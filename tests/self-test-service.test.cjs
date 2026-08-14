@@ -18,7 +18,7 @@ test('packaged self-test passes with official Web UI runtime assets', async () =
     const rendererEntry = path.join(dir, 'index.html')
     await writeFile(rendererEntry, '<!doctype html>')
     const report = await runPackagedSelfTest({
-      appVersion: '0.9.0-rc.7',
+      appVersion: '0.9.0-rc.8',
       userData: path.join(dir, 'userdata'),
       rendererEntry,
       resolveDshBin: () => ({ source: 'bundled', version: '0.1.0-rc.6' }),
@@ -40,7 +40,7 @@ test('packaged self-test passes with official Web UI runtime assets', async () =
 
 test('packaged self-test fails when the official Harness binary is unavailable', async () => {
   const report = await runPackagedSelfTest({
-    appVersion: '0.9.0-rc.7',
+    appVersion: '0.9.0-rc.8',
     userData: 'unused',
     rendererEntry: 'missing',
     resolveDshBin: () => ({ source: 'npx-fallback', version: 'unresolved' }),

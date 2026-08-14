@@ -40,6 +40,21 @@
         </section>
       </div>
     </section>
+    <section id="updateReadyOverlay" class="update-ready-overlay hidden" aria-hidden="true">
+      <div class="update-ready-dialog" role="dialog" aria-modal="true" aria-labelledby="updateReadyTitle" aria-describedby="updateReadyDetail">
+        <div class="update-ready-icon" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2h14v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h2 id="updateReadyTitle">更新已准备好</h2>
+        <p id="updateReadyDetail">新版本已经下载并通过安全校验。</p>
+        <p class="update-ready-note">点击安装后，当前程序将关闭，随后打开纯中文安装向导。</p>
+        <div class="update-ready-actions">
+          <button id="updateLaterButton" type="button">稍后安装</button>
+          <button id="updateNowButton" class="primary" type="button">立即安装</button>
+        </div>
+        <p id="updateLaunchError" class="update-launch-error" role="alert"></p>
+      </div>
+    </section>
   </main>
   <script src="./theme-catalog.js"></script>
   <script src="./theme-integration.js"></script>

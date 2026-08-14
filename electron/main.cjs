@@ -396,34 +396,7 @@ async function installAppUpdate() {
     }
 
     send('updates:install-progress', { phase: 'ready', version: update.latestVersion })
-    const messageBoxOptions = {
-      type: 'info',
-      title: 'Harness Desktop 更新',
-      message: `Harness Desktop ${update.latestVersion} 已下载完成`,
-      detail: '现在安装将关闭 Harness Desktop。你也可以选择稍后安装，已下载的安装包会保留。',
-      buttons: ['立即安装', '稍后'],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true
-    }
-    const confirmation = mainWindow && !mainWindow.isDestroyed()
-      ? await dialog.showMessageBox(mainWindow, messageBoxOptions)
-      : await dialog.showMessageBox(messageBoxOptions)
-    if (confirmation.response !== 0) {
-      send('updates:install-progress', { phase: 'ready', version: update.latestVersion })
-      return { ok: true, version: update.latestVersion, deferred: true }
-    }
-
-    send('updates:install-progress', { phase: 'launch', version: update.latestVersion })
-    const handoff = buildWindowsInstallerHandoff({ installerPath, parentPid: process.pid })
-    const child = spawn(handoff.command, handoff.args, handoff.options)
-    await new Promise((resolve, reject) => {
-      child.once('spawn', resolve)
-      child.once('error', reject)
-    })
-    child.unref()
-    app.quit()
-    return { ok: true, version: update.latestVersion }
+    return { ok: true, version: update.latestVersion, ready: true }
   })()
 
   try {
@@ -431,6 +404,25 @@ async function installAppUpdate() {
   } finally {
     activeUpdateInstall = null
   }
+}
+
+async function launchReadyAppUpdate() {
+  if (process.platform !== 'win32') throw new Error('当前版本仅支持在 Windows 内自动安装更新。')
+  if (!readyUpdate?.installerPath || !existsSync(readyUpdate.installerPath)) {
+    throw new Error('已下载的更新安装包不存在，请重新下载。')
+  }
+
+  send('updates:install-progress', { phase: 'launch', version: readyUpdate.version })
+  const handoff = buildWindowsInstallerHandoff({ installerPath: readyUpdate.installerPath, parentPid: process.pid })
+  const child = spawn(handoff.command, handoff.args, handoff.options)
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve)
+    child.once('error', reject)
+  })
+  child.unref()
+  const version = readyUpdate.version
+  app.quit()
+  return { ok: true, version }
 }
 
 function selfTestOutputPath() {
@@ -512,6 +504,7 @@ ipcMain.handle('updates:preferences', () => ensureStateStore().get().updates)
 ipcMain.handle('updates:setPreferences', (_event, patch) => ensureStateStore().updatePreferences(patch || {}).updates)
 ipcMain.handle('updates:check', () => checkUpdates())
 ipcMain.handle('updates:install', () => installAppUpdate())
+ipcMain.handle('updates:launchReady', () => launchReadyAppUpdate())
 ipcMain.handle('appearance:get', () => appearancePayload())
 ipcMain.handle('appearance:assets', () => bundledThemeAssets())
 ipcMain.handle('appearance:setTheme', async (_event, themeId) => {

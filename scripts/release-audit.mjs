@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '0.9.0-rc.7') throw new Error(`release audit expects 0.9.0-rc.7, got ${pkg.version}`)
+if (pkg.version !== '0.9.0-rc.8') throw new Error(`release audit expects 0.9.0-rc.8, got ${pkg.version}`)
 if (!pkg.author?.email) throw new Error('Linux .deb packaging requires a maintainer email in package author metadata.')
 if (pkg.main !== 'electron/main.cjs') throw new Error('Electron main entry drifted.')
 if (pkg.build?.asar !== true) throw new Error('Release must keep ASAR enabled.')
@@ -31,13 +31,14 @@ const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
 for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview']) {
   if (!main.includes(contract)) throw new Error(`Electron security contract missing: ${contract}`)
 }
-for (const contract of ["ipcMain.handle('updates:install'", 'SHA256SUMS.txt', 'buildWindowsInstallerHandoff', 'downloadUpdateFile', 'fetchChecksum', 'ensurePluginMarketplace']) {
+for (const contract of ["ipcMain.handle('updates:install'", "ipcMain.handle('updates:launchReady'", 'SHA256SUMS.txt', 'buildWindowsInstallerHandoff', 'downloadUpdateFile', 'fetchChecksum', 'ensurePluginMarketplace']) {
   if (!main.includes(contract)) throw new Error(`Desktop self-update contract missing: ${contract}`)
 }
 const updateLauncher = await readFile(path.join(root, 'electron/bridge/update-launcher.cjs'), 'utf8')
-for (const contract of ['Wait-Process', 'Start-Process', "'/VERYSILENT'", "'/CLOSEAPPLICATIONS'"]) {
+for (const contract of ['Wait-Process', 'Start-Process', "'/NORESTART'"]) {
   if (!updateLauncher.includes(contract)) throw new Error(`Installer handoff contract missing: ${contract}`)
 }
+if (updateLauncher.includes('/VERYSILENT') || updateLauncher.includes('/SUPPRESSMSGBOXES')) throw new Error('In-app updates must open the visible Simplified Chinese installer wizard.')
 for (const removedContract of ['AgentBridge', 'TerminalManager', 'SessionStore', 'ProviderStore']) {
   if (main.includes(removedContract)) throw new Error(`Obsolete native backend returned to the release: ${removedContract}`)
 }

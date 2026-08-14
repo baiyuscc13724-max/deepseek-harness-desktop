@@ -12,8 +12,8 @@ function buildWindowsInstallerHandoff({ installerPath, parentPid }) {
   const script = [
     `$ErrorActionPreference = 'Stop'`,
     `Wait-Process -Id ${parentPid} -ErrorAction SilentlyContinue`,
-    `Start-Sleep -Milliseconds 700`,
-    `Start-Process -FilePath ${installer} -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS')`
+    `Start-Sleep -Milliseconds 1200`,
+    `Start-Process -FilePath ${installer} -ArgumentList @('/NORESTART')`
   ].join('; ')
   return {
     command: 'powershell.exe',

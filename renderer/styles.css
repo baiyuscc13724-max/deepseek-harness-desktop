@@ -50,6 +50,18 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .skin-custom-editor select { height:30px; border:1px solid var(--shell-border); border-radius:7px; color:var(--shell-text); background:var(--shell-layer-2); }
 .skin-custom-editor input[type="color"] { width:32px; height:30px; border:0; padding:0; background:none; }
 #skinBackgroundState { width:100%; color:var(--shell-text-tertiary); font-size:11px; text-align:right; }
+.update-ready-overlay { position:absolute; z-index:30; inset:0; display:grid; place-items:center; padding:48px 28px 28px; color:var(--shell-text); background:var(--shell-overlay); -webkit-app-region:no-drag; backdrop-filter:blur(5px); }
+.update-ready-dialog { width:min(430px,calc(100vw - 48px)); border:1px solid var(--shell-border); border-radius:18px; padding:26px 28px 22px; color:var(--shell-text); background:var(--shell-layer); box-shadow:0 24px 70px rgba(0,0,0,.28); text-align:center; }
+.update-ready-icon { display:grid; place-items:center; width:50px; height:50px; margin:0 auto 13px; border-radius:15px; color:#fff; background:var(--shell-accent); }
+.update-ready-dialog h2 { margin:0; font-size:20px; }
+.update-ready-dialog p { margin:8px 0 0; color:var(--shell-text-secondary); }
+.update-ready-dialog .update-ready-note { font-size:12px; }
+.update-ready-actions { display:flex; justify-content:center; gap:10px; margin-top:22px; }
+.update-ready-actions button { min-width:108px; min-height:38px; border:1px solid var(--shell-border); border-radius:9px; padding:0 16px; color:var(--shell-text); background:var(--shell-layer-2); cursor:pointer; }
+.update-ready-actions button:hover:not(:disabled) { background:var(--shell-hover); }
+.update-ready-actions button.primary { border-color:var(--shell-accent); color:#fff; background:var(--shell-accent); }
+.update-ready-actions button:disabled { cursor:wait; opacity:.65; }
+.update-ready-dialog .update-launch-error { min-height:18px; color:#d92d20; font-size:12px; }
 #runtimeView { display: flex; width: 100%; height: 100%; border: 0; background: #fff; }
 .runtime-status { position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; gap: 9px; color: #202124; background: #f7f8fa; text-align: center; }
 .runtime-status.ready { display: none; }

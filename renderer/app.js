@@ -12,6 +12,11 @@ const restoreOfficialThemeButton = document.querySelector('#restoreOfficialTheme
 const skinChooseBackgroundButton = document.querySelector('#skinChooseBackground')
 const skinApplyCustomButton = document.querySelector('#skinApplyCustom')
 const skinBackgroundState = document.querySelector('#skinBackgroundState')
+const updateReadyOverlay = document.querySelector('#updateReadyOverlay')
+const updateReadyDetail = document.querySelector('#updateReadyDetail')
+const updateLaterButton = document.querySelector('#updateLaterButton')
+const updateNowButton = document.querySelector('#updateNowButton')
+const updateLaunchError = document.querySelector('#updateLaunchError')
 
 let updateState = {
   checking: false,
@@ -123,6 +128,23 @@ function closeSkinPicker() {
   skinPickerOverlay.classList.add('hidden')
   skinPickerOverlay.setAttribute('aria-hidden', 'true')
   skinQuickButton.focus()
+}
+
+function showUpdateReady(version) {
+  applyShellTheme()
+  updateReadyDetail.textContent = `Harness Desktop ${version || '新版本'} 已经下载并通过安全校验。`
+  updateLaunchError.textContent = ''
+  updateNowButton.disabled = false
+  updateNowButton.textContent = '立即安装'
+  updateReadyOverlay.classList.remove('hidden')
+  updateReadyOverlay.setAttribute('aria-hidden', 'false')
+  updateNowButton.focus()
+}
+
+function closeUpdateReady() {
+  if (updateNowButton.disabled) return
+  updateReadyOverlay.classList.add('hidden')
+  updateReadyOverlay.setAttribute('aria-hidden', 'true')
 }
 
 function renderRuntimeState(state) {
@@ -327,9 +349,10 @@ async function installUpdate() {
   await publishUpdateState()
   try {
     const result = await api.installUpdate()
-    if (result?.deferred) {
+    if (result?.ready) {
       updateState = { ...updateState, installing: false, installProgress: { phase: 'ready', version: result.version } }
       await publishUpdateState()
+      showUpdateReady(result.version)
     }
   } catch (error) {
     updateState = { ...updateState, installing: false, installError: error.message, installProgress: null }
@@ -418,8 +441,27 @@ closeSkinPickerButton.addEventListener('click', closeSkinPicker)
 skinPickerOverlay.addEventListener('click', event => {
   if (event.target === skinPickerOverlay) closeSkinPicker()
 })
+updateLaterButton.addEventListener('click', closeUpdateReady)
+updateReadyOverlay.addEventListener('click', event => {
+  if (event.target === updateReadyOverlay) closeUpdateReady()
+})
+updateNowButton.addEventListener('click', async () => {
+  updateNowButton.disabled = true
+  updateNowButton.textContent = '正在退出…'
+  updateLaterButton.disabled = true
+  updateLaunchError.textContent = ''
+  try {
+    await api.launchReadyUpdate()
+  } catch (error) {
+    updateNowButton.disabled = false
+    updateNowButton.textContent = '立即安装'
+    updateLaterButton.disabled = false
+    updateLaunchError.textContent = error.message
+  }
+})
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !skinPickerOverlay.classList.contains('hidden')) closeSkinPicker()
+  if (event.key === 'Escape' && !updateReadyOverlay.classList.contains('hidden')) closeUpdateReady()
 })
 restoreOfficialThemeButton.addEventListener('click', async () => {
   appearanceState = await api.setTheme('official')
