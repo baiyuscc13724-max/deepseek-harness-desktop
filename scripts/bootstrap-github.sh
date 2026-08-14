@@ -11,6 +11,6 @@ git push -u origin main
 git show-ref --verify --quiet refs/heads/develop || git branch develop
 git show-ref --verify --quiet refs/heads/release/v0.9 || git branch release/v0.9
 git push origin develop release/v0.9
-git rev-parse "v0.9.0-rc.5" >/dev/null 2>&1 || git tag -a v0.9.0-rc.5 -m "Harness Desktop v0.9.0-rc.5"
-git push origin v0.9.0-rc.5
+git rev-parse "v0.9.0-rc.6" >/dev/null 2>&1 || git tag -a v0.9.0-rc.6 -m "Harness Desktop v0.9.0-rc.6"
+git push origin v0.9.0-rc.6
 echo "Published: https://github.com/$repo"

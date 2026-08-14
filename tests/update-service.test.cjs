@@ -1,6 +1,11 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { checkAppUpdate, checkHarnessUpstream, compareVersions, parseChecksumFile, parseReleasePayload, selectChecksumAsset, selectReleasePayload, selectWindowsInstallerAsset } = require('../electron/bridge/update-service.cjs')
+const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, compareVersions, parseChecksumFile, parseReleasePayload, selectChecksumAsset, selectReleasePayload, selectWindowsInstallerAsset } = require('../electron/bridge/update-service.cjs')
+
+test('desktop update checks use the repository manifest instead of the rate-limited Releases API', () => {
+  assert.equal(DEFAULT_APP_FEED, 'https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/release-manifest.json')
+  assert.doesNotMatch(DEFAULT_APP_FEED, /api\.github\.com/)
+})
 
 test('compareVersions handles prerelease and patch changes', () => {
   assert.equal(compareVersions('0.8.1', '0.8.0'), 1)

@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   saveCustomTheme: customTheme => ipcRenderer.invoke('appearance:saveCustom', customTheme),
   chooseThemeBackground: () => ipcRenderer.invoke('appearance:chooseBackground'),
   openHarnessSettings: () => ipcRenderer.invoke('settings:openDocument'),
+  getModelRouting: () => ipcRenderer.invoke('models:routing:get'),
+  saveModelRouting: routing => ipcRenderer.invoke('models:routing:save', routing),
   openExternal: url => ipcRenderer.invoke('shell:openExternal', url),
   onRuntimeState: listener => subscribe('runtime:state', listener),
   onUpdateResult: listener => subscribe('updates:result', listener),

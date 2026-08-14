@@ -7,6 +7,7 @@ const http = require('node:http')
 const path = require('node:path')
 
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
+const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
@@ -281,6 +282,13 @@ function safeUpdateUrl(value) {
   return target.toString()
 }
 
+function modelRoutingOptions() {
+  return {
+    dshHome: String(process.env.DSH_HOME || path.join(app.getPath('home'), '.dsh')).trim(),
+    shippedPresetRoot: path.join(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh', 'config', 'agent-presets')
+  }
+}
+
 async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {} } = {}) {
   const target = new URL(url)
   if (!['https:', 'http:'].includes(target.protocol)) throw new Error('更新地址只允许 http/https。')
@@ -510,6 +518,8 @@ ipcMain.handle('appearance:saveCustom', async (_event, customTheme) => {
 })
 ipcMain.handle('appearance:chooseBackground', () => chooseCustomThemeBackground())
 ipcMain.handle('settings:openDocument', () => openHarnessSettingsDocument())
+ipcMain.handle('models:routing:get', () => getModelRouting(modelRoutingOptions()))
+ipcMain.handle('models:routing:save', (_event, routing) => saveModelRouting(modelRoutingOptions(), routing || {}))
 ipcMain.handle('runtime:start', (_event, options) => startRuntime(options || {}))
 ipcMain.handle('runtime:state', () => runtimeState)
 ipcMain.handle('shell:openExternal', async (_event, value) => {
@@ -524,6 +534,9 @@ app.whenReady().then(async () => {
     app.exit(report.ok ? 0 : 1)
     return
   }
+  await ensureModelRouting(modelRoutingOptions()).catch(error => {
+    console.warn(`Unable to restore desktop model routing: ${error.message}`)
+  })
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

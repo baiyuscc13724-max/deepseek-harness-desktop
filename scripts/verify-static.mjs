@@ -7,18 +7,18 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
   'electron/main.cjs', 'electron/preload.cjs',
   'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs',
-  'electron/bridge/update-service.cjs', 'electron/bridge/self-test-service.cjs',
+  'electron/bridge/update-service.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs',
   'electron/store/app-state-store.cjs',
-  'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js',
+  'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js',
   'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
   'renderer/themes/maid-atelier/maid-atelier-maid-right-v6.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/self-test-service.test.cjs',
+  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md',
   'build/installer.iss', 'scripts/build-release.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs',
-  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md'
+  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json'
 ]
 for (const relative of required) await access(path.join(root, relative))
 
@@ -40,7 +40,7 @@ for (const relative of removed) {
 }
 
 const html = await readFile(path.join(root, 'renderer/index.html'), 'utf8')
-for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './app.js', './assets/deepseek-icon.svg']) {
+for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './app.js', './assets/deepseek-icon.svg']) {
   if (!html.includes(relative)) throw new Error(`renderer/index.html is missing expected reference: ${relative}`)
 }
 for (const id of ['runtimeView', 'runtimeStatus', 'runtimeStatusTitle', 'runtimeStatusDetail', 'retryRuntime']) {
@@ -51,8 +51,11 @@ for (const removedSurface of ['nativeChatSurface', 'webCompatibilitySurface', 's
 }
 
 const rendererStyles = await readFile(path.join(root, 'renderer/styles.css'), 'utf8')
-if (!rendererStyles.includes('.window-drag') || !rendererStyles.includes('right: 148px') || !rendererStyles.includes('height: 36px') || !rendererStyles.includes('-webkit-app-region: drag')) {
+if (!rendererStyles.includes('.window-drag') || !rendererStyles.includes('right: 232px') || !rendererStyles.includes('height: 36px') || !rendererStyles.includes('-webkit-app-region: drag')) {
   throw new Error('The frameless Windows shell must keep a full-height draggable title region without covering the window controls.')
+}
+if (!html.includes('id="skinQuickButton"') || !html.includes('id="skinPickerOverlay"') || !rendererStyles.includes('.skin-picker-dialog')) {
+  throw new Error('The desktop shell must expose a standalone quick skin picker without opening the full official settings dialog.')
 }
 
 const rendererScript = await readFile(path.join(root, 'renderer/app.js'), 'utf8')
@@ -85,13 +88,25 @@ if (!themeIntegration.includes("event.detail >= 2") || !themeIntegration.include
 if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includes('markThemeSurfaces') || !themeIntegration.includes('[data-slot="conversation"]')) {
   throw new Error('Theme integration must survive upstream class-name changes and isolate official surface variables.')
 }
+if (!rendererScript.includes('api.getModelRouting()') || !rendererScript.includes('api.saveModelRouting(') || !rendererScript.includes("target.hostname === 'save-model-routing'")) {
+  throw new Error('Official Models settings must expose independent main-model and subagent routing.')
+}
+for (const contract of ['openSkinPicker', 'closeSkinPicker()', "card.addEventListener('dblclick'", "api.setTheme(card.dataset.skinId", 'skinPickerOverlay.classList.add']) {
+  if (!rendererScript.includes(contract)) throw new Error(`Standalone skin picker behavior is missing: ${contract}`)
+}
+
+const modelRoutingIntegration = await readFile(path.join(root, 'renderer/model-routing-integration.js'), 'utf8')
+for (const contract of ['主模型与子代理', '跟随主模型', 'data-hd-sub-provider', 'data-hd-sub-model', '不受官方更新覆盖']) {
+  if (!modelRoutingIntegration.includes(contract)) throw new Error(`Model routing settings UI is missing: ${contract}`)
+}
 if (!themeIntegration.includes('__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__') || !themeIntegration.includes('mount(false)') || !themeIntegration.includes('[data-color-scheme]')) {
   throw new Error('Theme restoration must be idempotent and override nested upstream theme providers after restart.')
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '0.9.0-rc.5') throw new Error(`Expected package version 0.9.0-rc.5, received ${pkg.version}`)
+if (pkg.version !== '0.9.0-rc.6') throw new Error(`Expected package version 0.9.0-rc.6, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
+if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')
 if (pkg.scripts?.['test:provider:real']) throw new Error('The removed desktop provider smoke script must not return.')
@@ -110,7 +125,7 @@ if (officialIconHash !== '77b823e3d14122b6dfe6ff6089e629d1c6e3fcd1ed7fc0b9e7bf59
 }
 
 const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
-for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'shell:openExternal']) {
+for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'shell:openExternal']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }
 for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'terminal:start', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {
@@ -125,7 +140,7 @@ for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase
 if (main.includes('await fetch(safeUpdateUrl')) throw new Error('Update downloads must use Electron system networking for proxy and direct connections.')
 
 const preload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
-for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'openHarnessSettings', 'openExternal', 'onUpdateResult', 'onUpdateInstallProgress']) {
+for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openExternal', 'onUpdateResult', 'onUpdateInstallProgress']) {
   if (!preload.includes(api)) throw new Error(`preload API missing: ${api}`)
 }
 for (const removedApi of ['getProviderSettings', 'runDiagnostics', 'listSessions', 'listWorkspaceDirectory', 'startTerminal']) {

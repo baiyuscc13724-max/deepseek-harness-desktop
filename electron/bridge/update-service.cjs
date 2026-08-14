@@ -2,7 +2,7 @@ const http = require('node:http')
 const https = require('node:https')
 
 const DEFAULT_UPSTREAM_MANIFEST = 'https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/apps/cli/package.json'
-const DEFAULT_APP_FEED = 'https://api.github.com/repos/baiyuscc13724-max/deepseek-harness-desktop/releases'
+const DEFAULT_APP_FEED = 'https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/release-manifest.json'
 
 function normalizeVersion(value) {
   return String(value || '').trim().replace(/^v/i, '')

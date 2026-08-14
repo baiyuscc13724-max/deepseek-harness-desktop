@@ -4,6 +4,14 @@ const runtimeStatus = document.querySelector('#runtimeStatus')
 const runtimeStatusTitle = document.querySelector('#runtimeStatusTitle')
 const runtimeStatusDetail = document.querySelector('#runtimeStatusDetail')
 const retryRuntime = document.querySelector('#retryRuntime')
+const skinQuickButton = document.querySelector('#skinQuickButton')
+const skinPickerOverlay = document.querySelector('#skinPickerOverlay')
+const skinPickerGrid = document.querySelector('#skinPickerGrid')
+const closeSkinPickerButton = document.querySelector('#closeSkinPicker')
+const restoreOfficialThemeButton = document.querySelector('#restoreOfficialTheme')
+const skinChooseBackgroundButton = document.querySelector('#skinChooseBackground')
+const skinApplyCustomButton = document.querySelector('#skinApplyCustom')
+const skinBackgroundState = document.querySelector('#skinBackgroundState')
 
 let updateState = {
   checking: false,
@@ -15,8 +23,70 @@ let updateState = {
   preferences: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null }
 }
 let appearanceState = { themeId: 'official', customTheme: {}, customBackgroundDataUrl: null }
+let modelRoutingState = { main: {}, subagent: { inheritMain: true }, providers: [], saving: false, saved: false, error: '' }
 let themeCatalog = []
 const themeIntegration = window.harnessThemeIntegration
+const modelRoutingIntegration = window.harnessModelRoutingIntegration
+
+const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+})[character])
+
+function themePreview(theme) {
+  if (theme.id === 'maid-atelier' && theme.assets?.day) return `linear-gradient(rgba(5,31,59,.08),rgba(5,31,59,.28)),url("${theme.assets.day}") center/cover`
+  if (theme.id === 'custom' && appearanceState.customBackgroundDataUrl) return `url("${appearanceState.customBackgroundDataUrl}") center/cover`
+  return theme.preview
+}
+
+function renderSkinPicker() {
+  skinPickerGrid.innerHTML = themeCatalog.map(theme => `
+    <article class="skin-picker-card" data-skin-id="${escapeHtml(theme.id)}" data-selected="${theme.id === appearanceState.themeId}" tabindex="0">
+      <div class="skin-picker-preview" style="background:${escapeHtml(themePreview(theme))}"></div>
+      <div class="skin-picker-body">
+        <div class="skin-picker-title"><strong>${escapeHtml(theme.name)}</strong><span class="skin-picker-license" data-nc="${Boolean(theme.nonCommercial)}">${escapeHtml(theme.license)}</span></div>
+        <div class="skin-picker-description">${escapeHtml(theme.description)}</div>
+        <div class="skin-picker-meta"><span class="skin-picker-author">${escapeHtml(theme.author)}</span><span>${theme.id === appearanceState.themeId ? '当前使用' : '双击使用'}</span>${theme.source ? `<button type="button" class="skin-picker-source" data-source="${escapeHtml(theme.source)}">来源</button>` : ''}</div>
+      </div>
+    </article>`).join('')
+  skinPickerGrid.querySelectorAll('[data-skin-id]').forEach(card => {
+    const apply = async () => {
+      appearanceState = await api.setTheme(card.dataset.skinId || 'official')
+      await publishAppearanceState()
+      closeSkinPicker()
+    }
+    card.addEventListener('dblclick', event => {
+      if (!event.target.closest('[data-source]')) apply().catch(() => {})
+    })
+    card.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      apply().catch(() => {})
+    })
+  })
+  skinPickerGrid.querySelectorAll('[data-source]').forEach(button => button.addEventListener('click', event => {
+    event.stopPropagation()
+    api.openExternal(event.currentTarget.dataset.source || '').catch(() => {})
+  }))
+  const custom = appearanceState.customTheme || {}
+  document.querySelector('#skinCustomMode').value = custom.mode || 'dark'
+  document.querySelector('#skinCustomAccent').value = custom.accent || '#6f8cff'
+  document.querySelector('#skinCustomSurface').value = custom.surface || '#171b29'
+  document.querySelector('#skinCustomText').value = custom.text || '#f4f7ff'
+  skinBackgroundState.textContent = appearanceState.customBackgroundDataUrl ? '已选择本地背景图' : '未选择背景图，将使用渐变背景'
+}
+
+function openSkinPicker() {
+  renderSkinPicker()
+  skinPickerOverlay.classList.remove('hidden')
+  skinPickerOverlay.setAttribute('aria-hidden', 'false')
+  closeSkinPickerButton.focus()
+}
+
+function closeSkinPicker() {
+  skinPickerOverlay.classList.add('hidden')
+  skinPickerOverlay.setAttribute('aria-hidden', 'true')
+  skinQuickButton.focus()
+}
 
 function renderRuntimeState(state) {
   if (state?.status === 'ready' && state.url) {
@@ -198,6 +268,10 @@ async function publishAppearanceState() {
   await themeIntegration.publish(runtimeView, appearanceState, themeCatalog).catch(() => {})
 }
 
+async function publishModelRoutingState() {
+  await modelRoutingIntegration.publish(runtimeView, modelRoutingState).catch(() => {})
+}
+
 async function checkUpdates() {
   updateState = { ...updateState, checking: true }
   await publishUpdateState()
@@ -228,8 +302,10 @@ async function installUpdate() {
 runtimeView.addEventListener('dom-ready', async () => {
   await runtimeView.executeJavaScript(`(${officialSettingsBootstrap.toString()})()`, true).catch(() => {})
   await themeIntegration.install(runtimeView).catch(() => {})
+  await modelRoutingIntegration.install(runtimeView).catch(() => {})
   await publishUpdateState()
   await publishAppearanceState()
+  await publishModelRoutingState()
 })
 
 runtimeView.addEventListener('will-navigate', event => {
@@ -255,6 +331,27 @@ runtimeView.addEventListener('will-navigate', event => {
     if (url) api.openExternal(url).catch(() => {})
   } else if (target.hostname === 'open-config-file') {
     api.openHarnessSettings().catch(() => {})
+  } else if (target.hostname === 'save-model-routing') {
+    modelRoutingState = { ...modelRoutingState, saving: true, saved: false, error: '' }
+    publishModelRoutingState()
+    api.saveModelRouting({
+      main: {
+        provider: target.searchParams.get('mainProvider') || '',
+        model: target.searchParams.get('mainModel') || ''
+      },
+      subagent: {
+        inheritMain: target.searchParams.get('subInherit') !== '0',
+        provider: target.searchParams.get('subProvider') || '',
+        model: target.searchParams.get('subModel') || ''
+      },
+      basePreset: modelRoutingState.basePreset
+    }).then(state => {
+      modelRoutingState = { ...state, saving: false, saved: true, error: '' }
+      publishModelRoutingState()
+    }).catch(error => {
+      modelRoutingState = { ...modelRoutingState, saving: false, saved: false, error: error.message }
+      publishModelRoutingState()
+    })
   } else if (target.hostname === 'set-theme') {
     api.setTheme(target.searchParams.get('id') || 'official').then(state => {
       appearanceState = state
@@ -278,6 +375,35 @@ retryRuntime.addEventListener('click', () => {
   api.startRuntime({}).then(renderRuntimeState).catch(error => renderRuntimeState({ status: 'error', detail: error.message }))
 })
 
+skinQuickButton.addEventListener('click', openSkinPicker)
+closeSkinPickerButton.addEventListener('click', closeSkinPicker)
+skinPickerOverlay.addEventListener('click', event => {
+  if (event.target === skinPickerOverlay) closeSkinPicker()
+})
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !skinPickerOverlay.classList.contains('hidden')) closeSkinPicker()
+})
+restoreOfficialThemeButton.addEventListener('click', async () => {
+  appearanceState = await api.setTheme('official')
+  await publishAppearanceState()
+  closeSkinPicker()
+})
+skinChooseBackgroundButton.addEventListener('click', async () => {
+  appearanceState = await api.chooseThemeBackground()
+  await publishAppearanceState()
+  renderSkinPicker()
+})
+skinApplyCustomButton.addEventListener('click', async () => {
+  appearanceState = await api.saveCustomTheme({
+    mode: document.querySelector('#skinCustomMode').value,
+    accent: document.querySelector('#skinCustomAccent').value,
+    surface: document.querySelector('#skinCustomSurface').value,
+    text: document.querySelector('#skinCustomText').value
+  })
+  await publishAppearanceState()
+  closeSkinPicker()
+})
+
 api.onRuntimeState(renderRuntimeState)
 api.onUpdateResult(result => {
   updateState = { ...updateState, ...result, checking: false }
@@ -291,8 +417,10 @@ api.onUpdateInstallProgress(progress => {
 async function startOfficialWorkspace() {
   updateState = { ...updateState, preferences: await api.getUpdatePreferences() }
   appearanceState = await api.getAppearance()
+  modelRoutingState = { ...await api.getModelRouting(), saving: false, saved: false, error: '' }
   const themeAssets = await api.getThemeAssets()
   themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)
+  renderSkinPicker()
   const initial = await api.getRuntimeState()
   renderRuntimeState(initial)
   if (initial.status !== 'ready') renderRuntimeState(await api.startRuntime({}))

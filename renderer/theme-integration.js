@@ -178,6 +178,9 @@
             applyTheme(themeId)
             renderCards(panel)
             request('set-theme', { id: themeId })
+            const dialog = panel.closest('[role="dialog"]')
+            const close = [...(dialog?.querySelectorAll('button') || [])].find(button => /关闭|close/i.test(button.getAttribute('aria-label') || button.title || '') || button.textContent?.trim() === '×')
+            close?.click()
           }
           card.addEventListener('click', event => {
             if (event.target.closest('[data-hd-source]')) return
@@ -298,7 +301,7 @@
         if (rect.top > 48 || rect.right < innerWidth - 190) continue
         const group = element.parentElement || element
         group.dataset.hdWindowInset = 'true'
-        group.style.marginRight = '142px'
+        group.style.marginRight = '226px'
       }
     }
 

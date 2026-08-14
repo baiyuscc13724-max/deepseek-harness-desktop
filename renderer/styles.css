@@ -4,7 +4,37 @@ html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Microsoft YaHei UI", sans-serif; }
 .hidden { display: none !important; }
 .official-shell { position: relative; width: 100%; height: 100%; background: #fff; }
-.window-drag { position: absolute; z-index: 5; top: 0; right: 148px; left: 0; height: 36px; -webkit-app-region: drag; pointer-events: auto; }
+.window-drag { position: absolute; z-index: 5; top: 0; right: 232px; left: 0; height: 36px; -webkit-app-region: drag; pointer-events: auto; }
+.skin-quick-button { position:absolute; z-index:7; top:4px; right:156px; display:flex; align-items:center; gap:6px; height:28px; min-width:68px; border:1px solid rgba(127,127,127,.24); border-radius:7px; padding:0 10px; color:#30343a; background:rgba(248,249,250,.9); box-shadow:0 1px 6px rgba(0,0,0,.08); font:12px/1 "Segoe UI","Microsoft YaHei UI",sans-serif; cursor:pointer; -webkit-app-region:no-drag; backdrop-filter:blur(10px); }
+.skin-quick-button:hover { background:#fff; }
+.skin-picker-overlay { position:absolute; z-index:20; inset:0; display:grid; place-items:center; padding:48px 28px 28px; background:rgba(15,23,42,.38); -webkit-app-region:no-drag; backdrop-filter:blur(5px); }
+.skin-picker-dialog { display:flex; flex-direction:column; width:min(1000px,calc(100vw - 56px)); max-height:calc(100vh - 76px); overflow:hidden; border:1px solid rgba(127,127,127,.22); border-radius:18px; color:#1f2937; background:#f7f8fa; box-shadow:0 24px 70px rgba(0,0,0,.28); }
+.skin-picker-header { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; padding:18px 20px 14px; border-bottom:1px solid rgba(127,127,127,.18); background:#fff; }
+.skin-picker-header h2,.skin-custom-editor h3 { margin:0; font-size:18px; }
+.skin-picker-header p,.skin-custom-editor p { margin:3px 0 0; color:#6b7280; font-size:12px; }
+.skin-picker-header-actions { display:flex; gap:8px; }
+.skin-picker-header button,.skin-custom-editor button { min-height:32px; border:1px solid rgba(127,127,127,.24); border-radius:8px; padding:5px 12px; color:inherit; background:#f8fafc; cursor:pointer; }
+.skin-picker-header .skin-picker-close { width:32px; padding:0; font-size:22px; line-height:1; }
+.skin-picker-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:13px; min-height:0; overflow:auto; padding:18px 20px; }
+.skin-picker-card { overflow:hidden; border:1px solid rgba(127,127,127,.22); border-radius:12px; background:#fff; box-shadow:0 7px 22px rgba(0,0,0,.07); cursor:pointer; transition:transform .15s ease,border-color .15s ease; }
+.skin-picker-card:hover { transform:translateY(-2px); border-color:#5275dc; }
+.skin-picker-card[data-selected="true"] { outline:2px solid #5275dc; outline-offset:1px; }
+.skin-picker-preview { height:96px; background-position:center!important; background-size:cover!important; }
+.skin-picker-body { padding:10px 11px 11px; }
+.skin-picker-title { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.skin-picker-title strong { font-size:13px; }
+.skin-picker-license { border-radius:4px; padding:2px 5px; color:#6b7280; background:#eef0f3; font-size:10px; }
+.skin-picker-license[data-nc="true"] { color:#9a4f05; background:#fff0d5; }
+.skin-picker-description { min-height:34px; margin:6px 0 8px; color:#667085; font-size:11px; }
+.skin-picker-meta { display:flex; align-items:center; gap:8px; color:#7b8494; font-size:10px; }
+.skin-picker-author { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.skin-picker-source { border:0; padding:0; color:#315efb; background:none; font:inherit; cursor:pointer; }
+.skin-custom-editor { display:flex; align-items:center; flex-wrap:wrap; gap:10px 14px; padding:14px 20px 18px; border-top:1px solid rgba(127,127,127,.18); background:#fff; }
+.skin-custom-editor > div { margin-right:auto; }
+.skin-custom-editor label { display:flex; align-items:center; gap:6px; color:#667085; font-size:11px; }
+.skin-custom-editor select { height:30px; border:1px solid rgba(127,127,127,.25); border-radius:7px; background:#fff; }
+.skin-custom-editor input[type="color"] { width:32px; height:30px; border:0; padding:0; background:none; }
+#skinBackgroundState { width:100%; color:#7b8494; font-size:11px; text-align:right; }
 #runtimeView { display: flex; width: 100%; height: 100%; border: 0; background: #fff; }
 .runtime-status { position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; gap: 9px; color: #202124; background: #f7f8fa; text-align: center; }
 .runtime-status.ready { display: none; }
@@ -16,4 +46,9 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
   body, .official-shell, #runtimeView { background: #171816; }
   .runtime-status { color: #f1f0ea; background: #171816; }
   .runtime-status span { color: #9a9992; }
+  .skin-quick-button { color:#f1f3f5; background:rgba(30,32,36,.9); }
+  .skin-picker-dialog { color:#eef0f4; background:#181a1f; }
+  .skin-picker-header,.skin-custom-editor,.skin-picker-card { background:#202228; }
+  .skin-picker-header p,.skin-custom-editor p,.skin-picker-description,.skin-picker-meta,.skin-custom-editor label { color:#a5a9b2; }
+  .skin-picker-header button,.skin-custom-editor button,.skin-custom-editor select { color:#eef0f4; background:#2a2d34; }
 }
