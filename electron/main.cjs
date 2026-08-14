@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, net, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const { createHash } = require('node:crypto')
 const { existsSync } = require('node:fs')
@@ -23,6 +23,7 @@ let runtimeState = { status: 'stopped', url: null, detail: '' }
 let appStateStore = null
 let lastUpdatePayload = null
 let activeUpdateInstall = null
+let readyUpdate = null
 
 const BUNDLED_THEME_ASSETS = Object.freeze([
   'maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -260,10 +261,10 @@ async function checkUpdates() {
   const feedUrl = String(process.env.HARNESS_DESKTOP_UPDATE_FEED || DEFAULT_APP_FEED).trim()
   const channel = preferences.channel === 'prerelease' || app.getVersion().includes('-') ? 'prerelease' : 'stable'
   const [appResult, harnessResult] = await Promise.all([
-    checkAppUpdate({ currentVersion: app.getVersion(), feedUrl, channel }).catch(error => ({
+    checkAppUpdate({ currentVersion: app.getVersion(), feedUrl, channel, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
       kind: 'app', configured: Boolean(feedUrl), currentVersion: app.getVersion(), updateAvailable: false, error: error.message
     })),
-    checkHarnessUpstream({ currentVersion: currentHarnessVersion }).catch(error => ({
+    checkHarnessUpstream({ currentVersion: currentHarnessVersion, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
       kind: 'harness', currentVersion: currentHarnessVersion, updateAvailable: false, error: error.message
     }))
   ])
@@ -280,8 +281,35 @@ function safeUpdateUrl(value) {
   return target.toString()
 }
 
+async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {} } = {}) {
+  const target = new URL(url)
+  if (!['https:', 'http:'].includes(target.protocol)) throw new Error('更新地址只允许 http/https。')
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await net.fetch(target.toString(), {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Harness-Desktop-Update-Checker', Accept: 'application/json', ...headers }
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const text = await response.text()
+    if (Buffer.byteLength(text) > maxBytes) throw new Error('更新响应过大。')
+    try {
+      return JSON.parse(text)
+    } catch (error) {
+      throw new Error(`更新响应不是有效 JSON：${error.message}`)
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(`更新检查超时（${timeoutMs}ms）`)
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 async function downloadUpdateFile(url, destination, expectedSize, onProgress) {
-  const response = await fetch(safeUpdateUrl(url), {
+  const response = await net.fetch(safeUpdateUrl(url), {
     redirect: 'follow',
     headers: { 'User-Agent': `Harness-Desktop/${app.getVersion()}`, Accept: 'application/octet-stream' }
   })
@@ -310,7 +338,7 @@ async function downloadUpdateFile(url, destination, expectedSize, onProgress) {
 }
 
 async function fetchChecksum(url, fileName) {
-  const response = await fetch(safeUpdateUrl(url), {
+  const response = await net.fetch(safeUpdateUrl(url), {
     redirect: 'follow',
     headers: { 'User-Agent': `Harness-Desktop/${app.getVersion()}`, Accept: 'text/plain' }
   })
@@ -332,9 +360,13 @@ async function installAppUpdate() {
     if (!update.installer?.url) throw new Error('新版本没有可用的 Windows 安装包。')
     if (!update.checksums?.url) throw new Error('新版本缺少 SHA256SUMS.txt，已拒绝不安全更新。')
 
-    const updatesDir = path.join(app.getPath('temp'), 'harness-desktop-updates')
-    await mkdir(updatesDir, { recursive: true })
-    const installerPath = path.join(updatesDir, path.basename(update.installer.name))
+    let installerPath = readyUpdate?.version === update.latestVersion && existsSync(readyUpdate.installerPath)
+      ? readyUpdate.installerPath
+      : null
+    if (!installerPath) {
+      const updatesDir = path.join(app.getPath('temp'), 'harness-desktop-updates')
+      await mkdir(updatesDir, { recursive: true })
+      installerPath = path.join(updatesDir, path.basename(update.installer.name))
     send('updates:install-progress', { phase: 'checksum', version: update.latestVersion })
     const expectedHash = await fetchChecksum(update.checksums.url, update.installer.name)
     send('updates:install-progress', { phase: 'download', version: update.latestVersion, received: 0, total: update.installer.size || 0 })
@@ -342,6 +374,28 @@ async function installAppUpdate() {
       send('updates:install-progress', { phase: 'download', version: update.latestVersion, ...progress })
     })
     if (downloaded.sha256 !== expectedHash) throw new Error('更新安装包 SHA-256 校验失败，已停止安装。')
+
+      readyUpdate = { version: update.latestVersion, installerPath }
+    }
+
+    send('updates:install-progress', { phase: 'ready', version: update.latestVersion })
+    const messageBoxOptions = {
+      type: 'info',
+      title: 'Harness Desktop 更新',
+      message: `Harness Desktop ${update.latestVersion} 已下载完成`,
+      detail: '现在安装将关闭 Harness Desktop。你也可以选择稍后安装，已下载的安装包会保留。',
+      buttons: ['立即安装', '稍后'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true
+    }
+    const confirmation = mainWindow && !mainWindow.isDestroyed()
+      ? await dialog.showMessageBox(mainWindow, messageBoxOptions)
+      : await dialog.showMessageBox(messageBoxOptions)
+    if (confirmation.response !== 0) {
+      send('updates:install-progress', { phase: 'ready', version: update.latestVersion })
+      return { ok: true, version: update.latestVersion, deferred: true }
+    }
 
     send('updates:install-progress', { phase: 'launch', version: update.latestVersion })
     const child = spawn(installerPath, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS'], {

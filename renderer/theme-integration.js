@@ -108,10 +108,13 @@
       const state = window.__HARNESS_DESKTOP_THEME_STATE__ || { themeId: 'official' }
       const id = requestedId || state.themeId || 'official'
       const old = document.querySelector('#harness-desktop-active-theme')
-      old?.remove()
-      document.documentElement.removeAttribute('data-hd-theme')
-      document.documentElement.removeAttribute('data-hd-skin-tone')
-      if (id === 'official') return
+      if (id === 'official') {
+        old?.remove()
+        document.documentElement.removeAttribute('data-hd-theme')
+        document.documentElement.removeAttribute('data-hd-skin-tone')
+        window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ = ''
+        return
+      }
 
       let theme = id === 'custom' ? customThemeFromState(state) : themeById(id)
       if (!theme) return
@@ -130,13 +133,23 @@
         '--hd-theme-input': vars['--dsw-specific-input-major'] || vars['--dsw-alias-bg-layer-1'] || 'transparent',
         '--hd-theme-dialog': vars['--dsw-alias-bg-layer-1'] || vars['--dsw-alias-bg-base'] || 'transparent'
       }
+      const themeValues = { ...vars, ...isolatedSurfaces }
+      const signature = JSON.stringify([theme.id, tone, wallpaper, themeValues])
+      if (old && window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ === signature && document.documentElement.dataset.hdTheme === theme.id) return
+      old?.remove()
       active.textContent = `
-        html[data-hd-theme="${theme.id}"] { color-scheme:${tone}; ${Object.entries({ ...vars, ...isolatedSurfaces }).map(([name, value]) => `${name}:${value} !important;`).join('')} ${theme.id === 'maid-atelier' ? `--hd-maid-left:url("${theme.assets?.left}");--hd-maid-right:url("${theme.assets?.right}");` : ''} }
+        html[data-hd-theme="${theme.id}"],
+        html[data-hd-theme="${theme.id}"] body,
+        html[data-hd-theme="${theme.id}"] #root,
+        html[data-hd-theme="${theme.id}"] [data-theme],
+        html[data-hd-theme="${theme.id}"] [data-color-scheme],
+        html[data-hd-theme="${theme.id}"] [data-slot="root"] { color-scheme:${tone}; ${Object.entries(themeValues).map(([name, value]) => `${name}:${value} !important;`).join('')} ${theme.id === 'maid-atelier' ? `--hd-maid-left:url("${theme.assets?.left}");--hd-maid-right:url("${theme.assets?.right}");` : ''} }
         html[data-hd-theme="${theme.id}"] body { background:${wallpaper} center/cover fixed !important; }
       `
       document.head.appendChild(active)
       document.documentElement.dataset.hdTheme = theme.id
       document.documentElement.dataset.hdSkinTone = tone
+      window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ = signature
     }
 
     const renderCards = panel => {
@@ -303,20 +316,20 @@
       }
     }
 
-    const mount = () => {
+    const mount = (refreshTheme = true) => {
       const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
       if (dialog) ensureNavigation(dialog)
       applyWindowControlInsets()
       markThemeSurfaces()
-      applyTheme()
+      if (refreshTheme) applyTheme()
     }
     window.__HARNESS_DESKTOP_RENDER_THEMES__ = mount
     let scheduled = false
     new MutationObserver(() => {
       if (scheduled) return
       scheduled = true
-      setTimeout(() => { scheduled = false; mount() }, 80)
-    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current', 'style'] })
+      setTimeout(() => { scheduled = false; mount(false) }, 80)
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
     mount()
   }
 

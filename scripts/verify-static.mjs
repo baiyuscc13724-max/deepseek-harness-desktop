@@ -85,9 +85,12 @@ if (!themeIntegration.includes("event.detail >= 2") || !themeIntegration.include
 if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includes('markThemeSurfaces') || !themeIntegration.includes('[data-slot="conversation"]')) {
   throw new Error('Theme integration must survive upstream class-name changes and isolate official surface variables.')
 }
+if (!themeIntegration.includes('__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__') || !themeIntegration.includes('mount(false)') || !themeIntegration.includes('[data-color-scheme]')) {
+  throw new Error('Theme restoration must be idempotent and override nested upstream theme providers after restart.')
+}
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '0.9.0-rc.4') throw new Error(`Expected package version 0.9.0-rc.4, received ${pkg.version}`)
+if (pkg.version !== '0.9.0-rc.5') throw new Error(`Expected package version 0.9.0-rc.5, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')
@@ -116,6 +119,10 @@ for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'work
 for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview']) {
   if (!main.includes(contract)) throw new Error(`Electron security contract missing: ${contract}`)
 }
+for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase: 'ready'", 'dialog.showMessageBox']) {
+  if (!main.includes(updateContract)) throw new Error(`Background updater contract missing: ${updateContract}`)
+}
+if (main.includes('await fetch(safeUpdateUrl')) throw new Error('Update downloads must use Electron system networking for proxy and direct connections.')
 
 const preload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
 for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'openHarnessSettings', 'openExternal', 'onUpdateResult', 'onUpdateInstallProgress']) {

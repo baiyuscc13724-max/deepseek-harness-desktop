@@ -79,7 +79,9 @@ function officialSettingsBootstrap() {
     const checked = state.preferences?.lastCheckedAt
     const progress = state.installProgress
     const percent = progress?.total ? Math.min(100, Math.round(progress.received * 100 / progress.total)) : 0
-    const status = state.installing
+    const status = progress?.phase === 'ready'
+      ? '更新已在后台下载完成，等待安装确认'
+      : state.installing
       ? progress?.phase === 'checksum'
         ? '正在验证桌面版更新…'
         : progress?.phase === 'launch'
@@ -106,7 +108,7 @@ function officialSettingsBootstrap() {
     const canInstall = Boolean(state.app?.updateAvailable && state.app?.installer && state.app?.checksums)
     if (installButton.hidden === canInstall) installButton.hidden = !canInstall
     if (installButton.disabled !== Boolean(state.installing)) installButton.disabled = Boolean(state.installing)
-    setText(installButton, state.installing ? '正在更新…' : '下载并安装桌面版更新')
+    setText(installButton, state.installing ? '正在更新…' : progress?.phase === 'ready' ? '安装已下载的更新' : '下载并安装桌面版更新')
     if (autoCheck.checked !== (state.preferences?.checkOnStartup !== false)) autoCheck.checked = state.preferences?.checkOnStartup !== false
     const release = row.querySelector('[data-hd-release]')
     const releaseHidden = !state.app?.updateAvailable || !state.app?.url || canInstall
@@ -212,7 +214,11 @@ async function installUpdate() {
   updateState = { ...updateState, installing: true, installError: '', installProgress: { phase: 'checksum' } }
   await publishUpdateState()
   try {
-    await api.installUpdate()
+    const result = await api.installUpdate()
+    if (result?.deferred) {
+      updateState = { ...updateState, installing: false, installProgress: { phase: 'ready', version: result.version } }
+      await publishUpdateState()
+    }
   } catch (error) {
     updateState = { ...updateState, installing: false, installError: error.message, installProgress: null }
     await publishUpdateState()
@@ -278,7 +284,7 @@ api.onUpdateResult(result => {
   publishUpdateState()
 })
 api.onUpdateInstallProgress(progress => {
-  updateState = { ...updateState, installing: true, installError: '', installProgress: progress }
+  updateState = { ...updateState, installing: progress?.phase !== 'ready', installError: '', installProgress: progress }
   publishUpdateState()
 })
 
