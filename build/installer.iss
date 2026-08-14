@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.9.0-rc.8"
+  #define MyAppVersion "0.9.0-rc.9"
 #endif
 
 #define MyAppName "Harness Desktop"

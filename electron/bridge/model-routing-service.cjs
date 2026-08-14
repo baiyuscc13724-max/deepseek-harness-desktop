@@ -7,6 +7,7 @@ const ROUTING_STATE_FILE = 'harness-desktop-model-routing.json'
 const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/
 const MODEL_ID = /^\S{1,256}$/
 const PRESET_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/
+let installedCatalogPromise = null
 
 function validRoute(route, label) {
   const provider = String(route?.provider || '').trim()
@@ -41,17 +42,36 @@ function normalizeModel(model) {
   return String(model.id || model.model || model.name || '').trim()
 }
 
-function providerCatalog(settings, routes) {
+async function installedCatalog() {
+  if (!installedCatalogPromise) {
+    installedCatalogPromise = import('@earendil-works/pi-ai/providers/all')
+      .then(module => ({ getBuiltinModels: module.getBuiltinModels }))
+      .catch(() => ({ getBuiltinModels: () => [] }))
+  }
+  return installedCatalogPromise
+}
+
+async function installedModelsFor(provider) {
+  const catalog = await installedCatalog()
+  try {
+    return catalog.getBuiltinModels(provider).map(normalizeModel).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+async function providerCatalog(settings, routes) {
   const configured = settings?.['llm-pi-ai']?.providers || {}
   const rows = new Map()
   for (const [id, profile] of Object.entries(configured)) {
     if (!PROVIDER_ID.test(id)) continue
-    const models = Array.isArray(profile?.models) ? profile.models.map(normalizeModel).filter(Boolean) : []
-    rows.set(id, { id, name: String(profile?.name || id), models: [...new Set(models)] })
+    const configuredModels = Array.isArray(profile?.models) ? profile.models.map(normalizeModel).filter(Boolean) : []
+    const catalogModels = await installedModelsFor(id)
+    rows.set(id, { id, name: String(profile?.displayName || profile?.name || id), models: [...new Set([...configuredModels, ...catalogModels])] })
   }
   for (const route of routes) {
     if (!route?.provider || !PROVIDER_ID.test(route.provider)) continue
-    const row = rows.get(route.provider) || { id: route.provider, name: route.provider, models: [] }
+    const row = rows.get(route.provider) || { id: route.provider, name: route.provider, models: await installedModelsFor(route.provider) }
     if (route.model && !row.models.includes(route.model)) row.models.push(route.model)
     rows.set(route.provider, row)
   }
@@ -97,7 +117,7 @@ async function getModelRouting(options) {
     subagent,
     basePreset: selectedBasePreset(settings, stored),
     managedPresetId: ROUTING_PRESET_ID,
-    providers: providerCatalog(settings, [main, subagent]),
+    providers: await providerCatalog(settings, [main, subagent]),
     configured: Boolean(stored)
   }
 }

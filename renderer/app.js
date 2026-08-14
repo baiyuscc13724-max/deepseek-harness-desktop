@@ -27,7 +27,7 @@ let updateState = {
   harness: null,
   preferences: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null }
 }
-let appearanceState = { themeId: 'official', customTheme: {}, customBackgroundDataUrl: null }
+let appearanceState = { themeId: 'porcelain-mist', customTheme: {}, customBackgroundDataUrl: null }
 let modelRoutingState = { main: {}, subagent: { inheritMain: true }, providers: [], saving: false, saved: false, error: '' }
 let themeCatalog = []
 const themeIntegration = window.harnessThemeIntegration
@@ -392,6 +392,14 @@ runtimeView.addEventListener('will-navigate', event => {
     if (url) api.openExternal(url).catch(() => {})
   } else if (target.hostname === 'open-config-file') {
     api.openHarnessSettings().catch(() => {})
+  } else if (target.hostname === 'refresh-model-routing') {
+    api.getModelRouting().then(state => {
+      modelRoutingState = { ...state, saving: false, saved: false, error: '' }
+      publishModelRoutingState()
+    }).catch(error => {
+      modelRoutingState = { ...modelRoutingState, saving: false, saved: false, error: error.message }
+      publishModelRoutingState()
+    })
   } else if (target.hostname === 'save-model-routing') {
     modelRoutingState = { ...modelRoutingState, saving: true, saved: false, error: '' }
     publishModelRoutingState()

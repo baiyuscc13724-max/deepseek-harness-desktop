@@ -98,6 +98,9 @@ if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includ
 if (!rendererScript.includes('applyShellTheme()') || !rendererStyles.includes('--shell-surface') || !rendererStyles.includes('--shell-accent')) {
   throw new Error('The standalone skin picker must inherit the selected Harness Desktop theme.')
 }
+if (!rendererScript.includes("themeId: 'porcelain-mist'") || !(await readFile(path.join(root, 'electron/store/app-state-store.cjs'), 'utf8')).includes("DEFAULT_THEME_ID = 'porcelain-mist'")) {
+  throw new Error('Porcelain Mist must remain the first-run desktop theme without overriding later user selections.')
+}
 if (!rendererScript.includes('api.getModelRouting()') || !rendererScript.includes('api.saveModelRouting(') || !rendererScript.includes("target.hostname === 'save-model-routing'")) {
   throw new Error('Official Models settings must expose independent main-model and subagent routing.')
 }
@@ -109,18 +112,22 @@ const modelRoutingIntegration = await readFile(path.join(root, 'renderer/model-r
 for (const contract of ['主模型与子代理', '跟随主模型', 'data-hd-sub-provider', 'data-hd-sub-model', '不受官方更新覆盖']) {
   if (!modelRoutingIntegration.includes(contract)) throw new Error(`Model routing settings UI is missing: ${contract}`)
 }
-for (const contract of ['data-hd-sub-mode="inherit"', 'data-hd-sub-mode="independent"', 'data-hd-add-model', '＋ 添加模型', '选择服务商', '选择模型']) {
+for (const contract of ['data-hd-sub-mode="inherit"', 'data-hd-sub-mode="independent"', 'data-hd-add-model', 'data-hd-refresh-models', "request('refresh-model-routing')", '＋ 添加模型', '选择服务商', '选择模型']) {
   if (!modelRoutingIntegration.includes(contract)) throw new Error(`Simple model routing selector is missing: ${contract}`)
+}
+if (!modelRoutingIntegration.includes("querySelectorAll('#harness-desktop-model-routing').forEach(panel => panel.remove())")) {
+  throw new Error('Model routing must unmount immediately when the user leaves the official Models section.')
 }
 if (!themeIntegration.includes('__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__') || !themeIntegration.includes('mount(false)') || !themeIntegration.includes('[data-color-scheme]')) {
   throw new Error('Theme restoration must be idempotent and override nested upstream theme providers after restart.')
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '0.9.0-rc.8') throw new Error(`Expected package version 0.9.0-rc.8, received ${pkg.version}`)
+if (pkg.version !== '0.9.0-rc.9') throw new Error(`Expected package version 0.9.0-rc.9, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
+if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
-if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'github:bradeGithub/DSH-Plugins-Marketplace#a84581f15609b8b76eb900ff4e82d8ffcd454c44') {
+if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'github:baiyuscc13724-max/DSH-Plugins-Marketplace#fa1bf750a9e07f23a501b22e863b0461cf8ffda3') {
   throw new Error('The in-app DSH plugin marketplace must remain pinned to the audited upstream commit.')
 }
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')

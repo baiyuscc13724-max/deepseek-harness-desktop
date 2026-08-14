@@ -4,6 +4,7 @@ const { THEME_CATALOG } = require('../../renderer/theme-catalog.js')
 
 const VALID_THEME_IDS = new Set(THEME_CATALOG.map(theme => theme.id))
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
+const DEFAULT_THEME_ID = 'porcelain-mist'
 
 function normalizeCustomTheme(value = {}) {
   return {
@@ -18,10 +19,10 @@ function normalizeCustomTheme(value = {}) {
 }
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null },
   appearance: {
-    themeId: 'official',
+    themeId: DEFAULT_THEME_ID,
     customTheme: normalizeCustomTheme()
   }
 })
@@ -33,8 +34,10 @@ function cloneDefaultState() {
 function normalizeState(input) {
   const base = cloneDefaultState()
   const value = input && typeof input === 'object' ? input : {}
+  const savedTheme = VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : DEFAULT_THEME_ID
+  const themeId = Number(value.schemaVersion || 0) < 3 && savedTheme === 'official' ? DEFAULT_THEME_ID : savedTheme
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     updates: {
       checkOnStartup: value.updates?.checkOnStartup !== false,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
@@ -42,7 +45,7 @@ function normalizeState(input) {
       skippedVersion: value.updates?.skippedVersion || null
     },
     appearance: {
-      themeId: VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : 'official',
+      themeId,
       customTheme: normalizeCustomTheme(value.appearance?.customTheme)
     }
   }
@@ -88,7 +91,7 @@ class AppStateStore {
 
   updateAppearance(patch = {}) {
     if (Object.prototype.hasOwnProperty.call(patch, 'themeId')) {
-      this.state.appearance.themeId = VALID_THEME_IDS.has(patch.themeId) ? patch.themeId : 'official'
+      this.state.appearance.themeId = VALID_THEME_IDS.has(patch.themeId) ? patch.themeId : DEFAULT_THEME_ID
     }
     if (patch.customTheme && typeof patch.customTheme === 'object') {
       this.state.appearance.customTheme = normalizeCustomTheme({
@@ -101,4 +104,4 @@ class AppStateStore {
   }
 }
 
-module.exports = { AppStateStore, DEFAULT_STATE, VALID_THEME_IDS, normalizeState }
+module.exports = { AppStateStore, DEFAULT_STATE, DEFAULT_THEME_ID, VALID_THEME_IDS, normalizeState }

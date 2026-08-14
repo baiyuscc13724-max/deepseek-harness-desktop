@@ -65,11 +65,27 @@ test('subagents follow the main model unless the user explicitly configures a se
   await assert.rejects(access(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID)), { code: 'ENOENT' })
 })
 
-test('model routing catalog exposes configured providers without reading credentials', async t => {
+test('model routing catalog merges configured and installed provider models without reading credentials', async t => {
   const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-catalog-'))
   t.after(() => rm(dshHome, { recursive: true, force: true }))
   await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-default-model:\n  provider: opencode-go\n  model: deepseek-v4-flash\nllm-pi-ai:\n  providers:\n    opencode-go:\n      models:\n        - id: deepseek-v4-flash\n')
   const result = await getModelRouting({ dshHome, shippedPresetRoot })
-  assert.deepEqual(result.providers, [{ id: 'opencode-go', name: 'opencode-go', models: ['deepseek-v4-flash'] }])
+  assert.equal(result.providers[0].id, 'opencode-go')
+  assert.equal(result.providers[0].name, 'opencode-go')
+  assert.ok(result.providers[0].models.includes('deepseek-v4-flash'))
+  assert.ok(result.providers[0].models.includes('mimo-v2.5'))
+  assert.ok(result.providers[0].models.includes('qwen3.7-max'))
+  assert.ok(result.providers[0].models.length > 1)
   assert.equal(result.subagent.inheritMain, true)
+})
+
+test('a catalog provider with only a credential reference still exposes its full installed model list', async t => {
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-installed-catalog-'))
+  t.after(() => rm(dshHome, { recursive: true, force: true }))
+  await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-default-model:\n  provider: opencode-go\n  model: deepseek-v4-flash\nllm-pi-ai:\n  providers:\n    opencode-go:\n      apiKeyEnv: OPENCODE_GO_API_KEY\n')
+  const result = await getModelRouting({ dshHome, shippedPresetRoot })
+  const provider = result.providers.find(row => row.id === 'opencode-go')
+  assert.ok(provider.models.length >= 10)
+  assert.ok(provider.models.includes('deepseek-v4-pro'))
+  assert.ok(provider.models.includes('kimi-k2.7-code'))
 })

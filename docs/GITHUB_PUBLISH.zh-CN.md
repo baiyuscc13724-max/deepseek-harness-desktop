@@ -10,7 +10,7 @@
 
 ## RC 标签
 
-`v0.9.0-rc.8`
+`v0.9.0-rc.9`
 
 ## 自动构建
 
@@ -23,7 +23,7 @@ gh auth login
 gh auth refresh -h github.com -s workflow
 gh repo create baiyuscc13724-max/deepseek-harness-desktop --public --source . --remote origin --push
 git push origin develop release/v0.9
-git push origin v0.9.0-rc.8
+git push origin v0.9.0-rc.9
 ```
 
 注意：公开前必须运行完整验证与密钥扫描。只有实际安装版、便携版和 GitHub Actions 均通过后才推送 RC 标签。

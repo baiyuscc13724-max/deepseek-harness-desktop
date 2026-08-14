@@ -30,12 +30,29 @@ test('AppStateStore persists only validated appearance fields', () => {
   })
 })
 
+test('new installs use Porcelain Mist while preserving an explicitly selected non-default theme', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-default-theme-'))
+  const file = path.join(dir, 'app-state.json')
+  assert.equal(new AppStateStore(file).get().appearance.themeId, 'porcelain-mist')
+  const store = new AppStateStore(file)
+  store.updateAppearance({ themeId: 'tokyo-night' })
+  assert.equal(new AppStateStore(file).get().appearance.themeId, 'tokyo-night')
+})
+
+test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
+  const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
+  assert.equal(migrated.schemaVersion, 3)
+  assert.equal(migrated.appearance.themeId, 'porcelain-mist')
+  const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
+  assert.equal(explicitOfficial.appearance.themeId, 'official')
+})
+
 test('AppStateStore rejects unknown themes and unsafe custom values', () => {
   const state = normalizeState({ appearance: {
     themeId: '../../escape',
     customTheme: { accent: 'url(file:///secret)', surface: '#123', text: 'red', backgroundFile: '../../secret.txt' }
   } })
-  assert.equal(state.appearance.themeId, 'official')
+  assert.equal(state.appearance.themeId, 'porcelain-mist')
   assert.equal(state.appearance.customTheme.accent, '#6f8cff')
   assert.equal(state.appearance.customTheme.backgroundFile, null)
 })
@@ -46,5 +63,5 @@ test('normalizeState discards unknown mutable fields', () => {
   assert.equal(state.updates.channel, 'stable')
   assert.equal(state.updates.checkOnStartup, true)
   assert.equal('secret' in state, false)
-  assert.equal(state.appearance.themeId, 'official')
+  assert.equal(state.appearance.themeId, 'porcelain-mist')
 })
