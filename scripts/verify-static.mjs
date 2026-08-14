@@ -123,7 +123,7 @@ if (!themeIntegration.includes('__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__') || 
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '0.9.0-rc.9') throw new Error(`Expected package version 0.9.0-rc.9, received ${pkg.version}`)
+if (pkg.version !== '1.0.0') throw new Error(`Expected package version 1.0.0, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
@@ -157,7 +157,7 @@ for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'work
 for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview']) {
   if (!main.includes(contract)) throw new Error(`Electron security contract missing: ${contract}`)
 }
-for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase: 'ready'", 'launchReadyAppUpdate', 'buildWindowsInstallerHandoff', 'ensurePluginMarketplace']) {
+for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase: 'ready'", 'launchReadyAppUpdate', 'openWindowsInstaller', 'shell.openPath', 'ensurePluginMarketplace']) {
   if (!main.includes(updateContract)) throw new Error(`Background updater contract missing: ${updateContract}`)
 }
 if (main.includes('await fetch(safeUpdateUrl')) throw new Error('Update downloads must use Electron system networking for proxy and direct connections.')

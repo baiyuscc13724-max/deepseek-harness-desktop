@@ -1,25 +1,13 @@
 const path = require('node:path')
 
-function quotePowerShellLiteral(value) {
-  return `'${String(value).replaceAll("'", "''")}'`
-}
-
-function buildWindowsInstallerHandoff({ installerPath, parentPid }) {
+async function openWindowsInstaller({ installerPath, openPath }) {
   const resolved = path.resolve(String(installerPath || ''))
   if (!path.isAbsolute(resolved) || !/\.exe$/i.test(resolved)) throw new Error('更新安装包路径无效。')
-  if (!Number.isInteger(parentPid) || parentPid <= 0) throw new Error('桌面进程编号无效。')
-  const installer = quotePowerShellLiteral(resolved)
-  const script = [
-    `$ErrorActionPreference = 'Stop'`,
-    `Wait-Process -Id ${parentPid} -ErrorAction SilentlyContinue`,
-    `Start-Sleep -Milliseconds 1200`,
-    `Start-Process -FilePath ${installer} -ArgumentList @('/NORESTART')`
-  ].join('; ')
-  return {
-    command: 'powershell.exe',
-    args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
-    options: { detached: true, stdio: 'ignore', windowsHide: true }
-  }
+  if (typeof openPath !== 'function') throw new Error('Windows 安装程序启动器不可用。')
+
+  const error = String(await openPath(resolved) || '').trim()
+  if (error) throw new Error(`无法启动更新安装程序：${error}`)
+  return { installerPath: resolved }
 }
 
-module.exports = { buildWindowsInstallerHandoff, quotePowerShellLiteral }
+module.exports = { openWindowsInstaller }

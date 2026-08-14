@@ -11,7 +11,7 @@ const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bri
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
-const { buildWindowsInstallerHandoff } = require('./bridge/update-launcher.cjs')
+const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
 const { AppStateStore } = require('./store/app-state-store.cjs')
 const desktopPackage = require('../package.json')
@@ -413,14 +413,9 @@ async function launchReadyAppUpdate() {
   }
 
   send('updates:install-progress', { phase: 'launch', version: readyUpdate.version })
-  const handoff = buildWindowsInstallerHandoff({ installerPath: readyUpdate.installerPath, parentPid: process.pid })
-  const child = spawn(handoff.command, handoff.args, handoff.options)
-  await new Promise((resolve, reject) => {
-    child.once('spawn', resolve)
-    child.once('error', reject)
-  })
-  child.unref()
+  await openWindowsInstaller({ installerPath: readyUpdate.installerPath, openPath: value => shell.openPath(value) })
   const version = readyUpdate.version
+  await new Promise(resolve => setTimeout(resolve, 1200))
   app.quit()
   return { ok: true, version }
 }

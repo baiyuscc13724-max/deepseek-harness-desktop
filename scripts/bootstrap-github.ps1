@@ -10,6 +10,6 @@ git push -u origin main
 if (-not (git show-ref --verify --quiet refs/heads/develop)) { git branch develop }
 if (-not (git show-ref --verify --quiet refs/heads/release/v0.9)) { git branch release/v0.9 }
 git push origin develop release/v0.9
-if (-not (git rev-parse "v0.9.0-rc.9" 2>$null)) { git tag -a v0.9.0-rc.9 -m "Harness Desktop v0.9.0-rc.9" }
-git push origin v0.9.0-rc.9
+if (-not (git rev-parse "v1.0.0" 2>$null)) { git tag -a v1.0.0 -m "Harness Desktop v1.0.0" }
+git push origin v1.0.0
 Write-Host "Published: https://github.com/$Repo"
