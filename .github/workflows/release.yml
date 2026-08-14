@@ -1,0 +1,129 @@
+name: Build & Release Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Verify source and smoke tests
+        run: npm run verify
+      - name: Audit release contract
+        run: npm run verify:release
+      - name: Ensure tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: node -e "const p=require('./package.json'); if(process.env.GITHUB_REF_NAME !== 'v'+p.version) { console.error('Tag must equal v'+p.version); process.exit(1) }"
+      - name: Build desktop packages
+        run: npm run dist
+      - name: Run packaged Windows self-test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path dist -Recurse -Filter '*.exe' | Where-Object { $_.FullName -match 'win-unpacked' } | Select-Object -First 1
+          if (-not $exe) { throw 'Cannot find unpacked Windows executable for self-test.' }
+          $output = Join-Path $env:RUNNER_TEMP 'harness-desktop-selftest.json'
+          $userData = Join-Path $env:RUNNER_TEMP 'harness-desktop-selftest-userdata'
+          $selfTest = Start-Process -FilePath $exe.FullName -ArgumentList @('--self-test', "--self-test-output=$output", "--user-data-dir=$userData") -Wait -PassThru
+          if ($selfTest.ExitCode -ne 0) {
+            if (Test-Path $output) { Get-Content $output }
+            throw "Packaged Windows self-test exited with code $($selfTest.ExitCode)"
+          }
+          if (-not (Test-Path $output)) { throw 'Packaged Windows self-test did not produce a report.' }
+          $report = Get-Content $output -Raw | ConvertFrom-Json
+          $report | ConvertTo-Json -Depth 8
+          if (-not $report.ok) { throw 'Packaged Windows self-test reported failure.' }
+      - name: Run Windows installer smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem -Path dist -File -Filter '*-win-*.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'Cannot find the Windows Inno Setup installer.' }
+          $installRoot = Join-Path $env:RUNNER_TEMP 'harness-desktop-install-smoke'
+          $process = Start-Process -FilePath $setup.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Windows installer exited with code $($process.ExitCode)." }
+          $installedExe = Get-ChildItem -Path $installRoot -Recurse -File -Filter 'Harness Desktop.exe' | Select-Object -First 1
+          if (-not $installedExe) { throw 'Windows installer did not lay down Harness Desktop.exe.' }
+          $installedAsar = Get-ChildItem -Path $installRoot -Recurse -File -Filter 'app.asar' | Select-Object -First 1
+          if (-not $installedAsar) { throw 'Windows installer did not lay down app.asar.' }
+          $uninstaller = Get-ChildItem -Path $installRoot -Recurse -File -Filter 'unins*.exe' | Select-Object -First 1
+          if ($uninstaller) {
+            $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
+            if ($uninstall.ExitCode -ne 0) { throw "Windows uninstaller exited with code $($uninstall.ExitCode)." }
+          }
+      - name: Audit release artifacts
+        run: npm run verify:artifact
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: dist/**
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: release-artifacts
+      - name: Collect audited install files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \) -print0 |
+            while IFS= read -r -d '' file; do cp "$file" release-files/; done
+          test -n "$(find release-files -maxdepth 1 -type f -print -quit)"
+          (cd release-files && sha256sum * > SHA256SUMS.txt)
+          cat release-files/SHA256SUMS.txt
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          name: Harness Desktop ${{ github.ref_name }}
+          body: |
+            Harness Desktop v0.9.0-rc.2 is the current public release candidate.
+
+            Community-maintained desktop client powered by DeepSeek Harness.
+
+            This is not an official DeepSeek application.
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true

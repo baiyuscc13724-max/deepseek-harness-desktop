@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: DeepSeek Harness upstream
+    url: https://github.com/deepseek-ai/deepseek-harness
+    about: Report upstream Harness issues to the official upstream repository.

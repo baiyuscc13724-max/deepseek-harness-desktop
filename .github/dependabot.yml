@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 5
+    groups:
+      harness-core:
+        patterns:
+          - "@deepseek-ai/dsh"
+          - "@deepseek-ai/dsh-*"
+      desktop-tooling:
+        patterns:
+          - "electron"
+          - "electron-builder"

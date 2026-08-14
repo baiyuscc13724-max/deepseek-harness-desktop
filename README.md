@@ -102,4 +102,3 @@ DeepSeek 官方 manifest → 提示新的 Harness 核心版本
 本项目代码按 MIT License 开源，是社区维护的非官方桌面壳，不代表 DeepSeek 官方背书。应用使用的 DeepSeek 鲸鱼图标来自官方 DeepSeek GitHub 品牌资产；软件许可证与商标权相互独立，发行者仍应遵守最新品牌规则。
 
 上游：`https://github.com/deepseek-ai/deepseek-harness`
-

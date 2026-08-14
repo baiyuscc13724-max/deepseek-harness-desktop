@@ -1,0 +1,70 @@
+const { existsSync, readFileSync } = require('node:fs')
+const path = require('node:path')
+const { createRequire } = require('node:module')
+
+const requireFromHere = createRequire(__filename)
+
+function resolvePackageBin(packageName, preferredBin) {
+  const packageJsonPath = requireFromHere.resolve(`${packageName}/package.json`)
+  const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
+  let bin = pkg.bin
+  if (typeof bin === 'object' && bin) {
+    bin = (preferredBin && bin[preferredBin]) || Object.values(bin)[0]
+  }
+  if (typeof bin !== 'string' || !bin) {
+    throw new Error(`${packageName} does not expose a usable CLI bin.`)
+  }
+  const cli = path.resolve(path.dirname(packageJsonPath), bin)
+  if (!existsSync(cli)) throw new Error(`Resolved CLI does not exist: ${cli}`)
+  return { cli, pkg, packageJsonPath }
+}
+
+function resolveDshBin() {
+  const explicitCommand = process.env.HARNESS_DESKTOP_DSH_COMMAND
+  if (explicitCommand) {
+    return {
+      command: explicitCommand,
+      argsPrefix: parseArgsEnv(process.env.HARNESS_DESKTOP_DSH_ARGS),
+      env: {},
+      source: 'env',
+      version: 'external'
+    }
+  }
+
+  try {
+    const { cli, pkg } = resolvePackageBin('@deepseek-ai/dsh', 'dsh')
+    return {
+      command: process.execPath,
+      argsPrefix: [cli],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+      source: 'bundled',
+      version: pkg.version || 'unknown'
+    }
+  } catch (error) {
+    const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+    return {
+      command: npx,
+      argsPrefix: ['-y', '@deepseek-ai/dsh'],
+      env: {},
+      source: 'npx-fallback',
+      version: 'unresolved',
+      error: String(error)
+    }
+  }
+}
+
+function parseArgsEnv(value) {
+  if (!value || !String(value).trim()) return []
+  const text = String(value).trim()
+  try {
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) return parsed
+  } catch {}
+  return text.split(/\s+/).filter(Boolean)
+}
+
+module.exports = {
+  resolveDshBin,
+  resolvePackageBin,
+  parseArgsEnv
+}

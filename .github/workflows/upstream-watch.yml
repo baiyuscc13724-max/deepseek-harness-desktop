@@ -1,0 +1,21 @@
+name: Upstream Watch
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: upstream
+        run: node scripts/upstream-status.mjs
+      - name: Report Harness update
+        if: steps.upstream.outputs.update_available == 'true'
+        run: |
+          echo "::notice title=DeepSeek Harness update::Pinned ${{ steps.upstream.outputs.pinned }}, latest ${{ steps.upstream.outputs.latest }}. Create an upstream compatibility PR and run acceptance tests before release."

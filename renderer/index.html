@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src http://127.0.0.1:* http://localhost:*;" />
+  <title>Harness Desktop</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="official-shell">
+    <div class="window-drag drag-region" aria-hidden="true"></div>
+    <webview id="runtimeView" partition="persist:harness"></webview>
+    <section id="runtimeStatus" class="runtime-status" aria-live="polite">
+      <img src="./assets/deepseek-icon.svg" alt="" />
+      <strong id="runtimeStatusTitle">正在启动 DeepSeek Harness…</strong>
+      <span id="runtimeStatusDetail">官方工作台准备中</span>
+      <button id="retryRuntime" class="retry-button hidden">重试</button>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

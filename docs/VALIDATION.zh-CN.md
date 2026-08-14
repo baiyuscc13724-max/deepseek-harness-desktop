@@ -1,0 +1,34 @@
+# Harness Desktop v0.9.0-rc.2 验收
+
+## 自动化
+
+```bash
+npm run verify
+npm run verify:release
+npm run dist
+npm run verify:packaged
+npm run verify:artifact
+```
+
+自动化验证单一官方工作台、最小 IPC、WebView 安全边界、更新服务、官方图标、废弃模块清除、打包后 Runtime/Renderer/userData 自检、Windows 安装落盘契约和产物 SHA-256。
+
+## Windows 安装版
+
+1. 启动 Inno Setup `.exe`，确认安装向导为纯简体中文并使用官方 DeepSeek 鲸鱼图标；
+2. 选择安装目录并完成安装；
+3. 检查桌面/开始菜单快捷方式和卸载列表图标；
+4. 启动后应直接进入官方 Harness 工作台，无引导页、重复侧栏、顶部黑条或独立桌面设置；
+5. 模型下拉、工作区选择、Harness 权限和官方设置可以正常交互；
+6. 官方“设置 → 通用设置”能看到桌面版与 Harness 更新项；
+7. 完成一个真实模型请求和一次需要 Harness 权限的操作；
+8. 退出后确认没有残留由桌面版创建的 Runtime 进程。
+
+## Windows 便携版
+
+1. 直接启动便携版 `.exe`，确认图标与安装版一致；
+2. 重复官方工作台、模型、权限、更新和真实请求验收；
+3. 关闭后确认进程退出，不在程序目录留下安装器状态。
+
+## 卸载与清理
+
+完成验收后可以卸载测试安装版，并删除明确创建的临时测试工作区。默认卸载不删除 Harness/userData；如需删除用户数据，必须单独确认准确路径后执行。
