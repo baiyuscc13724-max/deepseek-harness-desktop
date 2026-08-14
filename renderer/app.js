@@ -38,6 +38,42 @@ function themePreview(theme) {
   return theme.preview
 }
 
+function applyShellTheme() {
+  const theme = themeCatalog.find(entry => entry.id === appearanceState.themeId)
+  const root = document.documentElement
+  if (!theme || theme.id === 'official') {
+    root.removeAttribute('data-shell-theme')
+    root.style.removeProperty('color-scheme')
+    for (const name of ['--shell-surface', '--shell-layer', '--shell-layer-2', '--shell-text', '--shell-text-secondary', '--shell-text-tertiary', '--shell-border', '--shell-hover', '--shell-accent', '--shell-overlay']) root.style.removeProperty(name)
+    return
+  }
+  const custom = appearanceState.customTheme || {}
+  const prefersDark = matchMedia('(prefers-color-scheme: dark)').matches
+  const mode = theme.id === 'custom' ? custom.mode : theme.mode === 'adaptive' ? (prefersDark ? 'dark' : 'light') : theme.mode
+  const vars = theme.id === 'custom'
+    ? {
+        '--dsw-alias-bg-base': custom.surface,
+        '--dsw-alias-bg-layer-1': custom.surface,
+        '--dsw-alias-bg-layer-2': custom.surface,
+        '--dsw-alias-label-primary': custom.text,
+        '--dsw-alias-label-secondary': custom.text,
+        '--dsw-alias-brand-primary': custom.accent
+      }
+    : { ...theme.vars, ...(theme.mode === 'adaptive' && mode === 'dark' ? theme.darkVars : {}) }
+  root.dataset.shellTheme = theme.id
+  root.style.colorScheme = mode === 'light' ? 'light' : 'dark'
+  root.style.setProperty('--shell-surface', vars['--dsw-alias-bg-base'] || vars['--dsw-alias-bg-layer-1'] || '#181a1f')
+  root.style.setProperty('--shell-layer', vars['--dsw-alias-bg-layer-1'] || vars['--dsw-alias-bg-base'] || '#202228')
+  root.style.setProperty('--shell-layer-2', vars['--dsw-alias-bg-layer-2'] || vars['--dsw-alias-bg-layer-1'] || '#2a2d34')
+  root.style.setProperty('--shell-text', vars['--dsw-alias-label-primary'] || '#eef0f4')
+  root.style.setProperty('--shell-text-secondary', vars['--dsw-alias-label-secondary'] || vars['--dsw-alias-label-primary'] || '#a5a9b2')
+  root.style.setProperty('--shell-text-tertiary', vars['--dsw-alias-label-tertiary'] || vars['--dsw-alias-label-secondary'] || '#8c929d')
+  root.style.setProperty('--shell-border', vars['--dsw-alias-border-l2'] || 'rgba(210,215,225,.18)')
+  root.style.setProperty('--shell-hover', vars['--dsw-alias-interactive-bg-hover'] || 'rgba(255,255,255,.08)')
+  root.style.setProperty('--shell-accent', vars['--dsw-alias-brand-primary'] || '#8ba5ff')
+  root.style.setProperty('--shell-overlay', mode === 'light' ? 'rgba(15,23,42,.32)' : 'rgba(2,6,16,.58)')
+}
+
 function renderSkinPicker() {
   skinPickerGrid.innerHTML = themeCatalog.map(theme => `
     <article class="skin-picker-card" data-skin-id="${escapeHtml(theme.id)}" data-selected="${theme.id === appearanceState.themeId}" tabindex="0">
@@ -76,6 +112,7 @@ function renderSkinPicker() {
 }
 
 function openSkinPicker() {
+  applyShellTheme()
   renderSkinPicker()
   skinPickerOverlay.classList.remove('hidden')
   skinPickerOverlay.setAttribute('aria-hidden', 'false')
@@ -265,6 +302,7 @@ async function publishUpdateState() {
 }
 
 async function publishAppearanceState() {
+  applyShellTheme()
   await themeIntegration.publish(runtimeView, appearanceState, themeCatalog).catch(() => {})
 }
 
@@ -420,6 +458,7 @@ async function startOfficialWorkspace() {
   modelRoutingState = { ...await api.getModelRouting(), saving: false, saved: false, error: '' }
   const themeAssets = await api.getThemeAssets()
   themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)
+  applyShellTheme()
   renderSkinPicker()
   const initial = await api.getRuntimeState()
   renderRuntimeState(initial)

@@ -15,35 +15,44 @@
     style.dataset.harnessDesktop = 'model-routing'
     style.textContent = `
       #harness-desktop-model-routing { box-sizing:border-box; max-width:720px; margin:0 0 20px; border:1px solid var(--dsw-alias-border-l2); border-radius:14px; padding:16px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-1); }
-      #harness-desktop-model-routing .hd-route-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+      #harness-desktop-model-routing .hd-route-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
       #harness-desktop-model-routing h2 { margin:0; font-size:16px; line-height:24px; font-weight:500; }
       #harness-desktop-model-routing .hd-route-intro { margin:3px 0 0; color:var(--dsw-alias-label-tertiary); font-size:12px; line-height:18px; }
       #harness-desktop-model-routing .hd-route-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:14px; }
       #harness-desktop-model-routing .hd-route-card { border:1px solid var(--dsw-alias-border-l2); border-radius:12px; padding:13px; background:var(--dsw-alias-bg-module-platform); }
       #harness-desktop-model-routing .hd-route-title { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; font-size:14px; font-weight:500; }
-      #harness-desktop-model-routing .hd-route-inherit { display:flex; align-items:center; gap:6px; color:var(--dsw-alias-label-secondary); font-size:11px; font-weight:400; }
       #harness-desktop-model-routing .hd-route-field { display:grid; gap:5px; margin-top:9px; color:var(--dsw-alias-label-secondary); font-size:12px; }
-      #harness-desktop-model-routing input[type="text"] { box-sizing:border-box; width:100%; height:34px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:0 10px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-1); font:inherit; font-size:13px; }
-      #harness-desktop-model-routing input[type="text"]:focus { border-color:var(--dsw-alias-brand-primary); outline:none; }
-      #harness-desktop-model-routing input:disabled { opacity:.55; }
+      #harness-desktop-model-routing select { box-sizing:border-box; width:100%; height:36px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:0 10px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-1); font:inherit; font-size:13px; }
+      #harness-desktop-model-routing select:focus { border-color:var(--dsw-alias-brand-primary); outline:none; }
+      #harness-desktop-model-routing .hd-route-mode { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin:2px 0 10px; border:1px solid var(--dsw-alias-border-l2); border-radius:10px; padding:3px; background:var(--dsw-alias-bg-layer-1); }
+      #harness-desktop-model-routing .hd-route-mode button { min-height:30px; border-radius:7px; padding:4px 8px; color:var(--dsw-alias-label-secondary); background:transparent; }
+      #harness-desktop-model-routing .hd-route-mode button[aria-pressed="true"] { color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-3); box-shadow:0 1px 4px rgba(0,0,0,.08); }
+      #harness-desktop-model-routing .hd-route-summary { min-height:76px; display:grid; place-content:center; border:1px dashed var(--dsw-alias-border-l2); border-radius:9px; color:var(--dsw-alias-label-secondary); text-align:center; font-size:12px; }
+      #harness-desktop-model-routing .hd-route-fields[hidden], #harness-desktop-model-routing .hd-route-summary[hidden] { display:none; }
       #harness-desktop-model-routing .hd-route-footer { display:flex; align-items:center; gap:12px; margin-top:14px; }
       #harness-desktop-model-routing .hd-route-status { flex:1; color:var(--dsw-alias-label-tertiary); font-size:12px; line-height:18px; }
       #harness-desktop-model-routing .hd-route-status[data-error="true"] { color:var(--dsw-alias-state-error-primary); }
       #harness-desktop-model-routing button { min-height:34px; border:0; border-radius:17px; padding:6px 15px; color:var(--dsw-alias-label-primary-foreground); background:var(--dsw-alias-button-primary-fill); font:inherit; font-size:13px; cursor:pointer; }
+      #harness-desktop-model-routing .hd-route-add { flex:none; border:1px solid var(--dsw-alias-border-l2); color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); }
       #harness-desktop-model-routing button:disabled { cursor:default; opacity:.55; }
       @media (max-width:760px) { #harness-desktop-model-routing .hd-route-grid { grid-template-columns:1fr; } }
     `
     document.head.appendChild(style)
 
     const modelsFor = (state, provider) => state.providers?.find(row => row.id === provider)?.models || []
-    const fillList = (list, values) => {
-      const html = [...new Set(values.filter(Boolean))].map(value => `<option value="${escapeHtml(value)}"></option>`).join('')
-      if (list.innerHTML !== html) list.innerHTML = html
+    const fillSelect = (select, rows, selected, placeholder) => {
+      const normalized = rows.map(row => typeof row === 'string' ? { value: row, label: row } : row).filter(row => row.value)
+      if (selected && !normalized.some(row => row.value === selected)) normalized.unshift({ value: selected, label: selected })
+      const html = `<option value="">${escapeHtml(placeholder)}</option>${normalized.map(row => `<option value="${escapeHtml(row.value)}">${escapeHtml(row.label || row.value)}</option>`).join('')}`
+      if (select.innerHTML !== html) select.innerHTML = html
+      select.value = selected || ''
     }
-    const updateDisabled = panel => {
-      const inherited = panel.querySelector('[data-hd-sub-inherit]').checked
-      panel.querySelector('[data-hd-sub-provider]').disabled = inherited
-      panel.querySelector('[data-hd-sub-model]').disabled = inherited
+    const setSubagentMode = (panel, inherited) => {
+      panel.dataset.subInherit = inherited ? 'true' : 'false'
+      panel.querySelector('[data-hd-sub-mode="inherit"]').setAttribute('aria-pressed', String(inherited))
+      panel.querySelector('[data-hd-sub-mode="independent"]').setAttribute('aria-pressed', String(!inherited))
+      panel.querySelector('[data-hd-sub-fields]').hidden = inherited
+      panel.querySelector('[data-hd-sub-summary]').hidden = !inherited
     }
 
     const paint = panel => {
@@ -52,18 +61,22 @@
       const mainModel = panel.querySelector('[data-hd-main-model]')
       const subProvider = panel.querySelector('[data-hd-sub-provider]')
       const subModel = panel.querySelector('[data-hd-sub-model]')
-      const inherit = panel.querySelector('[data-hd-sub-inherit]')
+      const inherited = panel.dataset.dirty ? panel.dataset.subInherit !== 'false' : state.subagent?.inheritMain !== false
+      const providerRows = (state.providers || []).map(row => ({ value: row.id, label: row.name && row.name !== row.id ? `${row.name} (${row.id})` : row.id }))
       if (!panel.dataset.dirty) {
-        mainProvider.value = state.main?.provider || ''
-        mainModel.value = state.main?.model || ''
-        subProvider.value = state.subagent?.provider || state.main?.provider || ''
-        subModel.value = state.subagent?.model || state.main?.model || ''
-        inherit.checked = state.subagent?.inheritMain !== false
+        panel.dataset.subProvider = state.subagent?.provider || state.main?.provider || ''
+        panel.dataset.subModel = state.subagent?.model || state.main?.model || ''
       }
-      fillList(panel.querySelector('[data-hd-provider-list]'), (state.providers || []).map(row => row.id))
-      fillList(panel.querySelector('[data-hd-main-model-list]'), modelsFor(state, mainProvider.value))
-      fillList(panel.querySelector('[data-hd-sub-model-list]'), modelsFor(state, subProvider.value))
-      updateDisabled(panel)
+      const mainProviderValue = panel.dataset.dirty ? mainProvider.value : state.main?.provider || ''
+      const mainModelValue = panel.dataset.dirty ? mainModel.value : state.main?.model || ''
+      const subProviderValue = panel.dataset.dirty ? subProvider.value : panel.dataset.subProvider
+      const subModelValue = panel.dataset.dirty ? subModel.value : panel.dataset.subModel
+      fillSelect(mainProvider, providerRows, mainProviderValue, '选择服务商')
+      fillSelect(mainModel, modelsFor(state, mainProvider.value).map(value => ({ value, label: value })), mainModelValue, '选择模型')
+      fillSelect(subProvider, providerRows, subProviderValue, '选择服务商')
+      fillSelect(subModel, modelsFor(state, subProvider.value).map(value => ({ value, label: value })), subModelValue, '选择模型')
+      setSubagentMode(panel, inherited)
+      panel.querySelector('[data-hd-sub-summary]').textContent = mainProvider.value && mainModel.value ? `${mainProvider.value} / ${mainModel.value}` : '先选择主模型'
       const status = panel.querySelector('[data-hd-route-status]')
       status.dataset.error = state.error ? 'true' : 'false'
       status.textContent = state.error
@@ -80,34 +93,47 @@
       const panel = document.createElement('section')
       panel.id = 'harness-desktop-model-routing'
       panel.innerHTML = `
-        <div class="hd-route-head"><div><h2>主模型与子代理</h2><p class="hd-route-intro">像 Hermes 一样分别指定主代理与内置子代理的服务商和模型。仅影响新会话。</p></div></div>
+        <div class="hd-route-head"><div><h2>主模型与子代理</h2><p class="hd-route-intro">选择模型即可；没有需要的模型时，先添加一次。</p></div><button type="button" class="hd-route-add" data-hd-add-model>＋ 添加模型</button></div>
         <div class="hd-route-grid">
           <div class="hd-route-card">
             <div class="hd-route-title">主模型</div>
-            <label class="hd-route-field">服务商<input type="text" data-hd-main-provider list="hd-route-providers" autocomplete="off" /></label>
-            <label class="hd-route-field">模型<input type="text" data-hd-main-model list="hd-route-main-models" autocomplete="off" /></label>
+            <label class="hd-route-field">服务商<select data-hd-main-provider></select></label>
+            <label class="hd-route-field">模型<select data-hd-main-model></select></label>
           </div>
           <div class="hd-route-card">
-            <div class="hd-route-title"><span>子代理</span><label class="hd-route-inherit"><input type="checkbox" data-hd-sub-inherit /> 跟随主模型</label></div>
-            <label class="hd-route-field">服务商<input type="text" data-hd-sub-provider list="hd-route-providers" autocomplete="off" /></label>
-            <label class="hd-route-field">模型<input type="text" data-hd-sub-model list="hd-route-sub-models" autocomplete="off" /></label>
+            <div class="hd-route-title">子代理</div>
+            <div class="hd-route-mode"><button type="button" data-hd-sub-mode="inherit">跟随主模型</button><button type="button" data-hd-sub-mode="independent">单独指定</button></div>
+            <div class="hd-route-summary" data-hd-sub-summary></div>
+            <div class="hd-route-fields" data-hd-sub-fields>
+              <label class="hd-route-field">服务商<select data-hd-sub-provider></select></label>
+              <label class="hd-route-field">模型<select data-hd-sub-model></select></label>
+            </div>
           </div>
         </div>
-        <datalist id="hd-route-providers" data-hd-provider-list></datalist>
-        <datalist id="hd-route-main-models" data-hd-main-model-list></datalist>
-        <datalist id="hd-route-sub-models" data-hd-sub-model-list></datalist>
         <div class="hd-route-footer"><span class="hd-route-status" data-hd-route-status></span><button type="button" data-hd-route-save>保存模型路由</button></div>
       `
-      panel.querySelectorAll('input').forEach(input => input.addEventListener('input', () => {
+      panel.querySelectorAll('select').forEach(select => select.addEventListener('change', () => {
         panel.dataset.dirty = 'true'
-        updateDisabled(panel)
+        if (select.matches('[data-hd-main-provider]')) panel.querySelector('[data-hd-main-model]').value = ''
+        if (select.matches('[data-hd-sub-provider]')) panel.querySelector('[data-hd-sub-model]').value = ''
         paint(panel)
       }))
+      panel.querySelectorAll('[data-hd-sub-mode]').forEach(button => button.addEventListener('click', () => {
+        panel.dataset.dirty = 'true'
+        setSubagentMode(panel, button.dataset.hdSubMode === 'inherit')
+        paint(panel)
+      }))
+      panel.querySelector('[data-hd-add-model]').addEventListener('click', () => {
+        const content = panel.parentElement
+        const addButton = [...content.querySelectorAll('button')].find(button => !panel.contains(button) && /添加.*(模型|服务商)|Add.*(model|provider)|自定义模型/i.test(button.textContent || ''))
+        if (addButton) addButton.click()
+        else panel.nextElementSibling?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
       panel.querySelector('[data-hd-route-save]').addEventListener('click', () => {
         const values = {
           mainProvider: panel.querySelector('[data-hd-main-provider]').value.trim(),
           mainModel: panel.querySelector('[data-hd-main-model]').value.trim(),
-          subInherit: panel.querySelector('[data-hd-sub-inherit]').checked ? '1' : '0',
+          subInherit: panel.dataset.subInherit !== 'false' ? '1' : '0',
           subProvider: panel.querySelector('[data-hd-sub-provider]').value.trim(),
           subModel: panel.querySelector('[data-hd-sub-model]').value.trim()
         }

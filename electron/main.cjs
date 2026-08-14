@@ -8,8 +8,10 @@ const path = require('node:path')
 
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
+const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
+const { buildWindowsInstallerHandoff } = require('./bridge/update-launcher.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
 const { AppStateStore } = require('./store/app-state-store.cjs')
 const desktopPackage = require('../package.json')
@@ -289,6 +291,13 @@ function modelRoutingOptions() {
   }
 }
 
+function pluginMarketplaceOptions() {
+  return {
+    dshHome: String(process.env.DSH_HOME || path.join(app.getPath('home'), '.dsh')).trim(),
+    bundledRoot: path.join(__dirname, '..', 'node_modules', 'dsh-plugin-marketplace')
+  }
+}
+
 async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {} } = {}) {
   const target = new URL(url)
   if (!['https:', 'http:'].includes(target.protocol)) throw new Error('更新地址只允许 http/https。')
@@ -375,13 +384,13 @@ async function installAppUpdate() {
       const updatesDir = path.join(app.getPath('temp'), 'harness-desktop-updates')
       await mkdir(updatesDir, { recursive: true })
       installerPath = path.join(updatesDir, path.basename(update.installer.name))
-    send('updates:install-progress', { phase: 'checksum', version: update.latestVersion })
-    const expectedHash = await fetchChecksum(update.checksums.url, update.installer.name)
-    send('updates:install-progress', { phase: 'download', version: update.latestVersion, received: 0, total: update.installer.size || 0 })
-    const downloaded = await downloadUpdateFile(update.installer.url, installerPath, update.installer.size, progress => {
-      send('updates:install-progress', { phase: 'download', version: update.latestVersion, ...progress })
-    })
-    if (downloaded.sha256 !== expectedHash) throw new Error('更新安装包 SHA-256 校验失败，已停止安装。')
+      send('updates:install-progress', { phase: 'checksum', version: update.latestVersion })
+      const expectedHash = await fetchChecksum(update.checksums.url, update.installer.name)
+      send('updates:install-progress', { phase: 'download', version: update.latestVersion, received: 0, total: update.installer.size || 0 })
+      const downloaded = await downloadUpdateFile(update.installer.url, installerPath, update.installer.size, progress => {
+        send('updates:install-progress', { phase: 'download', version: update.latestVersion, ...progress })
+      })
+      if (downloaded.sha256 !== expectedHash) throw new Error('更新安装包 SHA-256 校验失败，已停止安装。')
 
       readyUpdate = { version: update.latestVersion, installerPath }
     }
@@ -406,17 +415,14 @@ async function installAppUpdate() {
     }
 
     send('updates:install-progress', { phase: 'launch', version: update.latestVersion })
-    const child = spawn(installerPath, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS'], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true
-    })
+    const handoff = buildWindowsInstallerHandoff({ installerPath, parentPid: process.pid })
+    const child = spawn(handoff.command, handoff.args, handoff.options)
     await new Promise((resolve, reject) => {
       child.once('spawn', resolve)
       child.once('error', reject)
     })
     child.unref()
-    setTimeout(() => app.quit(), 700).unref()
+    app.quit()
     return { ok: true, version: update.latestVersion }
   })()
 
@@ -536,6 +542,11 @@ app.whenReady().then(async () => {
   }
   await ensureModelRouting(modelRoutingOptions()).catch(error => {
     console.warn(`Unable to restore desktop model routing: ${error.message}`)
+  })
+  await ensurePluginMarketplace(pluginMarketplaceOptions()).then(result => {
+    if (result.warning) console.warn(result.warning)
+  }).catch(error => {
+    console.warn(`Unable to prepare DSH plugin marketplace: ${error.message}`)
   })
   createWindow()
   app.on('activate', () => {

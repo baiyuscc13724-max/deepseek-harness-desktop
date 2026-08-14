@@ -1,24 +1,24 @@
 [
   {
-    "tag_name": "v0.9.0-rc.6",
-    "name": "Harness Desktop v0.9.0-rc.6",
-    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v0.9.0-rc.6",
+    "tag_name": "v0.9.0-rc.7",
+    "name": "Harness Desktop v0.9.0-rc.7",
+    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v0.9.0-rc.7",
     "prerelease": true,
     "draft": false,
     "assets": [
       {
-        "name": "Harness-Desktop-0.9.0-rc.6-win-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.6/Harness-Desktop-0.9.0-rc.6-win-x64.exe",
-        "size": 127848842
+        "name": "Harness-Desktop-0.9.0-rc.7-win-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.7/Harness-Desktop-0.9.0-rc.7-win-x64.exe",
+        "size": 129067834
       },
       {
-        "name": "Harness-Desktop-0.9.0-rc.6-portable-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.6/Harness-Desktop-0.9.0-rc.6-portable-x64.exe",
-        "size": 122108112
+        "name": "Harness-Desktop-0.9.0-rc.7-portable-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.7/Harness-Desktop-0.9.0-rc.7-portable-x64.exe",
+        "size": 123315155
       },
       {
         "name": "SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.6/SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.7/SHA256SUMS.txt",
         "size": 215
       }
     ]

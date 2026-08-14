@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '0.9.0-rc.6') throw new Error(`release audit expects 0.9.0-rc.6, got ${pkg.version}`)
+if (pkg.version !== '0.9.0-rc.7') throw new Error(`release audit expects 0.9.0-rc.7, got ${pkg.version}`)
 if (!pkg.author?.email) throw new Error('Linux .deb packaging requires a maintainer email in package author metadata.')
 if (pkg.main !== 'electron/main.cjs') throw new Error('Electron main entry drifted.')
 if (pkg.build?.asar !== true) throw new Error('Release must keep ASAR enabled.')
@@ -20,7 +20,7 @@ if (!pkg.build?.win?.target?.includes('portable')) throw new Error('Windows port
 if (pkg.build?.win?.target?.includes('nsis') || pkg.build?.nsis) throw new Error('The blocked NSIS installer must not return.')
 for (const target of ['dmg', 'zip']) if (!pkg.build?.mac?.target?.includes(target)) throw new Error(`macOS target missing: ${target}`)
 for (const target of ['AppImage', 'deb']) if (!pkg.build?.linux?.target?.includes(target)) throw new Error(`Linux target missing: ${target}`)
-for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
+for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
 
 const installer = await readFile(path.join(root, 'build/installer.iss'), 'utf8')
 for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={localappdata}\\Programs\\{#MyAppName}', 'OutputBaseFilename=Harness-Desktop-{#MyAppVersion}-win-x64', 'SetupIconFile=..\\dist\\.icon-ico\\icon.ico', 'UninstallDisplayIcon={app}\\{#MyAppExeName}', 'Name: "chinesesimp"', 'compiler:Languages\\ChineseSimplified.isl', 'recursesubdirs', 'autodesktop', 'autoprograms']) {
@@ -31,8 +31,12 @@ const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
 for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview']) {
   if (!main.includes(contract)) throw new Error(`Electron security contract missing: ${contract}`)
 }
-for (const contract of ["ipcMain.handle('updates:install'", 'SHA256SUMS.txt', "'/VERYSILENT'", 'downloadUpdateFile', 'fetchChecksum']) {
+for (const contract of ["ipcMain.handle('updates:install'", 'SHA256SUMS.txt', 'buildWindowsInstallerHandoff', 'downloadUpdateFile', 'fetchChecksum', 'ensurePluginMarketplace']) {
   if (!main.includes(contract)) throw new Error(`Desktop self-update contract missing: ${contract}`)
+}
+const updateLauncher = await readFile(path.join(root, 'electron/bridge/update-launcher.cjs'), 'utf8')
+for (const contract of ['Wait-Process', 'Start-Process', "'/VERYSILENT'", "'/CLOSEAPPLICATIONS'"]) {
+  if (!updateLauncher.includes(contract)) throw new Error(`Installer handoff contract missing: ${contract}`)
 }
 for (const removedContract of ['AgentBridge', 'TerminalManager', 'SessionStore', 'ProviderStore']) {
   if (main.includes(removedContract)) throw new Error(`Obsolete native backend returned to the release: ${removedContract}`)

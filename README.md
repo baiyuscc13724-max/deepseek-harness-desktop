@@ -9,11 +9,11 @@ Harness Desktop 是面向 Windows 的开源桌面客户端，直接运行并显�
 
 ## 下载
 
-当前版本：`v0.9.0-rc.6`
+当前版本：`v0.9.0-rc.7`
 
-- [Windows 中文安装版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.6/Harness-Desktop-0.9.0-rc.6-win-x64.exe)
-- [Windows 便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.6/Harness-Desktop-0.9.0-rc.6-portable-x64.exe)
-- [SHA-256 校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.6/SHA256SUMS.txt)
+- [Windows 中文安装版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.7/Harness-Desktop-0.9.0-rc.7-win-x64.exe)
+- [Windows 便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.7/Harness-Desktop-0.9.0-rc.7-portable-x64.exe)
+- [SHA-256 校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.7/SHA256SUMS.txt)
 
 安装版按当前用户安装，不要求管理员权限；便携版可以直接运行。模型和密钥在官方 Harness 设置中管理，本项目不保存第二份 Provider 配置。
 
@@ -28,7 +28,8 @@ Harness Desktop 是面向 Windows 的开源桌面客户端，直接运行并显�
 - 下载新安装包后强制校验 `SHA256SUMS.txt`，校验通过才会启动中文升级程序；
 - 在官方“设置”内增加外观皮肤：内置多款开源配色、Deep Whale 女仆工坊皮肤和自定义颜色/背景图，双击卡片即可应用；
 - 桌面壳顶部提供独立“皮肤”快捷窗，双击应用后自动关闭，不必先打开完整设置；
-- 在官方“模型”设置中增加主模型与子代理路由；未单独配置子代理时默认跟随主模型，独立配置保存在用户目录并可跨官方更新保留；
+- 在官方“模型”设置中增加主模型与子代理的直接选择；子代理可跟随主模型或单独指定，配置保存在用户目录并可跨官方更新保留；
+- 在官方设置中内置实时 DSH 插件市场，可直接安装和更新社区插件；用户插件不会被桌面版或 Harness 核心更新覆盖；
 - 应用、安装包、便携版和卸载列表使用 DeepSeek 鲸鱼图标。
 
 ## 皮肤许可说明

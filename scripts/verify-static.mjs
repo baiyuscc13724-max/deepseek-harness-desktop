@@ -7,7 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
   'electron/main.cjs', 'electron/preload.cjs',
   'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs',
-  'electron/bridge/update-service.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs',
+  'electron/bridge/update-service.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs',
   'electron/store/app-state-store.cjs',
   'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js',
   'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -15,7 +15,7 @@ const required = [
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs',
+  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/plugin-marketplace-service.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md',
   'build/installer.iss', 'scripts/build-release.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json'
@@ -88,6 +88,9 @@ if (!themeIntegration.includes("event.detail >= 2") || !themeIntegration.include
 if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includes('markThemeSurfaces') || !themeIntegration.includes('[data-slot="conversation"]')) {
   throw new Error('Theme integration must survive upstream class-name changes and isolate official surface variables.')
 }
+if (!rendererScript.includes('applyShellTheme()') || !rendererStyles.includes('--shell-surface') || !rendererStyles.includes('--shell-accent')) {
+  throw new Error('The standalone skin picker must inherit the selected Harness Desktop theme.')
+}
 if (!rendererScript.includes('api.getModelRouting()') || !rendererScript.includes('api.saveModelRouting(') || !rendererScript.includes("target.hostname === 'save-model-routing'")) {
   throw new Error('Official Models settings must expose independent main-model and subagent routing.')
 }
@@ -99,14 +102,20 @@ const modelRoutingIntegration = await readFile(path.join(root, 'renderer/model-r
 for (const contract of ['主模型与子代理', '跟随主模型', 'data-hd-sub-provider', 'data-hd-sub-model', '不受官方更新覆盖']) {
   if (!modelRoutingIntegration.includes(contract)) throw new Error(`Model routing settings UI is missing: ${contract}`)
 }
+for (const contract of ['data-hd-sub-mode="inherit"', 'data-hd-sub-mode="independent"', 'data-hd-add-model', '＋ 添加模型', '选择服务商', '选择模型']) {
+  if (!modelRoutingIntegration.includes(contract)) throw new Error(`Simple model routing selector is missing: ${contract}`)
+}
 if (!themeIntegration.includes('__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__') || !themeIntegration.includes('mount(false)') || !themeIntegration.includes('[data-color-scheme]')) {
   throw new Error('Theme restoration must be idempotent and override nested upstream theme providers after restart.')
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '0.9.0-rc.6') throw new Error(`Expected package version 0.9.0-rc.6, received ${pkg.version}`)
+if (pkg.version !== '0.9.0-rc.7') throw new Error(`Expected package version 0.9.0-rc.7, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
+if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'github:bradeGithub/DSH-Plugins-Marketplace#a84581f15609b8b76eb900ff4e82d8ffcd454c44') {
+  throw new Error('The in-app DSH plugin marketplace must remain pinned to the audited upstream commit.')
+}
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')
 if (pkg.scripts?.['test:provider:real']) throw new Error('The removed desktop provider smoke script must not return.')
@@ -134,7 +143,7 @@ for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'work
 for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview']) {
   if (!main.includes(contract)) throw new Error(`Electron security contract missing: ${contract}`)
 }
-for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase: 'ready'", 'dialog.showMessageBox']) {
+for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase: 'ready'", 'dialog.showMessageBox', 'buildWindowsInstallerHandoff', 'ensurePluginMarketplace']) {
   if (!main.includes(updateContract)) throw new Error(`Background updater contract missing: ${updateContract}`)
 }
 if (main.includes('await fetch(safeUpdateUrl')) throw new Error('Update downloads must use Electron system networking for proxy and direct connections.')

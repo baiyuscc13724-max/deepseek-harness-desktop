@@ -26,6 +26,16 @@ electron-builder is licensed under the MIT License. See its upstream project for
 
 `cross-spawn` is licensed under the MIT License. Harness Desktop uses it to launch the bundled Harness command consistently across supported platforms without routing arguments through a shell.
 
+## DSH Plugin Marketplace
+
+`dsh-plugin-marketplace` version 1.2.0 is licensed under the MIT License and is maintained by bradeGithub. Harness Desktop bundles the pinned upstream release and installs it into the user's DSH Web profile so the official Harness settings can display, install, and update community plugins.
+
+Source: https://github.com/bradeGithub/DSH-Plugins-Marketplace
+
+Copyright (c) 2026 bradeGithub
+
+The marketplace lists and can execute installation code from independent third-party repositories. Those repositories retain their own licenses and are not endorsed by Harness Desktop, DeepSeek, or the marketplace author. Users must review and trust a plugin before installing it.
+
 ## node-pty
 
 `node-pty` is licensed under the MIT License. Harness Desktop does not implement a separate native terminal, but the bundled official DeepSeek Harness dependency graph uses `node-pty` for its own local subprocess support. Its native binary is rebuilt for Electron and unpacked from ASAR.
