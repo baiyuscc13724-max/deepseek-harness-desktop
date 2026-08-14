@@ -23,7 +23,7 @@ for (const target of ['AppImage', 'deb']) if (!pkg.build?.linux?.target?.include
 for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
 
 const installer = await readFile(path.join(root, 'build/installer.iss'), 'utf8')
-for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={localappdata}\\Programs\\{#MyAppName}', 'OutputBaseFilename=Harness-Desktop-{#MyAppVersion}-win-x64', 'SetupIconFile=..\\dist\\.icon-ico\\icon.ico', 'UninstallDisplayIcon={app}\\{#MyAppExeName}', 'Name: "chinesesimp"', 'compiler:Languages\\ChineseSimplified.isl', 'recursesubdirs', 'autodesktop', 'autoprograms']) {
+for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={localappdata}\\Programs\\{#MyAppName}', 'OutputBaseFilename=Harness-Desktop-{#MyAppVersion}-win-x64', 'SetupIconFile=..\\dist\\.icon-ico\\icon.ico', 'UninstallDisplayIcon={app}\\{#MyAppExeName}', 'Name: "chinesesimp"', 'compiler:Languages\\ChineseSimplified.isl', 'recursesubdirs', 'autodesktop', 'autoprograms', "HasCommandLineParameter('/CLOSEAPPLICATIONS')", "'/NORESTART /LANG=chinesesimp'", 'WizardSilent']) {
   if (!installer.includes(contract)) throw new Error(`Inno Setup contract missing: ${contract}`)
 }
 

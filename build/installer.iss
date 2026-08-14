@@ -45,3 +45,32 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function HasCommandLineParameter(const Value: String): Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(Index), Value) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+function InitializeSetup(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := True;
+  { rc.7 passed this exact silent-only flag. Relaunch once as a visible Chinese wizard. }
+  if WizardSilent and HasCommandLineParameter('/CLOSEAPPLICATIONS') then
+  begin
+    if Exec(ExpandConstant('{srcexe}'), '/NORESTART /LANG=chinesesimp', '', SW_SHOWNORMAL, ewNoWait, ResultCode) then
+      Result := False;
+  end;
+end;
