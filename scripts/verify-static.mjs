@@ -50,6 +50,11 @@ for (const removedSurface of ['nativeChatSurface', 'webCompatibilitySurface', 's
   if (html.includes(removedSurface)) throw new Error(`renderer/index.html must not retain duplicate native workspace surface: ${removedSurface}`)
 }
 
+const rendererStyles = await readFile(path.join(root, 'renderer/styles.css'), 'utf8')
+if (!rendererStyles.includes('.window-drag') || !rendererStyles.includes('right: 148px') || !rendererStyles.includes('height: 36px') || !rendererStyles.includes('-webkit-app-region: drag')) {
+  throw new Error('The frameless Windows shell must keep a full-height draggable title region without covering the window controls.')
+}
+
 const rendererScript = await readFile(path.join(root, 'renderer/app.js'), 'utf8')
 if (!rendererScript.includes('api.startRuntime({})')) throw new Error('Official Harness Web UI must start automatically.')
 if (rendererScript.includes('showCompatibility') || rendererScript.includes('compatibilityMode')) throw new Error('Renderer must expose one official workspace, not native/Web mode switching.')
@@ -82,7 +87,7 @@ if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includ
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '0.9.0-rc.3') throw new Error(`Expected package version 0.9.0-rc.3, received ${pkg.version}`)
+if (pkg.version !== '0.9.0-rc.4') throw new Error(`Expected package version 0.9.0-rc.4, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')

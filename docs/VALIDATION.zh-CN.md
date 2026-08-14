@@ -1,4 +1,4 @@
-# Harness Desktop v0.9.0-rc.3 验收
+# Harness Desktop v0.9.0-rc.4 验收
 
 ## 自动化
 
