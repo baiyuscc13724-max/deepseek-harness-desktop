@@ -13,6 +13,8 @@ if (pkg.devDependencies?.electron !== '43.2.0') throw new Error('Release baselin
 if (pkg.devDependencies?.['electron-builder'] !== '26.15.7') throw new Error('Release must pin electron-builder 26.15.7.')
 if (pkg.build?.icon !== 'build/icon.png') throw new Error('Release packages must use the official DeepSeek icon.')
 if (pkg.scripts?.dist !== 'node scripts/build-release.mjs') throw new Error('Release packaging must use the audited cross-platform build script.')
+const buildScript = await readFile(path.join(root, 'scripts/build-release.mjs'), 'utf8')
+if (!buildScript.includes("'--publish', 'never'")) throw new Error('electron-builder implicit tag publishing must remain disabled.')
 if (!pkg.build?.win?.target?.includes('portable')) throw new Error('Windows portable target is missing.')
 if (pkg.build?.win?.target?.includes('nsis') || pkg.build?.nsis) throw new Error('The blocked NSIS installer must not return.')
 for (const target of ['dmg', 'zip']) if (!pkg.build?.mac?.target?.includes(target)) throw new Error(`macOS target missing: ${target}`)

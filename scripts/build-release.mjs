@@ -21,7 +21,7 @@ function run(command, args) {
 await rm(dist, { recursive: true, force: true })
 
 if (process.platform === 'win32') {
-  run('npx.cmd', ['electron-builder', '--win', 'portable', '--x64'])
+  run('npx.cmd', ['electron-builder', '--win', 'portable', '--x64', '--publish', 'never'])
 
   const candidates = [
     process.env.ISCC_PATH,
@@ -36,5 +36,5 @@ if (process.platform === 'win32') {
 
   run(iscc, [`/DMyAppVersion=${pkg.version}`, path.join(root, 'build', 'installer.iss')])
 } else {
-  run('npx', ['electron-builder'])
+  run('npx', ['electron-builder', '--publish', 'never'])
 }
