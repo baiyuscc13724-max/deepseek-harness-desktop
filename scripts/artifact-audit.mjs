@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile, readdir, writeFile } from 'node:fs/promises'
-import asar from '@electron/asar'
+import { access, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 const dist = path.resolve(process.argv[2] || 'dist')
@@ -13,13 +12,20 @@ const expected = process.platform === 'win32'
     : files.filter(name => /(?:\.AppImage|\.deb)$/i.test(name))
 if (!expected.length) throw new Error(`No release artifact found for ${process.platform} in ${dist}. Found: ${files.join(', ') || '(none)'}`)
 if (process.platform === 'win32') {
-  const archive = path.join(dist, 'win-unpacked', 'resources', 'app.asar')
-  const entries = new Set(asar.listPackage(archive, { isPack: false }).map(entry => entry.replaceAll('\\', '/').replace(/^\//, '')))
+  const unpacked = path.join(dist, 'win-unpacked', 'resources', 'app.asar.unpacked')
+  const runtimePackages = [
+    'cordis-plugin-group', 'dsh-anonymous-user-id', 'dsh-atomic-write', 'dsh-bash-local',
+    'dsh-code-runtime', 'dsh-compaction', 'dsh-fs', 'dsh-invariants', 'dsh-output-retention',
+    'dsh-sandbox', 'dsh-scope', 'dsh-session-telemetry', 'dsh-session-title-llm', 'dsh-shell',
+    'dsh-spill', 'dsh-subagent-in-process-driver', 'dsh-subprocess', 'dsh-timeout', 'dsh-workflow'
+  ]
   for (const required of [
-    'node_modules/@deepseek-ai/cordis-plugin-group/package.json',
+    ...runtimePackages.map(name => `node_modules/@deepseek-ai/${name}/package.json`),
     'node_modules/@deepseek-ai/cordis-plugin-group/lib/index.js'
   ]) {
-    if (!entries.has(required)) throw new Error(`Packaged runtime dependency is missing from app.asar: ${required}`)
+    await access(path.join(unpacked, ...required.split('/'))).catch(() => {
+      throw new Error(`Packaged runtime dependency is missing from app.asar.unpacked: ${required}`)
+    })
   }
 }
 const lines = []

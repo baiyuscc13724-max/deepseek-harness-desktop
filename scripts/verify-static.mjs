@@ -132,9 +132,19 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.5') throw new Error(`Expected package version 1.0.5, received ${pkg.version}`)
+if (pkg.version !== '1.0.6') throw new Error(`Expected package version 1.0.6, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
+for (const dependency of [
+  'dsh-anonymous-user-id', 'dsh-atomic-write', 'dsh-bash-local', 'dsh-code-runtime',
+  'dsh-compaction', 'dsh-fs', 'dsh-invariants', 'dsh-output-retention', 'dsh-sandbox',
+  'dsh-scope', 'dsh-session-telemetry', 'dsh-session-title-llm', 'dsh-shell', 'dsh-spill',
+  'dsh-subagent-in-process-driver', 'dsh-subprocess', 'dsh-timeout', 'dsh-workflow'
+]) {
+  if (pkg.dependencies?.[`@deepseek-ai/${dependency}`] !== '0.1.0-rc.6') {
+    throw new Error(`The DSH Web runtime peer dependency must be pinned explicitly: ${dependency}`)
+  }
+}
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
 if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'github:baiyuscc13724-max/DSH-Plugins-Marketplace#fa1bf750a9e07f23a501b22e863b0461cf8ffda3') {
@@ -143,8 +153,8 @@ if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'github:baiyuscc13724-max/D
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')
 if (pkg.scripts?.['test:provider:real']) throw new Error('The removed desktop provider smoke script must not return.')
-if (pkg.build?.npmRebuild !== true || !pkg.build?.asarUnpack?.some(item => item === 'node_modules/node-pty/**/*')) {
-  throw new Error('The bundled official Harness subprocess module requires Electron ABI rebuild and node-pty ASAR unpacking.')
+if (pkg.build?.npmRebuild !== true || !pkg.build?.asarUnpack?.some(item => item === 'node_modules/**/*')) {
+  throw new Error('The bundled Harness runtime requires Electron ABI rebuild and a physical node_modules tree for Windows profile links.')
 }
 if (pkg.build?.icon !== 'build/icon.png') throw new Error('All packages must use the official DeepSeek icon.')
 if (pkg.devDependencies?.electron !== '43.2.0') throw new Error('Release baseline requires pinned Electron 43.2.0.')
@@ -173,6 +183,9 @@ for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase
 if (main.includes('await fetch(safeUpdateUrl')) throw new Error('Update downloads must use Electron system networking for proxy and direct connections.')
 for (const proxyContract of ['buildRuntimeProxyEnv', 'hasExplicitProxy', "resolveProxy('https://chatgpt.com')", 'runtimeProxyEnv']) {
   if (!main.includes(proxyContract)) throw new Error(`Harness runtime proxy bridge is missing: ${proxyContract}`)
+}
+if (!(await readFile(path.join(root, 'electron/bridge/dsh-resolver.cjs'), 'utf8')).includes("argsPrefix: ['--expose-internals', cli]")) {
+  throw new Error('The bundled Harness Web runtime must enable Node internals required by the official HMR plugin.')
 }
 
 const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')

@@ -4,8 +4,15 @@ const { createRequire } = require('node:module')
 
 const requireFromHere = createRequire(__filename)
 
+function physicalUnpackedPath(resolvedPath) {
+  const marker = `${path.sep}app.asar${path.sep}`
+  if (!resolvedPath.includes(marker)) return resolvedPath
+  const unpacked = resolvedPath.replace(marker, `${path.sep}app.asar.unpacked${path.sep}`)
+  return existsSync(unpacked) ? unpacked : resolvedPath
+}
+
 function resolvePackageBin(packageName, preferredBin) {
-  const packageJsonPath = requireFromHere.resolve(`${packageName}/package.json`)
+  const packageJsonPath = physicalUnpackedPath(requireFromHere.resolve(`${packageName}/package.json`))
   const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
   let bin = pkg.bin
   if (typeof bin === 'object' && bin) {
@@ -35,7 +42,9 @@ function resolveDshBin() {
     const { cli, pkg } = resolvePackageBin('@deepseek-ai/dsh', 'dsh')
     return {
       command: process.execPath,
-      argsPrefix: [cli],
+      // The official Web profile enables cordis-plugin-hmr, which needs Node's
+      // internal module hooks even when Electron is running as Node.
+      argsPrefix: ['--expose-internals', cli],
       env: { ELECTRON_RUN_AS_NODE: '1' },
       source: 'bundled',
       version: pkg.version || 'unknown'
@@ -64,6 +73,7 @@ function parseArgsEnv(value) {
 }
 
 module.exports = {
+  physicalUnpackedPath,
   resolveDshBin,
   resolvePackageBin,
   parseArgsEnv

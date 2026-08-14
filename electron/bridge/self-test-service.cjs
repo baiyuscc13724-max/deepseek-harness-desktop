@@ -1,5 +1,6 @@
-const { access, mkdir, unlink, writeFile } = require('node:fs/promises')
+const { access, mkdir, mkdtemp, rm, unlink, writeFile } = require('node:fs/promises')
 const { spawn } = require('node:child_process')
+const os = require('node:os')
 const path = require('node:path')
 
 async function rendererAvailable(rendererEntry) {
@@ -29,36 +30,52 @@ async function userDataWritable(userData) {
   }
 }
 
-async function runtimeCliLoadable(dsh, spawnImpl = spawn) {
+const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+
+async function probeRuntimeUrl(url) {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(1200) })
+    return response.status >= 200 && response.status < 500
+  } catch {
+    return false
+  }
+}
+
+async function runtimeWebBootable(dsh, options = {}) {
   if (!dsh?.command || !Array.isArray(dsh.argsPrefix)) return false
-  return new Promise(resolve => {
-    let settled = false
-    let timer = null
-    const finish = value => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve(value)
+  const spawnImpl = options.spawnImpl || spawn
+  const probeUrl = options.probeUrl || probeRuntimeUrl
+  const ownsRuntimeHome = !options.runtimeHome
+  const runtimeHome = options.runtimeHome || await mkdtemp(path.join(os.tmpdir(), 'harness-desktop-runtime-probe-'))
+  let child = null
+  let candidateUrl = null
+  let exited = false
+  try {
+    child = spawnImpl(dsh.command, [...dsh.argsPrefix, 'web', '--port', '0'], {
+      env: { ...process.env, ...(dsh.env || {}), DSH_HOME: runtimeHome },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    const inspect = chunk => {
+      const match = String(chunk || '').match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/i)
+      if (match) candidateUrl = match[0].replace('localhost', '127.0.0.1')
     }
-    let child
-    try {
-      child = spawnImpl(dsh.command, [...dsh.argsPrefix, '--help'], {
-        env: { ...process.env, ...(dsh.env || {}) },
-        windowsHide: true,
-        stdio: 'ignore'
-      })
-    } catch {
-      resolve(false)
-      return
+    child.stdout?.on('data', inspect)
+    child.stderr?.on('data', inspect)
+    child.once('error', () => { exited = true })
+    child.once('exit', () => { exited = true })
+    const deadline = Date.now() + (options.timeoutMs || 25000)
+    while (Date.now() < deadline && !exited) {
+      if (candidateUrl && await probeUrl(candidateUrl)) return true
+      await wait(150)
     }
-    timer = setTimeout(() => {
-      child.kill?.()
-      finish(false)
-    }, 15000)
-    timer.unref?.()
-    child.once('error', () => finish(false))
-    child.once('exit', code => finish(code === 0))
-  })
+    return false
+  } catch {
+    return false
+  } finally {
+    child?.kill?.()
+    if (ownsRuntimeHome) await rm(runtimeHome, { recursive: true, force: true }).catch(() => {})
+  }
 }
 
 async function runPackagedSelfTest(options = {}) {
@@ -72,9 +89,9 @@ async function runPackagedSelfTest(options = {}) {
   const checks = {
     rendererEntry: await rendererAvailable(options.rendererEntry),
     bundledHarness: dsh.source === 'bundled' || dsh.source === 'env',
-    runtimeImports: options.runtimeProbe
+    runtimeWebBoot: options.runtimeProbe
       ? await options.runtimeProbe(dsh)
-      : await runtimeCliLoadable(dsh, options.spawnImpl),
+      : await runtimeWebBootable(dsh, options.runtimeProbeOptions),
     nodeRuntime: nodeRuntimeSupported(options.nodeVersion),
     userData: options.userDataProbe
       ? await options.userDataProbe(options.userData)
@@ -102,4 +119,4 @@ async function runPackagedSelfTest(options = {}) {
   }
 }
 
-module.exports = { nodeRuntimeSupported, rendererAvailable, runPackagedSelfTest, runtimeCliLoadable, userDataWritable }
+module.exports = { nodeRuntimeSupported, rendererAvailable, runPackagedSelfTest, runtimeWebBootable, userDataWritable }

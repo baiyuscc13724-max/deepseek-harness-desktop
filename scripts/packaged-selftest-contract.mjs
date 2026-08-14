@@ -10,7 +10,7 @@ const service = await readFile(path.join(root, 'electron/bridge/self-test-servic
 for (const contract of ['--self-test', 'runPackagedSelfTest', 'HARNESS_DESKTOP_SELFTEST']) {
   if (!main.includes(contract)) throw new Error(`Packaged self-test main-process contract missing: ${contract}`)
 }
-for (const contract of ['rendererEntry', 'bundledHarness', 'runtimeImports', 'runtimeCliLoadable', 'nodeRuntime', 'userData', 'webCompatibility']) {
+for (const contract of ['rendererEntry', 'bundledHarness', 'runtimeWebBoot', 'runtimeWebBootable', "'web', '--port', '0'", 'nodeRuntime', 'userData', 'webCompatibility']) {
   if (!service.includes(contract)) throw new Error(`Packaged self-test service contract missing: ${contract}`)
 }
 if (!workflow.includes('Run packaged Windows self-test')) throw new Error('Release workflow must execute the unpacked Windows app self-test before artifact upload.')

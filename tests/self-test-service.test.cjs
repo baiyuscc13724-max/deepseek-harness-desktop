@@ -29,7 +29,7 @@ test('packaged self-test passes with official Web UI runtime assets', async () =
     assert.deepEqual(report.checks, {
       rendererEntry: true,
       bundledHarness: true,
-      runtimeImports: true,
+      runtimeWebBoot: true,
       nodeRuntime: true,
       userData: true,
       webCompatibility: true
@@ -55,7 +55,7 @@ test('packaged self-test fails when the official Harness binary is unavailable',
   assert.equal(report.checks.rendererEntry, false)
 })
 
-test('packaged self-test fails when the bundled Harness dependency graph cannot load', async () => {
+test('packaged self-test fails when the bundled Harness Web runtime cannot boot', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'harness-desktop-selftest-import-'))
   try {
     const rendererEntry = path.join(dir, 'index.html')
@@ -68,7 +68,7 @@ test('packaged self-test fails when the bundled Harness dependency graph cannot 
       nodeVersion: '24.1.0'
     })
     assert.equal(report.ok, false)
-    assert.equal(report.checks.runtimeImports, false)
+    assert.equal(report.checks.runtimeWebBoot, false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

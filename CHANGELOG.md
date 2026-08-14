@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.6
+
+- 完整固定官方 Harness Web 运行时实际使用、但上游仅声明为 peer dependency 的 18 个 DSH 模块，修复依次出现的 `dsh-scope` 等启动缺包问题。
+- 将运行时模块放入真实的 `app.asar.unpacked` 目录并从该目录启动，保证官方 DSH 在 Windows 用户目录创建的 profile 模块链接可用，不再指向不可链接的 ASAR 虚拟目录。
+- 按官方 Web profile 要求启用 Node 内部模块钩子，修复 HMR 服务启动条件缺失。
+- 发布自检从执行命令行帮助升级为启动隔离的真实 Web 服务并探测本地端口；运行时没有真正就绪时禁止发布。
+- 1.0.4 与 1.0.5 已标记为预发布，避免稳定通道继续安装不完整包。
+
 ## 1.0.5
 
 - 修复 1.0.4 安装包启动时缺少 `@deepseek-ai/cordis-plugin-group` 的问题：将官方启动模块实际导入的 peer dependency 固定为桌面端直接依赖，避免打包器裁剪。
