@@ -45,6 +45,7 @@ if (!workflow.includes('npm run dist')) throw new Error('Release workflow must p
 if (!workflow.includes('npm run verify:artifact')) throw new Error('Release workflow must audit built artifacts and write checksums.')
 if (!workflow.includes('Run packaged Windows self-test') || !workflow.includes('--self-test') || !workflow.includes('$selfTest = Start-Process') || !workflow.includes('-Wait -PassThru')) throw new Error('Windows release must launch and wait for the packaged app self-test before publishing.')
 if (!workflow.includes('choco install innosetup') || !workflow.includes('Run Windows installer smoke test') || !workflow.includes('/VERYSILENT') || !workflow.includes('Harness Desktop.exe') || !workflow.includes('app.asar') || !workflow.includes('unins*.exe')) throw new Error('Windows release must build, install, inspect, and uninstall the Inno Setup payload.')
+if (!workflow.includes('3cfb0e5632828e0dd9b49400a185834e8f1ab570/Files/Languages/ChineseSimplified.isl') || !workflow.includes('e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d')) throw new Error('Windows release must install and hash-check the pinned Simplified Chinese language file.')
 if (!workflow.includes('softprops/action-gh-release')) throw new Error('Tag builds must publish a GitHub Release after matrix artifacts are audited.')
 if (!workflow.includes('download-artifact')) throw new Error('Release job must collect audited matrix artifacts before publishing.')
 

@@ -33,6 +33,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: choco install innosetup --no-progress -y
+      - name: Install pinned Simplified Chinese installer language
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = 'https://raw.githubusercontent.com/jrsoftware/issrc/3cfb0e5632828e0dd9b49400a185834e8f1ab570/Files/Languages/ChineseSimplified.isl'
+          $languages = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\Languages'
+          $target = Join-Path $languages 'ChineseSimplified.isl'
+          New-Item -ItemType Directory -Path $languages -Force | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile $target
+          $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = 'e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d'
+          if ($actual -ne $expected) { throw "Chinese installer language hash mismatch: $actual" }
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Verify source and smoke tests
