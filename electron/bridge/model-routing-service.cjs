@@ -1,4 +1,4 @@
-const { cp, mkdir, readFile, rename, rm, writeFile } = require('node:fs/promises')
+const { mkdir, readFile, readdir, rename, rm, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 const YAML = require('yaml')
 
@@ -146,12 +146,30 @@ async function resolvePresetSource(paths, presetId) {
   throw new Error(`找不到基础 Agent 预设：${presetId}`)
 }
 
+async function copyPresetDirectory(source, destination) {
+  await mkdir(destination, { recursive: true, mode: 0o700 })
+  const entries = await readdir(source, { withFileTypes: true })
+  for (const entry of entries) {
+    const sourceEntry = path.join(source, entry.name)
+    const destinationEntry = path.join(destination, entry.name)
+    if (entry.isDirectory()) {
+      await copyPresetDirectory(sourceEntry, destinationEntry)
+      continue
+    }
+    if (!entry.isFile()) throw new Error(`Unsupported entry in Agent preset: ${entry.name}`)
+    await writeFile(destinationEntry, await readFile(sourceEntry), { mode: 0o600 })
+  }
+}
+
 async function buildManagedPreset(paths, basePreset, subagentRoute) {
   const source = await resolvePresetSource(paths, basePreset)
   const temporary = path.join(paths.userPresetRoot, `.${ROUTING_PRESET_ID}.tmp-${process.pid}-${Date.now()}`)
   await mkdir(paths.userPresetRoot, { recursive: true, mode: 0o700 })
   try {
-    await cp(source, temporary, { recursive: true, force: true })
+    // Node's fs.cp does not understand Electron's ASAR virtual directories.
+    // Electron patches readdir/readFile, so copying each file keeps packaged
+    // presets (including nested skills) usable without unpacking the archive.
+    await copyPresetDirectory(source, temporary)
     const compositionFile = path.join(temporary, 'agent.cordis.yml')
     const composition = YAML.parseDocument(await readText(compositionFile))
     if (composition.errors.length) throw new Error(`基础 Agent 预设无法解析：${composition.errors[0].message}`)

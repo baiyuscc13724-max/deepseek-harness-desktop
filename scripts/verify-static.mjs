@@ -126,7 +126,7 @@ if (!themeIntegration.includes('windowControlInset = 232') || !themeIntegration.
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.1') throw new Error(`Expected package version 1.0.1, received ${pkg.version}`)
+if (pkg.version !== '1.0.2') throw new Error(`Expected package version 1.0.2, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')

@@ -13,7 +13,7 @@ test('model routing stores main selection and creates an update-safe subagent pr
   t.after(() => rm(dshHome, { recursive: true, force: true }))
   await writeFile(path.join(dshHome, 'settings.yaml'), [
     'agent-presets:',
-    '  default: standard',
+    '  default: cordis',
     'agent-default-model:',
     '  provider: primary-provider',
     '  model: primary-model',
@@ -31,7 +31,7 @@ test('model routing stores main selection and creates an update-safe subagent pr
     subagent: { inheritMain: false, provider: 'worker-provider', model: 'worker-model' }
   })
   assert.equal(result.subagent.inheritMain, false)
-  assert.equal(result.basePreset, 'standard')
+  assert.equal(result.basePreset, 'cordis')
 
   const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
   assert.equal(settings['agent-default-model'].provider, 'primary-provider')
@@ -39,6 +39,8 @@ test('model routing stores main selection and creates an update-safe subagent pr
 
   const compositionText = await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, 'agent.cordis.yml'), 'utf8')
   assert.match(compositionText, /!!js process\.platform/)
+  const nestedSkill = await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, 'skills', 'cordis-plugin-development', 'SKILL.md'), 'utf8')
+  assert.match(nestedSkill, /Cordis/i)
   const composition = YAML.parseDocument(compositionText).toJS()
   const delegation = composition.find(row => row.id === 'delegation')
   const localTools = delegation.config.filter(row => row.name === '@deepseek-ai/dsh-tool-subagent' && ['spawn', 'fork'].includes(row.config?.provider))
