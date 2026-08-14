@@ -294,14 +294,26 @@
       renderCards(panel)
     }
 
+    const windowControlInset = 232
     const applyWindowControlInsets = () => {
       const candidates = [...document.querySelectorAll('button,a')].filter(element => /Session log|会话日志|会话记录/i.test(element.textContent || ''))
+      const active = new Set()
       for (const element of candidates) {
+        const previousShift = Number(element.dataset.hdWindowInsetShift || 0)
         const rect = element.getBoundingClientRect()
-        if (rect.top > 48 || rect.right < innerWidth - 190) continue
-        const group = element.parentElement || element
-        group.dataset.hdWindowInset = 'true'
-        group.style.marginRight = '226px'
+        const unshiftedRight = rect.right + previousShift
+        if (rect.top > 48 || unshiftedRight < innerWidth - windowControlInset) continue
+        const shift = Math.max(0, Math.ceil(unshiftedRight - (innerWidth - windowControlInset)))
+        element.dataset.hdWindowInset = 'true'
+        element.dataset.hdWindowInsetShift = String(shift)
+        element.style.setProperty('translate', `${-shift}px 0`, 'important')
+        active.add(element)
+      }
+      for (const element of document.querySelectorAll('[data-hd-window-inset="true"]')) {
+        if (active.has(element)) continue
+        element.style.removeProperty('translate')
+        delete element.dataset.hdWindowInset
+        delete element.dataset.hdWindowInsetShift
       }
     }
 
@@ -333,6 +345,11 @@
       scheduled = true
       setTimeout(() => { scheduled = false; mount(false) }, 80)
     }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
+    window.addEventListener('resize', () => {
+      if (scheduled) return
+      scheduled = true
+      requestAnimationFrame(() => { scheduled = false; mount(false) })
+    })
     mount()
   }
 

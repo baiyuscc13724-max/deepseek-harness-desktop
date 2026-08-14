@@ -121,9 +121,12 @@ if (!modelRoutingIntegration.includes("querySelectorAll('#harness-desktop-model-
 if (!themeIntegration.includes('__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__') || !themeIntegration.includes('mount(false)') || !themeIntegration.includes('[data-color-scheme]')) {
   throw new Error('Theme restoration must be idempotent and override nested upstream theme providers after restart.')
 }
+if (!themeIntegration.includes('windowControlInset = 232') || !themeIntegration.includes('hdWindowInsetShift') || !themeIntegration.includes("style.setProperty('translate'") || !themeIntegration.includes("addEventListener('resize'")) {
+  throw new Error('Official header actions must remain left of the desktop skin button and native Windows controls after upstream or viewport changes.')
+}
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.0') throw new Error(`Expected package version 1.0.0, received ${pkg.version}`)
+if (pkg.version !== '1.0.1') throw new Error(`Expected package version 1.0.1, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
