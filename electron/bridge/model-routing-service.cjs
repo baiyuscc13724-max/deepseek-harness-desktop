@@ -17,6 +17,12 @@ function validRoute(route, label) {
   return { provider, model }
 }
 
+function optionalRoute(route) {
+  const provider = String(route?.provider || '').trim()
+  const model = String(route?.model || '').trim()
+  return PROVIDER_ID.test(provider) && MODEL_ID.test(model) ? { provider, model } : null
+}
+
 async function readText(file, fallback = '') {
   return readFile(file, 'utf8').catch(error => {
     if (error.code === 'ENOENT') return fallback
@@ -28,6 +34,17 @@ async function readJson(file) {
   const text = await readText(file)
   if (!text) return null
   try { return JSON.parse(text) } catch { return null }
+}
+
+async function writeFileAtomic(file, contents, options) {
+  const temporary = `${file}.tmp-${process.pid}-${Date.now()}`
+  try {
+    await writeFile(temporary, contents, options)
+    await rename(temporary, file)
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {})
+    throw error
+  }
 }
 
 function settingsDocument(text) {
@@ -103,10 +120,11 @@ async function getModelRouting(options) {
   const document = settingsDocument(await readText(paths.settingsFile))
   const settings = document.toJS() || {}
   const stored = await readJson(paths.stateFile)
-  const main = {
-    provider: String(settings?.['agent-default-model']?.provider || stored?.main?.provider || '').trim(),
-    model: String(settings?.['agent-default-model']?.model || stored?.main?.model || '').trim()
-  }
+  const settingsMain = optionalRoute(settings?.['agent-default-model']) || { provider: '', model: '' }
+  // The official Harness model picker owns agent-default-model. Older desktop
+  // releases duplicated it in the routing state; that value is migration-only.
+  const legacyStoredMain = optionalRoute(stored?.main)
+  const main = settingsMain.provider ? settingsMain : (legacyStoredMain || settingsMain)
   const subagent = {
     inheritMain: stored?.subagent?.inheritMain !== false,
     provider: String(stored?.subagent?.provider || main.provider).trim(),
@@ -118,7 +136,7 @@ async function getModelRouting(options) {
     basePreset: selectedBasePreset(settings, stored),
     managedPresetId: ROUTING_PRESET_ID,
     providers: await providerCatalog(settings, [main, subagent]),
-    configured: Boolean(stored)
+    configured: Boolean(settingsMain.provider || legacyStoredMain)
   }
 }
 
@@ -201,7 +219,8 @@ async function saveModelRouting(options, next) {
   const currentText = await readText(paths.settingsFile)
   const document = settingsDocument(currentText)
   const settings = document.toJS() || {}
-  const stored = await readJson(paths.stateFile)
+  const previousStateText = await readText(paths.stateFile, null)
+  const stored = previousStateText ? await readJson(paths.stateFile) : null
   const requestedBase = String(next?.basePreset || '').trim()
   const basePreset = PRESET_ID.test(requestedBase) && requestedBase !== ROUTING_PRESET_ID
     ? requestedBase
@@ -213,19 +232,35 @@ async function saveModelRouting(options, next) {
   document.setIn(['agent-default-model', 'model'], main.model)
   document.setIn(['agent-presets', 'default'], inheritMain ? basePreset : ROUTING_PRESET_ID)
   await mkdir(paths.home, { recursive: true, mode: 0o700 })
-  await writeFile(paths.settingsFile, String(document), { encoding: 'utf8', mode: 0o600 })
-  await writeFile(paths.stateFile, `${JSON.stringify({ schemaVersion: 1, main, subagent: { ...subagent, inheritMain }, basePreset }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  const atomicWrite = options.writeFileAtomic || writeFileAtomic
+  const stateText = `${JSON.stringify({ schemaVersion: 2, subagent: { ...subagent, inheritMain }, basePreset }, null, 2)}\n`
+  await atomicWrite(paths.stateFile, stateText, { encoding: 'utf8', mode: 0o600 })
+  try {
+    await atomicWrite(paths.settingsFile, String(document), { encoding: 'utf8', mode: 0o600 })
+  } catch (error) {
+    try {
+      if (previousStateText === null) await rm(paths.stateFile, { force: true })
+      else await atomicWrite(paths.stateFile, previousStateText, { encoding: 'utf8', mode: 0o600 })
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], '模型路由保存失败，且权威状态回滚失败。')
+    }
+    throw error
+  }
   return getModelRouting(options)
 }
 
 async function ensureModelRouting(options) {
   const paths = pathsFor(options)
   const stored = await readJson(paths.stateFile)
-  if (!stored) return getModelRouting(options)
   const current = await getModelRouting(options)
+  if (!optionalRoute(current.main)) return current
+  const storedSubagent = optionalRoute(stored?.subagent)
+  const inheritMain = stored?.subagent?.inheritMain !== false || !storedSubagent
   return saveModelRouting(options, {
     main: current.main,
-    subagent: { ...stored.subagent, inheritMain: stored.subagent?.inheritMain !== false },
+    subagent: inheritMain
+      ? { ...current.main, inheritMain: true }
+      : { ...storedSubagent, inheritMain: false },
     basePreset: current.basePreset
   })
 }

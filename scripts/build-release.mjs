@@ -19,6 +19,7 @@ function run(command, args) {
 }
 
 await rm(dist, { recursive: true, force: true })
+run(process.execPath, ['scripts/patch-official-runtime.mjs'])
 
 if (process.platform === 'win32') {
   run('npx.cmd', ['electron-builder', '--win', 'portable', '--x64', '--publish', 'never'])

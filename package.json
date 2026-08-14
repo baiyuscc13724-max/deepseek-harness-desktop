@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": false,
   "description": "Open-source Windows desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, packaged self-test, and release gates.",
   "author": {
@@ -18,7 +18,7 @@
     "dist": "node scripts/build-release.mjs",
     "verify": "node scripts/verify-static.mjs && npm run test:smoke",
     "test:smoke": "node --test tests/*.test.cjs",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "node scripts/patch-official-runtime.mjs && electron-builder install-app-deps",
     "verify:release": "node scripts/release-audit.mjs",
     "verify:artifact": "node scripts/artifact-audit.mjs dist",
     "verify:packaged": "node scripts/packaged-selftest-contract.mjs"

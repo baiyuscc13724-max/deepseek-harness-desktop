@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, net, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, net, session, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const { createHash } = require('node:crypto')
 const { existsSync } = require('node:fs')
@@ -10,6 +10,7 @@ const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
+const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
 const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
 const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
@@ -169,6 +170,11 @@ async function startRuntime({ cwd } = {}) {
   if (await connectExistingRuntime()) return runtimeState
 
   const resolved = resolveDshBin()
+  let systemProxyRules = ''
+  if (!hasExplicitProxy(process.env)) {
+    systemProxyRules = await session.defaultSession.resolveProxy('https://chatgpt.com').catch(() => '')
+  }
+  const runtimeProxyEnv = buildRuntimeProxyEnv(process.env, systemProxyRules)
   setRuntimeState({ status: 'starting', url: null, detail: `正在启动 DeepSeek Harness Web（${resolved.source}）…` })
 
   let child
@@ -177,7 +183,7 @@ async function startRuntime({ cwd } = {}) {
       cwd: cwd && existsSync(cwd) ? cwd : app.getPath('documents'),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...resolved.env }
+      env: { ...process.env, ...runtimeProxyEnv, ...resolved.env }
     })
   } catch (error) {
     setRuntimeState({ status: 'error', url: null, detail: error.message })

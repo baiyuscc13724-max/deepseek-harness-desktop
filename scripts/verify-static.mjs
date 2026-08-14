@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
   'electron/main.cjs', 'electron/preload.cjs',
-  'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs',
+  'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/runtime-proxy.cjs',
   'electron/bridge/update-service.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs',
   'electron/store/app-state-store.cjs',
   'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js',
@@ -15,9 +15,9 @@ const required = [
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/plugin-marketplace-service.test.cjs',
+  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/official-runtime-patch.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md',
-  'build/installer.iss', 'scripts/build-release.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs',
+  'build/installer.iss', 'scripts/build-release.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json'
 ]
 for (const relative of required) await access(path.join(root, relative))
@@ -121,12 +121,12 @@ if (!modelRoutingIntegration.includes("querySelectorAll('#harness-desktop-model-
 if (!themeIntegration.includes('__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__') || !themeIntegration.includes('mount(false)') || !themeIntegration.includes('[data-color-scheme]')) {
   throw new Error('Theme restoration must be idempotent and override nested upstream theme providers after restart.')
 }
-if (!themeIntegration.includes('windowControlInset = 232') || !themeIntegration.includes('hdWindowInsetShift') || !themeIntegration.includes("style.setProperty('translate'") || !themeIntegration.includes("addEventListener('resize'")) {
-  throw new Error('Official header actions must remain left of the desktop skin button and native Windows controls after upstream or viewport changes.')
+if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.includes('hdSessionLogDocked') || !themeIntegration.includes("style.setProperty('top', '40px'") || !themeIntegration.includes("style.setProperty('right', '12px'") || !themeIntegration.includes("addEventListener('resize'")) {
+  throw new Error('Session log must remain docked below the native Windows controls after upstream or viewport changes.')
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.2') throw new Error(`Expected package version 1.0.2, received ${pkg.version}`)
+if (pkg.version !== '1.0.3') throw new Error(`Expected package version 1.0.3, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
@@ -164,6 +164,17 @@ for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase
   if (!main.includes(updateContract)) throw new Error(`Background updater contract missing: ${updateContract}`)
 }
 if (main.includes('await fetch(safeUpdateUrl')) throw new Error('Update downloads must use Electron system networking for proxy and direct connections.')
+for (const proxyContract of ['buildRuntimeProxyEnv', 'hasExplicitProxy', "resolveProxy('https://chatgpt.com')", 'runtimeProxyEnv']) {
+  if (!main.includes(proxyContract)) throw new Error(`Harness runtime proxy bridge is missing: ${proxyContract}`)
+}
+
+const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')
+for (const contract of ['this.sessions.create({ workspaceId: target })', 'workspaceId === void 0', 'Pinned DSH startSession implementation changed']) {
+  if (!runtimePatch.includes(contract)) throw new Error(`Project-scoped New Session patch is missing: ${contract}`)
+}
+if (pkg.scripts?.postinstall !== 'node scripts/patch-official-runtime.mjs && electron-builder install-app-deps') {
+  throw new Error('Dependency installation must reapply the audited project-scoped New Session patch.')
+}
 
 const preload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
 for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'launchReadyUpdate', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openExternal', 'onUpdateResult', 'onUpdateInstallProgress']) {

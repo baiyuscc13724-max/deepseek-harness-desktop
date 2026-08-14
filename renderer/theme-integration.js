@@ -294,26 +294,25 @@
       renderCards(panel)
     }
 
-    const windowControlInset = 232
-    const applyWindowControlInsets = () => {
+    const applySessionLogDock = () => {
       const candidates = [...document.querySelectorAll('button,a')].filter(element => /Session log|会话日志|会话记录/i.test(element.textContent || ''))
       const active = new Set()
       for (const element of candidates) {
-        const previousShift = Number(element.dataset.hdWindowInsetShift || 0)
         const rect = element.getBoundingClientRect()
-        const unshiftedRight = rect.right + previousShift
-        if (rect.top > 48 || unshiftedRight < innerWidth - windowControlInset) continue
-        const shift = Math.max(0, Math.ceil(unshiftedRight - (innerWidth - windowControlInset)))
-        element.dataset.hdWindowInset = 'true'
-        element.dataset.hdWindowInsetShift = String(shift)
-        element.style.setProperty('translate', `${-shift}px 0`, 'important')
+        if (rect.top > 54 && element.dataset.hdSessionLogDocked !== 'true') continue
+        element.dataset.hdSessionLogDocked = 'true'
+        element.style.setProperty('position', 'fixed', 'important')
+        element.style.setProperty('top', '40px', 'important')
+        element.style.setProperty('right', '12px', 'important')
+        element.style.setProperty('left', 'auto', 'important')
+        element.style.setProperty('translate', 'none', 'important')
+        element.style.setProperty('z-index', '2147483000', 'important')
         active.add(element)
       }
-      for (const element of document.querySelectorAll('[data-hd-window-inset="true"]')) {
+      for (const element of document.querySelectorAll('[data-hd-session-log-docked="true"]')) {
         if (active.has(element)) continue
-        element.style.removeProperty('translate')
-        delete element.dataset.hdWindowInset
-        delete element.dataset.hdWindowInsetShift
+        for (const property of ['position', 'top', 'right', 'left', 'translate', 'z-index']) element.style.removeProperty(property)
+        delete element.dataset.hdSessionLogDocked
       }
     }
 
@@ -334,7 +333,7 @@
     const mount = (refreshTheme = true) => {
       const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
       if (dialog) ensureNavigation(dialog)
-      applyWindowControlInsets()
+      applySessionLogDock()
       markThemeSurfaces()
       if (refreshTheme) applyTheme()
     }

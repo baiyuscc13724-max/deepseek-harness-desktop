@@ -4,7 +4,7 @@ const { access, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const YAML = require('yaml')
-const { ROUTING_PRESET_ID, getModelRouting, saveModelRouting } = require('../electron/bridge/model-routing-service.cjs')
+const { ROUTING_PRESET_ID, ensureModelRouting, getModelRouting, saveModelRouting } = require('../electron/bridge/model-routing-service.cjs')
 
 const shippedPresetRoot = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh', 'config', 'agent-presets')
 
@@ -90,4 +90,62 @@ test('a catalog provider with only a credential reference still exposes its full
   assert.ok(provider.models.length >= 10)
   assert.ok(provider.models.includes('deepseek-v4-pro'))
   assert.ok(provider.models.includes('kimi-k2.7-code'))
+})
+
+test('the official Harness default model is authoritative over legacy duplicated desktop state', async t => {
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-drift-'))
+  t.after(() => rm(dshHome, { recursive: true, force: true }))
+  await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: settings-provider\n  model: settings-model\n')
+  await writeFile(path.join(dshHome, 'harness-desktop-model-routing.json'), JSON.stringify({
+    schemaVersion: 1,
+    main: { provider: 'desktop-provider', model: 'desktop-model' },
+    subagent: { inheritMain: true, provider: 'desktop-provider', model: 'desktop-model' },
+    basePreset: 'standard'
+  }))
+
+  const before = await getModelRouting({ dshHome, shippedPresetRoot })
+  assert.deepEqual(before.main, { provider: 'settings-provider', model: 'settings-model' })
+  await ensureModelRouting({ dshHome, shippedPresetRoot })
+  const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
+  assert.deepEqual(settings['agent-default-model'], { provider: 'settings-provider', model: 'settings-model' })
+  const migratedState = JSON.parse(await readFile(path.join(dshHome, 'harness-desktop-model-routing.json'), 'utf8'))
+  assert.equal(migratedState.schemaVersion, 2)
+  assert.equal(migratedState.main, undefined)
+})
+
+test('first startup establishes subagent routing without duplicating the official main model', async t => {
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-migration-'))
+  t.after(() => rm(dshHome, { recursive: true, force: true }))
+  await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: official-provider\n  model: official-model\n')
+
+  const result = await ensureModelRouting({ dshHome, shippedPresetRoot })
+  assert.deepEqual(result.main, { provider: 'official-provider', model: 'official-model' })
+  const stored = JSON.parse(await readFile(path.join(dshHome, 'harness-desktop-model-routing.json'), 'utf8'))
+  assert.equal(stored.schemaVersion, 2)
+  assert.equal(stored.main, undefined)
+  assert.deepEqual(stored.subagent, { inheritMain: true, provider: 'official-provider', model: 'official-model' })
+})
+
+test('a failed settings projection rolls back the authoritative desktop route', async t => {
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-rollback-'))
+  t.after(() => rm(dshHome, { recursive: true, force: true }))
+  const settingsFile = path.join(dshHome, 'settings.yaml')
+  const stateFile = path.join(dshHome, 'harness-desktop-model-routing.json')
+  const oldState = {
+    schemaVersion: 1,
+    main: { provider: 'old-provider', model: 'old-model' },
+    subagent: { inheritMain: true, provider: 'old-provider', model: 'old-model' },
+    basePreset: 'standard'
+  }
+  await writeFile(settingsFile, 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: old-provider\n  model: old-model\n')
+  await writeFile(stateFile, `${JSON.stringify(oldState, null, 2)}\n`)
+  const writeFileAtomic = async (file, contents, options) => {
+    if (file === settingsFile) throw new Error('simulated settings projection failure')
+    await writeFile(file, contents, options)
+  }
+
+  await assert.rejects(saveModelRouting({ dshHome, shippedPresetRoot, writeFileAtomic }, {
+    main: { provider: 'new-provider', model: 'new-model' }
+  }), /simulated settings projection failure/)
+  assert.deepEqual(JSON.parse(await readFile(stateFile, 'utf8')), oldState)
 })
