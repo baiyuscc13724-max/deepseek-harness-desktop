@@ -25,7 +25,7 @@ const ORIGINAL = dedentOne(`\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\t});
 \t\t\t\t}`)
 
-const PATCHED = dedentOne(`\t\t\t\tstartSession(workspaceId) {
+const PATCHED_V1 = dedentOne(`\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\tconst workspace = this.list.getSnapshot();
 \t\t\t\t\tconst current = this.sessions.list.getSnapshot().current;
 \t\t\t\t\tconst currentWorkspaceId = current === void 0 ? void 0 : workspace.items.find((item) => item.sessionIds.includes(current))?.workspaceId;
@@ -44,12 +44,31 @@ const PATCHED = dedentOne(`\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\t});
 \t\t\t\t}`)
 
+const PATCHED = dedentOne(`\t\t\t\tstartSession(workspaceId) {
+\t\t\t\t\tconst workspace = this.list.getSnapshot();
+\t\t\t\t\tconst current = this.sessions.list.getSnapshot().current;
+\t\t\t\t\tconst currentWorkspaceId = current === void 0 ? void 0 : workspace.items.find((item) => item.sessionIds.includes(current))?.workspaceId;
+\t\t\t\t\tconst target = workspaceId ?? currentWorkspaceId ?? workspace.recentWorkspaceId;
+\t\t\t\t\tif (target === void 0) {
+\t\t\t\t\t\tthis.sessions.clear();
+\t\t\t\t\t\treturn;
+\t\t\t\t\t}
+\t\t\t\t\tthis.sessions.clear();
+\t\t\t\t\tthis.sessions.create({ workspaceId: target }).then((sessionId) => {
+\t\t\t\t\t\tthis.sessions.open(sessionId);
+\t\t\t\t\t}, (reason) => {
+\t\t\t\t\t\tif (current !== void 0) this.sessions.open(current);
+\t\t\t\t\t\tconsole.warn("new session failed:", reason);
+\t\t\t\t\t});
+\t\t\t\t}`)
+
 export function patchRuntimeSource(source) {
   if (source.includes(PATCHED)) return { source, changed: false }
-  if (!source.includes(ORIGINAL)) {
+  const previous = source.includes(PATCHED_V1) ? PATCHED_V1 : ORIGINAL
+  if (!source.includes(previous)) {
     throw new Error('Pinned DSH startSession implementation changed; refusing an unsafe runtime patch.')
   }
-  return { source: source.replace(ORIGINAL, PATCHED), changed: true }
+  return { source: source.replace(previous, PATCHED), changed: true }
 }
 
 export async function patchInstalledRuntime(file = runtimeClient) {
@@ -61,5 +80,5 @@ export async function patchInstalledRuntime(file = runtimeClient) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const changed = await patchInstalledRuntime()
-  process.stdout.write(changed ? 'Patched project-scoped New Session behavior.\n' : 'Project-scoped New Session patch already applied.\n')
+  process.stdout.write(changed ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
 }

@@ -92,8 +92,14 @@ if (!themeCatalog.includes("license: 'CC BY-NC-SA 4.0'") || !themeCatalog.includ
 if (!themeIntegration.includes("event.detail >= 2") || !themeIntegration.includes("addEventListener('dblclick'") || themeIntegration.includes('>使用</button>')) {
   throw new Error('Theme cards must apply on a real double click without restoring a visible apply button.')
 }
-if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includes('markThemeSurfaces') || !themeIntegration.includes('[data-slot="conversation"]')) {
+if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includes('[data-slot="conversation"]')) {
   throw new Error('Theme integration must survive upstream class-name changes and isolate official surface variables.')
+}
+if (themeIntegration.includes("root.querySelectorAll('div,main,section')") || themeIntegration.includes('getComputedStyle(element).backgroundColor')) {
+  throw new Error('Theme integration must not force a full-page layout scan during sidebar updates.')
+}
+if (!themeIntegration.includes('clearTimeout(mutationTimer)') || !themeIntegration.includes('cancelAnimationFrame(resizeFrame)')) {
+  throw new Error('Theme integration must coalesce mutation and resize refresh work.')
 }
 if (!rendererScript.includes('applyShellTheme()') || !rendererStyles.includes('--shell-surface') || !rendererStyles.includes('--shell-accent')) {
   throw new Error('The standalone skin picker must inherit the selected Harness Desktop theme.')
@@ -126,7 +132,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.3') throw new Error(`Expected package version 1.0.3, received ${pkg.version}`)
+if (pkg.version !== '1.0.4') throw new Error(`Expected package version 1.0.4, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
@@ -169,8 +175,11 @@ for (const proxyContract of ['buildRuntimeProxyEnv', 'hasExplicitProxy', "resolv
 }
 
 const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')
-for (const contract of ['this.sessions.create({ workspaceId: target })', 'workspaceId === void 0', 'Pinned DSH startSession implementation changed']) {
+for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Project-scoped New Session patch is missing: ${contract}`)
+}
+for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "'web', '--port', '0'"]) {
+  if (!main.includes(contract)) throw new Error(`Dedicated desktop runtime policy is missing: ${contract}`)
 }
 if (pkg.scripts?.postinstall !== 'node scripts/patch-official-runtime.mjs && electron-builder install-app-deps') {
   throw new Error('Dependency installation must reapply the audited project-scoped New Session patch.')

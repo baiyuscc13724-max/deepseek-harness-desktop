@@ -167,7 +167,11 @@ async function connectExistingRuntime() {
 async function startRuntime({ cwd } = {}) {
   if (runtimeState.status === 'ready' && runtimeState.url) return runtimeState
   if (runtime && runtime.exitCode == null) return runtimeState
-  if (await connectExistingRuntime()) return runtimeState
+  // Desktop extensions patch the pinned client runtime bundled with this app.
+  // Reusing an arbitrary service on 3080 can silently serve a different client
+  // build, leaving shell-owned actions (such as New Session) out of sync.
+  // Keep reuse as an explicit developer escape hatch only.
+  if (process.env.HARNESS_DESKTOP_REUSE_RUNTIME === '1' && await connectExistingRuntime()) return runtimeState
 
   const resolved = resolveDshBin()
   let systemProxyRules = ''
@@ -179,7 +183,7 @@ async function startRuntime({ cwd } = {}) {
 
   let child
   try {
-    child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web'], {
+    child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0'], {
       cwd: cwd && existsSync(cwd) ? cwd : app.getPath('documents'),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -192,7 +196,7 @@ async function startRuntime({ cwd } = {}) {
 
   runtime = child
   runtimeOwnedByDesktop = true
-  let candidateUrl = DEFAULT_RUNTIME_URL
+  let candidateUrl = null
   let lastErrorText = ''
 
   const onOutput = (chunk, isError = false) => {
@@ -220,11 +224,11 @@ async function startRuntime({ cwd } = {}) {
 
   const deadline = Date.now() + 22000
   while (Date.now() < deadline && runtime === child && child.exitCode == null) {
-    if (await probeUrl(candidateUrl)) {
+    if (candidateUrl && await probeUrl(candidateUrl)) {
       setRuntimeState({ status: 'ready', url: candidateUrl, detail: `DeepSeek Harness Web 已就绪：${candidateUrl}` })
       return runtimeState
     }
-    if (candidateUrl !== DEFAULT_RUNTIME_URL && await probeUrl(DEFAULT_RUNTIME_URL)) {
+    if (process.env.HARNESS_DESKTOP_REUSE_RUNTIME === '1' && candidateUrl !== DEFAULT_RUNTIME_URL && await probeUrl(DEFAULT_RUNTIME_URL)) {
       candidateUrl = DEFAULT_RUNTIME_URL
       setRuntimeState({ status: 'ready', url: candidateUrl, detail: `DeepSeek Harness Web 已就绪：${candidateUrl}` })
       return runtimeState

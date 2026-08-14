@@ -53,7 +53,6 @@
       html[data-hd-theme]:not([data-hd-theme="official"]) #root { position:relative; z-index:1; min-height:100vh; background:transparent !important; }
       html[data-hd-theme]:not([data-hd-theme="official"]) #root > [data-slot="root"] > *,
       html[data-hd-theme]:not([data-hd-theme="official"]) [data-slot="conversation"] > * { background:transparent !important; }
-      html[data-hd-theme]:not([data-hd-theme="official"]) [data-hd-theme-major-surface="true"] { background:transparent !important; }
       html[data-hd-theme]:not([data-hd-theme="official"]) [data-slot="sidebar"] > * {
         background:var(--hd-theme-sidebar) !important;
       }
@@ -316,38 +315,28 @@
       }
     }
 
-    const markThemeSurfaces = () => {
-      const root = document.querySelector('#root')
-      if (!root) return
-      const minimumArea = innerWidth * innerHeight * 0.42
-      for (const element of root.querySelectorAll('div,main,section')) {
-        if (element.closest('[role="dialog"]')) continue
-        const rect = element.getBoundingClientRect()
-        if (rect.width * rect.height < minimumArea) continue
-        const background = getComputedStyle(element).backgroundColor.match(/[\d.]+/g)?.map(Number) || []
-        const alpha = background.length >= 4 ? background[3] : 1
-        if (alpha >= 0.9) element.dataset.hdThemeMajorSurface = 'true'
-      }
-    }
-
     const mount = (refreshTheme = true) => {
       const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
       if (dialog) ensureNavigation(dialog)
       applySessionLogDock()
-      markThemeSurfaces()
       if (refreshTheme) applyTheme()
     }
     window.__HARNESS_DESKTOP_RENDER_THEMES__ = mount
-    let scheduled = false
+    let mutationTimer = null
+    let resizeFrame = null
     new MutationObserver(() => {
-      if (scheduled) return
-      scheduled = true
-      setTimeout(() => { scheduled = false; mount(false) }, 80)
+      clearTimeout(mutationTimer)
+      mutationTimer = setTimeout(() => {
+        mutationTimer = null
+        mount(false)
+      }, 120)
     }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
     window.addEventListener('resize', () => {
-      if (scheduled) return
-      scheduled = true
-      requestAnimationFrame(() => { scheduled = false; mount(false) })
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = null
+        applySessionLogDock()
+      })
     })
     mount()
   }
