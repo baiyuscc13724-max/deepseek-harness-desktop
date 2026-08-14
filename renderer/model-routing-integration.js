@@ -16,7 +16,6 @@
     style.textContent = `
       #harness-desktop-model-routing { box-sizing:border-box; max-width:720px; margin:0 0 20px; border:1px solid var(--dsw-alias-border-l2); border-radius:14px; padding:16px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-1); }
       #harness-desktop-model-routing .hd-route-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
-      #harness-desktop-model-routing .hd-route-head-actions { display:flex; align-items:center; gap:8px; }
       #harness-desktop-model-routing h2 { margin:0; font-size:16px; line-height:24px; font-weight:500; }
       #harness-desktop-model-routing .hd-route-intro { margin:3px 0 0; color:var(--dsw-alias-label-tertiary); font-size:12px; line-height:18px; }
       #harness-desktop-model-routing .hd-route-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:14px; }
@@ -34,7 +33,6 @@
       #harness-desktop-model-routing .hd-route-status { flex:1; color:var(--dsw-alias-label-tertiary); font-size:12px; line-height:18px; }
       #harness-desktop-model-routing .hd-route-status[data-error="true"] { color:var(--dsw-alias-state-error-primary); }
       #harness-desktop-model-routing button { min-height:34px; border:0; border-radius:17px; padding:6px 15px; color:var(--dsw-alias-label-primary-foreground); background:var(--dsw-alias-button-primary-fill); font:inherit; font-size:13px; cursor:pointer; }
-      #harness-desktop-model-routing .hd-route-add { flex:none; border:1px solid var(--dsw-alias-border-l2); color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); }
       #harness-desktop-model-routing button:disabled { cursor:default; opacity:.55; }
       @media (max-width:760px) { #harness-desktop-model-routing .hd-route-grid { grid-template-columns:1fr; } }
     `
@@ -94,7 +92,7 @@
       const panel = document.createElement('section')
       panel.id = 'harness-desktop-model-routing'
       panel.innerHTML = `
-        <div class="hd-route-head"><div><h2>主模型与子代理</h2><p class="hd-route-intro">自动识别每个服务商提供的全部模型，也保留手动添加的自定义模型。</p></div><div class="hd-route-head-actions"><button type="button" class="hd-route-add" data-hd-refresh-models>↻ 刷新模型</button><button type="button" class="hd-route-add" data-hd-add-model>＋ 添加模型</button></div></div>
+        <div class="hd-route-head"><div><h2>主模型与子代理</h2><p class="hd-route-intro">自动识别每个服务商提供的全部模型，也保留手动添加的自定义模型。</p></div></div>
         <div class="hd-route-grid">
           <div class="hd-route-card">
             <div class="hd-route-title">主模型</div>
@@ -124,13 +122,6 @@
         setSubagentMode(panel, button.dataset.hdSubMode === 'inherit')
         paint(panel)
       }))
-      panel.querySelector('[data-hd-add-model]').addEventListener('click', () => {
-        const content = panel.parentElement
-        const addButton = [...content.querySelectorAll('button')].find(button => !panel.contains(button) && /添加.*(模型|服务商)|Add.*(model|provider)|自定义模型/i.test(button.textContent || ''))
-        if (addButton) addButton.click()
-        else panel.nextElementSibling?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      })
-      panel.querySelector('[data-hd-refresh-models]').addEventListener('click', () => request('refresh-model-routing'))
       panel.querySelector('[data-hd-route-save]').addEventListener('click', () => {
         const values = {
           mainProvider: panel.querySelector('[data-hd-main-provider]').value.trim(),

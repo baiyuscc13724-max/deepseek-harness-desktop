@@ -21,11 +21,20 @@ if (process.platform === 'win32') {
   ]
   for (const required of [
     ...runtimePackages.map(name => `node_modules/@deepseek-ai/${name}/package.json`),
-    'node_modules/@deepseek-ai/cordis-plugin-group/lib/index.js'
+    'node_modules/@deepseek-ai/cordis-plugin-group/lib/index.js',
+    'node_modules/dsh-plugin-marketplace/package.json',
+    'node_modules/dsh-plugin-marketplace/lib/index.js',
+    'node_modules/dsh-plugin-marketplace/lib/client.js'
   ]) {
     await access(path.join(unpacked, ...required.split('/'))).catch(() => {
       throw new Error(`Packaged runtime dependency is missing from app.asar.unpacked: ${required}`)
     })
+  }
+  const marketplaceRoot = path.join(unpacked, 'node_modules', 'dsh-plugin-marketplace')
+  const marketplacePackage = JSON.parse(await readFile(path.join(marketplaceRoot, 'package.json'), 'utf8'))
+  const marketplaceRuntime = await readFile(path.join(marketplaceRoot, 'lib', 'index.js'), 'utf8')
+  if (marketplacePackage.version !== '1.2.2' || !marketplaceRuntime.includes('process.env.ComSpec') || !marketplaceRuntime.includes('"npm.cmd", ...args')) {
+    throw new Error('Packaged marketplace is missing the verified Electron/Node 24 Windows npm launcher.')
   }
 }
 const lines = []

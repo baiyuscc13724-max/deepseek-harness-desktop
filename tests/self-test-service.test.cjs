@@ -23,6 +23,7 @@ test('packaged self-test passes with official Web UI runtime assets', async () =
       rendererEntry,
       resolveDshBin: () => ({ source: 'bundled', version: '0.1.0-rc.6' }),
       runtimeProbe: async () => true,
+      marketplaceProbe: async () => true,
       nodeVersion: '24.1.0'
     })
     assert.equal(report.ok, true)
@@ -32,6 +33,7 @@ test('packaged self-test passes with official Web UI runtime assets', async () =
       runtimeWebBoot: true,
       nodeRuntime: true,
       userData: true,
+      desktopMarketplace: true,
       webCompatibility: true
     })
     assert.equal(report.dsh.version, '0.1.0-rc.6')
@@ -47,6 +49,7 @@ test('packaged self-test fails when the official Harness binary is unavailable',
     rendererEntry: 'missing',
     resolveDshBin: () => ({ source: 'npx-fallback', version: 'unresolved' }),
     runtimeProbe: async () => false,
+    marketplaceProbe: async () => false,
     nodeVersion: '24.1.0',
     userDataProbe: async () => true
   })
@@ -65,6 +68,7 @@ test('packaged self-test fails when the bundled Harness Web runtime cannot boot'
       rendererEntry,
       resolveDshBin: () => ({ source: 'bundled', version: '0.1.0-rc.6' }),
       runtimeProbe: async () => false,
+      marketplaceProbe: async () => true,
       nodeVersion: '24.1.0'
     })
     assert.equal(report.ok, false)

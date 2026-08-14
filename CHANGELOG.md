@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.7
+
+- 修复 Electron/Node 24 在 Windows 上直接启动 `npm.cmd` 返回 `spawn EINVAL` 的问题；已用 `dsh-at-file` 完成真实依赖安装、注册及重启加载测试，并用 `anthropics/skills` 完成 18 个 Skills 的真实安装测试。
+- 修复全新安装时内置 DSH 插件市场从 `app.asar` 虚拟目录复制失败的问题；现在会从真实的 `app.asar.unpacked` 目录安装到用户 DSH profile。
+- 将桌面插件市场加入打包自检和产物审计，发布包必须能在空白用户目录完成安装、注册客户端并启动官方 Web 工作台。
+- 补齐主题对最新版官方按钮、选中项、浮层和侧栏导航色彩变量的覆盖，避免青瓷云雾等亮色皮肤叠加官方深色偏好后出现黑色块。
+- 插件市场仍保存在用户目录；桌面版或官方 Harness 更新不会覆盖用户自行更新的市场与插件。
+
 ## 1.0.6
 
 - 完整固定官方 Harness Web 运行时实际使用、但上游仅声明为 peer dependency 的 18 个 DSH 模块，修复依次出现的 `dsh-scope` 等启动缺包问题。

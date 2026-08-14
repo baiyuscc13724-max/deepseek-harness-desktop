@@ -19,3 +19,17 @@ test('third-party theme entries expose source and license metadata', () => {
   }
   assert.equal(THEME_CATALOG.find(theme => theme.id === 'maid-atelier').nonCommercial, true)
 })
+
+test('default theme supplies the core palette used to complete upstream light and dark tokens', () => {
+  const theme = THEME_CATALOG.find(entry => entry.id === 'porcelain-mist')
+  for (const token of [
+    '--dsw-alias-bg-base',
+    '--dsw-alias-bg-layer-1',
+    '--dsw-alias-bg-layer-2',
+    '--dsw-alias-label-primary',
+    '--dsw-alias-label-secondary',
+    '--dsw-alias-brand-primary',
+    '--dsw-alias-interactive-bg-hover',
+    '--dsw-specific-sidebar-fill'
+  ]) assert.ok(theme.vars[token], `default theme is missing ${token}`)
+})

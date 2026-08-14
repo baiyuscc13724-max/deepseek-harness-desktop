@@ -11,6 +11,73 @@
       '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
     })[character])
     const hexWithAlpha = (value, alpha) => /^#[0-9a-f]{6}$/i.test(value || '') ? `${value}${alpha}` : value
+    const completeThemeVars = (vars, tone) => {
+      const base = vars['--dsw-alias-bg-base'] || (tone === 'dark' ? '#151517' : '#ffffff')
+      const layer1 = vars['--dsw-alias-bg-layer-1'] || base
+      const layer2 = vars['--dsw-alias-bg-layer-2'] || layer1
+      const layer3 = vars['--dsw-alias-bg-layer-3'] || layer2
+      const module = vars['--dsw-alias-bg-module-platform'] || layer2
+      const brand = vars['--dsw-alias-brand-primary'] || (tone === 'dark' ? '#f1f3f5' : '#202124')
+      const brandText = vars['--dsw-alias-brand-text'] || brand
+      const primary = vars['--dsw-alias-label-primary'] || (tone === 'dark' ? '#f5f6f7' : '#17191c')
+      const secondary = vars['--dsw-alias-label-secondary'] || primary
+      const tertiary = vars['--dsw-alias-label-tertiary'] || secondary
+      const hover = vars['--dsw-alias-interactive-bg-hover'] || (tone === 'dark' ? 'rgba(255,255,255,.08)' : 'rgba(23,59,58,.08)')
+      const active = vars['--dsw-alias-interactive-bg-active'] || (tone === 'dark' ? 'rgba(255,255,255,.14)' : 'rgba(23,59,58,.12)')
+      const border2 = vars['--dsw-alias-border-l2'] || (tone === 'dark' ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.1)')
+      const border3 = vars['--dsw-alias-border-l3'] || border2
+      const foreground = tone === 'dark' ? '#0f1115' : '#ffffff'
+      return {
+        '--dsw-alias-bg-mask-1': tone === 'dark' ? 'rgba(0,0,0,.5)' : 'rgba(0,0,0,.24)',
+        '--dsw-alias-bg-mask-2': tone === 'dark' ? 'rgba(0,0,0,.2)' : 'rgba(0,0,0,.12)',
+        '--dsw-alias-bg-mask-3': 'rgba(0,0,0,.48)',
+        '--dsw-alias-bg-mask-drop': tone === 'dark' ? 'rgba(15,17,21,.72)' : 'rgba(255,255,255,.72)',
+        '--dsw-alias-bg-module-platform': module,
+        '--dsw-alias-bg-multi-select': module,
+        '--dsw-alias-bg-overlay': layer3,
+        '--dsw-alias-bg-skeleton': tone === 'dark' ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.04)',
+        '--dsw-alias-border-inverted': tone === 'dark' ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,0)',
+        '--dsw-alias-border-inverted2': tone === 'dark' ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,0)',
+        '--dsw-alias-border-l2-darkmode-thin': border2,
+        '--dsw-alias-border-l4': border3,
+        '--dsw-alias-brand-primary-invert': foreground,
+        '--dsw-alias-button-contrast-fill': brand,
+        '--dsw-alias-button-elevated-fill': layer1,
+        '--dsw-alias-button-floating-fill': layer2,
+        '--dsw-alias-button-floating-hover': layer3,
+        '--dsw-alias-button-ghost-active-border': border3,
+        '--dsw-alias-button-ghost-active-fill': active,
+        '--dsw-alias-button-ghost-active-hover': hover,
+        '--dsw-alias-button-info-fill': brand,
+        '--dsw-alias-button-info-hover': brandText,
+        '--dsw-alias-button-primary-dimmed': module,
+        '--dsw-alias-button-primary-fill': brand,
+        '--dsw-alias-button-primary-hover': brandText,
+        '--dsw-alias-interactive-bg-active': active,
+        '--dsw-alias-interactive-bg-hover-accent': active,
+        '--dsw-alias-interactive-bg-hover-solid': module,
+        '--dsw-alias-label-caption': tertiary,
+        '--dsw-alias-label-dimmed': tertiary,
+        '--dsw-alias-label-primary-bluish': primary,
+        '--dsw-alias-label-primary-dimmed': secondary,
+        '--dsw-alias-label-primary-foreground': foreground,
+        '--dsw-alias-label-primary-inverted': foreground,
+        '--dsw-alias-scrollbar-bg-l1': border2,
+        '--dsw-alias-scrollbar-bg-l2': border2,
+        '--dsw-alias-scrollbar-hover-l1': border3,
+        '--dsw-alias-scrollbar-hover-l2': border3,
+        '--dsw-alias-toast-bg': layer3,
+        '--dsw-alias-tooltip-bg': layer3,
+        '--dsw-specific-bubble': module,
+        '--dsw-specific-bubble-highlight': layer3,
+        '--dsw-specific-selector': module,
+        '--dsw-specific-sidebar-nav-item-active': active,
+        '--dsw-specific-sidebar-nav-item-active-accent': active,
+        '--dsw-specific-sidebar-nav-item-hover': hover,
+        '--dsw-specific-tip': module,
+        ...vars
+      }
+    }
 
     const style = document.createElement('style')
     style.dataset.harnessDesktop = 'themes'
@@ -119,7 +186,7 @@
       if (!theme) return
       const officialTone = getComputedStyle(document.documentElement).colorScheme.includes('dark') ? 'dark' : 'light'
       const tone = theme.mode === 'adaptive' ? officialTone : theme.mode
-      const vars = { ...theme.vars, ...(theme.mode === 'adaptive' && tone === 'dark' ? theme.darkVars : {}) }
+      const vars = completeThemeVars({ ...theme.vars, ...(theme.mode === 'adaptive' && tone === 'dark' ? theme.darkVars : {}) }, tone)
       const wallpaper = theme.id === 'maid-atelier'
         ? `linear-gradient(${tone === 'dark' ? 'rgba(1,14,29,.18),rgba(1,14,29,.42)' : 'rgba(238,250,255,.12),rgba(209,236,248,.35)'}),url("${tone === 'dark' ? theme.assets?.night : theme.assets?.day}")`
         : theme.customBackgroundDataUrl

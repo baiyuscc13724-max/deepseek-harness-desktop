@@ -30,6 +30,25 @@ async function userDataWritable(userData) {
   }
 }
 
+async function marketplaceInstallable(options = {}) {
+  if (typeof options.marketplaceProbe === 'function') return Boolean(await options.marketplaceProbe())
+  if (typeof options.ensurePluginMarketplace !== 'function' || !options.marketplaceBundledRoot) return false
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-desktop-marketplace-probe-'))
+  try {
+    const result = await options.ensurePluginMarketplace({
+      dshHome,
+      bundledRoot: options.marketplaceBundledRoot
+    })
+    await access(path.join(result.destination, 'lib', 'client.js'))
+    await access(path.join(dshHome, 'profiles', 'web', 'cordis.patch.yml'))
+    return true
+  } catch {
+    return false
+  } finally {
+    await rm(dshHome, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 async function probeRuntimeUrl(url) {
@@ -96,6 +115,7 @@ async function runPackagedSelfTest(options = {}) {
     userData: options.userDataProbe
       ? await options.userDataProbe(options.userData)
       : await userDataWritable(options.userData),
+    desktopMarketplace: await marketplaceInstallable(options),
     webCompatibility: true
   }
 
@@ -119,4 +139,4 @@ async function runPackagedSelfTest(options = {}) {
   }
 }
 
-module.exports = { nodeRuntimeSupported, rendererAvailable, runPackagedSelfTest, runtimeWebBootable, userDataWritable }
+module.exports = { marketplaceInstallable, nodeRuntimeSupported, rendererAvailable, runPackagedSelfTest, runtimeWebBootable, userDataWritable }

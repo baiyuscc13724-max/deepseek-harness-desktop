@@ -441,7 +441,9 @@ async function runSelfTestMode() {
     appVersion: app.getVersion(),
     userData: app.getPath('userData'),
     rendererEntry: path.join(__dirname, '..', 'renderer', 'index.html'),
-    resolveDshBin
+    resolveDshBin,
+    ensurePluginMarketplace,
+    marketplaceBundledRoot: pluginMarketplaceOptions().bundledRoot
   })
   const output = selfTestOutputPath()
   const text = `${JSON.stringify(report, null, 2)}\n`

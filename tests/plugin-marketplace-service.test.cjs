@@ -50,3 +50,18 @@ test('a newer user-updated marketplace is never overwritten by a desktop update'
   assert.equal(result.action, 'preserved')
   assert.equal(JSON.parse(await readFile(pkgFile, 'utf8')).version, '9.9.9')
 })
+
+test('packaged marketplace resolves from the physical app.asar.unpacked directory', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harness-marketplace-asar-'))
+  const dshHome = path.join(root, 'dsh-home')
+  const virtualRoot = path.join(root, 'app.asar', 'node_modules', 'dsh-plugin-marketplace')
+  const unpackedRoot = path.join(root, 'app.asar.unpacked', 'node_modules', 'dsh-plugin-marketplace')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(path.dirname(unpackedRoot), { recursive: true })
+  await cp(bundledRoot, unpackedRoot, { recursive: true })
+
+  const result = await ensurePluginMarketplace({ dshHome, bundledRoot: virtualRoot })
+
+  assert.equal(result.action, 'installed')
+  await access(path.join(result.destination, 'lib', 'client.js'))
+})

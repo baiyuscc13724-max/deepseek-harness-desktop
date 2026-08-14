@@ -95,6 +95,9 @@ if (!themeIntegration.includes("event.detail >= 2") || !themeIntegration.include
 if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includes('[data-slot="conversation"]')) {
   throw new Error('Theme integration must survive upstream class-name changes and isolate official surface variables.')
 }
+for (const token of ['--dsw-alias-button-contrast-fill', '--dsw-alias-button-primary-fill', '--dsw-specific-sidebar-nav-item-active']) {
+  if (!themeIntegration.includes(token)) throw new Error(`Theme compatibility palette is missing: ${token}`)
+}
 if (themeIntegration.includes("root.querySelectorAll('div,main,section')") || themeIntegration.includes('getComputedStyle(element).backgroundColor')) {
   throw new Error('Theme integration must not force a full-page layout scan during sidebar updates.')
 }
@@ -118,8 +121,11 @@ const modelRoutingIntegration = await readFile(path.join(root, 'renderer/model-r
 for (const contract of ['主模型与子代理', '跟随主模型', 'data-hd-sub-provider', 'data-hd-sub-model', '不受官方更新覆盖']) {
   if (!modelRoutingIntegration.includes(contract)) throw new Error(`Model routing settings UI is missing: ${contract}`)
 }
-for (const contract of ['data-hd-sub-mode="inherit"', 'data-hd-sub-mode="independent"', 'data-hd-add-model', 'data-hd-refresh-models', "request('refresh-model-routing')", '＋ 添加模型', '选择服务商', '选择模型']) {
+for (const contract of ['data-hd-sub-mode="inherit"', 'data-hd-sub-mode="independent"', "request('refresh-model-routing')", '选择服务商', '选择模型']) {
   if (!modelRoutingIntegration.includes(contract)) throw new Error(`Simple model routing selector is missing: ${contract}`)
+}
+for (const duplicateAction of ['data-hd-add-model', 'data-hd-refresh-models', '＋ 添加模型', '↻ 刷新模型']) {
+  if (modelRoutingIntegration.includes(duplicateAction)) throw new Error(`The model router must rely on the official provider controls instead of duplicating: ${duplicateAction}`)
 }
 if (!modelRoutingIntegration.includes("querySelectorAll('#harness-desktop-model-routing').forEach(panel => panel.remove())")) {
   throw new Error('Model routing must unmount immediately when the user leaves the official Models section.')
@@ -132,7 +138,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.6') throw new Error(`Expected package version 1.0.6, received ${pkg.version}`)
+if (pkg.version !== '1.0.7') throw new Error(`Expected package version 1.0.7, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 for (const dependency of [
@@ -147,8 +153,13 @@ for (const dependency of [
 }
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
-if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'github:baiyuscc13724-max/DSH-Plugins-Marketplace#fa1bf750a9e07f23a501b22e863b0461cf8ffda3') {
+if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'github:baiyuscc13724-max/DSH-Plugins-Marketplace#41cf453f1267b535258720dda3966b8643f3a224') {
   throw new Error('The in-app DSH plugin marketplace must remain pinned to the audited upstream commit.')
+}
+const marketplacePackage = JSON.parse(await readFile(path.join(root, 'node_modules/dsh-plugin-marketplace/package.json'), 'utf8'))
+const marketplaceRuntime = await readFile(path.join(root, 'node_modules/dsh-plugin-marketplace/lib/index.js'), 'utf8')
+if (marketplacePackage.version !== '1.2.2' || !marketplaceRuntime.includes('process.env.ComSpec') || !marketplaceRuntime.includes('"npm.cmd", ...args')) {
+  throw new Error('The bundled marketplace must include the verified Electron/Node 24 Windows npm launcher.')
 }
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')

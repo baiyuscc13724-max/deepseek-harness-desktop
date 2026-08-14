@@ -1,6 +1,7 @@
 const { cp, mkdir, readFile, rename, rm, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 const YAML = require('yaml')
+const { physicalUnpackedPath } = require('./dsh-resolver.cjs')
 
 const MARKETPLACE_ID = 'plugin-marketplace'
 const MARKETPLACE_PACKAGE = 'dsh-plugin-marketplace'
@@ -76,7 +77,11 @@ async function replaceDirectory(source, destination) {
 
 async function ensurePluginMarketplace({ dshHome, bundledRoot }) {
   const home = path.resolve(dshHome)
-  const source = path.resolve(bundledRoot)
+  // electron-builder keeps node_modules in app.asar.unpacked. Electron can
+  // read individual files through the app.asar virtual path, but fs.cp cannot
+  // enumerate a directory there. Always move to the physical unpacked tree
+  // before copying the bundled marketplace into a fresh user's DSH profile.
+  const source = path.resolve(physicalUnpackedPath(path.resolve(bundledRoot)))
   const profileRoot = path.join(home, 'profiles', 'web')
   const destination = path.join(profileRoot, 'node_modules', MARKETPLACE_PACKAGE)
   const stateFile = path.join(home, MARKETPLACE_STATE_FILE)
