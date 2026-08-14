@@ -10,7 +10,7 @@ test('compareVersions handles prerelease and patch changes', () => {
 
 test('app update checker accepts GitHub release payloads', async () => {
   const assets = [
-    { name: 'Harness Desktop-0.9.0-win-x64.exe', browser_download_url: 'https://example.test/setup.exe', size: 123 },
+    { name: 'Harness-Desktop-0.9.0-win-x64.exe', browser_download_url: 'https://example.test/setup.exe', size: 123 },
     { name: 'Harness-Desktop-0.9.0-portable-x64.exe', browser_download_url: 'https://example.test/portable.exe', size: 120 },
     { name: 'SHA256SUMS.txt', browser_download_url: 'https://example.test/SHA256SUMS.txt', size: 200 }
   ]
@@ -19,7 +19,7 @@ test('app update checker accepts GitHub release payloads', async () => {
   assert.equal(result.updateAvailable, true)
   assert.equal(result.latestVersion, '0.9.0')
   assert.equal(result.url, 'https://example.test/release')
-  assert.equal(result.installer.name, 'Harness Desktop-0.9.0-win-x64.exe')
+  assert.equal(result.installer.name, 'Harness-Desktop-0.9.0-win-x64.exe')
   assert.equal(result.checksums.name, 'SHA256SUMS.txt')
   assert.equal(selectWindowsInstallerAsset(result.installer ? [result.installer] : []).url, 'https://example.test/setup.exe')
   assert.equal(selectChecksumAsset(result.checksums ? [result.checksums] : []).url, 'https://example.test/SHA256SUMS.txt')
@@ -27,7 +27,7 @@ test('app update checker accepts GitHub release payloads', async () => {
 })
 
 test('desktop updater requires the installer hash from SHA256SUMS', () => {
-  const name = 'Harness Desktop-0.9.0-win-x64.exe'
+  const name = 'Harness-Desktop-0.9.0-win-x64.exe'
   const digest = 'a'.repeat(64)
   assert.equal(parseChecksumFile(`${digest}  ${name}\n`, name), digest)
   assert.throws(() => parseChecksumFile(`${digest}  another.exe\n`, name), /SHA-256/)

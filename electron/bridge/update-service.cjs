@@ -99,7 +99,7 @@ function parseReleasePayload(payload) {
 }
 
 function selectWindowsInstallerAsset(assets = []) {
-  return assets.find(asset => /^Harness Desktop-.+-win-x64\.exe$/i.test(asset.name)) || null
+  return assets.find(asset => /^Harness[ ._-]Desktop-.+-win-x64\.exe$/i.test(asset.name)) || null
 }
 
 function selectChecksumAsset(assets = []) {
