@@ -9,7 +9,11 @@ const required = [
   'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs',
   'electron/bridge/update-service.cjs', 'electron/bridge/self-test-service.cjs',
   'electron/store/app-state-store.cjs',
-  'renderer/index.html', 'renderer/styles.css', 'renderer/app.js',
+  'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js',
+  'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
+  'renderer/themes/maid-atelier/maid-atelier-maid-right-v6.webp',
+  'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
+  'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
   'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/self-test-service.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md',
@@ -36,7 +40,7 @@ for (const relative of removed) {
 }
 
 const html = await readFile(path.join(root, 'renderer/index.html'), 'utf8')
-for (const relative of ['./styles.css', './app.js', './assets/deepseek-icon.svg']) {
+for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './app.js', './assets/deepseek-icon.svg']) {
   if (!html.includes(relative)) throw new Error(`renderer/index.html is missing expected reference: ${relative}`)
 }
 for (const id of ['runtimeView', 'runtimeStatus', 'runtimeStatusTitle', 'runtimeStatusDetail', 'retryRuntime']) {
@@ -58,9 +62,27 @@ if (!rendererScript.includes('element.textContent !== value') || !rendererScript
 if (!rendererScript.includes("request('install-update')") || !rendererScript.includes('api.installUpdate()') || !rendererScript.includes('下载并安装桌面版更新')) {
   throw new Error('Official General settings must install verified Harness Desktop updates, not only open a download page.')
 }
+if (!rendererScript.includes('api.openHarnessSettings()') || !rendererScript.includes('api.chooseThemeBackground()') || !rendererScript.includes('themeIntegration.prepareCatalog')) {
+  throw new Error('Official settings must integrate desktop file opening, theme selection, and local custom backgrounds.')
+}
+
+const themeCatalog = await readFile(path.join(root, 'renderer/theme-catalog.js'), 'utf8')
+const themeIntegration = await readFile(path.join(root, 'renderer/theme-integration.js'), 'utf8')
+for (const id of ['official', 'maid-atelier', 'catppuccin-mocha', 'nord-aurora', 'dracula-night', 'gruvbox-paper', 'solarized-dawn', 'tokyo-night', 'rose-pine', 'custom']) {
+  if (!themeCatalog.includes(`id: '${id}'`)) throw new Error(`Theme catalog is missing: ${id}`)
+}
+if (!themeCatalog.includes("license: 'CC BY-NC-SA 4.0'") || !themeCatalog.includes('nonCommercial: true')) {
+  throw new Error('The non-commercial Deep Whale derivative must retain its license boundary.')
+}
+if (!themeIntegration.includes("event.detail >= 2") || !themeIntegration.includes("addEventListener('dblclick'") || themeIntegration.includes('>使用</button>')) {
+  throw new Error('Theme cards must apply on a real double click without restoring a visible apply button.')
+}
+if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includes('markThemeSurfaces') || !themeIntegration.includes('[data-slot="conversation"]')) {
+  throw new Error('Theme integration must survive upstream class-name changes and isolate official surface variables.')
+}
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '0.9.0-rc.2') throw new Error(`Expected package version 0.9.0-rc.2, received ${pkg.version}`)
+if (pkg.version !== '0.9.0-rc.3') throw new Error(`Expected package version 0.9.0-rc.3, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')
@@ -80,7 +102,7 @@ if (officialIconHash !== '77b823e3d14122b6dfe6ff6089e629d1c6e3fcd1ed7fc0b9e7bf59
 }
 
 const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
-for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:install-progress', 'shell:openExternal']) {
+for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'shell:openExternal']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }
 for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'terminal:start', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {
@@ -91,7 +113,7 @@ for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'san
 }
 
 const preload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
-for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'openExternal', 'onUpdateResult', 'onUpdateInstallProgress']) {
+for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'openHarnessSettings', 'openExternal', 'onUpdateResult', 'onUpdateInstallProgress']) {
   if (!preload.includes(api)) throw new Error(`preload API missing: ${api}`)
 }
 for (const removedApi of ['getProviderSettings', 'runDiagnostics', 'listSessions', 'listWorkspaceDirectory', 'startTerminal']) {

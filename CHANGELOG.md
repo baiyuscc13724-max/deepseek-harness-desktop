@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0-rc.3
+
+- 在 DeepSeek Harness 官方设置中新增“外观皮肤”，不增加第二套工作台或独立桌面设置。
+- 内置官方外观、Deep Ocean、Catppuccin、Nord、Dracula、Gruvbox、Solarized、Tokyo Night、Rosé Pine 等配色。
+- 加入 Deep Whale 女仆工坊皮肤，并保留 CC BY-NC-SA 4.0 非商业许可、来源和完整署名链。
+- 新增自定义主题，可设置明暗模式、强调色、界面底色、文字颜色和本地背景图。
+- 主题卡片改为双击立即应用；真实鼠标第二次点击与标准 `dblclick` 均可触发，选择会持久化。
+- 修复会话日志入口与 Windows 窗口按钮区域重叠的问题。
+- 修复官方“通用设置 → 打开配置文件”在桌面壳中无响应的问题。
+
 ## 0.9.0-rc.2
 
 - 直接使用 DeepSeek Harness 官方 Web UI 作为唯一工作台，删除重复的原生会话、项目和聊天界面。

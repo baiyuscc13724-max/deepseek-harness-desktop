@@ -1,8 +1,8 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const { createHash } = require('node:crypto')
 const { existsSync } = require('node:fs')
-const { mkdir, open, writeFile } = require('node:fs/promises')
+const { copyFile, mkdir, open, readFile, stat, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 
@@ -24,6 +24,13 @@ let appStateStore = null
 let lastUpdatePayload = null
 let activeUpdateInstall = null
 
+const BUNDLED_THEME_ASSETS = Object.freeze([
+  'maid-atelier/maid-atelier-maid-left-v5.webp',
+  'maid-atelier/maid-atelier-maid-right-v6.webp',
+  'maid-atelier/maid-atelier-palace-day-v4.webp',
+  'maid-atelier/maid-atelier-palace-night-v4.webp'
+])
+
 function send(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
 }
@@ -36,6 +43,74 @@ function setRuntimeState(next) {
 function ensureStateStore() {
   if (!appStateStore) appStateStore = new AppStateStore(path.join(app.getPath('userData'), 'app-state.json'))
   return appStateStore
+}
+
+function themeAssetMime(file) {
+  if (/\.png$/i.test(file)) return 'image/png'
+  if (/\.jpe?g$/i.test(file)) return 'image/jpeg'
+  return 'image/webp'
+}
+
+async function readThemeDataUrl(file) {
+  const info = await stat(file)
+  if (!info.isFile() || info.size > 20 * 1024 * 1024) throw new Error('主题图片无效或超过 20 MB。')
+  const data = await readFile(file)
+  return `data:${themeAssetMime(file)};base64,${data.toString('base64')}`
+}
+
+async function appearancePayload() {
+  const appearance = ensureStateStore().get().appearance
+  const backgroundFile = appearance.customTheme?.backgroundFile
+  if (!backgroundFile) return { ...appearance, customBackgroundDataUrl: null }
+  const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
+  const customBackgroundDataUrl = await readThemeDataUrl(file).catch(() => null)
+  return { ...appearance, customBackgroundDataUrl }
+}
+
+async function bundledThemeAssets() {
+  const root = path.join(__dirname, '..', 'renderer', 'themes')
+  const entries = await Promise.all(BUNDLED_THEME_ASSETS.map(async relative => {
+    const url = await readThemeDataUrl(path.join(root, relative))
+    return [relative, url]
+  }))
+  return Object.fromEntries(entries)
+}
+
+async function chooseCustomThemeBackground() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择自定义主题背景图',
+    properties: ['openFile'],
+    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+  })
+  if (result.canceled || !result.filePaths[0]) return appearancePayload()
+
+  const source = path.resolve(result.filePaths[0])
+  const extension = path.extname(source).toLowerCase()
+  if (!['.png', '.jpg', '.jpeg', '.webp'].includes(extension)) throw new Error('仅支持 PNG、JPG 和 WebP 图片。')
+  const info = await stat(source)
+  if (!info.isFile() || info.size > 20 * 1024 * 1024) throw new Error('背景图片必须小于 20 MB。')
+
+  const directory = path.join(app.getPath('userData'), 'themes')
+  const fileName = `custom-background${extension}`
+  await mkdir(directory, { recursive: true })
+  await copyFile(source, path.join(directory, fileName))
+  ensureStateStore().updateAppearance({ themeId: 'custom', customTheme: { backgroundFile: fileName } })
+  return appearancePayload()
+}
+
+async function openHarnessSettingsDocument() {
+  const harnessHome = String(process.env.DSH_HOME || path.join(app.getPath('home'), '.dsh')).trim()
+  const settingsFile = path.resolve(harnessHome, 'settings.yaml')
+  if (!existsSync(settingsFile)) {
+    await mkdir(path.dirname(settingsFile), { recursive: true })
+    await writeFile(settingsFile, '', { encoding: 'utf8', mode: 0o600, flag: 'a' })
+  }
+  const error = await shell.openPath(settingsFile)
+  if (error) {
+    shell.showItemInFolder(settingsFile)
+    return { ok: false, path: settingsFile, fallback: 'folder', error }
+  }
+  return { ok: true, path: settingsFile }
 }
 
 function detectUrl(text) {
@@ -369,6 +444,18 @@ ipcMain.handle('updates:preferences', () => ensureStateStore().get().updates)
 ipcMain.handle('updates:setPreferences', (_event, patch) => ensureStateStore().updatePreferences(patch || {}).updates)
 ipcMain.handle('updates:check', () => checkUpdates())
 ipcMain.handle('updates:install', () => installAppUpdate())
+ipcMain.handle('appearance:get', () => appearancePayload())
+ipcMain.handle('appearance:assets', () => bundledThemeAssets())
+ipcMain.handle('appearance:setTheme', async (_event, themeId) => {
+  ensureStateStore().updateAppearance({ themeId })
+  return appearancePayload()
+})
+ipcMain.handle('appearance:saveCustom', async (_event, customTheme) => {
+  ensureStateStore().updateAppearance({ themeId: 'custom', customTheme })
+  return appearancePayload()
+})
+ipcMain.handle('appearance:chooseBackground', () => chooseCustomThemeBackground())
+ipcMain.handle('settings:openDocument', () => openHarnessSettingsDocument())
 ipcMain.handle('runtime:start', (_event, options) => startRuntime(options || {}))
 ipcMain.handle('runtime:state', () => runtimeState)
 ipcMain.handle('shell:openExternal', async (_event, value) => {

@@ -1,9 +1,29 @@
 const { mkdirSync, readFileSync, renameSync, writeFileSync } = require('node:fs')
 const path = require('node:path')
+const { THEME_CATALOG } = require('../../renderer/theme-catalog.js')
+
+const VALID_THEME_IDS = new Set(THEME_CATALOG.map(theme => theme.id))
+const HEX_COLOR = /^#[0-9a-f]{6}$/i
+
+function normalizeCustomTheme(value = {}) {
+  return {
+    mode: value.mode === 'light' ? 'light' : 'dark',
+    accent: HEX_COLOR.test(value.accent) ? value.accent.toLowerCase() : '#6f8cff',
+    surface: HEX_COLOR.test(value.surface) ? value.surface.toLowerCase() : '#171b29',
+    text: HEX_COLOR.test(value.text) ? value.text.toLowerCase() : '#f4f7ff',
+    backgroundFile: /^custom-background\.(?:png|jpe?g|webp)$/i.test(value.backgroundFile || '')
+      ? value.backgroundFile
+      : null
+  }
+}
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 1,
-  updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null }
+  schemaVersion: 2,
+  updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null },
+  appearance: {
+    themeId: 'official',
+    customTheme: normalizeCustomTheme()
+  }
 })
 
 function cloneDefaultState() {
@@ -14,12 +34,16 @@ function normalizeState(input) {
   const base = cloneDefaultState()
   const value = input && typeof input === 'object' ? input : {}
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     updates: {
       checkOnStartup: value.updates?.checkOnStartup !== false,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
       lastCheckedAt: value.updates?.lastCheckedAt || null,
       skippedVersion: value.updates?.skippedVersion || null
+    },
+    appearance: {
+      themeId: VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : 'official',
+      customTheme: normalizeCustomTheme(value.appearance?.customTheme)
     }
   }
 }
@@ -61,6 +85,20 @@ class AppStateStore {
     this.#persist()
     return this.get()
   }
+
+  updateAppearance(patch = {}) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'themeId')) {
+      this.state.appearance.themeId = VALID_THEME_IDS.has(patch.themeId) ? patch.themeId : 'official'
+    }
+    if (patch.customTheme && typeof patch.customTheme === 'object') {
+      this.state.appearance.customTheme = normalizeCustomTheme({
+        ...this.state.appearance.customTheme,
+        ...patch.customTheme
+      })
+    }
+    this.#persist()
+    return this.get()
+  }
 }
 
-module.exports = { AppStateStore, DEFAULT_STATE, normalizeState }
+module.exports = { AppStateStore, DEFAULT_STATE, VALID_THEME_IDS, normalizeState }

@@ -14,6 +14,9 @@ let updateState = {
   harness: null,
   preferences: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null }
 }
+let appearanceState = { themeId: 'official', customTheme: {}, customBackgroundDataUrl: null }
+let themeCatalog = []
+const themeIntegration = window.harnessThemeIntegration
 
 function renderRuntimeState(state) {
   if (state?.status === 'ready' && state.url) {
@@ -115,6 +118,15 @@ function officialSettingsBootstrap() {
   const mount = () => {
     const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
     if (!dialog) return
+    const configButton = [...dialog.querySelectorAll('button')].find(button => /打开配置文件|Open configuration file/i.test(button.textContent || ''))
+    if (configButton && !configButton.dataset.hdDesktopOpen) {
+      configButton.dataset.hdDesktopOpen = 'true'
+      configButton.addEventListener('click', event => {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        request('open-config-file')
+      }, true)
+    }
     const general = [...dialog.querySelectorAll('nav button')].find(button => /通用设置|General/i.test(button.textContent || ''))
     if (!general || general.getAttribute('aria-current') !== 'true') return
     const slot = dialog.querySelector('[data-slot="settings.general.item"]')
@@ -180,6 +192,10 @@ async function publishUpdateState() {
   await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_UPDATE_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_UPDATES__?.();`, true).catch(() => {})
 }
 
+async function publishAppearanceState() {
+  await themeIntegration.publish(runtimeView, appearanceState, themeCatalog).catch(() => {})
+}
+
 async function checkUpdates() {
   updateState = { ...updateState, checking: true }
   await publishUpdateState()
@@ -205,7 +221,9 @@ async function installUpdate() {
 
 runtimeView.addEventListener('dom-ready', async () => {
   await runtimeView.executeJavaScript(`(${officialSettingsBootstrap.toString()})()`, true).catch(() => {})
+  await themeIntegration.install(runtimeView).catch(() => {})
   await publishUpdateState()
+  await publishAppearanceState()
 })
 
 runtimeView.addEventListener('will-navigate', event => {
@@ -226,6 +244,26 @@ runtimeView.addEventListener('will-navigate', event => {
   } else if (target.hostname === 'open-release') {
     const url = target.searchParams.get('url')
     if (url) api.openExternal(url).catch(() => {})
+  } else if (target.hostname === 'open-external') {
+    const url = target.searchParams.get('url')
+    if (url) api.openExternal(url).catch(() => {})
+  } else if (target.hostname === 'open-config-file') {
+    api.openHarnessSettings().catch(() => {})
+  } else if (target.hostname === 'set-theme') {
+    api.setTheme(target.searchParams.get('id') || 'official').then(state => {
+      appearanceState = state
+      publishAppearanceState()
+    })
+  } else if (target.hostname === 'save-custom-theme') {
+    api.saveCustomTheme(Object.fromEntries(['mode', 'accent', 'surface', 'text'].map(name => [name, target.searchParams.get(name)]))).then(state => {
+      appearanceState = state
+      publishAppearanceState()
+    })
+  } else if (target.hostname === 'choose-theme-background') {
+    api.chooseThemeBackground().then(state => {
+      appearanceState = state
+      publishAppearanceState()
+    })
   }
 })
 
@@ -246,6 +284,9 @@ api.onUpdateInstallProgress(progress => {
 
 async function startOfficialWorkspace() {
   updateState = { ...updateState, preferences: await api.getUpdatePreferences() }
+  appearanceState = await api.getAppearance()
+  const themeAssets = await api.getThemeAssets()
+  themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)
   const initial = await api.getRuntimeState()
   renderRuntimeState(initial)
   if (initial.status !== 'ready') renderRuntimeState(await api.startRuntime({}))

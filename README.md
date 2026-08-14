@@ -9,11 +9,11 @@ Harness Desktop 是面向 Windows 的开源桌面客户端，直接运行并显�
 
 ## 下载
 
-当前版本：`v0.9.0-rc.2`
+当前版本：`v0.9.0-rc.3`
 
-- [Windows 中文安装版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.2/Harness-Desktop-0.9.0-rc.2-win-x64.exe)
-- [Windows 便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.2/Harness-Desktop-0.9.0-rc.2-portable-x64.exe)
-- [SHA-256 校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.2/SHA256SUMS.txt)
+- [Windows 中文安装版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.3/Harness-Desktop-0.9.0-rc.3-win-x64.exe)
+- [Windows 便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.3/Harness-Desktop-0.9.0-rc.3-portable-x64.exe)
+- [SHA-256 校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.9.0-rc.3/SHA256SUMS.txt)
 
 安装版按当前用户安装，不要求管理员权限；便携版可以直接运行。模型和密钥在官方 Harness 设置中管理，本项目不保存第二份 Provider 配置。
 
@@ -26,7 +26,12 @@ Harness Desktop 是面向 Windows 的开源桌面客户端，直接运行并显�
 - 桌面版更新和 Harness 核心更新状态嵌入官方“设置 → 通用设置”；
 - Windows 桌面版通过 GitHub Releases 检查更新；
 - 下载新安装包后强制校验 `SHA256SUMS.txt`，校验通过才会启动中文升级程序；
+- 在官方“设置”内增加外观皮肤：内置多款开源配色、Deep Whale 女仆工坊皮肤和自定义颜色/背景图，双击卡片即可应用；
 - 应用、安装包、便携版和卸载列表使用 DeepSeek 鲸鱼图标。
+
+## 皮肤许可说明
+
+桌面壳代码采用 MIT 许可证。内置配色保留各上游项目许可证；Deep Whale 女仆工坊图片来自 [`Small-tailqwq/dsh-deep-whale`](https://github.com/Small-tailqwq/dsh-deep-whale)，单独采用 **CC BY-NC-SA 4.0**，不得用于商业用途。完整来源和署名见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 开发与验证
 
@@ -51,10 +56,10 @@ Renderer 没有 Node.js 权限。WebView 仅允许访问本机 Harness HTTP Runt
 
 Harness Desktop is an open-source Windows desktop client that launches and displays the official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI.
 
-The project adds desktop startup, Windows packaging, and verified self-updates without rebuilding the official workbench. It ships a Simplified Chinese installer and a portable executable. Desktop updates are downloaded from GitHub Releases and must match the published SHA-256 checksum before installation.
+The project adds desktop startup, Windows packaging, verified self-updates, and an appearance panel inside the official settings surface without rebuilding the official workbench. It ships a Simplified Chinese installer and a portable executable. Desktop updates are downloaded from GitHub Releases and must match the published SHA-256 checksum before installation.
 
 Harness Desktop is community-maintained. It is not an official DeepSeek application and is not endorsed by DeepSeek.
 
 ## License
 
-The desktop shell is released under the [MIT License](LICENSE). Third-party components and notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The desktop shell is released under the [MIT License](LICENSE). The bundled Deep Whale artwork is separately licensed under CC BY-NC-SA 4.0 and is non-commercial. Third-party components and notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
