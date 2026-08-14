@@ -1,4 +1,5 @@
 const { access, mkdir, unlink, writeFile } = require('node:fs/promises')
+const { spawn } = require('node:child_process')
 const path = require('node:path')
 
 async function rendererAvailable(rendererEntry) {
@@ -28,6 +29,38 @@ async function userDataWritable(userData) {
   }
 }
 
+async function runtimeCliLoadable(dsh, spawnImpl = spawn) {
+  if (!dsh?.command || !Array.isArray(dsh.argsPrefix)) return false
+  return new Promise(resolve => {
+    let settled = false
+    let timer = null
+    const finish = value => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    let child
+    try {
+      child = spawnImpl(dsh.command, [...dsh.argsPrefix, '--help'], {
+        env: { ...process.env, ...(dsh.env || {}) },
+        windowsHide: true,
+        stdio: 'ignore'
+      })
+    } catch {
+      resolve(false)
+      return
+    }
+    timer = setTimeout(() => {
+      child.kill?.()
+      finish(false)
+    }, 15000)
+    timer.unref?.()
+    child.once('error', () => finish(false))
+    child.once('exit', code => finish(code === 0))
+  })
+}
+
 async function runPackagedSelfTest(options = {}) {
   let dsh = { source: 'unknown', version: 'unknown', error: '' }
   try {
@@ -39,6 +72,9 @@ async function runPackagedSelfTest(options = {}) {
   const checks = {
     rendererEntry: await rendererAvailable(options.rendererEntry),
     bundledHarness: dsh.source === 'bundled' || dsh.source === 'env',
+    runtimeImports: options.runtimeProbe
+      ? await options.runtimeProbe(dsh)
+      : await runtimeCliLoadable(dsh, options.spawnImpl),
     nodeRuntime: nodeRuntimeSupported(options.nodeVersion),
     userData: options.userDataProbe
       ? await options.userDataProbe(options.userData)
@@ -66,4 +102,4 @@ async function runPackagedSelfTest(options = {}) {
   }
 }
 
-module.exports = { nodeRuntimeSupported, rendererAvailable, runPackagedSelfTest, userDataWritable }
+module.exports = { nodeRuntimeSupported, rendererAvailable, runPackagedSelfTest, runtimeCliLoadable, userDataWritable }

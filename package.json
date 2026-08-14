@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": false,
   "description": "Open-source Windows desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, packaged self-test, and release gates.",
   "author": {
@@ -24,6 +24,7 @@
     "verify:packaged": "node scripts/packaged-selftest-contract.mjs"
   },
   "dependencies": {
+    "@deepseek-ai/cordis-plugin-group": "1.0.1",
     "@deepseek-ai/dsh": "0.1.0-rc.6",
     "@earendil-works/pi-ai": "0.82.1",
     "cross-spawn": "7.0.6",
