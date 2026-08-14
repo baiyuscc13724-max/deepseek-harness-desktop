@@ -3,6 +3,10 @@
   "version": "0.9.0-rc.2",
   "private": false,
   "description": "Open-source Windows desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, packaged self-test, and release gates.",
+  "author": {
+    "name": "Harness Desktop Contributors",
+    "email": "baiyuscc13724-max@users.noreply.github.com"
+  },
   "license": "MIT",
   "type": "commonjs",
   "main": "electron/main.cjs",
