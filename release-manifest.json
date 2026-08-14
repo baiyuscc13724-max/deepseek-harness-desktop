@@ -3,7 +3,7 @@
     "tag_name": "v1.0.5",
     "name": "Harness Desktop v1.0.5",
     "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.5",
-    "prerelease": false,
+    "prerelease": true,
     "draft": false,
     "assets": [
       {
