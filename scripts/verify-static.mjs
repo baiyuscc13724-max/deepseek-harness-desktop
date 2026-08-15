@@ -143,7 +143,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.9') throw new Error(`Expected package version 1.0.9, received ${pkg.version}`)
+if (pkg.version !== '1.0.10') throw new Error(`Expected package version 1.0.10, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 for (const dependency of [
