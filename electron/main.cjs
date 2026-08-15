@@ -16,6 +16,7 @@ const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFil
 const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
 const { createDesktopTray } = require('./desktop-tray.cjs')
+const { distributionInfo, isStoreDistribution } = require('./distribution.cjs')
 const { AppStateStore } = require('./store/app-state-store.cjs')
 const { PetDomainService } = require('./pet/pet-domain-service.cjs')
 const { PetEventAdapter } = require('./pet/pet-event-adapter.cjs')
@@ -27,6 +28,7 @@ const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3080'
 const LOCAL_RUNTIME_HOSTS = new Set(['127.0.0.1', 'localhost'])
 const SELF_TEST_MODE = process.argv.includes('--self-test')
 const HAS_SINGLE_INSTANCE_LOCK = SELF_TEST_MODE || app.requestSingleInstanceLock()
+const STORE_BUILD = isStoreDistribution()
 
 let mainWindow = null
 let runtime = null
@@ -81,6 +83,15 @@ function desktopDshHome() {
 }
 
 function petPayload(domainState = petDomain?.getState()) {
+  if (STORE_BUILD) {
+    return {
+      status: 'disabled',
+      disabled: true,
+      fullness: 0,
+      inventory: { refined: 0, standard: 0, fragments: 0 },
+      preferences: { enabled: false, awake: false, alwaysOnTop: false, autoFeed: false }
+    }
+  }
   return {
     ...(domainState || {}),
     preferences: ensureStateStore().get().pet
@@ -157,7 +168,10 @@ async function readThemeDataUrl(file) {
 }
 
 async function appearancePayload() {
-  const appearance = ensureStateStore().get().appearance
+  let appearance = ensureStateStore().get().appearance
+  if (STORE_BUILD && appearance.themeId === 'maid-atelier') {
+    appearance = ensureStateStore().updateAppearance({ themeId: 'porcelain-mist' }).appearance
+  }
   const backgroundFile = appearance.customTheme?.backgroundFile
   if (!backgroundFile) return { ...appearance, customBackgroundDataUrl: null }
   const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
@@ -166,6 +180,7 @@ async function appearancePayload() {
 }
 
 async function bundledThemeAssets() {
+  if (STORE_BUILD) return {}
   const root = path.join(__dirname, '..', 'renderer', 'themes')
   const entries = await Promise.all(BUNDLED_THEME_ASSETS.map(async relative => {
     const url = await readThemeDataUrl(path.join(root, relative))
@@ -366,16 +381,26 @@ async function checkUpdates() {
   const preferences = store.get().updates
   const feedUrl = String(process.env.HARNESS_DESKTOP_UPDATE_FEED || DEFAULT_APP_FEED).trim()
   const channel = preferences.channel === 'prerelease' || app.getVersion().includes('-') ? 'prerelease' : 'stable'
+  const appUpdateCheck = STORE_BUILD
+    ? Promise.resolve({
+        kind: 'app',
+        configured: true,
+        currentVersion: app.getVersion(),
+        latestVersion: app.getVersion(),
+        updateAvailable: false,
+        storeManaged: true
+      })
+    : checkAppUpdate({ currentVersion: app.getVersion(), feedUrl, channel, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
+        kind: 'app', configured: Boolean(feedUrl), currentVersion: app.getVersion(), updateAvailable: false, error: error.message
+      }))
   const [appResult, harnessResult] = await Promise.all([
-    checkAppUpdate({ currentVersion: app.getVersion(), feedUrl, channel, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
-      kind: 'app', configured: Boolean(feedUrl), currentVersion: app.getVersion(), updateAvailable: false, error: error.message
-    })),
+    appUpdateCheck,
     checkHarnessUpstream({ currentVersion: currentHarnessVersion, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
       kind: 'harness', currentVersion: currentHarnessVersion, updateAvailable: false, error: error.message
     }))
   ])
   const state = store.markUpdateChecked()
-  const payload = { app: appResult, harness: harnessResult, preferences: state.updates }
+  const payload = { app: appResult, harness: harnessResult, preferences: state.updates, distribution: distributionInfo() }
   lastUpdatePayload = payload
   send('updates:result', payload)
   return payload
@@ -469,6 +494,7 @@ async function fetchChecksum(url, fileName) {
 }
 
 async function installAppUpdate() {
+  if (STORE_BUILD) throw new Error('此版本由 Microsoft Store 管理桌面应用更新。')
   if (process.platform !== 'win32') throw new Error('当前版本仅支持在 Windows 内自动安装更新。')
   if (activeUpdateInstall) return activeUpdateInstall
 
@@ -510,6 +536,7 @@ async function installAppUpdate() {
 }
 
 async function launchReadyAppUpdate() {
+  if (STORE_BUILD) throw new Error('此版本由 Microsoft Store 管理桌面应用更新。')
   if (process.platform !== 'win32') throw new Error('当前版本仅支持在 Windows 内自动安装更新。')
   if (!readyUpdate?.installerPath || !existsSync(readyUpdate.installerPath)) {
     throw new Error('已下载的更新安装包不存在，请重新下载。')
@@ -569,7 +596,9 @@ function ensureDesktopTray() {
     Tray,
     Menu,
     nativeImage,
-    iconPath: path.join(__dirname, '..', 'build', 'icon.png'),
+    iconPath: STORE_BUILD
+      ? path.join(__dirname, '..', 'store', 'Assets', 'AppList.targetsize-256.png')
+      : path.join(__dirname, '..', 'build', 'icon.png'),
     showMainWindow,
     hideMainWindow,
     quitApp: () => app.quit()
@@ -579,7 +608,9 @@ function ensureDesktopTray() {
 
 function createWindow() {
   ensureStateStore()
-  const iconPath = path.join(__dirname, '..', 'build', 'icon.png')
+  const iconPath = STORE_BUILD
+    ? path.join(__dirname, '..', 'store', 'Assets', 'AppList.targetsize-256.png')
+    : path.join(__dirname, '..', 'build', 'icon.png')
   mainWindow = new BrowserWindow({
     width: 1460,
     height: 930,
@@ -639,9 +670,11 @@ ipcMain.handle('updates:setPreferences', (_event, patch) => ensureStateStore().u
 ipcMain.handle('updates:check', () => checkUpdates())
 ipcMain.handle('updates:install', () => installAppUpdate())
 ipcMain.handle('updates:launchReady', () => launchReadyAppUpdate())
+ipcMain.handle('distribution:get', () => distributionInfo())
 ipcMain.handle('appearance:get', () => appearancePayload())
 ipcMain.handle('appearance:assets', () => bundledThemeAssets())
 ipcMain.handle('appearance:setTheme', async (_event, themeId) => {
+  if (STORE_BUILD && themeId === 'maid-atelier') throw new Error('Microsoft Store 版本不包含非商业授权主题。')
   ensureStateStore().updateAppearance({ themeId })
   return appearancePayload()
 })
@@ -653,10 +686,10 @@ ipcMain.handle('appearance:chooseBackground', () => chooseCustomThemeBackground(
 ipcMain.handle('pet:getState', () => petPayload())
 ipcMain.handle('pet:setPreferences', (_event, patch) => updatePetPreferences(patch || {}))
 ipcMain.handle('pet:feed', (_event, kind) => {
-  petDomain.feed(kind)
+  petDomain?.feed(kind)
   return petPayload()
 })
-ipcMain.handle('pet:interact', (_event, kind) => petDomain.interact(kind))
+ipcMain.handle('pet:interact', (_event, kind) => petDomain?.interact(kind) || petPayload())
 ipcMain.handle('pet:focusMain', (_event, sessionId) => {
   petWindowController?.focusMain(sessionId || null)
   return true
@@ -700,7 +733,7 @@ app.whenReady().then(async () => {
   }).catch(error => {
     console.warn(`Unable to prepare DSH plugin marketplace: ${error.message}`)
   })
-  ensurePetSystem()
+  if (!STORE_BUILD) ensurePetSystem()
   ensureDesktopTray()
   createWindow()
   app.on('activate', () => {

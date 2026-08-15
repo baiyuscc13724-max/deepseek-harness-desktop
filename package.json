@@ -21,7 +21,10 @@
     "postinstall": "node scripts/patch-official-runtime.mjs && electron-builder install-app-deps",
     "verify:release": "node scripts/release-audit.mjs",
     "verify:artifact": "node scripts/artifact-audit.mjs dist",
-    "verify:packaged": "node scripts/packaged-selftest-contract.mjs"
+    "verify:packaged": "node scripts/packaged-selftest-contract.mjs",
+    "store:assets": "winapp manifest update-assets store/branding/harness-desktop-store.svg --manifest store/Package.appxmanifest.template",
+    "store:check": "node scripts/store-readiness.mjs",
+    "store:msix": "node scripts/build-store-msix.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis-plugin-group": "1.0.1",
@@ -51,6 +54,7 @@
     "yaml": "2.9.0"
   },
   "devDependencies": {
+    "@microsoft/winappcli": "^0.5.0",
     "electron": "43.2.0",
     "electron-builder": "26.15.7"
   },

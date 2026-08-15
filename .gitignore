@@ -1,5 +1,9 @@
 node_modules/
 dist/
+dist-store/
+store/store-identity.json
+store/devcert.pfx
+store/*.pfx
 *.log
 .DS_Store
 .env

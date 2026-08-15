@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   checkUpdates: () => ipcRenderer.invoke('updates:check'),
   installUpdate: () => ipcRenderer.invoke('updates:install'),
   launchReadyUpdate: () => ipcRenderer.invoke('updates:launchReady'),
+  getDistribution: () => ipcRenderer.invoke('distribution:get'),
   getAppearance: () => ipcRenderer.invoke('appearance:get'),
   setTheme: themeId => ipcRenderer.invoke('appearance:setTheme', themeId),
   getThemeAssets: () => ipcRenderer.invoke('appearance:assets'),

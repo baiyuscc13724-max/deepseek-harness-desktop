@@ -1,0 +1,31 @@
+appId: io.harnessdesktop.app.store
+productName: Harness Desktop
+asar: true
+files:
+  - electron/**/*
+  - renderer/**/*
+  - store/Assets/**/*
+  - '!renderer/themes/maid-atelier/**/*'
+  - '!renderer/pets/maid-whale/**/*'
+  - '!renderer/pet/pet-glb-rig.js'
+  - '!renderer/pet/pet-rig.js'
+  - '!renderer/pet/pet-rig-motion.js'
+  - '!renderer/pet/vendor/**/*'
+  - package.json
+  - LICENSE
+  - THIRD_PARTY_NOTICES.md
+  - docs/**/*
+  - '!node_modules/**/*.map'
+  - '!node_modules/**/*.{ts,tsx,cts,mts}'
+  - '!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*'
+extraMetadata:
+  main: electron/main.cjs
+win:
+  icon: store/Assets/app.ico
+icon: store/Assets/app.ico
+npmRebuild: true
+asarUnpack:
+  - node_modules/**/*
+artifactName: ${productName}-${version}-store-${arch}.${ext}
+directories:
+  output: dist-store

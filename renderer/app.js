@@ -42,6 +42,10 @@ let updateState = {
   harness: null,
   preferences: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null }
 }
+let distributionState = {
+  channel: 'direct', store: false, appUpdatesManagedByStore: false,
+  nonCommercialContentAvailable: true, desktopPetAvailable: true, links: {}
+}
 let appearanceState = { themeId: 'porcelain-mist', customTheme: {}, customBackgroundDataUrl: null }
 let petState = {
   status: 'idle', fullness: 80, inventory: { refined: 0, standard: 0, fragments: 0 },
@@ -317,6 +321,8 @@ function officialSettingsBootstrap() {
     #harness-desktop-update-row .hd-update-line { display:flex; justify-content:space-between; gap:12px; color:var(--dsw-alias-label-secondary); font-size:12px; }
     #harness-desktop-update-row .hd-update-line strong { color:var(--dsw-alias-label-primary); font-weight:400; text-align:right; }
     #harness-desktop-update-row .hd-update-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:12px; }
+    #harness-desktop-update-row .hd-policy-links { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:12px; }
+    #harness-desktop-update-row .hd-policy-links a { min-height:auto; padding:0; border-radius:0; color:var(--dsw-alias-label-secondary); background:transparent; text-decoration:underline; }
     #harness-desktop-update-row button, #harness-desktop-update-row a { box-sizing:border-box; min-height:34px; border:0; border-radius:17px; padding:6px 14px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); font:inherit; font-size:13px; text-decoration:none; cursor:pointer; }
     #harness-desktop-update-row button:hover, #harness-desktop-update-row a:hover { background:var(--dsw-alias-interactive-bg-hover); }
     #harness-desktop-update-row button:disabled { cursor:default; opacity:.55; }
@@ -326,6 +332,7 @@ function officialSettingsBootstrap() {
 
   const versionText = result => {
     if (!result) return '等待首次检查'
+    if (result.storeManaged) return `${result.currentVersion || '当前版本'}（由 Microsoft Store 管理）`
     if (result.error) return `检查失败：${result.error}`
     const current = result.currentVersion || '未知'
     const latest = result.latestVersion || current
@@ -350,9 +357,11 @@ function officialSettingsBootstrap() {
     const checked = state.preferences?.lastCheckedAt
     const progress = state.installProgress
     const percent = progress?.total ? Math.min(100, Math.round(progress.received * 100 / progress.total)) : 0
-    const status = progress?.phase === 'ready'
-      ? '更新已在后台下载完成，等待安装确认'
-      : state.installing
+    const status = state.app?.storeManaged && !state.installing && !state.installError
+      ? state.checking ? '正在检查官方 Harness 更新…' : '桌面应用更新由 Microsoft Store 管理'
+      : progress?.phase === 'ready'
+        ? '更新已在后台下载完成，等待安装确认'
+        : state.installing
       ? progress?.phase === 'checksum'
         ? '正在验证桌面版更新…'
         : progress?.phase === 'launch'
@@ -386,6 +395,13 @@ function officialSettingsBootstrap() {
     if (release.hidden !== releaseHidden) release.hidden = releaseHidden
     const releaseUrl = state.app?.url || ''
     if (release.dataset.url !== releaseUrl) release.dataset.url = releaseUrl
+    const links = state.distribution?.links || {}
+    for (const [name, url] of Object.entries({ privacy: links.privacy, aiReport: links.aiReport, pluginPolicy: links.pluginPolicy })) {
+      const link = row.querySelector(`[data-hd-policy="${name}"]`)
+      if (!link) continue
+      link.hidden = !url
+      link.dataset.url = url || ''
+    }
   }
 
   const mount = () => {
@@ -430,6 +446,11 @@ function officialSettingsBootstrap() {
         <a href="#" data-hd-release hidden>打开桌面版下载页</a>
         <label><input type="checkbox" data-hd-auto checked /> 启动时自动检查</label>
       </div>
+      <div class="hd-policy-links">
+        <a href="#" data-hd-policy="privacy">隐私政策</a>
+        <a href="#" data-hd-policy="aiReport">举报不当 AI 内容</a>
+        <a href="#" data-hd-policy="pluginPolicy">插件内容规则</a>
+      </div>
     `
     row.querySelector('[data-hd-check]').addEventListener('click', () => request('check-updates'))
     row.querySelector('[data-hd-install]').addEventListener('click', () => request('install-update'))
@@ -438,6 +459,10 @@ function officialSettingsBootstrap() {
       request('open-release', { url: event.currentTarget.dataset.url || '' })
     })
     row.querySelector('[data-hd-auto]').addEventListener('change', event => request('auto-check', { enabled: event.currentTarget.checked ? '1' : '0' }))
+    row.querySelectorAll('[data-hd-policy]').forEach(link => link.addEventListener('click', event => {
+      event.preventDefault()
+      request('open-external', { url: event.currentTarget.dataset.url || '' })
+    }))
     section.appendChild(row)
     paint()
   }
@@ -667,12 +692,16 @@ api.onUpdateInstallProgress(progress => {
 })
 
 async function startOfficialWorkspace() {
-  updateState = { ...updateState, preferences: await api.getUpdatePreferences() }
+  distributionState = await api.getDistribution()
+  updateState = { ...updateState, preferences: await api.getUpdatePreferences(), distribution: distributionState }
   appearanceState = await api.getAppearance()
   petState = await api.getPetState()
   modelRoutingState = { ...await api.getModelRouting(), saving: false, saved: false, error: '' }
   const themeAssets = await api.getThemeAssets()
   themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)
+    .filter(theme => distributionState.nonCommercialContentAvailable || !theme.nonCommercial)
+  petQuickButton.hidden = !distributionState.desktopPetAvailable
+  if (!distributionState.desktopPetAvailable) petPanel.classList.add('hidden')
   applyShellTheme()
   renderPetState()
   renderSkinPicker()
