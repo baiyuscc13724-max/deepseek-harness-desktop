@@ -9,11 +9,11 @@ Harness Desktop 是面向 Windows 的开源桌面客户端，直接运行并显�
 
 ## 下载
 
-当前版本：`v1.0.8`
+当前版本：`v1.0.9`
 
-- [Windows 中文安装版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.8/Harness-Desktop-1.0.8-win-x64.exe)
-- [Windows 便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.8/Harness-Desktop-1.0.8-portable-x64.exe)
-- [SHA-256 校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.8/SHA256SUMS.txt)
+- [Windows 中文安装版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.9/Harness-Desktop-1.0.9-win-x64.exe)
+- [Windows 便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.9/Harness-Desktop-1.0.9-portable-x64.exe)
+- [SHA-256 校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.9/SHA256SUMS.txt)
 
 安装版按当前用户安装，不要求管理员权限；便携版可以直接运行。模型和密钥在官方 Harness 设置中管理，本项目不保存第二份 Provider 配置。
 
@@ -30,6 +30,7 @@ Harness Desktop 是面向 Windows 的开源桌面客户端，直接运行并显�
 - 桌面壳顶部提供独立“皮肤”快捷窗，双击应用后自动关闭，不必先打开完整设置；
 - 在官方“模型”设置中增加主模型与子代理的直接选择；子代理可跟随主模型或单独指定，配置保存在用户目录并可跨官方更新保留；
 - 在官方设置中内置实时 DSH 插件市场，可直接安装和更新社区插件；用户插件不会被桌面版或 Harness 核心更新覆盖；
+- 提供可选的女仆鲸桌面宠物：根据任务与 TOK 状态工作、庆祝、休息和自动进食，也能被抚摸、拖动并在屏幕或应用窗口边缘活动；
 - 应用、安装包、便携版和卸载列表使用 DeepSeek 鲸鱼图标。
 
 ## 皮肤许可说明
