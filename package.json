@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": false,
   "description": "Open-source Windows desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, packaged self-test, and release gates.",
   "author": {
@@ -64,7 +64,10 @@
       "package.json",
       "LICENSE",
       "THIRD_PARTY_NOTICES.md",
-      "docs/**/*"
+      "docs/**/*",
+      "!node_modules/**/*.map",
+      "!node_modules/**/*.{ts,tsx,cts,mts}",
+      "!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*"
     ],
     "extraMetadata": {
       "main": "electron/main.cjs"

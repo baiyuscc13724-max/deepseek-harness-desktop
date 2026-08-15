@@ -1,7 +1,11 @@
 # Changelog
 
-## 1.0.7
+## 1.0.8
 
+- 修复选择已有项目文件夹时报错“win32 folder dialog worker exited before reporting a result”：Windows 桌面包改用系统文件夹选择框，绕开官方 Koffi/COM 对话框子进程的原生崩溃。
+- 精简安装包内不参与运行的源码映射、类型声明、测试和示例文件；官方运行时仍保留实体依赖目录，兼容项目、插件、Skill 和子代理的模块链接。
+
+## 1.0.7
 - 修复 Electron/Node 24 在 Windows 上直接启动 `npm.cmd` 返回 `spawn EINVAL` 的问题；已用 `dsh-at-file` 完成真实依赖安装、注册及重启加载测试，并用 `anthropics/skills` 完成 18 个 Skills 的真实安装测试。
 - 修复全新安装时内置 DSH 插件市场从 `app.asar` 虚拟目录复制失败的问题；现在会从真实的 `app.asar.unpacked` 目录安装到用户 DSH profile。
 - 将桌面插件市场加入打包自检和产物审计，发布包必须能在空白用户目录完成安装、注册客户端并启动官方 Web 工作台。

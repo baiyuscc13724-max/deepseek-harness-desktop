@@ -138,7 +138,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.7') throw new Error(`Expected package version 1.0.7, received ${pkg.version}`)
+if (pkg.version !== '1.0.8') throw new Error(`Expected package version 1.0.8, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 for (const dependency of [
@@ -166,6 +166,9 @@ if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('
 if (pkg.scripts?.['test:provider:real']) throw new Error('The removed desktop provider smoke script must not return.')
 if (pkg.build?.npmRebuild !== true || !pkg.build?.asarUnpack?.some(item => item === 'node_modules/**/*')) {
   throw new Error('The bundled Harness runtime requires Electron ABI rebuild and a physical node_modules tree for Windows profile links.')
+}
+for (const excluded of ['!node_modules/**/*.map', '!node_modules/**/*.{ts,tsx,cts,mts}', '!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*']) {
+  if (!pkg.build?.files?.includes(excluded)) throw new Error(`Non-runtime package files must be pruned from the installer: ${excluded}`)
 }
 if (pkg.build?.icon !== 'build/icon.png') throw new Error('All packages must use the official DeepSeek icon.')
 if (pkg.devDependencies?.electron !== '43.2.0') throw new Error('Release baseline requires pinned Electron 43.2.0.')
@@ -200,7 +203,7 @@ if (!(await readFile(path.join(root, 'electron/bridge/dsh-resolver.cjs'), 'utf8'
 }
 
 const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')
-for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed']) {
+for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Project-scoped New Session patch is missing: ${contract}`)
 }
 for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "'web', '--port', '0'"]) {

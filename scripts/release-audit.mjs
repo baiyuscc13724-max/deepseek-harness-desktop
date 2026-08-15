@@ -4,11 +4,14 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.7') throw new Error(`release audit expects 1.0.7, got ${pkg.version}`)
+if (pkg.version !== '1.0.8') throw new Error(`release audit expects 1.0.8, got ${pkg.version}`)
 if (!pkg.author?.email) throw new Error('Linux .deb packaging requires a maintainer email in package author metadata.')
 if (pkg.main !== 'electron/main.cjs') throw new Error('Electron main entry drifted.')
 if (pkg.build?.asar !== true) throw new Error('Release must keep ASAR enabled.')
 if (!pkg.build?.asarUnpack?.some(item => item === 'node_modules/**/*')) throw new Error('The complete Harness runtime must be unpacked so Windows profile links target physical directories.')
+for (const excluded of ['!node_modules/**/*.map', '!node_modules/**/*.{ts,tsx,cts,mts}', '!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*']) {
+  if (!pkg.build?.files?.includes(excluded)) throw new Error(`Release must prune non-runtime package files: ${excluded}`)
+}
 if (pkg.build?.npmRebuild !== true) throw new Error('Bundled official Harness native dependencies must be rebuilt for Electron.')
 if (pkg.devDependencies?.electron !== '43.2.0') throw new Error('Release baseline must pin Electron 43.2.0 / Node 24.x.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Release must pin the provider model catalog used by dynamic routing discovery.')

@@ -36,6 +36,13 @@ if (process.platform === 'win32') {
   if (marketplacePackage.version !== '1.2.2' || !marketplaceRuntime.includes('process.env.ComSpec') || !marketplaceRuntime.includes('"npm.cmd", ...args')) {
     throw new Error('Packaged marketplace is missing the verified Electron/Node 24 Windows npm launcher.')
   }
+  const directoryPicker = await readFile(path.join(unpacked, 'node_modules', '@deepseek-ai', 'dsh-host-directory-picker-native', 'lib', 'index.js'), 'utf8')
+  if (!directoryPicker.includes('System.Windows.Forms.FolderBrowserDialog') || !directoryPicker.includes('"-EncodedCommand"')) {
+    throw new Error('Packaged runtime is missing the stable Windows directory picker.')
+  }
+  const unpackedFiles = await readdir(unpacked, { recursive: true })
+  const forbiddenRuntimeFile = unpackedFiles.find(name => /(?:\.map|\.(?:ts|tsx|cts|mts))$/i.test(name) && !/\.json$/i.test(name))
+  if (forbiddenRuntimeFile) throw new Error(`Packaged runtime still contains a pruned development file: ${forbiddenRuntimeFile}`)
 }
 const lines = []
 for (const name of expected.sort()) {
