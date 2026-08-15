@@ -131,9 +131,9 @@ jobs:
           files: release-files/*
           name: Harness Desktop ${{ github.ref_name }}
           body: |
-            Harness Desktop is a community-maintained desktop client powered by the official DeepSeek Harness Web UI.
+            Harness Desktop v0.9.0-rc.2 is the current public release candidate.
 
-            Windows users can choose the Chinese installer or the portable edition. The desktop shell adds update-safe themes, model routing, a plugin marketplace, and the optional Maid Whale desktop pet.
+            Community-maintained desktop client powered by DeepSeek Harness.
 
             This is not an official DeepSeek application.
           generate_release_notes: true
