@@ -9,11 +9,11 @@ Harness Desktop 是面向 Windows 的开源桌面客户端，直接运行并显�
 
 ## 下载
 
-当前版本：`v1.0.10`
+当前版本：`v1.0.11`
 
-- [Windows 中文安装版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.10/Harness-Desktop-1.0.10-win-x64.exe)
-- [Windows 便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.10/Harness-Desktop-1.0.10-portable-x64.exe)
-- [SHA-256 校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.10/SHA256SUMS.txt)
+- [Windows 中文安装版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.11/Harness-Desktop-1.0.11-win-x64.exe)
+- [Windows 便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.11/Harness-Desktop-1.0.11-portable-x64.exe)
+- [SHA-256 校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.11/SHA256SUMS.txt)
 
 安装版按当前用户安装，不要求管理员权限；便携版可以直接运行。模型和密钥在官方 Harness 设置中管理，本项目不保存第二份 Provider 配置。
 

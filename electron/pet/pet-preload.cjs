@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('maidWhale', {
   focusMain: sessionId => ipcRenderer.invoke('pet:focusMain', sessionId),
   getEnvironment: () => ipcRenderer.invoke('pet:getEnvironment'),
   moveTo: (x, y) => ipcRenderer.invoke('pet:moveTo', { x, y }),
-  setInteractive: interactive => ipcRenderer.send('pet:setInteractive', Boolean(interactive)),
+  setInteractive: value => ipcRenderer.send('pet:setInteractive', value),
   setHitProfile: profile => ipcRenderer.send('pet:setHitProfile', profile),
   onStateChanged: listener => {
     const wrapped = (_event, state) => listener(state)

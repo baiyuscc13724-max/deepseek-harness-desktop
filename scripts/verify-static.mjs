@@ -52,8 +52,8 @@ for (const removedSurface of ['nativeChatSurface', 'webCompatibilitySurface', 's
 
 const rendererStyles = await readFile(path.join(root, 'renderer/styles.css'), 'utf8')
 const windowDragRule = rendererStyles.match(/\.window-drag\s*\{([^}]*)\}/)?.[1] ?? ''
-if (!/right:\s*208px/.test(windowDragRule) || !/width:\s*24px/.test(windowDragRule) || !/height:\s*36px/.test(windowDragRule) || !/-webkit-app-region:\s*drag/.test(windowDragRule)) {
-  throw new Error('The frameless Windows shell must keep its full-height drag handle inside the reserved gap, without covering official title actions.')
+if (!/left:\s*0(?:px)?\b/.test(windowDragRule) || !/right:\s*208px/.test(windowDragRule) || !/height:\s*36px/.test(windowDragRule) || !/(?:^|[;\s])app-region:\s*drag/.test(windowDragRule) || !/-webkit-app-region:\s*drag/.test(windowDragRule) || /width:\s*24px/.test(windowDragRule)) {
+  throw new Error('The frameless Windows shell must keep a usable full-width title-bar drag surface without covering desktop or native window controls.')
 }
 if (!html.includes('id="skinQuickButton"') || !html.includes('id="skinPickerOverlay"') || !rendererStyles.includes('.skin-picker-dialog')) {
   throw new Error('The desktop shell must expose a standalone quick skin picker without opening the full official settings dialog.')
@@ -143,7 +143,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.10') throw new Error(`Expected package version 1.0.10, received ${pkg.version}`)
+if (pkg.version !== '1.0.11') throw new Error(`Expected package version 1.0.11, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 for (const dependency of [

@@ -15,7 +15,8 @@ class PetWindowController {
     this.movingTimer = null
     this.quitting = false
     this.interactive = false
-    this.hitProfile = { left: 0.13, top: 0.08, right: 0.87, bottom: 0.99 }
+    this.transientRegions = []
+    this.hitProfile = { left: 0.17, top: 0.49, right: 0.83, bottom: 0.97 }
   }
 
   displayKey(display) {
@@ -87,18 +88,35 @@ class PetWindowController {
     }
   }
 
-  setInteractive(interactive) {
+  setInteractive(value) {
     if (!this.window || this.window.isDestroyed()) return
-    this.interactive = Boolean(interactive)
+    const payload = value && typeof value === 'object' ? value : { interactive: Boolean(value), regions: [] }
+    this.interactive = Boolean(payload.interactive)
+    this.transientRegions = Array.isArray(payload.regions)
+      ? payload.regions.map(region => this.sanitizeRegion(region)).filter(Boolean)
+      : []
+    this.applyShape()
+  }
+
+  sanitizeRegion(region = {}) {
+    const x = Math.max(0, Math.min(269, Math.floor(Number(region.x) || 0)))
+    const y = Math.max(0, Math.min(319, Math.floor(Number(region.y) || 0)))
+    const width = Math.max(1, Math.min(270 - x, Math.ceil(Number(region.width) || 0)))
+    const height = Math.max(1, Math.min(320 - y, Math.ceil(Number(region.height) || 0)))
+    if (width <= 1 || height <= 1) return null
+    return { x, y, width, height }
+  }
+
+  applyShape() {
+    if (!this.window || this.window.isDestroyed()) return
     // Keep the pet immediately clickable. A shaped window lets transparent
     // pixels fall through without the first-hover race caused by
-    // setIgnoreMouseEvents(true). Expand to the full window only while menus
-    // or other transient controls are active.
+    // setIgnoreMouseEvents(true). Speech and menus contribute only their own
+    // small rectangles instead of turning the whole transparent window into
+    // an invisible input-blocking box.
     this.window.setIgnoreMouseEvents(false)
     if (process.platform === 'win32' && typeof this.window.setShape === 'function') {
-      this.window.setShape(this.interactive
-        ? [{ x: 0, y: 0, width: 270, height: 320 }]
-        : [this.profileRectangle()])
+      this.window.setShape([this.profileRectangle(), ...this.transientRegions])
     }
   }
 
@@ -123,7 +141,7 @@ class PetWindowController {
       right: profile.right,
       bottom: profile.bottom
     }
-    if (!this.interactive) this.setInteractive(false)
+    this.applyShape()
   }
 
   ensure() {

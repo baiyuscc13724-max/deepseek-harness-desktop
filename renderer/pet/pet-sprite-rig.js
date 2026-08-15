@@ -31,21 +31,25 @@ const ACTION_SPECS = Object.freeze({
   wave: { atlas: 'celebrate', fps: 10, loop: false, frames: [18, 19, 20, 21, 22, 23, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47] }
 })
 
-const DEFAULT_HIT_PROFILE = Object.freeze({ left: 0.13, top: 0.08, right: 0.87, bottom: 0.99 })
+// These profiles follow the alpha bounds of the rendered PNG frames. Keeping
+// them close to visible pixels prevents the transparent top half of the pet
+// window from feeling like a large invisible rectangle.
+const DEFAULT_HIT_PROFILE = Object.freeze({ left: 0.17, top: 0.49, right: 0.83, bottom: 0.97 })
 const ACTION_HIT_PROFILES = Object.freeze({
-  drag: { left: 0.08, top: 0.08, right: 0.92, bottom: 0.95 },
-  fall: { left: 0.04, top: 0.08, right: 0.96, bottom: 0.95 },
-  land: { left: 0.08, top: 0.16, right: 0.92, bottom: 0.99 },
-  sit: { left: 0.1, top: 0.18, right: 0.9, bottom: 0.99 },
-  sleeping: { left: 0.06, top: 0.28, right: 0.94, bottom: 0.99 },
-  perch: { left: 0.1, top: 0.18, right: 0.9, bottom: 0.99 },
-  ceiling: { left: 0.08, top: 0.02, right: 0.92, bottom: 0.99 },
-  feeding: { left: 0.06, top: 0.1, right: 0.94, bottom: 0.99 },
-  celebrating: { left: 0.02, top: 0.04, right: 0.98, bottom: 0.99 },
-  wave: { left: 0.02, top: 0.06, right: 0.98, bottom: 0.99 },
-  working: { left: 0.02, top: 0.1, right: 0.98, bottom: 0.99 },
-  gaming: { left: 0.02, top: 0.1, right: 0.98, bottom: 0.99 },
-  'desk-work': { left: 0.02, top: 0.1, right: 0.98, bottom: 0.99 }
+  drag: { left: 0, top: 0.49, right: 1, bottom: 0.97 },
+  fall: { left: 0, top: 0.49, right: 1, bottom: 0.97 },
+  land: { left: 0, top: 0.49, right: 1, bottom: 0.97 },
+  sit: { left: 0.08, top: 0.49, right: 0.92, bottom: 0.97 },
+  sleeping: { left: 0.08, top: 0.49, right: 0.92, bottom: 0.97 },
+  perch: { left: 0.08, top: 0.49, right: 0.92, bottom: 0.97 },
+  ceiling: { left: 0.11, top: 0.49, right: 0.89, bottom: 0.97 },
+  climb: { left: 0.11, top: 0.49, right: 0.89, bottom: 0.97 },
+  feeding: { left: 0.13, top: 0.49, right: 0.87, bottom: 0.97 },
+  celebrating: { left: 0.1, top: 0.49, right: 0.9, bottom: 0.97 },
+  wave: { left: 0.1, top: 0.49, right: 0.9, bottom: 0.97 },
+  working: { left: 0.1, top: 0.49, right: 0.9, bottom: 0.97 },
+  gaming: { left: 0.1, top: 0.49, right: 0.9, bottom: 0.97 },
+  'desk-work': { left: 0.1, top: 0.49, right: 0.9, bottom: 0.97 }
 })
 
 function loadImage(url) {

@@ -17,7 +17,7 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .hidden { display: none !important; }
 .visually-hidden { position:absolute!important; width:1px!important; height:1px!important; overflow:hidden!important; clip:rect(0,0,0,0)!important; white-space:nowrap!important; }
 .official-shell { position: relative; width: 100%; height: 100%; background: #fff; }
-.startup-splash { position:absolute; z-index:50; inset:0; display:grid; place-content:center; justify-items:center; gap:18px; color:#315efb; background:radial-gradient(circle at 50% 42%,#fff 0,#f4f8ff 46%,#edf3fb 100%); opacity:1; visibility:visible; transition:opacity .28s ease,visibility 0s linear .28s; -webkit-app-region:no-drag; }
+.startup-splash { position:absolute; z-index:50; inset:0; display:grid; place-content:center; justify-items:center; gap:18px; color:#315efb; background:radial-gradient(circle at 50% 42%,#fff 0,#f4f8ff 46%,#edf3fb 100%); opacity:1; visibility:visible; transition:opacity .28s ease,visibility 0s linear .28s; app-region:no-drag; -webkit-app-region:no-drag; }
 .startup-splash.is-complete { opacity:0; visibility:hidden; pointer-events:none; }
 .startup-mark { width:132px; height:116px; filter:drop-shadow(0 10px 24px rgba(49,94,251,.18)); }
 .startup-mark svg { display:block; width:100%; height:100%; overflow:visible; }
@@ -25,8 +25,8 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .startup-wordmark { color:#17313b; font-size:23px; font-weight:650; letter-spacing:-.7px; opacity:0; transform:translateY(5px); transition:opacity .3s ease,transform .3s ease; }
 .startup-wordmark span { display:inline-block; margin-left:4px; border-radius:4px; padding:2px 5px; color:#fff; background:#17313b; font-size:9px; font-weight:700; letter-spacing:.3px; vertical-align:4px; }
 .startup-splash.show-wordmark .startup-wordmark { opacity:1; transform:translateY(0); }
-.window-drag { position:absolute; z-index:5; top:0; right:208px; width:24px; height:36px; -webkit-app-region:drag; pointer-events:auto; }
-.pet-quick-button { position:absolute; z-index:7; top:2px; right:176px; display:grid; place-items:center; width:32px; height:32px; border:0; border-radius:6px; padding:0; background:transparent; cursor:pointer; -webkit-app-region:no-drag; }
+.window-drag { position:absolute; z-index:5; top:0; right:208px; left:0; height:36px; app-region:drag; -webkit-app-region:drag; pointer-events:auto; }
+.pet-quick-button { position:absolute; z-index:7; top:2px; right:176px; display:grid; place-items:center; width:32px; height:32px; border:0; border-radius:6px; padding:0; background:transparent; cursor:pointer; app-region:no-drag; -webkit-app-region:no-drag; }
 .pet-quick-button:hover { background:var(--shell-hover); }
 .pet-quick-button:focus-visible { outline:2px solid var(--shell-accent); outline-offset:-2px; }
 .pet-quick-button img { width:16px; height:16px; }
@@ -35,10 +35,10 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .pet-quick-button[data-status="needs-input"] .pet-quick-dot { background:#efa43a; }
 .pet-quick-button[data-status="blocked"] .pet-quick-dot { background:#db4e4e; }
 .pet-quick-button[data-status="ready"] .pet-quick-dot,.pet-quick-button[data-status="celebrating"] .pet-quick-dot { background:#7963d5; }
-.skin-quick-button { position:absolute; z-index:7; top:2px; right:140px; display:grid; place-items:center; width:32px; height:32px; border:0; border-radius:6px; padding:0; color:var(--shell-text); background:transparent; font:12px/1 "Segoe UI","Microsoft YaHei UI",sans-serif; cursor:pointer; -webkit-app-region:no-drag; }
+.skin-quick-button { position:absolute; z-index:7; top:2px; right:140px; display:grid; place-items:center; width:32px; height:32px; border:0; border-radius:6px; padding:0; color:var(--shell-text); background:transparent; font:12px/1 "Segoe UI","Microsoft YaHei UI",sans-serif; cursor:pointer; app-region:no-drag; -webkit-app-region:no-drag; }
 .skin-quick-button:hover { background:var(--shell-hover); }
 .skin-quick-button:focus-visible { outline:2px solid var(--shell-accent); outline-offset:-2px; }
-.pet-panel { position:absolute; z-index:18; top:38px; right:140px; width:310px; border:1px solid var(--shell-border); border-radius:14px; padding:14px; color:var(--shell-text); background:var(--shell-layer); box-shadow:0 18px 48px rgba(0,0,0,.24); -webkit-app-region:no-drag; }
+.pet-panel { position:absolute; z-index:18; top:38px; right:140px; width:310px; border:1px solid var(--shell-border); border-radius:14px; padding:14px; color:var(--shell-text); background:var(--shell-layer); box-shadow:0 18px 48px rgba(0,0,0,.24); app-region:no-drag; -webkit-app-region:no-drag; }
 .pet-panel-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
 .pet-panel-header > div { display:grid; gap:1px; }
 .pet-panel-header strong { font-size:15px; }
@@ -60,7 +60,7 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .pet-panel-actions button:disabled { cursor:default; opacity:.5; }
 .pet-panel-check { display:flex; align-items:center; gap:7px; margin-top:10px; color:var(--shell-text-secondary); font-size:11px; cursor:pointer; }
 .pet-panel-note { margin:11px 0 0; color:var(--shell-text-tertiary); font-size:10px; line-height:1.55; }
-.skin-picker-overlay { position:absolute; z-index:20; inset:0; display:grid; place-items:center; padding:48px 28px 28px; color:var(--shell-text); background:var(--shell-overlay); -webkit-app-region:no-drag; backdrop-filter:blur(5px); }
+.skin-picker-overlay { position:absolute; z-index:20; inset:0; display:grid; place-items:center; padding:48px 28px 28px; color:var(--shell-text); background:var(--shell-overlay); app-region:no-drag; -webkit-app-region:no-drag; backdrop-filter:blur(5px); }
 .skin-picker-dialog { display:flex; flex-direction:column; width:min(1000px,calc(100vw - 56px)); max-height:calc(100vh - 76px); overflow:hidden; border:1px solid var(--shell-border); border-radius:18px; color:var(--shell-text); background:var(--shell-surface); box-shadow:0 24px 70px rgba(0,0,0,.28); }
 .skin-picker-header { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; padding:18px 20px 14px; border-bottom:1px solid var(--shell-border); background:var(--shell-layer); }
 .skin-picker-header h2,.skin-custom-editor h3 { margin:0; font-size:18px; }
@@ -89,7 +89,7 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .skin-custom-editor select { height:30px; border:1px solid var(--shell-border); border-radius:7px; color:var(--shell-text); background:var(--shell-layer-2); }
 .skin-custom-editor input[type="color"] { width:32px; height:30px; border:0; padding:0; background:none; }
 #skinBackgroundState { width:100%; color:var(--shell-text-tertiary); font-size:11px; text-align:right; }
-.update-ready-overlay { position:absolute; z-index:30; inset:0; display:grid; place-items:center; padding:48px 28px 28px; color:var(--shell-text); background:var(--shell-overlay); -webkit-app-region:no-drag; backdrop-filter:blur(5px); }
+.update-ready-overlay { position:absolute; z-index:30; inset:0; display:grid; place-items:center; padding:48px 28px 28px; color:var(--shell-text); background:var(--shell-overlay); app-region:no-drag; -webkit-app-region:no-drag; backdrop-filter:blur(5px); }
 .update-ready-dialog { width:min(430px,calc(100vw - 48px)); border:1px solid var(--shell-border); border-radius:18px; padding:26px 28px 22px; color:var(--shell-text); background:var(--shell-layer); box-shadow:0 24px 70px rgba(0,0,0,.28); text-align:center; }
 .update-ready-icon { display:grid; place-items:center; width:50px; height:50px; margin:0 auto 13px; border-radius:15px; color:#fff; background:var(--shell-accent); }
 .update-ready-dialog h2 { margin:0; font-size:20px; }

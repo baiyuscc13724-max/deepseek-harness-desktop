@@ -696,7 +696,7 @@ ipcMain.handle('pet:focusMain', (_event, sessionId) => {
 })
 ipcMain.handle('pet:getEnvironment', () => petWindowController?.environment())
 ipcMain.handle('pet:moveTo', (_event, point = {}) => petWindowController?.moveTo(point.x, point.y))
-ipcMain.on('pet:setInteractive', (_event, interactive) => petWindowController?.setInteractive(Boolean(interactive)))
+ipcMain.on('pet:setInteractive', (_event, value) => petWindowController?.setInteractive(value))
 ipcMain.on('pet:setHitProfile', (_event, profile) => petWindowController?.setHitProfile(profile || {}))
 ipcMain.handle('settings:openDocument', () => openHarnessSettingsDocument())
 ipcMain.handle('models:routing:get', () => getModelRouting(modelRoutingOptions()))

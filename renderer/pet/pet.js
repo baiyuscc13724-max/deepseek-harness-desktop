@@ -36,6 +36,23 @@ let ceilingTimer = null
 let petHoldTimer = null
 const previewAction = new URLSearchParams(window.location.search).get('rigAction')
 
+function elementRegion(element, padding = 0) {
+  const bounds = element.getBoundingClientRect()
+  return {
+    x: Math.floor(bounds.left - padding),
+    y: Math.floor(bounds.top - padding),
+    width: Math.ceil(bounds.width + padding * 2),
+    height: Math.ceil(bounds.height + padding * 2)
+  }
+}
+
+function syncWindowShape() {
+  const regions = []
+  if (speech.classList.contains('show')) regions.push(elementRegion(speech, 1))
+  if (!contextMenu.hidden) regions.push(elementRegion(contextMenu, 2))
+  api.setInteractive({ interactive: !contextMenu.hidden, regions })
+}
+
 const messages = {
   working: '正在努力工作…',
   'needs-input': '有任务在等你决定',
@@ -58,7 +75,13 @@ function showSpeech(message, duration = 2600) {
   clearTimeout(speechTimer)
   speech.textContent = message
   speech.classList.add('show')
-  if (duration > 0) speechTimer = setTimeout(() => speech.classList.remove('show'), duration)
+  requestAnimationFrame(syncWindowShape)
+  if (duration > 0) {
+    speechTimer = setTimeout(() => {
+      speech.classList.remove('show')
+      syncWindowShape()
+    }, duration)
+  }
 }
 
 function applyAction(next, meta = {}) {
@@ -273,17 +296,17 @@ function render(next) {
 
 function hideContextMenu() {
   contextMenu.hidden = true
-  api.setInteractive(false)
+  syncWindowShape()
 }
 
 function showContextMenu(event) {
   event.preventDefault()
-  api.setInteractive(true)
   contextMenu.hidden = false
   const width = contextMenu.offsetWidth
   const height = contextMenu.offsetHeight
   contextMenu.style.left = `${Math.max(5, Math.min(event.clientX, window.innerWidth - width - 5))}px`
   contextMenu.style.top = `${Math.max(5, Math.min(event.clientY, window.innerHeight - height - 5))}px`
+  syncWindowShape()
 }
 
 function dragSample(event) {
@@ -434,9 +457,7 @@ tuckButton.addEventListener('click', () => {
 
 document.addEventListener('mousemove', event => {
   if (dragging) return
-  const menuInteractive = Boolean(event.target.closest?.('.context-menu')) && !contextMenu.hidden
   if (!event.target.closest?.('#character')) rig?.setGaze(0, 0)
-  api.setInteractive(menuInteractive)
 })
 document.addEventListener('pointerdown', event => {
   if (!event.target.closest?.('.context-menu') && event.target !== character) hideContextMenu()
@@ -444,7 +465,7 @@ document.addEventListener('pointerdown', event => {
 document.addEventListener('mouseleave', () => {
   if (!dragging && contextMenu.hidden) {
     rig?.setGaze(0, 0)
-    api.setInteractive(false)
+    syncWindowShape()
   }
 })
 window.addEventListener('blur', hideContextMenu)
