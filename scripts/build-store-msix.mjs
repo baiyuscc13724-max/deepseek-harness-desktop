@@ -33,7 +33,7 @@ await writeFile(manifestPath, manifest, 'utf8')
 
 run(process.execPath, ['scripts/store-readiness.mjs', '--require-identity'])
 run(process.execPath, ['scripts/patch-official-runtime.mjs'])
-run('npx.cmd', ['electron-builder', '--dir', '--win', 'x64', '--publish', 'never', '--config', 'build/electron-builder.store.yml'], {
+run('npx.cmd', ['electron-builder', '--dir', '--win', '--x64', '--publish', 'never', '--config', 'build/electron-builder.store.yml'], {
   ...process.env,
   HARNESS_DESKTOP_STORE_BUILD: '1'
 })

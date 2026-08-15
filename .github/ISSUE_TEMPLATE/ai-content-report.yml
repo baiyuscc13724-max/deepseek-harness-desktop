@@ -1,0 +1,35 @@
+name: Report harmful AI content
+description: Report potentially unlawful, unsafe, or harmful output produced through Harness Desktop.
+title: "[AI content report] "
+labels:
+  - ai-content-report
+body:
+  - type: markdown
+    attributes:
+      value: Do not include API keys, passwords, private source code, personal identifiers, or other secrets.
+  - type: input
+    id: provider
+    attributes:
+      label: AI provider and model
+      description: Identify the configured provider and model if known.
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What happened?
+      description: Describe the concern and include only the minimum content excerpt needed to understand it.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Explain the minimum steps needed to reproduce the behavior without sharing secrets.
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I removed credentials, personal data, and private source material from this report.
+          required: true
