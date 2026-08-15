@@ -1,7 +1,7 @@
 # 女仆鲸 TOK 宠物系统设计方案
 
-状态：设计冻结候选稿（尚未实现）  
-适用项目：Harness Desktop  
+状态：Harness Desktop 1.0.9 已实现
+适用项目：Harness Desktop
 设计目标：在不修改官方 DeepSeek Harness 核心界面的前提下，为桌面版增加本地宠物、任务状态提示和 TOK 养成体验。
 
 ## 1. 产品定位
