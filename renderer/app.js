@@ -1,9 +1,24 @@
 const api = window.desktopHarness
+const startupSplash = document.querySelector('#startupSplash')
+const startupPath = document.querySelector('#startupSplash .startup-mark path')
 const runtimeView = document.querySelector('#runtimeView')
 const runtimeStatus = document.querySelector('#runtimeStatus')
 const runtimeStatusTitle = document.querySelector('#runtimeStatusTitle')
 const runtimeStatusDetail = document.querySelector('#runtimeStatusDetail')
 const retryRuntime = document.querySelector('#retryRuntime')
+const petQuickButton = document.querySelector('#petQuickButton')
+const petPanel = document.querySelector('#petPanel')
+const closePetPanelButton = document.querySelector('#closePetPanel')
+const petPanelStatus = document.querySelector('#petPanelStatus')
+const petFullness = document.querySelector('#petFullness')
+const petFullnessText = document.querySelector('#petFullnessText')
+const petRefinedCount = document.querySelector('#petRefinedCount')
+const petStandardCount = document.querySelector('#petStandardCount')
+const petFragmentCount = document.querySelector('#petFragmentCount')
+const petAwakeToggle = document.querySelector('#petAwakeToggle')
+const petFeedButton = document.querySelector('#petFeedButton')
+const petAutoFeed = document.querySelector('#petAutoFeed')
+const petAlwaysOnTop = document.querySelector('#petAlwaysOnTop')
 const skinQuickButton = document.querySelector('#skinQuickButton')
 const skinPickerOverlay = document.querySelector('#skinPickerOverlay')
 const skinPickerGrid = document.querySelector('#skinPickerGrid')
@@ -28,14 +43,91 @@ let updateState = {
   preferences: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null }
 }
 let appearanceState = { themeId: 'porcelain-mist', customTheme: {}, customBackgroundDataUrl: null }
+let petState = {
+  status: 'idle', fullness: 80, inventory: { refined: 0, standard: 0, fragments: 0 },
+  preferences: { enabled: true, awake: false, alwaysOnTop: true, autoFeed: true }
+}
 let modelRoutingState = { main: {}, subagent: { inheritMain: true }, providers: [], saving: false, saved: false, error: '' }
 let themeCatalog = []
+let startupRuntimeReady = false
+let startupWebviewReady = false
+let startupFailed = false
+let startupProgress = 0
+let startupStartedAt = 0
+let startupRuntimeReadyAt = 0
+let startupLastFrameAt = 0
+let startupFinishStartedAt = 0
+let startupFinishStartProgress = 0
+let startupReducedMotion = false
 const themeIntegration = window.harnessThemeIntegration
 const modelRoutingIntegration = window.harnessModelRoutingIntegration
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
 })[character])
+
+function startupIsResolved() {
+  return startupFailed || (startupRuntimeReady && startupWebviewReady)
+}
+
+function renderStartupProgress(value) {
+  startupProgress = Math.max(startupProgress, Math.min(1, value))
+  if (startupPath) startupPath.style.strokeDashoffset = String(1 - startupProgress)
+  if (startupProgress >= 0.62) startupSplash?.classList.add('show-wordmark')
+}
+
+function completeStartup() {
+  renderStartupProgress(1)
+  startupSplash.classList.add('is-complete')
+  startupSplash.setAttribute('aria-hidden', 'true')
+}
+
+function drawStartupFrame(now) {
+  if (!startupSplash || startupSplash.classList.contains('is-complete')) return
+  if (!startupStartedAt) startupStartedAt = now
+  const elapsed = now - startupStartedAt
+  const frameDelta = startupLastFrameAt ? Math.min(80, now - startupLastFrameAt) : 16
+  startupLastFrameAt = now
+
+  if (startupReducedMotion) {
+    renderStartupProgress(1)
+    if (startupIsResolved()) completeStartup()
+    else requestAnimationFrame(drawStartupFrame)
+    return
+  }
+
+  if (startupIsResolved()) {
+    if (!startupFinishStartedAt) {
+      startupFinishStartedAt = now
+      startupFinishStartProgress = startupProgress
+    }
+    const remaining = 1 - startupFinishStartProgress
+    const duration = Math.min(720, Math.max(280, 280 + remaining * 440))
+    const ratio = Math.min(1, (now - startupFinishStartedAt) / duration)
+    const eased = 1 - Math.pow(1 - ratio, 3)
+    renderStartupProgress(startupFinishStartProgress + remaining * eased)
+    if (ratio >= 1) completeStartup()
+    else requestAnimationFrame(drawStartupFrame)
+    return
+  }
+
+  let target = 0.62 * (1 - Math.exp(-elapsed / 1600))
+  if (startupRuntimeReady) {
+    const phaseElapsed = Math.max(0, now - startupRuntimeReadyAt)
+    target = Math.max(target, 0.68 + 0.22 * (1 - Math.exp(-phaseElapsed / 700)))
+  }
+  const follow = 1 - Math.exp(-frameDelta / 180)
+  renderStartupProgress(startupProgress + Math.max(0, target - startupProgress) * follow)
+  requestAnimationFrame(drawStartupFrame)
+}
+
+function playStartupAnimation() {
+  if (!startupSplash) return
+  startupReducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches
+  startupSplash.classList.add('is-running')
+  renderStartupProgress(0)
+  requestAnimationFrame(drawStartupFrame)
+}
 
 function themePreview(theme) {
   if (theme.id === 'maid-atelier' && theme.assets?.day) return `linear-gradient(rgba(5,31,59,.08),rgba(5,31,59,.28)),url("${theme.assets.day}") center/cover`
@@ -116,7 +208,51 @@ function renderSkinPicker() {
   skinBackgroundState.textContent = appearanceState.customBackgroundDataUrl ? '已选择本地背景图' : '未选择背景图，将使用渐变背景'
 }
 
+const petStatusLabels = {
+  idle: '正在休息',
+  working: '正在陪你工作',
+  'needs-input': '有任务等待你的决定',
+  blocked: '任务遇到问题',
+  ready: '任务已完成',
+  celebrating: '正在庆祝任务完成',
+  sleeping: '饿得睡着了'
+}
+
+function renderPetState(next = petState) {
+  petState = next
+  const inventory = next.inventory || {}
+  const preferences = next.preferences || {}
+  petQuickButton.dataset.status = next.status || 'idle'
+  petPanelStatus.textContent = petStatusLabels[next.status] || petStatusLabels.idle
+  petFullness.value = Math.max(0, Math.min(100, Number(next.fullness) || 0))
+  petFullnessText.textContent = `${Math.round(petFullness.value)}%`
+  petRefinedCount.textContent = inventory.refined || 0
+  petStandardCount.textContent = inventory.standard || 0
+  petFragmentCount.textContent = inventory.fragments || 0
+  petAwakeToggle.textContent = preferences.awake ? '收起女仆鲸' : '唤醒女仆鲸'
+  petAwakeToggle.classList.toggle('primary', !preferences.awake)
+  petAutoFeed.checked = preferences.autoFeed !== false
+  petAlwaysOnTop.checked = preferences.alwaysOnTop !== false
+  petFeedButton.disabled = Number(next.fullness) >= 100 || ![inventory.fragments, inventory.standard, inventory.refined].some(value => Number(value) > 0)
+}
+
+function openPetPanel() {
+  closeSkinPicker()
+  renderPetState()
+  petPanel.classList.remove('hidden')
+  petPanel.setAttribute('aria-hidden', 'false')
+  petQuickButton.setAttribute('aria-expanded', 'true')
+  closePetPanelButton.focus()
+}
+
+function closePetPanel() {
+  petPanel.classList.add('hidden')
+  petPanel.setAttribute('aria-hidden', 'true')
+  petQuickButton.setAttribute('aria-expanded', 'false')
+}
+
 function openSkinPicker() {
+  closePetPanel()
   applyShellTheme()
   renderSkinPicker()
   skinPickerOverlay.classList.remove('hidden')
@@ -149,10 +285,16 @@ function closeUpdateReady() {
 
 function renderRuntimeState(state) {
   if (state?.status === 'ready' && state.url) {
+    startupRuntimeReady = true
+    if (!startupRuntimeReadyAt) startupRuntimeReadyAt = performance.now()
+    startupFailed = false
     if (runtimeView.src !== state.url) runtimeView.src = state.url
     runtimeStatus.classList.add('ready')
     retryRuntime.classList.add('hidden')
     return
+  }
+  if (state?.status === 'error') {
+    startupFailed = true
   }
   runtimeStatus.classList.remove('ready')
   runtimeStatusTitle.textContent = state?.status === 'error' ? 'DeepSeek Harness 启动失败' : '正在启动 DeepSeek Harness…'
@@ -367,6 +509,7 @@ runtimeView.addEventListener('dom-ready', async () => {
   await publishUpdateState()
   await publishAppearanceState()
   await publishModelRoutingState()
+  startupWebviewReady = true
 })
 
 runtimeView.addEventListener('will-navigate', event => {
@@ -445,6 +588,25 @@ retryRuntime.addEventListener('click', () => {
 })
 
 skinQuickButton.addEventListener('click', openSkinPicker)
+petQuickButton.addEventListener('click', () => {
+  if (petPanel.classList.contains('hidden')) openPetPanel()
+  else closePetPanel()
+})
+closePetPanelButton.addEventListener('click', closePetPanel)
+petAwakeToggle.addEventListener('click', async () => {
+  renderPetState(await api.setPetPreferences({ awake: !petState.preferences?.awake }))
+})
+petFeedButton.addEventListener('click', async () => {
+  const inventory = petState.inventory || {}
+  const kind = inventory.fragments > 0 ? 'fragments' : inventory.standard > 0 ? 'standard' : 'refined'
+  renderPetState(await api.feedPet(kind))
+})
+petAutoFeed.addEventListener('change', async () => {
+  renderPetState(await api.setPetPreferences({ autoFeed: petAutoFeed.checked }))
+})
+petAlwaysOnTop.addEventListener('change', async () => {
+  renderPetState(await api.setPetPreferences({ alwaysOnTop: petAlwaysOnTop.checked }))
+})
 closeSkinPickerButton.addEventListener('click', closeSkinPicker)
 skinPickerOverlay.addEventListener('click', event => {
   if (event.target === skinPickerOverlay) closeSkinPicker()
@@ -468,6 +630,7 @@ updateNowButton.addEventListener('click', async () => {
   }
 })
 document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !petPanel.classList.contains('hidden')) closePetPanel()
   if (event.key === 'Escape' && !skinPickerOverlay.classList.contains('hidden')) closeSkinPicker()
   if (event.key === 'Escape' && !updateReadyOverlay.classList.contains('hidden')) closeUpdateReady()
 })
@@ -493,6 +656,7 @@ skinApplyCustomButton.addEventListener('click', async () => {
 })
 
 api.onRuntimeState(renderRuntimeState)
+api.onPetState(renderPetState)
 api.onUpdateResult(result => {
   updateState = { ...updateState, ...result, checking: false }
   publishUpdateState()
@@ -505,14 +669,17 @@ api.onUpdateInstallProgress(progress => {
 async function startOfficialWorkspace() {
   updateState = { ...updateState, preferences: await api.getUpdatePreferences() }
   appearanceState = await api.getAppearance()
+  petState = await api.getPetState()
   modelRoutingState = { ...await api.getModelRouting(), saving: false, saved: false, error: '' }
   const themeAssets = await api.getThemeAssets()
   themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)
   applyShellTheme()
+  renderPetState()
   renderSkinPicker()
   const initial = await api.getRuntimeState()
   renderRuntimeState(initial)
   if (initial.status !== 'ready') renderRuntimeState(await api.startRuntime({}))
 }
 
+playStartupAnimation()
 startOfficialWorkspace().catch(error => renderRuntimeState({ status: 'error', detail: error.message }))

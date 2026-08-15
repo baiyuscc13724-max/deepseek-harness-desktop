@@ -1,0 +1,53 @@
+const assert = require('node:assert/strict')
+const test = require('node:test')
+const { mkdtempSync } = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+
+const { PetStateStore, normalizePetState } = require('../electron/pet/pet-state-store.cjs')
+
+test('PetStateStore persists inventory, fullness and usage cursors', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-pet-state-'))
+  const file = path.join(dir, 'pet-state.json')
+  const store = new PetStateStore(file)
+  store.initializeCursor('session-1', 100)
+  store.settleTask({ sessionId: 'session-1', outputTokens: 900, observedTokens: 800, quality: 'refined', quantity: 4, completed: true })
+  store.tickActive(15)
+  store.feed('refined')
+  const restored = new PetStateStore(file).get()
+  assert.equal(restored.usageCursors['session-1'].outputTokens, 900)
+  assert.equal(restored.inventory.refined, 3)
+  assert.equal(restored.fullness, 97)
+  assert.equal(restored.lifetime.tasksCompleted, 1)
+  assert.equal(restored.lifetime.tokensObserved, 800)
+  assert.equal(restored.lifetime.tokProduced, 4)
+  assert.equal(restored.schemaVersion, 2)
+  assert.equal(restored.energy, 81)
+  assert.equal(restored.mood, 80)
+  assert.equal(restored.affection, 1)
+})
+
+test('normalizePetState rejects unsafe and unbounded values', () => {
+  const state = normalizePetState({
+    fullness: 500,
+    inventory: { refined: -1, standard: 5000, fragments: '3' },
+    usageCursors: { ok: { outputTokens: 12, updatedAt: 10 }, bad: { outputTokens: 'nope' } }
+  })
+  assert.equal(state.fullness, 100)
+  assert.deepEqual(state.inventory, { refined: 0, standard: 999, fragments: 3 })
+  assert.equal(state.energy, 78)
+  assert.equal(state.mood, 72)
+  assert.equal(state.affection, 0)
+  assert.deepEqual(state.usageCursors, { ok: { outputTokens: 12, updatedAt: 10 } })
+})
+
+test('petting is persisted as mood and affection without changing inventory', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-pet-state-'))
+  const file = path.join(dir, 'pet-state.json')
+  const store = new PetStateStore(file)
+  store.interact('petting')
+  const restored = new PetStateStore(file).get()
+  assert.equal(restored.mood, 75)
+  assert.equal(restored.affection, 1)
+  assert.deepEqual(restored.inventory, { refined: 0, standard: 0, fragments: 0 })
+})

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, net, session, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, screen, session, shell, Tray } = require('electron')
 const { spawn } = require('node:child_process')
 const { createHash } = require('node:crypto')
 const { existsSync } = require('node:fs')
@@ -10,15 +10,23 @@ const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
+const { resolveDesktopDshHome } = require('./bridge/dsh-home.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
 const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
 const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
+const { createDesktopTray } = require('./desktop-tray.cjs')
 const { AppStateStore } = require('./store/app-state-store.cjs')
+const { PetDomainService } = require('./pet/pet-domain-service.cjs')
+const { PetEventAdapter } = require('./pet/pet-event-adapter.cjs')
+const { PetStateStore } = require('./pet/pet-state-store.cjs')
+const { PetWindowController } = require('./pet/pet-window.cjs')
 const desktopPackage = require('../package.json')
 
 const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3080'
 const LOCAL_RUNTIME_HOSTS = new Set(['127.0.0.1', 'localhost'])
+const SELF_TEST_MODE = process.argv.includes('--self-test')
+const HAS_SINGLE_INSTANCE_LOCK = SELF_TEST_MODE || app.requestSingleInstanceLock()
 
 let mainWindow = null
 let runtime = null
@@ -28,6 +36,13 @@ let appStateStore = null
 let lastUpdatePayload = null
 let activeUpdateInstall = null
 let readyUpdate = null
+let petStateStore = null
+let petDomain = null
+let petAdapter = null
+let petWindowController = null
+let petTickTimer = null
+let desktopTray = null
+let isQuitting = false
 
 const BUNDLED_THEME_ASSETS = Object.freeze([
   'maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -43,11 +58,89 @@ function send(channel, payload) {
 function setRuntimeState(next) {
   runtimeState = { ...runtimeState, ...next }
   send('runtime:state', runtimeState)
+  if (runtimeState.status === 'ready' && runtimeState.url && petAdapter) {
+    petAdapter.start(runtimeState.url).catch(error => console.warn(`Unable to start pet event adapter: ${error.message}`))
+  } else if (['stopped', 'error'].includes(runtimeState.status) && petAdapter) {
+    petAdapter.stop()
+    petDomain?.resetTransient()
+  }
 }
 
 function ensureStateStore() {
   if (!appStateStore) appStateStore = new AppStateStore(path.join(app.getPath('userData'), 'app-state.json'))
   return appStateStore
+}
+
+function desktopDshHome() {
+  return resolveDesktopDshHome({
+    env: process.env,
+    argv: process.argv,
+    home: app.getPath('home'),
+    userData: app.getPath('userData')
+  })
+}
+
+function petPayload(domainState = petDomain?.getState()) {
+  return {
+    ...(domainState || {}),
+    preferences: ensureStateStore().get().pet
+  }
+}
+
+function publishPetState(domainState = petDomain?.getState()) {
+  const payload = petPayload(domainState)
+  send('pet:state', payload)
+  petWindowController?.publish(payload)
+  return payload
+}
+
+function updatePetPreferences(patch = {}) {
+  const preferences = ensureStateStore().updatePet(patch).pet
+  petWindowController?.syncPreferences(preferences)
+  publishPetState()
+  return petPayload()
+}
+
+function ensurePetSystem() {
+  if (petDomain) return
+  petStateStore = new PetStateStore(path.join(app.getPath('userData'), 'pet-state.json'))
+  petDomain = new PetDomainService({
+    store: petStateStore,
+    getPreferences: () => ensureStateStore().get().pet,
+    onChange: state => publishPetState(state)
+  })
+  petAdapter = new PetEventAdapter({
+    onEvent: event => {
+      if (event.type === 'baseline') petDomain.ingestBaseline(event)
+      else petDomain.ingest(event)
+    },
+    onDiagnostic: message => console.warn(message)
+  })
+  petWindowController = new PetWindowController({
+    BrowserWindow,
+    screen,
+    appRoot: path.join(__dirname, '..'),
+    preload: path.join(__dirname, 'pet', 'pet-preload.cjs'),
+    getPreferences: () => ensureStateStore().get().pet,
+    updatePreferences: patch => updatePetPreferences(patch),
+    getMainBounds: () => mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMinimized() ? mainWindow.getBounds() : null,
+    onFocusMain: sessionId => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore()
+        mainWindow.show()
+        mainWindow.focus()
+      }
+      if (sessionId) petDomain.markRead(sessionId)
+    }
+  })
+  petWindowController.syncPreferences(ensureStateStore().get().pet)
+  petTickTimer = setInterval(() => {
+    const preferences = ensureStateStore().get().pet
+    if (!preferences.enabled || !preferences.awake) return
+    if (powerMonitor.getSystemIdleTime() >= 300) return
+    petDomain.tickActive(1)
+  }, 60 * 1000)
+  petTickTimer.unref?.()
 }
 
 function themeAssetMime(file) {
@@ -104,7 +197,7 @@ async function chooseCustomThemeBackground() {
 }
 
 async function openHarnessSettingsDocument() {
-  const harnessHome = String(process.env.DSH_HOME || path.join(app.getPath('home'), '.dsh')).trim()
+  const harnessHome = desktopDshHome()
   const settingsFile = path.resolve(harnessHome, 'settings.yaml')
   if (!existsSync(settingsFile)) {
     await mkdir(path.dirname(settingsFile), { recursive: true })
@@ -187,7 +280,7 @@ async function startRuntime({ cwd } = {}) {
       cwd: cwd && existsSync(cwd) ? cwd : app.getPath('documents'),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...runtimeProxyEnv, ...resolved.env }
+      env: { ...process.env, ...runtimeProxyEnv, ...resolved.env, DSH_HOME: desktopDshHome() }
     })
   } catch (error) {
     setRuntimeState({ status: 'error', url: null, detail: error.message })
@@ -296,14 +389,14 @@ function safeUpdateUrl(value) {
 
 function modelRoutingOptions() {
   return {
-    dshHome: String(process.env.DSH_HOME || path.join(app.getPath('home'), '.dsh')).trim(),
+    dshHome: desktopDshHome(),
     shippedPresetRoot: path.join(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh', 'config', 'agent-presets')
   }
 }
 
 function pluginMarketplaceOptions() {
   return {
-    dshHome: String(process.env.DSH_HOME || path.join(app.getPath('home'), '.dsh')).trim(),
+    dshHome: desktopDshHome(),
     bundledRoot: path.join(__dirname, '..', 'node_modules', 'dsh-plugin-marketplace')
   }
 }
@@ -459,6 +552,31 @@ function secureGuest(guest) {
   })
 }
 
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow()
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function hideMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
+}
+
+function ensureDesktopTray() {
+  if (desktopTray && !desktopTray.isDestroyed()) return desktopTray
+  desktopTray = createDesktopTray({
+    Tray,
+    Menu,
+    nativeImage,
+    iconPath: path.join(__dirname, '..', 'build', 'icon.png'),
+    showMainWindow,
+    hideMainWindow,
+    quitApp: () => app.quit()
+  })
+  return desktopTray
+}
+
 function createWindow() {
   ensureStateStore()
   const iconPath = path.join(__dirname, '..', 'build', 'icon.png')
@@ -500,7 +618,16 @@ function createWindow() {
   })
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
-  mainWindow.on('closed', () => { mainWindow = null })
+  mainWindow.on('close', event => {
+    if (isQuitting) return
+    event.preventDefault()
+    mainWindow.hide()
+  })
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+
+  petWindowController?.syncPreferences(ensureStateStore().get().pet)
 
   if (ensureStateStore().get().updates.checkOnStartup) {
     setTimeout(() => checkUpdates().catch(() => {}), 2500).unref()
@@ -523,6 +650,21 @@ ipcMain.handle('appearance:saveCustom', async (_event, customTheme) => {
   return appearancePayload()
 })
 ipcMain.handle('appearance:chooseBackground', () => chooseCustomThemeBackground())
+ipcMain.handle('pet:getState', () => petPayload())
+ipcMain.handle('pet:setPreferences', (_event, patch) => updatePetPreferences(patch || {}))
+ipcMain.handle('pet:feed', (_event, kind) => {
+  petDomain.feed(kind)
+  return petPayload()
+})
+ipcMain.handle('pet:interact', (_event, kind) => petDomain.interact(kind))
+ipcMain.handle('pet:focusMain', (_event, sessionId) => {
+  petWindowController?.focusMain(sessionId || null)
+  return true
+})
+ipcMain.handle('pet:getEnvironment', () => petWindowController?.environment())
+ipcMain.handle('pet:moveTo', (_event, point = {}) => petWindowController?.moveTo(point.x, point.y))
+ipcMain.on('pet:setInteractive', (_event, interactive) => petWindowController?.setInteractive(Boolean(interactive)))
+ipcMain.on('pet:setHitProfile', (_event, profile) => petWindowController?.setHitProfile(profile || {}))
 ipcMain.handle('settings:openDocument', () => openHarnessSettingsDocument())
 ipcMain.handle('models:routing:get', () => getModelRouting(modelRoutingOptions()))
 ipcMain.handle('models:routing:save', (_event, routing) => saveModelRouting(modelRoutingOptions(), routing || {}))
@@ -534,8 +676,18 @@ ipcMain.handle('shell:openExternal', async (_event, value) => {
   return shell.openExternal(target.toString())
 })
 
+if (HAS_SINGLE_INSTANCE_LOCK && !SELF_TEST_MODE) {
+  app.on('second-instance', () => {
+    showMainWindow()
+  })
+}
+
 app.whenReady().then(async () => {
-  if (process.argv.includes('--self-test')) {
+  if (!HAS_SINGLE_INSTANCE_LOCK) {
+    app.quit()
+    return
+  }
+  if (SELF_TEST_MODE) {
     const report = await runSelfTestMode().catch(error => ({ ok: false, error: error.message }))
     app.exit(report.ok ? 0 : 1)
     return
@@ -548,13 +700,24 @@ app.whenReady().then(async () => {
   }).catch(error => {
     console.warn(`Unable to prepare DSH plugin marketplace: ${error.message}`)
   })
+  ensurePetSystem()
+  ensureDesktopTray()
   createWindow()
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    showMainWindow()
   })
 })
 
-app.on('before-quit', stopRuntime)
+app.on('before-quit', () => {
+  isQuitting = true
+  clearInterval(petTickTimer)
+  petAdapter?.stop()
+  petDomain?.dispose()
+  petWindowController?.dispose()
+  desktopTray?.destroy()
+  desktopTray = null
+  stopRuntime()
+})
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // The tray owns the application lifecycle; only its explicit Exit action quits.
 })

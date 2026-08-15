@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "id": "maid-whale",
+  "name": "女仆鲸",
+  "version": "1.0.0",
+  "license": "CC-BY-NC-SA-4.0",
+  "source": "https://github.com/Small-tailqwq/dsh-deep-whale",
+  "renderer": {
+    "format": "complete-frame-2d-sprites",
+    "atlases": {
+      "idle": "sprites/idle/0.png..47.png",
+      "walk": "sprites/walk-left/0.png..23.png",
+      "celebrate": "sprites/celebrate/0.png..47.png",
+      "feeding": "sprites/feeding/0.png..39.png",
+      "sleeping": "sprites/sleeping/0.png..31.png",
+      "working": "sprites/working/0.png..23.png",
+      "climb": "sprites/climb-left/0.png..31.png",
+      "physics": "sprites/physics/0.png..31.png"
+    },
+    "animations": ["idle", "prepare-walk", "walk", "settle", "stretch", "yawn", "wink", "groom", "look-around", "tail-flick", "petting", "nap", "gaming", "desk-work", "working", "sleeping", "climb", "ceiling", "perch", "drag", "fall", "land", "feeding", "celebrating"],
+    "drawnPoseCounts": {
+      "idle": 8,
+      "walk": 17,
+      "celebrate": 16,
+      "feeding": 16,
+      "sleeping": 16,
+      "working": 16,
+      "climb": 16,
+      "physics": 16
+    }
+  },
+  "canvas": {
+    "width": 270,
+    "height": 320,
+    "groundOffset": 20
+  },
+  "poses": {
+    "companion": {
+      "src": "../../themes/maid-atelier/maid-atelier-maid-left-v5.webp",
+      "anchorX": 0.5,
+      "anchorY": 1
+    },
+    "working": {
+      "src": "../../themes/maid-atelier/maid-atelier-maid-right-v6.webp",
+      "anchorX": 0.5,
+      "anchorY": 1
+    }
+  },
+  "actions": {
+    "idle": { "pose": "companion", "motion": "breathe", "loop": true },
+    "prepare-walk": { "pose": "companion", "motion": "anticipate", "duration": 420 },
+    "walk": { "pose": "companion", "motion": "walk", "loop": true, "speed": 34 },
+    "settle": { "pose": "companion", "motion": "settle", "duration": 520 },
+    "yawn": { "pose": "companion", "motion": "yawn", "duration": 1900 },
+    "wink": { "pose": "companion", "motion": "wink", "duration": 1600 },
+    "stretch": { "pose": "companion", "motion": "stretch", "duration": 1500 },
+    "groom": { "pose": "companion", "motion": "groom", "duration": 2200 },
+    "look-around": { "pose": "companion", "motion": "look-around", "duration": 2100 },
+    "tail-flick": { "pose": "companion", "motion": "tail-flick", "duration": 1800 },
+    "petting": { "pose": "companion", "motion": "petting", "loop": true },
+    "nap": { "pose": "companion", "motion": "nap", "loop": true },
+    "gaming": { "pose": "working", "motion": "play-computer", "loop": true },
+    "desk-work": { "pose": "working", "motion": "self-work", "loop": true },
+    "climb": { "pose": "companion", "motion": "climb", "loop": true, "speed": 30 },
+    "ceiling": { "pose": "companion", "motion": "ceiling-crawl", "loop": true, "speed": 26 },
+    "perch": { "pose": "companion", "motion": "sit-on-window", "loop": true },
+    "sit": { "pose": "companion", "motion": "sit", "loop": true },
+    "working": { "pose": "working", "motion": "work", "loop": true },
+    "needs-input": { "pose": "working", "motion": "attention", "loop": true },
+    "blocked": { "pose": "companion", "motion": "blocked", "loop": true },
+    "ready": { "pose": "working", "motion": "ready", "duration": 5000 },
+    "celebrating": { "pose": "companion", "motion": "dance", "duration": 6200 },
+    "hungry": { "pose": "companion", "motion": "hungry", "loop": true },
+    "sleeping": { "pose": "companion", "motion": "sleep", "loop": true },
+    "wave": { "pose": "companion", "motion": "wave", "duration": 2000 },
+    "feeding": { "pose": "companion", "motion": "eat", "duration": 4200 },
+    "drag": { "pose": "companion", "motion": "drag", "loop": true },
+    "fall": { "pose": "companion", "motion": "fall", "loop": true },
+    "land": { "pose": "companion", "motion": "land", "duration": 1300 }
+  }
+}

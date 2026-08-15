@@ -26,6 +26,7 @@ test('all desktop New Session entry points force a new session and remain idempo
   assert.match(first.source, /this\.sessions\.create\(\{ workspaceId: target \}\)/)
   assert.doesNotMatch(first.source, /connectWorkspace\(target\)/)
   assert.match(first.source, /this\.sessions\.clear\(\);\s*this\.sessions\.create/)
+  assert.match(first.source, /this\.sessionWorkspaceHints \?\?= new Map\(\)/)
   assert.equal(patchRuntimeSource(first.source).changed, false)
 })
 
@@ -72,19 +73,24 @@ test('New Session targets the current project and supports multiple projects', a
   const events = []
   let current = 'session-a'
   let sequence = 0
+  const summaries = {
+    'session-a': { id: 'session-a', cwd: 'D:\\project-a' },
+    'session-b': { id: 'session-b', cwd: 'D:\\project-b' }
+  }
   const runtime = new Runtime()
   runtime.list = { getSnapshot: () => ({
     items: [
-      { workspaceId: 'project-a', sessionIds: ['session-a'] },
-      { workspaceId: 'project-b', sessionIds: ['session-b'] }
+      { workspaceId: 'project-a', path: 'D:\\project-a', sessionIds: ['session-a'] },
+      { workspaceId: 'project-b', path: 'D:\\project-b', sessionIds: ['session-b'] }
     ],
     recentWorkspaceId: 'project-b'
   }) }
   runtime.sessions = {
-    list: { getSnapshot: () => ({ current }) },
+    list: { getSnapshot: () => ({ current, byId: summaries }) },
     clear: () => { events.push(['clear']); current = undefined },
     create: async ({ workspaceId }) => {
       const id = `${workspaceId}-new-${++sequence}`
+      summaries[id] = { id }
       events.push(['create', workspaceId, id])
       return id
     },
@@ -106,5 +112,33 @@ test('New Session targets the current project and supports multiple projects', a
     ['clear'],
     ['create', 'project-a', 'project-a-new-2'],
     ['open', 'project-a-new-2']
+  ])
+
+  // The Workspace changed projection can lag behind session.create. The next
+  // click must stay in project A instead of falling back to recent project B.
+  runtime.startSession()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(events.slice(6), [
+    ['clear'],
+    ['create', 'project-a', 'project-a-new-3'],
+    ['open', 'project-a-new-3']
+  ])
+
+  // A selected session with stale membership can still resolve by cwd.
+  current = 'session-c'
+  summaries['session-c'] = { id: 'session-c', cwd: 'D:\\project-c' }
+  runtime.list = { getSnapshot: () => ({
+    items: [
+      { workspaceId: 'project-b', path: 'D:\\project-b', sessionIds: ['session-b'] },
+      { workspaceId: 'project-c', path: 'D:\\project-c', sessionIds: [] }
+    ],
+    recentWorkspaceId: 'project-b'
+  }) }
+  runtime.startSession()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(events.slice(9), [
+    ['clear'],
+    ['create', 'project-c', 'project-c-new-4'],
+    ['open', 'project-c-new-4']
   ])
 })

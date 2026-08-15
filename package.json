@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "private": false,
   "description": "Open-source Windows desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, packaged self-test, and release gates.",
   "author": {
@@ -47,6 +47,7 @@
     "@earendil-works/pi-ai": "0.82.1",
     "cross-spawn": "7.0.6",
     "dsh-plugin-marketplace": "github:baiyuscc13724-max/DSH-Plugins-Marketplace#41cf453f1267b535258720dda3966b8643f3a224",
+    "ws": "^8.21.3",
     "yaml": "2.9.0"
   },
   "devDependencies": {
@@ -60,6 +61,16 @@
     "files": [
       "electron/**/*",
       "renderer/**/*",
+      "!renderer/pet/pet-glb-rig.js",
+      "!renderer/pet/pet-rig.js",
+      "!renderer/pet/pet-rig-motion.js",
+      "!renderer/pet/vendor/**/*",
+      "!renderer/pets/maid-whale/model/**/*",
+      "!renderer/pets/maid-whale/rig/**/*",
+      "!renderer/pets/maid-whale/rive/**/*",
+      "!renderer/pets/maid-whale/sprites/keyframes/**/*",
+      "!renderer/pets/maid-whale/sprites/inbetweens/**/*",
+      "!renderer/pets/maid-whale/sprites/inbetweens-secondary/**/*",
       "build/icon.png",
       "package.json",
       "LICENSE",

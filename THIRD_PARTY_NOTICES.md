@@ -58,6 +58,12 @@ The original repositories remain the authoritative source for their license text
 
 The optional bundled `maid-atelier` artwork is adapted from `Small-tailqwq/dsh-deep-whale` and remains separately licensed under **CC BY-NC-SA 4.0**. It is not relicensed under Harness Desktop's MIT license and must not be used commercially.
 
+The optional desktop pet includes AI-assisted complete-frame animation sequences derived for this project from the attributed `maid-atelier` character design. The generated source poses and resulting character animation remain under the same **CC BY-NC-SA 4.0** terms. No third-party Shimeji character pack or QQ Pet artwork is bundled.
+
+Desktop edge movement and click-through behavior were informed by the MIT-licensed `Sunwood-ai-labs/desktop-pet-mitarashi` project; Harness Desktop does not bundle that project's character artwork.
+
+Desktop Pet Mitarashi source: https://github.com/Sunwood-ai-labs/desktop-pet-mitarashi
+
 Attribution chain retained from the upstream NOTICE:
 
 1. 上善 — original whale-girl character design: https://www.pixiv.net/users/62155430

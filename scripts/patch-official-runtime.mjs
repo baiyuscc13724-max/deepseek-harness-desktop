@@ -45,7 +45,7 @@ const PATCHED_V1 = dedentOne(`\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\t});
 \t\t\t\t}`)
 
-const PATCHED = dedentOne(`\t\t\t\tstartSession(workspaceId) {
+const PATCHED_V2 = dedentOne(`\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\tconst workspace = this.list.getSnapshot();
 \t\t\t\t\tconst current = this.sessions.list.getSnapshot().current;
 \t\t\t\t\tconst currentWorkspaceId = current === void 0 ? void 0 : workspace.items.find((item) => item.sessionIds.includes(current))?.workspaceId;
@@ -56,6 +56,28 @@ const PATCHED = dedentOne(`\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\t}
 \t\t\t\t\tthis.sessions.clear();
 \t\t\t\t\tthis.sessions.create({ workspaceId: target }).then((sessionId) => {
+\t\t\t\t\t\tthis.sessions.open(sessionId);
+\t\t\t\t\t}, (reason) => {
+\t\t\t\t\t\tif (current !== void 0) this.sessions.open(current);
+\t\t\t\t\t\tconsole.warn("new session failed:", reason);
+\t\t\t\t\t});
+\t\t\t\t}`)
+
+const PATCHED = dedentOne(`\t\t\t\tstartSession(workspaceId) {
+\t\t\t\t\tconst workspace = this.list.getSnapshot();
+\t\t\t\t\tconst sessionState = this.sessions.list.getSnapshot();
+\t\t\t\t\tconst current = sessionState.current;
+\t\t\t\t\tthis.sessionWorkspaceHints ??= new Map();
+\t\t\t\t\tconst currentSummary = current === void 0 ? void 0 : sessionState.byId[current];
+\t\t\t\t\tconst currentWorkspaceId = current === void 0 ? void 0 : workspace.items.find((item) => item.sessionIds.includes(current) || currentSummary?.cwd !== void 0 && item.path === currentSummary.cwd)?.workspaceId ?? this.sessionWorkspaceHints.get(current);
+\t\t\t\t\tconst target = workspaceId ?? currentWorkspaceId ?? workspace.recentWorkspaceId;
+\t\t\t\t\tif (target === void 0) {
+\t\t\t\t\t\tthis.sessions.clear();
+\t\t\t\t\t\treturn;
+\t\t\t\t\t}
+\t\t\t\t\tthis.sessions.clear();
+\t\t\t\t\tthis.sessions.create({ workspaceId: target }).then((sessionId) => {
+\t\t\t\t\t\tthis.sessionWorkspaceHints.set(sessionId, target);
 \t\t\t\t\t\tthis.sessions.open(sessionId);
 \t\t\t\t\t}, (reason) => {
 \t\t\t\t\t\tif (current !== void 0) this.sessions.open(current);
@@ -86,7 +108,7 @@ const DIRECTORY_PICKER_PATCHED = `if (platform === "win32") {
 
 export function patchRuntimeSource(source) {
   if (source.includes(PATCHED)) return { source, changed: false }
-  const previous = source.includes(PATCHED_V1) ? PATCHED_V1 : ORIGINAL
+  const previous = source.includes(PATCHED_V2) ? PATCHED_V2 : source.includes(PATCHED_V1) ? PATCHED_V1 : ORIGINAL
   if (!source.includes(previous)) {
     throw new Error('Pinned DSH startSession implementation changed; refusing an unsafe runtime patch.')
   }

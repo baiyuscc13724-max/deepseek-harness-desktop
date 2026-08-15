@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
-  'electron/main.cjs', 'electron/preload.cjs',
+  'electron/main.cjs', 'electron/preload.cjs', 'electron/desktop-tray.cjs',
   'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/runtime-proxy.cjs',
   'electron/bridge/update-service.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs',
   'electron/store/app-state-store.cjs',
@@ -15,7 +15,7 @@ const required = [
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/official-runtime-patch.test.cjs',
+  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md',
   'build/installer.iss', 'scripts/build-release.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json'
@@ -51,8 +51,9 @@ for (const removedSurface of ['nativeChatSurface', 'webCompatibilitySurface', 's
 }
 
 const rendererStyles = await readFile(path.join(root, 'renderer/styles.css'), 'utf8')
-if (!rendererStyles.includes('.window-drag') || !rendererStyles.includes('right: 232px') || !rendererStyles.includes('height: 36px') || !rendererStyles.includes('-webkit-app-region: drag')) {
-  throw new Error('The frameless Windows shell must keep a full-height draggable title region without covering the window controls.')
+const windowDragRule = rendererStyles.match(/\.window-drag\s*\{([^}]*)\}/)?.[1] ?? ''
+if (!/right:\s*208px/.test(windowDragRule) || !/width:\s*24px/.test(windowDragRule) || !/height:\s*36px/.test(windowDragRule) || !/-webkit-app-region:\s*drag/.test(windowDragRule)) {
+  throw new Error('The frameless Windows shell must keep its full-height drag handle inside the reserved gap, without covering official title actions.')
 }
 if (!html.includes('id="skinQuickButton"') || !html.includes('id="skinPickerOverlay"') || !rendererStyles.includes('.skin-picker-dialog')) {
   throw new Error('The desktop shell must expose a standalone quick skin picker without opening the full official settings dialog.')
@@ -94,6 +95,10 @@ if (!themeIntegration.includes("event.detail >= 2") || !themeIntegration.include
 }
 if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includes('[data-slot="conversation"]')) {
   throw new Error('Theme integration must survive upstream class-name changes and isolate official surface variables.')
+}
+const startupSplash = html.match(/<section id="startupSplash"[\s\S]*?<\/section>/)?.[0] ?? ''
+if ((startupSplash.match(/<path\b/g) || []).length !== 1 || !startupSplash.includes('pathLength="1"') || !rendererScript.includes('requestAnimationFrame(drawStartupFrame)')) {
+  throw new Error('The startup experience must adaptively trace the DeepSeek mark with one DOM path.')
 }
 for (const token of ['--dsw-alias-button-contrast-fill', '--dsw-alias-button-primary-fill', '--dsw-specific-sidebar-nav-item-active']) {
   if (!themeIntegration.includes(token)) throw new Error(`Theme compatibility palette is missing: ${token}`)
@@ -138,7 +143,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.8') throw new Error(`Expected package version 1.0.8, received ${pkg.version}`)
+if (pkg.version !== '1.0.9') throw new Error(`Expected package version 1.0.9, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 for (const dependency of [
@@ -182,6 +187,9 @@ if (officialIconHash !== '77b823e3d14122b6dfe6ff6089e629d1c6e3fcd1ed7fc0b9e7bf59
 }
 
 const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
+for (const trayContract of ['createDesktopTray', 'ensureDesktopTray', "mainWindow.on('close'", 'event.preventDefault()', 'mainWindow.hide()', 'isQuitting = true']) {
+  if (!main.includes(trayContract)) throw new Error(`Desktop tray lifecycle contract missing: ${trayContract}`)
+}
 for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'shell:openExternal']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }

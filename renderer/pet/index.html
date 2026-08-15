@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; worker-src 'self' blob:;" />
+  <title>女仆鲸</title>
+  <link rel="stylesheet" href="./pet.css" />
+</head>
+<body>
+  <main id="pet" class="pet" data-status="idle">
+    <div class="speech" id="speech" aria-live="polite">准备好陪你工作啦</div>
+    <div class="tok-bubble" id="tokBubble" aria-hidden="true"></div>
+    <button id="character" class="character" type="button" title="可以抚摸、拖动和抛出女仆鲸" aria-label="和女仆鲸互动">
+      <span id="rigHost" class="rig-host" aria-hidden="true"></span>
+    </button>
+    <nav id="contextMenu" class="context-menu" aria-label="女仆鲸菜单" hidden>
+      <button id="focusButton" type="button">查看当前任务</button>
+      <button id="feedButton" type="button">喂一颗 TOK</button>
+      <button id="tuckButton" type="button">收起女仆鲸</button>
+    </nav>
+  </main>
+  <script src="./pet-behavior-engine.js"></script>
+  <script src="./pet-interaction-engine.js"></script>
+  <script type="module" src="./pet.js"></script>
+</body>
+</html>

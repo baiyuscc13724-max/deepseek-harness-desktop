@@ -19,11 +19,20 @@ function normalizeCustomTheme(value = {}) {
 }
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 3,
+  schemaVersion: 4,
   updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null },
   appearance: {
     themeId: DEFAULT_THEME_ID,
     customTheme: normalizeCustomTheme()
+  },
+  pet: {
+    enabled: true,
+    awake: false,
+    alwaysOnTop: true,
+    autoFeed: true,
+    motion: 'system',
+    muted: true,
+    positionByDisplay: {}
   }
 })
 
@@ -37,7 +46,7 @@ function normalizeState(input) {
   const savedTheme = VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : DEFAULT_THEME_ID
   const themeId = Number(value.schemaVersion || 0) < 3 && savedTheme === 'official' ? DEFAULT_THEME_ID : savedTheme
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     updates: {
       checkOnStartup: value.updates?.checkOnStartup !== false,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
@@ -47,8 +56,28 @@ function normalizeState(input) {
     appearance: {
       themeId,
       customTheme: normalizeCustomTheme(value.appearance?.customTheme)
+    },
+    pet: {
+      enabled: value.pet?.enabled !== false,
+      awake: value.pet?.awake === true,
+      alwaysOnTop: value.pet?.alwaysOnTop !== false,
+      autoFeed: value.pet?.autoFeed !== false,
+      motion: ['system', 'full', 'reduced', 'still'].includes(value.pet?.motion) ? value.pet.motion : 'system',
+      muted: value.pet?.muted !== false,
+      positionByDisplay: normalizePetPositions(value.pet?.positionByDisplay)
     }
   }
+}
+
+function normalizePetPositions(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const entries = Object.entries(value).slice(0, 16).flatMap(([displayId, position]) => {
+    const x = Number(position?.x)
+    const y = Number(position?.y)
+    if (!/^[\w.-]{1,80}$/.test(displayId) || !Number.isFinite(x) || !Number.isFinite(y)) return []
+    return [[displayId, { x: Math.round(x), y: Math.round(y) }]]
+  })
+  return Object.fromEntries(entries)
 }
 
 class AppStateStore {
@@ -102,6 +131,23 @@ class AppStateStore {
     this.#persist()
     return this.get()
   }
+
+  updatePet(patch = {}) {
+    for (const key of ['enabled', 'awake', 'alwaysOnTop', 'autoFeed', 'muted']) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) this.state.pet[key] = Boolean(patch[key])
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'motion')) {
+      this.state.pet.motion = ['system', 'full', 'reduced', 'still'].includes(patch.motion) ? patch.motion : 'system'
+    }
+    if (patch.positionByDisplay && typeof patch.positionByDisplay === 'object') {
+      this.state.pet.positionByDisplay = normalizePetPositions({
+        ...this.state.pet.positionByDisplay,
+        ...patch.positionByDisplay
+      })
+    }
+    this.#persist()
+    return this.get()
+  }
 }
 
-module.exports = { AppStateStore, DEFAULT_STATE, DEFAULT_THEME_ID, VALID_THEME_IDS, normalizeState }
+module.exports = { AppStateStore, DEFAULT_STATE, DEFAULT_THEME_ID, VALID_THEME_IDS, normalizeState, normalizePetPositions }

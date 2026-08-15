@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "source": "rig-source-v1.png",
+  "scale": 3,
+  "parts": {
+    "back-hair": {
+      "file": "parts/back-hair.png",
+      "width": 804,
+      "height": 927
+    },
+    "torso": {
+      "file": "parts/torso.png",
+      "width": 696,
+      "height": 261
+    },
+    "head": {
+      "file": "parts/head.png",
+      "width": 990,
+      "height": 855
+    },
+    "headdress": {
+      "file": "parts/headdress.png",
+      "width": 762,
+      "height": 483
+    },
+    "ear-left": {
+      "file": "parts/ear-left.png",
+      "width": 543,
+      "height": 447
+    },
+    "ear-right": {
+      "file": "parts/ear-right.png",
+      "width": 759,
+      "height": 261
+    },
+    "arm-left-upper": {
+      "file": "parts/arm-left-upper.png",
+      "width": 381,
+      "height": 507
+    },
+    "arm-left-lower": {
+      "file": "parts/arm-left-lower.png",
+      "width": 387,
+      "height": 450
+    },
+    "arm-right-upper": {
+      "file": "parts/arm-right-upper.png",
+      "width": 378,
+      "height": 504
+    },
+    "arm-right-lower": {
+      "file": "parts/arm-right-lower.png",
+      "width": 354,
+      "height": 453
+    },
+    "skirt-front": {
+      "file": "parts/skirt-front.png",
+      "width": 750,
+      "height": 591
+    },
+    "skirt-back": {
+      "file": "parts/skirt-back.png",
+      "width": 846,
+      "height": 561
+    },
+    "leg-left": {
+      "file": "parts/leg-left.png",
+      "width": 234,
+      "height": 588
+    },
+    "leg-right": {
+      "file": "parts/leg-right.png",
+      "width": 240,
+      "height": 579
+    },
+    "tail-base": {
+      "file": "parts/tail-base.png",
+      "width": 711,
+      "height": 516
+    },
+    "tail-tip": {
+      "file": "parts/tail-tip.png",
+      "width": 540,
+      "height": 759
+    }
+  }
+}

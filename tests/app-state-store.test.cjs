@@ -41,10 +41,23 @@ test('new installs use Porcelain Mist while preserving an explicitly selected no
 
 test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
   const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
-  assert.equal(migrated.schemaVersion, 3)
+  assert.equal(migrated.schemaVersion, 4)
   assert.equal(migrated.appearance.themeId, 'porcelain-mist')
   const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
   assert.equal(explicitOfficial.appearance.themeId, 'official')
+})
+
+test('AppStateStore persists validated pet preferences and display positions', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-pet-preferences-'))
+  const file = path.join(dir, 'app-state.json')
+  const store = new AppStateStore(file)
+  store.updatePet({ awake: true, autoFeed: false, motion: 'reduced', positionByDisplay: { '123': { x: 40.4, y: 80.8 }, '../bad': { x: 1, y: 2 } } })
+  const restored = new AppStateStore(file).get().pet
+  assert.equal(restored.awake, true)
+  assert.equal(restored.autoFeed, false)
+  assert.equal(restored.motion, 'reduced')
+  assert.deepEqual(restored.positionByDisplay['123'], { x: 40, y: 81 })
+  assert.equal(restored.positionByDisplay['../bad'], undefined)
 })
 
 test('AppStateStore rejects unknown themes and unsafe custom values', () => {

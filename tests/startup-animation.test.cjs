@@ -1,0 +1,27 @@
+const assert = require('node:assert/strict')
+const { readFileSync } = require('node:fs')
+const path = require('node:path')
+const test = require('node:test')
+
+test('startup splash draws the DeepSeek mark with one DOM path', () => {
+  const root = path.resolve(__dirname, '..')
+  const html = readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8')
+  const styles = readFileSync(path.join(root, 'renderer', 'styles.css'), 'utf8')
+  const script = readFileSync(path.join(root, 'renderer', 'app.js'), 'utf8')
+  const splash = html.match(/<section id="startupSplash"[\s\S]*?<\/section>/)?.[0] ?? ''
+
+  assert.equal((splash.match(/<path\b/g) || []).length, 1)
+  assert.match(splash, /<path pathLength="1"/)
+  assert.match(styles, /\.startup-mark path[^{]*\{[^}]*stroke-dasharray:\s*1[^}]*stroke-dashoffset:\s*1/)
+  assert.doesNotMatch(styles, /@keyframes startup-logo-trace/)
+  assert.match(styles, /\.startup-splash\.show-wordmark/)
+  assert.match(styles, /prefers-reduced-motion:\s*reduce/)
+  assert.match(script, /playStartupAnimation\(\)/)
+  assert.match(script, /startupFailed \|\| \(startupRuntimeReady && startupWebviewReady\)/)
+  assert.match(script, /requestAnimationFrame\(drawStartupFrame\)/)
+  assert.match(script, /0\.62 \* \(1 - Math\.exp\(-elapsed \/ 1600\)\)/)
+  assert.match(script, /0\.68 \+ 0\.22 \* \(1 - Math\.exp\(-phaseElapsed \/ 700\)\)/)
+  assert.match(script, /startupFinishStartProgress \+ remaining \* eased/)
+  assert.match(script, /startupWebviewReady = true/)
+  assert.match(script, /startupSplash\.classList\.add\('is-complete'\)/)
+})

@@ -19,11 +19,16 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   getThemeAssets: () => ipcRenderer.invoke('appearance:assets'),
   saveCustomTheme: customTheme => ipcRenderer.invoke('appearance:saveCustom', customTheme),
   chooseThemeBackground: () => ipcRenderer.invoke('appearance:chooseBackground'),
+  getPetState: () => ipcRenderer.invoke('pet:getState'),
+  setPetPreferences: patch => ipcRenderer.invoke('pet:setPreferences', patch),
+  feedPet: kind => ipcRenderer.invoke('pet:feed', kind),
+  focusPetActivity: sessionId => ipcRenderer.invoke('pet:focusMain', sessionId),
   openHarnessSettings: () => ipcRenderer.invoke('settings:openDocument'),
   getModelRouting: () => ipcRenderer.invoke('models:routing:get'),
   saveModelRouting: routing => ipcRenderer.invoke('models:routing:save', routing),
   openExternal: url => ipcRenderer.invoke('shell:openExternal', url),
   onRuntimeState: listener => subscribe('runtime:state', listener),
+  onPetState: listener => subscribe('pet:state', listener),
   onUpdateResult: listener => subscribe('updates:result', listener),
   onUpdateInstallProgress: listener => subscribe('updates:install-progress', listener)
 })
