@@ -25,7 +25,7 @@ win:
 icon: store/Assets/app.ico
 npmRebuild: true
 asarUnpack:
-  - node_modules/**/*
+  - node_modules/**/*.node
 artifactName: ${productName}-${version}-store-${arch}.${ext}
 directories:
   output: dist-store

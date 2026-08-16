@@ -22,3 +22,12 @@ test('window drag surface spans the title bar without covering desktop or native
   assert.match(skinButtonRule, /(?:^|[;\s])app-region:\s*no-drag/)
   assert.match(skinButtonRule, /-webkit-app-region:\s*no-drag/)
 })
+
+test('desktop pet card closes when the user clicks outside it', () => {
+  const source = readFileSync(path.resolve(__dirname, '..', 'renderer', 'app.js'), 'utf8')
+
+  assert.match(source, /document\.addEventListener\('pointerdown', event => \{/)
+  assert.match(source, /petPanel\.contains\(event\.target\) \|\| petQuickButton\.contains\(event\.target\)/)
+  assert.match(source, /runtimeView\.addEventListener\('focus', closePetPanel\)/)
+  assert.match(source, /closePetPanel\(\)/)
+})

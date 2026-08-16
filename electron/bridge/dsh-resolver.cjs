@@ -11,8 +11,10 @@ function physicalUnpackedPath(resolvedPath) {
   return existsSync(unpacked) ? unpacked : resolvedPath
 }
 
-function resolvePackageBin(packageName, preferredBin) {
-  const packageJsonPath = physicalUnpackedPath(requireFromHere.resolve(`${packageName}/package.json`))
+function resolvePackageBin(packageName, preferredBin, options = {}) {
+  const packageJsonPath = options.nodeModulesRoot
+    ? path.join(options.nodeModulesRoot, ...packageName.split('/'), 'package.json')
+    : physicalUnpackedPath(requireFromHere.resolve(`${packageName}/package.json`))
   const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
   let bin = pkg.bin
   if (typeof bin === 'object' && bin) {
@@ -26,7 +28,7 @@ function resolvePackageBin(packageName, preferredBin) {
   return { cli, pkg, packageJsonPath }
 }
 
-function resolveDshBin() {
+function resolveDshBin(options = {}) {
   const explicitCommand = process.env.HARNESS_DESKTOP_DSH_COMMAND
   if (explicitCommand) {
     return {
@@ -39,7 +41,7 @@ function resolveDshBin() {
   }
 
   try {
-    const { cli, pkg } = resolvePackageBin('@deepseek-ai/dsh', 'dsh')
+    const { cli, pkg } = resolvePackageBin('@deepseek-ai/dsh', 'dsh', options)
     return {
       command: process.execPath,
       // The official Web profile enables cordis-plugin-hmr, which needs Node's

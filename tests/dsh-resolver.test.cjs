@@ -32,3 +32,20 @@ test('bundled Harness Web runtime enables the Node internals required by HMR', (
     else process.env.HARNESS_DESKTOP_DSH_COMMAND = originalCommand
   }
 })
+
+test('packaged runtime can resolve from the versioned local runtime cache', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harness-dsh-cache-'))
+  try {
+    const packageRoot = path.join(root, '@deepseek-ai', 'dsh')
+    const cli = path.join(packageRoot, 'lib', 'bin.js')
+    await mkdir(path.dirname(cli), { recursive: true })
+    await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ version: 'test', bin: { dsh: 'lib/bin.js' } }))
+    await writeFile(cli, 'console.log("cached")')
+    const resolved = resolveDshBin({ nodeModulesRoot: root })
+    assert.equal(resolved.source, 'bundled')
+    assert.equal(resolved.version, 'test')
+    assert.equal(resolved.argsPrefix[1], cli)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

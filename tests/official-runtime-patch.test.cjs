@@ -42,6 +42,59 @@ test('Windows directory selection avoids the crashing Koffi dialog worker', asyn
   assert.equal(patchDirectoryPickerSource(first.source).changed, false)
 })
 
+test('desktop Markdown keeps the upstream web allowlist and adds only local workspace targets', async () => {
+  const { patchMarkdownSource } = await import('../scripts/patch-official-runtime.mjs')
+  const original = `function sanitizeUrl(url) {
+\ttry {
+\t\tswitch (new URL(url).protocol) {
+\t\t\tcase "http:":
+\t\t\tcase "https:":
+\t\t\tcase "mailto:": return url;
+\t\t\tdefault: return "";
+\t\t}
+\t} catch {
+\t\treturn "";
+\t}
+}
+function inlineCodeHttpUrl(value) {
+\tif (value.trim() !== value) return void 0;
+\ttry {
+\t\tconst protocol = new URL(value).protocol;
+\t\treturn protocol === "http:" || protocol === "https:" ? value : void 0;
+\t} catch {
+\t\treturn;
+\t}
+}`
+  const first = patchMarkdownSource(original)
+  assert.equal(first.changed, true)
+  assert.match(first.source, /harness-desktop:\/\/open-local\?path=/)
+  assert.match(first.source, /case "https:"/)
+  assert.match(first.source, /desktopLocalHref\(value\)/)
+  assert.doesNotMatch(first.source, /case "javascript:"/)
+  assert.equal(patchMarkdownSource(first.source).changed, false)
+})
+
+test('chat inline-code paths fall back to the active workspace without making launchables clickable', async () => {
+  const { patchConversationSource } = await import('../scripts/patch-official-runtime.mjs')
+  const original = 'fileMentions: (owner) => ctx.get("chatFileMentions")?.forClosing(owner),'
+  const first = patchConversationSource(original)
+  assert.equal(first.changed, true)
+  assert.match(first.source, /owner\.openFile\(target\)/)
+  assert.match(first.source, /looksLikePath/)
+  assert.match(first.source, /launchable/)
+  assert.match(first.source, /ps1/)
+  const provider = Function('ctx', `return ({${first.source}}).fileMentions`)({ get: () => undefined })
+  const opened = []
+  const mentions = provider({ openFile: target => opened.push(target) })
+  const relativeProject = mentions.resolve('./子项目')
+  assert.equal(relativeProject.title, './子项目')
+  relativeProject.open()
+  assert.deepEqual(opened, ['./子项目'])
+  assert.equal(mentions.resolve('setup.exe'), undefined)
+  assert.equal(mentions.resolve('普通文本'), undefined)
+  assert.equal(patchConversationSource(first.source).changed, false)
+})
+
 test('patched Windows directory picker returns the selected existing project path', async () => {
   const pickerFile = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-host-directory-picker-native', 'lib', 'index.js')
   const { pickNativeDirectory } = await import(`${pathToFileURL(pickerFile).href}?desktop-picker-test=${Date.now()}`)

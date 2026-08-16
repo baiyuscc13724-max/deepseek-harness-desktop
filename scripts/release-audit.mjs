@@ -4,11 +4,11 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.12') throw new Error(`release audit expects 1.0.12, got ${pkg.version}`)
+if (pkg.version !== '1.0.13') throw new Error(`release audit expects 1.0.13, got ${pkg.version}`)
 if (!pkg.author?.email) throw new Error('Linux .deb packaging requires a maintainer email in package author metadata.')
 if (pkg.main !== 'electron/main.cjs') throw new Error('Electron main entry drifted.')
 if (pkg.build?.asar !== true) throw new Error('Release must keep ASAR enabled.')
-if (!pkg.build?.asarUnpack?.some(item => item === 'node_modules/**/*')) throw new Error('The complete Harness runtime must be unpacked so Windows profile links target physical directories.')
+if (!pkg.build?.asarUnpack?.some(item => item === 'node_modules/**/*.node')) throw new Error('Only native modules may remain outside app.asar; the JavaScript Harness runtime must ship as one archive.')
 for (const excluded of ['!node_modules/**/*.map', '!node_modules/**/*.{ts,tsx,cts,mts}', '!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*']) {
   if (!pkg.build?.files?.includes(excluded)) throw new Error(`Release must prune non-runtime package files: ${excluded}`)
 }
@@ -25,7 +25,7 @@ if (!pkg.build?.win?.target?.includes('portable')) throw new Error('Windows port
 if (pkg.build?.win?.target?.includes('nsis') || pkg.build?.nsis) throw new Error('The blocked NSIS installer must not return.')
 for (const target of ['dmg', 'zip']) if (!pkg.build?.mac?.target?.includes(target)) throw new Error(`macOS target missing: ${target}`)
 for (const target of ['AppImage', 'deb']) if (!pkg.build?.linux?.target?.includes(target)) throw new Error(`Linux target missing: ${target}`)
-for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
+for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
 
 const installer = await readFile(path.join(root, 'build/installer.iss'), 'utf8')
 for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={code:GetDefaultDirName}', 'UsePreviousAppDir=yes', '#define MyOutputBaseFilename "Harness-Desktop-" + MyAppVersion + "-win-x64"', 'OutputBaseFilename={#MyOutputBaseFilename}', 'SetupIconFile=..\\dist\\.icon-ico\\icon.ico', 'UninstallDisplayIcon={app}\\{#MyAppExeName}', 'Name: "chinesesimp"', 'compiler:Languages\\ChineseSimplified.isl', 'recursesubdirs', 'autodesktop', 'autoprograms', 'FindLegacyInstallDirectory', "RegQueryStringValue(RootKey, Subkey, 'DisplayIcon'", "HasCommandLineParameter('/CLOSEAPPLICATIONS')", "'/NORESTART /LANG=chinesesimp'", 'WizardSilent']) {
@@ -33,7 +33,7 @@ for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={code:GetDe
 }
 
 const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
-for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview']) {
+for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview', "guest.on('context-menu'", "ipcMain.handle('shell:openLocal'"]) {
   if (!main.includes(contract)) throw new Error(`Electron security contract missing: ${contract}`)
 }
 for (const contract of ["ipcMain.handle('updates:install'", "ipcMain.handle('updates:launchReady'", 'SHA256SUMS.txt', 'openWindowsInstaller', 'shell.openPath', 'downloadUpdateFile', 'fetchChecksum', 'ensurePluginMarketplace']) {

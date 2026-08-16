@@ -73,6 +73,7 @@ let startupReducedMotion = false
 let updateNoticeShownVersion = null
 const themeIntegration = window.harnessThemeIntegration
 const modelRoutingIntegration = window.harnessModelRoutingIntegration
+const workspaceLinksIntegration = window.HarnessDesktopWorkspaceLinks
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -241,11 +242,11 @@ function renderPetState(next = petState) {
   petRefinedCount.textContent = inventory.refined || 0
   petStandardCount.textContent = inventory.standard || 0
   petFragmentCount.textContent = inventory.fragments || 0
-  petAwakeToggle.textContent = preferences.awake ? '收起女仆鲸' : '唤醒女仆鲸'
   petAwakeToggle.classList.toggle('primary', !preferences.awake)
   petAutoFeed.checked = preferences.autoFeed !== false
   petAlwaysOnTop.checked = preferences.alwaysOnTop !== false
   petFeedButton.disabled = Number(next.fullness) >= 100 || ![inventory.fragments, inventory.standard, inventory.refined].some(value => Number(value) > 0)
+  petAwakeToggle.textContent = preferences.awake ? '收起女仆鲸' : '唤醒女仆鲸'
 }
 
 function openPetPanel() {
@@ -723,6 +724,7 @@ runtimeView.addEventListener('dom-ready', async () => {
   await runtimeView.executeJavaScript(`(${officialSubagentEnhancementsBootstrap.toString()})()`, true).catch(() => {})
   await themeIntegration.install(runtimeView).catch(() => {})
   await modelRoutingIntegration.install(runtimeView).catch(() => {})
+  await workspaceLinksIntegration.install(runtimeView).catch(() => {})
   await publishUpdateState()
   await publishAppearanceState()
   await publishModelRoutingState()
@@ -750,6 +752,10 @@ runtimeView.addEventListener('will-navigate', event => {
   } else if (target.hostname === 'open-external') {
     const url = target.searchParams.get('url')
     if (url) api.openExternal(url).catch(() => {})
+  } else if (target.hostname === 'open-local') {
+    const localPath = target.searchParams.get('path')
+    const reveal = target.searchParams.get('reveal') === '1'
+    if (localPath) api.openLocal(localPath, { reveal }).catch(() => {})
   } else if (target.hostname === 'open-config-file') {
     api.openHarnessSettings().catch(() => {})
   } else if (target.hostname === 'refresh-model-routing') {
@@ -810,6 +816,12 @@ petQuickButton.addEventListener('click', () => {
   else closePetPanel()
 })
 closePetPanelButton.addEventListener('click', closePetPanel)
+document.addEventListener('pointerdown', event => {
+  if (petPanel.classList.contains('hidden')) return
+  if (petPanel.contains(event.target) || petQuickButton.contains(event.target)) return
+  closePetPanel()
+})
+runtimeView.addEventListener('focus', closePetPanel)
 petAwakeToggle.addEventListener('click', async () => {
   renderPetState(await api.setPetPreferences({ awake: !petState.preferences?.awake }))
 })

@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   getModelRouting: () => ipcRenderer.invoke('models:routing:get'),
   saveModelRouting: routing => ipcRenderer.invoke('models:routing:save', routing),
   openExternal: url => ipcRenderer.invoke('shell:openExternal', url),
+  openLocal: (target, options) => ipcRenderer.invoke('shell:openLocal', target, options),
   onRuntimeState: listener => subscribe('runtime:state', listener),
   onPetState: listener => subscribe('pet:state', listener),
   onUpdateResult: listener => subscribe('updates:result', listener),

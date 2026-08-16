@@ -6,16 +6,16 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
   'electron/main.cjs', 'electron/preload.cjs', 'electron/desktop-tray.cjs',
-  'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/runtime-proxy.cjs',
-  'electron/bridge/update-service.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs',
+  'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/runtime-proxy.cjs', 'electron/bridge/runtime-bundle-service.cjs',
+  'electron/bridge/update-service.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs',
   'electron/store/app-state-store.cjs',
-  'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js',
+  'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js', 'renderer/workspace-links-integration.js',
   'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
   'renderer/themes/maid-atelier/maid-atelier-maid-right-v6.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
+  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
   'build/installer.iss', 'scripts/build-release.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json'
@@ -40,7 +40,7 @@ for (const relative of removed) {
 }
 
 const html = await readFile(path.join(root, 'renderer/index.html'), 'utf8')
-for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './app.js', './assets/deepseek-icon.svg']) {
+for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './workspace-links-integration.js', './app.js', './assets/deepseek-icon.svg']) {
   if (!html.includes(relative)) throw new Error(`renderer/index.html is missing expected reference: ${relative}`)
 }
 for (const id of ['runtimeView', 'runtimeStatus', 'runtimeStatusTitle', 'runtimeStatusDetail', 'retryRuntime']) {
@@ -69,6 +69,9 @@ if (!rendererStyles.includes('.update-notice-dialog')) throw new Error('Update r
 
 const rendererScript = await readFile(path.join(root, 'renderer/app.js'), 'utf8')
 if (!rendererScript.includes('api.startRuntime({})')) throw new Error('Official Harness Web UI must start automatically.')
+if (!rendererScript.includes("document.addEventListener('pointerdown'") || !rendererScript.includes('petPanel.contains(event.target) || petQuickButton.contains(event.target)') || !rendererScript.includes("runtimeView.addEventListener('focus', closePetPanel)")) {
+  throw new Error('The top-bar desktop pet card must close when the user clicks anywhere outside the card, including the isolated official WebView.')
+}
 if (rendererScript.includes('showCompatibility') || rendererScript.includes('compatibilityMode')) throw new Error('Renderer must expose one official workspace, not native/Web mode switching.')
 if (!rendererScript.includes('harness-desktop-update-row') || !rendererScript.includes('api.getUpdatePreferences()')) {
   throw new Error('Desktop and Harness update status must be integrated into the official General settings surface.')
@@ -84,6 +87,10 @@ if (!rendererScript.includes('showUpdateReady(result.version)') || !rendererScri
 }
 for (const contract of ['showUpdateNotice(result.app', 'normalizedReleaseNotes', 'data-hd-notes', '更新内容', 'officialSubagentEnhancementsBootstrap', 'hd-subagent-panel', 'hd-subagent-running-indicator']) {
   if (!rendererScript.includes(contract)) throw new Error(`Desktop enhancement contract is missing: ${contract}`)
+}
+const workspaceLinksIntegration = await readFile(path.join(root, 'renderer/workspace-links-integration.js'), 'utf8')
+for (const contract of ['data-hd-local-target', 'harness-desktop://${host}', 'MutationObserver', '右键可复制']) {
+  if (!workspaceLinksIntegration.includes(contract)) throw new Error(`Workspace local-link integration is missing: ${contract}`)
 }
 if (!rendererScript.includes('api.openHarnessSettings()') || !rendererScript.includes('api.chooseThemeBackground()') || !rendererScript.includes('themeIntegration.prepareCatalog')) {
   throw new Error('Official settings must integrate desktop file opening, theme selection, and local custom backgrounds.')
@@ -150,7 +157,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.12') throw new Error(`Expected package version 1.0.12, received ${pkg.version}`)
+if (pkg.version !== '1.0.13') throw new Error(`Expected package version 1.0.13, received ${pkg.version}`)
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
   `v${pkg.version}`,
@@ -190,8 +197,8 @@ for (const contract of ['HARNESS_DESKTOP_AUTO_ZH_SUMMARY_V1', 'automaticChineseD
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')
 if (pkg.scripts?.['test:provider:real']) throw new Error('The removed desktop provider smoke script must not return.')
-if (pkg.build?.npmRebuild !== true || !pkg.build?.asarUnpack?.some(item => item === 'node_modules/**/*')) {
-  throw new Error('The bundled Harness runtime requires Electron ABI rebuild and a physical node_modules tree for Windows profile links.')
+if (pkg.build?.npmRebuild !== true || !pkg.build?.asarUnpack?.some(item => item === 'node_modules/**/*.node')) {
+  throw new Error('The bundled Harness runtime requires Electron ABI rebuild while keeping only native modules outside app.asar.')
 }
 for (const excluded of ['!node_modules/**/*.map', '!node_modules/**/*.{ts,tsx,cts,mts}', '!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*']) {
   if (!pkg.build?.files?.includes(excluded)) throw new Error(`Non-runtime package files must be pruned from the installer: ${excluded}`)
@@ -211,13 +218,13 @@ const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
 for (const trayContract of ['createDesktopTray', 'ensureDesktopTray', "mainWindow.on('close'", 'event.preventDefault()', 'mainWindow.hide()', 'isQuitting = true']) {
   if (!main.includes(trayContract)) throw new Error(`Desktop tray lifecycle contract missing: ${trayContract}`)
 }
-for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'shell:openExternal']) {
+for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'shell:openExternal', 'shell:openLocal']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }
 for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'terminal:start', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {
   if (main.includes(removedChannel)) throw new Error(`Duplicate native workbench IPC must not return: ${removedChannel}`)
 }
-for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview']) {
+for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview', "guest.on('context-menu'", 'showGuestContextMenu', 'normalizeLocalTarget']) {
   if (!main.includes(contract)) throw new Error(`Electron security contract missing: ${contract}`)
 }
 for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase: 'ready'", 'launchReadyAppUpdate', 'openWindowsInstaller', 'shell.openPath', 'ensurePluginMarketplace']) {
@@ -232,7 +239,7 @@ if (!(await readFile(path.join(root, 'electron/bridge/dsh-resolver.cjs'), 'utf8'
 }
 
 const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')
-for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker']) {
+for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledMarkdownRenderer', 'patchInstalledConversation', 'desktopLocalHref', 'owner.openFile(target)']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Project-scoped New Session patch is missing: ${contract}`)
 }
 for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "'web', '--port', '0'"]) {
@@ -243,7 +250,7 @@ if (pkg.scripts?.postinstall !== 'node scripts/patch-official-runtime.mjs && ele
 }
 
 const preload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
-for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'launchReadyUpdate', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openExternal', 'onUpdateResult', 'onUpdateInstallProgress']) {
+for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'launchReadyUpdate', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openExternal', 'openLocal', 'onUpdateResult', 'onUpdateInstallProgress']) {
   if (!preload.includes(api)) throw new Error(`preload API missing: ${api}`)
 }
 for (const removedApi of ['getProviderSettings', 'runDiagnostics', 'listSessions', 'listWorkspaceDirectory', 'startTerminal']) {

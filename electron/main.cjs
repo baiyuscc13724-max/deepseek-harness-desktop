@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, screen, session, shell, Tray } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, screen, session, shell, Tray } = require('electron')
 const { spawn } = require('node:child_process')
 const { createHash } = require('node:crypto')
 const { existsSync } = require('node:fs')
@@ -7,6 +7,7 @@ const http = require('node:http')
 const path = require('node:path')
 
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
+const { ensureRuntimeNodeModules } = require('./bridge/runtime-bundle-service.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
@@ -14,6 +15,7 @@ const { resolveDesktopDshHome } = require('./bridge/dsh-home.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
 const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
 const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
+const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
 const { createDesktopTray } = require('./desktop-tray.cjs')
 const { distributionInfo, isStoreDistribution } = require('./distribution.cjs')
@@ -45,6 +47,8 @@ let petWindowController = null
 let petTickTimer = null
 let desktopTray = null
 let isQuitting = false
+let runtimeNodeModulesRoot = null
+let runtimeInitializationPromise = null
 
 const BUNDLED_THEME_ASSETS = Object.freeze([
   'maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -80,6 +84,20 @@ function desktopDshHome() {
     home: app.getPath('home'),
     userData: app.getPath('userData')
   })
+}
+
+function bundledNodeModulesRoot() {
+  return runtimeNodeModulesRoot || path.join(__dirname, '..', 'node_modules')
+}
+
+async function ensureBundledRuntime() {
+  if (runtimeNodeModulesRoot) return runtimeNodeModulesRoot
+  runtimeNodeModulesRoot = await ensureRuntimeNodeModules({
+    appRoot: path.join(__dirname, '..'),
+    userData: app.getPath('userData'),
+    appVersion: app.getVersion()
+  })
+  return runtimeNodeModulesRoot
 }
 
 function petPayload(domainState = petDomain?.getState()) {
@@ -281,7 +299,15 @@ async function startRuntime({ cwd } = {}) {
   // Keep reuse as an explicit developer escape hatch only.
   if (process.env.HARNESS_DESKTOP_REUSE_RUNTIME === '1' && await connectExistingRuntime()) return runtimeState
 
-  const resolved = resolveDshBin()
+  if (runtimeInitializationPromise) {
+    setRuntimeState({ status: 'starting', url: null, detail: '正在准备本地 Harness 运行环境…' })
+    try { await runtimeInitializationPromise }
+    catch (error) {
+      setRuntimeState({ status: 'error', url: null, detail: `本地运行环境准备失败：${error.message}` })
+      return runtimeState
+    }
+  } else await ensureBundledRuntime()
+  const resolved = resolveDshBin({ nodeModulesRoot: bundledNodeModulesRoot() })
   let systemProxyRules = ''
   if (!hasExplicitProxy(process.env)) {
     systemProxyRules = await session.defaultSession.resolveProxy('https://chatgpt.com').catch(() => '')
@@ -374,7 +400,7 @@ function stopRuntime() {
 
 async function checkUpdates() {
   const store = ensureStateStore()
-  const resolved = resolveDshBin()
+  const resolved = resolveDshBin({ nodeModulesRoot: runtimeNodeModulesRoot || undefined })
   const currentHarnessVersion = resolved.version && !['unresolved', 'external'].includes(resolved.version)
     ? resolved.version
     : desktopPackage.dependencies?.['@deepseek-ai/dsh'] || 'unknown'
@@ -415,14 +441,14 @@ function safeUpdateUrl(value) {
 function modelRoutingOptions() {
   return {
     dshHome: desktopDshHome(),
-    shippedPresetRoot: path.join(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh', 'config', 'agent-presets')
+    shippedPresetRoot: path.join(bundledNodeModulesRoot(), '@deepseek-ai', 'dsh', 'config', 'agent-presets')
   }
 }
 
 function pluginMarketplaceOptions() {
   return {
     dshHome: desktopDshHome(),
-    bundledRoot: path.join(__dirname, '..', 'node_modules', 'dsh-plugin-marketplace')
+    bundledRoot: path.join(bundledNodeModulesRoot(), 'dsh-plugin-marketplace')
   }
 }
 
@@ -557,11 +583,12 @@ function selfTestOutputPath() {
 }
 
 async function runSelfTestMode() {
+  await ensureBundledRuntime()
   const report = await runPackagedSelfTest({
     appVersion: app.getVersion(),
     userData: app.getPath('userData'),
     rendererEntry: path.join(__dirname, '..', 'renderer', 'index.html'),
-    resolveDshBin,
+    resolveDshBin: () => resolveDshBin({ nodeModulesRoot: bundledNodeModulesRoot() }),
     ensurePluginMarketplace,
     marketplaceBundledRoot: pluginMarketplaceOptions().bundledRoot
   })
@@ -572,10 +599,94 @@ async function runSelfTestMode() {
   return report
 }
 
+function openDesktopLocalTarget(value, reveal = false) {
+  return openLocalTarget(value, {
+    reveal,
+    statImpl: stat,
+    openPath: target => shell.openPath(target),
+    showItemInFolder: target => shell.showItemInFolder(target)
+  })
+}
+
+function externalWebUrl(value) {
+  try {
+    const target = new URL(value)
+    return ['http:', 'https:'].includes(target.protocol) ? target.toString() : ''
+  } catch {
+    return ''
+  }
+}
+
+async function guestLocalTargetAtPoint(guest, params) {
+  if (/^harness-desktop:\/\/open-local(?:[/?#]|$)/i.test(params.linkURL || '')) return params.linkURL
+  const x = Number.isFinite(params.x) ? params.x : 0
+  const y = Number.isFinite(params.y) ? params.y : 0
+  return guest.executeJavaScript(`(() => {
+    const element = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
+    return element?.closest?.('[data-hd-local-target]')?.dataset?.hdLocalTarget || '';
+  })()`, true).catch(() => '')
+}
+
+async function showGuestContextMenu(guest, params) {
+  const template = []
+  const localValue = await guestLocalTargetAtPoint(guest, params)
+  let local = null
+  if (localValue) local = (() => {
+    try { return normalizeLocalTarget(localValue) } catch { return null }
+  })()
+  const external = externalWebUrl(params.linkURL)
+
+  if (local) {
+    template.push(
+      { label: '打开文件或项目', click: () => openDesktopLocalTarget(localValue).catch(() => {}) },
+      { label: '在文件夹中显示', click: () => openDesktopLocalTarget(localValue, true).catch(() => {}) },
+      { label: '复制本机路径', click: () => clipboard.writeText(local.path) },
+      { type: 'separator' }
+    )
+  } else if (external) {
+    template.push(
+      { label: '打开链接', click: () => shell.openExternal(external).catch(() => {}) },
+      { label: '复制链接', click: () => clipboard.writeText(external) },
+      { type: 'separator' }
+    )
+  }
+
+  if (params.isEditable) {
+    template.push(
+      { label: '撤销', role: 'undo', enabled: Boolean(params.editFlags?.canUndo) },
+      { label: '重做', role: 'redo', enabled: Boolean(params.editFlags?.canRedo) },
+      { type: 'separator' },
+      { label: '剪切', role: 'cut', enabled: Boolean(params.editFlags?.canCut) },
+      { label: '复制', role: 'copy', enabled: Boolean(params.editFlags?.canCopy) },
+      { label: '粘贴', role: 'paste', enabled: Boolean(params.editFlags?.canPaste) },
+      { label: '全选', role: 'selectAll', enabled: Boolean(params.editFlags?.canSelectAll) }
+    )
+  } else {
+    template.push(
+      { label: '复制', role: 'copy', enabled: Boolean(params.selectionText) },
+      { label: '全选', role: 'selectAll' }
+    )
+  }
+
+  while (template[0]?.type === 'separator') template.shift()
+  while (template.at(-1)?.type === 'separator') template.pop()
+  if (template.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
+    Menu.buildFromTemplate(template).popup({ window: mainWindow })
+  }
+}
+
 function secureGuest(guest) {
-  guest.setWindowOpenHandler(() => ({ action: 'deny' }))
+  guest.setWindowOpenHandler(details => {
+    const external = externalWebUrl(details.url)
+    if (external) shell.openExternal(external).catch(() => {})
+    else if (/^harness-desktop:\/\/open-local(?:[/?#]|$)/i.test(details.url || '')) openDesktopLocalTarget(details.url).catch(() => {})
+    return { action: 'deny' }
+  })
   guest.on('will-navigate', (event, targetUrl) => {
     if (!isLocalRuntimeUrl(targetUrl)) event.preventDefault()
+  })
+  guest.on('context-menu', (_event, params) => {
+    showGuestContextMenu(guest, params).catch(() => {})
   })
 }
 
@@ -708,6 +819,7 @@ ipcMain.handle('shell:openExternal', async (_event, value) => {
   if (!['https:', 'http:'].includes(target.protocol)) throw new Error('只允许打开 http/https 链接。')
   return shell.openExternal(target.toString())
 })
+ipcMain.handle('shell:openLocal', (_event, value, options = {}) => openDesktopLocalTarget(value, Boolean(options.reveal)))
 
 if (HAS_SINGLE_INSTANCE_LOCK && !SELF_TEST_MODE) {
   app.on('second-instance', () => {
@@ -725,17 +837,21 @@ app.whenReady().then(async () => {
     app.exit(report.ok ? 0 : 1)
     return
   }
-  await ensureModelRouting(modelRoutingOptions()).catch(error => {
-    console.warn(`Unable to restore desktop model routing: ${error.message}`)
-  })
-  await ensurePluginMarketplace(pluginMarketplaceOptions()).then(result => {
-    if (result.warning) console.warn(result.warning)
-  }).catch(error => {
-    console.warn(`Unable to prepare DSH plugin marketplace: ${error.message}`)
-  })
+  runtimeInitializationPromise = (async () => {
+    await ensureBundledRuntime()
+    await ensureModelRouting(modelRoutingOptions()).catch(error => {
+      console.warn(`Unable to restore desktop model routing: ${error.message}`)
+    })
+    await ensurePluginMarketplace(pluginMarketplaceOptions()).then(result => {
+      if (result.warning) console.warn(result.warning)
+    }).catch(error => {
+      console.warn(`Unable to prepare DSH plugin marketplace: ${error.message}`)
+    })
+  })()
   if (!STORE_BUILD) ensurePetSystem()
   ensureDesktopTray()
   createWindow()
+  runtimeInitializationPromise.catch(error => console.warn(`Unable to prepare bundled Harness runtime: ${error.message}`))
   app.on('activate', () => {
     showMainWindow()
   })
