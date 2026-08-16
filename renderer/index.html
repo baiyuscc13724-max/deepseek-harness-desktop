@@ -87,6 +87,19 @@
         <p id="updateLaunchError" class="update-launch-error" role="alert"></p>
       </div>
     </section>
+    <section id="updateNoticeOverlay" class="update-notice-overlay hidden" aria-hidden="true">
+      <div class="update-notice-dialog" role="dialog" aria-modal="true" aria-labelledby="updateNoticeTitle" aria-describedby="updateNoticeSummary">
+        <div class="update-notice-badge">发现新版本</div>
+        <h2 id="updateNoticeTitle">Harness Desktop 有新版本</h2>
+        <p id="updateNoticeSummary">本次更新内容如下：</p>
+        <ul id="updateNoticeNotes" class="update-notice-notes"></ul>
+        <div class="update-notice-actions">
+          <button id="updateNoticeLater" type="button">稍后提醒</button>
+          <button id="updateNoticeRelease" type="button">查看发布页</button>
+          <button id="updateNoticeInstall" class="primary" type="button">立即更新</button>
+        </div>
+      </div>
+    </section>
   </main>
   <script src="./theme-catalog.js"></script>
   <script src="./theme-integration.js"></script>

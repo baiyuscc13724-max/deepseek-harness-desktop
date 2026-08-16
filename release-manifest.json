@@ -1,24 +1,25 @@
 [
   {
-    "tag_name": "v1.0.11",
-    "name": "Harness Desktop 1.0.11",
-    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.11",
+    "tag_name": "v1.0.12",
+    "name": "Harness Desktop 1.0.12",
+    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.12",
     "prerelease": false,
     "draft": false,
+    "body": "- 子代理窗口改为自适应宽版布局，长任务信息不再拥挤。\n- 运行中的子代理新增动态状态标识。\n- 发现新版本时主动提示，并直接展示本次更新内容。\n- DSH 插件市场与通用 Skills 的英文简介自动生成中文摘要，同时保留英文原文。",
     "assets": [
       {
-        "name": "Harness-Desktop-1.0.11-win-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.11/Harness-Desktop-1.0.11-win-x64.exe",
-        "size": 154445032
+        "name": "Harness-Desktop-1.0.12-win-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.12/Harness-Desktop-1.0.12-win-x64.exe",
+        "size": 154452124
       },
       {
-        "name": "Harness-Desktop-1.0.11-portable-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.11/Harness-Desktop-1.0.11-portable-x64.exe",
-        "size": 148398693
+        "name": "Harness-Desktop-1.0.12-portable-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.12/Harness-Desktop-1.0.12-portable-x64.exe",
+        "size": 148402689
       },
       {
         "name": "SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.11/SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.12/SHA256SUMS.txt",
         "size": 207
       }
     ]

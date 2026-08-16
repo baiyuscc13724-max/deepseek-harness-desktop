@@ -32,6 +32,13 @@ const updateReadyDetail = document.querySelector('#updateReadyDetail')
 const updateLaterButton = document.querySelector('#updateLaterButton')
 const updateNowButton = document.querySelector('#updateNowButton')
 const updateLaunchError = document.querySelector('#updateLaunchError')
+const updateNoticeOverlay = document.querySelector('#updateNoticeOverlay')
+const updateNoticeTitle = document.querySelector('#updateNoticeTitle')
+const updateNoticeSummary = document.querySelector('#updateNoticeSummary')
+const updateNoticeNotes = document.querySelector('#updateNoticeNotes')
+const updateNoticeLater = document.querySelector('#updateNoticeLater')
+const updateNoticeRelease = document.querySelector('#updateNoticeRelease')
+const updateNoticeInstall = document.querySelector('#updateNoticeInstall')
 
 let updateState = {
   checking: false,
@@ -63,6 +70,7 @@ let startupLastFrameAt = 0
 let startupFinishStartedAt = 0
 let startupFinishStartProgress = 0
 let startupReducedMotion = false
+let updateNoticeShownVersion = null
 const themeIntegration = window.harnessThemeIntegration
 const modelRoutingIntegration = window.harnessModelRoutingIntegration
 
@@ -287,6 +295,43 @@ function closeUpdateReady() {
   updateReadyOverlay.setAttribute('aria-hidden', 'true')
 }
 
+function normalizedReleaseNotes(value) {
+  const lines = String(value || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map(line => line.trim().replace(/^[-*+]\s+/, '').replace(/^#{1,6}\s+/, ''))
+    .filter(line => line && !/^Full Changelog:/i.test(line) && !/^https?:\/\//i.test(line))
+    .slice(0, 6)
+  return lines.length ? lines : ['修复已知问题并改善桌面端使用体验。', '完整改动可以在发布页面查看。']
+}
+
+function closeUpdateNotice() {
+  if (updateNoticeInstall.disabled) return
+  updateNoticeOverlay.classList.add('hidden')
+  updateNoticeOverlay.setAttribute('aria-hidden', 'true')
+}
+
+function showUpdateNotice(result, { force = false } = {}) {
+  if (!result?.updateAvailable || !result.latestVersion) return
+  if (!force && updateNoticeShownVersion === result.latestVersion) return
+  updateNoticeShownVersion = result.latestVersion
+  applyShellTheme()
+  updateNoticeTitle.textContent = `Harness Desktop ${result.latestVersion} 可以更新了`
+  updateNoticeSummary.textContent = `当前版本 ${result.currentVersion || '未知'}，这次主要更新：`
+  updateNoticeNotes.replaceChildren(...normalizedReleaseNotes(result.notes).map(note => {
+    const item = document.createElement('li')
+    item.textContent = note
+    return item
+  }))
+  updateNoticeRelease.hidden = !result.url
+  updateNoticeRelease.dataset.url = result.url || ''
+  updateNoticeInstall.disabled = false
+  updateNoticeInstall.textContent = '立即更新'
+  updateNoticeOverlay.classList.remove('hidden')
+  updateNoticeOverlay.setAttribute('aria-hidden', 'false')
+  updateNoticeInstall.focus()
+}
+
 function renderRuntimeState(state) {
   if (state?.status === 'ready' && state.url) {
     startupRuntimeReady = true
@@ -320,6 +365,9 @@ function officialSettingsBootstrap() {
     #harness-desktop-update-row .hd-update-lines { display:grid; gap:6px; margin-top:12px; }
     #harness-desktop-update-row .hd-update-line { display:flex; justify-content:space-between; gap:12px; color:var(--dsw-alias-label-secondary); font-size:12px; }
     #harness-desktop-update-row .hd-update-line strong { color:var(--dsw-alias-label-primary); font-weight:400; text-align:right; }
+    #harness-desktop-update-row .hd-update-notes { margin-top:12px; border:1px solid var(--dsw-alias-border-l2); border-radius:10px; padding:10px 12px; color:var(--dsw-alias-label-secondary); background:var(--dsw-alias-bg-layer-2); font-size:12px; line-height:1.55; }
+    #harness-desktop-update-row .hd-update-notes strong { display:block; margin-bottom:5px; color:var(--dsw-alias-label-primary); font-weight:600; }
+    #harness-desktop-update-row .hd-update-notes ul { display:grid; gap:4px; margin:0; padding-left:18px; }
     #harness-desktop-update-row .hd-update-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:12px; }
     #harness-desktop-update-row .hd-policy-links { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:12px; }
     #harness-desktop-update-row .hd-policy-links a { min-height:auto; padding:0; border-radius:0; color:var(--dsw-alias-label-secondary); background:transparent; text-decoration:underline; }
@@ -337,6 +385,14 @@ function officialSettingsBootstrap() {
     const current = result.currentVersion || '未知'
     const latest = result.latestVersion || current
     return result.updateAvailable ? `${current} → ${latest}（有新版）` : `${current}（已是最新）`
+  }
+
+  const noteLines = value => {
+    const lines = String(value || '').replace(/\r/g, '').split('\n')
+      .map(line => line.trim().replace(/^[-*+]\s+/, '').replace(/^#{1,6}\s+/, ''))
+      .filter(line => line && !/^Full Changelog:/i.test(line) && !/^https?:\/\//i.test(line))
+      .slice(0, 6)
+    return lines.length ? lines : ['本次更新包含体验优化与问题修复，完整内容可查看发布页。']
   }
 
   const setText = (element, value) => {
@@ -381,6 +437,22 @@ function officialSettingsBootstrap() {
     setText(row.querySelector('[data-hd-status]'), status)
     setText(row.querySelector('[data-hd-app]'), versionText(state.app))
     setText(row.querySelector('[data-hd-harness]'), versionText(state.harness))
+    const notesBox = row.querySelector('[data-hd-notes]')
+    const shouldShowNotes = Boolean(state.app?.updateAvailable)
+    notesBox.hidden = !shouldShowNotes
+    if (shouldShowNotes) {
+      const signature = `${state.app.latestVersion || ''}:${state.app.notes || ''}`
+      if (notesBox.dataset.signature !== signature) {
+        notesBox.dataset.signature = signature
+        notesBox.querySelector('strong').textContent = `${state.app.latestVersion || '新版本'} 更新内容`
+        const list = notesBox.querySelector('ul')
+        list.replaceChildren(...noteLines(state.app.notes).map(note => {
+          const item = document.createElement('li')
+          item.textContent = note
+          return item
+        }))
+      }
+    }
     const checkButton = row.querySelector('[data-hd-check]')
     const installButton = row.querySelector('[data-hd-install]')
     const autoCheck = row.querySelector('[data-hd-auto]')
@@ -440,6 +512,7 @@ function officialSettingsBootstrap() {
         <div class="hd-update-line"><span>Harness Desktop</span><strong data-hd-app>等待首次检查</strong></div>
         <div class="hd-update-line"><span>DeepSeek Harness 官方核心</span><strong data-hd-harness>等待首次检查</strong></div>
       </div>
+      <div class="hd-update-notes" data-hd-notes hidden><strong>新版本更新内容</strong><ul></ul></div>
       <div class="hd-update-actions">
         <button type="button" data-hd-check>立即检查</button>
         <button type="button" data-hd-install hidden>下载并安装桌面版更新</button>
@@ -484,6 +557,123 @@ function officialSettingsBootstrap() {
   mount()
 }
 
+function officialSubagentEnhancementsBootstrap() {
+  if (window.__HARNESS_DESKTOP_SUBAGENT_ENHANCEMENTS__) return
+  window.__HARNESS_DESKTOP_SUBAGENT_ENHANCEMENTS__ = true
+
+  const style = document.createElement('style')
+  style.dataset.harnessDesktop = 'subagent-enhancements'
+  style.textContent = `
+    .hd-subagent-panel { box-sizing:border-box!important; width:min(680px,calc(100vw - 32px))!important; min-width:min(680px,calc(100vw - 32px))!important; max-width:calc(100vw - 32px)!important; max-height:min(78vh,820px)!important; overflow:auto!important; }
+    .hd-subagent-panel [data-hd-subagent-row] { position:relative!important; box-sizing:border-box!important; min-height:52px!important; padding-left:38px!important; }
+    .hd-subagent-running-indicator { position:absolute; left:12px; top:50%; display:flex; align-items:center; gap:2px; width:16px; height:18px; transform:translateY(-50%); pointer-events:none; }
+    .hd-subagent-running-indicator i { display:block; width:3px; height:9px; border-radius:2px; background:var(--dsw-alias-brand-primary,#6f8cff); animation:hd-subagent-running 1s ease-in-out infinite; }
+    .hd-subagent-running-indicator i:nth-child(2) { animation-delay:.14s; }
+    .hd-subagent-running-indicator i:nth-child(3) { animation-delay:.28s; }
+    @keyframes hd-subagent-running { 0%,100%{height:5px;opacity:.42} 50%{height:15px;opacity:1} }
+    @media (prefers-reduced-motion:reduce) { .hd-subagent-running-indicator i { animation:none; height:9px; opacity:.85; } }
+  `
+  document.head.appendChild(style)
+
+  const visible = element => {
+    if (!(element instanceof HTMLElement)) return false
+    const rect = element.getBoundingClientRect()
+    const computed = getComputedStyle(element)
+    return rect.width > 0 && rect.height > 0 && computed.display !== 'none' && computed.visibility !== 'hidden'
+  }
+
+  const isGreen = value => {
+    const match = String(value || '').match(/rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)/i)
+    if (!match) return false
+    const [, red, green, blue] = match.map(Number)
+    return green >= 100 && green > red * 1.25 && green > blue * 1.08
+  }
+
+  const hasRunningSignal = row => {
+    if (/运行中|正在|working|running|executing/i.test(row.textContent || '')) return true
+    return [...row.querySelectorAll('*')].some(element => {
+      const rect = element.getBoundingClientRect()
+      if (rect.width < 2 || rect.width > 18 || rect.height < 2 || rect.height > 18) return false
+      const computed = getComputedStyle(element)
+      return isGreen(computed.backgroundColor) || isGreen(computed.color) || isGreen(computed.fill)
+    })
+  }
+
+  const rowForToken = (node, panel) => {
+    let row = node.closest('button,[role="menuitem"],[role="option"],li')
+    if (row && panel.contains(row)) return row
+    row = node.parentElement
+    while (row && row !== panel) {
+      const rect = row.getBoundingClientRect()
+      if (rect.width >= 220 && rect.height >= 34 && rect.height <= 110) return row
+      row = row.parentElement
+    }
+    return null
+  }
+
+  const markPanel = panel => {
+    if (!visible(panel)) return
+    const tokenNodes = [...panel.querySelectorAll('*')].filter(element => {
+      if (element.children.length) return false
+      return /\b\d+(?:\.\d+)?\s*[KMG]?\s*tok\b/i.test(element.textContent || '')
+    })
+    if (!tokenNodes.length) return
+    panel.classList.add('hd-subagent-panel')
+    if (panel.parentElement?.matches('[data-radix-popper-content-wrapper]')) {
+      panel.parentElement.style.setProperty('max-width', 'calc(100vw - 16px)')
+    }
+    const rows = new Set(tokenNodes.map(node => rowForToken(node, panel)).filter(Boolean))
+    rows.forEach(row => {
+      row.dataset.hdSubagentRow = 'true'
+      const marker = row.querySelector(':scope > .hd-subagent-running-indicator')
+      if (!hasRunningSignal(row)) {
+        marker?.remove()
+        return
+      }
+      if (marker) return
+      const indicator = document.createElement('span')
+      indicator.className = 'hd-subagent-running-indicator'
+      indicator.setAttribute('aria-label', '正在运行')
+      indicator.innerHTML = '<i></i><i></i><i></i>'
+      row.prepend(indicator)
+    })
+  }
+
+  const scan = () => {
+    document.querySelectorAll('button').forEach(button => {
+      if (!/\d+\s*个子代理|\d+\s*subagents?/i.test(button.textContent || '')) return
+      button.dataset.hdSubagentTrigger = 'true'
+      if (button.dataset.hdSubagentBound) return
+      button.dataset.hdSubagentBound = 'true'
+      button.addEventListener('click', () => [0, 60, 180].forEach(delay => setTimeout(scan, delay)))
+    })
+
+    const candidates = [...document.querySelectorAll('[role="menu"],[role="listbox"],[role="dialog"],[data-radix-popper-content-wrapper] > *,body > div')]
+      .filter(visible)
+      .filter(element => {
+        const rect = element.getBoundingClientRect()
+        if (rect.width > innerWidth * .94 && rect.height > innerHeight * .9) return false
+        const text = element.textContent || ''
+        return (text.match(/\btok\b/gi) || []).length >= 1
+      })
+      .sort((left, right) => {
+        const a = left.getBoundingClientRect()
+        const b = right.getBoundingClientRect()
+        return a.width * a.height - b.width * b.height
+      })
+    if (candidates[0]) markPanel(candidates[0])
+  }
+
+  let timer = null
+  const schedule = () => {
+    clearTimeout(timer)
+    timer = setTimeout(scan, 70)
+  }
+  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true, characterData: true })
+  addEventListener('resize', schedule)
+  scan()
+}
+
 async function publishUpdateState() {
   if (!runtimeView.getURL()) return
   const serialized = JSON.stringify(updateState).replaceAll('<', '\\u003c')
@@ -499,12 +689,13 @@ async function publishModelRoutingState() {
   await modelRoutingIntegration.publish(runtimeView, modelRoutingState).catch(() => {})
 }
 
-async function checkUpdates() {
+async function checkUpdates({ forceNotice = false } = {}) {
   updateState = { ...updateState, checking: true }
   await publishUpdateState()
   try {
     const result = await api.checkUpdates()
     updateState = { ...updateState, ...result, checking: false }
+    showUpdateNotice(result.app, { force: forceNotice })
   } catch (error) {
     updateState = { ...updateState, checking: false, app: { error: error.message }, harness: updateState.harness }
   }
@@ -529,6 +720,7 @@ async function installUpdate() {
 
 runtimeView.addEventListener('dom-ready', async () => {
   await runtimeView.executeJavaScript(`(${officialSettingsBootstrap.toString()})()`, true).catch(() => {})
+  await runtimeView.executeJavaScript(`(${officialSubagentEnhancementsBootstrap.toString()})()`, true).catch(() => {})
   await themeIntegration.install(runtimeView).catch(() => {})
   await modelRoutingIntegration.install(runtimeView).catch(() => {})
   await publishUpdateState()
@@ -543,7 +735,7 @@ runtimeView.addEventListener('will-navigate', event => {
   if (target.protocol !== 'harness-desktop:') return
   event.preventDefault()
   if (target.hostname === 'check-updates') {
-    checkUpdates()
+    checkUpdates({ forceNotice: true })
   } else if (target.hostname === 'install-update') {
     installUpdate()
   } else if (target.hostname === 'auto-check') {
@@ -640,6 +832,19 @@ updateLaterButton.addEventListener('click', closeUpdateReady)
 updateReadyOverlay.addEventListener('click', event => {
   if (event.target === updateReadyOverlay) closeUpdateReady()
 })
+updateNoticeLater.addEventListener('click', closeUpdateNotice)
+updateNoticeRelease.addEventListener('click', () => {
+  const url = updateNoticeRelease.dataset.url
+  if (url) api.openExternal(url).catch(() => {})
+})
+updateNoticeInstall.addEventListener('click', () => {
+  updateNoticeOverlay.classList.add('hidden')
+  updateNoticeOverlay.setAttribute('aria-hidden', 'true')
+  installUpdate()
+})
+updateNoticeOverlay.addEventListener('click', event => {
+  if (event.target === updateNoticeOverlay) closeUpdateNotice()
+})
 updateNowButton.addEventListener('click', async () => {
   updateNowButton.disabled = true
   updateNowButton.textContent = '正在退出…'
@@ -658,6 +863,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !petPanel.classList.contains('hidden')) closePetPanel()
   if (event.key === 'Escape' && !skinPickerOverlay.classList.contains('hidden')) closeSkinPicker()
   if (event.key === 'Escape' && !updateReadyOverlay.classList.contains('hidden')) closeUpdateReady()
+  if (event.key === 'Escape' && !updateNoticeOverlay.classList.contains('hidden')) closeUpdateNotice()
 })
 restoreOfficialThemeButton.addEventListener('click', async () => {
   appearanceState = await api.setTheme('official')
@@ -685,6 +891,7 @@ api.onPetState(renderPetState)
 api.onUpdateResult(result => {
   updateState = { ...updateState, ...result, checking: false }
   publishUpdateState()
+  showUpdateNotice(result.app)
 })
 api.onUpdateInstallProgress(progress => {
   updateState = { ...updateState, installing: progress?.phase !== 'ready', installError: '', installProgress: progress }

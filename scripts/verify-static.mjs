@@ -61,7 +61,11 @@ if (!html.includes('id="skinQuickButton"') || !html.includes('id="skinPickerOver
 for (const id of ['updateReadyOverlay', 'updateReadyDetail', 'updateLaterButton', 'updateNowButton', 'updateLaunchError']) {
   if (!html.includes(`id="${id}"`)) throw new Error(`In-app update confirmation is missing: ${id}`)
 }
+for (const id of ['updateNoticeOverlay', 'updateNoticeTitle', 'updateNoticeNotes', 'updateNoticeLater', 'updateNoticeRelease', 'updateNoticeInstall']) {
+  if (!html.includes(`id="${id}"`)) throw new Error(`Proactive update notification is missing: ${id}`)
+}
 if (!rendererStyles.includes('.update-ready-dialog')) throw new Error('In-app update confirmation must inherit the active desktop theme.')
+if (!rendererStyles.includes('.update-notice-dialog')) throw new Error('Update release notes notification must inherit the active desktop theme.')
 
 const rendererScript = await readFile(path.join(root, 'renderer/app.js'), 'utf8')
 if (!rendererScript.includes('api.startRuntime({})')) throw new Error('Official Harness Web UI must start automatically.')
@@ -77,6 +81,9 @@ if (!rendererScript.includes("request('install-update')") || !rendererScript.inc
 }
 if (!rendererScript.includes('showUpdateReady(result.version)') || !rendererScript.includes('api.launchReadyUpdate()')) {
   throw new Error('A verified update must use the in-app confirmation before opening the visible installer wizard.')
+}
+for (const contract of ['showUpdateNotice(result.app', 'normalizedReleaseNotes', 'data-hd-notes', '更新内容', 'officialSubagentEnhancementsBootstrap', 'hd-subagent-panel', 'hd-subagent-running-indicator']) {
+  if (!rendererScript.includes(contract)) throw new Error(`Desktop enhancement contract is missing: ${contract}`)
 }
 if (!rendererScript.includes('api.openHarnessSettings()') || !rendererScript.includes('api.chooseThemeBackground()') || !rendererScript.includes('themeIntegration.prepareCatalog')) {
   throw new Error('Official settings must integrate desktop file opening, theme selection, and local custom backgrounds.')
@@ -143,7 +150,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.11') throw new Error(`Expected package version 1.0.11, received ${pkg.version}`)
+if (pkg.version !== '1.0.12') throw new Error(`Expected package version 1.0.12, received ${pkg.version}`)
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 for (const dependency of [
@@ -165,6 +172,10 @@ const marketplacePackage = JSON.parse(await readFile(path.join(root, 'node_modul
 const marketplaceRuntime = await readFile(path.join(root, 'node_modules/dsh-plugin-marketplace/lib/index.js'), 'utf8')
 if (marketplacePackage.version !== '1.2.2' || !marketplaceRuntime.includes('process.env.ComSpec') || !marketplaceRuntime.includes('"npm.cmd", ...args')) {
   throw new Error('The bundled marketplace must include the verified Electron/Node 24 Windows npm launcher.')
+}
+const marketplaceService = await readFile(path.join(root, 'electron/bridge/plugin-marketplace-service.cjs'), 'utf8')
+for (const contract of ['HARNESS_DESKTOP_AUTO_ZH_SUMMARY_V1', 'automaticChineseDescription', '查看英文原文', 'translationReady']) {
+  if (!marketplaceService.includes(contract)) throw new Error(`Managed marketplace Chinese translation overlay is missing: ${contract}`)
 }
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')

@@ -7,6 +7,7 @@ const MARKETPLACE_ID = 'plugin-marketplace'
 const MARKETPLACE_PACKAGE = 'dsh-plugin-marketplace'
 const MARKETPLACE_REPOSITORY = 'bradeGithub/DSH-Plugins-Marketplace'
 const MARKETPLACE_STATE_FILE = 'harness-desktop-marketplace.json'
+const CHINESE_OVERLAY_MARKER = 'HARNESS_DESKTOP_AUTO_ZH_SUMMARY_V1'
 
 async function readText(file, fallback = '') {
   return readFile(file, 'utf8').catch(error => {
@@ -75,6 +76,58 @@ async function replaceDirectory(source, destination) {
   await rename(temporary, destination)
 }
 
+async function ensureChineseTranslationOverlay(destination) {
+  const clientFile = path.join(destination, 'lib', 'client.js')
+  const original = await readText(clientFile)
+  if (!original) throw new Error('内置 DSH 插件市场缺少客户端入口。')
+  if (original.includes(CHINESE_OVERLAY_MARKER)) return false
+
+  const functionAnchor = '    function RepoCard(props) {'
+  const repoAnchor = '      var repo = props.repo;'
+  const descriptionAnchor = '            repo.description ? h("p", { style: s.desc }, repo.description) : null,'
+  if (!original.includes(functionAnchor) || !original.includes(repoAnchor) || !original.includes(descriptionAnchor)) {
+    throw new Error('DSH 插件市场客户端结构已变化，无法安全加入自动中文翻译。')
+  }
+
+  const translator = `    // ${CHINESE_OVERLAY_MARKER}\n` +
+`    function automaticChineseDescription(repo) {\n` +
+`      var source = String((repo && repo.description) || "").trim();\n` +
+`      if (!source) return "";\n` +
+`      if (/[\\u3400-\\u9fff]/.test(source)) return source;\n` +
+`      var haystack = (source + " " + ((repo && repo.topics) || []).join(" ")).toLowerCase();\n` +
+`      var rules = [\n` +
+`        [/pdf|document|markdown|word|docx/, "文档处理"],\n` +
+`        [/image|vision|photo|ocr|screenshot/, "图像与视觉处理"],\n` +
+`        [/video|audio|speech|voice|subtitle/, "音视频处理"],\n` +
+`        [/browser|scrap|crawl|website|web search/, "网页浏览与信息采集"],\n` +
+`        [/github|gitlab|repository|pull request|code review/, "代码仓库协作"],\n` +
+`        [/database|postgres|mysql|sqlite|sql|redis/, "数据库操作"],\n` +
+`        [/excel|spreadsheet|csv|table/, "表格处理"],\n` +
+`        [/powerpoint|presentation|slides|ppt/, "演示文稿制作"],\n` +
+`        [/search|retrieval|rag|knowledge/, "搜索与知识检索"],\n` +
+`        [/automat|workflow|schedule|task/, "自动化工作流"],\n` +
+`        [/security|audit|vulnerab|scan/, "安全检查"],\n` +
+`        [/test|debug|diagnos|monitor/, "测试与诊断"],\n` +
+`        [/design|ui|ux|figma|frontend/, "界面与设计辅助"],\n` +
+`        [/email|calendar|slack|discord|message/, "沟通与日程协作"],\n` +
+`        [/cloud|deploy|docker|kubernetes|server/, "云服务与部署"],\n` +
+`        [/finance|stock|crypto|payment/, "金融数据处理"]\n` +
+`      ];\n` +
+`      var capabilities = [];\n` +
+`      rules.forEach(function (row) { if (row[0].test(haystack) && capabilities.indexOf(row[1]) < 0) capabilities.push(row[1]); });\n` +
+`      capabilities = capabilities.slice(0, 4);\n` +
+`      var kind = /skill/.test(haystack) ? "Skill" : (/mcp/.test(haystack) ? "MCP 扩展" : (/agent/.test(haystack) ? "AI Agent 扩展" : "开源插件"));\n` +
+`      if (!capabilities.length) return "自动翻译：这是一个面向 DSH 与 AI Agent 的第三方" + kind + "，具体能力请查看项目原文。";\n` +
+`      return "自动翻译：这是一个面向 DSH 与 AI Agent 的" + kind + "，主要用于" + capabilities.join("、") + "。";\n` +
+`    }\n\n`;
+
+  let next = original.replace(functionAnchor, `${translator}${functionAnchor}`)
+  next = next.replace(repoAnchor, `${repoAnchor}\n      var translatedDescription = automaticChineseDescription(repo);`)
+  next = next.replace(descriptionAnchor, `            translatedDescription ? h("div", null,\n              h("p", { style: s.desc, title: repo.description || "" }, translatedDescription),\n              translatedDescription !== repo.description ? h("details", { style: { marginTop: 5, color: "var(--dsw-alias-label-tertiary)", fontSize: 12 } },\n                h("summary", { style: { cursor: "pointer" } }, "查看英文原文"),\n                h("p", { style: Object.assign({}, s.desc, { marginTop: 5 }) }, repo.description)\n              ) : null\n            ) : null,`)
+  await writeFile(clientFile, next, { encoding: 'utf8', mode: 0o600 })
+  return true
+}
+
 async function ensurePluginMarketplace({ dshHome, bundledRoot }) {
   const home = path.resolve(dshHome)
   // electron-builder keeps node_modules in app.asar.unpacked. Electron can
@@ -114,6 +167,10 @@ async function ensurePluginMarketplace({ dshHome, bundledRoot }) {
   const patchChanged = await ensureProfilePatch(patchFile)
   if (action !== 'conflict') {
     const currentPackage = await readJson(path.join(destination, 'package.json'))
+    const managed = state?.managed === true || action === 'installed' || action === 'updated'
+    const translationOverlayApplied = managed && compareVersions(currentPackage?.version, bundledPackage.version) <= 0
+      ? await ensureChineseTranslationOverlay(destination)
+      : false
     await mkdir(home, { recursive: true, mode: 0o700 })
     await writeFile(stateFile, `${JSON.stringify({
       schemaVersion: 1,
@@ -125,11 +182,13 @@ async function ensurePluginMarketplace({ dshHome, bundledRoot }) {
     }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   }
 
+  const installedClient = await readText(path.join(destination, 'lib', 'client.js'))
   return {
     action,
     warning,
     patchChanged,
     destination,
+    translationReady: installedClient.includes(CHINESE_OVERLAY_MARKER),
     installedVersion: (await readJson(path.join(destination, 'package.json')))?.version || null,
     bundledVersion: bundledPackage.version
   }
@@ -140,6 +199,7 @@ module.exports = {
   MARKETPLACE_PACKAGE,
   MARKETPLACE_REPOSITORY,
   compareVersions,
+  ensureChineseTranslationOverlay,
   ensurePluginMarketplace,
   ensureProfilePatch,
   repositoryIdentity

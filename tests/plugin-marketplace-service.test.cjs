@@ -14,10 +14,15 @@ test('marketplace is installed in the user DSH profile and registered once', asy
   const first = await ensurePluginMarketplace({ dshHome, bundledRoot })
   assert.equal(first.action, 'installed')
   assert.equal(first.patchChanged, true)
+  assert.equal(first.translationReady, true)
   await access(path.join(first.destination, 'lib', 'index.js'))
+  const translatedClient = await readFile(path.join(first.destination, 'lib', 'client.js'), 'utf8')
+  assert.match(translatedClient, /HARNESS_DESKTOP_AUTO_ZH_SUMMARY_V1/)
+  assert.match(translatedClient, /自动翻译/)
   const second = await ensurePluginMarketplace({ dshHome, bundledRoot })
   assert.equal(second.action, 'preserved')
   assert.equal(second.patchChanged, false)
+  assert.equal(second.translationReady, true)
   const patch = YAML.parse(await readFile(path.join(dshHome, 'profiles', 'web', 'cordis.patch.yml'), 'utf8'))
   assert.equal(patch.flatMap(row => row.insert || []).filter(row => row.id === 'plugin-marketplace').length, 1)
 })
@@ -49,6 +54,7 @@ test('a newer user-updated marketplace is never overwritten by a desktop update'
   const result = await ensurePluginMarketplace({ dshHome, bundledRoot })
   assert.equal(result.action, 'preserved')
   assert.equal(JSON.parse(await readFile(pkgFile, 'utf8')).version, '9.9.9')
+  assert.equal(result.translationReady, false)
 })
 
 test('packaged marketplace resolves from the physical app.asar.unpacked directory', async t => {
