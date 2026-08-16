@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+
+PackageIdentifier: Baiyuscc13724Max.HarnessDesktop
+PackageVersion: 1.0.16
+InstallerType: inno
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+UpgradeBehavior: install
+ProductCode: '{A116521E-7A92-4B10-9F64-315E8ED7A499}_is1'
+AppsAndFeaturesEntries:
+  - DisplayName: Harness Desktop
+    Publisher: Harness Desktop Contributors
+    DisplayVersion: 1.0.16
+    ProductCode: '{A116521E-7A92-4B10-9F64-315E8ED7A499}_is1'
+    InstallerType: inno
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/baiyuscc13724-max/deepseek-harness-desktop-releases/releases/download/v1.0.16/Harness-Desktop-1.0.16-win-x64.exe
+    InstallerSha256: AF0E7AA0E471BC100CB1774C41FB63816CEB2FB71946FB8C3BF3325C877E897D
+ManifestType: installer
+ManifestVersion: 1.12.0

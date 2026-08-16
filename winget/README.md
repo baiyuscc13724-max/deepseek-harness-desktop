@@ -2,18 +2,18 @@
 
 The ready-to-submit manifest set is under:
 
-`winget/manifests/b/Baiyuscc13724Max/HarnessDesktop/1.0.15`
+`winget/manifests/b/Baiyuscc13724Max/HarnessDesktop/1.0.16`
 
 The installer is published in the immutable binary archive:
 
 `https://github.com/baiyuscc13724-max/deepseek-harness-desktop-releases`
 
-The installer SHA-256 is taken from the locally audited `v1.0.15` release artifact. Before submission, publish those exact bytes and `SHA256SUMS.txt` to the immutable binary archive. WinGet requires the hash to match the bytes downloaded from `InstallerUrl` exactly.
+The installer SHA-256 is taken from the locally audited `v1.0.16` release artifact. Before submission, publish those exact bytes and `SHA256SUMS.txt` to the immutable binary archive. WinGet requires the hash to match the bytes downloaded from `InstallerUrl` exactly.
 
 ## Validate locally
 
 ```powershell
-winget validate .\winget\manifests\b\Baiyuscc13724Max\HarnessDesktop\1.0.15
+winget validate .\winget\manifests\b\Baiyuscc13724Max\HarnessDesktop\1.0.16
 ```
 
 ## Submit after approval
@@ -27,7 +27,7 @@ winget install --id Microsoft.WingetCreate --exact --source winget
 Then submit the version directory:
 
 ```powershell
-wingetcreate submit .\winget\manifests\b\Baiyuscc13724Max\HarnessDesktop\1.0.15
+wingetcreate submit .\winget\manifests\b\Baiyuscc13724Max\HarnessDesktop\1.0.16
 ```
 
 The submit command opens or updates a public pull request in `microsoft/winget-pkgs` and may prompt for GitHub authorization. Do not submit until the publisher approves the public metadata and package identifier.

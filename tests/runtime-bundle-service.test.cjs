@@ -26,3 +26,20 @@ test('packaged Harness runtime expands from app.asar into one versioned user cac
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('concurrent packaged starts share one runtime cache installation', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harness-runtime-concurrent-'))
+  try {
+    const appRoot = path.join(root, 'resources', 'app.asar')
+    const source = path.join(appRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib')
+    await mkdir(source, { recursive: true })
+    await writeFile(path.join(source, 'bin.js'), 'console.log("ok")')
+    const options = { appRoot, userData: path.join(root, 'user-data'), appVersion: '1.2.4' }
+
+    const destinations = await Promise.all(Array.from({ length: 8 }, () => ensureRuntimeNodeModules(options)))
+    assert.equal(new Set(destinations).size, 1)
+    assert.equal(await readFile(path.join(destinations[0], '@deepseek-ai', 'dsh', 'lib', 'bin.js'), 'utf8'), 'console.log("ok")')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

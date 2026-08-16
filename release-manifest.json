@@ -1,25 +1,25 @@
 [
   {
-    "tag_name": "v1.0.15",
-    "name": "Harness Desktop 1.0.15",
-    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.15",
+    "tag_name": "v1.0.16",
+    "name": "Harness Desktop 1.0.16",
+    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.16",
     "prerelease": false,
     "draft": false,
-    "body": "- 修复更新安装时无法识别旧安装目录、自动跳回 C 盘的问题；升级程序会把当前目录明确交给安装器，并永久记住上一次位置。\n- 安装器不再尝试关闭腾讯电脑管家等无关安全进程；应用内更新会更快退出旧桌面程序。\n- 修复 1.0.13 Windows 中文安装版提示安装文件损坏的问题，已完成本机真实安装验证。\n- 顶部和正文空白处都能拖动窗口，按钮、链接、文字和菜单自动避让。\n- 子代理入口恢复完整点击区域，并可进入官方实时会话详情页。\n- 缓存指标区分最近一步、热请求、前缀复用、累计冷启动与提供方未报告。\n- 修复桌面路由兼容预设被删除导致历史会话无法恢复，用户自建预设保持原样。\n- 官方工作区路径支持打开、复制和定位；桌宠卡片支持点击外部收起。\n- Harness 运行依赖收进应用主包，减少安装阶段需要释放的小文件。",
+    "body": "- 修复首次启动或重复启动时运行时缓存争用触发 EPERM rename，导致 Harness 启动失败的问题。\n- 同一进程只展开一次运行时；多个进程同时启动时复用先完成的缓存，并对安全软件造成的短暂占用自动重试。\n- 修复更新安装时无法识别旧安装目录、自动跳回 C 盘的问题；升级程序会把当前目录明确交给安装器，并永久记住上一次位置。\n- 安装器不再尝试关闭腾讯电脑管家等无关安全进程；应用内更新会更快退出旧桌面程序。\n- 顶部和正文空白处都能拖动窗口，按钮、链接、文字和菜单自动避让。\n- 子代理入口恢复完整点击区域，并可进入官方实时会话详情页。\n- 缓存指标区分最近一步、热请求、前缀复用、累计冷启动与提供方未报告。\n- 修复桌面路由兼容预设被删除导致历史会话无法恢复，用户自建预设保持原样。",
     "assets": [
       {
-        "name": "Harness-Desktop-1.0.15-win-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.15/Harness-Desktop-1.0.15-win-x64.exe",
-        "size": 153968582
+        "name": "Harness-Desktop-1.0.16-win-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.16/Harness-Desktop-1.0.16-win-x64.exe",
+        "size": 153970857
       },
       {
-        "name": "Harness-Desktop-1.0.15-portable-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.15/Harness-Desktop-1.0.15-portable-x64.exe",
-        "size": 147576934
+        "name": "Harness-Desktop-1.0.16-portable-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.16/Harness-Desktop-1.0.16-portable-x64.exe",
+        "size": 147576231
       },
       {
         "name": "SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.15/SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.16/SHA256SUMS.txt",
         "size": 207
       }
     ]
