@@ -2,25 +2,42 @@ const assert = require('node:assert/strict')
 const { readFileSync } = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const { beginWindowDrag, moveWindowDrag, endWindowDrag } = require('../electron/bridge/window-drag-service.cjs')
 
-test('window drag surface spans the title bar without covering desktop or native controls', () => {
-  const source = readFileSync(path.resolve(__dirname, '..', 'renderer', 'styles.css'), 'utf8')
-  const rule = source.match(/\.window-drag\s*\{([^}]*)\}/)?.[1] ?? ''
-  const petButtonRule = source.match(/\.pet-quick-button\s*\{([^}]*)\}/)?.[1] ?? ''
-  const skinButtonRule = source.match(/\.skin-quick-button\s*\{([^}]*)\}/)?.[1] ?? ''
+test('blank-area drag follows the pointer and restores a maximized window around its grab point', () => {
+  const calls = []
+  let bounds = { x: 0, y: 0, width: 1400, height: 900 }
+  let maximized = true
+  const window = {
+    isDestroyed: () => false,
+    isMaximized: () => maximized,
+    unmaximize: () => { maximized = false; bounds = { x: 500, y: 200, width: 1000, height: 700 }; calls.push(['restore']) },
+    getBounds: () => ({ ...bounds }),
+    setPosition: (x, y) => { bounds = { ...bounds, x, y }; calls.push(['move', x, y]) }
+  }
 
-  assert.match(rule, /left:\s*0(?:px)?\b/)
-  assert.match(rule, /right:\s*208px/)
-  assert.match(rule, /height:\s*36px/)
-  assert.match(rule, /(?:^|[;\s])app-region:\s*drag/)
-  assert.match(rule, /-webkit-app-region:\s*drag/)
-  assert.doesNotMatch(rule, /width:\s*24px/)
-  assert.match(petButtonRule, /right:\s*176px/)
-  assert.match(petButtonRule, /(?:^|[;\s])app-region:\s*no-drag/)
-  assert.match(petButtonRule, /-webkit-app-region:\s*no-drag/)
-  assert.match(skinButtonRule, /right:\s*140px/)
-  assert.match(skinButtonRule, /(?:^|[;\s])app-region:\s*no-drag/)
-  assert.match(skinButtonRule, /-webkit-app-region:\s*no-drag/)
+  assert.equal(beginWindowDrag(window, { x: 700, y: 180 }, 'win32'), true)
+  assert.equal(moveWindowDrag(window, { x: 820, y: 260 }), true)
+  assert.equal(endWindowDrag(window), true)
+  assert.deepEqual(calls, [['restore'], ['move', 200, 40], ['move', 320, 120]])
+  assert.equal(beginWindowDrag(window, { x: 1, y: 1 }, 'linux'), false)
+})
+
+test('blank-area window dragging dynamically excludes official controls', () => {
+  const html = readFileSync(path.resolve(__dirname, '..', 'renderer', 'index.html'), 'utf8')
+  const guestPreload = readFileSync(path.resolve(__dirname, '..', 'electron', 'guest-preload.cjs'), 'utf8')
+  const main = readFileSync(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+
+  assert.doesNotMatch(html, /window-drag|drag-region/)
+  assert.match(guestPreload, /target\.closest\(interactiveSelector\)/)
+  assert.match(guestPreload, /pointTouchesText\(event\.clientX, event\.clientY\)/)
+  assert.match(guestPreload, /ipcRenderer\.send\('window:beginDrag', \{ x: event\.screenX, y: event\.screenY \}\)/)
+  assert.match(guestPreload, /ipcRenderer\.send\('window:moveDrag'/)
+  assert.match(guestPreload, /ipcRenderer\.send\('window:endDrag'\)/)
+  assert.match(main, /webPreferences\.preload = path\.join\(__dirname, 'guest-preload\.cjs'\)/)
+  assert.match(main, /ipcMain\.on\('window:beginDrag'/)
+  assert.match(main, /beginWindowDrag\(mainWindow, point\)/)
+  assert.match(main, /moveWindowDrag\(mainWindow, point\)/)
 })
 
 test('desktop pet card closes when the user clicks outside it', () => {

@@ -566,11 +566,16 @@ function officialSubagentEnhancementsBootstrap() {
   style.dataset.harnessDesktop = 'subagent-enhancements'
   style.textContent = `
     .hd-subagent-panel { box-sizing:border-box!important; width:min(680px,calc(100vw - 32px))!important; min-width:min(680px,calc(100vw - 32px))!important; max-width:calc(100vw - 32px)!important; max-height:min(78vh,820px)!important; overflow:auto!important; }
-    .hd-subagent-panel [data-hd-subagent-row] { position:relative!important; box-sizing:border-box!important; min-height:52px!important; padding-left:38px!important; }
+    [data-hd-subagent-trigger] { position:relative!important; z-index:1!important; min-height:34px!important; cursor:pointer!important; pointer-events:auto!important; }
+    .hd-subagent-panel [data-hd-subagent-row] { position:relative!important; box-sizing:border-box!important; min-height:58px!important; padding:8px 128px 8px 38px!important; cursor:pointer!important; pointer-events:auto!important; }
+    .hd-subagent-panel [data-hd-subagent-row]:hover { background:color-mix(in srgb,var(--dsw-alias-brand-primary,#6f8cff) 10%,transparent)!important; }
+    .hd-subagent-open-detail { position:absolute; right:12px; top:50%; max-width:108px; overflow:hidden; color:var(--dsw-alias-brand-primary,#5877ef); font-size:12px; font-weight:600; white-space:nowrap; text-overflow:ellipsis; transform:translateY(-50%); pointer-events:none; }
     .hd-subagent-running-indicator { position:absolute; left:12px; top:50%; display:flex; align-items:center; gap:2px; width:16px; height:18px; transform:translateY(-50%); pointer-events:none; }
     .hd-subagent-running-indicator i { display:block; width:3px; height:9px; border-radius:2px; background:var(--dsw-alias-brand-primary,#6f8cff); animation:hd-subagent-running 1s ease-in-out infinite; }
     .hd-subagent-running-indicator i:nth-child(2) { animation-delay:.14s; }
     .hd-subagent-running-indicator i:nth-child(3) { animation-delay:.28s; }
+    .hd-subagent-detail-label { display:inline-flex; align-items:center; gap:6px; min-height:24px; margin-left:10px; padding:0 9px; border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#6f8cff) 28%,transparent); border-radius:999px; background:color-mix(in srgb,var(--dsw-alias-brand-primary,#6f8cff) 8%,transparent); color:var(--dsw-alias-brand-primary,#5877ef); font-size:12px; font-weight:600; white-space:nowrap; }
+    .hd-subagent-detail-label::before { width:7px; height:7px; border-radius:50%; background:#22b573; box-shadow:0 0 0 3px color-mix(in srgb,#22b573 16%,transparent); content:''; }
     @keyframes hd-subagent-running { 0%,100%{height:5px;opacity:.42} 50%{height:15px;opacity:1} }
     @media (prefers-reduced-motion:reduce) { .hd-subagent-running-indicator i { animation:none; height:9px; opacity:.85; } }
   `
@@ -601,7 +606,7 @@ function officialSubagentEnhancementsBootstrap() {
   }
 
   const rowForToken = (node, panel) => {
-    let row = node.closest('button,[role="menuitem"],[role="option"],li')
+    let row = node.closest('button,[role="treeitem"],[role="menuitem"],[role="option"],li')
     if (row && panel.contains(row)) return row
     row = node.parentElement
     while (row && row !== panel) {
@@ -626,6 +631,12 @@ function officialSubagentEnhancementsBootstrap() {
     const rows = new Set(tokenNodes.map(node => rowForToken(node, panel)).filter(Boolean))
     rows.forEach(row => {
       row.dataset.hdSubagentRow = 'true'
+      if (!row.querySelector(':scope > .hd-subagent-open-detail')) {
+        const affordance = document.createElement('span')
+        affordance.className = 'hd-subagent-open-detail'
+        affordance.textContent = '打开运行详情 →'
+        row.append(affordance)
+      }
       const marker = row.querySelector(':scope > .hd-subagent-running-indicator')
       if (!hasRunningSignal(row)) {
         marker?.remove()
@@ -640,10 +651,28 @@ function officialSubagentEnhancementsBootstrap() {
     })
   }
 
+  const markDetailPage = () => {
+    const hierarchy = document.querySelector('nav[aria-label="会话层级"]')
+    if (!hierarchy) return
+    const buttons = hierarchy.querySelectorAll('button')
+    const existing = hierarchy.parentElement?.querySelector(':scope > .hd-subagent-detail-label')
+    if (buttons.length < 2) {
+      existing?.remove()
+      return
+    }
+    if (existing) return
+    const label = document.createElement('span')
+    label.className = 'hd-subagent-detail-label'
+    label.textContent = '子代理详情 · 实时会话'
+    label.title = '这里显示子代理正在执行的完整过程；点击左侧上级会话可返回。'
+    hierarchy.insertAdjacentElement('afterend', label)
+  }
+
   const scan = () => {
     document.querySelectorAll('button').forEach(button => {
       if (!/\d+\s*个子代理|\d+\s*subagents?/i.test(button.textContent || '')) return
       button.dataset.hdSubagentTrigger = 'true'
+      button.title = '查看子代理运行详情'
       if (button.dataset.hdSubagentBound) return
       button.dataset.hdSubagentBound = 'true'
       button.addEventListener('click', () => [0, 60, 180].forEach(delay => setTimeout(scan, delay)))
@@ -663,6 +692,7 @@ function officialSubagentEnhancementsBootstrap() {
         return a.width * a.height - b.width * b.height
       })
     if (candidates[0]) markPanel(candidates[0])
+    markDetailPage()
   }
 
   let timer = null

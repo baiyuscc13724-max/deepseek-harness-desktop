@@ -211,6 +211,61 @@ async function buildManagedPreset(paths, basePreset, subagentRoute) {
   }
 }
 
+async function buildHistoricalManagedPreset(paths, basePreset, subagentRoute) {
+  try {
+    await buildManagedPreset(paths, basePreset, subagentRoute)
+  } catch (error) {
+    if (basePreset === 'standard') throw error
+    // Existing sessions store the preset id in their header. Even when the
+    // current configuration follows the main model, keep that id resolvable.
+    // A custom user preset that cannot be projected must never block startup;
+    // use the shipped standard preset only for this compatibility copy.
+    await buildManagedPreset(paths, 'standard', subagentRoute)
+  }
+}
+
+function routesEqual(left, right) {
+  return left?.provider === right?.provider && left?.model === right?.model
+}
+
+function managedRowsMatch(rows, route) {
+  let found = 0
+  let matched = 0
+  const visit = value => {
+    if (!Array.isArray(value)) return
+    for (const row of value) {
+      if (row?.name === '@deepseek-ai/dsh-tool-subagent' && ['spawn', 'fork'].includes(row?.config?.provider)) {
+        found += 1
+        if (routesEqual(optionalRoute(row?.config?.agentOptions), route)) matched += 1
+      }
+      if (Array.isArray(row?.config)) visit(row.config)
+    }
+  }
+  visit(rows)
+  return found > 0 && matched === found
+}
+
+async function managedPresetMatches(paths, route) {
+  const source = await readText(path.join(paths.managedPreset, 'agent.cordis.yml'))
+  if (!source) return false
+  try {
+    const document = YAML.parseDocument(source)
+    return document.errors.length === 0 && managedRowsMatch(document.toJS(), route)
+  } catch {
+    return false
+  }
+}
+
+async function routingAlreadyCurrent(paths, stored, current, subagent, inheritMain) {
+  if (stored?.schemaVersion !== 2 || stored?.basePreset !== current.basePreset) return false
+  if (stored?.subagent?.inheritMain !== inheritMain || !routesEqual(optionalRoute(stored?.subagent), subagent)) return false
+  const settings = settingsDocument(await readText(paths.settingsFile)).toJS() || {}
+  if (!routesEqual(optionalRoute(settings?.['agent-default-model']), current.main)) return false
+  const expectedPreset = inheritMain ? current.basePreset : ROUTING_PRESET_ID
+  if (String(settings?.['agent-presets']?.default || '').trim() !== expectedPreset) return false
+  return managedPresetMatches(paths, subagent)
+}
+
 async function saveModelRouting(options, next) {
   const paths = pathsFor(options)
   const main = validRoute(next?.main, '主模型')
@@ -227,7 +282,7 @@ async function saveModelRouting(options, next) {
     : selectedBasePreset(settings, stored)
 
   if (!inheritMain) await buildManagedPreset(paths, basePreset, subagent)
-  else await rm(paths.managedPreset, { recursive: true, force: true })
+  else await buildHistoricalManagedPreset(paths, basePreset, subagent)
   document.setIn(['agent-default-model', 'provider'], main.provider)
   document.setIn(['agent-default-model', 'model'], main.model)
   document.setIn(['agent-presets', 'default'], inheritMain ? basePreset : ROUTING_PRESET_ID)
@@ -256,11 +311,11 @@ async function ensureModelRouting(options) {
   if (!optionalRoute(current.main)) return current
   const storedSubagent = optionalRoute(stored?.subagent)
   const inheritMain = stored?.subagent?.inheritMain !== false || !storedSubagent
+  const subagent = inheritMain ? current.main : storedSubagent
+  if (await routingAlreadyCurrent(paths, stored, current, subagent, inheritMain)) return current
   return saveModelRouting(options, {
     main: current.main,
-    subagent: inheritMain
-      ? { ...current.main, inheritMain: true }
-      : { ...storedSubagent, inheritMain: false },
+    subagent: { ...subagent, inheritMain },
     basePreset: current.basePreset
   })
 }

@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict')
 const test = require('node:test')
+const { readFileSync } = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -93,6 +94,25 @@ test('chat inline-code paths fall back to the active workspace without making la
   assert.equal(mentions.resolve('setup.exe'), undefined)
   assert.equal(mentions.resolve('普通文本'), undefined)
   assert.equal(patchConversationSource(first.source).changed, false)
+})
+
+test('cache metrics separate the latest warm request from the cold-start cumulative value', async () => {
+  const { patchConversationCacheSource, patchTokenMeterSource } = await import('../scripts/patch-official-runtime.mjs')
+  const tokenMeterFixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-token-meter', 'lib', 'index.js'), 'utf8')
+  const tokenPatch = patchTokenMeterSource(tokenMeterFixture)
+  assert.match(tokenPatch.source, /key: "tokenUsageDetail"/)
+  assert.match(tokenPatch.source, /lastCacheReadReported/)
+  assert.match(tokenPatch.source, /previousPromptTokens/)
+  assert.match(tokenPatch.source, /register\(tokenUsageDetailProjectionDefinition\)/)
+  assert.equal(patchTokenMeterSource(tokenPatch.source).changed, false)
+
+  const conversationFixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js'), 'utf8')
+  const conversationPatch = patchConversationCacheSource(conversationFixture)
+  assert.match(conversationPatch.source, /useProjection\("tokenUsageDetail"\)/)
+  assert.match(conversationPatch.source, /最近一步缓存读取/)
+  assert.match(conversationPatch.source, /提供方未报告/)
+  assert.match(conversationPatch.source, /累计缓存读取 \{percent\}%（含首次冷启动）/)
+  assert.equal(patchConversationCacheSource(conversationPatch.source).changed, false)
 })
 
 test('patched Windows directory picker returns the selected existing project path', async () => {

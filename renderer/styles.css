@@ -25,7 +25,6 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .startup-wordmark { color:#17313b; font-size:23px; font-weight:650; letter-spacing:-.7px; opacity:0; transform:translateY(5px); transition:opacity .3s ease,transform .3s ease; }
 .startup-wordmark span { display:inline-block; margin-left:4px; border-radius:4px; padding:2px 5px; color:#fff; background:#17313b; font-size:9px; font-weight:700; letter-spacing:.3px; vertical-align:4px; }
 .startup-splash.show-wordmark .startup-wordmark { opacity:1; transform:translateY(0); }
-.window-drag { position:absolute; z-index:5; top:0; right:208px; left:0; height:36px; app-region:drag; -webkit-app-region:drag; pointer-events:auto; }
 .pet-quick-button { position:absolute; z-index:7; top:2px; right:176px; display:grid; place-items:center; width:32px; height:32px; border:0; border-radius:6px; padding:0; background:transparent; cursor:pointer; app-region:no-drag; -webkit-app-region:no-drag; }
 .pet-quick-button:hover { background:var(--shell-hover); }
 .pet-quick-button:focus-visible { outline:2px solid var(--shell-accent); outline-offset:-2px; }

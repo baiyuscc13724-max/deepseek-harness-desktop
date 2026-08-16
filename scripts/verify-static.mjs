@@ -51,10 +51,6 @@ for (const removedSurface of ['nativeChatSurface', 'webCompatibilitySurface', 's
 }
 
 const rendererStyles = await readFile(path.join(root, 'renderer/styles.css'), 'utf8')
-const windowDragRule = rendererStyles.match(/\.window-drag\s*\{([^}]*)\}/)?.[1] ?? ''
-if (!/left:\s*0(?:px)?\b/.test(windowDragRule) || !/right:\s*208px/.test(windowDragRule) || !/height:\s*36px/.test(windowDragRule) || !/(?:^|[;\s])app-region:\s*drag/.test(windowDragRule) || !/-webkit-app-region:\s*drag/.test(windowDragRule) || /width:\s*24px/.test(windowDragRule)) {
-  throw new Error('The frameless Windows shell must keep a usable full-width title-bar drag surface without covering desktop or native window controls.')
-}
 if (!html.includes('id="skinQuickButton"') || !html.includes('id="skinPickerOverlay"') || !rendererStyles.includes('.skin-picker-dialog')) {
   throw new Error('The desktop shell must expose a standalone quick skin picker without opening the full official settings dialog.')
 }
@@ -68,6 +64,10 @@ if (!rendererStyles.includes('.update-ready-dialog')) throw new Error('In-app up
 if (!rendererStyles.includes('.update-notice-dialog')) throw new Error('Update release notes notification must inherit the active desktop theme.')
 
 const rendererScript = await readFile(path.join(root, 'renderer/app.js'), 'utf8')
+const guestPreload = await readFile(path.join(root, 'electron/guest-preload.cjs'), 'utf8')
+if (/window-drag|drag-region/.test(html) || !guestPreload.includes("ipcRenderer.send('window:beginDrag',") || !guestPreload.includes("ipcRenderer.send('window:moveDrag'") || !guestPreload.includes('target.closest(interactiveSelector)')) {
+  throw new Error('The frameless desktop shell must move only from dynamically detected blank workbench areas.')
+}
 if (!rendererScript.includes('api.startRuntime({})')) throw new Error('Official Harness Web UI must start automatically.')
 if (!rendererScript.includes("document.addEventListener('pointerdown'") || !rendererScript.includes('petPanel.contains(event.target) || petQuickButton.contains(event.target)') || !rendererScript.includes("runtimeView.addEventListener('focus', closePetPanel)")) {
   throw new Error('The top-bar desktop pet card must close when the user clicks anywhere outside the card, including the isolated official WebView.')

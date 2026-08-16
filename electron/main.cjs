@@ -17,6 +17,7 @@ const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFil
 const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
+const { beginWindowDrag, moveWindowDrag, endWindowDrag } = require('./bridge/window-drag-service.cjs')
 const { createDesktopTray } = require('./desktop-tray.cjs')
 const { distributionInfo, isStoreDistribution } = require('./distribution.cjs')
 const { AppStateStore } = require('./store/app-state-store.cjs')
@@ -744,7 +745,7 @@ function createWindow() {
   })
 
   mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
-    delete webPreferences.preload
+    webPreferences.preload = path.join(__dirname, 'guest-preload.cjs')
     webPreferences.nodeIntegration = false
     webPreferences.contextIsolation = true
     webPreferences.sandbox = true
@@ -814,6 +815,20 @@ ipcMain.handle('models:routing:get', () => getModelRouting(modelRoutingOptions()
 ipcMain.handle('models:routing:save', (_event, routing) => saveModelRouting(modelRoutingOptions(), routing || {}))
 ipcMain.handle('runtime:start', (_event, options) => startRuntime(options || {}))
 ipcMain.handle('runtime:state', () => runtimeState)
+ipcMain.on('window:beginDrag', (event, point) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (event.sender !== mainWindow.webContents && !isLocalRuntimeUrl(event.sender.getURL())) return
+  beginWindowDrag(mainWindow, point)
+})
+ipcMain.on('window:moveDrag', (event, point) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (event.sender !== mainWindow.webContents && !isLocalRuntimeUrl(event.sender.getURL())) return
+  moveWindowDrag(mainWindow, point)
+})
+ipcMain.on('window:endDrag', event => {
+  if (event.sender !== mainWindow?.webContents && !isLocalRuntimeUrl(event.sender.getURL())) return
+  endWindowDrag(mainWindow)
+})
 ipcMain.handle('shell:openExternal', async (_event, value) => {
   const target = new URL(value)
   if (!['https:', 'http:'].includes(target.protocol)) throw new Error('只允许打开 http/https 链接。')

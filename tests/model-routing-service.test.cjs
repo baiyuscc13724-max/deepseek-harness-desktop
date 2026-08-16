@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { access, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
+const { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const YAML = require('yaml')
@@ -64,7 +64,9 @@ test('subagents follow the main model unless the user explicitly configures a se
   assert.deepEqual(result.subagent, { inheritMain: true, provider: 'new-provider', model: 'new-model' })
   const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
   assert.equal(settings['agent-presets'].default, 'standard')
-  await assert.rejects(access(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID)), { code: 'ENOENT' })
+  const compatibilityPreset = await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, 'agent.cordis.yml'), 'utf8')
+  assert.match(compatibilityPreset, /provider: new-provider/)
+  assert.match(compatibilityPreset, /model: new-model/)
 })
 
 test('model routing catalog merges configured and installed provider models without reading credentials', async t => {
@@ -124,6 +126,48 @@ test('first startup establishes subagent routing without duplicating the officia
   assert.equal(stored.schemaVersion, 2)
   assert.equal(stored.main, undefined)
   assert.deepEqual(stored.subagent, { inheritMain: true, provider: 'official-provider', model: 'official-model' })
+})
+
+test('startup leaves an unchanged routing configuration untouched', async t => {
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-noop-'))
+  t.after(() => rm(dshHome, { recursive: true, force: true }))
+  const settingsFile = path.join(dshHome, 'settings.yaml')
+  const stateFile = path.join(dshHome, 'harness-desktop-model-routing.json')
+  await writeFile(settingsFile, 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: stable-provider\n  model: stable-model\n')
+
+  await ensureModelRouting({ dshHome, shippedPresetRoot })
+  const beforeSettings = await stat(settingsFile)
+  const beforeState = await stat(stateFile)
+  await new Promise(resolve => setTimeout(resolve, 25))
+  const result = await ensureModelRouting({ dshHome, shippedPresetRoot })
+
+  assert.deepEqual(result.main, { provider: 'stable-provider', model: 'stable-model' })
+  assert.equal((await stat(settingsFile)).mtimeMs, beforeSettings.mtimeMs)
+  assert.equal((await stat(stateFile)).mtimeMs, beforeState.mtimeMs)
+})
+
+test('startup restores a missing desktop preset for existing sessions without changing user presets', async t => {
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-session-compat-'))
+  t.after(() => rm(dshHome, { recursive: true, force: true }))
+  const userPreset = path.join(dshHome, '.agent-presets', 'novel-closed-loop')
+  await mkdir(userPreset, { recursive: true })
+  await writeFile(path.join(userPreset, 'preset.yml'), 'name: 小说闭环协调器\n')
+  await writeFile(path.join(userPreset, 'agent.cordis.yml'), '[]\n')
+  await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: opencode-go\n  model: deepseek-v4-flash\n')
+  await writeFile(path.join(dshHome, 'harness-desktop-model-routing.json'), `${JSON.stringify({
+    schemaVersion: 2,
+    subagent: { provider: 'opencode-go', model: 'deepseek-v4-flash', inheritMain: true },
+    basePreset: 'standard'
+  }, null, 2)}\n`)
+
+  await ensureModelRouting({ dshHome, shippedPresetRoot })
+
+  const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
+  assert.equal(settings['agent-presets'].default, 'standard')
+  assert.equal((await readFile(path.join(userPreset, 'preset.yml'), 'utf8')).trim(), 'name: 小说闭环协调器')
+  const restored = await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, 'agent.cordis.yml'), 'utf8')
+  assert.match(restored, /provider: opencode-go/)
+  assert.match(restored, /model: deepseek-v4-flash/)
 })
 
 test('a failed settings projection rolls back the authoritative desktop route', async t => {
