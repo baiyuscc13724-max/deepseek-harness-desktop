@@ -5,13 +5,22 @@ const { openWindowsInstaller } = require('../electron/bridge/update-launcher.cjs
 
 test('installer is opened directly through the Windows shell', async () => {
   const installerPath = path.resolve('C:\\Temp\\Harness Desktop updater.exe')
+  const currentInstallDir = path.resolve('D:\\Apps\\Harness Desktop')
   const opened = []
-  const result = await openWindowsInstaller({ installerPath, openPath: async value => {
-    opened.push(value)
-    return ''
-  } })
+  const hints = []
+  const result = await openWindowsInstaller({
+    installerPath,
+    currentInstallDir,
+    writeInstallHint: async (target, value) => hints.push([target, value]),
+    openPath: async value => {
+      opened.push(value)
+      return ''
+    }
+  })
   assert.deepEqual(opened, [installerPath])
+  assert.deepEqual(hints, [[`${installerPath}.install-dir`, currentInstallDir]])
   assert.equal(result.installerPath, installerPath)
+  assert.equal(result.installDir, currentInstallDir)
 })
 
 test('installer launch failure is returned before the desktop exits', async () => {
@@ -19,4 +28,16 @@ test('installer launch failure is returned before the desktop exits', async () =
     openWindowsInstaller({ installerPath: 'C:\\Temp\\update.exe', openPath: async () => 'Access denied' }),
     /Access denied/
   )
+})
+
+test('a manual installer launch without a packaged location remains supported', async () => {
+  const writes = []
+  const result = await openWindowsInstaller({
+    installerPath: 'C:\\Temp\\update.exe',
+    currentInstallDir: '',
+    writeInstallHint: async (...args) => writes.push(args),
+    openPath: async () => ''
+  })
+  assert.deepEqual(writes, [])
+  assert.equal(result.installDir, '')
 })

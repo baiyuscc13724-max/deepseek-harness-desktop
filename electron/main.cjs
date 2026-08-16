@@ -570,9 +570,13 @@ async function launchReadyAppUpdate() {
   }
 
   send('updates:install-progress', { phase: 'launch', version: readyUpdate.version })
-  await openWindowsInstaller({ installerPath: readyUpdate.installerPath, openPath: value => shell.openPath(value) })
+  await openWindowsInstaller({
+    installerPath: readyUpdate.installerPath,
+    currentInstallDir: app.isPackaged ? path.dirname(process.execPath) : '',
+    openPath: value => shell.openPath(value)
+  })
   const version = readyUpdate.version
-  await new Promise(resolve => setTimeout(resolve, 1200))
+  await new Promise(resolve => setTimeout(resolve, 250))
   app.quit()
   return { ok: true, version }
 }

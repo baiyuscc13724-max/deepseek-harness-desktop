@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.14') throw new Error(`release audit expects 1.0.14, got ${pkg.version}`)
+if (pkg.version !== '1.0.15') throw new Error(`release audit expects 1.0.15, got ${pkg.version}`)
 if (!pkg.author?.email) throw new Error('Linux .deb packaging requires a maintainer email in package author metadata.')
 if (pkg.main !== 'electron/main.cjs') throw new Error('Electron main entry drifted.')
 if (pkg.build?.asar !== true) throw new Error('Release must keep ASAR enabled.')
@@ -31,7 +31,7 @@ for (const target of ['AppImage', 'deb']) if (!pkg.build?.linux?.target?.include
 for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
 
 const installer = await readFile(path.join(root, 'build/installer.iss'), 'utf8')
-for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={code:GetDefaultDirName}', 'UsePreviousAppDir=yes', '#define MyOutputBaseFilename "Harness-Desktop-" + MyAppVersion + "-win-x64"', 'OutputBaseFilename={#MyOutputBaseFilename}', 'SetupIconFile=..\\dist\\.icon-ico\\icon.ico', 'UninstallDisplayIcon={app}\\{#MyAppExeName}', 'Name: "chinesesimp"', 'compiler:Languages\\ChineseSimplified.isl', 'recursesubdirs', 'autodesktop', 'autoprograms', 'FindLegacyInstallDirectory', "RegQueryStringValue(RootKey, Subkey, 'DisplayIcon'", "HasCommandLineParameter('/CLOSEAPPLICATIONS')", "'/NORESTART /LANG=chinesesimp'", 'WizardSilent']) {
+for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={code:GetDefaultDirName}', 'UsePreviousAppDir=yes', 'CloseApplications=no', '#define MyOutputBaseFilename "Harness-Desktop-" + MyAppVersion + "-win-x64"', 'OutputBaseFilename={#MyOutputBaseFilename}', 'SetupIconFile=..\\dist\\.icon-ico\\icon.ico', 'UninstallDisplayIcon={app}\\{#MyAppExeName}', 'Name: "chinesesimp"', 'compiler:Languages\\ChineseSimplified.isl', 'recursesubdirs', 'autodesktop', 'autoprograms', 'FindLegacyInstallDirectory', 'ReadInstallHint', 'ReadUserInstallLocationFile', 'ReadLastInstallDirectory', 'LastInstallLocation', "RegQueryStringValue(RootKey, Subkey, 'DisplayIcon'", "HasCommandLineParameter('/CLOSEAPPLICATIONS')", "'/NORESTART /LANG=chinesesimp'", 'WizardSilent']) {
   if (!installer.includes(contract)) throw new Error(`Inno Setup contract missing: ${contract}`)
 }
 
@@ -45,6 +45,9 @@ for (const contract of ["ipcMain.handle('updates:install'", "ipcMain.handle('upd
 const updateLauncher = await readFile(path.join(root, 'electron/bridge/update-launcher.cjs'), 'utf8')
 if (updateLauncher.includes('powershell.exe') || updateLauncher.includes('Wait-Process')) throw new Error('The updater must not depend on a hidden PowerShell handoff.')
 if (!updateLauncher.includes('openPath(resolved)')) throw new Error('The updater must launch the verified installer through the Windows shell.')
+for (const contract of ['currentInstallDir', '.install-dir', 'writeInstallHint']) {
+  if (!updateLauncher.includes(contract)) throw new Error(`The updater must preserve the current install location: ${contract}`)
+}
 for (const removedContract of ['AgentBridge', 'TerminalManager', 'SessionStore', 'ProviderStore']) {
   if (main.includes(removedContract)) throw new Error(`Obsolete native backend returned to the release: ${removedContract}`)
 }

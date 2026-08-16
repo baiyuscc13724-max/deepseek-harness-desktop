@@ -43,7 +43,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-CloseApplications=yes
+CloseApplications=no
 RestartApplications=no
 MinVersion=10.0
 
@@ -52,6 +52,9 @@ Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Registry]
+Root: HKCU; Subkey: "Software\Harness Desktop"; ValueType: string; ValueName: "LastInstallLocation"; ValueData: "{app}"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -93,6 +96,36 @@ begin
   Result := (Directory <> '') and FileExists(AddBackslash(Directory) + '{#MyAppExeName}');
 end;
 
+function ReadInstallHint(var Directory: String): Boolean;
+var
+  Value: AnsiString;
+begin
+  Directory := '';
+  if LoadStringFromFile(ExpandConstant('{srcexe}') + '.install-dir', Value) then
+    Directory := ExistingDirectoryFromValue(String(Value));
+  Result := (Directory <> '') and FileExists(AddBackslash(Directory) + '{#MyAppExeName}');
+end;
+
+function ReadUserInstallLocationFile(var Directory: String): Boolean;
+var
+  Value: AnsiString;
+begin
+  Directory := '';
+  if LoadStringFromFile(ExpandConstant('{userappdata}\deepseek-harness-desktop\install-location.txt'), Value) then
+    Directory := ExistingDirectoryFromValue(String(Value));
+  Result := Directory <> '';
+end;
+
+function ReadLastInstallDirectory(var Directory: String): Boolean;
+var
+  Value: String;
+begin
+  Directory := '';
+  if RegQueryStringValue(HKCU, 'Software\Harness Desktop', 'LastInstallLocation', Value) then
+    Directory := ExistingDirectoryFromValue(Value);
+  Result := Directory <> '';
+end;
+
 function FindLegacyInstallDirectory(RootKey: Integer; var Directory: String): Boolean;
 var
   Subkeys: TArrayOfString;
@@ -123,8 +156,15 @@ var
 begin
   Directory := '';
 
-  { Prefer the stable Inno Setup identity used by current releases. }
-  if ReadRegisteredInstallDirectory(HKCU, '{#MyUninstallKey}', Directory) or
+  { An updater hint is authoritative because it is written by the currently
+    running packaged app immediately before the verified installer starts. }
+  if ReadInstallHint(Directory) or
+     ReadUserInstallLocationFile(Directory) or
+     { Keep a stable last location outside the uninstall entry so reinstalling
+       or repairing registration does not silently jump back to C:. }
+     ReadLastInstallDirectory(Directory) or
+     { Prefer the stable Inno Setup identity used by current releases. }
+     ReadRegisteredInstallDirectory(HKCU, '{#MyUninstallKey}', Directory) or
      ReadRegisteredInstallDirectory(HKLM64, '{#MyUninstallKey}', Directory) or
      ReadRegisteredInstallDirectory(HKLM32, '{#MyUninstallKey}', Directory) or
      { Older NSIS releases used a generated uninstall key and often omitted
