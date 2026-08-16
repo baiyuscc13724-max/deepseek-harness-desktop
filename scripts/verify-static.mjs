@@ -16,7 +16,7 @@ const required = [
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
   'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
-  'docs/ARCHITECTURE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md',
+  'docs/ARCHITECTURE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
   'build/installer.iss', 'scripts/build-release.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json'
 ]
@@ -151,6 +151,16 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 if (pkg.version !== '1.0.12') throw new Error(`Expected package version 1.0.12, received ${pkg.version}`)
+const readme = await readFile(path.join(root, 'README.md'), 'utf8')
+for (const contract of [
+  `v${pkg.version}`,
+  `Harness-Desktop-${pkg.version}-win-x64.exe`,
+  `Harness-Desktop-${pkg.version}-portable-x64.exe`,
+  'docs/assets/harness-desktop-hero.jpg',
+  'releases/latest'
+]) {
+  if (!readme.includes(contract)) throw new Error(`README release and discovery content is stale or incomplete: ${contract}`)
+}
 if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 for (const dependency of [
