@@ -32,6 +32,13 @@
 
 安装版按当前用户安装，不要求管理员权限。模型和密钥由官方 Harness 设置管理，桌面壳不会保存第二份 Provider 密钥。
 
+使用 [Scoop](https://scoop.sh) 的用户可以从项目软件源安装，清单会核对同一 GitHub Release 发布的 SHA-256：
+
+```powershell
+scoop bucket add harness-desktop https://github.com/baiyuscc13724-max/scoop-harness-desktop
+scoop install harness-desktop/harness-desktop
+```
+
 ## 这版有什么
 
 | 功能 | 使用方式 |
