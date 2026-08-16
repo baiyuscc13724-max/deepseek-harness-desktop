@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "collection": {
+    "id": "pgr-q",
+    "displayName": "PGR Q-version characters",
+    "format": "FBX 7.3 binary",
+    "authorization": "separate-maintainer-authorization",
+    "includedInInstaller": false
+  },
+  "commonAnimationClips": [
+    "Stand01", "Stand02", "Stand03", "Walk01", "Walk02", "Walk03",
+    "Touch01", "Touch02", "Click01", "Talk01", "Tired01", "Lazy01",
+    "Bed01", "Chair01", "Sofa01", "Gift01", "Hug01", "StandReward01"
+  ],
+  "characters": [
+    { "id": "qr1-gongjian", "sourceDirectory": "QR1GongjianMd010011", "sourceModel": "QR1GongjianMd010011.fbx", "bones": 43, "meshes": 2, "skins": 2, "animationClips": 47 },
+    { "id": "qr1-lifu", "sourceDirectory": "QR1LifuMd010011", "sourceModel": "QR1LifuMd010011.fbx", "bones": 41, "meshes": 4, "skins": 4, "animationClips": 47, "preferredInitial": true },
+    { "id": "qr1-luxiya", "sourceDirectory": "QR1LuxiyaMd010011", "sourceModel": "QR1LuxiyaMd010011.fbx", "bones": 48, "meshes": 2, "skins": 2, "animationClips": 47, "preferredInitial": true },
+    { "id": "qr1-xiulijigong", "sourceDirectory": "QR1XiulijigongMd010011 #656938", "sourceModel": "QR1XiulijigongMd010011 #656938.fbx", "bones": 25, "meshes": 2, "skins": 2, "animationClips": 39 },
+    { "id": "qr2-aila", "sourceDirectory": "QR2AilaMd010011 #793800", "sourceModel": "QR2AilaMd010011 #793800.fbx", "bones": 40, "meshes": 2, "skins": 2, "animationClips": 47 },
+    { "id": "qr2-bianka", "sourceDirectory": "QR2BiankaMd010011 #128877", "sourceModel": "QR2BiankaMd010011 #128877.fbx", "bones": 56, "meshes": 2, "skins": 2, "animationClips": 48, "preferredInitial": true },
+    { "id": "qr2-dubian", "sourceDirectory": "QR2DubianMd010011", "sourceModel": "QR2DubianMd010011.fbx", "bones": 42, "meshes": 2, "skins": 2, "animationClips": 48 },
+    { "id": "qr2-kalienina", "sourceDirectory": "QR2KalieninaMd010011 #678436", "sourceModel": "QR2KalieninaMd010011 #678436.fbx", "bones": 44, "meshes": 2, "skins": 2, "animationClips": 48, "preferredInitial": true },
+    { "id": "qr2-liang", "sourceDirectory": "QR2LiangMd010011", "sourceModel": "QR2LiangMd010011.fbx", "bones": 38, "meshes": 2, "skins": 2, "animationClips": 48 },
+    { "id": "qr2-lifu", "sourceDirectory": "QR2LifuMd010011 #179012", "sourceModel": "QR2LifuMd010011 #179012.fbx", "bones": 24, "meshes": 2, "skins": 2, "animationClips": 48 },
+    { "id": "qr2-shenwei", "sourceDirectory": "QR2ShenweiMd010011 #338587", "sourceModel": "QR2ShenweiMd010011 #338587.fbx", "bones": 25, "meshes": 2, "skins": 2, "animationClips": 48 },
+    { "id": "qr2-sufeiya", "sourceDirectory": "QR2SufeiyaMd010011 #1070730", "sourceModel": "QR2SufeiyaMd010011 #1070730.fbx", "bones": 24, "meshes": 2, "skins": 2, "animationClips": 42 },
+    { "id": "qr3-bianka", "sourceDirectory": "QR3BiankaMd010011", "sourceModel": "QR3BiankaMd010011.fbx", "bones": 68, "meshes": 2, "skins": 2, "animationClips": 42 },
+    { "id": "qr3-dubian", "sourceDirectory": "QR3DubianMd010011 #733349", "sourceModel": "QR3DubianMd010011 #733349.fbx", "bones": 32, "meshes": 2, "skins": 2, "animationClips": 47 },
+    { "id": "qr3-liang", "sourceDirectory": "QR3LiangMd010011 #863624", "sourceModel": "QR3LiangMd010011 #863624.fbx", "bones": 42, "meshes": 2, "skins": 2, "animationClips": 47 },
+    { "id": "qr3-lifu", "sourceDirectory": "QR3LifuMd010011", "sourceModel": "QR3LifuMd010011.fbx", "bones": 49, "meshes": 2, "skins": 2, "animationClips": 47 },
+    { "id": "qr3-luxiya", "sourceDirectory": "QR3LuxiyaMd010011 #1030180", "sourceModel": "QR3LuxiyaMd010011 #1030180.fbx", "bones": 64, "meshes": 2, "skins": 2, "animationClips": 47, "preferredInitial": true },
+    { "id": "qr3-shenwei", "sourceDirectory": "QR3ShenweiMd010011 #730497", "sourceModel": "QR3ShenweiMd010011 #730497.fbx", "bones": 27, "meshes": 2, "skins": 2, "animationClips": 47 },
+    { "id": "qr3-yongyechao", "sourceDirectory": "QR3YongyechaoMd010011 #986773", "sourceModel": "QR3YongyechaoMd010011 #986773.fbx", "bones": 47, "meshes": 2, "skins": 2, "animationClips": 47 }
+  ]
+}

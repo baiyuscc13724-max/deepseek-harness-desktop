@@ -1,3 +1,5 @@
 *.blend binary
 *.glb binary
 *.riv binary
+third_party/pgr-q/**/*.fbx filter=lfs diff=lfs merge=lfs -text
+third_party/pgr-q/**/*.png filter=lfs diff=lfs merge=lfs -text

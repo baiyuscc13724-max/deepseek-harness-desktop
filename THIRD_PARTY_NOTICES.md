@@ -73,3 +73,11 @@ Attribution chain retained from the upstream NOTICE:
 Source: https://github.com/Small-tailqwq/dsh-deep-whale
 
 License: https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+## PGR Q-version character asset collection
+
+The source FBX models and texture images under `third_party/pgr-q` are character assets supplied by the project maintainer from a separately purchased and authorized asset collection. The project maintainer represents that the collection is authorized for inclusion and redistribution in this repository.
+
+These character assets are **not** covered by Harness Desktop's MIT license. Any downstream reuse must follow the separate asset authorization held by the project maintainer. The source assets are retained outside the packaged application until the optimized desktop-pet runtime models and character selector are completed.
+
+Collection inventory: 19 rigged Q-version FBX characters, 78 texture images, and 39–48 embedded animation clips per character. The full game client, server files, account data, and purchased archive are not included.
