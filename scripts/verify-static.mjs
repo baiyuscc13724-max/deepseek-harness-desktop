@@ -157,7 +157,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.13') throw new Error(`Expected package version 1.0.13, received ${pkg.version}`)
+if (pkg.version !== '1.0.14') throw new Error(`Expected package version 1.0.14, received ${pkg.version}`)
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
   `v${pkg.version}`,

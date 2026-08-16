@@ -1,5 +1,4 @@
 import { access, readFile, rm } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import spawn from 'cross-spawn'
@@ -36,18 +35,15 @@ if (process.platform === 'win32') {
   })).catch(() => null)
   if (!iscc) throw new Error('Inno Setup 6 was not found. Install it or set ISCC_PATH.')
 
-  // Inno Setup still hits Win32 path limits when the fully unpacked Harness
-  // dependency tree is compiled from a long checkout path. Compile through a
-  // temporary short drive while leaving the actual output in dist.
-  const driveLetter = ['Z', 'Y', 'X', 'W', 'V', 'U', 'T'].find(letter => !existsSync(`${letter}:\\`))
-  if (!driveLetter) throw new Error('No free temporary drive letter is available for the Windows installer build.')
-  const drive = `${driveLetter}:`
-  run('subst.exe', [drive, root])
-  try {
-    run(iscc, [`/DMyAppVersion=${pkg.version}`, `${drive}\\build\\installer.iss`])
-  } finally {
-    run('subst.exe', [drive, '/D'])
-  }
+  // Compile against the real paths. Building through a temporary SUBST drive
+  // can make Inno Setup return success while emitting a truncated setup data
+  // section once the application is concentrated in a large ASAR file.
+  run(iscc, [
+    `/DMyAppVersion=${pkg.version}`,
+    `/DMySourceDir=${path.join(dist, 'win-unpacked')}`,
+    `/DMyOutputDir=${dist}`,
+    path.join(root, 'build', 'installer.iss')
+  ])
 } else {
   run('npx', ['electron-builder', '--publish', 'never'])
 }

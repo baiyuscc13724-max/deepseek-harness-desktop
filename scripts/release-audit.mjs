@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.13') throw new Error(`release audit expects 1.0.13, got ${pkg.version}`)
+if (pkg.version !== '1.0.14') throw new Error(`release audit expects 1.0.14, got ${pkg.version}`)
 if (!pkg.author?.email) throw new Error('Linux .deb packaging requires a maintainer email in package author metadata.')
 if (pkg.main !== 'electron/main.cjs') throw new Error('Electron main entry drifted.')
 if (pkg.build?.asar !== true) throw new Error('Release must keep ASAR enabled.')
@@ -20,7 +20,10 @@ if (pkg.build?.icon !== 'build/icon.png') throw new Error('Release packages must
 if (pkg.scripts?.dist !== 'node scripts/build-release.mjs') throw new Error('Release packaging must use the audited cross-platform build script.')
 const buildScript = await readFile(path.join(root, 'scripts/build-release.mjs'), 'utf8')
 if (!buildScript.includes("'--publish', 'never'")) throw new Error('electron-builder implicit tag publishing must remain disabled.')
-if (!buildScript.includes("run('subst.exe', [drive, root])") || !buildScript.includes("run('subst.exe', [drive, '/D'])")) throw new Error('The Windows installer build must use and release a short temporary drive to avoid path-limit failures.')
+for (const contract of ["`/DMySourceDir=${path.join(dist, 'win-unpacked')}`", "`/DMyOutputDir=${dist}`", "path.join(root, 'build', 'installer.iss')"]) {
+  if (!buildScript.includes(contract)) throw new Error(`The Windows installer must compile from explicit real paths: ${contract}`)
+}
+if (buildScript.includes("run('subst.exe'")) throw new Error('The Windows installer must not compile through SUBST; it can emit a truncated setup data section.')
 if (!pkg.build?.win?.target?.includes('portable')) throw new Error('Windows portable target is missing.')
 if (pkg.build?.win?.target?.includes('nsis') || pkg.build?.nsis) throw new Error('The blocked NSIS installer must not return.')
 for (const target of ['dmg', 'zip']) if (!pkg.build?.mac?.target?.includes(target)) throw new Error(`macOS target missing: ${target}`)
