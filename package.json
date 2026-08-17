@@ -48,7 +48,7 @@
     "@deepseek-ai/dsh-subprocess": "0.1.0-rc.7",
     "@deepseek-ai/dsh-timeout": "0.1.0-rc.7",
     "@deepseek-ai/dsh-workflow": "0.1.0-rc.7",
-    "@earendil-works/pi-ai": "0.82.1",
+    "@earendil-works/pi-ai": "0.84.2",
     "adm-zip": "^0.6.0",
     "cross-spawn": "7.0.6",
     "dsh-plugin-marketplace": "github:baiyuscc13724-max/DSH-Plugins-Marketplace#41cf453f1267b535258720dda3966b8643f3a224",
