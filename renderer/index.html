@@ -45,6 +45,65 @@
       <label class="pet-panel-check"><input id="petAlwaysOnTop" type="checkbox" checked /> 宠物保持置顶</label>
       <p class="pet-panel-note">TOK 只根据本机模型使用量结算，不读取对话内容或文件。</p>
     </section>
+    <section id="mobileSyncOverlay" class="mobile-sync-overlay hidden" aria-hidden="true">
+      <div class="mobile-sync-dialog" role="dialog" aria-modal="true" aria-labelledby="mobileSyncTitle">
+        <header class="mobile-sync-header">
+          <div>
+            <h2 id="mobileSyncTitle">手机与远程同步</h2>
+            <p>首次扫码添加手机，之后自动连接；首页不会增加同步控件。</p>
+          </div>
+          <button id="closeMobileSync" class="mobile-sync-close" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="mobile-sync-content">
+          <section class="mobile-sync-summary">
+            <div>
+              <strong id="mobileSyncHeadline">尚未开启</strong>
+              <span id="mobileSyncDetail">开启后自动选择局域网或远程安全通道。</span>
+            </div>
+            <button id="mobileSyncToggle" class="primary" type="button">开启手机同步</button>
+          </section>
+          <div id="mobileSyncEnabledContent" class="mobile-sync-enabled hidden">
+            <section class="mobile-sync-remote-card">
+              <div>
+                <strong>离开同一 Wi-Fi 后自动接管</strong>
+                <span id="mobileRemoteStatus">正在检查远程连接组件…</span>
+              </div>
+              <label class="mobile-sync-switch"><input id="mobileRemoteToggle" type="checkbox" checked /><span aria-hidden="true"></span><b>远程连接</b></label>
+              <label class="mobile-sync-provider">连接策略
+                <select id="mobileTransportPreference">
+                  <option value="auto">智能选择</option>
+                  <option value="easytier">国内优先</option>
+                  <option value="tailscale">海外优先</option>
+                </select>
+              </label>
+            </section>
+            <div class="mobile-sync-warning">二维码只在首次添加手机时使用，10 分钟内有效且只能使用一次。以后打开开关即可自动连接，不需要再次扫码。</div>
+            <div class="mobile-sync-add-row"><button id="refreshMobilePairing" type="button">添加手机</button><span id="mobileSyncPairExpiry"></span></div>
+            <section id="mobileSyncPairCard" class="mobile-sync-pair-card hidden">
+              <div class="mobile-sync-qr-wrap">
+                <img id="mobileSyncQr" alt="手机同步配对二维码" />
+                <span id="mobileSyncQrPlaceholder">正在生成二维码…</span>
+              </div>
+              <div class="mobile-sync-pair-copy">
+                <h3>用 Harness Mobile 扫码</h3>
+                <p>扫码后，手机会打开与电脑相同的项目、会话和任务状态，并可继续发送消息。</p>
+                <label for="mobileSyncUrl">手动配对地址</label>
+                <div class="mobile-sync-url-row">
+                  <input id="mobileSyncUrl" type="text" readonly value="" />
+                  <button id="copyMobileSyncUrl" type="button">复制</button>
+                </div>
+              </div>
+            </section>
+            <section class="mobile-sync-devices">
+              <div class="mobile-sync-section-title"><h3>已配对设备</h3><span id="mobileSyncDeviceCount">0 台</span></div>
+              <div id="mobileSyncDeviceList" class="mobile-sync-device-list"></div>
+            </section>
+            <p class="mobile-sync-compatibility">连接顺序：局域网直连 → EasyTier / Tailscale 智能接管。两条远程通道均不可用时只暂停远程连接，不影响电脑端和局域网使用。</p>
+          </div>
+          <p id="mobileSyncError" class="mobile-sync-error" role="alert"></p>
+        </div>
+      </div>
+    </section>
     <webview id="runtimeView" partition="persist:harness"></webview>
     <section id="runtimeStatus" class="runtime-status" aria-live="polite">
       <img src="./assets/deepseek-icon.svg" alt="" />

@@ -14,7 +14,7 @@
 
 把官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 工作台装进 Windows。打开软件就能使用，不用另外安装 Node.js，也不用在命令行里启动服务。
 
-这版额外提供女仆鲸桌宠、外观皮肤、DSH 插件市场、主模型与子代理路由，以及经过 SHA-256 校验的自动更新。官方工作台仍然是唯一主界面，没有第二套侧栏和重复设置页。
+这版额外提供女仆鲸桌宠、外观皮肤、DSH 插件市场、主模型与子代理路由、局域网与异地 Android 手机同步，以及经过 SHA-256 校验的自动更新。官方工作台仍然是唯一主界面，没有第二套侧栏和重复设置页。
 
 > Harness Desktop 是社区维护的开源项目，不是 DeepSeek 官方应用，也不代表 DeepSeek 官方背书。
 
@@ -50,6 +50,7 @@ scoop install harness-desktop/harness-desktop
 | 主模型与子代理 | 子代理可以跟随主模型，也可以单独选择服务商和模型 |
 | 桌面更新 | 后台下载、SHA-256 校验、中文安装引导，并在更新前展示改动内容 |
 | 用户配置保护 | 主题、插件和模型路由保存在用户目录，更新官方 Harness 时不会被覆盖 |
+| Android 手机同步 | 电脑顶部手机入口扫码配对；手机和电脑使用同一工作区、会话、任务状态与模型配置 |
 
 ## 三步开始
 
@@ -58,6 +59,8 @@ scoop install harness-desktop/harness-desktop
 3. 选择一个工作区，开始新会话。
 
 需要换皮肤时点窗口顶部的调色盘；需要桌宠时点女仆鲸入口。插件、Skills、模型和通用设置都在官方设置页面里。
+
+手机同步放在设置页中：首次扫码后会保存受信设备，之后可一键连接或关闭，不必重复扫码。应用优先使用局域网直连；离开同一 Wi-Fi 后可由内置 EasyTier 通道接管，并为可选 Tailscale 组件保留自动回退接口。电脑仍需保持 Harness Desktop 运行，项目不会在开发者云端复制第二份 Harness 数据。详细安全边界和官方破坏性更新兼容策略见[手机同步架构](docs/MOBILE_SYNC_ARCHITECTURE.zh-CN.md)。
 
 ## 项目边界
 
@@ -68,6 +71,7 @@ Harness Desktop 负责 Windows 窗口、运行时启动、安装、更新和桌�
 - 外部链接通过受限 IPC 交给系统浏览器。
 - 更新只接受 GitHub Release 的 HTTPS 安装包，并强制匹配公开的 SHA-256。
 - 用户插件和外观设置不会随官方 Harness 更新被覆盖。
+- 手机端只通过带设备鉴权、可切换线路的适配层加载当前官方工作台，不绑定官方内部 API；官方页面和协议变化不会形成两套客户端维护负担。
 
 安全边界见 [SECURITY.md](SECURITY.md)，实现结构见 [架构说明](docs/ARCHITECTURE.zh-CN.md)。
 

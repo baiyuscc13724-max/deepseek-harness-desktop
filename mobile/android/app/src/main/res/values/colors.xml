@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="harness_background">#F7F8FA</color>
+    <color name="harness_splash_background">#F4F8FF</color>
+    <color name="harness_surface">#FFFFFF</color>
+    <color name="harness_primary">#4D6BFE</color>
+    <color name="harness_primary_dark">#315EFB</color>
+    <color name="harness_text">#17313B</color>
+    <color name="harness_secondary">#66727D</color>
+    <color name="harness_border">#DCE3EC</color>
+    <color name="harness_icon_background">#EDF3FF</color>
+</resources>

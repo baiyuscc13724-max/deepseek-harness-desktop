@@ -1,0 +1,472 @@
+@media (max-width: 700px) {
+  :root {
+    --harness-mobile-nav-height: 62px;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    overflow-x: hidden !important;
+    overscroll-behavior: none;
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  [role="button"],
+  input,
+  textarea,
+  select {
+    max-width: 100%;
+  }
+
+  /* The official desktop shell becomes a one-column workspace with a native-
+     sized bottom rail. Its own buttons keep all existing click behaviour. */
+  [class*="_frame"] {
+    width: 100% !important;
+    min-width: 0 !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) var(--harness-mobile-nav-height) !important;
+  }
+
+  [class*="_sidebarCol"] {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: var(--harness-mobile-nav-height) !important;
+    z-index: 60 !important;
+  }
+
+  [class*="_centerCol"] {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 100% !important;
+  }
+
+  [class*="_detailsCol"] {
+    display: none !important;
+  }
+
+  [class*="_overlayLayer"] {
+    grid-column: 1 !important;
+    grid-row: 1 / span 2 !important;
+    min-width: 0 !important;
+  }
+
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: var(--harness-mobile-nav-height) !important;
+    padding: 5px max(8px, env(safe-area-inset-right)) 5px max(8px, env(safe-area-inset-left)) !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-around !important;
+    gap: 2px !important;
+    border-right: 0 !important;
+    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent) !important;
+    box-shadow: 0 -4px 18px rgba(21, 45, 58, 0.06) !important;
+  }
+
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] > *,
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [data-slot="sidebar.workspaces"],
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [data-slot="sidebar.workspaces"] > div,
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [data-slot="sidebar.settings"],
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [data-slot="settings.trigger"] {
+    display: contents !important;
+  }
+
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [class*="_listArea"],
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [data-slot*="directoryFlow"],
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [class*="_footerActions"],
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [class*="_sectionHeader"] > :not([class*="_headerActions"]) {
+    display: none !important;
+  }
+
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] button {
+    box-sizing: border-box !important;
+    flex: 0 0 48px !important;
+    width: 48px !important;
+    min-width: 48px !important;
+    height: 48px !important;
+    min-height: 48px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border-radius: 14px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  /* Opening the official sidebar turns the same component into a touch drawer. */
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div:not([class*="_collapsed"]) {
+    position: fixed !important;
+    inset: 0 auto 0 0 !important;
+    width: min(86vw, 340px) !important;
+    max-width: 340px !important;
+    height: 100dvh !important;
+    z-index: 400 !important;
+    box-shadow: 12px 0 38px rgba(10, 32, 42, 0.22) !important;
+  }
+
+  [data-slot="conversation"] > *,
+  [data-slot="conversation.session"] > *,
+  [data-slot="conversation.composer"] > * {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  [data-composer-seat],
+  [data-composer-card] {
+    max-width: calc(100vw - 24px) !important;
+  }
+
+  [data-composer-card] {
+    margin-inline: auto !important;
+  }
+
+  textarea[data-phase] {
+    font-size: 16px !important;
+  }
+
+  /* The official header puts title, subagents and session log on one desktop
+     row. Give the two utilities explicit mobile seats so they never overlap. */
+  [data-harness-mobile-title-row="true"] {
+    box-sizing: border-box !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: center !important;
+    gap: 6px !important;
+    padding-inline: 10px !important;
+  }
+
+  [data-harness-mobile-title-cluster="true"] {
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  [data-harness-mobile-title-cluster="true"] > nav {
+    flex: 1 1 72px !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  [data-harness-mobile-title-cluster="true"] > nav button {
+    display: block !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  [data-harness-mobile-title-cluster="true"] > [class*="_headerActions"] {
+    flex: 0 1 auto !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    min-width: 0 !important;
+  }
+
+  [data-harness-mobile-title-cluster="true"] > [class*="_headerActions"] > * {
+    min-width: 0 !important;
+  }
+
+  [data-harness-mobile-title-cluster="true"] > [class*="_headerActions"] [title] {
+    max-width: 100px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  [data-harness-mobile-header-utilities="true"] {
+    position: static !important;
+    inset: auto !important;
+    translate: none !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    gap: 4px !important;
+    min-width: 0 !important;
+    max-width: 154px !important;
+  }
+
+  [data-harness-mobile-subagents="true"] {
+    box-sizing: border-box !important;
+    flex: 1 1 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: 88px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    padding: 0 7px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    font-size: 12px !important;
+  }
+
+  [data-harness-mobile-session-log="true"] {
+    box-sizing: border-box !important;
+    position: static !important;
+    inset: auto !important;
+    translate: none !important;
+    flex: 0 0 48px !important;
+    width: 48px !important;
+    min-width: 48px !important;
+    max-width: 48px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    font-size: 0 !important;
+  }
+
+  [data-harness-mobile-session-log="true"] span {
+    display: none !important;
+  }
+
+  [data-harness-mobile-session-log="true"]::before {
+    content: "日志";
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  [data-harness-mobile-session-row="true"] {
+    min-height: 46px !important;
+    touch-action: manipulation !important;
+    cursor: pointer !important;
+    pointer-events: auto !important;
+  }
+
+  /* Settings is a full-height mobile sheet. All official/desktop extension
+     entries stay visible in a compact grid; users should not have to discover
+     that the desktop navigation can be scrolled sideways. */
+  [role="dialog"] {
+    box-sizing: border-box !important;
+    width: calc(100vw - 12px) !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    height: calc(100dvh - 16px) !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+    border-radius: 20px !important;
+  }
+
+  [role="dialog"] > nav {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    flex: 0 0 auto !important;
+    padding: max(12px, env(safe-area-inset-top)) 12px 8px !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent) !important;
+  }
+
+  [role="dialog"] > nav > div:first-child {
+    margin: 0 4px 8px !important;
+    font-size: 18px !important;
+  }
+
+  [role="dialog"] > nav > div:nth-child(2) {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    height: auto !important;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  [role="dialog"] > nav > div:nth-child(2) > button {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: 46px !important;
+    padding: 6px 5px !important;
+    justify-content: center !important;
+    gap: 5px !important;
+    white-space: normal !important;
+    text-align: center !important;
+    line-height: 1.15 !important;
+  }
+
+  /* Settings is rendered through the sidebar portal. Reset the collapsed
+     sidebar's 48px icon-button rule before sizing settings controls. */
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [role="dialog"] button {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 44px !important;
+    padding: 8px 12px !important;
+  }
+
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [role="dialog"] > nav > div:nth-child(2) > button {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 46px !important;
+    padding: 6px 5px !important;
+  }
+
+  [role="dialog"] > div {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    flex: 1 1 auto !important;
+    overflow: hidden !important;
+  }
+
+  [role="dialog"] > div > div:first-child {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 48px !important;
+    min-height: 48px !important;
+    padding-inline: 14px !important;
+  }
+
+  [role="dialog"] > div > div:nth-child(2) {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: calc(100% - 48px) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 0 16px max(22px, env(safe-area-inset-bottom)) !important;
+  }
+
+  [role="dialog"] *,
+  [data-slot="settings.section"] > * {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  [role="dialog"] [data-slot="settings.general.item"] > div {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+    padding-block: 16px !important;
+  }
+
+  [role="dialog"] [data-slot="settings.general.item"] > div > :last-child,
+  [role="dialog"] [data-slot="settings.general.item"] button[aria-haspopup="menu"],
+  [role="dialog"] input,
+  [role="dialog"] textarea,
+  [role="dialog"] select {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  [role="dialog"] [data-slot="settings.general.item"] > div > :last-child {
+    display: block !important;
+    flex: 0 0 auto !important;
+  }
+
+  [role="dialog"] [data-slot="settings.general.item"] button[aria-haspopup="menu"] {
+    min-width: 100% !important;
+    min-height: 44px !important;
+    justify-content: space-between !important;
+    white-space: normal !important;
+    text-align: left !important;
+  }
+
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [role="dialog"] button[aria-haspopup="menu"] {
+    box-sizing: border-box !important;
+    display: flex !important;
+    width: 100% !important;
+    min-width: 100% !important;
+    min-height: 48px !important;
+    padding-inline: 14px !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    white-space: normal !important;
+    text-align: left !important;
+  }
+
+  [role="dialog"] [class*="_cubeRow"] {
+    display: grid !important;
+    width: 100% !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+
+  [class*="_sidebarCol"] [data-slot="sidebar"] > div[class*="_collapsed"] [role="dialog"] [class*="_cubeRow"] > button {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 66px !important;
+    padding: 8px 4px !important;
+  }
+
+  [role="dialog"] table {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+  }
+
+  [role="menu"],
+  [role="listbox"] {
+    max-width: calc(100vw - 16px) !important;
+    max-height: min(70dvh, 560px) !important;
+    overflow: auto !important;
+  }
+
+  .hd-theme-panel {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    padding: 4px 4px 24px !important;
+  }
+
+  .hd-theme-heading {
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+
+  .hd-theme-heading .hd-theme-button {
+    width: 100% !important;
+  }
+
+  .hd-theme-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .hd-custom-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .hd-custom-actions {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+}

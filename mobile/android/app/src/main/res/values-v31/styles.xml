@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.HarnessMobile.Starting" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowSplashScreenBackground">@color/harness_splash_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/deepseek_app_icon_foreground</item>
+        <item name="android:windowSplashScreenAnimationDuration">500</item>
+        <item name="android:navigationBarColor">@color/harness_splash_background</item>
+        <item name="android:statusBarColor">@color/harness_splash_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

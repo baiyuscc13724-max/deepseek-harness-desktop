@@ -26,6 +26,14 @@ electron-builder is licensed under the MIT License. See its upstream project for
 
 `cross-spawn` is licensed under the MIT License. Harness Desktop uses it to launch the bundled Harness command consistently across supported platforms without routing arguments through a shell.
 
+## Phone sync dependencies
+
+- `http-proxy` is licensed under the MIT License and is used by the desktop phone-sync gateway to forward authenticated HTTP and WebSocket traffic to the loopback Harness runtime.
+- `qrcode` is licensed under the MIT License and is used to render one-time local pairing QR codes.
+- ZXing and ZXing Android Embedded are licensed under the Apache License 2.0 and are used by the Android companion application to scan pairing QR codes.
+- AndroidX libraries are licensed under the Apache License 2.0 and provide the Android application compatibility and refresh UI layers.
+- EasyTier is licensed under the Apache License 2.0. Harness Desktop downloads its pinned Windows core on demand, and Harness Mobile bundles the matching Android JNI libraries to provide the optional serverless remote-sync path.
+
 ## DSH Plugin Marketplace
 
 `dsh-plugin-marketplace` version 1.2.0 is licensed under the MIT License and is maintained by bradeGithub. Harness Desktop bundles the pinned upstream release and installs it into the user's DSH Web profile so the official Harness settings can display, install, and update community plugins.

@@ -4,6 +4,33 @@
     window.__HARNESS_DESKTOP_THEME_INSTALLED__ = true
 
     const request = (action, values = {}) => {
+      if (document.documentElement.dataset.harnessMobile === 'true') {
+        if (action === 'choose-theme-background') {
+          window.alert('自定义背景图请先在电脑端选择；主题配色可以直接在手机端保存。')
+          return Promise.resolve(null)
+        }
+        if (action === 'open-external') {
+          if (values.url) window.location.href = values.url
+          return Promise.resolve(null)
+        }
+        return fetch('/__harness_mobile__/appearance', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, values })
+        }).then(response => {
+          if (!response.ok) throw new Error(`appearance ${response.status}`)
+          return response.json()
+        }).then(payload => {
+          window.__HARNESS_DESKTOP_THEME_STATE__ = payload.state
+          window.__HARNESS_DESKTOP_THEMES__ = payload.catalog
+          window.__HARNESS_DESKTOP_RENDER_THEMES__?.()
+          return payload
+        }).catch(error => {
+          console.warn('Unable to save mobile appearance:', error)
+          return null
+        })
+      }
       const query = new URLSearchParams(values).toString()
       location.href = `harness-desktop://${action}/${query ? `?${query}` : ''}`
     }
@@ -245,13 +272,16 @@
             renderCards(panel)
             request('set-theme', { id: themeId })
             const dialog = panel.closest('[role="dialog"]')
-            const close = [...(dialog?.querySelectorAll('button') || [])].find(button => /关闭|close/i.test(button.getAttribute('aria-label') || button.title || '') || button.textContent?.trim() === '×')
+            const close = [...(dialog?.querySelectorAll('button') || [])].find(button => {
+              const label = `${button.getAttribute('aria-label') || ''} ${button.title || ''} ${button.textContent || ''}`
+              return /关闭|close/i.test(label) || button.textContent?.trim() === '×'
+            })
             close?.click()
           }
           card.addEventListener('click', event => {
             if (event.target.closest('[data-hd-source]')) return
             card.focus()
-            if (event.detail >= 2) choose()
+            if (document.documentElement.dataset.harnessMobile === 'true' || event.detail >= 2) choose()
           })
           card.addEventListener('dblclick', event => { if (!event.target.closest('[data-hd-source]')) choose() })
           card.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose() } })
@@ -264,7 +294,9 @@
       grid.querySelectorAll('[data-hd-theme-card]').forEach(card => {
         card.dataset.selected = String(card.dataset.hdThemeCard === state.themeId)
         const selected = card.dataset.hdThemeCard === state.themeId
-        card.querySelector('[data-hd-gesture]').textContent = selected ? '当前使用' : '双击使用'
+        card.querySelector('[data-hd-gesture]').textContent = selected
+          ? '当前使用'
+          : document.documentElement.dataset.harnessMobile === 'true' ? '点击使用' : '双击使用'
         const theme = themeById(card.dataset.hdThemeCard)
         const preview = card.querySelector('.hd-theme-preview')
         if (theme?.id === 'maid-atelier' && theme.assets?.day) preview.style.background = `linear-gradient(rgba(5,31,59,.08),rgba(5,31,59,.28)),url("${theme.assets.day}") center/cover`
@@ -361,6 +393,13 @@
     }
 
     const applySessionLogDock = () => {
+      if (document.documentElement.dataset.harnessMobile === 'true') {
+        for (const element of document.querySelectorAll('[data-hd-session-log-docked="true"]')) {
+          for (const property of ['position', 'top', 'right', 'left', 'translate', 'z-index']) element.style.removeProperty(property)
+          delete element.dataset.hdSessionLogDocked
+        }
+        return
+      }
       const candidates = [...document.querySelectorAll('button,a')].filter(element => /Session log|会话日志|会话记录/i.test(element.textContent || ''))
       const active = new Set()
       for (const element of candidates) {
@@ -429,5 +468,12 @@
     await webview.executeJavaScript(`window.__HARNESS_DESKTOP_THEME_STATE__=${serializedState};window.__HARNESS_DESKTOP_THEMES__=${serializedCatalog};window.__HARNESS_DESKTOP_RENDER_THEMES__?.();`, true)
   }
 
-  root.harnessThemeIntegration = { install, prepareCatalog, publish }
-})(window)
+  const api = {
+    install,
+    prepareCatalog,
+    publish,
+    mobileBootstrapSource: `(${guestThemeBootstrap.toString()})()`
+  }
+  if (typeof module !== 'undefined' && module.exports) module.exports = api
+  if (root) root.harnessThemeIntegration = api
+})(typeof window !== 'undefined' ? window : null)

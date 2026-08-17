@@ -14,6 +14,7 @@ Harness Desktop 是一个独立的开源桌面客户端，在本机运行 DeepSe
 - Direct-download builds may contact GitHub to check for Harness Desktop updates. Microsoft Store builds receive desktop-app updates through Microsoft Store. The app can also check public package information for the bundled Harness runtime.
 - The bundled upstream Harness configuration contains an optional session-telemetry component that is disabled by default. Advanced users can enforce opt-out by setting `DSH_TELEMETRY_DISABLED=1` before launch.
 - Installed plugins may process local files or contact their own services according to the permissions and code of each plugin. Review a plugin before installing it.
+- When phone sync is enabled, Harness Desktop exposes the currently running local Harness Web UI to paired devices on the same private network. The gateway authenticates each paired device but the local HTTP/WebSocket transport is not encrypted. No developer-operated relay or cloud copy is used; enable it only on a trusted Wi-Fi network.
 
 - 应用设置、会话记录、工作区引用和日志保存在你的设备上的应用数据目录及独立 Harness 数据目录中。
 - 使用已配置的第三方 AI 服务时，为完成请求所需的提示词、附件、所选本地文件片段、工具结果和对话上下文可能直接发送给该服务商，并受服务商自己的条款和隐私政策约束。
@@ -21,6 +22,7 @@ Harness Desktop 是一个独立的开源桌面客户端，在本机运行 DeepSe
 - 普通下载版可能访问 GitHub 检查桌面应用更新；Microsoft Store 版由商店提供桌面应用更新。应用也可能查询所捆绑 Harness 运行时的公开软件包信息。
 - 上游 Harness 配置包含一个默认关闭的可选会话遥测组件。高级用户可在启动前设置 `DSH_TELEMETRY_DISABLED=1` 强制退出。
 - 用户安装的插件可能按各自代码和权限处理本地文件或访问外部服务，安装前应自行审查。
+- 开启手机同步后，Harness Desktop 会把当前本机 Harness Web 工作台开放给已配对设备。局域网直连会验证每台设备，但当前局域网 HTTP/WebSocket 通道不加密，只应在本人控制的可信 Wi-Fi 中使用。用户开启异地连接时，EasyTier 或可选的 Tailscale 兼容通道可能使用其公共协调或中继基础设施；Harness Desktop 项目方不运营这些服务，也不会在项目方服务器创建会话、工作区或密钥副本。
 
 ## Generative AI / 生成式 AI
 

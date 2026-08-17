@@ -27,6 +27,25 @@ const restoreOfficialThemeButton = document.querySelector('#restoreOfficialTheme
 const skinChooseBackgroundButton = document.querySelector('#skinChooseBackground')
 const skinApplyCustomButton = document.querySelector('#skinApplyCustom')
 const skinBackgroundState = document.querySelector('#skinBackgroundState')
+const mobileSyncOverlay = document.querySelector('#mobileSyncOverlay')
+const closeMobileSyncButton = document.querySelector('#closeMobileSync')
+const mobileSyncToggle = document.querySelector('#mobileSyncToggle')
+const mobileSyncHeadline = document.querySelector('#mobileSyncHeadline')
+const mobileSyncDetail = document.querySelector('#mobileSyncDetail')
+const mobileSyncEnabledContent = document.querySelector('#mobileSyncEnabledContent')
+const mobileSyncPairCard = document.querySelector('#mobileSyncPairCard')
+const mobileRemoteToggle = document.querySelector('#mobileRemoteToggle')
+const mobileRemoteStatus = document.querySelector('#mobileRemoteStatus')
+const mobileTransportPreference = document.querySelector('#mobileTransportPreference')
+const mobileSyncQr = document.querySelector('#mobileSyncQr')
+const mobileSyncQrPlaceholder = document.querySelector('#mobileSyncQrPlaceholder')
+const mobileSyncUrl = document.querySelector('#mobileSyncUrl')
+const copyMobileSyncUrl = document.querySelector('#copyMobileSyncUrl')
+const refreshMobilePairing = document.querySelector('#refreshMobilePairing')
+const mobileSyncPairExpiry = document.querySelector('#mobileSyncPairExpiry')
+const mobileSyncDeviceCount = document.querySelector('#mobileSyncDeviceCount')
+const mobileSyncDeviceList = document.querySelector('#mobileSyncDeviceList')
+const mobileSyncError = document.querySelector('#mobileSyncError')
 const updateReadyOverlay = document.querySelector('#updateReadyOverlay')
 const updateReadyDetail = document.querySelector('#updateReadyDetail')
 const updateLaterButton = document.querySelector('#updateLaterButton')
@@ -59,6 +78,15 @@ let petState = {
   preferences: { enabled: true, awake: false, alwaysOnTop: true, autoFeed: true }
 }
 let modelRoutingState = { main: {}, subagent: { inheritMain: true }, providers: [], saving: false, saved: false, error: '' }
+let mobileSyncState = {
+  enabled: false,
+  running: false,
+  targetReady: false,
+  origins: [],
+  devices: [],
+  pairing: null,
+  remote: { enabled: true, preference: 'auto', status: 'disabled', active: null, adapters: {} }
+}
 let themeCatalog = []
 let startupRuntimeReady = false
 let startupWebviewReady = false
@@ -352,6 +380,93 @@ function renderRuntimeState(state) {
   retryRuntime.classList.toggle('hidden', state?.status !== 'error')
 }
 
+function formatDeviceTime(value) {
+  if (!value) return '尚未连接'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '时间未知'
+  return `最近连接 ${date.toLocaleString('zh-CN', { hour12: false })}`
+}
+
+function renderMobileSync(next = mobileSyncState) {
+  mobileSyncState = { ...mobileSyncState, ...(next || {}) }
+  const running = mobileSyncState.enabled && mobileSyncState.running
+  const remote = mobileSyncState.remote || {}
+  mobileSyncHeadline.textContent = running ? '手机同步已开启' : '手机同步未开启'
+  mobileSyncDetail.textContent = running
+    ? mobileSyncState.targetReady ? '电脑工作台已就绪，已配对手机会自动连接。' : '同步服务已开启，正在等待电脑工作台就绪。'
+    : '开启后优先局域网直连，离家时由安全远程通道接管。'
+  mobileSyncToggle.textContent = running ? '关闭手机同步' : '开启手机同步'
+  mobileSyncToggle.classList.toggle('primary', !running)
+  mobileSyncEnabledContent.classList.toggle('hidden', !running)
+  mobileRemoteToggle.checked = remote.enabled !== false
+  mobileRemoteToggle.disabled = !running
+  mobileTransportPreference.value = remote.preference || 'auto'
+  mobileTransportPreference.disabled = !running || remote.enabled === false
+  const adapterLabel = remote.active === 'easytier' ? 'EasyTier（国内线路）' : remote.active === 'tailscale' ? 'Tailscale（海外线路）' : ''
+  const remoteStatusText = remote.enabled === false
+    ? '远程连接已关闭；同一 Wi-Fi 仍可使用'
+    : remote.status === 'connected'
+      ? `${adapterLabel || '远程通道'}已连接`
+      : remote.status === 'connecting'
+        ? '正在选择可用的远程通道…'
+        : remote.status === 'reconnecting'
+          ? '当前通道中断，正在自动切换备用线路…'
+          : remote.status === 'unavailable'
+            ? '远程组件暂不可用；同一 Wi-Fi 仍可使用'
+            : running ? '等待远程通道启动' : '手机同步开启后可用'
+  mobileRemoteStatus.textContent = remoteStatusText
+  const pairing = mobileSyncState.pairing || {}
+  mobileSyncUrl.value = pairing.url || ''
+  mobileSyncPairCard.classList.toggle('hidden', !pairing.qrDataUrl)
+  mobileSyncQrPlaceholder.classList.toggle('hidden', Boolean(pairing.qrDataUrl))
+  if (pairing.qrDataUrl) mobileSyncQr.src = pairing.qrDataUrl
+  else mobileSyncQr.removeAttribute('src')
+  if (pairing.expiresAt) {
+    const minutes = Math.max(0, Math.ceil((new Date(pairing.expiresAt).getTime() - Date.now()) / 60000))
+    mobileSyncPairExpiry.textContent = `${minutes} 分钟内有效`
+  } else mobileSyncPairExpiry.textContent = ''
+  const devices = Array.isArray(mobileSyncState.devices) ? mobileSyncState.devices : []
+  mobileSyncDeviceCount.textContent = `${devices.length} 台`
+  mobileSyncDeviceList.innerHTML = devices.length
+    ? devices.map(device => `<article class="mobile-sync-device"><div><strong>${escapeHtml(device.name)}</strong><span>${escapeHtml(formatDeviceTime(device.lastSeenAt || device.createdAt))}</span></div><button type="button" data-revoke-mobile-device="${escapeHtml(device.id)}">解除配对</button></article>`).join('')
+    : '<div class="mobile-sync-empty">还没有已配对设备。点击“添加手机”生成一次性二维码。</div>'
+  mobileSyncDeviceList.querySelectorAll('[data-revoke-mobile-device]').forEach(button => button.addEventListener('click', async () => {
+    try {
+      mobileSyncError.textContent = ''
+      renderMobileSync(await api.revokeMobileDevice(button.dataset.revokeMobileDevice))
+    } catch (error) { mobileSyncError.textContent = error.message }
+  }))
+}
+
+async function generateMobilePairing() {
+  refreshMobilePairing.disabled = true
+  mobileSyncError.textContent = ''
+  mobileSyncQrPlaceholder.textContent = '正在生成二维码…'
+  mobileSyncQr.removeAttribute('src')
+  try { renderMobileSync(await api.beginMobilePairing()) }
+  catch (error) {
+    mobileSyncQrPlaceholder.classList.remove('hidden')
+    mobileSyncQrPlaceholder.textContent = '暂时无法生成二维码'
+    mobileSyncError.textContent = error.message
+  } finally { refreshMobilePairing.disabled = false }
+}
+
+async function openMobileSync() {
+  mobileSyncOverlay.classList.remove('hidden')
+  mobileSyncOverlay.setAttribute('aria-hidden', 'false')
+  closePetPanel()
+  try {
+    renderMobileSync(await api.getMobileSyncState())
+    if (mobileSyncState.enabled && mobileSyncState.running && !mobileSyncState.devices?.length && !mobileSyncState.pairing?.qrDataUrl) await generateMobilePairing()
+  } catch (error) { mobileSyncError.textContent = error.message }
+}
+
+function closeMobileSync() {
+  mobileSyncOverlay.classList.add('hidden')
+  mobileSyncOverlay.setAttribute('aria-hidden', 'true')
+  runtimeView.focus()
+}
+
 function officialSettingsBootstrap() {
   if (window.__HARNESS_DESKTOP_UPDATE_INSTALLED__) return
   window.__HARNESS_DESKTOP_UPDATE_INSTALLED__ = true
@@ -376,6 +491,18 @@ function officialSettingsBootstrap() {
     #harness-desktop-update-row button:hover, #harness-desktop-update-row a:hover { background:var(--dsw-alias-interactive-bg-hover); }
     #harness-desktop-update-row button:disabled { cursor:default; opacity:.55; }
     #harness-desktop-update-row label { display:flex; align-items:center; gap:7px; margin-left:auto; color:var(--dsw-alias-label-secondary); font-size:12px; cursor:pointer; }
+    #harness-desktop-mobile-sync-row { display:flex; align-items:center; justify-content:space-between; gap:18px; border-bottom:1px solid var(--dsw-alias-border-l2); padding:16px 0; color:var(--dsw-alias-label-primary); }
+    #harness-desktop-mobile-sync-row .hd-mobile-copy { min-width:0; }
+    #harness-desktop-mobile-sync-row .hd-mobile-title { font-size:14px; line-height:22px; }
+    #harness-desktop-mobile-sync-row .hd-mobile-status { overflow:hidden; margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
+    #harness-desktop-mobile-sync-row .hd-mobile-actions { display:flex; flex:none; align-items:center; gap:8px; }
+    #harness-desktop-mobile-sync-row button { box-sizing:border-box; min-height:34px; border:0; border-radius:17px; padding:6px 14px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); font:inherit; font-size:13px; cursor:pointer; }
+    #harness-desktop-mobile-sync-row button:hover { background:var(--dsw-alias-interactive-bg-hover); }
+    #harness-desktop-mobile-sync-row .hd-mobile-switch { position:relative; width:42px; min-width:42px; height:24px; min-height:24px; border-radius:12px; padding:0; background:var(--dsw-alias-bg-module-platform); }
+    #harness-desktop-mobile-sync-row .hd-mobile-switch::after { content:''; position:absolute; left:3px; top:3px; width:18px; height:18px; border-radius:50%; background:var(--dsw-alias-label-tertiary); transition:transform .16s ease,background .16s ease; }
+    #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"] { background:var(--dsw-alias-brand-primary,#315efb); }
+    #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"]::after { background:#fff; transform:translateX(18px); }
+    #harness-desktop-mobile-sync-row .hd-mobile-switch:disabled { cursor:wait; opacity:.6; }
   `
   document.head.appendChild(style)
 
@@ -477,6 +604,54 @@ function officialSettingsBootstrap() {
     }
   }
 
+  const paintMobile = () => {
+    const state = window.__HARNESS_DESKTOP_MOBILE_SYNC_STATE__ || {}
+    const row = document.querySelector('#harness-desktop-mobile-sync-row')
+    if (!row) return
+    const enabled = Boolean(state.enabled && state.running)
+    const devices = Array.isArray(state.devices) ? state.devices.length : 0
+    const remote = state.remote || {}
+    const remoteLabel = remote.active === 'easytier' ? '国内线路' : remote.active === 'tailscale' ? '海外线路' : ''
+    const detail = enabled
+      ? remote.status === 'connected'
+        ? `${devices} 台设备 · ${remoteLabel || '远程通道'}已连接`
+        : `${devices} 台设备 · 局域网可用${remote.enabled === false ? '' : '，远程通道准备中'}`
+      : `${devices} 台已配对设备 · 当前已关闭`
+    setText(row.querySelector('[data-hd-mobile-status]'), detail)
+    const toggle = row.querySelector('[data-hd-mobile-toggle]')
+    toggle.setAttribute('aria-pressed', String(enabled))
+    toggle.setAttribute('aria-label', enabled ? '关闭手机同步' : '开启手机同步')
+    toggle.title = enabled ? '关闭手机同步' : '开启手机同步'
+    toggle.disabled = Boolean(state.changing)
+  }
+
+  const mountMobile = section => {
+    if (!section || section.querySelector('#harness-desktop-mobile-sync-row')) {
+      paintMobile()
+      return
+    }
+    const row = document.createElement('div')
+    row.id = 'harness-desktop-mobile-sync-row'
+    row.innerHTML = `
+      <div class="hd-mobile-copy">
+        <div class="hd-mobile-title">手机与远程同步</div>
+        <div class="hd-mobile-status" data-hd-mobile-status>首次扫码配对，之后自动连接</div>
+      </div>
+      <div class="hd-mobile-actions">
+        <button type="button" data-hd-mobile-manage>管理设备</button>
+        <button class="hd-mobile-switch" type="button" role="switch" aria-pressed="false" data-hd-mobile-toggle><span hidden>开关</span></button>
+      </div>
+    `
+    row.querySelector('[data-hd-mobile-manage]').addEventListener('click', () => request('open-mobile-sync'))
+    row.querySelector('[data-hd-mobile-toggle]').addEventListener('click', event => {
+      const enabled = event.currentTarget.getAttribute('aria-pressed') !== 'true'
+      event.currentTarget.disabled = true
+      request('mobile-sync-toggle', { enabled: enabled ? '1' : '0' })
+    })
+    section.appendChild(row)
+    paintMobile()
+  }
+
   const mount = () => {
     const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
     if (!dialog) return
@@ -495,6 +670,7 @@ function officialSettingsBootstrap() {
     const content = dialog.querySelector(':scope > nav + div')
     const options = content?.lastElementChild
     const section = slot?.parentElement || options?.firstElementChild || options
+    mountMobile(section)
     if (!section || section.querySelector('#harness-desktop-update-row')) {
       paint()
       return
@@ -544,6 +720,11 @@ function officialSettingsBootstrap() {
   window.__HARNESS_DESKTOP_RENDER_UPDATES__ = () => {
     mount()
     paint()
+    paintMobile()
+  }
+  window.__HARNESS_DESKTOP_RENDER_MOBILE_SYNC__ = () => {
+    mount()
+    paintMobile()
   }
   let mountScheduled = false
   const scheduleMount = () => {
@@ -711,6 +892,12 @@ async function publishUpdateState() {
   await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_UPDATE_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_UPDATES__?.();`, true).catch(() => {})
 }
 
+async function publishMobileSyncState() {
+  if (!runtimeView.getURL()) return
+  const serialized = JSON.stringify(mobileSyncState).replaceAll('<', '\\u003c')
+  await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_MOBILE_SYNC_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_MOBILE_SYNC__?.();`, true).catch(() => {})
+}
+
 async function publishAppearanceState() {
   applyShellTheme()
   await themeIntegration.publish(runtimeView, appearanceState, themeCatalog).catch(() => {})
@@ -756,6 +943,7 @@ runtimeView.addEventListener('dom-ready', async () => {
   await modelRoutingIntegration.install(runtimeView).catch(() => {})
   await workspaceLinksIntegration.install(runtimeView).catch(() => {})
   await publishUpdateState()
+  await publishMobileSyncState()
   await publishAppearanceState()
   await publishModelRoutingState()
   startupWebviewReady = true
@@ -788,6 +976,17 @@ runtimeView.addEventListener('will-navigate', event => {
     if (localPath) api.openLocal(localPath, { reveal }).catch(() => {})
   } else if (target.hostname === 'open-config-file') {
     api.openHarnessSettings().catch(() => {})
+  } else if (target.hostname === 'open-mobile-sync') {
+    openMobileSync()
+  } else if (target.hostname === 'mobile-sync-toggle') {
+    const enabled = target.searchParams.get('enabled') !== '0'
+    api.setMobileSyncEnabled(enabled).then(state => {
+      renderMobileSync(state)
+      publishMobileSyncState()
+    }).catch(error => {
+      mobileSyncError.textContent = error.message
+      publishMobileSyncState()
+    })
   } else if (target.hostname === 'refresh-model-routing') {
     api.getModelRouting().then(state => {
       modelRoutingState = { ...state, saving: false, saved: false, error: '' }
@@ -841,6 +1040,47 @@ retryRuntime.addEventListener('click', () => {
 })
 
 skinQuickButton.addEventListener('click', openSkinPicker)
+closeMobileSyncButton.addEventListener('click', closeMobileSync)
+mobileSyncOverlay.addEventListener('click', event => {
+  if (event.target === mobileSyncOverlay) closeMobileSync()
+})
+mobileSyncToggle.addEventListener('click', async () => {
+  mobileSyncToggle.disabled = true
+  mobileSyncError.textContent = ''
+  try {
+    renderMobileSync(await api.setMobileSyncEnabled(!(mobileSyncState.enabled && mobileSyncState.running)))
+    await publishMobileSyncState()
+    if (mobileSyncState.enabled && mobileSyncState.running && !mobileSyncState.devices?.length) await generateMobilePairing()
+  } catch (error) { mobileSyncError.textContent = error.message }
+  finally { mobileSyncToggle.disabled = false }
+})
+refreshMobilePairing.addEventListener('click', generateMobilePairing)
+mobileRemoteToggle.addEventListener('change', async () => {
+  mobileRemoteToggle.disabled = true
+  mobileSyncError.textContent = ''
+  try {
+    renderMobileSync(await api.setMobileSyncRemoteEnabled(mobileRemoteToggle.checked))
+    await publishMobileSyncState()
+  } catch (error) {
+    mobileSyncError.textContent = error.message
+    mobileRemoteToggle.checked = !mobileRemoteToggle.checked
+  } finally { mobileRemoteToggle.disabled = false }
+})
+mobileTransportPreference.addEventListener('change', async () => {
+  mobileTransportPreference.disabled = true
+  mobileSyncError.textContent = ''
+  try {
+    renderMobileSync(await api.setMobileSyncTransportPreference(mobileTransportPreference.value))
+    await publishMobileSyncState()
+  } catch (error) { mobileSyncError.textContent = error.message }
+  finally { mobileTransportPreference.disabled = false }
+})
+copyMobileSyncUrl.addEventListener('click', async () => {
+  if (!mobileSyncUrl.value) return
+  await api.copyMobileSyncText(mobileSyncUrl.value)
+  copyMobileSyncUrl.textContent = '已复制'
+  setTimeout(() => { copyMobileSyncUrl.textContent = '复制' }, 1200)
+})
 petQuickButton.addEventListener('click', () => {
   if (petPanel.classList.contains('hidden')) openPetPanel()
   else closePetPanel()
@@ -904,6 +1144,7 @@ updateNowButton.addEventListener('click', async () => {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !petPanel.classList.contains('hidden')) closePetPanel()
   if (event.key === 'Escape' && !skinPickerOverlay.classList.contains('hidden')) closeSkinPicker()
+  if (event.key === 'Escape' && !mobileSyncOverlay.classList.contains('hidden')) closeMobileSync()
   if (event.key === 'Escape' && !updateReadyOverlay.classList.contains('hidden')) closeUpdateReady()
   if (event.key === 'Escape' && !updateNoticeOverlay.classList.contains('hidden')) closeUpdateNotice()
 })
@@ -929,6 +1170,10 @@ skinApplyCustomButton.addEventListener('click', async () => {
 })
 
 api.onRuntimeState(renderRuntimeState)
+api.onMobileSyncState(state => {
+  renderMobileSync(state)
+  publishMobileSyncState()
+})
 api.onPetState(renderPetState)
 api.onUpdateResult(result => {
   updateState = { ...updateState, ...result, checking: false }
@@ -946,6 +1191,7 @@ async function startOfficialWorkspace() {
   appearanceState = await api.getAppearance()
   petState = await api.getPetState()
   modelRoutingState = { ...await api.getModelRouting(), saving: false, saved: false, error: '' }
+  mobileSyncState = await api.getMobileSyncState()
   const themeAssets = await api.getThemeAssets()
   themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)
     .filter(theme => distributionState.nonCommercialContentAvailable || !theme.nonCommercial)
@@ -953,6 +1199,7 @@ async function startOfficialWorkspace() {
   if (!distributionState.desktopPetAvailable) petPanel.classList.add('hidden')
   applyShellTheme()
   renderPetState()
+  renderMobileSync()
   renderSkinPicker()
   const initial = await api.getRuntimeState()
   renderRuntimeState(initial)

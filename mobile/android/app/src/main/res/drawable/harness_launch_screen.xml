@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:centerX="50%"
+                android:centerY="42%"
+                android:gradientRadius="520dp"
+                android:startColor="#FFFFFFFF"
+                android:centerColor="#FFF4F8FF"
+                android:endColor="#FFEDF3FB" />
+        </shape>
+    </item>
+    <item
+        android:width="112dp"
+        android:height="112dp"
+        android:gravity="center"
+        android:drawable="@drawable/deepseek_app_icon" />
+</layer-list>

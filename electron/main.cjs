@@ -1,7 +1,7 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, screen, session, shell, Tray } = require('electron')
 const { spawn } = require('node:child_process')
 const { createHash } = require('node:crypto')
-const { existsSync } = require('node:fs')
+const { existsSync, mkdirSync } = require('node:fs')
 const { copyFile, mkdir, open, readFile, stat, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
@@ -16,15 +16,23 @@ const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-pro
 const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
 const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
+const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
+const { createEasyTierComponentInstaller } = require('./bridge/network-component-service.cjs')
+const { SyncTransportManager } = require('./bridge/sync-transport-manager.cjs')
+const { createEasyTierAdapter } = require('./bridge/sync-transports/easytier-adapter.cjs')
+const { createTailscaleAdapter } = require('./bridge/sync-transports/tailscale-adapter.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
 const { beginWindowDrag, moveWindowDrag, endWindowDrag } = require('./bridge/window-drag-service.cjs')
 const { createDesktopTray } = require('./desktop-tray.cjs')
 const { distributionInfo, isStoreDistribution } = require('./distribution.cjs')
 const { AppStateStore } = require('./store/app-state-store.cjs')
+const { MobileSyncStore } = require('./store/mobile-sync-store.cjs')
 const { PetDomainService } = require('./pet/pet-domain-service.cjs')
 const { PetEventAdapter } = require('./pet/pet-event-adapter.cjs')
 const { PetStateStore } = require('./pet/pet-state-store.cjs')
 const { PetWindowController } = require('./pet/pet-window.cjs')
+const { THEME_CATALOG } = require('../renderer/theme-catalog.js')
+const { mobileBootstrapSource } = require('../renderer/theme-integration.js')
 const desktopPackage = require('../package.json')
 
 const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3080'
@@ -50,6 +58,9 @@ let desktopTray = null
 let isQuitting = false
 let runtimeNodeModulesRoot = null
 let runtimeInitializationPromise = null
+let mobileSyncStore = null
+let mobileSyncService = null
+let mobileSyncTransportManager = null
 
 const BUNDLED_THEME_ASSETS = Object.freeze([
   'maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -71,11 +82,48 @@ function setRuntimeState(next) {
     petAdapter.stop()
     petDomain?.resetTransient()
   }
+  mobileSyncService?.publish()
 }
 
 function ensureStateStore() {
   if (!appStateStore) appStateStore = new AppStateStore(path.join(app.getPath('userData'), 'app-state.json'))
   return appStateStore
+}
+
+function ensureMobileSyncService() {
+  if (mobileSyncService) return mobileSyncService
+  const userData = app.getPath('userData')
+  const componentRoot = path.join(userData, 'network-components')
+  const stateDir = path.join(userData, 'mobile-sync-network')
+  mkdirSync(componentRoot, { recursive: true })
+  mkdirSync(stateDir, { recursive: true })
+  mobileSyncStore = new MobileSyncStore(path.join(userData, 'mobile-sync.json'))
+  const adapterOptions = {
+    resourcesPath: process.resourcesPath,
+    componentRoot,
+    developmentRoot: path.resolve(__dirname, '..'),
+    ensureBinary: createEasyTierComponentInstaller({
+      componentRoot,
+      fetchImpl: (url, options) => net.fetch(url, options)
+    }),
+    resolveProxy: url => session.defaultSession.resolveProxy(url)
+  }
+  mobileSyncTransportManager = new SyncTransportManager({
+    store: mobileSyncStore,
+    adapters: [createEasyTierAdapter(adapterOptions), createTailscaleAdapter(adapterOptions)]
+  })
+  mobileSyncService = new MobileSyncService({
+    store: mobileSyncStore,
+    getRuntimeTarget: () => runtimeState.status === 'ready' ? runtimeState.url : null,
+    transportManager: mobileSyncTransportManager,
+    stateDir,
+    getAppearance: mobileAppearancePayload,
+    setAppearance: updateMobileAppearance,
+    getThemeScript: () => `${mobileBootstrapSource};(() => { fetch('/__harness_mobile__/appearance', { credentials: 'same-origin' }).then(response => { if (!response.ok) throw new Error('appearance ' + response.status); return response.json(); }).then(payload => { window.__HARNESS_DESKTOP_THEME_STATE__ = payload.state; window.__HARNESS_DESKTOP_THEMES__ = payload.catalog; window.__HARNESS_DESKTOP_RENDER_THEMES__?.(); window.__harnessMobileThemeBridgeLoading = false; }).catch(error => { window.__harnessMobileThemeBridgeLoading = false; console.warn('Unable to load mobile appearance:', error); }); })();`,
+    readThemeAsset: readMobileThemeAsset
+  })
+  mobileSyncService.on('state', state => send('mobileSync:state', state))
+  return mobileSyncService
 }
 
 function desktopDshHome() {
@@ -206,6 +254,66 @@ async function bundledThemeAssets() {
     return [relative, url]
   }))
   return Object.fromEntries(entries)
+}
+
+function mobileThemeAssetUrl(relative) {
+  return `/__harness_mobile__/theme-assets/${String(relative).split('/').map(encodeURIComponent).join('/')}`
+}
+
+async function mobileAppearancePayload() {
+  let state = ensureStateStore().get().appearance
+  if (STORE_BUILD && state.themeId === 'maid-atelier') {
+    state = ensureStateStore().updateAppearance({ themeId: 'porcelain-mist' }).appearance
+  }
+  const backgroundFile = state.customTheme?.backgroundFile
+  const customBackgroundFile = backgroundFile && path.join(app.getPath('userData'), 'themes', backgroundFile)
+  const catalog = THEME_CATALOG
+    .filter(theme => !STORE_BUILD || !theme.nonCommercial)
+    .map(theme => ({
+      ...theme,
+      assets: Object.fromEntries(Object.entries(theme.assets || {}).map(([name, relative]) => [name, mobileThemeAssetUrl(relative.replace(/^\.\/themes\//, ''))]))
+    }))
+  return {
+    state: {
+      ...state,
+      customBackgroundDataUrl: customBackgroundFile && existsSync(customBackgroundFile)
+        ? mobileThemeAssetUrl('custom-background')
+        : null
+    },
+    catalog
+  }
+}
+
+async function updateMobileAppearance(payload = {}) {
+  const action = String(payload.action || '')
+  const values = payload.values && typeof payload.values === 'object' ? payload.values : {}
+  if (action === 'set-theme') {
+    const themeId = String(values.id || '')
+    if (STORE_BUILD && themeId === 'maid-atelier') throw new Error('Microsoft Store 版本不包含非商业授权主题。')
+    ensureStateStore().updateAppearance({ themeId })
+  } else if (action === 'save-custom-theme') {
+    ensureStateStore().updateAppearance({ themeId: 'custom', customTheme: values })
+  } else {
+    throw new Error('Unsupported appearance action.')
+  }
+  return mobileAppearancePayload()
+}
+
+async function readMobileThemeAsset(relative) {
+  if (relative === 'custom-background') {
+    const backgroundFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
+    if (!backgroundFile) return null
+    const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
+    if (!existsSync(file)) return null
+    const info = await stat(file)
+    if (!info.isFile() || info.size > 20 * 1024 * 1024) return null
+    return { data: await readFile(file), mime: themeAssetMime(file) }
+  }
+  const normalized = String(relative || '').replaceAll('\\', '/')
+  if (STORE_BUILD || !BUNDLED_THEME_ASSETS.includes(normalized)) return null
+  const root = path.join(__dirname, '..', 'renderer', 'themes')
+  const file = path.join(root, ...normalized.split('/'))
+  return { data: await readFile(file), mime: themeAssetMime(file) }
 }
 
 async function chooseCustomThemeBackground() {
@@ -817,6 +925,16 @@ ipcMain.on('pet:setHitProfile', (_event, profile) => petWindowController?.setHit
 ipcMain.handle('settings:openDocument', () => openHarnessSettingsDocument())
 ipcMain.handle('models:routing:get', () => getModelRouting(modelRoutingOptions()))
 ipcMain.handle('models:routing:save', (_event, routing) => saveModelRouting(modelRoutingOptions(), routing || {}))
+ipcMain.handle('mobileSync:getState', () => ensureMobileSyncService().state())
+ipcMain.handle('mobileSync:setEnabled', (_event, enabled) => ensureMobileSyncService().setEnabled(Boolean(enabled)))
+ipcMain.handle('mobileSync:setRemoteEnabled', (_event, enabled) => ensureMobileSyncService().setRemoteEnabled(Boolean(enabled)))
+ipcMain.handle('mobileSync:setTransportPreference', (_event, preference) => ensureMobileSyncService().setTransportPreference(String(preference || 'auto')))
+ipcMain.handle('mobileSync:beginPairing', () => ensureMobileSyncService().beginPairing())
+ipcMain.handle('mobileSync:revokeDevice', (_event, id) => ensureMobileSyncService().revokeDevice(String(id || '')))
+ipcMain.handle('mobileSync:copy', (_event, value) => {
+  clipboard.writeText(String(value || ''))
+  return true
+})
 ipcMain.handle('runtime:start', (_event, options) => startRuntime(options || {}))
 ipcMain.handle('runtime:state', () => runtimeState)
 ipcMain.on('window:beginDrag', (event, point) => {
@@ -868,6 +986,10 @@ app.whenReady().then(async () => {
     })
   })()
   if (!STORE_BUILD) ensurePetSystem()
+  const syncService = ensureMobileSyncService()
+  if (mobileSyncStore.get().enabled) {
+    syncService.start({ persist: false }).catch(error => console.warn(`Unable to restore mobile sync: ${error.message}`))
+  }
   ensureDesktopTray()
   createWindow()
   runtimeInitializationPromise.catch(error => console.warn(`Unable to prepare bundled Harness runtime: ${error.message}`))
@@ -884,6 +1006,7 @@ app.on('before-quit', () => {
   petWindowController?.dispose()
   desktopTray?.destroy()
   desktopTray = null
+  mobileSyncService?.stop({ persist: false }).catch(() => {})
   stopRuntime()
 })
 app.on('window-all-closed', () => {

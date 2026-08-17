@@ -11,4 +11,5 @@ store/*.pfx
 !.env.example
 .acceptance-*
 .artifacts/
+.android-build/
 __pycache__/
