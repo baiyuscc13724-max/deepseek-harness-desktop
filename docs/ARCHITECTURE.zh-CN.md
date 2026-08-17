@@ -7,7 +7,7 @@ DeepSeek Harness 官方 Web UI 是唯一工作台。桌面端不复制会话、�
 ```text
 Electron Main
   ├─ Runtime Manager ──→ bundled @deepseek-ai/dsh web
-  ├─ UpdateService ────→ GitHub Releases + DeepSeek 官方 manifest
+  ├─ UpdateService ────→ 国内/全球发布源 + DeepSeek 官方 npm manifest
   ├─ AppStateStore ────→ 仅更新偏好
   ├─ Packaged Self-Test
   └─ BrowserWindow
@@ -54,7 +54,11 @@ Renderer 无 Node.js、文件系统或任意进程启动权限。
 
 ## 更新边界
 
-桌面版与核心更新是两条独立链路。桌面版读取项目 GitHub Releases，选择 Windows 中文安装包，下载后强制核对同一 Release 中的 `SHA256SUMS.txt`，校验通过才启动原位升级；安装版与便携版都可进入这条升级链路。核心读取 DeepSeek 官方 manifest，发现新版本时只提示维护者和用户，不在安装目录内直接运行包管理器或静默替换代码。
+桌面版与核心更新是两条独立链路。桌面版按优先级读取多个项目发布源，资产可以通过 `mirror_urls` 声明国内镜像与全球后备地址；清单或文件不可达时自动尝试下一个地址，下载后仍强制核对同一 Release 的 `SHA256SUMS.txt`，校验通过才启动原位升级。`HARNESS_DESKTOP_UPDATE_FEEDS` 可用分号配置多个清单地址，旧的单地址变量继续兼容。
+
+核心版本查询依次使用 npmmirror、npm 官方 Registry 和官方 GitHub manifest。核心代码与桌面补丁一起打包并经过兼容验证，不在安装目录内直接运行包管理器或静默替换代码；因此官方先发布新核心时，界面会明确显示“随桌面兼容版更新”，而不是显示一个无法执行的更新动作。
+
+开发与打包使用 `package.json` 中的 Electron 和 electron-builder 国内二进制镜像配置，避免无代理环境在下载打包工具时访问 GitHub 超时。这只影响公开构建依赖，不改变应用运行时的用户代理设置。
 
 `AppStateStore` 只保存自动检查开关、发布通道和最后检查时间。
 

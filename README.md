@@ -20,14 +20,14 @@
 
 ## 下载
 
-当前稳定版：**v1.0.18** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.18)
+当前稳定版：**v1.0.19** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.19)
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.18/Harness-Desktop-1.0.18-win-x64.exe) |
-| Windows 便携版 | 不想安装；解压后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.18/Harness-Desktop-1.0.18-portable-x64.zip) |
-| Android 手机端（测试版） | 与桌面端扫码配对并跨网络同步 | [下载 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.18/Harness-Mobile-1.0.18-android-universal-beta.apk) |
-| SHA-256 校验文件 | 手动核对安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.18/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.19/Harness-Desktop-1.0.19-win-x64.exe) |
+| Windows 便携版 | 不想安装；解压后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.19/Harness-Desktop-1.0.19-portable-x64.zip) |
+| Android 手机端（测试版） | 与桌面端扫码配对并跨网络同步 | [下载 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.19/Harness-Mobile-1.0.19-android-universal-beta.apk) |
+| SHA-256 校验文件 | 手动核对安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.19/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 
@@ -49,7 +49,7 @@ scoop install harness-desktop/harness-desktop
 | 外观皮肤 | 从顶部快捷入口切换配色和背景；支持开源主题与自定义外观 |
 | DSH 插件与 Skills | 在应用内发现、安装和更新；英文简介自动生成中文摘要，并保留原文 |
 | 主模型与子代理 | 子代理可以跟随主模型，也可以单独选择服务商和模型 |
-| 桌面更新 | 后台下载、SHA-256 校验、中文安装引导，并在更新前展示改动内容 |
+| 桌面更新 | 国内源优先、全球源自动回退、SHA-256 校验和中文安装引导，并在更新前展示改动内容 |
 | 用户配置保护 | 主题、插件和模型路由保存在用户目录，更新官方 Harness 时不会被覆盖 |
 | Android 手机同步 | 电脑顶部手机入口扫码配对；手机和电脑使用同一工作区、会话、任务状态与模型配置 |
 
@@ -70,7 +70,7 @@ Harness Desktop 负责 Windows 窗口、运行时启动、安装、更新和桌�
 - Renderer 没有 Node.js 权限。
 - WebView 只允许访问本机 Harness Runtime。
 - 外部链接通过受限 IPC 交给系统浏览器。
-- 更新只接受 GitHub Release 的 HTTPS 安装包，并强制匹配公开的 SHA-256。
+- 更新只接受项目配置的 HTTPS 安装包；国内镜像不可用时自动换到后备源，并强制匹配公开的 SHA-256。
 - 用户插件和外观设置不会随官方 Harness 更新被覆盖。
 - 手机端只通过带设备鉴权、可切换线路的适配层加载当前官方工作台，不绑定官方内部 API；官方页面和协议变化不会形成两套客户端维护负担。
 

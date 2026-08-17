@@ -512,6 +512,9 @@ function officialSettingsBootstrap() {
     if (result.error) return `检查失败：${result.error}`
     const current = result.currentVersion || '未知'
     const latest = result.latestVersion || current
+    if (result.kind === 'harness' && result.updateAvailable && result.updatePolicy === 'desktop-bundled') {
+      return `${current} → ${latest}（官方已发布，随桌面兼容版更新）`
+    }
     return result.updateAvailable ? `${current} → ${latest}（有新版）` : `${current}（已是最新）`
   }
 
@@ -536,7 +539,8 @@ function officialSettingsBootstrap() {
     const state = window.__HARNESS_DESKTOP_UPDATE_STATE__ || {}
     const row = document.querySelector('#harness-desktop-update-row')
     if (!row) return
-    const hasUpdate = Boolean(state.app?.updateAvailable || state.harness?.updateAvailable)
+    const hasAppUpdate = Boolean(state.app?.updateAvailable)
+    const hasHarnessUpdate = Boolean(state.harness?.updateAvailable)
     const failed = Boolean(state.app?.error || state.harness?.error)
     const checked = state.preferences?.lastCheckedAt
     const progress = state.installProgress
@@ -555,8 +559,10 @@ function officialSettingsBootstrap() {
         ? `桌面版更新失败：${state.installError}`
         : state.checking
           ? '正在检查桌面版和官方 Harness…'
-          : hasUpdate
-            ? '检测到新版本'
+          : hasAppUpdate
+            ? '检测到可下载安装的桌面新版'
+            : hasHarnessUpdate
+              ? '官方核心有新版；兼容验证后会随桌面版更新'
             : failed
               ? '部分更新源检查失败'
               : checked
