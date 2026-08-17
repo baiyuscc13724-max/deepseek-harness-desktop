@@ -89,6 +89,10 @@ final class PairingProfile {
                 String legacyUrl = queryParameter(input, "url");
                 return fromLegacy(legacyUrl);
             }
+            if (PairingLinkValidator.isSafeHarnessSetupUrl(normalized)) {
+                String payload = PairingLinkValidator.extractSetupPayload(normalized);
+                return payload.isEmpty() ? null : fromPayload(payload);
+            }
             return fromLegacy(normalized);
         } catch (RuntimeException | JSONException error) {
             return null;

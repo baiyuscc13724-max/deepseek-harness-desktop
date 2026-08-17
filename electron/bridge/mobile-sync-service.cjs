@@ -4,11 +4,13 @@ const http = require('node:http')
 const os = require('node:os')
 const httpProxy = require('http-proxy')
 const QRCode = require('qrcode')
+const { version: DESKTOP_VERSION } = require('../../package.json')
 
 const BRIDGE_API_VERSION = 1
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
+const DEFAULT_MOBILE_DOWNLOAD_URL = `https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v${DESKTOP_VERSION}/Harness-Mobile-${DESKTOP_VERSION}-android-universal-beta.apk`
 
 function sha256(value) {
   return createHash('sha256').update(String(value)).digest('hex')
@@ -69,6 +71,17 @@ function pairingErrorPage(message = '请回到电脑端重新生成配对二维�
 
 function runtimeUnavailablePage() {
   return '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Harness Mobile</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f8f7;color:#173c3a;font:16px/1.6 system-ui,"Microsoft YaHei",sans-serif}.card{max-width:420px;margin:24px;padding:28px;border:1px solid #c8ddda;border-radius:18px;background:#fff}h1{margin:0 0 10px;font-size:22px}p{margin:0;color:#55706e}</style><main class="card"><h1>电脑工作台尚未就绪</h1><p>请保持 Harness Desktop 正在运行，稍后下拉刷新。</p></main></html>'
+}
+
+function mobileDownloadRedirect(response, downloadUrl) {
+  response.writeHead(302, {
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'none'",
+    'Location': downloadUrl,
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff'
+  })
+  response.end()
 }
 
 function writeResponse(response, statusCode, body, headers = {}) {
@@ -133,6 +146,7 @@ class MobileSyncService extends EventEmitter {
     networkInterfaces,
     now = () => Date.now(),
     qrFactory = value => QRCode.toDataURL(value, { errorCorrectionLevel: 'M', margin: 1, width: 280 }),
+    mobileDownloadUrl = DEFAULT_MOBILE_DOWNLOAD_URL,
     getAppearance = null,
     setAppearance = null,
     getThemeScript = null,
@@ -150,6 +164,7 @@ class MobileSyncService extends EventEmitter {
     this.networkInterfaces = networkInterfaces
     this.now = now
     this.qrFactory = qrFactory
+    this.mobileDownloadUrl = mobileDownloadUrl
     this.getAppearance = getAppearance
     this.setAppearance = setAppearance
     this.getThemeScript = getThemeScript
@@ -205,6 +220,7 @@ class MobileSyncService extends EventEmitter {
         ? {
             url: this.pairing.url || null,
             appUrl: this.pairing.appUrl || null,
+            shareUrl: this.pairing.shareUrl || null,
             qrDataUrl: this.pairing.qrDataUrl || null,
             expiresAt: new Date(this.pairing.expiresAt).toISOString()
           }
@@ -322,9 +338,12 @@ class MobileSyncService extends EventEmitter {
       transports: this.transportManager?.pairingTransports?.() || []
     })).toString('base64url')
     const appUrl = `harnessmobile://pair?payload=${encodeURIComponent(payload)}`
-    const qrDataUrl = await this.qrFactory(appUrl)
+    const shareUrl = `${origin}/__harness_mobile__/setup?payload=${encodeURIComponent(payload)}`
+    const qrDataUrl = await this.qrFactory(shareUrl)
     this.pairing.url = url
     this.pairing.appUrl = appUrl
+    this.pairing.shareUrl = shareUrl
+    this.pairing.payload = payload
     this.pairing.qrDataUrl = qrDataUrl
     this.publish()
     return this.state()
@@ -387,6 +406,16 @@ class MobileSyncService extends EventEmitter {
     if (requestUrl.pathname === '/__harness_mobile__/health') {
       response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, pairingRequired: true }))
+      return
+    }
+    if (requestUrl.pathname === '/__harness_mobile__/setup' && request.method === 'GET') {
+      const payload = requestUrl.searchParams.get('payload') || ''
+      const current = this.pairing
+      if (!current || current.expiresAt <= this.now() || !payload || payload !== current.payload) {
+        writeResponse(response, 410, pairingErrorPage('下载二维码已经失效，请回到电脑端点击“添加手机”重新生成。'))
+        return
+      }
+      mobileDownloadRedirect(response, this.mobileDownloadUrl)
       return
     }
     const pairMatch = requestUrl.pathname.match(/^\/__harness_mobile__\/pair\/([A-Za-z0-9_-]+)$/)

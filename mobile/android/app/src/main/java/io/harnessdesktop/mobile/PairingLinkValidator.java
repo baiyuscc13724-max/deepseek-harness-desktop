@@ -1,6 +1,8 @@
 package io.harnessdesktop.mobile;
 
 import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 
 final class PairingLinkValidator {
     private PairingLinkValidator() {}
@@ -18,6 +20,36 @@ final class PairingLinkValidator {
         } catch (RuntimeException error) {
             return false;
         }
+    }
+
+    static boolean isSafeHarnessSetupUrl(String value) {
+        try {
+            URI uri = URI.create(value);
+            return "http".equalsIgnoreCase(uri.getScheme())
+                && uri.getHost() != null
+                && uri.getPort() >= 1024
+                && isPrivateOrOverlayIpv4(uri.getHost())
+                && "/__harness_mobile__/setup".equals(uri.getPath());
+        } catch (RuntimeException error) {
+            return false;
+        }
+    }
+
+    static String extractSetupPayload(String value) {
+        if (!isSafeHarnessSetupUrl(value)) return "";
+        try {
+            String query = URI.create(value).getRawQuery();
+            if (query == null) return "";
+            for (String part : query.split("&")) {
+                int separator = part.indexOf('=');
+                String key = separator < 0 ? part : part.substring(0, separator);
+                if (!"payload".equals(URLDecoder.decode(key, StandardCharsets.UTF_8))) continue;
+                return URLDecoder.decode(separator < 0 ? "" : part.substring(separator + 1), StandardCharsets.UTF_8);
+            }
+        } catch (RuntimeException ignored) {
+            // Invalid QR input is handled as an empty payload by the caller.
+        }
+        return "";
     }
 
     static String extractHttpPairingUrl(String value) {

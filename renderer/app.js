@@ -416,7 +416,7 @@ function renderMobileSync(next = mobileSyncState) {
             : running ? '等待远程通道启动' : '手机同步开启后可用'
   mobileRemoteStatus.textContent = remoteStatusText
   const pairing = mobileSyncState.pairing || {}
-  mobileSyncUrl.value = pairing.url || ''
+  mobileSyncUrl.value = pairing.shareUrl || pairing.appUrl || pairing.url || ''
   mobileSyncPairCard.classList.toggle('hidden', !pairing.qrDataUrl)
   mobileSyncQrPlaceholder.classList.toggle('hidden', Boolean(pairing.qrDataUrl))
   if (pairing.qrDataUrl) mobileSyncQr.src = pairing.qrDataUrl

@@ -77,7 +77,7 @@
                 </select>
               </label>
             </section>
-            <div class="mobile-sync-warning">二维码只在首次添加手机时使用，10 分钟内有效且只能使用一次。以后打开开关即可自动连接，不需要再次扫码。</div>
+            <div class="mobile-sync-warning"><strong>第一次使用：</strong>先用手机相机、微信或浏览器扫码下载并安装 APP；再打开 Harness Mobile，点击“扫码连接电脑”，重新扫描同一二维码。<br /><strong>已经安装：</strong>直接用 Harness Mobile 扫码即可连接。二维码 10 分钟内有效且只能成功配对一次。</div>
             <div class="mobile-sync-add-row"><button id="refreshMobilePairing" type="button">添加手机</button><span id="mobileSyncPairExpiry"></span></div>
             <section id="mobileSyncPairCard" class="mobile-sync-pair-card hidden">
               <div class="mobile-sync-qr-wrap">
@@ -85,8 +85,8 @@
                 <span id="mobileSyncQrPlaceholder">正在生成二维码…</span>
               </div>
               <div class="mobile-sync-pair-copy">
-                <h3>用 Harness Mobile 扫码</h3>
-                <p>扫码后，手机会打开与电脑相同的项目、会话和任务状态，并可继续发送消息。</p>
+                <h3>一个二维码，下载和连接都能用</h3>
+                <p><strong>相机、微信或浏览器扫码：</strong>下载 Harness Mobile。<br /><strong>Harness Mobile 内扫码：</strong>立即连接这台电脑，并打开相同的项目、会话和任务状态。</p>
                 <label for="mobileSyncUrl">手动配对地址</label>
                 <div class="mobile-sync-url-row">
                   <input id="mobileSyncUrl" type="text" readonly value="" />

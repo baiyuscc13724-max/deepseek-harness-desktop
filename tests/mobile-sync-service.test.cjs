@@ -77,6 +77,45 @@ test('mobile bridge requires one-time pairing and proxies HTTP without protocol 
   assert.equal(service.state().devices.length, 1)
 })
 
+test('one QR downloads the Android app in browsers without consuming app pairing', async t => {
+  const runtime = await createRuntime('official')
+  let encodedQrValue = ''
+  const service = new MobileSyncService({
+    store: createStore(),
+    getRuntimeTarget: () => runtime.url,
+    host: '127.0.0.1',
+    port: 0,
+    mobileDownloadUrl: 'https://downloads.example.test/Harness-Mobile.apk',
+    qrFactory: async value => {
+      encodedQrValue = value
+      return `qr:${value}`
+    }
+  })
+  t.after(async () => {
+    await service.stop()
+    await runtime.close()
+  })
+  await service.start()
+  const state = await service.beginPairing()
+  assert.equal(encodedQrValue, state.pairing.shareUrl)
+  assert.match(state.pairing.shareUrl, /\/__harness_mobile__\/setup\?payload=/)
+  assert.match(state.pairing.appUrl, /^harnessmobile:\/\/pair\?payload=/)
+
+  const browserResponse = await fetch(state.pairing.shareUrl, { redirect: 'manual' })
+  assert.equal(browserResponse.status, 302)
+  assert.equal(browserResponse.headers.get('location'), 'https://downloads.example.test/Harness-Mobile.apk')
+  assert.equal(service.state().devices.length, 0)
+  assert.ok(service.state().pairing)
+
+  const appResponse = await fetch(state.pairing.url, {
+    redirect: 'manual',
+    headers: { 'User-Agent': 'HarnessMobile/1 Android 16; Pixel' }
+  })
+  assert.equal(appResponse.status, 302)
+  assert.equal(service.state().devices.length, 1)
+  assert.equal(service.state().pairing, null)
+})
+
 test('mobile bridge proxies WebSocket and follows a replaced official runtime target', async t => {
   const runtimeA = await createRuntime('official-a')
   const runtimeB = await createRuntime('official-b')
