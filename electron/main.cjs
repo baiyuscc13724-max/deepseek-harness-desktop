@@ -2,7 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, 
 const { spawn } = require('node:child_process')
 const { createHash } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { copyFile, mkdir, open, readFile, stat, writeFile } = require('node:fs/promises')
+const { copyFile, mkdir, open, readFile, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 
@@ -13,7 +13,7 @@ const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { resolveDesktopDshHome } = require('./bridge/dsh-home.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
-const { DEFAULT_APP_FEED, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
+const { DEFAULT_APP_FEEDS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
 const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
@@ -514,7 +514,10 @@ async function checkUpdates() {
     ? resolved.version
     : desktopPackage.dependencies?.['@deepseek-ai/dsh'] || 'unknown'
   const preferences = store.get().updates
-  const feedUrl = String(process.env.HARNESS_DESKTOP_UPDATE_FEED || DEFAULT_APP_FEED).trim()
+  const configuredFeeds = String(process.env.HARNESS_DESKTOP_UPDATE_FEEDS || process.env.HARNESS_DESKTOP_UPDATE_FEED || '').trim()
+  const feedUrls = configuredFeeds
+    ? configuredFeeds.split(/[;,\r\n]+/).map(value => value.trim()).filter(Boolean)
+    : DEFAULT_APP_FEEDS
   const channel = preferences.channel === 'prerelease' || app.getVersion().includes('-') ? 'prerelease' : 'stable'
   const appUpdateCheck = STORE_BUILD
     ? Promise.resolve({
@@ -525,8 +528,8 @@ async function checkUpdates() {
         updateAvailable: false,
         storeManaged: true
       })
-    : checkAppUpdate({ currentVersion: app.getVersion(), feedUrl, channel, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
-        kind: 'app', configured: Boolean(feedUrl), currentVersion: app.getVersion(), updateAvailable: false, error: error.message
+    : checkAppUpdate({ currentVersion: app.getVersion(), feedUrls, channel, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
+        kind: 'app', configured: Boolean(feedUrls.length), currentVersion: app.getVersion(), updateAvailable: false, error: error.message
       }))
   const [appResult, harnessResult] = await Promise.all([
     appUpdateCheck,
@@ -588,7 +591,17 @@ async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 10
   }
 }
 
-async function downloadUpdateFile(url, destination, expectedSize, onProgress) {
+function updateAssetUrls(asset) {
+  const values = Array.isArray(asset?.urls) ? asset.urls : [asset?.url || asset]
+  return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))]
+}
+
+function updateSourceLabel(url) {
+  try { return new URL(url).hostname }
+  catch { return '无效地址' }
+}
+
+async function downloadUpdateFileFromUrl(url, destination, expectedSize, onProgress) {
   const response = await net.fetch(safeUpdateUrl(url), {
     redirect: 'follow',
     headers: { 'User-Agent': `Harness-Desktop/${app.getVersion()}`, Accept: 'application/octet-stream' }
@@ -617,7 +630,22 @@ async function downloadUpdateFile(url, destination, expectedSize, onProgress) {
   return { size: received, sha256: hash.digest('hex') }
 }
 
-async function fetchChecksum(url, fileName) {
+async function downloadUpdateFile(asset, destination, expectedSize, onProgress, expectedHash) {
+  const failures = []
+  for (const url of updateAssetUrls(asset)) {
+    try {
+      const downloaded = await downloadUpdateFileFromUrl(url, destination, expectedSize, onProgress)
+      if (expectedHash && downloaded.sha256 !== expectedHash) throw new Error('SHA-256 校验失败')
+      return { ...downloaded, source: url }
+    } catch (error) {
+      failures.push(`${updateSourceLabel(url)}: ${error.message}`)
+      await unlink(destination).catch(() => {})
+    }
+  }
+  throw new Error(`所有安装包下载源均不可用：${failures.join('；')}`)
+}
+
+async function fetchChecksumFromUrl(url, fileName) {
   const response = await net.fetch(safeUpdateUrl(url), {
     redirect: 'follow',
     headers: { 'User-Agent': `Harness-Desktop/${app.getVersion()}`, Accept: 'text/plain' }
@@ -626,6 +654,18 @@ async function fetchChecksum(url, fileName) {
   const text = await response.text()
   if (text.length > 2 * 1024 * 1024) throw new Error('更新校验文件过大。')
   return parseChecksumFile(text, fileName)
+}
+
+async function fetchChecksum(asset, fileName) {
+  const failures = []
+  for (const url of updateAssetUrls(asset)) {
+    try {
+      return await fetchChecksumFromUrl(url, fileName)
+    } catch (error) {
+      failures.push(`${updateSourceLabel(url)}: ${error.message}`)
+    }
+  }
+  throw new Error(`所有更新校验源均不可用：${failures.join('；')}`)
 }
 
 async function installAppUpdate() {
@@ -649,11 +689,11 @@ async function installAppUpdate() {
       await mkdir(updatesDir, { recursive: true })
       installerPath = path.join(updatesDir, path.basename(update.installer.name))
       send('updates:install-progress', { phase: 'checksum', version: update.latestVersion })
-      const expectedHash = await fetchChecksum(update.checksums.url, update.installer.name)
+      const expectedHash = await fetchChecksum(update.checksums, update.installer.name)
       send('updates:install-progress', { phase: 'download', version: update.latestVersion, received: 0, total: update.installer.size || 0 })
-      const downloaded = await downloadUpdateFile(update.installer.url, installerPath, update.installer.size, progress => {
+      const downloaded = await downloadUpdateFile(update.installer, installerPath, update.installer.size, progress => {
         send('updates:install-progress', { phase: 'download', version: update.latestVersion, ...progress })
-      })
+      }, expectedHash)
       if (downloaded.sha256 !== expectedHash) throw new Error('更新安装包 SHA-256 校验失败，已停止安装。')
 
       readyUpdate = { version: update.latestVersion, installerPath }

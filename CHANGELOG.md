@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.19
+
+- 升级内置官方 DeepSeek Harness 至 0.1.0-rc.7，并保持所有桌面运行时依赖精确锁定。
+- 核心版本查询优先使用 npmmirror，失败后自动回退 npm 官方 Registry 和官方 GitHub manifest。
+- 桌面更新清单及发布资产支持多地址优先级与自动换源，国内镜像可以通过 `mirror_urls` 排在 GitHub 前面。
+- 设置页明确区分可安装的桌面更新与等待兼容发布的官方核心更新，避免出现“发现新版但没有更新按钮”的误导状态。
+- 增加国内镜像清单生成工具，并继续对所有安装来源强制执行大小和 SHA-256 校验。
+- Electron 与 electron-builder 的公开构建组件改由 npmmirror 获取，无代理的国内开发机也可以完成打包。
+
 ## 1.0.18
 
 - 手机同步二维码改为双用途入口：相机、微信或浏览器扫码会下载 Android APK，Harness Mobile 内扫码会直接连接电脑。

@@ -157,7 +157,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.18') throw new Error(`Expected package version 1.0.18, received ${pkg.version}`)
+if (pkg.version !== '1.0.19') throw new Error(`Expected package version 1.0.19, received ${pkg.version}`)
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
   `v${pkg.version}`,
@@ -169,7 +169,7 @@ for (const contract of [
 ]) {
   if (!readme.includes(contract)) throw new Error(`README release and discovery content is stale or incomplete: ${contract}`)
 }
-if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.6') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
+if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.7') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 for (const dependency of [
   'dsh-anonymous-user-id', 'dsh-atomic-write', 'dsh-bash-local', 'dsh-code-runtime',
@@ -177,7 +177,7 @@ for (const dependency of [
   'dsh-scope', 'dsh-session-telemetry', 'dsh-session-title-llm', 'dsh-shell', 'dsh-spill',
   'dsh-subagent-in-process-driver', 'dsh-subprocess', 'dsh-timeout', 'dsh-workflow'
 ]) {
-  if (pkg.dependencies?.[`@deepseek-ai/${dependency}`] !== '0.1.0-rc.6') {
+  if (pkg.dependencies?.[`@deepseek-ai/${dependency}`] !== '0.1.0-rc.7') {
     throw new Error(`The DSH Web runtime peer dependency must be pinned explicitly: ${dependency}`)
   }
 }

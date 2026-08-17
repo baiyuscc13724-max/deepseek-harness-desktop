@@ -1,8 +1,31 @@
 const http = require('node:http')
 const https = require('node:https')
 
-const DEFAULT_UPSTREAM_MANIFEST = 'https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/apps/cli/package.json'
+const DEFAULT_UPSTREAM_MANIFEST = 'https://registry.npmmirror.com/@deepseek-ai%2Fdsh/latest'
+const DEFAULT_UPSTREAM_MANIFESTS = [
+  DEFAULT_UPSTREAM_MANIFEST,
+  'https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest',
+  'https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/apps/cli/package.json'
+]
 const DEFAULT_APP_FEED = 'https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/release-manifest.json'
+const DEFAULT_APP_FEEDS = [DEFAULT_APP_FEED]
+
+function normalizeUrlList(value, fallback = []) {
+  const values = Array.isArray(value) ? value : value ? [value] : fallback
+  return [...new Set(values.map(item => String(item || '').trim()).filter(Boolean))]
+}
+
+async function fetchFirstJson(urls, fetchJsonImpl, parsePayload = payload => payload) {
+  const failures = []
+  for (const url of normalizeUrlList(urls)) {
+    try {
+      return { payload: parsePayload(await fetchJsonImpl(url)), source: url }
+    } catch (error) {
+      failures.push(`${url}: ${error.message}`)
+    }
+  }
+  throw new Error(failures.length ? `所有更新源均不可用：${failures.join('；')}` : '没有配置可用的更新源。')
+}
 
 function normalizeVersion(value) {
   return String(value || '').trim().replace(/^v/i, '')
@@ -66,10 +89,14 @@ function fetchJson(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {}
   })
 }
 
-async function checkHarnessUpstream({ currentVersion, manifestUrl = DEFAULT_UPSTREAM_MANIFEST, fetchJsonImpl = fetchJson } = {}) {
-  const manifest = await fetchJsonImpl(manifestUrl)
-  const latestVersion = normalizeVersion(manifest?.version)
-  if (!latestVersion) throw new Error('官方 Harness manifest 没有有效 version。')
+async function checkHarnessUpstream({ currentVersion, manifestUrl, manifestUrls, fetchJsonImpl = fetchJson } = {}) {
+  const configuredSources = manifestUrls !== undefined ? manifestUrls : manifestUrl !== undefined ? manifestUrl : DEFAULT_UPSTREAM_MANIFESTS
+  const sources = normalizeUrlList(configuredSources)
+  const { payload: latestVersion, source } = await fetchFirstJson(sources, fetchJsonImpl, manifest => {
+    const version = normalizeVersion(manifest?.version)
+    if (!version) throw new Error('官方 Harness manifest 没有有效 version。')
+    return version
+  })
   const comparison = compareVersions(latestVersion, currentVersion)
   return {
     kind: 'harness',
@@ -77,7 +104,9 @@ async function checkHarnessUpstream({ currentVersion, manifestUrl = DEFAULT_UPST
     latestVersion,
     updateAvailable: comparison > 0,
     aheadOfUpstream: comparison < 0,
-    source: manifestUrl,
+    actionable: false,
+    updatePolicy: 'desktop-bundled',
+    source,
     releaseUrl: 'https://github.com/deepseek-ai/deepseek-harness/releases',
     checkedAt: new Date().toISOString()
   }
@@ -89,11 +118,20 @@ function parseReleasePayload(payload) {
   if (!version) throw new Error('应用更新源缺少 version/tag_name。')
   const url = payload.html_url || payload.releaseUrl || payload.url || ''
   const assets = Array.isArray(payload.assets)
-    ? payload.assets.map(asset => ({
-        name: String(asset?.name || ''),
-        url: String(asset?.browser_download_url || asset?.url || ''),
-        size: Number(asset?.size || 0)
-      })).filter(asset => asset.name && asset.url)
+    ? payload.assets.map(asset => {
+        const urls = normalizeUrlList([
+          ...(Array.isArray(asset?.mirror_urls) ? asset.mirror_urls : []),
+          ...(Array.isArray(asset?.urls) ? asset.urls : []),
+          asset?.browser_download_url,
+          asset?.url
+        ])
+        return {
+          name: String(asset?.name || ''),
+          url: urls[0] || '',
+          urls,
+          size: Number(asset?.size || 0)
+        }
+      }).filter(asset => asset.name && asset.url)
     : []
   return { version, url, notes: payload.notes || payload.body || '', assets }
 }
@@ -122,9 +160,11 @@ function selectReleasePayload(payload, channel = 'stable') {
   return candidates[0]
 }
 
-async function checkAppUpdate({ currentVersion, feedUrl = DEFAULT_APP_FEED, channel = 'stable', fetchJsonImpl = fetchJson } = {}) {
-  if (!feedUrl) return { kind: 'app', configured: false, currentVersion: normalizeVersion(currentVersion), updateAvailable: false }
-  const release = parseReleasePayload(selectReleasePayload(await fetchJsonImpl(feedUrl), channel))
+async function checkAppUpdate({ currentVersion, feedUrl, feedUrls, channel = 'stable', fetchJsonImpl = fetchJson } = {}) {
+  const configuredSources = feedUrls !== undefined ? feedUrls : feedUrl !== undefined ? feedUrl : DEFAULT_APP_FEEDS
+  const sources = normalizeUrlList(configuredSources)
+  if (!sources.length) return { kind: 'app', configured: false, currentVersion: normalizeVersion(currentVersion), updateAvailable: false }
+  const { payload: release, source } = await fetchFirstJson(sources, fetchJsonImpl, payload => parseReleasePayload(selectReleasePayload(payload, channel)))
   const installer = selectWindowsInstallerAsset(release.assets)
   const checksums = selectChecksumAsset(release.assets)
   return {
@@ -137,6 +177,8 @@ async function checkAppUpdate({ currentVersion, feedUrl = DEFAULT_APP_FEED, chan
     notes: release.notes,
     installer,
     checksums,
+    source,
+    sources,
     channel,
     checkedAt: new Date().toISOString()
   }
@@ -144,12 +186,15 @@ async function checkAppUpdate({ currentVersion, feedUrl = DEFAULT_APP_FEED, chan
 
 module.exports = {
   DEFAULT_APP_FEED,
+  DEFAULT_APP_FEEDS,
   DEFAULT_UPSTREAM_MANIFEST,
+  DEFAULT_UPSTREAM_MANIFESTS,
   checkAppUpdate,
   checkHarnessUpstream,
   compareVersions,
   fetchJson,
   normalizeVersion,
+  normalizeUrlList,
   parseReleasePayload,
   parseChecksumFile,
   selectReleasePayload,
