@@ -91,6 +91,7 @@
       "main": "electron/main.cjs"
     },
     "win": {
+      "icon": "build/.icon-ico/icon.ico",
       "target": [
         "portable"
       ]

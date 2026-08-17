@@ -14,6 +14,8 @@ const expected = process.platform === 'win32'
     ? files.filter(name => /\.(?:dmg|zip)$/i.test(name))
     : files.filter(name => /(?:\.AppImage|\.deb)$/i.test(name))
 if (!expected.length) throw new Error(`No release artifact found for ${process.platform} in ${dist}. Found: ${files.join(', ') || '(none)'}`)
+const supplemental = files.filter(name => /(?:portable.*\.zip|\.apk)$/i.test(name))
+const audited = Array.from(new Set([...expected, ...supplemental]))
 if (process.platform === 'win32') {
   const asar = path.join(dist, 'win-unpacked', 'resources', 'app.asar')
   const unpacked = path.join(dist, 'win-unpacked', 'resources', 'app.asar.unpacked')
@@ -60,11 +62,11 @@ if (process.platform === 'win32') {
   }
 }
 const lines = []
-for (const name of expected.sort()) {
+for (const name of audited.sort()) {
   const data = await readFile(path.join(dist, name))
   if (data.length < 1024) throw new Error(`Release artifact is implausibly small: ${name} (${data.length} bytes)`)
   lines.push(`${createHash('sha256').update(data).digest('hex')}  ${name}`)
 }
 await writeFile(path.join(dist, 'SHA256SUMS.txt'), `${lines.join('\n')}\n`)
-console.log(`Artifact audit passed for ${expected.length} ${process.platform} release file(s).`)
+console.log(`Artifact audit passed for ${audited.length} release file(s) (${expected.length} native ${process.platform}, ${supplemental.length} supplemental).`)
 console.log(lines.join('\n'))

@@ -1,4 +1,4 @@
-import { access, readFile, rm } from 'node:fs/promises'
+import { access, copyFile, mkdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import spawn from 'cross-spawn'
@@ -18,11 +18,44 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`${command} exited with code ${result.status}`)
 }
 
+function withNodeRequire(modulePath, callback) {
+  const previous = process.env.NODE_OPTIONS
+  const requireOption = `--require=${modulePath}`
+  process.env.NODE_OPTIONS = [previous, requireOption].filter(Boolean).join(' ')
+  try {
+    return callback()
+  } finally {
+    if (previous === undefined) delete process.env.NODE_OPTIONS
+    else process.env.NODE_OPTIONS = previous
+  }
+}
+
 await rm(dist, { recursive: true, force: true })
 run(process.execPath, ['scripts/patch-official-runtime.mjs'])
 
 if (process.platform === 'win32') {
-  run('npx.cmd', ['electron-builder', '--win', 'portable', '--x64', '--publish', 'never'])
+  // Native dependencies are already aligned by the package postinstall step.
+  // Re-running electron-rebuild here adds no release value and can fail in
+  // restricted Windows shells that deny nested child-process forks.
+  withNodeRequire(path.join(root, 'scripts', 'electron-builder-traversal.cjs'), () => {
+    run('npx.cmd', [
+      'electron-builder',
+      '--win',
+      'portable',
+      '--x64',
+      '--publish',
+      'never',
+      '--config.npmRebuild=false',
+      // The app does not enable Electron's embedded ASAR-integrity fuse. Avoid
+      // loading the entire 200+ MB Electron executable into a second in-memory
+      // PE image merely to embed an integrity resource that is never consumed.
+      '--config.disableAsarIntegrity=true'
+    ])
+  })
+
+  const installerIconDir = path.join(dist, '.icon-ico')
+  await mkdir(installerIconDir, { recursive: true })
+  await copyFile(path.join(root, 'build', '.icon-ico', 'icon.ico'), path.join(installerIconDir, 'icon.ico'))
 
   const candidates = [
     process.env.ISCC_PATH,
