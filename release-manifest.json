@@ -1,30 +1,30 @@
 [
   {
-    "tag_name": "v1.0.17",
-    "name": "Harness Desktop 1.0.17",
-    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.17",
+    "tag_name": "v1.0.18",
+    "name": "Harness Desktop 1.0.18",
+    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.18",
     "prerelease": false,
     "draft": false,
-    "body": "- 新增 Android 手机端测试版：在桌面设置中扫码一次即可配对，后续可一键连接或断开。\n- 支持局域网优先、远程连接回退与已信任设备重连；配对信息保存在用户目录，不随官方 Harness 更新被覆盖。\n- 手机端适配安全区域、系统返回手势、设置页、会话与历史记录，并补齐插件市场和外观皮肤入口。\n- 修复手机端首次进入、后台恢复、历史会话切换和滚动误触刷新的问题。\n- 新增插件市场实时列表与中文摘要，保留英文原文和安装状态。\n- 桌面壳与官方 Harness 继续通过兼容层隔离，为上游破坏性更新保留低成本适配边界。\n- 发布包不包含用户 API 密钥或本机配对数据。",
+    "body": "- 一张二维码同时负责下载安装和连接：用相机、微信或浏览器扫码会直接下载 Android APK；在 Harness Mobile 内扫码会直接连接电脑。\n- 普通浏览器扫码不会消耗一次性配对码，下载并安装后仍可用 APP 扫描同一二维码完成配对。\n- 桌面设置页新增清晰的首次使用提示，分别说明“先下载 APP”和“已安装直接连接”的操作步骤。\n- 手动复制的地址同步升级为双用途地址，同时保留局域网、EasyTier 与 Tailscale 的完整连接信息。\n- 发布包不包含用户 API 密钥、本机代理凭据或手机配对数据。",
     "assets": [
       {
-        "name": "Harness-Desktop-1.0.17-win-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.17/Harness-Desktop-1.0.17-win-x64.exe",
-        "size": 154221734
+        "name": "Harness-Desktop-1.0.18-win-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.18/Harness-Desktop-1.0.18-win-x64.exe",
+        "size": 154266662
       },
       {
-        "name": "Harness-Desktop-1.0.17-portable-x64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.17/Harness-Desktop-1.0.17-portable-x64.zip",
-        "size": 240732445
+        "name": "Harness-Desktop-1.0.18-portable-x64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.18/Harness-Desktop-1.0.18-portable-x64.zip",
+        "size": 235883305
       },
       {
-        "name": "Harness-Mobile-1.0.17-android-universal-beta.apk",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.17/Harness-Mobile-1.0.17-android-universal-beta.apk",
+        "name": "Harness-Mobile-1.0.18-android-universal-beta.apk",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.18/Harness-Mobile-1.0.18-android-universal-beta.apk",
         "size": 54450100
       },
       {
         "name": "SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.17/SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.18/SHA256SUMS.txt",
         "size": 322
       }
     ]
