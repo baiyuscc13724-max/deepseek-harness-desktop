@@ -20,8 +20,8 @@ function Invoke-CnbJson {
   return (($output -join "`n") | ConvertFrom-Json)
 }
 
-$package = Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json
-$manifest = @(Get-Content -LiteralPath 'release-manifest.json' -Raw | ConvertFrom-Json)
+$package = Get-Content -LiteralPath 'package.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+$manifest = @(Get-Content -LiteralPath 'release-manifest.json' -Raw -Encoding UTF8 | ConvertFrom-Json)
 if ($manifest.Count -ne 1) { throw 'release-manifest.json must contain exactly one release.' }
 $release = $manifest[0]
 $expectedTag = "v$($package.version)"
