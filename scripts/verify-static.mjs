@@ -171,7 +171,7 @@ const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
   `v${pkg.version}`,
   `Harness-Desktop-${pkg.version}-win-x64.exe`,
-  `Harness-Desktop-${pkg.version}-portable-x64.zip`,
+  `Harness-Desktop-${pkg.version}-portable-x64.exe`,
   `Harness-Mobile-${pkg.version}-android-universal-beta.apk`,
   'docs/assets/harness-desktop-hero.jpg',
   'releases/latest'
