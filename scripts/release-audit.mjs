@@ -24,11 +24,32 @@ for (const contract of ["`/DMySourceDir=${path.join(dist, 'win-unpacked')}`", "`
   if (!buildScript.includes(contract)) throw new Error(`The Windows installer must compile from explicit real paths: ${contract}`)
 }
 if (buildScript.includes("run('subst.exe'")) throw new Error('The Windows installer must not compile through SUBST; it can emit a truncated setup data section.')
+if (pkg.scripts?.['release:cnb-cloud'] !== 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/publish-cnb-cloud-mirror.ps1') {
+  throw new Error('CNB publishing must use the permanent cloud-mirror command instead of local binary uploads.')
+}
+const cnbPipeline = await readFile(path.join(root, '.cnb.yml'), 'utf8')
+for (const contract of ['image: cnbcool/attachments:latest', 'CNB_TOKEN', 'browser_download_url', 'sha256sum', 'Already present:', 'release-manifest.json']) {
+  if (!cnbPipeline.includes(contract)) throw new Error(`CNB cloud mirror contract missing: ${contract}`)
+}
+for (const forbidden of ['asset-upload-url', '--upload-file', 'PLUGIN_TOKEN']) {
+  if (cnbPipeline.includes(forbidden)) throw new Error(`CNB attachments must use the official plugin instead of custom local upload plumbing: ${forbidden}`)
+}
+const cnbPublisher = await readFile(path.join(root, 'scripts/publish-cnb-cloud-mirror.ps1'), 'utf8')
+for (const contract of ['cnb-cloud-release-', 'get-build-status', 'CNB metadata pushed', 'Method Head', 'SHA256SUMS.txt']) {
+  if (!cnbPublisher.includes(contract)) throw new Error(`CNB cloud publisher contract missing: ${contract}`)
+}
+for (const forbidden of ['-InFile', '--upload-file', 'asset-upload-url']) {
+  if (cnbPublisher.includes(forbidden)) throw new Error(`The local CNB publisher must never transmit release binaries: ${forbidden}`)
+}
+const releasingGuide = await readFile(path.join(root, 'docs/RELEASING.zh-CN.md'), 'utf8')
+if (!releasingGuide.includes('npm run release:cnb-cloud') || !releasingGuide.includes('禁止从本机向 CNB 上传')) {
+  throw new Error('The permanent release guide must require CNB cloud mirroring and forbid local large-file uploads.')
+}
 if (!pkg.build?.win?.target?.includes('portable')) throw new Error('Windows portable target is missing.')
 if (pkg.build?.win?.target?.includes('nsis') || pkg.build?.nsis) throw new Error('The blocked NSIS installer must not return.')
 for (const target of ['dmg', 'zip']) if (!pkg.build?.mac?.target?.includes(target)) throw new Error(`macOS target missing: ${target}`)
 for (const target of ['AppImage', 'deb']) if (!pkg.build?.linux?.target?.includes(target)) throw new Error(`Linux target missing: ${target}`)
-for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'release-mirrors.example.json', 'release-update-sources.json', 'docs/UPDATE-MIRRORS.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
+for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/publish-cnb-cloud-mirror.ps1', '.cnb.yml', 'docs/RELEASING.zh-CN.md', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'release-mirrors.example.json', 'release-update-sources.json', 'docs/UPDATE-MIRRORS.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
 
 const installer = await readFile(path.join(root, 'build/installer.iss'), 'utf8')
 for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={code:GetDefaultDirName}', 'UsePreviousAppDir=yes', 'CloseApplications=no', '#define MyOutputBaseFilename "Harness-Desktop-" + MyAppVersion + "-win-x64"', 'OutputBaseFilename={#MyOutputBaseFilename}', 'SetupIconFile=..\\dist\\.icon-ico\\icon.ico', 'UninstallDisplayIcon={app}\\{#MyAppExeName}', 'Name: "chinesesimp"', 'compiler:Languages\\ChineseSimplified.isl', 'recursesubdirs', 'autodesktop', 'autoprograms', 'FindLegacyInstallDirectory', 'ReadInstallHint', 'ReadUserInstallLocationFile', 'ReadLastInstallDirectory', 'LastInstallLocation', "RegQueryStringValue(RootKey, Subkey, 'DisplayIcon'", "HasCommandLineParameter('/CLOSEAPPLICATIONS')", "'/NORESTART /LANG=chinesesimp'", 'WizardSilent']) {

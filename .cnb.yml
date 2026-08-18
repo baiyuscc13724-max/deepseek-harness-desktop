@@ -1,0 +1,58 @@
+main:
+  push:
+    - stages:
+        - name: Prepare verified GitHub release assets
+          image: alpine:3.20
+          script: |
+            set -eu
+            apk add --no-cache ca-certificates curl jq coreutils
+            manifest="release-manifest.json"
+            tag="$(jq -r '.[0].tag_name' "$manifest")"
+            api="$CNB_API_ENDPOINT/$CNB_REPO_SLUG"
+            auth="Authorization: Bearer $CNB_TOKEN"
+            release_file=".cnb-release.json"
+            status="$(curl -sS --retry 5 -o "$release_file" -w '%{http_code}' -H "$auth" -H 'Accept: application/vnd.cnb.api+json' "$api/-/releases/tags/$tag")"
+            if [ "$status" = "404" ]; then
+              payload="$(jq -nc --arg tag "$tag" --arg name "Harness Desktop ${tag#v}" --rawfile body release-notes.md '{tag_name:$tag,target_commitish:"main",name:$name,body:$body,draft:false,prerelease:false,make_latest:"true"}')"
+              curl -fsS --retry 5 -X POST -H "$auth" -H 'Accept: application/vnd.cnb.api+json' -H 'Content-Type: application/json' -d "$payload" "$api/-/releases" > "$release_file"
+            elif [ "$status" != "200" ]; then
+              cat "$release_file" >&2
+              exit 1
+            fi
+            mkdir -p .cnb-release-assets
+            checksum_url="$(jq -r '.[0].assets[] | select(.name == "SHA256SUMS.txt") | .browser_download_url' "$manifest")"
+            curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 -o .cnb-release-assets/SHA256SUMS.txt "$checksum_url"
+            attachments=""
+            jq -r '.[0].assets[].name' "$manifest" | while IFS= read -r name; do
+              if jq -e --arg name "$name" '.assets[]? | select(.name == $name)' "$release_file" >/dev/null; then
+                echo "Already present: $name" >&2
+                continue
+              fi
+              url="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .browser_download_url' "$manifest")"
+              expected_size="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .size' "$manifest")"
+              file=".cnb-release-assets/$name"
+              if [ "$name" != "SHA256SUMS.txt" ]; then
+                curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 -o "$file" "$url"
+              fi
+              actual_size="$(stat -c %s "$file")"
+              [ "$actual_size" = "$expected_size" ] || { echo "Size mismatch for $name" >&2; exit 1; }
+              if [ "$name" != "SHA256SUMS.txt" ]; then
+                expected_hash="$(awk -v target="$name" '$2 == target { print $1 }' .cnb-release-assets/SHA256SUMS.txt)"
+                actual_hash="$(sha256sum "$file" | awk '{ print $1 }')"
+                [ "$actual_hash" = "$expected_hash" ] || { echo "SHA-256 mismatch for $name" >&2; exit 1; }
+              fi
+              attachments="${attachments}${attachments:+,}${file}"
+              echo "##[set-output attachments=$attachments]"
+            done
+            echo "##[set-output release_tag=$tag]"
+          exports:
+            attachments: CNB_RELEASE_ATTACHMENTS
+            release_tag: CNB_RELEASE_TAG
+        - name: Upload verified assets with official plugin
+          if: test -n "$CNB_RELEASE_ATTACHMENTS"
+          image: cnbcool/attachments:latest
+          settings:
+            type: UPLOAD
+            tag: ${CNB_RELEASE_TAG}
+            attachments: ${CNB_RELEASE_ATTACHMENTS}
+            ttl: 0

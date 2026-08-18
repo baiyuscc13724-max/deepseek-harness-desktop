@@ -23,6 +23,7 @@
     "verify:artifact": "node scripts/artifact-audit.mjs dist",
     "verify:packaged": "node scripts/packaged-selftest-contract.mjs",
     "release:mirror-manifest": "node scripts/build-mirror-manifest.mjs",
+    "release:cnb-cloud": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/publish-cnb-cloud-mirror.ps1",
     "store:assets": "winapp manifest update-assets store/branding/harness-desktop-store.svg --manifest store/Package.appxmanifest.template",
     "store:check": "node scripts/store-readiness.mjs",
     "store:msix": "node scripts/build-store-msix.mjs"
