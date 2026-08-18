@@ -178,7 +178,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.22') throw new Error(`Expected package version 1.0.22, received ${pkg.version}`)
+if (pkg.version !== '1.0.23') throw new Error(`Expected package version 1.0.23, received ${pkg.version}`)
 const mobileVersion = '1.0.20'
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
@@ -264,6 +264,9 @@ if (!(await readFile(path.join(root, 'electron/bridge/dsh-resolver.cjs'), 'utf8'
 const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')
 for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledMarkdownRenderer', 'patchInstalledConversation', 'desktopLocalHref', 'owner.openFile(target)']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Project-scoped New Session patch is missing: ${contract}`)
+}
+for (const contract of ['patchInstalledModelImageCompatibility', 'desktopMessagesForInputModalities', 'preparedCall?.inputModalities', 'does not accept the image waiting in the prompt', 'refusing an unsafe model-image compatibility patch']) {
+  if (!runtimePatch.includes(contract)) throw new Error(`Historical-image model-switch patch is missing: ${contract}`)
 }
 for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "'web', '--port', '0'"]) {
   if (!main.includes(contract)) throw new Error(`Dedicated desktop runtime policy is missing: ${contract}`)

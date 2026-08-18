@@ -131,6 +131,52 @@ test('cache metrics separate the latest warm request from the cold-start cumulat
   assert.equal(patchConversationCacheSource(conversationPatch.source).changed, false)
 })
 
+test('text-only model switches preserve the session while degrading only historical images', async () => {
+  const {
+    desktopMessagesForInputModalities,
+    patchAgentLoopImageCompatibilitySource,
+    patchApiProxyImageCompatibilitySource,
+    patchLlmPreparedCallSource
+  } = await import('../scripts/patch-official-runtime.mjs')
+
+  const messages = [{
+    role: 'user',
+    source: { kind: 'user' },
+    content: [
+      { type: 'text', text: '请继续处理之前的内容' },
+      { type: 'image', mediaType: 'image/png', data: 'opaque-image' },
+      {
+        type: 'tool-result',
+        toolCallId: 'capture-1',
+        content: [{ type: 'image', mediaType: 'image/png', data: 'nested-image' }]
+      }
+    ]
+  }]
+  assert.equal(desktopMessagesForInputModalities(messages, undefined), messages)
+  assert.equal(desktopMessagesForInputModalities(messages, ['text', 'image']), messages)
+
+  const textOnly = desktopMessagesForInputModalities(messages, ['text'])
+  assert.notEqual(textOnly, messages)
+  assert.equal(messages[0].content[1].type, 'image')
+  assert.deepEqual(textOnly[0].content.map(block => block.type), ['text', 'text', 'tool-result'])
+  assert.equal(textOnly[0].content[2].content[0].type, 'text')
+  assert.match(textOnly[0].content[1].text, /Historical image omitted/)
+
+  const fixtures = [
+    [patchLlmPreparedCallSource, 'node_modules/@deepseek-ai/dsh-llm/lib/index.js', /inputModalities: resolved\.inputModalities|inputModalities = resolved\.inputModalities/],
+    [patchLlmPreparedCallSource, 'node_modules/@deepseek-ai/dsh-llm/lib/types/index.js', /inputModalities: resolved\.inputModalities|inputModalities = resolved\.inputModalities/],
+    [patchAgentLoopImageCompatibilitySource, 'node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js', /desktopMessagesForInputModalities\(boundaryMessages, preparedCall\?\.inputModalities\)/],
+    [patchApiProxyImageCompatibilitySource, 'node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js', /does not accept the image waiting in the prompt/],
+    [patchApiProxyImageCompatibilitySource, 'node_modules/@deepseek-ai/dsh-host-apiproxy/lib/types/api-proxy.js', /does not accept the image waiting in the prompt/]
+  ]
+  for (const [patcher, relative, marker] of fixtures) {
+    const source = readFileSync(path.resolve(__dirname, '..', relative), 'utf8')
+    const patched = patcher(source)
+    assert.match(patched.source, marker)
+    assert.equal(patcher(patched.source).changed, false)
+  }
+})
+
 test('patched Windows directory picker returns the selected existing project path', async () => {
   const pickerFile = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-host-directory-picker-native', 'lib', 'index.js')
   const { pickNativeDirectory } = await import(`${pathToFileURL(pickerFile).href}?desktop-picker-test=${Date.now()}`)

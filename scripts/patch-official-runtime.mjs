@@ -8,6 +8,15 @@ const directoryPickerRuntime = path.join(root, 'node_modules', '@deepseek-ai', '
 const markdownRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-primitives', 'lib', 'index.js')
 const conversationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
 const tokenMeterRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-token-meter', 'lib', 'index.js')
+const llmRuntimes = [
+  path.join(root, 'node_modules', '@deepseek-ai', 'dsh-llm', 'lib', 'index.js'),
+  path.join(root, 'node_modules', '@deepseek-ai', 'dsh-llm', 'lib', 'types', 'index.js')
+]
+const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
+const apiProxyRuntimes = [
+  path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'index.js'),
+  path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'types', 'api-proxy.js')
+]
 
 function dedentOne(source) {
   return source.split('\n').map(line => line.slice(1)).join('\n')
@@ -327,6 +336,116 @@ const CONVERSATION_CACHE_EN_PATCHED = `			"stats.cacheHit": "Cumulative cache re
 			"stats.cacheCumulative": "Cumulative cache read {percent}% (includes cold start)",
 			"stats.cacheUnreported": "Cache: not reported by provider",`
 
+export function desktopTextOnlyContent(content) {
+  let changed = false
+  const next = content.map(block => {
+    if (block.type === 'image') {
+      changed = true
+      return { type: 'text', text: '[Historical image omitted because the selected model accepts text input only.]' }
+    }
+    if (block.type === 'tool-result' && Array.isArray(block.content)) {
+      const nested = desktopTextOnlyContent(block.content)
+      if (nested !== block.content) {
+        changed = true
+        return { ...block, content: nested }
+      }
+    }
+    return block
+  })
+  return changed ? next : content
+}
+
+export function desktopMessagesForInputModalities(messages, inputModalities) {
+  if (inputModalities === undefined || inputModalities.includes('image')) return messages
+  let changed = false
+  const next = messages.map(message => {
+    const content = desktopTextOnlyContent(message.content)
+    if (content === message.content) return message
+    changed = true
+    return { ...message, content }
+  })
+  return changed ? next : messages
+}
+
+const LLM_MODALITY_REPLACEMENTS = [
+  [
+    'config: resolvedConfig,\n\t\t\t...info.context === void 0 ? {} : { context: info.context }',
+    'config: resolvedConfig,\n\t\t\t...info.inputModalities === void 0 ? {} : { inputModalities: info.inputModalities },\n\t\t\t...info.context === void 0 ? {} : { context: info.context }'
+  ],
+  [
+    'config: resolvedConfig,\n            ...info.context === undefined ? {} : { context: info.context },',
+    'config: resolvedConfig,\n            ...info.inputModalities === undefined ? {} : { inputModalities: info.inputModalities },\n            ...info.context === undefined ? {} : { context: info.context },'
+  ],
+  [
+    'const context = resolved.context === void 0 ? void 0 : deepFreeze(structuredClone(resolved.context));',
+    'const inputModalities = resolved.inputModalities === void 0 ? void 0 : deepFreeze(structuredClone(resolved.inputModalities));\n\t\tconst context = resolved.context === void 0 ? void 0 : deepFreeze(structuredClone(resolved.context));'
+  ],
+  [
+    'const context = resolved.context === undefined\n            ? undefined\n            : deepFreeze(structuredClone(resolved.context));',
+    'const inputModalities = resolved.inputModalities === undefined\n            ? undefined\n            : deepFreeze(structuredClone(resolved.inputModalities));\n        const context = resolved.context === undefined\n            ? undefined\n            : deepFreeze(structuredClone(resolved.context));'
+  ],
+  [
+    'adapterDefaults,\n\t\t\t...context === void 0 ? {} : { context },',
+    'adapterDefaults,\n\t\t\t...inputModalities === void 0 ? {} : { inputModalities },\n\t\t\t...context === void 0 ? {} : { context },'
+  ],
+  [
+    'adapterDefaults,\n            ...context === undefined ? {} : { context },',
+    'adapterDefaults,\n            ...inputModalities === undefined ? {} : { inputModalities },\n            ...context === undefined ? {} : { context },'
+  ]
+]
+
+const LLM_MODALITY_REQUIREMENTS = [
+  ['...info.inputModalities === void 0 ? {} : { inputModalities: info.inputModalities }', '...info.inputModalities === undefined ? {} : { inputModalities: info.inputModalities }'],
+  ['const inputModalities = resolved.inputModalities === void 0', 'const inputModalities = resolved.inputModalities === undefined'],
+  ['...inputModalities === void 0 ? {} : { inputModalities }', '...inputModalities === undefined ? {} : { inputModalities }']
+]
+
+const AGENT_LOOP_HELPERS_ANCHOR = '/** Drives one session through turn and step boundaries. */'
+const AGENT_LOOP_HELPERS_PATCHED = `${desktopTextOnlyContent.toString()}\n${desktopMessagesForInputModalities.toString()}\n`
+const AGENT_LOOP_MESSAGES_ORIGINAL = 'messages: boundaryMessages,'
+const AGENT_LOOP_MESSAGES_PATCHED = 'messages: desktopMessagesForInputModalities(boundaryMessages, preparedCall?.inputModalities),'
+
+const API_PROXY_IMAGE_REPLACEMENTS = [
+  [
+    `const pendingImage = [...found.agent.inbox.nextTurn, ...found.agent.inbox.nextStep]
+                            .some(message => contentHasImage(message.content));
+                        if (pendingImage || messagesHaveImage(found.agent.session.deriveMessages())) {
+                            const info = await ctx.llm.resolveModelInfo(resolved.provider, resolved.model);
+                            if (info.inputModalities !== undefined && !info.inputModalities.includes('image')) {
+                                return err(request, {
+                                    code: 'model-unavailable',
+                                    message: \`Model "\${resolved.model}" does not accept image input, but this session already contains images; select an image-capable model.\`,
+                                    details: { provider, model },
+                                });
+                            }
+                        }`,
+    `const pendingImage = [...found.agent.inbox.nextTurn, ...found.agent.inbox.nextStep]
+                            .some(message => contentHasImage(message.content));
+                        if (pendingImage) {
+                            const info = await ctx.llm.resolveModelInfo(resolved.provider, resolved.model);
+                            if (info.inputModalities !== undefined && !info.inputModalities.includes('image')) {
+                                return err(request, {
+                                    code: 'model-unavailable',
+                                    message: \`Model "\${resolved.model}" does not accept the image waiting in the prompt; send or remove that image before switching.\`,
+                                    details: { provider, model },
+                                });
+                            }
+                        }`
+  ],
+  [
+    `if ([...found.agent.inbox.nextTurn, ...found.agent.inbox.nextStep].some((message) => contentHasImage(message.content)) || messagesHaveImage(found.agent.session.deriveMessages())) {
+\t\t\t\t\t\t\tconst info = await ctx.llm.resolveModelInfo(resolved.provider, resolved.model);
+\t\t\t\t\t\t\tif (info.inputModalities !== void 0 && !info.inputModalities.includes("image")) return err(request, {
+\t\t\t\t\t\t\t\tcode: "model-unavailable",
+\t\t\t\t\t\t\t\tmessage: \`Model "\${resolved.model}" does not accept image input, but this session already contains images; select an image-capable model.\`,`,
+    `if ([...found.agent.inbox.nextTurn, ...found.agent.inbox.nextStep].some((message) => contentHasImage(message.content))) {
+\t\t\t\t\t\t\tconst info = await ctx.llm.resolveModelInfo(resolved.provider, resolved.model);
+\t\t\t\t\t\t\tif (info.inputModalities !== void 0 && !info.inputModalities.includes("image")) return err(request, {
+\t\t\t\t\t\t\t\tcode: "model-unavailable",
+\t\t\t\t\t\t\t\tmessage: \`Model "\${resolved.model}" does not accept the image waiting in the prompt; send or remove that image before switching.\`,`
+  ]
+]
+
 export function patchRuntimeSource(source) {
   if (source.includes(PATCHED)) return { source, changed: false }
   const previous = source.includes(PATCHED_V2) ? PATCHED_V2 : source.includes(PATCHED_V1) ? PATCHED_V1 : ORIGINAL
@@ -413,6 +532,63 @@ export function patchTokenMeterSource(source) {
   return { source: output, changed }
 }
 
+export function patchLlmPreparedCallSource(source) {
+  let output = source
+  let changed = false
+  for (const [original, patched] of LLM_MODALITY_REPLACEMENTS) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) continue
+    output = output.replace(original, patched)
+    changed = true
+  }
+  if (!LLM_MODALITY_REQUIREMENTS.every(variants => variants.some(marker => output.includes(marker)))) {
+    throw new Error('Pinned DSH prepared-call capability handling changed; refusing an unsafe model-image compatibility patch.')
+  }
+  return { source: output, changed }
+}
+
+export function patchAgentLoopImageCompatibilitySource(source) {
+  let output = source
+  let changed = false
+  if (!output.includes('function desktopTextOnlyContent(')) {
+    if (!output.includes(AGENT_LOOP_HELPERS_ANCHOR)) throw new Error('Pinned DSH agent loop helper boundary changed; refusing an unsafe model-image compatibility patch.')
+    output = output.replace(AGENT_LOOP_HELPERS_ANCHOR, `${AGENT_LOOP_HELPERS_PATCHED}${AGENT_LOOP_HELPERS_ANCHOR}`)
+    changed = true
+  }
+  if (!output.includes(AGENT_LOOP_MESSAGES_PATCHED)) {
+    if (!output.includes(AGENT_LOOP_MESSAGES_ORIGINAL)) throw new Error('Pinned DSH agent request message assembly changed; refusing an unsafe model-image compatibility patch.')
+    output = output.replace(AGENT_LOOP_MESSAGES_ORIGINAL, AGENT_LOOP_MESSAGES_PATCHED)
+    changed = true
+  }
+  return { source: output, changed }
+}
+
+export function patchApiProxyImageCompatibilitySource(source) {
+  let output = source
+  let changed = false
+  for (const [original, patched] of API_PROXY_IMAGE_REPLACEMENTS) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) continue
+    output = output.replace(original, patched)
+    changed = true
+  }
+  if (!output.includes('does not accept the image waiting in the prompt')) {
+    throw new Error('Pinned DSH model selection image admission changed; refusing an unsafe model-image compatibility patch.')
+  }
+  return { source: output, changed }
+}
+
+async function patchInstalledFiles(files, patcher) {
+  let changed = false
+  for (const file of files) {
+    const source = await readFile(file, 'utf8')
+    const patched = patcher(source)
+    if (patched.changed) await writeFile(file, patched.source, 'utf8')
+    changed ||= patched.changed
+  }
+  return changed
+}
+
 export async function patchInstalledRuntime(file = runtimeClient) {
   const source = await readFile(file, 'utf8')
   const patched = patchRuntimeSource(source)
@@ -450,15 +626,24 @@ export async function patchInstalledTokenMeter(file = tokenMeterRuntime) {
   return patched.changed
 }
 
+export async function patchInstalledModelImageCompatibility() {
+  const llmChanged = await patchInstalledFiles(llmRuntimes, patchLlmPreparedCallSource)
+  const agentChanged = await patchInstalledFiles([agentLoopRuntime], patchAgentLoopImageCompatibilitySource)
+  const proxyChanged = await patchInstalledFiles(apiProxyRuntimes, patchApiProxyImageCompatibilitySource)
+  return llmChanged || agentChanged || proxyChanged
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const sessionChanged = await patchInstalledRuntime()
   const pickerChanged = await patchInstalledDirectoryPicker()
   const markdownChanged = await patchInstalledMarkdownRenderer()
   const conversationChanged = await patchInstalledConversation()
   const tokenMeterChanged = await patchInstalledTokenMeter()
+  const modelImageChanged = await patchInstalledModelImageCompatibility()
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
   process.stdout.write(markdownChanged ? 'Patched clickable desktop workspace links.\n' : 'Desktop workspace-link patch already applied.\n')
   process.stdout.write(conversationChanged ? 'Patched workspace-relative chat links.\n' : 'Workspace-relative chat-link patch already applied.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
+  process.stdout.write(modelImageChanged ? 'Patched text-model switching for sessions with historical images.\n' : 'Historical-image model-switch patch already applied.\n')
 }
