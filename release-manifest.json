@@ -5,12 +5,12 @@
     "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.20",
     "prerelease": false,
     "draft": false,
-    "body": "- 内置官方 DeepSeek Harness 0.1.0-rc.7，并完成桌面运行时兼容升级。\n- 新增 CNB 国内更新镜像、Provider 用量适配和安装目录内独立 HarnessData 工作区。\n- 在现有 Harness Mobile 中新增用户授权的固定白名单手机控制、能力协商、结果回执和立即停止。\n- 保留原二维码下载、APP 内扫码配对、会话同步、实时刷新与安装数据。\n- 所有镜像下载均强制执行文件大小和 SHA-256 校验。",
+    "body": "- 在现有 Harness Mobile 中新增用户授权的固定白名单手机控制、能力协商、结果回执和立即停止。\n- 新增 Provider 用量适配、安装目录内独立 HarnessData 工作区和更广泛的本地附件支持。\n- 正式启用 CNB 国内更新源并保留 GitHub 后备源。\n- 保留原二维码下载、APP 内扫码配对、会话同步、实时刷新与安装数据。\n- 所有镜像下载均强制执行文件大小和 SHA-256 校验。",
     "assets": [
       {
         "name": "Harness-Desktop-1.0.20-win-x64.exe",
         "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.20/Harness-Desktop-1.0.20-win-x64.exe",
-        "size": 152747764,
+        "size": 152744536,
         "mirror_urls": [
           "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.20/Harness-Desktop-1.0.20-win-x64.exe"
         ]
@@ -18,7 +18,7 @@
       {
         "name": "Harness-Desktop-1.0.20-portable-x64.exe",
         "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.20/Harness-Desktop-1.0.20-portable-x64.exe",
-        "size": 146415236,
+        "size": 146415955,
         "mirror_urls": [
           "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.20/Harness-Desktop-1.0.20-portable-x64.exe"
         ]
