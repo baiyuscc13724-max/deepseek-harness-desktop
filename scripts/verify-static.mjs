@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
   'electron/main.cjs', 'electron/preload.cjs', 'electron/desktop-tray.cjs',
-  'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/runtime-proxy.cjs', 'electron/bridge/runtime-bundle-service.cjs',
-  'electron/bridge/update-service.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/attachment-reference-service.cjs',
+  'electron/bridge/dsh-resolver.cjs', 'electron/bridge/dsh-home.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/runtime-proxy.cjs', 'electron/bridge/runtime-bundle-service.cjs',
+  'electron/bridge/update-service.cjs', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/provider-meter-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/attachment-reference-service.cjs',
   'electron/store/app-state-store.cjs',
   'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js', 'renderer/workspace-links-integration.js',
   'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -15,10 +15,10 @@ const required = [
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/update-service.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
-  'docs/ARCHITECTURE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
-  'build/installer.iss', 'scripts/build-release.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
-  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json'
+  'tests/app-state-store.test.cjs', 'tests/dsh-home.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
+  'docs/ARCHITECTURE.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
+  'build/installer.iss', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
+  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json', 'release-mirrors.example.json', 'release-update-sources.json', 'release-update-sources.example.json'
 ]
 for (const relative of required) await access(path.join(root, relative))
 
@@ -135,6 +135,9 @@ if (!rendererScript.includes("themeId: 'porcelain-mist'") || !(await readFile(pa
 if (!rendererScript.includes('api.getModelRouting()') || !rendererScript.includes('api.saveModelRouting(') || !rendererScript.includes("target.hostname === 'save-model-routing'")) {
   throw new Error('Official Models settings must expose independent main-model and subagent routing.')
 }
+for (const contract of ['api.getProviderMeters(false)', 'api.getProviderMeters(true)', "target.hostname === 'refresh-provider-meters'", 'meters: { ...meters']) {
+  if (!rendererScript.includes(contract)) throw new Error(`Provider meter renderer contract is missing: ${contract}`)
+}
 for (const contract of ['openSkinPicker', 'closeSkinPicker()', "card.addEventListener('dblclick'", "api.setTheme(card.dataset.skinId", 'skinPickerOverlay.classList.add']) {
   if (!rendererScript.includes(contract)) throw new Error(`Standalone skin picker behavior is missing: ${contract}`)
 }
@@ -145,6 +148,9 @@ for (const contract of ['主模型与子代理', '跟随主模型', 'data-hd-sub
 }
 for (const contract of ['data-hd-sub-mode="inherit"', 'data-hd-sub-mode="independent"', "request('refresh-model-routing')", '选择服务商', '选择模型']) {
   if (!modelRoutingIntegration.includes(contract)) throw new Error(`Simple model routing selector is missing: ${contract}`)
+}
+for (const contract of ['账户额度', 'usage-window', 'spending-budget', 'token-counter', 'data-hd-meter-refresh', '不同服务商会按余额、套餐用量或消费限额显示']) {
+  if (!modelRoutingIntegration.includes(contract)) throw new Error(`Generic provider meter UI is missing: ${contract}`)
 }
 for (const duplicateAction of ['data-hd-add-model', 'data-hd-refresh-models', '＋ 添加模型', '↻ 刷新模型']) {
   if (modelRoutingIntegration.includes(duplicateAction)) throw new Error(`The model router must rely on the official provider controls instead of duplicating: ${duplicateAction}`)
@@ -222,7 +228,7 @@ const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
 for (const trayContract of ['createDesktopTray', 'ensureDesktopTray', "mainWindow.on('close'", 'event.preventDefault()', 'mainWindow.hide()', 'isQuitting = true']) {
   if (!main.includes(trayContract)) throw new Error(`Desktop tray lifecycle contract missing: ${trayContract}`)
 }
-for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'shell:openExternal', 'shell:openLocal', 'attachments:inspect']) {
+for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'models:meters:get', 'shell:openExternal', 'shell:openLocal', 'attachments:inspect']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }
 for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'terminal:start', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {
@@ -248,6 +254,21 @@ for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.s
 }
 for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "'web', '--port', '0'"]) {
   if (!main.includes(contract)) throw new Error(`Dedicated desktop runtime policy is missing: ${contract}`)
+}
+const updateDownloadService = await readFile(path.join(root, 'electron/bridge/update-download-service.cjs'), 'utf8')
+for (const contract of ['DEFAULT_IDLE_TIMEOUT_MS', 'DEFAULT_CHECKSUM_TIMEOUT_MS', 'rejectedInstallerType', 'SHA-256 校验失败', 'unlinkImpl(destination)']) {
+  if (!updateDownloadService.includes(contract)) throw new Error(`Smart update fallback contract missing: ${contract}`)
+}
+const updateFeedConfig = await readFile(path.join(root, 'electron/bridge/update-feed-config.cjs'), 'utf8')
+for (const contract of ['HARNESS_DESKTOP_UPDATE_FEEDS', 'configPaths', 'normalizeFeedUrls', 'https:']) {
+  if (!updateFeedConfig.includes(contract)) throw new Error(`Update feed configuration contract missing: ${contract}`)
+}
+for (const contract of ['resolveDesktopRuntimePaths', 'desktopRuntimeEnvironment', 'userData: runtimePaths.root', 'mkdir(runtimePaths.temp', 'cwd: runtimePaths.workspace']) {
+  if (!main.includes(contract)) throw new Error(`Install-local Harness runtime contract is missing: ${contract}`)
+}
+const dshHomeService = await readFile(path.join(root, 'electron/bridge/dsh-home.cjs'), 'utf8')
+for (const contract of ['PORTABLE_EXECUTABLE_DIR', "INSTALL_DATA_DIRECTORY = 'HarnessData'", "dshHome: path.join(root, 'dsh-home')", "workspace: path.join(root, 'workspace')", "temp: path.join(root, 'temp')", 'TEMP: runtimePaths.temp', 'TMP: runtimePaths.temp', 'TMPDIR: runtimePaths.temp']) {
+  if (!dshHomeService.includes(contract)) throw new Error(`Install-local Harness path resolution is missing: ${contract}`)
 }
 if (pkg.scripts?.postinstall !== 'node scripts/patch-official-runtime.mjs && electron-builder install-app-deps') {
   throw new Error('Dependency installation must reapply the audited project-scoped New Session patch.')

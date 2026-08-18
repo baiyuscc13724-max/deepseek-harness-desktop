@@ -1,19 +1,21 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, screen, session, shell, Tray } = require('electron')
 const { spawn } = require('node:child_process')
-const { createHash } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { copyFile, mkdir, open, readFile, stat, unlink, writeFile } = require('node:fs/promises')
+const { copyFile, mkdir, readFile, stat, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
 const { ensureRuntimeNodeModules } = require('./bridge/runtime-bundle-service.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
+const { createDefaultProviderMeterRegistry } = require('./bridge/provider-meter-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
-const { resolveDesktopDshHome } = require('./bridge/dsh-home.cjs')
+const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
 const { DEFAULT_APP_FEEDS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
+const { checksumWithFallback, downloadWithFallback } = require('./bridge/update-download-service.cjs')
+const { resolveUpdateFeeds } = require('./bridge/update-feed-config.cjs')
 const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { inspectAttachmentPaths } = require('./bridge/attachment-reference-service.cjs')
@@ -43,6 +45,7 @@ const HAS_SINGLE_INSTANCE_LOCK = SELF_TEST_MODE || app.requestSingleInstanceLock
 const STORE_BUILD = isStoreDistribution()
 
 let mainWindow = null
+let providerMeterRegistryPromise = null
 let runtime = null
 let runtimeOwnedByDesktop = false
 let runtimeState = { status: 'stopped', url: null, detail: '' }
@@ -127,13 +130,21 @@ function ensureMobileSyncService() {
   return mobileSyncService
 }
 
-function desktopDshHome() {
-  return resolveDesktopDshHome({
+function desktopRuntimePaths() {
+  return resolveDesktopRuntimePaths({
     env: process.env,
     argv: process.argv,
-    home: app.getPath('home'),
+    appPath: app.getAppPath(),
+    executablePath: app.getPath('exe'),
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    store: STORE_BUILD,
     userData: app.getPath('userData')
   })
+}
+
+function desktopDshHome() {
+  return desktopRuntimePaths().dshHome
 }
 
 function bundledNodeModulesRoot() {
@@ -142,9 +153,15 @@ function bundledNodeModulesRoot() {
 
 async function ensureBundledRuntime() {
   if (runtimeNodeModulesRoot) return runtimeNodeModulesRoot
+  const runtimePaths = desktopRuntimePaths()
+  await Promise.all([
+    mkdir(runtimePaths.dshHome, { recursive: true }),
+    mkdir(runtimePaths.workspace, { recursive: true }),
+    mkdir(runtimePaths.temp, { recursive: true })
+  ])
   runtimeNodeModulesRoot = await ensureRuntimeNodeModules({
     appRoot: path.join(__dirname, '..'),
-    userData: app.getPath('userData'),
+    userData: runtimePaths.root,
     appVersion: app.getVersion()
   })
   return runtimeNodeModulesRoot
@@ -400,7 +417,7 @@ async function connectExistingRuntime() {
   return true
 }
 
-async function startRuntime({ cwd } = {}) {
+async function startRuntime() {
   if (runtimeState.status === 'ready' && runtimeState.url) return runtimeState
   if (runtime && runtime.exitCode == null) return runtimeState
   // Desktop extensions patch the pinned client runtime bundled with this app.
@@ -427,11 +444,12 @@ async function startRuntime({ cwd } = {}) {
 
   let child
   try {
+    const runtimePaths = desktopRuntimePaths()
     child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0'], {
-      cwd: cwd && existsSync(cwd) ? cwd : app.getPath('documents'),
+      cwd: runtimePaths.workspace,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...runtimeProxyEnv, ...resolved.env, DSH_HOME: desktopDshHome() }
+      env: desktopRuntimeEnvironment({ ...process.env, ...runtimeProxyEnv, ...resolved.env }, runtimePaths)
     })
   } catch (error) {
     setRuntimeState({ status: 'error', url: null, detail: error.message })
@@ -515,10 +533,13 @@ async function checkUpdates() {
     ? resolved.version
     : desktopPackage.dependencies?.['@deepseek-ai/dsh'] || 'unknown'
   const preferences = store.get().updates
-  const configuredFeeds = String(process.env.HARNESS_DESKTOP_UPDATE_FEEDS || process.env.HARNESS_DESKTOP_UPDATE_FEED || '').trim()
-  const feedUrls = configuredFeeds
-    ? configuredFeeds.split(/[;,\r\n]+/).map(value => value.trim()).filter(Boolean)
-    : DEFAULT_APP_FEEDS
+  const feedUrls = await resolveUpdateFeeds({
+    configPaths: [
+      path.resolve(__dirname, '..', 'release-update-sources.local.json'),
+      path.resolve(__dirname, '..', 'release-update-sources.json')
+    ],
+    fallback: DEFAULT_APP_FEEDS
+  })
   const channel = preferences.channel === 'prerelease' || app.getVersion().includes('-') ? 'prerelease' : 'stable'
   const appUpdateCheck = STORE_BUILD
     ? Promise.resolve({
@@ -558,6 +579,16 @@ function modelRoutingOptions() {
   }
 }
 
+function providerMeterRegistry() {
+  if (!providerMeterRegistryPromise) providerMeterRegistryPromise = createDefaultProviderMeterRegistry()
+  return providerMeterRegistryPromise
+}
+
+async function getProviderMeters(force = false) {
+  const registry = await providerMeterRegistry()
+  return registry.readAll({ dshHome: desktopDshHome(), force, fetchImpl: net.fetch, spawnImpl: spawn })
+}
+
 function pluginMarketplaceOptions() {
   return {
     dshHome: desktopDshHome(),
@@ -592,81 +623,27 @@ async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 10
   }
 }
 
-function updateAssetUrls(asset) {
-  const values = Array.isArray(asset?.urls) ? asset.urls : [asset?.url || asset]
-  return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))]
-}
-
-function updateSourceLabel(url) {
-  try { return new URL(url).hostname }
-  catch { return '无效地址' }
-}
-
-async function downloadUpdateFileFromUrl(url, destination, expectedSize, onProgress) {
-  const response = await net.fetch(safeUpdateUrl(url), {
-    redirect: 'follow',
-    headers: { 'User-Agent': `Harness-Desktop/${app.getVersion()}`, Accept: 'application/octet-stream' }
-  })
-  if (!response.ok || !response.body) throw new Error(`下载更新失败（HTTP ${response.status}）。`)
-  const advertised = Number(response.headers.get('content-length') || expectedSize || 0)
-  const maximum = 600 * 1024 * 1024
-  if (advertised > maximum) throw new Error('更新文件大小超过安全限制。')
-
-  const file = await open(destination, 'w', 0o600)
-  const hash = createHash('sha256')
-  let received = 0
-  try {
-    for await (const value of response.body) {
-      const chunk = Buffer.from(value)
-      received += chunk.length
-      if (received > maximum) throw new Error('更新文件大小超过安全限制。')
-      await file.write(chunk)
-      hash.update(chunk)
-      onProgress?.({ received, total: advertised || 0 })
-    }
-  } finally {
-    await file.close()
-  }
-  if (expectedSize && received !== expectedSize) throw new Error('更新文件大小校验失败。')
-  return { size: received, sha256: hash.digest('hex') }
-}
-
 async function downloadUpdateFile(asset, destination, expectedSize, onProgress, expectedHash) {
-  const failures = []
-  for (const url of updateAssetUrls(asset)) {
-    try {
-      const downloaded = await downloadUpdateFileFromUrl(url, destination, expectedSize, onProgress)
-      if (expectedHash && downloaded.sha256 !== expectedHash) throw new Error('SHA-256 校验失败')
-      return { ...downloaded, source: url }
-    } catch (error) {
-      failures.push(`${updateSourceLabel(url)}: ${error.message}`)
-      await unlink(destination).catch(() => {})
-    }
-  }
-  throw new Error(`所有安装包下载源均不可用：${failures.join('；')}`)
-}
-
-async function fetchChecksumFromUrl(url, fileName) {
-  const response = await net.fetch(safeUpdateUrl(url), {
-    redirect: 'follow',
-    headers: { 'User-Agent': `Harness-Desktop/${app.getVersion()}`, Accept: 'text/plain' }
+  return downloadWithFallback({
+    asset,
+    destination,
+    expectedSize,
+    expectedHash,
+    fetchImpl: net.fetch,
+    onProgress,
+    userAgent: `Harness-Desktop/${app.getVersion()}`
   })
-  if (!response.ok) throw new Error(`下载更新校验文件失败（HTTP ${response.status}）。`)
-  const text = await response.text()
-  if (text.length > 2 * 1024 * 1024) throw new Error('更新校验文件过大。')
-  return parseChecksumFile(text, fileName)
 }
 
 async function fetchChecksum(asset, fileName) {
-  const failures = []
-  for (const url of updateAssetUrls(asset)) {
-    try {
-      return await fetchChecksumFromUrl(url, fileName)
-    } catch (error) {
-      failures.push(`${updateSourceLabel(url)}: ${error.message}`)
-    }
-  }
-  throw new Error(`所有更新校验源均不可用：${failures.join('；')}`)
+  const result = await checksumWithFallback({
+    asset,
+    fileName,
+    fetchImpl: net.fetch,
+    parseChecksum: parseChecksumFile,
+    userAgent: `Harness-Desktop/${app.getVersion()}`
+  })
+  return result.hash
 }
 
 async function installAppUpdate() {
@@ -966,6 +943,7 @@ ipcMain.on('pet:setHitProfile', (_event, profile) => petWindowController?.setHit
 ipcMain.handle('settings:openDocument', () => openHarnessSettingsDocument())
 ipcMain.handle('models:routing:get', () => getModelRouting(modelRoutingOptions()))
 ipcMain.handle('models:routing:save', (_event, routing) => saveModelRouting(modelRoutingOptions(), routing || {}))
+ipcMain.handle('models:meters:get', (_event, force) => getProviderMeters(Boolean(force)))
 ipcMain.handle('mobileSync:getState', () => ensureMobileSyncService().state())
 ipcMain.handle('mobileSync:setEnabled', (_event, enabled) => ensureMobileSyncService().setEnabled(Boolean(enabled)))
 ipcMain.handle('mobileSync:setRemoteEnabled', (_event, enabled) => ensureMobileSyncService().setRemoteEnabled(Boolean(enabled)))

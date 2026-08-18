@@ -77,7 +77,7 @@ let petState = {
   status: 'idle', fullness: 80, inventory: { refined: 0, standard: 0, fragments: 0 },
   preferences: { enabled: true, awake: false, alwaysOnTop: true, autoFeed: true }
 }
-let modelRoutingState = { main: {}, subagent: { inheritMain: true }, providers: [], saving: false, saved: false, error: '' }
+let modelRoutingState = { main: {}, subagent: { inheritMain: true }, providers: [], meters: { snapshots: [], loading: false, error: '' }, saving: false, saved: false, error: '' }
 let mobileSyncState = {
   enabled: false,
   running: false,
@@ -552,6 +552,8 @@ function officialSettingsBootstrap() {
         : state.installing
       ? progress?.phase === 'checksum'
         ? '正在验证桌面版更新…'
+        : progress?.phase === 'source'
+          ? `正在连接下载源 ${progress.attempt || 1}/${progress.totalSources || 1}：${progress.source || '镜像站'}…`
         : progress?.phase === 'launch'
           ? '校验完成，正在启动中文升级程序…'
           : `正在下载桌面版更新${percent ? `：${percent}%` : '…'}`
@@ -994,11 +996,23 @@ runtimeView.addEventListener('will-navigate', event => {
       publishMobileSyncState()
     })
   } else if (target.hostname === 'refresh-model-routing') {
-    api.getModelRouting().then(state => {
-      modelRoutingState = { ...state, saving: false, saved: false, error: '' }
+    modelRoutingState = { ...modelRoutingState, meters: { ...(modelRoutingState.meters || {}), loading: true, error: '' } }
+    publishModelRoutingState()
+    Promise.all([api.getModelRouting(), api.getProviderMeters(false)]).then(([state, meters]) => {
+      modelRoutingState = { ...state, meters: { ...meters, loading: false, error: '' }, saving: false, saved: false, error: '' }
       publishModelRoutingState()
     }).catch(error => {
-      modelRoutingState = { ...modelRoutingState, saving: false, saved: false, error: error.message }
+      modelRoutingState = { ...modelRoutingState, meters: { ...(modelRoutingState.meters || {}), loading: false, error: error.message }, saving: false, saved: false, error: error.message }
+      publishModelRoutingState()
+    })
+  } else if (target.hostname === 'refresh-provider-meters') {
+    modelRoutingState = { ...modelRoutingState, meters: { ...(modelRoutingState.meters || {}), loading: true, error: '' } }
+    publishModelRoutingState()
+    api.getProviderMeters(true).then(meters => {
+      modelRoutingState = { ...modelRoutingState, meters: { ...meters, loading: false, error: '' } }
+      publishModelRoutingState()
+    }).catch(error => {
+      modelRoutingState = { ...modelRoutingState, meters: { ...(modelRoutingState.meters || {}), loading: false, error: error.message } }
       publishModelRoutingState()
     })
   } else if (target.hostname === 'save-model-routing') {
@@ -1016,7 +1030,7 @@ runtimeView.addEventListener('will-navigate', event => {
       },
       basePreset: modelRoutingState.basePreset
     }).then(state => {
-      modelRoutingState = { ...state, saving: false, saved: true, error: '' }
+      modelRoutingState = { ...state, meters: modelRoutingState.meters, saving: false, saved: true, error: '' }
       publishModelRoutingState()
     }).catch(error => {
       modelRoutingState = { ...modelRoutingState, saving: false, saved: false, error: error.message }
@@ -1196,7 +1210,8 @@ async function startOfficialWorkspace() {
   updateState = { ...updateState, preferences: await api.getUpdatePreferences(), distribution: distributionState }
   appearanceState = await api.getAppearance()
   petState = await api.getPetState()
-  modelRoutingState = { ...await api.getModelRouting(), saving: false, saved: false, error: '' }
+  const [routing, meters] = await Promise.all([api.getModelRouting(), api.getProviderMeters(false)])
+  modelRoutingState = { ...routing, meters: { ...meters, loading: false, error: '' }, saving: false, saved: false, error: '' }
   mobileSyncState = await api.getMobileSyncState()
   const themeAssets = await api.getThemeAssets()
   themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)

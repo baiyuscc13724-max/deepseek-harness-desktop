@@ -28,7 +28,7 @@ if (!pkg.build?.win?.target?.includes('portable')) throw new Error('Windows port
 if (pkg.build?.win?.target?.includes('nsis') || pkg.build?.nsis) throw new Error('The blocked NSIS installer must not return.')
 for (const target of ['dmg', 'zip']) if (!pkg.build?.mac?.target?.includes(target)) throw new Error(`macOS target missing: ${target}`)
 for (const target of ['AppImage', 'deb']) if (!pkg.build?.linux?.target?.includes(target)) throw new Error(`Linux target missing: ${target}`)
-for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
+for (const file of ['build/icon.png', 'build/installer.iss', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'release-mirrors.example.json', 'release-update-sources.json', 'docs/UPDATE-MIRRORS.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
 
 const installer = await readFile(path.join(root, 'build/installer.iss'), 'utf8')
 for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={code:GetDefaultDirName}', 'UsePreviousAppDir=yes', 'CloseApplications=no', '#define MyOutputBaseFilename "Harness-Desktop-" + MyAppVersion + "-win-x64"', 'OutputBaseFilename={#MyOutputBaseFilename}', 'SetupIconFile=..\\dist\\.icon-ico\\icon.ico', 'UninstallDisplayIcon={app}\\{#MyAppExeName}', 'Name: "chinesesimp"', 'compiler:Languages\\ChineseSimplified.isl', 'recursesubdirs', 'autodesktop', 'autoprograms', 'FindLegacyInstallDirectory', 'ReadInstallHint', 'ReadUserInstallLocationFile', 'ReadLastInstallDirectory', 'LastInstallLocation', "RegQueryStringValue(RootKey, Subkey, 'DisplayIcon'", "HasCommandLineParameter('/CLOSEAPPLICATIONS')", "'/NORESTART /LANG=chinesesimp'", 'WizardSilent']) {
@@ -41,6 +41,13 @@ for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'san
 }
 for (const contract of ["ipcMain.handle('updates:install'", "ipcMain.handle('updates:launchReady'", 'SHA256SUMS.txt', 'openWindowsInstaller', 'shell.openPath', 'downloadUpdateFile', 'fetchChecksum', 'ensurePluginMarketplace']) {
   if (!main.includes(contract)) throw new Error(`Desktop self-update contract missing: ${contract}`)
+}
+const updateDownloadService = await readFile(path.join(root, 'electron/bridge/update-download-service.cjs'), 'utf8')
+for (const contract of ['DEFAULT_IDLE_TIMEOUT_MS', 'DEFAULT_CHECKSUM_TIMEOUT_MS', 'rejectedInstallerType', 'expectedHash', 'unlinkImpl(destination)']) {
+  if (!updateDownloadService.includes(contract)) throw new Error(`Smart mirror fallback contract missing: ${contract}`)
+}
+if (!pkg.build?.files?.includes('release-update-sources.json') || !pkg.build?.files?.includes('release-update-sources.local.json')) {
+  throw new Error('Packaged desktop must include configurable update feed files.')
 }
 const updateLauncher = await readFile(path.join(root, 'electron/bridge/update-launcher.cjs'), 'utf8')
 if (updateLauncher.includes('powershell.exe') || updateLauncher.includes('Wait-Process')) throw new Error('The updater must not depend on a hidden PowerShell handoff.')

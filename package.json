@@ -87,6 +87,8 @@
       "package.json",
       "LICENSE",
       "THIRD_PARTY_NOTICES.md",
+      "release-update-sources.json",
+      "release-update-sources.local.json",
       "docs/**/*",
       "!node_modules/**/*.map",
       "!node_modules/**/*.{ts,tsx,cts,mts}",

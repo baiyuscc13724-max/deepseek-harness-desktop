@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   openHarnessSettings: () => ipcRenderer.invoke('settings:openDocument'),
   getModelRouting: () => ipcRenderer.invoke('models:routing:get'),
   saveModelRouting: routing => ipcRenderer.invoke('models:routing:save', routing),
+  getProviderMeters: force => ipcRenderer.invoke('models:meters:get', Boolean(force)),
   getMobileSyncState: () => ipcRenderer.invoke('mobileSync:getState'),
   setMobileSyncEnabled: enabled => ipcRenderer.invoke('mobileSync:setEnabled', enabled),
   setMobileSyncRemoteEnabled: enabled => ipcRenderer.invoke('mobileSync:setRemoteEnabled', enabled),

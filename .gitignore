@@ -9,6 +9,8 @@ store/*.pfx
 .env
 .env.*
 !.env.example
+release-mirrors.local.json
+release-update-sources.local.json
 .acceptance-*
 .artifacts/
 .android-build/

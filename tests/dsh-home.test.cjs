@@ -2,16 +2,37 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const test = require('node:test')
 
-const { hasUserDataOverride, resolveDesktopDshHome } = require('../electron/bridge/dsh-home.cjs')
+const { desktopRuntimeEnvironment, hasUserDataOverride, resolveDesktopDshHome, resolveDesktopRuntimePaths } = require('../electron/bridge/dsh-home.cjs')
 
-test('normal desktop launches retain the user DSH home', () => {
-  const result = resolveDesktopDshHome({
+test('packaged Windows launches keep official Harness data beside the installed executable', () => {
+  const result = resolveDesktopRuntimePaths({
     env: {},
     argv: ['Harness Desktop.exe'],
-    home: 'C:\\Users\\Example',
+    appPath: 'D:\\Apps\\Harness Desktop\\resources\\app.asar',
+    executablePath: 'D:\\Apps\\Harness Desktop\\Harness Desktop.exe',
+    isPackaged: true,
+    platform: 'win32',
     userData: 'C:\\Users\\Example\\AppData\\Roaming\\deepseek-harness-desktop'
   })
-  assert.equal(result, path.resolve('C:\\Users\\Example', '.dsh'))
+  assert.deepEqual(result, {
+    root: path.resolve('D:\\Apps\\Harness Desktop', 'HarnessData'),
+    dshHome: path.resolve('D:\\Apps\\Harness Desktop', 'HarnessData', 'dsh-home'),
+    workspace: path.resolve('D:\\Apps\\Harness Desktop', 'HarnessData', 'workspace'),
+    temp: path.resolve('D:\\Apps\\Harness Desktop', 'HarnessData', 'temp')
+  })
+})
+
+test('portable builds use the original executable directory instead of the extraction directory', () => {
+  const result = resolveDesktopDshHome({
+    env: { PORTABLE_EXECUTABLE_DIR: 'E:\\Portable Apps\\Harness' },
+    argv: ['Harness Desktop.exe'],
+    appPath: 'C:\\Users\\Example\\AppData\\Local\\Temp\\portable\\resources\\app.asar',
+    executablePath: 'C:\\Users\\Example\\AppData\\Local\\Temp\\portable\\Harness Desktop.exe',
+    isPackaged: true,
+    platform: 'win32',
+    userData: 'C:\\Users\\Example\\AppData\\Roaming\\deepseek-harness-desktop'
+  })
+  assert.equal(result, path.resolve('E:\\Portable Apps\\Harness', 'HarnessData', 'dsh-home'))
 })
 
 test('custom Electron profiles isolate their Harness sessions by default', () => {
@@ -19,20 +40,63 @@ test('custom Electron profiles isolate their Harness sessions by default', () =>
   const result = resolveDesktopDshHome({
     env: {},
     argv: ['electron.exe', `--user-data-dir=${userData}`, '.'],
-    home: 'C:\\Users\\Example',
+    appPath: 'D:\\Harness\\source',
+    executablePath: 'D:\\Harness\\electron.exe',
+    isPackaged: true,
+    platform: 'win32',
     userData
   })
-  assert.equal(result, path.resolve(userData, 'dsh-home'))
+  assert.equal(result, path.resolve(userData, 'HarnessData', 'dsh-home'))
   assert.equal(hasUserDataOverride(['electron.exe', '--user-data-dir', userData, '.']), true)
 })
 
-test('an explicit DSH_HOME remains authoritative for advanced launches', () => {
-  const explicit = 'E:\\isolated-dsh'
+test('ambient DSH_HOME cannot redirect a normal packaged desktop launch back to C', () => {
   const result = resolveDesktopDshHome({
-    env: { DSH_HOME: `  ${explicit}  ` },
-    argv: ['electron.exe', '--user-data-dir=D:\\profile', '.'],
-    home: 'C:\\Users\\Example',
-    userData: 'D:\\profile'
+    env: { DSH_HOME: 'C:\\Users\\Example\\.dsh' },
+    argv: ['Harness Desktop.exe'],
+    appPath: 'D:\\Apps\\Harness Desktop\\resources\\app.asar',
+    executablePath: 'D:\\Apps\\Harness Desktop\\Harness Desktop.exe',
+    isPackaged: true,
+    platform: 'win32',
+    userData: 'C:\\Users\\Example\\AppData\\Roaming\\deepseek-harness-desktop'
   })
-  assert.equal(result, path.resolve(explicit))
+  assert.equal(result, path.resolve('D:\\Apps\\Harness Desktop', 'HarnessData', 'dsh-home'))
+})
+
+test('desktop runtime environment forces Harness and sandbox temporary data onto the install drive', () => {
+  const runtimePaths = resolveDesktopRuntimePaths({
+    env: {},
+    argv: ['Harness Desktop.exe'],
+    appPath: 'D:\\Apps\\Harness Desktop\\resources\\app.asar',
+    executablePath: 'D:\\Apps\\Harness Desktop\\Harness Desktop.exe',
+    isPackaged: true,
+    platform: 'win32',
+    userData: 'C:\\Users\\Example\\AppData\\Roaming\\deepseek-harness-desktop'
+  })
+  const result = desktopRuntimeEnvironment({
+    TEMP: 'C:\\Users\\Example\\AppData\\Local\\Temp',
+    TMP: 'C:\\Windows\\Temp',
+    DSH_HOME: 'C:\\Users\\Example\\.dsh',
+    PRESERVED_VALUE: 'yes'
+  }, runtimePaths)
+
+  assert.equal(result.DSH_HOME, path.resolve('D:\\Apps\\Harness Desktop', 'HarnessData', 'dsh-home'))
+  assert.equal(result.TEMP, path.resolve('D:\\Apps\\Harness Desktop', 'HarnessData', 'temp'))
+  assert.equal(result.TMP, result.TEMP)
+  assert.equal(result.TMPDIR, result.TEMP)
+  assert.equal(result.PRESERVED_VALUE, 'yes')
+})
+
+test('Store builds retain their writable application data boundary', () => {
+  const result = resolveDesktopRuntimePaths({
+    env: {},
+    argv: ['Harness Desktop.exe'],
+    appPath: 'C:\\Program Files\\WindowsApps\\Harness\\app.asar',
+    executablePath: 'C:\\Program Files\\WindowsApps\\Harness\\Harness Desktop.exe',
+    isPackaged: true,
+    platform: 'win32',
+    store: true,
+    userData: 'C:\\Users\\Example\\AppData\\Local\\Packages\\Harness\\LocalState'
+  })
+  assert.equal(result.root, path.resolve('C:\\Users\\Example\\AppData\\Local\\Packages\\Harness\\LocalState', 'HarnessData'))
 })

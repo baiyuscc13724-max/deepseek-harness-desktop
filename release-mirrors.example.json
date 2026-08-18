@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "mirrors": [
+    {
+      "id": "cnb",
+      "priority": 10,
+      "enabled": true,
+      "urlTemplate": "https://cnb.cool/YOUR_REPO_SLUG/-/releases/download/{tag}/{fileEncoded}"
+    }
+  ]
+}

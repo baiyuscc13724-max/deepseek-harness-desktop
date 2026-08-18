@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "feeds": [
+    "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/release-manifest.json"
+  ]
+}

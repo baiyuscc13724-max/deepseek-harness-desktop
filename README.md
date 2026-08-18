@@ -74,7 +74,7 @@ Harness Desktop 负责 Windows 窗口、运行时启动、安装、更新和桌�
 - 用户插件和外观设置不会随官方 Harness 更新被覆盖。
 - 手机端只通过带设备鉴权、可切换线路的适配层加载当前官方工作台，不绑定官方内部 API；官方页面和协议变化不会形成两套客户端维护负担。
 
-安全边界见 [SECURITY.md](SECURITY.md)，实现结构见 [架构说明](docs/ARCHITECTURE.zh-CN.md)。
+安全边界见 [SECURITY.md](SECURITY.md)，实现结构见 [架构说明](docs/ARCHITECTURE.zh-CN.md)，国内多源发布见[更新镜像接入说明](docs/UPDATE-MIRRORS.zh-CN.md)。
 
 ## 开发
 

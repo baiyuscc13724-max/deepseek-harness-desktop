@@ -52,9 +52,26 @@ Renderer 无 Node.js、文件系统或任意进程启动权限。
 
 默认探测 `127.0.0.1:3080`。如果已有服务，桌面端只连接；否则启动 bundled `@deepseek-ai/dsh web` 并从输出探测实际本地 URL。退出时只停止自己创建的进程树。
 
+Windows 直装版会由桌面壳把官方 Runtime 的 `DSH_HOME`、进程工作目录和 Runtime 解包缓存固定到安装目录下的 `HarnessData`：
+
+- `HarnessData/dsh-home`：官方 Harness 配置、会话与插件；
+- `HarnessData/workspace`：官方进程的默认工作目录；
+- `HarnessData/runtime`：桌面壳解包的固定版本官方 Runtime；
+- `HarnessData/temp`：官方 Runtime、PowerShell 及 Windows ACL 沙箱的临时目录。
+
+桌面壳会在官方 Runtime 的子进程环境中强制覆盖 `DSH_HOME`、`TEMP`、`TMP` 和 `TMPDIR`。因此 Windows 的非“全部权限”模式即使经过官方 ACL 受限启动器，其私有临时目录也会继续留在安装盘，不会因父进程环境重新落回 C 盘。便携版使用便携 EXE 实际所在目录，而不是 Electron 临时解包目录。开发启动、显式 `--user-data-dir` 的隔离启动及 Microsoft Store 沙箱仍使用对应的可写 `userData/HarnessData`。桌面壳不会静默回退到用户主目录，也不会自动搬移或删除旧的 `~/.dsh`；旧数据需要由用户确认后另行迁移或清理。
+
+## 服务商额度协议
+
+额度由桌面主进程读取，Renderer 只接收不含凭据的版本化快照。通用界面只识别 `balance`、`usage-window`、`spending-budget` 和 `token-counter` 四种计量类型，并统一处理实时、缓存、需授权、不支持和刷新失败状态。
+
+内置适配器位于 `electron/bridge/provider-meter-adapters`，启动时自动发现；新增服务商只需增加一个实现 `createAdapter()` 的适配器文件，不需要修改额度注册表或界面。DeepSeek 适配器读取官方余额，Codex 适配器通过本机官方 Codex 客户端读取账户用量周期。OpenCode Go 仅凭模型 API key 无法查询套餐用量时会明确显示需账户授权，并指向官方账户页，不用固定上限伪装实时结果。
+
 ## 更新边界
 
-桌面版与核心更新是两条独立链路。桌面版按优先级读取多个项目发布源，资产可以通过 `mirror_urls` 声明国内镜像与全球后备地址；清单或文件不可达时自动尝试下一个地址，下载后仍强制核对同一 Release 的 `SHA256SUMS.txt`，校验通过才启动原位升级。`HARNESS_DESKTOP_UPDATE_FEEDS` 可用分号配置多个清单地址，旧的单地址变量继续兼容。
+桌面版与核心更新是两条独立链路。桌面版优先读取 CNB 国内发布源，CNB 不可用时回退到 GitHub；资产可以通过 `mirror_urls` 声明镜像与全球后备地址。更新清单地址来自通用 JSON 配置，资产地址来自发布时的 URL 模板，因此以后替换发布仓库只改配置，不改下载器源码。`HARNESS_DESKTOP_UPDATE_FEEDS` 可用分号配置多个清单地址，旧的单地址变量继续兼容。
+
+下载器会拒绝伪装成安装包的 HTML、JSON 或 XML 响应，对校验文件和安装包分别执行超时控制，并检查最大尺寸、清单声明尺寸和 SHA-256。任一源校验失败都会删除该源留下的残片并切换下一源；只有同一 Release 的 `SHA256SUMS.txt` 与最终文件完全匹配才启动原位升级。镜像配置、注册信息和打包 AI 的发布步骤见[更新镜像接入说明](UPDATE-MIRRORS.zh-CN.md)。
 
 核心版本查询依次使用 npmmirror、npm 官方 Registry 和官方 GitHub manifest。核心代码与桌面补丁一起打包并经过兼容验证，不在安装目录内直接运行包管理器或静默替换代码；因此官方先发布新核心时，界面会明确显示“随桌面兼容版更新”，而不是显示一个无法执行的更新动作。
 

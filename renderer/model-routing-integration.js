@@ -34,7 +34,23 @@
       #harness-desktop-model-routing .hd-route-status[data-error="true"] { color:var(--dsw-alias-state-error-primary); }
       #harness-desktop-model-routing button { min-height:34px; border:0; border-radius:17px; padding:6px 15px; color:var(--dsw-alias-label-primary-foreground); background:var(--dsw-alias-button-primary-fill); font:inherit; font-size:13px; cursor:pointer; }
       #harness-desktop-model-routing button:disabled { cursor:default; opacity:.55; }
+      #harness-desktop-model-routing .hd-meter-section { margin-top:16px; border-top:1px solid var(--dsw-alias-border-l2); padding-top:14px; }
+      #harness-desktop-model-routing .hd-meter-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+      #harness-desktop-model-routing .hd-meter-head h3 { margin:0; font-size:14px; font-weight:500; }
+      #harness-desktop-model-routing .hd-meter-head button, #harness-desktop-model-routing .hd-meter-action { min-height:28px; border-radius:14px; padding:4px 11px; font-size:12px; }
+      #harness-desktop-model-routing .hd-meter-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; }
+      #harness-desktop-model-routing .hd-meter-provider { min-width:0; border:1px solid var(--dsw-alias-border-l2); border-radius:10px; padding:11px; background:var(--dsw-alias-bg-module-platform); }
+      #harness-desktop-model-routing .hd-meter-provider-head { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; }
+      #harness-desktop-model-routing .hd-meter-state { color:var(--dsw-alias-label-tertiary); font-size:11px; }
+      #harness-desktop-model-routing .hd-meter-row { margin-top:10px; }
+      #harness-desktop-model-routing .hd-meter-row-head { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--dsw-alias-label-secondary); font-size:12px; }
+      #harness-desktop-model-routing .hd-meter-value { margin-top:4px; font-size:18px; line-height:24px; font-weight:500; }
+      #harness-desktop-model-routing .hd-meter-detail, #harness-desktop-model-routing .hd-meter-message { margin-top:5px; color:var(--dsw-alias-label-tertiary); font-size:11px; line-height:17px; }
+      #harness-desktop-model-routing .hd-meter-bar { overflow:hidden; height:6px; margin-top:7px; border-radius:3px; background:var(--dsw-alias-bg-layer-3); }
+      #harness-desktop-model-routing .hd-meter-bar span { display:block; height:100%; border-radius:inherit; background:var(--dsw-alias-brand-primary); }
+      #harness-desktop-model-routing .hd-meter-action { display:inline-block; margin-top:8px; color:var(--dsw-alias-label-primary-foreground); text-decoration:none; background:var(--dsw-alias-button-primary-fill); }
       @media (max-width:760px) { #harness-desktop-model-routing .hd-route-grid { grid-template-columns:1fr; } }
+      @media (max-width:760px) { #harness-desktop-model-routing .hd-meter-grid { grid-template-columns:1fr; } }
     `
     document.head.appendChild(style)
 
@@ -52,6 +68,60 @@
       panel.querySelector('[data-hd-sub-mode="independent"]').setAttribute('aria-pressed', String(!inherited))
       panel.querySelector('[data-hd-sub-fields]').hidden = inherited
       panel.querySelector('[data-hd-sub-summary]').hidden = !inherited
+    }
+
+    const percent = value => `${Math.max(0, Math.min(100, Number(value) || 0)).toFixed(0)}%`
+    const resetText = seconds => {
+      if (!seconds) return ''
+      const date = new Date(Number(seconds) * 1000)
+      return Number.isNaN(date.getTime()) ? '' : `重置：${new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)}`
+    }
+    const amount = (value, unit) => {
+      if (value === null || value === undefined || value === '') return '—'
+      const number = Number(value)
+      if (!Number.isFinite(number)) return `${escapeHtml(value)}${unit ? ` ${escapeHtml(unit)}` : ''}`
+      if (/^[A-Z]{3}$/.test(unit || '')) {
+        try { return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: unit }).format(number) } catch {}
+      }
+      return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(number)}${unit ? ` ${escapeHtml(unit)}` : ''}`
+    }
+    const renderMeter = meter => {
+      if (meter.kind === 'balance') return `
+        <div class="hd-meter-row"><div class="hd-meter-row-head"><span>${escapeHtml(meter.label || '余额')}</span><span>${escapeHtml(meter.currency || '')}</span></div>
+        <div class="hd-meter-value">${amount(meter.total, meter.currency)}</div>
+        <div class="hd-meter-detail">赠送 ${amount(meter.granted, meter.currency)} · 充值 ${amount(meter.toppedUp, meter.currency)}</div></div>`
+      if (meter.kind === 'usage-window') return `
+        <div class="hd-meter-row"><div class="hd-meter-row-head"><span>${escapeHtml(meter.label || '套餐用量')}</span><span>剩余 ${percent(meter.remainingPercent)}</span></div>
+        <div class="hd-meter-bar"><span style="width:${percent(meter.usedPercent)}"></span></div>
+        <div class="hd-meter-detail">已用 ${percent(meter.usedPercent)}${resetText(meter.resetsAt) ? ` · ${escapeHtml(resetText(meter.resetsAt))}` : ''}</div></div>`
+      if (meter.kind === 'spending-budget') return `
+        <div class="hd-meter-row"><div class="hd-meter-row-head"><span>${escapeHtml(meter.label || '消费限额')}</span><span>剩余 ${percent(meter.remainingPercent)}</span></div>
+        <div class="hd-meter-value">${escapeHtml(meter.used)} / ${escapeHtml(meter.limit)}</div>
+        <div class="hd-meter-detail">${escapeHtml(resetText(meter.resetsAt))}</div></div>`
+      if (meter.kind === 'token-counter') return `
+        <div class="hd-meter-row"><div class="hd-meter-row-head"><span>${escapeHtml(meter.label || '用量')}</span></div><div class="hd-meter-value">${amount(meter.value, meter.unit)}</div></div>`
+      return ''
+    }
+    const meterStateLabel = snapshot => ({ ready: snapshot.stale ? '上次结果' : '实时', unsupported: '暂不支持', 'auth-required': '需授权', unavailable: '不可用', error: '刷新失败' })[snapshot.status] || snapshot.status
+    const renderMeters = panel => {
+      const state = window.__HARNESS_DESKTOP_MODEL_ROUTING_STATE__ || {}
+      const metersState = state.meters || {}
+      const container = panel.querySelector('[data-hd-meter-grid]')
+      const snapshots = metersState.snapshots || []
+      container.innerHTML = snapshots.length ? snapshots.map(snapshot => `
+        <div class="hd-meter-provider">
+          <div class="hd-meter-provider-head"><strong>${escapeHtml(snapshot.provider?.name || snapshot.provider?.id || '服务商')}</strong><span class="hd-meter-state">${escapeHtml(meterStateLabel(snapshot))}</span></div>
+          ${(snapshot.meters || []).map(renderMeter).join('')}
+          ${snapshot.message ? `<div class="hd-meter-message">${escapeHtml(snapshot.message)}</div>` : ''}
+          ${snapshot.action ? `<a href="#" class="hd-meter-action" data-hd-meter-url="${escapeHtml(snapshot.action.url)}">${escapeHtml(snapshot.action.label)}</a>` : ''}
+        </div>`).join('') : `<div class="hd-meter-message">${metersState.error ? `额度读取失败：${escapeHtml(metersState.error)}` : '没有已配置的服务商。'}</div>`
+      container.querySelectorAll('[data-hd-meter-url]').forEach(link => link.addEventListener('click', event => {
+        event.preventDefault()
+        request('open-external', { url: link.dataset.hdMeterUrl })
+      }))
+      const refresh = panel.querySelector('[data-hd-meter-refresh]')
+      refresh.disabled = Boolean(metersState.loading)
+      refresh.textContent = metersState.loading ? '刷新中…' : '刷新额度'
     }
 
     const paint = panel => {
@@ -86,6 +156,7 @@
       const button = panel.querySelector('[data-hd-route-save]')
       button.disabled = Boolean(state.saving)
       button.textContent = state.saving ? '正在保存…' : '保存模型路由'
+      renderMeters(panel)
     }
 
     const createPanel = () => {
@@ -109,6 +180,10 @@
             </div>
           </div>
         </div>
+        <section class="hd-meter-section">
+          <div class="hd-meter-head"><div><h3>账户额度</h3><p class="hd-route-intro">不同服务商会按余额、套餐用量或消费限额显示。</p></div><button type="button" data-hd-meter-refresh>刷新额度</button></div>
+          <div class="hd-meter-grid" data-hd-meter-grid></div>
+        </section>
         <div class="hd-route-footer"><span class="hd-route-status" data-hd-route-status></span><button type="button" data-hd-route-save>保存模型路由</button></div>
       `
       panel.querySelectorAll('select').forEach(select => select.addEventListener('change', () => {
@@ -132,6 +207,7 @@
         }
         request('save-model-routing', values)
       })
+      panel.querySelector('[data-hd-meter-refresh]').addEventListener('click', () => request('refresh-provider-meters'))
       return panel
     }
 
@@ -161,6 +237,9 @@
       scheduled = true
       setTimeout(() => { scheduled = false; mount() }, 80)
     }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
+    setInterval(() => {
+      if (document.querySelector('#harness-desktop-model-routing')) request('refresh-provider-meters')
+    }, 60 * 1000)
     mount()
   }
 
