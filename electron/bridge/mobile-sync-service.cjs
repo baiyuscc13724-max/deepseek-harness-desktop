@@ -5,8 +5,9 @@ const os = require('node:os')
 const httpProxy = require('http-proxy')
 const QRCode = require('qrcode')
 const { version: DESKTOP_VERSION } = require('../../package.json')
+const { CONTROL_PROTOCOL_VERSION, MobileControlBroker, isLoopbackAddress } = require('./mobile-control-broker.cjs')
 
-const BRIDGE_API_VERSION = 1
+const BRIDGE_API_VERSION = 2
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
@@ -150,7 +151,8 @@ class MobileSyncService extends EventEmitter {
     getAppearance = null,
     setAppearance = null,
     getThemeScript = null,
-    readThemeAsset = null
+    readThemeAsset = null,
+    controlBroker = null
   }) {
     super()
     if (!store) throw new Error('MobileSyncService requires a store.')
@@ -169,6 +171,7 @@ class MobileSyncService extends EventEmitter {
     this.setAppearance = setAppearance
     this.getThemeScript = getThemeScript
     this.readThemeAsset = readThemeAsset
+    this.controlBroker = controlBroker || new MobileControlBroker({ now })
     this.server = null
     this.proxy = null
     this.port = null
@@ -209,6 +212,7 @@ class MobileSyncService extends EventEmitter {
       port: this.port,
       origins: this.origins(),
       devices: saved.devices.map(({ id, name, createdAt, lastSeenAt }) => ({ id, name, createdAt, lastSeenAt })),
+      control: this.controlBroker.state(saved.devices),
       remote: this.transportManager?.state?.() || {
         enabled: saved.remoteEnabled,
         preference: saved.transportPreference,
@@ -290,6 +294,7 @@ class MobileSyncService extends EventEmitter {
 
   async stop({ persist = true } = {}) {
     this.pairing = null
+    this.controlBroker.stop(null, 'SYNC_STOPPED')
     if (persist && this.store.get().enabled) this.store.setEnabled(false)
     if (!this.server) return this.publish()
     const server = this.server
@@ -351,11 +356,34 @@ class MobileSyncService extends EventEmitter {
 
   revokeDevice(id) {
     this.store.revokeDevice(id)
+    this.controlBroker.clearDevice(id, 'DEVICE_REVOKED')
     for (const socket of this.deviceSockets.get(id) || []) socket.destroy()
     this.deviceSockets.delete(id)
     this.lastTouchByDevice.delete(id)
     this.publish()
     return this.state()
+  }
+
+  sendControlCommand(deviceId, command) {
+    const result = this.controlBroker.enqueue(String(deviceId || ''), command || {})
+    this.publish()
+    return result
+  }
+
+  cancelControlCommand(commandId) {
+    const cancelled = this.controlBroker.cancel(String(commandId || ''))
+    this.publish()
+    return { ok: cancelled }
+  }
+
+  stopControl(deviceId = null, reason = 'DESKTOP_STOP') {
+    const count = this.controlBroker.stop(deviceId ? String(deviceId) : null, reason)
+    this.publish()
+    return { ok: true, stoppedDevices: count, state: this.state().control }
+  }
+
+  controlResult(commandId) {
+    return this.controlBroker.result(String(commandId || ''))
   }
 
   #deviceFromRequest(request) {
@@ -403,9 +431,42 @@ class MobileSyncService extends EventEmitter {
 
   async #handleHttp(request, response) {
     const requestUrl = new URL(request.url || '/', 'http://harness-mobile.local')
+    const isDesktopControlRequest = requestUrl.pathname.startsWith('/__harness_mobile__/control/desktop-')
+    if (isDesktopControlRequest) {
+      if (!isLoopbackAddress(request.socket?.remoteAddress) || request.headers['x-harness-mobile-control'] !== '1') {
+        writeResponse(response, 403, JSON.stringify({ ok: false, error: 'Desktop control API is loopback-only.' }), { 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      if (requestUrl.pathname === '/__harness_mobile__/control/desktop-state' && request.method === 'GET') {
+        response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify({ ok: true, control: this.state().control }))
+        return
+      }
+      if (requestUrl.pathname === '/__harness_mobile__/control/desktop-command' && request.method === 'POST') {
+        const payload = await readJsonBody(request)
+        const command = this.sendControlCommand(payload.deviceId, payload.command)
+        response.writeHead(202, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify({ ok: true, command }))
+        return
+      }
+      if (requestUrl.pathname === '/__harness_mobile__/control/desktop-stop' && request.method === 'POST') {
+        const payload = await readJsonBody(request)
+        response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify(this.stopControl(payload.deviceId || null, 'DESKTOP_STOP')))
+        return
+      }
+      if (requestUrl.pathname === '/__harness_mobile__/control/desktop-result' && request.method === 'GET') {
+        const result = this.controlResult(requestUrl.searchParams.get('id'))
+        response.writeHead(result ? 200 : 202, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify({ ok: Boolean(result), pending: !result, result }))
+        return
+      }
+      writeResponse(response, 404, JSON.stringify({ ok: false, error: 'Unknown desktop control endpoint.' }), { 'Content-Type': 'application/json; charset=utf-8' })
+      return
+    }
     if (requestUrl.pathname === '/__harness_mobile__/health') {
       response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
-      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, pairingRequired: true }))
+      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, pairingRequired: true }))
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/setup' && request.method === 'GET') {
@@ -428,9 +489,29 @@ class MobileSyncService extends EventEmitter {
       writeResponse(response, 401, pairingErrorPage('请在电脑端打开“手机同步”，扫描新的配对二维码。'))
       return
     }
+    if (requestUrl.pathname === '/__harness_mobile__/control/status' && request.method === 'POST') {
+      const status = this.controlBroker.reportStatus(device.id, await readJsonBody(request))
+      this.publish()
+      response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ ok: true, protocolVersion: CONTROL_PROTOCOL_VERSION, status }))
+      return
+    }
+    if (requestUrl.pathname === '/__harness_mobile__/control/poll' && request.method === 'GET') {
+      const payload = this.controlBroker.poll(device.id, requestUrl.searchParams.get('protocolVersion'))
+      response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify(payload))
+      return
+    }
+    if (requestUrl.pathname === '/__harness_mobile__/control/result' && request.method === 'POST') {
+      const result = this.controlBroker.reportResult(device.id, await readJsonBody(request, 10 * 1024 * 1024))
+      this.publish()
+      response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ ok: true, result: { id: result.id, ok: result.ok, code: result.code } }))
+      return
+    }
     if (requestUrl.pathname === '/__harness_mobile__/meta') {
       response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
-      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, deviceId: device.id, targetReady: Boolean(this.runtimeTarget()) }))
+      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, deviceId: device.id, targetReady: Boolean(this.runtimeTarget()) }))
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/theme.js' && request.method === 'GET') {

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DeepSeek Harness</string>
+    <string name="control_accessibility_description">仅在你打开手机控制总开关后，读取当前页面的可访问节点，并执行明确的点击、滑动、输入和系统导航命令。密码、支付、验证码和账户安全操作不会自动执行。</string>
+</resources>

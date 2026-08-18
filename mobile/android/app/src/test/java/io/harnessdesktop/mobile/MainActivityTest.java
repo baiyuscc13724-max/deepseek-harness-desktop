@@ -5,6 +5,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
+import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -28,5 +29,39 @@ public final class MainActivityTest {
         assertTrue(PairingLinkValidator.isSafeHarnessSetupUrl(setupUrl));
         assertEquals(payload, PairingLinkValidator.extractSetupPayload(setupUrl));
         assertFalse(PairingLinkValidator.isSafeHarnessSetupUrl("https://example.com/__harness_mobile__/setup?payload=" + payload));
+    }
+
+    @Test public void parsesOnlyVersionedFixedControlActions() throws Exception {
+        ControlCommand command = ControlCommand.parse(new JSONObject()
+            .put("type", "command")
+            .put("protocolVersion", 1)
+            .put("id", "00000000-0000-4000-8000-000000000001")
+            .put("action", "tap")
+            .put("payload", new JSONObject().put("x", 12).put("y", 34)));
+        assertEquals("tap", command.action);
+        assertEquals(15000, command.timeoutMs);
+        assertFalse(command.requiresConfirmation);
+
+        try {
+            ControlCommand.parse(new JSONObject()
+                .put("type", "command")
+                .put("protocolVersion", 1)
+                .put("id", "00000000-0000-4000-8000-000000000002")
+                .put("action", "shell"));
+            throw new AssertionError("shell must be rejected");
+        } catch (org.json.JSONException expected) {
+            assertEquals("UNSUPPORTED_ACTION", expected.getMessage());
+        }
+    }
+
+    @Test public void sensitiveControlActionsAlwaysRequireConfirmation() throws Exception {
+        ControlCommand command = ControlCommand.parse(new JSONObject()
+            .put("type", "command")
+            .put("protocolVersion", 1)
+            .put("id", "00000000-0000-4000-8000-000000000003")
+            .put("action", "clearCache")
+            .put("payload", new JSONObject().put("packageName", "com.example.app")));
+        assertTrue(command.requiresConfirmation);
+        assertTrue(ControlCommand.isSensitive("textInput"));
     }
 }

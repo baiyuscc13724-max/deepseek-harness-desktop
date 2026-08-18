@@ -73,6 +73,7 @@
     "files": [
       "electron/**/*",
       "renderer/**/*",
+      "plugins/dsh-mobile-control/**/*",
       "!renderer/pet/pet-glb-rig.js",
       "!renderer/pet/pet-rig.js",
       "!renderer/pet/pet-rig-motion.js",
@@ -120,7 +121,8 @@
     "icon": "build/icon.png",
     "npmRebuild": true,
     "asarUnpack": [
-      "node_modules/**/*.node"
+      "node_modules/**/*.node",
+      "plugins/dsh-mobile-control/**/*"
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "portable": {

@@ -45,6 +45,9 @@ const refreshMobilePairing = document.querySelector('#refreshMobilePairing')
 const mobileSyncPairExpiry = document.querySelector('#mobileSyncPairExpiry')
 const mobileSyncDeviceCount = document.querySelector('#mobileSyncDeviceCount')
 const mobileSyncDeviceList = document.querySelector('#mobileSyncDeviceList')
+const mobileControlSummary = document.querySelector('#mobileControlSummary')
+const mobileControlDeviceList = document.querySelector('#mobileControlDeviceList')
+const stopMobileControl = document.querySelector('#stopMobileControl')
 const mobileSyncError = document.querySelector('#mobileSyncError')
 const updateReadyOverlay = document.querySelector('#updateReadyOverlay')
 const updateReadyDetail = document.querySelector('#updateReadyDetail')
@@ -85,6 +88,7 @@ let mobileSyncState = {
   origins: [],
   devices: [],
   pairing: null,
+  control: { protocolVersion: 1, devices: [] },
   remote: { enabled: true, preference: 'auto', status: 'disabled', active: null, adapters: {} }
 }
 let themeCatalog = []
@@ -436,6 +440,28 @@ function renderMobileSync(next = mobileSyncState) {
       renderMobileSync(await api.revokeMobileDevice(button.dataset.revokeMobileDevice))
     } catch (error) { mobileSyncError.textContent = error.message }
   }))
+
+  const controlDevices = Array.isArray(mobileSyncState.control?.devices) ? mobileSyncState.control.devices : []
+  const readyControls = controlDevices.filter(device => device.ready)
+  const enabledControls = controlDevices.filter(device => device.enabled)
+  mobileControlSummary.textContent = readyControls.length
+    ? `${readyControls.length} 台手机已就绪；关闭手机开关或点击停止会立即清空命令。`
+    : enabledControls.length
+      ? '手机控制已授权，正在等待无障碍服务或控制通道就绪。'
+      : '等待手机上报授权状态；默认不会执行任何操作。'
+  stopMobileControl.disabled = !enabledControls.length && !controlDevices.some(device => device.queued > 0)
+  mobileControlDeviceList.innerHTML = controlDevices.length
+    ? controlDevices.map(device => `<article class="mobile-control-device"><div><b>${escapeHtml(device.name || 'Android 手机')} · ${device.ready ? '已就绪' : device.online ? escapeHtml(device.phase || '未就绪') : '离线'}</b><span>${escapeHtml(device.detail || (device.ready ? '可以接收固定动作' : '请在手机设置中完成授权'))}</span><code>${escapeHtml((device.capabilities || []).join(', ') || '尚未上报 capability')}</code></div>${device.enabled || device.queued ? `<button type="button" data-stop-mobile-control="${escapeHtml(device.id)}">停止</button>` : ''}</article>`).join('')
+    : '<div class="mobile-sync-empty">已配对手机打开新版 APP 后，这里会显示控制授权和能力状态。</div>'
+  mobileControlDeviceList.querySelectorAll('[data-stop-mobile-control]').forEach(button => button.addEventListener('click', async () => {
+    button.disabled = true
+    try {
+      const result = await api.stopMobileControl(button.dataset.stopMobileControl)
+      renderMobileSync({ control: result.state })
+      await publishMobileSyncState()
+    } catch (error) { mobileSyncError.textContent = error.message }
+    finally { button.disabled = false }
+  }))
 }
 
 async function generateMobilePairing() {
@@ -498,6 +524,8 @@ function officialSettingsBootstrap() {
     #harness-desktop-mobile-sync-row .hd-mobile-actions { display:flex; flex:none; align-items:center; gap:8px; }
     #harness-desktop-mobile-sync-row button { box-sizing:border-box; min-height:34px; border:0; border-radius:17px; padding:6px 14px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); font:inherit; font-size:13px; cursor:pointer; }
     #harness-desktop-mobile-sync-row button:hover { background:var(--dsw-alias-interactive-bg-hover); }
+    #harness-desktop-mobile-sync-row .hd-mobile-stop { color:#fff; background:#d92d20; }
+    #harness-desktop-mobile-sync-row .hd-mobile-stop:hover { background:#b42318; }
     #harness-desktop-mobile-sync-row .hd-mobile-switch { position:relative; width:42px; min-width:42px; height:24px; min-height:24px; border-radius:12px; padding:0; background:var(--dsw-alias-bg-module-platform); }
     #harness-desktop-mobile-sync-row .hd-mobile-switch::after { content:''; position:absolute; left:3px; top:3px; width:18px; height:18px; border-radius:50%; background:var(--dsw-alias-label-tertiary); transition:transform .16s ease,background .16s ease; }
     #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"] { background:var(--dsw-alias-brand-primary,#315efb); }
@@ -619,11 +647,14 @@ function officialSettingsBootstrap() {
     const enabled = Boolean(state.enabled && state.running)
     const devices = Array.isArray(state.devices) ? state.devices.length : 0
     const remote = state.remote || {}
+    const controlDevices = Array.isArray(state.control?.devices) ? state.control.devices : []
+    const controlReady = controlDevices.filter(device => device.ready).length
+    const controlActive = controlDevices.some(device => device.enabled || device.queued > 0)
     const remoteLabel = remote.active === 'easytier' ? '国内线路' : remote.active === 'tailscale' ? '海外线路' : ''
     const detail = enabled
       ? remote.status === 'connected'
-        ? `${devices} 台设备 · ${remoteLabel || '远程通道'}已连接`
-        : `${devices} 台设备 · 局域网可用${remote.enabled === false ? '' : '，远程通道准备中'}`
+        ? `${devices} 台设备 · ${remoteLabel || '远程通道'}已连接${controlReady ? ` · ${controlReady} 台控制就绪` : ''}`
+        : `${devices} 台设备 · 局域网可用${remote.enabled === false ? '' : '，远程通道准备中'}${controlReady ? ` · ${controlReady} 台控制就绪` : ''}`
       : `${devices} 台已配对设备 · 当前已关闭`
     setText(row.querySelector('[data-hd-mobile-status]'), detail)
     const toggle = row.querySelector('[data-hd-mobile-toggle]')
@@ -631,6 +662,9 @@ function officialSettingsBootstrap() {
     toggle.setAttribute('aria-label', enabled ? '关闭手机同步' : '开启手机同步')
     toggle.title = enabled ? '关闭手机同步' : '开启手机同步'
     toggle.disabled = Boolean(state.changing)
+    const stop = row.querySelector('[data-hd-mobile-stop]')
+    stop.hidden = !controlActive
+    stop.disabled = Boolean(state.controlStopping)
   }
 
   const mountMobile = section => {
@@ -646,11 +680,13 @@ function officialSettingsBootstrap() {
         <div class="hd-mobile-status" data-hd-mobile-status>首次扫码配对，之后自动连接</div>
       </div>
       <div class="hd-mobile-actions">
+        <button class="hd-mobile-stop" type="button" data-hd-mobile-stop hidden>立即停止控制</button>
         <button type="button" data-hd-mobile-manage>管理设备</button>
         <button class="hd-mobile-switch" type="button" role="switch" aria-pressed="false" data-hd-mobile-toggle><span hidden>开关</span></button>
       </div>
     `
     row.querySelector('[data-hd-mobile-manage]').addEventListener('click', () => request('open-mobile-sync'))
+    row.querySelector('[data-hd-mobile-stop]').addEventListener('click', () => request('mobile-control-stop'))
     row.querySelector('[data-hd-mobile-toggle]').addEventListener('click', event => {
       const enabled = event.currentTarget.getAttribute('aria-pressed') !== 'true'
       event.currentTarget.disabled = true
@@ -986,6 +1022,11 @@ runtimeView.addEventListener('will-navigate', event => {
     api.openHarnessSettings().catch(() => {})
   } else if (target.hostname === 'open-mobile-sync') {
     openMobileSync()
+  } else if (target.hostname === 'mobile-control-stop') {
+    api.stopMobileControl(null).then(result => {
+      renderMobileSync({ control: result.state })
+      publishMobileSyncState()
+    }).catch(error => { mobileSyncError.textContent = error.message })
   } else if (target.hostname === 'mobile-sync-toggle') {
     const enabled = target.searchParams.get('enabled') !== '0'
     api.setMobileSyncEnabled(enabled).then(state => {
@@ -1094,6 +1135,16 @@ mobileTransportPreference.addEventListener('change', async () => {
     await publishMobileSyncState()
   } catch (error) { mobileSyncError.textContent = error.message }
   finally { mobileTransportPreference.disabled = false }
+})
+stopMobileControl.addEventListener('click', async () => {
+  stopMobileControl.disabled = true
+  mobileSyncError.textContent = ''
+  try {
+    const result = await api.stopMobileControl(null)
+    renderMobileSync({ control: result.state })
+    await publishMobileSyncState()
+  } catch (error) { mobileSyncError.textContent = error.message }
+  finally { stopMobileControl.disabled = false }
 })
 copyMobileSyncUrl.addEventListener('click', async () => {
   if (!mobileSyncUrl.value) return

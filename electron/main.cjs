@@ -10,6 +10,7 @@ const { ensureRuntimeNodeModules } = require('./bridge/runtime-bundle-service.cj
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
 const { createDefaultProviderMeterRegistry } = require('./bridge/provider-meter-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
+const { ensureMobileControlPlugin } = require('./bridge/mobile-control-plugin-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
@@ -449,7 +450,12 @@ async function startRuntime() {
       cwd: runtimePaths.workspace,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: desktopRuntimeEnvironment({ ...process.env, ...runtimeProxyEnv, ...resolved.env }, runtimePaths)
+      env: desktopRuntimeEnvironment({
+        ...process.env,
+        ...runtimeProxyEnv,
+        ...resolved.env,
+        HARNESS_MOBILE_SYNC_STATE_FILE: path.join(app.getPath('userData'), 'mobile-sync.json')
+      }, runtimePaths)
     })
   } catch (error) {
     setRuntimeState({ status: 'error', url: null, detail: error.message })
@@ -593,6 +599,13 @@ function pluginMarketplaceOptions() {
   return {
     dshHome: desktopDshHome(),
     bundledRoot: path.join(bundledNodeModulesRoot(), 'dsh-plugin-marketplace')
+  }
+}
+
+function mobileControlPluginOptions() {
+  return {
+    dshHome: desktopDshHome(),
+    bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-mobile-control')
   }
 }
 
@@ -950,6 +963,9 @@ ipcMain.handle('mobileSync:setRemoteEnabled', (_event, enabled) => ensureMobileS
 ipcMain.handle('mobileSync:setTransportPreference', (_event, preference) => ensureMobileSyncService().setTransportPreference(String(preference || 'auto')))
 ipcMain.handle('mobileSync:beginPairing', () => ensureMobileSyncService().beginPairing())
 ipcMain.handle('mobileSync:revokeDevice', (_event, id) => ensureMobileSyncService().revokeDevice(String(id || '')))
+ipcMain.handle('mobileControl:send', (_event, deviceId, command) => ensureMobileSyncService().sendControlCommand(String(deviceId || ''), command || {}))
+ipcMain.handle('mobileControl:cancel', (_event, commandId) => ensureMobileSyncService().cancelControlCommand(String(commandId || '')))
+ipcMain.handle('mobileControl:stop', (_event, deviceId) => ensureMobileSyncService().stopControl(deviceId ? String(deviceId) : null, 'DESKTOP_STOP'))
 ipcMain.handle('mobileSync:copy', (_event, value) => {
   clipboard.writeText(String(value || ''))
   return true
@@ -1006,6 +1022,9 @@ app.whenReady().then(async () => {
       if (result.warning) console.warn(result.warning)
     }).catch(error => {
       console.warn(`Unable to prepare DSH plugin marketplace: ${error.message}`)
+    })
+    await ensureMobileControlPlugin(mobileControlPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare mobile control plugin: ${error.message}`)
     })
   })()
   if (!STORE_BUILD) ensurePetSystem()

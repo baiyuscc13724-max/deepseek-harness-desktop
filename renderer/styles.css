@@ -89,6 +89,19 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .mobile-sync-switch b { font-weight:400; }
 .mobile-sync-provider { display:flex; align-items:center; gap:7px; color:var(--shell-text-secondary); font-size:10px; }
 .mobile-sync-provider select { height:30px; border:1px solid var(--shell-border); border-radius:8px; padding:0 26px 0 9px; color:var(--shell-text); background:var(--shell-layer-2); font:inherit; }
+.mobile-control-card { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:start; gap:10px 16px; margin-top:14px; border:1px solid var(--shell-border); border-radius:12px; padding:13px 14px; background:var(--shell-layer); }
+.mobile-control-card > div:first-child { display:grid; gap:3px; }
+.mobile-control-card strong { font-size:12px; }
+.mobile-control-card span,.mobile-control-card p { color:var(--shell-text-secondary); font-size:10px; }
+.mobile-control-card p { grid-column:1 / -1; margin:0; line-height:1.55; }
+.mobile-control-card button { min-height:34px; border:1px solid #d92d20; border-radius:9px; padding:0 13px; color:#fff; background:#d92d20; cursor:pointer; }
+.mobile-control-card button:disabled { cursor:default; opacity:.55; }
+.mobile-control-device-list { display:grid; grid-column:1 / -1; gap:6px; }
+.mobile-control-device { display:flex; align-items:center; justify-content:space-between; gap:12px; border-top:1px solid var(--shell-border); padding-top:8px; }
+.mobile-control-device > div { display:grid; gap:2px; }
+.mobile-control-device b { font-size:11px; }
+.mobile-control-device code { color:var(--shell-text-tertiary); font:9px/1.4 Consolas,monospace; }
+.mobile-control-device button { min-height:28px; padding:0 10px; font-size:10px; }
 .mobile-sync-add-row { display:flex; align-items:center; gap:10px; margin-top:14px; }
 .mobile-sync-add-row button { min-height:34px; border:1px solid var(--shell-border); border-radius:9px; padding:0 13px; color:var(--shell-text); background:var(--shell-layer-2); cursor:pointer; }
 .mobile-sync-add-row button:hover { background:var(--shell-hover); }

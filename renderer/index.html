@@ -77,6 +77,15 @@
                 </select>
               </label>
             </section>
+            <section class="mobile-control-card" aria-labelledby="mobileControlTitle">
+              <div>
+                <strong id="mobileControlTitle">手机控制</strong>
+                <span id="mobileControlSummary">等待手机上报授权状态；默认不会执行任何操作。</span>
+              </div>
+              <button id="stopMobileControl" class="danger" type="button">立即停止全部控制</button>
+              <div id="mobileControlDeviceList" class="mobile-control-device-list"></div>
+              <p>仅执行版本化的固定动作；不接受 Shell 或任意脚本。密码、支付、银行、验证码、清除数据和权限绕过始终拒绝。</p>
+            </section>
             <div class="mobile-sync-warning"><strong>第一次使用：</strong>先用手机相机、微信或浏览器扫码下载并安装 APP；再打开 Harness Mobile，点击“扫码连接电脑”，重新扫描同一二维码。<br /><strong>已经安装：</strong>直接用 Harness Mobile 扫码即可连接。二维码 10 分钟内有效且只能成功配对一次。</div>
             <div class="mobile-sync-add-row"><button id="refreshMobilePairing" type="button">添加手机</button><span id="mobileSyncPairExpiry"></span></div>
             <section id="mobileSyncPairCard" class="mobile-sync-pair-card hidden">

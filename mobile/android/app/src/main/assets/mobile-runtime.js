@@ -145,6 +145,26 @@
       .catch(() => { window.__harnessMobileThemeBridgeLoading = false })
   }
 
+  const installControlSettingsEntry = () => {
+    if (typeof document.querySelector !== 'function') return
+    const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
+    if (!dialog) return
+    const general = [...dialog.querySelectorAll('nav button')].find(button => /通用设置|General/i.test(button.textContent || ''))
+    if (!general || general.getAttribute('aria-current') !== 'true') return
+    const slot = dialog.querySelector('[data-slot="settings.general.item"]')
+    const content = dialog.querySelector(':scope > nav + div')
+    const options = content?.lastElementChild
+    const section = slot?.parentElement || options?.firstElementChild || options
+    if (!section || section.querySelector('#harness-mobile-control-row')) return
+    const row = document.createElement('div')
+    row.id = 'harness-mobile-control-row'
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:14px;border-bottom:1px solid var(--dsw-alias-border-l2);padding:16px 0;color:var(--dsw-alias-label-primary)'
+    const state = window.HarnessMobileControl?.status?.() || 'disabled'
+    row.innerHTML = `<div style="min-width:0"><div style="font-size:14px;line-height:22px">手机控制</div><div style="margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px">${state === 'ready' ? '已授权并开启，可随时立即停止' : '权限向导、总开关与安全确认'}</div></div><button type="button" style="flex:none;min-height:34px;border:0;border-radius:17px;padding:6px 14px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-module-platform);font:inherit;font-size:13px">管理</button>`
+    row.querySelector('button').addEventListener('click', () => window.HarnessMobileControl?.openSettings?.())
+    section.appendChild(row)
+  }
+
   const mount = () => {
     dismissOfficialNotice()
     decorateHeader()
@@ -152,6 +172,7 @@
     translateStableLabels()
     installHistoryRecovery()
     installThemeBridge()
+    installControlSettingsEntry()
   }
 
   mount()

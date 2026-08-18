@@ -188,6 +188,58 @@ test('LAN address selection prefers physical private IPv4 interfaces', () => {
   assert.deepEqual(result, ['192.168.1.20', '172.20.0.1'])
 })
 
+test('versioned mobile control endpoints require pairing and desktop commands are loopback-only', async t => {
+  const runtime = await createRuntime('official')
+  const service = new MobileSyncService({
+    store: createStore(),
+    getRuntimeTarget: () => runtime.url,
+    host: '127.0.0.1',
+    port: 0,
+    qrFactory: async () => 'qr'
+  })
+  t.after(async () => {
+    await service.stop()
+    await runtime.close()
+  })
+  await service.start()
+  const paired = await pair(service)
+  const origin = service.state().origins[0]
+  const headers = { Cookie: paired.cookie, 'Content-Type': 'application/json' }
+  const deviceId = service.state().devices[0].id
+
+  const status = await fetch(`${origin}/__harness_mobile__/control/status`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ protocolVersion: 1, enabled: true, ready: true, accessibility: true, capabilities: ['tap', 'screenshot'] })
+  })
+  assert.equal(status.status, 200)
+  assert.equal(service.state().control.devices[0].ready, true)
+
+  const forbidden = await fetch(`${origin}/__harness_mobile__/control/desktop-command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, command: { action: 'tap', payload: { x: 1, y: 2 } } })
+  })
+  assert.equal(forbidden.status, 403)
+
+  const submitted = await fetch(`${origin}/__harness_mobile__/control/desktop-command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Harness-Mobile-Control': '1' },
+    body: JSON.stringify({ deviceId, command: { action: 'tap', payload: { x: 10, y: 20 } } })
+  })
+  assert.equal(submitted.status, 202)
+  const command = (await submitted.json()).command
+
+  const polled = await fetch(`${origin}/__harness_mobile__/control/poll?protocolVersion=1`, { headers: { Cookie: paired.cookie } })
+  assert.equal((await polled.json()).command.id, command.id)
+  const receipt = await fetch(`${origin}/__harness_mobile__/control/result`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ id: command.id, ok: true, code: 'OK' })
+  })
+  assert.equal(receipt.status, 200)
+})
+
 test('paired phones can load and update the desktop appearance bridge', async t => {
   const runtime = await createRuntime('official')
   let selected = 'porcelain-mist'

@@ -3,6 +3,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:allowBackup="false"
@@ -33,5 +37,37 @@
             android:exported="false"
             android:screenOrientation="sensorPortrait"
             android:theme="@style/Theme.HarnessMobile.Scanner" />
+        <activity
+            android:name=".ControlSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.HarnessMobile" />
+        <activity
+            android:name=".ScreenCaptureActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.HarnessMobile.Scanner" />
+        <activity
+            android:name=".DocumentPickerActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.HarnessMobile.Scanner" />
+        <service
+            android:name=".HarnessControlAccessibilityService"
+            android:description="@string/control_accessibility_description"
+            android:exported="true"
+            android:label="DeepSeek Harness 手机控制"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/harness_control_accessibility" />
+        </service>
+        <service
+            android:name=".ControlForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync|mediaProjection"
+            android:stopWithTask="true" />
     </application>
 </manifest>

@@ -13,6 +13,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceResponse;
@@ -43,9 +44,9 @@ import com.journeyapps.barcodescanner.ScanOptions;
 import java.util.Locale;
 
 public final class MainActivity extends AppCompatActivity {
-    private static final String PREFS = "harness_mobile";
-    private static final String SAVED_ORIGIN = "saved_origin";
-    private static final String SAVED_PROFILE = "saved_profile";
+    static final String PREFS = "harness_mobile";
+    static final String SAVED_ORIGIN = "saved_origin";
+    static final String SAVED_PROFILE = "saved_profile";
     private static final long[] WORKBENCH_RETRY_DELAYS_MS = { 800L, 1500L, 2500L, 4000L, 5000L };
 
     private LinearLayout pairingPanel;
@@ -103,6 +104,7 @@ public final class MainActivity extends AppCompatActivity {
         bindViews();
         configureWebView();
         configureActions();
+        if (ControlPreferences.isEnabled(this)) ControlForegroundService.start(this);
 
         String incomingPairing = getIntent().getDataString();
         pairingProfile = PairingProfile.fromStoredJson(getSharedPreferences(PREFS, MODE_PRIVATE).getString(SAVED_PROFILE, ""));
@@ -184,7 +186,8 @@ public final class MainActivity extends AppCompatActivity {
         webView.getSettings().setAllowFileAccess(false);
         webView.getSettings().setAllowContentAccess(false);
         webView.getSettings().setMediaPlaybackRequiresUserGesture(true);
-        webView.getSettings().setUserAgentString(webView.getSettings().getUserAgentString() + " HarnessMobile/0.1 Android");
+        webView.getSettings().setUserAgentString(webView.getSettings().getUserAgentString() + " HarnessMobile/1 Android");
+        webView.addJavascriptInterface(new MobileControlBridge(), "HarnessMobileControl");
         if (android.os.Build.VERSION.SDK_INT >= 26) webView.getSettings().setSafeBrowsingEnabled(true);
 
         webView.setWebChromeClient(new WebChromeClient() {
@@ -585,8 +588,20 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private final class MobileControlBridge {
+        @JavascriptInterface public void openSettings() {
+            runOnUiThread(() -> startActivity(new Intent(MainActivity.this, ControlSettingsActivity.class)));
+        }
+
+        @JavascriptInterface public String status() {
+            return ControlPreferences.isEnabled(MainActivity.this) && HarnessControlAccessibilityService.isConnected() ? "ready" : "disabled";
+        }
+    }
+
     @Override
     protected void onDestroy() {
+        ControlPreferences.setEnabled(this, false);
+        ControlForegroundService.stop(this);
         cancelWorkbenchRetry(true);
         workbenchReadyGeneration++;
         remoteReconnectProfile = null;
