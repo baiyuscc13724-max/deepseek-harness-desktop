@@ -1,34 +1,34 @@
 [
   {
-    "tag_name": "v1.0.21",
-    "name": "Harness Desktop 1.0.21",
-    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.21",
+    "tag_name": "v1.0.22",
+    "name": "Harness Desktop 1.0.22",
+    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.22",
     "prerelease": false,
     "draft": false,
-    "body": "- 在现有外观皮肤中新增壁纸明暗、模糊、面板通透和边框清晰调节。\n- 壁纸使用独立背景层，不会模糊文字、代码和操作控件。\n- 玻璃效果仅作用于自定义主题，并修复移除壁纸、旧文件清理和缓存一致性。\n- Windows 桌面安装版与便携版同步发布到 GitHub 和 CNB 国内镜像。\n- Android APP 未改动，继续沿用 1.0.20 测试版。",
+    "body": "- 修复自定义皮肤设置页被限制并挤压在左侧栏内的问题。\n- 侧栏不再使用会改变定位上下文的玻璃滤镜，输入框和对话框仍保留玻璃效果。\n- 自定义主题编辑器按自身容器宽度响应，窄设置区自动上下排列，不再越界。\n- 两项布局修复均通过源码窗口人工验证。\n- Android APP 未改动，继续沿用 1.0.20 测试版。",
     "assets": [
       {
-        "name": "Harness-Desktop-1.0.21-win-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.21/Harness-Desktop-1.0.21-win-x64.exe",
-        "size": 152746628,
+        "name": "Harness-Desktop-1.0.22-win-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.22/Harness-Desktop-1.0.22-win-x64.exe",
+        "size": 152749860,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.21/Harness-Desktop-1.0.21-win-x64.exe"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.22/Harness-Desktop-1.0.22-win-x64.exe"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.21-portable-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.21/Harness-Desktop-1.0.21-portable-x64.exe",
-        "size": 146417509,
+        "name": "Harness-Desktop-1.0.22-portable-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.22/Harness-Desktop-1.0.22-portable-x64.exe",
+        "size": 146418070,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.21/Harness-Desktop-1.0.21-portable-x64.exe"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.22/Harness-Desktop-1.0.22-portable-x64.exe"
         ]
       },
       {
         "name": "SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.21/SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.22/SHA256SUMS.txt",
         "size": 207,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.21/SHA256SUMS.txt"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.22/SHA256SUMS.txt"
         ]
       }
     ]

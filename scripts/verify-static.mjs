@@ -113,6 +113,18 @@ if (!themeIntegration.includes("event.detail >= 2") || !themeIntegration.include
 if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includes('[data-slot="conversation"]')) {
   throw new Error('Theme integration must survive upstream class-name changes and isolate official surface variables.')
 }
+if (!themeIntegration.includes('html[data-hd-theme="custom"] body::before')) {
+  throw new Error('The custom wallpaper must stay outside the workbench layout so it cannot alter fixed dialog positioning.')
+}
+if (themeIntegration.includes('html[data-hd-theme="custom"] [data-slot="sidebar"] > *')) {
+  throw new Error('The custom sidebar must not use backdrop-filter because it traps fixed settings dialogs inside the sidebar containing block.')
+}
+if (!themeIntegration.includes('Math.max(.22, surfaceOpacity - .02)')) {
+  throw new Error('The custom sidebar must retain built-in-theme transparency parity instead of becoming an isolated opaque panel.')
+}
+if (!themeIntegration.includes('container-type:inline-size') || !themeIntegration.includes('@container (max-width:660px)')) {
+  throw new Error('The custom theme editor must respond to its own settings-panel width instead of overflowing based on viewport width.')
+}
 const startupSplash = html.match(/<section id="startupSplash"[\s\S]*?<\/section>/)?.[0] ?? ''
 if ((startupSplash.match(/<path\b/g) || []).length !== 1 || !startupSplash.includes('pathLength="1"') || !rendererScript.includes('requestAnimationFrame(drawStartupFrame)')) {
   throw new Error('The startup experience must adaptively trace the DeepSeek mark with one DOM path.')
@@ -166,7 +178,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.21') throw new Error(`Expected package version 1.0.21, received ${pkg.version}`)
+if (pkg.version !== '1.0.22') throw new Error(`Expected package version 1.0.22, received ${pkg.version}`)
 const mobileVersion = '1.0.20'
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
