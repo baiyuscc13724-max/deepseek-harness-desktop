@@ -101,7 +101,7 @@ function queryCodexAppServer({ spawnImpl = spawn, command = process.env.HARNESS_
       id: 1,
       method: 'initialize',
       params: {
-        clientInfo: { name: 'harness-desktop-meter', title: 'Harness Desktop', version: '1.0.19' },
+        clientInfo: { name: 'harness-desktop-meter', title: 'Harness Desktop', version: '1.0.20' },
         capabilities: { experimentalApi: true }
       }
     })}\n`)

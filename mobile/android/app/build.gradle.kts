@@ -10,8 +10,8 @@ android {
         applicationId = "io.harnessdesktop.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10019
-        versionName = "1.0.19"
+        versionCode = 10020
+        versionName = "1.0.20"
     }
 
     buildTypes {
