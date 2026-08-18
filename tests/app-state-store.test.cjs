@@ -21,13 +21,29 @@ test('AppStateStore persists only validated appearance fields', () => {
   const store = new AppStateStore(file)
   store.updateAppearance({
     themeId: 'tokyo-night',
-    customTheme: { mode: 'light', accent: '#AABBCC', surface: '#112233', text: '#F0F0F0', backgroundFile: 'custom-background.webp' }
+    customTheme: {
+      mode: 'light', accent: '#AABBCC', surface: '#112233', text: '#F0F0F0',
+      wallpaperBrightness: 118, wallpaperBlur: 9, glassTransparency: 46, borderStrength: 71,
+      backgroundFile: 'custom-background.webp'
+    }
   })
   const restored = new AppStateStore(file).get().appearance
   assert.equal(restored.themeId, 'tokyo-night')
   assert.deepEqual(restored.customTheme, {
-    mode: 'light', accent: '#aabbcc', surface: '#112233', text: '#f0f0f0', backgroundFile: 'custom-background.webp'
+    mode: 'light', accent: '#aabbcc', surface: '#112233', text: '#f0f0f0',
+    wallpaperBrightness: 118, wallpaperBlur: 9, glassTransparency: 46, borderStrength: 71,
+    backgroundFile: 'custom-background.webp'
   })
+})
+
+test('custom appearance updates preserve the active catalog theme and use safe defaults for empty ranges', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-theme-merge-'))
+  const store = new AppStateStore(path.join(dir, 'app-state.json'))
+  store.updateAppearance({ themeId: 'tokyo-night', customTheme: { backgroundFile: 'custom-background.webp' } })
+  const restored = store.updateAppearance({ customTheme: { backgroundFile: null, wallpaperBrightness: null } }).appearance
+  assert.equal(restored.themeId, 'tokyo-night')
+  assert.equal(restored.customTheme.backgroundFile, null)
+  assert.equal(restored.customTheme.wallpaperBrightness, 82)
 })
 
 test('new installs use Porcelain Mist while preserving an explicitly selected non-default theme', () => {
@@ -63,11 +79,18 @@ test('AppStateStore persists validated pet preferences and display positions', (
 test('AppStateStore rejects unknown themes and unsafe custom values', () => {
   const state = normalizeState({ appearance: {
     themeId: '../../escape',
-    customTheme: { accent: 'url(file:///secret)', surface: '#123', text: 'red', backgroundFile: '../../secret.txt' }
+    customTheme: {
+      accent: 'url(file:///secret)', surface: '#123', text: 'red', backgroundFile: '../../secret.txt',
+      wallpaperBrightness: 999, wallpaperBlur: -8, glassTransparency: 'oops', borderStrength: 140
+    }
   } })
   assert.equal(state.appearance.themeId, 'porcelain-mist')
   assert.equal(state.appearance.customTheme.accent, '#6f8cff')
   assert.equal(state.appearance.customTheme.backgroundFile, null)
+  assert.equal(state.appearance.customTheme.wallpaperBrightness, 140)
+  assert.equal(state.appearance.customTheme.wallpaperBlur, 0)
+  assert.equal(state.appearance.customTheme.glassTransparency, 32)
+  assert.equal(state.appearance.customTheme.borderStrength, 100)
 })
 
 test('normalizeState discards unknown mutable fields', () => {

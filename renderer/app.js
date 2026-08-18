@@ -25,6 +25,7 @@ const skinPickerGrid = document.querySelector('#skinPickerGrid')
 const closeSkinPickerButton = document.querySelector('#closeSkinPicker')
 const restoreOfficialThemeButton = document.querySelector('#restoreOfficialTheme')
 const skinChooseBackgroundButton = document.querySelector('#skinChooseBackground')
+const skinClearBackgroundButton = document.querySelector('#skinClearBackground')
 const skinApplyCustomButton = document.querySelector('#skinApplyCustom')
 const skinBackgroundState = document.querySelector('#skinBackgroundState')
 const mobileSyncOverlay = document.querySelector('#mobileSyncOverlay')
@@ -111,6 +112,35 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character =>
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
 })[character])
 
+const customThemeDefaults = Object.freeze({
+  mode: 'dark', accent: '#6f8cff', surface: '#171b29', text: '#f4f7ff',
+  wallpaperBrightness: 82, wallpaperBlur: 2, glassTransparency: 32, borderStrength: 48
+})
+
+const customThemeRangeFields = Object.freeze({
+  wallpaperBrightness: { input: '#skinWallpaperBrightness', output: '#skinBrightnessValue', suffix: '%' },
+  wallpaperBlur: { input: '#skinWallpaperBlur', output: '#skinBlurValue', suffix: 'px' },
+  glassTransparency: { input: '#skinGlassTransparency', output: '#skinGlassValue', suffix: '%' },
+  borderStrength: { input: '#skinBorderStrength', output: '#skinBorderValue', suffix: '%' }
+})
+
+function shellColorWithOpacity(hex, opacity) {
+  if (!/^#[0-9a-f]{6}$/i.test(hex || '')) return hex
+  const alpha = Math.round(Math.min(1, Math.max(0, opacity)) * 255).toString(16).padStart(2, '0')
+  return `${hex}${alpha}`
+}
+
+function readShellCustomTheme() {
+  const values = {
+    mode: document.querySelector('#skinCustomMode').value,
+    accent: document.querySelector('#skinCustomAccent').value,
+    surface: document.querySelector('#skinCustomSurface').value,
+    text: document.querySelector('#skinCustomText').value
+  }
+  for (const [name, field] of Object.entries(customThemeRangeFields)) values[name] = Number(document.querySelector(field.input).value)
+  return values
+}
+
 function startupIsResolved() {
   return startupFailed || (startupRuntimeReady && startupWebviewReady)
 }
@@ -189,16 +219,18 @@ function applyShellTheme() {
     for (const name of ['--shell-surface', '--shell-layer', '--shell-layer-2', '--shell-text', '--shell-text-secondary', '--shell-text-tertiary', '--shell-border', '--shell-hover', '--shell-accent', '--shell-overlay']) root.style.removeProperty(name)
     return
   }
-  const custom = appearanceState.customTheme || {}
+  const custom = { ...customThemeDefaults, ...(appearanceState.customTheme || {}) }
   const prefersDark = matchMedia('(prefers-color-scheme: dark)').matches
   const mode = theme.id === 'custom' ? custom.mode : theme.mode === 'adaptive' ? (prefersDark ? 'dark' : 'light') : theme.mode
+  const glassOpacity = 1 - custom.glassTransparency / 100
   const vars = theme.id === 'custom'
     ? {
-        '--dsw-alias-bg-base': custom.surface,
-        '--dsw-alias-bg-layer-1': custom.surface,
-        '--dsw-alias-bg-layer-2': custom.surface,
+        '--dsw-alias-bg-base': shellColorWithOpacity(custom.surface, Math.max(.22, glassOpacity)),
+        '--dsw-alias-bg-layer-1': shellColorWithOpacity(custom.surface, Math.min(1, glassOpacity + .08)),
+        '--dsw-alias-bg-layer-2': shellColorWithOpacity(custom.surface, Math.min(1, glassOpacity + .16)),
         '--dsw-alias-label-primary': custom.text,
         '--dsw-alias-label-secondary': custom.text,
+        '--dsw-alias-border-l2': shellColorWithOpacity(custom.text, custom.borderStrength / 100 * .34),
         '--dsw-alias-brand-primary': custom.accent
       }
     : { ...theme.vars, ...(theme.mode === 'adaptive' && mode === 'dark' ? theme.darkVars : {}) }
@@ -245,12 +277,19 @@ function renderSkinPicker() {
     event.stopPropagation()
     api.openExternal(event.currentTarget.dataset.source || '').catch(() => {})
   }))
-  const custom = appearanceState.customTheme || {}
-  document.querySelector('#skinCustomMode').value = custom.mode || 'dark'
-  document.querySelector('#skinCustomAccent').value = custom.accent || '#6f8cff'
-  document.querySelector('#skinCustomSurface').value = custom.surface || '#171b29'
-  document.querySelector('#skinCustomText').value = custom.text || '#f4f7ff'
-  skinBackgroundState.textContent = appearanceState.customBackgroundDataUrl ? '已选择本地背景图' : '未选择背景图，将使用渐变背景'
+  const custom = { ...customThemeDefaults, ...(appearanceState.customTheme || {}) }
+  document.querySelector('#skinCustomMode').value = custom.mode
+  document.querySelector('#skinCustomAccent').value = custom.accent
+  document.querySelector('#skinCustomSurface').value = custom.surface
+  document.querySelector('#skinCustomText').value = custom.text
+  for (const [name, field] of Object.entries(customThemeRangeFields)) {
+    const input = document.querySelector(field.input)
+    const output = document.querySelector(field.output)
+    input.value = String(custom[name])
+    output.textContent = `${custom[name]}${field.suffix}`
+  }
+  skinClearBackgroundButton.disabled = !appearanceState.customBackgroundDataUrl
+  skinBackgroundState.textContent = appearanceState.customBackgroundDataUrl ? '本地壁纸已启用' : '当前使用渐变背景'
 }
 
 const petStatusLabels = {
@@ -1083,12 +1122,18 @@ runtimeView.addEventListener('will-navigate', event => {
       publishAppearanceState()
     })
   } else if (target.hostname === 'save-custom-theme') {
-    api.saveCustomTheme(Object.fromEntries(['mode', 'accent', 'surface', 'text'].map(name => [name, target.searchParams.get(name)]))).then(state => {
+    const fields = ['mode', 'accent', 'surface', 'text', 'wallpaperBrightness', 'wallpaperBlur', 'glassTransparency', 'borderStrength']
+    api.saveCustomTheme(Object.fromEntries(fields.map(name => [name, target.searchParams.get(name)]))).then(state => {
       appearanceState = state
       publishAppearanceState()
     })
   } else if (target.hostname === 'choose-theme-background') {
     api.chooseThemeBackground().then(state => {
+      appearanceState = state
+      publishAppearanceState()
+    })
+  } else if (target.hostname === 'clear-theme-background') {
+    api.clearThemeBackground().then(state => {
       appearanceState = state
       publishAppearanceState()
     })
@@ -1229,13 +1274,19 @@ skinChooseBackgroundButton.addEventListener('click', async () => {
   await publishAppearanceState()
   renderSkinPicker()
 })
-skinApplyCustomButton.addEventListener('click', async () => {
-  appearanceState = await api.saveCustomTheme({
-    mode: document.querySelector('#skinCustomMode').value,
-    accent: document.querySelector('#skinCustomAccent').value,
-    surface: document.querySelector('#skinCustomSurface').value,
-    text: document.querySelector('#skinCustomText').value
+skinClearBackgroundButton.addEventListener('click', async () => {
+  appearanceState = await api.clearThemeBackground()
+  await publishAppearanceState()
+  renderSkinPicker()
+})
+for (const field of Object.values(customThemeRangeFields)) {
+  const input = document.querySelector(field.input)
+  input.addEventListener('input', () => {
+    document.querySelector(field.output).textContent = `${input.value}${field.suffix}`
   })
+}
+skinApplyCustomButton.addEventListener('click', async () => {
+  appearanceState = await api.saveCustomTheme(readShellCustomTheme())
   await publishAppearanceState()
   closeSkinPicker()
 })

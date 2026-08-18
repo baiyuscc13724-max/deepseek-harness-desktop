@@ -4,14 +4,14 @@ const http = require('node:http')
 const os = require('node:os')
 const httpProxy = require('http-proxy')
 const QRCode = require('qrcode')
-const { version: DESKTOP_VERSION } = require('../../package.json')
 const { CONTROL_PROTOCOL_VERSION, MobileControlBroker, isLoopbackAddress } = require('./mobile-control-broker.cjs')
 
 const BRIDGE_API_VERSION = 2
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const DEFAULT_MOBILE_DOWNLOAD_URL = `https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v${DESKTOP_VERSION}/Harness-Mobile-${DESKTOP_VERSION}-android-universal-beta.apk`
+const CURRENT_MOBILE_VERSION = '1.0.20'
+const DEFAULT_MOBILE_DOWNLOAD_URL = `https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v${CURRENT_MOBILE_VERSION}/Harness-Mobile-${CURRENT_MOBILE_VERSION}-android-universal-beta.apk`
 
 function sha256(value) {
   return createHash('sha256').update(String(value)).digest('hex')
@@ -555,8 +555,9 @@ class MobileSyncService extends EventEmitter {
         writeResponse(response, 404, '')
         return
       }
+      const isCustomThemeAsset = decodeURIComponent(themeAssetMatch[1]) === 'custom-background'
       response.writeHead(200, {
-        'Cache-Control': 'private, max-age=86400',
+        'Cache-Control': isCustomThemeAsset ? 'no-store' : 'private, max-age=86400',
         'Content-Type': asset.mime || 'application/octet-stream',
         'Content-Length': asset.data.length,
         'X-Content-Type-Options': 'nosniff'

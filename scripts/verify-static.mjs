@@ -166,13 +166,14 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.20') throw new Error(`Expected package version 1.0.20, received ${pkg.version}`)
+if (pkg.version !== '1.0.21') throw new Error(`Expected package version 1.0.21, received ${pkg.version}`)
+const mobileVersion = '1.0.20'
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
   `v${pkg.version}`,
   `Harness-Desktop-${pkg.version}-win-x64.exe`,
   `Harness-Desktop-${pkg.version}-portable-x64.exe`,
-  `Harness-Mobile-${pkg.version}-android-universal-beta.apk`,
+  `Harness-Mobile-${mobileVersion}-android-universal-beta.apk`,
   'docs/assets/harness-desktop-hero.jpg',
   'releases/latest'
 ]) {

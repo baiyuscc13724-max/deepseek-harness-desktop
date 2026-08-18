@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   getThemeAssets: () => ipcRenderer.invoke('appearance:assets'),
   saveCustomTheme: customTheme => ipcRenderer.invoke('appearance:saveCustom', customTheme),
   chooseThemeBackground: () => ipcRenderer.invoke('appearance:chooseBackground'),
+  clearThemeBackground: () => ipcRenderer.invoke('appearance:clearBackground'),
   getPetState: () => ipcRenderer.invoke('pet:getState'),
   setPetPreferences: patch => ipcRenderer.invoke('pet:setPreferences', patch),
   feedPet: kind => ipcRenderer.invoke('pet:feed', kind),

@@ -128,14 +128,28 @@
         </header>
         <div id="skinPickerGrid" class="skin-picker-grid"></div>
         <section class="skin-custom-editor">
-          <div><h3>自定义主题</h3><p>背景图只保存在本机，不会上传。</p></div>
-          <label>明暗<select id="skinCustomMode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
-          <label>强调色<input id="skinCustomAccent" type="color" value="#6f8cff" /></label>
-          <label>表面色<input id="skinCustomSurface" type="color" value="#171b29" /></label>
-          <label>文字色<input id="skinCustomText" type="color" value="#f4f7ff" /></label>
-          <button id="skinChooseBackground" type="button">选择背景图</button>
-          <button id="skinApplyCustom" type="button">应用自定义主题</button>
-          <span id="skinBackgroundState"></span>
+          <div class="skin-custom-heading"><div><h3>自定义主题</h3><p>在现有皮肤基础上调出更清晰、舒适的壁纸质感；图片只保存在本机。</p></div><span id="skinBackgroundState"></span></div>
+          <div class="skin-custom-layout">
+            <section class="skin-custom-group" aria-labelledby="skinPaletteTitle">
+              <h4 id="skinPaletteTitle">基础配色</h4>
+              <div class="skin-custom-colors">
+                <label>明暗模式<select id="skinCustomMode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
+                <label>强调色<input id="skinCustomAccent" type="color" value="#6f8cff" /></label>
+                <label>表面色<input id="skinCustomSurface" type="color" value="#171b29" /></label>
+                <label>文字色<input id="skinCustomText" type="color" value="#f4f7ff" /></label>
+              </div>
+            </section>
+            <section class="skin-custom-group skin-wallpaper-controls" aria-labelledby="skinWallpaperTitle">
+              <h4 id="skinWallpaperTitle">壁纸质感</h4>
+              <div class="skin-range-grid">
+                <label><span>壁纸明暗 <output id="skinBrightnessValue">82%</output></span><input id="skinWallpaperBrightness" type="range" min="40" max="140" value="82" /></label>
+                <label><span>壁纸模糊 <output id="skinBlurValue">2px</output></span><input id="skinWallpaperBlur" type="range" min="0" max="24" value="2" /></label>
+                <label><span>面板通透 <output id="skinGlassValue">32%</output></span><input id="skinGlassTransparency" type="range" min="0" max="75" value="32" /></label>
+                <label><span>边框清晰 <output id="skinBorderValue">48%</output></span><input id="skinBorderStrength" type="range" min="0" max="100" value="48" /></label>
+              </div>
+            </section>
+          </div>
+          <div class="skin-custom-actions"><button id="skinChooseBackground" type="button">选择本地壁纸</button><button id="skinClearBackground" type="button">移除壁纸</button><button id="skinApplyCustom" class="primary" type="button">应用并保存</button></div>
         </section>
       </div>
     </section>

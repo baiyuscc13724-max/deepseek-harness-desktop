@@ -259,7 +259,7 @@ test('paired phones can load and update the desktop appearance bridge', async t 
       return appearance()
     },
     getThemeScript: async () => 'window.__mobileThemeLoaded=true;',
-    readThemeAsset: async relative => relative === 'preview.webp'
+    readThemeAsset: async relative => ['preview.webp', 'custom-background'].includes(relative)
       ? { data: Buffer.from('theme-asset'), mime: 'image/webp' }
       : null
   })
@@ -290,5 +290,10 @@ test('paired phones can load and update the desktop appearance bridge', async t 
 
   const asset = await fetch(`${origin}/__harness_mobile__/theme-assets/preview.webp`, { headers })
   assert.equal(asset.headers.get('content-type'), 'image/webp')
+  assert.equal(asset.headers.get('cache-control'), 'private, max-age=86400')
   assert.equal(await asset.text(), 'theme-asset')
+
+  const customAsset = await fetch(`${origin}/__harness_mobile__/theme-assets/custom-background`, { headers })
+  assert.equal(customAsset.headers.get('cache-control'), 'no-store')
+  assert.equal(await customAsset.text(), 'theme-asset')
 })

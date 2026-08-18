@@ -6,12 +6,23 @@ const VALID_THEME_IDS = new Set(THEME_CATALOG.map(theme => theme.id))
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 const DEFAULT_THEME_ID = 'porcelain-mist'
 
+function boundedInteger(value, minimum, maximum, fallback) {
+  if (value === null || value === '' || typeof value === 'boolean') return fallback
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(maximum, Math.max(minimum, Math.round(number)))
+}
+
 function normalizeCustomTheme(value = {}) {
   return {
     mode: value.mode === 'light' ? 'light' : 'dark',
     accent: HEX_COLOR.test(value.accent) ? value.accent.toLowerCase() : '#6f8cff',
     surface: HEX_COLOR.test(value.surface) ? value.surface.toLowerCase() : '#171b29',
     text: HEX_COLOR.test(value.text) ? value.text.toLowerCase() : '#f4f7ff',
+    wallpaperBrightness: boundedInteger(value.wallpaperBrightness, 40, 140, 82),
+    wallpaperBlur: boundedInteger(value.wallpaperBlur, 0, 24, 2),
+    glassTransparency: boundedInteger(value.glassTransparency, 0, 75, 32),
+    borderStrength: boundedInteger(value.borderStrength, 0, 100, 48),
     backgroundFile: /^custom-background\.(?:png|jpe?g|webp)$/i.test(value.backgroundFile || '')
       ? value.backgroundFile
       : null

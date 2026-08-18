@@ -38,6 +38,25 @@
       '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
     })[character])
     const hexWithAlpha = (value, alpha) => /^#[0-9a-f]{6}$/i.test(value || '') ? `${value}${alpha}` : value
+    const boundedNumber = (value, minimum, maximum, fallback) => {
+      const number = Number(value)
+      return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, Math.round(number))) : fallback
+    }
+    const alphaHex = opacity => Math.round(Math.min(1, Math.max(0, opacity)) * 255).toString(16).padStart(2, '0')
+    const hexWithOpacity = (value, opacity) => hexWithAlpha(value, alphaHex(opacity))
+    const customThemeValues = state => {
+      const custom = state?.customTheme || {}
+      return {
+        mode: custom.mode === 'light' ? 'light' : 'dark',
+        accent: custom.accent || '#6f8cff',
+        surface: custom.surface || '#171b29',
+        text: custom.text || '#f4f7ff',
+        wallpaperBrightness: boundedNumber(custom.wallpaperBrightness, 40, 140, 82),
+        wallpaperBlur: boundedNumber(custom.wallpaperBlur, 0, 24, 2),
+        glassTransparency: boundedNumber(custom.glassTransparency, 0, 75, 32),
+        borderStrength: boundedNumber(custom.borderStrength, 0, 100, 48)
+      }
+    }
     const completeThemeVars = (vars, tone) => {
       const base = vars['--dsw-alias-bg-base'] || (tone === 'dark' ? '#151517' : '#ffffff')
       const layer1 = vars['--dsw-alias-bg-layer-1'] || base
@@ -133,18 +152,30 @@
       .hd-theme-gesture { flex:none; color:var(--dsw-alias-label-tertiary); }
       .hd-theme-card[data-selected="true"] .hd-theme-gesture { color:var(--dsw-alias-brand-text); }
       .hd-theme-source { border:0; padding:0; color:var(--dsw-alias-brand-text); background:none; font:inherit; cursor:pointer; }
-      .hd-custom-editor { margin-top:18px; border:1px solid var(--dsw-alias-border-l2); border-radius:12px; padding:16px; background:var(--dsw-alias-bg-layer-1); }
-      .hd-custom-editor h3 { margin:0 0 4px; font-size:14px; }
-      .hd-custom-editor p { margin:0 0 14px; color:var(--dsw-alias-label-secondary); font-size:11px; }
-      .hd-custom-fields { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:12px; }
-      .hd-custom-fields label { display:grid; gap:6px; color:var(--dsw-alias-label-secondary); font-size:11px; }
-      .hd-custom-fields input[type="color"] { width:100%; height:38px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:3px; background:var(--dsw-alias-bg-layer-2); }
-      .hd-custom-fields select { height:38px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:0 9px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-2); }
-      .hd-custom-actions { display:flex; align-items:center; gap:8px; margin-top:14px; }
-      .hd-custom-hint { margin-left:auto; color:var(--dsw-alias-label-tertiary); font-size:10px; }
-      @media (max-width:900px) { .hd-custom-fields { grid-template-columns:repeat(2,minmax(120px,1fr)); } }
+      .hd-custom-editor { margin-top:18px; border:1px solid var(--dsw-alias-border-l2); border-radius:14px; padding:16px; background:var(--dsw-alias-bg-layer-1); }
+      .hd-custom-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+      .hd-custom-heading h3 { margin:0 0 4px; font-size:14px; }
+      .hd-custom-heading p { margin:0; color:var(--dsw-alias-label-secondary); font-size:11px; line-height:18px; }
+      .hd-custom-status { flex:none; color:var(--dsw-alias-label-tertiary); font-size:10px; }
+      .hd-custom-layout { display:grid; grid-template-columns:minmax(250px,.8fr) minmax(360px,1.2fr); gap:12px; margin-top:14px; }
+      .hd-custom-group { min-width:0; border:1px solid var(--dsw-alias-border-l2); border-radius:11px; padding:12px; background:var(--dsw-alias-bg-layer-2); }
+      .hd-custom-group h4 { margin:0 0 10px; font-size:11px; line-height:18px; }
+      .hd-custom-fields { display:grid; grid-template-columns:repeat(2,minmax(100px,1fr)); gap:10px; }
+      .hd-custom-fields label,.hd-custom-range-grid label { display:grid; gap:6px; color:var(--dsw-alias-label-secondary); font-size:10px; }
+      .hd-custom-fields input[type="color"] { width:100%; height:36px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:3px; background:var(--dsw-alias-bg-layer-1); }
+      .hd-custom-fields select { height:36px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:0 9px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-1); }
+      .hd-custom-range-grid { display:grid; grid-template-columns:repeat(2,minmax(140px,1fr)); gap:10px 16px; }
+      .hd-custom-range-grid label > span { display:flex; justify-content:space-between; gap:8px; }
+      .hd-custom-range-grid output { color:var(--dsw-alias-label-primary); font-variant-numeric:tabular-nums; }
+      .hd-custom-range-grid input[type="range"] { width:100%; margin:0; accent-color:var(--dsw-alias-brand-primary); }
+      .hd-custom-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin-top:14px; }
+      .hd-custom-actions .hd-theme-primary { border-color:var(--dsw-alias-brand-primary); color:var(--dsw-alias-label-primary-foreground); background:var(--dsw-alias-brand-primary); }
+      .hd-custom-actions button:disabled { cursor:not-allowed; opacity:.45; }
+      @media (max-width:900px) { .hd-custom-layout { grid-template-columns:1fr; } }
       html[data-hd-theme]:not([data-hd-theme="official"]) body { min-height:100vh; background-position:center !important; background-size:cover !important; background-attachment:fixed !important; }
       html[data-hd-theme]:not([data-hd-theme="official"]) #root { position:relative; z-index:1; min-height:100vh; background:transparent !important; }
+      html[data-hd-theme="custom"] body { background:var(--dsw-alias-bg-base) !important; }
+      html[data-hd-theme="custom"] body::before { content:""; position:fixed; z-index:0; inset:calc(-16px - var(--hd-wallpaper-blur,0px)); background:var(--hd-wallpaper) center/cover no-repeat; filter:brightness(var(--hd-wallpaper-brightness,.82)) blur(var(--hd-wallpaper-blur,2px)); pointer-events:none; }
       html[data-hd-theme]:not([data-hd-theme="official"]) #root > [data-slot="root"] > *,
       html[data-hd-theme]:not([data-hd-theme="official"]) [data-slot="conversation"] > * { background:transparent !important; }
       html[data-hd-theme]:not([data-hd-theme="official"]) [data-slot="sidebar"] > * {
@@ -158,6 +189,12 @@
         background:var(--hd-theme-dialog) !important;
         backdrop-filter:blur(22px) saturate(1.08);
       }
+      html[data-hd-theme="custom"] [data-slot="sidebar"] > *,
+      html[data-hd-theme="custom"] [data-composer-card="true"],
+      html[data-hd-theme="custom"] [role="dialog"] {
+        backdrop-filter:blur(var(--hd-theme-glass-blur,18px)) saturate(1.08);
+        border-color:var(--dsw-alias-border-l2) !important;
+      }
       html[data-hd-theme="maid-atelier"] body::before, html[data-hd-theme="maid-atelier"] body::after { content:""; position:fixed; z-index:0; bottom:0; width:min(29vw,430px); height:78vh; background-repeat:no-repeat; background-position:center bottom; background-size:contain; pointer-events:none; filter:drop-shadow(0 12px 28px rgba(0,24,54,.2)); }
       html[data-hd-theme="maid-atelier"] body::before { left:clamp(210px,20vw,300px); background-image:var(--hd-maid-left); }
       html[data-hd-theme="maid-atelier"] body::after { right:2vw; background-image:var(--hd-maid-right); }
@@ -166,33 +203,36 @@
 
     const themeById = id => (window.__HARNESS_DESKTOP_THEMES__ || []).find(theme => theme.id === id)
     const customThemeFromState = state => {
-      const custom = state?.customTheme || {}
-      const accent = custom.accent || '#6f8cff'
-      const surface = custom.surface || '#171b29'
-      const text = custom.text || '#f4f7ff'
+      const custom = customThemeValues(state)
+      const { accent, surface, text } = custom
+      const surfaceOpacity = Math.max(.22, 1 - custom.glassTransparency / 100)
+      const borderOpacity = custom.borderStrength / 100
       return {
-        id: 'custom', mode: custom.mode === 'light' ? 'light' : 'dark',
+        id: 'custom', mode: custom.mode,
         preview: `radial-gradient(circle at 18% 14%, ${accent} 0%, transparent 34%), linear-gradient(145deg, ${surface}, ${accent})`,
         customBackgroundDataUrl: state?.customBackgroundDataUrl || '',
+        wallpaperBrightness: custom.wallpaperBrightness,
+        wallpaperBlur: custom.wallpaperBlur,
         vars: {
-          '--dsw-alias-bg-base': hexWithAlpha(surface, 'e8'),
-          '--dsw-alias-bg-layer-1': hexWithAlpha(surface, 'dc'),
-          '--dsw-alias-bg-layer-2': hexWithAlpha(surface, 'ee'),
-          '--dsw-alias-bg-layer-3': hexWithAlpha(surface, 'f5'),
-          '--dsw-alias-bg-module-platform': hexWithAlpha(surface, 'd8'),
+          '--dsw-alias-bg-base': hexWithOpacity(surface, surfaceOpacity),
+          '--dsw-alias-bg-layer-1': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .08)),
+          '--dsw-alias-bg-layer-2': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .16)),
+          '--dsw-alias-bg-layer-3': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .24)),
+          '--dsw-alias-bg-module-platform': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .05)),
           '--dsw-alias-label-primary': text,
           '--dsw-alias-label-secondary': hexWithAlpha(text, 'c7'),
           '--dsw-alias-label-tertiary': hexWithAlpha(text, '91'),
           '--dsw-alias-brand-primary': accent,
           '--dsw-alias-brand-text': accent,
-          '--dsw-alias-border-l1': hexWithAlpha(text, '14'),
-          '--dsw-alias-border-l2': hexWithAlpha(text, '2b'),
-          '--dsw-alias-border-l3': hexWithAlpha(text, '42'),
+          '--dsw-alias-border-l1': hexWithOpacity(text, borderOpacity * .16),
+          '--dsw-alias-border-l2': hexWithOpacity(text, borderOpacity * .34),
+          '--dsw-alias-border-l3': hexWithOpacity(text, borderOpacity * .52),
           '--dsw-alias-interactive-bg-hover': hexWithAlpha(accent, '24'),
-          '--dsw-specific-sidebar-fill': hexWithAlpha(surface, 'e6'),
-          '--dsw-specific-input-major': hexWithAlpha(surface, 'f2'),
-          '--dsw-specific-menu': hexWithAlpha(surface, 'fa'),
-          '--dsw-alias-markdown-code-block': hexWithAlpha(surface, 'd9')
+          '--dsw-specific-sidebar-fill': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .1)),
+          '--dsw-specific-input-major': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .18)),
+          '--dsw-specific-menu': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .24)),
+          '--dsw-alias-markdown-code-block': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .08)),
+          '--hd-theme-glass-blur': `${Math.round(10 + custom.glassTransparency * .22)}px`
         }
       }
     }
@@ -217,7 +257,7 @@
       const wallpaper = theme.id === 'maid-atelier'
         ? `linear-gradient(${tone === 'dark' ? 'rgba(1,14,29,.18),rgba(1,14,29,.42)' : 'rgba(238,250,255,.12),rgba(209,236,248,.35)'}),url("${tone === 'dark' ? theme.assets?.night : theme.assets?.day}")`
         : theme.customBackgroundDataUrl
-          ? `linear-gradient(rgba(0,0,0,.12),rgba(0,0,0,.18)),url("${theme.customBackgroundDataUrl}")`
+          ? `url("${theme.customBackgroundDataUrl}")`
           : theme.preview
       const active = document.createElement('style')
       active.id = 'harness-desktop-active-theme'
@@ -226,7 +266,12 @@
         '--hd-theme-input': vars['--dsw-specific-input-major'] || vars['--dsw-alias-bg-layer-1'] || 'transparent',
         '--hd-theme-dialog': vars['--dsw-alias-bg-layer-1'] || vars['--dsw-alias-bg-base'] || 'transparent'
       }
-      const themeValues = { ...vars, ...isolatedSurfaces }
+      const wallpaperVars = theme.id === 'custom' ? {
+        '--hd-wallpaper': wallpaper,
+        '--hd-wallpaper-brightness': String(theme.wallpaperBrightness / 100),
+        '--hd-wallpaper-blur': `${theme.wallpaperBlur}px`
+      } : {}
+      const themeValues = { ...vars, ...isolatedSurfaces, ...wallpaperVars }
       const signature = JSON.stringify([theme.id, tone, wallpaper, themeValues])
       if (old && window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ === signature && document.documentElement.dataset.hdTheme === theme.id) return
       old?.remove()
@@ -237,7 +282,7 @@
         html[data-hd-theme="${theme.id}"] [data-theme],
         html[data-hd-theme="${theme.id}"] [data-color-scheme],
         html[data-hd-theme="${theme.id}"] [data-slot="root"] { color-scheme:${tone}; ${Object.entries(themeValues).map(([name, value]) => `${name}:${value} !important;`).join('')} ${theme.id === 'maid-atelier' ? `--hd-maid-left:url("${theme.assets?.left}");--hd-maid-right:url("${theme.assets?.right}");` : ''} }
-        html[data-hd-theme="${theme.id}"] body { background:${wallpaper} center/cover fixed !important; }
+        html[data-hd-theme="${theme.id}"] body { background:${theme.id === 'custom' ? vars['--dsw-alias-bg-base'] : `${wallpaper} center/cover fixed`} !important; }
       `
       document.head.appendChild(active)
       document.documentElement.dataset.hdTheme = theme.id
@@ -305,12 +350,15 @@
           preview.style.background = custom.customBackgroundDataUrl ? `url("${custom.customBackgroundDataUrl}") center/cover` : custom.preview
         }
       })
-      const custom = state.customTheme || {}
-      for (const [name, fallback] of Object.entries({ mode: 'dark', accent: '#6f8cff', surface: '#171b29', text: '#f4f7ff' })) {
+      const custom = customThemeValues(state)
+      for (const [name, value] of Object.entries(custom)) {
         const input = panel.querySelector(`[data-hd-custom="${name}"]`)
-        if (input && document.activeElement !== input) input.value = custom[name] || fallback
+        if (input && document.activeElement !== input) input.value = String(value)
+        const output = panel.querySelector(`[data-hd-custom-output="${name}"]`)
+        if (output) output.textContent = `${value}${name === 'wallpaperBlur' ? 'px' : name === 'wallpaperBrightness' || name === 'glassTransparency' || name === 'borderStrength' ? '%' : ''}`
       }
-      panel.querySelector('[data-hd-custom-background-state]').textContent = state.customBackgroundDataUrl ? '已选择本地背景图' : '未选择背景图，将使用渐变背景'
+      panel.querySelector('[data-hd-custom-background-state]').textContent = state.customBackgroundDataUrl ? '本地壁纸已启用' : '当前使用渐变背景'
+      panel.querySelector('[data-hd-clear-background]').disabled = !state.customBackgroundDataUrl
     }
 
     const createPanel = () => {
@@ -319,24 +367,39 @@
       panel.dataset.hdThemePanel = ''
       panel.hidden = true
       panel.innerHTML = `
-        <div class="hd-theme-heading"><div><h2>外观皮肤</h2><p>直接装饰官方 DeepSeek Harness 工作台，不创建第二套界面。选择即刻预览，随桌面版保存；可随时恢复官方外观。</p></div><button type="button" class="hd-theme-button" data-hd-restore>恢复官方外观</button></div>
+        <div class="hd-theme-heading"><div><h2>外观皮肤</h2><p>直接装饰官方 DeepSeek Harness 工作台，不创建第二套界面。保留现有皮肤选择方式，并提供适合阅读与编码的壁纸调节。</p></div><button type="button" class="hd-theme-button" data-hd-restore>恢复官方外观</button></div>
         <div class="hd-theme-grid" data-hd-theme-grid></div>
-        <section class="hd-custom-editor"><h3>自定义主题</h3><p>背景图只保存在本机，不会上传；支持 PNG、JPG、WebP，最大 20 MB。</p>
-          <div class="hd-custom-fields">
-            <label>明暗模式<select data-hd-custom="mode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
-            <label>强调色<input type="color" data-hd-custom="accent" value="#6f8cff"></label>
-            <label>表面色<input type="color" data-hd-custom="surface" value="#171b29"></label>
-            <label>文字色<input type="color" data-hd-custom="text" value="#f4f7ff"></label>
+        <section class="hd-custom-editor">
+          <div class="hd-custom-heading"><div><h3>自定义主题</h3><p>调整配色和壁纸质感；图片只保存在本机，支持 PNG、JPG、WebP，最大 20 MB。</p></div><span class="hd-custom-status" data-hd-custom-background-state></span></div>
+          <div class="hd-custom-layout">
+            <section class="hd-custom-group"><h4>基础配色</h4><div class="hd-custom-fields">
+              <label>明暗模式<select data-hd-custom="mode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
+              <label>强调色<input type="color" data-hd-custom="accent" value="#6f8cff"></label>
+              <label>表面色<input type="color" data-hd-custom="surface" value="#171b29"></label>
+              <label>文字色<input type="color" data-hd-custom="text" value="#f4f7ff"></label>
+            </div></section>
+            <section class="hd-custom-group"><h4>壁纸质感</h4><div class="hd-custom-range-grid">
+              <label><span>壁纸明暗 <output data-hd-custom-output="wallpaperBrightness">82%</output></span><input type="range" min="40" max="140" value="82" data-hd-custom="wallpaperBrightness"></label>
+              <label><span>壁纸模糊 <output data-hd-custom-output="wallpaperBlur">2px</output></span><input type="range" min="0" max="24" value="2" data-hd-custom="wallpaperBlur"></label>
+              <label><span>面板通透 <output data-hd-custom-output="glassTransparency">32%</output></span><input type="range" min="0" max="75" value="32" data-hd-custom="glassTransparency"></label>
+              <label><span>边框清晰 <output data-hd-custom-output="borderStrength">48%</output></span><input type="range" min="0" max="100" value="48" data-hd-custom="borderStrength"></label>
+            </div></section>
           </div>
-          <div class="hd-custom-actions"><button type="button" class="hd-theme-button" data-hd-choose-background>选择本地背景图</button><button type="button" class="hd-theme-button" data-hd-save-custom>应用自定义主题</button><span class="hd-custom-hint" data-hd-custom-background-state></span></div>
+          <div class="hd-custom-actions"><button type="button" class="hd-theme-button" data-hd-choose-background>选择本地壁纸</button><button type="button" class="hd-theme-button" data-hd-clear-background>移除壁纸</button><button type="button" class="hd-theme-button hd-theme-primary" data-hd-save-custom>应用并保存</button></div>
         </section>`
       panel.querySelector('[data-hd-restore]').addEventListener('click', () => {
         window.__HARNESS_DESKTOP_THEME_STATE__ = { ...(window.__HARNESS_DESKTOP_THEME_STATE__ || {}), themeId: 'official' }
         applyTheme('official'); renderCards(panel); request('set-theme', { id: 'official' })
       })
       panel.querySelector('[data-hd-choose-background]').addEventListener('click', () => request('choose-theme-background'))
+      panel.querySelector('[data-hd-clear-background]').addEventListener('click', () => request('clear-theme-background'))
+      panel.querySelectorAll('.hd-custom-range-grid input').forEach(input => input.addEventListener('input', () => {
+        const output = panel.querySelector(`[data-hd-custom-output="${input.dataset.hdCustom}"]`)
+        if (output) output.textContent = `${input.value}${input.dataset.hdCustom === 'wallpaperBlur' ? 'px' : '%'}`
+      }))
       panel.querySelector('[data-hd-save-custom]').addEventListener('click', () => {
-        const values = Object.fromEntries(['mode', 'accent', 'surface', 'text'].map(name => [name, panel.querySelector(`[data-hd-custom="${name}"]`).value]))
+        const names = ['mode', 'accent', 'surface', 'text', 'wallpaperBrightness', 'wallpaperBlur', 'glassTransparency', 'borderStrength']
+        const values = Object.fromEntries(names.map(name => [name, panel.querySelector(`[data-hd-custom="${name}"]`).value]))
         window.__HARNESS_DESKTOP_THEME_STATE__ = { ...(window.__HARNESS_DESKTOP_THEME_STATE__ || {}), themeId: 'custom', customTheme: { ...(window.__HARNESS_DESKTOP_THEME_STATE__?.customTheme || {}), ...values } }
         applyTheme('custom'); renderCards(panel); request('save-custom-theme', values)
       })

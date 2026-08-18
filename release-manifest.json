@@ -1,42 +1,34 @@
 [
   {
-    "tag_name": "v1.0.20",
-    "name": "Harness Desktop 1.0.20",
-    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.20",
+    "tag_name": "v1.0.21",
+    "name": "Harness Desktop 1.0.21",
+    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.21",
     "prerelease": false,
     "draft": false,
-    "body": "- 在现有 Harness Mobile 中新增用户授权的固定白名单手机控制、能力协商、结果回执和立即停止。\n- 新增 Provider 用量适配、安装目录内独立 HarnessData 工作区和更广泛的本地附件支持。\n- 正式启用 CNB 国内更新源并保留 GitHub 后备源。\n- 保留原二维码下载、APP 内扫码配对、会话同步、实时刷新与安装数据。\n- 所有镜像下载均强制执行文件大小和 SHA-256 校验。",
+    "body": "- 在现有外观皮肤中新增壁纸明暗、模糊、面板通透和边框清晰调节。\n- 壁纸使用独立背景层，不会模糊文字、代码和操作控件。\n- 玻璃效果仅作用于自定义主题，并修复移除壁纸、旧文件清理和缓存一致性。\n- Windows 桌面安装版与便携版同步发布到 GitHub 和 CNB 国内镜像。\n- Android APP 未改动，继续沿用 1.0.20 测试版。",
     "assets": [
       {
-        "name": "Harness-Desktop-1.0.20-win-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.20/Harness-Desktop-1.0.20-win-x64.exe",
-        "size": 152744536,
+        "name": "Harness-Desktop-1.0.21-win-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.21/Harness-Desktop-1.0.21-win-x64.exe",
+        "size": 152746628,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.20/Harness-Desktop-1.0.20-win-x64.exe"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.21/Harness-Desktop-1.0.21-win-x64.exe"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.20-portable-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.20/Harness-Desktop-1.0.20-portable-x64.exe",
-        "size": 146415955,
+        "name": "Harness-Desktop-1.0.21-portable-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.21/Harness-Desktop-1.0.21-portable-x64.exe",
+        "size": 146417509,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.20/Harness-Desktop-1.0.20-portable-x64.exe"
-        ]
-      },
-      {
-        "name": "Harness-Mobile-1.0.20-android-universal-beta.apk",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.20/Harness-Mobile-1.0.20-android-universal-beta.apk",
-        "size": 51932507,
-        "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.20/Harness-Mobile-1.0.20-android-universal-beta.apk"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.21/Harness-Desktop-1.0.21-portable-x64.exe"
         ]
       },
       {
         "name": "SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.20/SHA256SUMS.txt",
-        "size": 322,
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.21/SHA256SUMS.txt",
+        "size": 207,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.20/SHA256SUMS.txt"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.21/SHA256SUMS.txt"
         ]
       }
     ]

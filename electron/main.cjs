@@ -1,7 +1,7 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, screen, session, shell, Tray } = require('electron')
 const { spawn } = require('node:child_process')
 const { existsSync, mkdirSync } = require('node:fs')
-const { copyFile, mkdir, readFile, stat, writeFile } = require('node:fs/promises')
+const { copyFile, mkdir, readFile, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 
@@ -312,6 +312,8 @@ async function updateMobileAppearance(payload = {}) {
     ensureStateStore().updateAppearance({ themeId })
   } else if (action === 'save-custom-theme') {
     ensureStateStore().updateAppearance({ themeId: 'custom', customTheme: values })
+  } else if (action === 'clear-theme-background') {
+    await removeCustomThemeBackground()
   } else {
     throw new Error('Unsupported appearance action.')
   }
@@ -351,9 +353,31 @@ async function chooseCustomThemeBackground() {
 
   const directory = path.join(app.getPath('userData'), 'themes')
   const fileName = `custom-background${extension}`
+  const previousFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
   await mkdir(directory, { recursive: true })
   await copyFile(source, path.join(directory, fileName))
+  if (previousFile && previousFile !== fileName) {
+    await unlink(path.join(directory, previousFile)).catch(error => {
+      if (error?.code !== 'ENOENT') throw error
+    })
+  }
   ensureStateStore().updateAppearance({ themeId: 'custom', customTheme: { backgroundFile: fileName } })
+  return appearancePayload()
+}
+
+async function removeCustomThemeBackground() {
+  const backgroundFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
+  if (backgroundFile) {
+    const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
+    await unlink(file).catch(error => {
+      if (error?.code !== 'ENOENT') throw error
+    })
+  }
+  ensureStateStore().updateAppearance({ customTheme: { backgroundFile: null } })
+}
+
+async function clearCustomThemeBackground() {
+  await removeCustomThemeBackground()
   return appearancePayload()
 }
 
@@ -938,6 +962,7 @@ ipcMain.handle('appearance:saveCustom', async (_event, customTheme) => {
   return appearancePayload()
 })
 ipcMain.handle('appearance:chooseBackground', () => chooseCustomThemeBackground())
+ipcMain.handle('appearance:clearBackground', () => clearCustomThemeBackground())
 ipcMain.handle('pet:getState', () => petPayload())
 ipcMain.handle('pet:setPreferences', (_event, patch) => updatePetPreferences(patch || {}))
 ipcMain.handle('pet:feed', (_event, kind) => {
