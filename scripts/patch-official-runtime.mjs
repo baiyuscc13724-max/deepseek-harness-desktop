@@ -180,6 +180,15 @@ const CONVERSATION_MENTIONS_PATCHED = dedentOne(`						fileMentions: (owner) => 
 							};
 						} },`)
 
+const CONVERSATION_ATTACHMENT_COPY_REPLACEMENTS = [
+  ['"image.dropTitle": "图片拖动到此处即可添加",', '"image.dropTitle": "文档或图片拖动到此处即可添加",', 'Chinese attachment drop title'],
+  ['"image.dropDesc": "最多 {count} 张，每张 {size}",', '"image.dropDesc": "原生图片最多 {count} 张，每张 {size}；其他文件按本地附件添加",', 'Chinese attachment drop description'],
+  ['"image.dropBlocked": "当前无法添加图片",', '"image.dropBlocked": "当前无法添加附件",', 'Chinese blocked attachment copy'],
+  ['"image.dropTitle": "Drag images here to add them",', '"image.dropTitle": "Drag documents or images here to add them",', 'English attachment drop title'],
+  ['"image.dropDesc": "Up to {count} images, {size} each",', '"image.dropDesc": "Up to {count} native images, {size} each; other files are added as local attachments",', 'English attachment drop description'],
+  ['"image.dropBlocked": "Images cannot be added right now",', '"image.dropBlocked": "Attachments cannot be added right now",', 'English blocked attachment copy']
+]
+
 const TOKEN_USAGE_DETAIL_MARKER = 'key: "tokenUsageDetail"'
 const TOKEN_USAGE_DETAIL_ANCHOR = 'const contextPressureProjectionDefinition = {'
 const TOKEN_USAGE_DETAIL_PATCH = dedentOne(`	const tokenUsageDetailSchema = z$1.object({
@@ -357,6 +366,18 @@ export function patchConversationSource(source) {
   return { source: source.replace(CONVERSATION_MENTIONS_ORIGINAL, CONVERSATION_MENTIONS_PATCHED), changed: true }
 }
 
+export function patchConversationAttachmentCopySource(source) {
+  let output = source
+  let changed = false
+  for (const [original, patched, label] of CONVERSATION_ATTACHMENT_COPY_REPLACEMENTS) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) throw new Error(`Pinned DSH ${label} changed; refusing an unsafe attachment-copy patch.`)
+    output = output.replace(original, patched)
+    changed = true
+  }
+  return { source: output, changed }
+}
+
 export function patchConversationCacheSource(source) {
   let output = source
   let changed = false
@@ -416,9 +437,10 @@ export async function patchInstalledMarkdownRenderer(file = markdownRuntime) {
 export async function patchInstalledConversation(file = conversationRuntime) {
   const source = await readFile(file, 'utf8')
   const links = patchConversationSource(source)
-  const cache = patchConversationCacheSource(links.source)
-  if (links.changed || cache.changed) await writeFile(file, cache.source, 'utf8')
-  return links.changed || cache.changed
+  const attachmentCopy = patchConversationAttachmentCopySource(links.source)
+  const cache = patchConversationCacheSource(attachmentCopy.source)
+  if (links.changed || attachmentCopy.changed || cache.changed) await writeFile(file, cache.source, 'utf8')
+  return links.changed || attachmentCopy.changed || cache.changed
 }
 
 export async function patchInstalledTokenMeter(file = tokenMeterRuntime) {

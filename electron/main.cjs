@@ -16,6 +16,7 @@ const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-pro
 const { DEFAULT_APP_FEEDS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
 const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
+const { inspectAttachmentPaths } = require('./bridge/attachment-reference-service.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
 const { createEasyTierComponentInstaller } = require('./bridge/network-component-service.cjs')
 const { SyncTransportManager } = require('./bridge/sync-transport-manager.cjs')
@@ -997,6 +998,10 @@ ipcMain.handle('shell:openExternal', async (_event, value) => {
   return shell.openExternal(target.toString())
 })
 ipcMain.handle('shell:openLocal', (_event, value, options = {}) => openDesktopLocalTarget(value, Boolean(options.reveal)))
+ipcMain.handle('attachments:inspect', (event, candidates) => {
+  if (!isLocalRuntimeUrl(event.sender.getURL())) throw new Error('只允许本机 Harness 界面添加附件。')
+  return inspectAttachmentPaths(candidates)
+})
 
 if (HAS_SINGLE_INSTANCE_LOCK && !SELF_TEST_MODE) {
   app.on('second-instance', () => {

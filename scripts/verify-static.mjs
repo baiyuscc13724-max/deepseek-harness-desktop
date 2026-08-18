@@ -7,7 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
   'electron/main.cjs', 'electron/preload.cjs', 'electron/desktop-tray.cjs',
   'electron/bridge/dsh-resolver.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/runtime-proxy.cjs', 'electron/bridge/runtime-bundle-service.cjs',
-  'electron/bridge/update-service.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs',
+  'electron/bridge/update-service.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/attachment-reference-service.cjs',
   'electron/store/app-state-store.cjs',
   'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js', 'renderer/workspace-links-integration.js',
   'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -67,6 +67,9 @@ const rendererScript = await readFile(path.join(root, 'renderer/app.js'), 'utf8'
 const guestPreload = await readFile(path.join(root, 'electron/guest-preload.cjs'), 'utf8')
 if (/window-drag|drag-region/.test(html) || !guestPreload.includes("ipcRenderer.send('window:beginDrag',") || !guestPreload.includes("ipcRenderer.send('window:moveDrag'") || !guestPreload.includes('target.closest(interactiveSelector)')) {
   throw new Error('The frameless desktop shell must move only from dynamically detected blank workbench areas.')
+}
+for (const attachmentContract of ['webUtils.getPathForFile(file)', "ipcRenderer.invoke('attachments:inspect'", '[data-composer-card] textarea', 'dispatchNativeImages(nativeImages)']) {
+  if (!guestPreload.includes(attachmentContract)) throw new Error(`Guest attachment intake missing: ${attachmentContract}`)
 }
 if (!rendererScript.includes('api.startRuntime({})')) throw new Error('Official Harness Web UI must start automatically.')
 if (!rendererScript.includes("document.addEventListener('pointerdown'") || !rendererScript.includes('petPanel.contains(event.target) || petQuickButton.contains(event.target)') || !rendererScript.includes("runtimeView.addEventListener('focus', closePetPanel)")) {
@@ -219,7 +222,7 @@ const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
 for (const trayContract of ['createDesktopTray', 'ensureDesktopTray', "mainWindow.on('close'", 'event.preventDefault()', 'mainWindow.hide()', 'isQuitting = true']) {
   if (!main.includes(trayContract)) throw new Error(`Desktop tray lifecycle contract missing: ${trayContract}`)
 }
-for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'shell:openExternal', 'shell:openLocal']) {
+for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'shell:openExternal', 'shell:openLocal', 'attachments:inspect']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }
 for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'terminal:start', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {

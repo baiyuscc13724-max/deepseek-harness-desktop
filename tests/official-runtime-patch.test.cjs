@@ -96,6 +96,22 @@ test('chat inline-code paths fall back to the active workspace without making la
   assert.equal(patchConversationSource(first.source).changed, false)
 })
 
+test('attachment overlay describes broad document and image support in both locales', async () => {
+  const { patchConversationAttachmentCopySource } = await import('../scripts/patch-official-runtime.mjs')
+  const original = `"image.dropTitle": "图片拖动到此处即可添加",
+"image.dropDesc": "最多 {count} 张，每张 {size}",
+"image.dropBlocked": "当前无法添加图片",
+"image.dropTitle": "Drag images here to add them",
+"image.dropDesc": "Up to {count} images, {size} each",
+"image.dropBlocked": "Images cannot be added right now",`
+  const first = patchConversationAttachmentCopySource(original)
+  assert.equal(first.changed, true)
+  assert.match(first.source, /文档或图片拖动到此处即可添加/)
+  assert.match(first.source, /其他文件按本地附件添加/)
+  assert.match(first.source, /Drag documents or images here/)
+  assert.equal(patchConversationAttachmentCopySource(first.source).changed, false)
+})
+
 test('cache metrics separate the latest warm request from the cold-start cumulative value', async () => {
   const { patchConversationCacheSource, patchTokenMeterSource } = await import('../scripts/patch-official-runtime.mjs')
   const tokenMeterFixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-token-meter', 'lib', 'index.js'), 'utf8')
