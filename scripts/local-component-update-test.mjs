@@ -43,7 +43,7 @@ async function waitForReport(output, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const report = await readFile(output, 'utf8').then(value => JSON.parse(value)).catch(() => null)
-    if (report) return report
+    if (report && typeof report.ok === 'boolean') return report
     await delay(250)
   }
   throw new Error(`Timed out waiting for self-test report ${output}`)
@@ -52,10 +52,17 @@ async function runPackagedSelfTest(executable, profile, output) {
   const child = spawn(executable, [`--user-data-dir=${profile}`, `--harness-user-data-dir=${profile}`, '--self-test', `--self-test-output=${output}`], {
     cwd: path.dirname(executable), stdio: 'ignore', windowsHide: true, env: desktopEnvironment(process.env)
   })
-  const exitPromise = waitForExit(child).catch(error => error)
-  const report = await waitForReport(output)
+  const exitPromise = waitForExit(child)
+  const report = await Promise.race([
+    waitForReport(output),
+    exitPromise.then(async code => {
+      const written = await readFile(output, 'utf8').then(value => JSON.parse(value)).catch(() => null)
+      if (written && typeof written.ok === 'boolean') return written
+      throw new Error(`Packaged baseline exited with code ${code} before writing its final self-test report (last phase: ${written?.phase || 'none'}).`)
+    })
+  ])
   await Promise.race([exitPromise, delay(2_000)])
-  if (!report.ok) throw new Error(`Packaged baseline self-test failed: ${JSON.stringify(report.checks)}`)
+  if (!report.ok) throw new Error(`Packaged baseline self-test failed: ${JSON.stringify(report.error || report.checks)}`)
   return report
 }
 
@@ -68,6 +75,10 @@ await mkdir(workspace, { recursive: true })
 
 const baselineOutput = path.join(workspace, 'baseline-self-test.json')
 const baselineReport = await runPackagedSelfTest(executable, profile, baselineOutput)
+const baselineParts = String(baselineReport.product.version || '').split('.').map(Number)
+if (baselineParts.length !== 3 || baselineParts.some(value => !Number.isInteger(value) || value < 0)) throw new Error(`Packaged baseline version is invalid: ${baselineReport.product.version}`)
+const healthyVersion = `${baselineParts[0]}.${baselineParts[1]}.${baselineParts[2] + 1}`
+const brokenVersion = `${baselineParts[0]}.${baselineParts[1]}.${baselineParts[2] + 2}`
 const store = new ComponentUpdateStore(path.join(profile, 'component-updates'))
 const { privateKey, publicKey } = generateKeyPairSync('ed25519')
 const trustedKeys = { 'local-test': publicKey.export({ type: 'spki', format: 'pem' }) }
@@ -141,19 +152,19 @@ async function applyAndWait(version, terminalPhase, output) {
   return state
 }
 
-await stage('1.0.24', true)
+await stage(healthyVersion, true)
 const healthyOutput = path.join(workspace, 'healthy-self-test.json')
-const healthyState = await applyAndWait('1.0.24', 'idle', healthyOutput)
+const healthyState = await applyAndWait(healthyVersion, 'idle', healthyOutput)
 const healthyPointer = await store.pointer()
 const marker = path.join(store.componentPath(healthyPointer.components.find(component => component.id === 'desktop-shell')), 'component-local-test-marker.txt')
 if (!(await stat(marker).catch(() => null))?.isFile()) throw new Error('Healthy component marker is missing after activation.')
 
-await stage('1.0.25', false)
+await stage(brokenVersion, false)
 const rollbackOutput = path.join(workspace, 'rollback-self-test.json')
-const rollbackState = await applyAndWait('1.0.25', 'failed', rollbackOutput)
+const rollbackState = await applyAndWait(brokenVersion, 'failed', rollbackOutput)
 const rollbackPointer = await store.pointer()
-if (rollbackPointer?.releaseVersion !== '1.0.24' || rollbackState.active?.releaseVersion !== '1.0.24') throw new Error('Failed component did not roll back to 1.0.24.')
-if (rollbackState.failure?.releaseVersion !== '1.0.25') throw new Error('Rollback failure metadata does not identify 1.0.25.')
+if (rollbackPointer?.releaseVersion !== healthyVersion || rollbackState.active?.releaseVersion !== healthyVersion) throw new Error(`Failed component did not roll back to ${healthyVersion}.`)
+if (rollbackState.failure?.releaseVersion !== brokenVersion) throw new Error(`Rollback failure metadata does not identify ${brokenVersion}.`)
 
 const report = {
   ok: true,

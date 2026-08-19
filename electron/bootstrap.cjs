@@ -1,9 +1,24 @@
 const path = require('node:path')
+const { mkdirSync, writeFileSync } = require('node:fs')
 const { app } = require('electron')
 const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { confirmComponentActivation, prepareComponentActivation, rollbackUnhealthyActivation } = require('./bridge/component-update-health.cjs')
 const { installComponentModulePaths, resolveComponentLayout } = require('./bridge/component-runtime-resolver.cjs')
 const { applyUserDataOverride } = require('./bridge/user-data-override.cjs')
+
+function reportSelfTestBootstrapFailure(error) {
+  const prefix = '--self-test-output='
+  const output = process.argv.find(value => value.startsWith(prefix))?.slice(prefix.length)
+  if (!output) return
+  try {
+    mkdirSync(path.dirname(path.resolve(output)), { recursive: true })
+    writeFileSync(path.resolve(output), `${JSON.stringify({
+      ok: false,
+      phase: 'bootstrap-failed',
+      error: { name: String(error?.name || 'Error'), message: String(error?.message || error || 'Unknown bootstrap failure') }
+    }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  } catch {}
+}
 
 async function boot() {
   applyUserDataOverride(app)
@@ -58,5 +73,6 @@ async function boot() {
 
 boot().catch(error => {
   console.error(error?.stack || error)
+  reportSelfTestBootstrapFailure(error)
   app.exit(1)
 })

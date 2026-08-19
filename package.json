@@ -106,7 +106,6 @@
       "!node_modules/**/*.map",
       "!node_modules/**/*.{ts,tsx,cts,mts}",
       "!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*",
-      "!node_modules/**/{doc,docs,documentation}/**/*",
       "!node_modules/**/{README,README.*,CHANGELOG,CHANGELOG.*,HISTORY,HISTORY.*,CONTRIBUTING,CONTRIBUTING.*,AUTHORS,AUTHORS.*}",
       "!node_modules/node-pty/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*",
       "!node_modules/node-pty/third_party/**/*",

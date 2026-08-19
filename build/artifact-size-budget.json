@@ -1,7 +1,7 @@
 {
   "windows": {
-    "installerMiB": 115,
-    "portableMiB": 115,
+    "installerMiB": 138,
+    "portableMiB": 132,
     "unpackedMiB": 465,
     "appAsarMiB": 120,
     "appAsarUnpackedMiB": 30,

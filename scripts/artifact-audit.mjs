@@ -44,7 +44,8 @@ if (process.platform === 'win32') {
     'node_modules/@deepseek-ai/cordis-plugin-group/lib/index.js',
     'node_modules/dsh-plugin-marketplace/package.json',
     'node_modules/dsh-plugin-marketplace/lib/index.js',
-    'node_modules/dsh-plugin-marketplace/lib/client.js'
+    'node_modules/dsh-plugin-marketplace/lib/client.js',
+    'node_modules/yaml/dist/doc/directives.js'
   ]) {
     try { extractPackagedFile(required) }
     catch { throw new Error(`Packaged runtime dependency is missing from app.asar: ${required}`) }

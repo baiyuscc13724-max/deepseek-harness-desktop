@@ -275,7 +275,6 @@ for (const excluded of [
   '!node_modules/**/*.map',
   '!node_modules/**/*.{ts,tsx,cts,mts}',
   '!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*',
-  '!node_modules/**/{doc,docs,documentation}/**/*',
   '!node_modules/**/{README,README.*,CHANGELOG,CHANGELOG.*,HISTORY,HISTORY.*,CONTRIBUTING,CONTRIBUTING.*,AUTHORS,AUTHORS.*}'
 ]) {
   if (!pkg.build?.files?.includes(excluded)) throw new Error(`Non-runtime package files must be pruned from the installer: ${excluded}`)
