@@ -77,8 +77,8 @@ jobs:
           test -x "$apksigner"
           test -x "$aapt"
           "$apksigner" verify --verbose "$asset"
-          cert_report="$($apksigner verify --print-certs "$asset")"
-          actual="$(printf '%s\n' "$cert_report" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+          cert_report="$("$apksigner" verify --print-certs "$asset" 2>&1)"
+          actual="$(printf '%s\n' "$cert_report" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
           configured="$(printf '%s' "$EXPECTED_ANDROID_CERT_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
           pinned='092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21'
           keytool -exportcert -keystore "$HARNESS_ANDROID_KEYSTORE_PATH" -alias "$HARNESS_ANDROID_KEY_ALIAS" -storepass:env HARNESS_ANDROID_STORE_PASSWORD -file restored-cert.der
