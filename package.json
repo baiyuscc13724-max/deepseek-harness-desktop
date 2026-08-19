@@ -103,11 +103,12 @@
       "scripts/component-update-helper.cjs",
       "node_modules/@img/**/*",
       "node_modules/@koromix/**/*",
+      "node_modules/node-pty/**/*",
       "!node_modules/**/*.map",
       "!node_modules/**/*.{ts,tsx,cts,mts}",
       "!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*",
       "!node_modules/**/{README,README.*,CHANGELOG,CHANGELOG.*,HISTORY,HISTORY.*,CONTRIBUTING,CONTRIBUTING.*,AUTHORS,AUTHORS.*}",
-      "!node_modules/node-pty/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*",
+      "!node_modules/node-pty/prebuilds/**/*.pdb",
       "!node_modules/node-pty/third_party/**/*",
       "!node_modules/node-pty/src/**/*",
       "!node_modules/node-pty/build/Release/*.{iobj,ipdb,lib,exp}",
@@ -132,11 +133,17 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "artifactName": "Harness-Desktop-${version}-mac-${arch}.${ext}",
@@ -162,6 +169,7 @@
     "npmRebuild": true,
     "asarUnpack": [
       "node_modules/**/*.node",
+      "node_modules/node-pty/prebuilds/**/*",
       "node_modules/@img/**/*",
       "node_modules/@koromix/**/*",
       "plugins/dsh-mobile-control/**/*",
@@ -187,5 +195,8 @@
   "homepage": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop#readme",
   "bugs": {
     "url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/issues"
+  },
+  "optionalDependencies": {
+    "node-pty": "1.2.0-beta.15"
   }
 }

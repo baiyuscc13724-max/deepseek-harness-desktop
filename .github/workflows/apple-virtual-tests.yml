@@ -106,6 +106,8 @@ jobs:
           test -f 'dist-apple-test/mac/Harness Desktop.app/Contents/Resources/app.asar'
           find 'dist-apple-test/mac/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/@img' -name '*.node' | grep -q 'darwin-x64'
           find 'dist-apple-test/mac/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/@koromix' -name '*.node' | grep -q 'darwin_x64'
+          test -f 'dist-apple-test/mac/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-x64/pty.node'
+          test -x 'dist-apple-test/mac/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-x64/spawn-helper'
       - name: Run packaged Intel macOS self-test
         shell: bash
         run: |
@@ -137,3 +139,19 @@ jobs:
           test -f 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar'
           find 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/@img' -name '*.node' | grep -q 'darwin-arm64'
           find 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/@koromix' -name '*.node' | grep -q 'darwin_arm64'
+          test -f 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/pty.node'
+          test -x 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper'
+      - name: Run packaged Apple Silicon macOS self-test
+        shell: bash
+        run: |
+          output="$RUNNER_TEMP/harness-desktop-macos-arm64-selftest.json"
+          profile="$RUNNER_TEMP/harness-desktop-macos-arm64-profile"
+          set +e
+          'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/MacOS/Harness Desktop' \
+            "--user-data-dir=$profile" "--harness-user-data-dir=$profile" \
+            --self-test "--self-test-output=$output"
+          app_exit=$?
+          set -e
+          if test -f "$output"; then cat "$output"; else echo 'Packaged Apple Silicon self-test did not create a report.'; fi
+          test "$app_exit" -eq 0
+          node -e "const r=require(process.argv[1]); if(!r.ok) process.exit(1)" "$output"

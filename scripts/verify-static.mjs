@@ -284,7 +284,8 @@ const marketplaceService = await readFile(path.join(root, 'electron/bridge/plugi
 for (const contract of ['HARNESS_DESKTOP_AUTO_ZH_SUMMARY_V1', 'automaticChineseDescription', '查看英文原文', 'translationReady']) {
   if (!marketplaceService.includes(contract)) throw new Error(`Managed marketplace Chinese translation overlay is missing: ${contract}`)
 }
-if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return with the removed native terminal.')
+if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return as a normal dependency with the removed native terminal.')
+if (pkg.optionalDependencies?.['node-pty'] !== '1.2.0-beta.15') throw new Error('Official DSH macOS/Linux terminal support requires the pinned optional node-pty runtime.')
 if (pkg.optionalDependencies?.['@deepseek-ai/dsh-sdk-client']) throw new Error('The removed duplicate AgentBridge SDK must not be packaged.')
 if (pkg.scripts?.['test:provider:real']) throw new Error('The removed desktop provider smoke script must not return.')
 if (pkg.build?.npmRebuild !== true || !pkg.build?.asarUnpack?.some(item => item === 'node_modules/**/*.node')) {
@@ -312,12 +313,17 @@ if (JSON.stringify(pkg.build?.win?.electronLanguages) !== JSON.stringify(['zh-CN
   throw new Error('Windows packages must contain only the supported zh-CN and en-US Electron locale packs.')
 }
 for (const excluded of [
-  '!node_modules/node-pty/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*',
+  '!node_modules/node-pty/prebuilds/**/*.pdb',
   '!node_modules/node-pty/third_party/**/*',
   '!node_modules/node-pty/build/Release/*.{iobj,ipdb,lib,exp}'
 ]) {
-  if (!pkg.build?.files?.includes(excluded)) throw new Error(`Windows node-pty build debris must be pruned without widening the packaged file matcher: ${excluded}`)
+  if (!pkg.build?.files?.includes(excluded)) throw new Error(`node-pty build debris must be pruned without deleting platform runtime binaries: ${excluded}`)
 }
+if (pkg.build?.files?.some(rule => rule.includes('node-pty/prebuilds/{darwin-') || rule.includes('node-pty/prebuilds/darwin-'))) {
+  throw new Error('macOS node-pty prebuilds must never be removed by global package filters.')
+}
+if (!pkg.build?.files?.includes('node_modules/node-pty/**/*')) throw new Error('node-pty must be an explicit packaged runtime dependency on macOS and Linux.')
+if (!pkg.build?.asarUnpack?.includes('node_modules/node-pty/prebuilds/**/*')) throw new Error('node-pty prebuilds and macOS spawn-helper must remain executable outside app.asar.')
 if (pkg.build?.icon !== 'build/icon.png') throw new Error('All packages must use the official DeepSeek icon.')
 if (pkg.devDependencies?.electron !== '43.2.0') throw new Error('Release baseline requires pinned Electron 43.2.0.')
 if (pkg.scripts?.dist !== 'node scripts/build-release.mjs' || !pkg.build?.win?.target?.includes('portable')) throw new Error('Windows release must build the portable target and audited Inno Setup installer.')
