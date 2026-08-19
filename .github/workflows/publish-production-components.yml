@@ -7,10 +7,6 @@ on:
         description: Existing immutable Bootstrap release tag
         required: true
         default: v1.0.26
-      staging_ref:
-        description: Branch containing public signed component-release-staging files
-        required: true
-        default: component-publish/v1.0.26
   push:
     branches:
       - 'component-publish/v1.0.26'
@@ -31,16 +27,52 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag || 'v1.0.26' }}
-      STAGING_REF: ${{ inputs.staging_ref || 'component-publish/v1.0.26' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ env.STAGING_REF }}
+          ref: ${{ github.ref }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       - name: Install verification dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Bind component payload inputs to immutable tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          git archive "$RELEASE_TAG" electron renderer plugins package.json build/icon.png | tar -xf -
+          test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
+      - name: Prepare signed staging from protected CI key
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          COMPONENT_SIGNING_PRIVATE_KEY_BASE64: ${{ secrets.HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$COMPONENT_SIGNING_PRIVATE_KEY_BASE64" || { echo 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64 is not configured.' >&2; exit 1; }
+          version="${RELEASE_TAG#v}"
+          fallback_dir="$RUNNER_TEMP/component-fallbacks"
+          output_dir="$RUNNER_TEMP/component-production"
+          staging_dir="component-release-staging/$version"
+          key_file="$RUNNER_TEMP/component-production-ed25519-private.pem"
+          trap 'rm -f "$key_file"' EXIT
+          umask 077
+          printf '%s' "$COMPONENT_SIGNING_PRIVATE_KEY_BASE64" | base64 --decode > "$key_file"
+          mkdir -p "$fallback_dir" "$staging_dir"
+          for name in \
+            "Harness-Desktop-$version-win-x64.exe" \
+            "Harness-Desktop-$version-mac-x64.dmg" \
+            "Harness-Desktop-$version-mac-arm64.dmg"; do
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$fallback_dir"
+          done
+          HARNESS_COMPONENT_SIGNING_KEY_FILE="$key_file" \
+          HARNESS_COMPONENT_KEY_ID='harness-components-02643f81164c594a' \
+            node scripts/prepare-production-components.mjs --version "$version" --release-dir "$fallback_dir" --out "$output_dir"
+          cp "$output_dir"/assets/* "$staging_dir"/
+          cp "$output_dir"/manifests/* "$staging_dir"/
+          (cd "$staging_dir" && sha256sum components-*.json desktop-shell-*.zip > COMPONENT-SHA256SUMS.txt)
       - name: Verify target tag and signed staging set
         shell: bash
         run: |

@@ -129,7 +129,7 @@ for (const contract of ['workflow_dispatch:', 'Existing immutable release tag to
   if (!workflow.includes(contract)) throw new Error(`Tag builds must publish one verified, non-overwriting draft release: ${contract}`)
 }
 const componentPublishWorkflow = await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')
-for (const contract of ['component-publish/v1.0.26', 'verify-production-component-staging.mjs', 'Refuse replacement or partial component publication', 'gh release upload', 'Re-download and verify public component assets']) {
+for (const contract of ['component-publish/v1.0.26', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'prepare-production-components.mjs', 'verify-production-component-staging.mjs', 'Refuse replacement or partial component publication', 'gh release upload', 'Re-download and verify public component assets']) {
   if (!componentPublishWorkflow.includes(contract)) throw new Error(`Production component publication must verify public signed staging and refuse replacement: ${contract}`)
 }
 const manifestRefresher = await readFile(path.join(root, 'scripts/refresh-release-manifest.mjs'), 'utf8')

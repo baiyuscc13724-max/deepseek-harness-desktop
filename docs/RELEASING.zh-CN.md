@@ -92,7 +92,7 @@ node scripts/create-component-signing-key.mjs `
 ```
 
 - `component-update-sources.json` 只能提交公开 SPKI 公钥。
-- GitHub Actions 只通过 Secret 获取生产私钥；私人备份仓库只保存 `.encrypted.json`，绝不保存明文 PEM 或恢复密钥。
+- GitHub Actions 只通过 Secret `HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64` 获取生产私钥（明文 PEM 的 Base64，仅在临时 Runner 文件中解码并用 `trap` 删除）；私人备份仓库只保存 `.encrypted.json`，绝不保存明文 PEM 或恢复密钥。
 - 恢复演练必须在隔离临时目录解密并完成一次 Ed25519 签名/验签，随后删除临时明文。
 
 ## 6. 生成生产组件
