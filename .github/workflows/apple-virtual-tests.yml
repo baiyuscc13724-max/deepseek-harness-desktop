@@ -17,6 +17,13 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+      - name: Select Xcode 16
+        shell: bash
+        run: |
+          xcode_path="$(find /Applications -maxdepth 1 -type d -name 'Xcode_16*.app' | sort -V | tail -1)"
+          test -n "$xcode_path"
+          sudo xcode-select -s "$xcode_path/Contents/Developer"
+          xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
@@ -99,8 +106,12 @@ jobs:
         run: |
           output="$RUNNER_TEMP/harness-desktop-macos-selftest.json"
           profile="$RUNNER_TEMP/harness-desktop-macos-profile"
+          set +e
           'dist-apple-test/mac/Harness Desktop.app/Contents/MacOS/Harness Desktop' \
             "--user-data-dir=$profile" "--harness-user-data-dir=$profile" \
             --self-test "--self-test-output=$output"
-          cat "$output"
+          app_exit=$?
+          set -e
+          if test -f "$output"; then cat "$output"; else echo 'Packaged macOS self-test did not create a report.'; fi
+          test "$app_exit" -eq 0
           node -e "const r=require(process.argv[1]); if(!r.ok) process.exit(1)" "$output"

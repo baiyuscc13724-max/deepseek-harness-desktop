@@ -20,7 +20,7 @@
 
 ## 在 macOS 上生成和验证工程
 
-仓库提交 XcodeGen 的 `project.yml`，避免在 Windows 开发阶段手工维护易冲突的 `.pbxproj`。在装有 Xcode 15.4+ 和 XcodeGen 的 Mac 上执行：
+仓库提交 XcodeGen 的 `project.yml`，避免在 Windows 开发阶段手工维护易冲突的 `.pbxproj`。在装有 Xcode 16+ 和 XcodeGen 的 Mac 上执行：
 
 ```text
 cd mobile/ios

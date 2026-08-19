@@ -211,8 +211,8 @@ for (const contract of ['NSCameraUsageDescription', 'NSLocalNetworkUsageDescript
 if (iosInfo.includes('UIBackgroundModes')) throw new Error('iOS client must not claim unsupported persistent background networking.')
 const appleWorkflow = await readFile(path.join(root, '.github/workflows/apple-virtual-tests.yml'), 'utf8')
 const iosProject = await readFile(path.join(root, 'mobile/ios/project.yml'), 'utf8')
-if (!iosProject.includes('xcodeVersion: "15.4"')) throw new Error('iOS project generation must remain compatible with the Xcode 15.4 cloud image.')
-for (const contract of ['workflow_dispatch:', 'runs-on: macos-14', 'xcodegen generate', 'iPhone Simulator', 'iPad Simulator', 'xcodebuild test', '--x64 --arm64', 'CODE_SIGNING_ALLOWED=NO']) {
+if (!iosProject.includes('xcodeVersion: "16.0"')) throw new Error('iOS project generation must target the selected Xcode 16 cloud image.')
+for (const contract of ['workflow_dispatch:', 'runs-on: macos-14', 'Select Xcode 16', 'xcodegen generate', 'iPhone Simulator', 'iPad Simulator', 'xcodebuild test', '--x64 --arm64', 'CODE_SIGNING_ALLOWED=NO']) {
   if (!appleWorkflow.includes(contract)) throw new Error(`Apple virtual-device test contract is missing: ${contract}`)
 }
 for (const forbidden of ['upload-artifact', 'softprops/action-gh-release', 'contents: write']) {
