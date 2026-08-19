@@ -249,7 +249,7 @@ for (const contract of ['HARNESS_ANDROID_KEYSTORE_PATH', 'HARNESS_ANDROID_KEY_AL
   if (!androidBuild.includes(contract)) throw new Error(`Android release signing configuration is incomplete: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
-for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', 'versionCode=\'10025\'', 'Harness-Mobile-${version}-android-universal.apk', 'gh release upload', '--clobber']) {
+for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', 'versionCode=\'10025\'', 'Harness-Mobile-${version}-android-universal.apk', 'gh release upload', '--clobber']) {
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Signed Android publication workflow contract missing: ${contract}`)
 }
 for (const forbidden of ['app-debug.apk', 'assembleDebug']) {

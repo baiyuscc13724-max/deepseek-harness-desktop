@@ -78,11 +78,17 @@ jobs:
           test -x "$aapt"
           "$apksigner" verify --verbose "$asset"
           actual="$($apksigner verify --print-certs "$asset" | awk -F': ' '/certificate SHA-256 digest/{print tolower($2); exit}' | tr -d ':[:space:]')"
-          expected="$(printf '%s' "$EXPECTED_ANDROID_CERT_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+          configured="$(printf '%s' "$EXPECTED_ANDROID_CERT_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+          pinned='092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21'
           test -n "$actual"
-          test "$actual" = "$expected"
-          badging="$($aapt dump badging "$asset")"
-          printf '%s\n' "$badging" | grep -F "package: name='io.harnessdesktop.mobile' versionCode='10025' versionName='1.0.25'"
+          test "$configured" = "$pinned"
+          test "$actual" = "$pinned"
+          echo "Verified certificate SHA-256: $actual"
+          badging="$($aapt dump badging "$asset" | head -n 1)"
+          echo "$badging"
+          printf '%s\n' "$badging" | grep -F "name='io.harnessdesktop.mobile'"
+          printf '%s\n' "$badging" | grep -F "versionCode='10025'"
+          printf '%s\n' "$badging" | grep -F "versionName='1.0.25'"
           sha256sum "$asset" > android-checksum.txt
           echo "ANDROID_ASSET=$asset" >> "$GITHUB_ENV"
       - name: Add signed APK to the existing release
