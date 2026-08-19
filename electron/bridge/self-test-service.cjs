@@ -79,7 +79,10 @@ async function runtimeWebBootable(dsh, options = {}) {
       const match = String(chunk || '').match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/i)
       if (match) candidateUrl = match[0].replace('localhost', '127.0.0.1')
     }
-    child.stdout?.on('data', inspect)
+    child.stdout?.on('data', chunk => {
+      inspect(chunk)
+      if (options.logOutput) process.stdout.write(chunk)
+    })
     child.stderr?.on('data', chunk => {
       inspect(chunk)
       if (options.logOutput) process.stderr.write(chunk)
