@@ -61,8 +61,13 @@ function lanAddresses(networkInterfaces = os.networkInterfaces()) {
 }
 
 function safeDeviceName(userAgent = '') {
-  const android = String(userAgent).match(/Android\s+([^;)]+)/i)?.[1]?.trim()
-  return android ? `Android ${android}`.slice(0, 80) : 'Android 手机'
+  const value = String(userAgent)
+  const android = value.match(/Android\s+([^;)]+)/i)?.[1]?.trim()
+  if (android) return `Android ${android}`.slice(0, 80)
+  const ios = value.match(/(?:iPhone|CPU) OS\s+([0-9_]+)/i)?.[1]?.replaceAll('_', '.')
+  if (/iPad/i.test(value)) return `iPadOS ${ios || ''}`.trim().slice(0, 80)
+  if (/iPhone/i.test(value)) return `iPhone iOS ${ios || ''}`.trim().slice(0, 80)
+  return '移动设备'
 }
 
 function pairingErrorPage(message = '请回到电脑端重新生成配对二维码。') {
@@ -630,6 +635,7 @@ module.exports = {
   isPrivateIpv4,
   lanAddresses,
   parseCookies,
+  safeDeviceName,
   withoutMobileCookie,
   sha256
 }

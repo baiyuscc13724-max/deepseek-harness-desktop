@@ -1,4 +1,4 @@
-# Harness Desktop for Windows
+# Harness Desktop for Windows & macOS
 
 <p align="center">
   <img src="docs/assets/harness-desktop-hero.jpg" alt="Harness Desktop：DeepSeek Harness 中文 Windows 桌面版，带桌宠、主题和插件市场" width="100%">
@@ -10,11 +10,12 @@
   <a href="https://github.com/baiyuscc13724-max/deepseek-harness-desktop/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/baiyuscc13724-max/deepseek-harness-desktop?style=flat&label=Stars"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/baiyuscc13724-max/deepseek-harness-desktop"></a>
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows">
+  <img alt="macOS source preview" src="https://img.shields.io/badge/macOS-12%2B%20source%20preview-000000?logo=apple">
 </p>
 
-把官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 工作台装进 Windows。打开软件就能使用，不用另外安装 Node.js，也不用在命令行里启动服务。
+把官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 工作台装进 Windows 或 macOS。当前公开稳定包仍为 Windows 版；macOS、iOS/iPadOS 和增量更新位于源码验证阶段，完成真实 Mac/iPhone 测试前不会冒充可下载成品。
 
-这版额外提供女仆鲸桌宠、外观皮肤、DSH 插件市场、主模型与子代理路由、局域网与异地 Android 手机同步，以及经过 SHA-256 校验的自动更新。官方工作台仍然是唯一主界面，没有第二套侧栏和重复设置页。
+项目额外提供女仆鲸桌宠、外观皮肤、DSH 插件市场、主模型与子代理路由、Android/iOS 移动工作台、局域网优先与 WSS/443 端到端加密后备线路，以及经过 SHA-256 校验的完整安装包更新。官方工作台仍然是唯一主界面，没有第二套侧栏和重复设置页。
 
 > Harness Desktop 是社区维护的开源项目，不是 DeepSeek 官方应用，也不代表 DeepSeek 官方背书。
 
@@ -51,7 +52,8 @@ scoop install harness-desktop/harness-desktop
 | 主模型与子代理 | 子代理可以跟随主模型，也可以单独选择服务商和模型 |
 | 桌面更新 | 国内源优先、全球源自动回退、SHA-256 校验和中文安装引导，并在更新前展示改动内容 |
 | 用户配置保护 | 主题、插件和模型路由保存在用户目录，更新官方 Harness 时不会被覆盖 |
-| Android 手机同步 | 电脑顶部手机入口扫码配对；手机和电脑使用同一工作区、会话、任务状态与模型配置 |
+| Android / iOS 移动工作台 | 跨 Windows/macOS 扫码配对；局域网优先，异地使用端到端加密 WSS/443；iOS 不提供跨 App 控制 |
+| 组件增量更新（源码验证阶段） | Electron Bootstrap 验签、按组件暂存、健康检查和自动回滚；完整安装包始终作为后备 |
 
 ## 三步开始
 
@@ -61,11 +63,11 @@ scoop install harness-desktop/harness-desktop
 
 需要换皮肤时点窗口顶部的调色盘；需要桌宠时点女仆鲸入口。插件、Skills、模型和通用设置都在官方设置页面里。
 
-手机同步放在设置页中：首次扫码后会保存受信设备，之后可一键连接或关闭，不必重复扫码。应用优先使用局域网直连；离开同一 Wi-Fi 后可由内置 EasyTier 通道接管，并为可选 Tailscale 组件保留自动回退接口。电脑仍需保持 Harness Desktop 运行，项目不会在开发者云端复制第二份 Harness 数据。详细安全边界和官方破坏性更新兼容策略见[手机同步架构](docs/MOBILE_SYNC_ARCHITECTURE.zh-CN.md)。
+手机同步放在设置页中：首次扫码后会保存受信设备，之后可一键连接或关闭，不必重复扫码。应用优先使用局域网直连；离开同一 Wi-Fi 后使用 443/WSS 盲中继传输端到端加密字节流，EasyTier/Tailscale 保留为可选优化线路。电脑仍需保持 Harness Desktop 运行，中继不会保存或解密 Harness 数据。详细边界见[手机同步架构](docs/MOBILE_SYNC_ARCHITECTURE.zh-CN.md)和[跨平台/WSS 协议](docs/CROSS-PLATFORM-MOBILE.zh-CN.md)。
 
 ## 项目边界
 
-Harness Desktop 负责 Windows 窗口、运行时启动、安装、更新和桌面增强。会话、工作区、权限、终端和智能体能力来自官方 DeepSeek Harness。
+Harness Desktop 负责 Windows/macOS 窗口、运行时启动、安装、更新和桌面增强。会话、工作区、权限、终端和智能体能力来自官方 DeepSeek Harness。
 
 - Renderer 没有 Node.js 权限。
 - WebView 只允许访问本机 Harness Runtime。
@@ -101,6 +103,6 @@ Deep Whale 女仆工坊图片来自 [`Small-tailqwq/dsh-deep-whale`](https://git
 
 ## English
 
-Harness Desktop is a community-maintained Windows client for the official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI. It bundles the local runtime and adds a verified Windows installer, portable build, desktop pet, themes, in-app DSH plugin discovery, model routing, and self-updates.
+Harness Desktop is a community-maintained Windows and macOS client for the official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI. The current public stable artifact remains Windows-only; macOS and iOS/iPadOS are source previews pending real Apple hardware validation. The project bundles the local runtime and adds verified updates, mobile pairing, a desktop pet, themes, in-app DSH plugin discovery, and model routing.
 
 Download the current stable build from [GitHub Releases](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest). The project is unofficial and is not endorsed by DeepSeek.

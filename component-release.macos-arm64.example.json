@@ -1,0 +1,48 @@
+{
+  "releaseVersion": "1.0.24",
+  "channel": "stable",
+  "keyId": "release-2026",
+  "bootstrap": {
+    "minVersion": "1.0.24"
+  },
+  "baseUrls": [
+    "https://cnb.cool/example/harness-desktop/-/releases/download/v1.0.24",
+    "https://github.com/example/harness-desktop/releases/download/v1.0.24"
+  ],
+  "components": [
+    {
+      "id": "desktop-shell",
+      "target": "shell",
+      "platform": "darwin",
+      "arch": "arm64",
+      "inputDir": ".component-input/darwin-arm64/desktop-shell",
+      "restart": true
+    },
+    {
+      "id": "harness-runtime",
+      "target": "harness-runtime",
+      "platform": "darwin",
+      "arch": "arm64",
+      "inputDir": ".component-input/darwin-arm64/harness-runtime",
+      "restart": true
+    },
+    {
+      "id": "desktop-plugins",
+      "target": "plugins",
+      "platform": "darwin",
+      "arch": "arm64",
+      "inputDir": ".component-input/darwin-arm64/desktop-plugins",
+      "restart": true
+    }
+  ],
+  "fallback": {
+    "version": "1.0.24",
+    "size": 180000000,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "urls": [
+      "https://cnb.cool/example/harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.dmg",
+      "https://github.com/example/harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.dmg"
+    ]
+  },
+  "notes": "Generate a separate signed manifest for darwin-x64 with the Intel DMG fallback."
+}

@@ -6,7 +6,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { WebSocket, WebSocketServer } = require('ws')
 
-const { MobileSyncService, lanAddresses } = require('../electron/bridge/mobile-sync-service.cjs')
+const { MobileSyncService, lanAddresses, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
 const { MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
 
 async function createRuntime(label) {
@@ -114,6 +114,31 @@ test('one QR downloads the Android app in browsers without consuming app pairing
   assert.equal(appResponse.status, 302)
   assert.equal(service.state().devices.length, 1)
   assert.equal(service.state().pairing, null)
+})
+
+test('pairing payload is OS-neutral and carries the WSS/443 fallback for iPhone and Android', async t => {
+  const relay = {
+    id: 'wss-relay', origin: 'http://10.252.77.254:3081', relayUrl: 'wss://relay.example.test/',
+    roomId: 'r'.repeat(43), tunnelKey: 'k'.repeat(43), protocolVersion: 1, secureMode: true
+  }
+  const transportManager = {
+    pairingTransports: () => [relay],
+    state: () => ({ enabled: true, status: 'connected', active: 'wss-relay', adapters: [] }),
+    async start() {}, async stop() {}, on() {}
+  }
+  const service = new MobileSyncService({
+    store: createStore(), getRuntimeTarget: () => null, transportManager,
+    host: '127.0.0.1', port: 0, qrFactory: async value => `qr:${value}`
+  })
+  t.after(() => service.stop())
+  await service.start()
+  const state = await service.beginPairing()
+  const encoded = new URL(state.pairing.appUrl).searchParams.get('payload')
+  const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
+  assert.deepEqual(payload.transports, [relay])
+  assert.match(safeDeviceName('Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X)'), /^iPhone iOS 18\.4/)
+  assert.match(safeDeviceName('Mozilla/5.0 (iPad; CPU OS 18_4 like Mac OS X)'), /^iPadOS 18\.4/)
+  assert.match(safeDeviceName('Mozilla/5.0 (Linux; Android 15; Pixel 9)'), /^Android 15/)
 })
 
 test('mobile bridge proxies WebSocket and follows a replaced official runtime target', async t => {

@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   checkUpdates: () => ipcRenderer.invoke('updates:check'),
   installUpdate: () => ipcRenderer.invoke('updates:install'),
   launchReadyUpdate: () => ipcRenderer.invoke('updates:launchReady'),
+  getComponentUpdateState: () => ipcRenderer.invoke('componentUpdates:getState'),
+  checkComponentUpdates: () => ipcRenderer.invoke('componentUpdates:check'),
+  stageComponentUpdates: () => ipcRenderer.invoke('componentUpdates:stage'),
+  applyComponentUpdates: () => ipcRenderer.invoke('componentUpdates:apply'),
   getDistribution: () => ipcRenderer.invoke('distribution:get'),
   getAppearance: () => ipcRenderer.invoke('appearance:get'),
   setTheme: themeId => ipcRenderer.invoke('appearance:setTheme', themeId),
@@ -45,5 +49,6 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   onMobileSyncState: listener => subscribe('mobileSync:state', listener),
   onPetState: listener => subscribe('pet:state', listener),
   onUpdateResult: listener => subscribe('updates:result', listener),
-  onUpdateInstallProgress: listener => subscribe('updates:install-progress', listener)
+  onUpdateInstallProgress: listener => subscribe('updates:install-progress', listener),
+  onComponentUpdateProgress: listener => subscribe('componentUpdates:progress', listener)
 })

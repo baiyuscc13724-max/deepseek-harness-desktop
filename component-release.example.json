@@ -1,0 +1,48 @@
+{
+  "releaseVersion": "1.0.24",
+  "channel": "stable",
+  "keyId": "release-2026",
+  "bootstrap": {
+    "minVersion": "1.0.24"
+  },
+  "baseUrls": [
+    "https://cnb.cool/example/harness-desktop/-/releases/download/v1.0.24",
+    "https://github.com/example/harness-desktop/releases/download/v1.0.24"
+  ],
+  "components": [
+    {
+      "id": "desktop-shell",
+      "target": "shell",
+      "platform": "win32",
+      "arch": "x64",
+      "inputDir": ".component-input/desktop-shell",
+      "restart": true
+    },
+    {
+      "id": "harness-runtime",
+      "target": "harness-runtime",
+      "platform": "win32",
+      "arch": "x64",
+      "inputDir": ".component-input/harness-runtime",
+      "restart": true
+    },
+    {
+      "id": "desktop-plugins",
+      "target": "plugins",
+      "platform": "win32",
+      "arch": "x64",
+      "inputDir": ".component-input/desktop-plugins",
+      "restart": true
+    }
+  ],
+  "fallback": {
+    "version": "1.0.24",
+    "size": 157286400,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "urls": [
+      "https://cnb.cool/example/harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-win-x64.exe",
+      "https://github.com/example/harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-win-x64.exe"
+    ]
+  },
+  "notes": "Replace example URLs, sizes and hashes before signing a real release."
+}

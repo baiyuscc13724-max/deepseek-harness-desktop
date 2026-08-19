@@ -136,8 +136,17 @@ function parseReleasePayload(payload) {
   return { version, url, notes: payload.notes || payload.body || '', assets }
 }
 
+function selectDesktopInstallerAsset(assets = [], platform = process.platform, arch = process.arch) {
+  if (platform === 'win32') return assets.find(asset => /^Harness[ ._-]Desktop-.+-win-x64\.exe$/i.test(asset.name)) || null
+  if (platform === 'darwin') {
+    const targetArch = arch === 'arm64' ? 'arm64' : 'x64'
+    return assets.find(asset => new RegExp(`^Harness[ ._-]Desktop-.+-mac-${targetArch}\\.(?:dmg|zip)$`, 'i').test(asset.name)) || null
+  }
+  return null
+}
+
 function selectWindowsInstallerAsset(assets = []) {
-  return assets.find(asset => /^Harness[ ._-]Desktop-.+-win-x64\.exe$/i.test(asset.name)) || null
+  return selectDesktopInstallerAsset(assets, 'win32', 'x64')
 }
 
 function selectChecksumAsset(assets = []) {
@@ -160,12 +169,12 @@ function selectReleasePayload(payload, channel = 'stable') {
   return candidates[0]
 }
 
-async function checkAppUpdate({ currentVersion, feedUrl, feedUrls, channel = 'stable', fetchJsonImpl = fetchJson } = {}) {
+async function checkAppUpdate({ currentVersion, feedUrl, feedUrls, channel = 'stable', platform = process.platform, arch = process.arch, fetchJsonImpl = fetchJson } = {}) {
   const configuredSources = feedUrls !== undefined ? feedUrls : feedUrl !== undefined ? feedUrl : DEFAULT_APP_FEEDS
   const sources = normalizeUrlList(configuredSources)
   if (!sources.length) return { kind: 'app', configured: false, currentVersion: normalizeVersion(currentVersion), updateAvailable: false }
   const { payload: release, source } = await fetchFirstJson(sources, fetchJsonImpl, payload => parseReleasePayload(selectReleasePayload(payload, channel)))
-  const installer = selectWindowsInstallerAsset(release.assets)
+  const installer = selectDesktopInstallerAsset(release.assets, platform, arch)
   const checksums = selectChecksumAsset(release.assets)
   return {
     kind: 'app',
@@ -198,6 +207,7 @@ module.exports = {
   parseReleasePayload,
   parseChecksumFile,
   selectReleasePayload,
+  selectDesktopInstallerAsset,
   selectWindowsInstallerAsset,
   selectChecksumAsset,
   versionParts

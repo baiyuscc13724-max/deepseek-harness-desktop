@@ -18,9 +18,10 @@ function resolveDesktopRuntimePaths({
   isPackaged = false,
   platform = process.platform,
   store = false,
-  userData
+  userData,
+  userDataOverride = false
 }) {
-  const isolatedLaunch = hasUserDataOverride(argv)
+  const isolatedLaunch = userDataOverride || hasUserDataOverride(argv)
   const portableDirectory = String(env.PORTABLE_EXECUTABLE_DIR || '').trim()
   const canUseInstallDirectory = platform === 'win32' && isPackaged && !store && !isolatedLaunch
   const applicationDirectory = canUseInstallDirectory

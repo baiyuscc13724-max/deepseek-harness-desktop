@@ -7,6 +7,7 @@ const AdmZip = require('adm-zip')
 
 const {
   createEasyTierComponentInstaller,
+  easyTierRelease,
   extractExecutable,
   hashBuffer,
   safeArchiveEntryName
@@ -27,6 +28,16 @@ test('archive paths reject traversal and absolute paths', () => {
 
 test('extractExecutable returns the single expected executable', () => {
   assert.deepEqual(extractExecutable(archiveWithExecutable(), 'easytier-core.exe'), Buffer.from('fake-easytier-core'))
+})
+
+test('official EasyTier component catalog covers Intel and Apple Silicon Macs', () => {
+  const intel = easyTierRelease('darwin', 'x64')
+  const apple = easyTierRelease('darwin', 'arm64')
+  assert.match(intel.url, /easytier-macos-x86_64-v2\.6\.4\.zip$/)
+  assert.equal(intel.sha256, '89fc28a6e6995259d76ce3f11775220e8a21c760e94df91a6a9db30a69b6982e')
+  assert.match(apple.url, /easytier-macos-aarch64-v2\.6\.4\.zip$/)
+  assert.equal(apple.sha256, '4be1882d1aa36d31c1d6ba0596f2cf8a097e371f8da124212324b2e0f8df7e4b')
+  assert.equal(apple.executable, 'easytier-core')
 })
 
 test('component installer verifies archive hash and persists version metadata', async () => {

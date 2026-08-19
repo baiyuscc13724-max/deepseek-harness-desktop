@@ -1,8 +1,9 @@
-function createDesktopTray({ Tray, Menu, nativeImage, iconPath, showMainWindow, hideMainWindow, quitApp }) {
+function createDesktopTray({ Tray, Menu, nativeImage, iconPath, showMainWindow, hideMainWindow, quitApp, platform = process.platform }) {
   const source = nativeImage.createFromPath(iconPath)
-  const icon = process.platform === 'win32' && !source.isEmpty()
-    ? source.resize({ width: 16, height: 16 })
+  const icon = ['win32', 'darwin'].includes(platform) && !source.isEmpty()
+    ? source.resize({ width: platform === 'darwin' ? 18 : 16, height: platform === 'darwin' ? 18 : 16 })
     : source
+  if (platform === 'darwin' && typeof icon.setTemplateImage === 'function') icon.setTemplateImage(true)
   const tray = new Tray(icon)
 
   tray.setToolTip('Harness Desktop')

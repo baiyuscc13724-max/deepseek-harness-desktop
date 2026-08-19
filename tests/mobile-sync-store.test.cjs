@@ -54,6 +54,32 @@ test('normalizeState migrates the legacy mapped service address out of the node 
   assert.equal(state.mesh.serviceAddress, DEFAULT_SERVICE_ADDRESS)
 })
 
+test('existing EasyTier identities gain WSS relay secrets without changing the mesh', () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'harness-mobile-relay-migration-'))
+  const file = path.join(directory, 'mobile-sync.json')
+  const store = new MobileSyncStore(file)
+  const first = store.ensureMesh(() => ({
+    networkName: 'harness-0123456789abcdef',
+    networkSecret: 'a'.repeat(43),
+    desktopAddress: '10.254.77.1',
+    serviceAddress: DEFAULT_SERVICE_ADDRESS
+  }))
+  const migrated = store.ensureMesh(() => ({
+    networkName: 'unused-new-network-name',
+    networkSecret: 'b'.repeat(43),
+    desktopAddress: '10.254.77.9',
+    serviceAddress: '10.253.77.253',
+    relayRoomId: 'r'.repeat(43),
+    relayTunnelKey: 'k'.repeat(43)
+  }))
+  assert.equal(migrated.networkName, first.networkName)
+  assert.equal(migrated.networkSecret, first.networkSecret)
+  assert.equal(migrated.relayRoomId, 'r'.repeat(43))
+  assert.equal(migrated.relayTunnelKey, 'k'.repeat(43))
+  store.setTransportPreference('wss-relay')
+  assert.equal(store.get().transportPreference, 'wss-relay')
+})
+
 test('normalizeState drops malformed secrets and invalid ports', () => {
   const state = normalizeState({
     enabled: 1,

@@ -5,20 +5,25 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
-  'electron/main.cjs', 'electron/preload.cjs', 'electron/desktop-tray.cjs',
-  'electron/bridge/dsh-resolver.cjs', 'electron/bridge/dsh-home.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/runtime-proxy.cjs', 'electron/bridge/runtime-bundle-service.cjs',
+  'electron/bootstrap.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/desktop-tray.cjs',
+  'electron/bridge/dsh-resolver.cjs', 'electron/bridge/dsh-home.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/process-tree.cjs', 'electron/bridge/runtime-proxy.cjs', 'electron/bridge/runtime-bundle-service.cjs',
   'electron/bridge/update-service.cjs', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/provider-meter-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/attachment-reference-service.cjs',
-  'electron/store/app-state-store.cjs',
+  'electron/bridge/component-update-contract.cjs', 'electron/bridge/component-update-archive.cjs', 'electron/bridge/component-update-builder.cjs', 'electron/bridge/component-update-config.cjs', 'electron/bridge/component-update-store.cjs', 'electron/bridge/component-update-service.cjs', 'electron/bridge/component-update-helper.cjs', 'electron/bridge/component-update-launcher.cjs', 'electron/bridge/component-update-health.cjs', 'electron/bridge/component-runtime-resolver.cjs',
+  'electron/bridge/relay-tunnel-codec.cjs', 'electron/bridge/mobile-relay-config.cjs', 'electron/bridge/sync-transport-manager.cjs', 'electron/bridge/sync-transports/wss-relay-adapter.cjs', 'services/wss-relay/server.cjs', 'services/wss-relay/README.zh-CN.md',
+  'electron/store/app-state-store.cjs', 'electron/store/mobile-sync-store.cjs',
   'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js', 'renderer/workspace-links-integration.js',
   'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
   'renderer/themes/maid-atelier/maid-atelier-maid-right-v6.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/dsh-home.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
-  'docs/ARCHITECTURE.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
-  'build/installer.iss', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
-  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json', 'release-mirrors.example.json', 'release-update-sources.json', 'release-update-sources.example.json'
+  'tests/app-state-store.test.cjs', 'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
+  'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
+  'docs/ARCHITECTURE.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
+  '.github/workflows/apple-virtual-tests.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/component-update-helper.cjs', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
+  'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
+  'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
+  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json', 'release-mirrors.example.json', 'release-update-sources.json', 'release-update-sources.example.json', 'component-update-sources.json', 'mobile-relay-sources.json', 'component-release.example.json', 'component-release.macos-arm64.example.json'
 ]
 for (const relative of required) await access(path.join(root, relative))
 
@@ -85,7 +90,7 @@ if (!rendererScript.includes('element.textContent !== value') || !rendererScript
 if (!rendererScript.includes("request('install-update')") || !rendererScript.includes('api.installUpdate()') || !rendererScript.includes('下载并安装桌面版更新')) {
   throw new Error('Official General settings must install verified Harness Desktop updates, not only open a download page.')
 }
-if (!rendererScript.includes('showUpdateReady(result.version)') || !rendererScript.includes('api.launchReadyUpdate()')) {
+if (!rendererScript.includes('showUpdateReady(version') || !rendererScript.includes('api.launchReadyUpdate()') || !rendererScript.includes('api.applyComponentUpdates()')) {
   throw new Error('A verified update must use the in-app confirmation before opening the visible installer wizard.')
 }
 for (const contract of ['showUpdateNotice(result.app', 'normalizedReleaseNotes', 'data-hd-notes', '更新内容', 'officialSubagentEnhancementsBootstrap', 'hd-subagent-panel', 'hd-subagent-running-indicator']) {
@@ -179,6 +184,38 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 if (pkg.version !== '1.0.23') throw new Error(`Expected package version 1.0.23, received ${pkg.version}`)
+if (pkg.main !== 'electron/bootstrap.cjs' || pkg.build?.extraMetadata?.main !== 'electron/bootstrap.cjs') throw new Error('Component updates require the stable Electron bootstrap entrypoint.')
+if (pkg.scripts?.['release:components'] !== 'node scripts/build-component-update.mjs') throw new Error('Component release builder command is missing.')
+if (pkg.scripts?.['test:component-local'] !== 'node scripts/local-component-update-test.mjs') throw new Error('Local component restart/rollback test command is missing.')
+for (const helperPath of ['scripts/component-update-helper.cjs', 'electron/bridge/component-update-*.cjs']) {
+  if (!pkg.build?.asarUnpack?.includes(helperPath)) throw new Error(`Detached component helper must be unpacked: ${helperPath}`)
+}
+for (const bundled of ['component-update-sources.json', 'mobile-relay-sources.json', 'scripts/component-update-helper.cjs']) {
+  if (!pkg.build?.files?.includes(bundled)) throw new Error(`Packaged component updater support file is missing: ${bundled}`)
+}
+if (pkg.scripts?.['dist:mac'] !== 'electron-builder --mac dmg zip --x64 --arm64') throw new Error('Universal macOS packaging command is missing.')
+if (pkg.build?.mac?.artifactName !== 'Harness-Desktop-${version}-mac-${arch}.${ext}' || pkg.build?.mac?.hardenedRuntime !== true || pkg.build?.mac?.notarize !== true || pkg.build?.mac?.entitlements !== 'build/entitlements.mac.plist' || pkg.build?.mac?.minimumSystemVersion !== '12.0') throw new Error('macOS hardened-runtime packaging contract is incomplete.')
+const macTargets = pkg.build?.mac?.target || []
+for (const target of ['dmg', 'zip']) {
+  const value = macTargets.find(entry => entry?.target === target)
+  if (!value || !['x64', 'arm64'].every(arch => value.arch?.includes(arch))) throw new Error(`macOS ${target} target must cover Intel and Apple Silicon.`)
+}
+const desktopMain = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
+for (const contract of ['createWssRelayAdapter', 'loadMobileRelayConfig', "detached: process.platform !== 'win32'", 'terminateProcessTree(child)']) {
+  if (!desktopMain.includes(contract)) throw new Error(`Cross-platform desktop runtime contract is missing: ${contract}`)
+}
+const iosInfo = await readFile(path.join(root, 'mobile/ios/HarnessMobile/Resources/Info.plist'), 'utf8')
+for (const contract of ['NSCameraUsageDescription', 'NSLocalNetworkUsageDescription', 'NSAllowsLocalNetworking', 'harnessmobile']) {
+  if (!iosInfo.includes(contract)) throw new Error(`iOS pairing declaration is missing: ${contract}`)
+}
+if (iosInfo.includes('UIBackgroundModes')) throw new Error('iOS client must not claim unsupported persistent background networking.')
+const appleWorkflow = await readFile(path.join(root, '.github/workflows/apple-virtual-tests.yml'), 'utf8')
+for (const contract of ['workflow_dispatch:', 'runs-on: macos-14', 'xcodegen generate', 'iPhone Simulator', 'iPad Simulator', 'xcodebuild test', '--x64 --arm64', 'CODE_SIGNING_ALLOWED=NO']) {
+  if (!appleWorkflow.includes(contract)) throw new Error(`Apple virtual-device test contract is missing: ${contract}`)
+}
+for (const forbidden of ['upload-artifact', 'softprops/action-gh-release', 'contents: write']) {
+  if (appleWorkflow.includes(forbidden)) throw new Error(`Apple virtual test workflow must not publish artifacts: ${forbidden}`)
+}
 const mobileVersion = '1.0.20'
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
@@ -238,10 +275,21 @@ if (officialIconHash !== '77b823e3d14122b6dfe6ff6089e629d1c6e3fcd1ed7fc0b9e7bf59
 }
 
 const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
+const bootstrap = await readFile(path.join(root, 'electron/bootstrap.cjs'), 'utf8')
+for (const contract of ['prepareComponentActivation', 'resolveComponentLayout', 'installComponentModulePaths', '__HARNESS_COMPONENT_UPDATE__', 'require(layout.shellEntry)']) {
+  if (!bootstrap.includes(contract)) throw new Error(`Stable component bootstrap contract missing: ${contract}`)
+}
+const componentSources = JSON.parse(await readFile(path.join(root, 'component-update-sources.json'), 'utf8'))
+if (componentSources.enabled !== false || componentSources.manifestUrls?.length || Object.values(componentSources.targets || {}).some(urls => urls?.length) || Object.keys(componentSources.trustedKeys || {}).length) {
+  throw new Error('Component updates must remain disabled until a reviewed release public key and feed are approved.')
+}
+const relaySources = JSON.parse(await readFile(path.join(root, 'mobile-relay-sources.json'), 'utf8'))
+if (relaySources.enabled !== false || relaySources.relayUrl) throw new Error('Public WSS relay must remain disabled until its 443/TLS deployment is reviewed.')
+if (!main.includes("ipcMain.handle('componentUpdates:apply'")) throw new Error('Component apply IPC is missing after local installation testing approval.')
 for (const trayContract of ['createDesktopTray', 'ensureDesktopTray', "mainWindow.on('close'", 'event.preventDefault()', 'mainWindow.hide()', 'isQuitting = true']) {
   if (!main.includes(trayContract)) throw new Error(`Desktop tray lifecycle contract missing: ${trayContract}`)
 }
-for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'models:meters:get', 'shell:openExternal', 'shell:openLocal', 'attachments:inspect']) {
+for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'componentUpdates:getState', 'componentUpdates:check', 'componentUpdates:stage', 'componentUpdates:apply', 'componentUpdates:progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'models:meters:get', 'shell:openExternal', 'shell:openLocal', 'attachments:inspect']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }
 for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'terminal:start', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {
@@ -250,7 +298,7 @@ for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'work
 for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview', "guest.on('context-menu'", 'showGuestContextMenu', 'normalizeLocalTarget']) {
   if (!main.includes(contract)) throw new Error(`Electron security contract missing: ${contract}`)
 }
-for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase: 'ready'", 'launchReadyAppUpdate', 'openWindowsInstaller', 'shell.openPath', 'ensurePluginMarketplace']) {
+for (const updateContract of ['net.fetch(', 'fetchJsonWithSystemNetwork', "phase: 'ready'", 'launchReadyAppUpdate', 'openDesktopInstaller', 'shell.openPath', 'ensurePluginMarketplace']) {
   if (!main.includes(updateContract)) throw new Error(`Background updater contract missing: ${updateContract}`)
 }
 if (main.includes('await fetch(safeUpdateUrl')) throw new Error('Update downloads must use Electron system networking for proxy and direct connections.')
@@ -291,7 +339,7 @@ if (pkg.scripts?.postinstall !== 'node scripts/patch-official-runtime.mjs && ele
 }
 
 const preload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
-for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'launchReadyUpdate', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openExternal', 'openLocal', 'onUpdateResult', 'onUpdateInstallProgress']) {
+for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'launchReadyUpdate', 'getComponentUpdateState', 'checkComponentUpdates', 'stageComponentUpdates', 'onComponentUpdateProgress', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openExternal', 'openLocal', 'onUpdateResult', 'onUpdateInstallProgress']) {
   if (!preload.includes(api)) throw new Error(`preload API missing: ${api}`)
 }
 for (const removedApi of ['getProviderSettings', 'runDiagnostics', 'listSessions', 'listWorkspaceDirectory', 'startTerminal']) {
@@ -300,7 +348,7 @@ for (const removedApi of ['getProviderSettings', 'runDiagnostics', 'listSessions
 
 async function* walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
-    if (['node_modules', '.git', 'dist', 'release'].includes(entry.name)) continue
+    if (['node_modules', '.git', 'dist', 'dist-store', 'dist-local-component-test', 'local-test-output', '.artifacts', '.android-build', 'release'].includes(entry.name)) continue
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) yield* walk(full)
     else yield full

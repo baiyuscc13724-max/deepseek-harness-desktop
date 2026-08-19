@@ -35,6 +35,21 @@ test('portable builds use the original executable directory instead of the extra
   assert.equal(result, path.resolve('E:\\Portable Apps\\Harness', 'HarnessData', 'dsh-home'))
 })
 
+test('packaged macOS builds keep writable Harness data in Application Support', () => {
+  const userData = path.resolve('/Users/example/Library/Application Support/Harness Desktop')
+  const paths = resolveDesktopRuntimePaths({
+    argv: ['/Applications/Harness Desktop.app/Contents/MacOS/Harness Desktop'],
+    appPath: '/Applications/Harness Desktop.app/Contents/Resources/app.asar',
+    executablePath: '/Applications/Harness Desktop.app/Contents/MacOS/Harness Desktop',
+    isPackaged: true,
+    platform: 'darwin',
+    store: false,
+    userData
+  })
+  assert.equal(paths.root, path.join(userData, 'HarnessData'))
+  assert.equal(paths.dshHome, path.join(userData, 'HarnessData', 'dsh-home'))
+})
+
 test('custom Electron profiles isolate their Harness sessions by default', () => {
   const userData = 'D:\\Harness\\.runtime-pet-test'
   const result = resolveDesktopDshHome({
@@ -48,6 +63,11 @@ test('custom Electron profiles isolate their Harness sessions by default', () =>
   })
   assert.equal(result, path.resolve(userData, 'HarnessData', 'dsh-home'))
   assert.equal(hasUserDataOverride(['electron.exe', '--user-data-dir', userData, '.']), true)
+  assert.equal(resolveDesktopDshHome({
+    env: {}, argv: ['Harness Desktop.exe'], appPath: 'D:\\Harness\\source',
+    executablePath: 'D:\\Harness\\Harness Desktop.exe', isPackaged: true, platform: 'win32',
+    userData, userDataOverride: true
+  }), path.resolve(userData, 'HarnessData', 'dsh-home'))
 })
 
 test('ambient DSH_HOME cannot redirect a normal packaged desktop launch back to C', () => {

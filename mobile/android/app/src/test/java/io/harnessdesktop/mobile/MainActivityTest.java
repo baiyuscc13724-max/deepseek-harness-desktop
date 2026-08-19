@@ -3,6 +3,7 @@ package io.harnessdesktop.mobile;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import org.junit.Test;
 import org.json.JSONObject;
@@ -29,6 +30,47 @@ public final class MainActivityTest {
         assertTrue(PairingLinkValidator.isSafeHarnessSetupUrl(setupUrl));
         assertEquals(payload, PairingLinkValidator.extractSetupPayload(setupUrl));
         assertFalse(PairingLinkValidator.isSafeHarnessSetupUrl("https://example.com/__harness_mobile__/setup?payload=" + payload));
+    }
+
+    @Test public void parsesAndPersistsCredentialFreeWssRelayTransport() throws Exception {
+        String pairUrl = "http://192.168.1.8:3081/__harness_mobile__/pair/abc";
+        JSONObject transport = new JSONObject()
+            .put("id", "wss-relay")
+            .put("origin", "http://10.252.77.254:3081")
+            .put("relayUrl", "wss://relay.example.com/tunnel")
+            .put("roomId", "r".repeat(43))
+            .put("tunnelKey", "k".repeat(43))
+            .put("protocolVersion", 1);
+        JSONObject object = new JSONObject().put("version", 2).put("pairUrl", pairUrl)
+            .put("transports", new org.json.JSONArray().put(transport));
+        String payload = Base64.getUrlEncoder().withoutPadding().encodeToString(object.toString().getBytes(StandardCharsets.UTF_8));
+        PairingProfile profile = PairingProfile.parse("harnessmobile://pair?payload=" + payload);
+        assertTrue(profile != null && profile.relay != null);
+        assertEquals("wss://relay.example.com/tunnel", profile.relay.relayUrl);
+        assertEquals(2, profile.routes.size());
+        PairingProfile restored = PairingProfile.fromStoredJson(profile.toJson());
+        assertTrue(restored != null && restored.relay != null);
+    }
+
+    @Test public void opensNodeGeneratedRelayVectorAndRejectsReplay() throws Exception {
+        RelayTunnelCodec codec = new RelayTunnelCodec("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc");
+        byte[] packet = hex("01000102030405060708090a0b1983e9701d23a93b1ec484e887781c9b9850d9ef7c1353fcafca71c638a5771489d6931d56");
+        RelayTunnelCodec.Frame frame = codec.decode(packet);
+        assertEquals(RelayTunnelCodec.DATA, frame.type);
+        assertEquals(42L, frame.streamId);
+        assertEquals("private payload", new String(frame.payload, StandardCharsets.UTF_8));
+        try { codec.decode(packet); fail("Replay must be rejected"); }
+        catch (java.security.GeneralSecurityException expected) { assertTrue(expected.getMessage().contains("replay")); }
+    }
+
+    @Test public void reconnectPolicyDebouncesDuplicateNetworkCallbacks() {
+        NetworkReconnectPolicy policy = new NetworkReconnectPolicy();
+        policy.seed(10L, true);
+        assertFalse(policy.available(10L, true));
+        assertTrue(policy.available(11L, true));
+        assertFalse(policy.lost(10L));
+        assertTrue(policy.lost(11L));
+        assertFalse(policy.hasUsableNetwork());
     }
 
     @Test public void parsesOnlyVersionedFixedControlActions() throws Exception {
@@ -63,5 +105,13 @@ public final class MainActivityTest {
             .put("payload", new JSONObject().put("packageName", "com.example.app")));
         assertTrue(command.requiresConfirmation);
         assertTrue(ControlCommand.isSensitive("textInput"));
+    }
+
+    private static byte[] hex(String value) {
+        byte[] result = new byte[value.length() / 2];
+        for (int index = 0; index < result.length; index++) {
+            result[index] = (byte) Integer.parseInt(value.substring(index * 2, index * 2 + 2), 16);
+        }
+        return result;
     }
 }

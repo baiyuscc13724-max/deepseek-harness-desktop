@@ -2,20 +2,21 @@
   "name": "deepseek-harness-desktop",
   "version": "1.0.23",
   "private": false,
-  "description": "Open-source Windows desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, packaged self-test, and release gates.",
+  "description": "Open-source Windows and macOS desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, mobile pairing, packaged self-test, and release gates.",
   "author": {
     "name": "Harness Desktop Contributors",
     "email": "baiyuscc13724-max@users.noreply.github.com"
   },
   "license": "MIT",
   "type": "commonjs",
-  "main": "electron/main.cjs",
+  "main": "electron/bootstrap.cjs",
   "scripts": {
     "dev": "electron .",
     "start": "electron .",
     "upstream:status": "node scripts/upstream-status.mjs",
     "pack": "electron-builder --dir",
     "dist": "node scripts/build-release.mjs",
+    "dist:mac": "electron-builder --mac dmg zip --x64 --arm64",
     "verify": "node scripts/verify-static.mjs && npm run test:smoke",
     "test:smoke": "node --test tests/*.test.cjs",
     "postinstall": "node scripts/patch-official-runtime.mjs && electron-builder install-app-deps",
@@ -23,6 +24,8 @@
     "verify:artifact": "node scripts/artifact-audit.mjs dist",
     "verify:packaged": "node scripts/packaged-selftest-contract.mjs",
     "release:mirror-manifest": "node scripts/build-mirror-manifest.mjs",
+    "release:components": "node scripts/build-component-update.mjs",
+    "test:component-local": "node scripts/local-component-update-test.mjs",
     "release:cnb-cloud": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/publish-cnb-cloud-mirror.ps1",
     "store:assets": "winapp manifest update-assets store/branding/harness-desktop-store.svg --manifest store/Package.appxmanifest.template",
     "store:check": "node scripts/store-readiness.mjs",
@@ -91,13 +94,16 @@
       "THIRD_PARTY_NOTICES.md",
       "release-update-sources.json",
       "release-update-sources.local.json",
+      "component-update-sources.json",
+      "mobile-relay-sources.json",
+      "scripts/component-update-helper.cjs",
       "docs/**/*",
       "!node_modules/**/*.map",
       "!node_modules/**/*.{ts,tsx,cts,mts}",
       "!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*"
     ],
     "extraMetadata": {
-      "main": "electron/main.cjs"
+      "main": "electron/bootstrap.cjs"
     },
     "win": {
       "icon": "build/.icon-ico/icon.ico",
@@ -107,10 +113,25 @@
     },
     "mac": {
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64", "arm64"]
+        }
       ],
-      "category": "public.app-category.developer-tools"
+      "artifactName": "Harness-Desktop-${version}-mac-${arch}.${ext}",
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "minimumSystemVersion": "12.0",
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Harness Desktop uses the local network to connect paired phones and tablets."
+      }
     },
     "linux": {
       "target": [
@@ -123,7 +144,9 @@
     "npmRebuild": true,
     "asarUnpack": [
       "node_modules/**/*.node",
-      "plugins/dsh-mobile-control/**/*"
+      "plugins/dsh-mobile-control/**/*",
+      "scripts/component-update-helper.cjs",
+      "electron/bridge/component-update-*.cjs"
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "portable": {

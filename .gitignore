@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-store/
+dist-local-component-test/
+local-test-output/
 store/store-identity.json
 store/devcert.pfx
 store/*.pfx

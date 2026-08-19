@@ -1,0 +1,56 @@
+name: HarnessMobile
+options:
+  bundleIdPrefix: io.harnessdesktop
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    CURRENT_PROJECT_VERSION: 10020
+    MARKETING_VERSION: 1.0.20
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+targets:
+  HarnessMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: HarnessMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.harnessdesktop.mobile
+        PRODUCT_NAME: DeepSeek Harness
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+    info:
+      path: HarnessMobile/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: DeepSeek Harness
+        UILaunchScreen: {}
+        NSCameraUsageDescription: 扫描 Harness Desktop 上的一次性配对二维码。
+        NSLocalNetworkUsageDescription: 连接同一局域网中的 Harness Desktop 工作台。
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: io.harnessdesktop.mobile.pair
+            CFBundleURLSchemes:
+              - harnessmobile
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    scheme:
+      testTargets:
+        - HarnessMobileCoreTests
+  HarnessMobileCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: HarnessMobileCoreTests
+    dependencies:
+      - target: HarnessMobile

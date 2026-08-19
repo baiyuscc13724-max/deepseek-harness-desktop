@@ -1,0 +1,106 @@
+name: Apple Virtual Device Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-virtual-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-simulators:
+    name: iPhone and iPad simulators
+    runs-on: macos-14
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: mobile/ios
+        run: xcodegen generate
+      - name: Select virtual Apple devices
+        id: devices
+        shell: bash
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, subprocess
+          devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))['devices']
+          flat = [device for runtime in devices.values() for device in runtime if device.get('isAvailable')]
+          for key, prefix in [('iphone', 'iPhone'), ('ipad', 'iPad')]:
+              match = next((device for device in flat if device['name'].startswith(prefix)), None)
+              if not match:
+                  raise SystemExit(f'No available {prefix} simulator')
+              print(f"{key}_udid={match['udid']}")
+              print(f"{key}_name={match['name']}")
+          PY
+      - name: Boot iPhone and iPad simulators
+        shell: bash
+        run: |
+          xcrun simctl boot "${{ steps.devices.outputs.iphone_udid }}" || true
+          xcrun simctl bootstatus "${{ steps.devices.outputs.iphone_udid }}" -b
+          xcrun simctl boot "${{ steps.devices.outputs.ipad_udid }}" || true
+          xcrun simctl bootstatus "${{ steps.devices.outputs.ipad_udid }}" -b
+      - name: Test on iPhone Simulator
+        working-directory: mobile/ios
+        run: >-
+          xcodebuild test
+          -project HarnessMobile.xcodeproj
+          -scheme HarnessMobile
+          -destination 'id=${{ steps.devices.outputs.iphone_udid }}'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Test on iPad Simulator
+        working-directory: mobile/ios
+        run: >-
+          xcodebuild test
+          -project HarnessMobile.xcodeproj
+          -scheme HarnessMobile
+          -destination 'id=${{ steps.devices.outputs.ipad_udid }}'
+          CODE_SIGNING_ALLOWED=NO
+
+  macos-desktop:
+    name: macOS Desktop package contracts
+    runs-on: macos-14
+    timeout-minutes: 50
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Verify source and release contracts
+        run: |
+          npm run verify
+          npm run verify:release
+      - name: Build unsigned Intel and Apple Silicon app bundles
+        run: >-
+          npx electron-builder --mac dir --x64 --arm64 --publish never
+          --config.npmRebuild=false
+          --config.mac.identity=null
+          --config.mac.notarize=false
+          --config.directories.output=dist-apple-test
+      - name: Inspect both macOS architectures
+        shell: bash
+        run: |
+          test -d 'dist-apple-test/mac/Harness Desktop.app'
+          test -d 'dist-apple-test/mac-arm64/Harness Desktop.app'
+          file 'dist-apple-test/mac/Harness Desktop.app/Contents/MacOS/Harness Desktop' | grep -q 'x86_64'
+          file 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/MacOS/Harness Desktop' | grep -q 'arm64'
+          test -f 'dist-apple-test/mac/Harness Desktop.app/Contents/Resources/app.asar'
+          test -f 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar'
+      - name: Run packaged Intel macOS self-test
+        shell: bash
+        run: |
+          output="$RUNNER_TEMP/harness-desktop-macos-selftest.json"
+          profile="$RUNNER_TEMP/harness-desktop-macos-profile"
+          'dist-apple-test/mac/Harness Desktop.app/Contents/MacOS/Harness Desktop' \
+            "--user-data-dir=$profile" "--harness-user-data-dir=$profile" \
+            --self-test "--self-test-output=$output"
+          cat "$output"
+          node -e "const r=require(process.argv[1]); if(!r.ok) process.exit(1)" "$output"

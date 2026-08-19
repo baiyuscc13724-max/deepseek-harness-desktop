@@ -67,16 +67,32 @@ final class PairingProfile {
         }
     }
 
+    static final class RelayConfig {
+        final String relayUrl;
+        final String roomId;
+        final String tunnelKey;
+        final int protocolVersion;
+
+        RelayConfig(String relayUrl, String roomId, String tunnelKey, int protocolVersion) {
+            this.relayUrl = relayUrl;
+            this.roomId = roomId;
+            this.tunnelKey = tunnelKey;
+            this.protocolVersion = protocolVersion;
+        }
+    }
+
     final int version;
     final String pairUrl;
     final List<Route> routes;
     final EasyTierConfig easyTier;
+    final RelayConfig relay;
 
-    private PairingProfile(int version, String pairUrl, List<Route> routes, EasyTierConfig easyTier) {
+    private PairingProfile(int version, String pairUrl, List<Route> routes, EasyTierConfig easyTier, RelayConfig relay) {
         this.version = version;
         this.pairUrl = pairUrl;
         this.routes = Collections.unmodifiableList(routes);
         this.easyTier = easyTier;
+        this.relay = relay;
     }
 
     static PairingProfile parse(String value) {
@@ -121,6 +137,7 @@ final class PairingProfile {
         List<Route> routes = new ArrayList<>();
         addRoute(routes, "lan", pairUrl);
         EasyTierConfig easyTier = null;
+        RelayConfig relay = null;
         JSONArray transports = object.optJSONArray("transports");
         if (transports != null) {
             for (int index = 0; index < transports.length(); index++) {
@@ -129,16 +146,17 @@ final class PairingProfile {
                 String id = transport.optString("id", "remote");
                 addRoute(routes, id, transport.optString("origin", ""));
                 if ("easytier".equals(id)) easyTier = parseEasyTier(transport);
+                if ("wss-relay".equals(id)) relay = parseRelay(transport);
             }
         }
-        return routes.isEmpty() ? null : new PairingProfile(version, pairUrl, deduplicate(routes), easyTier);
+        return routes.isEmpty() ? null : new PairingProfile(version, pairUrl, deduplicate(routes), easyTier, relay);
     }
 
     private static PairingProfile fromLegacy(String value) {
         if (!PairingLinkValidator.isSafeHarnessUrl(value, true)) return null;
         List<Route> routes = new ArrayList<>();
         addRoute(routes, "lan", value);
-        return new PairingProfile(1, value, routes, null);
+        return new PairingProfile(1, value, routes, null, null);
     }
 
     private static EasyTierConfig parseEasyTier(JSONObject object) {
@@ -163,6 +181,23 @@ final class PairingProfile {
         return new EasyTierConfig(networkName, networkSecret, desktopAddress, serviceAddress, peer);
     }
 
+    private static RelayConfig parseRelay(JSONObject object) {
+        String relayUrl = object.optString("relayUrl", "");
+        String roomId = object.optString("roomId", "");
+        String tunnelKey = object.optString("tunnelKey", "");
+        int protocolVersion = object.optInt("protocolVersion", 0);
+        try {
+            URI uri = URI.create(relayUrl);
+            if (!"wss".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null || uri.getHost().isEmpty()) return null;
+            if ((uri.getPort() != -1 && uri.getPort() != 443) || uri.getUserInfo() != null || uri.getRawFragment() != null) return null;
+            if (!roomId.matches("[A-Za-z0-9_-]{43}") || !tunnelKey.matches("[A-Za-z0-9_-]{43}") || protocolVersion != 1) return null;
+            if (Base64.getUrlDecoder().decode(tunnelKey).length != 32) return null;
+            return new RelayConfig(uri.toString(), roomId, tunnelKey, protocolVersion);
+        } catch (RuntimeException error) {
+            return null;
+        }
+    }
+
     private static void addRoute(List<Route> routes, String id, String value) {
         if (!PairingLinkValidator.isSafeHarnessUrl(value, false)) return;
         URI uri = URI.create(value);
@@ -181,9 +216,17 @@ final class PairingProfile {
     }
 
     List<Route> routesWithEasyTierProxy(int socksPort) {
+        return routesWithProxy("easytier", easyTier != null, socksPort);
+    }
+
+    List<Route> routesWithRelayProxy(int socksPort) {
+        return routesWithProxy("wss-relay", relay != null, socksPort);
+    }
+
+    private List<Route> routesWithProxy(String transportId, boolean configured, int socksPort) {
         List<Route> values = new ArrayList<>();
         for (Route route : routes) {
-            values.add("easytier".equals(route.id) && easyTier != null
+            values.add(transportId.equals(route.id) && configured
                 ? route.throughSocks5("127.0.0.1", socksPort)
                 : route);
         }
@@ -227,6 +270,12 @@ final class PairingProfile {
                     item.put("desktopAddress", easyTier.desktopAddress);
                     item.put("serviceAddress", easyTier.serviceAddress);
                     item.put("peer", easyTier.peer);
+                }
+                if ("wss-relay".equals(route.id) && relay != null) {
+                    item.put("relayUrl", relay.relayUrl);
+                    item.put("roomId", relay.roomId);
+                    item.put("tunnelKey", relay.tunnelKey);
+                    item.put("protocolVersion", relay.protocolVersion);
                 }
                 values.put(item);
             }

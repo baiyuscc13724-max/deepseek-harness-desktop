@@ -51,6 +51,8 @@ const mobileControlDeviceList = document.querySelector('#mobileControlDeviceList
 const stopMobileControl = document.querySelector('#stopMobileControl')
 const mobileSyncError = document.querySelector('#mobileSyncError')
 const updateReadyOverlay = document.querySelector('#updateReadyOverlay')
+const updateReadyTitle = document.querySelector('#updateReadyTitle')
+const updateReadyNote = document.querySelector('.update-ready-note')
 const updateReadyDetail = document.querySelector('#updateReadyDetail')
 const updateLaterButton = document.querySelector('#updateLaterButton')
 const updateNowButton = document.querySelector('#updateNowButton')
@@ -63,6 +65,8 @@ const updateNoticeLater = document.querySelector('#updateNoticeLater')
 const updateNoticeRelease = document.querySelector('#updateNoticeRelease')
 const updateNoticeInstall = document.querySelector('#updateNoticeInstall')
 
+let pendingUpdateKind = 'installer'
+let pendingComponentUpdate = null
 let updateState = {
   checking: false,
   installing: false,
@@ -350,12 +354,18 @@ function closeSkinPicker() {
   skinQuickButton.focus()
 }
 
-function showUpdateReady(version) {
+function showUpdateReady(version, kind = 'installer') {
+  pendingUpdateKind = kind
   applyShellTheme()
+  const component = kind === 'components'
+  updateReadyTitle.textContent = component ? '组件更新已准备好' : '更新已准备好'
   updateReadyDetail.textContent = `Harness Desktop ${version || '新版本'} 已经下载并通过安全校验。`
+  updateReadyNote.textContent = component
+    ? '点击应用后，当前程序将关闭；独立助手会原子切换组件并通过健康检查确认或自动回滚。'
+    : '点击安装后，当前程序将关闭，随后打开系统安装流程。'
   updateLaunchError.textContent = ''
   updateNowButton.disabled = false
-  updateNowButton.textContent = '立即安装'
+  updateNowButton.textContent = component ? '重启并应用' : '立即安装'
   updateReadyOverlay.classList.remove('hidden')
   updateReadyOverlay.setAttribute('aria-hidden', 'false')
   updateNowButton.focus()
@@ -404,6 +414,21 @@ function showUpdateNotice(result, { force = false } = {}) {
   updateNoticeInstall.focus()
 }
 
+function showComponentUpdateNotice(componentState, { force = false } = {}) {
+  const check = componentState?.lastCheck
+  if (!componentState?.enabled || check?.mode !== 'components' || !check.releaseVersion) return false
+  pendingComponentUpdate = componentState
+  const components = Array.isArray(check.components) ? check.components : []
+  showUpdateNotice({
+    updateAvailable: true,
+    latestVersion: check.releaseVersion,
+    currentVersion: updateState.app?.currentVersion || '当前组件版本',
+    notes: components.map(component => `增量更新 ${component.id} → ${component.version}`).join('\n') || '已发现经过签名的组件增量更新。',
+    url: ''
+  }, { force })
+  return true
+}
+
 function renderRuntimeState(state) {
   if (state?.status === 'ready' && state.url) {
     startupRuntimeReady = true
@@ -445,7 +470,7 @@ function renderMobileSync(next = mobileSyncState) {
   mobileRemoteToggle.disabled = !running
   mobileTransportPreference.value = remote.preference || 'auto'
   mobileTransportPreference.disabled = !running || remote.enabled === false
-  const adapterLabel = remote.active === 'easytier' ? 'EasyTier（国内线路）' : remote.active === 'tailscale' ? 'Tailscale（海外线路）' : ''
+  const adapterLabel = remote.active === 'wss-relay' ? 'WSS/443（通用线路）' : remote.active === 'easytier' ? 'EasyTier' : remote.active === 'tailscale' ? 'Tailscale' : ''
   const remoteStatusText = remote.enabled === false
     ? '远程连接已关闭；同一 Wi-Fi 仍可使用'
     : remote.status === 'connected'
@@ -689,7 +714,7 @@ function officialSettingsBootstrap() {
     const controlDevices = Array.isArray(state.control?.devices) ? state.control.devices : []
     const controlReady = controlDevices.filter(device => device.ready).length
     const controlActive = controlDevices.some(device => device.enabled || device.queued > 0)
-    const remoteLabel = remote.active === 'easytier' ? '国内线路' : remote.active === 'tailscale' ? '海外线路' : ''
+    const remoteLabel = remote.active === 'wss-relay' ? 'WSS/443' : remote.active === 'easytier' ? 'EasyTier' : remote.active === 'tailscale' ? 'Tailscale' : ''
     const detail = enabled
       ? remote.status === 'connected'
         ? `${devices} 台设备 · ${remoteLabel || '远程通道'}已连接${controlReady ? ` · ${controlReady} 台控制就绪` : ''}`
@@ -995,8 +1020,11 @@ async function checkUpdates({ forceNotice = false } = {}) {
   await publishUpdateState()
   try {
     const result = await api.checkUpdates()
+    const componentState = result.component || null
     updateState = { ...updateState, ...result, checking: false }
-    showUpdateNotice(result.app, { force: forceNotice })
+    pendingUpdateKind = 'installer'
+    pendingComponentUpdate = null
+    if (!showComponentUpdateNotice(componentState, { force: forceNotice })) showUpdateNotice(result.app, { force: forceNotice })
   } catch (error) {
     updateState = { ...updateState, checking: false, app: { error: error.message }, harness: updateState.harness }
   }
@@ -1007,11 +1035,14 @@ async function installUpdate() {
   updateState = { ...updateState, installing: true, installError: '', installProgress: { phase: 'checksum' } }
   await publishUpdateState()
   try {
-    const result = await api.installUpdate()
-    if (result?.ready) {
-      updateState = { ...updateState, installing: false, installProgress: { phase: 'ready', version: result.version } }
+    const component = pendingUpdateKind === 'components'
+    const result = component ? await api.stageComponentUpdates() : await api.installUpdate()
+    const ready = component ? result?.state?.phase === 'ready' : result?.ready
+    const version = component ? result?.state?.pending?.releaseVersion || pendingComponentUpdate?.lastCheck?.releaseVersion : result?.version
+    if (ready) {
+      updateState = { ...updateState, installing: false, installProgress: { phase: 'ready', version } }
       await publishUpdateState()
-      showUpdateReady(result.version)
+      showUpdateReady(version, component ? 'components' : 'installer')
     }
   } catch (error) {
     updateState = { ...updateState, installing: false, installError: error.message, installProgress: null }
@@ -1249,10 +1280,11 @@ updateNowButton.addEventListener('click', async () => {
   updateLaterButton.disabled = true
   updateLaunchError.textContent = ''
   try {
-    await api.launchReadyUpdate()
+    if (pendingUpdateKind === 'components') await api.applyComponentUpdates()
+    else await api.launchReadyUpdate()
   } catch (error) {
     updateNowButton.disabled = false
-    updateNowButton.textContent = '立即安装'
+    updateNowButton.textContent = pendingUpdateKind === 'components' ? '重启并应用' : '立即安装'
     updateLaterButton.disabled = false
     updateLaunchError.textContent = error.message
   }
@@ -1300,10 +1332,16 @@ api.onPetState(renderPetState)
 api.onUpdateResult(result => {
   updateState = { ...updateState, ...result, checking: false }
   publishUpdateState()
-  showUpdateNotice(result.app)
+  pendingUpdateKind = 'installer'
+  pendingComponentUpdate = null
+  if (!showComponentUpdateNotice(result.component)) showUpdateNotice(result.app)
 })
 api.onUpdateInstallProgress(progress => {
   updateState = { ...updateState, installing: progress?.phase !== 'ready', installError: '', installProgress: progress }
+  publishUpdateState()
+})
+api.onComponentUpdateProgress(progress => {
+  updateState = { ...updateState, installing: true, installError: '', installProgress: { kind: 'components', ...progress } }
   publishUpdateState()
 })
 

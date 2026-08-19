@@ -5,7 +5,7 @@ const DEFAULT_SERVICE_ADDRESS = '10.253.77.254'
 const LEGACY_SERVICE_ADDRESS = '10.254.77.254'
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   enabled: false,
   remoteEnabled: true,
   transportPreference: 'auto',
@@ -25,11 +25,11 @@ function safeDate(value) {
 }
 
 function safeName(value) {
-  const normalized = String(value || 'Android 手机')
+  const normalized = String(value || '移动设备')
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .trim()
     .slice(0, 80)
-  return normalized || 'Android 手机'
+  return normalized || '移动设备'
 }
 
 function normalizeDevice(value) {
@@ -62,7 +62,17 @@ function normalizeMesh(value) {
   if (!/^10\.(?:\d{1,3}\.){2}\d{1,3}$/.test(desktopAddress)) return null
   if (!/^10\.(?:\d{1,3}\.){2}\d{1,3}$/.test(serviceAddress)) return null
   if (serviceAddress === desktopAddress) return null
-  return { networkName, networkSecret, desktopAddress, serviceAddress }
+  const relayRoomId = String(value.relayRoomId || '').trim()
+  const relayTunnelKey = String(value.relayTunnelKey || '').trim()
+  if (relayRoomId && !/^[A-Za-z0-9_-]{40,64}$/.test(relayRoomId)) return null
+  if (relayTunnelKey && !/^[A-Za-z0-9_-]{40,64}$/.test(relayTunnelKey)) return null
+  return {
+    networkName,
+    networkSecret,
+    desktopAddress,
+    serviceAddress,
+    ...(relayRoomId && relayTunnelKey ? { relayRoomId, relayTunnelKey } : {})
+  }
 }
 
 function normalizeState(input) {
@@ -72,10 +82,10 @@ function normalizeState(input) {
     ? value.devices.map(normalizeDevice).filter(Boolean).slice(-32)
     : []
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     enabled: value.enabled === true,
     remoteEnabled: value.remoteEnabled !== false,
-    transportPreference: ['auto', 'easytier', 'tailscale'].includes(value.transportPreference)
+    transportPreference: ['auto', 'easytier', 'wss-relay', 'tailscale'].includes(value.transportPreference)
       ? value.transportPreference
       : DEFAULT_STATE.transportPreference,
     preferredPort: Number.isInteger(preferredPort) && preferredPort >= 1024 && preferredPort <= 65535
@@ -121,15 +131,18 @@ class MobileSyncStore {
   }
 
   setTransportPreference(preference) {
-    this.state.transportPreference = ['auto', 'easytier', 'tailscale'].includes(preference) ? preference : 'auto'
+    this.state.transportPreference = ['auto', 'easytier', 'wss-relay', 'tailscale'].includes(preference) ? preference : 'auto'
     this.#persist()
     return this.get()
   }
 
   ensureMesh(meshFactory) {
-    if (!this.state.mesh) {
-      this.state.mesh = normalizeMesh(meshFactory())
-      if (!this.state.mesh) throw new Error('Invalid mobile sync mesh configuration.')
+    const generated = meshFactory()
+    const merged = this.state.mesh ? { ...generated, ...this.state.mesh } : generated
+    const normalized = normalizeMesh(merged)
+    if (!normalized) throw new Error('Invalid mobile sync mesh configuration.')
+    if (JSON.stringify(normalized) !== JSON.stringify(this.state.mesh)) {
+      this.state.mesh = normalized
       this.#persist()
     }
     return JSON.parse(JSON.stringify(this.state.mesh))

@@ -48,6 +48,7 @@ public final class MainActivity extends AppCompatActivity {
     static final String SAVED_ORIGIN = "saved_origin";
     static final String SAVED_PROFILE = "saved_profile";
     private static final long[] WORKBENCH_RETRY_DELAYS_MS = { 800L, 1500L, 2500L, 4000L, 5000L };
+    private static final long NETWORK_RECONNECT_DEBOUNCE_MS = 1_500L;
 
     private LinearLayout pairingPanel;
     private EditText pairingUrl;
@@ -60,8 +61,10 @@ public final class MainActivity extends AppCompatActivity {
     private TextView connectionStatus;
     private HarnessWebProxy localProxy;
     private EasyTierClient easyTierClient;
+    private WssRelayClient wssRelayClient;
     private MobileUiAdapter mobileUiAdapter;
     private MobileAssetCache mobileAssetCache;
+    private PairingProfileStore pairingProfileStore;
     private PairingProfile pairingProfile;
     private PairingProfile remoteReconnectProfile;
     private String pendingWorkbenchUrl;
@@ -73,6 +76,17 @@ public final class MainActivity extends AppCompatActivity {
     private int workbenchReadyGeneration;
     private int remoteReconnectAttempt;
     private boolean backDispatchPending;
+    private ConnectivityManager connectivityManager;
+    private boolean networkCallbackRegistered;
+    private final NetworkReconnectPolicy networkReconnectPolicy = new NetworkReconnectPolicy();
+    private final Runnable networkChangedReconnect = this::reconnectAfterNetworkChange;
+    private final ConnectivityManager.NetworkCallback networkCallback = new ConnectivityManager.NetworkCallback() {
+        @Override public void onAvailable(Network network) { observeAvailableNetwork(network, null); }
+        @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) { observeAvailableNetwork(network, capabilities); }
+        @Override public void onLost(Network network) {
+            if (network != null && networkReconnectPolicy.lost(network.getNetworkHandle())) scheduleNetworkChangedReconnect();
+        }
+    };
     private final Runnable workbenchRetry = () -> {
         workbenchRetryScheduled = false;
         if (webView == null || swipeRefresh == null || swipeRefresh.getVisibility() != View.VISIBLE) return;
@@ -87,7 +101,10 @@ public final class MainActivity extends AppCompatActivity {
     };
     private final Runnable remoteReconnect = () -> {
         PairingProfile profile = remoteReconnectProfile;
-        if (profile != null && profile == pairingProfile && easyTierClient != null) startEasyTier(profile);
+        if (profile != null && profile == pairingProfile) {
+            if (profile.relay != null && wssRelayClient != null) startWssRelay(profile);
+            else if (profile.easyTier != null && easyTierClient != null) startEasyTier(profile);
+        }
     };
 
     private final ActivityResultLauncher<ScanOptions> scanner = registerForActivityResult(
@@ -107,7 +124,7 @@ public final class MainActivity extends AppCompatActivity {
         if (ControlPreferences.isEnabled(this)) ControlForegroundService.start(this);
 
         String incomingPairing = getIntent().getDataString();
-        pairingProfile = PairingProfile.fromStoredJson(getSharedPreferences(PREFS, MODE_PRIVATE).getString(SAVED_PROFILE, ""));
+        pairingProfile = pairingProfileStore.loadAndMigrate();
         String savedOrigin = getSharedPreferences(PREFS, MODE_PRIVATE).getString(SAVED_ORIGIN, "");
         if (incomingPairing != null) connect(incomingPairing);
         else if (pairingProfile != null) {
@@ -121,6 +138,7 @@ public final class MainActivity extends AppCompatActivity {
                 handleWorkbenchBack();
             }
         });
+        registerNetworkMonitoring();
     }
 
     private void applySystemBarInsets() {
@@ -173,8 +191,10 @@ public final class MainActivity extends AppCompatActivity {
     private void configureWebView() {
         localProxy = new HarnessWebProxy(this);
         easyTierClient = new EasyTierClient();
+        wssRelayClient = new WssRelayClient();
         mobileUiAdapter = new MobileUiAdapter(this);
         mobileAssetCache = new MobileAssetCache(this);
+        pairingProfileStore = new PairingProfileStore(this);
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
@@ -288,8 +308,12 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         pairingError.setText("");
+        try { pairingProfileStore.save(nextProfile); }
+        catch (Exception error) {
+            pairingError.setText("无法安全保存配对信息，请检查系统密钥存储后重试。");
+            return;
+        }
         pairingProfile = nextProfile;
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(SAVED_PROFILE, nextProfile.toJson()).apply();
         if (hasActiveSystemVpn()) {
             Toast.makeText(this, "已检测到系统 VPN。Harness 仅代理本应用流量，不会关闭或替换现有 VPN。", Toast.LENGTH_LONG).show();
         }
@@ -308,10 +332,11 @@ public final class MainActivity extends AppCompatActivity {
         cancelWorkbenchRetry(true);
         pairingPanel.setVisibility(View.GONE);
         swipeRefresh.setVisibility(View.VISIBLE);
-        showConnectionOverlay(pairingProfile != null && pairingProfile.easyTier != null
-            ? "正在尝试局域网，必要时会自动切换远程线路…"
+        boolean hasRemoteRoute = pairingProfile != null && (pairingProfile.relay != null || pairingProfile.easyTier != null);
+        showConnectionOverlay(hasRemoteRoute
+            ? "正在尝试局域网，必要时会自动切换 WSS/443 加密线路…"
             : "正在连接桌面工作台…");
-        if (pairingProfile != null && pairingProfile.easyTier != null && !hasLocalNetwork()) {
+        if (hasRemoteRoute && !hasLocalNetwork()) {
             pendingWorkbenchUrl = url;
         } else {
             pendingWorkbenchUrl = null;
@@ -328,23 +353,102 @@ public final class MainActivity extends AppCompatActivity {
             // path, then add the overlay route in onReady.
             boolean localNetworkAvailable = hasLocalNetwork();
             localProxy.updateRoutes(profile.routes.stream()
-                .filter(route -> !"easytier".equals(route.id))
+                .filter(route -> !"easytier".equals(route.id) && !"wss-relay".equals(route.id))
                 .filter(route -> localNetworkAvailable || !"lan".equals(route.id))
                 .toList());
             localGatewayPort = localProxy.start(profile.desktopPort());
-            if (profile.easyTier == null) {
+            easyTierClient.stop();
+            wssRelayClient.stop();
+            if (profile.relay == null && profile.easyTier == null) {
                 remoteReconnectProfile = null;
                 mainHandler.removeCallbacks(remoteReconnect);
-                easyTierClient.stop();
             } else {
                 remoteReconnectProfile = profile;
-                startEasyTier(profile);
+                if (profile.relay != null) startWssRelay(profile);
+                else startEasyTier(profile);
             }
             return pairing ? profile.stablePairUrl(localGatewayPort) : profile.stableOrigin(localGatewayPort);
         } catch (Exception error) {
             Toast.makeText(this, "应用内连接通道启动失败，将尝试局域网直连", Toast.LENGTH_LONG).show();
             return null;
         }
+    }
+
+    private void updateRoutesBeforeRemoteReady(PairingProfile profile) {
+        if (localProxy == null || profile == null) return;
+        boolean localNetworkAvailable = hasLocalNetwork();
+        localProxy.updateRoutes(profile.routes.stream()
+            .filter(route -> !"easytier".equals(route.id) && !"wss-relay".equals(route.id))
+            .filter(route -> localNetworkAvailable || !"lan".equals(route.id))
+            .toList());
+    }
+
+    private void registerNetworkMonitoring() {
+        connectivityManager = getSystemService(ConnectivityManager.class);
+        if (connectivityManager == null || networkCallbackRegistered) return;
+        Network active = connectivityManager.getActiveNetwork();
+        NetworkCapabilities capabilities = active == null ? null : connectivityManager.getNetworkCapabilities(active);
+        networkReconnectPolicy.seed(
+            active == null ? NetworkReconnectPolicy.NO_NETWORK : active.getNetworkHandle(),
+            isUsableNetwork(capabilities)
+        );
+        try {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback);
+            networkCallbackRegistered = true;
+        } catch (RuntimeException ignored) {
+            networkCallbackRegistered = false;
+        }
+    }
+
+    private void observeAvailableNetwork(Network network, NetworkCapabilities capabilities) {
+        if (network == null) return;
+        NetworkCapabilities resolved = capabilities;
+        if (resolved == null && connectivityManager != null) resolved = connectivityManager.getNetworkCapabilities(network);
+        if (networkReconnectPolicy.available(network.getNetworkHandle(), isUsableNetwork(resolved))) scheduleNetworkChangedReconnect();
+    }
+
+    private void scheduleNetworkChangedReconnect() {
+        mainHandler.removeCallbacks(networkChangedReconnect);
+        mainHandler.postDelayed(networkChangedReconnect, NETWORK_RECONNECT_DEBOUNCE_MS);
+    }
+
+    private void reconnectAfterNetworkChange() {
+        PairingProfile profile = pairingProfile;
+        if (profile == null || localProxy == null || webView == null || isFinishing() || isDestroyed()) return;
+        updateRoutesBeforeRemoteReady(profile);
+        if (!networkReconnectPolicy.hasUsableNetwork()) {
+            mainHandler.removeCallbacks(remoteReconnect);
+            if (easyTierClient != null) easyTierClient.stop();
+            if (wssRelayClient != null) wssRelayClient.stop();
+            showConnectionOverlay("网络已断开，恢复后会自动重新连接…");
+            return;
+        }
+        boolean hasRemoteRoute = profile.relay != null || profile.easyTier != null;
+        showConnectionOverlay(hasRemoteRoute
+            ? "网络已切换，正在重建加密远程线路…"
+            : "网络已切换，正在重新连接桌面工作台…");
+        retryableMainFrameUrl = null;
+        webView.stopLoading();
+        if (hasRemoteRoute) {
+            remoteReconnectProfile = profile;
+            remoteReconnectAttempt = 0;
+            if (profile.relay != null) startWssRelay(profile);
+            else startEasyTier(profile);
+        } else {
+            retryWorkbenchNow();
+        }
+    }
+
+    private void unregisterNetworkMonitoring() {
+        mainHandler.removeCallbacks(networkChangedReconnect);
+        if (!networkCallbackRegistered || connectivityManager == null) return;
+        try { connectivityManager.unregisterNetworkCallback(networkCallback); }
+        catch (RuntimeException ignored) {}
+        networkCallbackRegistered = false;
+    }
+
+    private static boolean isUsableNetwork(NetworkCapabilities capabilities) {
+        return capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
     }
 
     private void showPairing() {
@@ -380,12 +484,14 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void disconnect() {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(SAVED_ORIGIN).remove(SAVED_PROFILE).apply();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(SAVED_ORIGIN).apply();
+        if (pairingProfileStore != null) pairingProfileStore.clear();
         pairingProfile = null;
         remoteReconnectProfile = null;
         mainHandler.removeCallbacks(remoteReconnect);
         if (localProxy != null) localProxy.updateRoutes(java.util.List.of());
         if (easyTierClient != null) easyTierClient.stop();
+        if (wssRelayClient != null) wssRelayClient.stop();
         CookieManager.getInstance().removeAllCookies(null);
         CookieManager.getInstance().flush();
         webView.clearHistory();
@@ -435,6 +541,46 @@ public final class MainActivity extends AppCompatActivity {
         workbenchRetryScheduled = false;
         retryableMainFrameUrl = null;
         if (resetAttempts) workbenchRetryAttempt = 0;
+    }
+
+    private void startWssRelay(PairingProfile profile) {
+        mainHandler.removeCallbacks(remoteReconnect);
+        setConnectionStatus("正在建立端到端加密的 WSS/443 远程线路…");
+        wssRelayClient.start(profile.relay, new WssRelayClient.Listener() {
+            @Override public void onReady(int socksPort) {
+                if (pairingProfile != profile || localProxy == null) return;
+                java.util.List<PairingProfile.Route> readyRoutes = profile.routesWithRelayProxy(socksPort);
+                if (!hasLocalNetwork()) {
+                    readyRoutes = readyRoutes.stream()
+                        .sorted(java.util.Comparator.comparingInt(route -> "wss-relay".equals(route.id) ? 0 : 1))
+                        .toList();
+                }
+                localProxy.updateRoutes(readyRoutes);
+                remoteReconnectAttempt = 0;
+                runOnUiThread(() -> {
+                    setConnectionStatus("WSS/443 远程线路已连接，正在打开工作台…");
+                    if (webView == null) return;
+                    if (pendingWorkbenchUrl != null) {
+                        String url = pendingWorkbenchUrl;
+                        pendingWorkbenchUrl = null;
+                        webView.loadUrl(url);
+                    } else if (PairingProfile.STABLE_HOST.equalsIgnoreCase(Uri.parse(webView.getUrl() == null ? "" : webView.getUrl()).getHost())) {
+                        retryWorkbenchNow();
+                    }
+                });
+            }
+
+            @Override public void onFailure(String message) {
+                if (pairingProfile != profile) return;
+                runOnUiThread(() -> {
+                    setConnectionStatus("WSS/443 线路暂未接通，正在自动重试；局域网连接仍然可用…");
+                    long delay = Math.min(15_000L, 3_000L + remoteReconnectAttempt * 2_000L);
+                    remoteReconnectAttempt = Math.min(remoteReconnectAttempt + 1, 6);
+                    mainHandler.removeCallbacks(remoteReconnect);
+                    mainHandler.postDelayed(remoteReconnect, delay);
+                });
+            }
+        });
     }
 
     private void startEasyTier(PairingProfile profile) {
@@ -606,12 +752,14 @@ public final class MainActivity extends AppCompatActivity {
         workbenchReadyGeneration++;
         remoteReconnectProfile = null;
         mainHandler.removeCallbacks(remoteReconnect);
+        unregisterNetworkMonitoring();
         webView.stopLoading();
         webView.setWebChromeClient(null);
         webView.setWebViewClient(null);
         webView.destroy();
         if (localProxy != null) localProxy.close();
         if (easyTierClient != null) easyTierClient.close();
+        if (wssRelayClient != null) wssRelayClient.stop();
         if (mobileUiAdapter != null) mobileUiAdapter.close();
         super.onDestroy();
     }

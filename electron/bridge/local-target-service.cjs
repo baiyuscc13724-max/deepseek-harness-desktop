@@ -4,7 +4,8 @@ const { fileURLToPath } = require('node:url')
 const BLOCKED_OPEN_EXTENSIONS = new Set([
   '.appref-ms', '.bat', '.cmd', '.com', '.cpl', '.exe', '.hta', '.inf', '.ins',
   '.isp', '.js', '.jse', '.lnk', '.msc', '.msi', '.msp', '.mst', '.pif', '.ps1',
-  '.reg', '.scr', '.sct', '.url', '.vb', '.vbe', '.vbs', '.ws', '.wsc', '.wsf', '.wsh'
+  '.reg', '.scr', '.sct', '.url', '.vb', '.vbe', '.vbs', '.ws', '.wsc', '.wsf', '.wsh',
+  '.app', '.command', '.dmg', '.pkg', '.workflow'
 ])
 
 function unwrapLocalUrl(value) {
@@ -91,7 +92,7 @@ async function openLocalTarget(value, {
     return { ok: true, action: 'reveal', ...target }
   }
 
-  if (!info.isDirectory() && blocksDirectOpen(target.path)) {
+  if (blocksDirectOpen(target.path)) {
     showItemInFolder(target.path)
     return { ok: true, action: 'reveal-blocked-executable', ...target }
   }

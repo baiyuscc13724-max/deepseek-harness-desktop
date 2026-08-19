@@ -71,9 +71,10 @@
               <label class="mobile-sync-switch"><input id="mobileRemoteToggle" type="checkbox" checked /><span aria-hidden="true"></span><b>远程连接</b></label>
               <label class="mobile-sync-provider">连接策略
                 <select id="mobileTransportPreference">
-                  <option value="auto">智能选择</option>
-                  <option value="easytier">国内优先</option>
-                  <option value="tailscale">海外优先</option>
+                  <option value="auto">智能选择（WSS/443 优先）</option>
+                  <option value="wss-relay">通用 WSS/443</option>
+                  <option value="easytier">EasyTier 优先</option>
+                  <option value="tailscale">Tailscale 优先</option>
                 </select>
               </label>
             </section>

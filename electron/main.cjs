@@ -4,6 +4,8 @@ const { existsSync, mkdirSync } = require('node:fs')
 const { copyFile, mkdir, readFile, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
+const AdmZip = require('adm-zip')
+const WebSocket = require('ws')
 
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
 const { ensureRuntimeNodeModules } = require('./bridge/runtime-bundle-service.cjs')
@@ -12,18 +14,26 @@ const { createDefaultProviderMeterRegistry } = require('./bridge/provider-meter-
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { ensureMobileControlPlugin } = require('./bridge/mobile-control-plugin-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
+const { terminateProcessTree } = require('./bridge/process-tree.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
+const { resolveUserDataOverride } = require('./bridge/user-data-override.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
 const { DEFAULT_APP_FEEDS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
 const { checksumWithFallback, downloadWithFallback } = require('./bridge/update-download-service.cjs')
 const { resolveUpdateFeeds } = require('./bridge/update-feed-config.cjs')
-const { openWindowsInstaller } = require('./bridge/update-launcher.cjs')
+const { openDesktopInstaller } = require('./bridge/update-launcher.cjs')
+const { resolveComponentUpdateConfig } = require('./bridge/component-update-config.cjs')
+const { ComponentUpdateService } = require('./bridge/component-update-service.cjs')
+const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
+const { launchComponentUpdateHelper } = require('./bridge/component-update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { inspectAttachmentPaths } = require('./bridge/attachment-reference-service.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
+const { loadMobileRelayConfig } = require('./bridge/mobile-relay-config.cjs')
 const { createEasyTierComponentInstaller } = require('./bridge/network-component-service.cjs')
 const { SyncTransportManager } = require('./bridge/sync-transport-manager.cjs')
 const { createEasyTierAdapter } = require('./bridge/sync-transports/easytier-adapter.cjs')
+const { createWssRelayAdapter } = require('./bridge/sync-transports/wss-relay-adapter.cjs')
 const { createTailscaleAdapter } = require('./bridge/sync-transports/tailscale-adapter.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
 const { beginWindowDrag, moveWindowDrag, endWindowDrag } = require('./bridge/window-drag-service.cjs')
@@ -42,7 +52,8 @@ const desktopPackage = require('../package.json')
 const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3080'
 const LOCAL_RUNTIME_HOSTS = new Set(['127.0.0.1', 'localhost'])
 const SELF_TEST_MODE = process.argv.includes('--self-test')
-const HAS_SINGLE_INSTANCE_LOCK = SELF_TEST_MODE || app.requestSingleInstanceLock()
+const COMPONENT_HEALTH_CHECK_MODE = process.argv.includes('--component-health-check')
+const HAS_SINGLE_INSTANCE_LOCK = SELF_TEST_MODE || COMPONENT_HEALTH_CHECK_MODE || app.requestSingleInstanceLock()
 const STORE_BUILD = isStoreDistribution()
 
 let mainWindow = null
@@ -66,6 +77,8 @@ let runtimeInitializationPromise = null
 let mobileSyncStore = null
 let mobileSyncService = null
 let mobileSyncTransportManager = null
+let componentUpdateServicePromise = null
+let lastComponentUpdateCheck = null
 
 const BUNDLED_THEME_ASSETS = Object.freeze([
   'maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -103,6 +116,16 @@ function ensureMobileSyncService() {
   mkdirSync(componentRoot, { recursive: true })
   mkdirSync(stateDir, { recursive: true })
   mobileSyncStore = new MobileSyncStore(path.join(userData, 'mobile-sync.json'))
+  let relayConfig = { enabled: false, relayUrl: '' }
+  try {
+    relayConfig = loadMobileRelayConfig({
+      file: path.join(app.getAppPath(), 'mobile-relay-sources.json'),
+      env: process.env,
+      allowEnvironmentOverride: !app.isPackaged
+    })
+  } catch (error) {
+    console.warn(`Unable to load WSS relay configuration: ${error.message}`)
+  }
   const adapterOptions = {
     resourcesPath: process.resourcesPath,
     componentRoot,
@@ -111,11 +134,13 @@ function ensureMobileSyncService() {
       componentRoot,
       fetchImpl: (url, options) => net.fetch(url, options)
     }),
-    resolveProxy: url => session.defaultSession.resolveProxy(url)
+    resolveProxy: url => session.defaultSession.resolveProxy(url),
+    relayUrl: relayConfig.enabled ? relayConfig.relayUrl : '',
+    WebSocketImpl: WebSocket
   }
   mobileSyncTransportManager = new SyncTransportManager({
     store: mobileSyncStore,
-    adapters: [createEasyTierAdapter(adapterOptions), createTailscaleAdapter(adapterOptions)]
+    adapters: [createEasyTierAdapter(adapterOptions), createWssRelayAdapter(adapterOptions), createTailscaleAdapter(adapterOptions)]
   })
   mobileSyncService = new MobileSyncService({
     store: mobileSyncStore,
@@ -140,7 +165,8 @@ function desktopRuntimePaths() {
     isPackaged: app.isPackaged,
     platform: process.platform,
     store: STORE_BUILD,
-    userData: app.getPath('userData')
+    userData: app.getPath('userData'),
+    userDataOverride: app.commandLine.hasSwitch('user-data-dir')
   })
 }
 
@@ -154,14 +180,23 @@ function bundledNodeModulesRoot() {
 
 async function ensureBundledRuntime() {
   if (runtimeNodeModulesRoot) return runtimeNodeModulesRoot
+  const componentRuntimeRoot = String(process.env.HARNESS_COMPONENT_RUNTIME_ROOT || '').trim()
+  if (componentRuntimeRoot && path.isAbsolute(componentRuntimeRoot)) {
+    const componentNodeModules = path.join(componentRuntimeRoot, 'node_modules')
+    if (existsSync(path.join(componentNodeModules, '@deepseek-ai', 'dsh', 'lib', 'bin.js'))) {
+      runtimeNodeModulesRoot = componentNodeModules
+      return runtimeNodeModulesRoot
+    }
+  }
   const runtimePaths = desktopRuntimePaths()
   await Promise.all([
     mkdir(runtimePaths.dshHome, { recursive: true }),
     mkdir(runtimePaths.workspace, { recursive: true }),
     mkdir(runtimePaths.temp, { recursive: true })
   ])
+  const bundledRoot = String(process.env.HARNESS_DESKTOP_BUNDLED_ROOT || '').trim()
   runtimeNodeModulesRoot = await ensureRuntimeNodeModules({
-    appRoot: path.join(__dirname, '..'),
+    appRoot: bundledRoot && path.isAbsolute(bundledRoot) ? bundledRoot : path.join(__dirname, '..'),
     userData: runtimePaths.root,
     appVersion: app.getVersion()
   })
@@ -473,6 +508,7 @@ async function startRuntime() {
     child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0'], {
       cwd: runtimePaths.workspace,
       windowsHide: true,
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       env: desktopRuntimeEnvironment({
         ...process.env,
@@ -546,14 +582,7 @@ function stopRuntime() {
   }
   const child = runtime
   setRuntimeState({ status: 'stopping', detail: '正在停止 DeepSeek Harness…' })
-  if (process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' })
-  } else {
-    child.kill('SIGTERM')
-    setTimeout(() => {
-      if (child.exitCode == null) child.kill('SIGKILL')
-    }, 3000).unref()
-  }
+  terminateProcessTree(child)
 }
 
 async function checkUpdates() {
@@ -583,14 +612,15 @@ async function checkUpdates() {
     : checkAppUpdate({ currentVersion: app.getVersion(), feedUrls, channel, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
         kind: 'app', configured: Boolean(feedUrls.length), currentVersion: app.getVersion(), updateAvailable: false, error: error.message
       }))
-  const [appResult, harnessResult] = await Promise.all([
+  const [appResult, harnessResult, componentResult] = await Promise.all([
     appUpdateCheck,
     checkHarnessUpstream({ currentVersion: currentHarnessVersion, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
       kind: 'harness', currentVersion: currentHarnessVersion, updateAvailable: false, error: error.message
-    }))
+    })),
+    checkComponentUpdates().catch(error => ({ enabled: false, error: error.message }))
   ])
   const state = store.markUpdateChecked()
-  const payload = { app: appResult, harness: harnessResult, preferences: state.updates, distribution: distributionInfo() }
+  const payload = { app: appResult, harness: harnessResult, component: componentResult, preferences: state.updates, distribution: distributionInfo() }
   lastUpdatePayload = payload
   send('updates:result', payload)
   return payload
@@ -627,9 +657,10 @@ function pluginMarketplaceOptions() {
 }
 
 function mobileControlPluginOptions() {
+  const componentPluginsRoot = String(process.env.HARNESS_COMPONENT_PLUGINS_ROOT || '').trim()
   return {
     dshHome: desktopDshHome(),
-    bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-mobile-control')
+    bundledRoot: path.join(componentPluginsRoot && path.isAbsolute(componentPluginsRoot) ? componentPluginsRoot : path.join(__dirname, '..', 'plugins'), 'dsh-mobile-control')
   }
 }
 
@@ -660,6 +691,88 @@ async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 10
   }
 }
 
+function componentUpdateBootstrapContext() {
+  return global.__HARNESS_COMPONENT_UPDATE__ || null
+}
+
+async function ensureComponentUpdateService() {
+  if (componentUpdateServicePromise) return componentUpdateServicePromise
+  componentUpdateServicePromise = (async () => {
+    const bootstrap = componentUpdateBootstrapContext()
+    const bundledRoot = bootstrap?.bundledRoot || app.getAppPath()
+    const config = await resolveComponentUpdateConfig({ appRoot: bundledRoot, resourcesPath: process.resourcesPath })
+    const store = bootstrap?.store || new ComponentUpdateStore(path.join(app.getPath('userData'), 'component-updates'))
+    if (!config.enabled || STORE_BUILD) return { enabled: false, config, store, service: null }
+    const service = new ComponentUpdateService({
+      store,
+      manifestUrls: config.manifestUrls,
+      trustedKeys: config.trustedKeys,
+      bootstrapVersion: app.getVersion(),
+      fetchJson: url => fetchJsonWithSystemNetwork(url, { timeoutMs: 8_000, maxBytes: 1024 * 1024 }),
+      fetchImpl: net.fetch,
+      AdmZipImpl: AdmZip
+    })
+    return { enabled: true, config, store, service }
+  })()
+  return componentUpdateServicePromise
+}
+
+async function getComponentUpdateState() {
+  const context = await ensureComponentUpdateService()
+  return {
+    enabled: context.enabled,
+    source: context.config.source || '',
+    state: await context.store.get(),
+    pointer: await context.store.pointer(),
+    lastCheck: lastComponentUpdateCheck ? {
+      source: lastComponentUpdateCheck.source,
+      releaseVersion: lastComponentUpdateCheck.manifest.releaseVersion,
+      mode: lastComponentUpdateCheck.plan.mode,
+      components: lastComponentUpdateCheck.plan.components?.map(component => ({ id: component.id, version: component.version, size: component.size })) || [],
+      totalSize: lastComponentUpdateCheck.plan.totalSize || 0
+    } : null
+  }
+}
+
+async function checkComponentUpdates() {
+  const context = await ensureComponentUpdateService()
+  if (!context.enabled) return getComponentUpdateState()
+  lastComponentUpdateCheck = await context.service.check()
+  return getComponentUpdateState()
+}
+
+async function stageComponentUpdates() {
+  const context = await ensureComponentUpdateService()
+  if (!context.enabled) throw new Error('组件增量更新尚未启用。')
+  if (!lastComponentUpdateCheck) lastComponentUpdateCheck = await context.service.check()
+  if (lastComponentUpdateCheck.plan.mode !== 'components') throw new Error('当前没有可暂存的组件更新。')
+  await context.service.stage(lastComponentUpdateCheck, progress => send('componentUpdates:progress', progress))
+  return getComponentUpdateState()
+}
+
+async function launchReadyComponentUpdate() {
+  const context = await ensureComponentUpdateService()
+  if (!context.enabled) throw new Error('组件增量更新尚未启用。')
+  const bootstrap = componentUpdateBootstrapContext()
+  const bundledRoot = bootstrap?.bundledRoot || app.getAppPath()
+  const userDataOverride = resolveUserDataOverride(process.argv, app.commandLine.getSwitchValue('user-data-dir'))
+  const launched = await launchComponentUpdateHelper({
+    store: context.store,
+    execPath: process.execPath,
+    helperScript: path.join(bundledRoot, 'scripts', 'component-update-helper.cjs'),
+    componentRoot: context.store.root,
+    restartExecutable: process.execPath,
+    restartCwd: path.dirname(process.execPath),
+    restartArgs: [
+      ...(userDataOverride ? [`--user-data-dir=${userDataOverride}`, `--harness-user-data-dir=${userDataOverride}`] : []),
+      '--component-health-check'
+    ]
+  })
+  await new Promise(resolve => setTimeout(resolve, 250))
+  app.quit()
+  return launched
+}
+
 async function downloadUpdateFile(asset, destination, expectedSize, onProgress, expectedHash) {
   return downloadWithFallback({
     asset,
@@ -685,7 +798,7 @@ async function fetchChecksum(asset, fileName) {
 
 async function installAppUpdate() {
   if (STORE_BUILD) throw new Error('此版本由 Microsoft Store 管理桌面应用更新。')
-  if (process.platform !== 'win32') throw new Error('当前版本仅支持在 Windows 内自动安装更新。')
+  if (!['win32', 'darwin'].includes(process.platform)) throw new Error('当前系统暂不支持应用内桌面更新。')
   if (activeUpdateInstall) return activeUpdateInstall
 
   activeUpdateInstall = (async () => {
@@ -693,7 +806,7 @@ async function installAppUpdate() {
     if (!payload?.app?.updateAvailable) payload = await checkUpdates()
     const update = payload?.app
     if (!update?.updateAvailable) throw new Error('当前桌面版已经是最新版本。')
-    if (!update.installer?.url) throw new Error('新版本没有可用的 Windows 安装包。')
+    if (!update.installer?.url) throw new Error('新版本没有适用于当前系统和架构的桌面安装包。')
     if (!update.checksums?.url) throw new Error('新版本缺少 SHA256SUMS.txt，已拒绝不安全更新。')
 
     let installerPath = readyUpdate?.version === update.latestVersion && existsSync(readyUpdate.installerPath)
@@ -727,15 +840,16 @@ async function installAppUpdate() {
 
 async function launchReadyAppUpdate() {
   if (STORE_BUILD) throw new Error('此版本由 Microsoft Store 管理桌面应用更新。')
-  if (process.platform !== 'win32') throw new Error('当前版本仅支持在 Windows 内自动安装更新。')
+  if (!['win32', 'darwin'].includes(process.platform)) throw new Error('当前系统暂不支持应用内桌面更新。')
   if (!readyUpdate?.installerPath || !existsSync(readyUpdate.installerPath)) {
     throw new Error('已下载的更新安装包不存在，请重新下载。')
   }
 
   send('updates:install-progress', { phase: 'launch', version: readyUpdate.version })
-  await openWindowsInstaller({
+  await openDesktopInstaller({
     installerPath: readyUpdate.installerPath,
     currentInstallDir: app.isPackaged ? path.dirname(process.execPath) : '',
+    platform: process.platform,
     openPath: value => shell.openPath(value)
   })
   const version = readyUpdate.version
@@ -949,6 +1063,12 @@ ipcMain.handle('updates:setPreferences', (_event, patch) => ensureStateStore().u
 ipcMain.handle('updates:check', () => checkUpdates())
 ipcMain.handle('updates:install', () => installAppUpdate())
 ipcMain.handle('updates:launchReady', () => launchReadyAppUpdate())
+ipcMain.handle('componentUpdates:getState', () => getComponentUpdateState())
+ipcMain.handle('componentUpdates:check', () => checkComponentUpdates())
+ipcMain.handle('componentUpdates:stage', () => stageComponentUpdates())
+ipcMain.handle('componentUpdates:apply', () => launchReadyComponentUpdate())
+// Applying a ready component update remains intentionally unexposed until the
+// isolated branch is merged and installation testing is explicitly approved.
 ipcMain.handle('distribution:get', () => distributionInfo())
 ipcMain.handle('appearance:get', () => appearancePayload())
 ipcMain.handle('appearance:assets', () => bundledThemeAssets())
@@ -1033,8 +1153,31 @@ app.whenReady().then(async () => {
     app.quit()
     return
   }
-  if (SELF_TEST_MODE) {
+  if (SELF_TEST_MODE || COMPONENT_HEALTH_CHECK_MODE) {
     const report = await runSelfTestMode().catch(error => ({ ok: false, error: error.message }))
+    if (COMPONENT_HEALTH_CHECK_MODE) {
+      const componentUpdate = global.__HARNESS_COMPONENT_UPDATE__
+      let canRestart = false
+      if (report.ok && componentUpdate?.healthCheckRequired) {
+        try {
+          await componentUpdate.confirmHealthy()
+          canRestart = true
+        } catch (error) {
+          const recovered = await componentUpdate.rollback(error).catch(rollbackError => ({ error: rollbackError.message }))
+          canRestart = !recovered?.error
+        }
+      } else if (componentUpdate?.healthCheckRequired) {
+        const failure = new Error(report.error || '组件版本打包自检失败。')
+        const recovered = await componentUpdate.rollback(failure).catch(error => ({ error: error.message }))
+        canRestart = !recovered?.error
+      } else {
+        canRestart = true
+      }
+      if (canRestart && !SELF_TEST_MODE) {
+        const args = process.argv.slice(1).filter(value => value !== '--component-health-check')
+        app.relaunch({ args })
+      }
+    }
     app.exit(report.ok ? 0 : 1)
     return
   }

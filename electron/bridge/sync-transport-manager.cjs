@@ -2,14 +2,16 @@ const { EventEmitter } = require('node:events')
 const { randomBytes } = require('node:crypto')
 const { DEFAULT_SERVICE_ADDRESS } = require('../store/mobile-sync-store.cjs')
 
-const REMOTE_TRANSPORT_ORDER = Object.freeze(['easytier', 'tailscale'])
+const REMOTE_TRANSPORT_ORDER = Object.freeze(['wss-relay', 'easytier', 'tailscale'])
 
 function createMeshIdentity() {
   return {
     networkName: `harness-${randomBytes(10).toString('hex')}`,
     networkSecret: randomBytes(32).toString('base64url'),
     desktopAddress: '10.254.77.1',
-    serviceAddress: DEFAULT_SERVICE_ADDRESS
+    serviceAddress: DEFAULT_SERVICE_ADDRESS,
+    relayRoomId: randomBytes(32).toString('base64url'),
+    relayTunnelKey: randomBytes(32).toString('base64url')
   }
 }
 

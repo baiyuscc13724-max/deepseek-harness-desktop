@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
-const { openWindowsInstaller } = require('../electron/bridge/update-launcher.cjs')
+const { openDesktopInstaller, openWindowsInstaller } = require('../electron/bridge/update-launcher.cjs')
 
 test('installer is opened directly through the Windows shell', async () => {
   const installerPath = path.resolve('C:\\Temp\\Harness Desktop updater.exe')
@@ -21,6 +21,23 @@ test('installer is opened directly through the Windows shell', async () => {
   assert.deepEqual(hints, [[`${installerPath}.install-dir`, currentInstallDir]])
   assert.equal(result.installerPath, installerPath)
   assert.equal(result.installDir, currentInstallDir)
+})
+
+test('macOS DMG is opened without writing a Windows install-directory hint', async () => {
+  const installerPath = path.resolve('/tmp/Harness Desktop-1.0.24-mac-arm64.dmg')
+  const opened = []
+  const writes = []
+  const result = await openDesktopInstaller({
+    installerPath,
+    currentInstallDir: '/Applications',
+    platform: 'darwin',
+    writeInstallHint: async (...args) => writes.push(args),
+    openPath: async value => { opened.push(value); return '' }
+  })
+  assert.deepEqual(opened, [installerPath])
+  assert.deepEqual(writes, [])
+  assert.equal(result.installDir, '')
+  assert.equal(result.hintPath, '')
 })
 
 test('installer launch failure is returned before the desktop exits', async () => {

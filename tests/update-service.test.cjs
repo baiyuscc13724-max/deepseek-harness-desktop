@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { DEFAULT_APP_FEED, DEFAULT_UPSTREAM_MANIFEST, checkAppUpdate, checkHarnessUpstream, compareVersions, parseChecksumFile, parseReleasePayload, selectChecksumAsset, selectReleasePayload, selectWindowsInstallerAsset } = require('../electron/bridge/update-service.cjs')
+const { DEFAULT_APP_FEED, DEFAULT_UPSTREAM_MANIFEST, checkAppUpdate, checkHarnessUpstream, compareVersions, parseChecksumFile, parseReleasePayload, selectChecksumAsset, selectReleasePayload, selectDesktopInstallerAsset, selectWindowsInstallerAsset } = require('../electron/bridge/update-service.cjs')
 
 test('desktop update checks use the repository manifest instead of the rate-limited Releases API', () => {
   assert.equal(DEFAULT_APP_FEED, 'https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/release-manifest.json')
@@ -33,6 +33,22 @@ test('app update checker accepts GitHub release payloads', async () => {
   assert.equal(selectWindowsInstallerAsset(result.installer ? [result.installer] : []).url, 'https://example.test/setup.exe')
   assert.equal(selectChecksumAsset(result.checksums ? [result.checksums] : []).url, 'https://example.test/SHA256SUMS.txt')
   assert.equal(parseReleasePayload({ version: '1.0.0' }).version, '1.0.0')
+})
+
+test('app update checker selects native macOS installers by architecture', async () => {
+  const assets = [
+    { name: 'Harness Desktop-1.0.24-mac-x64.dmg', browser_download_url: 'https://example.test/x64.dmg', size: 100 },
+    { name: 'Harness Desktop-1.0.24-mac-arm64.dmg', browser_download_url: 'https://example.test/arm64.dmg', size: 90 },
+    { name: 'Harness-Desktop-1.0.24-win-x64.exe', browser_download_url: 'https://example.test/setup.exe', size: 120 },
+    { name: 'SHA256SUMS.txt', browser_download_url: 'https://example.test/SHA256SUMS.txt', size: 200 }
+  ]
+  const result = await checkAppUpdate({
+    currentVersion: '1.0.23', platform: 'darwin', arch: 'arm64',
+    feedUrl: 'https://example.test/latest',
+    fetchJsonImpl: async () => ({ version: '1.0.24', assets })
+  })
+  assert.equal(result.installer.name, 'Harness Desktop-1.0.24-mac-arm64.dmg')
+  assert.equal(selectDesktopInstallerAsset(result.installer ? [result.installer] : [], 'darwin', 'arm64').url, 'https://example.test/arm64.dmg')
 })
 
 test('app update checker falls back to the next manifest and prefers asset mirrors', async () => {
