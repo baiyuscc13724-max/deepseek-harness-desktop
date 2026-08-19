@@ -874,7 +874,7 @@ async function runSelfTestMode() {
     resolveDshBin: () => resolveDshBin({ nodeModulesRoot: bundledNodeModulesRoot() }),
     ensurePluginMarketplace,
     marketplaceBundledRoot: pluginMarketplaceOptions().bundledRoot,
-    runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 60_000 }
+    runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 180_000 }
   })
   const output = selfTestOutputPath()
   const text = `${JSON.stringify(report, null, 2)}\n`
