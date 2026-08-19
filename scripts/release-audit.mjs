@@ -48,14 +48,14 @@ if (pkg.scripts?.['release:cnb-cloud'] !== 'powershell.exe -NoProfile -Execution
   throw new Error('CNB publishing must use the permanent cloud-mirror command instead of local binary uploads.')
 }
 const cnbPipeline = await readFile(path.join(root, '.cnb.yml'), 'utf8')
-for (const contract of ['image: cnbcool/attachments:latest', 'CNB_TOKEN', 'browser_download_url', '.sha256 // empty', 'Missing trusted SHA-256', 'sha256sum', 'Already present:', 'release-manifest.json']) {
+for (const contract of ['image: cnbcool/attachments:latest', 'CNB_TOKEN', 'browser_download_url', '.sha256 // empty', 'Missing trusted SHA-256', 'sha256sum', 'Already present and verified:', 'release-manifest.json']) {
   if (!cnbPipeline.includes(contract)) throw new Error(`CNB cloud mirror contract missing: ${contract}`)
 }
 for (const forbidden of ['asset-upload-url', '--upload-file', 'PLUGIN_TOKEN']) {
   if (cnbPipeline.includes(forbidden)) throw new Error(`CNB attachments must use the official plugin instead of custom local upload plumbing: ${forbidden}`)
 }
 const cnbPublisher = await readFile(path.join(root, 'scripts/publish-cnb-cloud-mirror.ps1'), 'utf8')
-for (const contract of ['cnb-cloud-release-', 'get-build-status', 'CNB metadata pushed', 'Method Head', 'SHA256SUMS.txt', 'mac-arm64.dmg', 'mac-x64.dmg', 'android-universal.apk', 'GitHub source verification failed', "credential.helper='"]) {
+for (const contract of ['cnb-cloud-release-', 'get-build-status', 'CNB metadata pushed', 'Method Head', 'SHA256SUMS.txt', 'COMPONENT-SHA256SUMS.txt', 'linux-x86_64.AppImage', 'mac-arm64.dmg', 'mac-x64.dmg', 'android-universal.apk.sha256', 'desktop-shell-', 'components-', 'Manifest SHA-256 missing', 'GitHub source verification failed', "credential.helper='"]) {
   if (!cnbPublisher.includes(contract)) throw new Error(`CNB cloud publisher contract missing: ${contract}`)
 }
 for (const forbidden of ['-InFile', '--upload-file', 'asset-upload-url']) {

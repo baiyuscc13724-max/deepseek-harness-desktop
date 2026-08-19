@@ -24,28 +24,31 @@ main:
             curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 -o .cnb-release-assets/SHA256SUMS.txt "$checksum_url"
             attachments=""
             jq -r '.[0].assets[].name' "$manifest" | while IFS= read -r name; do
-              if jq -e --arg name "$name" '.assets[]? | select(.name == $name)' "$release_file" >/dev/null; then
-                echo "Already present: $name" >&2
-                continue
-              fi
-              url="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .browser_download_url' "$manifest")"
+              source_url="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .browser_download_url' "$manifest")"
               expected_size="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .size' "$manifest")"
-              file=".cnb-release-assets/$name"
-              if [ "$name" != "SHA256SUMS.txt" ]; then
-                curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 -o "$file" "$url"
-              fi
-              actual_size="$(stat -c %s "$file")"
-              [ "$actual_size" = "$expected_size" ] || { echo "Size mismatch for $name" >&2; exit 1; }
               expected_hash="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .sha256 // empty' "$manifest")"
               if [ -z "$expected_hash" ] && [ "$name" != "SHA256SUMS.txt" ]; then
                 expected_hash="$(awk -v target="$name" '$2 == target { print $1 }' .cnb-release-assets/SHA256SUMS.txt)"
               fi
+              present=false
+              if jq -e --arg name "$name" '.assets[]? | select(.name == $name)' "$release_file" >/dev/null; then
+                present=true
+                source_url="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .browser_download_url' "$release_file")"
+              fi
+              file=".cnb-release-assets/$name"
+              curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 -o "$file" "$source_url"
+              actual_size="$(stat -c %s "$file")"
+              [ "$actual_size" = "$expected_size" ] || { echo "Size mismatch for $name" >&2; exit 1; }
               if [ -n "$expected_hash" ]; then
                 actual_hash="$(sha256sum "$file" | awk '{ print $1 }')"
                 [ "$actual_hash" = "$expected_hash" ] || { echo "SHA-256 mismatch for $name" >&2; exit 1; }
               elif [ "$name" != "SHA256SUMS.txt" ]; then
                 echo "Missing trusted SHA-256 for $name" >&2
                 exit 1
+              fi
+              if [ "$present" = true ]; then
+                echo "Already present and verified: $name" >&2
+                continue
               fi
               attachments="${attachments}${attachments:+,}${file}"
               echo "##[set-output attachments=$attachments]"
