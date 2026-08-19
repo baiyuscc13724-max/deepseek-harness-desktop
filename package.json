@@ -97,6 +97,8 @@
       "mobile-relay-sources.json",
       "scripts/component-update-helper.cjs",
       "docs/**/*",
+      "node_modules/@img/**/*",
+      "node_modules/@koromix/**/*",
       "!node_modules/**/*.map",
       "!node_modules/**/*.{ts,tsx,cts,mts}",
       "!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*"
@@ -143,6 +145,8 @@
     "npmRebuild": true,
     "asarUnpack": [
       "node_modules/**/*.node",
+      "node_modules/@img/**/*",
+      "node_modules/@koromix/**/*",
       "plugins/dsh-mobile-control/**/*",
       "scripts/component-update-helper.cjs",
       "electron/bridge/component-update-*.cjs"

@@ -141,6 +141,29 @@ test('pairing payload is OS-neutral and carries the WSS/443 fallback for iPhone 
   assert.match(safeDeviceName('Mozilla/5.0 (Linux; Android 15; Pixel 9)'), /^Android 15/)
 })
 
+test('iPhone and iPad setup never redirect to the Android APK', async t => {
+  const runtime = await createRuntime('official')
+  const service = new MobileSyncService({
+    store: createStore(), getRuntimeTarget: () => runtime.url, host: '127.0.0.1', port: 0,
+    iosDownloadUrl: 'https://testflight.apple.com/join/HarnessTest', qrFactory: async value => `qr:${value}`
+  })
+  t.after(async () => { await service.stop(); await runtime.close() })
+  await service.start()
+  const state = await service.beginPairing()
+  const response = await fetch(state.pairing.shareUrl, {
+    redirect: 'manual', headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X)' }
+  })
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('location'), null)
+  const page = await response.text()
+  assert.match(page, /Harness Mobile for iPhone \/ iPad/)
+  assert.match(page, /harnessmobile:\/\/pair\?payload=/)
+  assert.match(page, /https:\/\/testflight\.apple\.com\/join\/HarnessTest/)
+  assert.doesNotMatch(page, /\.apk/)
+  assert.equal(service.state().devices.length, 0)
+  assert.ok(service.state().pairing)
+})
+
 test('mobile bridge proxies WebSocket and follows a replaced official runtime target', async t => {
   const runtimeA = await createRuntime('official-a')
   const runtimeB = await createRuntime('official-b')

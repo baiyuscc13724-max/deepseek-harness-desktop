@@ -13,6 +13,7 @@ final class MobileSessionViewModel: ObservableObject {
     @Published private(set) var state: State = .unpaired
     @Published private(set) var workbenchURL: URL?
     @Published var scannerPresented = false
+    @Published var availableAppUpdate: MobileAppUpdate?
 
     let networkMonitor = NetworkMonitor()
     private let store = PairingStore()
@@ -25,6 +26,22 @@ final class MobileSessionViewModel: ObservableObject {
             profile = stored
             Task { await activate(stored, pairing: false) }
         }
+        checkForMobileAppUpdate()
+    }
+
+    func checkForMobileAppUpdate() {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: "HarnessMobileUpdateManifestURL") as? String,
+              !value.isEmpty, let manifestURL = URL(string: value) else { return }
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        Task {
+            do { availableAppUpdate = try await MobileAppUpdateChecker.check(manifestURL: manifestURL, currentVersion: currentVersion) }
+            catch { /* A failed optional foreground update check must not block pairing. */ }
+        }
+    }
+
+    func dismissOptionalAppUpdate() {
+        guard availableAppUpdate?.required != true else { return }
+        availableAppUpdate = nil
     }
 
     func connect(_ value: String) {

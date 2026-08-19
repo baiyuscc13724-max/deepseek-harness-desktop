@@ -79,28 +79,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+      - name: Install Intel macOS dependencies
+        run: npm ci --no-audit --no-fund --include=optional --os=darwin --cpu=x64
       - name: Verify source and release contracts
         run: |
           npm run verify
           npm run verify:release
-      - name: Build unsigned Intel and Apple Silicon app bundles
+      - name: Build unsigned Intel app bundle
         run: >-
-          npx electron-builder --mac dir --x64 --arm64 --publish never
+          npx electron-builder --mac dir --x64 --publish never
           --config.npmRebuild=false
           --config.mac.identity=null
           --config.mac.notarize=false
           --config.directories.output=dist-apple-test
-      - name: Inspect both macOS architectures
+      - name: Inspect Intel architecture and native dependencies
         shell: bash
         run: |
           test -d 'dist-apple-test/mac/Harness Desktop.app'
-          test -d 'dist-apple-test/mac-arm64/Harness Desktop.app'
           file 'dist-apple-test/mac/Harness Desktop.app/Contents/MacOS/Harness Desktop' | grep -q 'x86_64'
-          file 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/MacOS/Harness Desktop' | grep -q 'arm64'
           test -f 'dist-apple-test/mac/Harness Desktop.app/Contents/Resources/app.asar'
-          test -f 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar'
+          find 'dist-apple-test/mac/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/@img' -name '*.node' | grep -q 'darwin-x64'
+          find 'dist-apple-test/mac/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/@koromix' -name '*.node' | grep -q 'darwin_x64'
       - name: Run packaged Intel macOS self-test
         shell: bash
         run: |
@@ -115,3 +114,20 @@ jobs:
           if test -f "$output"; then cat "$output"; else echo 'Packaged macOS self-test did not create a report.'; fi
           test "$app_exit" -eq 0
           node -e "const r=require(process.argv[1]); if(!r.ok) process.exit(1)" "$output"
+      - name: Install Apple Silicon dependencies
+        run: npm ci --no-audit --no-fund --include=optional --os=darwin --cpu=arm64
+      - name: Build unsigned Apple Silicon app bundle
+        run: >-
+          npx electron-builder --mac dir --arm64 --publish never
+          --config.npmRebuild=false
+          --config.mac.identity=null
+          --config.mac.notarize=false
+          --config.directories.output=dist-apple-test
+      - name: Inspect Apple Silicon architecture and native dependencies
+        shell: bash
+        run: |
+          test -d 'dist-apple-test/mac-arm64/Harness Desktop.app'
+          file 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/MacOS/Harness Desktop' | grep -q 'arm64'
+          test -f 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar'
+          find 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/@img' -name '*.node' | grep -q 'darwin-arm64'
+          find 'dist-apple-test/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar.unpacked/node_modules/@koromix' -name '*.node' | grep -q 'darwin_arm64'

@@ -77,6 +77,18 @@ if (process.platform === 'win32') {
     `/DMyOutputDir=${dist}`,
     path.join(root, 'build', 'installer.iss')
   ])
+} else if (process.platform === 'darwin') {
+  // A single node_modules tree cannot contain reliable native sharp/koffi
+  // payloads for both Intel and Apple Silicon. Reinstall and package each
+  // architecture independently so the immutable runtime cache is complete.
+  for (const arch of ['x64', 'arm64']) {
+    run('npm', ['ci', '--no-audit', '--no-fund', '--include=optional', '--os=darwin', `--cpu=${arch}`])
+    run(process.execPath, ['scripts/patch-official-runtime.mjs'])
+    run('npx', [
+      'electron-builder', '--mac', 'dmg', 'zip', `--${arch}`, '--publish', 'never',
+      '--config.npmRebuild=false'
+    ])
+  }
 } else {
   run('npx', ['electron-builder', '--publish', 'never'])
 }

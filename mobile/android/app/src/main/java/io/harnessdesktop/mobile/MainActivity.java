@@ -32,6 +32,7 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -79,6 +80,8 @@ public final class MainActivity extends AppCompatActivity {
     private ConnectivityManager connectivityManager;
     private boolean networkCallbackRegistered;
     private final NetworkReconnectPolicy networkReconnectPolicy = new NetworkReconnectPolicy();
+    private final MobileAppUpdateChecker mobileAppUpdateChecker = new MobileAppUpdateChecker();
+    private boolean mobileUpdatePrompted;
     private final Runnable networkChangedReconnect = this::reconnectAfterNetworkChange;
     private final ConnectivityManager.NetworkCallback networkCallback = new ConnectivityManager.NetworkCallback() {
         @Override public void onAvailable(Network network) { observeAvailableNetwork(network, null); }
@@ -139,6 +142,43 @@ public final class MainActivity extends AppCompatActivity {
             }
         });
         registerNetworkMonitoring();
+        checkMobileAppUpdate();
+    }
+
+    private void checkMobileAppUpdate() {
+        mobileAppUpdateChecker.check(BuildConfig.MOBILE_UPDATE_MANIFEST_URL, BuildConfig.VERSION_NAME, (update, error) -> {
+            if (isFinishing() || isDestroyed() || update == null || mobileUpdatePrompted) return;
+            mobileUpdatePrompted = true;
+            AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(update.required ? "需要更新手机 App" : "手机 App 有新版本")
+                .setMessage("Android 版 " + update.version + " 已可用。下载后仍由 Android 系统核验应用签名并要求您确认安装。")
+                .setPositiveButton("下载并校验 Android APK", (ignored, which) -> downloadMobileAppUpdate(update))
+                .create();
+            if (!update.required) dialog.setButton(AlertDialog.BUTTON_NEGATIVE, "稍后", (ignored, which) -> {});
+            dialog.setCanceledOnTouchOutside(!update.required);
+            dialog.setCancelable(!update.required);
+            dialog.show();
+        });
+    }
+
+    private void downloadMobileAppUpdate(MobileAppUpdateChecker.Update update) {
+        Toast.makeText(this, "正在下载并校验 APK…", Toast.LENGTH_SHORT).show();
+        mobileAppUpdateChecker.downloadAndVerify(this, update, (apk, error) -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (error != null || apk == null) {
+                Toast.makeText(this, error == null ? "APK 校验失败" : error.getMessage(), Toast.LENGTH_LONG).show();
+                return;
+            }
+            try {
+                Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".updates", apk);
+                Intent install = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(install);
+            } catch (ActivityNotFoundException failure) {
+                Toast.makeText(this, "系统中没有可用的 APK 安装器", Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
     private void applySystemBarInsets() {
@@ -761,6 +801,7 @@ public final class MainActivity extends AppCompatActivity {
         if (easyTierClient != null) easyTierClient.close();
         if (wssRelayClient != null) wssRelayClient.stop();
         if (mobileUiAdapter != null) mobileUiAdapter.close();
+        mobileAppUpdateChecker.close();
         super.onDestroy();
     }
 }

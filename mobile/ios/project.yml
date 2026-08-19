@@ -29,6 +29,7 @@ targets:
         UILaunchScreen: {}
         NSCameraUsageDescription: 扫描 Harness Desktop 上的一次性配对二维码。
         NSLocalNetworkUsageDescription: 连接同一局域网中的 Harness Desktop 工作台。
+        HarnessMobileUpdateManifestURL: ""
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         CFBundleURLTypes:

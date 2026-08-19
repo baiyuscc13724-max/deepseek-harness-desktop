@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: MobileSessionViewModel
+    @Environment(\.openURL) private var openURL
     @State private var manualCode = ""
     @State private var confirmForget = false
 
@@ -30,6 +31,19 @@ struct ContentView: View {
             Button("取消", role: .cancel) {}
         }
         .onChange(of: model.networkMonitor.generation) { _ in model.networkChanged() }
+        .alert("手机 App 有新版本", isPresented: Binding(
+            get: { model.availableAppUpdate != nil },
+            set: { if !$0 { model.dismissOptionalAppUpdate() } }
+        )) {
+            if let update = model.availableAppUpdate {
+                Button("前往 App Store / TestFlight") { openURL(update.storeURL) }
+                if !update.required { Button("稍后", role: .cancel) { model.dismissOptionalAppUpdate() } }
+            }
+        } message: {
+            if let update = model.availableAppUpdate {
+                Text("iOS/iPadOS 版 \(update.version) 已可用。按照 Apple 平台规则，更新只由 App Store 或 TestFlight 完成，App 不会自行安装 IPA。")
+            }
+        }
     }
 
     private var setup: some View {

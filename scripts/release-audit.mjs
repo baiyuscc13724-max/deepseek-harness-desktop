@@ -21,9 +21,15 @@ if (pkg.devDependencies?.['@microsoft/winappcli'] || !pkg.scripts?.['store:asset
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Release must pin the provider model catalog used by dynamic routing discovery.')
 if (pkg.devDependencies?.['electron-builder'] !== '26.15.7') throw new Error('Release must pin electron-builder 26.15.7.')
 if (pkg.build?.icon !== 'build/icon.png') throw new Error('Release packages must use the official DeepSeek icon.')
+for (const nativePattern of ['node_modules/@img/**/*', 'node_modules/@koromix/**/*']) {
+  if (!pkg.build?.files?.includes(nativePattern) || !pkg.build?.asarUnpack?.includes(nativePattern)) throw new Error(`macOS runtime native dependencies must be explicitly packaged and unpacked: ${nativePattern}`)
+}
 if (pkg.scripts?.dist !== 'node scripts/build-release.mjs') throw new Error('Release packaging must use the audited cross-platform build script.')
 const buildScript = await readFile(path.join(root, 'scripts/build-release.mjs'), 'utf8')
 if (!buildScript.includes("'--publish', 'never'")) throw new Error('electron-builder implicit tag publishing must remain disabled.')
+for (const contract of ["for (const arch of ['x64', 'arm64'])", "'--include=optional'", "`--cpu=${arch}`", "'--config.npmRebuild=false'"]) {
+  if (!buildScript.includes(contract)) throw new Error(`macOS packages must install and package native dependencies independently per architecture: ${contract}`)
+}
 for (const contract of ["`/DMySourceDir=${path.join(dist, 'win-unpacked')}`", "`/DMyOutputDir=${dist}`", "path.join(root, 'build', 'installer.iss')"]) {
   if (!buildScript.includes(contract)) throw new Error(`The Windows installer must compile from explicit real paths: ${contract}`)
 }
