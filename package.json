@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "private": false,
   "description": "Open-source Windows and macOS desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, mobile pairing, packaged self-test, and release gates.",
   "author": {
@@ -77,6 +77,10 @@
       "electron/**/*",
       "renderer/**/*",
       "plugins/dsh-mobile-control/**/*",
+      "plugins/dsh-desktop-directory-picker/**/*",
+      "plugins/dsh-desktop-browser-tools/**/*",
+      "plugins/dsh-desktop-memory-tools/**/*",
+      "plugins/dsh-desktop-computer-use/**/*",
       "!renderer/pet/pet-glb-rig.js",
       "!renderer/pet/pet-rig.js",
       "!renderer/pet/pet-rig-motion.js",
@@ -87,6 +91,7 @@
       "!renderer/pets/maid-whale/sprites/keyframes/**/*",
       "!renderer/pets/maid-whale/sprites/inbetweens/**/*",
       "!renderer/pets/maid-whale/sprites/inbetweens-secondary/**/*",
+      "!pet-sprite-source/**/*",
       "build/icon.png",
       "package.json",
       "LICENSE",
@@ -101,13 +106,26 @@
       "node_modules/@koromix/**/*",
       "!node_modules/**/*.map",
       "!node_modules/**/*.{ts,tsx,cts,mts}",
-      "!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*"
+      "!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*",
+      "!node_modules/**/{doc,docs,documentation}/**/*",
+      "!node_modules/**/{README,README.*,CHANGELOG,CHANGELOG.*,HISTORY,HISTORY.*,CONTRIBUTING,CONTRIBUTING.*,AUTHORS,AUTHORS.*}",
+      "!node_modules/node-pty/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*",
+      "!node_modules/node-pty/third_party/**/*",
+      "!node_modules/node-pty/src/**/*",
+      "!node_modules/node-pty/build/Release/*.{iobj,ipdb,lib,exp}",
+      "!node_modules/node-pty/build/Release/obj/**/*",
+      "!node_modules/node-pty/build/{Debug,obj}/**/*",
+      "!node_modules/node-pty/build/*.{sln,vcxproj,vcxproj.filters}"
     ],
     "extraMetadata": {
       "main": "electron/bootstrap.cjs"
     },
     "win": {
       "icon": "build/.icon-ico/icon.ico",
+      "electronLanguages": [
+        "zh-CN",
+        "en-US"
+      ],
       "target": [
         "portable"
       ]
@@ -148,6 +166,10 @@
       "node_modules/@img/**/*",
       "node_modules/@koromix/**/*",
       "plugins/dsh-mobile-control/**/*",
+      "plugins/dsh-desktop-directory-picker/**/*",
+      "plugins/dsh-desktop-browser-tools/**/*",
+      "plugins/dsh-desktop-memory-tools/**/*",
+      "plugins/dsh-desktop-computer-use/**/*",
       "scripts/component-update-helper.cjs",
       "electron/bridge/component-update-*.cjs"
     ],

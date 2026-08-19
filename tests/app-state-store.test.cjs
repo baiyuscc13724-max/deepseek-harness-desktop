@@ -57,7 +57,7 @@ test('new installs use Porcelain Mist while preserving an explicitly selected no
 
 test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
   const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
-  assert.equal(migrated.schemaVersion, 4)
+  assert.equal(migrated.schemaVersion, 5)
   assert.equal(migrated.appearance.themeId, 'porcelain-mist')
   const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
   assert.equal(explicitOfficial.appearance.themeId, 'official')
@@ -74,6 +74,18 @@ test('AppStateStore persists validated pet preferences and display positions', (
   assert.equal(restored.motion, 'reduced')
   assert.deepEqual(restored.positionByDisplay['123'], { x: 40, y: 81 })
   assert.equal(restored.positionByDisplay['../bad'], undefined)
+})
+
+test('local memory remains opt-in and persists only safe preferences', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-memory-preferences-'))
+  const file = path.join(dir, 'app-state.json')
+  const store = new AppStateStore(file)
+  assert.deepEqual(store.get().memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false })
+  store.updateMemory({ enabled: true, sensitivityMode: 'redact', autoRecall: true, dbPath: '../../escape', token: 'nope' })
+  const restored = new AppStateStore(file).get()
+  assert.deepEqual(restored.memory, { enabled: true, sensitivityMode: 'redact', autoRecall: true })
+  assert.equal('dbPath' in restored.memory, false)
+  assert.equal('token' in restored.memory, false)
 })
 
 test('AppStateStore rejects unknown themes and unsafe custom values', () => {

@@ -26,6 +26,60 @@
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.1a6.9 6.9 0 1 0 0 13.8h1.1a1.35 1.35 0 0 0 .55-2.58.72.72 0 0 1 .3-1.38h1.15A3.8 3.8 0 0 0 14.9 7.1 6 6 0 0 0 8 1.1Zm-3.05 7A1.05 1.05 0 1 1 4.95 6a1.05 1.05 0 0 1 0 2.1Zm1.7-3A1.05 1.05 0 1 1 6.65 3a1.05 1.05 0 0 1 0 2.1Zm3.1-.15a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Zm2 2.2a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Z" fill="currentColor"/></svg>
       <span class="visually-hidden">皮肤</span>
     </button>
+    <button id="storageQuickButton" class="storage-quick-button" type="button" aria-haspopup="dialog" aria-controls="storageOverlay" title="存储与缓存">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><ellipse cx="8" cy="3.4" rx="5.5" ry="2.1" stroke="currentColor" stroke-width="1.25"/><path d="M2.5 3.4v4.5C2.5 9.05 4.96 10 8 10s5.5-.95 5.5-2.1V3.4M2.5 7.9v4.5c0 1.15 2.46 2.1 5.5 2.1s5.5-.95 5.5-2.1V7.9" stroke="currentColor" stroke-width="1.25"/></svg>
+      <span class="visually-hidden">存储与缓存</span>
+    </button>
+    <button id="memoryQuickButton" class="memory-quick-button" type="button" aria-haspopup="dialog" aria-controls="memoryOverlay" title="本地记忆">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5.1 3.1A2.4 2.4 0 0 1 9.6 2a2.55 2.55 0 0 1 2.1 4 2.8 2.8 0 0 1-.25 5.2A2.7 2.7 0 0 1 6.5 13a2.45 2.45 0 0 1-2.2-3.8A2.6 2.6 0 0 1 5.1 3.1Z" stroke="currentColor" stroke-width="1.25"/><path d="M8 3.2v9.4M5.3 6.1c.9.2 1.6.8 1.8 1.7M10.8 7.1c-.9.2-1.6.8-1.8 1.7" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+      <span class="visually-hidden">本地记忆</span>
+    </button>
+    <button id="browserQuickButton" class="browser-quick-button" type="button" aria-controls="browserSidebar" aria-expanded="false" title="打开右栏浏览器">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.1" stroke="currentColor" stroke-width="1.25"/><path d="M2.2 8h11.6M8 1.9c1.7 1.65 2.55 3.68 2.55 6.1S9.7 12.45 8 14.1C6.3 12.45 5.45 10.42 5.45 8S6.3 3.55 8 1.9Z" stroke="currentColor" stroke-width="1.1"/></svg>
+      <span class="visually-hidden">右栏浏览器</span>
+    </button>
+    <aside id="browserSidebar" class="browser-sidebar hidden" aria-label="右栏浏览器" aria-hidden="true">
+      <header class="browser-sidebar-header">
+        <strong>浏览器</strong>
+        <span id="browserLoading" class="browser-loading" aria-hidden="true"></span>
+        <button id="browserProfileButton" type="button" title="Profile 与登录数据">Profile</button>
+        <button id="closeBrowserSidebar" type="button" aria-label="关闭右栏浏览器">×</button>
+      </header>
+      <div class="browser-toolbar">
+        <button id="browserBack" type="button" aria-label="后退">←</button>
+        <button id="browserForward" type="button" aria-label="前进">→</button>
+        <button id="browserReload" type="button" aria-label="刷新">↻</button>
+        <form id="browserAddressForm"><input id="browserAddress" type="text" maxlength="8192" autocomplete="off" spellcheck="false" aria-label="网址或搜索内容" placeholder="输入网址或搜索" /></form>
+        <button id="browserGo" type="button">前往</button>
+      </div>
+      <section id="browserProfilePanel" class="browser-profile-panel hidden">
+        <h3>独立浏览器 Profile</h3>
+        <p>网站登录只保存在 <strong>Harness Browser</strong> 中，与官方 Harness 会话完全隔离。</p>
+        <div class="browser-profile-status"><span id="browserProfileOrigin">尚未打开站点</span><strong id="browserLoginState">无本站会话数据</strong></div>
+        <p>请直接在下方真实网页中亲自登录。模型无法读取密码、Cookie、验证码或令牌。</p>
+        <section class="browser-model-permissions">
+          <h4>模型站点授权（2 小时）</h4>
+          <label><input type="checkbox" value="read" checked /> 读取页面</label>
+          <label><input type="checkbox" value="click" /> 点击</label>
+          <label><input type="checkbox" value="type" /> 输入普通文本</label>
+          <label><input type="checkbox" value="submit" /> 提交（仍需逐次确认）</label>
+          <div><button id="browserGrantCurrent" type="button">授权当前站点</button><button id="browserRevokeCurrent" type="button">撤销当前站点</button><button id="browserResumeModel" type="button">恢复模型控制</button></div>
+          <div id="browserPendingActions" class="browser-pending-actions"></div>
+        </section>
+        <section class="browser-model-permissions">
+          <h4>受限 Computer Use</h4>
+          <p>仅可截取和操作 Harness Desktop 窗口；点击、输入、滚动均逐次确认。</p>
+          <button id="computerUseToggle" type="button">开启本次控制</button>
+          <div id="computerUsePending" class="browser-pending-actions"></div>
+        </section>
+        <label><input id="browserClearSiteConfirm" type="checkbox" /> 确认清除当前站点登录数据</label>
+        <button id="browserClearSite" class="danger" type="button" disabled>清除当前站点</button>
+        <label><input id="browserClearAllConfirm" type="checkbox" /> 确认重置整个独立 Profile</label>
+        <button id="browserClearAll" class="danger" type="button" disabled>重置全部浏览数据</button>
+        <button id="closeBrowserProfile" type="button">返回网页</button>
+      </section>
+      <footer class="browser-sidebar-footer"><span id="browserStatusText">独立 Profile · 用户可直接登录</span><button id="browserStop" type="button">停止</button></footer>
+    </aside>
     <section id="petPanel" class="pet-panel hidden" role="dialog" aria-label="女仆鲸" aria-hidden="true">
       <header class="pet-panel-header">
         <div><strong>女仆鲸</strong><span id="petPanelStatus">正在休息</span></div>
@@ -114,6 +168,75 @@
         </div>
       </div>
     </section>
+    <section id="storageOverlay" class="storage-overlay hidden" aria-hidden="true">
+      <div class="storage-dialog" role="dialog" aria-modal="true" aria-labelledby="storageTitle">
+        <header class="storage-header">
+          <div><h2 id="storageTitle">存储与缓存</h2><p>先扫描、再预览、最后明确确认；不会清理会话、附件、记忆或当前运行时。</p></div>
+          <button id="closeStorage" class="storage-close" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="storage-content">
+          <section class="storage-summary">
+            <div><strong id="storageTotal">正在扫描…</strong><span id="storageRootLabel">HarnessData 本地数据</span></div>
+            <button id="refreshStorage" type="button">重新扫描</button>
+          </section>
+          <div id="storageCategories" class="storage-categories" aria-live="polite"></div>
+          <section class="storage-cleanup-card">
+            <div><h3>安全清理</h3><p>选择范围后只生成预览，不会立即删除。</p></div>
+            <div class="storage-options">
+              <label><input id="storageOldRuntimes" type="checkbox" checked /> 旧版本运行时</label>
+              <label><input id="storageCaches" type="checkbox" checked /> Marketplace 缓存</label>
+              <label><input id="storageOldTemp" type="checkbox" /> 超过 <select id="storageTempDays"><option value="7">7 天</option><option value="14">14 天</option><option value="30">30 天</option></select> 的临时项</label>
+            </div>
+            <button id="previewStorageCleanup" class="primary" type="button">预览清理内容</button>
+          </section>
+          <section id="storagePreview" class="storage-preview hidden" aria-live="polite">
+            <div class="storage-preview-heading"><h3>待清理预览</h3><strong id="storagePreviewSummary"></strong></div>
+            <ul id="storagePreviewList"></ul>
+            <label class="storage-confirm"><input id="storageConfirm" type="checkbox" /> 我已检查以上项目并确认执行清理</label>
+            <button id="applyStorageCleanup" class="danger" type="button" disabled>确认并执行</button>
+          </section>
+          <p id="storageMessage" class="storage-message" role="status"></p>
+          <p class="storage-protection">永久保护：sessions、attachments、memories、当前 runtime，以及仍在活动或未达到年龄阈值的临时文件。</p>
+        </div>
+      </div>
+    </section>
+    <section id="memoryOverlay" class="memory-overlay hidden" aria-hidden="true">
+      <div class="memory-dialog" role="dialog" aria-modal="true" aria-labelledby="memoryTitle">
+        <header class="memory-header">
+          <div><h2 id="memoryTitle">本地跨会话记忆</h2><p>默认关闭、完全本地；密码、令牌、Cookie、银行卡和验证码不会保存。</p></div>
+          <button id="closeMemory" class="memory-close" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="memory-content">
+          <section class="memory-status-card">
+            <div><strong id="memoryStatusTitle">本地记忆未开启</strong><span id="memoryStatusDetail">开启前不会创建数据库或写入数据。</span></div>
+            <button id="memoryEnableToggle" class="primary" type="button">开启本地记忆</button>
+          </section>
+          <div id="memoryEnabledContent" class="hidden">
+            <section class="memory-preferences">
+              <label>敏感内容处理 <select id="memorySensitivity"><option value="reject">拒绝保存（推荐）</option><option value="redact">自动脱敏后保存</option></select></label>
+              <label><input id="memoryAutoRecall" type="checkbox" /> 允许模型按需召回普通级记忆</label>
+              <span>自动召回仍受来源、数量和敏感级别限制，不会加载整库。</span>
+            </section>
+            <section class="memory-add-card">
+              <h3>添加一条记忆</h3>
+              <input id="memoryTitleInput" type="text" maxlength="200" placeholder="标题（可选）" />
+              <textarea id="memoryContentInput" maxlength="20000" rows="4" placeholder="只保存你希望以后复用的偏好或事实"></textarea>
+              <div><input id="memoryTagsInput" type="text" maxlength="300" placeholder="标签，用逗号分隔" /><button id="memoryAdd" class="primary" type="button">保存</button></div>
+            </section>
+            <section class="memory-search-card">
+              <div class="memory-search-row"><input id="memorySearchInput" type="search" maxlength="200" placeholder="搜索本地记忆" /><button id="memorySearch" type="button">搜索</button><button id="memoryRefresh" type="button">全部</button></div>
+              <div id="memoryResults" class="memory-results" aria-live="polite"></div>
+            </section>
+            <section class="memory-data-actions">
+              <button id="memoryExport" type="button">导出 JSON</button>
+              <label><input id="memoryDeleteAllConfirm" type="checkbox" /> 我确认删除全部本地记忆</label>
+              <button id="memoryDeleteAll" class="danger" type="button" disabled>删除全部</button>
+            </section>
+          </div>
+          <p id="memoryMessage" class="memory-message" role="status"></p>
+        </div>
+      </div>
+    </section>
     <webview id="runtimeView" partition="persist:harness"></webview>
     <section id="runtimeStatus" class="runtime-status" aria-live="polite">
       <img src="./assets/deepseek-icon.svg" alt="" />
@@ -187,6 +310,9 @@
   <script src="./theme-integration.js"></script>
   <script src="./model-routing-integration.js"></script>
   <script src="./workspace-links-integration.js"></script>
+  <script src="./storage-manager.js"></script>
+  <script src="./memory-manager.js"></script>
+  <script src="./browser-sidebar.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

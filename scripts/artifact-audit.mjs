@@ -3,7 +3,10 @@ import { access, readFile, readdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
-const { extractFile, listPackage } = createRequire(import.meta.url)('@electron/asar')
+import { assertMaximum, enforceWindowsFootprint, formatMiB, windowsFootprint } from './artifact-size-budget.mjs'
+
+const { extractFile, getRawHeader, listPackage } = createRequire(import.meta.url)('@electron/asar')
+const sizeBudget = JSON.parse(await readFile(new URL('../build/artifact-size-budget.json', import.meta.url), 'utf8'))
 
 const dist = path.resolve(process.argv[2] || 'dist')
 const names = await readdir(dist).catch(() => [])
@@ -16,10 +19,20 @@ const expected = process.platform === 'win32'
 if (!expected.length) throw new Error(`No release artifact found for ${process.platform} in ${dist}. Found: ${files.join(', ') || '(none)'}`)
 const supplemental = files.filter(name => /(?:portable.*\.zip|\.apk)$/i.test(name))
 const audited = Array.from(new Set([...expected, ...supplemental]))
+let measuredFootprint = null
 if (process.platform === 'win32') {
   const asar = path.join(dist, 'win-unpacked', 'resources', 'app.asar')
   const unpacked = path.join(dist, 'win-unpacked', 'resources', 'app.asar.unpacked')
+  const footprint = await windowsFootprint(dist)
+  measuredFootprint = footprint
+  enforceWindowsFootprint(footprint, sizeBudget.windows)
   const extractPackagedFile = relative => extractFile(asar, relative.split('/').join(path.sep))
+  const asarHeader = getRawHeader(asar).header.files
+  const treeSize = node => node?.files
+    ? Object.values(node.files).reduce((total, child) => total + treeSize(child), 0)
+    : Number(node?.size || 0)
+  const petRuntimeBytes = treeSize(asarHeader.renderer?.files?.pets)
+  assertMaximum('Packaged pet runtime assets', petRuntimeBytes, sizeBudget.windows.petRuntimeAssetsMiB)
   const runtimePackages = [
     'cordis-plugin-group', 'dsh-anonymous-user-id', 'dsh-atomic-write', 'dsh-bash-local',
     'dsh-code-runtime', 'dsh-compaction', 'dsh-fs', 'dsh-invariants', 'dsh-output-retention',
@@ -65,8 +78,15 @@ const lines = []
 for (const name of audited.sort()) {
   const data = await readFile(path.join(dist, name))
   if (data.length < 1024) throw new Error(`Release artifact is implausibly small: ${name} (${data.length} bytes)`)
+  if (process.platform === 'win32' && /\.exe$/i.test(name)) {
+    const maximum = /portable/i.test(name) ? sizeBudget.windows.portableMiB : sizeBudget.windows.installerMiB
+    assertMaximum(`Release artifact ${name}`, data.length, maximum)
+  }
   lines.push(`${createHash('sha256').update(data).digest('hex')}  ${name}`)
 }
 await writeFile(path.join(dist, 'SHA256SUMS.txt'), `${lines.join('\n')}\n`)
 console.log(`Artifact audit passed for ${audited.length} release file(s) (${expected.length} native ${process.platform}, ${supplemental.length} supplemental).`)
+if (measuredFootprint) {
+  console.log(`Windows footprint: unpacked ${formatMiB(measuredFootprint.unpackedBytes)}, app.asar ${formatMiB(measuredFootprint.appAsarBytes)}, app.asar.unpacked ${formatMiB(measuredFootprint.appAsarUnpackedBytes)}, locales ${formatMiB(measuredFootprint.localesBytes)} (${measuredFootprint.localeFiles} files).`)
+}
 console.log(lines.join('\n'))

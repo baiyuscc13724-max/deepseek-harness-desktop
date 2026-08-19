@@ -1,0 +1,15 @@
+{
+  "windows": {
+    "installerMiB": 115,
+    "portableMiB": 115,
+    "unpackedMiB": 465,
+    "appAsarMiB": 120,
+    "appAsarUnpackedMiB": 30,
+    "localesMiB": 2,
+    "localesMaxFiles": 2,
+    "petRuntimeAssetsMiB": 30
+  },
+  "repository": {
+    "petSourceAssetsMiB": 35
+  }
+}

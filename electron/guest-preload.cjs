@@ -1,8 +1,12 @@
-const { ipcRenderer, webUtils } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 let activeDrag = null
 let pendingPoint = null
 let pendingFrame = 0
 let attachmentQueue = Promise.resolve()
+
+contextBridge.exposeInMainWorld('harnessDesktopGuest', Object.freeze({
+  chooseWorkspaceDirectory: () => ipcRenderer.invoke('workspace:chooseDirectory')
+}))
 
 const nativeImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const nativeImageTypeByExtension = new Map([

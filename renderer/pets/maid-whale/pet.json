@@ -7,15 +7,17 @@
   "source": "https://github.com/Small-tailqwq/dsh-deep-whale",
   "renderer": {
     "format": "complete-frame-2d-sprites",
+    "atlasFormat": "webp-lossless-grid",
+    "atlasManifest": "atlas/maid-whale.atlas.json",
     "atlases": {
-      "idle": "sprites/idle/0.png..47.png",
-      "walk": "sprites/walk-left/0.png..23.png",
-      "celebrate": "sprites/celebrate/0.png..47.png",
-      "feeding": "sprites/feeding/0.png..39.png",
-      "sleeping": "sprites/sleeping/0.png..31.png",
-      "working": "sprites/working/0.png..23.png",
-      "climb": "sprites/climb-left/0.png..31.png",
-      "physics": "sprites/physics/0.png..31.png"
+      "idle": "atlas/idle.webp",
+      "walk": "atlas/walk.webp",
+      "celebrate": "atlas/celebrate.webp",
+      "feeding": "atlas/feeding.webp",
+      "sleeping": "atlas/sleeping.webp",
+      "working": "atlas/working.webp",
+      "climb": "atlas/climb.webp",
+      "physics": "atlas/physics.webp"
     },
     "animations": ["idle", "prepare-walk", "walk", "settle", "stretch", "yawn", "wink", "groom", "look-around", "tail-flick", "petting", "nap", "gaming", "desk-work", "working", "sleeping", "climb", "ceiling", "perch", "drag", "fall", "land", "feeding", "celebrating"],
     "drawnPoseCounts": {

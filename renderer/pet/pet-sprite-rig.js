@@ -31,9 +31,9 @@ const ACTION_SPECS = Object.freeze({
   wave: { atlas: 'celebrate', fps: 10, loop: false, frames: [18, 19, 20, 21, 22, 23, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47] }
 })
 
-// These profiles follow the alpha bounds of the rendered PNG frames. Keeping
-// them close to visible pixels prevents the transparent top half of the pet
-// window from feeling like a large invisible rectangle.
+// These profiles follow the alpha bounds of the rendered frames. Keeping them
+// close to visible pixels prevents the transparent top half of the pet window
+// from feeling like a large invisible rectangle.
 const DEFAULT_HIT_PROFILE = Object.freeze({ left: 0.17, top: 0.49, right: 0.83, bottom: 0.97 })
 const ACTION_HIT_PROFILES = Object.freeze({
   drag: { left: 0, top: 0.49, right: 1, bottom: 0.97 },
@@ -52,37 +52,52 @@ const ACTION_HIT_PROFILES = Object.freeze({
   'desk-work': { left: 0.1, top: 0.49, right: 0.9, bottom: 0.97 }
 })
 
+// Maximum number of decoded atlas sheets retained in memory at once. Bounded so
+// switching between many actions never grows the footprint unboundedly.
+const LRU_LIMIT = 3
+const EAGER_ATLAS = 'idle'
+
 function loadImage(url) {
   return new Promise((resolve, reject) => {
     const image = new Image()
     image.decoding = 'sync'
     image.onload = () => resolve(image)
-    image.onerror = () => reject(new Error(`无法加载桌宠动画：${url}`))
+    image.onerror = () => reject(new Error(`无法加载桌宠图集：${url}`))
     image.src = url
   })
 }
 
 export class MaidWhaleSpriteRig {
-  constructor({ host, atlases }) {
+  constructor({ host, manifestUrl }) {
     this.host = host
-    this.atlases = atlases
+    this.manifestUrl = manifestUrl
     this.viewport = null
     this.sheet = null
     this.context = null
-    this.images = new Map()
-    this.currentUrl = null
+    this.manifest = null
+    // action name -> { image } for atlas sheets decoded into memory.
+    this.loaded = new Map()
+    // Atlas action names in recency order (least-recently-used first).
+    this.lru = []
+    this.loading = new Map()
+    this.currentKey = null
     this.action = 'idle'
     this.direction = 1
     this.frame = -1
     this.startedAt = performance.now()
     this.frameHandle = null
-    this.preloadPromises = new Map()
     this.gazeTarget = { x: 0, y: 0 }
     this.gazeCurrent = { x: 0, y: 0 }
   }
 
+  #atlasBaseUrl() {
+    return this.manifestUrl.replace(/[^/]*$/u, '')
+  }
+
   async load() {
-    await Promise.all(Object.keys(this.atlases).map(name => this.#preloadAtlas(name)))
+    const response = await fetch(this.manifestUrl)
+    if (!response.ok) throw new Error(`无法加载桌宠图集清单：${this.manifestUrl} (${response.status})`)
+    this.manifest = await response.json()
     this.viewport = document.createElement('span')
     this.viewport.className = 'sprite-viewport'
     this.sheet = document.createElement('canvas')
@@ -97,35 +112,69 @@ export class MaidWhaleSpriteRig {
     this.host.replaceChildren(this.viewport)
     this.host.dataset.rigStage = 'ready'
     this.host.dataset.rigFormat = 'complete-frame-2d-sprites'
+    // Startup only loads the idle atlas; everything else loads on demand.
+    await this.#ensureAtlas(EAGER_ATLAS).catch(() => {})
     this.setAction('idle', { immediate: true })
     this.#renderFrame(performance.now())
     return this
   }
 
-  #preloadAtlas(name) {
-    if (!this.preloadPromises.has(name)) {
-      const frames = this.atlases[name] || []
-      this.preloadPromises.set(name, Promise.all(frames.map(async url => {
-        if (this.images.has(url)) return this.images.get(url)
-        const image = await loadImage(url)
-        this.images.set(url, image)
-        return image
-      })).then(() => undefined))
+  #frameCount(atlasName) {
+    return this.manifest?.actions?.[atlasName]?.frameRects?.length || 1
+  }
+
+  #markUsed(name) {
+    const index = this.lru.indexOf(name)
+    if (index !== -1) this.lru.splice(index, 1)
+    this.lru.push(name)
+  }
+
+  #evictLru() {
+    // Never evict the currently-playing atlas.
+    const current = ACTION_SPECS[this.action]?.atlas
+    while (this.lru.length > LRU_LIMIT) {
+      const candidate = this.lru[0]
+      if (candidate === current) break
+      const removed = this.lru.shift()
+      this.loaded.delete(removed)
     }
-    return this.preloadPromises.get(name)
+  }
+
+  #ensureAtlas(name) {
+    if (this.loaded.has(name)) {
+      this.#markUsed(name)
+      return Promise.resolve()
+    }
+    if (this.loading.has(name)) return this.loading.get(name)
+    const promise = loadImage(`${this.#atlasBaseUrl()}${this.manifest.actions[name].fileName}`)
+      .then(image => {
+        this.loading.delete(name)
+        this.loaded.set(name, { image })
+        this.#markUsed(name)
+        this.#evictLru()
+        this.#showFrame(this.action, this.frame)
+      })
+      .catch(error => {
+        this.loading.delete(name)
+        throw error
+      })
+    this.loading.set(name, promise)
+    return promise
   }
 
   #renderFrame = now => {
     if (!this.host?.isConnected || !this.sheet) return
     const spec = ACTION_SPECS[this.action] || ACTION_SPECS.idle
-    const frames = spec.frames || this.atlases[spec.atlas].map((_, index) => index)
+    const frameCount = this.#frameCount(spec.atlas)
+    const allIndices = Array.from({ length: frameCount }, (_, index) => index)
+    const frames = spec.frames || allIndices
     const elapsed = Math.max(0, now - this.startedAt) / 1000
     const rawIndex = Math.floor(elapsed * spec.fps)
     const frameIndex = spec.loop ? rawIndex % frames.length : Math.min(frames.length - 1, rawIndex)
     const frame = frames[frameIndex]
     if (frame !== this.frame) {
       this.frame = frame
-      this.#showFrame(this.atlases[spec.atlas][frame])
+      this.#showFrame(this.action, frame)
       this.host.dataset.rigFrame = String(frame)
     }
     this.#updateGaze()
@@ -141,34 +190,48 @@ export class MaidWhaleSpriteRig {
     this.viewport.style.transform = `translateX(-50%) translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0)`
   }
 
-  #showFrame(url) {
-    if (!this.context || !this.sheet || this.currentUrl === url) return
-    const image = this.images.get(url)
-    if (!image) return
+  #showFrame(actionName, frameIndex) {
+    if (!this.context || !this.sheet) return
+    const spec = ACTION_SPECS[actionName] || ACTION_SPECS.idle
+    const atlasName = spec.atlas
+    const entry = this.loaded.get(atlasName)
+    const key = `${atlasName}:${frameIndex}`
+    if (!entry) {
+      // Not decoded yet — kick off the on-demand load; it redraws on arrival.
+      this.#ensureAtlas(atlasName).catch(() => {})
+      return
+    }
+    const rect = this.manifest.actions[atlasName].frameRects[frameIndex]
+      || { x: 0, y: 0, width: this.manifest.frameWidth || 420, height: this.manifest.frameHeight || 724 }
+    if (this.currentKey === key) return
     const canvasWidth = this.sheet.width
     const canvasHeight = this.sheet.height
-    const scale = Math.min(canvasWidth / image.naturalWidth, canvasHeight / image.naturalHeight)
-    const width = image.naturalWidth * scale
-    const height = image.naturalHeight * scale
+    const scale = Math.min(canvasWidth / rect.width, canvasHeight / rect.height)
+    const width = rect.width * scale
+    const height = rect.height * scale
     this.context.clearRect(0, 0, canvasWidth, canvasHeight)
-    this.context.drawImage(image, (canvasWidth - width) / 2, canvasHeight - height, width, height)
-    this.currentUrl = url
-    this.sheet.dataset.src = url
+    this.context.drawImage(
+      entry.image,
+      rect.x, rect.y, rect.width, rect.height,
+      (canvasWidth - width) / 2, canvasHeight - height, width, height
+    )
+    this.currentKey = key
+    this.sheet.dataset.src = `${atlasName}#${frameIndex}`
   }
 
   setAction(name, { direction = this.direction } = {}) {
     this.action = ACTION_SPECS[name] ? name : 'idle'
     this.direction = direction < 0 ? -1 : 1
     const spec = ACTION_SPECS[this.action]
-    this.#preloadAtlas(spec.atlas).catch(() => {})
+    this.#ensureAtlas(spec.atlas).catch(() => {})
     this.startedAt = performance.now()
     this.frame = -1
-    this.currentUrl = null
+    this.currentKey = null
     const firstFrame = spec.frames?.[0] ?? 0
     const directional = this.action === 'walk' || this.action === 'climb'
     const transform = directional && this.direction > 0 ? 'scaleX(-1)' : 'scaleX(1)'
     this.sheet.style.transform = transform
-    this.#showFrame(this.atlases[spec.atlas][firstFrame])
+    this.#showFrame(this.action, firstFrame)
     this.viewport.dataset.action = this.action
     this.host.dataset.rigAction = this.action
   }

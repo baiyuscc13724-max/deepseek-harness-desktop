@@ -1,5 +1,6 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, screen, session, shell, Tray } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, screen, session, shell, Tray, WebContentsView } = require('electron')
 const { spawn } = require('node:child_process')
+const { randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
 const { copyFile, mkdir, readFile, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
@@ -13,6 +14,10 @@ const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bri
 const { createDefaultProviderMeterRegistry } = require('./bridge/provider-meter-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { ensureMobileControlPlugin } = require('./bridge/mobile-control-plugin-service.cjs')
+const { ensureDesktopDirectoryPickerPlugin } = require('./bridge/desktop-directory-picker-plugin-service.cjs')
+const { ensureDesktopBrowserToolsPlugin } = require('./bridge/desktop-browser-tools-plugin-service.cjs')
+const { ensureDesktopMemoryToolsPlugin } = require('./bridge/desktop-memory-tools-plugin-service.cjs')
+const { ensureDesktopComputerUsePlugin } = require('./bridge/desktop-computer-use-plugin-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { terminateProcessTree } = require('./bridge/process-tree.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
@@ -28,6 +33,11 @@ const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { launchComponentUpdateHelper } = require('./bridge/component-update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { inspectAttachmentPaths } = require('./bridge/attachment-reference-service.cjs')
+const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
+const { MemoryService } = require('./bridge/memory-service.cjs')
+const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
+const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
+const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
 const { loadMobileRelayConfig } = require('./bridge/mobile-relay-config.cjs')
 const { createEasyTierComponentInstaller } = require('./bridge/network-component-service.cjs')
@@ -79,6 +89,17 @@ let mobileSyncService = null
 let mobileSyncTransportManager = null
 let componentUpdateServicePromise = null
 let lastComponentUpdateCheck = null
+let storageManagementService = null
+let memoryService = null
+let browserView = null
+let browserSecurityPolicy = null
+let browserControlServer = null
+let browserSidebarVisible = false
+let browserContentVisible = true
+let workspacePickerPromise = null
+let computerUseEnabled = false
+const computerUseConfirmations = new Map()
+let browserState = { visible: false, loading: false, url: '', title: '', origin: '', canGoBack: false, canGoForward: false, hasSiteData: false, error: '' }
 
 const BUNDLED_THEME_ASSETS = Object.freeze([
   'maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -106,6 +127,465 @@ function setRuntimeState(next) {
 function ensureStateStore() {
   if (!appStateStore) appStateStore = new AppStateStore(path.join(app.getPath('userData'), 'app-state.json'))
   return appStateStore
+}
+
+function ensureStorageManagementService() {
+  if (!storageManagementService) {
+    storageManagementService = new StorageManagementService({
+      root: desktopRuntimePaths().root,
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch
+    })
+  }
+  return storageManagementService
+}
+
+function memoryServiceOptions(overrides = {}) {
+  const root = desktopRuntimePaths().root
+  const preferences = ensureStateStore().get().memory
+  return {
+    dbPath: path.join(root, 'memory', 'memory.sqlite'),
+    exportsDir: path.join(root, 'memory-exports'),
+    enabled: preferences.enabled,
+    sensitivityMode: preferences.sensitivityMode,
+    ...overrides
+  }
+}
+
+function ensureMemoryService() {
+  if (!memoryService) memoryService = new MemoryService(memoryServiceOptions())
+  return memoryService
+}
+
+function memoryStatusPayload() {
+  const status = ensureMemoryService().status()
+  return {
+    ...status,
+    dbPath: status.dbPath ? path.dirname(status.dbPath) : null,
+    preferences: ensureStateStore().get().memory
+  }
+}
+
+async function setMemoryEnabled(enabled) {
+  const service = ensureMemoryService()
+  if (enabled) {
+    await service.enable(memoryServiceOptions({ enabled: true }))
+    ensureStateStore().updateMemory({ enabled: true })
+  } else {
+    service.disable()
+    ensureStateStore().updateMemory({ enabled: false, autoRecall: false })
+  }
+  return memoryStatusPayload()
+}
+
+async function updateMemoryPreferences(patch = {}) {
+  const current = ensureStateStore().get().memory
+  const next = {
+    sensitivityMode: patch.sensitivityMode === 'redact' ? 'redact' : current.sensitivityMode,
+    autoRecall: Object.prototype.hasOwnProperty.call(patch, 'autoRecall') ? Boolean(patch.autoRecall) : current.autoRecall
+  }
+  if (!current.enabled) next.autoRecall = false
+  ensureStateStore().updateMemory(next)
+  if (current.enabled) await ensureMemoryService().enable(memoryServiceOptions({ enabled: true, sensitivityMode: next.sensitivityMode }))
+  return memoryStatusPayload()
+}
+
+const BROWSER_PANEL_WIDTH = 460
+const BROWSER_VIEW_TOP = 118
+const BROWSER_VIEW_FOOTER = 34
+
+function browserPolicyOptions() {
+  const root = path.join(desktopRuntimePaths().root, 'browser')
+  return {
+    authzFile: path.join(root, 'site-authorizations.json'),
+    authzRootDir: root
+  }
+}
+
+function browserNavigationHistory() {
+  return browserView?.webContents?.navigationHistory || null
+}
+
+function layoutBrowserView() {
+  if (!browserView || !mainWindow || mainWindow.isDestroyed()) return
+  const [width, height] = mainWindow.getContentSize()
+  const panelWidth = Math.min(BROWSER_PANEL_WIDTH, width)
+  browserView.setBounds({
+    x: Math.max(0, width - panelWidth),
+    y: BROWSER_VIEW_TOP,
+    width: panelWidth,
+    height: Math.max(1, height - BROWSER_VIEW_TOP - BROWSER_VIEW_FOOTER)
+  })
+  browserView.setVisible(browserSidebarVisible && browserContentVisible)
+}
+
+async function browserStatePayload(patch = {}) {
+  browserState = { ...browserState, ...patch }
+  const contents = browserView?.webContents
+  const history = browserNavigationHistory()
+  if (contents && !contents.isDestroyed()) {
+    browserState.url = contents.getURL() || browserState.url
+    browserState.title = contents.getTitle() || browserState.title
+    browserState.canGoBack = Boolean(history?.canGoBack())
+    browserState.canGoForward = Boolean(history?.canGoForward())
+  }
+  browserState.visible = browserSidebarVisible
+  browserState.hasSiteData = false
+  if (browserState.origin && browserView) {
+    const cookies = await browserView.webContents.session.cookies.get({ url: browserState.origin }).catch(() => [])
+    browserState.hasSiteData = cookies.length > 0
+  }
+  return {
+    ...browserState,
+    profile: {
+      name: 'Harness Browser',
+      partition: browserSecurityPolicy?.partitionName || BrowserSecurityPolicy.partitionName(),
+      isolatedFromHarness: true
+    },
+    authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [] },
+    modelControlStopped: browserSecurityPolicy?.isStopped === true,
+    pendingConfirmations: browserSecurityPolicy?.pendingConfirmations() || []
+  }
+}
+
+async function publishBrowserState(patch = {}) {
+  const payload = await browserStatePayload(patch)
+  send('browser:state', payload)
+  return payload
+}
+
+function updateBrowserActiveTab(url) {
+  if (!browserSecurityPolicy || !url) return
+  try {
+    const nav = browserSecurityPolicy.userNavigate(url)
+    browserSecurityPolicy.setActiveTab({ id: 'side-browser-main', origin: nav.origin, visible: browserSidebarVisible && browserContentVisible })
+    browserState.origin = nav.origin
+    browserState.error = ''
+  } catch {
+    browserState.origin = ''
+  }
+}
+
+function ensureBrowserSidebar() {
+  if (browserView && !browserView.webContents.isDestroyed()) return browserView
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error('主窗口尚未准备好。')
+  browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
+  const browserSession = session.fromPartition(browserSecurityPolicy.partitionName, { cache: true })
+  browserSession.setPermissionCheckHandler(() => false)
+  browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+  browserView = new WebContentsView({
+    webPreferences: {
+      partition: browserSecurityPolicy.partitionName,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      devTools: false,
+      spellcheck: true
+    }
+  })
+  browserView.setBackgroundColor('#ffffff')
+  mainWindow.contentView.addChildView(browserView)
+  const contents = browserView.webContents
+  const validateNavigation = (event, url) => {
+    try { browserSecurityPolicy.userNavigate(url) }
+    catch { event.preventDefault() }
+  }
+  contents.on('will-navigate', validateNavigation)
+  contents.on('will-redirect', validateNavigation)
+  contents.setWindowOpenHandler(details => {
+    try {
+      const nav = browserSecurityPolicy.userNavigate(details.url)
+      contents.loadURL(nav.normalized).catch(() => {})
+    } catch {}
+    return { action: 'deny' }
+  })
+  contents.on('did-start-loading', () => publishBrowserState({ loading: true }).catch(() => {}))
+  contents.on('did-stop-loading', () => publishBrowserState({ loading: false }).catch(() => {}))
+  const navigated = (_event, url) => {
+    updateBrowserActiveTab(url)
+    publishBrowserState({ url }).catch(() => {})
+  }
+  contents.on('did-navigate', navigated)
+  contents.on('did-navigate-in-page', navigated)
+  contents.on('page-title-updated', (_event, title) => publishBrowserState({ title }).catch(() => {}))
+  contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+    if (isMainFrame && code !== -3) publishBrowserState({ loading: false, url, error: description || `加载失败 (${code})` }).catch(() => {})
+  })
+  layoutBrowserView()
+  return browserView
+}
+
+function normalizeBrowserAddress(value, base = '') {
+  const text = String(value || '').trim()
+  if (!text) throw new Error('请输入网址或搜索内容。')
+  let candidate = text
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(candidate)) {
+    candidate = (/\s/u.test(candidate) || !candidate.includes('.'))
+      ? `https://www.baidu.com/s?wd=${encodeURIComponent(candidate)}`
+      : `https://${candidate}`
+  }
+  return browserSecurityPolicy.userNavigate(candidate, base ? { base } : {}).normalized
+}
+
+async function setBrowserSidebarVisible(visible) {
+  ensureBrowserSidebar()
+  browserSidebarVisible = Boolean(visible)
+  if (browserSidebarVisible && !browserView.webContents.getURL()) {
+    await browserView.webContents.loadURL(browserSecurityPolicy.userNavigate('https://www.baidu.com/').normalized)
+  }
+  updateBrowserActiveTab(browserView.webContents.getURL())
+  layoutBrowserView()
+  return publishBrowserState()
+}
+
+async function setBrowserContentVisible(visible) {
+  browserContentVisible = Boolean(visible)
+  if (browserView) {
+    updateBrowserActiveTab(browserView.webContents.getURL())
+    layoutBrowserView()
+  }
+  return publishBrowserState()
+}
+
+async function navigateBrowser(value) {
+  const view = ensureBrowserSidebar()
+  const target = normalizeBrowserAddress(value, view.webContents.getURL())
+  await view.webContents.loadURL(target)
+  return publishBrowserState({ error: '' })
+}
+
+async function clearBrowserSiteData(confirmed) {
+  if (confirmed !== true) throw new Error('清除当前站点登录数据需要用户明确确认。')
+  const view = ensureBrowserSidebar()
+  const origin = browserState.origin
+  if (!origin) throw new Error('当前页面没有可清理的站点数据。')
+  await view.webContents.session.clearStorageData({ origin })
+  browserSecurityPolicy.revoke(origin)
+  return publishBrowserState({ hasSiteData: false })
+}
+
+async function resumeBrowserModelControl() {
+  if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
+  if (browserView) updateBrowserActiveTab(browserView.webContents.getURL())
+  return publishBrowserState()
+}
+
+async function grantCurrentBrowserOrigin(actions) {
+  if (!browserState.origin) throw new Error('请先打开需要授权的站点。')
+  await resumeBrowserModelControl()
+  browserSecurityPolicy.grant(browserState.origin, { actions: Array.isArray(actions) ? actions : [], ttlMs: 2 * 60 * 60 * 1000 })
+  return publishBrowserState()
+}
+
+async function clearAllBrowserData(confirmed) {
+  if (confirmed !== true) throw new Error('重置独立浏览器 Profile 需要用户明确确认。')
+  const view = ensureBrowserSidebar()
+  await view.webContents.session.clearStorageData()
+  await view.webContents.session.clearCache()
+  browserSecurityPolicy.revokeAll()
+  return publishBrowserState({ hasSiteData: false })
+}
+
+function requireVisibleBrowserForModel() {
+  const view = ensureBrowserSidebar()
+  if (!browserSidebarVisible || !browserContentVisible) throw Object.assign(new Error('模型只能操作当前可见的右栏浏览器页面。'), { code: 'tab-not-visible' })
+  if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) throw Object.assign(new Error('浏览器模型控制已停止；需要用户在右栏重新启用。'), { code: 'stopped' })
+  const url = view.webContents.getURL()
+  updateBrowserActiveTab(url)
+  if (!browserState.origin) throw new Error('当前浏览器页面没有可操作的 HTTP(S) 来源。')
+  return { view, url, origin: browserState.origin, tabId: 'side-browser-main' }
+}
+
+function safeBrowserText(value, maximum = 12000) {
+  return redactSensitiveText(String(value || '').slice(0, maximum)).text
+}
+
+async function observeBrowserForModel() {
+  const { view, origin, tabId } = requireVisibleBrowserForModel()
+  browserSecurityPolicy.modelAction({ action: 'read', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'document' }, payload: {} })
+  const raw = await view.webContents.executeJavaScript(`(() => {
+    const sensitive = /(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc)/i;
+    const visible = element => { const r=element.getBoundingClientRect(); const s=getComputedStyle(element); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
+    const nodes=[...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]')].filter(visible);
+    let sequence=0;
+    const interactive=[];
+    for (const element of nodes) {
+      const metadata=[element.type,element.name,element.id,element.autocomplete,element.getAttribute('aria-label'),element.placeholder].filter(Boolean).join(' ');
+      if (sensitive.test(metadata)) continue;
+      const ref='b'+(++sequence);
+      element.setAttribute('data-hd-model-ref',ref);
+      interactive.push({ ref, tag:element.tagName.toLowerCase(), type:String(element.type||''), role:String(element.getAttribute('role')||''), label:String(element.getAttribute('aria-label')||element.innerText||element.textContent||element.placeholder||'').trim().slice(0,240), disabled:Boolean(element.disabled||element.getAttribute('aria-disabled')==='true') });
+      if (interactive.length>=120) break;
+    }
+    return { title:document.title, text:String(document.body?.innerText||'').slice(0,12000), interactive };
+  })()`, true)
+  const result = {
+    origin,
+    title: safeBrowserText(raw.title, 500),
+    text: safeBrowserText(raw.text),
+    interactive: (raw.interactive || []).map(item => ({ ...item, label: safeBrowserText(item.label, 240) }))
+  }
+  return result
+}
+
+async function browserElementMetadata(view, ref) {
+  if (!/^b\d{1,4}$/.test(String(ref || ''))) throw new Error('浏览器元素引用无效，请重新 observe。')
+  return view.webContents.executeJavaScript(`(() => {
+    const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(ref))}]');
+    if(!element) return null;
+    const label=element.labels?.[0]?.innerText||element.getAttribute('aria-label')||element.placeholder||'';
+    const text=String(element.innerText||element.textContent||'').trim().slice(0,300);
+    return { tag:element.tagName.toLowerCase(),type:String(element.type||''),name:String(element.name||''),id:String(element.id||''),role:String(element.getAttribute('role')||''),autocomplete:String(element.autocomplete||''),ariaLabel:String(element.getAttribute('aria-label')||''),label:String(label),baseUrl:location.origin,text,submit:Boolean(element.type==='submit'||element.closest('button[type="submit"],input[type="submit"]')),disabled:Boolean(element.disabled||element.getAttribute('aria-disabled')==='true') };
+  })()`, true)
+}
+
+async function modelBrowserAction(input = {}) {
+  const action = String(input.action || '')
+  const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
+  if (action === 'status') {
+    const authorizations = browserSecurityPolicy?.authorizations() || { entries: [] }
+    const current = authorizations.entries.find(entry => entry.origin === browserState.origin)
+    return { visible: browserSidebarVisible && browserContentVisible, origin: browserState.origin || null, title: safeBrowserText(browserState.title, 500), loading: browserState.loading, stopped: browserSecurityPolicy?.isStopped === true, actions: current?.actions || [] }
+  }
+  if (action === 'stop') {
+    browserSecurityPolicy?.stop()
+    return { stopped: true, message: '模型浏览器控制已停止；网页仍由用户直接控制。' }
+  }
+  if (action === 'observe') return observeBrowserForModel()
+  const { view, origin, tabId } = requireVisibleBrowserForModel()
+  if (action === 'navigate') {
+    const nav = browserSecurityPolicy.modelNavigate(String(parameters.url || ''), { tabId, base: view.webContents.getURL() })
+    await view.webContents.loadURL(nav.normalized)
+    return { navigated: true, origin: nav.origin, url: nav.normalized }
+  }
+  if (!['click', 'type'].includes(action)) throw new Error('不支持的浏览器模型操作。')
+  const field = await browserElementMetadata(view, parameters.ref)
+  if (!field) throw new Error('元素已失效，请重新 observe。')
+  if (field.disabled) throw new Error('目标元素当前不可用。')
+  if (action === 'type') {
+    const decision = browserSecurityPolicy.modelAction({ action: 'type', tabId, declaredOrigin: origin, field, payload: { text: String(parameters.text || '') }, confirmationId: parameters.confirmation_id })
+    if (!decision.allowed) {
+      publishBrowserState().catch(() => {})
+      return decision
+    }
+    await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!element) return false; const setter=Object.getOwnPropertyDescriptor(element instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value')?.set; if(setter) setter.call(element,${JSON.stringify(String(parameters.text || ''))}); else if(element.isContentEditable) element.textContent=${JSON.stringify(String(parameters.text || ''))}; else return false; element.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'})); element.dispatchEvent(new Event('change',{bubbles:true})); element.focus(); return true; })()`, true)
+    return { typed: true, ref: String(parameters.ref), origin }
+  }
+  const targetDescription = `${field.text} ${field.label} ${field.ariaLabel}`
+  if (/(?:purchase|pay|buy|checkout|bank|card|付款|支付|购买|结账|银行|银行卡)/i.test(targetDescription)) {
+    throw Object.assign(new Error('模型永久禁止执行支付、购买或银行相关操作，请由用户亲自操作。'), { code: 'financial-action-blocked' })
+  }
+  const dangerous = field.submit || /(?:submit|publish|delete|remove|发送|提交|发布|删除|移除)/i.test(targetDescription)
+  const effectiveAction = dangerous ? 'submit' : 'click'
+  const decision = browserSecurityPolicy.modelAction({ action: effectiveAction, tabId, declaredOrigin: origin, field, payload: {}, confirmationId: parameters.confirmation_id })
+  if (!decision.allowed) return decision
+  await view.webContents.executeJavaScript(`document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]')?.click()`, true)
+  return { clicked: true, ref: String(parameters.ref), origin, confirmed: dangerous }
+}
+
+function browserControlStateFile() {
+  return path.join(app.getPath('userData'), 'browser-control.json')
+}
+
+async function modelMemoryAction(input = {}) {
+  const action = String(input.action || '')
+  const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
+  const preferences = ensureStateStore().get().memory
+  if (action === 'status') return { enabled: preferences.enabled, recallAllowed: preferences.enabled && preferences.autoRecall, count: preferences.enabled ? ensureMemoryService().status().counts.entries : 0 }
+  if (action !== 'search') throw new Error('不支持的本地记忆操作。')
+  if (!preferences.enabled) throw Object.assign(new Error('用户尚未开启本地记忆。'), { code: 'memory-disabled' })
+  if (!preferences.autoRecall) throw Object.assign(new Error('用户尚未允许模型按需召回本地记忆。'), { code: 'memory-recall-disabled' })
+  const query = String(parameters.query || '').trim()
+  const maxResults = Math.max(1, Math.min(8, Math.floor(Number(parameters.max_results) || 5)))
+  const recalled = await ensureMemoryService().recall(query, { maxResults })
+  return {
+    query: recalled.query,
+    total: recalled.total,
+    hits: recalled.hits.map(hit => ({
+      id: hit.id,
+      title: safeBrowserText(hit.title, 300),
+      content: safeBrowserText(hit.content, 2000),
+      tags: hit.tags,
+      matched: hit.matched,
+      snippet: safeBrowserText(hit.snippet, 500)
+    }))
+  }
+}
+
+function computerUseState() {
+  return { enabled: computerUseEnabled, pending: [...computerUseConfirmations.values()].map(item => ({ id: item.id, action: item.action, summary: item.summary, confirmed: item.confirmed, expiresAt: item.expiresAt })) }
+}
+
+function requireComputerConfirmation(action, parameters) {
+  const fingerprint = JSON.stringify({ action, x: parameters.x, y: parameters.y, text: parameters.text, deltaY: parameters.delta_y })
+  const id = String(parameters.confirmation_id || '')
+  if (id) {
+    const item = computerUseConfirmations.get(id)
+    if (!item || item.fingerprint !== fingerprint || !item.confirmed || item.expiresAt < Date.now()) throw Object.assign(new Error('Computer Use 确认无效或已过期。'), { code: 'confirmation-invalid' })
+    computerUseConfirmations.delete(id)
+    return null
+  }
+  const request = { id: randomUUID(), action, fingerprint, summary: `${action} Harness Desktop 窗口`, confirmed: false, expiresAt: Date.now() + 60000 }
+  computerUseConfirmations.set(request.id, request)
+  return { requiresConfirmation: true, confirmationId: request.id, action, summary: request.summary }
+}
+
+async function modelComputerUseAction(input = {}) {
+  const action = String(input.action || '')
+  const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
+  if (action === 'status') return computerUseState()
+  if (action === 'stop') { computerUseEnabled = false; computerUseConfirmations.clear(); return computerUseState() }
+  if (!computerUseEnabled) throw Object.assign(new Error('用户尚未开启本次 Computer Use。'), { code: 'computer-use-disabled' })
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) throw new Error('Harness Desktop 主窗口当前不可见。')
+  if (action === 'screenshot') {
+    const image = await mainWindow.capturePage()
+    const size = image.getSize()
+    const scaled = size.width > 1280 ? image.resize({ width: 1280, quality: 'good' }) : image
+    const directory = path.join(desktopRuntimePaths().root, 'computer-use', 'screenshots')
+    await mkdir(directory, { recursive: true })
+    const file = path.join(directory, `window-${Date.now()}.png`)
+    await writeFile(file, scaled.toPNG(), { mode: 0o600 })
+    return { file, width: scaled.getSize().width, height: scaled.getSize().height, scope: 'Harness Desktop window only' }
+  }
+  if (!['click', 'type', 'scroll'].includes(action)) throw new Error('不支持的 Computer Use 操作。')
+  if (action === 'type' && redactSensitiveText(String(parameters.text || '')).types.length) throw Object.assign(new Error('Computer Use 永久禁止输入密码、令牌、验证码、银行卡或其他秘密。'), { code: 'sensitive-input-blocked' })
+  const confirmation = requireComputerConfirmation(action, parameters)
+  if (confirmation) return confirmation
+  const [width, height] = mainWindow.getContentSize()
+  const x = Math.round(Number(parameters.x)); const y = Math.round(Number(parameters.y))
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 36 || x >= width || y >= height) throw new Error('操作坐标超出 Harness Desktop 可控区域。')
+  if (action === 'click') {
+    mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
+    mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+  } else if (action === 'scroll') {
+    mainWindow.webContents.sendInputEvent({ type: 'mouseWheel', x, y, deltaY: Math.max(-800, Math.min(800, Number(parameters.delta_y) || 0)), deltaX: 0 })
+  } else {
+    mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
+    mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+    for (const character of String(parameters.text || '').slice(0, 2000)) mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: character })
+  }
+  return { completed: true, action, x, y }
+}
+
+async function desktopModelToolAction(input = {}) {
+  if (input.scope === 'memory') return modelMemoryAction(input)
+  if (input.scope === 'computer') return modelComputerUseAction(input)
+  return modelBrowserAction(input)
+}
+
+async function ensureBrowserControlServer() {
+  if (!browserControlServer) browserControlServer = new BrowserControlServer({ stateFile: browserControlStateFile(), handler: desktopModelToolAction })
+  await browserControlServer.start()
+  return browserControlServer
+}
+
+function assertDesktopShellSender(event) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error('只允许 Harness Desktop 桌面壳调用本地桌面能力。')
+  }
 }
 
 function ensureMobileSyncService() {
@@ -504,6 +984,7 @@ async function startRuntime() {
 
   let child
   try {
+    await ensureBrowserControlServer()
     const runtimePaths = desktopRuntimePaths()
     child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0'], {
       cwd: runtimePaths.workspace,
@@ -514,7 +995,9 @@ async function startRuntime() {
         ...process.env,
         ...runtimeProxyEnv,
         ...resolved.env,
-        HARNESS_MOBILE_SYNC_STATE_FILE: path.join(app.getPath('userData'), 'mobile-sync.json')
+        HARNESS_MOBILE_SYNC_STATE_FILE: path.join(app.getPath('userData'), 'mobile-sync.json'),
+        HARNESS_DESKTOP_BROWSER_STATE_FILE: browserControlStateFile(),
+        HARNESS_DESKTOP_CAPABILITIES_STATE_FILE: browserControlStateFile()
       }, runtimePaths)
     })
   } catch (error) {
@@ -662,6 +1145,27 @@ function mobileControlPluginOptions() {
     dshHome: desktopDshHome(),
     bundledRoot: path.join(componentPluginsRoot && path.isAbsolute(componentPluginsRoot) ? componentPluginsRoot : path.join(__dirname, '..', 'plugins'), 'dsh-mobile-control')
   }
+}
+
+function desktopDirectoryPickerPluginOptions() {
+  return {
+    dshHome: desktopDshHome(),
+    bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-directory-picker')
+  }
+}
+
+function desktopBrowserToolsPluginOptions() {
+  return {
+    dshHome: desktopDshHome(),
+    bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-browser-tools')
+  }
+}
+
+function desktopMemoryToolsPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-memory-tools') }
+}
+function desktopComputerUsePluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-computer-use') }
 }
 
 async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {} } = {}) {
@@ -865,8 +1369,11 @@ function selfTestOutputPath() {
 }
 
 async function runSelfTestMode() {
+  const output = selfTestOutputPath()
+  if (output) await writeFile(path.resolve(output), `${JSON.stringify({ phase: 'preparing-runtime', startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   await ensureBundledRuntime()
   await ensurePluginMarketplace(pluginMarketplaceOptions())
+  if (output) await writeFile(path.resolve(output), `${JSON.stringify({ phase: 'probing-runtime', startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   const report = await runPackagedSelfTest({
     appVersion: app.getVersion(),
     userData: app.getPath('userData'),
@@ -876,7 +1383,6 @@ async function runSelfTestMode() {
     marketplaceBundledRoot: pluginMarketplaceOptions().bundledRoot,
     runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 180_000 }
   })
-  const output = selfTestOutputPath()
   const text = `${JSON.stringify(report, null, 2)}\n`
   if (output) await writeFile(path.resolve(output), text, { encoding: 'utf8', mode: 0o600 })
   else process.stdout.write(`HARNESS_DESKTOP_SELFTEST=${JSON.stringify(report)}\n`)
@@ -956,6 +1462,26 @@ async function showGuestContextMenu(guest, params) {
   while (template.at(-1)?.type === 'separator') template.pop()
   if (template.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
     Menu.buildFromTemplate(template).popup({ window: mainWindow })
+  }
+}
+
+async function chooseWorkspaceDirectory() {
+  if (workspacePickerPromise) return workspacePickerPromise
+  showMainWindow()
+  workspacePickerPromise = Promise.resolve().then(() => {
+    const filePaths = dialog.showOpenDialogSync(mainWindow, {
+      title: '选择工作区目录',
+      buttonLabel: '选择此文件夹',
+      defaultPath: desktopRuntimePaths().workspace,
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus()
+    return filePaths?.[0] || null
+  })
+  try {
+    return await workspacePickerPromise
+  } finally {
+    workspacePickerPromise = null
   }
 }
 
@@ -1049,7 +1575,13 @@ function createWindow() {
     event.preventDefault()
     mainWindow.hide()
   })
+  mainWindow.on('resize', layoutBrowserView)
   mainWindow.on('closed', () => {
+    browserSecurityPolicy?.stop()
+    if (browserView && !browserView.webContents.isDestroyed()) browserView.webContents.close()
+    browserView = null
+    browserSecurityPolicy = null
+    browserSidebarVisible = false
     mainWindow = null
   })
 
@@ -1104,6 +1636,137 @@ ipcMain.handle('settings:openDocument', () => openHarnessSettingsDocument())
 ipcMain.handle('models:routing:get', () => getModelRouting(modelRoutingOptions()))
 ipcMain.handle('models:routing:save', (_event, routing) => saveModelRouting(modelRoutingOptions(), routing || {}))
 ipcMain.handle('models:meters:get', (_event, force) => getProviderMeters(Boolean(force)))
+ipcMain.handle('storage:scan', event => {
+  assertDesktopShellSender(event)
+  return ensureStorageManagementService().scan()
+})
+ipcMain.handle('storage:cleanupPreview', (event, options) => {
+  assertDesktopShellSender(event)
+  return ensureStorageManagementService().preview(options || {})
+})
+ipcMain.handle('storage:cleanupApply', (event, request) => {
+  assertDesktopShellSender(event)
+  return ensureStorageManagementService().apply(request?.previewId, { confirmed: request?.confirmed === true })
+})
+ipcMain.handle('storage:status', event => {
+  assertDesktopShellSender(event)
+  return ensureStorageManagementService().status()
+})
+ipcMain.handle('memory:status', event => {
+  assertDesktopShellSender(event)
+  return memoryStatusPayload()
+})
+ipcMain.handle('memory:setEnabled', (event, enabled) => {
+  assertDesktopShellSender(event)
+  return setMemoryEnabled(Boolean(enabled))
+})
+ipcMain.handle('memory:setPreferences', (event, patch) => {
+  assertDesktopShellSender(event)
+  return updateMemoryPreferences(patch || {})
+})
+ipcMain.handle('memory:list', (event, options) => {
+  assertDesktopShellSender(event)
+  return ensureMemoryService().list(options || {})
+})
+ipcMain.handle('memory:search', (event, query, options) => {
+  assertDesktopShellSender(event)
+  return ensureMemoryService().search(String(query || ''), options || {})
+})
+ipcMain.handle('memory:add', (event, entry) => {
+  assertDesktopShellSender(event)
+  return ensureMemoryService().add(entry || {})
+})
+ipcMain.handle('memory:update', (event, id, patch) => {
+  assertDesktopShellSender(event)
+  return ensureMemoryService().update(String(id || ''), patch || {})
+})
+ipcMain.handle('memory:delete', (event, id) => {
+  assertDesktopShellSender(event)
+  return ensureMemoryService().delete(String(id || ''))
+})
+ipcMain.handle('memory:deleteAll', (event, request) => {
+  assertDesktopShellSender(event)
+  if (request?.confirmed !== true) throw new Error('删除全部记忆需要用户明确确认。')
+  return ensureMemoryService().deleteAll()
+})
+ipcMain.handle('memory:export', event => {
+  assertDesktopShellSender(event)
+  const destination = path.join(desktopRuntimePaths().root, 'memory-exports', `memory-export-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
+  return ensureMemoryService().export({ to: destination })
+})
+ipcMain.handle('browser:state', event => {
+  assertDesktopShellSender(event)
+  return browserStatePayload()
+})
+ipcMain.handle('browser:setVisible', (event, visible) => {
+  assertDesktopShellSender(event)
+  return setBrowserSidebarVisible(Boolean(visible))
+})
+ipcMain.handle('browser:setContentVisible', (event, visible) => {
+  assertDesktopShellSender(event)
+  return setBrowserContentVisible(Boolean(visible))
+})
+ipcMain.handle('browser:navigate', (event, value) => {
+  assertDesktopShellSender(event)
+  return navigateBrowser(value)
+})
+ipcMain.handle('browser:back', event => {
+  assertDesktopShellSender(event)
+  const history = browserNavigationHistory()
+  if (history?.canGoBack()) history.goBack()
+  return browserStatePayload()
+})
+ipcMain.handle('browser:forward', event => {
+  assertDesktopShellSender(event)
+  const history = browserNavigationHistory()
+  if (history?.canGoForward()) history.goForward()
+  return browserStatePayload()
+})
+ipcMain.handle('browser:reload', event => {
+  assertDesktopShellSender(event)
+  ensureBrowserSidebar().webContents.reload()
+  return browserStatePayload()
+})
+ipcMain.handle('browser:stop', event => {
+  assertDesktopShellSender(event)
+  ensureBrowserSidebar().webContents.stop()
+  return browserStatePayload({ loading: false })
+})
+ipcMain.handle('browser:clearSiteData', (event, request) => {
+  assertDesktopShellSender(event)
+  return clearBrowserSiteData(request?.confirmed === true)
+})
+ipcMain.handle('browser:clearAllData', (event, request) => {
+  assertDesktopShellSender(event)
+  return clearAllBrowserData(request?.confirmed === true)
+})
+ipcMain.handle('browser:grantCurrent', (event, actions) => {
+  assertDesktopShellSender(event)
+  return grantCurrentBrowserOrigin(actions)
+})
+ipcMain.handle('browser:revokeCurrent', event => {
+  assertDesktopShellSender(event)
+  if (browserState.origin && browserSecurityPolicy && !browserSecurityPolicy.isStopped) browserSecurityPolicy.revoke(browserState.origin)
+  return publishBrowserState()
+})
+ipcMain.handle('browser:resumeModelControl', event => {
+  assertDesktopShellSender(event)
+  return resumeBrowserModelControl()
+})
+ipcMain.handle('browser:confirmModelAction', (event, confirmationId) => {
+  assertDesktopShellSender(event)
+  const confirmation = browserSecurityPolicy?.confirm(String(confirmationId || ''), { by: 'user' })
+  return { confirmation, pending: browserSecurityPolicy?.pendingConfirmations() || [] }
+})
+ipcMain.handle('browser:rejectModelAction', (event, confirmationId) => {
+  assertDesktopShellSender(event)
+  browserSecurityPolicy?.rejectConfirmation(String(confirmationId || ''))
+  return { pending: browserSecurityPolicy?.pendingConfirmations() || [] }
+})
+ipcMain.handle('computerUse:state', event => { assertDesktopShellSender(event); return computerUseState() })
+ipcMain.handle('computerUse:setEnabled', (event, enabled) => { assertDesktopShellSender(event); computerUseEnabled = Boolean(enabled); if (!computerUseEnabled) computerUseConfirmations.clear(); return computerUseState() })
+ipcMain.handle('computerUse:confirm', (event, id) => { assertDesktopShellSender(event); const item = computerUseConfirmations.get(String(id || '')); if (!item || item.expiresAt < Date.now()) throw new Error('Computer Use 确认已过期。'); item.confirmed = true; return computerUseState() })
+ipcMain.handle('computerUse:reject', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.delete(String(id || '')); return computerUseState() })
 ipcMain.handle('mobileSync:getState', () => ensureMobileSyncService().state())
 ipcMain.handle('mobileSync:setEnabled', (_event, enabled) => ensureMobileSyncService().setEnabled(Boolean(enabled)))
 ipcMain.handle('mobileSync:setRemoteEnabled', (_event, enabled) => ensureMobileSyncService().setRemoteEnabled(Boolean(enabled)))
@@ -1142,6 +1805,10 @@ ipcMain.handle('shell:openLocal', (_event, value, options = {}) => openDesktopLo
 ipcMain.handle('attachments:inspect', (event, candidates) => {
   if (!isLocalRuntimeUrl(event.sender.getURL())) throw new Error('只允许本机 Harness 界面添加附件。')
   return inspectAttachmentPaths(candidates)
+})
+ipcMain.handle('workspace:chooseDirectory', event => {
+  if (!isLocalRuntimeUrl(event.sender.getURL())) throw new Error('只允许本机 Harness 界面选择工作区。')
+  return chooseWorkspaceDirectory()
 })
 
 if (HAS_SINGLE_INSTANCE_LOCK && !SELF_TEST_MODE) {
@@ -1196,6 +1863,18 @@ app.whenReady().then(async () => {
     await ensureMobileControlPlugin(mobileControlPluginOptions()).catch(error => {
       console.warn(`Unable to prepare mobile control plugin: ${error.message}`)
     })
+    await ensureDesktopDirectoryPickerPlugin(desktopDirectoryPickerPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare desktop directory picker plugin: ${error.message}`)
+    })
+    await ensureDesktopBrowserToolsPlugin(desktopBrowserToolsPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare desktop browser tools plugin: ${error.message}`)
+    })
+    await ensureDesktopMemoryToolsPlugin(desktopMemoryToolsPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare desktop memory tools plugin: ${error.message}`)
+    })
+    await ensureDesktopComputerUsePlugin(desktopComputerUsePluginOptions()).catch(error => {
+      console.warn(`Unable to prepare desktop Computer Use plugin: ${error.message}`)
+    })
   })()
   if (!STORE_BUILD) ensurePetSystem()
   const syncService = ensureMobileSyncService()
@@ -1219,6 +1898,11 @@ app.on('before-quit', () => {
   desktopTray?.destroy()
   desktopTray = null
   mobileSyncService?.stop({ persist: false }).catch(() => {})
+  storageManagementService?.stop()
+  memoryService?.close()
+  browserSecurityPolicy?.stop()
+  browserControlServer?.stop().catch(() => {})
+  if (browserView && !browserView.webContents.isDestroyed()) browserView.webContents.close()
   stopRuntime()
 })
 app.on('window-all-closed', () => {

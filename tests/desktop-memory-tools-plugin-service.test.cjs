@@ -1,0 +1,35 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const os = require('node:os')
+const path = require('node:path')
+const { mkdtemp, readFile, rm } = require('node:fs/promises')
+const { ensureDesktopMemoryToolsPlugin } = require('../electron/bridge/desktop-memory-tools-plugin-service.cjs')
+
+test('opt-in local memory tool installs idempotently with read-only actions', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'desktop-memory-tools-'))
+  try {
+    const bundledRoot = path.resolve(__dirname, '..', 'plugins', 'dsh-desktop-memory-tools')
+    const first = await ensureDesktopMemoryToolsPlugin({ dshHome: root, bundledRoot })
+    const second = await ensureDesktopMemoryToolsPlugin({ dshHome: root, bundledRoot })
+    assert.equal(first.patchChanged, true)
+    assert.equal(second.patchChanged, false)
+    const profile = path.join(root, 'profiles', 'web')
+    const patch = await readFile(path.join(profile, 'cordis.patch.yml'), 'utf8')
+    const plugin = await readFile(path.join(profile, 'node_modules', 'dsh-desktop-memory-tools', 'lib', 'index.js'), 'utf8')
+    assert.match(patch, /id: desktop-memory-tools/u)
+    assert.match(plugin, /name: 'local_memory'/u)
+    assert.match(plugin, /enum: \['status', 'search'\]/u)
+    assert.doesNotMatch(plugin, /enum:\s*\[[^\]]*(?:add|update|delete|remove)/u)
+    assert.doesNotMatch(plugin, /args\.action\s*===\s*['"](?:add|update|delete|remove)/u)
+    assert.match(plugin, /不会读取整库，也不能保存、修改或删除记忆/u)
+    assert.match(plugin, /HARNESS_DESKTOP_CAPABILITIES_STATE_FILE/u)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('main memory tool path requires explicit recall opt-in and caps results', async () => {
+  const main = await readFile(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  assert.match(main, /if \(!preferences\.autoRecall\)/u)
+  assert.match(main, /Math\.min\(8/u)
+  assert.match(main, /ensureMemoryService\(\)\.recall/u)
+  assert.match(main, /content: safeBrowserText\(hit\.content, 2000\)/u)
+})

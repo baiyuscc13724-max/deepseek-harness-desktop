@@ -3,6 +3,15 @@ dist/
 dist-store/
 dist-local-component-test/
 local-test-output/
+dist-capabilities/
+/pet-sprite-source/maid-whale/idle/
+/pet-sprite-source/maid-whale/walk-left/
+/pet-sprite-source/maid-whale/celebrate/
+/pet-sprite-source/maid-whale/feeding/
+/pet-sprite-source/maid-whale/sleeping/
+/pet-sprite-source/maid-whale/working/
+/pet-sprite-source/maid-whale/climb-left/
+/pet-sprite-source/maid-whale/physics/
 store/store-identity.json
 store/devcert.pfx
 store/*.pfx

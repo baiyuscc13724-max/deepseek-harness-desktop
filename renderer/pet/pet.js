@@ -101,16 +101,7 @@ const behavior = new PetBehaviorEngine({ onAction: applyAction })
 async function loadRig() {
   rig = new MaidWhaleSpriteRig({
     host: rigHost,
-    atlases: {
-      idle: Array.from({ length: 48 }, (_, index) => `../pets/maid-whale/sprites/idle/${index}.png`),
-      walk: Array.from({ length: 24 }, (_, index) => `../pets/maid-whale/sprites/walk-left/${index}.png`),
-      celebrate: Array.from({ length: 48 }, (_, index) => `../pets/maid-whale/sprites/celebrate/${index}.png`),
-      feeding: Array.from({ length: 40 }, (_, index) => `../pets/maid-whale/sprites/feeding/${index}.png`),
-      sleeping: Array.from({ length: 32 }, (_, index) => `../pets/maid-whale/sprites/sleeping/${index}.png`),
-      working: Array.from({ length: 24 }, (_, index) => `../pets/maid-whale/sprites/working/${index}.png`),
-      climb: Array.from({ length: 32 }, (_, index) => `../pets/maid-whale/sprites/climb-left/${index}.png`),
-      physics: Array.from({ length: 32 }, (_, index) => `../pets/maid-whale/sprites/physics/${index}.png`)
-    }
+    manifestUrl: '../pets/maid-whale/atlas/maid-whale.atlas.json'
   })
   await rig.load()
   rig.setAction(action, { direction })

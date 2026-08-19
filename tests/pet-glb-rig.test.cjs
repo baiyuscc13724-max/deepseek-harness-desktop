@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const { readFile } = require('node:fs/promises')
 const { createHash } = require('node:crypto')
+const { ACTIONS: TIMELINE_ACTIONS, timelineSources } = require('../scripts/build-pet-frame-timelines.cjs')
 
 const root = path.join(__dirname, '..')
 
@@ -18,7 +19,7 @@ function readPngHeader(buffer) {
 }
 
 test('desktop pet uses isolated high-resolution transparent complete-frame sprites', async () => {
-  const spriteDir = path.join(root, 'renderer', 'pets', 'maid-whale', 'sprites')
+  const spriteDir = path.join(root, 'pet-sprite-source', 'maid-whale')
   const animations = {
     idle: 48,
     'walk-left': 24,
@@ -41,9 +42,12 @@ test('desktop pet uses isolated high-resolution transparent complete-frame sprit
   }
   for (const [animation, frameCount] of Object.entries(animations)) {
     const hashes = new Set()
+    const action = TIMELINE_ACTIONS.find(candidate => candidate.name === animation)
+    const sources = timelineSources(spriteDir, action)
+    assert.equal(sources.length, frameCount)
     for (let frame = 0; frame < frameCount; frame += 1) {
-      const name = path.join(animation, `${frame}.png`)
-      const bytes = await readFile(path.join(spriteDir, name))
+      const name = `${animation}/${frame}.png`
+      const bytes = await readFile(sources[frame])
       const header = readPngHeader(bytes)
       assert.ok(header.width >= 250, `${name} should remain high resolution`)
       assert.ok(header.height >= 700, `${name} should remain high resolution`)
@@ -55,7 +59,7 @@ test('desktop pet uses isolated high-resolution transparent complete-frame sprit
   }
 })
 
-test('pet window loads the complete-frame sprite renderer instead of the deforming GLB rig', async () => {
+test('pet window loads the atlas-based complete-frame sprite renderer instead of the deforming GLB rig', async () => {
   const html = await readFile(path.join(root, 'renderer', 'pet', 'index.html'), 'utf8')
   const petSource = await readFile(path.join(root, 'renderer', 'pet', 'pet.js'), 'utf8')
   const rigSource = await readFile(path.join(root, 'renderer', 'pet', 'pet-sprite-rig.js'), 'utf8')
@@ -63,20 +67,19 @@ test('pet window loads the complete-frame sprite renderer instead of the deformi
   assert.match(html, /type="module" src="\.\/pet\.js"/u)
   assert.doesNotMatch(html, /pixi\.min\.js|pet-rig\.js|pet-rig-motion\.js/u)
   assert.match(petSource, /MaidWhaleSpriteRig/u)
-  assert.match(petSource, /sprites\/walk-left\/\$\{index\}\.png/u)
-  assert.match(petSource, /sprites\/celebrate\/\$\{index\}\.png/u)
-  assert.match(petSource, /sprites\/feeding\/\$\{index\}\.png/u)
-  assert.match(petSource, /sprites\/sleeping\/\$\{index\}\.png/u)
-  assert.match(petSource, /sprites\/working\/\$\{index\}\.png/u)
-  assert.match(petSource, /sprites\/climb-left\/\$\{index\}\.png/u)
-  assert.match(petSource, /sprites\/physics\/\$\{index\}\.png/u)
+  assert.match(petSource, /atlas\/maid-whale\.atlas\.json/u)
+  // The runtime must reference the packed atlas manifest, never the 280 loose
+  // dev PNG frames (which live outside renderer/ and are excluded at package time).
+  assert.doesNotMatch(petSource, /sprites\/(idle|walk-left|celebrate|feeding|sleeping|working|climb-left|physics)\/\$\{index\}\.png/u)
   assert.doesNotMatch(petSource, /maid-whale-rig\.glb|MaidWhaleGLBRig/u)
   assert.match(rigSource, /complete-frame-2d-sprites/u)
   assert.match(rigSource, /#showFrame/u)
+  assert.match(rigSource, /drawImage\(/u)
   assert.match(rigSource, /this\.sheet\.className = 'sprite-sheet'/u)
   assert.doesNotMatch(rigSource, /activeSheetIndex|is-active/u)
   assert.match(rigSource, /scaleX\(-1\)/u)
   assert.doesNotMatch(rigSource, /ATLAS_FRAMES = 8/u)
+  assert.match(rigSource, /LRU_LIMIT = 3/u)
 })
 
 test('desktop pet can detect a restored workbench for window-edge climbing', async () => {

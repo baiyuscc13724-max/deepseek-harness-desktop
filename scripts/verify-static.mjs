@@ -5,22 +5,25 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
-  'electron/bootstrap.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/desktop-tray.cjs',
+  'electron/bootstrap.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/guest-preload.cjs', 'electron/desktop-tray.cjs',
   'electron/bridge/dsh-resolver.cjs', 'electron/bridge/dsh-home.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/process-tree.cjs', 'electron/bridge/runtime-proxy.cjs', 'electron/bridge/runtime-bundle-service.cjs',
   'electron/bridge/update-service.cjs', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/provider-meter-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/attachment-reference-service.cjs',
   'electron/bridge/component-update-contract.cjs', 'electron/bridge/component-update-archive.cjs', 'electron/bridge/component-update-builder.cjs', 'electron/bridge/component-update-config.cjs', 'electron/bridge/component-update-store.cjs', 'electron/bridge/component-update-service.cjs', 'electron/bridge/component-update-helper.cjs', 'electron/bridge/component-update-launcher.cjs', 'electron/bridge/component-update-health.cjs', 'electron/bridge/component-runtime-resolver.cjs',
   'electron/bridge/relay-tunnel-codec.cjs', 'electron/bridge/mobile-relay-config.cjs', 'electron/bridge/sync-transport-manager.cjs', 'electron/bridge/sync-transports/wss-relay-adapter.cjs', 'services/wss-relay/server.cjs', 'services/wss-relay/README.zh-CN.md',
+  'electron/bridge/capability-broker.cjs', 'electron/bridge/storage-scan-service.cjs', 'electron/bridge/storage-cleanup-service.cjs', 'electron/bridge/storage-management-service.cjs', 'electron/bridge/memory-censor.cjs', 'electron/bridge/memory-service.cjs', 'electron/bridge/browser-url-policy.cjs', 'electron/bridge/browser-session-policy.cjs', 'electron/bridge/browser-site-authz.cjs', 'electron/bridge/browser-action-gate.cjs', 'electron/bridge/browser-audit.cjs', 'electron/bridge/browser-security-policy.cjs', 'electron/bridge/browser-control-server.cjs',
+  'electron/bridge/desktop-directory-picker-plugin-service.cjs', 'plugins/dsh-desktop-directory-picker/package.json', 'plugins/dsh-desktop-directory-picker/lib/index.js', 'plugins/dsh-desktop-directory-picker/lib/client.js', 'electron/bridge/desktop-browser-tools-plugin-service.cjs', 'plugins/dsh-desktop-browser-tools/package.json', 'plugins/dsh-desktop-browser-tools/lib/index.js', 'electron/bridge/desktop-memory-tools-plugin-service.cjs', 'plugins/dsh-desktop-memory-tools/package.json', 'plugins/dsh-desktop-memory-tools/lib/index.js', 'electron/bridge/desktop-computer-use-plugin-service.cjs', 'plugins/dsh-desktop-computer-use/package.json', 'plugins/dsh-desktop-computer-use/lib/index.js',
   'electron/store/app-state-store.cjs', 'electron/store/mobile-sync-store.cjs',
-  'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js', 'renderer/workspace-links-integration.js',
+  'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js', 'renderer/workspace-links-integration.js', 'renderer/storage-manager.js', 'renderer/memory-manager.js', 'renderer/browser-sidebar.js', 'renderer/pet/pet-sprite-rig.js', 'renderer/pets/maid-whale/atlas/maid-whale.atlas.json',
   'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
   'renderer/themes/maid-atelier/maid-atelier-maid-right-v6.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
+  'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
+  'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
-  '.github/workflows/apple-virtual-tests.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/component-update-helper.cjs', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
+  '.github/workflows/apple-virtual-tests.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/component-update-helper.cjs', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'mobile/mobile-app-update.example.json', 'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
   'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json', 'release-mirrors.example.json', 'release-update-sources.json', 'release-update-sources.example.json', 'component-update-sources.json', 'mobile-relay-sources.json', 'component-release.example.json', 'component-release.macos-arm64.example.json'
@@ -45,7 +48,7 @@ for (const relative of removed) {
 }
 
 const html = await readFile(path.join(root, 'renderer/index.html'), 'utf8')
-for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './workspace-links-integration.js', './app.js', './assets/deepseek-icon.svg']) {
+for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './workspace-links-integration.js', './storage-manager.js', './memory-manager.js', './browser-sidebar.js', './app.js', './assets/deepseek-icon.svg']) {
   if (!html.includes(relative)) throw new Error(`renderer/index.html is missing expected reference: ${relative}`)
 }
 for (const id of ['runtimeView', 'runtimeStatus', 'runtimeStatusTitle', 'runtimeStatusDetail', 'retryRuntime']) {
@@ -183,7 +186,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.23') throw new Error(`Expected package version 1.0.23, received ${pkg.version}`)
+if (pkg.version !== '1.0.24') throw new Error(`Expected package version 1.0.24, received ${pkg.version}`)
 if (pkg.main !== 'electron/bootstrap.cjs' || pkg.build?.extraMetadata?.main !== 'electron/bootstrap.cjs') throw new Error('Component updates require the stable Electron bootstrap entrypoint.')
 if (pkg.scripts?.['release:components'] !== 'node scripts/build-component-update.mjs') throw new Error('Component release builder command is missing.')
 if (pkg.scripts?.['test:component-local'] !== 'node scripts/local-component-update-test.mjs') throw new Error('Local component restart/rollback test command is missing.')
@@ -268,8 +271,34 @@ if (pkg.scripts?.['test:provider:real']) throw new Error('The removed desktop pr
 if (pkg.build?.npmRebuild !== true || !pkg.build?.asarUnpack?.some(item => item === 'node_modules/**/*.node')) {
   throw new Error('The bundled Harness runtime requires Electron ABI rebuild while keeping only native modules outside app.asar.')
 }
-for (const excluded of ['!node_modules/**/*.map', '!node_modules/**/*.{ts,tsx,cts,mts}', '!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*']) {
+for (const excluded of [
+  '!node_modules/**/*.map',
+  '!node_modules/**/*.{ts,tsx,cts,mts}',
+  '!node_modules/**/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**/*',
+  '!node_modules/**/{doc,docs,documentation}/**/*',
+  '!node_modules/**/{README,README.*,CHANGELOG,CHANGELOG.*,HISTORY,HISTORY.*,CONTRIBUTING,CONTRIBUTING.*,AUTHORS,AUTHORS.*}'
+]) {
   if (!pkg.build?.files?.includes(excluded)) throw new Error(`Non-runtime package files must be pruned from the installer: ${excluded}`)
+}
+if (pkg.build?.files?.includes('docs/**/*')) throw new Error('Developer documentation must not be copied into release artifacts.')
+if (!pkg.build?.files?.includes('!pet-sprite-source/**/*')) throw new Error('Pet source frames must stay outside packaged runtime assets.')
+if (!pkg.build?.files?.includes('plugins/dsh-desktop-directory-picker/**/*')) throw new Error('The owned desktop directory picker plugin must be packaged.')
+if (!pkg.build?.asarUnpack?.includes('plugins/dsh-desktop-directory-picker/**/*')) throw new Error('The desktop directory picker plugin must remain unpacked for profile installation.')
+if (!pkg.build?.files?.includes('plugins/dsh-desktop-browser-tools/**/*')) throw new Error('The first-party browser tools plugin must be packaged.')
+if (!pkg.build?.asarUnpack?.includes('plugins/dsh-desktop-browser-tools/**/*')) throw new Error('The browser tools plugin must remain unpacked for profile installation.')
+if (!pkg.build?.files?.includes('plugins/dsh-desktop-memory-tools/**/*')) throw new Error('The opt-in local memory tool plugin must be packaged.')
+if (!pkg.build?.asarUnpack?.includes('plugins/dsh-desktop-memory-tools/**/*')) throw new Error('The memory tool plugin must remain unpacked for profile installation.')
+if (!pkg.build?.files?.includes('plugins/dsh-desktop-computer-use/**/*')) throw new Error('The constrained Computer Use plugin must be packaged.')
+if (!pkg.build?.asarUnpack?.includes('plugins/dsh-desktop-computer-use/**/*')) throw new Error('The Computer Use plugin must remain unpacked for profile installation.')
+if (JSON.stringify(pkg.build?.win?.electronLanguages) !== JSON.stringify(['zh-CN', 'en-US'])) {
+  throw new Error('Windows packages must contain only the supported zh-CN and en-US Electron locale packs.')
+}
+for (const excluded of [
+  '!node_modules/node-pty/prebuilds/{darwin-*,linux-*,win32-arm64}/**/*',
+  '!node_modules/node-pty/third_party/**/*',
+  '!node_modules/node-pty/build/Release/*.{iobj,ipdb,lib,exp}'
+]) {
+  if (!pkg.build?.files?.includes(excluded)) throw new Error(`Windows node-pty build debris must be pruned without widening the packaged file matcher: ${excluded}`)
 }
 if (pkg.build?.icon !== 'build/icon.png') throw new Error('All packages must use the official DeepSeek icon.')
 if (pkg.devDependencies?.electron !== '43.2.0') throw new Error('Release baseline requires pinned Electron 43.2.0.')
@@ -297,7 +326,7 @@ if (!main.includes("ipcMain.handle('componentUpdates:apply'")) throw new Error('
 for (const trayContract of ['createDesktopTray', 'ensureDesktopTray', "mainWindow.on('close'", 'event.preventDefault()', 'mainWindow.hide()', 'isQuitting = true']) {
   if (!main.includes(trayContract)) throw new Error(`Desktop tray lifecycle contract missing: ${trayContract}`)
 }
-for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'componentUpdates:getState', 'componentUpdates:check', 'componentUpdates:stage', 'componentUpdates:apply', 'componentUpdates:progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'models:meters:get', 'shell:openExternal', 'shell:openLocal', 'attachments:inspect']) {
+for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'componentUpdates:getState', 'componentUpdates:check', 'componentUpdates:stage', 'componentUpdates:apply', 'componentUpdates:progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'models:meters:get', 'storage:scan', 'storage:cleanupPreview', 'storage:cleanupApply', 'storage:status', 'memory:status', 'memory:setEnabled', 'memory:setPreferences', 'memory:list', 'memory:search', 'memory:add', 'memory:update', 'memory:delete', 'memory:deleteAll', 'memory:export', 'browser:state', 'browser:setVisible', 'browser:setContentVisible', 'browser:navigate', 'browser:back', 'browser:forward', 'browser:reload', 'browser:stop', 'browser:clearSiteData', 'browser:clearAllData', 'browser:grantCurrent', 'browser:revokeCurrent', 'browser:resumeModelControl', 'browser:confirmModelAction', 'browser:rejectModelAction', 'computerUse:state', 'computerUse:setEnabled', 'computerUse:confirm', 'computerUse:reject', 'shell:openExternal', 'shell:openLocal', 'attachments:inspect']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }
 for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'terminal:start', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {

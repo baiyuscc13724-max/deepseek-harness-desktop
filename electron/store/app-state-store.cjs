@@ -30,7 +30,7 @@ function normalizeCustomTheme(value = {}) {
 }
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 4,
+  schemaVersion: 5,
   updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null },
   appearance: {
     themeId: DEFAULT_THEME_ID,
@@ -44,6 +44,11 @@ const DEFAULT_STATE = Object.freeze({
     motion: 'system',
     muted: true,
     positionByDisplay: {}
+  },
+  memory: {
+    enabled: false,
+    sensitivityMode: 'reject',
+    autoRecall: false
   }
 })
 
@@ -57,7 +62,7 @@ function normalizeState(input) {
   const savedTheme = VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : DEFAULT_THEME_ID
   const themeId = Number(value.schemaVersion || 0) < 3 && savedTheme === 'official' ? DEFAULT_THEME_ID : savedTheme
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     updates: {
       checkOnStartup: value.updates?.checkOnStartup !== false,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
@@ -76,6 +81,11 @@ function normalizeState(input) {
       motion: ['system', 'full', 'reduced', 'still'].includes(value.pet?.motion) ? value.pet.motion : 'system',
       muted: value.pet?.muted !== false,
       positionByDisplay: normalizePetPositions(value.pet?.positionByDisplay)
+    },
+    memory: {
+      enabled: value.memory?.enabled === true,
+      sensitivityMode: value.memory?.sensitivityMode === 'redact' ? 'redact' : 'reject',
+      autoRecall: value.memory?.autoRecall === true
     }
   }
 }
@@ -156,6 +166,16 @@ class AppStateStore {
         ...patch.positionByDisplay
       })
     }
+    this.#persist()
+    return this.get()
+  }
+
+  updateMemory(patch = {}) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'enabled')) this.state.memory.enabled = Boolean(patch.enabled)
+    if (Object.prototype.hasOwnProperty.call(patch, 'sensitivityMode')) {
+      this.state.memory.sensitivityMode = patch.sensitivityMode === 'redact' ? 'redact' : 'reject'
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'autoRecall')) this.state.memory.autoRecall = Boolean(patch.autoRecall)
     this.#persist()
     return this.get()
   }
