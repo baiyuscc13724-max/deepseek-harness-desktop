@@ -10,7 +10,7 @@
       {
         "name": "Harness-Desktop-1.0.24-win-x64.exe",
         "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-win-x64.exe",
-        "size": 141927492,
+        "size": 141974039,
         "mirror_urls": [
           "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-win-x64.exe"
         ]
@@ -18,7 +18,7 @@
       {
         "name": "Harness-Desktop-1.0.24-portable-x64.exe",
         "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-portable-x64.exe",
-        "size": 135614254,
+        "size": 135643801,
         "mirror_urls": [
           "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-portable-x64.exe"
         ]
@@ -26,7 +26,7 @@
       {
         "name": "SHA256SUMS.txt",
         "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/SHA256SUMS.txt",
-        "size": 207,
+        "size": 831,
         "mirror_urls": [
           "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/SHA256SUMS.txt"
         ]

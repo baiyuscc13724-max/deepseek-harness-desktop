@@ -155,7 +155,8 @@
         "AppImage",
         "deb"
       ],
-      "category": "Development"
+      "category": "Development",
+      "artifactName": "Harness-Desktop-${version}-linux-${arch}.${ext}"
     },
     "icon": "build/icon.png",
     "npmRebuild": true,

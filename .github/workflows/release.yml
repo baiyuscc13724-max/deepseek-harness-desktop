@@ -122,7 +122,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-files
-          find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \) -print0 |
+          find release-artifacts -mindepth 2 -maxdepth 2 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \) -print0 |
             while IFS= read -r -d '' file; do cp "$file" release-files/; done
           test -n "$(find release-files -maxdepth 1 -type f -print -quit)"
           (cd release-files && sha256sum * > SHA256SUMS.txt)
