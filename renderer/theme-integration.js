@@ -34,6 +34,12 @@
       const query = new URLSearchParams(values).toString()
       location.href = `harness-desktop://${action}/${query ? `?${query}` : ''}`
     }
+    const uiModes = Object.freeze([
+      { id: 'official', name: '官方经典', description: '保持官方材质与层级，作为随时可恢复的稳定基线。' },
+      { id: 'aurora', name: '极光玻璃', description: '低透明玻璃、柔和渐变光影与清晰细边框。' },
+      { id: 'spatial', name: '空间专注', description: '突出当前会话，辅助区域仅做轻度视觉降噪。' },
+      { id: 'tactile', name: '触感实体', description: '在主要按钮和输入区增加克制的高光与按压反馈。' }
+    ])
     const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
     })[character])
@@ -143,7 +149,7 @@
       .hd-theme-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; padding:4px 0 18px; }
       .hd-theme-heading h2 { margin:0; font-size:18px; line-height:28px; }
       .hd-theme-heading p { max-width:620px; margin:3px 0 0; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
-      .hd-theme-button { min-height:34px; border:1px solid var(--dsw-alias-border-l2); border-radius:9px; padding:6px 13px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-2); font:inherit; font-size:12px; cursor:pointer; }
+      .hd-theme-button { min-height:34px; border:1px solid var(--dsw-alias-border-l2); border-radius:9px; padding:6px 13px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-2); font:inherit; font-size:12px; white-space:nowrap; cursor:pointer; }
       .hd-theme-button:hover { background:var(--dsw-alias-interactive-bg-hover); }
       .hd-theme-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px; }
       .hd-theme-card { overflow:hidden; border:1px solid var(--dsw-alias-border-l2); border-radius:12px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-1); box-shadow:0 8px 24px rgba(0,0,0,.07); cursor:pointer; transition:transform .16s ease,border-color .16s ease; }
@@ -181,6 +187,52 @@
       .hd-custom-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin-top:14px; }
       .hd-custom-actions .hd-theme-primary { border-color:var(--dsw-alias-brand-primary); color:var(--dsw-alias-label-primary-foreground); background:var(--dsw-alias-brand-primary); }
       .hd-custom-actions button:disabled { cursor:not-allowed; opacity:.45; }
+      .hd-appearance-tabs { display:flex; gap:4px; margin:0 0 16px; border-bottom:1px solid var(--dsw-alias-border-l2); }
+      .hd-appearance-tab { min-width:104px; min-height:36px; border:0; border-bottom:2px solid transparent; padding:0 13px; color:var(--dsw-alias-label-secondary); background:transparent; font:inherit; font-size:12px; cursor:pointer; }
+      .hd-appearance-tab[aria-selected="true"] { border-bottom-color:var(--dsw-alias-brand-primary); color:var(--dsw-alias-label-primary); font-weight:650; }
+      .hd-appearance-pane[hidden] { display:none!important; }
+      .hd-ui-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+      .hd-ui-heading h3 { margin:0; font-size:16px; }
+      .hd-ui-heading p { max-width:620px; margin:4px 0 0; color:var(--dsw-alias-label-secondary); font-size:11px; line-height:18px; }
+      .hd-ui-current { flex:none; border-radius:999px; padding:5px 10px; color:var(--dsw-alias-brand-text); background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,transparent); font-size:10px; }
+      .hd-ui-grid { display:grid; grid-template-columns:repeat(2,minmax(230px,1fr)); gap:12px; margin-top:16px; }
+      .hd-ui-card { display:grid; grid-template-columns:118px 1fr; min-height:118px; overflow:hidden; border:1px solid var(--dsw-alias-border-l2); border-radius:13px; padding:0; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-1); text-align:left; font:inherit; cursor:pointer; transition:border-color .18s ease,transform .18s ease,box-shadow .18s ease; }
+      .hd-ui-card:hover { transform:translateY(-1px); border-color:var(--dsw-alias-brand-primary); }
+      .hd-ui-card[data-selected="true"] { border-color:var(--dsw-alias-brand-primary); box-shadow:0 0 0 1px var(--dsw-alias-brand-primary); }
+      .hd-ui-preview { position:relative; overflow:hidden; border-right:1px solid var(--dsw-alias-border-l2); background:#dfe8e6; }
+      .hd-ui-preview::before,.hd-ui-preview::after { content:""; position:absolute; border-radius:9px; }
+      .hd-ui-preview::before { inset:17px 13px; border:1px solid rgba(72,90,100,.24); background:rgba(242,247,246,.72); }
+      .hd-ui-preview::after { left:26px; right:6px; bottom:22px; height:22px; border:1px solid rgba(72,90,100,.18); background:rgba(255,255,255,.7); }
+      .hd-ui-preview[data-preview="aurora"] { background:radial-gradient(circle at 10% 5%,#6ed7c4,transparent 48%),linear-gradient(145deg,#26384a,#5968d9); }
+      .hd-ui-preview[data-preview="aurora"]::before,.hd-ui-preview[data-preview="aurora"]::after { border-color:rgba(235,244,255,.26); background:rgba(24,34,54,.62); box-shadow:inset 0 1px rgba(255,255,255,.12); backdrop-filter:blur(6px); }
+      .hd-ui-preview[data-preview="spatial"] { background:linear-gradient(145deg,#c8d6d4,#e4e9e7); }
+      .hd-ui-preview[data-preview="spatial"]::before { inset:13px 7px 18px 28px; box-shadow:-17px 7px 18px rgba(53,73,77,.18); }
+      .hd-ui-preview[data-preview="tactile"]::before,.hd-ui-preview[data-preview="tactile"]::after { box-shadow:inset 0 1px #fff,0 6px 11px rgba(52,72,74,.2); }
+      .hd-ui-body { align-self:center; padding:14px; }
+      .hd-ui-body strong,.hd-ui-body span { display:block; }
+      .hd-ui-body strong { font-size:13px; }
+      .hd-ui-body span { margin-top:5px; color:var(--dsw-alias-label-secondary); font-size:11px; line-height:1.55; }
+      .hd-ui-options { display:grid; grid-template-columns:repeat(2,minmax(260px,1fr)); gap:10px; margin-top:16px; }
+      .hd-ui-options label { display:flex; align-items:center; justify-content:space-between; gap:16px; border-top:1px solid var(--dsw-alias-border-l2); padding:13px 2px 4px; }
+      .hd-ui-options span,.hd-ui-options strong,.hd-ui-options small { display:block; }
+      .hd-ui-options strong { font-size:12px; }
+      .hd-ui-options small { margin-top:2px; color:var(--dsw-alias-label-secondary); font-size:10px; font-weight:400; }
+      .hd-ui-options input { width:17px; height:17px; accent-color:var(--dsw-alias-brand-primary); }
+      .hd-ui-note { margin:16px 0 0; color:var(--dsw-alias-label-tertiary); font-size:11px; }
+      html[data-hd-ui-mode="aurora"] [data-slot="sidebar"] > *,html[data-hd-ui-mode="aurora"] [data-composer-card="true"],html[data-hd-ui-mode="aurora"] [role="dialog"] { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,var(--dsw-alias-border-l2))!important; background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 88%,transparent)!important; box-shadow:inset 0 1px rgba(255,255,255,.08),0 18px 48px rgba(7,15,30,.14); backdrop-filter:blur(18px) saturate(1.08); }
+      html[data-hd-ui-mode="aurora"] [data-composer-card="true"] { border-radius:18px!important; }
+      html[data-hd-ui-mode="spatial"] [data-slot="sidebar"] > * { opacity:.86; transition:opacity .2s ease,filter .2s ease; }
+      html[data-hd-ui-mode="spatial"] [data-slot="sidebar"]:hover > *,html[data-hd-ui-mode="spatial"] [data-slot="sidebar"]:focus-within > * { opacity:1; }
+      html[data-hd-ui-mode="spatial"] [data-composer-card="true"] { border-radius:18px!important; box-shadow:0 20px 52px rgba(7,15,30,.20); }
+      html[data-hd-ui-mode="spatial"] [data-slot="conversation"] p,html[data-hd-ui-mode="spatial"] [data-slot="conversation"] li { line-height:1.7; }
+      html[data-hd-ui-mode="tactile"] [data-composer-card="true"],html[data-hd-ui-mode="tactile"] [role="dialog"] { border-color:color-mix(in srgb,var(--dsw-alias-label-primary) 16%,var(--dsw-alias-border-l2))!important; border-radius:18px!important; box-shadow:inset 0 1px rgba(255,255,255,.10),inset 0 -2px rgba(0,0,0,.08),0 12px 28px rgba(7,15,30,.14); }
+      html[data-hd-ui-mode="tactile"] [data-composer-card="true"] button,html[data-hd-ui-mode="tactile"] [role="dialog"] button { box-shadow:inset 0 1px rgba(255,255,255,.12),0 4px 10px rgba(7,15,30,.10); transition:transform .14s ease,box-shadow .14s ease; }
+      html[data-hd-ui-mode="tactile"] [data-composer-card="true"] button:active,html[data-hd-ui-mode="tactile"] [role="dialog"] button:active { transform:translateY(1px); box-shadow:inset 0 2px 4px rgba(0,0,0,.16); }
+      html[data-hd-low-performance="true"] [data-slot="sidebar"] > *,html[data-hd-low-performance="true"] [data-composer-card="true"],html[data-hd-low-performance="true"] [role="dialog"] { backdrop-filter:none!important; box-shadow:none!important; }
+      html[data-hd-reduced-motion="true"] .hd-ui-card,html[data-hd-reduced-motion="true"] [data-slot="sidebar"] > *,html[data-hd-reduced-motion="true"] [data-composer-card="true"] button,html[data-hd-reduced-motion="true"] [role="dialog"] button { transition:none!important; }
+      @media (prefers-reduced-motion:reduce) { .hd-ui-card,[data-slot="sidebar"] > *,[data-composer-card="true"] button,[role="dialog"] button { transition:none!important; } }
+      @container (max-width:660px) { .hd-custom-layout { grid-template-columns:1fr; } .hd-ui-grid,.hd-ui-options { grid-template-columns:1fr; } }
+      @container (max-width:380px) { .hd-custom-heading { flex-direction:column; gap:6px; } .hd-custom-status { align-self:flex-start; } .hd-custom-fields,.hd-custom-range-grid { grid-template-columns:1fr; } .hd-ui-card { grid-template-columns:96px 1fr; } }
       @container (max-width:660px) { .hd-custom-layout { grid-template-columns:1fr; } }
       @container (max-width:380px) { .hd-custom-heading { flex-direction:column; gap:6px; } .hd-custom-status { align-self:flex-start; } .hd-custom-fields,.hd-custom-range-grid { grid-template-columns:1fr; } }
       html[data-hd-theme]:not([data-hd-theme="official"]) body { background-position:center !important; background-size:cover !important; background-attachment:fixed !important; }
@@ -333,6 +385,48 @@
       window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ = signature
     }
 
+    const applyUiMode = () => {
+      const state = window.__HARNESS_DESKTOP_THEME_STATE__ || {}
+      const mobile = document.documentElement.dataset.harnessMobile === 'true'
+      const mode = !mobile && uiModes.some(entry => entry.id === state.uiMode) ? state.uiMode : 'official'
+      document.documentElement.dataset.hdUiMode = mode
+      document.documentElement.dataset.hdReducedMotion = String(state.reducedMotion === true)
+      document.documentElement.dataset.hdLowPerformance = String(state.lowPerformance === true)
+    }
+
+    const publishUiPreferences = panel => {
+      const state = window.__HARNESS_DESKTOP_THEME_STATE__ || {}
+      request('set-ui-preferences', {
+        uiMode: state.uiMode || 'official',
+        reducedMotion: state.reducedMotion === true ? '1' : '0',
+        lowPerformance: state.lowPerformance === true ? '1' : '0'
+      })
+      applyUiMode()
+      renderUiModes(panel)
+    }
+
+    const renderUiModes = panel => {
+      const state = window.__HARNESS_DESKTOP_THEME_STATE__ || {}
+      const selected = uiModes.find(entry => entry.id === state.uiMode) || uiModes[0]
+      const grid = panel.querySelector('[data-hd-ui-grid]')
+      if (!grid.dataset.ready) {
+        grid.dataset.ready = 'true'
+        grid.innerHTML = uiModes.map(mode => `
+          <button type="button" class="hd-ui-card" data-hd-ui-mode-card="${mode.id}">
+            <span class="hd-ui-preview" data-preview="${mode.id}" aria-hidden="true"></span>
+            <span class="hd-ui-body"><strong>${mode.name}</strong><span>${mode.description}</span></span>
+          </button>`).join('')
+        grid.querySelectorAll('[data-hd-ui-mode-card]').forEach(button => button.addEventListener('click', () => {
+          window.__HARNESS_DESKTOP_THEME_STATE__ = { ...(window.__HARNESS_DESKTOP_THEME_STATE__ || {}), uiMode: button.dataset.hdUiModeCard || 'official' }
+          publishUiPreferences(panel)
+        }))
+      }
+      grid.querySelectorAll('[data-hd-ui-mode-card]').forEach(button => { button.dataset.selected = String(button.dataset.hdUiModeCard === selected.id) })
+      panel.querySelector('[data-hd-ui-current]').textContent = selected.name
+      panel.querySelector('[data-hd-reduced-motion]').checked = state.reducedMotion === true
+      panel.querySelector('[data-hd-low-performance]').checked = state.lowPerformance === true
+    }
+
     const renderCards = panel => {
       const catalog = window.__HARNESS_DESKTOP_THEMES__ || []
       const state = window.__HARNESS_DESKTOP_THEME_STATE__ || { themeId: 'official', customTheme: {} }
@@ -408,6 +502,7 @@
         ? animated ? '动态壁纸已启用' : '本地壁纸已启用（兼容动态 WebP）'
         : '当前使用渐变背景'
       panel.querySelector('[data-hd-clear-background]').disabled = !state.customBackgroundDataUrl
+      renderUiModes(panel)
     }
 
     const createPanel = () => {
@@ -416,30 +511,56 @@
       panel.dataset.hdThemePanel = ''
       panel.hidden = true
       panel.innerHTML = `
-        <div class="hd-theme-heading"><div><h2>外观皮肤</h2><p>直接装饰官方 DeepSeek Harness 工作台，不创建第二套界面。保留现有皮肤选择方式，并提供适合阅读与编码的壁纸调节。</p></div><button type="button" class="hd-theme-button" data-hd-restore>恢复官方外观</button></div>
-        <div class="hd-theme-grid" data-hd-theme-grid></div>
-        <section class="hd-custom-editor">
-          <div class="hd-custom-heading"><div><h3>自定义主题</h3><p>调整配色和壁纸质感；文件只保存在本机，支持 PNG、JPG、WebP、GIF、APNG，最大 50 MB。</p></div><span class="hd-custom-status" data-hd-custom-background-state></span></div>
-          <div class="hd-custom-layout">
-            <section class="hd-custom-group"><h4>基础配色</h4><div class="hd-custom-fields">
-              <label>明暗模式<select data-hd-custom="mode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
-              <label>强调色<input type="color" data-hd-custom="accent" value="#6f8cff"></label>
-              <label>表面色<input type="color" data-hd-custom="surface" value="#171b29"></label>
-              <label>文字色<input type="color" data-hd-custom="text" value="#f4f7ff"></label>
-            </div></section>
-            <section class="hd-custom-group"><h4>壁纸质感</h4><div class="hd-custom-range-grid">
-              <label><span>壁纸明暗 <output data-hd-custom-output="wallpaperBrightness">82%</output></span><input type="range" min="40" max="140" value="82" data-hd-custom="wallpaperBrightness"></label>
-              <label><span>填充背景模糊 <output data-hd-custom-output="wallpaperBlur">2px</output></span><input type="range" min="0" max="24" value="2" data-hd-custom="wallpaperBlur"></label>
-              <label><span>面板通透 <output data-hd-custom-output="glassTransparency">32%</output></span><input type="range" min="0" max="92" value="32" data-hd-custom="glassTransparency"></label>
-              <label><span>边框清晰 <output data-hd-custom-output="borderStrength">48%</output></span><input type="range" min="0" max="100" value="48" data-hd-custom="borderStrength"></label>
-              <label><span>文字保护 <output data-hd-custom-output="readabilityStrength">72%</output></span><input type="range" min="0" max="100" value="72" data-hd-custom="readabilityStrength"></label>
-            </div></section>
+        <div class="hd-theme-heading"><div><h2>外观与界面模式</h2><p>皮肤控制颜色与壁纸，界面模式控制材质、层级和克制动效；不会创建第二套工作台。</p></div><button type="button" class="hd-theme-button" data-hd-restore>恢复官方外观</button></div>
+        <div class="hd-appearance-tabs"><button type="button" class="hd-appearance-tab" data-hd-appearance-tab="themes" aria-selected="true">皮肤</button><button type="button" class="hd-appearance-tab" data-hd-appearance-tab="modes" aria-selected="false">界面模式</button></div>
+        <div class="hd-appearance-pane" data-hd-appearance-pane="themes">
+          <div class="hd-theme-grid" data-hd-theme-grid></div>
+          <section class="hd-custom-editor">
+            <div class="hd-custom-heading"><div><h3>自定义主题</h3><p>调整配色和壁纸质感；文件只保存在本机，支持 PNG、JPG、WebP、GIF、APNG，最大 50 MB。</p></div><span class="hd-custom-status" data-hd-custom-background-state></span></div>
+            <div class="hd-custom-layout">
+              <section class="hd-custom-group"><h4>基础配色</h4><div class="hd-custom-fields">
+                <label>明暗模式<select data-hd-custom="mode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
+                <label>强调色<input type="color" data-hd-custom="accent" value="#6f8cff"></label>
+                <label>表面色<input type="color" data-hd-custom="surface" value="#171b29"></label>
+                <label>文字色<input type="color" data-hd-custom="text" value="#f4f7ff"></label>
+              </div></section>
+              <section class="hd-custom-group"><h4>壁纸质感</h4><div class="hd-custom-range-grid">
+                <label><span>壁纸明暗 <output data-hd-custom-output="wallpaperBrightness">82%</output></span><input type="range" min="40" max="140" value="82" data-hd-custom="wallpaperBrightness"></label>
+                <label><span>填充背景模糊 <output data-hd-custom-output="wallpaperBlur">2px</output></span><input type="range" min="0" max="24" value="2" data-hd-custom="wallpaperBlur"></label>
+                <label><span>面板通透 <output data-hd-custom-output="glassTransparency">32%</output></span><input type="range" min="0" max="92" value="32" data-hd-custom="glassTransparency"></label>
+                <label><span>边框清晰 <output data-hd-custom-output="borderStrength">48%</output></span><input type="range" min="0" max="100" value="48" data-hd-custom="borderStrength"></label>
+                <label><span>文字保护 <output data-hd-custom-output="readabilityStrength">72%</output></span><input type="range" min="0" max="100" value="72" data-hd-custom="readabilityStrength"></label>
+              </div></section>
+            </div>
+            <div class="hd-custom-actions"><button type="button" class="hd-theme-button" data-hd-choose-background>选择本地壁纸或动图</button><button type="button" class="hd-theme-button" data-hd-clear-background>移除壁纸</button><button type="button" class="hd-theme-button hd-theme-primary" data-hd-save-custom>应用并保存</button></div>
+          </section>
+        </div>
+        <section class="hd-appearance-pane" data-hd-appearance-pane="modes" hidden>
+          <div class="hd-ui-heading"><div><h3>界面模式</h3><p>模式只改变材质、层级与动效；当前配色和壁纸保持不变。</p></div><strong class="hd-ui-current" data-hd-ui-current>官方经典</strong></div>
+          <div class="hd-ui-grid" data-hd-ui-grid></div>
+          <div class="hd-ui-options">
+            <label><span><strong>减少动态效果</strong><small>关闭界面模式产生的位移与过渡。</small></span><input type="checkbox" data-hd-reduced-motion></label>
+            <label><span><strong>低性能模式</strong><small>关闭模糊和复杂阴影，保留清晰层级。</small></span><input type="checkbox" data-hd-low-performance></label>
           </div>
-          <div class="hd-custom-actions"><button type="button" class="hd-theme-button" data-hd-choose-background>选择本地壁纸或动图</button><button type="button" class="hd-theme-button" data-hd-clear-background>移除壁纸</button><button type="button" class="hd-theme-button hd-theme-primary" data-hd-save-custom>应用并保存</button></div>
+          <p class="hd-ui-note">旧用户默认保持“官方经典”；切换不会重载或中断当前会话。</p>
         </section>`
+      const showAppearancePane = name => {
+        panel.querySelectorAll('[data-hd-appearance-tab]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.hdAppearanceTab === name)))
+        panel.querySelectorAll('[data-hd-appearance-pane]').forEach(pane => { pane.hidden = pane.dataset.hdAppearancePane !== name })
+      }
+      panel.querySelectorAll('[data-hd-appearance-tab]').forEach(button => button.addEventListener('click', () => showAppearancePane(button.dataset.hdAppearanceTab)))
+      panel.querySelector('[data-hd-reduced-motion]').addEventListener('change', event => {
+        window.__HARNESS_DESKTOP_THEME_STATE__ = { ...(window.__HARNESS_DESKTOP_THEME_STATE__ || {}), reducedMotion: event.currentTarget.checked }
+        publishUiPreferences(panel)
+      })
+      panel.querySelector('[data-hd-low-performance]').addEventListener('change', event => {
+        window.__HARNESS_DESKTOP_THEME_STATE__ = { ...(window.__HARNESS_DESKTOP_THEME_STATE__ || {}), lowPerformance: event.currentTarget.checked }
+        publishUiPreferences(panel)
+      })
       panel.querySelector('[data-hd-restore]').addEventListener('click', () => {
-        window.__HARNESS_DESKTOP_THEME_STATE__ = { ...(window.__HARNESS_DESKTOP_THEME_STATE__ || {}), themeId: 'official' }
-        applyTheme('official'); renderCards(panel); request('set-theme', { id: 'official' })
+        const mobile = document.documentElement.dataset.harnessMobile === 'true'
+        window.__HARNESS_DESKTOP_THEME_STATE__ = { ...(window.__HARNESS_DESKTOP_THEME_STATE__ || {}), themeId: 'official', ...(mobile ? {} : { uiMode: 'official', reducedMotion: false, lowPerformance: false }) }
+        applyTheme('official'); applyUiMode(); renderCards(panel); request(mobile ? 'set-theme' : 'restore-appearance', mobile ? { id: 'official' } : {})
       })
       panel.querySelector('[data-hd-choose-background]').addEventListener('click', () => request('choose-theme-background'))
       panel.querySelector('[data-hd-clear-background]').addEventListener('click', () => request('clear-theme-background'))
@@ -479,7 +600,7 @@
       skinButton.className = inactive?.className || general.className
       skinButton.removeAttribute('aria-current')
       const label = skinButton.querySelector('span:last-child')
-      if (label) label.textContent = '外观皮肤'
+      if (label) label.textContent = '外观与界面模式'
       const icon = skinButton.querySelector('svg')
       if (icon) icon.outerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.1a6.9 6.9 0 1 0 0 13.8h1.1a1.35 1.35 0 0 0 .55-2.58.72.72 0 0 1 .3-1.38h1.15A3.8 3.8 0 0 0 14.9 7.1 6 6 0 0 0 8 1.1Zm-3.05 7A1.05 1.05 0 1 1 4.95 6a1.05 1.05 0 0 1 0 2.1Zm1.7-3A1.05 1.05 0 1 1 6.65 3a1.05 1.05 0 0 1 0 2.1Zm3.1-.15a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Zm2 2.2a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Z" fill="currentColor"/></svg>'
       general.parentElement.appendChild(skinButton)
@@ -544,6 +665,7 @@
       const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
       if (dialog) ensureNavigation(dialog)
       applySessionLogDock()
+      applyUiMode()
       if (refreshTheme) applyTheme()
       stabilizeWorkbenchViewport()
     }

@@ -28,6 +28,7 @@
   const clearSiteConfirm = document.querySelector('#browserClearSiteConfirm')
   const clearSite = document.querySelector('#browserClearSite')
   const clearAllConfirm = document.querySelector('#browserClearAllConfirm')
+  const privacySummary = document.querySelector('#browserPrivacySummary')
   const clearAll = document.querySelector('#browserClearAll')
   let state = { visible: false, loading: false, url: '', origin: '', canGoBack: false, canGoForward: false, hasSiteData: false }
 
@@ -64,13 +65,26 @@
   function render(next) {
     state = { ...state, ...next }
     const visible = state.visible === true
+    const resetting = state.profileResetting === true
     sidebar.classList.toggle('hidden', !visible)
     sidebar.setAttribute('aria-hidden', String(!visible))
     quickButton.setAttribute('aria-expanded', String(visible))
     document.body.classList.toggle('browser-sidebar-open', visible)
     loading.classList.toggle('is-loading', state.loading === true)
-    backButton.disabled = !state.canGoBack
-    forwardButton.disabled = !state.canGoForward
+    backButton.disabled = resetting || !state.canGoBack
+    forwardButton.disabled = resetting || !state.canGoForward
+    reloadButton.disabled = resetting
+    stopButton.disabled = resetting
+    address.disabled = resetting
+    goButton.disabled = resetting
+    grantCurrent.disabled = resetting
+    revokeCurrent.disabled = resetting
+    resumeModel.disabled = resetting
+    clearSiteConfirm.disabled = resetting
+    clearAllConfirm.disabled = resetting
+    clearSite.disabled = resetting || !clearSiteConfirm.checked
+    clearAll.disabled = resetting || !clearAllConfirm.checked
+    for (const checkbox of document.querySelectorAll('.browser-model-permissions input[type="checkbox"]')) checkbox.disabled = resetting
     reloadButton.textContent = state.loading ? '×' : '↻'
     reloadButton.setAttribute('aria-label', state.loading ? '停止加载' : '刷新')
     if (document.activeElement !== address && state.url) address.value = state.url
@@ -78,8 +92,11 @@
     loginState.textContent = state.hasSiteData ? '本站会话数据已保存在独立 Profile' : '未检测到本站 Cookie'
     const currentAuth = state.authorizations?.entries?.find(entry => entry.origin === state.origin)
     for (const checkbox of document.querySelectorAll('.browser-model-permissions input[type="checkbox"]')) checkbox.checked = currentAuth?.actions?.includes(checkbox.value) || checkbox.value === 'read' && !currentAuth
-    revokeCurrent.disabled = !currentAuth
-    resumeModel.disabled = !state.modelControlStopped
+    revokeCurrent.disabled = resetting || !currentAuth
+    const authorizationCount = Number(state.authorizations?.count) || 0
+    const auditCount = Number(state.audit?.count) || 0
+    privacySummary.textContent = `已保存 ${authorizationCount} 个模型站点授权；本次运行保留 ${auditCount} 条脱敏审计元数据。`
+    resumeModel.disabled = resetting || !state.modelControlStopped
     pendingActions.replaceChildren()
     for (const pending of state.pendingConfirmations || []) {
       const row = document.createElement('div')
@@ -100,7 +117,7 @@
       }
       pendingActions.append(row)
     }
-    statusText.textContent = state.error || (state.title ? `${state.title} · 独立 Profile` : '独立 Profile · 用户可直接登录')
+    statusText.textContent = resetting ? '正在安全重置独立 Profile，浏览与模型操作已暂停…' : state.error || (state.title ? `${state.title} · 独立 Profile` : '独立 Profile · 用户可直接登录')
   }
 
   async function open() {
@@ -171,8 +188,8 @@
     render(await api.resumeBrowserModelControl())
     statusText.textContent = '模型浏览器控制已恢复；仍需按站点授权。'
   })
-  clearSiteConfirm.addEventListener('change', () => { clearSite.disabled = !clearSiteConfirm.checked })
-  clearAllConfirm.addEventListener('change', () => { clearAll.disabled = !clearAllConfirm.checked })
+  clearSiteConfirm.addEventListener('change', () => { clearSite.disabled = state.profileResetting === true || !clearSiteConfirm.checked })
+  clearAllConfirm.addEventListener('change', () => { clearAll.disabled = state.profileResetting === true || !clearAllConfirm.checked })
   clearSite.addEventListener('click', async () => {
     if (!clearSiteConfirm.checked) return
     clearSite.disabled = true

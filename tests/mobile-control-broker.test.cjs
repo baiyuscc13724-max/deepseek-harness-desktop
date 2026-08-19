@@ -17,6 +17,9 @@ function readyBroker() {
     enabled: true,
     ready: true,
     accessibility: true,
+    platform: 'android',
+    deviceClass: 'phone',
+    appVersion: '1.0.20',
     capabilities: ['tap', 'swipe', 'textInput', 'screenshot', 'clearCache']
   })
   return { broker, advance: value => { now += value } }
@@ -27,13 +30,35 @@ test('control broker negotiates capabilities and returns command receipts', () =
   const command = broker.enqueue('phone-a', { action: 'tap', payload: { x: 24.4, y: 80.9 }, timeoutMs: 2500, retryLimit: 1 })
   assert.equal(command.protocolVersion, 1)
   assert.deepEqual(command.payload, { x: 24, y: 81 })
-  assert.equal(broker.state([{ id: 'phone-a', name: 'Pixel' }]).devices[0].queued, 1)
+  const device = broker.state([{ id: 'phone-a', name: 'Pixel' }]).devices[0]
+  assert.equal(device.queued, 1)
+  assert.equal(device.platform, 'android')
+  assert.equal(device.deviceClass, 'phone')
+  assert.equal(device.appVersion, '1.0.20')
 
   const delivery = broker.poll('phone-a', 1)
   assert.equal(delivery.command.id, command.id)
   const result = broker.reportResult('phone-a', { id: command.id, ok: true, code: 'OK', message: 'clicked' })
   assert.equal(result.ok, true)
   assert.equal(broker.result(command.id).action, 'tap')
+})
+
+test('control protocol is platform-neutral and gates future iOS clients only by capabilities', () => {
+  const broker = new MobileControlBroker({ idFactory: () => '00000000-0000-4000-8000-000000000099' })
+  broker.reportStatus('ios-a', {
+    protocolVersion: CONTROL_PROTOCOL_VERSION,
+    platform: 'ios',
+    deviceClass: 'tablet',
+    appVersion: '0.1.0',
+    enabled: true,
+    ready: true,
+    capabilities: ['screenshot', 'filePicker']
+  })
+  const device = broker.state([{ id: 'ios-a', name: 'iPad', platform: 'ios' }]).devices[0]
+  assert.equal(device.platform, 'ios')
+  assert.equal(device.deviceClass, 'tablet')
+  assert.equal(broker.enqueue('ios-a', { action: 'screenshot', payload: { maxWidth: 900 } }).action, 'screenshot')
+  assert.throws(() => broker.enqueue('ios-a', { action: 'openApp', payload: { packageName: 'com.example.app' } }), /未上报 openApp/)
 })
 
 test('control broker rejects unsupported and forbidden operations', () => {

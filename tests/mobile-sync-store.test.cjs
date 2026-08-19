@@ -24,10 +24,14 @@ test('MobileSyncStore persists only safe pairing records', () => {
     id: '0123456789abcdef',
     secretHash: 'a'.repeat(64),
     name: ' Pixel 9\u0000 ',
+    platform: 'android',
+    deviceClass: 'phone',
+    appVersion: '1.0.20',
     createdAt: '2026-08-17T01:02:03.000Z',
     lastSeenAt: null
   })
   const restored = new MobileSyncStore(file).get()
+  assert.equal(restored.schemaVersion, 3)
   assert.equal(restored.enabled, true)
   assert.equal(restored.remoteEnabled, false)
   assert.equal(restored.transportPreference, 'tailscale')
@@ -37,6 +41,9 @@ test('MobileSyncStore persists only safe pairing records', () => {
     id: '0123456789abcdef',
     secretHash: 'a'.repeat(64),
     name: 'Pixel 9',
+    platform: 'android',
+    deviceClass: 'phone',
+    appVersion: '1.0.20',
     createdAt: '2026-08-17T01:02:03.000Z',
     lastSeenAt: null
   })
@@ -93,6 +100,9 @@ test('normalizeState drops malformed secrets and invalid ports', () => {
   assert.equal(state.preferredPort, 3081)
   assert.equal(state.devices.length, 1)
   assert.equal(state.devices[0].name, 'OK')
+  assert.equal(state.devices[0].platform, 'unknown')
+  assert.equal(state.devices[0].deviceClass, 'unknown')
+  assert.equal(state.devices[0].appVersion, null)
   assert.equal(state.remoteEnabled, true)
   assert.equal(state.transportPreference, 'auto')
 })

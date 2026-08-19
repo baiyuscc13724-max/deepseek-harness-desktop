@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   getDistribution: () => ipcRenderer.invoke('distribution:get'),
   getAppearance: () => ipcRenderer.invoke('appearance:get'),
   setTheme: themeId => ipcRenderer.invoke('appearance:setTheme', themeId),
+  setUiPreferences: patch => ipcRenderer.invoke('appearance:setUiPreferences', patch),
   getThemeAssets: () => ipcRenderer.invoke('appearance:assets'),
   saveCustomTheme: customTheme => ipcRenderer.invoke('appearance:saveCustom', customTheme),
   chooseThemeBackground: () => ipcRenderer.invoke('appearance:chooseBackground'),

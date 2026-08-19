@@ -26,6 +26,18 @@ function sanitizeOptions(input = {}) {
   })
 }
 
+function publicPlan(plan) {
+  const sanitize = item => {
+    const { identity, ...safe } = item || {}
+    return safe
+  }
+  return {
+    ...plan,
+    deletions: (plan.deletions || []).map(sanitize),
+    applied: Array.isArray(plan.applied) ? plan.applied.map(sanitize) : plan.applied
+  }
+}
+
 class StorageManagementService {
   constructor(options = {}) {
     if (!options.root) throw new Error('HarnessData root is required.')
@@ -58,10 +70,11 @@ class StorageManagementService {
     const previewId = this.idFactory()
     this.previews.set(previewId, {
       options,
+      approvedCandidates: plan.deletions.map(candidate => ({ ...candidate, identity: { ...candidate.identity } })),
       createdAt: this.now(),
       expiresAt: this.now() + PREVIEW_TTL_MS
     })
-    return { ...plan, previewId, expiresAt: new Date(this.now() + PREVIEW_TTL_MS).toISOString() }
+    return { ...publicPlan(plan), previewId, expiresAt: new Date(this.now() + PREVIEW_TTL_MS).toISOString() }
   }
 
   async apply(previewId, { confirmed = false } = {}) {
@@ -73,7 +86,8 @@ class StorageManagementService {
     this.previews.delete(key)
     const request = this.#dispatch('storageCleanupApply', preview.options, true)
     if (!request) throw new Error('存储清理请求未获确认。')
-    return this.cleanup.plan(this.root, { ...request.payload, preview: false })
+    const plan = await this.cleanup.plan(this.root, { ...request.payload, preview: false, approvedCandidates: preview.approvedCandidates })
+    return publicPlan(plan)
   }
 
   status() {

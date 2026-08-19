@@ -2,34 +2,84 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
-const { mkdtemp, readdir, rm, symlink, writeFile } = require('node:fs/promises')
+const { access, mkdtemp, readdir, readFile, rm, writeFile } = require('node:fs/promises')
+const { ComputerUseScreenshotStore, SCREENSHOT_FILE } = require('../electron/bridge/computer-use-screenshot-store.cjs')
 
-const { pruneComputerUseScreenshots } = require('../electron/bridge/computer-use-screenshot-store.cjs')
+async function files(directory) {
+  return (await readdir(directory)).sort()
+}
 
-test('Computer Use screenshots are bounded by count and age without touching unrelated files', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'harness-computer-use-shots-'))
+test('clearing an unused Computer Use session does not create a screenshot directory', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'computer-use-empty-'))
+  const directory = path.join(root, 'screenshots')
   try {
-    const now = 2_000_000_000_000
-    for (let index = 0; index < 45; index++) {
-      await writeFile(path.join(root, `window-${now - index * 1000}.png`), `shot-${index}`)
-    }
-    await writeFile(path.join(root, 'keep.txt'), 'protected')
-    await writeFile(path.join(root, `window-${now - 20 * 24 * 60 * 60 * 1000}.png`), 'expired')
-    try { await symlink(path.join(root, 'keep.txt'), path.join(root, `window-${now + 1}.png`)) } catch {}
-
-    const result = await pruneComputerUseScreenshots(root, { maxFiles: 40, maxAgeMs: 7 * 24 * 60 * 60 * 1000, now })
-    const names = await readdir(root)
-    const screenshots = names.filter(name => /^window-\d+\.png$/.test(name) && name !== `window-${now + 1}.png`)
-    assert.equal(result.kept, 40)
-    assert.equal(screenshots.length, 40)
-    assert.ok(names.includes('keep.txt'))
-    assert.ok(!names.includes(`window-${now - 20 * 24 * 60 * 60 * 1000}.png`))
+    const store = new ComputerUseScreenshotStore({ directory })
+    assert.deepEqual(await store.clear(), { deletedFiles: 0, deletedBytes: 0, retainedFiles: 0, retainedBytes: 0 })
+    await assert.rejects(() => access(directory), error => error?.code === 'ENOENT')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
 })
 
-test('Computer Use screenshot cleanup tolerates a missing directory', async () => {
-  const result = await pruneComputerUseScreenshots(path.join(os.tmpdir(), `missing-computer-use-${Date.now()}`))
-  assert.deepEqual(result, { kept: 0, removed: 0 })
+test('Computer Use screenshots are session-scoped and count bounded', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'computer-use-shots-'))
+  const directory = path.join(root, 'screenshots')
+  try {
+    const store = new ComputerUseScreenshotStore({ directory, maxFiles: 2, maxBytes: 100, maxFileBytes: 50, maxAgeMs: 1000 })
+    const base = 1700000000000
+    await store.save(Buffer.from('one'), { now: base })
+    await store.save(Buffer.from('two'), { now: base + 1 })
+    const newest = await store.save(Buffer.from('three'), { now: base + 2 })
+    const managed = (await files(directory)).filter(file => SCREENSHOT_FILE.test(file))
+    assert.equal(managed.length, 2)
+    assert.ok(managed.some(file => newest.endsWith(file)))
+    await writeFile(path.join(directory, 'unrelated.txt'), 'keep')
+    await writeFile(path.join(directory, 'window-invalid.png'), 'keep')
+    const future = `window-${base + 61_000}-abcdef12.png`
+    await writeFile(path.join(directory, future), 'remove')
+    await store.prune({ now: base })
+    assert.equal((await files(directory)).includes(future), false)
+    const cleared = await store.clear()
+    assert.equal(cleared.deletedFiles, 2)
+    assert.deepEqual(await files(directory), ['unrelated.txt', 'window-invalid.png'])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('Computer Use screenshots enforce age, byte and single-file limits', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'computer-use-budget-'))
+  const directory = path.join(root, 'screenshots')
+  try {
+    const base = 1700000000000
+    const store = new ComputerUseScreenshotStore({ directory, maxFiles: 8, maxBytes: 10, maxFileBytes: 8, maxAgeMs: 100 })
+    await store.save(Buffer.alloc(6, 1), { now: base })
+    const second = await store.save(Buffer.alloc(6, 2), { now: base + 1 })
+    let managed = (await files(directory)).filter(file => SCREENSHOT_FILE.test(file))
+    assert.equal(managed.length, 1)
+    assert.equal(await readFile(second).then(buffer => buffer[0]), 2)
+    await store.prune({ now: base + 102 })
+    managed = (await files(directory)).filter(file => SCREENSHOT_FILE.test(file))
+    assert.equal(managed.length, 0)
+    await assert.rejects(() => store.save(Buffer.alloc(9), { now: base + 103 }), /超过单文件限制/)
+    await assert.rejects(() => store.save(Buffer.alloc(0), { now: base + 104 }), /截图为空/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('main process clears Computer Use screenshots on startup, disable, stop and quit', async () => {
+  const main = await readFile(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  const store = await readFile(path.resolve(__dirname, '..', 'electron', 'bridge', 'computer-use-screenshot-store.cjs'), 'utf8')
+  assert.match(main, /ensureComputerUseScreenshotStore\(\)\.save\(scaled\.toPNG\(\)\)/)
+  assert.match(main, /if \(action === 'stop'\) return setComputerUseEnabled\(false\)/)
+  assert.match(main, /if \(next === computerUseEnabled\) return computerUseState\(\)/)
+  assert.match(main, /computerUseSessionGeneration \+= 1/)
+  assert.equal((main.match(/sessionGeneration !== computerUseSessionGeneration/g) || []).length, 2)
+  assert.match(main, /if \(!computerUseEnabled\)[\s\S]*await clearComputerUseScreenshots\(\)/)
+  assert.match(main, /Unable to clear stale Computer Use screenshots/)
+  assert.match(main, /app\.on\('before-quit', event =>[\s\S]*event\.preventDefault\(\)[\s\S]*computerUseQuitCleanupComplete = true; app\.quit\(\)/)
+  assert.match(main, /sessionOnly: true/)
+  assert.match(store, /lstat\(this\.directory\)/)
+  assert.match(store, /!info\.isDirectory\(\) \|\| info\.isSymbolicLink\(\)/)
 })

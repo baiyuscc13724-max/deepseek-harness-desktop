@@ -150,6 +150,34 @@ test('模型动作必须作用于当前可见活动标签（tabId/来源强校�
   assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'tab-not-visible')
 })
 
+test('Profile 重置接管会清空活动标签和一次性确认但不越权改写授权', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-takeover-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const policy = new BrowserSecurityPolicy({ authzRootDir: root })
+  policy.grant(ORIGIN, { actions: ['read', 'submit'] })
+  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
+  const pending = policy.modelAction({ action: 'submit', tabId: 'tab-1' })
+  assert.equal(pending.requiresConfirmation, true)
+  assert.equal(policy.pendingConfirmations().length, 1)
+  assert.equal(policy.clearPendingControl(), true)
+  assert.equal(policy.pendingConfirmations().length, 0)
+  assert.equal(policy.authorizations().count, 1)
+  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'no-active-tab')
+})
+
+test('完整 Profile 重置可清除全部浏览器策略审计元数据', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-clear-audit-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const policy = new BrowserSecurityPolicy({ authzRootDir: root })
+  policy.userNavigate(ORIGIN)
+  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
+  policy.grant(ORIGIN, { actions: ['read'] })
+  assert.ok(policy.auditSnapshot().count >= 3)
+  const removed = policy.clearAudit()
+  assert.ok(removed >= 3)
+  assert.deepEqual(policy.auditSnapshot(), { maxEntries: 512, count: 0, total: 0, dropped: 0, stopped: false, entries: [] })
+})
+
 test('未授权动作与未知动作给出可识别错误码，且审计有 denied 记录', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-deny-'))
   t.after(() => rm(root, { recursive: true, force: true }))

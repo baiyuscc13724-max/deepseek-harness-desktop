@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
-const { access } = require('node:fs/promises')
+const { access, mkdir, rm, writeFile } = require('node:fs/promises')
 
 const {
   PREVIEW_TTL_MS,
@@ -69,6 +69,40 @@ test('apply requires a live preview and explicit user confirmation', async () =>
     assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64')), false)
     assert.equal(await exists(path.join(fixture.homeDir, 'marketplace', 'cache')), true)
     await assert.rejects(service.apply(preview.previewId, { confirmed: true }), /不存在或已过期/)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('apply never deletes cleanup candidates that appeared after the confirmed preview', async () => {
+  const fixture = await buildHarnessData()
+  try {
+    const service = serviceFor(fixture)
+    const preview = await service.preview({ includeOldRuntimes: true, includeCaches: false })
+    const appearedLater = path.join(fixture.runDir, '0.9.0-win32-x64')
+    await mkdir(appearedLater, { recursive: true })
+    await writeFile(path.join(appearedLater, 'new.txt'), 'not in preview')
+    await service.apply(preview.previewId, { confirmed: true })
+    assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64')), false)
+    assert.equal(await exists(path.join(appearedLater, 'new.txt')), true)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('apply skips a same-name target replaced after preview', async () => {
+  const fixture = await buildHarnessData()
+  try {
+    const service = serviceFor(fixture)
+    const target = path.join(fixture.runDir, '1.0.20-win32-x64')
+    const preview = await service.preview({ includeOldRuntimes: true, includeCaches: false })
+    await rm(target, { recursive: true, force: true })
+    await mkdir(target, { recursive: true })
+    await writeFile(path.join(target, 'replacement.txt'), 'replacement must survive')
+    const result = await service.apply(preview.previewId, { confirmed: true })
+    assert.equal(await exists(path.join(target, 'replacement.txt')), true)
+    assert.equal(result.applied.some(item => item.path === target), false)
+    assert.equal(JSON.stringify(result).includes('identity'), false)
   } finally {
     await destroyHarnessData(fixture.root)
   }

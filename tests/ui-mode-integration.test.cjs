@@ -1,0 +1,61 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { readFileSync } = require('node:fs')
+const path = require('node:path')
+
+const root = path.join(__dirname, '..')
+const read = file => readFileSync(path.join(root, file), 'utf8')
+
+test('interface modes persist through a narrow validated appearance bridge', () => {
+  const store = read('electron/store/app-state-store.cjs')
+  const preload = read('electron/preload.cjs')
+  const main = read('electron/main.cjs')
+  assert.match(store, /VALID_UI_MODES = new Set\(\['official', 'aurora', 'spatial', 'tactile'\]\)/)
+  assert.match(store, /uiMode: 'official'/)
+  assert.match(store, /reducedMotion: false/)
+  assert.match(store, /lowPerformance: false/)
+  assert.match(store, /patch\[key\] === true/)
+  assert.match(preload, /setUiPreferences: patch => ipcRenderer\.invoke\('appearance:setUiPreferences', patch\)/)
+  assert.match(main, /ipcMain\.handle\('appearance:setUiPreferences'/)
+})
+
+test('quick palette and official settings both expose the same four modes', () => {
+  const html = read('renderer/index.html')
+  const renderer = read('renderer/app.js')
+  const guest = read('renderer/theme-integration.js')
+  assert.match(html, /id="skinThemeTab"/)
+  assert.match(html, /id="skinModeTab"/)
+  assert.match(html, /id="skinReducedMotion"/)
+  assert.match(html, /id="skinLowPerformance"/)
+  for (const id of ['official', 'aurora', 'spatial', 'tactile']) {
+    assert.match(renderer, new RegExp(`id: '${id}'`))
+    assert.match(guest, new RegExp(`id: '${id}'`))
+  }
+  assert.match(guest, /data-hd-appearance-tab="modes"/)
+  assert.match(guest, /data-hd-reduced-motion/)
+  assert.match(guest, /data-hd-low-performance/)
+  assert.match(guest, /外观与界面模式/)
+})
+
+test('mode material effects are scoped, reversible and performance aware', () => {
+  const guest = read('renderer/theme-integration.js')
+  const shell = read('renderer/styles.css')
+  assert.match(guest, /html\[data-hd-ui-mode="aurora"\]/)
+  assert.match(guest, /html\[data-hd-ui-mode="spatial"\]/)
+  assert.match(guest, /html\[data-hd-ui-mode="tactile"\]/)
+  assert.match(guest, /html\[data-hd-low-performance="true"\]/)
+  assert.match(guest, /html\[data-hd-reduced-motion="true"\]/)
+  assert.match(guest, /const mode = !mobile && uiModes\.some/)
+  assert.match(guest, /\? state\.uiMode : 'official'/)
+  assert.match(shell, /data-shell-low-performance="true"/)
+  assert.match(shell, /prefers-reduced-motion:reduce/)
+  assert.match(guest, /restore-appearance/)
+  assert.doesNotMatch(guest, /data-hd-ui-mode="(?:aurora|spatial|tactile)"[^}]*display\s*:\s*none[^}]*data-slot="sidebar"/)
+})
+
+test('approved production UI adds no decorative whale text avatars', () => {
+  const html = read('renderer/index.html')
+  const guest = read('renderer/theme-integration.js')
+  assert.doesNotMatch(html, />鲸</)
+  assert.doesNotMatch(guest, />鲸</)
+})

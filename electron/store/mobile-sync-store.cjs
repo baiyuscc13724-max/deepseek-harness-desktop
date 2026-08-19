@@ -32,6 +32,19 @@ function safeName(value) {
   return normalized || '移动设备'
 }
 
+function safeDevicePlatform(value) {
+  return ['android', 'ios'].includes(value) ? value : 'unknown'
+}
+
+function safeDeviceClass(value) {
+  return ['phone', 'tablet'].includes(value) ? value : 'unknown'
+}
+
+function safeAppVersion(value) {
+  const normalized = String(value || '').replace(/[^0-9A-Za-z._+-]/g, '').slice(0, 40)
+  return normalized || null
+}
+
 function normalizeDevice(value) {
   if (!value || typeof value !== 'object') return null
   if (!/^[a-f0-9]{16}$/.test(value.id || '')) return null
@@ -40,6 +53,9 @@ function normalizeDevice(value) {
     id: value.id,
     secretHash: value.secretHash,
     name: safeName(value.name),
+    platform: safeDevicePlatform(value.platform),
+    deviceClass: safeDeviceClass(value.deviceClass),
+    appVersion: safeAppVersion(value.appVersion),
     createdAt: safeDate(value.createdAt) || new Date(0).toISOString(),
     lastSeenAt: safeDate(value.lastSeenAt)
   }

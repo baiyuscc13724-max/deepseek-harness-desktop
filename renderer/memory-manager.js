@@ -21,6 +21,7 @@
   const results = document.querySelector('#memoryResults')
   const exportButton = document.querySelector('#memoryExport')
   const deleteAllConfirm = document.querySelector('#memoryDeleteAllConfirm')
+  const deleteExports = document.querySelector('#memoryDeleteExports')
   const deleteAllButton = document.querySelector('#memoryDeleteAll')
   const message = document.querySelector('#memoryMessage')
   let state = null
@@ -35,7 +36,7 @@
     const enabled = next.enabled === true
     statusTitle.textContent = enabled ? `已保存 ${next.counts?.entries || 0} 条本地记忆` : '本地记忆未开启'
     statusDetail.textContent = enabled
-      ? `${next.fts5 ? 'FTS5 本地全文搜索' : '本地兼容搜索'} · 数据库位于 HarnessData/memory`
+      ? `${next.fts5 ? 'FTS5 本地全文搜索' : '本地兼容搜索'} · ${next.secureDelete ? '安全删除已启用' : '安全删除不可用'} · 数据库位于 HarnessData/memory`
       : '开启前不会创建数据库或写入数据。'
     enableToggle.textContent = enabled ? '关闭本地记忆' : '开启本地记忆'
     enabledContent.classList.toggle('hidden', !enabled)
@@ -100,6 +101,9 @@
     overlay.setAttribute('aria-hidden', 'false')
     button.setAttribute('aria-expanded', 'true')
     closeButton.focus()
+    deleteAllConfirm.checked = false
+    deleteExports.checked = false
+    deleteAllButton.disabled = true
     setMessage('')
     try {
       await refreshStatus()
@@ -202,10 +206,11 @@
     if (!deleteAllConfirm.checked) return
     deleteAllButton.disabled = true
     try {
-      const response = await api.deleteAllMemories({ confirmed: true })
+      const response = await api.deleteAllMemories({ confirmed: true, deleteExports: deleteExports.checked })
       deleteAllConfirm.checked = false
+      deleteExports.checked = false
       await loadAll()
-      setMessage(`已删除全部 ${response.deleted} 条本地记忆。`)
+      setMessage(`已安全擦除 ${response.deleted} 条本地记忆并清空审计元数据；删除 ${response.deletedExports || 0} 个导出副本。`)
     } catch (error) {
       setMessage(error.message || String(error), true)
       deleteAllButton.disabled = !deleteAllConfirm.checked

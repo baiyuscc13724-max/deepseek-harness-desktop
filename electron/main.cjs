@@ -19,6 +19,8 @@ const { ensureDesktopBrowserToolsPlugin } = require('./bridge/desktop-browser-to
 const { ensureDesktopMemoryToolsPlugin } = require('./bridge/desktop-memory-tools-plugin-service.cjs')
 const { ensureDesktopComputerUsePlugin } = require('./bridge/desktop-computer-use-plugin-service.cjs')
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
+const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
+const { ComputerUseConfirmationStore } = require('./bridge/computer-use-confirmation-store.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { terminateProcessTree } = require('./bridge/process-tree.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
@@ -37,8 +39,8 @@ const { inspectAttachmentPaths } = require('./bridge/attachment-reference-servic
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
 const { MemoryService } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
-const { pruneComputerUseScreenshots } = require('./bridge/computer-use-screenshot-store.cjs')
 const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
+const { BrowserOperationCoordinator } = require('./bridge/browser-operation-coordinator.cjs')
 const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
 const { loadMobileRelayConfig } = require('./bridge/mobile-relay-config.cjs')
@@ -96,11 +98,16 @@ let memoryService = null
 let browserView = null
 let browserSecurityPolicy = null
 let browserControlServer = null
+const browserOperations = new BrowserOperationCoordinator()
 let browserSidebarVisible = false
 let browserContentVisible = true
 let workspacePickerPromise = null
 let computerUseEnabled = false
-const computerUseConfirmations = new Map()
+let computerUseSessionGeneration = 0
+let computerUseScreenshotStore = null
+let computerUseQuitCleanupStarted = false
+let computerUseQuitCleanupComplete = false
+const computerUseConfirmations = new ComputerUseConfirmationStore()
 let browserState = { visible: false, loading: false, url: '', title: '', origin: '', canGoBack: false, canGoForward: false, hasSiteData: false, error: '' }
 
 const BUNDLED_THEME_ASSETS = Object.freeze([
@@ -251,6 +258,7 @@ async function browserStatePayload(patch = {}) {
     const cookies = await contents.session.cookies.get({ url: browserState.origin }).catch(() => [])
     browserState.hasSiteData = cookies.length > 0
   }
+  const audit = browserSecurityPolicy?.auditSnapshot() || { count: 0, total: 0, dropped: 0 }
   return {
     ...browserState,
     profile: {
@@ -259,7 +267,9 @@ async function browserStatePayload(patch = {}) {
       isolatedFromHarness: true
     },
     authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [] },
+    audit: { count: audit.count, total: audit.total, dropped: audit.dropped },
     modelControlStopped: browserSecurityPolicy?.isStopped === true,
+    profileResetting: browserOperations.snapshot().resetting,
     pendingConfirmations: browserSecurityPolicy?.pendingConfirmations() || []
   }
 }
@@ -271,6 +281,7 @@ async function publishBrowserState(patch = {}) {
 }
 
 function updateBrowserActiveTab(url) {
+  if (browserOperations.snapshot().resetting) return
   if (!browserSecurityPolicy || !url) return
   try {
     const nav = browserSecurityPolicy.userNavigate(url)
@@ -306,12 +317,17 @@ function ensureBrowserSidebar() {
   mainWindow.contentView.addChildView(browserView)
   const contents = browserView.webContents
   const validateNavigation = (event, url) => {
+    if (browserOperations.snapshot().resetting) {
+      if (url === 'about:blank') return
+      return event.preventDefault()
+    }
     try { browserSecurityPolicy.userNavigate(url) }
     catch { event.preventDefault() }
   }
   contents.on('will-navigate', validateNavigation)
   contents.on('will-redirect', validateNavigation)
   contents.setWindowOpenHandler(details => {
+    if (browserOperations.snapshot().resetting) return { action: 'deny' }
     try {
       const nav = browserSecurityPolicy.userNavigate(details.url)
       contents.loadURL(nav.normalized).catch(() => {})
@@ -347,6 +363,7 @@ function normalizeBrowserAddress(value, base = '') {
 }
 
 async function setBrowserSidebarVisible(visible) {
+  const ticket = browserOperations.ticket()
   ensureBrowserSidebar()
   const contents = liveBrowserContents()
   if (!contents) throw new Error('浏览器视图尚未准备好。')
@@ -354,25 +371,31 @@ async function setBrowserSidebarVisible(visible) {
   if (browserSidebarVisible && !contents.getURL()) {
     await contents.loadURL(browserSecurityPolicy.userNavigate('https://www.baidu.com/').normalized)
   }
+  browserOperations.assert(ticket)
   updateBrowserActiveTab(contents.getURL())
   layoutBrowserView()
   return publishBrowserState()
 }
 
 async function setBrowserContentVisible(visible) {
+  const ticket = browserOperations.ticket()
   browserContentVisible = Boolean(visible)
   const contents = liveBrowserContents()
   if (contents) {
     updateBrowserActiveTab(contents.getURL())
     layoutBrowserView()
   }
+  browserOperations.assert(ticket)
   return publishBrowserState()
 }
 
 async function navigateBrowser(value) {
+  const ticket = browserOperations.ticket()
   const view = ensureBrowserSidebar()
   const target = normalizeBrowserAddress(value, view.webContents.getURL())
+  browserOperations.assert(ticket)
   await view.webContents.loadURL(target)
+  browserOperations.assert(ticket)
   return publishBrowserState({ error: '' })
 }
 
@@ -381,12 +404,29 @@ async function clearBrowserSiteData(confirmed) {
   const view = ensureBrowserSidebar()
   const origin = browserState.origin
   if (!origin) throw new Error('当前页面没有可清理的站点数据。')
-  await view.webContents.session.clearStorageData({ origin })
-  browserSecurityPolicy.revoke(origin)
-  return publishBrowserState({ hasSiteData: false })
+  const resetGeneration = browserOperations.beginReset()
+  const contents = view.webContents
+  const browserSession = contents.session
+  try {
+    browserSecurityPolicy.clearPendingControl()
+    contents.stop()
+    if (typeof browserSession.closeAllConnections === 'function') await browserSession.closeAllConnections()
+    await contents.loadURL('about:blank')
+    await publishBrowserState({ loading: false })
+    await browserSession.clearStorageData({ origin })
+    if (typeof browserSession.clearCodeCaches === 'function') await browserSession.clearCodeCaches({ urlsForRequestingOrigins: [origin] })
+    if (typeof browserSession.closeAllConnections === 'function') await browserSession.closeAllConnections()
+    browserSecurityPolicy.revoke(origin)
+    browserState = { ...browserState, loading: false, url: 'about:blank', title: '', origin: '', hasSiteData: false, error: '' }
+  } finally {
+    browserOperations.finishReset(resetGeneration)
+    publishBrowserState().catch(() => {})
+  }
+  return publishBrowserState()
 }
 
 async function resumeBrowserModelControl() {
+  browserOperations.ticket()
   if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
   const contents = liveBrowserContents()
   if (contents) updateBrowserActiveTab(contents.getURL())
@@ -394,8 +434,10 @@ async function resumeBrowserModelControl() {
 }
 
 async function grantCurrentBrowserOrigin(actions) {
+  const ticket = browserOperations.ticket()
   if (!browserState.origin) throw new Error('请先打开需要授权的站点。')
   await resumeBrowserModelControl()
+  browserOperations.assert(ticket)
   browserSecurityPolicy.grant(browserState.origin, { actions: Array.isArray(actions) ? actions : [], ttlMs: 2 * 60 * 60 * 1000 })
   return publishBrowserState()
 }
@@ -403,20 +445,41 @@ async function grantCurrentBrowserOrigin(actions) {
 async function clearAllBrowserData(confirmed) {
   if (confirmed !== true) throw new Error('重置独立浏览器 Profile 需要用户明确确认。')
   const view = ensureBrowserSidebar()
-  await view.webContents.session.clearStorageData()
-  await view.webContents.session.clearCache()
-  browserSecurityPolicy.revokeAll()
-  return publishBrowserState({ hasSiteData: false })
+  const resetGeneration = browserOperations.beginReset()
+  const contents = view.webContents
+  const browserSession = contents.session
+  try {
+    browserSecurityPolicy.clearPendingControl()
+    contents.stop()
+    if (typeof browserSession.closeAllConnections === 'function') await browserSession.closeAllConnections()
+    await contents.loadURL('about:blank')
+    await publishBrowserState({ loading: false })
+    await browserSession.clearStorageData()
+    await browserSession.clearCache()
+    if (typeof browserSession.clearAuthCache === 'function') await browserSession.clearAuthCache()
+    if (typeof browserSession.clearCodeCaches === 'function') await browserSession.clearCodeCaches({})
+    if (typeof browserSession.clearHostResolverCache === 'function') await browserSession.clearHostResolverCache()
+    if (typeof browserSession.closeAllConnections === 'function') await browserSession.closeAllConnections()
+    contents.navigationHistory?.clear()
+    browserSecurityPolicy.revokeAll()
+    browserSecurityPolicy.clearAudit()
+    browserState = { ...browserState, loading: false, url: 'about:blank', title: '', origin: '', canGoBack: false, canGoForward: false, hasSiteData: false, error: '' }
+  } finally {
+    browserOperations.finishReset(resetGeneration)
+    publishBrowserState().catch(() => {})
+  }
+  return publishBrowserState()
 }
 
 function requireVisibleBrowserForModel() {
+  const ticket = browserOperations.ticket()
   const view = ensureBrowserSidebar()
   if (!browserSidebarVisible || !browserContentVisible) throw Object.assign(new Error('模型只能操作当前可见的右栏浏览器页面。'), { code: 'tab-not-visible' })
   if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) throw Object.assign(new Error('浏览器模型控制已停止；需要用户在右栏重新启用。'), { code: 'stopped' })
   const url = view.webContents.getURL()
   updateBrowserActiveTab(url)
   if (!browserState.origin) throw new Error('当前浏览器页面没有可操作的 HTTP(S) 来源。')
-  return { view, url, origin: browserState.origin, tabId: 'side-browser-main' }
+  return { view, url, origin: browserState.origin, tabId: 'side-browser-main', ticket }
 }
 
 function safeBrowserText(value, maximum = 12000) {
@@ -424,7 +487,7 @@ function safeBrowserText(value, maximum = 12000) {
 }
 
 async function observeBrowserForModel() {
-  const { view, origin, tabId } = requireVisibleBrowserForModel()
+  const { view, origin, tabId, ticket } = requireVisibleBrowserForModel()
   browserSecurityPolicy.modelAction({ action: 'read', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'document' }, payload: {} })
   const raw = await view.webContents.executeJavaScript(`(() => {
     const sensitive = /(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc)/i;
@@ -442,6 +505,7 @@ async function observeBrowserForModel() {
     }
     return { title:document.title, text:String(document.body?.innerText||'').slice(0,12000), interactive };
   })()`, true)
+  browserOperations.assert(ticket)
   const result = {
     origin,
     title: safeBrowserText(raw.title, 500),
@@ -475,14 +539,17 @@ async function modelBrowserAction(input = {}) {
     return { stopped: true, message: '模型浏览器控制已停止；网页仍由用户直接控制。' }
   }
   if (action === 'observe') return observeBrowserForModel()
-  const { view, origin, tabId } = requireVisibleBrowserForModel()
+  const { view, origin, tabId, ticket } = requireVisibleBrowserForModel()
   if (action === 'navigate') {
     const nav = browserSecurityPolicy.modelNavigate(String(parameters.url || ''), { tabId, base: view.webContents.getURL() })
+    browserOperations.assert(ticket)
     await view.webContents.loadURL(nav.normalized)
+    browserOperations.assert(ticket)
     return { navigated: true, origin: nav.origin, url: nav.normalized }
   }
   if (!['click', 'type'].includes(action)) throw new Error('不支持的浏览器模型操作。')
   const field = await browserElementMetadata(view, parameters.ref)
+  browserOperations.assert(ticket)
   if (!field) throw new Error('元素已失效，请重新 observe。')
   if (field.disabled) throw new Error('目标元素当前不可用。')
   if (action === 'type') {
@@ -491,7 +558,9 @@ async function modelBrowserAction(input = {}) {
       publishBrowserState().catch(() => {})
       return decision
     }
+    browserOperations.assert(ticket)
     await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!element) return false; const setter=Object.getOwnPropertyDescriptor(element instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value')?.set; if(setter) setter.call(element,${JSON.stringify(String(parameters.text || ''))}); else if(element.isContentEditable) element.textContent=${JSON.stringify(String(parameters.text || ''))}; else return false; element.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'})); element.dispatchEvent(new Event('change',{bubbles:true})); element.focus(); return true; })()`, true)
+    browserOperations.assert(ticket)
     return { typed: true, ref: String(parameters.ref), origin }
   }
   const targetDescription = `${field.text} ${field.label} ${field.ariaLabel}`
@@ -502,7 +571,9 @@ async function modelBrowserAction(input = {}) {
   const effectiveAction = dangerous ? 'submit' : 'click'
   const decision = browserSecurityPolicy.modelAction({ action: effectiveAction, tabId, declaredOrigin: origin, field, payload: {}, confirmationId: parameters.confirmation_id })
   if (!decision.allowed) return decision
+  browserOperations.assert(ticket)
   await view.webContents.executeJavaScript(`document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]')?.click()`, true)
+  browserOperations.assert(ticket)
   return { clicked: true, ref: String(parameters.ref), origin, confirmed: dangerous }
 }
 
@@ -535,40 +606,58 @@ async function modelMemoryAction(input = {}) {
   }
 }
 
+function ensureComputerUseScreenshotStore() {
+  if (!computerUseScreenshotStore) {
+    computerUseScreenshotStore = new ComputerUseScreenshotStore({
+      directory: path.join(desktopRuntimePaths().root, 'computer-use', 'screenshots')
+    })
+  }
+  return computerUseScreenshotStore
+}
+
+async function clearComputerUseScreenshots() {
+  return ensureComputerUseScreenshotStore().clear()
+}
+
+async function setComputerUseEnabled(enabled) {
+  const next = enabled === true
+  if (next === computerUseEnabled) return computerUseState()
+  computerUseSessionGeneration += 1
+  if (next) await clearComputerUseScreenshots()
+  computerUseEnabled = next
+  if (!computerUseEnabled) {
+    computerUseConfirmations.clear()
+    await clearComputerUseScreenshots()
+  }
+  return computerUseState()
+}
+
 function computerUseState() {
-  return { enabled: computerUseEnabled, pending: [...computerUseConfirmations.values()].map(item => ({ id: item.id, action: item.action, summary: item.summary, confirmed: item.confirmed, expiresAt: item.expiresAt })) }
+  return { enabled: computerUseEnabled, screenshotPolicy: { sessionOnly: true, maxFiles: COMPUTER_USE_SCREENSHOT_MAX_FILES, maxBytes: COMPUTER_USE_SCREENSHOT_MAX_BYTES, maxAgeMs: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS }, pending: computerUseConfirmations.snapshot() }
 }
 
 function requireComputerConfirmation(action, parameters) {
-  const fingerprint = JSON.stringify({ action, x: parameters.x, y: parameters.y, text: parameters.text, deltaY: parameters.delta_y })
-  const id = String(parameters.confirmation_id || '')
-  if (id) {
-    const item = computerUseConfirmations.get(id)
-    if (!item || item.fingerprint !== fingerprint || !item.confirmed || item.expiresAt < Date.now()) throw Object.assign(new Error('Computer Use 确认无效或已过期。'), { code: 'confirmation-invalid' })
-    computerUseConfirmations.delete(id)
-    return null
-  }
-  const request = { id: randomUUID(), action, fingerprint, summary: `${action} Harness Desktop 窗口`, confirmed: false, expiresAt: Date.now() + 60000 }
-  computerUseConfirmations.set(request.id, request)
-  return { requiresConfirmation: true, confirmationId: request.id, action, summary: request.summary }
+  return computerUseConfirmations.authorize(action, parameters)
 }
 
 async function modelComputerUseAction(input = {}) {
   const action = String(input.action || '')
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
   if (action === 'status') return computerUseState()
-  if (action === 'stop') { computerUseEnabled = false; computerUseConfirmations.clear(); return computerUseState() }
+  if (action === 'stop') return setComputerUseEnabled(false)
   if (!computerUseEnabled) throw Object.assign(new Error('用户尚未开启本次 Computer Use。'), { code: 'computer-use-disabled' })
   if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) throw new Error('Harness Desktop 主窗口当前不可见。')
   if (action === 'screenshot') {
+    const sessionGeneration = computerUseSessionGeneration
     const image = await mainWindow.capturePage()
+    if (!computerUseEnabled || sessionGeneration !== computerUseSessionGeneration) throw Object.assign(new Error('Computer Use 会话已停止。'), { code: 'computer-use-disabled' })
     const size = image.getSize()
     const scaled = size.width > 1280 ? image.resize({ width: 1280, quality: 'good' }) : image
-    const directory = path.join(desktopRuntimePaths().root, 'computer-use', 'screenshots')
-    await mkdir(directory, { recursive: true })
-    await pruneComputerUseScreenshots(directory, { maxFiles: 39 })
-    const file = path.join(directory, `window-${Date.now()}.png`)
-    await writeFile(file, scaled.toPNG(), { mode: 0o600 })
+    const file = await ensureComputerUseScreenshotStore().save(scaled.toPNG())
+    if (!computerUseEnabled || sessionGeneration !== computerUseSessionGeneration) {
+      await clearComputerUseScreenshots()
+      throw Object.assign(new Error('Computer Use 会话已停止。'), { code: 'computer-use-disabled' })
+    }
     return { file, width: scaled.getSize().width, height: scaled.getSize().height, scope: 'Harness Desktop window only' }
   }
   if (!['click', 'type', 'scroll'].includes(action)) throw new Error('不支持的 Computer Use 操作。')
@@ -1651,6 +1740,10 @@ ipcMain.handle('appearance:setTheme', async (_event, themeId) => {
   ensureStateStore().updateAppearance({ themeId })
   return appearancePayload()
 })
+ipcMain.handle('appearance:setUiPreferences', async (_event, patch) => {
+  ensureStateStore().updateAppearance(patch || {})
+  return appearancePayload()
+})
 ipcMain.handle('appearance:saveCustom', async (_event, customTheme) => {
   ensureStateStore().updateAppearance({ themeId: 'custom', customTheme })
   return appearancePayload()
@@ -1724,10 +1817,13 @@ ipcMain.handle('memory:delete', (event, id) => {
   assertDesktopShellSender(event)
   return ensureMemoryService().delete(String(id || ''))
 })
-ipcMain.handle('memory:deleteAll', (event, request) => {
+ipcMain.handle('memory:deleteAll', async (event, request) => {
   assertDesktopShellSender(event)
   if (request?.confirmed !== true) throw new Error('删除全部记忆需要用户明确确认。')
-  return ensureMemoryService().deleteAll()
+  const service = ensureMemoryService()
+  const deleted = await service.deleteAll()
+  const exports = request?.deleteExports === true ? await service.deleteExports() : { deletedExports: 0 }
+  return { ...deleted, ...exports }
 })
 ipcMain.handle('memory:export', event => {
   assertDesktopShellSender(event)
@@ -1752,18 +1848,21 @@ ipcMain.handle('browser:navigate', (event, value) => {
 })
 ipcMain.handle('browser:back', event => {
   assertDesktopShellSender(event)
+  browserOperations.ticket()
   const history = browserNavigationHistory()
   if (history?.canGoBack()) history.goBack()
   return browserStatePayload()
 })
 ipcMain.handle('browser:forward', event => {
   assertDesktopShellSender(event)
+  browserOperations.ticket()
   const history = browserNavigationHistory()
   if (history?.canGoForward()) history.goForward()
   return browserStatePayload()
 })
 ipcMain.handle('browser:reload', event => {
   assertDesktopShellSender(event)
+  browserOperations.ticket()
   ensureBrowserSidebar().webContents.reload()
   return browserStatePayload()
 })
@@ -1786,6 +1885,7 @@ ipcMain.handle('browser:grantCurrent', (event, actions) => {
 })
 ipcMain.handle('browser:revokeCurrent', event => {
   assertDesktopShellSender(event)
+  browserOperations.ticket()
   if (browserState.origin && browserSecurityPolicy && !browserSecurityPolicy.isStopped) browserSecurityPolicy.revoke(browserState.origin)
   return publishBrowserState()
 })
@@ -1795,18 +1895,20 @@ ipcMain.handle('browser:resumeModelControl', event => {
 })
 ipcMain.handle('browser:confirmModelAction', (event, confirmationId) => {
   assertDesktopShellSender(event)
+  browserOperations.ticket()
   const confirmation = browserSecurityPolicy?.confirm(String(confirmationId || ''), { by: 'user' })
   return { confirmation, pending: browserSecurityPolicy?.pendingConfirmations() || [] }
 })
 ipcMain.handle('browser:rejectModelAction', (event, confirmationId) => {
   assertDesktopShellSender(event)
+  browserOperations.ticket()
   browserSecurityPolicy?.rejectConfirmation(String(confirmationId || ''))
   return { pending: browserSecurityPolicy?.pendingConfirmations() || [] }
 })
 ipcMain.handle('computerUse:state', event => { assertDesktopShellSender(event); return computerUseState() })
-ipcMain.handle('computerUse:setEnabled', (event, enabled) => { assertDesktopShellSender(event); computerUseEnabled = Boolean(enabled); if (!computerUseEnabled) computerUseConfirmations.clear(); return computerUseState() })
-ipcMain.handle('computerUse:confirm', (event, id) => { assertDesktopShellSender(event); const item = computerUseConfirmations.get(String(id || '')); if (!item || item.expiresAt < Date.now()) throw new Error('Computer Use 确认已过期。'); item.confirmed = true; return computerUseState() })
-ipcMain.handle('computerUse:reject', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.delete(String(id || '')); return computerUseState() })
+ipcMain.handle('computerUse:setEnabled', async (event, enabled) => { assertDesktopShellSender(event); return setComputerUseEnabled(Boolean(enabled)) })
+ipcMain.handle('computerUse:confirm', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.confirm(id); return computerUseState() })
+ipcMain.handle('computerUse:reject', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.reject(id); return computerUseState() })
 ipcMain.handle('mobileSync:getState', () => ensureMobileSyncService().state())
 ipcMain.handle('mobileSync:setEnabled', (_event, enabled) => ensureMobileSyncService().setEnabled(Boolean(enabled)))
 ipcMain.handle('mobileSync:setRemoteEnabled', (_event, enabled) => ensureMobileSyncService().setRemoteEnabled(Boolean(enabled)))
@@ -1890,6 +1992,7 @@ app.whenReady().then(async () => {
     app.exit(report.ok ? 0 : 1)
     return
   }
+  await clearComputerUseScreenshots().catch(error => console.warn(`Unable to clear stale Computer Use screenshots: ${error.message}`))
   runtimeInitializationPromise = (async () => {
     await ensureBundledRuntime()
     await ensureModelRouting(modelRoutingOptions()).catch(error => {
@@ -1933,7 +2036,7 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
   isQuitting = true
   clearInterval(petTickTimer)
   petAdapter?.stop()
@@ -1946,6 +2049,18 @@ app.on('before-quit', () => {
   memoryService?.close()
   browserSecurityPolicy?.stop()
   browserControlServer?.stop().catch(() => {})
+  computerUseEnabled = false
+  computerUseSessionGeneration += 1
+  computerUseConfirmations.clear()
+  if (!computerUseQuitCleanupComplete) {
+    event.preventDefault()
+    if (!computerUseQuitCleanupStarted) {
+      computerUseQuitCleanupStarted = true
+      clearComputerUseScreenshots()
+        .catch(error => console.warn(`Unable to clear Computer Use screenshots during shutdown: ${error.message}`))
+        .finally(() => { computerUseQuitCleanupComplete = true; app.quit() })
+    }
+  }
   closeBrowserViewContents()
   stopRuntime()
 })

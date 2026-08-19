@@ -39,6 +39,19 @@ function safeString(value, maximum = 2048) {
   return String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, maximum)
 }
 
+function normalizeClientPlatform(value) {
+  return ['android', 'ios'].includes(value) ? value : 'unknown'
+}
+
+function normalizeDeviceClass(value) {
+  return ['phone', 'tablet'].includes(value) ? value : 'unknown'
+}
+
+function normalizeAppVersion(value) {
+  const version = safeString(value, 40).replace(/[^0-9A-Za-z._+-]/g, '')
+  return version || null
+}
+
 function normalizePoint(value) {
   if (!value || typeof value !== 'object') return null
   const x = Number(value.x)
@@ -67,7 +80,7 @@ function normalizePayload(action, input) {
   }
   if (action === 'openApp') {
     const packageName = safeString(value.packageName, 180)
-    if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/.test(packageName)) throw new Error('openApp 需要有效的 Android 包名。')
+    if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/.test(packageName)) throw new Error('openApp 需要有效的应用标识。')
     return { packageName }
   }
   if (action === 'openUri') {
@@ -83,7 +96,7 @@ function normalizePayload(action, input) {
   }
   if (action === 'clearCache') {
     const packageName = safeString(value.packageName, 180)
-    if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/.test(packageName)) throw new Error('clearCache 需要有效的 Android 包名。')
+    if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/.test(packageName)) throw new Error('clearCache 需要有效的应用标识。')
     return { packageName, requireConfirmation: true, neverClearData: true }
   }
   if (action === 'screenshot') return { maxWidth: finiteInteger(value.maxWidth, 720, 320, 1440), quality: finiteInteger(value.quality, 62, 35, 85) }
@@ -122,6 +135,9 @@ class MobileControlBroker {
     const capabilities = normalizeCapabilities(payload.capabilities)
     const status = {
       protocolVersion: Number(payload.protocolVersion) === CONTROL_PROTOCOL_VERSION ? CONTROL_PROTOCOL_VERSION : 0,
+      platform: normalizeClientPlatform(payload.platform),
+      deviceClass: normalizeDeviceClass(payload.deviceClass),
+      appVersion: normalizeAppVersion(payload.appVersion),
       enabled: payload.enabled === true,
       ready: payload.ready === true,
       accessibility: payload.accessibility === true,
@@ -148,6 +164,9 @@ class MobileControlBroker {
         return {
           id: device.id,
           name: device.name,
+          platform: status?.platform || normalizeClientPlatform(device.platform),
+          deviceClass: status?.deviceClass || normalizeDeviceClass(device.deviceClass),
+          appVersion: status?.appVersion || normalizeAppVersion(device.appVersion),
           online,
           enabled: online && status.enabled,
           ready: online && status.enabled && status.ready && status.protocolVersion === CONTROL_PROTOCOL_VERSION,

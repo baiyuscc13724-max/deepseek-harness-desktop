@@ -114,7 +114,11 @@ class BrowserAudit {
   }
 
   clear() {
+    const removed = this.entries.length
     this.entries = []
+    this.total = 0
+    this.dropped = 0
+    return removed
   }
 
   /** 停用审计：之后 record() 一律拒绝，已有记录仍可读取。 */

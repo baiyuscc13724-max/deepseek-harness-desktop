@@ -104,8 +104,10 @@ test('stop() 后不再接受记录，已有记录仍可读取；clear() 清空',
   assert.equal(snap.stopped, true)
   assert.throws(() => audit.record({ actor: 'user', origin: 'https://example.com', result: 'allowed' }), error => error.code === 'audit-stopped')
   assert.equal(audit.snapshot().count, 1) // 历史可读
-  audit.clear()
+  assert.equal(audit.clear(), 1)
   assert.equal(audit.snapshot().count, 0)
+  assert.equal(audit.snapshot().total, 0)
+  assert.equal(audit.snapshot().dropped, 0)
   assert.equal(audit.stop().stopped, true) // 幂等
 })
 

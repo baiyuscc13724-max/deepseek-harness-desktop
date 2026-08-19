@@ -36,6 +36,25 @@ test('AppStateStore persists only validated appearance fields', () => {
   })
 })
 
+test('AppStateStore persists only validated interface mode preferences', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-ui-mode-state-'))
+  const file = path.join(dir, 'app-state.json')
+  const store = new AppStateStore(file)
+  store.updateAppearance({ uiMode: 'spatial', reducedMotion: true, lowPerformance: true, token: 'discard-me' })
+  assert.deepEqual(new AppStateStore(file).get().appearance, {
+    themeId: 'porcelain-mist',
+    customTheme: {
+      mode: 'dark', accent: '#6f8cff', surface: '#171b29', text: '#f4f7ff',
+      wallpaperBrightness: 82, wallpaperBlur: 2, glassTransparency: 32, borderStrength: 48,
+      backgroundFile: null
+    },
+    uiMode: 'spatial', reducedMotion: true, lowPerformance: true
+  })
+  assert.equal('token' in new AppStateStore(file).get().appearance, false)
+  assert.equal(normalizeState({ appearance: { uiMode: '../../bad', reducedMotion: 1, lowPerformance: 'yes' } }).appearance.uiMode, 'official')
+  assert.equal(normalizeState({ appearance: { reducedMotion: 1, lowPerformance: 'yes' } }).appearance.reducedMotion, false)
+})
+
 test('custom appearance updates preserve the active catalog theme and use safe defaults for empty ranges', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-theme-merge-'))
   const store = new AppStateStore(path.join(dir, 'app-state.json'))
@@ -57,7 +76,7 @@ test('new installs use Porcelain Mist while preserving an explicitly selected no
 
 test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
   const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
-  assert.equal(migrated.schemaVersion, 5)
+  assert.equal(migrated.schemaVersion, 6)
   assert.equal(migrated.appearance.themeId, 'porcelain-mist')
   const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
   assert.equal(explicitOfficial.appearance.themeId, 'official')

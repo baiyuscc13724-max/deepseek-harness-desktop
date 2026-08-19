@@ -22,6 +22,14 @@ const petAlwaysOnTop = document.querySelector('#petAlwaysOnTop')
 const skinQuickButton = document.querySelector('#skinQuickButton')
 const skinPickerOverlay = document.querySelector('#skinPickerOverlay')
 const skinPickerGrid = document.querySelector('#skinPickerGrid')
+const skinThemeTab = document.querySelector('#skinThemeTab')
+const skinModeTab = document.querySelector('#skinModeTab')
+const skinThemePane = document.querySelector('#skinThemePane')
+const skinModePane = document.querySelector('#skinModePane')
+const skinModeGrid = document.querySelector('#skinModeGrid')
+const skinModeCurrent = document.querySelector('#skinModeCurrent')
+const skinReducedMotion = document.querySelector('#skinReducedMotion')
+const skinLowPerformance = document.querySelector('#skinLowPerformance')
 const closeSkinPickerButton = document.querySelector('#closeSkinPicker')
 const restoreOfficialThemeButton = document.querySelector('#restoreOfficialTheme')
 const skinChooseBackgroundButton = document.querySelector('#skinChooseBackground')
@@ -80,7 +88,7 @@ let distributionState = {
   channel: 'direct', store: false, appUpdatesManagedByStore: false,
   nonCommercialContentAvailable: true, desktopPetAvailable: true, links: {}
 }
-let appearanceState = { themeId: 'porcelain-mist', customTheme: {}, customBackgroundDataUrl: null }
+let appearanceState = { themeId: 'porcelain-mist', customTheme: {}, customBackgroundDataUrl: null, uiMode: 'official', reducedMotion: false, lowPerformance: false }
 let petState = {
   status: 'idle', fullness: 80, inventory: { refined: 0, standard: 0, fragments: 0 },
   preferences: { enabled: true, awake: false, alwaysOnTop: true, autoFeed: true }
@@ -115,6 +123,13 @@ const workspaceLinksIntegration = window.HarnessDesktopWorkspaceLinks
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
 })[character])
+
+const uiModeCatalog = Object.freeze([
+  { id: 'official', name: '官方经典', description: '保持官方材质与层级，作为随时可恢复的稳定基线。' },
+  { id: 'aurora', name: '极光玻璃', description: '低透明玻璃、柔和渐变光影与清晰细边框。' },
+  { id: 'spatial', name: '空间专注', description: '突出当前会话，辅助区域仅做轻度视觉降噪。' },
+  { id: 'tactile', name: '触感实体', description: '在主要按钮和输入区增加克制的高光与按压反馈。' }
+])
 
 const customThemeDefaults = Object.freeze({
   mode: 'dark', accent: '#6f8cff', surface: '#171b29', text: '#f4f7ff',
@@ -229,6 +244,14 @@ function themePreview(theme) {
   return theme.preview
 }
 
+function applyShellUiMode() {
+  const root = document.documentElement
+  const mode = uiModeCatalog.some(entry => entry.id === appearanceState.uiMode) ? appearanceState.uiMode : 'official'
+  root.dataset.shellUiMode = mode
+  root.dataset.shellReducedMotion = String(appearanceState.reducedMotion === true)
+  root.dataset.shellLowPerformance = String(appearanceState.lowPerformance === true)
+}
+
 function applyShellTheme() {
   const theme = themeCatalog.find(entry => entry.id === appearanceState.themeId)
   const root = document.documentElement
@@ -266,6 +289,31 @@ function applyShellTheme() {
   root.style.setProperty('--shell-accent', vars['--dsw-alias-brand-primary'] || '#8ba5ff')
   root.style.setProperty('--shell-overlay', mode === 'light' ? 'rgba(15,23,42,.32)' : 'rgba(2,6,16,.58)')
   root.style.setProperty('--shell-text-shadow', theme.id === 'custom' ? shellReadableTextShadow(custom.text, custom.readabilityStrength) : 'none')
+}
+
+function showSkinPickerPane(name) {
+  const showModes = name === 'modes'
+  skinThemeTab.setAttribute('aria-selected', String(!showModes))
+  skinModeTab.setAttribute('aria-selected', String(showModes))
+  skinThemePane.classList.toggle('hidden', showModes)
+  skinModePane.classList.toggle('hidden', !showModes)
+}
+
+function renderUiModePicker() {
+  const selectedMode = uiModeCatalog.find(entry => entry.id === appearanceState.uiMode) || uiModeCatalog[0]
+  skinModeCurrent.textContent = selectedMode.name
+  skinReducedMotion.checked = appearanceState.reducedMotion === true
+  skinLowPerformance.checked = appearanceState.lowPerformance === true
+  skinModeGrid.innerHTML = uiModeCatalog.map(mode => `
+    <button type="button" class="skin-mode-card" data-ui-mode="${mode.id}" data-selected="${mode.id === selectedMode.id}">
+      <span class="skin-mode-preview" data-preview="${mode.id}" aria-hidden="true"></span>
+      <span class="skin-mode-body"><strong>${mode.name}</strong><span>${mode.description}</span></span>
+    </button>`).join('')
+  skinModeGrid.querySelectorAll('[data-ui-mode]').forEach(button => button.addEventListener('click', async () => {
+    appearanceState = await api.setUiPreferences({ uiMode: button.dataset.uiMode || 'official' })
+    await publishAppearanceState()
+    renderUiModePicker()
+  }))
 }
 
 function renderSkinPicker() {
@@ -314,6 +362,7 @@ function renderSkinPicker() {
   skinBackgroundState.textContent = appearanceState.customBackgroundDataUrl
     ? animated ? '动态壁纸已启用' : '本地壁纸已启用（兼容动态 WebP）'
     : '当前使用渐变背景'
+  renderUiModePicker()
 }
 
 const petStatusLabels = {
@@ -362,6 +411,8 @@ function closePetPanel() {
 function openSkinPicker() {
   closePetPanel()
   applyShellTheme()
+  applyShellUiMode()
+  showSkinPickerPane('themes')
   renderSkinPicker()
   skinPickerOverlay.classList.remove('hidden')
   skinPickerOverlay.setAttribute('aria-hidden', 'false')
@@ -1028,6 +1079,7 @@ async function publishMobileSyncState() {
 
 async function publishAppearanceState() {
   applyShellTheme()
+  applyShellUiMode()
   await themeIntegration.publish(runtimeView, appearanceState, themeCatalog).catch(() => {})
 }
 
@@ -1167,8 +1219,22 @@ runtimeView.addEventListener('will-navigate', event => {
       modelRoutingState = { ...modelRoutingState, saving: false, saved: false, error: error.message }
       publishModelRoutingState()
     })
+  } else if (target.hostname === 'restore-appearance') {
+    api.setTheme('official').then(() => api.setUiPreferences({ uiMode: 'official', reducedMotion: false, lowPerformance: false })).then(state => {
+      appearanceState = state
+      publishAppearanceState()
+    })
   } else if (target.hostname === 'set-theme') {
     api.setTheme(target.searchParams.get('id') || 'official').then(state => {
+      appearanceState = state
+      publishAppearanceState()
+    })
+  } else if (target.hostname === 'set-ui-preferences') {
+    api.setUiPreferences({
+      uiMode: target.searchParams.get('uiMode') || appearanceState.uiMode || 'official',
+      reducedMotion: target.searchParams.get('reducedMotion') === '1',
+      lowPerformance: target.searchParams.get('lowPerformance') === '1'
+    }).then(state => {
       appearanceState = state
       publishAppearanceState()
     })
@@ -1197,6 +1263,18 @@ retryRuntime.addEventListener('click', () => {
 })
 
 skinQuickButton.addEventListener('click', openSkinPicker)
+skinThemeTab.addEventListener('click', () => showSkinPickerPane('themes'))
+skinModeTab.addEventListener('click', () => { showSkinPickerPane('modes'); renderUiModePicker() })
+skinReducedMotion.addEventListener('change', async () => {
+  appearanceState = await api.setUiPreferences({ reducedMotion: skinReducedMotion.checked })
+  await publishAppearanceState()
+  renderUiModePicker()
+})
+skinLowPerformance.addEventListener('change', async () => {
+  appearanceState = await api.setUiPreferences({ lowPerformance: skinLowPerformance.checked })
+  await publishAppearanceState()
+  renderUiModePicker()
+})
 closeMobileSyncButton.addEventListener('click', closeMobileSync)
 mobileSyncOverlay.addEventListener('click', event => {
   if (event.target === mobileSyncOverlay) closeMobileSync()
@@ -1318,6 +1396,7 @@ document.addEventListener('keydown', event => {
 })
 restoreOfficialThemeButton.addEventListener('click', async () => {
   appearanceState = await api.setTheme('official')
+  appearanceState = await api.setUiPreferences({ uiMode: 'official', reducedMotion: false, lowPerformance: false })
   await publishAppearanceState()
   closeSkinPicker()
 })
@@ -1379,6 +1458,7 @@ async function startOfficialWorkspace() {
   petQuickButton.hidden = !distributionState.desktopPetAvailable
   if (!distributionState.desktopPetAvailable) petPanel.classList.add('hidden')
   applyShellTheme()
+  applyShellUiMode()
   renderPetState()
   renderMobileSync()
   renderSkinPicker()

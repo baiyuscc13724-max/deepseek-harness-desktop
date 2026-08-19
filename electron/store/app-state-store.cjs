@@ -5,6 +5,7 @@ const { THEME_CATALOG } = require('../../renderer/theme-catalog.js')
 const VALID_THEME_IDS = new Set(THEME_CATALOG.map(theme => theme.id))
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 const DEFAULT_THEME_ID = 'porcelain-mist'
+const VALID_UI_MODES = new Set(['official', 'aurora', 'spatial', 'tactile'])
 
 function boundedInteger(value, minimum, maximum, fallback) {
   if (value === null || value === '' || typeof value === 'boolean') return fallback
@@ -31,11 +32,14 @@ function normalizeCustomTheme(value = {}) {
 }
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 5,
+  schemaVersion: 6,
   updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null },
   appearance: {
     themeId: DEFAULT_THEME_ID,
-    customTheme: normalizeCustomTheme()
+    customTheme: normalizeCustomTheme(),
+    uiMode: 'official',
+    reducedMotion: false,
+    lowPerformance: false
   },
   pet: {
     enabled: true,
@@ -63,7 +67,7 @@ function normalizeState(input) {
   const savedTheme = VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : DEFAULT_THEME_ID
   const themeId = Number(value.schemaVersion || 0) < 3 && savedTheme === 'official' ? DEFAULT_THEME_ID : savedTheme
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     updates: {
       checkOnStartup: value.updates?.checkOnStartup !== false,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
@@ -72,7 +76,10 @@ function normalizeState(input) {
     },
     appearance: {
       themeId,
-      customTheme: normalizeCustomTheme(value.appearance?.customTheme)
+      customTheme: normalizeCustomTheme(value.appearance?.customTheme),
+      uiMode: VALID_UI_MODES.has(value.appearance?.uiMode) ? value.appearance.uiMode : 'official',
+      reducedMotion: value.appearance?.reducedMotion === true,
+      lowPerformance: value.appearance?.lowPerformance === true
     },
     pet: {
       enabled: value.pet?.enabled !== false,
@@ -149,6 +156,12 @@ class AppStateStore {
         ...this.state.appearance.customTheme,
         ...patch.customTheme
       })
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'uiMode')) {
+      this.state.appearance.uiMode = VALID_UI_MODES.has(patch.uiMode) ? patch.uiMode : 'official'
+    }
+    for (const key of ['reducedMotion', 'lowPerformance']) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) this.state.appearance[key] = patch[key] === true
     }
     this.#persist()
     return this.get()

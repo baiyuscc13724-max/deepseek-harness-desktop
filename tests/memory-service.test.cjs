@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
-const { mkdtemp, rm, readFile } = require('node:fs/promises')
+const { mkdtemp, rm, readFile, writeFile } = require('node:fs/promises')
 const { existsSync } = require('node:fs')
 const os = require('node:os')
 
@@ -54,6 +54,7 @@ test('默认禁用：不写入、不建文件，数据操作全部拒绝', async
     await assert.rejects(service.update('m1', { content: 'y' }), /未启用/)
     await assert.rejects(service.delete('m1'), /未启用/)
     await assert.rejects(service.deleteAll(), /未启用/)
+    await assert.rejects(service.deleteExports(), /未启用/)
     await assert.rejects(service.get('m1'), /未启用/)
     await assert.rejects(service.list(), /未启用/)
     await assert.rejects(service.search('x'), /未启用/)
@@ -472,11 +473,64 @@ test('deleteAll 清空条目并保持后续可用', async () => {
     await service.enable({ dbPath: path.join(root, 'm.db') })
     try {
       for (let i = 1; i <= 3; i++) await service.add({ content: `temp ${i} record` })
-      assert.deepEqual(await service.deleteAll(), { deleted: 3 })
+      const deleted = await service.deleteAll()
+      assert.equal(deleted.deleted, 3)
+      assert.equal(deleted.storageCompacted, true)
+      assert.equal(deleted.secureDelete, true)
+      assert.ok(deleted.auditCleared >= 4)
+      assert.equal(service.audit().length, 0)
+      assert.equal(service.status().secureDelete, true)
       assert.equal(service.status().counts.entries, 0)
       assert.equal((await service.search('record')).total, 0)
       await service.add({ content: '恢复后可用' })
       assert.equal((await service.list()).total, 1)
+    } finally {
+      service.disable()
+    }
+  } finally {
+    await destroy(root)
+  }
+})
+
+test('deleteAll 启用 secure_delete、截断 WAL 并从数据库文件移除正文痕迹', async () => {
+  const root = await fixture()
+  const dbPath = path.join(root, 'm.db')
+  const marker = 'ERASE_ME_7f29c4e1_unique_plaintext_memory'
+  try {
+    const service = makeService(root)
+    await service.enable({ dbPath })
+    try {
+      assert.equal(service.status().secureDelete, true)
+      await service.add({ title: marker, content: `${marker} body body body` })
+      await service.deleteAll()
+      for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+        if (!existsSync(file)) continue
+        const bytes = await readFile(file)
+        assert.equal(bytes.includes(Buffer.from(marker)), false, `deleted plaintext remained in ${path.basename(file)}`)
+      }
+    } finally {
+      service.disable()
+    }
+  } finally {
+    await destroy(root)
+  }
+})
+
+test('deleteExports only removes application-generated memory export copies', async () => {
+  const root = await fixture()
+  const exportsDir = path.join(root, 'exports')
+  const managed = path.join(exportsDir, 'memory-export-2026-08-19T18-59-04-443Z.json')
+  const unrelated = path.join(exportsDir, 'keep.json')
+  try {
+    const service = makeService(root)
+    await service.enable({ dbPath: path.join(root, 'm.db'), exportsDir })
+    try {
+      await service.add({ content: 'export then delete copy' })
+      await service.export({ to: managed })
+      await writeFile(unrelated, 'keep')
+      assert.deepEqual(await service.deleteExports(), { deletedExports: 1 })
+      assert.equal(existsSync(managed), false)
+      assert.equal(existsSync(unrelated), true)
     } finally {
       service.disable()
     }

@@ -7,6 +7,12 @@ const QRCode = require('qrcode')
 const { CONTROL_PROTOCOL_VERSION, MobileControlBroker, isLoopbackAddress } = require('./mobile-control-broker.cjs')
 
 const BRIDGE_API_VERSION = 2
+const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
+  platformNeutral: true,
+  capabilityNegotiation: true,
+  protocolClientPlatforms: Object.freeze(['android', 'ios']),
+  implementedClients: Object.freeze(['android'])
+})
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
@@ -61,14 +67,26 @@ function lanAddresses(networkInterfaces = os.networkInterfaces()) {
     .filter((value, index, values) => values.indexOf(value) === index)
 }
 
-function safeDeviceName(userAgent = '') {
+function deviceDescriptorFromUserAgent(userAgent = '') {
   const value = String(userAgent)
+  const appVersion = value.match(/HarnessMobile\/([0-9A-Za-z._+-]+)/i)?.[1] || null
   const android = value.match(/Android\s+([^;)]+)/i)?.[1]?.trim()
-  if (android) return `Android ${android}`.slice(0, 80)
+  if (android) {
+    return {
+      name: `Android ${android}`.slice(0, 80),
+      platform: 'android',
+      deviceClass: /tablet|pixel c|nexus 7|nexus 9/i.test(value) ? 'tablet' : 'phone',
+      appVersion
+    }
+  }
   const ios = value.match(/(?:iPhone|CPU) OS\s+([0-9_]+)/i)?.[1]?.replaceAll('_', '.')
-  if (/iPad/i.test(value)) return `iPadOS ${ios || ''}`.trim().slice(0, 80)
-  if (/iPhone/i.test(value)) return `iPhone iOS ${ios || ''}`.trim().slice(0, 80)
-  return '移动设备'
+  if (/iPad/i.test(value)) return { name: `iPadOS ${ios || ''}`.trim().slice(0, 80), platform: 'ios', deviceClass: 'tablet', appVersion }
+  if (/iPhone|iPod/i.test(value)) return { name: `iPhone iOS ${ios || ''}`.trim().slice(0, 80), platform: 'ios', deviceClass: 'phone', appVersion }
+  return { name: '移动设备', platform: 'unknown', deviceClass: 'unknown', appVersion }
+}
+
+function safeDeviceName(userAgent = '') {
+  return deviceDescriptorFromUserAgent(userAgent).name
 }
 
 function pairingErrorPage(message = '请回到电脑端重新生成配对二维码。') {
@@ -239,12 +257,13 @@ class MobileSyncService extends EventEmitter {
     const saved = this.store.get()
     return {
       bridgeApiVersion: BRIDGE_API_VERSION,
+      protocol: MOBILE_PROTOCOL_DESCRIPTOR,
       enabled: saved.enabled,
       running: Boolean(this.server?.listening),
       targetReady: Boolean(this.runtimeTarget()),
       port: this.port,
       origins: this.origins(),
-      devices: saved.devices.map(({ id, name, createdAt, lastSeenAt }) => ({ id, name, createdAt, lastSeenAt })),
+      devices: saved.devices.map(({ id, name, platform, deviceClass, appVersion, createdAt, lastSeenAt }) => ({ id, name, platform, deviceClass, appVersion, createdAt, lastSeenAt })),
       control: this.controlBroker.state(saved.devices),
       remote: this.transportManager?.state?.() || {
         enabled: saved.remoteEnabled,
@@ -444,10 +463,11 @@ class MobileSyncService extends EventEmitter {
     const id = randomBytes(8).toString('hex')
     const secret = randomBytes(32).toString('base64url')
     const createdAt = new Date(this.now()).toISOString()
+    const descriptor = deviceDescriptorFromUserAgent(request.headers['user-agent'])
     this.store.addDevice({
       id,
       secretHash: sha256(secret),
-      name: safeDeviceName(request.headers['user-agent']),
+      ...descriptor,
       createdAt,
       lastSeenAt: createdAt
     })
@@ -499,7 +519,7 @@ class MobileSyncService extends EventEmitter {
     }
     if (requestUrl.pathname === '/__harness_mobile__/health') {
       response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
-      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, pairingRequired: true }))
+      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, protocol: MOBILE_PROTOCOL_DESCRIPTOR, pairingRequired: true }))
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/setup' && request.method === 'GET') {
@@ -548,7 +568,7 @@ class MobileSyncService extends EventEmitter {
     }
     if (requestUrl.pathname === '/__harness_mobile__/meta') {
       response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
-      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, deviceId: device.id, targetReady: Boolean(this.runtimeTarget()) }))
+      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, protocol: MOBILE_PROTOCOL_DESCRIPTOR, deviceId: device.id, platform: device.platform, deviceClass: device.deviceClass, appVersion: device.appVersion, targetReady: Boolean(this.runtimeTarget()) }))
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/theme.js' && request.method === 'GET') {
@@ -661,9 +681,11 @@ class MobileSyncService extends EventEmitter {
 module.exports = {
   MobileSyncService,
   BRIDGE_API_VERSION,
+  MOBILE_PROTOCOL_DESCRIPTOR,
   COOKIE_NAME,
   PAIRING_TTL_MS,
   constantTimeHexEqual,
+  deviceDescriptorFromUserAgent,
   isPrivateIpv4,
   isIosUserAgent,
   iosSetupPage,

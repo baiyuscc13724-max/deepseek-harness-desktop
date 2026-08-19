@@ -74,8 +74,9 @@
         </section>
         <label><input id="browserClearSiteConfirm" type="checkbox" /> 确认清除当前站点登录数据</label>
         <button id="browserClearSite" class="danger" type="button" disabled>清除当前站点</button>
-        <label><input id="browserClearAllConfirm" type="checkbox" /> 确认重置整个独立 Profile</label>
-        <button id="browserClearAll" class="danger" type="button" disabled>重置全部浏览数据</button>
+        <p id="browserPrivacySummary">已保存 0 个模型站点授权；本次运行保留 0 条脱敏审计元数据。</p>
+        <label><input id="browserClearAllConfirm" type="checkbox" /> 确认清除登录数据、缓存、浏览历史、站点授权与审计元数据</label>
+        <button id="browserClearAll" class="danger" type="button" disabled>重置整个独立 Profile</button>
         <button id="closeBrowserProfile" type="button">返回网页</button>
       </section>
       <footer class="browser-sidebar-footer"><span id="browserStatusText">独立 Profile · 用户可直接登录</span><button id="browserStop" type="button">停止</button></footer>
@@ -229,7 +230,8 @@
             </section>
             <section class="memory-data-actions">
               <button id="memoryExport" type="button">导出 JSON</button>
-              <label><input id="memoryDeleteAllConfirm" type="checkbox" /> 我确认删除全部本地记忆</label>
+              <label><input id="memoryDeleteAllConfirm" type="checkbox" /> 我确认安全擦除数据库中的全部本地记忆</label>
+              <label><input id="memoryDeleteExports" type="checkbox" /> 同时删除 HarnessData/memory-exports 中由本应用生成的 JSON 导出副本</label>
               <button id="memoryDeleteAll" class="danger" type="button" disabled>删除全部</button>
             </section>
           </div>
@@ -247,34 +249,49 @@
     <section id="skinPickerOverlay" class="skin-picker-overlay hidden" aria-hidden="true">
       <div class="skin-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="skinPickerTitle">
         <header class="skin-picker-header">
-          <div><h2 id="skinPickerTitle">外观皮肤</h2><p>双击皮肤立即应用，窗口会自动关闭。</p></div>
+          <div><h2 id="skinPickerTitle">外观与界面模式</h2><p>皮肤控制颜色与壁纸，界面模式控制材质与层级。</p></div>
           <div class="skin-picker-header-actions"><button id="restoreOfficialTheme" type="button">恢复官方外观</button><button id="closeSkinPicker" class="skin-picker-close" type="button" aria-label="关闭">×</button></div>
         </header>
-        <div id="skinPickerGrid" class="skin-picker-grid"></div>
-        <section class="skin-custom-editor">
-          <div class="skin-custom-heading"><div><h3>自定义主题</h3><p>支持静态壁纸和 GIF、APNG、动态 WebP；文件只保存在本机，文字保护会自动提高透明界面的清晰度。</p></div><span id="skinBackgroundState"></span></div>
-          <div class="skin-custom-layout">
-            <section class="skin-custom-group" aria-labelledby="skinPaletteTitle">
-              <h4 id="skinPaletteTitle">基础配色</h4>
-              <div class="skin-custom-colors">
-                <label>明暗模式<select id="skinCustomMode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
-                <label>强调色<input id="skinCustomAccent" type="color" value="#6f8cff" /></label>
-                <label>表面色<input id="skinCustomSurface" type="color" value="#171b29" /></label>
-                <label>文字色<input id="skinCustomText" type="color" value="#f4f7ff" /></label>
-              </div>
-            </section>
-            <section class="skin-custom-group skin-wallpaper-controls" aria-labelledby="skinWallpaperTitle">
-              <h4 id="skinWallpaperTitle">壁纸质感</h4>
-              <div class="skin-range-grid">
-                <label><span>壁纸明暗 <output id="skinBrightnessValue">82%</output></span><input id="skinWallpaperBrightness" type="range" min="40" max="140" value="82" /></label>
-                <label><span>填充背景模糊 <output id="skinBlurValue">2px</output></span><input id="skinWallpaperBlur" type="range" min="0" max="24" value="2" /></label>
-                <label><span>面板通透 <output id="skinGlassValue">32%</output></span><input id="skinGlassTransparency" type="range" min="0" max="92" value="32" /></label>
-                <label><span>边框清晰 <output id="skinBorderValue">48%</output></span><input id="skinBorderStrength" type="range" min="0" max="100" value="48" /></label>
-                <label><span>文字保护 <output id="skinReadabilityValue">72%</output></span><input id="skinReadabilityStrength" type="range" min="0" max="100" value="72" /></label>
-              </div>
-            </section>
-          </div>
-          <div class="skin-custom-actions"><button id="skinChooseBackground" type="button">选择本地壁纸或动图</button><button id="skinClearBackground" type="button">移除壁纸</button><button id="skinApplyCustom" class="primary" type="button">应用并保存</button></div>
+        <nav class="skin-picker-tabs" aria-label="外观类型">
+          <button id="skinThemeTab" type="button" aria-selected="true">皮肤</button>
+          <button id="skinModeTab" type="button" aria-selected="false">界面模式</button>
+        </nav>
+        <div id="skinThemePane" class="skin-picker-pane">
+          <div id="skinPickerGrid" class="skin-picker-grid"></div>
+          <section class="skin-custom-editor">
+            <div class="skin-custom-heading"><div><h3>自定义主题</h3><p>支持静态壁纸和 GIF、APNG、动态 WebP；文件只保存在本机，文字保护会自动提高透明界面的清晰度。</p></div><span id="skinBackgroundState"></span></div>
+            <div class="skin-custom-layout">
+              <section class="skin-custom-group" aria-labelledby="skinPaletteTitle">
+                <h4 id="skinPaletteTitle">基础配色</h4>
+                <div class="skin-custom-colors">
+                  <label>明暗模式<select id="skinCustomMode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
+                  <label>强调色<input id="skinCustomAccent" type="color" value="#6f8cff" /></label>
+                  <label>表面色<input id="skinCustomSurface" type="color" value="#171b29" /></label>
+                  <label>文字色<input id="skinCustomText" type="color" value="#f4f7ff" /></label>
+                </div>
+              </section>
+              <section class="skin-custom-group skin-wallpaper-controls" aria-labelledby="skinWallpaperTitle">
+                <h4 id="skinWallpaperTitle">壁纸质感</h4>
+                <div class="skin-range-grid">
+                  <label><span>壁纸明暗 <output id="skinBrightnessValue">82%</output></span><input id="skinWallpaperBrightness" type="range" min="40" max="140" value="82" /></label>
+                  <label><span>填充背景模糊 <output id="skinBlurValue">2px</output></span><input id="skinWallpaperBlur" type="range" min="0" max="24" value="2" /></label>
+                  <label><span>面板通透 <output id="skinGlassValue">32%</output></span><input id="skinGlassTransparency" type="range" min="0" max="92" value="32" /></label>
+                  <label><span>边框清晰 <output id="skinBorderValue">48%</output></span><input id="skinBorderStrength" type="range" min="0" max="100" value="48" /></label>
+                  <label><span>文字保护 <output id="skinReadabilityValue">72%</output></span><input id="skinReadabilityStrength" type="range" min="0" max="100" value="72" /></label>
+                </div>
+              </section>
+            </div>
+            <div class="skin-custom-actions"><button id="skinChooseBackground" type="button">选择本地壁纸或动图</button><button id="skinClearBackground" type="button">移除壁纸</button><button id="skinApplyCustom" class="primary" type="button">应用并保存</button></div>
+          </section>
+        </div>
+        <section id="skinModePane" class="skin-picker-pane skin-mode-pane hidden" aria-labelledby="skinModeTitle">
+          <div class="skin-mode-heading"><div><h3 id="skinModeTitle">界面模式</h3><p>模式只改变材质、层级和克制动效；当前皮肤、配色和壁纸保持不变。</p></div><strong id="skinModeCurrent">官方经典</strong></div>
+          <div id="skinModeGrid" class="skin-mode-grid"></div>
+          <section class="skin-mode-options" aria-label="无障碍与性能">
+            <label><span><strong>减少动态效果</strong><small>关闭界面模式的位移与过渡，系统设置仍然优先。</small></span><input id="skinReducedMotion" type="checkbox" /></label>
+            <label><span><strong>低性能模式</strong><small>关闭背景模糊和复杂阴影，保留配色与可读层级。</small></span><input id="skinLowPerformance" type="checkbox" /></label>
+          </section>
+          <p class="skin-mode-note">旧用户默认保持“官方经典”；任何模式都可立即切回，不会重载会话。</p>
         </section>
       </div>
     </section>

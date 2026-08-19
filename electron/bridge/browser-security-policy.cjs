@@ -149,6 +149,13 @@ class BrowserSecurityPolicy {
     return count
   }
 
+  /** 用户接管或 Profile 重置：立即清空活动标签与全部一次性确认，不改变授权。 */
+  clearPendingControl() {
+    this.gate.clearActiveTab()
+    this.gate.clearConfirmations()
+    return true
+  }
+
   /** 当前生效中的授权快照（仅权限元数据）。 */
   authorizations() {
     return this.authz.snapshot()
@@ -175,6 +182,11 @@ class BrowserSecurityPolicy {
   /** 有界审计只读快照。 */
   auditSnapshot() {
     return this.auditLog.snapshot()
+  }
+
+  /** 清除浏览器策略审计元数据；用于用户确认后的完整 Profile 重置。 */
+  clearAudit() {
+    return this.auditLog.clear()
   }
 
   /** 停机：停止接受一切新操作并关闭审计；幂等。 */

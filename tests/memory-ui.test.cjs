@@ -18,11 +18,14 @@ test('desktop shell exposes opt-in local memory management without secret access
   assert.match(html, /默认关闭、完全本地/u)
   assert.match(html, /密码、令牌、Cookie、银行卡和验证码不会保存/u)
   assert.match(html, /id="memoryDeleteAllConfirm"/u)
+  assert.match(html, /id="memoryDeleteExports"/u)
+  assert.match(html, /安全擦除数据库中的全部本地记忆/u)
   assert.match(html, /memory-manager\.js/u)
 
   assert.match(renderer, /setMemoryEnabled/u)
   assert.match(renderer, /searchMemories/u)
-  assert.match(renderer, /deleteAllMemories\(\{ confirmed: true \}\)/u)
+  assert.match(renderer, /deleteAllMemories\(\{ confirmed: true, deleteExports: deleteExports\.checked \}\)/u)
+  assert.match(renderer, /已安全擦除/u)
   assert.doesNotMatch(renderer, /node:sqlite|document\.cookie|localStorage/u)
 
   for (const channel of ['memory:status', 'memory:setEnabled', 'memory:setPreferences', 'memory:add', 'memory:search', 'memory:deleteAll']) {

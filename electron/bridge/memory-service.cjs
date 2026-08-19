@@ -103,6 +103,7 @@ class MemoryService {
     this.db = null
     this.fts5 = false
     this.auditLog = []
+    this.secureDelete = false
     this.enabled = false
     // 显式 opt-in：仅当构造参数 enabled: true 且提供了 dbPath 时才立即打开数据库。
     if (this.cfg.enabled) {
@@ -139,6 +140,7 @@ class MemoryService {
     this.db = null
     this.enabled = false
     this.fts5 = false
+    this.secureDelete = false
     this.#audit('disable', true)
     return this.status()
   }
@@ -163,6 +165,7 @@ class MemoryService {
       enabled: this.enabled,
       databaseAvailable: this.databaseAvailable,
       fts5: this.fts5,
+      secureDelete: this.secureDelete,
       dbPath,
       sqliteVersion,
       counts,
@@ -251,8 +254,32 @@ class MemoryService {
       this.db.exec('ROLLBACK')
       throw error
     }
-    this.#audit('deleteAll', true, { deleted })
-    return { deleted }
+    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)') } catch {}
+    this.db.exec('VACUUM')
+    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)') } catch {}
+    const auditCleared = this.auditLog.length
+    this.auditLog = []
+    return { deleted, auditCleared, storageCompacted: true, secureDelete: this.secureDelete }
+  }
+
+  async deleteExports() {
+    this.#requireEnabled()
+    const directory = this.cfg.exportsDir
+    if (!directory) return { deletedExports: 0 }
+    let info
+    try { info = fs.lstatSync(directory) } catch (error) {
+      if (error?.code === 'ENOENT') return { deletedExports: 0 }
+      throw error
+    }
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('记忆导出目录必须是常规目录。')
+    const managed = /^memory-export-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/
+    let deletedExports = 0
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !managed.test(entry.name)) continue
+      fs.unlinkSync(path.join(directory, entry.name))
+      deletedExports += 1
+    }
+    return { deletedExports }
   }
 
   // ---- 读取操作 ----
@@ -406,6 +433,13 @@ class MemoryService {
     const dir = path.dirname(dbPath)
     fs.mkdirSync(dir, { recursive: true })
     this.db = new this.sqliteModule.DatabaseSync(dbPath)
+    this.db.exec('PRAGMA secure_delete = ON')
+    this.secureDelete = Number(this.db.prepare('PRAGMA secure_delete').get().secure_delete) === 1
+    if (!this.secureDelete) {
+      this.db.close()
+      this.db = null
+      throw new Error('SQLite secure_delete 无法启用，拒绝打开本地记忆数据库。')
+    }
     this.fts5 = this.#detectFts5()
     this.#migrate()
   }

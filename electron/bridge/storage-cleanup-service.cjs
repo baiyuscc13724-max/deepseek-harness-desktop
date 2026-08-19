@@ -104,7 +104,7 @@ class StorageCleanupService {
       ? new Set(options.tempEntries.map(String))
       : new Set()
 
-    const deletions = []
+    let deletions = []
     const includeOldRuntimes = options.includeOldRuntimes !== false
     const includeCaches = options.includeCaches !== false
 
@@ -164,12 +164,25 @@ class StorageCleanupService {
       }
     }
 
+    const identified = []
+    for (const candidate of deletions) {
+      const identity = await this.#captureIdentity(candidate.path, rootAbs)
+      if (identity) identified.push({ ...candidate, identity })
+    }
+    deletions = identified
+
     let applied = []
     if (!preview) {
+      if (!Array.isArray(options.approvedCandidates)) throw new Error('执行存储清理必须绑定已确认的预览快照。')
+      const approved = new Map(options.approvedCandidates.map(candidate => [String(candidate?.path || ''), candidate]))
+      deletions = deletions.filter(candidate => this.#matchesApproved(candidate, approved.get(candidate.path)))
       applied = []
       for (const candidate of deletions) {
-        // 二重防护：执行删除前再次校验受控、非符号链接、非受保护。
+        const expected = approved.get(candidate.path)
+        // 执行删除前再次校验受控、非符号链接、非受保护，并核对文件身份。
         if (!(await this.#verifyDeletable(candidate.path, rootAbs))) continue
+        const finalIdentity = await this.#captureIdentity(candidate.path, rootAbs)
+        if (!finalIdentity || !this.#sameIdentity(expected.identity, finalIdentity)) continue
         try {
           await this.fs.rm(candidate.path, { recursive: true, force: true })
           applied.push({ ...candidate, applied: true })
@@ -204,6 +217,37 @@ class StorageCleanupService {
       preview,
       action: preview ? 'preview' : 'delete'
     }
+  }
+
+  async #captureIdentity(target, rootAbs) {
+    const contained = resolveContained(target, rootAbs)
+    if (!contained || contained === rootAbs) return null
+    const escape = await isSymlinkEscaping(contained, rootAbs)
+    if (escape.escaping) return null
+    const info = await lstat(contained).catch(() => null)
+    if (!info || info.isSymbolicLink() || !info.isDirectory()) return null
+    return {
+      dev: String(info.dev),
+      ino: String(info.ino),
+      mode: Number(info.mode),
+      size: Number(info.size),
+      mtimeMs: Number(info.mtimeMs),
+      birthtimeMs: Number(info.birthtimeMs)
+    }
+  }
+
+  #sameIdentity(left, right) {
+    if (!left || !right) return false
+    return ['dev', 'ino', 'mode', 'size', 'mtimeMs', 'birthtimeMs'].every(key => left[key] === right[key])
+  }
+
+  #matchesApproved(candidate, approved) {
+    return Boolean(approved &&
+      approved.path === candidate.path &&
+      approved.kind === candidate.kind &&
+      approved.name === candidate.name &&
+      Number(approved.size) === Number(candidate.size) &&
+      this.#sameIdentity(approved.identity, candidate.identity))
   }
 
   /**

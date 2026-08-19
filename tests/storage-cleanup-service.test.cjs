@@ -15,6 +15,11 @@ async function exists(p) {
   try { await access(p); return true } catch { return false }
 }
 
+async function applyPlan(service, root, options = {}) {
+  const preview = await service.plan(root, { ...options, preview: true })
+  return service.plan(root, { ...options, preview: false, approvedCandidates: preview.deletions })
+}
+
 // 把目录及其内容的 mtime 回拨到很久以前，模拟「过期」条目。
 async function backdate(p) {
   const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
@@ -49,11 +54,22 @@ test('cleanup is dry-run by default and never deletes anything', async () => {
   }
 })
 
+test('destructive cleanup refuses to run without a confirmed preview snapshot', async () => {
+  const fixture = await buildHarnessData()
+  const { service } = makeService()
+  try {
+    await assert.rejects(service.plan(fixture.root, { preview: false }), /预览快照/)
+    assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64')), true)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
 test('cleanup removes only old runtime and marketplace, keeps protected data', async () => {
   const fixture = await buildHarnessData()
   const { service } = makeService()
   try {
-    const plan = await service.plan(fixture.root, { preview: false })
+    const plan = await applyPlan(service, fixture.root)
     assert.equal(plan.preview, false)
     assert.ok(plan.applied.length >= 2)
 
@@ -79,13 +95,12 @@ test('temp entries are only cleaned when explicitly requested and past age thres
   const { service } = makeService()
   try {
     // 没有显式传入 -> 即使预览关闭也不清 temp。
-    const planNoTemp = await service.plan(fixture.root, { preview: false })
+    const planNoTemp = await applyPlan(service, fixture.root)
     assert.ok(!planNoTemp.deletions.some(d => d.kind === 'temp'))
     assert.equal(await exists(path.join(fixture.tempDir, 'dsh-spill-OLD1')), true)
 
     // 显式传入、条目是新鲜的（低于年龄阈值）-> 不清。
-    const planTooNew = await service.plan(fixture.root, {
-      preview: false,
+    const planTooNew = await applyPlan(service, fixture.root, {
       tempEntries: ['dsh-spill-OLD1'],
       tempAgeMs: 10 * 24 * 60 * 60 * 1000 // 10 天
     })
@@ -95,8 +110,7 @@ test('temp entries are only cleaned when explicitly requested and past age thres
     // 目录本身很旧但内部文件仍活跃时不得清理。
     const oldTempDir = path.join(fixture.tempDir, 'dsh-spill-OLD1')
     await backdate(oldTempDir)
-    const planActive = await service.plan(fixture.root, {
-      preview: false,
+    const planActive = await applyPlan(service, fixture.root, {
       tempEntries: ['dsh-spill-OLD1'],
       tempAgeMs: 1 * 24 * 60 * 60 * 1000
     })
@@ -105,8 +119,7 @@ test('temp entries are only cleaned when explicitly requested and past age thres
     // 目录和内部最新文件都超过阈值后才允许清除。
     await backdate(path.join(oldTempDir, 'x'))
     await backdate(oldTempDir)
-    const planOld = await service.plan(fixture.root, {
-      preview: false,
+    const planOld = await applyPlan(service, fixture.root, {
       tempEntries: ['dsh-spill-OLD1'],
       tempAgeMs: 1 * 24 * 60 * 60 * 1000 // 1 天；条目已回拨 30 天，远超阈值
     })
@@ -123,7 +136,7 @@ test('cleanup plans never include protected sessions/attachments', async () => {
   const fixture = await buildHarnessData()
   const { service } = makeService()
   try {
-    const plan = await service.plan(fixture.root, { preview: false })
+    const plan = await applyPlan(service, fixture.root)
     for (const d of plan.deletions) {
       const base = path.basename(d.path).toLowerCase()
       assert.ok(!['sessions', 'attachments', 'memories'].includes(base), `should not delete ${d.path}`)
@@ -148,8 +161,7 @@ test('symlink-escape sibling dirs are never deleted', async () => {
     } catch {
       return // 无法建链接的环境跳过此断言
     }
-    const plan = await service.plan(fixture.root, {
-      preview: false,
+    const plan = await applyPlan(service, fixture.root, {
       tempEntries: ['escape-link'],
       tempAgeMs: 0
     })
@@ -166,8 +178,7 @@ test('cleanup refuses to delete the HarnessData root itself', async () => {
   const { service } = makeService()
   try {
     // 模拟 root 被当成 temp 条目传入：不应把根目录删掉。
-    const plan = await service.plan(fixture.root, {
-      preview: false,
+    const plan = await applyPlan(service, fixture.root, {
       tempEntries: [path.basename(fixture.root)],
       tempAgeMs: 1
     })
