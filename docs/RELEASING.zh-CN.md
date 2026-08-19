@@ -134,7 +134,13 @@ Remove-Item Env:HARNESS_COMPONENT_KEY_ID
 - 禁止从本机向 CNB 上传 EXE、DMG、ZIP、APK 等大文件。
 - 本机只推送 `.cnb.yml`、发布说明、清单和校验信息；`release-manifest.json` 的每项资产必须记录独立 `size` 与 `sha256`，CNB Runner 从 GitHub Release 下载后逐项验证；旧清单仅可回退读取同版本 `SHA256SUMS.txt`。
 - 官方 `cnbcool/attachments:latest` 插件负责上传；流水线短期 `CNB_TOKEN` 自动注入、结束销毁。
-- 使用已登录的官方 `@cnbcool/cnb-cli` 启动并等待：
+- GitHub 桌面、APK 和七项组件资产全部公开并复核后，先从 GitHub API 的不可变 `sha256:` digest 生成精确 18 项清单：
+
+```powershell
+node scripts/refresh-release-manifest.mjs --version=1.0.26
+```
+
+- 使用已登录的官方 `@cnbcool/cnb-cli` 启动并等待；`dist/SHA256SUMS.txt` 必须先替换为 GitHub 公开同名字节：
 
 ```powershell
 npm run release:cnb-cloud

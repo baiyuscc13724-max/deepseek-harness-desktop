@@ -55,6 +55,9 @@ foreach ($asset in $release.assets) {
   if ([string]$asset.sha256 -notmatch '^[0-9a-f]{64}$') { throw "Manifest SHA-256 missing for $($asset.name)" }
 }
 if (-not (Test-Path -LiteralPath 'dist/SHA256SUMS.txt')) { throw 'Missing audited release file: dist/SHA256SUMS.txt' }
+$checksumAsset = @($release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1)[0]
+$localChecksumHash = (Get-FileHash -LiteralPath 'dist/SHA256SUMS.txt' -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($localChecksumHash -ne [string]$checksumAsset.sha256) { throw 'dist/SHA256SUMS.txt does not match the public GitHub release asset.' }
 foreach ($asset in $release.assets) {
   if ($asset.browser_download_url -notlike 'https://github.com/*') { throw "Untrusted GitHub source URL for $($asset.name)" }
   $sourceResponse = Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -Method Head -MaximumRedirection 8 -TimeoutSec 90

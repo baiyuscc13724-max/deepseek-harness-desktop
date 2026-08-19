@@ -55,7 +55,7 @@ for (const forbidden of ['asset-upload-url', '--upload-file', 'PLUGIN_TOKEN']) {
   if (cnbPipeline.includes(forbidden)) throw new Error(`CNB attachments must use the official plugin instead of custom local upload plumbing: ${forbidden}`)
 }
 const cnbPublisher = await readFile(path.join(root, 'scripts/publish-cnb-cloud-mirror.ps1'), 'utf8')
-for (const contract of ['cnb-cloud-release-', 'get-build-status', 'CNB metadata pushed', 'Method Head', 'SHA256SUMS.txt', 'COMPONENT-SHA256SUMS.txt', 'linux-x86_64.AppImage', 'mac-arm64.dmg', 'mac-x64.dmg', 'android-universal.apk.sha256', 'desktop-shell-', 'components-', 'component-feeds/stable/win32-x64.json', 'component-feeds/stable/darwin-x64.json', 'component-feeds/stable/darwin-arm64.json', 'Stable component feeds must be absent or complete', 'Manifest SHA-256 missing', 'GitHub source verification failed', "credential.helper='"]) {
+for (const contract of ['cnb-cloud-release-', 'get-build-status', 'CNB metadata pushed', 'Method Head', 'SHA256SUMS.txt', 'COMPONENT-SHA256SUMS.txt', 'linux-x86_64.AppImage', 'mac-arm64.dmg', 'mac-x64.dmg', 'android-universal.apk.sha256', 'desktop-shell-', 'components-', 'component-feeds/stable/win32-x64.json', 'component-feeds/stable/darwin-x64.json', 'component-feeds/stable/darwin-arm64.json', 'Stable component feeds must be absent or complete', 'Manifest SHA-256 missing', 'does not match the public GitHub release asset', 'GitHub source verification failed', "credential.helper='"]) {
   if (!cnbPublisher.includes(contract)) throw new Error(`CNB cloud publisher contract missing: ${contract}`)
 }
 for (const forbidden of ['-InFile', '--upload-file', 'asset-upload-url']) {
@@ -131,6 +131,10 @@ for (const contract of ['workflow_dispatch:', 'Existing immutable release tag to
 const componentPublishWorkflow = await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')
 for (const contract of ['component-publish/v1.0.26', 'verify-production-component-staging.mjs', 'Refuse replacement or partial component publication', 'gh release upload', 'Re-download and verify public component assets']) {
   if (!componentPublishWorkflow.includes(contract)) throw new Error(`Production component publication must verify public signed staging and refuse replacement: ${contract}`)
+}
+const manifestRefresher = await readFile(path.join(root, 'scripts/refresh-release-manifest.mjs'), 'utf8')
+for (const contract of ['assets: manifestAssets.length', 'asset.digest', 'Unexpected public release asset set', 'mirror_urls', 'COMPONENT-SHA256SUMS.txt']) {
+  if (!manifestRefresher.includes(contract)) throw new Error(`Final release manifest must bind the exact public asset set to GitHub digests and CNB mirrors: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
 for (const contract of ['seq 1 180', 'android-universal.apk.sha256', 'Only one Android release asset exists', 'Verify public signed APK bytes and identity']) {
