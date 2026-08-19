@@ -183,8 +183,13 @@
       .hd-custom-actions button:disabled { cursor:not-allowed; opacity:.45; }
       @container (max-width:660px) { .hd-custom-layout { grid-template-columns:1fr; } }
       @container (max-width:380px) { .hd-custom-heading { flex-direction:column; gap:6px; } .hd-custom-status { align-self:flex-start; } .hd-custom-fields,.hd-custom-range-grid { grid-template-columns:1fr; } }
-      html[data-hd-theme]:not([data-hd-theme="official"]) body { min-height:100vh; background-position:center !important; background-size:cover !important; background-attachment:fixed !important; }
-      html[data-hd-theme]:not([data-hd-theme="official"]) #root { position:relative; z-index:1; min-height:100vh; background:transparent !important; }
+      html[data-hd-theme]:not([data-hd-theme="official"]) body { background-position:center !important; background-size:cover !important; background-attachment:fixed !important; }
+      html[data-hd-theme]:not([data-hd-theme="official"]) #root { position:relative; z-index:1; background:transparent !important; }
+      html[data-hd-theme]:not([data-hd-theme="official"]):not([data-harness-mobile="true"]),
+      html[data-hd-theme]:not([data-hd-theme="official"]):not([data-harness-mobile="true"]) body,
+      html[data-hd-theme]:not([data-hd-theme="official"]):not([data-harness-mobile="true"]) #root { width:100%; height:100%; min-height:0 !important; overflow:hidden !important; }
+      html[data-hd-theme]:not([data-hd-theme="official"])[data-harness-mobile="true"] body,
+      html[data-hd-theme]:not([data-hd-theme="official"])[data-harness-mobile="true"] #root { min-height:100vh; }
       html[data-hd-theme="custom"] body { background:var(--dsw-alias-bg-base) !important; }
       html[data-hd-theme="custom"] body::before { content:""; position:fixed; z-index:0; inset:calc(-32px - var(--hd-wallpaper-blur,0px)); background:var(--hd-wallpaper) center/cover no-repeat; filter:brightness(var(--hd-wallpaper-brightness,.82)) blur(calc(var(--hd-wallpaper-blur,2px) + 22px)) saturate(.88); pointer-events:none; }
       html[data-hd-theme="custom"] body::after { content:""; position:fixed; z-index:0; inset:0; background-image:linear-gradient(var(--hd-wallpaper-overlay),var(--hd-wallpaper-overlay)),var(--hd-wallpaper-contain,none); background-position:center,center; background-size:cover,contain; background-repeat:no-repeat,no-repeat; filter:brightness(var(--hd-wallpaper-brightness,.82)); pointer-events:none; }
@@ -529,11 +534,18 @@
       }
     }
 
+    const stabilizeWorkbenchViewport = () => {
+      const root = document.documentElement
+      if (root.dataset.harnessMobile === 'true' || root.dataset.hdTheme === 'official') return
+      if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0)
+    }
+
     const mount = (refreshTheme = true) => {
       const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
       if (dialog) ensureNavigation(dialog)
       applySessionLogDock()
       if (refreshTheme) applyTheme()
+      stabilizeWorkbenchViewport()
     }
     window.__HARNESS_DESKTOP_RENDER_THEMES__ = mount
     let mutationTimer = null

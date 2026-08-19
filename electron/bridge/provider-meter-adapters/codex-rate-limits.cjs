@@ -1,5 +1,7 @@
 const { spawn } = require('node:child_process')
 
+const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+
 function meterError(code, publicMessage) {
   return Object.assign(new Error(publicMessage), { code, publicMessage })
 }
@@ -52,6 +54,74 @@ function normalizeCodexRateLimits(payload) {
     }
   }
   return { status: meters.length ? 'ready' : 'unavailable', message: meters.length ? '' : 'Codex 当前未返回可显示的用量周期。', meters }
+}
+
+function accountIdFromAccessToken(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(String(token || '').split('.')[1] || '', 'base64url').toString('utf8'))
+    const accountId = payload?.['https://api.openai.com/auth']?.chatgpt_account_id || payload?.chatgpt_account_id
+    return typeof accountId === 'string' ? accountId.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+function normalizedLimitId(value, fallback) {
+  const id = String(value || fallback || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
+  return id || fallback
+}
+
+function whamWindow(window) {
+  if (!window || percentage(window.used_percent) === null) return null
+  return {
+    usedPercent: percentage(window.used_percent),
+    resetsAt: Number.isFinite(Number(window.reset_at)) ? Number(window.reset_at) : null,
+    windowDurationMins: Number.isFinite(Number(window.limit_window_seconds)) ? Number(window.limit_window_seconds) / 60 : null
+  }
+}
+
+function whamRateLimit(rateLimit, limitId, limitName = '') {
+  if (!rateLimit) return null
+  const primary = whamWindow(rateLimit.primary_window)
+  const secondary = whamWindow(rateLimit.secondary_window)
+  if (!primary && !secondary) return null
+  return { limitId, limitName, primary, secondary }
+}
+
+function normalizeCodexUsage(payload) {
+  const rateLimitsByLimitId = {}
+  const primary = whamRateLimit(payload?.rate_limit, 'codex', 'Codex 用量')
+  if (primary) rateLimitsByLimitId.codex = primary
+  const codeReview = whamRateLimit(payload?.code_review_rate_limit, 'code-review', 'Codex 代码审查')
+  if (codeReview) rateLimitsByLimitId['code-review'] = codeReview
+  for (const [index, entry] of (Array.isArray(payload?.additional_rate_limits) ? payload.additional_rate_limits : []).entries()) {
+    const limitId = normalizedLimitId(entry?.metered_feature || entry?.limit_name, `additional-${index + 1}`)
+    const snapshot = whamRateLimit(entry?.rate_limit, limitId, String(entry?.limit_name || limitId))
+    if (snapshot && !rateLimitsByLimitId[limitId]) rateLimitsByLimitId[limitId] = snapshot
+  }
+  return normalizeCodexRateLimits({ rateLimitsByLimitId })
+}
+
+async function queryCodexUsage({ credential, fetchImpl = globalThis.fetch } = {}) {
+  const token = typeof credential === 'string' ? credential.trim() : String(credential?.value || '').trim()
+  if (!token) throw meterError('METER_AUTH_REQUIRED', 'Codex 账户尚未登录。')
+  const accountId = accountIdFromAccessToken(token)
+  if (!accountId) throw meterError('METER_AUTH_REQUIRED', 'Codex 登录凭据格式已失效，请重新登录。')
+  let response
+  try {
+    response = await fetchImpl(CODEX_USAGE_URL, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token}`,
+        'ChatGPT-Account-Id': accountId
+      }
+    })
+  } catch {
+    throw meterError('METER_UNAVAILABLE', 'Codex 用量服务当前无法连接。')
+  }
+  if (response.status === 401 || response.status === 403) throw meterError('METER_AUTH_REQUIRED', 'Codex 登录已过期，请重新登录。')
+  if (!response.ok) throw meterError('METER_UNAVAILABLE', `Codex 用量服务暂时不可用 (${response.status})。`)
+  return response.json()
 }
 
 function queryCodexAppServer({ spawnImpl = spawn, command = process.env.HARNESS_CODEX_EXECUTABLE || 'codex', timeoutMs = 12000 } = {}) {
@@ -110,12 +180,24 @@ function queryCodexAppServer({ spawnImpl = spawn, command = process.env.HARNESS_
 
 function createCodexRateLimitsAdapter(options = {}) {
   return {
-    id: 'openai-codex-rate-limits-v1',
+    id: 'openai-codex-rate-limits-v2',
     supports: provider => provider.id === 'openai-codex',
-    async refresh({ spawnImpl }) {
+    async refresh({ credential, fetchImpl, spawnImpl }) {
+      if (credential?.value) {
+        return normalizeCodexUsage(await queryCodexUsage({ credential, fetchImpl: fetchImpl || options.fetchImpl }))
+      }
       return normalizeCodexRateLimits(await queryCodexAppServer({ ...options, spawnImpl: spawnImpl || options.spawnImpl }))
     }
   }
 }
 
-module.exports = { createAdapter: createCodexRateLimitsAdapter, createCodexRateLimitsAdapter, normalizeCodexRateLimits, queryCodexAppServer }
+module.exports = {
+  CODEX_USAGE_URL,
+  accountIdFromAccessToken,
+  createAdapter: createCodexRateLimitsAdapter,
+  createCodexRateLimitsAdapter,
+  normalizeCodexRateLimits,
+  normalizeCodexUsage,
+  queryCodexAppServer,
+  queryCodexUsage
+}

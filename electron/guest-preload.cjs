@@ -163,6 +163,11 @@ window.addEventListener('DOMContentLoaded', () => {
     const target = event.target instanceof Element ? event.target : null
     if (!target || target.closest(interactiveSelector)) return
     if (interactiveCursors.has(getComputedStyle(target).cursor) || pointTouchesText(event.clientX, event.clientY)) return
+    const selection = window.getSelection?.()
+    if (selection && !selection.isCollapsed) {
+      selection.removeAllRanges()
+      return
+    }
     event.preventDefault()
     event.stopImmediatePropagation()
     activeDrag = { pointerId: event.pointerId, target }
@@ -192,6 +197,11 @@ window.addEventListener('DOMContentLoaded', () => {
   }
   document.addEventListener('pointerup', finishDrag, true)
   document.addEventListener('pointercancel', finishDrag, true)
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return
+    const selection = window.getSelection?.()
+    if (selection && !selection.isCollapsed) selection.removeAllRanges()
+  }, true)
 
   document.addEventListener('drop', event => {
     if (!event.isTrusted || !event.dataTransfer?.types.includes('Files')) return

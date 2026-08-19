@@ -10,7 +10,7 @@ test('registry discovers bundled adapters without provider branches in the core 
   const adapters = await loadBundledProviderMeterAdapters()
   assert.deepEqual(adapters.map(row => row.id).sort(), [
     'deepseek-balance-v1',
-    'openai-codex-rate-limits-v1',
+    'openai-codex-rate-limits-v2',
     'opencode-go-plan-v1'
   ])
 })

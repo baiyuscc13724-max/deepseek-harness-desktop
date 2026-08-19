@@ -2,7 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 
 const { createDeepSeekBalanceAdapter, normalizeDeepSeekBalance } = require('../electron/bridge/provider-meter-adapters/deepseek-balance.cjs')
-const { normalizeCodexRateLimits } = require('../electron/bridge/provider-meter-adapters/codex-rate-limits.cjs')
+const { CODEX_USAGE_URL, createCodexRateLimitsAdapter, normalizeCodexRateLimits, normalizeCodexUsage } = require('../electron/bridge/provider-meter-adapters/codex-rate-limits.cjs')
 const { createOpenCodeGoPlanAdapter } = require('../electron/bridge/provider-meter-adapters/opencode-go-plan.cjs')
 
 test('DeepSeek balance normalizes every returned currency', () => {
@@ -45,6 +45,46 @@ test('Codex rate limits become generic usage windows and budgets', () => {
   assert.deepEqual(result.meters.map(row => row.kind), ['usage-window', 'spending-budget', 'usage-window'])
   assert.equal(result.meters[0].remainingPercent, 34)
   assert.equal(result.meters[2].label, 'Spark')
+})
+
+test('Harness Codex OAuth usage response becomes generic usage windows', () => {
+  const result = normalizeCodexUsage({
+    rate_limit: {
+      primary_window: { used_percent: 87, limit_window_seconds: 604800, reset_at: 1_800_000_000 }
+    },
+    additional_rate_limits: [{
+      limit_name: 'Spark',
+      metered_feature: 'spark',
+      rate_limit: { primary_window: { used_percent: 5, limit_window_seconds: 18000, reset_at: 1_800_000_100 } }
+    }]
+  })
+  assert.equal(result.status, 'ready')
+  assert.deepEqual(result.meters.map(row => row.remainingPercent), [13, 95])
+  assert.deepEqual(result.meters.map(row => row.windowDurationMins), [10080, 300])
+})
+
+test('Codex adapter queries official usage with Harness OAuth without exposing credentials', async () => {
+  const accountId = 'account-test-only'
+  const token = `header.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: accountId } })).toString('base64url')}.signature`
+  let request
+  const result = await createCodexRateLimitsAdapter().refresh({
+    credential: { value: token },
+    fetchImpl: async (url, options) => {
+      request = { url, options }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ rate_limit: { primary_window: { used_percent: 25, limit_window_seconds: 3600, reset_at: 1_800_000_000 } } })
+      }
+    }
+  })
+  assert.equal(request.url, CODEX_USAGE_URL)
+  assert.equal(request.options.headers.Authorization, `Bearer ${token}`)
+  assert.equal(request.options.headers['ChatGPT-Account-Id'], accountId)
+  assert.equal(result.status, 'ready')
+  assert.equal(result.meters[0].remainingPercent, 75)
+  assert.equal(JSON.stringify(result).includes(token), false)
+  assert.equal(JSON.stringify(result).includes(accountId), false)
 })
 
 test('OpenCode Go is explicit when its model API key cannot query plan usage', async () => {

@@ -204,12 +204,25 @@ function browserPolicyOptions() {
   }
 }
 
+function liveBrowserContents() {
+  const contents = browserView?.webContents
+  if (!contents || typeof contents.isDestroyed !== 'function' || contents.isDestroyed()) return null
+  return contents
+}
+
+function closeBrowserViewContents() {
+  const contents = browserView?.webContents
+  browserView = null
+  if (!contents || typeof contents.isDestroyed !== 'function' || contents.isDestroyed()) return
+  contents.close()
+}
+
 function browserNavigationHistory() {
-  return browserView?.webContents?.navigationHistory || null
+  return liveBrowserContents()?.navigationHistory || null
 }
 
 function layoutBrowserView() {
-  if (!browserView || !mainWindow || mainWindow.isDestroyed()) return
+  if (!liveBrowserContents() || !mainWindow || mainWindow.isDestroyed()) return
   const [width, height] = mainWindow.getContentSize()
   const panelWidth = Math.min(BROWSER_PANEL_WIDTH, width)
   browserView.setBounds({
@@ -223,9 +236,9 @@ function layoutBrowserView() {
 
 async function browserStatePayload(patch = {}) {
   browserState = { ...browserState, ...patch }
-  const contents = browserView?.webContents
+  const contents = liveBrowserContents()
   const history = browserNavigationHistory()
-  if (contents && !contents.isDestroyed()) {
+  if (contents) {
     browserState.url = contents.getURL() || browserState.url
     browserState.title = contents.getTitle() || browserState.title
     browserState.canGoBack = Boolean(history?.canGoBack())
@@ -233,8 +246,8 @@ async function browserStatePayload(patch = {}) {
   }
   browserState.visible = browserSidebarVisible
   browserState.hasSiteData = false
-  if (browserState.origin && browserView) {
-    const cookies = await browserView.webContents.session.cookies.get({ url: browserState.origin }).catch(() => [])
+  if (browserState.origin && contents) {
+    const cookies = await contents.session.cookies.get({ url: browserState.origin }).catch(() => [])
     browserState.hasSiteData = cookies.length > 0
   }
   return {
@@ -269,7 +282,8 @@ function updateBrowserActiveTab(url) {
 }
 
 function ensureBrowserSidebar() {
-  if (browserView && !browserView.webContents.isDestroyed()) return browserView
+  if (liveBrowserContents()) return browserView
+  browserView = null
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('主窗口尚未准备好。')
   browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
   const browserSession = session.fromPartition(browserSecurityPolicy.partitionName, { cache: true })
@@ -333,19 +347,22 @@ function normalizeBrowserAddress(value, base = '') {
 
 async function setBrowserSidebarVisible(visible) {
   ensureBrowserSidebar()
+  const contents = liveBrowserContents()
+  if (!contents) throw new Error('浏览器视图尚未准备好。')
   browserSidebarVisible = Boolean(visible)
-  if (browserSidebarVisible && !browserView.webContents.getURL()) {
-    await browserView.webContents.loadURL(browserSecurityPolicy.userNavigate('https://www.baidu.com/').normalized)
+  if (browserSidebarVisible && !contents.getURL()) {
+    await contents.loadURL(browserSecurityPolicy.userNavigate('https://www.baidu.com/').normalized)
   }
-  updateBrowserActiveTab(browserView.webContents.getURL())
+  updateBrowserActiveTab(contents.getURL())
   layoutBrowserView()
   return publishBrowserState()
 }
 
 async function setBrowserContentVisible(visible) {
   browserContentVisible = Boolean(visible)
-  if (browserView) {
-    updateBrowserActiveTab(browserView.webContents.getURL())
+  const contents = liveBrowserContents()
+  if (contents) {
+    updateBrowserActiveTab(contents.getURL())
     layoutBrowserView()
   }
   return publishBrowserState()
@@ -370,7 +387,8 @@ async function clearBrowserSiteData(confirmed) {
 
 async function resumeBrowserModelControl() {
   if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
-  if (browserView) updateBrowserActiveTab(browserView.webContents.getURL())
+  const contents = liveBrowserContents()
+  if (contents) updateBrowserActiveTab(contents.getURL())
   return publishBrowserState()
 }
 
@@ -1452,7 +1470,7 @@ async function showGuestContextMenu(guest, params) {
   } else if (external) {
     template.push(
       { label: '打开链接', click: () => shell.openExternal(external).catch(() => {}) },
-      { label: '复制链接', click: () => clipboard.writeText(external) },
+      { label: '复制链接地址', click: () => clipboard.writeText(external) },
       { type: 'separator' }
     )
   }
@@ -1596,8 +1614,7 @@ function createWindow() {
   mainWindow.on('resize', layoutBrowserView)
   mainWindow.on('closed', () => {
     browserSecurityPolicy?.stop()
-    if (browserView && !browserView.webContents.isDestroyed()) browserView.webContents.close()
-    browserView = null
+    closeBrowserViewContents()
     browserSecurityPolicy = null
     browserSidebarVisible = false
     mainWindow = null
@@ -1921,7 +1938,7 @@ app.on('before-quit', () => {
   memoryService?.close()
   browserSecurityPolicy?.stop()
   browserControlServer?.stop().catch(() => {})
-  if (browserView && !browserView.webContents.isDestroyed()) browserView.webContents.close()
+  closeBrowserViewContents()
   stopRuntime()
 })
 app.on('window-all-closed', () => {
