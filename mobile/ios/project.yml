@@ -20,7 +20,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.harnessdesktop.mobile
-        PRODUCT_NAME: DeepSeek Harness
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
     info:

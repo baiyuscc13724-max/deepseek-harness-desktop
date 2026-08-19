@@ -866,13 +866,15 @@ function selfTestOutputPath() {
 
 async function runSelfTestMode() {
   await ensureBundledRuntime()
+  await ensurePluginMarketplace(pluginMarketplaceOptions())
   const report = await runPackagedSelfTest({
     appVersion: app.getVersion(),
     userData: app.getPath('userData'),
     rendererEntry: path.join(__dirname, '..', 'renderer', 'index.html'),
     resolveDshBin: () => resolveDshBin({ nodeModulesRoot: bundledNodeModulesRoot() }),
     ensurePluginMarketplace,
-    marketplaceBundledRoot: pluginMarketplaceOptions().bundledRoot
+    marketplaceBundledRoot: pluginMarketplaceOptions().bundledRoot,
+    runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true }
   })
   const output = selfTestOutputPath()
   const text = `${JSON.stringify(report, null, 2)}\n`

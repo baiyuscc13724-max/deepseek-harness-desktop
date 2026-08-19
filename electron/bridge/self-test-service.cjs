@@ -80,7 +80,10 @@ async function runtimeWebBootable(dsh, options = {}) {
       if (match) candidateUrl = match[0].replace('localhost', '127.0.0.1')
     }
     child.stdout?.on('data', inspect)
-    child.stderr?.on('data', inspect)
+    child.stderr?.on('data', chunk => {
+      inspect(chunk)
+      if (options.logOutput) process.stderr.write(chunk)
+    })
     child.once('error', () => { exited = true })
     child.once('exit', () => { exited = true })
     const deadline = Date.now() + (options.timeoutMs || 25000)

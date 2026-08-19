@@ -201,7 +201,7 @@ for (const target of ['dmg', 'zip']) {
   if (!value || !['x64', 'arm64'].every(arch => value.arch?.includes(arch))) throw new Error(`macOS ${target} target must cover Intel and Apple Silicon.`)
 }
 const desktopMain = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
-for (const contract of ['createWssRelayAdapter', 'loadMobileRelayConfig', "detached: process.platform !== 'win32'", 'terminateProcessTree(child)']) {
+for (const contract of ['createWssRelayAdapter', 'loadMobileRelayConfig', "detached: process.platform !== 'win32'", 'terminateProcessTree(child)', 'runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true }']) {
   if (!desktopMain.includes(contract)) throw new Error(`Cross-platform desktop runtime contract is missing: ${contract}`)
 }
 const iosInfo = await readFile(path.join(root, 'mobile/ios/HarnessMobile/Resources/Info.plist'), 'utf8')
@@ -212,6 +212,7 @@ if (iosInfo.includes('UIBackgroundModes')) throw new Error('iOS client must not 
 const appleWorkflow = await readFile(path.join(root, '.github/workflows/apple-virtual-tests.yml'), 'utf8')
 const iosProject = await readFile(path.join(root, 'mobile/ios/project.yml'), 'utf8')
 if (!iosProject.includes('xcodeVersion: "16.0"')) throw new Error('iOS project generation must target the selected Xcode 16 cloud image.')
+if (iosProject.includes('PRODUCT_NAME:')) throw new Error('The iOS target executable name must remain HarnessMobile so its unit-test host resolves correctly; use CFBundleDisplayName for branding.')
 for (const contract of ['workflow_dispatch:', 'runs-on: macos-14', 'Select Xcode 16', 'xcodegen generate', 'iPhone Simulator', 'iPad Simulator', 'xcodebuild test', '--x64 --arm64', 'CODE_SIGNING_ALLOWED=NO']) {
   if (!appleWorkflow.includes(contract)) throw new Error(`Apple virtual-device test contract is missing: ${contract}`)
 }

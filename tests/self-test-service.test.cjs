@@ -3,13 +3,41 @@ const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
 const { mkdtemp, rm, writeFile } = require('node:fs/promises')
+const { EventEmitter } = require('node:events')
+const { PassThrough } = require('node:stream')
 
-const { nodeRuntimeSupported, runPackagedSelfTest } = require('../electron/bridge/self-test-service.cjs')
+const { nodeRuntimeSupported, runPackagedSelfTest, runtimeWebBootable } = require('../electron/bridge/self-test-service.cjs')
 
 test('node runtime check rejects obsolete runtimes', () => {
   assert.equal(nodeRuntimeSupported('24.1.0'), true)
   assert.equal(nodeRuntimeSupported('18.20.0'), false)
   assert.equal(nodeRuntimeSupported('invalid'), false)
+})
+
+test('runtime probe uses the isolated prepared DSH home', async () => {
+  const runtimeHome = await mkdtemp(path.join(os.tmpdir(), 'harness-runtime-probe-home-'))
+  try {
+    let spawned
+    const child = new EventEmitter()
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    child.kill = () => {}
+    const resultPromise = runtimeWebBootable({ command: 'electron', argsPrefix: ['cli.js'], env: { ELECTRON_RUN_AS_NODE: '1' } }, {
+      runtimeHome,
+      timeoutMs: 500,
+      spawnImpl: (command, args, options) => {
+        spawned = { command, args, options }
+        process.nextTick(() => child.stdout.write('ready at http://127.0.0.1:43123'))
+        return child
+      },
+      probeUrl: async url => url === 'http://127.0.0.1:43123'
+    })
+    assert.equal(await resultPromise, true)
+    assert.equal(spawned.options.env.DSH_HOME, runtimeHome)
+    assert.equal(spawned.options.env.ELECTRON_RUN_AS_NODE, '1')
+  } finally {
+    await rm(runtimeHome, { recursive: true, force: true })
+  }
 })
 
 test('packaged self-test passes with official Web UI runtime assets', async () => {
