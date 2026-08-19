@@ -18,7 +18,7 @@ $keyBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($keySecure)
 try {
   $env:HARNESS_KEYTOOL_STORE_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($storeBstr)
   $env:HARNESS_KEYTOOL_KEY_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyBstr)
-  & $keytool -genkeypair -v -keystore $OutputPath -storetype PKCS12 -alias $Alias -keyalg RSA -keysize 4096 -sigalg SHA256withRSA -validity $ValidityDays -dname $DistinguishedName -storepass:env HARNESS_KEYTOOL_STORE_PASSWORD -keypass:env HARNESS_KEYTOOL_KEY_PASSWORD
+  & $keytool -genkeypair -v -keystore $OutputPath -storetype JKS -alias $Alias -keyalg RSA -keysize 4096 -sigalg SHA256withRSA -validity $ValidityDays -dname $DistinguishedName -storepass:env HARNESS_KEYTOOL_STORE_PASSWORD -keypass:env HARNESS_KEYTOOL_KEY_PASSWORD
   if ($LASTEXITCODE -ne 0) { throw "keytool failed with exit code $LASTEXITCODE" }
   Write-Host "Android release keystore created: $OutputPath"
   Write-Host 'Back it up offline. Losing this file or either password prevents future in-place updates.'
