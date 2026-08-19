@@ -61,6 +61,8 @@ gh run list --workflow release.yml --branch v1.0.26
 gh run watch <run-id> --exit-status
 ```
 
+如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。`workflow_dispatch` 的 `tag` 输入会从既有 Tag 重新 checkout；在无法使用 API/CLI 调度时，只允许推送一次 `release-retry/v1.0.26` 恢复分支触发同一路径。恢复工作流仍重跑全部平台、模拟器、哈希与 draft 门禁，并在已存在 Release 时拒绝修改。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
+
 ## 4. 正式 Android
 
 GitHub 仓库 Actions Secrets 必须已有：

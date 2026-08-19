@@ -2,9 +2,19 @@ name: Build & Release Desktop
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable release tag to build and publish
+        required: true
+        default: v1.0.26
   push:
     tags:
       - 'v*'
+    branches:
+      - 'release-retry/v1.0.26'
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.26' && 'v1.0.26') || github.ref_name }}
 
 permissions:
   contents: read
@@ -27,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           lfs: true
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -34,7 +45,7 @@ jobs:
       - name: Install Inno Setup
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install innosetup --version=6.7.0 --no-progress -y
+        run: choco install innosetup --version=6.7.0 --allow-downgrade --force --no-progress -y
       - name: Install pinned Simplified Chinese installer language
         if: runner.os == 'Windows'
         shell: pwsh
@@ -55,10 +66,9 @@ jobs:
         run: npm run verify
       - name: Audit release contract
         run: npm run verify:release
-      - name: Ensure tag matches package version
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Ensure target tag matches package version
         shell: bash
-        run: node -e "const p=require('./package.json'); if(process.env.GITHUB_REF_NAME !== 'v'+p.version) { console.error('Tag must equal v'+p.version); process.exit(1) }"
+        run: node -e "const p=require('./package.json'); if(process.env.RELEASE_TAG !== 'v'+p.version) { console.error('Target tag must equal v'+p.version); process.exit(1) }"
       - name: Build desktop packages
         run: npm run dist
       - name: Run packaged Windows self-test
@@ -142,6 +152,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           lfs: true
       - name: Select Xcode 16
         shell: bash
@@ -197,7 +208,6 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/')
     needs: [build, ios-simulators]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -207,12 +217,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Refuse an existing release mutation
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME already exists; refusing to replace or append desktop assets." >&2
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to replace or append desktop assets." >&2
             exit 1
           fi
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -237,10 +249,11 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release-files/*
-          name: Harness Desktop ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Harness Desktop ${{ env.RELEASE_TAG }}
           body_path: release-notes.md
           generate_release_notes: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           draft: true
           fail_on_unmatched_files: true
           overwrite_files: false
@@ -248,12 +261,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
           expected="$(find release-files -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
-          actual="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
+          actual="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
           diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
           mkdir public-release
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir public-release
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir public-release
           (cd public-release && sha256sum -c SHA256SUMS.txt)
-          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
-          test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = false
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = false
