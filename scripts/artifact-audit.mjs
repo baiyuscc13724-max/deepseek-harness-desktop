@@ -60,6 +60,8 @@ if (process.platform === 'win32') {
     throw new Error('Packaged runtime is missing the stable Windows directory picker.')
   }
   const packagedFiles = listPackage(asar)
+  const bundledProgressReporter = packagedFiles.find(name => /node_modules[\\/]dsh-progress-reporter(?:[\\/]|$)/i.test(name))
+  if (bundledProgressReporter) throw new Error('dsh-progress-reporter must remain an opt-in community plugin and must not ship inside Harness Desktop.')
   const forbiddenRuntimeFile = packagedFiles.find(name => /node_modules[\\/].*(?:\.map|\.(?:ts|tsx|cts|mts))$/i.test(name) && !/\.json$/i.test(name))
   if (forbiddenRuntimeFile) throw new Error(`Packaged runtime still contains a pruned development file: ${forbiddenRuntimeFile}`)
   const unpackedEntries = await readdir(unpacked, { recursive: true, withFileTypes: true }).catch(() => [])

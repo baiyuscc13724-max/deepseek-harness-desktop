@@ -9,6 +9,7 @@
 - 整合 Agent Teams 实验插件、Browser/Computer Use 重置竞态、截图会话清理、界面模式和完整删除控制。
 - 本地记忆与应用缓存改为类似 Codex 的低干扰后台使用：仅保存稳定偏好和项目约束，敏感内容硬过滤；入口移到托盘“数据与隐私”，保留预览、关闭、单项/全部删除。
 - 首次公开启用 Ed25519 签名生产组件更新：CNB 优先、GitHub 后备、逐目标清单、健康确认、自动回滚和完整安装包兜底。
+- `dsh-progress-reporter` 保持社区市场按需安装，不随 Harness Desktop 默认安装或打包。
 - 桌面、Android 与 iOS/iPadOS 源码同步到 1.0.26；Android 延续长期 release 证书，iPhone/iPad 在无 Apple Developer 会员时继续 Safari 工作台。
 
 ## 1.0.25

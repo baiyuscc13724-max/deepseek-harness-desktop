@@ -34,7 +34,7 @@ jobs:
       - name: Install Inno Setup
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install innosetup --no-progress -y
+        run: choco install innosetup --version=6.7.0 --no-progress -y
       - name: Install pinned Simplified Chinese installer language
         if: runner.os == 'Windows'
         shell: pwsh
@@ -130,10 +130,70 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  ios-simulators:
+    name: Validate iPhone and iPad simulators
+    runs-on: macos-14
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          lfs: true
+      - name: Select Xcode 16
+        shell: bash
+        run: |
+          xcode_path="$(find /Applications -maxdepth 1 -type d -name 'Xcode_16*.app' | sort -V | tail -1)"
+          test -n "$xcode_path"
+          sudo xcode-select -s "$xcode_path/Contents/Developer"
+          xcodebuild -version
+      - name: Install pinned XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/xcodegen-2.46.0.zip"
+          curl -fsSL --retry 5 'https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip' -o "$archive"
+          echo '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  '"$archive" | shasum -a 256 -c -
+          unzip -q "$archive" -d "$RUNNER_TEMP/xcodegen-dist"
+          echo "$RUNNER_TEMP/xcodegen-dist/xcodegen/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/xcodegen-dist/xcodegen/bin/xcodegen" --version
+      - name: Generate Xcode project
+        working-directory: mobile/ios
+        run: xcodegen generate
+      - name: Select virtual Apple devices
+        id: devices
+        shell: bash
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, subprocess
+          devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))['devices']
+          flat = [device for runtime in devices.values() for device in runtime if device.get('isAvailable')]
+          for key, prefix in [('iphone', 'iPhone'), ('ipad', 'iPad')]:
+              match = next((device for device in flat if device['name'].startswith(prefix)), None)
+              if not match:
+                  raise SystemExit(f'No available {prefix} simulator')
+              print(f"{key}_udid={match['udid']}")
+              print(f"{key}_name={match['name']}")
+          PY
+      - name: Test on iPhone Simulator
+        working-directory: mobile/ios
+        run: >-
+          xcodebuild test
+          -project HarnessMobile.xcodeproj
+          -scheme HarnessMobile
+          -destination 'id=${{ steps.devices.outputs.iphone_udid }}'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Test on iPad Simulator
+        working-directory: mobile/ios
+        run: >-
+          xcodebuild test
+          -project HarnessMobile.xcodeproj
+          -scheme HarnessMobile
+          -destination 'id=${{ steps.devices.outputs.ipad_udid }}'
+          CODE_SIGNING_ALLOWED=NO
+
   release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, ios-simulators]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

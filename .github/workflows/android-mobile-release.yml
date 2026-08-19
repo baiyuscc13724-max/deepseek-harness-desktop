@@ -1,6 +1,9 @@
 name: Publish Signed Android Mobile
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -12,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: android-mobile-release-${{ inputs.tag }}
+  group: android-mobile-release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -22,6 +25,7 @@ jobs:
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       HARNESS_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
       HARNESS_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
       HARNESS_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
@@ -38,13 +42,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node -e "const p=require('./package.json'); if(process.argv[1] !== 'v'+p.version) throw new Error('Requested tag must equal v'+p.version)" '${{ inputs.tag }}'
+          node -e "const p=require('./package.json'); if(process.argv[1] !== 'v'+p.version) throw new Error('Requested tag must equal v'+p.version)" "$RELEASE_TAG"
           test -n '${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}'
           test -n "$HARNESS_ANDROID_KEY_ALIAS"
           test -n "$HARNESS_ANDROID_STORE_PASSWORD"
           test -n "$HARNESS_ANDROID_KEY_PASSWORD"
           test -n "$EXPECTED_ANDROID_CERT_SHA256"
-          gh release view '${{ inputs.tag }}' --repo "$GITHUB_REPOSITORY" >/dev/null
+          for attempt in $(seq 1 40); do
+            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
+            echo "Waiting for verified desktop release $RELEASE_TAG ($attempt/40)..."
+            sleep 30
+          done
+          echo "Desktop release $RELEASE_TAG was not published within 20 minutes." >&2
+          exit 1
       - name: Restore private release keystore
         shell: bash
         env:
@@ -104,15 +114,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir checksums
-          gh release download '${{ inputs.tag }}' --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir checksums
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir checksums
           grep -v "  $ANDROID_ASSET$" checksums/SHA256SUMS.txt > checksums/SHA256SUMS.next || true
           cat android-checksum.txt >> checksums/SHA256SUMS.next
           LC_ALL=C sort -k2 checksums/SHA256SUMS.next > checksums/SHA256SUMS.txt
-          gh release upload '${{ inputs.tag }}' --repo "$GITHUB_REPOSITORY" "$ANDROID_ASSET" checksums/SHA256SUMS.txt --clobber
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "$ANDROID_ASSET" checksums/SHA256SUMS.txt --clobber
       - name: Verify public signed APK
         shell: bash
         run: |
           set -euo pipefail
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/${{ inputs.tag }}"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
           curl -fsSIL --retry 5 "$base/$ANDROID_ASSET" >/dev/null
-          gh release view '${{ inputs.tag }}' --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fx "$ANDROID_ASSET"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fx "$ANDROID_ASSET"

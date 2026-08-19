@@ -18,6 +18,15 @@ test('all third-party GitHub Actions are pinned to immutable commits', async () 
   }
 })
 
+test('signed Android publication follows the tag and waits for the verified desktop release', async () => {
+  const workflow = await source(path.join('.github', 'workflows', 'android-mobile-release.yml'))
+  assert.match(workflow, /push:[\s\S]*tags:[\s\S]*'v\*'/u)
+  assert.ok(workflow.includes('RELEASE_TAG: ${{ inputs.tag || github.ref_name }}'))
+  assert.match(workflow, /Waiting for verified desktop release/u)
+  assert.match(workflow, /gh release upload "\$RELEASE_TAG"/u)
+  assert.doesNotMatch(workflow, /assembleDebug|app-debug\.apk/u)
+})
+
 test('production component preparation binds the private key to target-correct fallbacks', async () => {
   const builder = await source('scripts/prepare-production-components.mjs')
   assert.match(builder, /does not match the public key embedded/u)

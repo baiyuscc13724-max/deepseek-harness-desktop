@@ -46,7 +46,8 @@ Windows 阶段固定生成并验证：
 2. 快进合并验证提交到 `main`，先推送 `main`，再创建并推送唯一 Tag `v<version>`。
 3. `.github/workflows/release.yml` 在 Windows、macOS、Linux 分别重新安装锁定依赖并运行全部门禁。
 4. Windows 云端必须完成 unpacked 自检、Inno 安装/检查/卸载冒烟；macOS 必须分别完成 Intel/Apple Silicon 原生架构和打包后自检。
-5. 聚合任务最后才创建 GitHub Release，并生成 `SHA256SUMS.txt`。任何矩阵任务失败都不得手动上传未验证替代品。
+5. 同一 Release 工作流还必须完成 iPhone Simulator 与 iPad Simulator 测试；发布聚合任务同时等待桌面矩阵和两个模拟器门禁。
+6. 聚合任务最后才创建 GitHub Release，并生成 `SHA256SUMS.txt`。任何矩阵任务失败都不得手动上传未验证替代品。
 
 GitHub CLI 必须由发布者本人登录；不得在聊天中发送密码、Token 或验证码：
 
@@ -66,7 +67,7 @@ GitHub 仓库 Actions Secrets 必须已有：
 - `ANDROID_RELEASE_KEY_PASSWORD`
 - `ANDROID_RELEASE_CERT_SHA256`
 
-桌面 Release 成功后运行 **Publish Signed Android Mobile**，输入同一 Tag。工作流强制验证 `io.harnessdesktop.mobile`、从桌面版本推导的 versionCode/versionName、长期证书固定指纹和 `apksigner`，然后才加入：
+推送同一 Tag 时 **Publish Signed Android Mobile** 自动启动：先检查全部 Secret，再等待桌面 Release 最多 20 分钟；手动 `workflow_dispatch` 只用于同 Tag 安全重跑。工作流强制验证 `io.harnessdesktop.mobile`、从桌面版本推导的 versionCode/versionName、长期证书固定指纹和 `apksigner`，然后才加入：
 
 - `Harness-Mobile-<version>-android-universal.apk`
 
