@@ -36,6 +36,7 @@ const { inspectAttachmentPaths } = require('./bridge/attachment-reference-servic
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
 const { MemoryService } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
+const { pruneComputerUseScreenshots } = require('./bridge/computer-use-screenshot-store.cjs')
 const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
 const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
@@ -546,6 +547,7 @@ async function modelComputerUseAction(input = {}) {
     const scaled = size.width > 1280 ? image.resize({ width: 1280, quality: 'good' }) : image
     const directory = path.join(desktopRuntimePaths().root, 'computer-use', 'screenshots')
     await mkdir(directory, { recursive: true })
+    await pruneComputerUseScreenshots(directory, { maxFiles: 39 })
     const file = path.join(directory, `window-${Date.now()}.png`)
     await writeFile(file, scaled.toPNG(), { mode: 0o600 })
     return { file, width: scaled.getSize().width, height: scaled.getSize().height, scope: 'Harness Desktop window only' }

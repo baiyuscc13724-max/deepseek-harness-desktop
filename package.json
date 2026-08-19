@@ -101,7 +101,6 @@
       "component-update-sources.json",
       "mobile-relay-sources.json",
       "scripts/component-update-helper.cjs",
-      "docs/**/*",
       "node_modules/@img/**/*",
       "node_modules/@koromix/**/*",
       "!node_modules/**/*.map",
