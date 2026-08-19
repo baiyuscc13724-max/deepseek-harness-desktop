@@ -40,7 +40,7 @@ run('npx.cmd', ['electron-builder', '--dir', '--win', '--x64', '--publish', 'nev
 await access(path.join(layout, 'Harness Desktop.exe'))
 
 const msixPath = path.join(resolvedDist, `Harness-Desktop-${pkg.version}-store-x64.msix`)
-const packArgs = ['winapp', 'package', layout, '--output', msixPath, '--manifest', manifestPath]
+const packArgs = ['--yes', '--package', '@microsoft/winappcli@0.5.0', 'winapp', 'package', layout, '--output', msixPath, '--manifest', manifestPath]
 const certificate = String(process.env.STORE_CERT_PATH || '').trim()
 if (certificate) packArgs.push('--cert', path.resolve(certificate))
 run('npx.cmd', packArgs)

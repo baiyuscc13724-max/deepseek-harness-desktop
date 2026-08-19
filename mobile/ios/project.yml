@@ -1,6 +1,7 @@
 name: HarnessMobile
 options:
   bundleIdPrefix: io.harnessdesktop
+  xcodeVersion: "15.4"
   deploymentTarget:
     iOS: "16.0"
 settings:

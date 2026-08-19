@@ -17,6 +17,7 @@ for (const excluded of ['!node_modules/**/*.map', '!node_modules/**/*.{ts,tsx,ct
 }
 if (pkg.build?.npmRebuild !== true) throw new Error('Bundled official Harness native dependencies must be rebuilt for Electron.')
 if (pkg.devDependencies?.electron !== '43.2.0') throw new Error('Release baseline must pin Electron 43.2.0 / Node 24.x.')
+if (pkg.devDependencies?.['@microsoft/winappcli'] || !pkg.scripts?.['store:assets']?.includes('@microsoft/winappcli@0.5.0')) throw new Error('Windows-only Store tooling must be fetched only by explicit Store commands so macOS npm ci remains valid.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Release must pin the provider model catalog used by dynamic routing discovery.')
 if (pkg.devDependencies?.['electron-builder'] !== '26.15.7') throw new Error('Release must pin electron-builder 26.15.7.')
 if (pkg.build?.icon !== 'build/icon.png') throw new Error('Release packages must use the official DeepSeek icon.')
