@@ -22,7 +22,7 @@ jobs:
   signed-apk:
     name: Build, verify and publish signed APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -48,12 +48,12 @@ jobs:
           test -n "$HARNESS_ANDROID_STORE_PASSWORD"
           test -n "$HARNESS_ANDROID_KEY_PASSWORD"
           test -n "$EXPECTED_ANDROID_CERT_SHA256"
-          for attempt in $(seq 1 40); do
-            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
-            echo "Waiting for verified desktop release $RELEASE_TAG ($attempt/40)..."
+          for attempt in $(seq 1 180); do
+            if test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || true)" = false; then exit 0; fi
+            echo "Waiting for verified desktop release $RELEASE_TAG ($attempt/180)..."
             sleep 30
           done
-          echo "Desktop release $RELEASE_TAG was not published within 20 minutes." >&2
+          echo "Desktop release $RELEASE_TAG was not published within 90 minutes." >&2
           exit 1
       - name: Restore private release keystore
         shell: bash
@@ -107,22 +107,53 @@ jobs:
           printf '%s\n' "$badging" | grep -F "name='io.harnessdesktop.mobile'"
           printf '%s\n' "$badging" | grep -F "versionCode='$expected_version_code'"
           printf '%s\n' "$badging" | grep -F "versionName='$version'"
-          sha256sum "$asset" > android-checksum.txt
+          checksum="Harness-Mobile-${version}-android-universal.apk.sha256"
+          sha256sum "$asset" > "$checksum"
           echo "ANDROID_ASSET=$asset" >> "$GITHUB_ENV"
-      - name: Add signed APK to the existing release
+          echo "ANDROID_CHECKSUM=$checksum" >> "$GITHUB_ENV"
+      - name: Add immutable signed APK to the existing release
         shell: bash
         run: |
           set -euo pipefail
-          mkdir checksums
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir checksums
-          grep -v "  $ANDROID_ASSET$" checksums/SHA256SUMS.txt > checksums/SHA256SUMS.next || true
-          cat android-checksum.txt >> checksums/SHA256SUMS.next
-          LC_ALL=C sort -k2 checksums/SHA256SUMS.next > checksums/SHA256SUMS.txt
-          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "$ANDROID_ASSET" checksums/SHA256SUMS.txt --clobber
-      - name: Verify public signed APK
+          existing="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          apk_exists=false
+          checksum_exists=false
+          grep -Fx "$ANDROID_ASSET" <<< "$existing" >/dev/null && apk_exists=true
+          grep -Fx "$ANDROID_CHECKSUM" <<< "$existing" >/dev/null && checksum_exists=true
+          if $apk_exists || $checksum_exists; then
+            $apk_exists && $checksum_exists || { echo 'Only one Android release asset exists; refusing a partial or mutable retry.' >&2; exit 1; }
+            mkdir public-existing
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ANDROID_ASSET" --dir public-existing
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ANDROID_CHECKSUM" --dir public-existing
+            (cd public-existing && sha256sum -c "$ANDROID_CHECKSUM")
+            echo 'Android assets already exist and were preserved byte-for-byte.'
+          else
+            gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "$ANDROID_ASSET" "$ANDROID_CHECKSUM"
+          fi
+      - name: Verify public signed APK bytes and identity
         shell: bash
         run: |
           set -euo pipefail
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
-          curl -fsSIL --retry 5 "$base/$ANDROID_ASSET" >/dev/null
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fx "$ANDROID_ASSET"
+          public="$RUNNER_TEMP/public-android"
+          mkdir -p "$public"
+          curl -fsSL --retry 5 "$base/$ANDROID_ASSET" -o "$public/$ANDROID_ASSET"
+          curl -fsSL --retry 5 "$base/$ANDROID_CHECKSUM" -o "$public/$ANDROID_CHECKSUM"
+          (cd "$public" && sha256sum -c "$ANDROID_CHECKSUM")
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          aapt="$(find "$ANDROID_HOME/build-tools" -type f -name aapt -print | sort -V | tail -n 1)"
+          test -x "$apksigner"
+          test -x "$aapt"
+          "$apksigner" verify --verbose "$public/$ANDROID_ASSET"
+          cert_report="$("$apksigner" verify --print-certs "$public/$ANDROID_ASSET" 2>&1)"
+          actual="$(printf '%s\n' "$cert_report" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+          test "$actual" = '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21'
+          version="$(node -p "require('./package.json').version")"
+          expected_version_code="$(node -e "const [major,minor,patch]=require('./package.json').version.split('.').map(Number); process.stdout.write(String(major*10000+minor*100+patch))")"
+          badging="$($aapt dump badging "$public/$ANDROID_ASSET" | head -n 1)"
+          printf '%s\n' "$badging" | grep -F "name='io.harnessdesktop.mobile'"
+          printf '%s\n' "$badging" | grep -F "versionCode='$expected_version_code'"
+          printf '%s\n' "$badging" | grep -F "versionName='$version'"
+          assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          grep -Fx "$ANDROID_ASSET" <<< "$assets"
+          grep -Fx "$ANDROID_CHECKSUM" <<< "$assets"

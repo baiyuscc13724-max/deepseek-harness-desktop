@@ -14,16 +14,19 @@
 
 ## 2. 本地可恢复编排
 
-状态保存在被 Git 忽略的 `.release-state/v<version>.json`。每一阶段开始、成功或失败都原子写入；再次运行会跳过已成功阶段。
+状态保存在被 Git 忽略的 `.release-state/v<version>.json`。每一阶段开始、成功或失败都原子写入；再次运行只会跳过**同一个干净 Git 提交**的已成功阶段。提交哈希变化会自动清空旧阶段，存在已跟踪或未跟踪改动时直接拒绝编排；重置某阶段也会级联重置所有下游阶段。
 
 ```powershell
+# 从 lock 冷安装；Windows 的 node-gyp 必须能找到真实 Python 3（必要时先设置 $env:PYTHON）
+npm ci --no-audit --no-fund
+
 # 查看状态
 npm run release:orchestrate -- status --version 1.0.26
 
 # 版本同步、生产源和文档门禁
 npm run release:orchestrate -- run --version 1.0.26 --through source
 
-# 385+ 项源码/安全测试与发布契约审计
+# 390+ 项源码/安全测试与发布契约审计
 npm run release:orchestrate -- run --version 1.0.26 --through verify
 
 # Windows 安装版/便携版、体积审计、打包后真实自检、真实组件健康与回滚测试
@@ -47,7 +50,8 @@ Windows 阶段固定生成并验证：
 3. `.github/workflows/release.yml` 在 Windows、macOS、Linux 分别重新安装锁定依赖并运行全部门禁。
 4. Windows 云端必须完成 unpacked 自检、Inno 安装/检查/卸载冒烟；macOS 必须分别完成 Intel/Apple Silicon 原生架构和打包后自检。
 5. 同一 Release 工作流还必须完成 iPhone Simulator 与 iPad Simulator 测试；发布聚合任务同时等待桌面矩阵和两个模拟器门禁。
-6. 聚合任务最后才创建 GitHub Release，并生成 `SHA256SUMS.txt`。任何矩阵任务失败都不得手动上传未验证替代品。
+6. 聚合任务先确认 Tag 下不存在任何 Release，再创建 **draft**、生成 `SHA256SUMS.txt` 并上传全部桌面资产；同名资产永不覆盖。
+7. 工作流从 draft 重新下载全部资产，核对精确文件集合和 SHA-256 后才一次性改为公开。任一矩阵/上传/复核失败时只留下非公开 draft，不得手动上传未验证替代品；处理失败 draft 时必须先查明原因。
 
 GitHub CLI 必须由发布者本人登录；不得在聊天中发送密码、Token 或验证码：
 
@@ -67,11 +71,12 @@ GitHub 仓库 Actions Secrets 必须已有：
 - `ANDROID_RELEASE_KEY_PASSWORD`
 - `ANDROID_RELEASE_CERT_SHA256`
 
-推送同一 Tag 时 **Publish Signed Android Mobile** 自动启动：先检查全部 Secret，再等待桌面 Release 最多 20 分钟；手动 `workflow_dispatch` 只用于同 Tag 安全重跑。工作流强制验证 `io.harnessdesktop.mobile`、从桌面版本推导的 versionCode/versionName、长期证书固定指纹和 `apksigner`，然后才加入：
+推送同一 Tag 时 **Publish Signed Android Mobile** 自动启动：先检查全部 Secret，再等待经过桌面矩阵和 iPhone/iPad 模拟器门禁的 Release 最多 90 分钟；手动 `workflow_dispatch` 只用于同 Tag 幂等核验。工作流强制验证 `io.harnessdesktop.mobile`、从桌面版本推导的 versionCode/versionName、长期证书固定指纹和 `apksigner`，然后只在资产尚不存在时加入：
 
 - `Harness-Mobile-<version>-android-universal.apk`
+- `Harness-Mobile-<version>-android-universal.apk.sha256`
 
-上传后重新生成同一 Release 的 `SHA256SUMS.txt`，并从公开 URL 再次下载验签、验包名、验版本和 SHA-256。
+桌面 `SHA256SUMS.txt`、APK 和 APK 独立校验文件一经公开均不覆盖。安全重跑遇到已有 APK 时重新下载既有字节核验；遇到只有 APK 或只有校验文件的半成品状态则失败。首次上传后也从公开 URL 重新下载并验签、验包名、验版本和 SHA-256。
 
 ## 5. 生产组件密钥保管
 

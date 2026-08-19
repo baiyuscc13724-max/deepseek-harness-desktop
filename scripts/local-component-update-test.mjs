@@ -21,13 +21,18 @@ function argument(name, fallback = '') {
 }
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
 async function waitForExit(child, timeoutMs = 120_000) {
-  return Promise.race([
-    new Promise((resolve, reject) => {
-      child.once('error', reject)
-      child.once('exit', code => resolve(code))
-    }),
-    delay(timeoutMs).then(() => { child.kill(); throw new Error(`Process ${child.pid} timed out.`) })
-  ])
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error(`Process ${child.pid} timed out.`))
+    }, timeoutMs)
+    const finish = callback => value => {
+      clearTimeout(timer)
+      callback(value)
+    }
+    child.once('error', finish(reject))
+    child.once('exit', finish(resolve))
+  })
 }
 async function waitForState(store, predicate, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs
@@ -87,6 +92,7 @@ async function prepareInput(version, healthy) {
   const input = path.join(workspace, `shell-${version}`)
   await mkdir(input, { recursive: true })
   await cp(path.join(root, 'electron'), path.join(input, 'electron'), { recursive: true })
+  await cp(path.join(root, 'plugins'), path.join(input, 'plugins'), { recursive: true })
   await copyFile(path.join(root, 'package.json'), path.join(input, 'package.json'))
   if (healthy) {
     await cp(path.join(root, 'renderer'), path.join(input, 'renderer'), { recursive: true })
@@ -145,7 +151,8 @@ async function applyAndWait(version, terminalPhase, output) {
     restartArgs: [`--user-data-dir=${profile}`, `--harness-user-data-dir=${profile}`, '--component-health-check', '--self-test', `--self-test-output=${output}`]
   })
   if (!launched.pid) throw new Error('Component helper did not start.')
-  const state = await waitForState(store, value => value.phase === terminalPhase)
+  const state = await waitForState(store, value => value.phase === terminalPhase || value.phase === 'failed' || value.phase === 'rollback-required')
+  if (state.phase !== terminalPhase) throw new Error(`Component ${version} reached ${state.phase} instead of ${terminalPhase}: ${state.failure?.message || 'unknown failure'}`)
   const selfTest = await waitForReport(output)
   if (!selfTest.ok) throw new Error(`Post-update packaged self-test failed for ${version}.`)
   if (terminalPhase === 'idle' && state.active?.releaseVersion !== version) throw new Error(`Healthy release ${version} was not confirmed.`)

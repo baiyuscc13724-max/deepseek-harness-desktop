@@ -11,7 +11,10 @@
 1. **GitHub Actions 标签可变**：所有第三方 Action 从 `@v4`/`@v2` 改为 40 位不可变提交，并增加自动测试和发布审计，防止回退到浮动标签。
 2. **活跃缓存删除竞态**：缓存年龄从目录自身时间改为整棵缓存树的最新修改时间；自动维护在删除前再次应用七天阈值。即使预览后同大小文件恢复活动，也会取消删除。
 3. **Windows 编排兼容性**：Node 24 在当前 Windows 环境直接 `spawnSync npm.cmd` 返回 `EINVAL`，编排改为通过 `npm_execpath` 和当前 Node 运行 npm CLI，并纳入回归测试。
-4. **Android 与桌面发布竞态**：正式 Android 工作流随 Tag 自动启动，先验 Secret，再等待已经通过矩阵门禁的桌面 Release；仍支持同 Tag 手动安全重跑。
+4. **Android 与桌面发布竞态**：正式 Android 工作流随 Tag 自动启动，先验 Secret，再等待已经通过矩阵和 iPhone/iPad 模拟器门禁的桌面 Release；等待上限扩为 90 分钟（覆盖桌面/模拟器/聚合任务配置的最坏执行窗口）。
+5. **公开资产被重跑覆盖或半发布**：桌面先建 draft、远端重下并验精确文件集合/SHA-256 后才公开，且禁止已有 Release 或 Action 覆盖；Android 改用独立 `.apk.sha256` 且永不 `--clobber`，已有资产只下载核验，半成品状态失败。
+6. **编排状态跨提交误复用**：状态绑定干净 Git 提交；提交变化自动使全部阶段失效，手动重置会级联下游，避免新源码跳过旧验证。
+7. **组件真实测试缺少插件输入**：健康 shell 测试此前未复制内置插件，Agent Teams 合入后会在启动门禁失败；测试输入现与生产组件一致包含 `plugins`，对非预期终态立即失败，并取消已结束子进程的超时定时器。
 
 ## 多会话工作树整合
 
@@ -24,6 +27,7 @@
 
 - `npm audit --omit=dev --audit-level=moderate --registry=https://registry.npmjs.org`：0 个已知漏洞。
 - `npm ls --all --omit=dev`：生产依赖树可解析；仅显示非当前平台的预期 optional native 依赖缺失。
+- `package-lock.json` 的全部远端 tarball 都限定为 HTTPS 的 npm 官方、npmmirror、GitHub 或 GitHub codeload，并全部带 SHA-256/384/512 integrity；发布审计阻止源白名单或完整性字段回退。
 - Electron 固定 43.2.0 / Node 24；electron-builder 固定 26.15.7；官方 DSH 固定 0.1.0-rc.7；Marketplace 使用提交哈希。
 - Inno Setup 固定 Chocolatey 6.7.0；Windows 安装器语言文件固定上游提交和 SHA-256；XcodeGen 固定 2.46.0 发布资产和 SHA-256；发布工作流重新运行源码测试、发布审计、制品体积审计、打包自检和安装/卸载冒烟。
 - 组件顶层清单和描述均使用 Ed25519；ZIP 校验大小、SHA-256、逐文件索引、路径穿越、符号链接、大小写冲突和解压上限。
@@ -57,7 +61,9 @@
 ## 本地验证证据
 
 - `npm run verify`：静态门禁通过，391/391 桌面单元、安全、集成与发布自动化测试通过。
-- `npm run verify:release`：发布契约审计通过。
+- `npm run verify:release`：发布契约审计通过；`npm audit --omit=dev --audit-level=moderate --registry=https://registry.npmjs.org` 为 0 漏洞。
+- 从最终 lock 冷执行 `npm ci` 成功安装 797 个包、应用全部固定 Runtime 补丁并重建 Electron 43.2.0 的 node-pty；Marketplace 固定提交改为 HTTPS codeload + SHA-512 integrity。
+- 修复测试夹具后，打包程序真实完成健康组件 1.0.27 激活确认，并对缺失 renderer 的 1.0.28 自动回滚到 1.0.27；最终提交仍须由编排再打包复核。
 - Android：Gradle debug/release JVM 测试共 43 个任务执行成功；正式 APK 仍只由长期 release Secret 的云端工作流构建和验签。
 - 生产组件脚本：使用生产公私钥匹配检查，对三个目标生成 ZIP/签名清单并在本地重新验签成功（仅测试兜底文件，未上传）。
 - 便携 Git LFS 3.7.1 从官方 Release 下载，按 `sha256sums.asc` 校验后使用。

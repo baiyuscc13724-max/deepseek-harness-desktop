@@ -5,6 +5,16 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 if (pkg.version !== '1.0.26') throw new Error(`release audit expects 1.0.26, got ${pkg.version}`)
+const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'))
+const allowedDependencyHosts = new Set(['registry.npmjs.org', 'registry.npmmirror.com', 'github.com', 'codeload.github.com'])
+for (const [packagePath, metadata] of Object.entries(lock.packages || {})) {
+  if (!metadata.resolved) continue
+  let resolved
+  try { resolved = new URL(metadata.resolved) }
+  catch { throw new Error(`Dependency lock has an invalid resolved URL at ${packagePath}: ${metadata.resolved}`) }
+  if (resolved.protocol !== 'https:' || !allowedDependencyHosts.has(resolved.hostname)) throw new Error(`Dependency lock source is not approved at ${packagePath}: ${metadata.resolved}`)
+  if (!/^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/.test(String(metadata.integrity || ''))) throw new Error(`Dependency lock is missing strong integrity at ${packagePath}.`)
+}
 if (!pkg.author?.email) throw new Error('Linux .deb packaging requires a maintainer email in package author metadata.')
 if (pkg.main !== 'electron/bootstrap.cjs' || pkg.build?.extraMetadata?.main !== 'electron/bootstrap.cjs') throw new Error('Stable Electron Bootstrap entry drifted.')
 if (pkg.build?.asar !== true) throw new Error('Release must keep ASAR enabled.')
@@ -115,9 +125,16 @@ for (const contract of ['Validate iPhone and iPad simulators', 'Test on iPhone S
 }
 if (!workflow.includes('choco install innosetup --version=6.7.0') || !workflow.includes('Run Windows installer smoke test') || !workflow.includes('/VERYSILENT') || !workflow.includes('Harness Desktop.exe') || !workflow.includes('app.asar') || !workflow.includes('unins*.exe')) throw new Error('Windows release must build, install, inspect, and uninstall the Inno Setup payload.')
 if (!workflow.includes('3cfb0e5632828e0dd9b49400a185834e8f1ab570/Files/Languages/ChineseSimplified.isl') || !workflow.includes('e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d')) throw new Error('Windows release must install and hash-check the pinned Simplified Chinese language file.')
-if (!workflow.includes('softprops/action-gh-release')) throw new Error('Tag builds must publish a GitHub Release after matrix artifacts are audited.')
+for (const contract of ['softprops/action-gh-release', 'overwrite_files: false', 'draft: true', 'Refuse an existing release mutation', 'Verify draft assets and publish atomically', 'sha256sum -c SHA256SUMS.txt', '--draft=false']) {
+  if (!workflow.includes(contract)) throw new Error(`Tag builds must publish one verified, non-overwriting draft release: ${contract}`)
+}
+const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
+for (const contract of ['seq 1 180', 'android-universal.apk.sha256', 'Only one Android release asset exists', 'Verify public signed APK bytes and identity']) {
+  if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Android immutable publication contract missing: ${contract}`)
+}
+if (androidReleaseWorkflow.includes('--clobber')) throw new Error('Android publication must never overwrite public release assets.')
 if (!workflow.includes('download-artifact')) throw new Error('Release job must collect audited matrix artifacts before publishing.')
-if (!workflow.includes('find release-artifacts -mindepth 2 -maxdepth 2 -type f')) throw new Error('Release collection must exclude unpacked internal executables.')
+if (!workflow.includes('find release-artifacts -mindepth 2 -maxdepth 2 -type f') || !workflow.includes('Duplicate release asset name')) throw new Error('Release collection must exclude unpacked executables and reject duplicate public names.')
 if (pkg.build?.linux?.artifactName !== 'Harness-Desktop-${version}-linux-${arch}.${ext}') throw new Error('Linux release filenames must remain checksum-safe and space-free.')
 
 console.log('Release audit passed: official single workbench, official icon, Inno Setup plus portable Windows targets, packaged gates, audited artifacts, and GitHub Release publishing are present.')

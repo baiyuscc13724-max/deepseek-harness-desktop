@@ -1,3 +1,4 @@
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
@@ -12,6 +13,8 @@ const stateFile = path.join(stateDir, `v${version}.json`)
 const command = process.argv[2] || 'status'
 const through = argument('through', 'verify')
 const npmCli = String(process.env.npm_execpath || '').trim()
+const portableGit = path.resolve(root, '..', '.tools', 'MinGit', 'cmd', 'git.exe')
+const gitExecutable = String(process.env.HARNESS_RELEASE_GIT || (existsSync(portableGit) ? portableGit : 'git')).trim()
 
 function argument(name, fallback = '') {
   const index = process.argv.indexOf(`--${name}`)
@@ -22,7 +25,7 @@ async function readState() {
   try { return JSON.parse(await readFile(stateFile, 'utf8')) }
   catch (error) {
     if (error?.code !== 'ENOENT') throw error
-    return { schemaVersion: 1, version, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), phases: {} }
+    return { schemaVersion: 2, version, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), sourceRevision: '', phases: {} }
   }
 }
 
@@ -45,6 +48,31 @@ function run(program, args, options = {}) {
   })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`${program} exited with code ${result.status}.`)
+}
+
+function capture(program, args) {
+  mkdirSync(stateDir, { recursive: true })
+  const temporary = path.join(stateDir, `.capture-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.log`)
+  const output = openSync(temporary, 'w')
+  let result
+  try {
+    result = spawnSync(program, args, { cwd: root, stdio: ['ignore', output, output], shell: false, env: process.env, timeout: 60_000 })
+  } finally {
+    closeSync(output)
+  }
+  const text = readFileSync(temporary, 'utf8')
+  rmSync(temporary, { force: true })
+  if (result.error) throw result.error
+  if (result.status !== 0) throw new Error(`${program} ${args.join(' ')} exited with code ${result.status}: ${text.trim()}`)
+  return text
+}
+
+function cleanSourceRevision() {
+  const status = capture(gitExecutable, ['status', '--porcelain=v1', '--untracked-files=normal']).trim()
+  if (status) throw new Error(`Release orchestration requires a clean source tree. Commit or remove:\n${status}`)
+  const revision = capture(gitExecutable, ['rev-parse', 'HEAD']).trim()
+  if (!/^[0-9a-f]{40}$/i.test(revision)) throw new Error(`Cannot resolve an immutable Git source revision: ${revision}`)
+  return revision.toLowerCase()
 }
 
 function runNpm(args, options = {}) {
@@ -118,8 +146,16 @@ const PHASES = [
 async function runPhases() {
   const targetIndex = PHASES.findIndex(phase => phase.id === through)
   if (targetIndex < 0) throw new Error(`Unknown --through phase: ${through}. Expected source, verify, or windows.`)
+  const sourceRevision = cleanSourceRevision()
   const state = await readState()
   if (state.version !== version) throw new Error(`State version mismatch: ${state.version}`)
+  if (state.sourceRevision !== sourceRevision) {
+    if (Object.keys(state.phases || {}).length > 0) console.log(`Source revision changed (${state.sourceRevision || 'legacy state'} -> ${sourceRevision}); invalidating completed phases.`)
+    state.schemaVersion = 2
+    state.sourceRevision = sourceRevision
+    state.phases = {}
+    await saveState(state)
+  }
   for (const phase of PHASES.slice(0, targetIndex + 1)) {
     if (state.phases[phase.id]?.status === 'completed') {
       console.log(`Skipping completed phase: ${phase.id}`)
@@ -137,7 +173,7 @@ async function runPhases() {
       throw error
     }
   }
-  console.log(JSON.stringify({ ok: true, stateFile, completedThrough: through }, null, 2))
+  console.log(JSON.stringify({ ok: true, stateFile, sourceRevision, completedThrough: through }, null, 2))
 }
 
 if (command === 'run') {
@@ -146,11 +182,13 @@ if (command === 'run') {
   console.log(JSON.stringify(await readState(), null, 2))
 } else if (command === 'reset') {
   const phase = argument('phase')
-  if (!PHASES.some(item => item.id === phase)) throw new Error('reset requires --phase source|verify|windows.')
+  const phaseIndex = PHASES.findIndex(item => item.id === phase)
+  if (phaseIndex < 0) throw new Error('reset requires --phase source|verify|windows.')
   const state = await readState()
-  delete state.phases[phase]
+  const reset = PHASES.slice(phaseIndex).map(item => item.id)
+  for (const id of reset) delete state.phases[id]
   await saveState(state)
-  console.log(JSON.stringify({ ok: true, reset: phase, stateFile }, null, 2))
+  console.log(JSON.stringify({ ok: true, reset, stateFile }, null, 2))
 } else {
   throw new Error('Usage: node scripts/release-orchestrator.mjs status|run|reset [--version x.y.z] [--through source|verify|windows] [--phase phase]')
 }

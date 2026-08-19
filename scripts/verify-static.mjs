@@ -250,10 +250,10 @@ for (const contract of ['HARNESS_ANDROID_KEYSTORE_PATH', 'HARNESS_ANDROID_KEY_AL
   if (!androidBuild.includes(contract)) throw new Error(`Android release signing configuration is incomplete: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
-for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', "expected_version_code=\"$(node -e", 'Harness-Mobile-${version}-android-universal.apk', 'RELEASE_TAG: ${{ inputs.tag || github.ref_name }}', 'Waiting for verified desktop release', 'gh release upload', '--clobber']) {
+for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', "expected_version_code=\"$(node -e", 'Harness-Mobile-${version}-android-universal.apk', 'RELEASE_TAG: ${{ inputs.tag || github.ref_name }}', 'Waiting for verified desktop release', 'seq 1 180', 'gh release upload', 'android-universal.apk.sha256', 'Only one Android release asset exists', 'Verify public signed APK bytes and identity']) {
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Signed Android publication workflow contract missing: ${contract}`)
 }
-for (const forbidden of ['app-debug.apk', 'assembleDebug']) {
+for (const forbidden of ['app-debug.apk', 'assembleDebug', '--clobber']) {
   if (androidReleaseWorkflow.includes(forbidden)) throw new Error(`Android publication workflow must never publish debug output: ${forbidden}`)
 }
 const mobileSyncService = await readFile(path.join(root, 'electron/bridge/mobile-sync-service.cjs'), 'utf8')
@@ -287,7 +287,7 @@ for (const dependency of [
 }
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
-if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'github:baiyuscc13724-max/DSH-Plugins-Marketplace#41cf453f1267b535258720dda3966b8643f3a224') {
+if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'https://codeload.github.com/baiyuscc13724-max/DSH-Plugins-Marketplace/tar.gz/41cf453f1267b535258720dda3966b8643f3a224') {
   throw new Error('The in-app DSH plugin marketplace must remain pinned to the audited upstream commit.')
 }
 const marketplacePackage = JSON.parse(await readFile(path.join(root, 'node_modules/dsh-plugin-marketplace/package.json'), 'utf8'))
@@ -384,7 +384,7 @@ for (const contract of ["generateKeyPairSync('ed25519')", "createCipheriv('aes-2
   if (!signingKeyCreator.includes(contract)) throw new Error(`Component signing key custody contract missing: ${contract}`)
 }
 const releaseOrchestrator = await readFile(path.join(root, 'scripts/release-orchestrator.mjs'), 'utf8')
-for (const contract of ['.release-state', "['--self-test'", "test:component-local", 'Skipping completed phase', "delete env.ELECTRON_RUN_AS_NODE"]) {
+for (const contract of ['.release-state', "['--self-test'", "test:component-local", 'Skipping completed phase', 'cleanSourceRevision', 'sourceRevision !== sourceRevision', 'Release orchestration requires a clean source tree', 'PHASES.slice(phaseIndex)', "delete env.ELECTRON_RUN_AS_NODE"]) {
   if (!releaseOrchestrator.includes(contract)) throw new Error(`Resumable release orchestrator contract missing: ${contract}`)
 }
 const relaySources = JSON.parse(await readFile(path.join(root, 'mobile-relay-sources.json'), 'utf8'))

@@ -57,7 +57,7 @@
     "@earendil-works/pi-ai": "0.82.1",
     "adm-zip": "^0.6.0",
     "cross-spawn": "7.0.6",
-    "dsh-plugin-marketplace": "github:baiyuscc13724-max/DSH-Plugins-Marketplace#41cf453f1267b535258720dda3966b8643f3a224",
+    "dsh-plugin-marketplace": "https://codeload.github.com/baiyuscc13724-max/DSH-Plugins-Marketplace/tar.gz/41cf453f1267b535258720dda3966b8643f3a224",
     "http-proxy": "1.18.1",
     "qrcode": "1.5.4",
     "ws": "^8.21.3",
