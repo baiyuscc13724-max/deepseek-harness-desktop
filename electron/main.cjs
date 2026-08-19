@@ -18,6 +18,7 @@ const { ensureDesktopDirectoryPickerPlugin } = require('./bridge/desktop-directo
 const { ensureDesktopBrowserToolsPlugin } = require('./bridge/desktop-browser-tools-plugin-service.cjs')
 const { ensureDesktopMemoryToolsPlugin } = require('./bridge/desktop-memory-tools-plugin-service.cjs')
 const { ensureDesktopComputerUsePlugin } = require('./bridge/desktop-computer-use-plugin-service.cjs')
+const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { terminateProcessTree } = require('./bridge/process-tree.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
@@ -1183,6 +1184,9 @@ function desktopMemoryToolsPluginOptions() {
 function desktopComputerUsePluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-computer-use') }
 }
+function agentTeamsPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-agent-teams') }
+}
 
 async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {} } = {}) {
   const target = new URL(url)
@@ -1389,6 +1393,7 @@ async function runSelfTestMode() {
   if (output) await writeFile(path.resolve(output), `${JSON.stringify({ phase: 'preparing-runtime', startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   await ensureBundledRuntime()
   await ensurePluginMarketplace(pluginMarketplaceOptions())
+  await ensureAgentTeamsPlugin(agentTeamsPluginOptions())
   if (output) await writeFile(path.resolve(output), `${JSON.stringify({ phase: 'probing-runtime', startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   const report = await runPackagedSelfTest({
     appVersion: app.getVersion(),
@@ -1892,6 +1897,9 @@ app.whenReady().then(async () => {
     })
     await ensureDesktopComputerUsePlugin(desktopComputerUsePluginOptions()).catch(error => {
       console.warn(`Unable to prepare desktop Computer Use plugin: ${error.message}`)
+    })
+    await ensureAgentTeamsPlugin(agentTeamsPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare Agent Teams plugin: ${error.message}`)
     })
   })()
   if (!STORE_BUILD) ensurePetSystem()

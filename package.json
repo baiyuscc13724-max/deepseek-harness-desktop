@@ -81,6 +81,7 @@
       "plugins/dsh-desktop-browser-tools/**/*",
       "plugins/dsh-desktop-memory-tools/**/*",
       "plugins/dsh-desktop-computer-use/**/*",
+      "plugins/dsh-agent-teams/**/*",
       "!renderer/pet/pet-glb-rig.js",
       "!renderer/pet/pet-rig.js",
       "!renderer/pet/pet-rig-motion.js",
@@ -177,6 +178,7 @@
       "plugins/dsh-desktop-browser-tools/**/*",
       "plugins/dsh-desktop-memory-tools/**/*",
       "plugins/dsh-desktop-computer-use/**/*",
+      "plugins/dsh-agent-teams/**/*",
       "scripts/component-update-helper.cjs",
       "electron/bridge/component-update-*.cjs"
     ],
