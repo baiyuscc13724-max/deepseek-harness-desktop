@@ -48,7 +48,7 @@ if (pkg.scripts?.['release:cnb-cloud'] !== 'powershell.exe -NoProfile -Execution
   throw new Error('CNB publishing must use the permanent cloud-mirror command instead of local binary uploads.')
 }
 const cnbPipeline = await readFile(path.join(root, '.cnb.yml'), 'utf8')
-for (const contract of ['image: cnbcool/attachments:latest', 'CNB_TOKEN', 'browser_download_url', 'sha256sum', 'Already present:', 'release-manifest.json']) {
+for (const contract of ['image: cnbcool/attachments:latest', 'CNB_TOKEN', 'browser_download_url', '.sha256 // empty', 'Missing trusted SHA-256', 'sha256sum', 'Already present:', 'release-manifest.json']) {
   if (!cnbPipeline.includes(contract)) throw new Error(`CNB cloud mirror contract missing: ${contract}`)
 }
 for (const forbidden of ['asset-upload-url', '--upload-file', 'PLUGIN_TOKEN']) {

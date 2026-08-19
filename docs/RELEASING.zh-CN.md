@@ -132,7 +132,7 @@ Remove-Item Env:HARNESS_COMPONENT_KEY_ID
 ## 8. CNB 云端镜像
 
 - 禁止从本机向 CNB 上传 EXE、DMG、ZIP、APK 等大文件。
-- 本机只推送 `.cnb.yml`、发布说明、清单和校验信息；CNB Runner 从 GitHub Release 下载后按 `release-manifest.json` 的大小和 SHA-256 验证。
+- 本机只推送 `.cnb.yml`、发布说明、清单和校验信息；`release-manifest.json` 的每项资产必须记录独立 `size` 与 `sha256`，CNB Runner 从 GitHub Release 下载后逐项验证；旧清单仅可回退读取同版本 `SHA256SUMS.txt`。
 - 官方 `cnbcool/attachments:latest` 插件负责上传；流水线短期 `CNB_TOKEN` 自动注入、结束销毁。
 - 使用已登录的官方 `@cnbcool/cnb-cli` 启动并等待：
 

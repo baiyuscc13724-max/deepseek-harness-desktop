@@ -36,10 +36,16 @@ main:
               fi
               actual_size="$(stat -c %s "$file")"
               [ "$actual_size" = "$expected_size" ] || { echo "Size mismatch for $name" >&2; exit 1; }
-              if [ "$name" != "SHA256SUMS.txt" ]; then
+              expected_hash="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .sha256 // empty' "$manifest")"
+              if [ -z "$expected_hash" ] && [ "$name" != "SHA256SUMS.txt" ]; then
                 expected_hash="$(awk -v target="$name" '$2 == target { print $1 }' .cnb-release-assets/SHA256SUMS.txt)"
+              fi
+              if [ -n "$expected_hash" ]; then
                 actual_hash="$(sha256sum "$file" | awk '{ print $1 }')"
                 [ "$actual_hash" = "$expected_hash" ] || { echo "SHA-256 mismatch for $name" >&2; exit 1; }
+              elif [ "$name" != "SHA256SUMS.txt" ]; then
+                echo "Missing trusted SHA-256 for $name" >&2
+                exit 1
               fi
               attachments="${attachments}${attachments:+,}${file}"
               echo "##[set-output attachments=$attachments]"
