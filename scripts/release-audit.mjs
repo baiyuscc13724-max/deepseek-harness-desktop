@@ -107,7 +107,7 @@ for (const removedContract of ['AgentBridge', 'TerminalManager', 'SessionStore',
 }
 
 const workflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8')
-for (const workflowFile of ['release.yml', 'android-mobile-release.yml', 'apple-virtual-tests.yml', 'ci.yml', 'upstream-watch.yml']) {
+for (const workflowFile of ['release.yml', 'publish-production-components.yml', 'android-mobile-release.yml', 'apple-virtual-tests.yml', 'ci.yml', 'upstream-watch.yml']) {
   const source = await readFile(path.join(root, '.github', 'workflows', workflowFile), 'utf8')
   const unpinned = [...source.matchAll(/uses:\s+([^\s#]+)@([^\s#]+)/g)].filter(match => !/^[0-9a-f]{40}$/.test(match[2]))
   if (unpinned.length) throw new Error(`GitHub Actions must be pinned to immutable commits in ${workflowFile}: ${unpinned.map(match => match[0]).join(', ')}`)
@@ -127,6 +127,10 @@ if (!workflow.includes('choco install innosetup --version=6.7.0 --allow-downgrad
 if (!workflow.includes('3cfb0e5632828e0dd9b49400a185834e8f1ab570/Files/Languages/ChineseSimplified.isl') || !workflow.includes('e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d')) throw new Error('Windows release must install and hash-check the pinned Simplified Chinese language file.')
 for (const contract of ['workflow_dispatch:', 'Existing immutable release tag to build and publish', "release-retry/v1.0.26", 'ref: ${{ env.RELEASE_TAG }}', 'Ensure target tag matches package version', 'softprops/action-gh-release', 'tag_name: ${{ env.RELEASE_TAG }}', 'overwrite_files: false', 'draft: true', 'Refuse an existing release mutation', 'Verify draft assets and publish atomically', 'sha256sum -c SHA256SUMS.txt', '--draft=false']) {
   if (!workflow.includes(contract)) throw new Error(`Tag builds must publish one verified, non-overwriting draft release: ${contract}`)
+}
+const componentPublishWorkflow = await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')
+for (const contract of ['component-publish/v1.0.26', 'verify-production-component-staging.mjs', 'Refuse replacement or partial component publication', 'gh release upload', 'Re-download and verify public component assets']) {
+  if (!componentPublishWorkflow.includes(contract)) throw new Error(`Production component publication must verify public signed staging and refuse replacement: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
 for (const contract of ['seq 1 180', 'android-universal.apk.sha256', 'Only one Android release asset exists', 'Verify public signed APK bytes and identity']) {

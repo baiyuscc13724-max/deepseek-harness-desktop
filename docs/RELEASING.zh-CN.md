@@ -118,8 +118,8 @@ Remove-Item Env:HARNESS_COMPONENT_KEY_ID
 ## 7. 组件与稳定指针的强制顺序
 
 1. **先有可信完整 Bootstrap**：GitHub/CNB 的 v1.0.26 完整安装包均已下载验哈希。
-2. 上传三个不可变组件 ZIP 到 GitHub Release，重新下载并逐个验大小、SHA-256 和 ZIP 索引。
-3. 上传三个不可变目标清单到 GitHub Release；本地再次用内置公钥验签。
+2. 把三个不可变组件 ZIP、三个不可变目标清单和 `COMPONENT-SHA256SUMS.txt` 放入一次性 `component-release-staging/<version>`；只允许公开签名产物进入 `component-publish/v1.0.26` 临时分支，私钥和恢复资料永不进入。
+3. `Publish Verified Production Components` 工作流先用内置公钥、精确文件集、SHA-256、ZIP 索引、目标架构、CNB/GitHub URL 顺序和完整包兜底绑定复核，再拒绝任何已存在/部分资产，上传后重新下载复核；成功后删除临时分支。
 4. 把组件 ZIP/不可变清单加入 `release-manifest.json`，先运行 CNB 云端镜像并等待所有附件验哈希成功。
 5. 只有 GitHub 与 CNB 两端资产都可用后，才把三个签名清单复制为：
    - `component-feeds/stable/win32-x64.json`

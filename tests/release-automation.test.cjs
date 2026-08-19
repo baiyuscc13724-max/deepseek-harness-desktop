@@ -10,7 +10,7 @@ async function source(relative) {
 }
 
 test('all third-party GitHub Actions are pinned to immutable commits', async () => {
-  for (const file of ['release.yml', 'android-mobile-release.yml', 'apple-virtual-tests.yml', 'ci.yml', 'upstream-watch.yml']) {
+  for (const file of ['release.yml', 'publish-production-components.yml', 'android-mobile-release.yml', 'apple-virtual-tests.yml', 'ci.yml', 'upstream-watch.yml']) {
     const workflow = await source(path.join('.github', 'workflows', file))
     const uses = [...workflow.matchAll(/uses:\s+([^\s#]+)@([^\s#]+)/g)]
     assert.ok(uses.length > 0, `${file} must use at least one pinned action`)
@@ -50,6 +50,11 @@ test('production component preparation binds the private key to target-correct f
   assert.match(builder, /darwin-arm64[\s\S]*mac-arm64\.dmg/u)
   assert.match(builder, /validateAndVerifyManifest/u)
   assert.doesNotMatch(builder, /console\.log\([^\n]*(privateKey|privatePem|recoveryKey)/u)
+  const publisher = await source(path.join('.github', 'workflows', 'publish-production-components.yml'))
+  assert.match(publisher, /Refuse replacement or partial component publication/u)
+  assert.match(publisher, /verify-production-component-staging\.mjs/u)
+  assert.match(publisher, /Re-download and verify public component assets/u)
+  assert.doesNotMatch(publisher, /--clobber/u)
 })
 
 test('release orchestration is resumable and defaults to non-publishing verification', async () => {

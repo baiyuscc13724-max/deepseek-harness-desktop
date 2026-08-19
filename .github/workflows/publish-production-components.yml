@@ -1,0 +1,78 @@
+name: Publish Verified Production Components
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable Bootstrap release tag
+        required: true
+        default: v1.0.26
+      staging_ref:
+        description: Branch containing public signed component-release-staging files
+        required: true
+        default: component-publish/v1.0.26
+  push:
+    branches:
+      - 'component-publish/v1.0.26'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-components-${{ inputs.tag || 'v1.0.26' }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || 'v1.0.26' }}
+      STAGING_REF: ${{ inputs.staging_ref || 'component-publish/v1.0.26' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.STAGING_REF }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install verification dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify target tag and signed staging set
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq 'select(.isDraft == false) | .isDraft' | grep -qx false
+          node scripts/verify-production-component-staging.mjs --version="$version" --dir="component-release-staging/$version"
+      - name: Refuse replacement or partial component publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          expected="$(find "component-release-staging/$version" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
+          current="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
+          overlap="$(comm -12 <(printf '%s\n' "$expected") <(printf '%s\n' "$current"))"
+          test -z "$overlap" || { printf 'Immutable component asset already exists:\n%s\n' "$overlap" >&2; exit 1; }
+      - name: Upload immutable signed component assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          mapfile -t files < <(find "component-release-staging/$version" -maxdepth 1 -type f -print | LC_ALL=C sort)
+          test "${#files[@]}" -eq 7
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "${files[@]}"
+      - name: Re-download and verify public component assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          mkdir public-components
+          while IFS= read -r name; do
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir public-components
+          done < <(find "component-release-staging/$version" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          node scripts/verify-production-component-staging.mjs --version="$version" --dir=public-components
