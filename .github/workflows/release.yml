@@ -76,6 +76,31 @@ jobs:
           $report = Get-Content $output -Raw | ConvertFrom-Json
           $report | ConvertTo-Json -Depth 8
           if (-not $report.ok) { throw 'Packaged Windows self-test reported failure.' }
+      - name: Run packaged macOS architecture and runtime self-tests
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in 'mac|x86_64|darwin-x64' 'mac-arm64|arm64|darwin-arm64'; do
+            IFS='|' read -r directory architecture prebuild <<< "$spec"
+            app="dist/$directory/Harness Desktop.app"
+            executable="$app/Contents/MacOS/Harness Desktop"
+            unpacked="$app/Contents/Resources/app.asar.unpacked"
+            test -d "$app"
+            file "$executable" | grep -q "$architecture"
+            test -f "$app/Contents/Resources/app.asar"
+            test -f "$unpacked/node_modules/node-pty/prebuilds/$prebuild/pty.node"
+            test -x "$unpacked/node_modules/node-pty/prebuilds/$prebuild/spawn-helper"
+            output="$RUNNER_TEMP/harness-desktop-$prebuild-selftest.json"
+            profile="$RUNNER_TEMP/harness-desktop-$prebuild-profile"
+            set +e
+            "$executable" "--user-data-dir=$profile" "--harness-user-data-dir=$profile" --self-test "--self-test-output=$output"
+            app_exit=$?
+            set -e
+            if test -f "$output"; then cat "$output"; else echo "Packaged $prebuild self-test did not create a report."; fi
+            test "$app_exit" -eq 0
+            node -e "const r=require(process.argv[1]); if(!r.ok) process.exit(1)" "$output"
+          done
       - name: Run Windows installer smoke test
         if: runner.os == 'Windows'
         shell: pwsh

@@ -25,4 +25,9 @@ release-update-sources.local.json
 .acceptance-*
 .artifacts/
 .android-build/
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+AuthKey_*.p8
 __pycache__/

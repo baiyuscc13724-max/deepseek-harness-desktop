@@ -23,9 +23,9 @@ const required = [
   'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-version-sync.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
-  '.github/workflows/apple-virtual-tests.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/component-update-helper.cjs', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
+  '.github/workflows/apple-virtual-tests.yml', '.github/workflows/android-mobile-release.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/component-update-helper.cjs', 'scripts/create-android-release-keystore.ps1', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'mobile/mobile-app-update.example.json', 'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
-  'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
+  'mobile/android/RELEASE-SIGNING.zh-CN.md', 'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json', 'release-mirrors.example.json', 'release-update-sources.json', 'release-update-sources.example.json', 'component-update-sources.json', 'mobile-relay-sources.json', 'component-release.example.json', 'component-release.macos-arm64.example.json'
 ]
 for (const relative of required) await access(path.join(root, relative))
@@ -201,7 +201,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.24') throw new Error(`Expected package version 1.0.24, received ${pkg.version}`)
+if (pkg.version !== '1.0.25') throw new Error(`Expected package version 1.0.25, received ${pkg.version}`)
 if (pkg.main !== 'electron/bootstrap.cjs' || pkg.build?.extraMetadata?.main !== 'electron/bootstrap.cjs') throw new Error('Component updates require the stable Electron bootstrap entrypoint.')
 if (pkg.scripts?.['release:components'] !== 'node scripts/build-component-update.mjs') throw new Error('Component release builder command is missing.')
 if (pkg.scripts?.['test:component-local'] !== 'node scripts/local-component-update-test.mjs') throw new Error('Local component restart/rollback test command is missing.')
@@ -244,15 +244,29 @@ for (const forbidden of ['upload-artifact', 'softprops/action-gh-release', 'cont
 }
 const mobileSourceVersion = pkg.version
 const androidBuild = await readFile(path.join(root, 'mobile/android/app/build.gradle.kts'), 'utf8')
-if (!androidBuild.includes(`versionCode = 10024`) || !androidBuild.includes(`versionName = "${mobileSourceVersion}"`)) throw new Error('Android mobile source version must stay synchronized with the desktop integration version.')
-if (!iosProject.includes(`CURRENT_PROJECT_VERSION: 10024`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
-const publishedMobileVersion = '1.0.20'
+if (!androidBuild.includes(`versionCode = 10025`) || !androidBuild.includes(`versionName = "${mobileSourceVersion}"`)) throw new Error('Android mobile source version must stay synchronized with the desktop integration version.')
+for (const contract of ['HARNESS_ANDROID_KEYSTORE_PATH', 'HARNESS_ANDROID_KEY_ALIAS', 'HARNESS_ANDROID_STORE_PASSWORD', 'HARNESS_ANDROID_KEY_PASSWORD', 'verifyReleaseSigningConfiguration', 'enableV3Signing = true']) {
+  if (!androidBuild.includes(contract)) throw new Error(`Android release signing configuration is incomplete: ${contract}`)
+}
+const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
+for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', 'versionCode=\'10025\'', 'Harness-Mobile-${version}-android-universal.apk', 'gh release upload', '--clobber']) {
+  if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Signed Android publication workflow contract missing: ${contract}`)
+}
+for (const forbidden of ['app-debug.apk', 'assembleDebug']) {
+  if (androidReleaseWorkflow.includes(forbidden)) throw new Error(`Android publication workflow must never publish debug output: ${forbidden}`)
+}
+const mobileSyncService = await readFile(path.join(root, 'electron/bridge/mobile-sync-service.cjs'), 'utf8')
+for (const contract of ["CURRENT_MOBILE_VERSION = '1.0.25'", 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/', 'android-universal.apk', '直接在 Safari 使用', '添加到主屏幕', '无需 Apple Developer 会员', '不会提供无法公开安装的未签名 IPA', 'current.url']) {
+  if (!mobileSyncService.includes(contract)) throw new Error(`iPhone/iPad no-membership QR fallback contract missing: ${contract}`)
+}
+if (!iosProject.includes(`CURRENT_PROJECT_VERSION: 10025`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
+const publishedMobileVersion = pkg.version
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
   `v${pkg.version}`,
   `Harness-Desktop-${pkg.version}-win-x64.exe`,
   `Harness-Desktop-${pkg.version}-portable-x64.exe`,
-  `Harness-Mobile-${publishedMobileVersion}-android-universal-beta.apk`,
+  `Harness-Mobile-${publishedMobileVersion}-android-universal.apk`,
   'docs/assets/harness-desktop-hero.jpg',
   'releases/latest'
 ]) {

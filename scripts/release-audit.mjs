@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.24') throw new Error(`release audit expects 1.0.24, got ${pkg.version}`)
+if (pkg.version !== '1.0.25') throw new Error(`release audit expects 1.0.25, got ${pkg.version}`)
 if (!pkg.author?.email) throw new Error('Linux .deb packaging requires a maintainer email in package author metadata.')
 if (pkg.main !== 'electron/bootstrap.cjs' || pkg.build?.extraMetadata?.main !== 'electron/bootstrap.cjs') throw new Error('Stable Electron Bootstrap entry drifted.')
 if (pkg.build?.asar !== true) throw new Error('Release must keep ASAR enabled.')
@@ -45,7 +45,7 @@ for (const forbidden of ['asset-upload-url', '--upload-file', 'PLUGIN_TOKEN']) {
   if (cnbPipeline.includes(forbidden)) throw new Error(`CNB attachments must use the official plugin instead of custom local upload plumbing: ${forbidden}`)
 }
 const cnbPublisher = await readFile(path.join(root, 'scripts/publish-cnb-cloud-mirror.ps1'), 'utf8')
-for (const contract of ['cnb-cloud-release-', 'get-build-status', 'CNB metadata pushed', 'Method Head', 'SHA256SUMS.txt', 'mac-arm64.dmg', 'mac-x64.dmg', 'GitHub source verification failed', "credential.helper='"]) {
+for (const contract of ['cnb-cloud-release-', 'get-build-status', 'CNB metadata pushed', 'Method Head', 'SHA256SUMS.txt', 'mac-arm64.dmg', 'mac-x64.dmg', 'android-universal.apk', 'GitHub source verification failed', "credential.helper='"]) {
   if (!cnbPublisher.includes(contract)) throw new Error(`CNB cloud publisher contract missing: ${contract}`)
 }
 for (const forbidden of ['-InFile', '--upload-file', 'asset-upload-url']) {
@@ -97,6 +97,9 @@ if (!workflow.includes('npm run verify')) throw new Error('Release workflow must
 if (!workflow.includes('npm run dist')) throw new Error('Release workflow must package artifacts.')
 if (!workflow.includes('npm run verify:artifact')) throw new Error('Release workflow must audit built artifacts and write checksums.')
 if (!workflow.includes('Run packaged Windows self-test') || !workflow.includes('--self-test') || !workflow.includes('$selfTest = Start-Process') || !workflow.includes('-Wait -PassThru')) throw new Error('Windows release must launch and wait for the packaged app self-test before publishing.')
+for (const contract of ['Run packaged macOS architecture and runtime self-tests', "'mac|x86_64|darwin-x64'", "'mac-arm64|arm64|darwin-arm64'", 'node-pty/prebuilds/$prebuild/pty.node', 'spawn-helper', 'harness-desktop-$prebuild-selftest.json']) {
+  if (!workflow.includes(contract)) throw new Error(`macOS release self-test contract missing: ${contract}`)
+}
 if (!workflow.includes('choco install innosetup') || !workflow.includes('Run Windows installer smoke test') || !workflow.includes('/VERYSILENT') || !workflow.includes('Harness Desktop.exe') || !workflow.includes('app.asar') || !workflow.includes('unins*.exe')) throw new Error('Windows release must build, install, inspect, and uninstall the Inno Setup payload.')
 if (!workflow.includes('3cfb0e5632828e0dd9b49400a185834e8f1ab570/Files/Languages/ChineseSimplified.isl') || !workflow.includes('e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d')) throw new Error('Windows release must install and hash-check the pinned Simplified Chinese language file.')
 if (!workflow.includes('softprops/action-gh-release')) throw new Error('Tag builds must publish a GitHub Release after matrix artifacts are audited.')

@@ -10,8 +10,8 @@ const BRIDGE_API_VERSION = 2
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.20'
-const DEFAULT_MOBILE_DOWNLOAD_URL = `https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v${CURRENT_MOBILE_VERSION}/Harness-Mobile-${CURRENT_MOBILE_VERSION}-android-universal-beta.apk`
+const CURRENT_MOBILE_VERSION = '1.0.25'
+const DEFAULT_MOBILE_DOWNLOAD_URL = `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v${CURRENT_MOBILE_VERSION}/Harness-Mobile-${CURRENT_MOBILE_VERSION}-android-universal.apk`
 const DEFAULT_IOS_DOWNLOAD_URL = ''
 
 function sha256(value) {
@@ -105,12 +105,15 @@ function safeIosDownloadUrl(value) {
   }
 }
 
-function iosSetupPage(appUrl, downloadUrl = '') {
+function iosSetupPage(appUrl, downloadUrl = '', browserUrl = '') {
   const escape = value => String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+  const browser = browserUrl
+    ? `<a href="${escape(browserUrl)}" rel="noreferrer">直接在 Safari 使用</a><p class="notice">打开后可在 Safari 的分享菜单中选择“添加到主屏幕”，无需 Apple Developer 会员。</p>`
+    : ''
   const install = downloadUrl
     ? `<a class="secondary" href="${escape(downloadUrl)}" rel="noreferrer">从 App Store / TestFlight 下载</a>`
-    : '<p class="notice">iOS 下载地址尚未配置。请使用已安装的 Harness Mobile 扫码；正式发布后再启用 App Store/TestFlight 地址。</p>'
-  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Harness Mobile for iOS</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f8f7;color:#173c3a;font:16px/1.6 system-ui,-apple-system,sans-serif}.card{max-width:430px;margin:24px;padding:28px;border:1px solid #c8ddda;border-radius:18px;background:#fff;box-shadow:0 16px 50px #173c3a18}h1{font-size:22px;margin:0 0 10px}a{display:block;margin-top:14px;padding:12px 16px;border-radius:12px;text-align:center;text-decoration:none;background:#126f68;color:#fff}.secondary{background:#edf6f5;color:#126f68}.notice{color:#55706e}</style><main class="card"><h1>Harness Mobile for iPhone / iPad</h1><p>苹果设备只会打开 iOS App，不会下载 Android APK。</p><a href="${escape(appUrl)}">打开 Harness Mobile</a>${install}</main></html>`
+    : '<p class="notice">当前未发布 App Store/TestFlight 安装包；不会提供无法公开安装的未签名 IPA。</p>'
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Harness Mobile for iOS</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f8f7;color:#173c3a;font:16px/1.6 system-ui,-apple-system,sans-serif}.card{max-width:430px;margin:24px;padding:28px;border:1px solid #c8ddda;border-radius:18px;background:#fff;box-shadow:0 16px 50px #173c3a18}h1{font-size:22px;margin:0 0 10px}a{display:block;margin-top:14px;padding:12px 16px;border-radius:12px;text-align:center;text-decoration:none;background:#126f68;color:#fff}.secondary{background:#edf6f5;color:#126f68}.notice{color:#55706e}</style><main class="card"><h1>Harness Mobile for iPhone / iPad</h1><p>苹果设备不会下载 Android APK。可直接使用 Safari 版；未来有正式商店版本时也会从这里进入。</p>${browser}<a class="secondary" href="${escape(appUrl)}">打开已安装的 Harness Mobile</a>${install}</main></html>`
 }
 
 function writeResponse(response, statusCode, body, headers = {}) {
@@ -507,7 +510,7 @@ class MobileSyncService extends EventEmitter {
         return
       }
       if (isIosUserAgent(request.headers['user-agent'])) {
-        writeResponse(response, 200, iosSetupPage(current.appUrl, this.iosDownloadUrl))
+        writeResponse(response, 200, iosSetupPage(current.appUrl, this.iosDownloadUrl, current.url))
       } else {
         mobileDownloadRedirect(response, this.mobileDownloadUrl)
       }

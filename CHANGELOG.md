@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.25
+
+- 自定义壁纸新增 GIF、APNG 与动态 WebP，单文件上限 50 MB；前景完整显示并以同图模糊填充空白区域。
+- 面板通透上限提高到 92%，新增“文字保护”可读性控制，并保持全部内置主题原有表现。
+- 文字选择重新可见；点击非输入区域、按 Esc 或使用右键“取消选择”均可清除选区。
+- 签名组件增量更新完成真实隔离包验证：健康版本激活成功，损坏版本自动回滚到上一健康组件。
+- 修复 macOS Intel/Apple Silicon 包遗漏 `node-pty` 原生运行模块的问题；双架构均完成打包后真实自检。
+- Android 与 iOS/iPadOS 源码同步到 1.0.25；正式移动分发继续要求 Android 长期 release 密钥及 Apple App Store/TestFlight 账户与证书。
+- GitHub 与 CNB 同步提供 Windows、macOS Intel、macOS Apple Silicon 桌面制品及 SHA-256 校验。
+
 ## 1.0.24
 
 - 新增 Codex 风格右栏浏览器、可见地址栏、独立持久化 Profile、用户登录入口与站点数据清理；与官方 Harness 会话完全隔离。

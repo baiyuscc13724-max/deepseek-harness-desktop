@@ -34,11 +34,12 @@ $assetNames = @(
   "Harness-Desktop-$($package.version)-mac-arm64.zip",
   "Harness-Desktop-$($package.version)-mac-x64.dmg",
   "Harness-Desktop-$($package.version)-mac-x64.zip",
+  "Harness-Mobile-$($package.version)-android-universal.apk",
   'SHA256SUMS.txt'
 )
 $manifestNames = @($release.assets | ForEach-Object { $_.name })
 if (@(Compare-Object ($assetNames | Sort-Object) ($manifestNames | Sort-Object)).Count -ne 0) {
-  throw 'The CNB cloud mirror accepts only the reviewed Windows, macOS, and SHA256SUMS.txt assets.'
+  throw 'The CNB cloud mirror accepts only the reviewed Windows, macOS, signed Android, and SHA256SUMS.txt assets.'
 }
 if (-not (Test-Path -LiteralPath 'dist/SHA256SUMS.txt')) { throw 'Missing audited release file: dist/SHA256SUMS.txt' }
 foreach ($asset in $release.assets) {

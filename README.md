@@ -21,14 +21,16 @@
 
 ## 下载
 
-当前稳定版：**v1.0.24** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.24)
+当前稳定版：**v1.0.25** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.25)
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-win-x64.exe) |
-| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-portable-x64.exe) |
-| Android 手机端（沿用 1.0.20 测试版） | 与桌面端扫码配对、同步会话并授权固定手机操作 | [下载 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.20/Harness-Mobile-1.0.20-android-universal-beta.apk) |
-| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-win-x64.exe) |
+| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-portable-x64.exe) |
+| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-arm64.dmg) |
+| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-x64.dmg) |
+| Android 手机端 1.0.25 | 与桌面端扫码配对、同步会话并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Mobile-1.0.25-android-universal.apk) |
+| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 

@@ -32,3 +32,9 @@ xcodebuild -project HarnessMobile.xcodeproj -scheme HarnessMobile \
 真机归档前必须在 Xcode 中选择发行团队，补齐 App Icon，并用实际 iPhone/iPad 完成以下测试：相机授权、本地网络授权、深链、局域网配对、Wi-Fi/蜂窝切换、WSS/443、Cookie 保持、前后台切换和忘记配对。
 
 当前 Windows 工作区不能运行 Xcode、Simulator、签名、TestFlight 或 App Store 公证；这些不是可由 Windows 单元测试替代的步骤。
+
+## 未加入 Apple Developer Program 时的用户入口
+
+普通 iPhone/iPad 无法公开安装未签名 IPA。当前发布不使用企业共享证书、临时侧载或其他容易失效的绕过方式。用户用系统相机扫描 Desktop 二维码后，会进入本地安装/配对页并选择“直接在 Safari 使用”；配对成功后可通过 Safari 分享菜单“添加到主屏幕”。
+
+Safari 版在同一局域网、Desktop 正在运行且页面位于前台时使用 WebSocket 实时同步。iOS 将网页置于后台或锁屏时可能暂停连接，回到前台后恢复；Safari 版不声明原生客户端的加密 WSS/443 远程后备能力。未来加入 Apple Developer Program 后，才可把同一页面的合规入口切换到 App Store/TestFlight。

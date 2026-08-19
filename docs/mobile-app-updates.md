@@ -6,7 +6,14 @@ Android and iOS/iPadOS releases are checked independently from Harness Desktop a
 
 - Android and iOS/iPadOS source versions are prepared together and must equal the current integration version; `tests/mobile-version-sync.test.cjs` rejects one-platform-only version drift.
 - The mobile update manifest must carry both `platforms.android` and `platforms.ios` at the same version before either production endpoint is enabled.
-- The 1.0.24 source preparation does not claim a public mobile release: Android still needs the approved release signing identity, while iOS/iPadOS still needs App Store Connect/TestFlight signing and review.
+- The 1.0.25 Android release is published only after the dedicated workflow verifies the long-lived release certificate fingerprint; a debug or unsigned APK never qualifies. The user has chosen not to join Apple Developer Program, so iOS/iPadOS source remains simulator-validated without claiming an installable IPA.
+
+## Desktop QR routing without an Apple membership
+
+- The same Desktop QR remains OS-neutral. Android system cameras are redirected to the verified signed APK, while the installed Android app consumes the pairing payload directly.
+- iPhone/iPad system cameras receive a local setup page that never redirects to an APK. With no App Store/TestFlight release, the primary action pairs and opens the official workbench in Safari and explains “Add to Home Screen”; an already installed native client can still consume the same payload.
+- The Safari workbench provides live WebSocket synchronization while the page is foregrounded on the same LAN. iOS may suspend it in the background, and it does not claim the native app's encrypted WSS/443 remote fallback.
+- A future reviewed App Store/TestFlight URL can be enabled without ever distributing an unsigned IPA.
 
 ## Platform routing and installation
 

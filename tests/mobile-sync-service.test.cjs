@@ -159,9 +159,33 @@ test('iPhone and iPad setup never redirect to the Android APK', async t => {
   assert.match(page, /Harness Mobile for iPhone \/ iPad/)
   assert.match(page, /harnessmobile:\/\/pair\?payload=/)
   assert.match(page, /https:\/\/testflight\.apple\.com\/join\/HarnessTest/)
+  assert.match(page, /直接在 Safari 使用/)
+  assert.match(page, /添加到主屏幕/)
+  assert.ok(page.includes(state.pairing.url))
   assert.doesNotMatch(page, /\.apk/)
   assert.equal(service.state().devices.length, 0)
   assert.ok(service.state().pairing)
+})
+
+test('iPhone and iPad offer a Safari workbench when no Apple distribution account exists', async t => {
+  const runtime = await createRuntime('official')
+  const service = new MobileSyncService({
+    store: createStore(), getRuntimeTarget: () => runtime.url, host: '127.0.0.1', port: 0,
+    qrFactory: async value => `qr:${value}`
+  })
+  t.after(async () => { await service.stop(); await runtime.close() })
+  await service.start()
+  const state = await service.beginPairing()
+  const response = await fetch(state.pairing.shareUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (iPad; CPU OS 18_4 like Mac OS X)' }
+  })
+  assert.equal(response.status, 200)
+  const page = await response.text()
+  assert.match(page, /直接在 Safari 使用/)
+  assert.match(page, /无需 Apple Developer 会员/)
+  assert.match(page, /不会提供无法公开安装的未签名 IPA/)
+  assert.ok(page.includes(state.pairing.url))
+  assert.doesNotMatch(page, /\.apk/)
 })
 
 test('mobile bridge proxies WebSocket and follows a replaced official runtime target', async t => {
