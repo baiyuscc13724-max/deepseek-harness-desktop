@@ -137,6 +137,7 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .mobile-sync-error { min-height:18px; margin:10px 0 0; color:#d92d20; font-size:11px; }
 @media (max-width:720px) { .mobile-sync-pair-card { grid-template-columns:1fr; } .mobile-sync-qr-wrap { margin:auto; } .mobile-sync-summary { align-items:flex-start; flex-direction:column; } .mobile-sync-remote-card { grid-template-columns:1fr auto; } .mobile-sync-provider { grid-column:1 / -1; } }
 .skin-picker-overlay { position:absolute; z-index:20; inset:0; display:grid; place-items:center; padding:48px 28px 28px; color:var(--shell-text); background:var(--shell-overlay); app-region:no-drag; -webkit-app-region:no-drag; backdrop-filter:blur(5px); }
+:root[data-shell-theme="custom"] .skin-picker-dialog { text-shadow:var(--shell-text-shadow,none); }
 .skin-picker-dialog { display:flex; flex-direction:column; width:min(1000px,calc(100vw - 56px)); max-height:calc(100vh - 76px); overflow:hidden; border:1px solid var(--shell-border); border-radius:18px; color:var(--shell-text); background:var(--shell-surface); box-shadow:0 24px 70px rgba(0,0,0,.28); }
 .skin-picker-header { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; padding:18px 20px 14px; border-bottom:1px solid var(--shell-border); background:var(--shell-layer); }
 .skin-picker-header h2,.skin-custom-editor h3 { margin:0; font-size:18px; }
@@ -149,7 +150,7 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .skin-picker-card { overflow:hidden; border:1px solid var(--shell-border); border-radius:12px; color:var(--shell-text); background:var(--shell-layer); box-shadow:0 7px 22px rgba(0,0,0,.07); cursor:pointer; transition:transform .15s ease,border-color .15s ease; }
 .skin-picker-card:hover { transform:translateY(-2px); border-color:var(--shell-accent); }
 .skin-picker-card[data-selected="true"] { outline:2px solid var(--shell-accent); outline-offset:1px; }
-.skin-picker-preview { height:96px; background-position:center!important; background-size:cover!important; }
+.skin-picker-preview { height:96px; background-position:center; background-size:cover; }
 .skin-picker-body { padding:10px 11px 11px; }
 .skin-picker-title { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .skin-picker-title strong { font-size:13px; }

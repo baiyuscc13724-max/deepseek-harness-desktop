@@ -19,9 +19,9 @@ const required = [
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/computer-use-screenshot-store.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
+  'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/computer-use-screenshot-store.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/text-selection-ui.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
   'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
-  'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
+  'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-version-sync.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
   '.github/workflows/apple-virtual-tests.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/component-update-helper.cjs', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'mobile/mobile-app-update.example.json', 'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
@@ -124,11 +124,26 @@ if (!themeIntegration.includes('--hd-theme-sidebar') || !themeIntegration.includ
 if (!themeIntegration.includes('html[data-hd-theme="custom"] body::before')) {
   throw new Error('The custom wallpaper must stay outside the workbench layout so it cannot alter fixed dialog positioning.')
 }
+for (const contract of ['html[data-hd-theme="custom"] body::after', 'background-size:cover,contain', '--hd-wallpaper-contain', '--hd-wallpaper-overlay', 'blur(calc(var(--hd-wallpaper-blur,2px) + 22px))']) {
+  if (!themeIntegration.includes(contract)) throw new Error(`Custom wallpapers must keep the full image above a blurred fill layer with a readable content overlay: ${contract}`)
+}
+if (!rendererScript.includes('center/contain no-repeat') || rendererStyles.includes('background-size:cover!important')) {
+  throw new Error('The custom wallpaper preview must show the complete image instead of forcing a cropped cover preview.')
+}
+const customForegroundRule = themeIntegration.match(/html\[data-hd-theme="custom"\] body::after \{[^}]+\}/)?.[0] || ''
+if (!customForegroundRule || customForegroundRule.includes(' blur(') || !themeIntegration.includes('填充背景模糊')) {
+  throw new Error('The contained foreground wallpaper must stay sharp while only the fill layer uses the blur control.')
+}
 if (themeIntegration.includes('html[data-hd-theme="custom"] [data-slot="sidebar"] > *')) {
   throw new Error('The custom sidebar must not use backdrop-filter because it traps fixed settings dialogs inside the sidebar containing block.')
 }
-if (!themeIntegration.includes('Math.max(.22, surfaceOpacity - .02)')) {
-  throw new Error('The custom sidebar must retain built-in-theme transparency parity instead of becoming an isolated opaque panel.')
+if (!themeIntegration.includes('Math.max(.08, surfaceOpacity * .48)') || !themeIntegration.includes('Math.max(.18, surfaceOpacity * .7)')) {
+  throw new Error('The custom sidebar and composer must remain translucent enough for the wallpaper to continue behind them.')
+}
+for (const readabilityContract of ['readabilityStrength', '--hd-theme-text-shadow', 'readableTextShadow', 'input::placeholder', 'max="92"']) {
+  if (!themeIntegration.includes(readabilityContract) && !html.includes(readabilityContract)) {
+    throw new Error(`Transparent custom themes must preserve readable text and expose the extended glass range: ${readabilityContract}`)
+  }
 }
 if (!themeIntegration.includes('container-type:inline-size') || !themeIntegration.includes('@container (max-width:660px)')) {
   throw new Error('The custom theme editor must respond to its own settings-panel width instead of overflowing based on viewport width.')
@@ -227,13 +242,17 @@ for (const contract of ['workflow_dispatch:', 'runs-on: macos-14', 'Select Xcode
 for (const forbidden of ['upload-artifact', 'softprops/action-gh-release', 'contents: write']) {
   if (appleWorkflow.includes(forbidden)) throw new Error(`Apple virtual test workflow must not publish artifacts: ${forbidden}`)
 }
-const mobileVersion = '1.0.20'
+const mobileSourceVersion = pkg.version
+const androidBuild = await readFile(path.join(root, 'mobile/android/app/build.gradle.kts'), 'utf8')
+if (!androidBuild.includes(`versionCode = 10024`) || !androidBuild.includes(`versionName = "${mobileSourceVersion}"`)) throw new Error('Android mobile source version must stay synchronized with the desktop integration version.')
+if (!iosProject.includes(`CURRENT_PROJECT_VERSION: 10024`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
+const publishedMobileVersion = '1.0.20'
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
   `v${pkg.version}`,
   `Harness-Desktop-${pkg.version}-win-x64.exe`,
   `Harness-Desktop-${pkg.version}-portable-x64.exe`,
-  `Harness-Mobile-${mobileVersion}-android-universal-beta.apk`,
+  `Harness-Mobile-${publishedMobileVersion}-android-universal-beta.apk`,
   'docs/assets/harness-desktop-hero.jpg',
   'releases/latest'
 ]) {
@@ -311,6 +330,12 @@ if (officialIconHash !== '77b823e3d14122b6dfe6ff6089e629d1c6e3fcd1ed7fc0b9e7bf59
 }
 
 const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
+for (const animatedWallpaperContract of ['MAX_THEME_BACKGROUND_BYTES', "if (/\\.gif$/i.test(file))", "if (/\\.apng$/i.test(file))", "'webp', 'gif', 'apng'", '背景图片或动图必须小于 50 MB']) {
+  if (!main.includes(animatedWallpaperContract)) throw new Error(`Animated custom wallpaper contract missing: ${animatedWallpaperContract}`)
+}
+for (const titleBarContract of ['syncTitleBarOverlay', 'setTitleBarOverlay', "dark ? '#f4f7ff' : '#202124'", "nativeTheme.on('updated'"]) {
+  if (!main.includes(titleBarContract)) throw new Error(`Native Windows controls must remain visible over the active light or dark skin: ${titleBarContract}`)
+}
 const bootstrap = await readFile(path.join(root, 'electron/bootstrap.cjs'), 'utf8')
 for (const contract of ['prepareComponentActivation', 'resolveComponentLayout', 'installComponentModulePaths', '__HARNESS_COMPONENT_UPDATE__', 'require(layout.shellEntry)']) {
   if (!bootstrap.includes(contract)) throw new Error(`Stable component bootstrap contract missing: ${contract}`)

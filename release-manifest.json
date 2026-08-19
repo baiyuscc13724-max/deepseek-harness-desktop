@@ -24,6 +24,38 @@
         ]
       },
       {
+        "name": "Harness-Desktop-1.0.24-mac-arm64.dmg",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.dmg",
+        "size": 175595040,
+        "mirror_urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.dmg"
+        ]
+      },
+      {
+        "name": "Harness-Desktop-1.0.24-mac-arm64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.zip",
+        "size": 170635485,
+        "mirror_urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.zip"
+        ]
+      },
+      {
+        "name": "Harness-Desktop-1.0.24-mac-x64.dmg",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-x64.dmg",
+        "size": 178222854,
+        "mirror_urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-x64.dmg"
+        ]
+      },
+      {
+        "name": "Harness-Desktop-1.0.24-mac-x64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-x64.zip",
+        "size": 173304116,
+        "mirror_urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-x64.zip"
+        ]
+      },
+      {
         "name": "SHA256SUMS.txt",
         "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/SHA256SUMS.txt",
         "size": 831,

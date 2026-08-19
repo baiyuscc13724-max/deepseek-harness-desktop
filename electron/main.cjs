@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, screen, session, shell, Tray, WebContentsView } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, screen, session, shell, Tray, WebContentsView } = require('electron')
 const { spawn } = require('node:child_process')
 const { randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
@@ -757,17 +757,29 @@ function ensurePetSystem() {
   petTickTimer.unref?.()
 }
 
+const MAX_THEME_BACKGROUND_BYTES = 50 * 1024 * 1024
+
 function themeAssetMime(file) {
   if (/\.png$/i.test(file)) return 'image/png'
+  if (/\.apng$/i.test(file)) return 'image/apng'
+  if (/\.gif$/i.test(file)) return 'image/gif'
   if (/\.jpe?g$/i.test(file)) return 'image/jpeg'
   return 'image/webp'
 }
 
 async function readThemeDataUrl(file) {
   const info = await stat(file)
-  if (!info.isFile() || info.size > 20 * 1024 * 1024) throw new Error('主题图片无效或超过 20 MB。')
+  if (!info.isFile() || info.size > MAX_THEME_BACKGROUND_BYTES) throw new Error('主题图片无效或超过 50 MB。')
   const data = await readFile(file)
   return `data:${themeAssetMime(file)};base64,${data.toString('base64')}`
+}
+
+function syncTitleBarOverlay(appearance = ensureStateStore().get().appearance) {
+  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return
+  const theme = THEME_CATALOG.find(entry => entry.id === appearance.themeId)
+  const requestedMode = appearance.themeId === 'custom' ? appearance.customTheme?.mode : theme?.mode
+  const dark = requestedMode === 'dark' || (requestedMode === 'adaptive' && nativeTheme.shouldUseDarkColors)
+  mainWindow.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#f4f7ff' : '#202124', height: 36 })
 }
 
 async function appearancePayload() {
@@ -775,6 +787,7 @@ async function appearancePayload() {
   if (STORE_BUILD && appearance.themeId === 'maid-atelier') {
     appearance = ensureStateStore().updateAppearance({ themeId: 'porcelain-mist' }).appearance
   }
+  syncTitleBarOverlay(appearance)
   const backgroundFile = appearance.customTheme?.backgroundFile
   if (!backgroundFile) return { ...appearance, customBackgroundDataUrl: null }
   const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
@@ -834,6 +847,7 @@ async function updateMobileAppearance(payload = {}) {
   } else {
     throw new Error('Unsupported appearance action.')
   }
+  syncTitleBarOverlay()
   return mobileAppearancePayload()
 }
 
@@ -844,7 +858,7 @@ async function readMobileThemeAsset(relative) {
     const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
     if (!existsSync(file)) return null
     const info = await stat(file)
-    if (!info.isFile() || info.size > 20 * 1024 * 1024) return null
+    if (!info.isFile() || info.size > MAX_THEME_BACKGROUND_BYTES) return null
     return { data: await readFile(file), mime: themeAssetMime(file) }
   }
   const normalized = String(relative || '').replaceAll('\\', '/')
@@ -856,17 +870,17 @@ async function readMobileThemeAsset(relative) {
 
 async function chooseCustomThemeBackground() {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择自定义主题背景图',
+    title: '选择自定义主题壁纸或动图',
     properties: ['openFile'],
-    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+    filters: [{ name: '静态或动态图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'apng'] }]
   })
   if (result.canceled || !result.filePaths[0]) return appearancePayload()
 
   const source = path.resolve(result.filePaths[0])
   const extension = path.extname(source).toLowerCase()
-  if (!['.png', '.jpg', '.jpeg', '.webp'].includes(extension)) throw new Error('仅支持 PNG、JPG 和 WebP 图片。')
+  if (!['.png', '.jpg', '.jpeg', '.webp', '.gif', '.apng'].includes(extension)) throw new Error('仅支持 PNG、JPG、WebP、GIF 和 APNG 图片。')
   const info = await stat(source)
-  if (!info.isFile() || info.size > 20 * 1024 * 1024) throw new Error('背景图片必须小于 20 MB。')
+  if (!info.isFile() || info.size > MAX_THEME_BACKGROUND_BYTES) throw new Error('背景图片或动图必须小于 50 MB。')
 
   const directory = path.join(app.getPath('userData'), 'themes')
   const fileName = `custom-background${extension}`
@@ -1456,6 +1470,7 @@ async function showGuestContextMenu(guest, params) {
   } else {
     template.push(
       { label: '复制', role: 'copy', enabled: Boolean(params.selectionText) },
+      { label: '取消选择', enabled: Boolean(params.selectionText), click: () => guest.executeJavaScript('window.getSelection?.()?.removeAllRanges()', true).catch(() => {}) },
       { label: '全选', role: 'selectAll' }
     )
   }
@@ -1554,6 +1569,7 @@ function createWindow() {
       webviewTag: true
     }
   })
+  syncTitleBarOverlay()
 
   mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
     webPreferences.preload = path.join(__dirname, 'guest-preload.cjs')
@@ -1885,6 +1901,7 @@ app.whenReady().then(async () => {
   }
   ensureDesktopTray()
   createWindow()
+  nativeTheme.on('updated', () => syncTitleBarOverlay())
   runtimeInitializationPromise.catch(error => console.warn(`Unable to prepare bundled Harness runtime: ${error.message}`))
   app.on('activate', () => {
     showMainWindow()

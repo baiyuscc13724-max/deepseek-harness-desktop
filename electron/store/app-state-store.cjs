@@ -21,9 +21,10 @@ function normalizeCustomTheme(value = {}) {
     text: HEX_COLOR.test(value.text) ? value.text.toLowerCase() : '#f4f7ff',
     wallpaperBrightness: boundedInteger(value.wallpaperBrightness, 40, 140, 82),
     wallpaperBlur: boundedInteger(value.wallpaperBlur, 0, 24, 2),
-    glassTransparency: boundedInteger(value.glassTransparency, 0, 75, 32),
+    glassTransparency: boundedInteger(value.glassTransparency, 0, 92, 32),
     borderStrength: boundedInteger(value.borderStrength, 0, 100, 48),
-    backgroundFile: /^custom-background\.(?:png|jpe?g|webp)$/i.test(value.backgroundFile || '')
+    readabilityStrength: boundedInteger(value.readabilityStrength, 0, 100, 72),
+    backgroundFile: /^custom-background\.(?:png|jpe?g|webp|gif|apng)$/i.test(value.backgroundFile || '')
       ? value.backgroundFile
       : null
   }

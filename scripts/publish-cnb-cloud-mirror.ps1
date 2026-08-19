@@ -30,14 +30,25 @@ if ($release.tag_name -ne $expectedTag) { throw "Manifest tag $($release.tag_nam
 $assetNames = @(
   "Harness-Desktop-$($package.version)-win-x64.exe",
   "Harness-Desktop-$($package.version)-portable-x64.exe",
+  "Harness-Desktop-$($package.version)-mac-arm64.dmg",
+  "Harness-Desktop-$($package.version)-mac-arm64.zip",
+  "Harness-Desktop-$($package.version)-mac-x64.dmg",
+  "Harness-Desktop-$($package.version)-mac-x64.zip",
   'SHA256SUMS.txt'
 )
 $manifestNames = @($release.assets | ForEach-Object { $_.name })
 if (@(Compare-Object ($assetNames | Sort-Object) ($manifestNames | Sort-Object)).Count -ne 0) {
-  throw 'The CNB cloud mirror accepts only the two Windows executables and SHA256SUMS.txt.'
+  throw 'The CNB cloud mirror accepts only the reviewed Windows, macOS, and SHA256SUMS.txt assets.'
 }
-foreach ($name in $assetNames) {
-  if (-not (Test-Path -LiteralPath (Join-Path 'dist' $name))) { throw "Missing audited release file: dist/$name" }
+if (-not (Test-Path -LiteralPath 'dist/SHA256SUMS.txt')) { throw 'Missing audited release file: dist/SHA256SUMS.txt' }
+foreach ($asset in $release.assets) {
+  if ($asset.browser_download_url -notlike 'https://github.com/*') { throw "Untrusted GitHub source URL for $($asset.name)" }
+  $sourceResponse = Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -Method Head -MaximumRedirection 8 -TimeoutSec 90
+  $sourceRawLength = @($sourceResponse.Headers['Content-Length'])[0]
+  $sourceLength = if ($sourceRawLength) { [long]$sourceRawLength } else { [long]$sourceResponse.RawContentLength }
+  if ($sourceResponse.StatusCode -ne 200 -or $sourceLength -ne [long]$asset.size) {
+    throw "GitHub source verification failed for $($asset.name): status=$($sourceResponse.StatusCode), size=$sourceLength"
+  }
 }
 
 $mirrorFiles = @('.cnb.yml', 'CHANGELOG.md', 'LICENSE', 'README.md', 'release-manifest.json', 'release-notes.md')

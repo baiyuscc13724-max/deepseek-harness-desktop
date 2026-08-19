@@ -6,13 +6,13 @@
 2. 运行 `npm run verify` 与 `npm run verify:release`。
 3. 运行 `npm run dist`、`npm run verify:artifact`、打包后自检和安装/卸载冒烟测试。
 4. 将源码提交推送至 GitHub `main`，创建同版本 GitHub Release 并上传经过审计的制品。
-5. GitHub Release 的三个公开下载地址全部可用后，运行：
+5. GitHub Release 的七个 CNB 镜像源地址全部可用后，运行：
 
    ```powershell
    npm run release:cnb-cloud
    ```
 
-6. 命令会等待 CNB 云端流水线结束，并核对 CNB 三个附件的文件大小和 `SHA256SUMS.txt` 内容。
+6. 命令会等待 CNB 云端流水线结束，并核对 CNB 七个附件的文件大小和 `SHA256SUMS.txt` 内容。
 
 ## CNB 云端镜像原则
 
@@ -25,10 +25,14 @@
 
 ## 固定附件集合
 
-桌面补丁版本默认只镜像：
+桌面补丁版本默认镜像经过云端构建和校验的 Windows 与 macOS 用户制品：
 
 - `Harness-Desktop-<version>-win-x64.exe`
 - `Harness-Desktop-<version>-portable-x64.exe`
+- `Harness-Desktop-<version>-mac-arm64.dmg`
+- `Harness-Desktop-<version>-mac-arm64.zip`
+- `Harness-Desktop-<version>-mac-x64.dmg`
+- `Harness-Desktop-<version>-mac-x64.zip`
 - `SHA256SUMS.txt`
 
 Android APP 只有在 Android 源码确实修改、完成单独验证并明确决定发布时才加入；桌面版本升级不得自动生成不存在的同版本 APK。

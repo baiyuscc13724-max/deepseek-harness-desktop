@@ -118,20 +118,29 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character =>
 
 const customThemeDefaults = Object.freeze({
   mode: 'dark', accent: '#6f8cff', surface: '#171b29', text: '#f4f7ff',
-  wallpaperBrightness: 82, wallpaperBlur: 2, glassTransparency: 32, borderStrength: 48
+  wallpaperBrightness: 82, wallpaperBlur: 2, glassTransparency: 32, borderStrength: 48, readabilityStrength: 72
 })
 
 const customThemeRangeFields = Object.freeze({
   wallpaperBrightness: { input: '#skinWallpaperBrightness', output: '#skinBrightnessValue', suffix: '%' },
   wallpaperBlur: { input: '#skinWallpaperBlur', output: '#skinBlurValue', suffix: 'px' },
   glassTransparency: { input: '#skinGlassTransparency', output: '#skinGlassValue', suffix: '%' },
-  borderStrength: { input: '#skinBorderStrength', output: '#skinBorderValue', suffix: '%' }
+  borderStrength: { input: '#skinBorderStrength', output: '#skinBorderValue', suffix: '%' },
+  readabilityStrength: { input: '#skinReadabilityStrength', output: '#skinReadabilityValue', suffix: '%' }
 })
 
 function shellColorWithOpacity(hex, opacity) {
   if (!/^#[0-9a-f]{6}$/i.test(hex || '')) return hex
   const alpha = Math.round(Math.min(1, Math.max(0, opacity)) * 255).toString(16).padStart(2, '0')
   return `${hex}${alpha}`
+}
+
+function shellReadableTextShadow(text, strength) {
+  const match = /^#([0-9a-f]{6})$/i.exec(text || '')
+  const rgb = match ? [0, 2, 4].map(offset => Number.parseInt(match[1].slice(offset, offset + 2), 16)) : [255, 255, 255]
+  const shadow = rgb[0] * .299 + rgb[1] * .587 + rgb[2] * .114 >= 150 ? '0,0,0' : '255,255,255'
+  const amount = Math.min(1, Math.max(0, Number(strength) / 100))
+  return `0 1px 2px rgba(${shadow},${(.18 + amount * .58).toFixed(2)}),0 0 12px rgba(${shadow},${(.06 + amount * .24).toFixed(2)})`
 }
 
 function readShellCustomTheme() {
@@ -210,7 +219,13 @@ function playStartupAnimation() {
 
 function themePreview(theme) {
   if (theme.id === 'maid-atelier' && theme.assets?.day) return `linear-gradient(rgba(5,31,59,.08),rgba(5,31,59,.28)),url("${theme.assets.day}") center/cover`
-  if (theme.id === 'custom' && appearanceState.customBackgroundDataUrl) return `url("${appearanceState.customBackgroundDataUrl}") center/cover`
+  if (theme.id === 'custom' && appearanceState.customBackgroundDataUrl) {
+    const custom = { ...customThemeDefaults, ...(appearanceState.customTheme || {}) }
+    const readability = custom.readabilityStrength / 100
+    const overlay = shellColorWithOpacity(custom.surface, .06 + readability * (custom.mode === 'dark' ? .34 : .27))
+    const image = `url("${appearanceState.customBackgroundDataUrl}")`
+    return `linear-gradient(${overlay},${overlay}),${image} center/contain no-repeat,${image} center/cover no-repeat`
+  }
   return theme.preview
 }
 
@@ -220,7 +235,7 @@ function applyShellTheme() {
   if (!theme || theme.id === 'official') {
     root.removeAttribute('data-shell-theme')
     root.style.removeProperty('color-scheme')
-    for (const name of ['--shell-surface', '--shell-layer', '--shell-layer-2', '--shell-text', '--shell-text-secondary', '--shell-text-tertiary', '--shell-border', '--shell-hover', '--shell-accent', '--shell-overlay']) root.style.removeProperty(name)
+    for (const name of ['--shell-surface', '--shell-layer', '--shell-layer-2', '--shell-text', '--shell-text-secondary', '--shell-text-tertiary', '--shell-border', '--shell-hover', '--shell-accent', '--shell-overlay', '--shell-text-shadow']) root.style.removeProperty(name)
     return
   }
   const custom = { ...customThemeDefaults, ...(appearanceState.customTheme || {}) }
@@ -229,7 +244,7 @@ function applyShellTheme() {
   const glassOpacity = 1 - custom.glassTransparency / 100
   const vars = theme.id === 'custom'
     ? {
-        '--dsw-alias-bg-base': shellColorWithOpacity(custom.surface, Math.max(.22, glassOpacity)),
+        '--dsw-alias-bg-base': shellColorWithOpacity(custom.surface, Math.max(.08, glassOpacity)),
         '--dsw-alias-bg-layer-1': shellColorWithOpacity(custom.surface, Math.min(1, glassOpacity + .08)),
         '--dsw-alias-bg-layer-2': shellColorWithOpacity(custom.surface, Math.min(1, glassOpacity + .16)),
         '--dsw-alias-label-primary': custom.text,
@@ -250,6 +265,7 @@ function applyShellTheme() {
   root.style.setProperty('--shell-hover', vars['--dsw-alias-interactive-bg-hover'] || 'rgba(255,255,255,.08)')
   root.style.setProperty('--shell-accent', vars['--dsw-alias-brand-primary'] || '#8ba5ff')
   root.style.setProperty('--shell-overlay', mode === 'light' ? 'rgba(15,23,42,.32)' : 'rgba(2,6,16,.58)')
+  root.style.setProperty('--shell-text-shadow', theme.id === 'custom' ? shellReadableTextShadow(custom.text, custom.readabilityStrength) : 'none')
 }
 
 function renderSkinPicker() {
@@ -293,7 +309,11 @@ function renderSkinPicker() {
     output.textContent = `${custom[name]}${field.suffix}`
   }
   skinClearBackgroundButton.disabled = !appearanceState.customBackgroundDataUrl
-  skinBackgroundState.textContent = appearanceState.customBackgroundDataUrl ? '本地壁纸已启用' : '当前使用渐变背景'
+  const backgroundFile = appearanceState.customTheme?.backgroundFile || ''
+  const animated = /\.(?:gif|apng)$/i.test(backgroundFile)
+  skinBackgroundState.textContent = appearanceState.customBackgroundDataUrl
+    ? animated ? '动态壁纸已启用' : '本地壁纸已启用（兼容动态 WebP）'
+    : '当前使用渐变背景'
 }
 
 const petStatusLabels = {

@@ -45,7 +45,7 @@ for (const forbidden of ['asset-upload-url', '--upload-file', 'PLUGIN_TOKEN']) {
   if (cnbPipeline.includes(forbidden)) throw new Error(`CNB attachments must use the official plugin instead of custom local upload plumbing: ${forbidden}`)
 }
 const cnbPublisher = await readFile(path.join(root, 'scripts/publish-cnb-cloud-mirror.ps1'), 'utf8')
-for (const contract of ['cnb-cloud-release-', 'get-build-status', 'CNB metadata pushed', 'Method Head', 'SHA256SUMS.txt', "credential.helper='"]) {
+for (const contract of ['cnb-cloud-release-', 'get-build-status', 'CNB metadata pushed', 'Method Head', 'SHA256SUMS.txt', 'mac-arm64.dmg', 'mac-x64.dmg', 'GitHub source verification failed', "credential.helper='"]) {
   if (!cnbPublisher.includes(contract)) throw new Error(`CNB cloud publisher contract missing: ${contract}`)
 }
 for (const forbidden of ['-InFile', '--upload-file', 'asset-upload-url']) {

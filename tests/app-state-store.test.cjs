@@ -23,16 +23,16 @@ test('AppStateStore persists only validated appearance fields', () => {
     themeId: 'tokyo-night',
     customTheme: {
       mode: 'light', accent: '#AABBCC', surface: '#112233', text: '#F0F0F0',
-      wallpaperBrightness: 118, wallpaperBlur: 9, glassTransparency: 46, borderStrength: 71,
-      backgroundFile: 'custom-background.webp'
+      wallpaperBrightness: 118, wallpaperBlur: 9, glassTransparency: 86, borderStrength: 71,
+      readabilityStrength: 88, backgroundFile: 'custom-background.gif'
     }
   })
   const restored = new AppStateStore(file).get().appearance
   assert.equal(restored.themeId, 'tokyo-night')
   assert.deepEqual(restored.customTheme, {
     mode: 'light', accent: '#aabbcc', surface: '#112233', text: '#f0f0f0',
-    wallpaperBrightness: 118, wallpaperBlur: 9, glassTransparency: 46, borderStrength: 71,
-    backgroundFile: 'custom-background.webp'
+    wallpaperBrightness: 118, wallpaperBlur: 9, glassTransparency: 86, borderStrength: 71,
+    readabilityStrength: 88, backgroundFile: 'custom-background.gif'
   })
 })
 
@@ -93,7 +93,8 @@ test('AppStateStore rejects unknown themes and unsafe custom values', () => {
     themeId: '../../escape',
     customTheme: {
       accent: 'url(file:///secret)', surface: '#123', text: 'red', backgroundFile: '../../secret.txt',
-      wallpaperBrightness: 999, wallpaperBlur: -8, glassTransparency: 'oops', borderStrength: 140
+      wallpaperBrightness: 999, wallpaperBlur: -8, glassTransparency: 999, borderStrength: 140,
+      readabilityStrength: -8
     }
   } })
   assert.equal(state.appearance.themeId, 'porcelain-mist')
@@ -101,8 +102,9 @@ test('AppStateStore rejects unknown themes and unsafe custom values', () => {
   assert.equal(state.appearance.customTheme.backgroundFile, null)
   assert.equal(state.appearance.customTheme.wallpaperBrightness, 140)
   assert.equal(state.appearance.customTheme.wallpaperBlur, 0)
-  assert.equal(state.appearance.customTheme.glassTransparency, 32)
+  assert.equal(state.appearance.customTheme.glassTransparency, 92)
   assert.equal(state.appearance.customTheme.borderStrength, 100)
+  assert.equal(state.appearance.customTheme.readabilityStrength, 0)
 })
 
 test('normalizeState discards unknown mutable fields', () => {
