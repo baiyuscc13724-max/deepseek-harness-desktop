@@ -23,7 +23,7 @@ test('app update checker accepts GitHub release payloads', async () => {
     { name: 'Harness-Desktop-0.9.0-portable-x64.exe', browser_download_url: 'https://example.test/portable.exe', size: 120 },
     { name: 'SHA256SUMS.txt', browser_download_url: 'https://example.test/SHA256SUMS.txt', size: 200 }
   ]
-  const result = await checkAppUpdate({ currentVersion: '0.8.0', feedUrl: 'https://example.test/latest', fetchJsonImpl: async () => ({ tag_name: 'v0.9.0', html_url: 'https://example.test/release', body: 'notes', assets }) })
+  const result = await checkAppUpdate({ currentVersion: '0.8.0', platform: 'win32', arch: 'x64', feedUrl: 'https://example.test/latest', fetchJsonImpl: async () => ({ tag_name: 'v0.9.0', html_url: 'https://example.test/release', body: 'notes', assets }) })
   assert.equal(result.configured, true)
   assert.equal(result.updateAvailable, true)
   assert.equal(result.latestVersion, '0.9.0')
@@ -54,7 +54,7 @@ test('app update checker selects native macOS installers by architecture', async
 test('app update checker falls back to the next manifest and prefers asset mirrors', async () => {
   const calls = []
   const result = await checkAppUpdate({
-    currentVersion: '1.0.18',
+    currentVersion: '1.0.18', platform: 'win32', arch: 'x64',
     feedUrls: ['https://cn.example.test/release.json', 'https://global.example.test/release.json'],
     fetchJsonImpl: async url => {
       calls.push(url)

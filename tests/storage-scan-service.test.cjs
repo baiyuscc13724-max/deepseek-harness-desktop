@@ -12,23 +12,24 @@ const {
 const { addSymlinkEscape, buildHarnessData, destroyHarnessData } = require('./harness-data-fixture.cjs')
 
 test('resolveContained allows inside and rejects escapes', () => {
-  const root = 'C:\\HarnessData'
-  assert.equal(resolveContained('C:\\HarnessData\\runtime', root), 'C:\\HarnessData\\runtime')
-  assert.equal(resolveContained('C:\\HarnessData', root), root)
+  const root = path.resolve('HarnessData-fixture')
+  assert.equal(resolveContained(path.join(root, 'runtime'), root), path.join(root, 'runtime'))
+  assert.equal(resolveContained(root, root), root)
   // 穿越根目录。
-  assert.equal(resolveContained('C:\\HarnessData\\..\\outside', root), null)
+  assert.equal(resolveContained(path.resolve(root, '..', 'outside'), root), null)
   // 绝对路径逃逸。
-  assert.equal(resolveContained('C:\\Windows\\system32', root), null)
+  assert.equal(resolveContained(path.resolve('other-root', 'system32'), root), null)
   // 相对路径指向根之外。
-  assert.equal(resolveContained('..\\x', root), null)
+  assert.equal(resolveContained(path.join('..', 'x'), root), null)
 })
 
 test('runtimePaths build the expected HarnessData layout', () => {
-  const paths = runtimePaths('C:\\HarnessData')
-  assert.equal(paths.runtime, 'C:\\HarnessData\\runtime')
-  assert.equal(paths.dshHome, 'C:\\HarnessData\\dsh-home')
-  assert.equal(paths.temp, 'C:\\HarnessData\\temp')
-  assert.equal(paths.workspace, 'C:\\HarnessData\\workspace')
+  const root = path.resolve('HarnessData-fixture')
+  const paths = runtimePaths(root)
+  assert.equal(paths.runtime, path.join(root, 'runtime'))
+  assert.equal(paths.dshHome, path.join(root, 'dsh-home'))
+  assert.equal(paths.temp, path.join(root, 'temp'))
+  assert.equal(paths.workspace, path.join(root, 'workspace'))
 })
 
 test('protected basenames include user data subtrees', () => {

@@ -4,7 +4,7 @@ const test = require('node:test')
 
 const { desktopRuntimeEnvironment, hasUserDataOverride, resolveDesktopDshHome, resolveDesktopRuntimePaths } = require('../electron/bridge/dsh-home.cjs')
 
-test('packaged Windows launches keep official Harness data beside the installed executable', () => {
+test('packaged Windows launches keep official Harness data beside the installed executable', { skip: process.platform !== 'win32' }, () => {
   const result = resolveDesktopRuntimePaths({
     env: {},
     argv: ['Harness Desktop.exe'],
@@ -22,7 +22,7 @@ test('packaged Windows launches keep official Harness data beside the installed 
   })
 })
 
-test('portable builds use the original executable directory instead of the extraction directory', () => {
+test('portable builds use the original executable directory instead of the extraction directory', { skip: process.platform !== 'win32' }, () => {
   const result = resolveDesktopDshHome({
     env: { PORTABLE_EXECUTABLE_DIR: 'E:\\Portable Apps\\Harness' },
     argv: ['Harness Desktop.exe'],
@@ -50,7 +50,7 @@ test('packaged macOS builds keep writable Harness data in Application Support', 
   assert.equal(paths.dshHome, path.join(userData, 'HarnessData', 'dsh-home'))
 })
 
-test('custom Electron profiles isolate their Harness sessions by default', () => {
+test('custom Electron profiles isolate their Harness sessions by default', { skip: process.platform !== 'win32' }, () => {
   const userData = 'D:\\Harness\\.runtime-pet-test'
   const result = resolveDesktopDshHome({
     env: {},
@@ -70,7 +70,7 @@ test('custom Electron profiles isolate their Harness sessions by default', () =>
   }), path.resolve(userData, 'HarnessData', 'dsh-home'))
 })
 
-test('ambient DSH_HOME cannot redirect a normal packaged desktop launch back to C', () => {
+test('ambient DSH_HOME cannot redirect a normal packaged desktop launch back to C', { skip: process.platform !== 'win32' }, () => {
   const result = resolveDesktopDshHome({
     env: { DSH_HOME: 'C:\\Users\\Example\\.dsh' },
     argv: ['Harness Desktop.exe'],
@@ -83,7 +83,7 @@ test('ambient DSH_HOME cannot redirect a normal packaged desktop launch back to 
   assert.equal(result, path.resolve('D:\\Apps\\Harness Desktop', 'HarnessData', 'dsh-home'))
 })
 
-test('desktop runtime environment forces Harness and sandbox temporary data onto the install drive', () => {
+test('desktop runtime environment forces Harness and sandbox temporary data onto the install drive', { skip: process.platform !== 'win32' }, () => {
   const runtimePaths = resolveDesktopRuntimePaths({
     env: {},
     argv: ['Harness Desktop.exe'],
@@ -107,7 +107,7 @@ test('desktop runtime environment forces Harness and sandbox temporary data onto
   assert.equal(result.PRESERVED_VALUE, 'yes')
 })
 
-test('Store builds retain their writable application data boundary', () => {
+test('Store builds retain their writable application data boundary', { skip: process.platform !== 'win32' }, () => {
   const result = resolveDesktopRuntimePaths({
     env: {},
     argv: ['Harness Desktop.exe'],

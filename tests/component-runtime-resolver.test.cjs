@@ -45,14 +45,16 @@ test('runtime resolver falls back to bundled layout without a component pointer'
 
 test('module path installation prefers component runtime and strips duplicates', () => {
   const previous = process.env.NODE_PATH
+  const runtimeNodeModules = path.resolve('runtime-component', 'node_modules')
+  const bundledRoot = path.resolve('bundled-shell')
   let initialized = false
   try {
-    process.env.NODE_PATH = ['C:\\Existing', 'C:\\Runtime\\node_modules'].join(path.delimiter)
-    const value = installComponentModulePaths({ runtimeNodeModules: 'C:\\Runtime\\node_modules' }, 'C:\\Bundled', {
+    process.env.NODE_PATH = [path.resolve('existing-modules'), runtimeNodeModules].join(path.delimiter)
+    const value = installComponentModulePaths({ runtimeNodeModules }, bundledRoot, {
       initPaths: () => { initialized = true }
     })
     const entries = value.split(path.delimiter)
-    assert.equal(entries[0], 'C:\\Runtime\\node_modules')
+    assert.equal(entries[0], runtimeNodeModules)
     assert.equal(new Set(entries).size, entries.length)
     assert.equal(initialized, true)
   } finally {

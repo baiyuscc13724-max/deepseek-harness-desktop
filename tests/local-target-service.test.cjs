@@ -17,7 +17,8 @@ test('normalizes Windows, file URL, Chinese and source-location targets', () => 
   assert.deepEqual(normalizeLocalTarget('harness-desktop://open-local?path=D%3A%255C%25E9%25A1%25B9%25E7%259B%25AE%255CREADME.md%2523L12'), {
     path: 'D:\\项目\\README.md', line: 12, column: null
   })
-  assert.equal(normalizeLocalTarget('file:///D:/Project/My%20File.txt').path, 'D:\\Project\\My File.txt')
+  const fileUrlPath = normalizeLocalTarget('file:///D:/Project/My%20File.txt').path
+  assert.equal(fileUrlPath, process.platform === 'win32' ? 'D:\\Project\\My File.txt' : '/D:/Project/My File.txt')
   assert.throws(() => normalizeLocalTarget('../relative/project'), /绝对/)
   assert.throws(() => normalizeLocalTarget('https://example.com'), /绝对/)
 })
