@@ -130,12 +130,7 @@ jobs:
         with:
           files: release-files/*
           name: Harness Desktop ${{ github.ref_name }}
-          body: |
-            Harness Desktop v0.9.0-rc.2 is the current public release candidate.
-
-            Community-maintained desktop client powered by DeepSeek Harness.
-
-            This is not an official DeepSeek application.
-          generate_release_notes: true
+          body_path: release-notes.md
+          generate_release_notes: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
