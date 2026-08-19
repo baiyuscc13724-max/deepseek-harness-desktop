@@ -1,66 +1,74 @@
 [
   {
-    "tag_name": "v1.0.24",
-    "name": "Harness Desktop 1.0.24",
-    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.24",
+    "tag_name": "v1.0.25",
+    "name": "Harness Desktop 1.0.25",
+    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.25",
     "prerelease": false,
     "draft": false,
-    "body": "- 新增签名组件增量更新、健康确认、失败回滚和完整安装包兜底。\n- 新增受限浏览器工具、本地记忆、Computer Use、存储管理与原生目录选择。\n- 完善 macOS Intel/Apple Silicon，并加入原生 iPhone/iPad 客户端和加密 WSS/443 后备线路。\n- 女仆鲸资源改为无损 WebP 图集，并增加发布制品体积和内容门禁。",
+    "body": "- 新增 GIF、APNG 与动态 WebP 壁纸、92% 面板通透上限和文字保护。\n- 恢复清晰文字选区，并支持点击空白、Esc 与右键取消选择。\n- 修复 macOS Intel/Apple Silicon 原生终端模块打包，两种架构均通过打包后自检。\n- Android 1.0.25 使用长期 release 证书签名；iPhone/iPad 在未加入 Apple Developer Program 时使用 Safari 实时工作台。",
     "assets": [
       {
-        "name": "Harness-Desktop-1.0.24-win-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-win-x64.exe",
-        "size": 141974039,
+        "name": "Harness-Desktop-1.0.25-win-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-win-x64.exe",
+        "size": 142495972,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-win-x64.exe"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.25/Harness-Desktop-1.0.25-win-x64.exe"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.24-portable-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-portable-x64.exe",
-        "size": 135643801,
+        "name": "Harness-Desktop-1.0.25-portable-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-portable-x64.exe",
+        "size": 136166226,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-portable-x64.exe"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.25/Harness-Desktop-1.0.25-portable-x64.exe"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.24-mac-arm64.dmg",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.dmg",
-        "size": 175595040,
+        "name": "Harness-Desktop-1.0.25-mac-arm64.dmg",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-arm64.dmg",
+        "size": 175847258,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.dmg"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-arm64.dmg"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.24-mac-arm64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.zip",
-        "size": 170635485,
+        "name": "Harness-Desktop-1.0.25-mac-arm64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-arm64.zip",
+        "size": 170902175,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-arm64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-arm64.zip"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.24-mac-x64.dmg",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-x64.dmg",
-        "size": 178222854,
+        "name": "Harness-Desktop-1.0.25-mac-x64.dmg",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-x64.dmg",
+        "size": 178498546,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-x64.dmg"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-x64.dmg"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.24-mac-x64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-x64.zip",
-        "size": 173304116,
+        "name": "Harness-Desktop-1.0.25-mac-x64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-x64.zip",
+        "size": 173570803,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/Harness-Desktop-1.0.24-mac-x64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.25/Harness-Desktop-1.0.25-mac-x64.zip"
+        ]
+      },
+      {
+        "name": "Harness-Mobile-1.0.25-android-universal.apk",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/Harness-Mobile-1.0.25-android-universal.apk",
+        "size": 52097425,
+        "mirror_urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.25/Harness-Mobile-1.0.25-android-universal.apk"
         ]
       },
       {
         "name": "SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.24/SHA256SUMS.txt",
-        "size": 831,
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.25/SHA256SUMS.txt",
+        "size": 941,
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.24/SHA256SUMS.txt"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.25/SHA256SUMS.txt"
         ]
       }
     ]
