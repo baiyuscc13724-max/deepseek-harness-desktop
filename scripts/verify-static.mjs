@@ -420,6 +420,9 @@ for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.s
 for (const contract of ['patchInstalledModelImageCompatibility', 'desktopMessagesForInputModalities', 'preparedCall?.inputModalities', 'does not accept the image waiting in the prompt', 'refusing an unsafe model-image compatibility patch']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Historical-image model-switch patch is missing: ${contract}`)
 }
+for (const contract of ['patchInstalledSubagent', 'subagentLifecycleCounts', 'filteredEntries.map', '待命（可恢复）', '已结束（仅记录）', 'dataPluginCss = "@harness-desktop/subagent-lifecycle"']) {
+  if (!runtimePatch.includes(contract)) throw new Error(`Subagent lifecycle/history patch is missing: ${contract}`)
+}
 for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "'web', '--port', '0'"]) {
   if (!main.includes(contract)) throw new Error(`Dedicated desktop runtime policy is missing: ${contract}`)
 }

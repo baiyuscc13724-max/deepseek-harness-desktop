@@ -1,4 +1,4 @@
-# Harness Desktop v1.0.0 验收
+# Harness Desktop v1.0.26 验收
 
 ## 自动化
 
@@ -10,7 +10,7 @@ npm run verify:packaged
 npm run verify:artifact
 ```
 
-自动化验证单一官方工作台、最小 IPC、WebView 安全边界、更新服务、官方图标、废弃模块清除、打包后 Runtime/Renderer/userData 自检、Windows 安装落盘契约和产物 SHA-256。
+自动化验证单一官方工作台、最小 IPC、WebView 安全边界、更新签名、记忆/缓存/删除控制、子代理当前与历史分类、官方图标、废弃模块清除、打包后 Runtime/Renderer/userData 自检、Windows 安装落盘契约和产物 SHA-256。
 
 ## Windows 安装版
 
@@ -24,7 +24,9 @@ npm run verify:artifact
 8. 在“设置 → 外观皮肤”双击不同卡片，确认主题立即显示且设置弹窗保持居中；
 9. 重启桌面版并升级 Harness 核心后，确认已选主题和自定义配置仍保留；
 10. 完成一个真实模型请求和一次需要 Harness 权限的操作；
-11. 退出后确认没有残留由桌面版创建的 Runtime 进程。
+11. 启动一个可继续子代理并完成一个一次性子代理，确认目录“当前 / 历史 / 全部”数量正确，历史记录可打开且重启后仍保留；
+12. 验证托盘“数据与隐私”可以关闭、搜索和删除本地记忆，自动缓存不删除七天内或刚恢复活动的文件；
+13. 退出后确认没有残留由桌面版创建的 Runtime 进程。
 
 ## Windows 便携版
 

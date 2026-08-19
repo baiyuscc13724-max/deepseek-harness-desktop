@@ -61,11 +61,20 @@ Windows 直装版会由桌面壳把官方 Runtime 的 `DSH_HOME`、进程工作�
 
 桌面壳会在官方 Runtime 的子进程环境中强制覆盖 `DSH_HOME`、`TEMP`、`TMP` 和 `TMPDIR`。因此 Windows 的非“全部权限”模式即使经过官方 ACL 受限启动器，其私有临时目录也会继续留在安装盘，不会因父进程环境重新落回 C 盘。便携版使用便携 EXE 实际所在目录，而不是 Electron 临时解包目录。开发启动、显式 `--user-data-dir` 的隔离启动及 Microsoft Store 沙箱仍使用对应的可写 `userData/HarnessData`。桌面壳不会静默回退到用户主目录，也不会自动搬移或删除旧的 `~/.dsh`；旧数据需要由用户确认后另行迁移或清理。
 
+## 子代理生命周期显示
+
+桌面安装时对固定版本官方子代理目录应用幂等、锚点校验的表现层补丁，不改变会话存储或删除语义：
+
+- “运行中”来自实际 running 状态；“可继续”只表示 continuable 会话待命，不会自行发起模型请求；
+- 一次性任务结束后归入“历史”，完整 transcript 原样保留，只读展示；
+- 目录提供“当前 / 历史 / 全部”筛选，并递归统计嵌套子代理；
+- 补丁不包含 `removeChild`、`deleteSubagent` 或 `archiveSubagent`，官方 bundle 锚点变化时拒绝继续打包。
+
 ## 服务商额度协议
 
 额度由桌面主进程读取，Renderer 只接收不含凭据的版本化快照。通用界面只识别 `balance`、`usage-window`、`spending-budget` 和 `token-counter` 四种计量类型，并统一处理实时、缓存、需授权、不支持和刷新失败状态。
 
-内置适配器位于 `electron/bridge/provider-meter-adapters`，启动时自动发现；新增服务商只需增加一个实现 `createAdapter()` 的适配器文件，不需要修改额度注册表或界面。DeepSeek 适配器读取官方余额，Codex 适配器通过本机官方 Codex 客户端读取账户用量周期。OpenCode Go 仅凭模型 API key 无法查询套餐用量时会明确显示需账户授权，并指向官方账户页，不用固定上限伪装实时结果。
+内置适配器位于 `electron/bridge/provider-meter-adapters`，启动时自动发现；新增服务商只需增加一个实现 `createAdapter()` 的适配器文件，不需要修改额度注册表或界面。DeepSeek 适配器读取官方余额，Codex 适配器优先使用 Harness 已登录 OAuth 直接查询官方 WHAM，用本机官方 Codex 客户端作为无 Harness 凭据时的后备。OpenCode Go 仅凭模型 API key 无法查询套餐用量时会明确显示需账户授权，并指向官方账户页，不用固定上限伪装实时结果。
 
 ## 更新边界
 

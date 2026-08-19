@@ -177,6 +177,44 @@ test('text-only model switches preserve the session while degrading only histori
   }
 })
 
+test('subagent catalog separates current work from retained history without deleting transcripts', async () => {
+  const { patchSubagentSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js'), 'utf8')
+  const first = patchSubagentSource(fixture)
+
+  assert.match(first.source, /function subagentLifecycleCounts\(/)
+  assert.match(first.source, /filteredEntries\.map/)
+  assert.match(first.source, /待命（可恢复）/)
+  assert.match(first.source, /已结束（仅记录）/)
+  assert.match(first.source, /filter\.active/)
+  assert.match(first.source, /filter\.history/)
+  assert.match(first.source, /width:560px/)
+  assert.match(first.source, /一次性任务结束后仅保留记录/)
+  assert.match(first.source, /openChild\(\{/)
+  assert.match(first.source, /childSessionId: entry\.id/)
+  assert.doesNotMatch(first.source, /removeChild|deleteSubagent|archiveSubagent/)
+  assert.doesNotThrow(() => new Function(first.source))
+
+  const helperStart = first.source.indexOf('function subagentLifecycleBucket(entry) {')
+  const helperEnd = first.source.indexOf('/** Render one catalog level', helperStart)
+  const helpers = Function(`${first.source.slice(helperStart, helperEnd)}; return { subagentLifecycleBucket, subagentLifecycleCounts, lifecycleFilterMatches }`)()
+  assert.equal(helpers.subagentLifecycleBucket({ kind: 'child', activity: 'running', mode: 'continuable' }), 'running')
+  assert.equal(helpers.subagentLifecycleBucket({ kind: 'child', activity: 'inactive', mode: 'continuable' }), 'resumable')
+  assert.equal(helpers.subagentLifecycleBucket({ kind: 'child', activity: 'inactive', mode: 'one-shot' }), 'history')
+
+  const summaries = {
+    running: { id: 'running', origin: 'subagent', parentId: 'root', running: true, projectionValues: { subagent: { mode: 'continuable' } } },
+    ready: { id: 'ready', origin: 'subagent', parentId: 'root', running: false, projectionValues: { subagent: { mode: 'continuable' } } },
+    history: { id: 'history', origin: 'subagent', parentId: 'root', running: false, projectionValues: { subagent: { mode: 'one-shot' } } },
+    nested: { id: 'nested', origin: 'subagent', parentId: 'history', running: false, projectionValues: { subagent: { mode: 'continuable' } } }
+  }
+  assert.deepEqual(helpers.subagentLifecycleCounts(summaries, 'root', 4), { running: 1, resumable: 2, history: 1 })
+  assert.equal(helpers.lifecycleFilterMatches('resumable', 'active'), true)
+  assert.equal(helpers.lifecycleFilterMatches('history', 'active'), false)
+  assert.equal(helpers.lifecycleFilterMatches('history', 'history'), true)
+  assert.equal(patchSubagentSource(first.source).changed, false)
+})
+
 test('patched Windows directory picker returns the selected existing project path', async () => {
   const pickerFile = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-host-directory-picker-native', 'lib', 'index.js')
   const { pickNativeDirectory } = await import(`${pathToFileURL(pickerFile).href}?desktop-picker-test=${Date.now()}`)

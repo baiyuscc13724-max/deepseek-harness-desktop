@@ -8,6 +8,7 @@ const directoryPickerRuntime = path.join(root, 'node_modules', '@deepseek-ai', '
 const markdownRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-primitives', 'lib', 'index.js')
 const conversationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
 const tokenMeterRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-token-meter', 'lib', 'index.js')
+const subagentRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js')
 const llmRuntimes = [
   path.join(root, 'node_modules', '@deepseek-ai', 'dsh-llm', 'lib', 'index.js'),
   path.join(root, 'node_modules', '@deepseek-ai', 'dsh-llm', 'lib', 'types', 'index.js')
@@ -336,6 +337,173 @@ const CONVERSATION_CACHE_EN_PATCHED = `			"stats.cacheHit": "Cumulative cache re
 			"stats.cacheCumulative": "Cumulative cache read {percent}% (includes cold start)",
 			"stats.cacheUnreported": "Cache: not reported by provider",`
 
+const SUBAGENT_LIFECYCLE_HELPERS_ANCHOR = '\t\t/** Render one catalog level and recurse only through explicitly expanded rows. */'
+const SUBAGENT_LIFECYCLE_HELPERS_MARKER = 'function subagentLifecycleBucket(entry) {'
+const SUBAGENT_LIFECYCLE_HELPERS_PATCH = String(`\t\tfunction subagentLifecycleBucket(entry) {
+\t\t\tif (entry.kind !== "child") return "history";
+\t\t\tif (entry.activity === "running") return "running";
+\t\t\treturn entry.mode === "continuable" ? "resumable" : "history";
+\t\t}
+\t\tfunction summaryLifecycleBucket(summary) {
+\t\t\tif (summary.running) return "running";
+\t\t\treturn summary.projectionValues?.subagent?.mode === "continuable" ? "resumable" : "history";
+\t\t}
+\t\tfunction belongsToSubagentTree(summary, rootSessionId, summaries) {
+\t\t\tconst seen = /* @__PURE__ */ new Set();
+\t\t\tlet current = summary;
+\t\t\twhile (current?.origin === "subagent" && current.parentId !== void 0 && !seen.has(current.id)) {
+\t\t\t\tif (current.parentId === rootSessionId) return true;
+\t\t\t\tseen.add(current.id);
+\t\t\t\tcurrent = summaries[current.parentId];
+\t\t\t}
+\t\t\treturn false;
+\t\t}
+\t\tfunction subagentLifecycleCounts(summaries, rootSessionId, descendantCount) {
+\t\t\tlet running = 0;
+\t\t\tlet resumable = 0;
+\t\t\tfor (const summary of Object.values(summaries)) {
+\t\t\t\tif (summary.origin !== "subagent" || !belongsToSubagentTree(summary, rootSessionId, summaries)) continue;
+\t\t\t\tconst bucket = summaryLifecycleBucket(summary);
+\t\t\t\tif (bucket === "running") running += 1;
+\t\t\t\telse if (bucket === "resumable") resumable += 1;
+\t\t\t}
+\t\t\treturn {
+\t\t\t\trunning,
+\t\t\t\tresumable,
+\t\t\t\thistory: Math.max(0, descendantCount - running - resumable)
+\t\t\t};
+\t\t}
+\t\tfunction lifecycleFilterMatches(bucket, filter) {
+\t\t\tif (filter === "all") return true;
+\t\t\tif (filter === "active") return bucket === "running" || bucket === "resumable";
+\t\t\treturn bucket === "history";
+\t\t}
+\t\tfunction subagentBranchMatches(entry, filter, summaries) {
+\t\t\tif (entry.kind !== "child") return filter !== "active";
+\t\t\tif (lifecycleFilterMatches(subagentLifecycleBucket(entry), filter)) return true;
+\t\t\tfor (const summary of Object.values(summaries)) {
+\t\t\t\tif (summary.origin === "subagent" && belongsToSubagentTree(summary, entry.id, summaries) && lifecycleFilterMatches(summaryLifecycleBucket(summary), filter)) return true;
+\t\t\t}
+\t\t\treturn false;
+\t\t}
+\t`)
+
+const SUBAGENT_CATALOG_ROWS_ORIGINAL = String(`\t\tfunction CatalogRows({ parentSessionId, catalog, catalogs, summaries, expanded, level, now, openChild, refresh, toggleBranch, closeCatalog, t }) {
+\t\t\tconst emptyLoading = catalog.state === "loading" && catalog.entries.length === 0;
+\t\t\tconst reserveDisclosure = catalog.entries.some((entry) => entry.kind === "child" && entry.hasChildren);`)
+const SUBAGENT_CATALOG_ROWS_PATCHED = String(`\t\tfunction CatalogRows({ parentSessionId, catalog, catalogs, summaries, expanded, level, now, openChild, refresh, toggleBranch, closeCatalog, filter, t }) {
+\t\t\tconst emptyLoading = catalog.state === "loading" && catalog.entries.length === 0;
+\t\t\tconst filteredEntries = catalog.entries.filter((entry) => subagentBranchMatches(entry, filter, summaries));
+\t\t\tconst reserveDisclosure = filteredEntries.some((entry) => entry.kind === "child" && entry.hasChildren);`)
+const SUBAGENT_CATALOG_MAP_ORIGINAL = '\t\t\t\tcatalog.entries.map((entry) => {'
+const SUBAGENT_CATALOG_MAP_PATCHED = '\t\t\t\tfilteredEntries.map((entry) => {'
+const SUBAGENT_ACTIVITY_ORIGINAL = 'const activity = entry.activity === "running" ? t("activity.running") : t("activity.inactive");'
+const SUBAGENT_ACTIVITY_PATCHED = 'const activity = entry.activity === "running" ? t("activity.running") : entry.mode === "continuable" ? t("activity.resumable") : t("activity.history");'
+const SUBAGENT_RECURSIVE_PROPS_ORIGINAL = '\t\t\t\t\t\t\t\tcloseCatalog,\n\t\t\t\t\t\t\t\tt'
+const SUBAGENT_RECURSIVE_PROPS_PATCHED = '\t\t\t\t\t\t\t\tcloseCatalog,\n\t\t\t\t\t\t\t\tfilter,\n\t\t\t\t\t\t\t\tt'
+const SUBAGENT_FILTER_STATE_ORIGINAL = '\t\t\tconst [expanded, setExpanded] = (0, react.useState)(() => /* @__PURE__ */ new Set());'
+const SUBAGENT_FILTER_STATE_PATCHED = `${SUBAGENT_FILTER_STATE_ORIGINAL}\n\t\t\tconst [lifecycleFilter, setLifecycleFilter] = (0, react.useState)("active");`
+const SUBAGENT_COUNTS_ORIGINAL = String(`\t\t\tconst descendantCount = Math.max(healthy.length, descendants.count);
+\t\t\tconst totalCountKey = descendantCount === 1 ? "count.total.one" : "count.total.other";
+\t\t\tconst runningCountKey = descendants.runningCount === 1 ? "count.running.one" : "count.running.other";`)
+const SUBAGENT_COUNTS_PATCHED = String(`\t\t\tconst descendantCount = Math.max(healthy.length, descendants.count);
+\t\t\tconst totalCountKey = descendantCount === 1 ? "count.total.one" : "count.total.other";
+\t\t\tconst lifecycle = (0, react.useMemo)(() => subagentLifecycleCounts(summaries, sessionId, descendantCount), [summaries, sessionId, descendantCount]);
+\t\t\tconst currentCount = lifecycle.running + lifecycle.resumable;
+\t\t\tconst effectiveLifecycleFilter = lifecycleFilter === "active" && currentCount === 0 ? "history" : lifecycleFilter;`)
+const SUBAGENT_TRIGGER_ARIA_ORIGINAL = `"aria-label": t(descendants.runningCount > 0 ? runningCountKey : totalCountKey, { count: descendants.runningCount > 0 ? descendants.runningCount : descendantCount }),`
+const SUBAGENT_TRIGGER_ARIA_PATCHED = `"aria-label": t(currentCount > 0 ? "count.lifecycle" : "count.historyOnly", { running: lifecycle.running, resumable: lifecycle.resumable, history: lifecycle.history }),`
+const SUBAGENT_TRIGGER_POPUP_ORIGINAL = '"aria-haspopup": "tree",'
+const SUBAGENT_TRIGGER_POPUP_PATCHED = '"aria-haspopup": "dialog",'
+const SUBAGENT_TRIGGER_COUNT_ORIGINAL = 'children: t(totalCountKey, { count: descendantCount })'
+const SUBAGENT_TRIGGER_COUNT_PATCHED = 'children: t(currentCount > 0 ? "count.lifecycle" : "count.historyOnly", { running: lifecycle.running, resumable: lifecycle.resumable, history: lifecycle.history })'
+const SUBAGENT_MENU_ORIGINAL = String(`\t\t\t\t}), open && (0, react_jsx_runtime.jsx)("div", {
+\t\t\t\t\tclassName: SubagentCatalogAction_module_css_default.menu,
+\t\t\t\t\trole: "tree",
+\t\t\t\t\t"aria-label": t("tree.aria"),
+\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(CatalogRows, {`)
+const SUBAGENT_MENU_PATCHED = String(`\t\t\t\t}), open && (0, react_jsx_runtime.jsxs)("div", {
+\t\t\t\t\tclassName: SubagentCatalogAction_module_css_default.menu,
+\t\t\t\t\trole: "dialog",
+\t\t\t\t\t"aria-label": t("tree.aria"),
+\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)("div", {
+\t\t\t\t\t\tclassName: "hd-subagent-lifecycle",
+\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)("div", {
+\t\t\t\t\t\t\tclassName: "hd-subagent-lifecycle-status",
+\t\t\t\t\t\t\trole: "status",
+\t\t\t\t\t\t\tchildren: [
+\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)("span", { className: "hd-subagent-status-running", children: t("status.running", { count: lifecycle.running }) }),
+\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)("span", { children: t("status.resumable", { count: lifecycle.resumable }) }),
+\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)("span", { children: t("status.history", { count: lifecycle.history }) })
+\t\t\t\t\t\t\t]
+\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("div", {
+\t\t\t\t\t\t\tclassName: "hd-subagent-lifecycle-tabs",
+\t\t\t\t\t\t\trole: "tablist",
+\t\t\t\t\t\t\t"aria-label": t("filter.aria"),
+\t\t\t\t\t\t\tchildren: [["active", t("filter.active", { count: currentCount })], ["history", t("filter.history", { count: lifecycle.history })], ["all", t("filter.all", { count: descendantCount })]].map(([value, label]) => (0, react_jsx_runtime.jsx)("button", {
+\t\t\t\t\t\t\t\ttype: "button",
+\t\t\t\t\t\t\t\trole: "tab",
+\t\t\t\t\t\t\t\t"aria-selected": effectiveLifecycleFilter === value,
+\t\t\t\t\t\t\t\tdisabled: value === "active" ? currentCount === 0 : value === "history" ? lifecycle.history === 0 : descendantCount === 0,
+\t\t\t\t\t\t\t\tclassName: effectiveLifecycleFilter === value ? "hd-subagent-lifecycle-tab hd-subagent-lifecycle-tab-active" : "hd-subagent-lifecycle-tab",
+\t\t\t\t\t\t\t\tonClick: (event) => {
+\t\t\t\t\t\t\t\t\tevent.preventDefault();
+\t\t\t\t\t\t\t\t\tevent.stopPropagation();
+\t\t\t\t\t\t\t\t\tsetLifecycleFilter(value);
+\t\t\t\t\t\t\t\t},
+\t\t\t\t\t\t\t\tchildren: label
+\t\t\t\t\t\t\t}, value))
+\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("p", {
+\t\t\t\t\t\t\tclassName: "hd-subagent-lifecycle-note",
+\t\t\t\t\t\t\tchildren: t("lifecycle.note")
+\t\t\t\t\t\t})]
+\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("div", {
+\t\t\t\t\t\trole: "tree",
+\t\t\t\t\t\t"aria-label": t("tree.aria"),
+\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(CatalogRows, {`)
+const SUBAGENT_ROOT_FILTER_PROPS_ORIGINAL = '\t\t\t\t\t\tcloseCatalog: () => {\n\t\t\t\t\t\t\tchangeOpen(false);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tt\n\t\t\t\t\t})\n\t\t\t\t})]'
+const SUBAGENT_ROOT_FILTER_PROPS_PATCHED = '\t\t\t\t\t\tcloseCatalog: () => {\n\t\t\t\t\t\t\tchangeOpen(false);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tfilter: effectiveLifecycleFilter,\n\t\t\t\t\t\tt\n\t\t\t\t\t})\n\t\t\t\t\t})]\n\t\t\t\t})]'
+const SUBAGENT_STYLE_ANCHOR = '\t\tconst tagId$1 = "@deepseek-ai/dsh-client-ui-subagent/SubagentCatalogAction.module.css";'
+const SUBAGENT_STYLE_MARKER = 'dataPluginCss = "@harness-desktop/subagent-lifecycle"'
+const SUBAGENT_STYLE_PATCH = String(`\t\tconst lifecycleCss = ".h8S2Va_menu{width:560px!important;max-width:min(680px,100vw - 32px)!important}.hd-subagent-lifecycle{position:sticky;z-index:2;top:-4px;background:var(--dsw-specific-menu);border-bottom:1px solid var(--dsw-alias-border-l2);padding:10px 10px 9px}.hd-subagent-lifecycle-status{color:var(--dsw-alias-label-secondary);flex-wrap:wrap;gap:6px 12px;font-size:12px;line-height:18px;display:flex}.hd-subagent-status-running{color:var(--dsw-alias-state-success-primary,#22a06b)}.hd-subagent-lifecycle-tabs{background:var(--dsw-alias-bg-layer-2);border-radius:8px;gap:3px;margin-top:8px;padding:3px;display:flex}.hd-subagent-lifecycle-tab{color:var(--dsw-alias-label-tertiary);cursor:pointer;background:transparent;border:0;border-radius:6px;flex:1;padding:5px 8px;font-size:12px}.hd-subagent-lifecycle-tab:hover{color:var(--dsw-alias-label-primary)}.hd-subagent-lifecycle-tab:disabled{cursor:not-allowed;opacity:.45}.hd-subagent-lifecycle-tab-active{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover);font-weight:600}.hd-subagent-lifecycle-note{color:var(--dsw-alias-label-tertiary);margin:7px 2px 0;font-size:11px;line-height:16px}";
+\t\tconst dataPluginCss = "@harness-desktop/subagent-lifecycle";
+\t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(dataPluginCss) + "]") === null) {
+\t\t\tconst lifecycleTag = document.createElement("style");
+\t\t\tlifecycleTag.dataset.plugin = "harness-desktop";
+\t\t\tlifecycleTag.dataset.pluginCss = dataPluginCss;
+\t\t\tlifecycleTag.textContent = lifecycleCss;
+\t\t\tdocument.head.appendChild(lifecycleTag);
+\t\t}
+\t`)
+const SUBAGENT_ZH_ACTIVITY_ORIGINAL = '\t\t\t"activity.inactive": "当前未运行",'
+const SUBAGENT_ZH_ACTIVITY_PATCHED = String(`\t\t\t"activity.inactive": "当前未运行",
+\t\t\t"activity.resumable": "待命（可恢复）",
+\t\t\t"activity.history": "已结束（仅记录）",
+\t\t\t"status.running": "运行中 {count}",
+\t\t\t"status.resumable": "可继续 {count}",
+\t\t\t"status.history": "历史 {count}",
+\t\t\t"filter.aria": "筛选子代理会话",
+\t\t\t"filter.active": "当前 {count}",
+\t\t\t"filter.history": "历史 {count}",
+\t\t\t"filter.all": "全部 {count}",
+\t\t\t"lifecycle.note": "一次性任务结束后仅保留记录；可继续任务待命时不发起模型请求，可随时恢复。",
+\t\t\t"count.lifecycle": "运行 {running} · 可继续 {resumable}",
+\t\t\t"count.historyOnly": "历史 {history}",`)
+const SUBAGENT_EN_ACTIVITY_ORIGINAL = '\t\t\t"activity.inactive": "not running",'
+const SUBAGENT_EN_ACTIVITY_PATCHED = String(`\t\t\t"activity.inactive": "not running",
+\t\t\t"activity.resumable": "ready to resume",
+\t\t\t"activity.history": "ended (record only)",
+\t\t\t"status.running": "Running {count}",
+\t\t\t"status.resumable": "Resumable {count}",
+\t\t\t"status.history": "History {count}",
+\t\t\t"filter.aria": "Filter subagent sessions",
+\t\t\t"filter.active": "Current {count}",
+\t\t\t"filter.history": "History {count}",
+\t\t\t"filter.all": "All {count}",
+\t\t\t"lifecycle.note": "One-shot tasks keep only their record after ending; resumable tasks make no model request while waiting and can be resumed later.",
+\t\t\t"count.lifecycle": "Running {running} · Resumable {resumable}",
+\t\t\t"count.historyOnly": "History {history}",`)
+
 export function desktopTextOnlyContent(content) {
   let changed = false
   const next = content.map(block => {
@@ -532,6 +700,43 @@ export function patchTokenMeterSource(source) {
   return { source: output, changed }
 }
 
+export function patchSubagentSource(source) {
+  let output = source
+  let changed = false
+  const replacements = [
+    [SUBAGENT_CATALOG_ROWS_ORIGINAL, SUBAGENT_CATALOG_ROWS_PATCHED, 'catalog lifecycle filter'],
+    [SUBAGENT_CATALOG_MAP_ORIGINAL, SUBAGENT_CATALOG_MAP_PATCHED, 'filtered catalog rows'],
+    [SUBAGENT_ACTIVITY_ORIGINAL, SUBAGENT_ACTIVITY_PATCHED, 'lifecycle activity labels'],
+    [SUBAGENT_RECURSIVE_PROPS_ORIGINAL, SUBAGENT_RECURSIVE_PROPS_PATCHED, 'nested lifecycle filter'],
+    [SUBAGENT_FILTER_STATE_ORIGINAL, SUBAGENT_FILTER_STATE_PATCHED, 'lifecycle filter state'],
+    [SUBAGENT_COUNTS_ORIGINAL, SUBAGENT_COUNTS_PATCHED, 'lifecycle descendant counts'],
+    [SUBAGENT_TRIGGER_POPUP_ORIGINAL, SUBAGENT_TRIGGER_POPUP_PATCHED, 'lifecycle popup semantics'],
+    [SUBAGENT_TRIGGER_ARIA_ORIGINAL, SUBAGENT_TRIGGER_ARIA_PATCHED, 'lifecycle trigger label'],
+    [SUBAGENT_TRIGGER_COUNT_ORIGINAL, SUBAGENT_TRIGGER_COUNT_PATCHED, 'lifecycle trigger summary'],
+    [SUBAGENT_MENU_ORIGINAL, SUBAGENT_MENU_PATCHED, 'lifecycle menu header'],
+    [SUBAGENT_ROOT_FILTER_PROPS_ORIGINAL, SUBAGENT_ROOT_FILTER_PROPS_PATCHED, 'root lifecycle filter'],
+    [SUBAGENT_ZH_ACTIVITY_ORIGINAL, SUBAGENT_ZH_ACTIVITY_PATCHED, 'Chinese lifecycle labels'],
+    [SUBAGENT_EN_ACTIVITY_ORIGINAL, SUBAGENT_EN_ACTIVITY_PATCHED, 'English lifecycle labels']
+  ]
+  if (!output.includes(SUBAGENT_LIFECYCLE_HELPERS_MARKER)) {
+    if (!output.includes(SUBAGENT_LIFECYCLE_HELPERS_ANCHOR)) throw new Error('Pinned DSH subagent catalog helpers changed; refusing an unsafe lifecycle patch.')
+    output = output.replace(SUBAGENT_LIFECYCLE_HELPERS_ANCHOR, `${SUBAGENT_LIFECYCLE_HELPERS_PATCH}${SUBAGENT_LIFECYCLE_HELPERS_ANCHOR}`)
+    changed = true
+  }
+  if (!output.includes(SUBAGENT_STYLE_MARKER)) {
+    if (!output.includes(SUBAGENT_STYLE_ANCHOR)) throw new Error('Pinned DSH subagent catalog styles changed; refusing an unsafe lifecycle patch.')
+    output = output.replace(SUBAGENT_STYLE_ANCHOR, `${SUBAGENT_STYLE_PATCH}${SUBAGENT_STYLE_ANCHOR}`)
+    changed = true
+  }
+  for (const [original, patched, label] of replacements) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) throw new Error(`Pinned DSH ${label} changed; refusing an unsafe desktop lifecycle patch.`)
+    output = output.replace(original, patched)
+    changed = true
+  }
+  return { source: output, changed }
+}
+
 export function patchLlmPreparedCallSource(source) {
   let output = source
   let changed = false
@@ -626,6 +831,13 @@ export async function patchInstalledTokenMeter(file = tokenMeterRuntime) {
   return patched.changed
 }
 
+export async function patchInstalledSubagent(file = subagentRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchSubagentSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 export async function patchInstalledModelImageCompatibility() {
   const llmChanged = await patchInstalledFiles(llmRuntimes, patchLlmPreparedCallSource)
   const agentChanged = await patchInstalledFiles([agentLoopRuntime], patchAgentLoopImageCompatibilitySource)
@@ -639,11 +851,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const markdownChanged = await patchInstalledMarkdownRenderer()
   const conversationChanged = await patchInstalledConversation()
   const tokenMeterChanged = await patchInstalledTokenMeter()
+  const subagentChanged = await patchInstalledSubagent()
   const modelImageChanged = await patchInstalledModelImageCompatibility()
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
   process.stdout.write(markdownChanged ? 'Patched clickable desktop workspace links.\n' : 'Desktop workspace-link patch already applied.\n')
   process.stdout.write(conversationChanged ? 'Patched workspace-relative chat links.\n' : 'Workspace-relative chat-link patch already applied.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
+  process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
   process.stdout.write(modelImageChanged ? 'Patched text-model switching for sessions with historical images.\n' : 'Historical-image model-switch patch already applied.\n')
 }

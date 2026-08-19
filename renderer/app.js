@@ -936,6 +936,8 @@ function officialSubagentEnhancementsBootstrap() {
     .hd-subagent-running-indicator i:nth-child(3) { animation-delay:.28s; }
     .hd-subagent-detail-label { display:inline-flex; align-items:center; gap:6px; min-height:24px; margin-left:10px; padding:0 9px; border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#6f8cff) 28%,transparent); border-radius:999px; background:color-mix(in srgb,var(--dsw-alias-brand-primary,#6f8cff) 8%,transparent); color:var(--dsw-alias-brand-primary,#5877ef); font-size:12px; font-weight:600; white-space:nowrap; }
     .hd-subagent-detail-label::before { width:7px; height:7px; border-radius:50%; background:#22b573; box-shadow:0 0 0 3px color-mix(in srgb,#22b573 16%,transparent); content:''; }
+    .hd-subagent-detail-label.hd-subagent-detail-history { border-color:var(--dsw-alias-border-l2,#ccd2d9); background:var(--dsw-alias-bg-layer-2,#f4f6f8); color:var(--dsw-alias-label-secondary,#5f6b76); }
+    .hd-subagent-detail-label.hd-subagent-detail-history::before { background:#89939e; box-shadow:none; }
     @keyframes hd-subagent-running { 0%,100%{height:5px;opacity:.42} 50%{height:15px;opacity:1} }
     @media (prefers-reduced-motion:reduce) { .hd-subagent-running-indicator i { animation:none; height:9px; opacity:.85; } }
   `
@@ -1020,12 +1022,14 @@ function officialSubagentEnhancementsBootstrap() {
       existing?.remove()
       return
     }
-    if (existing) return
-    const label = document.createElement('span')
-    label.className = 'hd-subagent-detail-label'
-    label.textContent = '子代理详情 · 实时会话'
-    label.title = '这里显示子代理正在执行的完整过程；点击左侧上级会话可返回。'
-    hierarchy.insertAdjacentElement('afterend', label)
+    const historyRecord = [...document.querySelectorAll('strong')].some(element => /一次性子代理记录|One-shot subagent record/i.test(element.textContent || ''))
+    const label = existing || document.createElement('span')
+    label.className = `hd-subagent-detail-label${historyRecord ? ' hd-subagent-detail-history' : ''}`
+    label.textContent = historyRecord ? '子代理历史 · 完整记录' : '子代理会话 · 可继续'
+    label.title = historyRecord
+      ? '这里保留一次性子代理的完整执行记录；点击左侧上级会话可返回。'
+      : '这里显示可继续子代理的会话；点击左侧上级会话可返回。'
+    if (!existing) hierarchy.insertAdjacentElement('afterend', label)
   }
 
   const scan = () => {

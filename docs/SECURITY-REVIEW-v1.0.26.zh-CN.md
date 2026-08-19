@@ -13,6 +13,13 @@
 3. **Windows 编排兼容性**：Node 24 在当前 Windows 环境直接 `spawnSync npm.cmd` 返回 `EINVAL`，编排改为通过 `npm_execpath` 和当前 Node 运行 npm CLI，并纳入回归测试。
 4. **Android 与桌面发布竞态**：正式 Android 工作流随 Tag 自动启动，先验 Secret，再等待已经通过矩阵门禁的桌面 Release；仍支持同 Tag 手动安全重跑。
 
+## 多会话工作树整合
+
+- 发布前重新枚举全部 Git worktree、独立提交和未提交文件，而不是依赖对话中是否逐项汇报。
+- Agent Teams、桌面能力、附件/子代理基础修复已在当前历史中；子代理生命周期会话通过独立完整测试后保存为 `61c7b64`，再按 rc.7 锚点精准移植并复测。
+- 更新镜像会话的最终“进度报告器保持按需安装”约束已移植到静态和打包审计；旧 v1.0.20 WinGet/宣传素材与 1.0.26 源码无关，保持原工作树不动。
+- `install-workspace-worktree` 按明确禁令完全未修改。
+
 ## 供应链与发布
 
 - `npm audit --omit=dev --audit-level=moderate --registry=https://registry.npmjs.org`：0 个已知漏洞。
@@ -30,6 +37,7 @@
 - Browser 使用独立持久化分区，与官方工作台隔离；模型只作用于当前可见已授权标签。密码、Cookie、令牌、验证码、支付和银行内容从结构上不可读写；提交/上传/下载/删除要求逐次确认。
 - Computer Use 仅控制 Harness Desktop 自身窗口，默认关闭；点击、输入和滚动逐次确认。截图限制单文件、总量、数量和时效，并在启动、停用、接管、停止和退出时清理。
 - 手机控制使用固定动作和能力协商；密码、支付、银行、验证码、静默安装/卸载、清除数据和权限绕过永久禁止。跨网后备只接受无凭据 WSS，配对撤销立即关闭连接。
+- 子代理目录补丁只分类 running/continuable/history 和增加筛选，不修改 transcript 或删除会话；源码与测试明确拒绝删除、归档类调用。
 
 ## 本地记忆
 
@@ -48,7 +56,7 @@
 
 ## 本地验证证据
 
-- `npm run verify`：静态门禁通过，389/389 桌面单元、安全、集成与发布自动化测试通过。
+- `npm run verify`：静态门禁通过，391/391 桌面单元、安全、集成与发布自动化测试通过。
 - `npm run verify:release`：发布契约审计通过。
 - Android：Gradle debug/release JVM 测试共 43 个任务执行成功；正式 APK 仍只由长期 release Secret 的云端工作流构建和验签。
 - 生产组件脚本：使用生产公私钥匹配检查，对三个目标生成 ZIP/签名清单并在本地重新验签成功（仅测试兜底文件，未上传）。
