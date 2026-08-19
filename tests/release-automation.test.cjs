@@ -32,6 +32,7 @@ test('release orchestration is resumable and defaults to non-publishing verifica
   const orchestrator = await source('scripts/release-orchestrator.mjs')
   assert.match(orchestrator, /const through = argument\('through', 'verify'\)/u)
   assert.match(orchestrator, /\.release-state/u)
+  assert.match(orchestrator, /process\.env\.npm_execpath/u)
   assert.match(orchestrator, /Skipping completed phase/u)
   assert.match(orchestrator, /test:component-local/u)
   assert.doesNotMatch(orchestrator, /gh release (create|upload)|git push/u)

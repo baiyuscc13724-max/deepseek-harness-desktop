@@ -19,9 +19,11 @@ function sanitizeOptions(input = {}) {
     : []
   const days = Number(input.tempAgeDays)
   const tempAgeDays = Number.isFinite(days) ? Math.max(1, Math.min(365, Math.floor(days))) : 7
+  const cacheMinAgeMs = Number(input.cacheMinAgeMs)
   return Object.freeze({
     includeOldRuntimes: input.includeOldRuntimes !== false,
     includeCaches: input.includeCaches !== false,
+    cacheMinAgeMs: Number.isFinite(cacheMinAgeMs) ? Math.max(0, Math.min(365 * 24 * 60 * 60 * 1000, Math.round(cacheMinAgeMs))) : null,
     tempEntries,
     tempAgeMs: tempAgeDays * 24 * 60 * 60 * 1000
   })
@@ -103,6 +105,7 @@ class StorageManagementService {
           preview: true,
           includeOldRuntimes: false,
           includeCaches: true,
+          cacheMinAgeMs: threshold,
           tempEntries: []
         })
         const approvedCandidates = preview.deletions.filter(candidate => candidate.kind === 'cache' && Number(candidate.ageMs) >= threshold)
@@ -111,6 +114,7 @@ class StorageManagementService {
               preview: false,
               includeOldRuntimes: false,
               includeCaches: true,
+              cacheMinAgeMs: threshold,
               tempEntries: [],
               approvedCandidates
             })

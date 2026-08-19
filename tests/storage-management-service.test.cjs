@@ -8,6 +8,7 @@ const {
   StorageManagementService,
   sanitizeOptions
 } = require('../electron/bridge/storage-management-service.cjs')
+const { StorageCleanupService } = require('../electron/bridge/storage-cleanup-service.cjs')
 const { buildHarnessData, destroyHarnessData } = require('./harness-data-fixture.cjs')
 
 async function exists(target) {
@@ -30,11 +31,13 @@ test('sanitizeOptions constrains temp names, age and cleanup categories', () => 
   const options = sanitizeOptions({
     includeOldRuntimes: false,
     includeCaches: true,
+    cacheMinAgeMs: Number.MAX_SAFE_INTEGER,
     tempAgeDays: 999,
     tempEntries: ['safe', '../escape', 'safe', '', 'also-safe']
   })
   assert.deepEqual(options.tempEntries, ['safe', 'also-safe'])
   assert.equal(options.tempAgeMs, 365 * 24 * 60 * 60 * 1000)
+  assert.equal(options.cacheMinAgeMs, 365 * 24 * 60 * 60 * 1000)
   assert.equal(options.includeOldRuntimes, false)
   assert.equal(options.includeCaches, true)
 })
@@ -118,6 +121,11 @@ test('automatic maintenance removes only aged application-owned caches', async (
     assert.equal(await exists(cache), true)
     const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
     await utimes(cache, old, old)
+    const active = await service.maintainCaches()
+    assert.equal(active.deletedEntries, 0)
+    assert.equal(await exists(cache), true)
+    await utimes(path.join(cache, 'cache.db'), old, old)
+    await utimes(cache, old, old)
     const result = await service.maintainCaches()
     assert.equal(result.ok, true)
     assert.equal(result.deletedEntries, 1)
@@ -127,6 +135,34 @@ test('automatic maintenance removes only aged application-owned caches', async (
     assert.equal(await exists(path.join(fixture.homeDir, 'attachments', 'a1.bin')), true)
     assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64')), true)
     assert.equal(service.status().automaticCache.lastRun.deletedEntries, 1)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('automatic maintenance aborts when an approved cache becomes active before deletion', async () => {
+  const fixture = await buildHarnessData()
+  try {
+    const cache = path.join(fixture.homeDir, 'marketplace', 'cache')
+    const blob = path.join(cache, 'cache.db')
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
+    await utimes(blob, old, old)
+    await utimes(cache, old, old)
+    const cleanup = new StorageCleanupService({ version: '1.0.24', platform: 'win32', arch: 'x64' })
+    let calls = 0
+    const cleanupService = {
+      async plan(root, options) {
+        const result = await cleanup.plan(root, options)
+        calls += 1
+        if (calls === 1) await writeFile(blob, 'active-cache')
+        return result
+      }
+    }
+    const service = serviceFor(fixture, { cleanup: cleanupService })
+    const result = await service.maintainCaches()
+    assert.equal(result.deletedEntries, 0)
+    assert.equal(await exists(cache), true)
+    assert.equal(calls, 2)
   } finally {
     await destroyHarnessData(fixture.root)
   }

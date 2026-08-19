@@ -11,7 +11,7 @@ const stateDir = path.join(root, '.release-state')
 const stateFile = path.join(stateDir, `v${version}.json`)
 const command = process.argv[2] || 'status'
 const through = argument('through', 'verify')
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const npmCli = String(process.env.npm_execpath || '').trim()
 
 function argument(name, fallback = '') {
   const index = process.argv.indexOf(`--${name}`)
@@ -47,6 +47,11 @@ function run(program, args, options = {}) {
   if (result.status !== 0) throw new Error(`${program} exited with code ${result.status}.`)
 }
 
+function runNpm(args, options = {}) {
+  if (npmCli) return run(process.execPath, [npmCli, ...args], options)
+  return run(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, options)
+}
+
 async function requireFile(file) {
   const info = await stat(file)
   if (!info.isFile() || info.size <= 0) throw new Error(`Required release file is empty: ${file}`)
@@ -77,14 +82,14 @@ async function sourceContracts() {
 }
 
 async function verifySource() {
-  run(npm, ['run', 'verify'])
-  run(npm, ['run', 'verify:release'])
+  runNpm( ['run', 'verify'])
+  runNpm( ['run', 'verify:release'])
 }
 
 async function windowsPackage() {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('The Windows package phase requires win32-x64.')
-  run(npm, ['run', 'dist'], { timeout: 60 * 60 * 1000 })
-  run(npm, ['run', 'verify:artifact'])
+  runNpm( ['run', 'dist'], { timeout: 60 * 60 * 1000 })
+  runNpm( ['run', 'verify:artifact'])
   const executable = await requireFile(path.join(root, 'dist', 'win-unpacked', 'Harness Desktop.exe'))
   const output = path.join(stateDir, `v${version}-packaged-selftest.json`)
   const userData = path.join(stateDir, `v${version}-packaged-selftest-userdata`)
@@ -97,7 +102,7 @@ async function windowsPackage() {
   if (!report.ok) throw new Error(`Packaged self-test failed: ${report.error || 'unknown error'}`)
   const componentProfile = path.join(stateDir, `v${version}-component-test-profile`)
   await rm(componentProfile, { recursive: true, force: true })
-  run(npm, ['run', 'test:component-local', '--', '--app-exe', executable, '--profile', componentProfile], { env, timeout: 15 * 60 * 1000 })
+  runNpm( ['run', 'test:component-local', '--', '--app-exe', executable, '--profile', componentProfile], { env, timeout: 15 * 60 * 1000 })
   for (const file of [
     `Harness-Desktop-${version}-win-x64.exe`,
     `Harness-Desktop-${version}-portable-x64.exe`

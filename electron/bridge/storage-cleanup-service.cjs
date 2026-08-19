@@ -100,6 +100,7 @@ class StorageCleanupService {
     const rootAbs = typeof root === 'string' ? path.resolve(root) : root
     const report = await scanHarnessData(rootAbs, { now: this.now })
     const tempAgeMs = Number.isFinite(Number(options.tempAgeMs)) ? Number(options.tempAgeMs) : null
+    const cacheMinAgeMs = Number.isFinite(Number(options.cacheMinAgeMs)) ? Math.max(0, Number(options.cacheMinAgeMs)) : null
     const requestedTemp = Array.isArray(options.tempEntries)
       ? new Set(options.tempEntries.map(String))
       : new Set()
@@ -127,7 +128,8 @@ class StorageCleanupService {
         if (entry.suspicious) continue
         if (entry.protected) continue // sessions/attachments/memories 被保护。
         if (isMarketplaceOrCache(entry.name, 'dsh-home')) {
-          deletions.push(this.#buildCandidate('cache', entry, rootAbs, preview))
+          const candidate = this.#buildCandidate('cache', entry, rootAbs, preview)
+          if (cacheMinAgeMs == null || Number(candidate.ageMs) >= cacheMinAgeMs) deletions.push(candidate)
           continue
         }
         if (isMarketplaceRoot(entry.name)) {
@@ -139,13 +141,14 @@ class StorageCleanupService {
           const escape = await isSymlinkEscaping(contained, rootAbs)
           if (escape.escaping) continue
           const scanned = await scanTree(contained, rootAbs)
-          deletions.push(this.#buildCandidate('cache', {
+          const candidate = this.#buildCandidate('cache', {
             name: `${entry.name}/cache`,
             path: contained,
             size: scanned.size || 0,
-            ageMs: Math.max(0, this.now() - info.mtimeMs),
+            ageMs: Math.max(0, this.now() - (scanned.mtimeMs || info.mtimeMs)),
             protected: false
-          }, rootAbs, preview))
+          }, rootAbs, preview)
+          if (cacheMinAgeMs == null || Number(candidate.ageMs) >= cacheMinAgeMs) deletions.push(candidate)
         }
       }
     }
