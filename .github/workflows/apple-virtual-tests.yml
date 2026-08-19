@@ -80,7 +80,7 @@ jobs:
         with:
           node-version: 24
       - name: Install Intel macOS dependencies
-        run: npm ci --no-audit --no-fund --include=optional --os=darwin --cpu=x64
+        run: npm ci --no-audit --no-fund --ignore-scripts --include=optional --os=darwin --cpu=x64 && node scripts/patch-official-runtime.mjs
       - name: Verify source and release contracts
         run: |
           npm run verify
@@ -115,7 +115,7 @@ jobs:
           test "$app_exit" -eq 0
           node -e "const r=require(process.argv[1]); if(!r.ok) process.exit(1)" "$output"
       - name: Install Apple Silicon dependencies
-        run: npm ci --no-audit --no-fund --include=optional --os=darwin --cpu=arm64
+        run: npm ci --no-audit --no-fund --ignore-scripts --include=optional --os=darwin --cpu=arm64 && node scripts/patch-official-runtime.mjs
       - name: Build unsigned Apple Silicon app bundle
         run: >-
           npx electron-builder --mac dir --arm64 --publish never
