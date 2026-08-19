@@ -78,7 +78,7 @@ try {
 
 $branch = "cnb-cloud-release-$($package.version)"
 Invoke-Git update-ref "refs/heads/$branch" $commit
-& git -c 'credential.helper=!npx.cmd --yes @cnbcool/cnb-cli git-credential' push $Remote "refs/heads/$branch`:refs/heads/main"
+& git -c 'credential.helper=' -c 'credential.helper=!npx.cmd --yes @cnbcool/cnb-cli git-credential' push $Remote "refs/heads/$branch`:refs/heads/main"
 if ($LASTEXITCODE -ne 0) { throw 'Unable to push the lightweight CNB mirror commit.' }
 Write-Host "CNB metadata pushed: $commit"
 Write-Host 'Release binaries remain on GitHub; CNB Runner will mirror them in the cloud.'
