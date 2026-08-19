@@ -25,10 +25,10 @@ jobs:
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           lfs: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       - name: Install Inno Setup
@@ -49,6 +49,8 @@ jobs:
           if ($actual -ne $expected) { throw "Chinese installer language hash mismatch: $actual" }
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - name: Verify source and smoke tests
         run: npm run verify
       - name: Audit release contract
@@ -121,7 +123,7 @@ jobs:
           }
       - name: Audit release artifacts
         run: npm run verify:artifact
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-${{ matrix.os }}
           path: dist/**
@@ -137,8 +139,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: desktop-*
           path: release-artifacts
@@ -153,7 +155,7 @@ jobs:
           (cd release-files && sha256sum * > SHA256SUMS.txt)
           cat release-files/SHA256SUMS.txt
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release-files/*
           name: Harness Desktop ${{ github.ref_name }}

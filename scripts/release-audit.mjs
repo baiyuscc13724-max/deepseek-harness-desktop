@@ -60,7 +60,7 @@ if (pkg.build?.win?.target?.includes('nsis') || pkg.build?.nsis) throw new Error
 for (const target of ['dmg', 'zip']) if (!pkg.build?.mac?.target?.some(entry => entry === target || entry?.target === target)) throw new Error(`macOS target missing: ${target}`)
 if (pkg.build?.mac?.hardenedRuntime !== true || pkg.build?.mac?.notarize !== true || pkg.build?.mac?.entitlements !== 'build/entitlements.mac.plist') throw new Error('macOS signing and notarization contract is incomplete.')
 for (const target of ['AppImage', 'deb']) if (!pkg.build?.linux?.target?.includes(target)) throw new Error(`Linux target missing: ${target}`)
-for (const file of ['build/icon.png', 'build/entitlements.mac.plist', 'build/installer.iss', 'electron/bootstrap.cjs', 'component-update-sources.json', 'mobile-relay-sources.json', 'mobile/ios/project.yml', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/publish-cnb-cloud-mirror.ps1', '.cnb.yml', 'docs/RELEASING.zh-CN.md', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'release-mirrors.example.json', 'release-update-sources.json', 'docs/UPDATE-MIRRORS.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
+for (const file of ['build/icon.png', 'build/entitlements.mac.plist', 'build/installer.iss', 'electron/bootstrap.cjs', 'component-update-sources.json', 'mobile-relay-sources.json', 'mobile/ios/project.yml', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/create-component-signing-key.mjs', 'scripts/publish-cnb-cloud-mirror.ps1', '.cnb.yml', 'docs/RELEASING.zh-CN.md', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'release-mirrors.example.json', 'release-update-sources.json', 'docs/UPDATE-MIRRORS.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
 
 const installer = await readFile(path.join(root, 'build/installer.iss'), 'utf8')
 for (const contract of ['PrivilegesRequired=lowest', 'DefaultDirName={code:GetDefaultDirName}', 'UsePreviousAppDir=yes', 'CloseApplications=no', '#define MyOutputBaseFilename "Harness-Desktop-" + MyAppVersion + "-win-x64"', 'OutputBaseFilename={#MyOutputBaseFilename}', 'SetupIconFile=..\\dist\\.icon-ico\\icon.ico', 'UninstallDisplayIcon={app}\\{#MyAppExeName}', 'Name: "chinesesimp"', 'compiler:Languages\\ChineseSimplified.isl', 'recursesubdirs', 'autodesktop', 'autoprograms', 'FindLegacyInstallDirectory', 'ReadInstallHint', 'ReadUserInstallLocationFile', 'ReadLastInstallDirectory', 'LastInstallLocation', "RegQueryStringValue(RootKey, Subkey, 'DisplayIcon'", "HasCommandLineParameter('/CLOSEAPPLICATIONS')", "'/NORESTART /LANG=chinesesimp'", 'WizardSilent']) {
@@ -81,6 +81,11 @@ for (const contract of ['DEFAULT_IDLE_TIMEOUT_MS', 'DEFAULT_CHECKSUM_TIMEOUT_MS'
 for (const source of ['release-update-sources.json', 'release-update-sources.local.json', 'component-update-sources.json', 'mobile-relay-sources.json']) {
   if (!pkg.build?.files?.includes(source)) throw new Error(`Packaged desktop update source is missing: ${source}`)
 }
+const componentSources = JSON.parse(await readFile(path.join(root, 'component-update-sources.json'), 'utf8'))
+if (componentSources.enabled !== true || Object.keys(componentSources.trustedKeys || {}).length !== 1) throw new Error('Production component updates must be enabled with exactly one reviewed trust root for the v1.0.26 bootstrap.')
+for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64']) {
+  if (componentSources.targets?.[target]?.length !== 2) throw new Error(`Production component mirrors are incomplete: ${target}`)
+}
 const updateLauncher = await readFile(path.join(root, 'electron/bridge/update-launcher.cjs'), 'utf8')
 if (updateLauncher.includes('powershell.exe') || updateLauncher.includes('Wait-Process')) throw new Error('The updater must not depend on a hidden PowerShell handoff.')
 if (!updateLauncher.includes('openPath(resolved)')) throw new Error('The updater must launch the verified installer through the Windows shell.')
@@ -92,6 +97,11 @@ for (const removedContract of ['AgentBridge', 'TerminalManager', 'SessionStore',
 }
 
 const workflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8')
+for (const workflowFile of ['release.yml', 'android-mobile-release.yml', 'apple-virtual-tests.yml', 'ci.yml', 'upstream-watch.yml']) {
+  const source = await readFile(path.join(root, '.github', 'workflows', workflowFile), 'utf8')
+  const unpinned = [...source.matchAll(/uses:\s+([^\s#]+)@([^\s#]+)/g)].filter(match => !/^[0-9a-f]{40}$/.test(match[2]))
+  if (unpinned.length) throw new Error(`GitHub Actions must be pinned to immutable commits in ${workflowFile}: ${unpinned.map(match => match[0]).join(', ')}`)
+}
 for (const os of ['windows-latest', 'macos-latest', 'ubuntu-latest']) if (!workflow.includes(os)) throw new Error(`CI release OS missing: ${os}`)
 if (!workflow.includes('npm run verify')) throw new Error('Release workflow must run verification before packaging.')
 if (!workflow.includes('npm run dist')) throw new Error('Release workflow must package artifacts.')

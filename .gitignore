@@ -24,6 +24,8 @@ release-mirrors.local.json
 release-update-sources.local.json
 .acceptance-*
 .artifacts/
+.release-state/
+.component-input/
 .android-build/
 *.jks
 *.keystore
