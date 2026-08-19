@@ -83,12 +83,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Install Intel macOS dependencies
-        run: npm ci --no-audit --no-fund --ignore-scripts --include=optional --os=darwin --cpu=x64 && node scripts/patch-official-runtime.mjs
+      - name: Install native macOS validation dependencies
+        run: npm ci --no-audit --no-fund --ignore-scripts --include=optional && node scripts/patch-official-runtime.mjs
       - name: Verify source and release contracts
         run: |
           npm run verify
           npm run verify:release
+      - name: Install Intel macOS dependencies
+        run: npm ci --no-audit --no-fund --ignore-scripts --include=optional --os=darwin --cpu=x64 && node scripts/patch-official-runtime.mjs
       - name: Build unsigned Intel app bundle
         run: >-
           npx electron-builder --mac dir --x64 --publish never
