@@ -66,6 +66,14 @@ foreach ($asset in $release.assets) {
 }
 
 $mirrorFiles = @('.cnb.yml', 'CHANGELOG.md', 'LICENSE', 'README.md', 'release-manifest.json', 'release-notes.md')
+$stableFeedFiles = @(
+  'component-feeds/stable/win32-x64.json',
+  'component-feeds/stable/darwin-x64.json',
+  'component-feeds/stable/darwin-arm64.json'
+)
+$presentStableFeeds = @($stableFeedFiles | Where-Object { Test-Path -LiteralPath $_ })
+if ($presentStableFeeds.Count -notin @(0, $stableFeedFiles.Count)) { throw 'Stable component feeds must be absent or complete for all three targets.' }
+if ($presentStableFeeds.Count -eq $stableFeedFiles.Count) { $mirrorFiles += $stableFeedFiles }
 foreach ($file in $mirrorFiles) {
   if (-not (Test-Path -LiteralPath $file)) { throw "Missing CNB mirror source file: $file" }
   & git diff --quiet HEAD -- $file
