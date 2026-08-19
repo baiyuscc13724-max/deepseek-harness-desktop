@@ -56,12 +56,16 @@
     previewList.replaceChildren()
   }
 
-  function renderScan(report) {
+  function renderScan(report, status = {}) {
     scanState = report
     const list = Object.entries(report.categories || {})
     const bytes = list.reduce((sum, [, category]) => sum + (Number(category.size) || 0), 0)
     total.textContent = formatBytes(bytes)
-    rootLabel.textContent = 'HarnessData 本地数据 · 受保护数据不会自动清理'
+    const automatic = status.automaticCache
+    const lastRun = automatic?.lastRun
+    rootLabel.textContent = automatic?.enabled
+      ? `HarnessData 本地数据 · 应用缓存自动维护${lastRun?.ok ? ` · 上次释放 ${formatBytes(lastRun.freedBytes)}` : ''} · 受保护数据永不自动清理`
+      : 'HarnessData 本地数据 · 受保护数据不会自动清理'
     categories.replaceChildren(...list.map(([kind, category]) => {
       const card = document.createElement('div')
       card.className = 'storage-category'
@@ -81,8 +85,9 @@
     total.textContent = '正在扫描…'
     setMessage('扫描只读取目录大小，不会修改任何数据。')
     try {
-      renderScan(await api.scanStorage())
-      setMessage('扫描完成。')
+      const [report, status] = await Promise.all([api.scanStorage(), api.getStorageStatus()])
+      renderScan(report, status)
+      setMessage('扫描完成；只有超过 7 天的应用自有缓存会后台维护，其他删除仍需预览和确认。')
     } catch (error) {
       setMessage(error.message || String(error), true)
       total.textContent = '扫描失败'
@@ -187,6 +192,9 @@
   for (const control of [oldRuntimes, caches, oldTemp, tempDays]) control.addEventListener('change', resetPreview)
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !overlay.classList.contains('hidden')) close()
+  })
+  api.onOpenDataManager?.(target => {
+    if (target === 'storage') open()
   })
 
   window.harnessDesktopStorageManager = Object.freeze({ formatBytes, open, close })

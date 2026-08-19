@@ -201,7 +201,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.25') throw new Error(`Expected package version 1.0.25, received ${pkg.version}`)
+if (pkg.version !== '1.0.26') throw new Error(`Expected package version 1.0.26, received ${pkg.version}`)
 if (pkg.main !== 'electron/bootstrap.cjs' || pkg.build?.extraMetadata?.main !== 'electron/bootstrap.cjs') throw new Error('Component updates require the stable Electron bootstrap entrypoint.')
 if (pkg.scripts?.['release:components'] !== 'node scripts/build-component-update.mjs') throw new Error('Component release builder command is missing.')
 if (pkg.scripts?.['test:component-local'] !== 'node scripts/local-component-update-test.mjs') throw new Error('Local component restart/rollback test command is missing.')
@@ -219,7 +219,7 @@ for (const target of ['dmg', 'zip']) {
   if (!value || !['x64', 'arm64'].every(arch => value.arch?.includes(arch))) throw new Error(`macOS ${target} target must cover Intel and Apple Silicon.`)
 }
 const desktopMain = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
-for (const contract of ['createWssRelayAdapter', 'loadMobileRelayConfig', "detached: process.platform !== 'win32'", 'terminateProcessTree(child)', 'runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 180_000 }', 'pruneComputerUseScreenshots(directory, { maxFiles: 39 })']) {
+for (const contract of ['createWssRelayAdapter', 'loadMobileRelayConfig', "detached: process.platform !== 'win32'", 'terminateProcessTree(child)', 'runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 180_000 }', 'ensureComputerUseScreenshotStore().save(scaled.toPNG())', 'clearComputerUseScreenshots()']) {
   if (!desktopMain.includes(contract)) throw new Error(`Cross-platform desktop runtime contract is missing: ${contract}`)
 }
 const iosInfo = await readFile(path.join(root, 'mobile/ios/HarnessMobile/Resources/Info.plist'), 'utf8')
@@ -244,22 +244,22 @@ for (const forbidden of ['upload-artifact', 'softprops/action-gh-release', 'cont
 }
 const mobileSourceVersion = pkg.version
 const androidBuild = await readFile(path.join(root, 'mobile/android/app/build.gradle.kts'), 'utf8')
-if (!androidBuild.includes(`versionCode = 10025`) || !androidBuild.includes(`versionName = "${mobileSourceVersion}"`)) throw new Error('Android mobile source version must stay synchronized with the desktop integration version.')
+if (!androidBuild.includes(`versionCode = 10026`) || !androidBuild.includes(`versionName = "${mobileSourceVersion}"`)) throw new Error('Android mobile source version must stay synchronized with the desktop integration version.')
 for (const contract of ['HARNESS_ANDROID_KEYSTORE_PATH', 'HARNESS_ANDROID_KEY_ALIAS', 'HARNESS_ANDROID_STORE_PASSWORD', 'HARNESS_ANDROID_KEY_PASSWORD', 'verifyReleaseSigningConfiguration', 'enableV3Signing = true']) {
   if (!androidBuild.includes(contract)) throw new Error(`Android release signing configuration is incomplete: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
-for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', 'versionCode=\'10025\'', 'Harness-Mobile-${version}-android-universal.apk', 'gh release upload', '--clobber']) {
+for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', "expected_version_code=\"$(node -e", 'Harness-Mobile-${version}-android-universal.apk', 'gh release upload', '--clobber']) {
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Signed Android publication workflow contract missing: ${contract}`)
 }
 for (const forbidden of ['app-debug.apk', 'assembleDebug']) {
   if (androidReleaseWorkflow.includes(forbidden)) throw new Error(`Android publication workflow must never publish debug output: ${forbidden}`)
 }
 const mobileSyncService = await readFile(path.join(root, 'electron/bridge/mobile-sync-service.cjs'), 'utf8')
-for (const contract of ["CURRENT_MOBILE_VERSION = '1.0.25'", 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/', 'android-universal.apk', '直接在 Safari 使用', '添加到主屏幕', '无需 Apple Developer 会员', '不会提供无法公开安装的未签名 IPA', 'current.url']) {
+for (const contract of ["CURRENT_MOBILE_VERSION = '1.0.26'", 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/', 'android-universal.apk', '直接在 Safari 使用', '添加到主屏幕', '无需 Apple Developer 会员', '不会提供无法公开安装的未签名 IPA', 'current.url']) {
   if (!mobileSyncService.includes(contract)) throw new Error(`iPhone/iPad no-membership QR fallback contract missing: ${contract}`)
 }
-if (!iosProject.includes(`CURRENT_PROJECT_VERSION: 10025`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
+if (!iosProject.includes(`CURRENT_PROJECT_VERSION: 10026`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
 const publishedMobileVersion = pkg.version
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
@@ -363,9 +363,17 @@ for (const contract of ['prepareComponentActivation', 'resolveComponentLayout', 
   if (!bootstrap.includes(contract)) throw new Error(`Stable component bootstrap contract missing: ${contract}`)
 }
 const componentSources = JSON.parse(await readFile(path.join(root, 'component-update-sources.json'), 'utf8'))
-if (componentSources.enabled !== false || componentSources.manifestUrls?.length || Object.values(componentSources.targets || {}).some(urls => urls?.length) || Object.keys(componentSources.trustedKeys || {}).length) {
-  throw new Error('Component updates must remain disabled until a reviewed release public key and feed are approved.')
+if (componentSources.enabled !== true || componentSources.manifestUrls?.length) throw new Error('Production component updates must be enabled through per-target feeds only.')
+for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64']) {
+  const urls = componentSources.targets?.[target]
+  if (!Array.isArray(urls) || urls.length !== 2) throw new Error(`Production component target must have CNB and GitHub feeds: ${target}`)
+  const parsed = urls.map(value => new URL(value))
+  if (parsed.some(url => url.protocol !== 'https:' || url.username || url.password || url.search || url.hash)) throw new Error(`Component feed URL must be credential-free immutable HTTPS: ${target}`)
+  if (parsed[0].hostname !== 'cnb.cool' || parsed[1].hostname !== 'raw.githubusercontent.com') throw new Error(`Component feeds must prefer CNB with GitHub fallback: ${target}`)
+  if (!parsed.every(url => url.pathname.endsWith(`/component-feeds/stable/${target}.json`))) throw new Error(`Component feed target path drifted: ${target}`)
 }
+const componentKey = componentSources.trustedKeys?.['harness-components-02643f81164c594a']
+if (!componentKey?.startsWith('-----BEGIN PUBLIC KEY-----') || !componentKey.endsWith('-----END PUBLIC KEY-----')) throw new Error('Reviewed production component Ed25519 public key is missing.')
 const relaySources = JSON.parse(await readFile(path.join(root, 'mobile-relay-sources.json'), 'utf8'))
 if (relaySources.enabled !== false || relaySources.relayUrl) throw new Error('Public WSS relay must remain disabled until its 443/TLS deployment is reviewed.')
 if (!main.includes("ipcMain.handle('componentUpdates:apply'")) throw new Error('Component apply IPC is missing after local installation testing approval.')

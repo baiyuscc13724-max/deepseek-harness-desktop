@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
-const { access, mkdir, rm, writeFile } = require('node:fs/promises')
+const { access, mkdir, rm, utimes, writeFile } = require('node:fs/promises')
 
 const {
   PREVIEW_TTL_MS,
@@ -103,6 +103,30 @@ test('apply skips a same-name target replaced after preview', async () => {
     assert.equal(await exists(path.join(target, 'replacement.txt')), true)
     assert.equal(result.applied.some(item => item.path === target), false)
     assert.equal(JSON.stringify(result).includes('identity'), false)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('automatic maintenance removes only aged application-owned caches', async () => {
+  const fixture = await buildHarnessData()
+  try {
+    const service = serviceFor(fixture)
+    const cache = path.join(fixture.homeDir, 'marketplace', 'cache')
+    const fresh = await service.maintainCaches()
+    assert.equal(fresh.deletedEntries, 0)
+    assert.equal(await exists(cache), true)
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
+    await utimes(cache, old, old)
+    const result = await service.maintainCaches()
+    assert.equal(result.ok, true)
+    assert.equal(result.deletedEntries, 1)
+    assert.equal(await exists(cache), false)
+    assert.equal(await exists(path.join(fixture.homeDir, 'marketplace', 'settings.json')), true)
+    assert.equal(await exists(path.join(fixture.homeDir, 'sessions', 's1.json')), true)
+    assert.equal(await exists(path.join(fixture.homeDir, 'attachments', 'a1.bin')), true)
+    assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64')), true)
+    assert.equal(service.status().automaticCache.lastRun.deletedEntries, 1)
   } finally {
     await destroyHarnessData(fixture.root)
   }

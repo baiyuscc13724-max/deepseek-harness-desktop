@@ -1,10 +1,21 @@
 {
-  "enabled": false,
+  "enabled": true,
   "manifestUrls": [],
   "targets": {
-    "win32-x64": [],
-    "darwin-x64": [],
-    "darwin-arm64": []
+    "win32-x64": [
+      "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/stable/win32-x64.json",
+      "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/stable/win32-x64.json"
+    ],
+    "darwin-x64": [
+      "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/stable/darwin-x64.json",
+      "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/stable/darwin-x64.json"
+    ],
+    "darwin-arm64": [
+      "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/stable/darwin-arm64.json",
+      "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/stable/darwin-arm64.json"
+    ]
   },
-  "trustedKeys": {}
+  "trustedKeys": {
+    "harness-components-02643f81164c594a": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA+gJlq5Lp+rGkLQDr4AY2XmR8rh+YJnAZf+leHWKYglA=\n-----END PUBLIC KEY-----"
+  }
 }

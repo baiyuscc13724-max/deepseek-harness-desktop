@@ -2,7 +2,7 @@
   "name": "dsh-desktop-memory-tools",
   "version": "1.0.0",
   "type": "module",
-  "description": "Harness Desktop opt-in local memory search tool",
+  "description": "Harness Desktop privacy-bounded automatic local memory tool",
   "license": "MIT",
   "exports": "./lib/index.js"
 }

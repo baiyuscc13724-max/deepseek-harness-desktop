@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   copyMobileSyncText: value => ipcRenderer.invoke('mobileSync:copy', value),
   openExternal: url => ipcRenderer.invoke('shell:openExternal', url),
   openLocal: (target, options) => ipcRenderer.invoke('shell:openLocal', target, options),
+  onOpenDataManager: listener => subscribe('data:open-manager', listener),
   onRuntimeState: listener => subscribe('runtime:state', listener),
   onMobileSyncState: listener => subscribe('mobileSync:state', listener),
   onBrowserState: listener => subscribe('browser:state', listener),

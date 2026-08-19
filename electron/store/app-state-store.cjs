@@ -32,7 +32,7 @@ function normalizeCustomTheme(value = {}) {
 }
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 6,
+  schemaVersion: 7,
   updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null },
   appearance: {
     themeId: DEFAULT_THEME_ID,
@@ -51,9 +51,10 @@ const DEFAULT_STATE = Object.freeze({
     positionByDisplay: {}
   },
   memory: {
-    enabled: false,
+    enabled: true,
     sensitivityMode: 'reject',
-    autoRecall: false
+    autoRecall: true,
+    autoCapture: true
   }
 })
 
@@ -64,10 +65,13 @@ function cloneDefaultState() {
 function normalizeState(input) {
   const base = cloneDefaultState()
   const value = input && typeof input === 'object' ? input : {}
+  const sourceSchemaVersion = Number(value.schemaVersion || 0)
+  const legacyMemoryDefaults = sourceSchemaVersion < 7
+  const memoryEnabled = legacyMemoryDefaults ? true : value.memory?.enabled !== false
   const savedTheme = VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : DEFAULT_THEME_ID
   const themeId = Number(value.schemaVersion || 0) < 3 && savedTheme === 'official' ? DEFAULT_THEME_ID : savedTheme
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     updates: {
       checkOnStartup: value.updates?.checkOnStartup !== false,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
@@ -91,9 +95,10 @@ function normalizeState(input) {
       positionByDisplay: normalizePetPositions(value.pet?.positionByDisplay)
     },
     memory: {
-      enabled: value.memory?.enabled === true,
+      enabled: memoryEnabled,
       sensitivityMode: value.memory?.sensitivityMode === 'redact' ? 'redact' : 'reject',
-      autoRecall: value.memory?.autoRecall === true
+      autoRecall: memoryEnabled && (legacyMemoryDefaults || value.memory?.autoRecall !== false),
+      autoCapture: memoryEnabled && (legacyMemoryDefaults || value.memory?.autoCapture !== false)
     }
   }
 }
@@ -190,6 +195,11 @@ class AppStateStore {
       this.state.memory.sensitivityMode = patch.sensitivityMode === 'redact' ? 'redact' : 'reject'
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'autoRecall')) this.state.memory.autoRecall = Boolean(patch.autoRecall)
+    if (Object.prototype.hasOwnProperty.call(patch, 'autoCapture')) this.state.memory.autoCapture = Boolean(patch.autoCapture)
+    if (!this.state.memory.enabled) {
+      this.state.memory.autoRecall = false
+      this.state.memory.autoCapture = false
+    }
     this.#persist()
     return this.get()
   }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.26
+
+- 修复 Electron 退出时浏览器 `webContents` 已释放导致的 JavaScript 错误，并补强所有 BrowserView 生命周期竞态。
+- 链接右键菜单明确提供“复制链接地址”；窗口拖动捕获不再阻断灰色选区清除，Esc 可取消选区。
+- 锁定桌面工作台外层视口，防止输入框和对话框随整个页面向上滚动；移动端继续允许正常纵向滚动。
+- Codex 额度改为使用 Harness 已登录 OAuth 直接查询官方 WHAM，用客户端 CLI 作为无凭据时的后备；不返回令牌、账户 ID 或个人信息。
+- 整合 Agent Teams 实验插件、Browser/Computer Use 重置竞态、截图会话清理、界面模式和完整删除控制。
+- 本地记忆与应用缓存改为类似 Codex 的低干扰后台使用：仅保存稳定偏好和项目约束，敏感内容硬过滤；入口移到托盘“数据与隐私”，保留预览、关闭、单项/全部删除。
+- 首次公开启用 Ed25519 签名生产组件更新：CNB 优先、GitHub 后备、逐目标清单、健康确认、自动回滚和完整安装包兜底。
+- 桌面、Android 与 iOS/iPadOS 源码同步到 1.0.26；Android 延续长期 release 证书，iPhone/iPad 在无 Apple Developer 会员时继续 Safari 工作台。
+
 ## 1.0.25
 
 - 自定义壁纸新增 GIF、APNG 与动态 WebP，单文件上限 50 MB；前景完整显示并以同图模糊填充空白区域。

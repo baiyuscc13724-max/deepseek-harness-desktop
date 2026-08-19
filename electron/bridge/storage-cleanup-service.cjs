@@ -143,7 +143,7 @@ class StorageCleanupService {
             name: `${entry.name}/cache`,
             path: contained,
             size: scanned.size || 0,
-            ageMs: entry.ageMs,
+            ageMs: Math.max(0, this.now() - info.mtimeMs),
             protected: false
           }, rootAbs, preview))
         }

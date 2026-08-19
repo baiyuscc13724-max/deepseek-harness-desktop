@@ -8,6 +8,7 @@ const { scanHarnessData } = require('./storage-scan-service.cjs')
 const PREVIEW_TTL_MS = 10 * 60_000
 const MAX_PENDING_PREVIEWS = 8
 const MAX_TEMP_ENTRIES = 100
+const AUTO_CACHE_MIN_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
 function sanitizeOptions(input = {}) {
   const tempEntries = Array.isArray(input.tempEntries)
@@ -52,6 +53,8 @@ class StorageManagementService {
       arch: options.arch
     })
     this.previews = new Map()
+    this.maintenancePromise = null
+    this.lastMaintenance = null
   }
 
   async scan() {
@@ -90,11 +93,65 @@ class StorageManagementService {
     return publicPlan(plan)
   }
 
+  async maintainCaches({ minAgeMs = AUTO_CACHE_MIN_AGE_MS } = {}) {
+    if (this.maintenancePromise) return this.maintenancePromise
+    const threshold = Math.max(AUTO_CACHE_MIN_AGE_MS, Number.isFinite(Number(minAgeMs)) ? Number(minAgeMs) : AUTO_CACHE_MIN_AGE_MS)
+    this.maintenancePromise = (async () => {
+      const startedAt = new Date(this.now()).toISOString()
+      try {
+        const preview = await this.cleanup.plan(this.root, {
+          preview: true,
+          includeOldRuntimes: false,
+          includeCaches: true,
+          tempEntries: []
+        })
+        const approvedCandidates = preview.deletions.filter(candidate => candidate.kind === 'cache' && Number(candidate.ageMs) >= threshold)
+        const applied = approvedCandidates.length
+          ? await this.cleanup.plan(this.root, {
+              preview: false,
+              includeOldRuntimes: false,
+              includeCaches: true,
+              tempEntries: [],
+              approvedCandidates
+            })
+          : { applied: [], summary: { candidates: 0, freedBytes: 0 } }
+        const deleted = (applied.applied || []).filter(item => item.applied)
+        this.lastMaintenance = {
+          ok: true,
+          startedAt,
+          completedAt: new Date(this.now()).toISOString(),
+          deletedEntries: deleted.length,
+          freedBytes: deleted.reduce((sum, item) => sum + (Number(item.size) || 0), 0)
+        }
+        return { ...this.lastMaintenance }
+      } catch (error) {
+        this.lastMaintenance = {
+          ok: false,
+          startedAt,
+          completedAt: new Date(this.now()).toISOString(),
+          deletedEntries: 0,
+          freedBytes: 0,
+          error: String(error?.message || error).slice(0, 300)
+        }
+        throw error
+      } finally {
+        this.maintenancePromise = null
+      }
+    })()
+    return this.maintenancePromise
+  }
+
   status() {
     this.#expirePreviews()
     return {
       broker: this.broker.snapshot(),
-      pendingPreviews: this.previews.size
+      pendingPreviews: this.previews.size,
+      automaticCache: {
+        enabled: true,
+        minimumAgeMs: AUTO_CACHE_MIN_AGE_MS,
+        protectedKinds: ['sessions', 'attachments', 'memories', 'workspace', 'current-runtime'],
+        lastRun: this.lastMaintenance ? { ...this.lastMaintenance } : null
+      }
     }
   }
 
@@ -123,6 +180,7 @@ class StorageManagementService {
 }
 
 module.exports = {
+  AUTO_CACHE_MIN_AGE_MS,
   MAX_PENDING_PREVIEWS,
   MAX_TEMP_ENTRIES,
   PREVIEW_TTL_MS,

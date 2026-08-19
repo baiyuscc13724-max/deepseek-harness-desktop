@@ -5,7 +5,7 @@ const path = require('node:path')
 const { mkdtemp, readFile, rm } = require('node:fs/promises')
 const { ensureDesktopMemoryToolsPlugin } = require('../electron/bridge/desktop-memory-tools-plugin-service.cjs')
 
-test('opt-in local memory tool installs idempotently with read-only actions', async () => {
+test('privacy-bounded automatic local memory tool installs idempotently', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'desktop-memory-tools-'))
   try {
     const bundledRoot = path.resolve(__dirname, '..', 'plugins', 'dsh-desktop-memory-tools')
@@ -18,18 +18,22 @@ test('opt-in local memory tool installs idempotently with read-only actions', as
     const plugin = await readFile(path.join(profile, 'node_modules', 'dsh-desktop-memory-tools', 'lib', 'index.js'), 'utf8')
     assert.match(patch, /id: desktop-memory-tools/u)
     assert.match(plugin, /name: 'local_memory'/u)
-    assert.match(plugin, /enum: \['status', 'search'\]/u)
-    assert.doesNotMatch(plugin, /enum:\s*\[[^\]]*(?:add|update|delete|remove)/u)
-    assert.doesNotMatch(plugin, /args\.action\s*===\s*['"](?:add|update|delete|remove)/u)
-    assert.match(plugin, /不会读取整库，也不能保存、修改或删除记忆/u)
+    assert.match(plugin, /enum: \['status', 'search', 'remember'\]/u)
+    assert.doesNotMatch(plugin, /enum:\s*\[[^\]]*(?:update|delete|remove)/u)
+    assert.match(plugin, /currentDirectHumanRoot/u)
+    assert.match(plugin, /Never save raw conversation transcripts/u)
+    assert.match(plugin, /source_session_id/u)
     assert.match(plugin, /HARNESS_DESKTOP_CAPABILITIES_STATE_FILE/u)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('main memory tool path requires explicit recall opt-in and caps results', async () => {
+test('main memory path bounds recall and safe automatic capture', async () => {
   const main = await readFile(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
   assert.match(main, /if \(!preferences\.autoRecall\)/u)
+  assert.match(main, /if \(!preferences\.autoCapture\)/u)
   assert.match(main, /Math\.min\(8/u)
   assert.match(main, /ensureMemoryService\(\)\.recall/u)
+  assert.match(main, /probe\.hits\.find\(hit => hit\.content === content && hit\.title === title\)/u)
   assert.match(main, /content: safeBrowserText\(hit\.content, 2000\)/u)
+  assert.doesNotMatch(main, /return \{ stored: true,.*content/u)
 })

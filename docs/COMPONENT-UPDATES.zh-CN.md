@@ -1,6 +1,6 @@
 # Harness Desktop 组件增量更新协议
 
-> 状态：开发中。首次启用前仍需一次完整安装版迁移。本协议不会替代完整安装包兜底。
+> 状态：v1.0.26 生产启用。v1.0.26 是首次完整 Bootstrap 迁移包；本协议始终保留完整安装包兜底。
 
 ## 目标
 
@@ -161,9 +161,10 @@ npm run test:component-local -- --app-exe <win-unpacked/Harness Desktop.exe> --p
 
 脚本先运行打包自检，再生成本地 Ed25519 测试密钥和 1.0.24 shell 组件，走真实 ZIP 索引/哈希/签名验证、不可变目录提交、独立 Electron-as-Node 助手、父进程退出等待、原子指针切换与 `--component-health-check`。随后暂存一个缺失 renderer 的 1.0.25 shell，验证稳定 Bootstrap 在可变 shell 加载前失败时自动恢复 1.0.24，并把失败版本和原因保留在状态中。测试资料只写入传入的隔离 profile，不使用当前稳定 Desktop 的 userData，也不上传任何资产。
 
-## 当前开发约束
+## 当前生产约束
 
-- 在 `feature/component-incremental-updater` 独立 worktree 开发。
-- 不修改其他会话工作树。
-- 全部源码与自动测试完成前不打包；之后只做本地测试包、真实更新/重启/健康检查/回滚验证。
-- 未经用户后续明确批准，不上传、不发布，也不替换当前稳定安装。
+- `component-update-sources.json` 固定受审 Ed25519 公钥，按 `win32-x64`、`darwin-x64`、`darwin-arm64` 选择 CNB 优先、GitHub 后备的稳定清单。
+- 生产私钥不进入源码、清单、构建产物或日志；CI 只从 Secret 读取，私人仓库只保存 AES-256-GCM 加密备份，恢复密钥分离保存。
+- 组件资产和版本清单不可变；必须先上传并双源验哈希，最后提交稳定频道清单。
+- 任何健康检查失败、同版本哈希冲突、未知 keyId 或兜底架构不匹配都默认失败，不继续激活。
+- v1.0.25 及更早版本未内置生产源，必须先安装一次 v1.0.26 完整包；之后 shell/runtime/plugins 的兼容变更才走增量更新。

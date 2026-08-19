@@ -26,11 +26,11 @@
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.1a6.9 6.9 0 1 0 0 13.8h1.1a1.35 1.35 0 0 0 .55-2.58.72.72 0 0 1 .3-1.38h1.15A3.8 3.8 0 0 0 14.9 7.1 6 6 0 0 0 8 1.1Zm-3.05 7A1.05 1.05 0 1 1 4.95 6a1.05 1.05 0 0 1 0 2.1Zm1.7-3A1.05 1.05 0 1 1 6.65 3a1.05 1.05 0 0 1 0 2.1Zm3.1-.15a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Zm2 2.2a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Z" fill="currentColor"/></svg>
       <span class="visually-hidden">皮肤</span>
     </button>
-    <button id="storageQuickButton" class="storage-quick-button" type="button" aria-haspopup="dialog" aria-controls="storageOverlay" title="存储与缓存">
+    <button id="storageQuickButton" class="storage-quick-button hidden" type="button" aria-haspopup="dialog" aria-controls="storageOverlay" title="存储与缓存">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><ellipse cx="8" cy="3.4" rx="5.5" ry="2.1" stroke="currentColor" stroke-width="1.25"/><path d="M2.5 3.4v4.5C2.5 9.05 4.96 10 8 10s5.5-.95 5.5-2.1V3.4M2.5 7.9v4.5c0 1.15 2.46 2.1 5.5 2.1s5.5-.95 5.5-2.1V7.9" stroke="currentColor" stroke-width="1.25"/></svg>
       <span class="visually-hidden">存储与缓存</span>
     </button>
-    <button id="memoryQuickButton" class="memory-quick-button" type="button" aria-haspopup="dialog" aria-controls="memoryOverlay" title="本地记忆">
+    <button id="memoryQuickButton" class="memory-quick-button hidden" type="button" aria-haspopup="dialog" aria-controls="memoryOverlay" title="本地记忆">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5.1 3.1A2.4 2.4 0 0 1 9.6 2a2.55 2.55 0 0 1 2.1 4 2.8 2.8 0 0 1-.25 5.2A2.7 2.7 0 0 1 6.5 13a2.45 2.45 0 0 1-2.2-3.8A2.6 2.6 0 0 1 5.1 3.1Z" stroke="currentColor" stroke-width="1.25"/><path d="M8 3.2v9.4M5.3 6.1c.9.2 1.6.8 1.8 1.7M10.8 7.1c-.9.2-1.6.8-1.8 1.7" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
       <span class="visually-hidden">本地记忆</span>
     </button>
@@ -172,7 +172,7 @@
     <section id="storageOverlay" class="storage-overlay hidden" aria-hidden="true">
       <div class="storage-dialog" role="dialog" aria-modal="true" aria-labelledby="storageTitle">
         <header class="storage-header">
-          <div><h2 id="storageTitle">存储与缓存</h2><p>先扫描、再预览、最后明确确认；不会清理会话、附件、记忆或当前运行时。</p></div>
+          <div><h2 id="storageTitle">存储与缓存</h2><p>超过 7 天的应用自有缓存会后台维护；旧运行时和临时项仍必须先预览、再明确确认。</p></div>
           <button id="closeStorage" class="storage-close" type="button" aria-label="关闭">×</button>
         </header>
         <div class="storage-content">
@@ -197,26 +197,27 @@
             <button id="applyStorageCleanup" class="danger" type="button" disabled>确认并执行</button>
           </section>
           <p id="storageMessage" class="storage-message" role="status"></p>
-          <p class="storage-protection">永久保护：sessions、attachments、memories、当前 runtime，以及仍在活动或未达到年龄阈值的临时文件。</p>
+          <p class="storage-protection">永久保护：sessions、attachments、memories、workspace、当前 runtime，以及仍在活动或未达到年龄阈值的临时文件。</p>
         </div>
       </div>
     </section>
     <section id="memoryOverlay" class="memory-overlay hidden" aria-hidden="true">
       <div class="memory-dialog" role="dialog" aria-modal="true" aria-labelledby="memoryTitle">
         <header class="memory-header">
-          <div><h2 id="memoryTitle">本地跨会话记忆</h2><p>默认关闭、完全本地；密码、令牌、Cookie、银行卡和验证码不会保存。</p></div>
+          <div><h2 id="memoryTitle">本地跨会话记忆</h2><p>完全本地、后台低干扰；只保存稳定偏好与项目约束，密码、令牌、Cookie、银行卡和验证码不会保存。</p></div>
           <button id="closeMemory" class="memory-close" type="button" aria-label="关闭">×</button>
         </header>
         <div class="memory-content">
           <section class="memory-status-card">
-            <div><strong id="memoryStatusTitle">本地记忆未开启</strong><span id="memoryStatusDetail">开启前不会创建数据库或写入数据。</span></div>
+            <div><strong id="memoryStatusTitle">正在检查本地记忆</strong><span id="memoryStatusDetail">数据只保存在 HarnessData/memory。</span></div>
             <button id="memoryEnableToggle" class="primary" type="button">开启本地记忆</button>
           </section>
           <div id="memoryEnabledContent" class="hidden">
             <section class="memory-preferences">
               <label>敏感内容处理 <select id="memorySensitivity"><option value="reject">拒绝保存（推荐）</option><option value="redact">自动脱敏后保存</option></select></label>
-              <label><input id="memoryAutoRecall" type="checkbox" /> 允许模型按需召回普通级记忆</label>
-              <span>自动召回仍受来源、数量和敏感级别限制，不会加载整库。</span>
+              <label><input id="memoryAutoRecall" type="checkbox" /> 后台按需召回普通级记忆</label>
+              <label><input id="memoryAutoCapture" type="checkbox" /> 自动保存稳定偏好、长期指令与项目约束</label>
+              <span>自动记忆只在直接用户会话中工作，受来源、数量、敏感过滤和去重限制，不会保存整段对话或加载整库。</span>
             </section>
             <section class="memory-add-card">
               <h3>添加一条记忆</h3>

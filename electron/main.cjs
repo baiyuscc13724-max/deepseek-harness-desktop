@@ -180,10 +180,10 @@ async function setMemoryEnabled(enabled) {
   const service = ensureMemoryService()
   if (enabled) {
     await service.enable(memoryServiceOptions({ enabled: true }))
-    ensureStateStore().updateMemory({ enabled: true })
+    ensureStateStore().updateMemory({ enabled: true, autoRecall: true, autoCapture: true })
   } else {
     service.disable()
-    ensureStateStore().updateMemory({ enabled: false, autoRecall: false })
+    ensureStateStore().updateMemory({ enabled: false, autoRecall: false, autoCapture: false })
   }
   return memoryStatusPayload()
 }
@@ -192,9 +192,13 @@ async function updateMemoryPreferences(patch = {}) {
   const current = ensureStateStore().get().memory
   const next = {
     sensitivityMode: patch.sensitivityMode === 'redact' ? 'redact' : current.sensitivityMode,
-    autoRecall: Object.prototype.hasOwnProperty.call(patch, 'autoRecall') ? Boolean(patch.autoRecall) : current.autoRecall
+    autoRecall: Object.prototype.hasOwnProperty.call(patch, 'autoRecall') ? Boolean(patch.autoRecall) : current.autoRecall,
+    autoCapture: Object.prototype.hasOwnProperty.call(patch, 'autoCapture') ? Boolean(patch.autoCapture) : current.autoCapture
   }
-  if (!current.enabled) next.autoRecall = false
+  if (!current.enabled) {
+    next.autoRecall = false
+    next.autoCapture = false
+  }
   ensureStateStore().updateMemory(next)
   if (current.enabled) await ensureMemoryService().enable(memoryServiceOptions({ enabled: true, sensitivityMode: next.sensitivityMode }))
   return memoryStatusPayload()
@@ -585,25 +589,58 @@ async function modelMemoryAction(input = {}) {
   const action = String(input.action || '')
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
   const preferences = ensureStateStore().get().memory
-  if (action === 'status') return { enabled: preferences.enabled, recallAllowed: preferences.enabled && preferences.autoRecall, count: preferences.enabled ? ensureMemoryService().status().counts.entries : 0 }
-  if (action !== 'search') throw new Error('不支持的本地记忆操作。')
-  if (!preferences.enabled) throw Object.assign(new Error('用户尚未开启本地记忆。'), { code: 'memory-disabled' })
-  if (!preferences.autoRecall) throw Object.assign(new Error('用户尚未允许模型按需召回本地记忆。'), { code: 'memory-recall-disabled' })
-  const query = String(parameters.query || '').trim()
-  const maxResults = Math.max(1, Math.min(8, Math.floor(Number(parameters.max_results) || 5)))
-  const recalled = await ensureMemoryService().recall(query, { maxResults })
-  return {
-    query: recalled.query,
-    total: recalled.total,
-    hits: recalled.hits.map(hit => ({
-      id: hit.id,
-      title: safeBrowserText(hit.title, 300),
-      content: safeBrowserText(hit.content, 2000),
-      tags: hit.tags,
-      matched: hit.matched,
-      snippet: safeBrowserText(hit.snippet, 500)
-    }))
+  if (action === 'status') {
+    return {
+      enabled: preferences.enabled,
+      recallAllowed: preferences.enabled && preferences.autoRecall,
+      captureAllowed: preferences.enabled && preferences.autoCapture,
+      count: preferences.enabled ? ensureMemoryService().status().counts.entries : 0
+    }
   }
+  if (!preferences.enabled) throw Object.assign(new Error('用户尚未开启本地记忆。'), { code: 'memory-disabled' })
+  if (action === 'search') {
+    if (!preferences.autoRecall) throw Object.assign(new Error('用户尚未允许模型按需召回本地记忆。'), { code: 'memory-recall-disabled' })
+    const query = String(parameters.query || '').trim()
+    const maxResults = Math.max(1, Math.min(8, Math.floor(Number(parameters.max_results) || 5)))
+    const recalled = await ensureMemoryService().recall(query, { maxResults })
+    return {
+      query: recalled.query,
+      total: recalled.total,
+      hits: recalled.hits.map(hit => ({
+        id: hit.id,
+        title: safeBrowserText(hit.title, 300),
+        content: safeBrowserText(hit.content, 2000),
+        tags: hit.tags,
+        matched: hit.matched,
+        snippet: safeBrowserText(hit.snippet, 500)
+      }))
+    }
+  }
+  if (action === 'remember') {
+    if (!preferences.autoCapture) throw Object.assign(new Error('用户尚未允许自动保存稳定偏好。'), { code: 'memory-capture-disabled' })
+    const content = String(parameters.content || '').trim().slice(0, 2000)
+    if (!content) throw new Error('本地记忆内容不能为空。')
+    const title = String(parameters.title || content.slice(0, 80)).trim().slice(0, 160)
+    const kind = ['preference', 'instruction', 'project', 'fact'].includes(parameters.kind) ? parameters.kind : 'preference'
+    const tags = Array.isArray(parameters.tags)
+      ? parameters.tags.map(value => String(value || '').trim().slice(0, 40)).filter(Boolean).slice(0, 8)
+      : []
+    const service = ensureMemoryService()
+    const probe = await service.search(content.slice(0, 200), { maxResults: 20 })
+    const duplicate = probe.hits.find(hit => hit.content === content && hit.title === title)
+    if (duplicate) return { stored: false, duplicate: true, id: duplicate.id }
+    const entry = await service.add({
+      kind,
+      title,
+      content,
+      tags,
+      sourceSessionId: String(parameters.source_session_id || '').slice(0, 128),
+      sensitivity: 0,
+      recallPolicy: 'auto'
+    })
+    return { stored: true, duplicate: false, id: entry.id }
+  }
+  throw new Error('不支持的本地记忆操作。')
 }
 
 function ensureComputerUseScreenshotStore() {
@@ -1640,6 +1677,15 @@ function hideMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
 }
 
+function openDataManager(target) {
+  showMainWindow()
+  const contents = mainWindow?.webContents
+  if (!contents || contents.isDestroyed()) return
+  const publish = () => contents.send('data:open-manager', target)
+  if (contents.isLoadingMainFrame()) contents.once('did-finish-load', publish)
+  else publish()
+}
+
 function ensureDesktopTray() {
   if (desktopTray && !desktopTray.isDestroyed()) return desktopTray
   desktopTray = createDesktopTray({
@@ -1651,6 +1697,8 @@ function ensureDesktopTray() {
       : path.join(__dirname, '..', 'build', 'icon.png'),
     showMainWindow,
     hideMainWindow,
+    openMemoryManager: () => openDataManager('memory'),
+    openStorageManager: () => openDataManager('storage'),
     quitApp: () => app.quit()
   })
   return desktopTray
@@ -1993,6 +2041,7 @@ app.whenReady().then(async () => {
     return
   }
   await clearComputerUseScreenshots().catch(error => console.warn(`Unable to clear stale Computer Use screenshots: ${error.message}`))
+  try { ensureMemoryService() } catch (error) { console.warn(`Unable to initialize local memory: ${error.message}`) }
   runtimeInitializationPromise = (async () => {
     await ensureBundledRuntime()
     await ensureModelRouting(modelRoutingOptions()).catch(error => {
@@ -2022,6 +2071,8 @@ app.whenReady().then(async () => {
       console.warn(`Unable to prepare Agent Teams plugin: ${error.message}`)
     })
   })()
+  runtimeInitializationPromise.then(() => ensureStorageManagementService().maintainCaches())
+    .catch(error => console.warn(`Unable to maintain managed caches: ${error.message}`))
   if (!STORE_BUILD) ensurePetSystem()
   const syncService = ensureMobileSyncService()
   if (mobileSyncStore.get().enabled) {

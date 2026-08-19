@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing desktop release tag that receives the signed APK
         required: true
-        default: v1.0.25
+        default: v1.0.26
 
 permissions:
   contents: write
@@ -56,7 +56,7 @@ jobs:
           test -s "$keystore"
           chmod 600 "$keystore"
           echo "HARNESS_ANDROID_KEYSTORE_PATH=$keystore" >> "$GITHUB_ENV"
-      - name: Build signed Android 1.0.25 APK
+      - name: Build signed Android APK
         working-directory: mobile/android
         shell: bash
         run: |
@@ -93,9 +93,10 @@ jobs:
           echo "Verified certificate SHA-256: $actual"
           badging="$($aapt dump badging "$asset" | head -n 1)"
           echo "$badging"
+          expected_version_code="$(node -e "const [major,minor,patch]=require('./package.json').version.split('.').map(Number); process.stdout.write(String(major*10000+minor*100+patch))")"
           printf '%s\n' "$badging" | grep -F "name='io.harnessdesktop.mobile'"
-          printf '%s\n' "$badging" | grep -F "versionCode='10025'"
-          printf '%s\n' "$badging" | grep -F "versionName='1.0.25'"
+          printf '%s\n' "$badging" | grep -F "versionCode='$expected_version_code'"
+          printf '%s\n' "$badging" | grep -F "versionName='$version'"
           sha256sum "$asset" > android-checksum.txt
           echo "ANDROID_ASSET=$asset" >> "$GITHUB_ENV"
       - name: Add signed APK to the existing release

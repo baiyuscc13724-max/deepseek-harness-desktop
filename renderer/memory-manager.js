@@ -11,6 +11,7 @@
   const enabledContent = document.querySelector('#memoryEnabledContent')
   const sensitivity = document.querySelector('#memorySensitivity')
   const autoRecall = document.querySelector('#memoryAutoRecall')
+  const autoCapture = document.querySelector('#memoryAutoCapture')
   const titleInput = document.querySelector('#memoryTitleInput')
   const contentInput = document.querySelector('#memoryContentInput')
   const tagsInput = document.querySelector('#memoryTagsInput')
@@ -37,11 +38,12 @@
     statusTitle.textContent = enabled ? `已保存 ${next.counts?.entries || 0} 条本地记忆` : '本地记忆未开启'
     statusDetail.textContent = enabled
       ? `${next.fts5 ? 'FTS5 本地全文搜索' : '本地兼容搜索'} · ${next.secureDelete ? '安全删除已启用' : '安全删除不可用'} · 数据库位于 HarnessData/memory`
-      : '开启前不会创建数据库或写入数据。'
+      : '已停用；数据库会保留但不会读取或写入，可在下方全部删除。'
     enableToggle.textContent = enabled ? '关闭本地记忆' : '开启本地记忆'
     enabledContent.classList.toggle('hidden', !enabled)
     sensitivity.value = next.preferences?.sensitivityMode === 'redact' ? 'redact' : 'reject'
     autoRecall.checked = next.preferences?.autoRecall === true
+    autoCapture.checked = next.preferences?.autoCapture === true
     if (!enabled) results.replaceChildren()
   }
 
@@ -126,7 +128,7 @@
     try {
       renderStatus(await api.setMemoryEnabled(!state?.enabled))
       if (state.enabled) await loadAll()
-      setMessage(state.enabled ? '本地记忆已开启。只有你主动保存的内容才会写入。' : '本地记忆已关闭，现有数据库保留但不会读取或写入。')
+      setMessage(state.enabled ? '本地记忆已开启；后台仅保存稳定偏好与项目约束，敏感内容会拒绝或脱敏。' : '本地记忆已关闭，现有数据库保留但不会读取或写入。')
     } catch (error) {
       setMessage(error.message || String(error), true)
     } finally {
@@ -136,7 +138,7 @@
 
   async function savePreferences() {
     try {
-      renderStatus(await api.setMemoryPreferences({ sensitivityMode: sensitivity.value, autoRecall: autoRecall.checked }))
+      renderStatus(await api.setMemoryPreferences({ sensitivityMode: sensitivity.value, autoRecall: autoRecall.checked, autoCapture: autoCapture.checked }))
       setMessage('记忆隐私偏好已保存。')
     } catch (error) {
       setMessage(error.message || String(error), true)
@@ -189,6 +191,7 @@
   enableToggle.addEventListener('click', toggleEnabled)
   sensitivity.addEventListener('change', savePreferences)
   autoRecall.addEventListener('change', savePreferences)
+  autoCapture.addEventListener('change', savePreferences)
   addButton.addEventListener('click', addMemory)
   searchButton.addEventListener('click', search)
   searchInput.addEventListener('keydown', event => { if (event.key === 'Enter') search() })
@@ -218,6 +221,9 @@
   })
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !overlay.classList.contains('hidden')) close()
+  })
+  api.onOpenDataManager?.(target => {
+    if (target === 'memory') open()
   })
 
   window.harnessDesktopMemoryManager = Object.freeze({ open, close })
