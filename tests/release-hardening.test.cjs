@@ -19,6 +19,7 @@ test('desktop publication is gated by authenticated draft installation', async (
   assert.match(workflow, /draft-snapshot\.json/u)
   const projection = '{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}'
   assert.equal(workflow.split(projection).length - 1, 3)
+  assert.match(workflow, /verify-windows-draft:[\s\S]*permissions:\s*\n\s*contents: write/u)
   assert.match(workflow, /Authenticated draft download, checksum, install, self-test, and uninstall/u)
   assert.match(workflow, /releases\/assets\/\$\(\$asset\.id\)/u)
   assert.match(workflow, /Authorization = "Bearer \$env:GH_TOKEN"/u)

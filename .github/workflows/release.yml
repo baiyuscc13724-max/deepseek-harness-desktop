@@ -295,8 +295,10 @@ jobs:
     needs: stage-draft
     runs-on: windows-latest
     timeout-minutes: 20
+    # GitHub App tokens need contents:write to read private draft releases by ID
+    # and to download their assets before publication; this job never mutates them.
     permissions:
-      contents: read
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
