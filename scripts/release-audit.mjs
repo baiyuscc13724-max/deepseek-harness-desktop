@@ -114,7 +114,7 @@ for (const removedContract of ['AgentBridge', 'TerminalManager', 'SessionStore',
 }
 
 const workflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8')
-for (const workflowFile of ['release.yml', 'publish-production-components.yml', 'android-mobile-release.yml', 'apple-virtual-tests.yml', 'ci.yml', 'upstream-watch.yml']) {
+for (const workflowFile of ['release.yml', 'publish-production-components.yml', 'verify-component-signing-secret.yml', 'android-mobile-release.yml', 'apple-virtual-tests.yml', 'ci.yml', 'upstream-watch.yml']) {
   const source = await readFile(path.join(root, '.github', 'workflows', workflowFile), 'utf8')
   const unpinned = [...source.matchAll(/uses:\s+([^\s#]+)@([^\s#]+)/g)].filter(match => !/^[0-9a-f]{40}$/.test(match[2]))
   if (unpinned.length) throw new Error(`GitHub Actions must be pinned to immutable commits in ${workflowFile}: ${unpinned.map(match => match[0]).join(', ')}`)
@@ -138,6 +138,10 @@ for (const contract of ['workflow_dispatch:', 'Existing immutable release tag to
 const componentPublishWorkflow = await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')
 for (const contract of ['component-publish/v1.0.26', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'prepare-production-components.mjs', 'verify-production-component-staging.mjs', 'Refuse replacement or partial component publication', 'gh release upload', 'Re-download and verify public component assets']) {
   if (!componentPublishWorkflow.includes(contract)) throw new Error(`Production component publication must verify public signed staging and refuse replacement: ${contract}`)
+}
+const signingSecretWorkflow = await readFile(path.join(root, '.github/workflows/verify-component-signing-secret.yml'), 'utf8')
+for (const contract of ['verify-component-signing-secret/v1.0.26', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'verify-component-signing-key.mjs']) {
+  if (!signingSecretWorkflow.includes(contract)) throw new Error(`Component signing Secret verification must remain isolated and non-exporting: ${contract}`)
 }
 const manifestRefresher = await readFile(path.join(root, 'scripts/refresh-release-manifest.mjs'), 'utf8')
 for (const contract of ['assets: manifestAssets.length', 'asset.digest', 'Unexpected public release asset set', 'mirror_urls', 'COMPONENT-SHA256SUMS.txt']) {

@@ -10,7 +10,7 @@ async function source(relative) {
 }
 
 test('all third-party GitHub Actions are pinned to immutable commits', async () => {
-  for (const file of ['release.yml', 'publish-production-components.yml', 'android-mobile-release.yml', 'apple-virtual-tests.yml', 'ci.yml', 'upstream-watch.yml']) {
+  for (const file of ['release.yml', 'publish-production-components.yml', 'verify-component-signing-secret.yml', 'android-mobile-release.yml', 'apple-virtual-tests.yml', 'ci.yml', 'upstream-watch.yml']) {
     const workflow = await source(path.join('.github', 'workflows', file))
     const uses = [...workflow.matchAll(/uses:\s+([^\s#]+)@([^\s#]+)/g)]
     assert.ok(uses.length > 0, `${file} must use at least one pinned action`)
@@ -63,6 +63,10 @@ test('production component preparation binds the private key to target-correct f
   assert.match(backup, /HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64/u)
   assert.match(backup, /\[Array\]::Clear/u)
   assert.doesNotMatch(backup, /Copy-Item -LiteralPath \$private/u)
+  const secretVerifier = await source(path.join('.github', 'workflows', 'verify-component-signing-secret.yml'))
+  assert.match(secretVerifier, /verify-component-signing-key\.mjs/u)
+  assert.match(secretVerifier, /trap 'rm -f/u)
+  assert.doesNotMatch(secretVerifier, /echo "\$COMPONENT_SIGNING_PRIVATE_KEY_BASE64"/u)
 })
 
 test('release orchestration is resumable and defaults to non-publishing verification', async () => {
