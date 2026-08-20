@@ -1,0 +1,132 @@
+name: Recover Release From Verified Actions Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable product tag
+        required: true
+        default: v1.0.28
+      source_run_id:
+        description: Failed release run whose platform build jobs all passed
+        required: true
+      release_id:
+        description: Empty private draft release created by the repository owner
+        required: true
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: recover-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Transfer verified cloud artifacts and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      RELEASE_ID: ${{ inputs.release_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Verify immutable tag, successful source jobs, and empty draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          test "$RELEASE_TAG" = "v$version"
+          tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$(git rev-parse HEAD)" = "$tag_commit"
+          jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100")"
+          for name in \
+            'Build windows-latest' \
+            'Build macos-latest' \
+            'Build ubuntu-latest' \
+            'Validate iPhone and iPad simulators'; do
+            jq -e --arg name "$name" '[.jobs[] | select(.name == $name and .conclusion == "success")] | length == 1' <<<"$jobs" >/dev/null
+          done
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > empty-draft.json
+          jq -e --arg tag "$RELEASE_TAG" --arg target "$tag_commit" --arg name "Harness Desktop $RELEASE_TAG" --rawfile body release-notes.md '
+            .tag_name == $tag and .target_commitish == $target and .draft == true and
+            .prerelease == false and .name == $name and .body == $body and (.assets | length) == 0
+          ' empty-draft.json >/dev/null
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run_id }}
+          pattern: desktop-*
+          path: release-artifacts
+      - name: Collect exact cloud artifacts and upload without replacement
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          mkdir release-files
+          find release-artifacts -mindepth 2 -maxdepth 2 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \) -print0 |
+            while IFS= read -r -d '' file; do
+              target="release-files/$(basename "$file")"
+              test ! -e "$target" || { echo "Duplicate release asset name: $target" >&2; exit 1; }
+              cp "$file" "$target"
+            done
+          expected="$(printf '%s\n' \
+            "Harness-Desktop-$version-linux-amd64.deb" \
+            "Harness-Desktop-$version-linux-x86_64.AppImage" \
+            "Harness-Desktop-$version-mac-arm64.dmg" \
+            "Harness-Desktop-$version-mac-arm64.zip" \
+            "Harness-Desktop-$version-mac-x64.dmg" \
+            "Harness-Desktop-$version-mac-x64.zip" \
+            "Harness-Desktop-$version-portable-x64.exe" \
+            "Harness-Desktop-$version-win-x64.exe" | LC_ALL=C sort)"
+          actual="$(find release-files -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
+          diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
+          (cd release-files && sha256sum * > SHA256SUMS.txt)
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.assets | length')" = 0
+          gh release upload "$RELEASE_TAG" release-files/* --repo "$GITHUB_REPOSITORY"
+      - name: Snapshot, re-download by immutable asset id, and publish unchanged draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          projection='{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}'
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq "$projection" > draft-snapshot.json
+          version="${RELEASE_TAG#v}"
+          expected="$(printf '%s\n' \
+            'SHA256SUMS.txt' \
+            "Harness-Desktop-$version-linux-amd64.deb" \
+            "Harness-Desktop-$version-linux-x86_64.AppImage" \
+            "Harness-Desktop-$version-mac-arm64.dmg" \
+            "Harness-Desktop-$version-mac-arm64.zip" \
+            "Harness-Desktop-$version-mac-x64.dmg" \
+            "Harness-Desktop-$version-mac-x64.zip" \
+            "Harness-Desktop-$version-portable-x64.exe" \
+            "Harness-Desktop-$version-win-x64.exe" | LC_ALL=C sort)"
+          actual="$(jq -r '.assets[].name' draft-snapshot.json | LC_ALL=C sort)"
+          diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
+          jq -e --arg tag "$RELEASE_TAG" --arg id "$RELEASE_ID" '
+            (.id | tostring) == $id and .tag_name == $tag and .draft == true and .prerelease == false and
+            all(.assets[]; (.id | type == "number") and (.size | type == "number") and (.digest | test("^sha256:[0-9a-f]{64}$")))
+          ' draft-snapshot.json >/dev/null
+          mkdir redownload
+          while IFS=$'\t' read -r id name size digest; do
+            test "$(basename "$name")" = "$name"
+            curl -fsSL --retry 5 --retry-all-errors \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/octet-stream' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$id" \
+              -o "redownload/$name"
+            test "$(stat -c %s "redownload/$name")" = "$size"
+            test "$(sha256sum "redownload/$name" | awk '{print $1}')" = "${digest#sha256:}"
+          done < <(jq -r '.assets[] | [.id,.name,.size,.digest] | @tsv' draft-snapshot.json)
+          downloaded="$(find redownload -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
+          diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$downloaded")
+          (cd redownload && sha256sum -c SHA256SUMS.txt)
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq "$projection" > current-draft.json
+          diff -u <(jq -S . draft-snapshot.json) <(jq -S . current-draft.json)
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false > published.json
+          jq -e --arg tag "$RELEASE_TAG" --arg id "$RELEASE_ID" '(.id | tostring) == $id and .tag_name == $tag and .draft == false and .prerelease == false' published.json >/dev/null
