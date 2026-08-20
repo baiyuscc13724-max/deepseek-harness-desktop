@@ -7,7 +7,7 @@
 - 所有本地编排默认只验证，不上传：`npm run release:orchestrate -- run --through verify`。
 - 只有干净、已验证的同一提交可以创建 Tag；Tag、GitHub Release、组件资产和 Android 正式 APK一经公开不得原地替换。
 - `release-manifest.json` 在新资产全部存在前继续指向上一健康版本，避免公开空链接。
-- v1.0.27 是生产组件更新的完整 Bootstrap 引导包。v1.0.25 不修改、不补发组件源。
+- v1.0.28 是生产组件更新的完整 Bootstrap 引导包。v1.0.25 不修改、不补发组件源。
 - Android 只允许长期 release 证书；debug、未签名、包名/版本/指纹漂移时工作流必须失败。
 - 用户未加入 Apple Developer Program，iPhone/iPad 只发布 Safari 工作台入口，不构造或发布未签名 IPA。
 - 生产组件私钥、Android keystore、密码、恢复密钥和长期令牌不得进入 Git、聊天、日志或发布资产。
@@ -21,19 +21,19 @@
 npm ci --no-audit --no-fund
 
 # 查看状态
-npm run release:orchestrate -- status --version 1.0.27
+npm run release:orchestrate -- status --version 1.0.28
 
 # 版本同步、生产源和文档门禁
-npm run release:orchestrate -- run --version 1.0.27 --through source
+npm run release:orchestrate -- run --version 1.0.28 --through source
 
 # 390+ 项源码/安全测试与发布契约审计
-npm run release:orchestrate -- run --version 1.0.27 --through verify
+npm run release:orchestrate -- run --version 1.0.28 --through verify
 
 # Windows 安装版/便携版、体积审计、打包后真实自检、真实组件健康与回滚测试
-npm run release:orchestrate -- run --version 1.0.27 --through windows
+npm run release:orchestrate -- run --version 1.0.28 --through windows
 
 # 只有确认代码或环境修复后才重置失败阶段
-npm run release:orchestrate -- reset --version 1.0.27 --phase windows
+npm run release:orchestrate -- reset --version 1.0.28 --phase windows
 ```
 
 Windows 阶段固定生成并验证：
@@ -57,11 +57,11 @@ GitHub CLI 必须由发布者本人登录；不得在聊天中发送密码、Tok
 
 ```powershell
 gh auth status
-gh run list --workflow release.yml --branch v1.0.27
+gh run list --workflow release.yml --branch v1.0.28
 gh run watch <run-id> --exit-status
 ```
 
-如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。`workflow_dispatch` 的 `tag` 输入会从既有 Tag 重新 checkout；在无法使用 API/CLI 调度时，只允许推送一次 `release-retry/v1.0.27` 恢复分支触发同一路径。恢复工作流仍重跑全部平台、模拟器、哈希与 draft 门禁，并在已存在 Release 时拒绝修改。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
+如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。`workflow_dispatch` 的 `tag` 输入会从既有 Tag 重新 checkout；在无法使用 API/CLI 调度时，只允许推送一次 `release-retry/v1.0.28` 恢复分支触发同一路径。恢复工作流仍重跑全部平台、模拟器、哈希与 draft 门禁，并在已存在 Release 时拒绝修改。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
 
 ## 4. 正式 Android
 
@@ -110,7 +110,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/configure-compon
 ```powershell
 $env:HARNESS_COMPONENT_SIGNING_KEY_FILE='<受保护的私钥 PEM>'
 $env:HARNESS_COMPONENT_KEY_ID='harness-components-02643f81164c594a'
-npm run release:components:production -- --version 1.0.27 --release-dir <完整包目录>
+npm run release:components:production -- --version 1.0.28 --release-dir <完整包目录>
 Remove-Item Env:HARNESS_COMPONENT_SIGNING_KEY_FILE
 Remove-Item Env:HARNESS_COMPONENT_KEY_ID
 ```
@@ -125,8 +125,8 @@ Remove-Item Env:HARNESS_COMPONENT_KEY_ID
 
 ## 7. 组件与稳定指针的强制顺序
 
-1. **先有可信完整 Bootstrap**：GitHub/CNB 的 v1.0.27 完整安装包均已下载验哈希。
-2. 把三个不可变组件 ZIP、三个不可变目标清单和 `COMPONENT-SHA256SUMS.txt` 放入一次性 `component-release-staging/<version>`；只允许公开签名产物进入 `component-publish/v1.0.27` 临时分支，私钥和恢复资料永不进入。
+1. **先有可信完整 Bootstrap**：GitHub/CNB 的 v1.0.28 完整安装包均已下载验哈希。
+2. 把三个不可变组件 ZIP、三个不可变目标清单和 `COMPONENT-SHA256SUMS.txt` 放入一次性 `component-release-staging/<version>`；只允许公开签名产物进入 `component-publish/v1.0.28` 临时分支，私钥和恢复资料永不进入。
 3. `Publish Verified Production Components` 工作流先用内置公钥、精确文件集、SHA-256、ZIP 索引、目标架构、CNB/GitHub URL 顺序和完整包兜底绑定复核，再拒绝任何已存在/部分资产，上传后重新下载复核；成功后删除临时分支。
 4. 把组件 ZIP/不可变清单加入 `release-manifest.json`，先运行 CNB 云端镜像并等待所有附件验哈希成功。
 5. 只有 GitHub 与 CNB 两端资产都可用后，才把三个签名清单复制为：
@@ -145,7 +145,7 @@ Remove-Item Env:HARNESS_COMPONENT_KEY_ID
 - GitHub 桌面、APK 和七项组件资产全部公开并复核后，先从 GitHub API 的不可变 `sha256:` digest 生成精确 18 项清单：
 
 ```powershell
-node scripts/refresh-release-manifest.mjs --version=1.0.27
+node scripts/refresh-release-manifest.mjs --version=1.0.28
 ```
 
 - 使用已登录的官方 `@cnbcool/cnb-cli` 启动并等待；`dist/SHA256SUMS.txt` 必须先替换为 GitHub 公开同名字节：

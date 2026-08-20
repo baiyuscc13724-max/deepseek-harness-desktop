@@ -11,54 +11,35 @@ window.__ModuleLoader__.load({
     var NS = "agent-teams";
 
     var zh = {
-      title: "代理团队工作台", button: "代理团队", close: "关闭", loading: "正在载入代理团队…", retry: "重试",
-      loadError: "无法载入代理团队：{error}", actionError: "操作失败：{error}", experiment: "代理团队实验功能",
-      disabledBody: "此实验功能当前已停用。启用后，可让多个可继续对话的代理围绕同一目标协作。",
-      enable: "启用实验功能", enabling: "正在启用…", noTeam: "当前会话尚无团队", objective: "团队目标",
-      objectivePlaceholder: "描述团队要共同完成的具体目标…", start: "创建团队", starting: "正在创建…",
-      status: "状态", members: "成员", tasks: "任务", costWarning: "多成员并行工作会增加模型调用与费用，请留意预算。",
-      live: "实时", polling: "轮询", disconnected: "重新连接中", maxMembers: "成员上限 {count}", maxTurns: "并行回合 {count}",
-      memberSection: "团队成员", spawn: "添加成员", name: "名称", role: "角色", prompt: "初始任务说明", model: "模型",
-      namePlaceholder: "例如：研究员", rolePlaceholder: "例如：研究与核验", promptPlaceholder: "说明该成员的职责和首个任务…",
-      modelPlaceholder: "留空使用默认模型", add: "添加", openConversation: "打开对话", message: "发送消息", messagePlaceholder: "给该成员发送后续指令…",
-      send: "发送", interrupt: "中断", retire: "退役", lead: "负责人", unknown: "未知", noMembers: "暂无成员",
-      taskBoard: "任务看板", pending: "待处理", in_progress: "进行中", completed: "已完成", noTasks: "暂无任务",
-      createTask: "创建任务", taskTitle: "任务标题", taskDescription: "任务说明", dependencies: "依赖任务 ID（逗号分隔）", files: "可能修改的文件（逗号分隔）",
-      fileScope: "文件范围：{value}", conflicts: "文件冲突风险：{value}", assignee: "负责人", unassigned: "未分配", create: "创建", assign: "分配", claim: "认领", complete: "完成", reopen: "重新打开",
-      dependsOn: "依赖：{value}", blockedBy: "阻塞于：{value}", taskId: "任务 {id}", messages: "最近消息", noMessages: "暂无团队消息",
-      closeTeam: "关闭团队", closeConfirm: "确定关闭这个团队吗？成员会被停止，未完成任务将保留在历史记录中。",
-      retireConfirm: "确定让该成员退役吗？", enabledHint: "实验功能已启用。在负责人会话中直接要求创建团队；敏感团队变更只通过经过鉴权的模型工具执行。", manageHint: "打开成员会话可直接发消息或中断；创建成员、任务分配和关闭团队请在负责人会话中提出。",
-      counts: "{members} 成员 · {active} 进行中 · {done} 已完成", current: "当前会话", state: "状态",
-      settingsTitle: "代理团队", settingsDescription: "配置原生多代理团队实验功能和全局并发限制。更高的限制可能增加模型用量与费用。",
-      settingsEnabled: "启用代理团队", settingsMaxMembers: "团队成员上限", settingsMaxActiveTurns: "最大并行回合数",
-      settingsSave: "保存设置", settingsSaving: "正在保存…", settingsSaved: "设置已保存", settingsRange: "请输入 1 到 8 之间的整数。"
+      title: "代理团队", loading: "正在载入团队工作区…", retry: "重试", loadError: "无法载入代理团队：{error}", actionError: "操作失败：{error}",
+      disabled: "自动团队尚未启用", disabledBody: "启用后，你只需像平常一样描述目标；AI 会判断是否需要团队，简单任务不会强行组队。", enable: "启用自动团队", enabling: "正在启用…", disable: "关闭自动团队", disabling: "正在关闭…", disableActiveHint: "存在活动团队时无法关闭自动团队。请先让负责人完成任务并关闭所有活动团队。", disableSafeHint: "关闭后不会创建新团队；已关闭团队的历史仍会保留。",
+      noTeam: "自动团队已开启", wizardIntro: "无需配置团队。回到对话直接说出目标，AI 会自动判断是否需要并行；下面的模板仅供希望立即指定方向时使用。", backToChat: "返回对话，直接说目标", chooseTemplate: "可选：协作方向", defineObjective: "可选：立即填写目标", prepare: "放入输入框", prepared: "提示词已放入输入框，确认无误后请手动发送。", objectivePlaceholder: "例如：完成新版团队工作台并通过验证",
+      research: "调研与核验", researchBody: "研究员收集资料，分析员交叉验证，负责人汇总结论。", build: "开发与审查", buildBody: "开发负责改动，审查负责风险，测试负责验证。", incident: "问题诊断", incidentBody: "诊断、修复与回归验证并行推进。", custom: "自定义团队", customBody: "只填写目标，由 AI 自动设计成员、职责、任务边界和协作方式。",
+      active: "协作进行中", closed: "团队已关闭", closedBody: "该团队不再接受成员协作；历史成员、任务和事件仍可查看。", unknown: "未知", status: "状态", objective: "团队目标", connection: "连接", live: "实时", polling: "轮询", stale: "数据可能已过期", disconnected: "重连中",
+      members: "成员", tasks: "任务", events: "协作事件", noMembers: "暂无成员", noTasks: "暂无任务", noEvents: "暂无协作事件", lead: "负责人", leadRole: "统筹目标和结果", openConversation: "查看实时工作", currentTask: "当前任务：{value}", model: "模型", mainModel: "主模型", subagentModel: "子代理模型", inheritsMain: "继承主模型",
+      pending: "待处理", in_progress: "进行中", completed: "已完成", blocked: "受阻", ready: "可接收任务", running: "工作中", idle: "当前回合结束", provisioning: "正在启动", shutting_down: "正在停止", closing: "正在关闭", retired: "已退役", failed: "失败", delivered: "已送达", closedStatus: "已关闭",
+      assignee: "负责人", unassigned: "未分配", blockedBy: "阻塞于：{value}", dependencySources: "跨团队依赖：{value}", conflicts: "冲突任务：{value}", files: "文件：{value}", filesHidden: "文件范围已按安全策略隐藏", taskFallback: "任务 {id}", lastActivity: "最后活动：{value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}",
+      quickActions: "快捷提示", addMember: "添加成员", newPeerTeam: "添加协作团队", createTask: "创建任务", coordinate: "协调团队", summarize: "汇总进展", closeTeam: "请求关闭", newTeam: "创建新团队", draftOnly: "操作会写入下方输入框，不会自动发送。", draftSet: "提示词已写入输入框。", creationSent: "创建请求已发送，正在返回对话。", creationSentFallback: "创建请求已发送。请使用上方“对话”标签查看响应。",
+      teamsOverview: "团队总览", teamCount: "共 {count} 个团队", activeTeams: "活跃 {count}", closedTeams: "已关闭 {count}", switchTeam: "切换到团队：{name}", crossTeam: "跨团队动态", noCrossTeam: "暂无跨团队动态", backgroundHint: "切换团队或页面不会停止后台成员。", teamTasks: "{active} 进行中 · {done} 已完成", lastUpdated: "更新于 {value}",
+      currentSession: "当前会话", revision: "修订 {value}", settingsTitle: "代理团队", settingsDescription: "启用后只需正常描述目标，AI 自动判断是否使用团队；简单任务保持单人执行。更高并发限制可能增加模型用量与费用。", settingsEnabled: "启用自动团队", settingsMaxMembers: "团队成员上限", settingsMaxActiveTurns: "最大并行回合数", settingsSave: "保存设置", settingsSaving: "正在保存…", settingsSaved: "设置已保存", settingsRange: "请输入 1 到 8 之间的整数。", settingsCloseTeamsFirst: "请先在负责人会话中关闭所有活动团队，再关闭代理团队功能。"
     };
     var en = {
-      title: "Team Workbench", button: "Team", close: "Close", loading: "Loading team…", retry: "Retry",
-      loadError: "Could not load team: {error}", actionError: "Action failed: {error}", experiment: "Agent Teams experiment",
-      disabledBody: "This experiment is disabled. Enable it to coordinate continuable agents around a shared objective.",
-      enable: "Enable experiment", enabling: "Enabling…", noTeam: "No team for this session", objective: "Team objective",
-      objectivePlaceholder: "Describe the concrete objective the team should accomplish…", start: "Start team", starting: "Starting…",
-      status: "Status", members: "Members", tasks: "Tasks", costWarning: "Parallel members increase model usage and cost. Keep an eye on your budget.",
-      live: "Live", polling: "Polling", disconnected: "Reconnecting", maxMembers: "Up to {count} members", maxTurns: "{count} active turns",
-      memberSection: "Team members", spawn: "Add member", name: "Name", role: "Role", prompt: "Initial prompt", model: "Model",
-      namePlaceholder: "e.g. Researcher", rolePlaceholder: "e.g. Research and verification", promptPlaceholder: "Describe this member's role and first assignment…",
-      modelPlaceholder: "Leave blank for the default model", add: "Add", openConversation: "Open conversation", message: "Message", messagePlaceholder: "Send this member a follow-up…",
-      send: "Send", interrupt: "Interrupt", retire: "Retire", lead: "Lead", unknown: "Unknown", noMembers: "No members yet",
-      taskBoard: "Task board", pending: "Pending", in_progress: "In progress", completed: "Completed", noTasks: "No tasks",
-      createTask: "Create task", taskTitle: "Task title", taskDescription: "Task description", dependencies: "Dependency task IDs (comma-separated)", files: "Files this task may edit (comma-separated)",
-      fileScope: "Files: {value}", conflicts: "File conflict risk: {value}", assignee: "Assignee", unassigned: "Unassigned", create: "Create", assign: "Assign", claim: "Claim", complete: "Complete", reopen: "Reopen",
-      dependsOn: "Depends on: {value}", blockedBy: "Blocked by: {value}", taskId: "Task {id}", messages: "Recent messages", noMessages: "No team messages",
-      closeTeam: "Close team", closeConfirm: "Close this team? Members will be stopped and unfinished tasks retained in history.",
-      retireConfirm: "Retire this member?", enabledHint: "The experiment is enabled. Ask the lead conversation to create a team; sensitive team mutations run only through authenticated model tools.", manageHint: "Open a member conversation to message or interrupt it. Ask the lead conversation to add members, assign tasks, or close the team.",
-      counts: "{members} members · {active} active · {done} done", current: "Current session", state: "State",
-      settingsTitle: "Agent Teams", settingsDescription: "Configure the native multi-agent team experiment and its global concurrency limits. Higher limits may increase model usage and cost.",
-      settingsEnabled: "Enable Agent Teams", settingsMaxMembers: "Maximum team members", settingsMaxActiveTurns: "Maximum active turns",
-      settingsSave: "Save settings", settingsSaving: "Saving…", settingsSaved: "Settings saved", settingsRange: "Enter a whole number from 1 to 8."
+      title: "Agent Teams", loading: "Loading team workspace…", retry: "Retry", loadError: "Could not load Agent Teams: {error}", actionError: "Action failed: {error}",
+      disabled: "Automatic teams are disabled", disabledBody: "After enabling, describe goals normally. AI decides whether a team is useful and keeps simple work solo.", enable: "Enable automatic teams", enabling: "Enabling…", disable: "Turn off automatic teams", disabling: "Turning off…", disableActiveHint: "Automatic teams cannot be turned off while a team is active. Ask the lead to finish work and close every active team first.", disableSafeHint: "Turning this off prevents new teams; closed-team history remains available.",
+      noTeam: "Automatic teams are ready", wizardIntro: "No team setup is required. Return to Chat and state the goal normally; AI decides whether to parallelize. The templates below are optional shortcuts.", backToChat: "Return to Chat and state a goal", chooseTemplate: "Optional: collaboration direction", defineObjective: "Optional: enter a goal now", prepare: "Put in composer", prepared: "The prompt is in the composer. Review it, then send it manually.", objectivePlaceholder: "For example: deliver the new team workspace and verify it",
+      research: "Research & verify", researchBody: "A researcher gathers evidence, an analyst cross-checks it, and the lead synthesizes findings.", build: "Build & review", buildBody: "Development makes changes, Review checks risk, and Test verifies the result.", incident: "Diagnose an issue", incidentBody: "Diagnosis, remediation, and regression verification move in parallel.", custom: "Custom team", customBody: "Enter only the objective; AI designs the members, responsibilities, task boundaries, and collaboration pattern.",
+      active: "Collaboration active", closed: "Team closed", closedBody: "This team no longer accepts member collaboration. Its members, tasks, and events remain available.", unknown: "Unknown", status: "Status", objective: "Team objective", connection: "Connection", live: "Live", polling: "Polling", stale: "Data may be stale", disconnected: "Reconnecting",
+      members: "Members", tasks: "Tasks", events: "Collaboration events", noMembers: "No members", noTasks: "No tasks", noEvents: "No collaboration events", lead: "Lead", leadRole: "Plans the goal and owns the result", openConversation: "View live work", currentTask: "Current task: {value}", model: "Model", mainModel: "Main model", subagentModel: "Subagent model", inheritsMain: "inherits main",
+      pending: "Pending", in_progress: "In progress", completed: "Completed", blocked: "Blocked", ready: "Ready for work", running: "Working", idle: "Turn complete", provisioning: "Starting", shutting_down: "Stopping", closing: "Closing", retired: "Retired", failed: "Failed", delivered: "Delivered", closedStatus: "Closed",
+      assignee: "Assignee", unassigned: "Unassigned", blockedBy: "Blocked by: {value}", dependencySources: "Cross-team dependencies: {value}", conflicts: "Conflicting tasks: {value}", files: "Files: {value}", filesHidden: "File scope hidden by the safety policy", taskFallback: "Task {id}", lastActivity: "Last activity: {value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}",
+      quickActions: "Prompt shortcuts", addMember: "Add member", newPeerTeam: "Add peer team", createTask: "Create task", coordinate: "Coordinate team", summarize: "Summarize progress", closeTeam: "Request shutdown", newTeam: "Create another team", draftOnly: "Actions write to the composer and never send automatically.", draftSet: "Prompt added to the composer.", creationSent: "Creation request sent; returning to Chat.", creationSentFallback: "Creation request sent. Use the Chat tab above to view the response.",
+      teamsOverview: "Team overview", teamCount: "{count} teams", activeTeams: "{count} active", closedTeams: "{count} closed", switchTeam: "Switch to team: {name}", crossTeam: "Cross-team activity", noCrossTeam: "No cross-team activity", backgroundHint: "Switching teams or views never stops background members.", teamTasks: "{active} active · {done} done", lastUpdated: "Updated {value}",
+      currentSession: "Current session", revision: "Revision {value}", settingsTitle: "Agent Teams", settingsDescription: "After enabling, describe goals normally and AI decides whether to use a team; simple work stays solo. Higher concurrency limits may increase model usage and cost.", settingsEnabled: "Enable automatic teams", settingsMaxMembers: "Maximum team members", settingsMaxActiveTurns: "Maximum active turns", settingsSave: "Save settings", settingsSaving: "Saving…", settingsSaved: "Settings saved", settingsRange: "Enter a whole number from 1 to 8.", settingsCloseTeamsFirst: "Close every active team from its lead conversation before disabling Agent Teams."
     };
     var currentLang = ((typeof navigator !== "undefined" && navigator.language) || "en").toLowerCase().indexOf("zh") === 0 ? "zh" : "en";
+    function isChinese() { return String(currentLang || "").toLowerCase().indexOf("zh") === 0; }
     var translate = function (key, vars) {
-      var text = (currentLang === "zh" ? zh : en)[key] || key;
+      var text = (isChinese() ? zh : en)[key] || key;
       Object.keys(vars || {}).forEach(function (name) { text = text.split("{" + name + "}").join(String(vars[name])); });
       return text;
     };
@@ -66,9 +47,9 @@ window.__ModuleLoader__.load({
     function useLocale() {
       var pair = useState(0);
       useEffect(function () {
-        var cb = function () { pair[1](function (n) { return n + 1; }); };
-        localeListeners.push(cb);
-        return function () { localeListeners = localeListeners.filter(function (item) { return item !== cb; }); };
+        var listener = function () { pair[1](function (value) { return value + 1; }); };
+        localeListeners.push(listener);
+        return function () { localeListeners = localeListeners.filter(function (item) { return item !== listener; }); };
       }, []);
       return translate;
     }
@@ -78,24 +59,17 @@ window.__ModuleLoader__.load({
       var style = document.createElement("style");
       style.id = "dsh-agent-teams-client-style";
       style.textContent = [
-        ".dat-btn{font:inherit;border:1px solid var(--dsw-alias-border-l3);border-radius:7px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);padding:5px 9px;cursor:pointer;line-height:1.25}",
-        ".dat-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}.dat-btn:focus-visible,.dat-field:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}",
-        ".dat-btn:disabled{opacity:.5;cursor:not-allowed}.dat-primary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border-color:transparent}",
-        ".dat-danger{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-secondary)}.dat-compact{padding:3px 7px;font-size:12px;white-space:nowrap}",
-        ".dat-overlay{position:fixed;inset:0;z-index:2400;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.46);backdrop-filter:blur(3px)}",
-        ".dat-modal{width:min(1040px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-shadow-lv4,0 22px 65px rgba(0,0,0,.35));font-family:var(--dsw-font-family,system-ui,sans-serif)}",
-        ".dat-modal-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}",
-        ".dat-body{padding:14px 16px}.dat-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dat-between{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}",
-        ".dat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:10px}.dat-card{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:11px;background:var(--dsw-alias-bg-layer-2);min-width:0}",
-        ".dat-field{box-sizing:border-box;width:100%;min-width:0;border:1px solid var(--dsw-alias-border-l3);border-radius:7px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);padding:7px 9px;font:inherit;font-size:13px}",
-        ".dat-label{display:block;font-size:12px;color:var(--dsw-alias-label-secondary);margin:7px 0 4px}.dat-meta{font-size:12px;color:var(--dsw-alias-label-tertiary);overflow-wrap:anywhere}.dat-section{margin-top:16px}.dat-section h3{font-size:14px;margin:0 0 8px}",
-        ".dat-badge{display:inline-flex;align-items:center;border:1px solid var(--dsw-alias-border-l3);border-radius:999px;padding:2px 7px;font-size:11px;color:var(--dsw-alias-label-secondary)}",
-        ".dat-dot{width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-state-success-primary);display:inline-block;margin-right:5px}.dat-warn{border:1px solid var(--dsw-alias-state-warn-secondary);background:var(--dsw-alias-state-warn-tertiary,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-state-warn-primary);border-radius:8px;padding:8px 10px;font-size:12px;margin-top:10px}",
-        ".dat-error{color:var(--dsw-alias-state-error-primary);font-size:12px;margin:8px 0}.dat-empty{text-align:center;padding:28px 12px;color:var(--dsw-alias-label-secondary)}",
-        ".dat-dock{width:100%;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer;text-align:left}",
-        ".dat-task-title{font-weight:600;font-size:13px;overflow-wrap:anywhere}.dat-columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.dat-column{min-width:0}.dat-column>h4{font-size:12px;margin:0 0 6px;color:var(--dsw-alias-label-secondary)}",
-        ".dat-message{border-left:2px solid var(--dsw-alias-brand-primary);padding:4px 8px;margin:5px 0;font-size:12px;overflow-wrap:anywhere}.dat-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}",
-        "@media(max-width:720px){.dat-overlay{padding:0;align-items:end}.dat-modal{width:100vw;max-height:94vh;border-radius:14px 14px 0 0}.dat-body{padding:12px}.dat-columns{grid-template-columns:1fr}.dat-grid{grid-template-columns:1fr}}"
+        ".dat-view{box-sizing:border-box;height:100%;min-height:0;overflow:auto;padding:18px 20px 28px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-family:var(--dsw-font-family,system-ui,sans-serif)}",
+        ".dat-shell{width:min(1260px,100%);margin:0 auto}.dat-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}.dat-title{font-size:20px;line-height:1.35;margin:0}.dat-subtitle{margin:5px 0 0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.5;overflow-wrap:anywhere}",
+        ".dat-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dat-badge{display:inline-flex;align-items:center;gap:5px;max-width:100%;border:1px solid var(--dsw-alias-border-l3);border-radius:999px;padding:3px 8px;color:var(--dsw-alias-label-secondary);font-size:12px;overflow-wrap:anywhere}.dat-dot{width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-state-success-primary);flex:none}",
+        ".dat-panel,.dat-card{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);border-radius:12px}.dat-panel{padding:16px}.dat-card{padding:11px;background:var(--dsw-alias-bg-layer-2);min-width:0}.dat-empty{text-align:center;padding:48px 18px}.dat-empty h2{margin:0 0 8px;font-size:18px}.dat-empty p{max-width:620px;margin:0 auto 16px;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.55}",
+        ".dat-btn{font:inherit;border:1px solid var(--dsw-alias-border-l3);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);padding:7px 11px;cursor:pointer;line-height:1.25}.dat-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}.dat-btn:focus-visible,.dat-field:focus-visible,.dat-template:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-btn:disabled{opacity:.5;cursor:not-allowed}.dat-primary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border-color:transparent}.dat-danger{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-secondary)}.dat-small{padding:4px 8px;font-size:12px}",
+        ".dat-error{border:1px solid var(--dsw-alias-state-error-secondary);border-radius:10px;padding:10px 12px;color:var(--dsw-alias-state-error-primary);font-size:13px;margin-bottom:12px}.dat-note{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}.dat-section-title{font-size:13px;margin:0 0 9px}.dat-field{box-sizing:border-box;width:100%;border:1px solid var(--dsw-alias-border-l3);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);padding:9px 10px;font:inherit;font-size:13px}.dat-label{display:block;margin:13px 0 6px;color:var(--dsw-alias-label-secondary);font-size:12px}",
+        ".dat-templates{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:9px}.dat-template{display:block;width:100%;text-align:left;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:12px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer}.dat-template[aria-pressed=true]{border-color:var(--dsw-alias-brand-primary);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary)}.dat-template strong{display:block;font-size:13px;margin-bottom:4px}.dat-template span{display:block;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}",
+        ".dat-columns{display:grid;grid-template-columns:minmax(210px,.8fr) minmax(280px,1.15fr) minmax(240px,1fr);gap:12px;align-items:start}.dat-column{min-width:0}.dat-column-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}.dat-column-head h2{font-size:14px;margin:0}.dat-stack{display:grid;gap:8px}.dat-card-title{font-size:13px;font-weight:650;overflow-wrap:anywhere}.dat-meta{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.dat-task-status{margin-top:7px}.dat-event{border-left:2px solid var(--dsw-alias-brand-primary);padding-left:9px}.dat-event time{display:block;color:var(--dsw-alias-label-tertiary);font-size:11px;margin-top:3px}",
+        ".dat-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:12px 0}.dat-closed{border-color:var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-layer-2);margin-bottom:12px}.dat-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}",
+        ".dat-overview{display:grid;grid-template-columns:minmax(260px,.9fr) minmax(300px,1.1fr);gap:12px;margin:14px 0}.dat-team-list{display:grid;gap:7px;max-height:280px;overflow:auto;list-style:none;margin:0;padding:0}.dat-team-choice{width:100%;text-align:left;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;padding:9px 10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer}.dat-team-choice[aria-current=true]{border-color:var(--dsw-alias-brand-primary);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary)}.dat-team-choice:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-cross-list{display:grid;gap:6px;max-height:280px;overflow:auto}.dat-cross-item{padding:7px 9px;border-left:2px solid var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2);border-radius:0 8px 8px 0}.dat-warn-text{color:var(--dsw-alias-state-warn-primary)}",
+        "@media(max-width:900px){.dat-columns{grid-template-columns:1fr 1fr}.dat-column:last-child{grid-column:1/-1}.dat-templates{grid-template-columns:1fr}.dat-overview{grid-template-columns:1fr}}@media(max-width:620px){.dat-view{padding:12px 10px 22px}.dat-head{display:block}.dat-head>.dat-row{margin-top:9px}.dat-columns{grid-template-columns:1fr}.dat-column:last-child{grid-column:auto}.dat-panel{padding:12px}}"
       ].join("\n");
       document.head.appendChild(style);
     }
@@ -105,55 +79,33 @@ window.__ModuleLoader__.load({
     function eventsUrl(sessionId) { return "/api/agent-teams/events?sessionId=" + encodeURIComponent(sessionId); }
     function fetchState(sessionId) {
       return fetch(stateUrl(sessionId), { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" } }).then(function (response) {
-        return response.json().catch(function () { return {}; }).then(function (data) {
-          if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
-          return data;
-        });
+        return response.json().catch(function () { return {}; }).then(function (data) { if (!response.ok) { var error = new Error(data.error || ("HTTP " + response.status)); error.code = data.code; error.status = response.status; throw error; } return data; });
       });
     }
     function postAction(sessionId, action, payload) {
-      return fetch("/api/agent-teams/action", {
-        method: "POST", credentials: "same-origin",
-        headers: { "content-type": "application/json", Accept: "application/json", "x-harness-agent-teams": "1" },
-        body: JSON.stringify(Object.assign({ sessionId: sessionId, action: action }, payload || {}))
-      }).then(function (response) {
-        return response.json().catch(function () { return {}; }).then(function (data) {
-          if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
-          return data;
-        });
+      return fetch("/api/agent-teams/action", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", Accept: "application/json", "x-harness-agent-teams": "1" }, body: JSON.stringify(Object.assign({ sessionId: sessionId, action: action }, payload || {})) }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) { if (!response.ok) { var error = new Error(data.error || ("HTTP " + response.status)); error.code = data.code; error.status = response.status; throw error; } return data; });
       });
     }
-
     function useTeamState(sessionId) {
       var statePair = useState(null), state = statePair[0], setState = statePair[1];
       var errorPair = useState(""), error = errorPair[0], setError = errorPair[1];
       var connectionPair = useState("disconnected"), connection = connectionPair[0], setConnection = connectionPair[1];
-      var reloadRef = useRef(function () {});
+      var reloadRef = useRef(function () {}), failureRef = useRef(0);
       useEffect(function () {
         if (!sessionId) return;
         var alive = true, source = null, poll = null;
         function load(silent) {
-          return fetchState(sessionId).then(function (next) {
-            if (!alive) return next;
-            setState(next); setError("");
-            return next;
-          }).catch(function (err) {
-            if (alive && !silent) setError(errorText(err));
-            throw err;
-          });
+          return fetchState(sessionId).then(function (next) { if (alive) { failureRef.current = 0; setState(next); setError(""); if (!source) setConnection("polling"); } return next; }).catch(function (err) { if (alive) { failureRef.current += 1; if (!silent) setError(errorText(err)); else if (failureRef.current >= 2) setConnection("stale"); } throw err; });
         }
-        function beginPolling() {
-          if (!alive || poll) return;
-          setConnection("polling");
-          poll = setInterval(function () { load(true).catch(function () {}); }, 4000);
-        }
+        function beginPolling() { if (!alive || poll) return; setConnection("polling"); poll = setInterval(function () { load(true).catch(function () {}); }, 4000); }
         reloadRef.current = function () { return load(false); };
         load(false).catch(function () {});
         if (typeof EventSource === "function") {
           try {
             source = new EventSource(eventsUrl(sessionId));
             source.onopen = function () { if (alive) setConnection("live"); };
-            var handleEvent = function (event) {
+            var update = function (event) {
               if (!alive) return;
               try {
                 var next = JSON.parse(event.data);
@@ -162,14 +114,9 @@ window.__ModuleLoader__.load({
                 else load(true).catch(function () {});
               } catch (_) { load(true).catch(function () {}); }
             };
-            source.onmessage = handleEvent;
-            source.addEventListener("snapshot", handleEvent);
-            source.addEventListener("state", handleEvent);
-            source.addEventListener("update", handleEvent);
-            source.onerror = function () {
-              if (source) { source.close(); source = null; }
-              beginPolling();
-            };
+            source.onmessage = update;
+            ["snapshot", "state", "update"].forEach(function (name) { source.addEventListener(name, update); });
+            source.onerror = function () { if (source) source.close(); source = null; beginPolling(); };
           } catch (_) { beginPolling(); }
         } else beginPolling();
         return function () { alive = false; if (source) source.close(); if (poll) clearInterval(poll); };
@@ -177,171 +124,332 @@ window.__ModuleLoader__.load({
       return { state: state, setState: setState, error: error, setError: setError, connection: connection, reload: function () { return reloadRef.current(); } };
     }
 
-    function FormField(props) {
-      return h("label", null, h("span", { className: "dat-label" }, props.label), props.multiline
-        ? h("textarea", { className: "dat-field", rows: props.rows || 3, value: props.value, placeholder: props.placeholder, required: props.required, onChange: function (e) { props.onChange(e.target.value); } })
-        : h("input", { className: "dat-field", type: props.type || "text", value: props.value, placeholder: props.placeholder, required: props.required, min: props.min, max: props.max, step: props.step, onChange: function (e) { props.onChange(e.target.value); } }));
-    }
     function Button(props) {
-      return h("button", { type: props.type || "button", className: "dat-btn" + (props.primary ? " dat-primary" : "") + (props.danger ? " dat-danger" : "") + (props.compact ? " dat-compact" : ""), disabled: props.disabled, title: props.title, "aria-label": props.ariaLabel || props.title, onClick: props.onClick }, props.children);
+      return h("button", { type: props.type || "button", className: "dat-btn" + (props.primary ? " dat-primary" : "") + (props.danger ? " dat-danger" : "") + (props.small ? " dat-small" : ""), disabled: props.disabled, onClick: props.onClick, "aria-label": props.ariaLabel }, props.children);
     }
-    function arrayText(value) {
-      if (!value) return "";
-      return (Array.isArray(value) ? value : [value]).map(function (item) { return typeof item === "object" ? (item.title || item.name || item.id || JSON.stringify(item)) : item; }).join(", ");
-    }
-    function memberId(member) { return member.id || member.memberId || member.sessionId || member.childSessionId; }
+    function arrayText(value) { return (Array.isArray(value) ? value : value ? [value] : []).map(function (item) { return typeof item === "object" ? item.title || item.name || item.teamName || item.id || JSON.stringify(item) : item; }).join(", "); }
+    function dependencySourceText(t, value) { return (value || []).map(function (item) { return (item.teamName || item.teamId || t("unknown")) + (item.teamStatus ? " · " + statusLabel(t, item.teamStatus) : ""); }).join(", "); }
+    function memberId(member) { return member.id || member.memberId || member.sessionId || member.childSessionId || member.name; }
     function memberSession(member) { return member.childSessionId || member.sessionId || member.id; }
-    function taskId(task) { return task.id || task.taskId; }
-
-    function MemberCard(props) {
-      var t = props.t, member = props.member;
-      var child = memberSession(member);
-      return h("article", { className: "dat-card" },
-        h("div", { className: "dat-between" },
-          h("div", null, h("div", { style: { fontWeight: 650 } }, member.name || child || t("unknown"), member.isLead || child === props.team.leadSessionId ? h("span", { className: "dat-badge", style: { marginLeft: 6 } }, t("lead")) : null), h("div", { className: "dat-meta" }, member.role || t("unknown"))),
-          h("span", { className: "dat-badge" }, member.state || member.status || t("unknown"))
-        ),
-        h("div", { className: "dat-meta", style: { marginTop: 6 } }, t("model") + ": " + (member.model || t("unknown"))),
-        h("div", { className: "dat-row", style: { marginTop: 8 } },
-          child ? h(Button, { compact: true, onClick: function () { props.open(child); } }, t("openConversation")) : null
-        ),
-        h("div", { className: "dat-meta", style: { marginTop: 8 } }, t("manageHint"))
-      );
+    function simpleMemberName(member, isLead, t) {
+      if (isLead) return t("lead");
+      var original = String(member.displayName || member.name || memberSession(member) || t("unknown"));
+      var simplified = isChinese() ? original.replace(/^(?:宿主|用户)/u, "").replace(/(?:负责人|实现者|执行者|协调器|作者|子代理)$/u, "").trim() : original.replace(/\s+(?:lead|implementer|executor|coordinator|author|subagent|worker)$/iu, "").trim();
+      var display = simplified || original, codePoints = Array.from(display);
+      return codePoints.length > 24 ? codePoints.slice(0, 23).join("") + "…" : display;
+    }
+    function taskId(task) { return task.id || task.taskId || task.title; }
+    function statusLabel(t, value) {
+      var normalized = String(value || "unknown").toLowerCase();
+      var aliases = { active: "running", working: "running", ready: "ready", pending: "pending", inprogress: "in_progress", "in-progress": "in_progress", done: "completed", complete: "completed", stopped: "retired", error: "failed", closed: "closedStatus" };
+      return t(aliases[normalized] || normalized);
+    }
+    function teamStatusLabel(t, value) { var normalized = String(value || "unknown").toLowerCase(); return normalized === "active" ? t("active") : normalized === "closed" ? t("closedStatus") : normalized === "closing" ? t("closing") : statusLabel(t, normalized); }
+    function formatTime(value) { if (!value) return ""; try { return new Date(value).toLocaleString(); } catch (_) { return String(value); } }
+    function teamId(team) { return team && (team.id || team.teamId || team.name || team.objective); }
+    function teamName(team, t) { return team && (team.name || team.objective || teamId(team)) || t("unknown"); }
+    function eventIdentity(event, fallbackTeamId) {
+      if (event && event.id) return "id:" + event.id;
+      return [event && event.fromTeamId || fallbackTeamId || "", event && event.toTeamId || "", event && event.fromSessionId || event && event.from || "", event && event.toSessionId || event && event.to || "", event && event.createdAt || event && event.timestamp || event && event.at || "", event && event.eventType || "", event && event.status || ""].join("|");
+    }
+    function pushUniqueEvent(target, seen, event, fallbackTeamId, entry) {
+      var key = eventIdentity(event, fallbackTeamId);
+      if (seen[key]) return;
+      seen[key] = true;
+      target.push(entry || event);
+    }
+    function teamsFromSnapshot(snapshot) {
+      if (!snapshot) return [];
+      var source = Array.isArray(snapshot.teams) ? snapshot.teams : Array.isArray(snapshot.relatedTeams) ? snapshot.relatedTeams : Array.isArray(snapshot.teamHistory) ? snapshot.teamHistory : [];
+      var teams = source.slice();
+      if (snapshot.team && !teams.some(function (item) { return teamId(item) === teamId(snapshot.team); })) teams.unshift(snapshot.team);
+      return teams;
     }
 
-    function TaskCard(props) {
-      var t = props.t, task = props.task, id = taskId(task);
-      var assigned = task.assigneeId || task.assignee || task.memberId || "";
-      return h("article", { className: "dat-card", style: { marginBottom: 7 } },
-        h("div", { className: "dat-task-title" }, task.title || task.name || t("taskId", { id: id })),
-        task.description ? h("div", { className: "dat-meta", style: { marginTop: 4 } }, task.description) : null,
-        h("div", { className: "dat-meta", style: { marginTop: 5 } }, "#" + id + " · " + t("assignee") + ": " + (props.memberName(assigned) || t("unassigned"))),
-        arrayText(task.dependencies || task.dependsOn) ? h("div", { className: "dat-meta" }, t("dependsOn", { value: arrayText(task.dependencies || task.dependsOn) })) : null,
-        arrayText(task.blockedBy) ? h("div", { className: "dat-meta", style: { color: "var(--dsw-alias-state-warn-primary)" } }, t("blockedBy", { value: arrayText(task.blockedBy) })) : null,
-        arrayText(task.files) ? h("div", { className: "dat-meta" }, t("fileScope", { value: arrayText(task.files) })) : null,
-        arrayText(task.conflictsWith) ? h("div", { className: "dat-meta", style: { color: "var(--dsw-alias-state-error-primary)" } }, t("conflicts", { value: arrayText(task.conflictsWith) })) : null
-      );
-    }
-
-    function Workbench(props) {
-      var t = useLocale(), live = props.live, snapshot = live.state;
-      var busyPair = useState(""), busy = busyPair[0], setBusy = busyPair[1];
-      var localErrorPair = useState(""), localError = localErrorPair[0], setLocalError = localErrorPair[1];
-      var closeRef = useRef(null);
-      useEffect(function () {
-        function keydown(event) { if (event.key === "Escape") props.onClose(); }
-        document.addEventListener("keydown", keydown); if (closeRef.current) closeRef.current.focus();
-        return function () { document.removeEventListener("keydown", keydown); };
-      }, []);
-      function act(action, payload) {
-        setBusy(action); setLocalError("");
-        return postAction(props.sessionId, action, payload).then(function (result) {
-          if (result && typeof result.enabled === "boolean" && Object.prototype.hasOwnProperty.call(result, "team")) live.setState(result);
-          else if (result && result.state && typeof result.state.enabled === "boolean") live.setState(result.state);
-          else return live.reload();
-          return result;
-        }).catch(function (err) { setLocalError(errorText(err)); throw err; }).finally(function () { setBusy(""); });
-      }
-      function openChild(childSessionId) { props.sessions.openSubagent({ parentSessionId: (snapshot && snapshot.team && snapshot.team.leadSessionId) || props.sessionId, childSessionId: childSessionId, mode: "continuable" }); props.onClose(); }
-      var team = snapshot && snapshot.team;
-      var config = snapshot && snapshot.config || {};
-      var members = team && team.members || [], tasks = team && team.tasks || [];
-      function nameFor(id) { var match = members.filter(function (m) { return memberId(m) === id || memberSession(m) === id; })[0]; return match && (match.name || memberId(match)); }
-      var connectionKey = live.connection === "live" ? "live" : (live.connection === "polling" ? "polling" : "disconnected");
-      return h("div", { className: "dat-overlay", onMouseDown: function (e) { if (e.target === e.currentTarget) props.onClose(); } },
-        h("section", { className: "dat-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "dat-title" },
-          h("header", { className: "dat-modal-head" }, h("div", null, h("div", { id: "dat-title", style: { fontWeight: 700 } }, t("title")), h("div", { className: "dat-meta" }, h("span", { className: "dat-dot", style: live.connection === "live" ? null : { background: "var(--dsw-alias-state-warn-primary)" } }), t(connectionKey))), h(Button, { compact: true, onClick: props.onClose, ariaLabel: t("close"), title: t("close") }, "×")),
-          h("div", { className: "dat-body" },
-            live.error ? h("div", { className: "dat-error" }, t("loadError", { error: live.error }), " ", h(Button, { compact: true, onClick: live.reload }, t("retry"))) : null,
-            localError ? h("div", { className: "dat-error", role: "alert" }, t("actionError", { error: localError })) : null,
-            !snapshot ? h("div", { className: "dat-empty" }, t("loading")) : !snapshot.enabled ? h("div", { className: "dat-empty" }, h("h3", null, t("experiment")), h("p", null, t("disabledBody")), h("label", { className: "dat-row", style: { justifyContent: "center", cursor: busy ? "default" : "pointer" } }, h("input", { type: "checkbox", role: "switch", checked: false, disabled: !!busy, onChange: function (event) { act("settings", { enabled: event.target.checked }).catch(function () {}); } }), h("strong", null, busy ? t("enabling") : t("enable")))) : !team ? h("div", { className: "dat-empty" },
-              h("h3", null, t("noTeam")), h("p", { className: "dat-meta" }, t("enabledHint"))
-            ) : h(React.Fragment, null,
-              h("div", { className: "dat-between" }, h("div", { style: { minWidth: 0, flex: "1 1 420px" } }, h("div", { className: "dat-row" }, h("span", { className: "dat-badge" }, t("status") + ": " + (team.status || t("unknown"))), h("span", { className: "dat-badge" }, t("maxMembers", { count: config.maxMembers || "–" })), h("span", { className: "dat-badge" }, t("maxTurns", { count: config.maxActiveTurns || "–" }))), h("h2", { style: { fontSize: 17, margin: "8px 0 3px", overflowWrap: "anywhere" } }, team.objective), h("div", { className: "dat-meta" }, "#" + team.id + " · rev " + team.revision)), h("span", { className: "dat-meta" }, t("manageHint"))),
-              h("div", { className: "dat-warn" }, t("costWarning")),
-              h("section", { className: "dat-section" }, h("div", { className: "dat-between" }, h("h3", null, t("memberSection") + " (" + members.length + ")"), h("span", { className: "dat-meta" }, t("current") + ": " + props.sessionId)), members.length ? h("div", { className: "dat-grid" }, members.map(function (member) { return h(MemberCard, { key: memberId(member), t: t, member: member, team: team, open: openChild }); })) : h("div", { className: "dat-card dat-meta" }, t("noMembers")),
-                h("div", { className: "dat-meta", style: { marginTop: 10 } }, t("manageHint"))
-              ),
-              h("section", { className: "dat-section" }, h("h3", null, t("taskBoard") + " (" + tasks.length + ")"), h("div", { className: "dat-columns" }, ["pending", "in_progress", "completed"].map(function (status) { var list = tasks.filter(function (taskItem) { return (taskItem.status || "pending") === status; }); return h("div", { className: "dat-column", key: status }, h("h4", null, t(status) + " · " + list.length), list.length ? list.map(function (taskItem) { return h(TaskCard, { key: taskId(taskItem), t: t, task: taskItem, memberName: nameFor }); }) : h("div", { className: "dat-card dat-meta" }, t("noTasks"))); })),
-                h("div", { className: "dat-meta", style: { marginTop: 10 } }, t("manageHint"))
-              ),
-              h("section", { className: "dat-section" }, h("h3", null, t("messages")), (team.messages || []).length ? h("div", { className: "dat-card" }, team.messages.slice(-8).reverse().map(function (msg, index) { return h("div", { className: "dat-message", key: msg.id || index }, h("strong", null, msg.fromName || msg.memberName || msg.from || t("unknown")), " — ", msg.text || msg.message || "", msg.createdAt ? h("div", { className: "dat-meta" }, new Date(msg.createdAt).toLocaleString()) : null); })) : h("div", { className: "dat-card dat-meta" }, t("noMessages")))
-            )
-          )
+    function DisableAutomaticTeams(props) {
+      var t = props.t;
+      return h("section", { className: "dat-panel", "aria-labelledby": props.labelId },
+        h("div", { className: "dat-row", style: { justifyContent: "space-between", alignItems: "flex-start" } },
+          h("div", { style: { flex: "1 1 320px" } }, h("h2", { id: props.labelId, className: "dat-section-title" }, t("disable")), h("p", { className: props.hasActive ? "dat-meta dat-warn-text" : "dat-meta", style: { margin: 0 } }, props.hasActive ? t("disableActiveHint") : t("disableSafeHint"))),
+          h(Button, { danger: true, disabled: props.busy || props.hasActive, onClick: props.disable, ariaLabel: t("disable") }, props.busy ? t("disabling") : t("disable"))
         )
       );
     }
 
-    function TeamEntry(props) {
-      var t = useLocale();
-      var openPair = useState(false), open = openPair[0], setOpen = openPair[1];
-      var live = useTeamState(props.sessionId);
-      return h(React.Fragment, null, h(Button, { compact: true, title: t("title"), onClick: function () { setOpen(true); } }, "⚭ ", t("button"), live.state && live.state.team ? h("span", { className: "dat-badge", style: { marginLeft: 5 } }, (live.state.team.members || []).length) : null), open ? h(Workbench, { sessionId: props.sessionId, sessions: props.sessions, live: live, onClose: function () { setOpen(false); } }) : null);
+    function FirstTeamWizard(props) {
+      var t = props.t;
+      var templatePair = useState("custom"), template = templatePair[0], setTemplate = templatePair[1];
+      var objectivePair = useState(""), objective = objectivePair[0], setObjective = objectivePair[1];
+      var templates = [
+        { id: "research", title: t("research"), body: t("researchBody") },
+        { id: "build", title: t("build"), body: t("buildBody") },
+        { id: "incident", title: t("incident"), body: t("incidentBody") },
+        { id: "custom", title: t("custom"), body: t("customBody") }
+      ];
+      function prepare() {
+        var selected = templates.filter(function (item) { return item.id === template; })[0];
+        var prompt = isChinese()
+          ? "请创建一个代理团队来完成以下目标：" + objective.trim() + "。" + (selected.id === "custom" ? "请完全根据目标自行设计团队。" : "以“" + selected.title + "”作为协作方向。") + "请由 AI 判断是否需要并行、需要多少成员、各自职责、任务依赖和互不冲突的文件边界；目标跨度较大时，可以由同一负责人创建多个同级团队，并建立跨团队依赖和负责人中继；先建立持久任务，再创建必要成员。负责人/大脑始终保持主模型；普通成员默认使用子代理模型来节省消耗，只有高复杂推理、架构或安全关键任务才使用主模型。成员名称使用“界面、测试、安全、文档”这类 2–6 字直白职责名，避免“宿主、协调器、执行器、实现者、子代理”等技术称谓。不要让用户设计团队结构，也不要为了凑人数创建成员。"
+          : "Create an agent team for this objective: " + objective.trim() + ". " + (selected.id === "custom" ? "Design the team entirely from the objective. " : "Use “" + selected.title + "” as the collaboration direction. ") + "AI must decide whether parallelism is useful, how many members are needed, their roles, task dependencies, and non-conflicting file boundaries. For a broad objective, the same root lead may create multiple peer teams with cross-team dependencies and lead-authenticated relays. Create durable tasks before only the necessary members. The root lead/brain must stay on the main model; default ordinary members to the subagent model to reduce cost, and use the main model only for complex reasoning, architecture, or security-critical work. Use short, plain function names such as UI, Test, Security, or Docs; avoid technical titles such as host, coordinator, executor, implementer, or subagent. Do not ask the user to design the team or add members just to fill seats.";
+        props.setDraft(prompt, { creation: true });
+      }
+      return h("section", { className: "dat-panel", "aria-labelledby": "dat-first-team" },
+        h("div", { className: "dat-empty", style: { paddingTop: 20, paddingBottom: 20 } }, h("h2", { id: "dat-first-team" }, t("noTeam")), h("p", null, t("wizardIntro")), typeof props.setView === "function" ? h(Button, { primary: true, onClick: function () { props.setView("chat"); } }, t("backToChat")) : null),
+        h(DisableAutomaticTeams, { t: t, labelId: "dat-disable-empty", disable: props.disable, busy: props.busy, hasActive: false }),
+        h("h3", { className: "dat-section-title", style: { marginTop: 16 } }, t("chooseTemplate")),
+        h("div", { className: "dat-templates", role: "group", "aria-label": t("chooseTemplate") }, templates.map(function (item) {
+          return h("button", { key: item.id, type: "button", className: "dat-template", "aria-pressed": template === item.id, onClick: function () { setTemplate(item.id); } }, h("strong", null, item.title), h("span", null, item.body));
+        })),
+        h("label", { className: "dat-label", htmlFor: "dat-objective" }, t("defineObjective")),
+        h("textarea", { id: "dat-objective", className: "dat-field", rows: 3, value: objective, placeholder: t("objectivePlaceholder"), onChange: function (event) { setObjective(event.target.value); } }),
+        h("div", { className: "dat-actions" }, h(Button, { primary: true, disabled: !objective.trim(), onClick: prepare }, t("prepare")), h("span", { className: "dat-note" }, t("draftOnly")))
+      );
     }
-    function TeamDock(props) {
+
+    function MemberCard(props) {
+      var member = props.member, t = props.t, child = memberSession(member);
+      var isLead = member.isLead || member.kind === "lead" || child === props.leadSessionId;
+      var address = !isLead && child && child.indexOf("provisioning:") !== 0 ? props.addressFor(child) : null;
+      var route = [member.provider, member.model].filter(Boolean).join(" / ") || t("unknown");
+      var tier = member.modelTier === "main" || isLead ? t("mainModel") : member.modelTier === "subagent" ? t("subagentModel") + (member.inheritsMain ? " (" + t("inheritsMain") + ")" : "") : "";
+      return h("article", { className: "dat-card" },
+        h("div", { className: "dat-row", style: { justifyContent: "space-between" } }, h("div", { className: "dat-card-title" }, simpleMemberName(member, isLead, t)), h("span", { className: "dat-badge" }, statusLabel(t, member.state || member.status))),
+        h("div", { className: "dat-meta", style: { marginTop: 4 } }, isLead ? t("leadRole") : member.role || t("unknown")),
+        h("div", { className: "dat-meta", style: { marginTop: 4 } }, t("model") + ": " + route + (tier ? " · " + tier : "")),
+        props.currentTask ? h("div", { className: "dat-meta", style: { marginTop: 4 } }, t("currentTask", { value: props.currentTask.title || props.currentTask.name || taskId(props.currentTask) })) : null,
+        member.lastActivityAt ? h("div", { className: "dat-meta", style: { marginTop: 4 } }, t("lastActivity", { value: formatTime(member.lastActivityAt) })) : null,
+        isLead ? h("div", { className: "dat-task-status" }, h("span", { className: "dat-badge" }, t("lead"))) : null,
+        address ? h("div", { style: { marginTop: 8 } }, h(Button, { small: true, onClick: function () { props.open(address); } }, t("openConversation"))) : null
+      );
+    }
+    function TaskCard(props) {
+      var task = props.task, t = props.t, id = taskId(task), assigned = task.assigneeId || task.assignee || task.memberId || "";
+      return h("article", { className: "dat-card" },
+        h("div", { className: "dat-card-title" }, task.title || task.name || t("taskFallback", { id: id })),
+        task.description ? h("div", { className: "dat-meta", style: { marginTop: 4 } }, task.description) : null,
+        h("div", { className: "dat-meta", style: { marginTop: 6 } }, "#" + id + " · " + t("assignee") + ": " + (props.memberName(assigned) || t("unassigned"))),
+        arrayText(task.blockedBy) ? h("div", { className: "dat-meta dat-warn-text" }, t("blockedBy", { value: arrayText(task.blockedBy) })) : null,
+        arrayText(task.dependencySources) ? h("div", { className: "dat-meta" }, t("dependencySources", { value: dependencySourceText(t, task.dependencySources) })) : null,
+        arrayText(task.conflictsWith) ? h("div", { className: "dat-meta dat-warn-text" }, t("conflicts", { value: arrayText(task.conflictsWith) })) : null,
+        arrayText(task.files || task.fileScope) ? h("div", { className: "dat-meta" }, t("files", { value: arrayText(task.files || task.fileScope) })) : task.fileScopeProjection && task.fileScopeProjection.projected === false ? h("div", { className: "dat-meta" }, t("filesHidden")) : null,
+        h("div", { className: "dat-task-status" }, h("span", { className: "dat-badge" }, statusLabel(t, task.status || "pending")))
+      );
+    }
+    function EventCard(props) {
+      var event = props.event, t = props.t, teamsById = props.teamsById || {};
+      var from = event.fromName || event.memberName || event.actorName || event.from || t("unknown");
+      var to = event.toName || event.toSessionId || t("unknown");
+      var status = statusLabel(t, event.status || event.eventType || "pending");
+      var fromTeam = event.fromTeamName || teamName(teamsById[event.fromTeamId], t), toTeam = event.toTeamName || teamName(teamsById[event.toTeamId], t);
+      var title = event.fromTeamId && event.toTeamId ? t("crossDelivery", { fromTeam: fromTeam, toTeam: toTeam, from: from, to: to, status: status }) : t("deliveryEvent", { from: from, to: to, status: status });
+      return h("article", { className: "dat-card dat-event" },
+        h("div", { className: "dat-card-title" }, title),
+        event.createdAt || event.timestamp || event.at ? h("time", { dateTime: event.createdAt || event.timestamp || event.at }, formatTime(event.createdAt || event.timestamp || event.at)) : null
+      );
+    }
+
+    function TeamOverview(props) {
+      var t = props.t, teams = props.teams;
+      var teamsById = {}; teams.forEach(function (team) { teamsById[teamId(team)] = team; });
+      var activeCount = teams.filter(function (team) { return String(team.status || team.state || "").toLowerCase() !== "closed"; }).length;
+      var crossEvents = [], seenCrossEvents = {};
+      function addCrossEvent(team, event) {
+        if (event.toTeamId && event.toTeamId !== (event.fromTeamId || teamId(team))) pushUniqueEvent(crossEvents, seenCrossEvents, event, teamId(team), { team: team, event: event });
+      }
+      teams.forEach(function (team) {
+        (team.events || team.messages || []).forEach(function (event) { addCrossEvent(team, event); });
+        (team.inboundEvents || []).forEach(function (event) { addCrossEvent(team, event); });
+      });
+      crossEvents.sort(function (left, right) { return Date.parse(right.event.createdAt || right.event.timestamp || right.event.at || 0) - Date.parse(left.event.createdAt || left.event.timestamp || left.event.at || 0); });
+      return h("section", { className: "dat-overview", "aria-labelledby": "dat-overview-title" },
+        h("div", { className: "dat-panel" },
+          h("div", { className: "dat-column-head" }, h("h2", { id: "dat-overview-title" }, t("teamsOverview")), h("span", { className: "dat-badge" }, t("teamCount", { count: teams.length }))),
+          h("div", { className: "dat-row", style: { marginBottom: 8 } }, h("span", { className: "dat-badge" }, t("activeTeams", { count: activeCount })), h("span", { className: "dat-badge" }, t("closedTeams", { count: teams.length - activeCount }))),
+          h("ul", { className: "dat-team-list" }, teams.map(function (team) {
+            var tasks = team.tasks || [], active = tasks.filter(function (task) { return (task.status || task.state) === "in_progress"; }).length, done = tasks.filter(function (task) { return (task.status || task.state) === "completed"; }).length;
+            var name = teamName(team, t), selected = teamId(team) === props.selectedId;
+            return h("li", { key: teamId(team) }, h("button", { type: "button", className: "dat-team-choice", "aria-current": selected ? "true" : undefined, "aria-label": t("switchTeam", { name: name }), onClick: function () { props.select(teamId(team)); } }, h("strong", { className: "dat-card-title" }, name), h("span", { className: "dat-meta", style: { display: "block", marginTop: 3 } }, teamStatusLabel(t, team.status || team.state), " · ", t("teamTasks", { active: active, done: done })), team.lastActivityAt || team.updatedAt ? h("span", { className: "dat-meta", style: { display: "block" } }, t("lastUpdated", { value: formatTime(team.lastActivityAt || team.updatedAt) })) : null));
+          })),
+          h("p", { className: "dat-note", style: { marginBottom: 0 } }, t("backgroundHint"))
+        ),
+        h("div", { className: "dat-panel" }, h("div", { className: "dat-column-head" }, h("h2", null, t("crossTeam")), h("span", { className: "dat-badge" }, crossEvents.length)),
+          h("div", { className: "dat-cross-list" }, crossEvents.length ? crossEvents.slice(0, 20).map(function (entry, index) {
+            var event = entry.event;
+            var fromTeam = teamsById[event.fromTeamId] || entry.team, toTeam = teamsById[event.toTeamId];
+            return h("div", { className: "dat-cross-item", key: eventIdentity(event, teamId(entry.team)) }, h("div", { className: "dat-card-title" }, t("crossDelivery", { fromTeam: event.fromTeamName || teamName(fromTeam, t), toTeam: event.toTeamName || teamName(toTeam, t), from: event.fromName || event.memberName || event.actorName || event.from || t("unknown"), to: event.toName || event.toSessionId || t("unknown"), status: statusLabel(t, event.status || event.eventType || "pending") })), event.createdAt || event.timestamp || event.at ? h("time", { className: "dat-meta", dateTime: event.createdAt || event.timestamp || event.at }, formatTime(event.createdAt || event.timestamp || event.at)) : null);
+          }) : h("div", { className: "dat-meta" }, t("noCrossTeam")))
+        )
+      );
+    }
+
+    function ActiveTeam(props) {
+      var t = props.t, team = props.team, members = team.members || [], tasks = team.tasks || [];
+      var events = [], seenEvents = {}, teamsById = {};
+      (props.teams || []).forEach(function (item) { teamsById[teamId(item)] = item; });
+      teamsById[teamId(team)] = team;
+      (team.events || team.messages || []).forEach(function (event) { pushUniqueEvent(events, seenEvents, event, teamId(team)); });
+      (team.inboundEvents || []).forEach(function (event) { pushUniqueEvent(events, seenEvents, event, event.fromTeamId); });
+      (props.teams || []).forEach(function (source) { if (teamId(source) !== teamId(team)) (source.events || source.messages || []).forEach(function (event) { if (event.toTeamId === teamId(team)) pushUniqueEvent(events, seenEvents, event, teamId(source)); }); });
+      events.sort(function (left, right) { return Date.parse(right.createdAt || right.timestamp || right.at || 0) - Date.parse(left.createdAt || left.timestamp || left.at || 0); });
+      function nameFor(id) { var found = members.filter(function (member) { return memberId(member) === id || memberSession(member) === id; })[0]; return found && (found.displayName || found.name || memberId(found)); }
+      function currentTaskFor(member) { var id = memberSession(member); return tasks.filter(function (task) { return (task.status || task.state) === "in_progress" && (task.assigneeSessionId || task.assigneeId || task.assignee || task.memberId) === id; })[0]; }
+      var objective = team.objective || t("unknown");
+      var targetContext = isChinese() ? "目标团队：‘" + teamName(team, t) + "’（team_id: " + teamId(team) + "）。" : "Target team: ‘" + teamName(team, t) + "’ (team_id: " + teamId(team) + "). ";
+      var teamSummary = (props.teams || []).map(function (item) { var itemTasks = item.tasks || [], activeTasks = itemTasks.filter(function (task) { return (task.status || task.state) === "in_progress"; }).length; return teamName(item, t) + " [" + teamId(item) + ", " + teamStatusLabel(t, item.status || item.state) + ", " + (isChinese() ? "目标：" : "objective: ") + String(item.objective || t("unknown")).slice(0, 160) + ", " + activeTasks + (isChinese() ? " 个进行中任务" : " active tasks") + "]"; }).join("; ");
+      function prompt(text, options) { props.setDraft(targetContext + text + (options && options.includeTeams && teamSummary ? (isChinese() ? " 当前团队安全摘要：" : " Current safe team summary: ") + teamSummary : ""), options); }
+      var prompts = isChinese() ? [
+        { key: "addMember", text: "请根据团队目标、当前任务缺口、成本和并行上限，判断是否真的需要新增成员。只有能明显减少重复工作并且文件边界不冲突时，才由你自动确定名称、职责、模型和首个任务；名称使用用户语言的 2–12 字符直白职责名（中文建议“界面、测试、安全、文档”这类 2–6 字名称，英文可用 UI、Test、Security、Docs），先创建持久任务再添加并分配成员；如果不需要，请说明原因且不要扩员。负责人始终使用主模型；新成员默认使用子代理模型，只有高复杂或高风险任务才分配主模型。" },
+        { key: "newPeerTeam", creation: true, includeTeams: true, text: "请根据当前项目目标、现有团队分工和成本，判断是否真的需要新增一个由同一负责人管理的同级协作团队。只有职责边界清楚且可以独立并行时才创建；由你自动确定新团队目标、必要成员、主/子模型分配、跨团队任务依赖和负责人中继。如果现有团队足够，请说明原因且不要创建。" },
+        { key: "createTask", text: "请把团队目标的下一步拆成一个任务，明确负责人、依赖关系和文件范围。" },
+        { key: "coordinate", text: "请检查团队当前阻塞和文件冲突，协调成员并更新任务分配。" },
+        { key: "summarize", text: "请汇总团队当前进展、风险、阻塞和下一步行动。" },
+        { key: "closeTeam", text: "请先收集所有成员的最终报告，确认没有进行中任务，再优雅退役成员并关闭团队。" }
+      ] : [
+        { key: "addMember", text: "Decide from the team objective, current task gaps, cost, and concurrency limit whether another member is genuinely useful. Only when it clearly reduces duplicated work and has a non-conflicting file boundary, choose a plain 2–12 character duty name in the user's language (for example UI, Test, Security, or Docs in English), role, model, and first task yourself; create the durable task before spawning and assigning the member. Otherwise explain why and do not expand the team. Keep the lead on the main model; default the new member to the subagent model and choose the main model only for highly complex or high-risk work." },
+        { key: "newPeerTeam", creation: true, includeTeams: true, text: "Decide from the project objective, existing team responsibilities, and cost whether another peer team under the same root lead is genuinely useful. Create it only with a clear independent boundary and useful parallelism. Choose its objective, necessary members, main/subagent model assignments, cross-team task dependencies, and lead-authenticated relays yourself. If the existing teams are enough, explain why and do not create one." },
+        { key: "createTask", text: "Break the next step toward the team objective into a task with an assignee, dependencies, and file scope." },
+        { key: "coordinate", text: "Review current blockers and file conflicts, coordinate members, and update task assignments." },
+        { key: "summarize", text: "Summarize the team’s progress, risks, blockers, and next actions." },
+        { key: "closeTeam", text: "Collect every member's final report, confirm that no task is still running, then gracefully retire members and close the team." }
+      ];
+      return h(React.Fragment, null,
+        props.closed ? h("section", { className: "dat-panel dat-closed", role: "status" }, h("strong", null, t("closed")), h("div", { className: "dat-meta", style: { marginTop: 4 } }, t("closedBody")), h("div", { style: { marginTop: 10 } }, h(Button, { small: true, onClick: function () { prompt(isChinese() ? "请询问我的下一个目标；收到目标后，由你判断是否需要团队并自动规划必要成员、任务依赖和文件边界，不要让我设计团队结构。" : "Ask for my next objective. After I provide it, decide whether a team is useful and design only the necessary members, task dependencies, and file boundaries yourself; do not ask me to design the team structure.", { creation: true, includeTeams: true }); } }, t("newTeam")))) : null,
+        h("div", { className: "dat-head" }, h("div", null, h("h2", { className: "dat-title" }, props.closed ? t("closed") : t("active")), h("p", { className: "dat-subtitle" }, objective)), h("div", { className: "dat-row" }, h("span", { className: "dat-badge" }, t("status") + ": " + teamStatusLabel(t, team.status)), h("span", { className: "dat-badge" }, t("revision", { value: team.revision || "–" })))),
+        !props.closed ? h("section", { "aria-labelledby": "dat-quick-actions" }, h("h2", { id: "dat-quick-actions", className: "dat-section-title" }, t("quickActions")), h("div", { className: "dat-actions" }, prompts.map(function (item) { return h(Button, { key: item.key, small: true, onClick: function () { prompt(item.text, { creation: item.creation, includeTeams: item.includeTeams }); } }, t(item.key)); }), h("span", { className: "dat-note" }, t("draftOnly")))) : null,
+        h("div", { className: "dat-columns" },
+          h("section", { className: "dat-column", "aria-labelledby": "dat-members" }, h("div", { className: "dat-column-head" }, h("h2", { id: "dat-members" }, t("members")), h("span", { className: "dat-badge" }, members.length)), h("div", { className: "dat-stack" }, members.length ? members.map(function (member) { return h(MemberCard, { key: memberId(member), member: member, currentTask: currentTaskFor(member), t: t, leadSessionId: team.leadSessionId, addressFor: props.addressFor, open: props.open }); }) : h("div", { className: "dat-card dat-meta" }, t("noMembers")))),
+          h("section", { className: "dat-column", "aria-labelledby": "dat-tasks" }, h("div", { className: "dat-column-head" }, h("h2", { id: "dat-tasks" }, t("tasks")), h("span", { className: "dat-badge" }, tasks.length)), h("div", { className: "dat-stack" }, tasks.length ? tasks.map(function (task) { return h(TaskCard, { key: taskId(task), task: task, t: t, memberName: nameFor }); }) : h("div", { className: "dat-card dat-meta" }, t("noTasks")))),
+          h("section", { className: "dat-column", "aria-labelledby": "dat-events" }, h("div", { className: "dat-column-head" }, h("h2", { id: "dat-events" }, t("events")), h("span", { className: "dat-badge" }, events.length)), h("div", { className: "dat-stack" }, events.length ? events.slice(0, 20).map(function (event, index) { return h(EventCard, { key: eventIdentity(event, teamId(team)), event: event, t: t, teamsById: teamsById }); }) : h("div", { className: "dat-card dat-meta" }, t("noEvents"))))
+        )
+      );
+    }
+
+    function TeamView(props) {
       var t = useLocale();
-      var openPair = useState(false), open = openPair[0], setOpen = openPair[1];
       var live = useTeamState(props.sessionId);
-      var team = live.state && live.state.team;
-      if (!team) return null;
-      var members = team.members || [], tasks = team.tasks || [];
-      var active = tasks.filter(function (item) { return item.status === "in_progress"; }).length;
-      var done = tasks.filter(function (item) { return item.status === "completed"; }).length;
-      return h(React.Fragment, null, h("button", { type: "button", className: "dat-dock", onClick: function () { setOpen(true); }, "aria-label": t("title") }, h("span", null, "⚭ ", h("strong", null, t("title")), " · ", team.objective), h("span", { style: { whiteSpace: "nowrap" } }, t("counts", { members: members.length, active: active, done: done }))), open ? h(Workbench, { sessionId: props.sessionId, sessions: props.sessions, live: live, onClose: function () { setOpen(false); } }) : null);
+      var inputPhase = props.useInput(function (state) { return state.phase; });
+      var inputDraft = props.useInput(function (state) { return state.draft; });
+      var inputDraftRev = props.useInput(function (state) { return state.draftRev; });
+      var busyPair = useState(false), busy = busyPair[0], setBusy = busyPair[1];
+      var actionErrorPair = useState(""), actionError = actionErrorPair[0], setActionError = actionErrorPair[1];
+      var noticePair = useState(""), notice = noticePair[0], setNotice = noticePair[1];
+      var selectedPair = useState(""), selectedId = selectedPair[0], setSelectedId = selectedPair[1];
+      var creationRef = useRef(null), previousPhaseRef = useRef(inputPhase);
+      var snapshot = live.state, teams = teamsFromSnapshot(snapshot);
+      var preferredId = snapshot && (snapshot.activeTeamId || snapshot.selectedTeamId) || snapshot && snapshot.team && teamId(snapshot.team);
+      var team = teams.filter(function (item) { return teamId(item) === selectedId; })[0] || teams.filter(function (item) { return teamId(item) === preferredId; })[0] || teams[0] || null;
+      useEffect(function () {
+        if (team && teamId(team) !== selectedId) setSelectedId(teamId(team));
+      }, [selectedId, preferredId, teams.map(teamId).join("|")]);
+      useEffect(function () {
+        var pending = creationRef.current;
+        if (pending && pending.observedInComposer && previousPhaseRef.current !== "submitting" && inputPhase === "submitting") {
+          pending.submitting = true;
+          pending.submittedDraft = inputDraft;
+          pending.submittedDraftRev = inputDraftRev;
+        }
+        if (pending && pending.submitting && previousPhaseRef.current === "submitting" && inputPhase === "plain") {
+          var draftConsumed = inputDraft === "" && inputDraftRev !== pending.submittedDraftRev;
+          if (draftConsumed) {
+            creationRef.current = null;
+            if (typeof props.setView === "function") {
+              setNotice(t("creationSent"));
+              props.setView("chat");
+            } else setNotice(t("creationSentFallback"));
+          } else pending.submitting = false;
+        }
+        previousPhaseRef.current = inputPhase;
+      }, [inputPhase, inputDraft, inputDraftRev, props.setView]);
+      useEffect(function () {
+        if (creationRef.current && inputDraft === creationRef.current.prompt) creationRef.current.observedInComposer = true;
+      }, [inputDraft]);
+      function setDraft(prompt, options) {
+        if (!props.inputActions || typeof props.inputActions.setDraft !== "function") { setActionError("inputActions.setDraft unavailable"); return; }
+        props.inputActions.setDraft(prompt);
+        if (options && options.creation) creationRef.current = { prompt: prompt, observedInComposer: false };
+        setNotice(t("draftSet"));
+      }
+      function applyActionState(result) {
+        if (result && result.state) { live.setState(result.state); return true; }
+        if (result && typeof result.enabled === "boolean") { live.setState(result); return true; }
+        return false;
+      }
+      function enable() {
+        setBusy(true); setActionError("");
+        postAction(props.sessionId, "settings", { enabled: true }).then(function (result) {
+          if (!applyActionState(result)) live.reload().catch(function () {});
+          if (typeof props.setView === "function") props.setView("chat");
+        }).catch(function (error) { setActionError(errorText(error)); }).finally(function () { setBusy(false); });
+      }
+      function disable() {
+        setBusy(true); setActionError("");
+        postAction(props.sessionId, "settings", { enabled: false }).then(function (result) {
+          if (!applyActionState(result)) return fetchState(props.sessionId).then(function (state) { live.setState(state); });
+        }).catch(function (error) {
+          setActionError(error && error.code === "AGENT_TEAMS_CONFLICT" ? t("disableActiveHint") : errorText(error));
+          return fetchState(props.sessionId).then(function (state) { live.setState(state); }).catch(function () {});
+        }).finally(function () { setBusy(false); });
+      }
+      function addressFor(childSessionId) {
+        try { return props.sessions && typeof props.sessions.subagentAddress === "function" ? props.sessions.subagentAddress(childSessionId) || null : null; } catch (_) { return null; }
+      }
+      function openChild(address) {
+        if (address && props.sessions && typeof props.sessions.openSubagent === "function") props.sessions.openSubagent(address);
+      }
+      var connectionKey = live.connection === "live" ? "live" : live.connection === "polling" ? "polling" : live.connection === "stale" ? "stale" : "disconnected";
+      var closed = !!(team && String(team.status || "").toLowerCase() === "closed");
+      var hasActiveTeams = teams.some(function (item) { return String(item.status || item.state || "").toLowerCase() !== "closed"; });
+      return h("main", { className: "dat-view", "aria-labelledby": "dat-view-title" }, h("div", { className: "dat-shell" },
+        h("div", { className: "dat-head" }, h("div", null, h("h1", { id: "dat-view-title", className: "dat-title" }, t("title")), h("p", { className: "dat-subtitle" }, t("currentSession") + ": " + props.sessionId)), h("span", { className: "dat-badge", title: t("connection") }, h("span", { className: "dat-dot", style: live.connection === "live" ? null : { background: "var(--dsw-alias-state-warn-primary)" } }), t(connectionKey))),
+        live.error ? h("div", { className: "dat-error", role: "alert" }, t("loadError", { error: live.error }), " ", h(Button, { small: true, onClick: live.reload }, t("retry"))) : null,
+        actionError ? h("div", { className: "dat-error", role: "alert" }, t("actionError", { error: actionError })) : null,
+        h("div", { className: "dat-sr", role: "status", "aria-live": "polite" }, notice),
+        !snapshot && !live.error ? h("div", { className: "dat-panel dat-empty", role: "status" }, t("loading")) : null,
+        snapshot && !snapshot.enabled ? h("section", { className: "dat-panel dat-empty", "aria-labelledby": "dat-disabled" }, h("h2", { id: "dat-disabled" }, t("disabled")), h("p", null, t("disabledBody")), h(Button, { primary: true, disabled: busy, onClick: enable }, busy ? t("enabling") : t("enable"))) : null,
+        snapshot && snapshot.enabled && teams.length === 0 ? h(FirstTeamWizard, { t: t, setDraft: setDraft, setView: props.setView, disable: disable, busy: busy }) : null,
+        snapshot && snapshot.enabled && teams.length > 0 ? h(React.Fragment, null,
+          h(DisableAutomaticTeams, { t: t, labelId: "dat-disable-teams", disable: disable, busy: busy, hasActive: hasActiveTeams }),
+          h(TeamOverview, { t: t, teams: teams, selectedId: team && teamId(team), select: setSelectedId }),
+          team ? h(ActiveTeam, { t: t, team: team, teams: teams, closed: closed, setDraft: setDraft, addressFor: addressFor, open: openChild }) : null
+        ) : null
+      ));
     }
 
     function resolveSettingsSessionId(sessions) {
-      try {
-        var current = sessions && sessions.list && sessions.list.getSnapshot().current;
-        if (typeof current === "string" && current) return current;
-        if (current && (current.sessionId || current.id)) return current.sessionId || current.id;
-      } catch (_) {}
+      try { var current = sessions && sessions.list && sessions.list.getSnapshot().current; if (typeof current === "string" && current) return current; if (current && (current.sessionId || current.id)) return current.sessionId || current.id; } catch (_) {}
       return "settings";
-    }
-    function useSettingsSessionId(sessions) {
-      var pair = useState(function () { return resolveSettingsSessionId(sessions); });
-      useEffect(function () {
-        if (!sessions || !sessions.list || typeof sessions.list.subscribe !== "function") return;
-        return sessions.list.subscribe(function () { pair[1](resolveSettingsSessionId(sessions)); });
-      }, [sessions]);
-      return pair[0];
     }
     function AgentTeamsSettings(props) {
       var t = useLocale();
-      var sessionId = useSettingsSessionId(props.sessions);
+      var sessionId = resolveSettingsSessionId(props.sessions);
       var valuesPair = useState({ enabled: false, maxMembers: 4, maxActiveTurns: 2 }), values = valuesPair[0], setValues = valuesPair[1];
       var loadingPair = useState(true), loading = loadingPair[0], setLoading = loadingPair[1];
       var savingPair = useState(false), saving = savingPair[0], setSaving = savingPair[1];
       var errorPair = useState(""), error = errorPair[0], setError = errorPair[1];
       var savedPair = useState(false), saved = savedPair[0], setSaved = savedPair[1];
+      function applyState(state) { var config = state.config || {}; setValues({ enabled: !!state.enabled, maxMembers: Number(config.maxMembers) || 4, maxActiveTurns: Number(config.maxActiveTurns) || 2 }); }
       useEffect(function () {
-        var alive = true;
-        setLoading(true); setError(""); setSaved(false);
-        fetchState(sessionId).then(function (state) {
-          if (!alive) return;
-          var config = state.config || {};
-          setValues({ enabled: !!state.enabled, maxMembers: Number(config.maxMembers) || 4, maxActiveTurns: Number(config.maxActiveTurns) || 2 });
-        }).catch(function (err) { if (alive) setError(errorText(err)); }).finally(function () { if (alive) setLoading(false); });
+        var alive = true; setLoading(true); setError("");
+        fetchState(sessionId).then(function (state) { if (alive) applyState(state); }).catch(function (err) { if (alive) setError(errorText(err)); }).finally(function () { if (alive) setLoading(false); });
         return function () { alive = false; };
       }, [sessionId]);
-      function numberInRange(value) { var number = Number(value); return Number.isInteger(number) && number >= 1 && number <= 8; }
+      function valid(value) { var number = Number(value); return Number.isInteger(number) && number >= 1 && number <= 8; }
       function submit(event) {
-        event.preventDefault();
-        if (!numberInRange(values.maxMembers) || !numberInRange(values.maxActiveTurns)) { setError(t("settingsRange")); return; }
-        var payload = { enabled: !!values.enabled, maxMembers: Number(values.maxMembers), maxActiveTurns: Number(values.maxActiveTurns) };
+        event.preventDefault(); if (!valid(values.maxMembers) || !valid(values.maxActiveTurns)) { setError(t("settingsRange")); return; }
         setSaving(true); setSaved(false); setError("");
-        postAction(sessionId, "settings", payload).then(function () { setSaved(true); }).catch(function (err) { setError(errorText(err)); }).finally(function () { setSaving(false); });
+        postAction(sessionId, "settings", { enabled: !!values.enabled, maxMembers: Number(values.maxMembers), maxActiveTurns: Number(values.maxActiveTurns) }).then(function (result) { if (result && result.state) applyState(result.state); setSaved(true); }).catch(function (err) {
+          setError(err && err.code === "AGENT_TEAMS_CONFLICT" ? t("settingsCloseTeamsFirst") : errorText(err));
+          return fetchState(sessionId).then(applyState).catch(function () {});
+        }).finally(function () { setSaving(false); });
       }
-      return h("section", { style: { maxWidth: 680, color: "var(--dsw-alias-label-primary)", fontFamily: "var(--dsw-font-family,system-ui,sans-serif)" }, "aria-labelledby": "dat-settings-title" },
-        h("h2", { id: "dat-settings-title", style: { fontSize: 17, margin: "0 0 4px" } }, t("settingsTitle")),
-        h("p", { className: "dat-meta", style: { margin: "0 0 14px", lineHeight: 1.5 } }, t("settingsDescription")),
-        loading ? h("div", { className: "dat-meta" }, t("loading")) : h("form", { onSubmit: submit, className: "dat-card" },
-          h("label", { className: "dat-between", style: { alignItems: "center", cursor: saving ? "default" : "pointer" } }, h("span", { style: { fontWeight: 600, fontSize: 13 } }, t("settingsEnabled")), h("input", { type: "checkbox", role: "switch", checked: values.enabled, disabled: saving, onChange: function (event) { setValues(Object.assign({}, values, { enabled: event.target.checked })); setSaved(false); } })),
-          h("div", { className: "dat-grid", style: { marginTop: 9 } },
-            h(FormField, { label: t("settingsMaxMembers"), type: "number", min: 1, max: 8, step: 1, value: values.maxMembers, onChange: function (value) { setValues(Object.assign({}, values, { maxMembers: value })); setSaved(false); } }),
-            h(FormField, { label: t("settingsMaxActiveTurns"), type: "number", min: 1, max: 8, step: 1, value: values.maxActiveTurns, onChange: function (value) { setValues(Object.assign({}, values, { maxActiveTurns: value })); setSaved(false); } })
-          ),
-          h("div", { className: "dat-between", style: { alignItems: "center", marginTop: 11 } }, h("div", null, error ? h("span", { className: "dat-error", role: "alert" }, t("actionError", { error: error })) : null, saved ? h("span", { className: "dat-meta", role: "status", style: { color: "var(--dsw-alias-state-success-primary)" } }, t("settingsSaved")) : null), h(Button, { type: "submit", primary: true, disabled: saving }, saving ? t("settingsSaving") : t("settingsSave")))
+      function numberField(id, label, key) { return h("label", { htmlFor: id }, h("span", { className: "dat-label" }, label), h("input", { id: id, className: "dat-field", type: "number", min: 1, max: 8, step: 1, value: values[key], onChange: function (event) { var next = {}; next[key] = event.target.value; setValues(Object.assign({}, values, next)); setSaved(false); } })); }
+      return h("section", { style: { maxWidth: 680, color: "var(--dsw-alias-label-primary)" }, "aria-labelledby": "dat-settings-title" },
+        h("h2", { id: "dat-settings-title" }, t("settingsTitle")), h("p", { className: "dat-meta" }, t("settingsDescription")),
+        loading ? h("div", { role: "status" }, t("loading")) : h("form", { onSubmit: submit, className: "dat-panel" },
+          h("label", { className: "dat-row", style: { justifyContent: "space-between" } }, h("span", null, t("settingsEnabled")), h("input", { type: "checkbox", role: "switch", checked: values.enabled, disabled: saving, onChange: function (event) { setValues(Object.assign({}, values, { enabled: event.target.checked })); setSaved(false); } })),
+          numberField("dat-max-members", t("settingsMaxMembers"), "maxMembers"), numberField("dat-max-turns", t("settingsMaxActiveTurns"), "maxActiveTurns"),
+          error ? h("div", { className: "dat-error", role: "alert" }, error) : null,
+          h("div", { className: "dat-actions" }, h(Button, { type: "submit", primary: true, disabled: saving }, saving ? t("settingsSaving") : t("settingsSave")), saved ? h("span", { className: "dat-note", role: "status" }, t("settingsSaved")) : null)
         )
       );
     }
@@ -352,12 +460,10 @@ window.__ModuleLoader__.load({
       try { translate = ctx.locale.bind(NS); } catch (_) {}
       try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {}
       try { ctx.locale.subscribe(function () { try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {} localeListeners.slice().forEach(function (listener) { listener(); }); }); } catch (_) {}
-      function Header(props) { return h(TeamEntry, { sessionId: props.sessionId, sessions: ctx.sessions }); }
-      function Dock(props) { return h(TeamDock, { sessionId: props.sessionId, sessions: ctx.sessions }); }
+      function View(props) { return h(TeamView, Object.assign({}, props, { sessions: ctx.sessions })); }
       function Settings() { return h(AgentTeamsSettings, { sessions: ctx.sessions }); }
+      ctx.slots.inject("conversation.view", function () { return ctx.slots.register({ name: "conversation.view", id: "agent-teams", order: 20, locale: NS, label: function () { return translate("title"); } }, View); });
       ctx.slots.inject("settings.section", function () { return ctx.slots.register({ name: "settings.section", id: "agent-teams-settings", order: 35, locale: NS, label: function () { return translate("settingsTitle"); } }, Settings); });
-      ctx.slots.inject("conversation.session.header.actions", function () { return ctx.slots.register({ name: "conversation.session.header.actions", id: "agent-teams", order: 30, locale: NS, label: function () { return translate("title"); } }, Header); });
-      ctx.slots.inject("conversation.input.dock", function () { return ctx.slots.register({ name: "conversation.input.dock", id: "agent-teams", order: 30, locale: NS, label: function () { return translate("title"); } }, Dock); });
     }
 
     exports.apply = apply;

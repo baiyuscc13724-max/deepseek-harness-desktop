@@ -56,6 +56,7 @@ test('cache metrics separate the latest warm request from the cold-start cumulat
   const conversationFixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js'), 'utf8')
   const conversationPatch = patchConversationCacheSource(conversationFixture)
   assert.match(conversationPatch.source, /useProjection\("tokenUsageDetail"\)/)
+  assert.match(conversationPatch.source, /setView: actions\.setView/)
   assert.match(conversationPatch.source, /最近一步缓存读取/)
   assert.match(conversationPatch.source, /提供方未报告/)
   assert.match(conversationPatch.source, /累计缓存读取 \{percent\}%（含首次冷启动）/)

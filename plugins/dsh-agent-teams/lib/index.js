@@ -8,18 +8,34 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 /** Host-only agent-team coordinator. A future client bundle is advertised by package metadata. */
 const name = "agent-teams";
 const inject = ["agents", "subagents", "tools", "systemPrompt", "webServer"];
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
+const LEGACY_STORE_VERSION = 1;
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_TEAM_MESSAGES = 500;
 const MAX_TEAM_TASKS = 1_000;
 const HARD_MAX_MEMBERS = 8;
+const HARD_MAX_TEAMS_PER_ROOT = 8;
 const DEFAULT_SETTINGS = Object.freeze({ enabled: false, maxMembers: 4, maxActiveTurns: 4 });
+const MODEL_ROUTING_FILE = "harness-desktop-model-routing.json";
+const MODEL_TIERS = Object.freeze(["main", "subagent"]);
+const MANAGED_MEMBER_DENIED_TOOLS = Object.freeze(["subagent", "subagent_fork", "workflow", "ralph"]);
+const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u;
+const MODEL_ID = /^\S{1,256}$/u;
 const TASK_STATES = Object.freeze(["pending", "in_progress", "completed"]);
 const MEMBER_STATES = Object.freeze([
   "provisioning", "running", "idle", "ready", "failed", "shutting_down", "retired",
 ]);
 const TEAM_STATES = Object.freeze(["active", "closing", "closed"]);
 const TRANSIENT_MEMBER_STATES = new Set(["provisioning", "running", "idle", "shutting_down"]);
+const STORE_MUTATION_CHAINS = new Map();
+const STORE_OPERATION_CHAINS = new Map();
+const TEAM_OPERATION_CHAINS = new Map();
+const GRACEFUL_ACTIVE_RUNS = new Map();
+const GRACEFUL_LIFECYCLE_WAITERS = new Map();
+const STORE_INSTANCES = new Map();
+const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages"]);
+const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt"]);
+const CROSS_DEPENDENCY_KEYS = new Set(["teamId", "taskId"]);
 const Config = z.object({
   enabled: z.boolean().default(false),
   maxMembers: z.number().step(1).min(1).max(HARD_MAX_MEMBERS).default(4),
@@ -29,6 +45,10 @@ const Config = z.object({
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function assertAllowedKeys(value, allowed, field) {
+  const unknown = Object.keys(value).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) throw new TypeError(`${field} contains unsupported fields: ${unknown.join(", ")}`);
+}
 function nonEmptyString(value, field, max = 16_384) {
   if (typeof value !== "string" || value.trim().length === 0 || value.length > max) {
     throw new TypeError(`${field} must be a non-empty string of at most ${max} characters`);
@@ -37,6 +57,105 @@ function nonEmptyString(value, field, max = 16_384) {
 }
 function optionalString(value, field, max = 16_384) {
   return value === undefined || value === null || value === "" ? undefined : nonEmptyString(value, field, max);
+}
+function optionalProvider(value) {
+  const provider = typeof value?.provider === "string" ? value.provider.trim() : "";
+  return PROVIDER_ID.test(provider) ? provider : undefined;
+}
+function optionalModelRoute(value) {
+  if (!isRecord(value)) return undefined;
+  const provider = typeof value.provider === "string" ? value.provider.trim() : "";
+  const model = typeof value.model === "string" ? value.model.trim() : "";
+  return PROVIDER_ID.test(provider) && MODEL_ID.test(model) ? { provider, model } : undefined;
+}
+async function readModelRouting(store) {
+  const file = join(dirname(dirname(store.filePath)), MODEL_ROUTING_FILE);
+  try {
+    const document = JSON.parse(await readFile(file, "utf8"));
+    if (!isRecord(document)) return {};
+    const main = optionalModelRoute(document.main);
+    const subagent = optionalModelRoute(document.subagent);
+    const sameRoute = main !== undefined && subagent !== undefined && main.provider === subagent.provider && main.model === subagent.model;
+    return {
+      main,
+      subagent,
+      subagentInheritsMain: document.subagent?.inheritMain === true || document.subagent?.inheritMain !== false && sameRoute,
+    };
+  } catch {
+    // Routing is optional and key-free. Any missing, unreadable, or malformed state
+    // safely falls back to Harness' inherited runtime defaults.
+    return {};
+  }
+}
+async function resolveModelSelection(store, tier, explicitModel, fallbackRoute) {
+  assertEnum(tier, MODEL_TIERS, "modelTier");
+  const routing = await readModelRouting(store);
+  const fallback = optionalModelRoute(fallbackRoute);
+  const fallbackProvider = optionalProvider(fallbackRoute);
+  const model = optionalString(explicitModel, "model", 256);
+  if (model !== undefined && !MODEL_ID.test(model)) throw new TypeError("model must be a non-whitespace model identifier");
+  if (model !== undefined) {
+    // Backward compatibility: explicit model inherits the exact live lead's
+    // provider first. Routing is only a safe fallback when that provider is absent.
+    const provider = fallbackProvider ?? routing.main?.provider ?? routing[tier]?.provider;
+    const providerSource = fallbackProvider !== undefined ? "live-lead" : routing.main?.provider !== undefined ? "routing-main" : routing[tier]?.provider !== undefined ? `routing-${tier}` : "runtime-default";
+    return {
+      modelTier: tier,
+      inheritsMain: false,
+      routeSource: `${providerSource}-explicit-model`,
+      ...(provider === undefined ? {} : { provider }),
+      model,
+    };
+  }
+  let selected = routing[tier];
+  let routeSource = selected === undefined ? undefined : `routing-${tier}`;
+  let inheritsMain = false;
+  if (tier === "subagent") {
+    if (selected !== undefined) inheritsMain = routing.subagentInheritsMain === true;
+    else if (routing.main !== undefined) {
+      selected = routing.main;
+      routeSource = "routing-main";
+      inheritsMain = true;
+    } else {
+      selected = fallback;
+      routeSource = selected === undefined ? "runtime-default" : "live-lead";
+      inheritsMain = true;
+    }
+  } else if (selected === undefined) {
+    selected = fallback;
+    routeSource = selected === undefined ? "runtime-default" : "live-lead";
+  }
+  return {
+    modelTier: tier,
+    inheritsMain,
+    routeSource,
+    ...(selected?.provider === undefined ? {} : { provider: selected.provider }),
+    ...(selected?.model === undefined ? {} : { model: selected.model }),
+  };
+}
+function canonicalMemberName(value, field = "member name") {
+  return nonEmptyString(value, field, 120).normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+function normalizeMemberName(value, field = "member name") {
+  const normalized = canonicalMemberName(value, field);
+  if (normalized.length === 0 || normalized.length > 120 || /[\p{Cc}\p{Cf}\p{Cs}]/u.test(normalized)) {
+    throw new TypeError(`${field} must be a visible display name of at most 120 characters`);
+  }
+  return normalized;
+}
+function normalizeWorkerName(value) {
+  const normalized = normalizeMemberName(value, "name");
+  const length = [...normalized].length;
+  const forbidden = ["宿主", "协调器", "执行器", "实现者", "子代理", "host", "coordinator", "executor", "implementer", "subagent"];
+  if (length < 2 || length > 24 || !/^[\p{L}\p{N}][\p{L}\p{N}\p{M}]*(?: [\p{L}\p{N}][\p{L}\p{N}\p{M}]*)*$/u.test(normalized) || forbidden.some((term) => normalized.toLowerCase().includes(term))) {
+    reject("worker name must be a plain 2–24 code-point duty name in the user's language and must not use internal agent terminology", "AGENT_TEAMS_INVALID_MEMBER_NAME");
+  }
+  return normalized;
+}
+function memberNameKey(value) {
+  // Persisted v1.0.27 names were only trimmed. Keep their NFKC identity usable on
+  // upgrade (including ZWJ emoji), while normalizeMemberName stays strict for new input.
+  return canonicalMemberName(value).toLowerCase();
 }
 function safeLimit(value, field, fallback, maximum = HARD_MAX_MEMBERS) {
   const resolved = value ?? fallback;
@@ -76,6 +195,13 @@ function validateMember(member) {
   assertIsoDate(member.updatedAt, "member.updatedAt");
   optionalString(member.runId, "member.runId", 256);
   optionalString(member.model, "member.model", 256);
+  const provider = optionalString(member.provider, "member.provider", 128);
+  if (provider !== undefined && !PROVIDER_ID.test(provider)) throw new TypeError("member.provider is invalid");
+  if (member.modelTier !== undefined) assertEnum(member.modelTier, MODEL_TIERS, "member.modelTier");
+  if (member.inheritsMain !== undefined && typeof member.inheritsMain !== "boolean") throw new TypeError("member.inheritsMain must be boolean");
+  optionalString(member.routeSource, "member.routeSource", 64);
+  if (member.shutdownUnconfirmed !== undefined && typeof member.shutdownUnconfirmed !== "boolean") throw new TypeError("member.shutdownUnconfirmed must be boolean");
+  if (member.stopUnconfirmed !== undefined && typeof member.stopUnconfirmed !== "boolean") throw new TypeError("member.stopUnconfirmed must be boolean");
   optionalString(member.error, "member.error", 4_096);
   return member;
 }
@@ -83,11 +209,23 @@ function validateMember(member) {
 /** Validate one persisted task and its dependency shape. */
 function validateTask(task) {
   if (!isRecord(task)) throw new TypeError("task must be an object");
+  assertAllowedKeys(task, TASK_KEYS, "task");
   nonEmptyString(task.id, "task.id", 256);
   nonEmptyString(task.title, "task.title", 500);
   optionalString(task.description, "task.description", 32_768);
   assertEnum(task.state, TASK_STATES, "task.state");
   assertStringArray(task.dependsOn, "task.dependsOn");
+  if (task.crossTeamDependsOn !== undefined) {
+    if (!Array.isArray(task.crossTeamDependsOn)) throw new TypeError("task.crossTeamDependsOn must be an array");
+    for (const dependency of task.crossTeamDependsOn) {
+      if (!isRecord(dependency)) throw new TypeError("cross-team task dependencies must be objects");
+      assertAllowedKeys(dependency, CROSS_DEPENDENCY_KEYS, "cross-team task dependency");
+      nonEmptyString(dependency.teamId, "cross-team dependency teamId", 256);
+      nonEmptyString(dependency.taskId, "cross-team dependency taskId", 256);
+    }
+    const keys = task.crossTeamDependsOn.map((dependency) => `${dependency.teamId}:${dependency.taskId}`);
+    if (new Set(keys).size !== keys.length) throw new TypeError("cross-team task dependencies must be unique");
+  }
   if (task.files !== undefined) assertStringArray(task.files, "task.files");
   if (new Set(task.dependsOn).size !== task.dependsOn.length || task.dependsOn.includes(task.id)) {
     throw new TypeError("task dependencies must be unique and cannot include the task itself");
@@ -106,6 +244,7 @@ function validateMessage(message) {
   nonEmptyString(message.id, "message.id", 256);
   nonEmptyString(message.fromSessionId, "message.fromSessionId", 256);
   nonEmptyString(message.toSessionId, "message.toSessionId", 256);
+  optionalString(message.toTeamId, "message.toTeamId", 256);
   nonEmptyString(message.body, "message.body", 65_536);
   assertIsoDate(message.createdAt, "message.createdAt");
   if (message.status !== undefined) assertEnum(message.status, ["pending", "delivered", "failed"], "message.status");
@@ -117,6 +256,7 @@ function validateMessage(message) {
 /** Validate one team and all cross-record references. */
 function validateTeam(team) {
   if (!isRecord(team)) throw new TypeError("team must be an object");
+  assertAllowedKeys(team, TEAM_KEYS, "team");
   nonEmptyString(team.id, "team.id", 256);
   nonEmptyString(team.rootLeadSessionId, "team.rootLeadSessionId", 256);
   nonEmptyString(team.name, "team.name", 500);
@@ -159,26 +299,93 @@ function validateTeam(team) {
   for (const message of team.messages) {
     if (messageIds.has(message.id)) throw new TypeError("team message ids must be unique");
     messageIds.add(message.id);
-    if (!sessions.has(message.fromSessionId) || !sessions.has(message.toSessionId)) throw new TypeError(`message ${message.id} must stay within its team`);
+    if (!sessions.has(message.fromSessionId)) throw new TypeError(`message ${message.id} sender must belong to its source team`);
+    if ((message.toTeamId === undefined || message.toTeamId === team.id) && !sessions.has(message.toSessionId)) {
+      throw new TypeError(`message ${message.id} recipient must belong to its team`);
+    }
   }
   return team;
 }
 
-/** Validate and normalize the complete disk document. */
+function taskNodeKey(teamId, taskId) {
+  return JSON.stringify([teamId, taskId]);
+}
+function crossTaskReference(dependency) {
+  return `${dependency.teamId}:${dependency.taskId}`;
+}
+function parseCrossTaskReference(reference) {
+  const value = nonEmptyString(reference, "cross-team task dependency", 513);
+  const separator = value.indexOf(":");
+  if (separator <= 0 || separator === value.length - 1) throw new TypeError("cross-team task dependencies must use team_id:task_id");
+  return {
+    teamId: nonEmptyString(value.slice(0, separator), "dependency teamId", 256),
+    taskId: nonEmptyString(value.slice(separator + 1), "dependency taskId", 256),
+  };
+}
+
+/** Validate and normalize the complete disk document. Version 1 migrates in place without reshaping records. */
 function validateStoreDocument(document) {
-  if (!isRecord(document) || document.version !== STORE_VERSION || !isRecord(document.settings) || !Array.isArray(document.teams)) {
+  if (!isRecord(document) || ![LEGACY_STORE_VERSION, STORE_VERSION].includes(document.version) || !isRecord(document.settings) || !Array.isArray(document.teams)) {
     throw new TypeError("agent teams store has an unsupported shape or version");
   }
+  if (document.version === LEGACY_STORE_VERSION) document.version = STORE_VERSION;
   document.settings.enabled = Boolean(document.settings.enabled);
   document.settings.maxMembers = safeLimit(document.settings.maxMembers, "settings.maxMembers", 4);
   document.settings.maxActiveTurns = safeLimit(document.settings.maxActiveTurns, "settings.maxActiveTurns", 4);
   document.teams.forEach(validateTeam);
-  const activeLeads = new Set();
+  const teamsById = new Map(document.teams.map((team) => [team.id, team]));
+  if (teamsById.size !== document.teams.length) throw new TypeError("team ids must be unique");
+  const rootLeadSessions = new Set(document.teams.map((team) => team.rootLeadSessionId));
+  const openTeamCounts = new Map();
   for (const team of document.teams) {
     if (team.state === "closed") continue;
-    if (activeLeads.has(team.rootLeadSessionId)) throw new TypeError("more than one active team exists for a root lead session");
-    activeLeads.add(team.rootLeadSessionId);
+    const count = (openTeamCounts.get(team.rootLeadSessionId) ?? 0) + 1;
+    if (count > HARD_MAX_TEAMS_PER_ROOT) throw new TypeError(`a root lead cannot own more than ${HARD_MAX_TEAMS_PER_ROOT} unclosed peer teams`);
+    openTeamCounts.set(team.rootLeadSessionId, count);
   }
+  const activeWorkers = new Set();
+  for (const team of document.teams) {
+    if (team.state !== "closed") {
+      for (const member of team.members) {
+        if (member.kind !== "worker" || member.state === "retired") continue;
+        if (rootLeadSessions.has(member.sessionId)) throw new TypeError("a root lead session cannot also be an active worker; nested teams are forbidden");
+        if (activeWorkers.has(member.sessionId)) throw new TypeError("an active worker session cannot belong to multiple teams");
+        activeWorkers.add(member.sessionId);
+      }
+    }
+    for (const task of team.tasks) {
+      for (const dependency of task.crossTeamDependsOn ?? []) {
+        const target = teamsById.get(dependency.teamId);
+        if (target === undefined) throw new TypeError(`task ${task.id} references an unknown dependency team`);
+        if (target.rootLeadSessionId !== team.rootLeadSessionId) throw new TypeError(`task ${task.id} crosses fixed root leads`);
+        if (target.tasks.every((candidate) => candidate.id !== dependency.taskId)) throw new TypeError(`task ${task.id} references an unknown cross-team task`);
+        if (dependency.teamId === team.id && dependency.taskId === task.id) throw new TypeError("a task cannot depend on itself across teams");
+      }
+    }
+    for (const message of team.messages) {
+      if (message.toTeamId === undefined || message.toTeamId === team.id) continue;
+      const target = teamsById.get(message.toTeamId);
+      if (target === undefined) throw new TypeError(`message ${message.id} references an unknown target team`);
+      if (target.rootLeadSessionId !== team.rootLeadSessionId || message.fromSessionId !== team.rootLeadSessionId) {
+        throw new TypeError(`message ${message.id} crosses teams without their common fixed root lead`);
+      }
+      if (memberOf(target, message.toSessionId) === undefined) throw new TypeError(`message ${message.id} has an unknown target-team recipient`);
+    }
+  }
+  const taskNodes = new Map(document.teams.flatMap((team) => team.tasks.map((task) => [taskNodeKey(team.id, task.id), { team, task }])));
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (key) => {
+    if (visiting.has(key)) throw new TypeError("cross-team task dependency cycle detected");
+    if (visited.has(key)) return;
+    visiting.add(key);
+    const node = taskNodes.get(key);
+    for (const taskId of node.task.dependsOn) visit(taskNodeKey(node.team.id, taskId));
+    for (const dependency of node.task.crossTeamDependsOn ?? []) visit(taskNodeKey(dependency.teamId, dependency.taskId));
+    visiting.delete(key);
+    visited.add(key);
+  };
+  for (const key of taskNodes.keys()) visit(key);
   return document;
 }
 
@@ -200,38 +407,166 @@ function deriveTask(task, tasks) {
     conflictsWith,
   };
 }
-function projectTeam(team) {
-  const members = team.members.map((member) => ({ ...clone(member), status: member.state }));
-  const names = new Map(members.map((member) => [member.sessionId, member.name]));
+function deriveTaskAcrossTeams(task, team, teams) {
+  const base = deriveTask(task, team.tasks);
+  const teamsById = new Map(teams.map((candidate) => [candidate.id, candidate]));
+  const crossTeamDependencies = clone(task.crossTeamDependsOn ?? []);
+  const crossReferences = crossTeamDependencies.map(crossTaskReference);
+  const crossBlockedBy = crossTeamDependencies.filter((dependency) => {
+    const target = teamsById.get(dependency.teamId)?.tasks.find((candidate) => candidate.id === dependency.taskId);
+    return target?.state !== "completed";
+  }).map(crossTaskReference);
+  const dependencySources = [...new Map(crossTeamDependencies.map((dependency) => {
+    const source = teamsById.get(dependency.teamId);
+    return [dependency.teamId, {
+      teamId: dependency.teamId,
+      teamName: source?.name ?? dependency.teamId,
+      teamStatus: source?.state ?? "unavailable",
+    }];
+  })).values()];
+  return {
+    ...base,
+    crossTeamDependencies,
+    dependencySources,
+    dependencies: [...base.dependencies, ...crossReferences],
+    blockedBy: [...base.blockedBy, ...crossBlockedBy],
+  };
+}
+function progressedDependents(document, teamId, taskId) {
+  const reference = taskNodeKey(teamId, taskId);
+  return document.teams.flatMap((team) => team.tasks
+    .filter((task) => task.state !== "pending" && (
+      team.id === teamId && task.dependsOn.includes(taskId)
+      || (task.crossTeamDependsOn ?? []).some((dependency) => taskNodeKey(dependency.teamId, dependency.taskId) === reference)
+    ))
+    .map((task) => `${team.id}:${task.id}`));
+}
+function latestTimestamp(values) {
+  return values.filter((value) => typeof value === "string" && !Number.isNaN(Date.parse(value)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+}
+function memberLastActivityAt(member, team) {
+  return latestTimestamp([
+    member.updatedAt,
+    ...team.tasks.filter((task) => task.assigneeSessionId === member.sessionId).map((task) => task.updatedAt),
+    ...team.messages.filter((message) => message.fromSessionId === member.sessionId || message.toSessionId === member.sessionId)
+      .flatMap((message) => [message.createdAt, message.deliveredAt]),
+  ]) ?? member.updatedAt;
+}
+function projectMessageEvent(message, names, sourceTeamId) {
+  return {
+    id: message.id,
+    eventType: "delivery",
+    ...(sourceTeamId === undefined ? {} : { fromTeamId: sourceTeamId }),
+    ...(message.toTeamId === undefined ? {} : { toTeamId: message.toTeamId }),
+    fromSessionId: message.fromSessionId,
+    toSessionId: message.toSessionId,
+    fromName: names.get(message.fromSessionId) ?? message.fromSessionId,
+    toName: names.get(message.toSessionId) ?? message.toSessionId,
+    status: message.status ?? "pending",
+    createdAt: message.createdAt,
+    ...(message.deliveredAt === undefined ? {} : { deliveredAt: message.deliveredAt }),
+  };
+}
+function projectTeam(team, nameTeams = []) {
+  const members = team.members.map((member) => ({
+    ...clone(member),
+    displayName: canonicalMemberName(member.name),
+    status: member.state,
+    lastActivityAt: memberLastActivityAt(member, team),
+  }));
+  const relatedMembers = Array.isArray(nameTeams) ? nameTeams.flatMap((candidate) => candidate.members ?? []) : [];
+  const names = new Map([...relatedMembers, ...members].map((member) => [member.sessionId, canonicalMemberName(member.displayName ?? member.name)]));
+  const taskTeams = Array.isArray(nameTeams) ? [...new Map([team, ...nameTeams].map((candidate) => [candidate.id, candidate])).values()] : [team];
+  const tasks = team.tasks.map((task) => deriveTaskAcrossTeams(task, team, taskTeams));
+  const messages = team.messages.map((message) => projectMessageEvent(message, names, team.id));
   return {
     ...clone(team),
     leadSessionId: team.rootLeadSessionId,
     objective: team.objective ?? team.name,
     status: team.state,
     revision: team.revision ?? 1,
+    lastActivityAt: latestTimestamp([
+      team.updatedAt,
+      ...members.map((member) => member.lastActivityAt),
+      ...tasks.map((task) => task.updatedAt),
+      ...messages.flatMap((message) => [message.createdAt, message.deliveredAt]),
+    ]) ?? team.updatedAt,
     members,
-    tasks: team.tasks.map((task) => deriveTask(task, team.tasks)),
-    messages: team.messages.map((message) => ({
-      ...clone(message),
-      text: message.body,
-      fromName: names.get(message.fromSessionId) ?? message.fromSessionId,
+    tasks,
+    // Public projections intentionally expose delivery metadata only. Durable message
+    // bodies remain host-private and are used solely for the authenticated relay.
+    messages,
+  };
+}
+function boundedTeamDisplayName(value) {
+  return [...nonEmptyString(value, "team display name", 200).normalize("NFKC")].slice(0, 80).join("");
+}
+function projectInboundEvents(team, nameTeams = []) {
+  const peers = Array.isArray(nameTeams) ? nameTeams : [];
+  const names = new Map([team, ...peers].flatMap((candidate) => candidate.members ?? [])
+    .map((member) => [member.sessionId, canonicalMemberName(member.name)]));
+  const inbound = new Map();
+  for (const source of peers) {
+    if (source.id === team.id) continue;
+    for (const message of source.messages ?? []) {
+      if (message.toTeamId !== team.id) continue;
+      const event = {
+        ...projectMessageEvent(message, names, source.id),
+        fromTeamName: boundedTeamDisplayName(source.name),
+        toTeamName: boundedTeamDisplayName(team.name),
+      };
+      inbound.set(`${source.id}:${message.id}`, event);
+    }
+  }
+  return [...inbound.values()];
+}
+function projectTeamForUi(team, nameTeams = []) {
+  const projected = projectTeam(team, nameTeams);
+  return {
+    ...projected,
+    // Cross-team inbound delivery history is metadata-only; message bodies remain host-private.
+    inboundEvents: projectInboundEvents(team, nameTeams),
+    members: projected.members.map((member) => ({
+      id: member.id,
+      sessionId: member.sessionId,
+      name: member.name,
+      displayName: member.displayName,
+      role: member.role,
+      model: member.model,
+      provider: member.provider,
+      modelTier: member.modelTier,
+      inheritsMain: member.inheritsMain,
+      routeSource: member.routeSource,
+      kind: member.kind,
+      state: member.state,
+      status: member.status,
+      createdAt: member.createdAt,
+      updatedAt: member.updatedAt,
+      lastActivityAt: member.lastActivityAt,
+    })),
+    tasks: projected.tasks.map(({ description, files, ...task }) => ({
+      ...task,
+      // Titles are already bounded and are the only task text safe enough for a brief.
+      summary: task.title,
+      ...(files.length === 0 ? { fileScope: [] } : {}),
+      fileScopeProjection: files.length === 0
+        ? { projected: true }
+        : { projected: false, reasonCode: "AGENT_TEAMS_FILE_SCOPE_NOT_SAFE_TO_PROJECT" },
     })),
   };
 }
-function projectTeamForUi(team) {
-  const projected = projectTeam(team);
+function projectTeamSummary(team) {
   return {
-    ...projected,
-    tasks: projected.tasks.map(({ description, files, ...task }) => task),
-    messages: projected.messages.map((message) => ({
-      id: message.id,
-      fromSessionId: message.fromSessionId,
-      toSessionId: message.toSessionId,
-      fromName: message.fromName,
-      status: message.status,
-      createdAt: message.createdAt,
-      deliveredAt: message.deliveredAt,
-    })),
+    id: team.id,
+    name: team.name,
+    status: team.state,
+    revision: team.revision ?? 1,
+    memberCount: team.members.filter((member) => member.state !== "retired").length,
+    activeTaskCount: team.tasks.filter((task) => task.state === "in_progress").length,
+    pendingTaskCount: team.tasks.filter((task) => task.state === "pending").length,
+    completedTaskCount: team.tasks.filter((task) => task.state === "completed").length,
+    updatedAt: team.updatedAt,
   };
 }
 function defaultDocument(settings = {}) {
@@ -246,6 +581,90 @@ function defaultDocument(settings = {}) {
   };
 }
 
+function queueStoreMutation(filePath, operation) {
+  const previous = STORE_MUTATION_CHAINS.get(filePath) ?? Promise.resolve();
+  const result = previous.then(operation, operation);
+  STORE_MUTATION_CHAINS.set(filePath, result.then(() => undefined, () => undefined));
+  return result;
+}
+function queueStoreOperation(filePath, operation) {
+  const previous = STORE_OPERATION_CHAINS.get(filePath) ?? Promise.resolve();
+  const result = previous.then(operation, operation);
+  STORE_OPERATION_CHAINS.set(filePath, result.then(() => undefined, () => undefined));
+  return result;
+}
+function queueTeamOperation(filePath, teamId, operation) {
+  const key = `${filePath}\u0000${teamId}`;
+  const previous = TEAM_OPERATION_CHAINS.get(key) ?? Promise.resolve();
+  const result = previous.then(operation, operation);
+  const settled = result.then(() => undefined, () => undefined);
+  TEAM_OPERATION_CHAINS.set(key, settled);
+  void settled.then(() => {
+    if (TEAM_OPERATION_CHAINS.get(key) === settled) TEAM_OPERATION_CHAINS.delete(key);
+  });
+  return result;
+}
+function queueTeamOperations(filePath, teamIds, operation) {
+  let queued = operation;
+  for (const teamId of [...new Set(teamIds)].sort().reverse()) {
+    const next = queued;
+    queued = () => queueTeamOperation(filePath, teamId, next);
+  }
+  return queued();
+}
+function registerGracefulLifecycleWaiter(childId) {
+  const initialRunId = GRACEFUL_ACTIVE_RUNS.get(childId);
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  const waiter = { initialRunId, starts: [], ends: [], accepted: false, targetRunId: undefined, resolve };
+  const waiters = GRACEFUL_LIFECYCLE_WAITERS.get(childId) ?? new Set();
+  waiters.add(waiter);
+  GRACEFUL_LIFECYCLE_WAITERS.set(childId, waiters);
+  const remove = () => {
+    waiters.delete(waiter);
+    if (waiters.size === 0) GRACEFUL_LIFECYCLE_WAITERS.delete(childId);
+  };
+  const settleIfMatched = () => {
+    if (!waiter.accepted) return;
+    if (waiter.targetRunId !== undefined) {
+      if (!waiter.ends.some((event) => event.runId === waiter.targetRunId)) return;
+    } else if (waiter.ends.length === 0) return;
+    remove();
+    resolve();
+  };
+  waiter.accept = () => {
+    waiter.accepted = true;
+    if (waiter.initialRunId !== undefined) waiter.targetRunId = waiter.starts.at(-1) ?? waiter.initialRunId;
+    else if (waiter.starts.length > 0) waiter.targetRunId = waiter.starts.at(-1);
+    settleIfMatched();
+  };
+  waiter.start = (runId) => { waiter.starts.push(runId); };
+  waiter.end = (runId) => {
+    waiter.ends.push({ runId });
+    if (waiter.targetRunId === runId || waiter.targetRunId === undefined) settleIfMatched();
+  };
+  return { promise, accept: waiter.accept, cancel: remove };
+}
+function noteGracefulLifecycleStart(info) {
+  const runId = String(info.runId);
+  GRACEFUL_ACTIVE_RUNS.set(info.id, runId);
+  for (const waiter of GRACEFUL_LIFECYCLE_WAITERS.get(info.id) ?? []) waiter.start(runId);
+}
+function noteGracefulLifecycleEnd(info) {
+  const runId = String(info.runId);
+  if (GRACEFUL_ACTIVE_RUNS.get(info.id) === runId) GRACEFUL_ACTIVE_RUNS.delete(info.id);
+  for (const waiter of GRACEFUL_LIFECYCLE_WAITERS.get(info.id) ?? []) waiter.end(runId);
+}
+function publishStoreDocument(filePath, document) {
+  for (const instance of STORE_INSTANCES.get(filePath) ?? []) {
+    instance.document = clone(document);
+    const snapshot = instance.snapshot();
+    for (const listener of instance.listeners) {
+      try { listener(snapshot); } catch { /* observers never veto committed state */ }
+    }
+  }
+}
+
 /**
  * Durable JSON store with a single mutation chain and same-directory temp+rename commits.
  * No state escapes until its complete document has reached the atomic rename boundary.
@@ -255,12 +674,18 @@ class AgentTeamsStore {
     this.filePath = filePath;
     this.document = defaultDocument(defaults);
     this.chain = Promise.resolve();
-    this.operationChain = Promise.resolve();
     this.listeners = new Set();
+    const instances = STORE_INSTANCES.get(filePath) ?? new Set();
+    instances.add(this);
+    STORE_INSTANCES.set(filePath, instances);
   }
   async init() {
+    return queueStoreOperation(this.filePath, () => queueStoreMutation(this.filePath, async () => {
+    let migrated = false;
     try {
-      this.document = validateStoreDocument(JSON.parse(await readFile(this.filePath, "utf8")));
+      const persisted = JSON.parse(await readFile(this.filePath, "utf8"));
+      migrated = persisted?.version === LEGACY_STORE_VERSION;
+      this.document = validateStoreDocument(persisted);
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
       // Disabled-by-default must not create storage on mere plugin activation.
@@ -272,8 +697,13 @@ class AgentTeamsStore {
       let teamChanged = false;
       for (const member of team.members) {
         if (!TRANSIENT_MEMBER_STATES.has(member.state)) continue;
-        member.state = member.state === "provisioning" ? "failed" : "ready";
-        if (member.state === "failed") member.error = "host restarted before provisioning completed";
+        if (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true) {
+          member.state = "failed";
+          member.error = "host restarted before shutdown acknowledgement";
+        } else {
+          member.state = member.state === "provisioning" ? "failed" : "ready";
+          if (member.state === "failed") member.error = "host restarted before provisioning completed";
+        }
         member.runId = undefined;
         member.updatedAt = now();
         teamChanged = true;
@@ -289,18 +719,30 @@ class AgentTeamsStore {
       if (teamChanged) team.updatedAt = now();
       changed ||= teamChanged;
     }
-    if (changed) await this.#write(this.document);
+    if (changed || migrated) await this.#write(this.document);
+    publishStoreDocument(this.filePath, this.document);
     return this.snapshot();
+    }));
   }
   snapshot() {
     return clone(this.document);
   }
   async read(reader = (document) => document) {
     await this.chain;
-    return clone(reader(this.document));
+    return queueStoreMutation(this.filePath, async () => {
+      try { this.document = validateStoreDocument(JSON.parse(await readFile(this.filePath, "utf8"))); }
+      catch (error) { if (error?.code !== "ENOENT") throw error; }
+      return clone(reader(this.document));
+    });
   }
   mutate(mutator) {
-    const operation = this.chain.then(async () => {
+    const operation = this.chain.then(() => queueStoreMutation(this.filePath, async () => {
+      try {
+        const persisted = validateStoreDocument(JSON.parse(await readFile(this.filePath, "utf8")));
+        if (JSON.stringify(persisted) !== JSON.stringify(this.document)) this.document = persisted;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
       const draft = clone(this.document);
       const previousTeams = new Map(this.document.teams.map((team) => [team.id, team]));
       const value = await mutator(draft);
@@ -319,20 +761,14 @@ class AgentTeamsStore {
       }
       validateStoreDocument(draft);
       await this.#write(draft);
-      this.document = draft;
-      const snapshot = this.snapshot();
-      for (const listener of this.listeners) {
-        try { listener(snapshot); } catch { /* observers never veto a committed mutation */ }
-      }
+      publishStoreDocument(this.filePath, draft);
       return clone(value);
-    });
+    }));
     this.chain = operation.catch(() => undefined);
     return operation;
   }
   runOperation(operation) {
-    const result = this.operationChain.then(operation, operation);
-    this.operationChain = result.then(() => undefined, () => undefined);
-    return result;
+    return queueStoreOperation(this.filePath, operation);
   }
   subscribe(listener) {
     this.listeners.add(listener);
@@ -394,8 +830,9 @@ function requireDirectHumanRoot(ctx, execution) {
 function relaySource(senderSessionId) {
   return {
     kind: "coordinator",
-    form: "relay",
+    form: "notice",
     senderSessionId,
+    summary: "Agent Teams",
   };
 }
 function textContent(text) {
@@ -417,18 +854,20 @@ function findTeam(document, teamId) {
   if (team === undefined) reject(`unknown team ${JSON.stringify(teamId)}`, "AGENT_TEAMS_NOT_FOUND");
   return team;
 }
-function activeTeamForLead(document, sessionId) {
-  return document.teams.find((team) => team.rootLeadSessionId === sessionId && team.state !== "closed");
-}
 function memberOf(team, sessionId) {
   return team.members.find((member) => member.sessionId === sessionId);
 }
 function resolveMember(team, reference) {
   const value = nonEmptyString(reference, "member reference", 256);
-  const lower = value.toLocaleLowerCase();
-  const matches = team.members.filter((member) => member.sessionId === value || member.id === value || member.name.toLocaleLowerCase() === lower);
-  if (matches.length !== 1) reject(matches.length === 0 ? "unknown team member" : "team member name is ambiguous", "AGENT_TEAMS_NOT_FOUND");
-  return matches[0];
+  const direct = team.members.find((member) => member.sessionId === value || member.id === value);
+  if (direct !== undefined) return direct;
+  let displayNameKey;
+  try { displayNameKey = memberNameKey(value); } catch { /* ids may contain non-display control characters */ }
+  const matches = displayNameKey === undefined ? [] : team.members.filter((member) => memberNameKey(member.name) === displayNameKey);
+  const activeMatches = matches.filter((member) => member.state !== "retired");
+  if (activeMatches.length === 1) return activeMatches[0];
+  if (activeMatches.length === 0 && matches.length === 1) return matches[0];
+  reject(matches.length === 0 ? "unknown team member" : "team member reference is ambiguous", "AGENT_TEAMS_NOT_FOUND");
 }
 function authenticateParticipant(team, sessionId) {
   const member = memberOf(team, sessionId);
@@ -437,6 +876,12 @@ function authenticateParticipant(team, sessionId) {
 }
 function requireLead(team, sessionId) {
   if (team.rootLeadSessionId !== sessionId) reject("operation requires the team root lead", "AGENT_TEAMS_UNAUTHORIZED");
+}
+function requireLiveRootLead(ctx, team, agent) {
+  requireLead(team, agent.id);
+  if (ctx.agents.get(team.rootLeadSessionId) !== agent || !ctx.agents.roots().includes(agent)) {
+    reject("operation requires the exact live top-level root lead", "AGENT_TEAMS_UNAUTHORIZED");
+  }
 }
 function requireActiveTeam(team) {
   if (team.state !== "active") reject("team is not active", "AGENT_TEAMS_CLOSING");
@@ -461,26 +906,42 @@ function exactLiveLead(ctx, team) {
 function activeWorkerTurns(team) {
   return team.members.filter((member) => member.kind === "worker" && ["provisioning", "running", "shutting_down"].includes(member.state)).length;
 }
+function activeWorkerTurnsForLead(document, rootLeadSessionId) {
+  return document.teams.filter((team) => team.rootLeadSessionId === rootLeadSessionId && team.state !== "closed")
+    .reduce((total, team) => total + activeWorkerTurns(team), 0);
+}
 function assertEnabled(document) {
   if (!document.settings.enabled) reject("agent teams are disabled; enable them in settings first", "AGENT_TEAMS_DISABLED");
 }
 function resolveTeamForCaller(document, teamId, sessionId) {
-  const team = teamId === undefined ? document.teams.find((candidate) => candidate.state !== "closed" && memberOf(candidate, sessionId)) : findTeam(document, teamId);
+  let team;
+  if (teamId === undefined) {
+    const candidates = document.teams.filter((candidate) => candidate.state !== "closed" && memberOf(candidate, sessionId));
+    if (candidates.length > 1) reject("team_id is required when the caller participates in multiple active teams", "AGENT_TEAMS_TEAM_REQUIRED");
+    [team] = candidates;
+  } else team = findTeam(document, teamId);
   if (team === undefined) reject("caller has no active team", "AGENT_TEAMS_NOT_FOUND");
   authenticateParticipant(team, sessionId);
   return team;
+}
+function requireCommonFixedLead(sourceTeam, targetTeam, sessionId) {
+  if (sourceTeam.rootLeadSessionId !== targetTeam.rootLeadSessionId || sourceTeam.rootLeadSessionId !== sessionId) {
+    reject("cross-team actions require the same fixed root lead to own both teams", "AGENT_TEAMS_CROSS_TEAM_FORBIDDEN");
+  }
 }
 function registrationPrompt(teamId, memberName, role) {
   return `You are being provisioned as ${memberName} (${role}) for agent team ${teamId}. Do not begin any task in this turn. Do not infer work from prior context. Reply only that you are waiting for the coordinator registration follow-up; membership must be durably persisted before work starts.`;
 }
 function workPrompt(teamId, memberId, prompt) {
-  return `Coordinator registration complete. Team ${teamId}; member ${memberId}. You may now begin the assigned work. Use agent-team tools for team tasks and coordinator relays. Assignment:\n${prompt}`;
+  return `Coordinator registration complete. Team ${teamId}; member ${memberId}. You may now begin the assigned work. Use agent-team tools for team tasks and coordinator relays. You cannot create or fork agents. If the assignment needs more parallel work, report that need to the root coordinator so it can create a visible managed member without bypassing maxActiveTurns. Assignment:\n${prompt}`;
 }
 
 async function createTeam(store, lead, input) {
+  const mainSelection = await resolveModelSelection(store, "main", undefined, lead.options);
   return store.mutate((document) => {
     assertEnabled(document);
-    if (activeTeamForLead(document, lead.id) !== undefined) reject("this root lead already has an active team", "AGENT_TEAMS_TEAM_EXISTS");
+    const openTeams = document.teams.filter((team) => team.rootLeadSessionId === lead.id && team.state !== "closed").length;
+    if (openTeams >= HARD_MAX_TEAMS_PER_ROOT) reject(`root lead peer-team limit reached (${HARD_MAX_TEAMS_PER_ROOT})`, "AGENT_TEAMS_TEAM_LIMIT");
     const timestamp = now();
     const objective = nonEmptyString(input.objective ?? input.name ?? "Agent team", "objective", 16_384);
     const team = {
@@ -494,8 +955,9 @@ async function createTeam(store, lead, input) {
       members: [{
         id: `lead:${lead.id}`,
         sessionId: lead.id,
-        name: nonEmptyString(input.leadName ?? "Lead", "leadName", 120),
+        name: normalizeMemberName(input.leadName ?? "Lead", "leadName"),
         role: "root lead and coordinator",
+        ...mainSelection,
         kind: "lead",
         state: "running",
         createdAt: timestamp,
@@ -509,98 +971,133 @@ async function createTeam(store, lead, input) {
   });
 }
 
-async function spawnMember(ctx, store, lead, input, signal) {
-  return store.runOperation(() => spawnMemberUnlocked(ctx, store, lead, input, signal));
-}
-async function spawnMemberUnlocked(ctx, store, lead, input, signal) {
-  // Persist a provisioning slot before any await outside the mutation chain. This makes
-  // concurrent member-limit and active-turn checks atomic even before a child id exists.
-  const reservation = await store.mutate((document) => {
-    assertEnabled(document);
-    const team = findTeam(document, nonEmptyString(input.teamId, "teamId", 256));
-    requireLead(team, lead.id);
-    if (team.state !== "active") reject("team is not accepting new members", "AGENT_TEAMS_CLOSING");
-    if (team.members.filter((member) => member.kind === "worker" && member.state !== "retired").length >= document.settings.maxMembers) reject("team teammate limit reached", "AGENT_TEAMS_MEMBER_LIMIT");
-    if (activeWorkerTurns(team) >= document.settings.maxActiveTurns) reject("team active-turn limit reached", "AGENT_TEAMS_ACTIVE_TURN_LIMIT");
-    const memberName = nonEmptyString(input.name, "name", 120);
-    if (team.members.some((member) => member.state !== "retired" && member.name.toLocaleLowerCase() === memberName.toLocaleLowerCase())) reject("an active team member already uses this name", "AGENT_TEAMS_CONFLICT");
-    const timestamp = now();
-    const memberId = randomUUID();
-    const reservation = {
-      teamId: team.id,
-      memberId,
-      placeholderSessionId: `provisioning:${memberId}`,
-      name: memberName,
-      role: nonEmptyString(input.role, "role", 500),
-      prompt: nonEmptyString(input.prompt, "prompt", 65_536),
-      model: optionalString(input.model, "model", 256),
-    };
-    team.members.push({
-      id: memberId,
-      sessionId: reservation.placeholderSessionId,
-      name: reservation.name,
-      role: reservation.role,
-      ...(reservation.model === undefined ? {} : { model: reservation.model }),
-      kind: "worker",
-      state: "provisioning",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
-    team.updatedAt = timestamp;
-    return reservation;
-  });
-  let started;
-  try {
-    started = await ctx.subagents.startContinuable({
-      provider: "spawn",
-      label: reservation.name,
-      request: {
-        parent: lead,
-        prompt: textContent(registrationPrompt(reservation.teamId, reservation.name, reservation.role)),
-        ...(reservation.model === undefined ? {} : { agentOptions: { model: reservation.model } }),
-      },
-      signal,
-    });
-  } catch (error) {
-    await store.mutate((document) => {
-      const team = findTeam(document, reservation.teamId);
-      team.members = team.members.filter((candidate) => candidate.id !== reservation.memberId);
-      team.updatedAt = now();
-    });
-    throw new HarnessError(`member provisioning failed before publication: ${String(error)}`, "AGENT_TEAMS_SPAWN_FAILED");
-  }
-  let member;
-  try {
-    member = await store.mutate((document) => {
-      const team = findTeam(document, reservation.teamId);
-      const record = team.members.find((candidate) => candidate.id === reservation.memberId);
-      if (team.state !== "active" || record === undefined || record.sessionId !== reservation.placeholderSessionId || team.members.some((candidate) => candidate.sessionId === started.childId)) reject("team changed during member provisioning", "AGENT_TEAMS_CONFLICT");
-      record.sessionId = started.childId;
-      record.updatedAt = now();
-      team.updatedAt = record.updatedAt;
-      return record;
-    });
-  } catch (error) {
-    try { ctx.subagents.interrupt(started.childId, { kind: "ancestor", agent: lead }); } catch { /* retain the child id below for later manual retirement */ }
-    await store.mutate((document) => {
-      const team = findTeam(document, reservation.teamId);
-      const record = team.members.find((candidate) => candidate.id === reservation.memberId);
+async function settleSpawnedChildFailure(ctx, store, lead, cleanup) {
+  const childIdUsedElsewhere = await store.read((document) => document.teams.some((team) => team.members.some((member) => member.id !== cleanup.memberId && member.sessionId === cleanup.childId)));
+  if (childIdUsedElsewhere) {
+    await store.runOperation(() => store.mutate((document) => {
+      const team = findTeam(document, cleanup.teamId);
+      const record = team.members.find((candidate) => candidate.id === cleanup.memberId);
       if (record !== undefined) {
-        record.sessionId = started.childId;
-        record.state = "failed";
-        record.error = `publication failed; child interrupt requested: ${String(error)}`;
-        record.updatedAt = now();
+        confirmMemberRetired(record);
+        record.error = "publication rejected because the returned child id already belongs to another member; existing child was not drained";
         team.updatedAt = record.updatedAt;
       }
-    }).catch(() => {});
-    throw new HarnessError(`member publication failed after child creation: ${String(error)}`, "AGENT_TEAMS_SPAWN_FAILED");
+    }));
+    return { drainSkipped: true };
   }
+  let drainError;
   try {
-    await ctx.subagents.followup(lead, started.childId, textContent(workPrompt(reservation.teamId, reservation.memberId, reservation.prompt)), {
-      source: relaySource(lead.id),
-      signal,
-    });
-    return store.mutate((document) => {
+    await ctx.subagents.drainContinuableChildren(lead, [cleanup.childId]);
+  } catch (error) {
+    drainError = error;
+  }
+  await store.runOperation(() => store.mutate((document) => {
+    const team = findTeam(document, cleanup.teamId);
+    const record = team.members.find((candidate) => candidate.id === cleanup.memberId);
+    if (record === undefined) return;
+    const childIdUsedElsewhere = document.teams.some((candidate) => candidate.members.some((member) => member.id !== record.id && member.sessionId === cleanup.childId));
+    if (!childIdUsedElsewhere) record.sessionId = cleanup.childId;
+    record.state = "failed";
+    record.runId = undefined;
+    record.updatedAt = now();
+    const failure = cleanup.phase === "publication" ? "publication failed after child creation" : "initial work followup failed after child became live";
+    if (drainError === undefined) {
+      record.shutdownUnconfirmed = undefined;
+      record.stopUnconfirmed = undefined;
+      record.error = `${failure} after confirmed drain: ${String(cleanup.cause)}`;
+    } else {
+      record.shutdownUnconfirmed = true;
+      record.stopUnconfirmed = true;
+      record.error = `${failure}: ${String(cleanup.cause)}; cleanup drain failed: ${String(drainError)}`;
+    }
+    team.updatedAt = record.updatedAt;
+  }));
+  return drainError;
+}
+async function spawnMember(ctx, store, lead, input, signal) {
+  const modelSelection = await resolveModelSelection(store, input.modelTier ?? "subagent", input.model, lead.options);
+  const reservation = await store.runOperation(() => store.mutate((document) => {
+    assertEnabled(document);
+    const team = findTeam(document, nonEmptyString(input.teamId, "teamId", 256));
+    requireLiveRootLead(ctx, team, lead);
+    if (team.state !== "active") reject("team is not accepting new members", "AGENT_TEAMS_CLOSING");
+    if (team.members.filter((member) => member.kind === "worker" && member.state !== "retired").length >= document.settings.maxMembers) reject("team teammate limit reached", "AGENT_TEAMS_MEMBER_LIMIT");
+    if (activeWorkerTurnsForLead(document, team.rootLeadSessionId) >= document.settings.maxActiveTurns) reject("root lead active-turn limit reached across its teams", "AGENT_TEAMS_ACTIVE_TURN_LIMIT");
+    const memberName = normalizeWorkerName(input.name);
+    const memberNameIdentity = memberNameKey(memberName);
+    if (team.members.some((member) => memberNameKey(member.name) === memberNameIdentity)) reject("a team member already uses this normalized display name", "AGENT_TEAMS_DUPLICATE_MEMBER_NAME");
+    const timestamp = now();
+    const memberId = randomUUID();
+    const reservation = { teamId: team.id, memberId, placeholderSessionId: `provisioning:${memberId}`, name: memberName, role: nonEmptyString(input.role, "role", 500), prompt: nonEmptyString(input.prompt, "prompt", 65_536), ...modelSelection };
+    team.members.push({ id: memberId, sessionId: reservation.placeholderSessionId, name: reservation.name, role: reservation.role, ...(reservation.model === undefined ? {} : { model: reservation.model }), ...(reservation.provider === undefined ? {} : { provider: reservation.provider }), modelTier: reservation.modelTier, inheritsMain: reservation.inheritsMain, routeSource: reservation.routeSource, kind: "worker", state: "provisioning", createdAt: timestamp, updatedAt: timestamp });
+    team.updatedAt = timestamp;
+    return reservation;
+  }));
+  return queueTeamOperation(store.filePath, reservation.teamId, async () => {
+    const admitted = await store.runOperation(() => store.mutate((document) => {
+      const team = findTeam(document, reservation.teamId);
+      const record = team.members.find((candidate) => candidate.id === reservation.memberId);
+      if (team.state === "active" && record?.sessionId === reservation.placeholderSessionId && record.state === "provisioning") return true;
+      if (record !== undefined) {
+        confirmMemberRetired(record);
+        team.updatedAt = record.updatedAt;
+      }
+      return false;
+    }));
+    if (!admitted) reject("team stopped accepting members before provisioning started", "AGENT_TEAMS_CLOSING");
+    let started;
+    try {
+      started = await ctx.subagents.startContinuable({
+        provider: "spawn",
+        label: reservation.name,
+        request: {
+          parent: lead,
+          prompt: textContent(registrationPrompt(reservation.teamId, reservation.name, reservation.role)),
+          toolFilter: { deny: [...MANAGED_MEMBER_DENIED_TOOLS] },
+          ...(reservation.provider === undefined && reservation.model === undefined ? {} : { agentOptions: { ...(reservation.provider === undefined ? {} : { provider: reservation.provider }), ...(reservation.model === undefined ? {} : { model: reservation.model }) } }),
+        },
+        signal,
+      });
+    } catch (error) {
+      await store.runOperation(() => store.mutate((document) => {
+        const team = findTeam(document, reservation.teamId);
+        team.members = team.members.filter((candidate) => candidate.id !== reservation.memberId);
+        team.updatedAt = now();
+      }));
+      throw new HarnessError(`member provisioning failed before publication: ${String(error)}`, "AGENT_TEAMS_SPAWN_FAILED");
+    }
+    let publication;
+    try {
+      publication = await store.runOperation(() => store.mutate((document) => {
+        const team = findTeam(document, reservation.teamId);
+        const record = team.members.find((candidate) => candidate.id === reservation.memberId);
+        const sessionAlreadyRegistered = document.teams.some((candidate) => candidate.members.some((candidateMember) => candidateMember.id !== reservation.memberId && candidateMember.sessionId === started.childId));
+        if (record !== undefined && record.sessionId === reservation.placeholderSessionId && sessionAlreadyRegistered) {
+          confirmMemberRetired(record);
+          record.error = "publication rejected because the returned child id already belongs to another member; existing child was not drained";
+          team.updatedAt = record.updatedAt;
+          return { duplicateChildId: true };
+        }
+        if (team.state !== "active" || record === undefined || record.sessionId !== reservation.placeholderSessionId || record.state !== "provisioning") reject("team changed during member provisioning", "AGENT_TEAMS_CONFLICT");
+        record.sessionId = started.childId;
+        record.updatedAt = now();
+        team.updatedAt = record.updatedAt;
+        return { duplicateChildId: false, member: clone(record) };
+      }));
+    } catch (error) {
+      const cleanup = { phase: "publication", teamId: reservation.teamId, memberId: reservation.memberId, childId: started.childId, cause: error };
+      await settleSpawnedChildFailure(ctx, store, lead, cleanup);
+      throw new HarnessError(`member publication failed after child creation: ${String(error)}`, "AGENT_TEAMS_SPAWN_FAILED");
+    }
+    if (publication.duplicateChildId) reject("subagent provider returned a child id already owned by another member", "AGENT_TEAMS_CONFLICT");
+    const member = publication.member;
+    try {
+      await ctx.subagents.followup(lead, started.childId, textContent(workPrompt(reservation.teamId, reservation.memberId, reservation.prompt)), { source: relaySource(lead.id), signal });
+    } catch (error) {
+      await settleSpawnedChildFailure(ctx, store, lead, { phase: "work-followup", teamId: reservation.teamId, memberId: reservation.memberId, childId: started.childId, cause: error });
+      throw error;
+    }
+    return store.runOperation(() => store.mutate((document) => {
       const team = findTeam(document, reservation.teamId);
       const current = memberOf(team, started.childId);
       if (current !== undefined && current.state === "provisioning") {
@@ -609,78 +1106,93 @@ async function spawnMemberUnlocked(ctx, store, lead, input, signal) {
         team.updatedAt = current.updatedAt;
       }
       return { teamId: team.id, member: clone(current ?? member) };
-    });
-  } catch (error) {
-    await store.mutate((document) => {
-      const team = findTeam(document, reservation.teamId);
-      const current = memberOf(team, started.childId);
-      if (current !== undefined) {
-        current.state = "failed";
-        current.error = String(error);
-        current.updatedAt = now();
-        team.updatedAt = current.updatedAt;
-      }
-    });
-    throw error;
-  }
+    }));
+  });
 }
 
 async function sendTeamMessage(ctx, store, caller, input, signal) {
-  return store.runOperation(() => sendTeamMessageUnlocked(ctx, store, caller, input, signal));
+  const teamIds = await store.read((document) => {
+    const sourceTeam = resolveTeamForCaller(document, optionalString(input.teamId, "teamId", 256), caller.id);
+    const targetTeamId = optionalString(input.targetTeamId, "targetTeamId", 256);
+    return [sourceTeam.id, targetTeamId ?? sourceTeam.id];
+  });
+  return queueTeamOperations(store.filePath, teamIds, () => sendTeamMessageUnlocked(ctx, store, caller, input, signal));
 }
 async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
-  const prepared = await store.mutate((document) => {
+  const prepared = await store.runOperation(() => store.mutate((document) => {
     assertEnabled(document);
-    const team = resolveTeamForCaller(document, optionalString(input.teamId, "teamId", 256), caller.id);
-    requireActiveTeam(team);
-    const recipient = resolveMember(team, input.recipientSessionId ?? input.recipient);
-    authenticateParticipant(team, recipient.sessionId);
+    const sourceTeam = resolveTeamForCaller(document, optionalString(input.teamId, "teamId", 256), caller.id);
+    requireActiveTeam(sourceTeam);
+    const targetTeamId = optionalString(input.targetTeamId, "targetTeamId", 256);
+    let targetTeam = sourceTeam;
+    if (targetTeamId !== undefined && targetTeamId !== sourceTeam.id) {
+      const candidate = document.teams.find((team) => team.id === targetTeamId);
+      if (candidate === undefined) reject("cross-team target is unavailable to this fixed root lead", "AGENT_TEAMS_CROSS_TEAM_FORBIDDEN");
+      requireCommonFixedLead(sourceTeam, candidate, caller.id);
+      requireLiveRootLead(ctx, sourceTeam, caller);
+      targetTeam = candidate;
+    }
+    requireActiveTeam(targetTeam);
+    const recipient = resolveMember(targetTeam, input.recipientSessionId ?? input.recipient);
+    authenticateParticipant(targetTeam, recipient.sessionId);
     const recipientId = recipient.sessionId;
     if (recipient.sessionId === caller.id) reject("cannot relay a team message to self", "AGENT_TEAMS_INVALID_MESSAGE");
     if (recipient.kind === "worker" && ["ready", "idle"].includes(recipient.state)) {
-      if (activeWorkerTurns(team) >= document.settings.maxActiveTurns) reject("team active-turn limit reached", "AGENT_TEAMS_ACTIVE_TURN_LIMIT");
+      if (activeWorkerTurnsForLead(document, targetTeam.rootLeadSessionId) >= document.settings.maxActiveTurns) reject("root lead active-turn limit reached across its teams", "AGENT_TEAMS_ACTIVE_TURN_LIMIT");
       recipient.state = "running";
       recipient.updatedAt = now();
+      targetTeam.updatedAt = recipient.updatedAt;
     }
     const message = {
       id: randomUUID(),
       fromSessionId: caller.id,
       toSessionId: recipientId,
+      ...(targetTeam === sourceTeam ? {} : { toTeamId: targetTeam.id }),
       body: nonEmptyString(input.message, "message", 65_536),
       status: "pending",
       createdAt: now(),
     };
-    team.messages.push(message);
-    if (team.messages.length > MAX_TEAM_MESSAGES) {
-      const removable = team.messages.findIndex((candidate) => candidate.status !== "pending");
-      team.messages.splice(removable < 0 ? 0 : removable, 1);
+    sourceTeam.messages.push(message);
+    if (sourceTeam.messages.length > MAX_TEAM_MESSAGES) {
+      const removable = sourceTeam.messages.findIndex((candidate) => candidate.status !== "pending");
+      sourceTeam.messages.splice(removable < 0 ? 0 : removable, 1);
     }
-    team.updatedAt = message.createdAt;
-    return { teamId: team.id, leadId: team.rootLeadSessionId, sender: clone(memberOf(team, caller.id)), recipient: clone(recipient), message };
-  });
+    sourceTeam.updatedAt = message.createdAt;
+    return {
+      teamId: sourceTeam.id,
+      targetTeamId: targetTeam.id,
+      leadId: sourceTeam.rootLeadSessionId,
+      sender: clone(memberOf(sourceTeam, caller.id)),
+      recipient: clone(recipient),
+      message,
+    };
+  }));
   try {
-    const team = await store.read((document) => findTeam(document, prepared.teamId));
-    const lead = exactLiveLead(ctx, team);
+    const targetTeam = await store.read((document) => findTeam(document, prepared.targetTeamId));
+    const lead = exactLiveLead(ctx, targetTeam);
     const content = textContent(`[Agent team message ${prepared.message.id} from ${prepared.sender?.name ?? caller.id}]\n${prepared.message.body}`);
     if (prepared.recipient.kind === "lead") {
       await lead.followup(createUserMessage({ content, source: relaySource(caller.id) }));
     } else {
       await ctx.subagents.followup(lead, prepared.recipient.sessionId, content, { source: relaySource(caller.id), signal });
     }
-    return store.mutate((document) => {
+    return store.runOperation(() => store.mutate((document) => {
       const currentTeam = findTeam(document, prepared.teamId);
+      const currentTarget = findTeam(document, prepared.targetTeamId);
       const message = currentTeam.messages.find((candidate) => candidate.id === prepared.message.id);
-      if (currentTeam.state === "closed") return { teamId: currentTeam.id, message };
+      const names = new Map([...currentTeam.members, ...currentTarget.members].map((member) => [member.sessionId, canonicalMemberName(member.name)]));
+      const event = () => message === undefined ? undefined : projectMessageEvent(message, names, currentTeam.id);
+      if (currentTeam.state === "closed") return { teamId: currentTeam.id, targetTeamId: currentTarget.id, message: event() };
       if (message !== undefined) {
         message.status = "delivered";
         message.deliveredAt = now();
         message.deliveryError = undefined;
       }
       currentTeam.updatedAt = now();
-      return { teamId: currentTeam.id, message };
-    });
+      return { teamId: currentTeam.id, targetTeamId: currentTarget.id, message: event() };
+    }));
   } catch (error) {
-    await store.mutate((document) => {
+    await store.runOperation(() => store.mutate((document) => {
       const currentTeam = findTeam(document, prepared.teamId);
       const message = currentTeam.messages.find((candidate) => candidate.id === prepared.message.id);
       if (currentTeam.state === "closed") return { teamId: currentTeam.id, message };
@@ -688,10 +1200,12 @@ async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
         message.status = "failed";
         message.deliveryError = String(error).slice(0, 4_096);
       }
-      const recipient = memberOf(currentTeam, prepared.recipient.sessionId);
+      const currentTarget = findTeam(document, prepared.targetTeamId);
+      const recipient = memberOf(currentTarget, prepared.recipient.sessionId);
       if (recipient?.state === "running" && recipient.runId === undefined) recipient.state = "ready";
-      currentTeam.updatedAt = now();
-    });
+      currentTarget.updatedAt = now();
+      currentTeam.updatedAt = currentTarget.updatedAt;
+    }));
     throw error;
   }
 }
@@ -703,11 +1217,23 @@ async function createTask(store, caller, input) {
     requireActiveTeam(team);
     if (team.tasks.length >= MAX_TEAM_TASKS) reject("team task limit reached", "AGENT_TEAMS_TASK_LIMIT");
     const dependsOn = input.dependsOn ?? [];
+    const crossTeamDependsOnInput = input.crossTeamDependsOn ?? [];
     const files = input.files ?? [];
     assertStringArray(dependsOn, "dependsOn");
+    assertStringArray(crossTeamDependsOnInput, "crossTeamDependsOn");
     assertStringArray(files, "files");
     const known = new Set(team.tasks.map((task) => task.id));
     if (dependsOn.some((id) => !known.has(id))) reject("task dependency does not exist in this team", "AGENT_TEAMS_INVALID_TASK");
+    const crossTeamDependsOn = [...new Map(crossTeamDependsOnInput.map((reference) => {
+      const dependency = parseCrossTaskReference(reference);
+      return [taskNodeKey(dependency.teamId, dependency.taskId), dependency];
+    })).values()];
+    for (const dependency of crossTeamDependsOn) {
+      const target = document.teams.find((candidate) => candidate.id === dependency.teamId);
+      if (target === undefined || target.id === team.id) reject("cross-team dependency must identify a peer team", "AGENT_TEAMS_INVALID_TASK");
+      requireCommonFixedLead(team, target, caller.id);
+      if (target.tasks.every((candidate) => candidate.id !== dependency.taskId)) reject("cross-team task dependency does not exist", "AGENT_TEAMS_INVALID_TASK");
+    }
     const assigneeReference = optionalString(input.assigneeSessionId, "assigneeSessionId", 256);
     const assigneeSessionId = assigneeReference === undefined ? undefined : resolveMember(team, assigneeReference).sessionId;
     if (assigneeSessionId !== undefined) {
@@ -721,6 +1247,7 @@ async function createTask(store, caller, input) {
       ...(optionalString(input.description, "description", 32_768) === undefined ? {} : { description: input.description.trim() }),
       state: "pending",
       dependsOn: [...new Set(dependsOn)],
+      ...(crossTeamDependsOn.length === 0 ? {} : { crossTeamDependsOn }),
       files: [...new Set(files.map((file) => nonEmptyString(file, "files item", 1_024)))],
       ...(assigneeSessionId === undefined ? {} : { assigneeSessionId }),
       createdAt: timestamp,
@@ -728,7 +1255,7 @@ async function createTask(store, caller, input) {
     };
     team.tasks.push(task);
     team.updatedAt = timestamp;
-    return { teamId: team.id, task: deriveTask(task, team.tasks) };
+    return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams) };
   });
 }
 
@@ -744,7 +1271,7 @@ async function updateTask(store, caller, input) {
     if (input.action === undefined && requestedState === undefined) reject("task update requires action or state", "AGENT_TEAMS_INVALID_TASK");
     const action = input.action ?? (requestedState === "in_progress" ? "claim" : requestedState === "completed" ? "complete" : task.state === "completed" ? "reopen" : "release");
     assertEnum(action, ["claim", "release", "complete", "reopen", "assign", "unassign"], "action");
-    const blockedBy = deriveTask(task, team.tasks).blockedBy;
+    const blockedBy = deriveTaskAcrossTeams(task, team, document.teams).blockedBy;
     const isLead = caller.id === team.rootLeadSessionId;
     if (action === "claim") {
       if (task.state !== "pending" || task.assigneeSessionId !== undefined && task.assigneeSessionId !== caller.id) reject("task is not atomically claimable by caller", "AGENT_TEAMS_TASK_CONFLICT");
@@ -755,6 +1282,7 @@ async function updateTask(store, caller, input) {
       task.completedAt = undefined;
     } else if (action === "complete") {
       if (task.state !== "in_progress" || !isLead && task.assigneeSessionId !== caller.id) reject("only the claimant or lead can complete an in-progress task", "AGENT_TEAMS_TASK_CONFLICT");
+      if (blockedBy.length > 0) reject(`task is blocked by: ${blockedBy.join(", ")}`, "AGENT_TEAMS_TASK_BLOCKED");
       task.state = "completed";
       task.completedAt = now();
     } else if (action === "release") {
@@ -765,6 +1293,8 @@ async function updateTask(store, caller, input) {
       task.completedAt = undefined;
     } else if (action === "reopen") {
       if (!isLead || task.state !== "completed") reject("only the lead can reopen a completed task", "AGENT_TEAMS_TASK_CONFLICT");
+      const progressed = progressedDependents(document, team.id, task.id);
+      if (progressed.length > 0) reject(`cannot reopen a prerequisite used by progressed tasks: ${progressed.join(", ")}`, "AGENT_TEAMS_TASK_CONFLICT");
       task.state = "pending";
       task.completedAt = undefined;
       task.claimedAt = undefined;
@@ -779,104 +1309,164 @@ async function updateTask(store, caller, input) {
     }
     task.updatedAt = now();
     team.updatedAt = task.updatedAt;
-    return { teamId: team.id, task: deriveTask(task, team.tasks) };
+    return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams) };
   });
 }
 
-async function interruptMember(ctx, store, lead, input) {
-  const prepared = await store.read((document) => {
-    const team = findTeam(document, nonEmptyString(input.teamId, "teamId", 256));
-    requireLead(team, lead.id);
-    requireActiveTeam(team);
-    const member = resolveMember(team, input.memberSessionId);
-    if (member.kind !== "worker" || member.state === "retired") reject("unknown active worker member", "AGENT_TEAMS_NOT_FOUND");
-    return { teamId: team.id, member };
-  });
-  ctx.subagents.interrupt(prepared.member.sessionId, { kind: "ancestor", agent: lead });
-  return { teamId: prepared.teamId, member: prepared.member, interrupted: true };
+function markMemberShuttingDown(member, force) {
+  member.state = "shutting_down";
+  if (force) {
+    member.shutdownUnconfirmed = true;
+    member.stopUnconfirmed = true;
+  }
+  member.updatedAt = now();
+}
+function confirmMemberRetired(member) {
+  member.state = "retired";
+  member.shutdownUnconfirmed = undefined;
+  member.stopUnconfirmed = undefined;
+  member.runId = undefined;
+  member.error = undefined;
+  member.updatedAt = now();
 }
 
 async function retireMember(ctx, store, lead, input, signal) {
-  const prepared = await store.mutate((document) => {
+  const force = input.force === true;
+  const prepared = await store.runOperation(() => store.mutate((document) => {
     const team = findTeam(document, nonEmptyString(input.teamId, "teamId", 256));
-    requireLead(team, lead.id);
+    requireLiveRootLead(ctx, team, lead);
     requireOpenTeam(team);
     const member = resolveMember(team, input.memberSessionId);
     if (member.kind !== "worker") reject("unknown worker member", "AGENT_TEAMS_NOT_FOUND");
     if (member.state === "retired") return { teamId: team.id, member: clone(member), noop: true };
-    member.state = "shutting_down";
-    member.updatedAt = now();
+    markMemberShuttingDown(member, force);
     team.updatedAt = member.updatedAt;
     return { teamId: team.id, member: clone(member), noop: false };
-  });
+  }));
   if (prepared.noop) return prepared;
+  const gracefulWaiter = force ? undefined : registerGracefulLifecycleWaiter(prepared.member.sessionId);
   try {
-    if (input.force === true) {
-      ctx.subagents.interrupt(prepared.member.sessionId, { kind: "ancestor", agent: lead });
-    } else {
+    if (force) await ctx.subagents.drainContinuableChildren(lead, [prepared.member.sessionId]);
+    else {
       await ctx.subagents.followup(lead, prepared.member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
         source: relaySource(lead.id), signal,
       });
+      gracefulWaiter.accept();
+      await gracefulWaiter.promise;
     }
   } catch (error) {
-    await store.mutate((document) => {
+    gracefulWaiter?.cancel();
+    await store.runOperation(() => store.mutate((document) => {
       const team = findTeam(document, prepared.teamId);
-      requireOpenTeam(team);
+      if (team.state === "closed") return;
       const member = memberOf(team, prepared.member.sessionId);
-      if (member !== undefined) {
+      if (member !== undefined && member.state !== "retired") {
         member.state = "failed";
+        member.shutdownUnconfirmed = true;
+        member.stopUnconfirmed = true;
         member.error = `retirement request failed: ${String(error)}`;
         member.updatedAt = now();
         team.updatedAt = member.updatedAt;
       }
-    }).catch(() => {});
+    })).catch(() => {});
     throw error;
   }
-  return store.mutate((document) => {
+  return store.runOperation(() => store.mutate((document) => {
     const team = findTeam(document, prepared.teamId);
-    requireOpenTeam(team);
     const member = memberOf(team, prepared.member.sessionId);
-    if (member !== undefined) {
-      member.state = input.force === true ? "retired" : "shutting_down";
-      member.runId = undefined;
-      member.updatedAt = now();
+    if (member !== undefined && team.state !== "closed") {
+      confirmMemberRetired(member);
       team.updatedAt = member.updatedAt;
     }
     return { teamId: team.id, member };
-  });
+  }));
 }
 
 async function shutdownTeam(ctx, store, lead, input, signal) {
-  return store.runOperation(() => shutdownTeamUnlocked(ctx, store, lead, input, signal));
-}
-async function shutdownTeamUnlocked(ctx, store, lead, input, signal) {
-  const snapshot = await store.read((document) => findTeam(document, nonEmptyString(input.teamId, "teamId", 256)));
-  requireLead(snapshot, lead.id);
-  requireActiveTeam(snapshot);
-  if (input.memberSessionId !== undefined && input.memberSessionId !== "") return retireMember(ctx, store, lead, input, signal);
-  await store.mutate((document) => {
-    const team = findTeam(document, snapshot.id);
+  const teamId = nonEmptyString(input.teamId, "teamId", 256);
+  if (input.memberSessionId !== undefined && input.memberSessionId !== "") {
+    return queueTeamOperation(store.filePath, teamId, () => retireMember(ctx, store, lead, input, signal));
+  }
+  const force = input.force === true;
+  const prepared = await queueTeamOperation(store.filePath, teamId, () => store.runOperation(() => store.mutate((document) => {
+    const team = findTeam(document, teamId);
+    requireLiveRootLead(ctx, team, lead);
     requireActiveTeam(team);
     team.state = "closing";
+    const workers = team.members.filter((member) => member.kind === "worker" && member.state !== "retired");
+    for (const member of workers) markMemberShuttingDown(member, force);
     team.updatedAt = now();
-  });
-  const workers = snapshot.members.filter((member) => member.kind === "worker" && member.state !== "retired");
-  const outcomes = await Promise.allSettled(workers.map((member) => retireMember(ctx, store, lead, {
-    teamId: snapshot.id,
-    memberSessionId: member.sessionId,
-    force: input.force === true,
-  }, signal)));
-  const failures = outcomes.filter((outcome) => outcome.status === "rejected");
-  return store.mutate((document) => {
-    const team = findTeam(document, snapshot.id);
+    return { teamId: team.id, workers: workers.map((member) => clone(member)) };
+  })));
+
+  let drainError;
+  let outcomes = [];
+  if (force) {
+    try {
+      await ctx.subagents.drainContinuableChildren(lead, prepared.workers.map((member) => member.sessionId));
+    } catch (error) {
+      drainError = error;
+    }
+  } else {
+    const gracefulRequests = prepared.workers.map((member) => ({ member, waiter: registerGracefulLifecycleWaiter(member.sessionId) }));
+    outcomes = await Promise.allSettled(gracefulRequests.map(async ({ member, waiter }) => {
+      try {
+        await ctx.subagents.followup(lead, member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
+          source: relaySource(lead.id), signal,
+        });
+        waiter.accept();
+        await waiter.promise;
+      } catch (error) {
+        waiter.cancel();
+        throw error;
+      }
+    }));
+  }
+
+  return queueTeamOperation(store.filePath, prepared.teamId, () => store.runOperation(() => store.mutate((document) => {
+    const team = findTeam(document, prepared.teamId);
+    if (team.state === "closed") return { team: projectTeam(team), failures: [] };
+    const failures = [];
+    if (force) {
+      for (const preparedMember of prepared.workers) {
+        const member = memberOf(team, preparedMember.sessionId);
+        if (member === undefined) continue;
+        if (drainError === undefined) {
+          confirmMemberRetired(member);
+          continue;
+        }
+        if (member.state !== "retired") {
+          member.state = "failed";
+          member.error = `retirement drain failed: ${String(drainError)}`;
+          member.updatedAt = now();
+        }
+      }
+      if (drainError !== undefined) failures.push(String(drainError));
+    } else {
+      outcomes.forEach((outcome, index) => {
+        const member = memberOf(team, prepared.workers[index].sessionId);
+        if (outcome.status === "fulfilled") {
+          if (member !== undefined) confirmMemberRetired(member);
+          return;
+        }
+        failures.push(String(outcome.reason));
+        if (member !== undefined && member.state !== "retired") {
+          member.state = "failed";
+          member.shutdownUnconfirmed = true;
+          member.stopUnconfirmed = true;
+          member.error = `retirement request failed: ${String(outcome.reason)}`;
+          member.updatedAt = now();
+        }
+      });
+    }
     const shouldClose = failures.length === 0 && team.members.filter((member) => member.kind === "worker").every((member) => member.state === "retired");
     if (shouldClose) closeTeamRecord(team);
     else {
       team.state = failures.length === 0 ? "closing" : "active";
       team.updatedAt = now();
     }
-    return { team: projectTeam(team), failures: failures.map((failure) => String(failure.reason)) };
-  });
+    return { team: projectTeam(team), failures };
+  })));
 }
 
 async function recoverOrphanTeams(ctx, store, caller, input) {
@@ -892,9 +1482,10 @@ async function recoverOrphanTeams(ctx, store, caller, input) {
     if (input.confirm !== true) return { candidates: candidates.map(projectTeam), recovered: [] };
     const recovered = [];
     for (const team of candidates) {
-      const unsafe = team.members.some((member) => member.kind === "worker" && ["provisioning", "running", "shutting_down"].includes(member.state));
+      const shutdownUnconfirmed = team.members.some((member) => member.kind === "worker" && (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true));
+      const unsafe = shutdownUnconfirmed || team.members.some((member) => member.kind === "worker" && ["provisioning", "running", "shutting_down"].includes(member.state));
       if (unsafe) {
-        if (requestedId !== undefined) reject("orphan recovery requires all workers to be inactive", "AGENT_TEAMS_CONFLICT");
+        if (requestedId !== undefined) reject(shutdownUnconfirmed ? "orphan recovery is blocked by an unconfirmed shutdown" : "orphan recovery requires all workers to be inactive", shutdownUnconfirmed ? "AGENT_TEAMS_SHUTDOWN_UNCONFIRMED" : "AGENT_TEAMS_CONFLICT");
         continue;
       }
       for (const member of team.members) if (member.kind === "worker") member.state = "retired";
@@ -906,21 +1497,41 @@ async function recoverOrphanTeams(ctx, store, caller, input) {
 }
 
 function teamSnapshot(document, sessionId) {
-  const team = sessionId === "settings" ? undefined : document.teams.find((candidate) => candidate.state !== "closed" && memberOf(candidate, sessionId));
+  const related = sessionId === "settings" ? [] : document.teams.filter((candidate) => memberOf(candidate, sessionId));
+  const ordered = [...related].sort((left, right) => {
+    const leftClosed = left.state === "closed";
+    const rightClosed = right.state === "closed";
+    if (leftClosed !== rightClosed) return leftClosed ? 1 : -1;
+    return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  });
   const config = clone(document.settings);
-  return { enabled: config.enabled, config, settings: config, team: team === undefined ? null : projectTeamForUi(team) };
+  const teams = ordered.map((team) => projectTeamForUi(team, document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId)));
+  return { enabled: config.enabled, config, settings: config, teams, team: teams[0] ?? null };
+}
+
+function teamSystemPrompt(store) {
+  if (store.snapshot().settings.enabled !== true) {
+    return "Agent Teams automatic-team mode is DISABLED. Do not proactively call any team tool. Work normally without creating, spawning, messaging, or managing teams unless the direct user first enables the feature through its settings. Team members must never create teams.";
+  }
+  return [
+    "Agent Teams automatic-team mode is ENABLED.",
+    "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively call team_start only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns.",
+    "The fixed root lead/brain always uses the main model route. The AI autonomously chooses each spawned member's model_tier: default to subagent to reduce cost; use main only for high-complexity reasoning, architecture, security-critical work, or repeated failures. Users do not choose member tiers.",
+    "Every spawned member display name must be a plain 2–12 character duty name in the user's language. For Chinese, prefer 2–6 characters such as 界面、安全、测试、文档; for English, use labels such as UI, Test, Security, Docs. Avoid internal or abstract technical terms including 宿主、协调器、执行器、实现者、子代理 and Host, Coordinator, Executor, Implementer, Subagent.",
+    "A top-level root may own at most 8 unclosed peer teams, and all peers share maxActiveTurns. Pass team_id when more than one is active. Only their same fixed root lead may relay across teams with target_team_id. Never nest teams or connect different roots. Persist tasks before work, atomically claim pending unblocked tasks, gracefully retire members before closing a team, and use direct-human team_recover only for inactive orphaned teams.",
+  ].join("\n");
 }
 
 function registerTools(ctx, store, ready) {
   ctx.systemPrompt.section({
     name: "tool:agent-teams",
     order: 116,
-    text: "Agent teams are durable coordinator-owned groups. Start a team only from a direct human root turn. Persist tasks before work, atomically claim pending unblocked tasks, use team_message for authenticated coordinator relays, gracefully retire members before closing a team, and use direct-human team_recover only for inactive orphaned teams.",
+    text: () => teamSystemPrompt(store),
   });
   const run = (handler) => async (args, exec) => { await ready; return handler(args, toolExecution(ctx, exec), exec.signal); };
   ctx.tools.register(defineTool({
     name: "team_start",
-    description: "Start the one active durable agent team allowed for this root lead. Requires direct-human root authority in the current open turn.",
+    description: "Start a durable peer team owned by this fixed top-level root lead. Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count, and one continuable helper should use ordinary subagent instead. An explicit user team request may override this automatic threshold. At most 8 teams may remain unclosed, and all peers share maxActiveTurns. Requires direct-human root authority in the current open turn.",
     parameters: {
       objective: { type: "string", required: true, description: "Concrete objective shared by the team." },
       name: { type: "string", description: "Optional short team display name." },
@@ -931,33 +1542,49 @@ function registerTools(ctx, store, ready) {
   }));
   ctx.tools.register(defineTool({
     name: "team_spawn",
-    description: "Provision a continuable independent-context team member through the spawn provider. Membership is persisted before the work follow-up is delivered.",
+    description: "Provision a continuable independent-context member. The AI chooses the tier by task: subagent by default for cost, main only for complex reasoning, architecture, security, or repeated failures; this is not a user choice.",
     parameters: {
       team_id: { type: "string", required: true }, name: { type: "string", required: true },
       role: { type: "string", required: true }, prompt: { type: "string", required: true },
-      model: { type: "string", description: "Optional model override; provider is inherited from the lead." },
+      model_tier: { type: "string", enum: MODEL_TIERS, description: "AI-selected route tier; defaults to subagent. Choose main only under the documented complexity criteria." },
+      model: { type: "string", description: "Optional explicit model override; for backward compatibility its provider is inherited from the exact live lead, not from model_tier." },
     }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => publicResult(await spawnMember(ctx, store, execution.agent, { teamId: args.team_id, name: args.name, role: args.role, prompt: args.prompt, model: args.model }, signal))),
+    execute: run(async (args, execution, signal) => publicResult(await spawnMember(ctx, store, execution.agent, { teamId: args.team_id, name: args.name, role: args.role, prompt: args.prompt, modelTier: args.model_tier, model: args.model }, signal))),
     presentCall: (args) => present("Spawn team member", args.name),
   }));
   ctx.tools.register(defineTool({
-    name: "team_status", description: "Read the authenticated caller's team, members, tasks, messages, settings, and derived task blockers.",
+    name: "team_status", description: "Read one authenticated team in detail. If team_id is omitted while several are active, return only safe team summaries so the caller can choose explicitly.",
     parameters: { team_id: { type: "string" } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => store.read((document) => {
-      const team = resolveTeamForCaller(document, optionalString(args.team_id, "team_id", 256), execution.agent.id);
-      return publicResult({ settings: document.settings, team: projectTeam(team) });
+      const teamId = optionalString(args.team_id, "team_id", 256);
+      if (teamId !== undefined) {
+        const team = resolveTeamForCaller(document, teamId, execution.agent.id);
+        return publicResult({ settings: document.settings, team: projectTeam(team, document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId)), teams: [projectTeamSummary(team)], selectionRequired: false });
+      }
+      const candidates = document.teams.filter((team) => team.state !== "closed" && memberOf(team, execution.agent.id) !== undefined)
+        .filter((team) => !["shutting_down", "retired"].includes(memberOf(team, execution.agent.id).state));
+      if (candidates.length === 0) reject("caller has no active team", "AGENT_TEAMS_NOT_FOUND");
+      if (candidates.length > 1) return publicResult({ settings: document.settings, team: null, teams: candidates.map(projectTeamSummary), selectionRequired: true });
+      const [team] = candidates;
+      return publicResult({ settings: document.settings, team: projectTeam(team, document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId)), teams: [projectTeamSummary(team)], selectionRequired: false });
     })), presentCall: () => present("Read team status"),
   }));
   ctx.tools.register(defineTool({
-    name: "team_message", description: "Send an authenticated same-team coordinator relay. Peer delivery routes through the exact live root lead and is never attributed to a user.",
-    parameters: { team_id: { type: "string" }, recipient_session_id: { type: "string", required: true, description: "Recipient session id, member id, or unique member name." }, message: { type: "string", required: true } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => publicResult(await sendTeamMessage(ctx, store, execution.agent, { teamId: args.team_id, recipientSessionId: args.recipient_session_id, message: args.message }, signal))),
+    name: "team_message", description: "Send an authenticated coordinator relay. Cross-team delivery requires target_team_id and is allowed only when the caller is the same fixed root lead of both peer teams.",
+    parameters: { team_id: { type: "string" }, target_team_id: { type: "string", description: "Optional peer team owned by the same fixed root lead." }, recipient_session_id: { type: "string", required: true, description: "Recipient session id, member id, or unique member name in the target team." }, message: { type: "string", required: true } }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution, signal) => publicResult(await sendTeamMessage(ctx, store, execution.agent, { teamId: args.team_id, targetTeamId: args.target_team_id, recipientSessionId: args.recipient_session_id, message: args.message }, signal))),
     presentCall: (args) => present("Relay team message", args.recipient_session_id),
   }));
   ctx.tools.register(defineTool({
-    name: "team_task_create", description: "Create a durable pending team task with optional assignee and dependency ids.",
-    parameters: { team_id: { type: "string" }, title: { type: "string", required: true }, description: { type: "string" }, assignee_session_id: { type: "string" }, depends_on: { type: "array", items: { type: "string" } }, files: { type: "array", items: { type: "string" }, description: "Optional normalized file paths this task may edit; overlapping active tasks are flagged." } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution) => publicResult(await createTask(store, execution.agent, { teamId: args.team_id, title: args.title, description: args.description, assigneeSessionId: args.assignee_session_id, dependsOn: args.depends_on, files: args.files }))),
+    name: "team_task_create", description: "Create a durable pending task with local dependencies or fixed-root-lead-authorized peer-team dependencies.",
+    parameters: { team_id: { type: "string" }, title: { type: "string", required: true }, description: { type: "string" }, assignee_session_id: { type: "string" }, depends_on: { type: "array", items: { type: "string" } }, cross_team_depends_on: { type: "array", items: { type: "string" }, description: "Peer dependencies as team_id:task_id; only their shared fixed root lead may create them." }, files: { type: "array", items: { type: "string" }, description: "Optional normalized file paths this task may edit; overlapping active tasks are flagged." } }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution) => {
+      if ((args.cross_team_depends_on?.length ?? 0) > 0) {
+        const sourceTeam = await store.read((document) => findTeam(document, nonEmptyString(args.team_id, "team_id", 256)));
+        requireLiveRootLead(ctx, sourceTeam, execution.agent);
+      }
+      return publicResult(await createTask(store, execution.agent, { teamId: args.team_id, title: args.title, description: args.description, assigneeSessionId: args.assignee_session_id, dependsOn: args.depends_on, crossTeamDependsOn: args.cross_team_depends_on, files: args.files }));
+    }),
     presentCall: (args) => present("Create team task", args.title),
   }));
   ctx.tools.register(defineTool({
@@ -965,7 +1592,7 @@ function registerTools(ctx, store, ready) {
     parameters: { team_id: { type: "string" }, state: { type: "string", enum: TASK_STATES } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => store.read((document) => {
       const team = resolveTeamForCaller(document, optionalString(args.team_id, "team_id", 256), execution.agent.id);
-      const tasks = team.tasks.map((task) => deriveTask(task, team.tasks)).filter((task) => args.state === undefined || task.state === args.state);
+      const tasks = team.tasks.map((task) => deriveTaskAcrossTeams(task, team, document.teams)).filter((task) => args.state === undefined || task.state === args.state);
       return publicResult({ teamId: team.id, tasks });
     })), presentCall: () => present("List team tasks"),
   }));
@@ -982,7 +1609,7 @@ function registerTools(ctx, store, ready) {
     presentCall: (args) => present(args.confirm === true ? "Recover orphaned team" : "Inspect orphaned teams", args.team_id),
   }));
   ctx.tools.register(defineTool({
-    name: "team_shutdown", description: "Gracefully retire one member or close the whole team. Force mode interrupts descendants using exact live ancestor authority.",
+    name: "team_shutdown", description: "Gracefully retire one member or close the whole team. Force mode drains selected continuable children to quiescence using the exact live parent.",
     parameters: { team_id: { type: "string", required: true }, member_session_id: { type: "string" }, force: { type: "boolean" } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution, signal) => publicResult(await shutdownTeam(ctx, store, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force }, signal))),
     presentCall: (args) => present("Shut down team", args.team_id),
@@ -993,6 +1620,12 @@ function json(res, status, body) {
   const encoded = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(encoded), "cache-control": "no-store" });
   res.end(encoded);
+}
+function errorPayload(error, fallbackCode = "AGENT_TEAMS_INVALID_REQUEST") {
+  return {
+    error: String(error?.message ?? error),
+    code: typeof error?.code === "string" ? error.code : fallbackCode,
+  };
 }
 function trustedRequest(req) {
   const rawHost = req.headers.host;
@@ -1042,19 +1675,19 @@ function registerWebApi(ctx, store, ready) {
   ctx.effect(() => unsubscribe, "agent-teams store subscription");
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/state", handler: async (req, res) => {
-      if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
-      if (!trustedRequest(req)) return json(res, 403, { error: "forbidden" });
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
+      if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
       try {
         await ready;
         const sessionId = nonEmptyString(new URL(req.url, "http://x").searchParams.get("sessionId"), "sessionId", 256);
         return json(res, 200, await store.read((document) => teamSnapshot(document, sessionId)));
-      } catch (error) { return json(res, 400, { error: String(error?.message ?? error) }); }
+      } catch (error) { return json(res, 400, errorPayload(error)); }
     },
   }), "agent-teams state route");
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/events", handler: async (req, res) => {
-      if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
-      if (!trustedRequest(req)) return json(res, 403, { error: "forbidden" });
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
+      if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
       try {
         await ready;
         const sessionId = nonEmptyString(new URL(req.url, "http://x").searchParams.get("sessionId"), "sessionId", 256);
@@ -1064,15 +1697,15 @@ function registerWebApi(ctx, store, ready) {
         clients.set(sessionId, responses);
         sseSnapshot(res, await store.read((document) => teamSnapshot(document, sessionId)));
         req.once("close", () => { responses.delete(res); if (responses.size === 0) clients.delete(sessionId); });
-      } catch (error) { if (!res.headersSent) return json(res, 400, { error: String(error?.message ?? error) }); }
+      } catch (error) { if (!res.headersSent) return json(res, 400, errorPayload(error)); }
     },
   }), "agent-teams events route");
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/action", handler: async (req, res) => {
-      if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
-      if (!trustedRequest(req) || req.headers["x-harness-agent-teams"] !== "1") return json(res, 403, { error: "forbidden" });
+      if (req.method !== "POST") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
+      if (!trustedRequest(req) || req.headers["x-harness-agent-teams"] !== "1") return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
       let body;
-      try { body = await readJsonBody(req); } catch (error) { return json(res, error?.status === 413 ? 413 : 400, { error: String(error?.message ?? error) }); }
+      try { body = await readJsonBody(req); } catch (error) { return json(res, error?.status === 413 ? 413 : 400, errorPayload(error, error?.status === 413 ? "AGENT_TEAMS_BODY_TOO_LARGE" : "AGENT_TEAMS_INVALID_REQUEST")); }
       try {
         await ready;
         const action = nonEmptyString(body.action, "action", 64);
@@ -1091,7 +1724,7 @@ function registerWebApi(ctx, store, ready) {
         return json(res, 200, publicResult({ result, state }));
       } catch (error) {
         const status = error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : error?.code === "AGENT_TEAMS_UNAUTHORIZED" ? 403 : error?.code?.includes("CONFLICT") || error?.code?.includes("LIMIT") ? 409 : 400;
-        return json(res, status, { error: String(error?.message ?? error), code: error?.code });
+        return json(res, status, errorPayload(error));
       }
     },
   }), "agent-teams action route");
@@ -1103,11 +1736,18 @@ function registerWebApi(ctx, store, ready) {
 
 function observeSubagents(ctx, store, ready) {
   ctx.on("subagent/start", (info) => {
+    noteGracefulLifecycleStart(info);
     return ready.then(() => store.runOperation(() => store.mutate((document) => {
       for (const team of document.teams) {
         if (team.state === "closed") continue;
         const member = memberOf(team, info.id);
         if (member === undefined || member.state === "retired") continue;
+        if (member.state === "shutting_down") {
+          member.runId = String(info.runId);
+          member.updatedAt = now();
+          team.updatedAt = member.updatedAt;
+          return;
+        }
         member.state = "running";
         member.runId = String(info.runId);
         member.error = undefined;
@@ -1118,23 +1758,32 @@ function observeSubagents(ctx, store, ready) {
     }))).catch((error) => ctx.logger.warn(`agent-teams start reconciliation failed: ${String(error)}`));
   });
   ctx.on("subagent/end", (info) => {
-    return ready.then(() => store.runOperation(() => store.mutate((document) => {
+    noteGracefulLifecycleEnd(info);
+    return ready.then(() => store.mutate((document) => {
       for (const team of document.teams) {
         if (team.state === "closed") continue;
         const member = memberOf(team, info.id);
-        if (member === undefined || member.state === "retired") continue;
-        if (member.state === "shutting_down") member.state = "retired";
-        else if (["error", "refusal"].includes(info.stopReason)) {
-          member.state = "failed";
-          member.error = `subagent ended with ${info.stopReason}`;
-        } else member.state = "ready";
-        member.runId = undefined;
-        member.updatedAt = now();
-        team.updatedAt = member.updatedAt;
-        if (team.state === "closing" && team.members.filter((candidate) => candidate.kind === "worker").every((candidate) => candidate.state === "retired")) closeTeamRecord(team);
+        if (member === undefined) continue;
+        if (member.state === "shutting_down") {
+          if (member.runId !== undefined && info.runId !== undefined && member.runId === String(info.runId)) member.runId = undefined;
+          member.updatedAt = now();
+          team.updatedAt = member.updatedAt;
+          return;
+        }
+        if (member.state !== "retired") {
+          if (["error", "refusal"].includes(info.stopReason)) {
+            member.state = "failed";
+            member.error = `subagent ended with ${info.stopReason}`;
+          } else member.state = "ready";
+          member.runId = undefined;
+          member.updatedAt = now();
+          team.updatedAt = member.updatedAt;
+        }
+        member.shutdownUnconfirmed = undefined;
+        member.stopUnconfirmed = undefined;
         return;
       }
-    }))).catch((error) => ctx.logger.warn(`agent-teams end reconciliation failed: ${String(error)}`));
+    })).catch((error) => ctx.logger.warn(`agent-teams end reconciliation failed: ${String(error)}`));
   });
 }
 
@@ -1161,6 +1810,7 @@ export {
   AgentTeamsStore,
   Config,
   HARD_MAX_MEMBERS,
+  HARD_MAX_TEAMS_PER_ROOT,
   MEMBER_STATES,
   TASK_STATES,
   apply,

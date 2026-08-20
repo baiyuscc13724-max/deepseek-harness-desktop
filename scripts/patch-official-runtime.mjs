@@ -276,6 +276,13 @@ const CONVERSATION_CACHE_ZH_PATCHED = `			"stats.cacheHit": "累计缓存读取 
 			"stats.cacheCumulative": "累计缓存读取 {percent}%（含首次冷启动）",
 			"stats.cacheUnreported": "缓存：提供方未报告",`
 const CONVERSATION_CACHE_EN_ORIGINAL = '"stats.cacheHit": "Cache hit {percent}%",'
+const CONVERSATION_VIEW_OWNER_ORIGINAL = `				children: active !== void 0 && renderSlot("conversation.view", {
+					inspect,
+					onInspectDone: () => {`
+const CONVERSATION_VIEW_OWNER_PATCHED = `				children: active !== void 0 && renderSlot("conversation.view", {
+					inspect,
+					setView: actions.setView,
+					onInspectDone: () => {`
 const CONVERSATION_CACHE_EN_PATCHED = `			"stats.cacheHit": "Cumulative cache read {percent}%",
 			"stats.cacheLast": "Latest cache read {percent}%",
 			"stats.cacheWarm": "Warm-request cache read {percent}%",
@@ -471,6 +478,7 @@ export function patchConversationCacheSource(source) {
   let output = source
   let changed = false
   const replacements = [
+    [CONVERSATION_VIEW_OWNER_ORIGINAL, CONVERSATION_VIEW_OWNER_PATCHED, 'conversation view navigation action'],
     [CONVERSATION_USAGE_ORIGINAL, CONVERSATION_USAGE_PATCHED, 'token projection consumer'],
     [CONVERSATION_CACHE_ORIGINAL, CONVERSATION_CACHE_PATCHED, 'cache summary'],
     [CONVERSATION_TOOLTIP_ORIGINAL, CONVERSATION_TOOLTIP_PATCHED, 'cache detail tooltip'],
@@ -582,7 +590,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const subagentChanged = await patchInstalledSubagent()
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
-  process.stdout.write(conversationChanged ? 'Patched cache telemetry conversation view.\n' : 'Cache telemetry conversation patch already applied.\n')
+  process.stdout.write(conversationChanged ? 'Patched conversation telemetry and view navigation.\n' : 'Conversation telemetry and view navigation already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
   process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
 }

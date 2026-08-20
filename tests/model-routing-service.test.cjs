@@ -111,11 +111,11 @@ test('the official Harness default model is authoritative over legacy duplicated
   const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
   assert.deepEqual(settings['agent-default-model'], { provider: 'settings-provider', model: 'settings-model' })
   const migratedState = JSON.parse(await readFile(path.join(dshHome, 'harness-desktop-model-routing.json'), 'utf8'))
-  assert.equal(migratedState.schemaVersion, 2)
-  assert.equal(migratedState.main, undefined)
+  assert.equal(migratedState.schemaVersion, 3)
+  assert.deepEqual(migratedState.main, { provider: 'settings-provider', model: 'settings-model' })
 })
 
-test('first startup establishes subagent routing without duplicating the official main model', async t => {
+test('first startup stores key-free main and subagent routes for trusted hosts', async t => {
   const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-migration-'))
   t.after(() => rm(dshHome, { recursive: true, force: true }))
   await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: official-provider\n  model: official-model\n')
@@ -123,9 +123,11 @@ test('first startup establishes subagent routing without duplicating the officia
   const result = await ensureModelRouting({ dshHome, shippedPresetRoot })
   assert.deepEqual(result.main, { provider: 'official-provider', model: 'official-model' })
   const stored = JSON.parse(await readFile(path.join(dshHome, 'harness-desktop-model-routing.json'), 'utf8'))
-  assert.equal(stored.schemaVersion, 2)
-  assert.equal(stored.main, undefined)
+  assert.equal(stored.schemaVersion, 3)
+  assert.deepEqual(stored.main, { provider: 'official-provider', model: 'official-model' })
   assert.deepEqual(stored.subagent, { inheritMain: true, provider: 'official-provider', model: 'official-model' })
+  assert.deepEqual(Object.keys(stored).sort(), ['basePreset', 'main', 'schemaVersion', 'subagent'])
+  assert.doesNotMatch(JSON.stringify(stored), /api[_-]?key|credential|secret|token/iu)
 })
 
 test('startup leaves an unchanged routing configuration untouched', async t => {
@@ -144,6 +146,24 @@ test('startup leaves an unchanged routing configuration untouched', async t => {
   assert.deepEqual(result.main, { provider: 'stable-provider', model: 'stable-model' })
   assert.equal((await stat(settingsFile)).mtimeMs, beforeSettings.mtimeMs)
   assert.equal((await stat(stateFile)).mtimeMs, beforeState.mtimeMs)
+})
+
+test('startup repairs a stale schema v3 main mirror even when subagent routing is current', async t => {
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-main-mirror-'))
+  t.after(() => rm(dshHome, { recursive: true, force: true }))
+  const stateFile = path.join(dshHome, 'harness-desktop-model-routing.json')
+  await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: authoritative-provider\n  model: authoritative-model\n')
+  await ensureModelRouting({ dshHome, shippedPresetRoot })
+  const stale = JSON.parse(await readFile(stateFile, 'utf8'))
+  stale.main = { provider: 'stale-provider', model: 'stale-model' }
+  await writeFile(stateFile, `${JSON.stringify(stale, null, 2)}\n`)
+
+  await ensureModelRouting({ dshHome, shippedPresetRoot })
+
+  const repaired = JSON.parse(await readFile(stateFile, 'utf8'))
+  assert.equal(repaired.schemaVersion, 3)
+  assert.deepEqual(repaired.main, { provider: 'authoritative-provider', model: 'authoritative-model' })
+  assert.deepEqual(repaired.subagent, { inheritMain: true, provider: 'authoritative-provider', model: 'authoritative-model' })
 })
 
 test('startup restores a missing desktop preset for existing sessions without changing user presets', async t => {
@@ -168,6 +188,10 @@ test('startup restores a missing desktop preset for existing sessions without ch
   const restored = await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, 'agent.cordis.yml'), 'utf8')
   assert.match(restored, /provider: opencode-go/)
   assert.match(restored, /model: deepseek-v4-flash/)
+  const migrated = JSON.parse(await readFile(path.join(dshHome, 'harness-desktop-model-routing.json'), 'utf8'))
+  assert.equal(migrated.schemaVersion, 3)
+  assert.deepEqual(migrated.main, { provider: 'opencode-go', model: 'deepseek-v4-flash' })
+  assert.deepEqual(migrated.subagent, { provider: 'opencode-go', model: 'deepseek-v4-flash', inheritMain: true })
 })
 
 test('a failed settings projection rolls back the authoritative desktop route', async t => {
@@ -176,8 +200,7 @@ test('a failed settings projection rolls back the authoritative desktop route', 
   const settingsFile = path.join(dshHome, 'settings.yaml')
   const stateFile = path.join(dshHome, 'harness-desktop-model-routing.json')
   const oldState = {
-    schemaVersion: 1,
-    main: { provider: 'old-provider', model: 'old-model' },
+    schemaVersion: 2,
     subagent: { inheritMain: true, provider: 'old-provider', model: 'old-model' },
     basePreset: 'standard'
   }

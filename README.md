@@ -21,16 +21,16 @@
 
 ## 下载
 
-当前稳定版：**v1.0.27** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.27)
+当前稳定版：**v1.0.28** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.28)
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-win-x64.exe) |
-| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-portable-x64.exe) |
-| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-arm64.dmg) |
-| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-x64.dmg) |
-| Android 手机端 1.0.27 | 与桌面端扫码配对、同步会话并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Mobile-1.0.27-android-universal.apk) |
-| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-win-x64.exe) |
+| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-portable-x64.exe) |
+| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-arm64.dmg) |
+| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-x64.dmg) |
+| Android 手机端 1.0.28 | 与桌面端扫码配对、同步会话并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Mobile-1.0.28-android-universal.apk) |
+| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 
@@ -52,7 +52,7 @@ scoop install harness-desktop/harness-desktop
 | 外观皮肤 | 从顶部快捷入口切换配色和背景；支持开源主题与自定义外观 |
 | DSH 插件与 Skills | 在应用内发现、安装和更新；英文简介自动生成中文摘要，并保留原文 |
 | 主模型与子代理 | 子代理可跟随主模型或单独选模型；目录区分运行中、可继续与只读历史，结束任务不会删除完整记录 |
-| 协作团队（实验） | 在设置中显式开启；固定负责人协调独立队友、共享依赖任务、同级消息和可恢复会话，默认关闭并限制并发与成员数 |
+| 协作团队（实验） | 启用后自动判断：简单任务由主模型 solo；无活动团队且只有一个独立一次性辅助时用官方普通 `subagent`；至少两个需交给不同成员的持续独立工作流且需要依赖、交接或文件边界时才建团队。成员是可见、持久责任主体，禁止调用 `subagent` / `subagent_fork` / `workflow` / `ralph`；扩员由 root 创建正式成员，防止绕过 `maxMembers` / `maxActiveTurns`、冲突检查和关停；详见[代理团队用户指南](docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md) |
 | 桌面更新 | 国内源优先、全球源自动回退、SHA-256 校验和中文安装引导，并在更新前展示改动内容 |
 | 用户配置保护 | 主题、插件和模型路由保存在用户目录，更新官方 Harness 时不会被覆盖 |
 | 自动本地记忆与缓存 | 像 Codex 一样低干扰后台使用；敏感信息硬过滤，托盘“数据与隐私”保留查看、关闭、预览和全部删除 |

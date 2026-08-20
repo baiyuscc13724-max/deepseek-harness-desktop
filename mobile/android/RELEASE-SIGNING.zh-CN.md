@@ -39,10 +39,10 @@ $path = "$env:USERPROFILE\.harness-desktop\signing\harness-mobile-release.jks"
 
 ## 3. 发布顺序
 
-1. 先完成同版本桌面 `v1.0.27` GitHub Release。
-2. 推送 `v1.0.27` Tag 时 **Publish Signed Android Mobile** 会自动启动并等待桌面 Release；需要重跑时才在 Actions 中手动输入同一 Tag。
-3. 工作流会运行 Android 单元测试，构建 release APK，使用 `apksigner` 验证签名，并强制证书指纹、包名 `io.harnessdesktop.mobile`、versionCode `10027`、versionName `1.0.27` 全部匹配。
-4. 验证通过后才把 `Harness-Mobile-1.0.27-android-universal.apk` 上传到现有 Release，并更新 `SHA256SUMS.txt`。
+1. 先完成同版本桌面 `v1.0.28` GitHub Release。
+2. 推送 `v1.0.28` Tag 时 **Publish Signed Android Mobile** 会自动启动并等待桌面 Release；需要重跑时才在 Actions 中手动输入同一 Tag。
+3. 工作流会运行 Android 单元测试，构建 release APK，使用 `apksigner` 验证签名，并强制证书指纹、包名 `io.harnessdesktop.mobile`、versionCode `10028`、versionName `1.0.28` 全部匹配。
+4. 验证通过后才把 `Harness-Mobile-1.0.28-android-universal.apk` 上传到现有 Release，并更新 `SHA256SUMS.txt`。
 
 缺少任一 Secret、证书指纹不符、APK 未签名、包名或版本不符时，工作流都会失败，不会发布 debug 或未签名 APK。
 

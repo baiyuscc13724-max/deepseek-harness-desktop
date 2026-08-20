@@ -2,7 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
-const { mkdtemp, rm, stat } = require('node:fs/promises')
+const { mkdir, mkdtemp, readFile, rm, stat, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
@@ -33,6 +33,253 @@ test('disabled Agent Teams initialization creates no storage file', async () => 
     await fx.store.mutate(() => undefined)
     await assert.rejects(stat(fx.file), error => error && error.code === 'ENOENT')
   } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('v1 store migration performs crash reconciliation in the same initialization', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-v1-migration-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  const mod = await plugin()
+  const timestamp = new Date().toISOString()
+  const legacy = {
+    version: 1,
+    settings: { enabled: true, maxMembers: 4, maxActiveTurns: 3 },
+    teams: [{
+      id: 'legacy-team', rootLeadSessionId: 'legacy-lead', name: 'Legacy', objective: 'Preserve every record', revision: 7,
+      state: 'active', createdAt: timestamp, updatedAt: timestamp,
+      members: [
+        { id: 'legacy-lead-id', sessionId: 'legacy-lead', name: 'Lead', role: 'root lead and coordinator', kind: 'lead', state: 'running', createdAt: timestamp, updatedAt: timestamp },
+        { id: 'legacy-worker-id', sessionId: 'legacy-worker', name: 'Worker', role: 'legacy worker', kind: 'worker', state: 'idle', runId: 'legacy-run', createdAt: timestamp, updatedAt: timestamp }
+      ],
+      tasks: [{ id: 'legacy-task', title: 'Done', description: 'durable detail', state: 'completed', dependsOn: [], files: ['src/legacy.js'], assigneeSessionId: 'legacy-lead', createdAt: timestamp, updatedAt: timestamp, completedAt: timestamp }],
+      messages: [{ id: 'legacy-message', fromSessionId: 'legacy-lead', toSessionId: 'legacy-worker', body: 'pending durable body', status: 'pending', createdAt: timestamp }]
+    }]
+  }
+  try {
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, `${JSON.stringify(legacy, null, 2)}\n`, 'utf8')
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    const migrated = JSON.parse(await readFile(file, 'utf8'))
+    assert.equal(migrated.version, 2)
+    assert.deepEqual(migrated.settings, legacy.settings)
+    const migratedTeam = migrated.teams[0]
+    assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-lead').state, 'ready')
+    assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-worker').state, 'ready')
+    assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-worker').runId, undefined)
+    assert.equal(migratedTeam.messages[0].status, 'failed')
+    assert.match(migratedTeam.messages[0].deliveryError, /retry manually/u)
+    assert.deepEqual(migratedTeam.tasks, legacy.teams[0].tasks)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('persisted team and task records reject unsupported fields', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Strict records' })
+    const rawTeam = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
+    assert.throws(() => fx.mod.validateTeam({ ...rawTeam, injected: 'unsafe' }), /unsupported fields/u)
+    const timestamp = new Date().toISOString()
+    assert.throws(() => fx.mod.validateTask({
+      id: 'strict-task', title: 'Strict', state: 'pending', dependsOn: [], files: [], createdAt: timestamp, updatedAt: timestamp, injected: 'unsafe'
+    }), /unsupported fields/u)
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('one fixed root lead may own multiple peer teams with explicit selection', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const first = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Team one' })
+    const second = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Team two' })
+    assert.notEqual(first.id, second.id)
+    await assert.rejects(
+      fx.mod.createTask(fx.store, { id: 'lead-session' }, { title: 'Ambiguous' }),
+      error => error && error.code === 'AGENT_TEAMS_TEAM_REQUIRED'
+    )
+    const firstTask = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: first.id, title: 'First task' })).task
+    const secondTask = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, {
+      teamId: second.id, title: 'Second task', crossTeamDependsOn: [`${first.id}:${firstTask.id}`]
+    })).task
+    assert.deepEqual(secondTask.blockedBy, [`${first.id}:${firstTask.id}`])
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: second.id, taskId: secondTask.id, action: 'claim' }),
+      error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
+    )
+    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: first.id, taskId: firstTask.id, action: 'claim' })
+    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: first.id, taskId: firstTask.id, action: 'complete' })
+    const claimed = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: second.id, taskId: secondTask.id, action: 'claim' })).task
+    assert.deepEqual(claimed.blockedBy, [])
+    assert.deepEqual(claimed.dependencySources, [{ teamId: first.id, teamName: 'Team one', teamStatus: 'active' }])
+    await fx.store.mutate(document => { document.teams.find(team => team.id === first.id).state = 'closed' })
+    const afterCompletedSourceClosed = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session').teams.find(team => team.id === second.id).tasks.find(task => task.id === secondTask.id)
+    assert.deepEqual(afterCompletedSourceClosed.blockedBy, [])
+    assert.deepEqual(afterCompletedSourceClosed.dependencySources, [{ teamId: first.id, teamName: 'Team one', teamStatus: 'closed' }])
+    assert.equal(JSON.stringify(afterCompletedSourceClosed).includes('src/'), false)
+
+    const closingSource = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Closing source' })
+    const incomplete = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: closingSource.id, title: 'Never completed' })).task
+    const blockedAfterClose = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, {
+      teamId: second.id, title: 'Blocked after source closes', crossTeamDependsOn: [`${closingSource.id}:${incomplete.id}`]
+    })).task
+    await fx.store.mutate(document => { document.teams.find(team => team.id === closingSource.id).state = 'closed' })
+    const blockedProjection = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session').teams.find(team => team.id === second.id).tasks.find(task => task.id === blockedAfterClose.id)
+    assert.deepEqual(blockedProjection.blockedBy, [`${closingSource.id}:${incomplete.id}`])
+    assert.equal(blockedProjection.dependencySources[0].teamStatus, 'closed')
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: second.id, taskId: blockedAfterClose.id, action: 'claim' }),
+      error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
+    )
+
+    const foreign = await fx.mod.createTeam(fx.store, { id: 'foreign-lead' }, { objective: 'Foreign team' })
+    const foreignTask = (await fx.mod.createTask(fx.store, { id: 'foreign-lead' }, { teamId: foreign.id, title: 'Foreign task' })).task
+    await assert.rejects(
+      fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: second.id, title: 'Forbidden dependency', crossTeamDependsOn: [`${foreign.id}:${foreignTask.id}`] }),
+      error => error && error.code === 'AGENT_TEAMS_CROSS_TEAM_FORBIDDEN'
+    )
+    const snapshot = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session')
+    assert.equal(snapshot.teams.length, 3)
+    assert.deepEqual(new Set(snapshot.teams.map(team => team.id)), new Set([first.id, second.id, closingSource.id]))
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('reopen and complete preserve dependency consistency', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Dependency consistency' })
+    const prerequisite = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Prerequisite' })).task
+    const dependent = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Dependent', dependsOn: [prerequisite.id] })).task
+    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'claim' })
+    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'complete' })
+    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: dependent.id, action: 'claim' })
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'reopen' }),
+      error => error && error.code === 'AGENT_TEAMS_TASK_CONFLICT'
+    )
+    await fx.store.mutate(document => { document.teams[0].tasks.find(task => task.id === prerequisite.id).state = 'pending' })
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: dependent.id, action: 'complete' }),
+      error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
+    )
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('one root has an atomic hard limit of eight unclosed peer teams', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const created = []
+    for (let index = 0; index < fx.mod.HARD_MAX_TEAMS_PER_ROOT - 1; index += 1) {
+      created.push(await fx.mod.createTeam(fx.store, { id: 'bounded-lead' }, { objective: `Bounded team ${index + 1}` }))
+    }
+    const boundary = await Promise.allSettled([
+      fx.mod.createTeam(fx.store, { id: 'bounded-lead' }, { objective: 'Boundary winner A' }),
+      fx.mod.createTeam(fx.store, { id: 'bounded-lead' }, { objective: 'Boundary winner B' })
+    ])
+    assert.equal(boundary.filter(result => result.status === 'fulfilled').length, 1)
+    assert.equal(boundary.filter(result => result.status === 'rejected' && result.reason?.code === 'AGENT_TEAMS_TEAM_LIMIT').length, 1)
+    assert.equal(fx.store.snapshot().teams.filter(team => team.rootLeadSessionId === 'bounded-lead' && team.state !== 'closed').length, 8)
+    await fx.store.mutate(document => { document.teams.find(team => team.id === created[0].id).state = 'closed' })
+    await fx.mod.createTeam(fx.store, { id: 'bounded-lead' }, { objective: 'Replacement after close' })
+    assert.equal(fx.store.snapshot().teams.filter(team => team.rootLeadSessionId === 'bounded-lead' && team.state !== 'closed').length, 8)
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('cross-team prerequisite completion and claim remain atomic across stores', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const source = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Atomic source' })
+    const target = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Atomic target' })
+    const prerequisite = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: source.id, title: 'Prerequisite' })).task
+    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: source.id, taskId: prerequisite.id, action: 'claim' })
+    const dependent = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, {
+      teamId: target.id, title: 'Dependent', crossTeamDependsOn: [`${source.id}:${prerequisite.id}`]
+    })).task
+    const peer = new fx.mod.AgentTeamsStore(fx.file)
+    await peer.init()
+    let unsafePublication = false
+    fx.store.subscribe(document => {
+      const sourceTask = document.teams.find(team => team.id === source.id)?.tasks.find(task => task.id === prerequisite.id)
+      const targetTask = document.teams.find(team => team.id === target.id)?.tasks.find(task => task.id === dependent.id)
+      if (targetTask?.state === 'in_progress' && sourceTask?.state !== 'completed') unsafePublication = true
+    })
+    const results = await Promise.allSettled([
+      fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: target.id, taskId: dependent.id, action: 'claim' }),
+      fx.mod.updateTask(peer, { id: 'lead-session' }, { teamId: source.id, taskId: prerequisite.id, action: 'complete' })
+    ])
+    assert.equal(results[1].status, 'fulfilled')
+    assert.equal(unsafePublication, false)
+    if (results[0].status === 'rejected') {
+      assert.equal(results[0].reason.code, 'AGENT_TEAMS_TASK_BLOCKED')
+      await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: target.id, taskId: dependent.id, action: 'claim' })
+    }
+    const final = await fx.store.read(document => ({
+      source: document.teams.find(team => team.id === source.id).tasks.find(task => task.id === prerequisite.id).state,
+      target: document.teams.find(team => team.id === target.id).tasks.find(task => task.id === dependent.id).state
+    }))
+    assert.deepEqual(final, { source: 'completed', target: 'in_progress' })
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('concurrent store instances serialize mutations without lost updates', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Shared disk race' })
+    const peer = new fx.mod.AgentTeamsStore(fx.file)
+    await peer.init()
+    let observedTaskCount = 0
+    fx.store.subscribe(document => { observedTaskCount = document.teams[0]?.tasks.length ?? 0 })
+    await Promise.all([
+      fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Writer one' }),
+      fx.mod.createTask(peer, { id: 'lead-session' }, { teamId: team.id, title: 'Writer two' })
+    ])
+    assert.equal((await fx.store.read(document => document.teams[0].tasks)).length, 2)
+    assert.equal((await peer.read(document => document.teams[0].tasks)).length, 2)
+    assert.equal(observedTaskCount, 2)
+    const racingInit = new fx.mod.AgentTeamsStore(fx.file)
+    await Promise.all([
+      racingInit.init(),
+      fx.mod.createTask(peer, { id: 'lead-session' }, { teamId: team.id, title: 'Writer during init' })
+    ])
+    assert.deepEqual(
+      new Set((await fx.store.read(document => document.teams[0].tasks)).map(task => task.title)),
+      new Set(['Writer one', 'Writer two', 'Writer during init'])
+    )
+    const order = []
+    let enterFirst
+    let releaseFirst
+    const enteredFirst = new Promise(resolve => { enterFirst = resolve })
+    const firstGate = new Promise(resolve => { releaseFirst = resolve })
+    const firstOperation = fx.store.runOperation(async () => { order.push('first'); enterFirst(); await firstGate; order.push('first-done') })
+    await enteredFirst
+    const secondOperation = peer.runOperation(async () => { order.push('second') })
+    await Promise.resolve()
+    assert.deepEqual(order, ['first'])
+    releaseFirst()
+    await Promise.all([firstOperation, secondOperation])
+    assert.deepEqual(order, ['first', 'first-done', 'second'])
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('persisted teams reject worker-to-root nesting across teams', async () => {
+  const mod = await plugin()
+  const timestamp = new Date().toISOString()
+  const team = (id, rootLeadSessionId, members) => ({
+    id, rootLeadSessionId, name: id, state: 'active', createdAt: timestamp, updatedAt: timestamp,
+    members, tasks: [], messages: []
+  })
+  const lead = id => ({ id: `lead-${id}`, sessionId: id, name: `Lead ${id}`, role: 'root lead and coordinator', kind: 'lead', state: 'running', createdAt: timestamp, updatedAt: timestamp })
+  const nested = {
+    version: 2, settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 },
+    teams: [
+      team('outer', 'outer-root', [lead('outer-root'), worker('nested-session', 'Nested worker')]),
+      team('nested', 'nested-session', [lead('nested-session')])
+    ]
+  }
+  assert.throws(() => mod.validateStoreDocument(nested), /nested teams are forbidden/u)
 })
 
 test('shared tasks enforce dependencies and exactly one concurrent claimant', async () => {
@@ -119,4 +366,34 @@ test('active tasks expose overlapping file conflict warnings', async () => {
     ]
     assert.deepEqual(fx.mod.deriveTask(tasks[0], tasks).conflictsWith, ['b'])
   } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('v1.0.27 persisted names remain readable across ZWJ and normalized collisions', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-legacy-name-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  const mod = await plugin()
+  const now = new Date().toISOString()
+  const team = {
+    id: 'legacy-team', rootLeadSessionId: 'lead-session', name: 'Legacy team', objective: 'Upgrade safely', revision: 1,
+    state: 'active', createdAt: now, updatedAt: now,
+    members: [
+      { id: 'lead', sessionId: 'lead-session', name: 'Lead', role: 'root lead and coordinator', kind: 'lead', state: 'running', createdAt: now, updatedAt: now },
+      { id: 'emoji', sessionId: 'emoji-session', name: '👩‍💻', role: 'legacy emoji member', kind: 'worker', state: 'ready', createdAt: now, updatedAt: now },
+      { id: 'wide', sessionId: 'wide-session', name: 'Ｒｅｖｉｅｗｅｒ', role: 'legacy full-width member', kind: 'worker', state: 'retired', createdAt: now, updatedAt: now },
+      { id: 'plain', sessionId: 'plain-session', name: 'reviewer', role: 'legacy normalized collision', kind: 'worker', state: 'retired', createdAt: now, updatedAt: now },
+      { id: 'long', sessionId: 'long-session', name: 'Legacy Worker Name Far Beyond New Limits', role: 'legacy long member name', kind: 'worker', state: 'retired', createdAt: now, updatedAt: now }
+    ],
+    tasks: [], messages: []
+  }
+  try {
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, `${JSON.stringify({ version: 1, settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 }, teams: [team] }, null, 2)}\n`, 'utf8')
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    const projected = mod.teamSnapshot(store.snapshot(), 'lead-session').team
+    assert.equal(projected.members.find(member => member.id === 'emoji').displayName, '👩‍💻')
+    assert.equal(projected.members.find(member => member.id === 'wide').displayName, 'Reviewer')
+    assert.equal(projected.members.find(member => member.id === 'long').displayName, 'Legacy Worker Name Far Beyond New Limits')
+    assert.equal(projected.status, 'active')
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

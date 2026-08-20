@@ -4,6 +4,7 @@ const YAML = require('yaml')
 
 const ROUTING_PRESET_ID = 'harness-desktop-routing'
 const ROUTING_STATE_FILE = 'harness-desktop-model-routing.json'
+const ROUTING_SCHEMA_VERSION = 3
 const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/
 const MODEL_ID = /^\S{1,256}$/
 const PRESET_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/
@@ -121,10 +122,13 @@ async function getModelRouting(options) {
   const settings = document.toJS() || {}
   const stored = await readJson(paths.stateFile)
   const settingsMain = optionalRoute(settings?.['agent-default-model']) || { provider: '', model: '' }
-  // The official Harness model picker owns agent-default-model. Older desktop
-  // releases duplicated it in the routing state; that value is migration-only.
-  const legacyStoredMain = optionalRoute(stored?.main)
-  const main = settingsMain.provider ? settingsMain : (legacyStoredMain || settingsMain)
+  // The official Harness model picker remains authoritative. Schema v3 mirrors
+  // only the key-free provider/model pair so trusted hosts (including Agent
+  // Teams) can select main and subagent routes without reading settings.yaml.
+  // A v2 document has no main field; older documents may still supply the
+  // migration fallback when the official setting is absent.
+  const storedMain = optionalRoute(stored?.main)
+  const main = settingsMain.provider ? settingsMain : (storedMain || settingsMain)
   const subagent = {
     inheritMain: stored?.subagent?.inheritMain !== false,
     provider: String(stored?.subagent?.provider || main.provider).trim(),
@@ -136,7 +140,7 @@ async function getModelRouting(options) {
     basePreset: selectedBasePreset(settings, stored),
     managedPresetId: ROUTING_PRESET_ID,
     providers: await providerCatalog(settings, [main, subagent]),
-    configured: Boolean(settingsMain.provider || legacyStoredMain)
+    configured: Boolean(settingsMain.provider || storedMain)
   }
 }
 
@@ -257,7 +261,8 @@ async function managedPresetMatches(paths, route) {
 }
 
 async function routingAlreadyCurrent(paths, stored, current, subagent, inheritMain) {
-  if (stored?.schemaVersion !== 2 || stored?.basePreset !== current.basePreset) return false
+  if (stored?.schemaVersion !== ROUTING_SCHEMA_VERSION || stored?.basePreset !== current.basePreset) return false
+  if (!routesEqual(optionalRoute(stored?.main), current.main)) return false
   if (stored?.subagent?.inheritMain !== inheritMain || !routesEqual(optionalRoute(stored?.subagent), subagent)) return false
   const settings = settingsDocument(await readText(paths.settingsFile)).toJS() || {}
   if (!routesEqual(optionalRoute(settings?.['agent-default-model']), current.main)) return false
@@ -288,7 +293,7 @@ async function saveModelRouting(options, next) {
   document.setIn(['agent-presets', 'default'], inheritMain ? basePreset : ROUTING_PRESET_ID)
   await mkdir(paths.home, { recursive: true, mode: 0o700 })
   const atomicWrite = options.writeFileAtomic || writeFileAtomic
-  const stateText = `${JSON.stringify({ schemaVersion: 2, subagent: { ...subagent, inheritMain }, basePreset }, null, 2)}\n`
+  const stateText = `${JSON.stringify({ schemaVersion: ROUTING_SCHEMA_VERSION, main, subagent: { ...subagent, inheritMain }, basePreset }, null, 2)}\n`
   await atomicWrite(paths.stateFile, stateText, { encoding: 'utf8', mode: 0o600 })
   try {
     await atomicWrite(paths.settingsFile, String(document), { encoding: 'utf8', mode: 0o600 })

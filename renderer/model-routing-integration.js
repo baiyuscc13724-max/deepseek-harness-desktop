@@ -1,5 +1,24 @@
 (function exposeModelRoutingIntegration(root) {
-  function guestModelRoutingBootstrap() {
+  function selectInitialRoute(state = {}) {
+    const explicit = {
+      provider: String(state.main?.provider || '').trim(),
+      model: String(state.main?.model || '').trim()
+    }
+    if (state.configured === true || explicit.provider || explicit.model) return explicit
+
+    const providers = (state.providers || []).filter(row => row && String(row.id || '').trim())
+    const hasModels = row => Array.isArray(row.models) && row.models.some(model => String(typeof model === 'string' ? model : model?.id || model?.model || model?.name || '').trim())
+    const isDeepSeek = row => /deepseek/i.test(`${row.id || ''} ${row.name || ''}`)
+    const provider = providers.find(row => isDeepSeek(row) && hasModels(row))
+      || providers.find(hasModels)
+      || providers.find(isDeepSeek)
+      || providers[0]
+    if (!provider) return explicit
+    const firstModel = (provider.models || []).map(model => String(typeof model === 'string' ? model : model?.id || model?.model || model?.name || '').trim()).find(Boolean) || ''
+    return { provider: String(provider.id).trim(), model: firstModel }
+  }
+
+  function guestModelRoutingBootstrap(selectInitialRoute) {
     if (window.__HARNESS_DESKTOP_MODEL_ROUTING_INSTALLED__) return
     window.__HARNESS_DESKTOP_MODEL_ROUTING_INSTALLED__ = true
 
@@ -132,12 +151,13 @@
       const subModel = panel.querySelector('[data-hd-sub-model]')
       const inherited = panel.dataset.dirty ? panel.dataset.subInherit !== 'false' : state.subagent?.inheritMain !== false
       const providerRows = (state.providers || []).map(row => ({ value: row.id, label: row.name && row.name !== row.id ? `${row.name} (${row.id})` : row.id }))
+      const initialMain = selectInitialRoute(state)
       if (!panel.dataset.dirty) {
-        panel.dataset.subProvider = state.subagent?.provider || state.main?.provider || ''
-        panel.dataset.subModel = state.subagent?.model || state.main?.model || ''
+        panel.dataset.subProvider = state.subagent?.provider || initialMain.provider
+        panel.dataset.subModel = state.subagent?.model || initialMain.model
       }
-      const mainProviderValue = panel.dataset.dirty ? mainProvider.value : state.main?.provider || ''
-      const mainModelValue = panel.dataset.dirty ? mainModel.value : state.main?.model || ''
+      const mainProviderValue = panel.dataset.dirty ? mainProvider.value : initialMain.provider
+      const mainModelValue = panel.dataset.dirty ? mainModel.value : initialMain.model
       const subProviderValue = panel.dataset.dirty ? subProvider.value : panel.dataset.subProvider
       const subModelValue = panel.dataset.dirty ? subModel.value : panel.dataset.subModel
       fillSelect(mainProvider, providerRows, mainProviderValue, '选择服务商')
@@ -232,11 +252,32 @@
 
     window.__HARNESS_DESKTOP_RENDER_MODEL_ROUTING__ = mount
     let scheduled = false
-    new MutationObserver(() => {
-      if (scheduled) return
-      scheduled = true
-      setTimeout(() => { scheduled = false; mount() }, 80)
-    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
+    let providerRefreshTimer = null
+    const insideRoutingPanel = node => {
+      const element = node?.nodeType === 1 ? node : node?.parentElement
+      return Boolean(element?.closest?.('#harness-desktop-model-routing'))
+    }
+    const officialModelsChanged = records => {
+      const panel = document.querySelector('#harness-desktop-model-routing')
+      if (!panel) return false
+      return records.some(record => {
+        if (insideRoutingPanel(record.target)) return false
+        const changed = [...(record.addedNodes || []), ...(record.removedNodes || [])]
+        return changed.length === 0 || changed.some(node => !insideRoutingPanel(node))
+      })
+    }
+    const scheduleProviderRefresh = records => {
+      if (!officialModelsChanged(records)) return
+      clearTimeout(providerRefreshTimer)
+      providerRefreshTimer = setTimeout(() => request('refresh-model-routing'), 240)
+    }
+    new MutationObserver(records => {
+      if (!scheduled) {
+        scheduled = true
+        setTimeout(() => { scheduled = false; mount() }, 80)
+      }
+      scheduleProviderRefresh(records)
+    }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-current'] })
     setInterval(() => {
       if (document.querySelector('#harness-desktop-model-routing')) request('refresh-provider-meters')
     }, 60 * 1000)
@@ -244,7 +285,7 @@
   }
 
   async function install(webview) {
-    await webview.executeJavaScript(`(${guestModelRoutingBootstrap.toString()})()`, true)
+    await webview.executeJavaScript(`(${guestModelRoutingBootstrap.toString()})(${selectInitialRoute.toString()})`, true)
   }
 
   async function publish(webview, state) {
@@ -253,5 +294,5 @@
     await webview.executeJavaScript(`window.__HARNESS_DESKTOP_MODEL_ROUTING_STATE__=${serialized};window.__HARNESS_DESKTOP_RENDER_MODEL_ROUTING__?.();`, true)
   }
 
-  root.harnessModelRoutingIntegration = { install, publish }
+  root.harnessModelRoutingIntegration = { install, publish, selectInitialRoute }
 })(window)
