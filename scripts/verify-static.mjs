@@ -137,6 +137,11 @@ if (!customForegroundRule || customForegroundRule.includes(' blur(') || !themeIn
 if (themeIntegration.includes('html[data-hd-theme="custom"] [data-slot="sidebar"] > *')) {
   throw new Error('The custom sidebar must not use backdrop-filter because it traps fixed settings dialogs inside the sidebar containing block.')
 }
+const auroraSidebarRule = 'html[data-hd-ui-mode="aurora"] [data-slot="sidebar"] > *'
+const auroraDialogSafety = 'html[data-hd-ui-mode="aurora"] [data-slot="sidebar"] > *:has([role="dialog"][aria-modal="true"]) { backdrop-filter:none!important; }'
+if (!themeIntegration.includes(auroraDialogSafety) || themeIntegration.indexOf(auroraDialogSafety) < themeIntegration.indexOf(auroraSidebarRule)) {
+  throw new Error('Aurora mode must remove the sidebar containing block while the official fixed settings dialog is open.')
+}
 if (!themeIntegration.includes('Math.max(.08, surfaceOpacity * .48)') || !themeIntegration.includes('Math.max(.18, surfaceOpacity * .7)')) {
   throw new Error('The custom sidebar and composer must remain translucent enough for the wallpaper to continue behind them.')
 }
@@ -423,7 +428,7 @@ for (const officialRc8Contract of ['patchInstalledMarkdownRenderer', 'patchInsta
 for (const contract of ['patchInstalledSubagent', 'subagentLifecycleCounts', 'filteredEntries.map', '待命（可恢复）', '已结束（仅记录）', 'dataPluginCss = "@harness-desktop/subagent-lifecycle"']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Subagent lifecycle/history patch is missing: ${contract}`)
 }
-for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "'web', '--port', '0'"]) {
+for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "'web', '--port', '0', '--no-open'"]) {
   if (!main.includes(contract)) throw new Error(`Dedicated desktop runtime policy is missing: ${contract}`)
 }
 const updateDownloadService = await readFile(path.join(root, 'electron/bridge/update-download-service.cjs'), 'utf8')

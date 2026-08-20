@@ -219,13 +219,16 @@
       .hd-ui-options small { margin-top:2px; color:var(--dsw-alias-label-secondary); font-size:10px; font-weight:400; }
       .hd-ui-options input { width:17px; height:17px; accent-color:var(--dsw-alias-brand-primary); }
       .hd-ui-note { margin:16px 0 0; color:var(--dsw-alias-label-tertiary); font-size:11px; }
-      html[data-hd-ui-mode="aurora"] [data-slot="sidebar"] > *,html[data-hd-ui-mode="aurora"] [data-composer-card="true"],html[data-hd-ui-mode="aurora"] [role="dialog"] { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,var(--dsw-alias-border-l2))!important; background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 88%,transparent)!important; box-shadow:inset 0 1px rgba(255,255,255,.08),0 18px 48px rgba(7,15,30,.14); backdrop-filter:blur(18px) saturate(1.08); }
-      html[data-hd-ui-mode="aurora"] [data-composer-card="true"] { border-radius:18px!important; }
-      html[data-hd-ui-mode="spatial"] [data-slot="sidebar"] > * { opacity:.86; transition:opacity .2s ease,filter .2s ease; }
+      html[data-hd-ui-mode]:not([data-hd-ui-mode="official"]) [data-composer-card="true"] { transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease,background .2s ease; }
+      html[data-hd-ui-mode="aurora"] body { box-shadow:inset 0 0 180px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)!important; }
+      html[data-hd-ui-mode="aurora"] [data-slot="sidebar"] > *,html[data-hd-ui-mode="aurora"] [data-composer-card="true"],html[data-hd-ui-mode="aurora"] [role="dialog"] { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 38%,var(--dsw-alias-border-l2))!important; background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 78%,transparent)!important; box-shadow:inset 0 1px rgba(255,255,255,.14),0 22px 58px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,rgba(7,15,30,.18)); backdrop-filter:blur(20px) saturate(1.16); }
+      html[data-hd-ui-mode="aurora"] [data-slot="sidebar"] > *:has([role="dialog"][aria-modal="true"]) { backdrop-filter:none!important; }
+      html[data-hd-ui-mode="aurora"] [data-composer-card="true"] { border-radius:22px!important; outline:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 28%,transparent); transform:translateY(-3px); }
+      html[data-hd-ui-mode="spatial"] [data-slot="sidebar"] > * { opacity:.68; transition:opacity .2s ease,filter .2s ease; }
       html[data-hd-ui-mode="spatial"] [data-slot="sidebar"]:hover > *,html[data-hd-ui-mode="spatial"] [data-slot="sidebar"]:focus-within > * { opacity:1; }
-      html[data-hd-ui-mode="spatial"] [data-composer-card="true"] { border-radius:18px!important; box-shadow:0 20px 52px rgba(7,15,30,.20); }
-      html[data-hd-ui-mode="spatial"] [data-slot="conversation"] p,html[data-hd-ui-mode="spatial"] [data-slot="conversation"] li { line-height:1.7; }
-      html[data-hd-ui-mode="tactile"] [data-composer-card="true"],html[data-hd-ui-mode="tactile"] [role="dialog"] { border-color:color-mix(in srgb,var(--dsw-alias-label-primary) 16%,var(--dsw-alias-border-l2))!important; border-radius:18px!important; box-shadow:inset 0 1px rgba(255,255,255,.10),inset 0 -2px rgba(0,0,0,.08),0 12px 28px rgba(7,15,30,.14); }
+      html[data-hd-ui-mode="spatial"] [data-composer-card="true"] { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 30%,var(--dsw-alias-border-l2))!important; border-radius:20px!important; box-shadow:0 34px 82px rgba(7,15,30,.28); transform:translateY(-6px) scale(1.015); }
+      html[data-hd-ui-mode="spatial"] [data-slot="conversation"] p,html[data-hd-ui-mode="spatial"] [data-slot="conversation"] li { line-height:1.72; }
+      html[data-hd-ui-mode="tactile"] [data-composer-card="true"],html[data-hd-ui-mode="tactile"] [role="dialog"] { border:2px solid color-mix(in srgb,var(--dsw-alias-label-primary) 22%,var(--dsw-alias-border-l2))!important; border-radius:14px!important; box-shadow:inset 0 2px rgba(255,255,255,.18),inset 0 -3px rgba(0,0,0,.11),0 15px 32px rgba(7,15,30,.18); }
       html[data-hd-ui-mode="tactile"] [data-composer-card="true"] button,html[data-hd-ui-mode="tactile"] [role="dialog"] button { box-shadow:inset 0 1px rgba(255,255,255,.12),0 4px 10px rgba(7,15,30,.10); transition:transform .14s ease,box-shadow .14s ease; }
       html[data-hd-ui-mode="tactile"] [data-composer-card="true"] button:active,html[data-hd-ui-mode="tactile"] [role="dialog"] button:active { transform:translateY(1px); box-shadow:inset 0 2px 4px rgba(0,0,0,.16); }
       html[data-hd-low-performance="true"] [data-slot="sidebar"] > *,html[data-hd-low-performance="true"] [data-composer-card="true"],html[data-hd-low-performance="true"] [role="dialog"] { backdrop-filter:none!important; box-shadow:none!important; }
@@ -405,6 +408,15 @@
       renderUiModes(panel)
     }
 
+    const closeSettingsDialog = panel => {
+      const dialog = panel.closest('[role="dialog"]')
+      const close = [...(dialog?.querySelectorAll('button') || [])].find(button => {
+        const label = `${button.getAttribute('aria-label') || ''} ${button.title || ''} ${button.textContent || ''}`
+        return /关闭|close/i.test(label) || button.textContent?.trim() === '×'
+      })
+      close?.click()
+    }
+
     const renderUiModes = panel => {
       const state = window.__HARNESS_DESKTOP_THEME_STATE__ || {}
       const selected = uiModes.find(entry => entry.id === state.uiMode) || uiModes[0]
@@ -416,10 +428,24 @@
             <span class="hd-ui-preview" data-preview="${mode.id}" aria-hidden="true"></span>
             <span class="hd-ui-body"><strong>${mode.name}</strong><span>${mode.description}</span></span>
           </button>`).join('')
-        grid.querySelectorAll('[data-hd-ui-mode-card]').forEach(button => button.addEventListener('click', () => {
-          window.__HARNESS_DESKTOP_THEME_STATE__ = { ...(window.__HARNESS_DESKTOP_THEME_STATE__ || {}), uiMode: button.dataset.hdUiModeCard || 'official' }
-          publishUiPreferences(panel)
-        }))
+        grid.querySelectorAll('[data-hd-ui-mode-card]').forEach(button => {
+          let lastAppliedAt = 0
+          const choose = () => {
+            const now = Date.now()
+            if (now - lastAppliedAt < 600) return
+            lastAppliedAt = now
+            const uiMode = button.dataset.hdUiModeCard || 'official'
+            window.__HARNESS_DESKTOP_THEME_STATE__ = { ...(window.__HARNESS_DESKTOP_THEME_STATE__ || {}), uiMode }
+            publishUiPreferences(panel)
+            closeSettingsDialog(panel)
+          }
+          button.addEventListener('click', event => {
+            button.focus()
+            if (document.documentElement.dataset.harnessMobile === 'true' || event.detail >= 2) choose()
+          })
+          button.addEventListener('dblclick', choose)
+          button.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose() } })
+        })
       }
       grid.querySelectorAll('[data-hd-ui-mode-card]').forEach(button => { button.dataset.selected = String(button.dataset.hdUiModeCard === selected.id) })
       panel.querySelector('[data-hd-ui-current]').textContent = selected.name
@@ -453,12 +479,7 @@
             applyTheme(themeId)
             renderCards(panel)
             request('set-theme', { id: themeId })
-            const dialog = panel.closest('[role="dialog"]')
-            const close = [...(dialog?.querySelectorAll('button') || [])].find(button => {
-              const label = `${button.getAttribute('aria-label') || ''} ${button.title || ''} ${button.textContent || ''}`
-              return /关闭|close/i.test(label) || button.textContent?.trim() === '×'
-            })
-            close?.click()
+            closeSettingsDialog(panel)
           }
           card.addEventListener('click', event => {
             if (event.target.closest('[data-hd-source]')) return

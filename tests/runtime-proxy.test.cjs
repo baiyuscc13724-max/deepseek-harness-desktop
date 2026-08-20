@@ -1,7 +1,14 @@
 const assert = require('node:assert/strict')
+const { readFileSync } = require('node:fs')
+const path = require('node:path')
 const test = require('node:test')
 
 const { buildRuntimeProxyEnv, hasExplicitProxy, proxyFromElectronRules } = require('../electron/bridge/runtime-proxy.cjs')
+
+test('desktop runtime never opens a duplicate external Web window', () => {
+  const main = readFileSync(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  assert.match(main, /\[\.\.\.resolved\.argsPrefix, 'web', '--port', '0', '--no-open'\]/)
+})
 
 test('inherits explicit proxy variables and enables native Node proxy support', () => {
   const env = buildRuntimeProxyEnv({ HTTPS_PROXY: 'http://127.0.0.1:7897', NO_PROXY: 'example.test' })

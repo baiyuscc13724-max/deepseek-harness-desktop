@@ -94,6 +94,8 @@ let mobileSyncTransportManager = null
 let componentUpdateServicePromise = null
 let lastComponentUpdateCheck = null
 let storageManagementService = null
+const CACHE_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000
+let cacheMaintenanceTimer = null
 let memoryService = null
 let browserView = null
 let browserSecurityPolicy = null
@@ -148,6 +150,18 @@ function ensureStorageManagementService() {
     })
   }
   return storageManagementService
+}
+
+function runManagedCacheMaintenance() {
+  return ensureStorageManagementService().maintainCaches()
+    .catch(error => console.warn(`Unable to maintain managed caches: ${error.message}`))
+}
+
+function startManagedCacheMaintenance() {
+  if (cacheMaintenanceTimer) return
+  runManagedCacheMaintenance()
+  cacheMaintenanceTimer = setInterval(runManagedCacheMaintenance, CACHE_MAINTENANCE_INTERVAL_MS)
+  cacheMaintenanceTimer.unref?.()
 }
 
 function memoryServiceOptions(overrides = {}) {
@@ -1147,7 +1161,7 @@ async function startRuntime() {
   try {
     await ensureBrowserControlServer()
     const runtimePaths = desktopRuntimePaths()
-    child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0'], {
+    child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0', '--no-open'], {
       cwd: runtimePaths.workspace,
       windowsHide: true,
       detached: process.platform !== 'win32',
@@ -2067,8 +2081,8 @@ app.whenReady().then(async () => {
       console.warn(`Unable to prepare Agent Teams plugin: ${error.message}`)
     })
   })()
-  runtimeInitializationPromise.then(() => ensureStorageManagementService().maintainCaches())
-    .catch(error => console.warn(`Unable to maintain managed caches: ${error.message}`))
+  runtimeInitializationPromise.then(startManagedCacheMaintenance)
+    .catch(error => console.warn(`Unable to start managed cache maintenance: ${error.message}`))
   if (!STORE_BUILD) ensurePetSystem()
   const syncService = ensureMobileSyncService()
   if (mobileSyncStore.get().enabled) {
@@ -2086,6 +2100,8 @@ app.whenReady().then(async () => {
 app.on('before-quit', event => {
   isQuitting = true
   clearInterval(petTickTimer)
+  clearInterval(cacheMaintenanceTimer)
+  cacheMaintenanceTimer = null
   petAdapter?.stop()
   petDomain?.dispose()
   petWindowController?.dispose()

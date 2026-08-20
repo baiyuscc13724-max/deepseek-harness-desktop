@@ -13,6 +13,8 @@ test('Agent Teams client uses native conversation slots and same-origin APIs', a
   assert.match(source, /\/api\/agent-teams\/state/u)
   assert.match(source, /\/api\/agent-teams\/events/u)
   assert.match(source, /x-harness-agent-teams/iu)
+  assert.match(source, /title: "代理团队工作台", button: "代理团队"/u)
+  assert.match(source, /settingsTitle: "代理团队"/u)
   assert.match(source, /EventSource/u)
   assert.doesNotMatch(source, /https?:\/\//u)
 })

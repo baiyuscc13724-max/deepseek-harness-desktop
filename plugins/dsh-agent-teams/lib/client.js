@@ -11,15 +11,15 @@ window.__ModuleLoader__.load({
     var NS = "agent-teams";
 
     var zh = {
-      title: "团队工作台", button: "团队", close: "关闭", loading: "正在载入团队…", retry: "重试",
-      loadError: "无法载入团队：{error}", actionError: "操作失败：{error}", experiment: "Agent Teams 实验功能",
-      disabledBody: "此实验功能当前已停用。启用后，可让多个可继续对话的 Agent 围绕同一目标协作。",
+      title: "代理团队工作台", button: "代理团队", close: "关闭", loading: "正在载入代理团队…", retry: "重试",
+      loadError: "无法载入代理团队：{error}", actionError: "操作失败：{error}", experiment: "代理团队实验功能",
+      disabledBody: "此实验功能当前已停用。启用后，可让多个可继续对话的代理围绕同一目标协作。",
       enable: "启用实验功能", enabling: "正在启用…", noTeam: "当前会话尚无团队", objective: "团队目标",
       objectivePlaceholder: "描述团队要共同完成的具体目标…", start: "创建团队", starting: "正在创建…",
       status: "状态", members: "成员", tasks: "任务", costWarning: "多成员并行工作会增加模型调用与费用，请留意预算。",
       live: "实时", polling: "轮询", disconnected: "重新连接中", maxMembers: "成员上限 {count}", maxTurns: "并行回合 {count}",
       memberSection: "团队成员", spawn: "添加成员", name: "名称", role: "角色", prompt: "初始任务说明", model: "模型",
-      namePlaceholder: "例如：Researcher", rolePlaceholder: "例如：研究与核验", promptPlaceholder: "说明该成员的职责和首个任务…",
+      namePlaceholder: "例如：研究员", rolePlaceholder: "例如：研究与核验", promptPlaceholder: "说明该成员的职责和首个任务…",
       modelPlaceholder: "留空使用默认模型", add: "添加", openConversation: "打开对话", message: "发送消息", messagePlaceholder: "给该成员发送后续指令…",
       send: "发送", interrupt: "中断", retire: "退役", lead: "负责人", unknown: "未知", noMembers: "暂无成员",
       taskBoard: "任务看板", pending: "待处理", in_progress: "进行中", completed: "已完成", noTasks: "暂无任务",
@@ -29,8 +29,8 @@ window.__ModuleLoader__.load({
       closeTeam: "关闭团队", closeConfirm: "确定关闭这个团队吗？成员会被停止，未完成任务将保留在历史记录中。",
       retireConfirm: "确定让该成员退役吗？", enabledHint: "实验功能已启用。在负责人会话中直接要求创建团队；敏感团队变更只通过经过鉴权的模型工具执行。", manageHint: "打开成员会话可直接发消息或中断；创建成员、任务分配和关闭团队请在负责人会话中提出。",
       counts: "{members} 成员 · {active} 进行中 · {done} 已完成", current: "当前会话", state: "状态",
-      settingsTitle: "Agent Teams", settingsDescription: "配置原生多 Agent 团队实验功能和全局并发限制。更高的限制可能增加模型用量与费用。",
-      settingsEnabled: "启用 Agent Teams", settingsMaxMembers: "团队成员上限", settingsMaxActiveTurns: "最大并行回合数",
+      settingsTitle: "代理团队", settingsDescription: "配置原生多代理团队实验功能和全局并发限制。更高的限制可能增加模型用量与费用。",
+      settingsEnabled: "启用代理团队", settingsMaxMembers: "团队成员上限", settingsMaxActiveTurns: "最大并行回合数",
       settingsSave: "保存设置", settingsSaving: "正在保存…", settingsSaved: "设置已保存", settingsRange: "请输入 1 到 8 之间的整数。"
     };
     var en = {

@@ -38,7 +38,8 @@ body { background: #f7f8fa; font: 13px/1.5 Inter, ui-sans-serif, "Segoe UI", "Mi
 .skin-quick-button { right:140px; font:12px/1 "Segoe UI","Microsoft YaHei UI",sans-serif; }
 .storage-quick-button { right:212px; }
 .memory-quick-button { right:248px; }
-.browser-quick-button { right:284px; }
+.browser-quick-button { right:212px; }
+.pet-quick-button[hidden] ~ .browser-quick-button { right:176px; }
 .pet-panel { position:absolute; z-index:18; top:38px; right:140px; width:310px; border:1px solid var(--shell-border); border-radius:14px; padding:14px; color:var(--shell-text); background:var(--shell-layer); box-shadow:0 18px 48px rgba(0,0,0,.24); app-region:no-drag; -webkit-app-region:no-drag; }
 .pet-panel-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
 .pet-panel-header > div { display:grid; gap:1px; }

@@ -64,6 +64,18 @@ test('blank-area window dragging dynamically excludes official controls', () => 
   assert.match(main, /moveWindowDrag\(mainWindow, point\)/)
 })
 
+test('visible titlebar tools collapse hidden storage and memory slots', () => {
+  const html = readFileSync(path.resolve(__dirname, '..', 'renderer', 'index.html'), 'utf8')
+  const styles = readFileSync(path.resolve(__dirname, '..', 'renderer', 'styles.css'), 'utf8')
+
+  assert.match(html, /id="storageQuickButton" class="storage-quick-button hidden"/)
+  assert.match(html, /id="memoryQuickButton" class="memory-quick-button hidden"/)
+  assert.match(styles, /\.skin-quick-button \{ right:140px;/)
+  assert.match(styles, /\.pet-quick-button \{ right:176px;/)
+  assert.match(styles, /\.browser-quick-button \{ right:212px;/)
+  assert.match(styles, /\.pet-quick-button\[hidden\] ~ \.browser-quick-button \{ right:176px;/)
+})
+
 test('desktop pet card closes when the user clicks outside it', () => {
   const source = readFileSync(path.resolve(__dirname, '..', 'renderer', 'app.js'), 'utf8')
 

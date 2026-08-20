@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const { readFileSync } = require('node:fs')
 const { access, mkdir, rm, utimes, writeFile } = require('node:fs/promises')
 
 const {
@@ -40,6 +41,13 @@ test('sanitizeOptions constrains temp names, age and cleanup categories', () => 
   assert.equal(options.cacheMinAgeMs, 365 * 24 * 60 * 60 * 1000)
   assert.equal(options.includeOldRuntimes, false)
   assert.equal(options.includeCaches, true)
+})
+
+test('desktop repeats safe cache maintenance daily during long-running sessions', () => {
+  const main = readFileSync(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  assert.match(main, /CACHE_MAINTENANCE_INTERVAL_MS = 24 \* 60 \* 60 \* 1000/)
+  assert.match(main, /setInterval\(runManagedCacheMaintenance, CACHE_MAINTENANCE_INTERVAL_MS\)/)
+  assert.match(main, /clearInterval\(cacheMaintenanceTimer\)/)
 })
 
 test('scan and preview are read-only and broker status never exposes its token', async () => {
