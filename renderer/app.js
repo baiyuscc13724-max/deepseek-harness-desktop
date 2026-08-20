@@ -710,8 +710,10 @@ function officialSettingsBootstrap() {
     const percent = progress?.total ? Math.min(100, Math.round(progress.received * 100 / progress.total)) : 0
     const status = state.app?.storeManaged && !state.installing && !state.installError
       ? state.checking ? '正在检查官方 Harness 更新…' : '桌面应用更新由 Microsoft Store 管理'
-      : progress?.phase === 'ready'
-        ? '更新已在后台下载完成，等待安装确认'
+      : progress?.phase === 'current'
+        ? '当前桌面版已经是最新版本'
+        : progress?.phase === 'ready'
+          ? '更新已在后台下载完成，等待安装确认'
         : state.installing
       ? progress?.phase === 'checksum'
         ? '正在验证桌面版更新…'
@@ -1092,12 +1094,12 @@ async function publishModelRoutingState() {
 }
 
 async function checkUpdates({ forceNotice = false } = {}) {
-  updateState = { ...updateState, checking: true }
+  updateState = { ...updateState, checking: true, installError: '' }
   await publishUpdateState()
   try {
     const result = await api.checkUpdates()
     const componentState = result.component || null
-    updateState = { ...updateState, ...result, checking: false }
+    updateState = { ...updateState, ...result, checking: false, installError: '' }
     pendingUpdateKind = 'installer'
     pendingComponentUpdate = null
     if (!showComponentUpdateNotice(componentState, { force: forceNotice })) showUpdateNotice(result.app, { force: forceNotice })
@@ -1115,11 +1117,19 @@ async function installUpdate() {
     const result = component ? await api.stageComponentUpdates() : await api.installUpdate()
     const ready = component ? result?.state?.phase === 'ready' : result?.ready
     const version = component ? result?.state?.pending?.releaseVersion || pendingComponentUpdate?.lastCheck?.releaseVersion : result?.version
+    if (!component && result?.upToDate) {
+      updateState = { ...updateState, installing: false, installError: '', installProgress: { phase: 'current', version } }
+      await publishUpdateState()
+      return
+    }
     if (ready) {
-      updateState = { ...updateState, installing: false, installProgress: { phase: 'ready', version } }
+      updateState = { ...updateState, installing: false, installError: '', installProgress: { phase: 'ready', version } }
       await publishUpdateState()
       showUpdateReady(version, component ? 'components' : 'installer')
+      return
     }
+    updateState = { ...updateState, installing: false, installError: '', installProgress: null }
+    await publishUpdateState()
   } catch (error) {
     updateState = { ...updateState, installing: false, installError: error.message, installProgress: null }
     await publishUpdateState()

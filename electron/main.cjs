@@ -1487,7 +1487,9 @@ async function installAppUpdate() {
     let payload = lastUpdatePayload
     if (!payload?.app?.updateAvailable) payload = await checkUpdates()
     const update = payload?.app
-    if (!update?.updateAvailable) throw new Error('当前桌面版已经是最新版本。')
+    if (!update?.updateAvailable) {
+      return { ok: true, version: update?.currentVersion || app.getVersion(), ready: false, upToDate: true }
+    }
     if (!update.installer?.url) throw new Error('新版本没有适用于当前系统和架构的桌面安装包。')
     if (!update.checksums?.url) throw new Error('新版本缺少 SHA256SUMS.txt，已拒绝不安全更新。')
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 未发布
+
+- 桌面更新在当前版本已是最新时改为幂等成功状态，不再显示“更新失败”；重新检查成功后同时清除旧错误提示。
+
 ## 1.0.27
 
 - 官方 DeepSeek Harness 固定升级到 `0.1.0-rc.8`；原生采用图文 `/goal`/`/plan`、文件与会话 `@` 引用、Claude Code/Codex Profile Bundle、持久 PowerShell、并发 `web_search` 和子代理及时回报。
