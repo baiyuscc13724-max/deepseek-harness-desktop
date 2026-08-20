@@ -66,7 +66,7 @@ const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3080'
 const LOCAL_RUNTIME_HOSTS = new Set(['127.0.0.1', 'localhost'])
 const SELF_TEST_MODE = process.argv.includes('--self-test')
 const COMPONENT_HEALTH_CHECK_MODE = process.argv.includes('--component-health-check')
-const MANUAL_VALIDATION_MODE = app.commandLine.hasSwitch('manual-validation') && Boolean(app.commandLine.getSwitchValue('user-data-dir'))
+const MANUAL_VALIDATION_MODE = process.argv.includes('--manual-validation') && process.argv.some(value => /^--harness-user-data-dir=.+/.test(value))
 const HAS_SINGLE_INSTANCE_LOCK = SELF_TEST_MODE || COMPONENT_HEALTH_CHECK_MODE || MANUAL_VALIDATION_MODE || app.requestSingleInstanceLock()
 const STORE_BUILD = isStoreDistribution()
 
