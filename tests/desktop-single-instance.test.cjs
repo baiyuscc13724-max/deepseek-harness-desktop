@@ -12,6 +12,6 @@ test('normal desktop launches hold one shared session-log writer', () => {
   assert.match(source, /if \(!HAS_SINGLE_INSTANCE_LOCK\) \{\s*app\.quit\(\)\s*return/)
   assert.match(source, /function showMainWindow\(\)[\s\S]*mainWindow\.focus\(\)/)
   assert.match(source, /app\.on\('second-instance',[\s\S]*showMainWindow\(\)/)
-  assert.match(source, /const MANUAL_VALIDATION_MODE = process\.argv\.includes\('--manual-validation'\) && process\.argv\.some\(value => \/\^--user-data-dir=\.\+\/\.test\(value\)\)/)
+  assert.match(source, /const MANUAL_VALIDATION_MODE = app\.commandLine\.hasSwitch\('manual-validation'\) && Boolean\(app\.commandLine\.getSwitchValue\('user-data-dir'\)\)/)
   assert.match(source, /const HAS_SINGLE_INSTANCE_LOCK = SELF_TEST_MODE \|\| COMPONENT_HEALTH_CHECK_MODE \|\| MANUAL_VALIDATION_MODE \|\| app\.requestSingleInstanceLock\(\)/)
 })
