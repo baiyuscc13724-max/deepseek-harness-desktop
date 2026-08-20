@@ -94,6 +94,14 @@ node scripts/create-component-signing-key.mjs `
 - `component-update-sources.json` 只能提交公开 SPKI 公钥。
 - GitHub Actions 只通过 Secret `HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64` 获取生产私钥（明文 PEM 的 Base64，仅在临时 Runner 文件中解码并用 `trap` 删除）；私人备份仓库只保存 `.encrypted.json`，绝不保存明文 PEM 或恢复密钥。
 - 恢复演练必须在隔离临时目录解密并完成一次 Ed25519 签名/验签，随后删除临时明文。
+- `gh auth login` 必须由用户本人完成。授权后用固定脚本创建/复核私有备份仓库并写入 Actions Secret；脚本只提交加密 JSON 与公开元数据，不复制恢复密钥或明文 PEM，也不在输出中打印 Secret：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/configure-component-signing-backup.ps1 `
+  -PrivateKeyFile <明文私钥路径> `
+  -EncryptedBackupFile <AES-256-GCM 加密备份路径> `
+  -PublicMetadataFile <公开密钥元数据路径>
+```
 
 ## 6. 生成生产组件
 

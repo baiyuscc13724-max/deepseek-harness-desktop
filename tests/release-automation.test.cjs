@@ -58,6 +58,11 @@ test('production component preparation binds the private key to target-correct f
   assert.match(publisher, /verify-production-component-staging\.mjs/u)
   assert.match(publisher, /Re-download and verify public component assets/u)
   assert.doesNotMatch(publisher, /--clobber/u)
+  const backup = await source('scripts/configure-component-signing-backup.ps1')
+  assert.match(backup, /gh repo create \$BackupRepo --private/u)
+  assert.match(backup, /HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64/u)
+  assert.match(backup, /\[Array\]::Clear/u)
+  assert.doesNotMatch(backup, /Copy-Item -LiteralPath \$private/u)
 })
 
 test('release orchestration is resumable and defaults to non-publishing verification', async () => {
