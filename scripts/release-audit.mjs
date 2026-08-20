@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.26') throw new Error(`release audit expects 1.0.26, got ${pkg.version}`)
+if (pkg.version !== '1.0.27') throw new Error(`release audit expects 1.0.27, got ${pkg.version}`)
 const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'))
 const allowedDependencyHosts = new Set(['registry.npmjs.org', 'registry.npmmirror.com', 'github.com', 'codeload.github.com'])
 for (const [packagePath, metadata] of Object.entries(lock.packages || {})) {
@@ -70,7 +70,7 @@ if (pkg.build?.win?.target?.includes('nsis') || pkg.build?.nsis) throw new Error
 for (const target of ['dmg', 'zip']) if (!pkg.build?.mac?.target?.some(entry => entry === target || entry?.target === target)) throw new Error(`macOS target missing: ${target}`)
 if (pkg.build?.mac?.hardenedRuntime !== true || pkg.build?.mac?.notarize !== true || pkg.build?.mac?.entitlements !== 'build/entitlements.mac.plist') throw new Error('macOS signing and notarization contract is incomplete.')
 for (const target of ['AppImage', 'deb']) if (!pkg.build?.linux?.target?.includes(target)) throw new Error(`Linux target missing: ${target}`)
-for (const file of ['build/icon.png', 'build/entitlements.mac.plist', 'build/installer.iss', 'electron/bootstrap.cjs', 'component-update-sources.json', 'mobile-relay-sources.json', 'mobile/ios/project.yml', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/create-component-signing-key.mjs', 'scripts/verify-component-signing-key.mjs', 'scripts/configure-component-signing-backup.ps1', 'scripts/publish-cnb-cloud-mirror.ps1', '.cnb.yml', 'docs/RELEASING.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.26.zh-CN.md', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'release-mirrors.example.json', 'release-update-sources.json', 'docs/UPDATE-MIRRORS.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
+for (const file of ['build/icon.png', 'build/entitlements.mac.plist', 'build/installer.iss', 'electron/bootstrap.cjs', 'component-update-sources.json', 'mobile-relay-sources.json', 'mobile/ios/project.yml', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/create-component-signing-key.mjs', 'scripts/verify-component-signing-key.mjs', 'scripts/configure-component-signing-backup.ps1', 'scripts/publish-cnb-cloud-mirror.ps1', '.cnb.yml', 'docs/RELEASING.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.27.zh-CN.md', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'release-mirrors.example.json', 'release-update-sources.json', 'docs/UPDATE-MIRRORS.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md']) await access(path.join(root, file))
 const signingBackup = await readFile(path.join(root, 'scripts/configure-component-signing-backup.ps1'), 'utf8')
 for (const contract of ['--private', 'isPrivate', 'component-production-ed25519-private.encrypted.json', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'verify-component-signing-key.mjs', '[Array]::Clear']) {
   if (!signingBackup.includes(contract)) throw new Error(`Signing backup automation must keep only encrypted material in a private repository and protect the CI Secret: ${contract}`)
@@ -99,7 +99,7 @@ for (const source of ['release-update-sources.json', 'release-update-sources.loc
   if (!pkg.build?.files?.includes(source)) throw new Error(`Packaged desktop update source is missing: ${source}`)
 }
 const componentSources = JSON.parse(await readFile(path.join(root, 'component-update-sources.json'), 'utf8'))
-if (componentSources.enabled !== true || Object.keys(componentSources.trustedKeys || {}).length !== 1) throw new Error('Production component updates must be enabled with exactly one reviewed trust root for the v1.0.26 bootstrap.')
+if (componentSources.enabled !== true || Object.keys(componentSources.trustedKeys || {}).length !== 1) throw new Error('Production component updates must be enabled with exactly one reviewed trust root for the v1.0.27 bootstrap.')
 for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64']) {
   if (componentSources.targets?.[target]?.length !== 2) throw new Error(`Production component mirrors are incomplete: ${target}`)
 }
@@ -132,15 +132,15 @@ for (const contract of ['Validate iPhone and iPad simulators', 'Test on iPhone S
 }
 if (!workflow.includes('choco install innosetup --version=6.7.0 --allow-downgrade --force') || !workflow.includes('Run Windows installer smoke test') || !workflow.includes('/VERYSILENT') || !workflow.includes('Harness Desktop.exe') || !workflow.includes('app.asar') || !workflow.includes('unins*.exe')) throw new Error('Windows release must build, install, inspect, and uninstall the Inno Setup payload.')
 if (!workflow.includes('3cfb0e5632828e0dd9b49400a185834e8f1ab570/Files/Languages/ChineseSimplified.isl') || !workflow.includes('e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d')) throw new Error('Windows release must install and hash-check the pinned Simplified Chinese language file.')
-for (const contract of ['workflow_dispatch:', 'Existing immutable release tag to build and publish', "release-retry/v1.0.26", 'ref: ${{ env.RELEASE_TAG }}', 'Ensure target tag matches package version', 'softprops/action-gh-release', 'tag_name: ${{ env.RELEASE_TAG }}', 'overwrite_files: false', 'draft: true', 'Refuse an existing release mutation', 'Verify draft assets and publish atomically', 'sha256sum -c SHA256SUMS.txt', '--draft=false']) {
+for (const contract of ['workflow_dispatch:', 'Existing immutable release tag to build and publish', "release-retry/v1.0.27", 'ref: ${{ env.RELEASE_TAG }}', 'Ensure target tag matches package version', 'softprops/action-gh-release', 'tag_name: ${{ env.RELEASE_TAG }}', 'overwrite_files: false', 'draft: true', 'Refuse an existing release mutation', 'Verify draft assets and publish atomically', 'sha256sum -c SHA256SUMS.txt', '--draft=false']) {
   if (!workflow.includes(contract)) throw new Error(`Tag builds must publish one verified, non-overwriting draft release: ${contract}`)
 }
 const componentPublishWorkflow = await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')
-for (const contract of ['component-publish/v1.0.26', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'prepare-production-components.mjs', 'verify-production-component-staging.mjs', 'Refuse replacement or partial component publication', 'gh release upload', 'Re-download and verify public component assets']) {
+for (const contract of ['component-publish/v1.0.27', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'prepare-production-components.mjs', 'verify-production-component-staging.mjs', 'Refuse replacement or partial component publication', 'gh release upload', 'Re-download and verify public component assets']) {
   if (!componentPublishWorkflow.includes(contract)) throw new Error(`Production component publication must verify public signed staging and refuse replacement: ${contract}`)
 }
 const signingSecretWorkflow = await readFile(path.join(root, '.github/workflows/verify-component-signing-secret.yml'), 'utf8')
-for (const contract of ['verify-component-signing-secret/v1.0.26', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'verify-component-signing-key.mjs']) {
+for (const contract of ['verify-component-signing-secret/v1.0.27', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'verify-component-signing-key.mjs']) {
   if (!signingSecretWorkflow.includes(contract)) throw new Error(`Component signing Secret verification must remain isolated and non-exporting: ${contract}`)
 }
 const manifestRefresher = await readFile(path.join(root, 'scripts/refresh-release-manifest.mjs'), 'utf8')

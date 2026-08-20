@@ -7,7 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
   'electron/bootstrap.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/guest-preload.cjs', 'electron/desktop-tray.cjs',
   'electron/bridge/dsh-resolver.cjs', 'electron/bridge/dsh-home.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/process-tree.cjs', 'electron/bridge/runtime-proxy.cjs', 'electron/bridge/runtime-bundle-service.cjs',
-  'electron/bridge/update-service.cjs', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/provider-meter-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/attachment-reference-service.cjs',
+  'electron/bridge/update-service.cjs', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/provider-meter-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs',
   'electron/bridge/component-update-contract.cjs', 'electron/bridge/component-update-archive.cjs', 'electron/bridge/component-update-builder.cjs', 'electron/bridge/component-update-config.cjs', 'electron/bridge/component-update-store.cjs', 'electron/bridge/component-update-service.cjs', 'electron/bridge/component-update-helper.cjs', 'electron/bridge/component-update-launcher.cjs', 'electron/bridge/component-update-health.cjs', 'electron/bridge/component-runtime-resolver.cjs',
   'electron/bridge/relay-tunnel-codec.cjs', 'electron/bridge/mobile-relay-config.cjs', 'electron/bridge/sync-transport-manager.cjs', 'electron/bridge/sync-transports/wss-relay-adapter.cjs', 'services/wss-relay/server.cjs', 'services/wss-relay/README.zh-CN.md',
   'electron/bridge/capability-broker.cjs', 'electron/bridge/computer-use-screenshot-store.cjs', 'electron/bridge/storage-scan-service.cjs', 'electron/bridge/storage-cleanup-service.cjs', 'electron/bridge/storage-management-service.cjs', 'electron/bridge/memory-censor.cjs', 'electron/bridge/memory-service.cjs', 'electron/bridge/browser-url-policy.cjs', 'electron/bridge/browser-session-policy.cjs', 'electron/bridge/browser-site-authz.cjs', 'electron/bridge/browser-action-gate.cjs', 'electron/bridge/browser-audit.cjs', 'electron/bridge/browser-security-policy.cjs', 'electron/bridge/browser-operation-coordinator.cjs', 'electron/bridge/browser-control-server.cjs', 'electron/bridge/computer-use-confirmation-store.cjs',
@@ -22,7 +22,7 @@ const required = [
   'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/computer-use-screenshot-store.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-operation-coordinator.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/computer-use-confirmation-store.test.cjs', 'tests/agent-teams-plugin-service.test.cjs', 'tests/agent-teams-domain.test.cjs', 'tests/agent-teams-runtime.test.cjs', 'tests/agent-teams-ui.test.cjs', 'tests/text-selection-ui.test.cjs', 'tests/ui-mode-integration.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
   'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/release-automation.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-version-sync.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
-  'docs/ARCHITECTURE.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.26.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
+  'docs/ARCHITECTURE.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.27.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
   '.github/workflows/apple-virtual-tests.yml', '.github/workflows/android-mobile-release.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/component-update-helper.cjs', 'scripts/create-component-signing-key.mjs', 'scripts/create-android-release-keystore.ps1', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'mobile/mobile-app-update.example.json', 'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
   'mobile/android/RELEASE-SIGNING.zh-CN.md', 'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
@@ -76,8 +76,8 @@ const guestPreload = await readFile(path.join(root, 'electron/guest-preload.cjs'
 if (/window-drag|drag-region/.test(html) || !guestPreload.includes("ipcRenderer.send('window:beginDrag',") || !guestPreload.includes("ipcRenderer.send('window:moveDrag'") || !guestPreload.includes('target.closest(interactiveSelector)')) {
   throw new Error('The frameless desktop shell must move only from dynamically detected blank workbench areas.')
 }
-for (const attachmentContract of ['webUtils.getPathForFile(file)', "ipcRenderer.invoke('attachments:inspect'", '[data-composer-card] textarea', 'dispatchNativeImages(nativeImages)']) {
-  if (!guestPreload.includes(attachmentContract)) throw new Error(`Guest attachment intake missing: ${attachmentContract}`)
+for (const obsoleteAttachmentShim of ['webUtils.getPathForFile(file)', "ipcRenderer.invoke('attachments:inspect'", 'data-hd-attachment-toast', 'dispatchNativeImages(nativeImages)']) {
+  if (guestPreload.includes(obsoleteAttachmentShim)) throw new Error(`Desktop must defer file, session and image references to official Harness rc.8: ${obsoleteAttachmentShim}`)
 }
 if (!rendererScript.includes('api.startRuntime({})')) throw new Error('Official Harness Web UI must start automatically.')
 if (!rendererScript.includes("document.addEventListener('pointerdown'") || !rendererScript.includes('petPanel.contains(event.target) || petQuickButton.contains(event.target)') || !rendererScript.includes("runtimeView.addEventListener('focus', closePetPanel)")) {
@@ -201,7 +201,7 @@ if (!themeIntegration.includes('applySessionLogDock') || !themeIntegration.inclu
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-if (pkg.version !== '1.0.26') throw new Error(`Expected package version 1.0.26, received ${pkg.version}`)
+if (pkg.version !== '1.0.27') throw new Error(`Expected package version 1.0.27, received ${pkg.version}`)
 if (pkg.dependencies?.['dsh-progress-reporter']) throw new Error('dsh-progress-reporter must remain an opt-in community plugin instead of a bundled desktop dependency.')
 if (pkg.main !== 'electron/bootstrap.cjs' || pkg.build?.extraMetadata?.main !== 'electron/bootstrap.cjs') throw new Error('Component updates require the stable Electron bootstrap entrypoint.')
 if (pkg.scripts?.['release:components'] !== 'node scripts/build-component-update.mjs') throw new Error('Component release builder command is missing.')
@@ -245,7 +245,7 @@ for (const forbidden of ['upload-artifact', 'softprops/action-gh-release', 'cont
 }
 const mobileSourceVersion = pkg.version
 const androidBuild = await readFile(path.join(root, 'mobile/android/app/build.gradle.kts'), 'utf8')
-if (!androidBuild.includes(`versionCode = 10026`) || !androidBuild.includes(`versionName = "${mobileSourceVersion}"`)) throw new Error('Android mobile source version must stay synchronized with the desktop integration version.')
+if (!androidBuild.includes(`versionCode = 10027`) || !androidBuild.includes(`versionName = "${mobileSourceVersion}"`)) throw new Error('Android mobile source version must stay synchronized with the desktop integration version.')
 for (const contract of ['HARNESS_ANDROID_KEYSTORE_PATH', 'HARNESS_ANDROID_KEY_ALIAS', 'HARNESS_ANDROID_STORE_PASSWORD', 'HARNESS_ANDROID_KEY_PASSWORD', 'verifyReleaseSigningConfiguration', 'enableV3Signing = true']) {
   if (!androidBuild.includes(contract)) throw new Error(`Android release signing configuration is incomplete: ${contract}`)
 }
@@ -257,10 +257,10 @@ for (const forbidden of ['app-debug.apk', 'assembleDebug', '--clobber']) {
   if (androidReleaseWorkflow.includes(forbidden)) throw new Error(`Android publication workflow must never publish debug output: ${forbidden}`)
 }
 const mobileSyncService = await readFile(path.join(root, 'electron/bridge/mobile-sync-service.cjs'), 'utf8')
-for (const contract of ["CURRENT_MOBILE_VERSION = '1.0.26'", 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/', 'android-universal.apk', '直接在 Safari 使用', '添加到主屏幕', '无需 Apple Developer 会员', '不会提供无法公开安装的未签名 IPA', 'current.url']) {
+for (const contract of ["CURRENT_MOBILE_VERSION = '1.0.27'", 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/', 'android-universal.apk', '直接在 Safari 使用', '添加到主屏幕', '无需 Apple Developer 会员', '不会提供无法公开安装的未签名 IPA', 'current.url']) {
   if (!mobileSyncService.includes(contract)) throw new Error(`iPhone/iPad no-membership QR fallback contract missing: ${contract}`)
 }
-if (!iosProject.includes(`CURRENT_PROJECT_VERSION: 10026`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
+if (!iosProject.includes(`CURRENT_PROJECT_VERSION: 10027`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
 const publishedMobileVersion = pkg.version
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
@@ -273,7 +273,7 @@ for (const contract of [
 ]) {
   if (!readme.includes(contract)) throw new Error(`README release and discovery content is stale or incomplete: ${contract}`)
 }
-if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.7') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
+if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.0-rc.8') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 for (const dependency of [
   'dsh-anonymous-user-id', 'dsh-atomic-write', 'dsh-bash-local', 'dsh-code-runtime',
@@ -281,7 +281,7 @@ for (const dependency of [
   'dsh-scope', 'dsh-session-telemetry', 'dsh-session-title-llm', 'dsh-shell', 'dsh-spill',
   'dsh-subagent-in-process-driver', 'dsh-subprocess', 'dsh-timeout', 'dsh-workflow'
 ]) {
-  if (pkg.dependencies?.[`@deepseek-ai/${dependency}`] !== '0.1.0-rc.7') {
+  if (pkg.dependencies?.[`@deepseek-ai/${dependency}`] !== '0.1.0-rc.8') {
     throw new Error(`The DSH Web runtime peer dependency must be pinned explicitly: ${dependency}`)
   }
 }
@@ -393,7 +393,7 @@ if (!main.includes("ipcMain.handle('componentUpdates:apply'")) throw new Error('
 for (const trayContract of ['createDesktopTray', 'ensureDesktopTray', "mainWindow.on('close'", 'event.preventDefault()', 'mainWindow.hide()', 'isQuitting = true']) {
   if (!main.includes(trayContract)) throw new Error(`Desktop tray lifecycle contract missing: ${trayContract}`)
 }
-for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'componentUpdates:getState', 'componentUpdates:check', 'componentUpdates:stage', 'componentUpdates:apply', 'componentUpdates:progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'models:meters:get', 'storage:scan', 'storage:cleanupPreview', 'storage:cleanupApply', 'storage:status', 'memory:status', 'memory:setEnabled', 'memory:setPreferences', 'memory:list', 'memory:search', 'memory:add', 'memory:update', 'memory:delete', 'memory:deleteAll', 'memory:export', 'browser:state', 'browser:setVisible', 'browser:setContentVisible', 'browser:navigate', 'browser:back', 'browser:forward', 'browser:reload', 'browser:stop', 'browser:clearSiteData', 'browser:clearAllData', 'browser:grantCurrent', 'browser:revokeCurrent', 'browser:resumeModelControl', 'browser:confirmModelAction', 'browser:rejectModelAction', 'computerUse:state', 'computerUse:setEnabled', 'computerUse:confirm', 'computerUse:reject', 'shell:openExternal', 'shell:openLocal', 'attachments:inspect']) {
+for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'componentUpdates:getState', 'componentUpdates:check', 'componentUpdates:stage', 'componentUpdates:apply', 'componentUpdates:progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'models:meters:get', 'storage:scan', 'storage:cleanupPreview', 'storage:cleanupApply', 'storage:status', 'memory:status', 'memory:setEnabled', 'memory:setPreferences', 'memory:list', 'memory:search', 'memory:add', 'memory:update', 'memory:delete', 'memory:deleteAll', 'memory:export', 'browser:state', 'browser:setVisible', 'browser:setContentVisible', 'browser:navigate', 'browser:back', 'browser:forward', 'browser:reload', 'browser:stop', 'browser:clearSiteData', 'browser:clearAllData', 'browser:grantCurrent', 'browser:revokeCurrent', 'browser:resumeModelControl', 'browser:confirmModelAction', 'browser:rejectModelAction', 'computerUse:state', 'computerUse:setEnabled', 'computerUse:confirm', 'computerUse:reject', 'shell:openExternal', 'shell:openLocal']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }
 for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'terminal:start', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {
@@ -414,11 +414,11 @@ if (!(await readFile(path.join(root, 'electron/bridge/dsh-resolver.cjs'), 'utf8'
 }
 
 const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')
-for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledMarkdownRenderer', 'patchInstalledConversation', 'desktopLocalHref', 'owner.openFile(target)']) {
-  if (!runtimePatch.includes(contract)) throw new Error(`Project-scoped New Session patch is missing: ${contract}`)
+for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledConversation', 'patchInstalledTokenMeter']) {
+  if (!runtimePatch.includes(contract)) throw new Error(`Guarded desktop runtime patch is missing: ${contract}`)
 }
-for (const contract of ['patchInstalledModelImageCompatibility', 'desktopMessagesForInputModalities', 'preparedCall?.inputModalities', 'does not accept the image waiting in the prompt', 'refusing an unsafe model-image compatibility patch']) {
-  if (!runtimePatch.includes(contract)) throw new Error(`Historical-image model-switch patch is missing: ${contract}`)
+for (const officialRc8Contract of ['patchInstalledMarkdownRenderer', 'patchInstalledModelImageCompatibility', 'desktopMessagesForInputModalities', 'does not accept the image waiting in the prompt', 'patchConversationAttachmentCopySource']) {
+  if (runtimePatch.includes(officialRc8Contract)) throw new Error(`Desktop must defer file references and multimodal handling to official Harness rc.8: ${officialRc8Contract}`)
 }
 for (const contract of ['patchInstalledSubagent', 'subagentLifecycleCounts', 'filteredEntries.map', '待命（可恢复）', '已结束（仅记录）', 'dataPluginCss = "@harness-desktop/subagent-lifecycle"']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Subagent lifecycle/history patch is missing: ${contract}`)

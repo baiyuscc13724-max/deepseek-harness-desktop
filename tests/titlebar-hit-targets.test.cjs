@@ -23,6 +23,30 @@ test('blank-area drag follows the pointer and restores a maximized window around
   assert.equal(beginWindowDrag(window, { x: 1, y: 1 }, 'linux'), false)
 })
 
+test('maximized drag uses normal bounds even when Windows restores asynchronously', () => {
+  const calls = []
+  const maximized = { x: 0, y: 0, width: 2560, height: 1440 }
+  const normal = { x: 300, y: 180, width: 1100, height: 760 }
+  const window = {
+    isDestroyed: () => false,
+    isMaximized: () => true,
+    getBounds: () => ({ ...maximized }),
+    getNormalBounds: () => ({ ...normal }),
+    unmaximize: () => calls.push(['restore']),
+    setBounds: bounds => calls.push(['bounds', bounds]),
+    setPosition: (x, y) => calls.push(['move', x, y])
+  }
+
+  assert.equal(beginWindowDrag(window, { x: 1280, y: 36 }, 'win32'), true)
+  assert.equal(moveWindowDrag(window, { x: 1330, y: 76 }), true)
+  assert.equal(endWindowDrag(window), true)
+  assert.deepEqual(calls, [
+    ['restore'],
+    ['bounds', { x: 730, y: 17, width: 1100, height: 760 }],
+    ['move', 780, 57]
+  ])
+})
+
 test('blank-area window dragging dynamically excludes official controls', () => {
   const html = readFileSync(path.resolve(__dirname, '..', 'renderer', 'index.html'), 'utf8')
   const guestPreload = readFileSync(path.resolve(__dirname, '..', 'electron', 'guest-preload.cjs'), 'utf8')

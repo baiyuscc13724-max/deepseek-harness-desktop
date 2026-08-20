@@ -13,7 +13,7 @@
   <img alt="macOS source preview" src="https://img.shields.io/badge/macOS-12%2B%20source%20preview-000000?logo=apple">
 </p>
 
-把官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 工作台装进 Windows 或 macOS。当前公开稳定包仍为 Windows 版；macOS、iOS/iPadOS 和增量更新位于源码验证阶段，完成真实 Mac/iPhone 测试前不会冒充可下载成品。
+把官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 工作台装进 Windows 或 macOS。公开稳定包提供 Windows、macOS 和已签名 Android 客户端；iPhone/iPad 在没有 Apple Developer 会员时继续使用 Safari 实时工作台，不分发无法公开安装的未签名 IPA。
 
 项目额外提供女仆鲸桌宠、外观皮肤、DSH 插件市场、主模型与子代理路由、Android/iOS 移动工作台、局域网优先与 WSS/443 端到端加密后备线路，以及经过 SHA-256 校验的完整安装包更新。官方工作台仍然是唯一主界面，没有第二套侧栏和重复设置页。
 
@@ -21,16 +21,16 @@
 
 ## 下载
 
-当前稳定版：**v1.0.26** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.26)
+当前稳定版：**v1.0.27** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.27)
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.26/Harness-Desktop-1.0.26-win-x64.exe) |
-| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.26/Harness-Desktop-1.0.26-portable-x64.exe) |
-| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.26/Harness-Desktop-1.0.26-mac-arm64.dmg) |
-| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.26/Harness-Desktop-1.0.26-mac-x64.dmg) |
-| Android 手机端 1.0.26 | 与桌面端扫码配对、同步会话并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.26/Harness-Mobile-1.0.26-android-universal.apk) |
-| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.26/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-win-x64.exe) |
+| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-portable-x64.exe) |
+| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-arm64.dmg) |
+| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-x64.dmg) |
+| Android 手机端 1.0.27 | 与桌面端扫码配对、同步会话并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Mobile-1.0.27-android-universal.apk) |
+| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 
@@ -47,7 +47,7 @@ scoop install harness-desktop/harness-desktop
 
 | 功能 | 使用方式 |
 | --- | --- |
-| 官方 Harness 工作台 | 软件自动启动固定版本的官方运行时，直接进入原生 Web UI |
+| 官方 Harness 工作台 | 固定使用官方 rc.8 原生 Web UI；多模态、文件/会话 `@` 引用、Claude Code/Codex Profile Bundle 和持久 PowerShell 均直接采用官方实现 |
 | 女仆鲸桌宠 | 跟随任务工作、休息、庆祝和进食 TOK；支持抚摸、拖动、屏幕边缘及窗口互动 |
 | 外观皮肤 | 从顶部快捷入口切换配色和背景；支持开源主题与自定义外观 |
 | DSH 插件与 Skills | 在应用内发现、安装和更新；英文简介自动生成中文摘要，并保留原文 |

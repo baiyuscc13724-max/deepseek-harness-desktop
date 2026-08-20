@@ -1,134 +1,11 @@
-const { contextBridge, ipcRenderer, webUtils } = require('electron')
+const { contextBridge, ipcRenderer } = require('electron')
 let activeDrag = null
 let pendingPoint = null
 let pendingFrame = 0
-let attachmentQueue = Promise.resolve()
 
 contextBridge.exposeInMainWorld('harnessDesktopGuest', Object.freeze({
   chooseWorkspaceDirectory: () => ipcRenderer.invoke('workspace:chooseDirectory')
 }))
-
-const nativeImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
-const nativeImageTypeByExtension = new Map([
-  ['.png', 'image/png'],
-  ['.jpg', 'image/jpeg'],
-  ['.jpeg', 'image/jpeg'],
-  ['.jfif', 'image/jpeg'],
-  ['.webp', 'image/webp'],
-  ['.gif', 'image/gif']
-])
-
-function fileExtension(name) {
-  const match = String(name || '').toLowerCase().match(/(\.[^.\\/]+)$/)
-  return match?.[1] || ''
-}
-
-function asNativeImage(file) {
-  if (nativeImageTypes.has(file.type)) return file
-  const inferred = nativeImageTypeByExtension.get(fileExtension(file.name))
-  if (!inferred) return null
-  return new File([file], file.name, { type: inferred, lastModified: file.lastModified })
-}
-
-function visibleComposer() {
-  return [...document.querySelectorAll('[data-composer-card] textarea')].find(element => {
-    if (!(element instanceof HTMLTextAreaElement) || element.disabled || element.readOnly) return false
-    const rect = element.getBoundingClientRect()
-    return rect.width > 0 && rect.height > 0
-  }) || null
-}
-
-function setTextareaValue(element, value) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
-  if (setter) setter.call(element, value)
-  else element.value = value
-}
-
-function insertAttachmentText(element, text) {
-  if (!element?.isConnected || !text) return false
-  const start = element.selectionStart ?? element.value.length
-  const end = element.selectionEnd ?? start
-  const prefix = element.value && start === element.value.length ? '\n\n' : ''
-  const inserted = `${prefix}${text}`
-  const next = element.value.slice(0, start) + inserted + element.value.slice(end)
-  setTextareaValue(element, next)
-  element.dispatchEvent(new InputEvent('input', {
-    bubbles: true,
-    inputType: 'insertText',
-    data: inserted
-  }))
-  const caret = start + inserted.length
-  element.focus({ preventScroll: true })
-  element.setSelectionRange(caret, caret)
-  return true
-}
-
-function showAttachmentToast(message, tone = 'info') {
-  document.querySelector('[data-hd-attachment-toast]')?.remove()
-  const toast = document.createElement('div')
-  toast.dataset.hdAttachmentToast = 'true'
-  toast.setAttribute('role', tone === 'error' ? 'alert' : 'status')
-  toast.textContent = message
-  Object.assign(toast.style, {
-    position: 'fixed',
-    left: '50%',
-    bottom: '88px',
-    zIndex: '2147483647',
-    maxWidth: 'min(560px, calc(100vw - 32px))',
-    transform: 'translateX(-50%)',
-    borderRadius: '12px',
-    padding: '10px 14px',
-    color: '#fff',
-    background: tone === 'error' ? '#b42318' : '#187f78',
-    boxShadow: '0 8px 24px rgba(0, 0, 0, .18)',
-    font: '13px/1.5 system-ui, sans-serif'
-  })
-  document.body.appendChild(toast)
-  setTimeout(() => toast.remove(), tone === 'error' ? 6000 : 3500)
-}
-
-function resetOfficialDropOverlay() {
-  window.dispatchEvent(new DragEvent('dragend'))
-}
-
-function dispatchNativeImages(files) {
-  if (files.length === 0) {
-    resetOfficialDropOverlay()
-    return
-  }
-  const transfer = new DataTransfer()
-  for (const file of files) transfer.items.add(file)
-  document.dispatchEvent(new DragEvent('drop', {
-    bubbles: true,
-    cancelable: true,
-    dataTransfer: transfer
-  }))
-}
-
-async function addFileReferences(files, composer) {
-  const candidates = files.map(file => ({
-    path: webUtils.getPathForFile(file),
-    mimeType: file.type
-  })).filter(candidate => candidate.path)
-  if (candidates.length === 0) {
-    showAttachmentToast('无法取得本机文件路径；请从资源管理器拖入文件。', 'error')
-    return
-  }
-  const result = await ipcRenderer.invoke('attachments:inspect', candidates)
-  const target = composer?.isConnected && !composer.disabled && !composer.readOnly ? composer : visibleComposer()
-  if (!target) {
-    showAttachmentToast('当前会话输入框不可用，无法添加附件。', 'error')
-    return
-  }
-  if (result.referenceText) insertAttachmentText(target, result.referenceText)
-  if (result.accepted.length > 0) {
-    const suffix = result.rejected.length > 0 ? `，另有 ${result.rejected.length} 个文件未添加` : ''
-    showAttachmentToast(`已添加 ${result.accepted.length} 个本地附件引用${suffix}；发送后模型可按路径读取。`)
-  } else {
-    const reason = result.rejected[0]?.reason || '文件不可用'
-    showAttachmentToast(`附件未添加：${reason}。`, 'error')
-  }
-}
 
 const interactiveSelector = [
   'a', 'button', 'input', 'textarea', 'select', 'option', 'label', 'summary',
@@ -201,27 +78,5 @@ window.addEventListener('DOMContentLoaded', () => {
     if (event.key !== 'Escape') return
     const selection = window.getSelection?.()
     if (selection && !selection.isCollapsed) selection.removeAllRanges()
-  }, true)
-
-  document.addEventListener('drop', event => {
-    if (!event.isTrusted || !event.dataTransfer?.types.includes('Files')) return
-    const files = [...event.dataTransfer.files]
-    if (files.length === 0) return
-    const nativeImages = []
-    const references = []
-    for (const file of files) {
-      const native = asNativeImage(file)
-      if (native) nativeImages.push(native)
-      else references.push(file)
-    }
-    if (references.length === 0) return
-
-    event.preventDefault()
-    event.stopImmediatePropagation()
-    const composer = visibleComposer()
-    dispatchNativeImages(nativeImages)
-    attachmentQueue = attachmentQueue
-      .then(() => addFileReferences(references, composer))
-      .catch(error => showAttachmentToast(`附件添加失败：${error?.message || String(error)}`, 'error'))
   }, true)
 }, { once: true })

@@ -25,7 +25,6 @@ const CAPABILITY_WHITELIST = Object.freeze({
   storageCleanupApply: 'storageCleanupApply',
   runtimeProbe: 'runtimeProbe',
   networkProbe: 'networkProbe',
-  attachmentInspect: 'attachmentInspect',
   systemInfo: 'systemInfo',
   updateFeed: 'updateFeed'
 })

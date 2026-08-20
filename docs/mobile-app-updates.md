@@ -6,7 +6,7 @@ Android and iOS/iPadOS releases are checked independently from Harness Desktop a
 
 - Android and iOS/iPadOS source versions are prepared together and must equal the current integration version; `tests/mobile-version-sync.test.cjs` rejects one-platform-only version drift.
 - The mobile update manifest must carry both `platforms.android` and `platforms.ios` at the same version before either production endpoint is enabled.
-- The 1.0.26 Android release is published only after the dedicated workflow verifies the long-lived release certificate fingerprint; a debug or unsigned APK never qualifies. The user has chosen not to join Apple Developer Program, so iOS/iPadOS source remains simulator-validated without claiming an installable IPA.
+- The 1.0.27 Android release is published only after the dedicated workflow verifies the long-lived release certificate fingerprint; a debug or unsigned APK never qualifies. The user has chosen not to join Apple Developer Program, so iOS/iPadOS source remains simulator-validated without claiming an installable IPA.
 
 ## Desktop QR routing without an Apple membership
 

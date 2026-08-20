@@ -35,7 +35,6 @@ const { ComponentUpdateService } = require('./bridge/component-update-service.cj
 const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { launchComponentUpdateHelper } = require('./bridge/component-update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
-const { inspectAttachmentPaths } = require('./bridge/attachment-reference-service.cjs')
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
 const { MemoryService } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
@@ -1992,10 +1991,6 @@ ipcMain.handle('shell:openExternal', async (_event, value) => {
   return shell.openExternal(target.toString())
 })
 ipcMain.handle('shell:openLocal', (_event, value, options = {}) => openDesktopLocalTarget(value, Boolean(options.reveal)))
-ipcMain.handle('attachments:inspect', (event, candidates) => {
-  if (!isLocalRuntimeUrl(event.sender.getURL())) throw new Error('只允许本机 Harness 界面添加附件。')
-  return inspectAttachmentPaths(candidates)
-})
 ipcMain.handle('workspace:chooseDirectory', event => {
   if (!isLocalRuntimeUrl(event.sender.getURL())) throw new Error('只允许本机 Harness 界面选择工作区。')
   return chooseWorkspaceDirectory()

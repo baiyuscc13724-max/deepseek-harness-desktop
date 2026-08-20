@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.27
+
+- 官方 DeepSeek Harness 固定升级到 `0.1.0-rc.8`；原生采用图文 `/goal`/`/plan`、文件与会话 `@` 引用、Claude Code/Codex Profile Bundle、持久 PowerShell、并发 `web_search` 和子代理及时回报。
+- 删除桌面壳旧的非图片附件路径注入、附件检查 IPC、历史图片降级和载荷改写；文件、会话、图片及模型模态能力统一交给官方运行时。
+- 修复部分 Windows/高 DPI 机器从最大化状态拖动顶部空白区时窗口尺寸异常：拖动前固定读取正常恢复边界，不再依赖异步 `unmaximize()` 后的瞬时尺寸。
+- 发布入口更新为 1.0.27 的不可变 Tag、draft 远端复核、正式 Android 签名和 Ed25519 组件工作流；本地编排继续绑定同一干净提交。
+- Windows、macOS、Android 与 iOS/iPadOS 源码同步到 1.0.27；完整安装包仍是原生模块、Bootstrap 和不兼容存储变化的兜底。
+
 ## 1.0.26
 
 - 修复 Electron 退出时浏览器 `webContents` 已释放导致的 JavaScript 错误，并补强所有 BrowserView 生命周期竞态。

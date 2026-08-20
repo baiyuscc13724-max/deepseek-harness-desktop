@@ -16,8 +16,8 @@ android {
         applicationId = "io.harnessdesktop.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10026
-        versionName = "1.0.26"
+        versionCode = 10027
+        versionName = "1.0.27"
         val updateManifestUrl = providers.gradleProperty("HARNESS_MOBILE_UPDATE_MANIFEST_URL").orElse("").get()
         buildConfigField("String", "MOBILE_UPDATE_MANIFEST_URL", "\"${updateManifestUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }

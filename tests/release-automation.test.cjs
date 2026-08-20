@@ -32,7 +32,7 @@ test('signed Android publication follows the tag and waits for the verified desk
   const desktopWorkflow = await source(path.join('.github', 'workflows', 'release.yml'))
   assert.match(desktopWorkflow, /overwrite_files: false/u)
   assert.match(desktopWorkflow, /draft: true/u)
-  assert.match(desktopWorkflow, /release-retry\/v1\.0\.26/u)
+  assert.match(desktopWorkflow, /release-retry\/v1\.0\.27/u)
   assert.match(desktopWorkflow, /ref: \$\{\{ env\.RELEASE_TAG \}\}/u)
   assert.match(desktopWorkflow, /--allow-downgrade --force/u)
   assert.match(desktopWorkflow, /tag_name: \$\{\{ env\.RELEASE_TAG \}\}/u)
