@@ -1,172 +1,172 @@
 [
   {
-    "tag_name": "v1.0.27",
-    "name": "Harness Desktop v1.0.27",
-    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.27",
+    "tag_name": "v1.0.28",
+    "name": "Harness Desktop v1.0.28",
+    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.28",
     "prerelease": false,
     "draft": false,
-    "body": "# Harness Desktop 1.0.27\n\n## 官方 Harness rc.8\n\n- 官方运行时从 `0.1.0-rc.7` 升级到 `0.1.0-rc.8`，直接采用官方原生多模态、`/goal` 与 `/plan` 图文输入、文件/会话 `@` 引用，以及图片体积与历史载荷控制。\n- Claude Code 与 Codex 子代理改由官方 Profile Bundle 按需安装；Codex 支持非交互权限模式和多个命名实例。\n- Windows 终端直接采用官方持久 PowerShell 会话；并带入官方的流式取消续问、OpenAI 兼容网关、并发 `web_search`、子代理 `reportDelivery` 与大历史分叉修复。\n- rc.8 的 SQLite 存储结构与旧版不兼容；桌面壳不会自动清理会话、附件或工作区数据，升级前仍建议备份 HarnessData。\n\n## 减少桌面壳重复能力\n\n- 删除桌面壳旧的非图片附件路径注入、附件检查 IPC 与相关测试，文件、会话和图片引用统一交给官方 Harness。\n- 删除与 rc.8 多模态处理重叠的历史图片降级兼容路径，不再修改官方消息载荷；模型能力判断与图片裁剪统一由官方实现。\n- 桌面壳继续只补官方未覆盖的窗口与安装、双源更新、移动工作台、桌宠与主题、受限 Browser/Computer Use、本地隐私管理和默认关闭的 Agent Teams。\n\n## 桌面体验与长期维护\n\n- 修复极光界面模式使 rc.8 官方设置弹窗被限制在侧栏的问题；界面模式双击后会关闭设置页，并在首页输入区、侧栏和整体材质上显示明确差异。\n- 顶栏浏览器入口不再为已隐藏的记忆/缓存按钮保留空槽；Agent Teams 中文界面统一显示为“代理团队”。\n- 桌面启动官方 Runtime 固定传入 `--no-open`，不再同时弹出缺少桌面扩展的浏览器页。\n- 本地记忆仍只按需召回最多 8 条有限内容；应用自有七天过期缓存除启动维护外，每 24 小时重复安全维护，会话、附件、记忆、工作区和当前 Runtime 永久排除。\n\n## 发布与平台\n\n- 继续使用绑定单一干净提交的可恢复发布编排：本地完成源码、发布契约、Windows 安装包、打包自检和组件回滚门禁；Tag 后由 GitHub Actions 构建并复核 Windows、macOS、Android 与 Apple 模拟器资产。\n- Release 先以 draft 汇总并重新下载验 SHA-256，通过后一次性公开；组件包与稳定指针仍验 Ed25519 签名并保持 CNB 优先、GitHub 后备。\n- Windows、macOS Intel、macOS Apple Silicon、Android 与 iOS/iPadOS 源码同步到 1.0.27；Android 只发布长期证书签名 APK，iPhone/iPad 继续使用 Safari 实时工作台。\n",
+    "body": "# Harness Desktop 1.0.28\n\n## 代理团队成为独立会话工作区\n\n- “代理团队”改用官方 `conversation.view`，与“对话 / 轨迹”并列，只替换中央会话内容；删除旧的全屏 Modal、顶栏符号入口和输入区 Dock，继续保留官方会话导航与输入框。\n- “启用自动团队”从用户的下一条普通需求起生效：开关本身不发送消息，没有目标不产生请求，简单任务由主模型负责人 solo。“自定义团队”和三种方向模板保留为可选草稿入口。\n- 无活动团队且只有一个独立的一次性辅助时，使用官方普通 `subagent`；只有至少两个需委派给不同成员的持续独立工作流，且需要依赖、交接、文件边界或汇总协调时才建立团队。团队成员是工作区可见的持久责任主体，硬性禁止调用 `subagent`、`subagent_fork`、`workflow` 或 `ralph`；扩员统一由 root 创建正式成员，避免绕过 `maxMembers` / `maxActiveTurns`、冲突检查和关停。\n- AI 自动设计必要成员、任务依赖和文件边界；成员使用“界面、测试、安全、文档”等 2–6 字直白职责名，避免技术称谓。“添加成员”同样按缺口、成本和冲突决定是否扩员，不要求用户填写成员表单。\n- 团队模型复用现有“主模型与子代理”设置，不新增重复配置 UI：固定负责人始终使用主模型作为规划与汇总大脑；成员由 AI 按任务内容选择主/子路由，普通任务默认子代理模型以节省成本，高复杂推理、架构、安全关键或失败升级才使用主模型；未单独设置子代理模型时继承主模型。\n- 新增“添加协作团队”快捷提示：AI 根据项目目标、现有分工和成本判断是否需要同级团队；现有团队足够就不创建，确需新增时自动确定目标、成员、主/子模型、跨团队依赖和负责人中继。\n- 所有快捷操作只把提示词写入官方输入框。创建请求只有在用户真实发送、提交成功且草稿被消费后才自动回到“对话”；仅生成草稿、编辑、取消或发送失败都不会误切页。\n- 活动团队使用成员、任务、协作事件三列工作区；窄窗口自动切换双列或单列。状态、阻塞、冲突、连接和生命周期统一中文显示，并补充键盘焦点、ARIA 与实时状态提示。\n- 同一最外层负责人现在可拥有多个平级团队；总览支持切换团队和查看跨团队动态，同根团队可以建立任务依赖并由共同负责人中继消息。不同根负责人默认隔离，禁止跨根依赖、跨根中继和嵌套团队。\n- 成员卡片显示当前任务、运行状态和最后活动；“查看实时工作”直接打开该成员的官方可继续会话，完整输出与工具时间线继续复用官方“对话 / 轨迹”，不复制第二套聊天或日志 UI。切换团队或切回普通对话只卸载监控页面，所有团队继续在宿主侧后台运行。\n- 普通团队协调回报在主聊天中降为可折叠的低权重事件通知；团队工作区只展示发送方、接收方、投递状态和时间，不向 Web 投影消息正文。\n- 关闭后的团队保留成员、任务和事件摘要，并提供创建下一团队的安全草稿入口。\n\n## 团队安全与可靠性\n\n- 成员显示名按 NFKC、空白折叠和大小写无关键做唯一性检查，拒绝控制字符、格式字符与同名成员，避免同名会话和文件归属混淆。\n- 自动模式不改变安全边界：只有直接用户触发的最外层负责人能创建团队；宿主以 `HARD_MAX_TEAMS_PER_ROOT = 8` 限制同一 root 的未关闭平级团队，第 9 个返回 `AGENT_TEAMS_TEAM_LIMIT`。每队分别受 `maxMembers`，全部团队共同受 `maxActiveTurns`，合计超限返回 `AGENT_TEAMS_ACTIVE_TURN_LIMIT`。每个团队负责人固定，跨 root 与嵌套团队禁止；歧义操作要求明确 `team_id`。\n- 保持成员注册先持久化、任务依赖、原子认领、并发与成员硬限制、文件冲突推导、优雅/强制关闭及显式孤儿恢复；新增跨团队依赖全图无环校验和跨根拒绝。\n- 官方 Runtime 只增加一处可回退的 view-owner 透传：把既有 `actions.setView` 交给 `conversation.view`；不修改发送或路由权限，锚点变化时明确失败，移除后仅退回手动点“对话”。\n- Web 投影新增安全的显示名、最后活动和任务摘要；非空文件范围无法证明不敏感时只返回隐藏原因码，消息正文和投递错误正文始终留在宿主侧。\n- 新增中文用户指南，覆盖适用场景、首次模板、实时查看、成本、文件冲突、失败替换、关闭与孤儿恢复。\n\n## 更新与发布\n\n- 当桌面已经是最新版本时，“下载并安装”现在以幂等成功结束，不再误报“更新失败”；重新检查成功后同步清除旧错误提示。\n- 官方 DeepSeek Harness 继续固定为 `0.1.0-rc.8`，Electron 继续固定为 43.2.0；本次不复制官方已有的编辑器、终端、会话导航、轨迹、模型或 Token 控件。\n- 桌面、Android 与 iOS/iPadOS 源码同步到 1.0.28。Android 仍只发布长期证书签名 APK；iPhone/iPad 在未加入 Apple Developer Program 时继续使用 Safari 实时工作台。\n- 发布继续绑定不可变 Tag，并升级为三段式门禁：先创建不可覆盖的非公开 GitHub draft；再由 Windows Runner 认证下载全部资产、用 PowerShell 逐项验证 `SHA256SUMS.txt`，对下载的安装器真实静默安装，检查版本/ASAR、运行 installed `--self-test` JSON 并成功卸载和清理；最终 job 仅在 draft 与资产 snapshot 完全未变时公开。任一步失败都保留 draft。生产组件继续验证 Ed25519 签名，CNB 只在云端从 GitHub 镜像二进制，不从本机上传大文件。\n",
     "assets": [
       {
         "name": "COMPONENT-SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/COMPONENT-SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/COMPONENT-SHA256SUMS.txt",
         "size": 608,
-        "sha256": "60004056ac395f6c921f6b8d8c0a66a2b0780c68de872d28eb45d9f35c17ae98",
+        "sha256": "843bd123460c7fafa3885dd3c9c0870f27188245335a03984f2232068761015a",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/COMPONENT-SHA256SUMS.txt"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/COMPONENT-SHA256SUMS.txt"
         ]
       },
       {
-        "name": "components-1.0.27-darwin-arm64.json",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/components-1.0.27-darwin-arm64.json",
+        "name": "components-1.0.28-darwin-arm64.json",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/components-1.0.28-darwin-arm64.json",
         "size": 1638,
-        "sha256": "a91ea8870297134760cc2978ef7735a8c5e9b01ea4df87d35c50e74211e1b582",
+        "sha256": "fb9051612b9857318307bdbf6771860ab8b26f0c006d1ff2f598f73f637e4116",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/components-1.0.27-darwin-arm64.json"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/components-1.0.28-darwin-arm64.json"
         ]
       },
       {
-        "name": "components-1.0.27-darwin-x64.json",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/components-1.0.27-darwin-x64.json",
+        "name": "components-1.0.28-darwin-x64.json",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/components-1.0.28-darwin-x64.json",
         "size": 1626,
-        "sha256": "6eca554fc1a01cb3466a2605f9e9856994f85a015b838990c0f6c04b6c1a161e",
+        "sha256": "accb91faf350c6c497d69c11511df719f62b5602c89fa7c4243197ed989567ab",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/components-1.0.27-darwin-x64.json"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/components-1.0.28-darwin-x64.json"
         ]
       },
       {
-        "name": "components-1.0.27-win32-x64.json",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/components-1.0.27-win32-x64.json",
+        "name": "components-1.0.28-win32-x64.json",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/components-1.0.28-win32-x64.json",
         "size": 1622,
-        "sha256": "d2534ff03323789d82db46490b84afb891206a10780bc32a616033bbf5f18ec7",
+        "sha256": "7f9b154041a057c7cefbcbf95cee4ded5e49ed07c7403c4562aba8dc892f6958",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/components-1.0.27-win32-x64.json"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/components-1.0.28-win32-x64.json"
         ]
       },
       {
-        "name": "desktop-shell-1.0.27-darwin-arm64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/desktop-shell-1.0.27-darwin-arm64.zip",
-        "size": 37034760,
-        "sha256": "d322cc2a5a80beb4c1db491938212f420df6337e276348a9740f439e183f1983",
+        "name": "desktop-shell-1.0.28-darwin-arm64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/desktop-shell-1.0.28-darwin-arm64.zip",
+        "size": 37052513,
+        "sha256": "117d119955c825af2badec28c4800e0f3f37fcc98a80afdfb3b7a2d1f86c238a",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/desktop-shell-1.0.27-darwin-arm64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/desktop-shell-1.0.28-darwin-arm64.zip"
         ]
       },
       {
-        "name": "desktop-shell-1.0.27-darwin-x64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/desktop-shell-1.0.27-darwin-x64.zip",
-        "size": 37034760,
-        "sha256": "7e786cc7a23d679eb544fa1781e135486d3c7b3665d1335bed4117533f6ab613",
+        "name": "desktop-shell-1.0.28-darwin-x64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/desktop-shell-1.0.28-darwin-x64.zip",
+        "size": 37052513,
+        "sha256": "b5f3d2860b484ba200a3a0a0cf96609dc5cf2de70c3821b3bd8ee427066b2c4b",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/desktop-shell-1.0.27-darwin-x64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/desktop-shell-1.0.28-darwin-x64.zip"
         ]
       },
       {
-        "name": "desktop-shell-1.0.27-win32-x64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/desktop-shell-1.0.27-win32-x64.zip",
-        "size": 37034760,
-        "sha256": "871b5b4e9a8717b929ff178b84ec605517c87cde7353abe35e4efb015e3d98e3",
+        "name": "desktop-shell-1.0.28-win32-x64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/desktop-shell-1.0.28-win32-x64.zip",
+        "size": 37052513,
+        "sha256": "bee7e5f14b40a67b5d65a949a00a3925864ed20ed304a5baf7cd0fdb33131dcb",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/desktop-shell-1.0.27-win32-x64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/desktop-shell-1.0.28-win32-x64.zip"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.27-linux-amd64.deb",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-linux-amd64.deb",
-        "size": 145113592,
-        "sha256": "e076b1e8db012f8e308f9e9f2702460743251a2fb1659bdd1c9149b4ab270176",
+        "name": "Harness-Desktop-1.0.28-linux-amd64.deb",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-linux-amd64.deb",
+        "size": 145126056,
+        "sha256": "34204e2e4dcb9ebdff0c0a6be22fdffa4b9cc8229d2b5847a564ec5ef69a9858",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Desktop-1.0.27-linux-amd64.deb"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Desktop-1.0.28-linux-amd64.deb"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.27-linux-x86_64.AppImage",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-linux-x86_64.AppImage",
-        "size": 179787331,
-        "sha256": "8a9cfd026dda6388d891af5436b7b7d09e55ac396322f5e4f95c3546b6bffcfd",
+        "name": "Harness-Desktop-1.0.28-linux-x86_64.AppImage",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-linux-x86_64.AppImage",
+        "size": 179803399,
+        "sha256": "4e999c3dbf119d09dd31bb7b287bcb46f8fdc29b9ea316dbb82fd8db66eb3200",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Desktop-1.0.27-linux-x86_64.AppImage"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Desktop-1.0.28-linux-x86_64.AppImage"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.27-mac-arm64.dmg",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-arm64.dmg",
-        "size": 170926108,
-        "sha256": "84b6b9642b53679377a7e70de2bed49a5ee5d4ff572cc31ddb12d74d28c7504e",
+        "name": "Harness-Desktop-1.0.28-mac-arm64.dmg",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-arm64.dmg",
+        "size": 170923668,
+        "sha256": "060b0bd27eae277ae74b2c336b6ce29051b1516e1b27144e88814863dea27aed",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-arm64.dmg"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-arm64.dmg"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.27-mac-arm64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-arm64.zip",
-        "size": 166179322,
-        "sha256": "a2b3b0412b0883e41639828f2d73db8b55f86e15b6404126ad42c255ffa58dbc",
+        "name": "Harness-Desktop-1.0.28-mac-arm64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-arm64.zip",
+        "size": 166195856,
+        "sha256": "e86f74d9feaac3fa067872d5e556dccd6fe6932cd650f6d59daa2b7a7acbc68a",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-arm64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-arm64.zip"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.27-mac-x64.dmg",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-x64.dmg",
-        "size": 173541588,
-        "sha256": "d21f6e7c36eebcba6a1b602c9d4c0a88d89a19298db54447d1f01d9732861ebb",
+        "name": "Harness-Desktop-1.0.28-mac-x64.dmg",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-x64.dmg",
+        "size": 173565596,
+        "sha256": "7e84293e9a15b83a6074757c2a99b485af95c295364e387ad3ae80d6401b26ed",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-x64.dmg"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-x64.dmg"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.27-mac-x64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-x64.zip",
-        "size": 168847973,
-        "sha256": "9d3b65c699d4f38b7bae472b44c3c3da4b4c4ae38157a6e0ccb1a8655694159e",
+        "name": "Harness-Desktop-1.0.28-mac-x64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-x64.zip",
+        "size": 168864484,
+        "sha256": "cd26266b50b092c36dc8d484f0646fb2c6bd64849998bde24edeaa7837772739",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Desktop-1.0.27-mac-x64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Desktop-1.0.28-mac-x64.zip"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.27-portable-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-portable-x64.exe",
-        "size": 134168286,
-        "sha256": "6e2e7e938e1b68048672a8c2745fafabb89cc3c0000a91f1a9fa9d28ea6d2313",
+        "name": "Harness-Desktop-1.0.28-portable-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-portable-x64.exe",
+        "size": 134180623,
+        "sha256": "fa93afdecf0e868e02f46e34225c0597ff1e63183ca9dde34875f41fab396cb8",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Desktop-1.0.27-portable-x64.exe"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Desktop-1.0.28-portable-x64.exe"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.27-win-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Desktop-1.0.27-win-x64.exe",
-        "size": 139512596,
-        "sha256": "31f1f7b336e5f7f811561762d81c96df987d7203f4741f2f3f7bdfd5cc00358c",
+        "name": "Harness-Desktop-1.0.28-win-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Desktop-1.0.28-win-x64.exe",
+        "size": 139525484,
+        "sha256": "d17bf17f769c5fc7ea838b8e0568f3037c2d7dbc53772655a4d1b9caae8ac017",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Desktop-1.0.27-win-x64.exe"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Desktop-1.0.28-win-x64.exe"
         ]
       },
       {
-        "name": "Harness-Mobile-1.0.27-android-universal.apk",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Mobile-1.0.27-android-universal.apk",
-        "size": 52097435,
-        "sha256": "6b8eddfd85f81d94fedc4288551dd95cd9defbeff171bf1401a92f0092b42c3a",
+        "name": "Harness-Mobile-1.0.28-android-universal.apk",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Mobile-1.0.28-android-universal.apk",
+        "size": 52097413,
+        "sha256": "52e31a0c82e6d992c3c4ad2824a111063d311617e6d00756c2e0b86675450d08",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Mobile-1.0.27-android-universal.apk"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Mobile-1.0.28-android-universal.apk"
         ]
       },
       {
-        "name": "Harness-Mobile-1.0.27-android-universal.apk.sha256",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/Harness-Mobile-1.0.27-android-universal.apk.sha256",
+        "name": "Harness-Mobile-1.0.28-android-universal.apk.sha256",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/Harness-Mobile-1.0.28-android-universal.apk.sha256",
         "size": 110,
-        "sha256": "e05e9a06c9a1203ef164e012266e155ba8679ec1b7067b6fa6ec952482ae5fee",
+        "sha256": "8829cfcd9dc85a0fc57a9f3354ece4973c9400cbd8151860e51a8ba7d0454e91",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/Harness-Mobile-1.0.27-android-universal.apk.sha256"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/Harness-Mobile-1.0.28-android-universal.apk.sha256"
         ]
       },
       {
         "name": "SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.27/SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.28/SHA256SUMS.txt",
         "size": 831,
-        "sha256": "d2ffdfff713ac0eb8d7fde50120dded0ccebb76875f247c6b10b0682edd22a06",
+        "sha256": "df42a05b770031e876515e066c4d1dec7790ac145802f24e406248f26bc1d15e",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.27/SHA256SUMS.txt"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.28/SHA256SUMS.txt"
         ]
       }
     ]
