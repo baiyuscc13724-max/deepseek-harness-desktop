@@ -49,8 +49,11 @@
 - `npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org`：0 个已知漏洞。
 - 隔离源码人工验收已确认窗口拖动、设置布局、顶栏间距、首页界面模式、代理团队中文和单一桌面窗口行为正常。
 
-## 待发布门禁
+## 发布后外部验证
 
-- Windows 安装版、便携版、打包后自检与真实组件健康/回滚结果。
-- GitHub Actions Windows/macOS/Linux、iPhone/iPad 模拟器和正式 Android 结果。
-- GitHub/CNB 公开资产、SHA-256、组件签名和三个稳定 feed 的外部验证。
+- GitHub `Build & Release Desktop`、正式 Android 和生产组件工作流均成功；公开 Release 为非 draft、非 prerelease，精确包含 18 个资产。
+- GitHub 公开 Windows 安装版 SHA-256 为 `31f1f7b336e5f7f811561762d81c96df987d7203f4741f2f3f7bdfd5cc00358c`；真实隔离安装、1.0.25 升级标记保留、1.0.27 自检、卸载和原 HKCU 注册信息恢复全部成功。安装器未使用 Authenticode 证书，Windows 可能显示 SmartScreen 提示，信任依据为公开不可变 Tag、GitHub digest 和 SHA-256 校验文件。
+- GitHub 公开便携版 SHA-256 为 `6e2e7e938e1b68048672a8c2745fafabb89cc3c0000a91f1a9fa9d28ea6d2313`；直接运行自检确认版本 1.0.27、Electron 43.2.0、官方核心 rc.8 和七项打包检查通过。
+- 正式 APK SHA-256 为 `6b8eddfd85f81d94fedc4288551dd95cd9defbeff171bf1401a92f0092b42c3a`，长期证书 SHA-256 为 `092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21`。
+- 三个生产组件清单的 Ed25519 签名、组件 ZIP digest、完整包兜底 digest 和 `COMPONENT-SHA256SUMS.txt` 已独立复核；CNB Runner 从 GitHub 云端镜像并验证全部 18 个资产。
+- CNB、GitHub 与仓库内三个稳定 feed 字节完全一致；真实在线更新检查确认 1.0.25 可直接选择 1.0.27 安装器，并保持 CNB 优先、GitHub 后备。
