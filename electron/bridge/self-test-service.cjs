@@ -111,6 +111,7 @@ async function runPackagedSelfTest(options = {}) {
     dsh = { source: 'error', version: 'unknown', error: error.message }
   }
 
+  const platform = options.platform || process.platform
   const gitRuntime = typeof options.gitRuntimeProbe === 'function'
     ? await options.gitRuntimeProbe().catch(() => null)
     : null
@@ -125,7 +126,12 @@ async function runPackagedSelfTest(options = {}) {
       ? await options.userDataProbe(options.userData)
       : await userDataWritable(options.userData),
     desktopMarketplace: await marketplaceInstallable(options),
-    bundledGit: gitRuntime ? gitRuntime.git?.source === 'bundled' && gitRuntime.git?.available === true && gitRuntime.gcm?.available === true : true,
+    // Bundled MinGit is Windows-only by design. On Windows the packaged app
+    // must use the bundled Git toolchain; on macOS/Linux any available Git
+    // (system or bundled) satisfies the release probe.
+    bundledGit: !gitRuntime ? true : platform === 'win32'
+      ? gitRuntime.git?.source === 'bundled' && gitRuntime.git?.available === true && gitRuntime.gcm?.available === true
+      : gitRuntime.git?.available === true,
     webCompatibility: true
   }
 

@@ -77,6 +77,7 @@ test('packaged self-test requires the bundled Git toolchain when the release pro
     resolveDshBin: () => ({ source: 'bundled', version: '0.1.0-rc.8' }),
     runtimeProbe: async () => true, marketplaceProbe: async () => true,
     userDataProbe: async () => true, nodeVersion: '24.1.0',
+    platform: 'win32',
     gitRuntimeProbe: async () => ({
       git: { available: true, source: 'system', version: '2.53.0' },
       gcm: { available: false, source: null, version: null },
@@ -86,6 +87,30 @@ test('packaged self-test requires the bundled Git toolchain when the release pro
   assert.equal(report.ok, false)
   assert.equal(report.checks.bundledGit, false)
   assert.equal(report.git.gcm.available, false)
+})
+
+test('packaged self-test accepts an available system Git on non-Windows platforms', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'harness-desktop-selftest-darwin-'))
+  try {
+    const rendererEntry = path.join(dir, 'index.html')
+    await writeFile(rendererEntry, '<!doctype html>')
+    const report = await runPackagedSelfTest({
+      userData: path.join(dir, 'userdata'), rendererEntry,
+      resolveDshBin: () => ({ source: 'bundled', version: '0.1.0-rc.8' }),
+      runtimeProbe: async () => true, marketplaceProbe: async () => true,
+      userDataProbe: async () => true, nodeVersion: '24.1.0',
+      platform: 'darwin',
+      gitRuntimeProbe: async () => ({
+        git: { available: true, source: 'system', version: '2.55.0' },
+        gcm: { available: false, source: null, version: null },
+        sshAgent: { available: false, running: false }
+      })
+    })
+    assert.equal(report.ok, true)
+    assert.equal(report.checks.bundledGit, true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 test('packaged self-test fails when the official Harness binary is unavailable', async () => {
