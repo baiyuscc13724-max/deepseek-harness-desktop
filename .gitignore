@@ -28,6 +28,7 @@ release-update-sources.local.json
 .component-input/
 /third_party/mingit/
 .android-build/
+output/
 *.jks
 *.keystore
 *.p12

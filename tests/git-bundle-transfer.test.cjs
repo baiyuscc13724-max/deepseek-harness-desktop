@@ -3,15 +3,20 @@ const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
 const { promisify } = require('node:util')
-const { execFile } = require('node:child_process')
+const { execFile, execFileSync } = require('node:child_process')
+const { realpathSync } = require('node:fs')
 const { mkdtemp, mkdir, readFile, rm, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const execFileAsync = promisify(execFile)
 const gitUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'git-workspace-adapter.js')).href
 const casUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'artifact-cas.js')).href
-const gitCommand = path.resolve(__dirname, '..', 'third_party', 'mingit', 'cmd', 'git.exe')
-const allowedGitRoot = path.resolve(__dirname, '..', 'third_party', 'mingit')
+const gitCommand = process.platform === 'win32'
+  ? path.resolve(__dirname, '..', 'third_party', 'mingit', 'cmd', 'git.exe')
+  : realpathSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim())
+const allowedGitRoot = process.platform === 'win32'
+  ? path.resolve(__dirname, '..', 'third_party', 'mingit')
+  : path.dirname(path.dirname(gitCommand))
 const REPOSITORY = 'repository_bundle01'
 
 async function git(cwd, args) {

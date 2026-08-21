@@ -77,6 +77,7 @@
     "appId": "io.harnessdesktop.app",
     "productName": "Harness Desktop",
     "asar": true,
+    "afterAllArtifactBuild": "scripts/afterAllArtifactBuild.cjs",
     "files": [
       "electron/**/*",
       "renderer/**/*",
@@ -166,10 +167,7 @@
       ],
       "artifactName": "Harness-Desktop-${version}-mac-${arch}.${ext}",
       "category": "public.app-category.developer-tools",
-      "hardenedRuntime": true,
-      "notarize": true,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
+      "identity": null,
       "minimumSystemVersion": "12.0",
       "extendInfo": {
         "NSLocalNetworkUsageDescription": "Harness Desktop uses the local network to connect paired phones and tablets."

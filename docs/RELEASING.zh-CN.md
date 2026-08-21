@@ -28,7 +28,7 @@ npm run release:publish -- status --version <package.json 中的版本>
 - `release-manifest.json` 在新资产全部存在前继续指向上一健康版本，避免公开空链接。
 - v1.0.29 是生产组件更新的完整 Bootstrap 引导包。v1.0.25 不修改、不补发组件源。
 - Android 只允许长期 release 证书；debug、未签名、包名/版本/指纹漂移时工作流必须失败。
-- macOS 桌面包只允许使用 Developer ID Application 签名并通过 Apple 公证；iPhone/iPad 当前仍只发布 Safari 工作台入口，不构造或发布未签名 IPA。
+- macOS 桌面包采用显式无签名契约（当前无 Apple Developer 会员）：构建拒绝任何 Developer ID/公证输入，DMG/ZIP 内含"一键安装"助手；这不等于 Developer ID 签名、Apple 公证或 Gatekeeper 验收，macOS 用户仍会看到 Gatekeeper 提示。iPhone/iPad 当前仍只发布 Safari 工作台入口，不构造或发布未签名 IPA。
 - 生产组件私钥、Android keystore、密码、恢复密钥和长期令牌不得进入 Git、聊天、日志或发布资产。
 
 ## 2. 本地可恢复编排
@@ -64,20 +64,15 @@ Windows 阶段固定生成并验证：
 
 ## 3. 提交、Tag 与 GitHub 桌面制品
 
-### macOS 一次性签名配置
+### macOS 显式无签名契约（当前无 Apple Developer 会员）
 
-GitHub Environment `macos-signing` 必须由仓库管理员一次性写入以下 Actions Secrets，后续每个不可变 Tag 都自动完成双架构签名、公证和 Gatekeeper 验证，不需要在发布时重复操作：
+macOS 桌面包按显式无签名契约构建：`package.json` 的 `build.mac.identity` 固定为 `null`，release.yml 的 macOS job 使用 `CSC_IDENTITY_AUTO_DISCOVERY: 'false'` 构建，`scripts/build-release.mjs` 在检测到任何 Developer ID/公证输入（`CSC_LINK`、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`）时 fail closed。产物确定性地未签名。
 
-- `MACOS_DEVELOPER_ID_P12_BASE64`：Developer ID Application `.p12` 的 Base64；
-- `MACOS_DEVELOPER_ID_P12_PASSWORD`：该 `.p12` 的密码；
-- `APPLE_NOTARY_API_KEY_P8_BASE64`：App Store Connect API Key `.p8` 的 Base64；
-- `APPLE_NOTARY_KEY_ID`；
-- `APPLE_NOTARY_ISSUER_ID`；
-- `APPLE_TEAM_ID`。
+**未签名包不是 Developer ID 签名、Apple 公证或 Gatekeeper 验收的等价替代。** 用户从浏览器下载后会遇到 Gatekeeper 提示；为降低摩擦，DMG/ZIP 内由 `scripts/afterAllArtifactBuild.cjs` 注入 **`安装.command`** 一键安装助手（复制到应用程序、清除隔离标记并启动）。这不等于"安全修复已损坏"——直接拖拽 .app 的用户仍需按 `docs/RELEASE-RUNBOOK.md` §7 处理 Gatekeeper。
 
-签名材料只允许进入 GitHub 加密 Environment Secrets。不得把 `.p12`、`.p8`、密码或其可逆 Base64 写入公开或私人 Git 仓库；私人仓库不是密钥保险库。若另做灾备，只能保存由独立恢复密钥加密后的不可逆明文备份，恢复密钥与备份分离保管。`desktop-build` Environment 不含 Apple Secrets；矩阵只有 `macos-latest` 选择 `macos-signing`，Windows/Linux runner 不获得这些值。
+`desktop-build` Environment 不含任何 Apple Secrets；`macos-signing` Environment 及其 6 个 Apple Secret 与当前发布流程无关，一律不得配置、修改或删除。若日后获得 Apple Developer 会员，可升级回签名+公证契约（届时需同步修改 `build-release.mjs`、`release-audit.mjs`、`release.yml` 与相关契约测试）。
 
-工作流先把 `.p8` 解码到临时 Runner 并在结束时删除；`electron-builder` 只在 macOS 步骤取得 `.p12` 和公证元数据。缺少任一 Secret、签名身份不属于 `APPLE_TEAM_ID`、缺少 Hardened Runtime、公证或 staple 失败、`spctl` 拒绝 `.app`/DMG/ZIP 中应用时，macOS job 必须 fail closed，draft 不会创建。
+无签名 macOS 产物仍需通过：双架构（x64/arm64）构建、打包后自检、DMG/ZIP 内应用结构核验（release.yml 的 `Verify unsigned macOS packages` 步骤）。
 
 1. `git diff --check`，确认工作树干净且 `npm run verify`、`npm run verify:release`、本地 Windows 阶段均成功。
 2. 快进合并验证提交到 `main`，先推送 `main`，再创建并推送唯一 Tag `v<version>`。
@@ -192,7 +187,7 @@ npm run release:cnb-cloud
 - 状态码成功、无重定向到登录页、无凭据或查询 Token。
 - 文件名、Content-Length（若提供）、实际大小、SHA-256 与清单一致。
 - Windows 安装版与便携版可启动并通过打包自检；正式 APK 证书/包名/版本正确。
-- macOS Intel/Apple Silicon 云端自检成功，两个架构均通过 Developer ID、Hardened Runtime、公证 staple 和 Gatekeeper 验证；iPhone/iPad 说明只指向 Safari 工作台。
+- macOS Intel/Apple Silicon 云端自检成功，两个架构的 DMG/ZIP 均完成无签名结构核验且内含 `安装.command` 一键安装助手；iPhone/iPad 说明只指向 Safari 工作台。
 - 生产清单签名有效，目标架构和兜底资产一致；健康激活、失败回滚、同版本冲突拒绝、完整包兜底均有测试证据。
 - 新安装上自动本地记忆和七天缓存维护默认生效；托盘可以关闭、搜索、预览、单项删除、全部安全删除，敏感内容不入库。
 

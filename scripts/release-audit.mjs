@@ -41,8 +41,8 @@ if (!buildScript.includes("'--publish', 'never'")) throw new Error('electron-bui
 for (const contract of ["for (const arch of ['x64', 'arm64'])", "'--ignore-scripts'", "'--include=optional'", "`--cpu=${arch}`", "'--config.npmRebuild=false'"]) {
   if (!buildScript.includes(contract)) throw new Error(`macOS packages must install and package native dependencies independently per architecture: ${contract}`)
 }
-for (const contract of ["'CSC_LINK'", "'CSC_KEY_PASSWORD'", "'APPLE_API_KEY'", "'APPLE_API_KEY_ID'", "'APPLE_API_ISSUER'", "'APPLE_TEAM_ID'", "CSC_IDENTITY_AUTO_DISCOVERY !== 'true'", 'await access(notarizationKey)']) {
-  if (!buildScript.includes(contract)) throw new Error(`macOS release packaging must fail closed without signing/notarization input: ${contract}`)
+for (const contract of ["'CSC_LINK'", "'CSC_KEY_PASSWORD'", "'APPLE_API_KEY'", "'APPLE_API_KEY_ID'", "'APPLE_API_ISSUER'", "'APPLE_TEAM_ID'", "CSC_IDENTITY_AUTO_DISCOVERY === 'true'", 'macOS unsigned packaging refuses Developer ID / notarization environment', 'macOS unsigned packaging requires CSC_IDENTITY_AUTO_DISCOVERY != true.']) {
+  if (!buildScript.includes(contract)) throw new Error(`macOS release packaging must fail closed when signing/notarization input is present (unsigned contract): ${contract}`)
 }
 for (const contract of ["`/DMySourceDir=${path.join(dist, 'win-unpacked')}`", "`/DMyOutputDir=${dist}`", "path.join(root, 'build', 'installer.iss')"]) {
   if (!buildScript.includes(contract)) throw new Error(`The Windows installer must compile from explicit real paths: ${contract}`)
@@ -72,7 +72,7 @@ if (!releasingGuide.includes('npm run release:cnb-cloud') || !releasingGuide.inc
 if (!pkg.build?.win?.target?.includes('portable')) throw new Error('Windows portable target is missing.')
 if (pkg.build?.win?.target?.includes('nsis') || pkg.build?.nsis) throw new Error('The blocked NSIS installer must not return.')
 for (const target of ['dmg', 'zip']) if (!pkg.build?.mac?.target?.some(entry => entry === target || entry?.target === target)) throw new Error(`macOS target missing: ${target}`)
-if (pkg.build?.mac?.hardenedRuntime !== true || pkg.build?.mac?.notarize !== true || pkg.build?.mac?.entitlements !== 'build/entitlements.mac.plist') throw new Error('macOS signing and notarization contract is incomplete.')
+if (pkg.build?.mac?.identity !== null || pkg.build?.mac?.hardenedRuntime === true || pkg.build?.mac?.notarize === true) throw new Error('macOS packages must be explicitly unsigned (identity null, no hardened runtime, no notarization).')
 for (const target of ['AppImage', 'deb']) if (!pkg.build?.linux?.target?.includes(target)) throw new Error(`Linux target missing: ${target}`)
 for (const file of ['build/icon.png', 'build/entitlements.mac.plist', 'build/installer.iss', 'electron/bootstrap.cjs', 'component-update-sources.json', 'mobile-relay-sources.json', 'mobile/ios/project.yml', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/create-component-signing-key.mjs', 'scripts/verify-component-signing-key.mjs', 'scripts/configure-component-signing-backup.ps1', 'scripts/publish-cnb-cloud-mirror.ps1', '.cnb.yml', 'docs/RELEASING.zh-CN.md', `docs/SECURITY-REVIEW-${releaseTag}.zh-CN.md`, 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs', 'electron/bridge/runtime-bundle-service.cjs', 'renderer/workspace-links-integration.js', 'release-mirrors.example.json', 'release-update-sources.json', 'docs/UPDATE-MIRRORS.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'third_party/licenses/git-credential-manager-2.7.0-LICENSE.txt', 'third_party/licenses/git-lfs-3.7.1-LICENSE.md', 'SECURITY.md']) await access(path.join(root, file))
 const signingBackup = await readFile(path.join(root, 'scripts/configure-component-signing-backup.ps1'), 'utf8')
@@ -131,8 +131,11 @@ if (!workflow.includes('Run packaged Windows self-test') || !workflow.includes('
 for (const contract of ['Run packaged macOS architecture and runtime self-tests', "'mac|x86_64|darwin-x64'", "'mac-arm64|arm64|darwin-arm64'", 'node-pty/prebuilds/$prebuild/pty.node', 'spawn-helper', 'harness-desktop-$prebuild-selftest.json']) {
   if (!workflow.includes(contract)) throw new Error(`macOS release self-test contract missing: ${contract}`)
 }
-for (const contract of ["matrix.os == 'macos-latest' && 'macos-signing' || 'desktop-build'", 'Prepare Apple notarization API key', 'MACOS_DEVELOPER_ID_P12_BASE64', 'MACOS_DEVELOPER_ID_P12_PASSWORD', 'APPLE_NOTARY_API_KEY_P8_BASE64', 'APPLE_NOTARY_KEY_ID', 'APPLE_NOTARY_ISSUER_ID', 'APPLE_TEAM_ID', "CSC_IDENTITY_AUTO_DISCOVERY: 'true'", 'Build signed and notarized macOS packages', 'xcrun notarytool submit', 'xcrun stapler staple', 'codesign --verify --deep --strict', 'Authority=Developer ID Application:', 'flags=.*runtime', 'xcrun stapler validate', 'spctl --assess --type execute', 'spctl --assess --type open', 'ditto -x -k', 'Remove temporary Apple notarization key']) {
-  if (!workflow.includes(contract)) throw new Error(`macOS production signing/notarization gate missing: ${contract}`)
+for (const contract of ['Build unsigned macOS packages', "CSC_IDENTITY_AUTO_DISCOVERY: 'false'", 'Verify unsigned macOS packages', 'ditto -x -k', "test -f \"dist/mac/Harness Desktop.app/Contents/Resources/app.asar\""]) {
+  if (!workflow.includes(contract)) throw new Error(`macOS unsigned build gate missing: ${contract}`)
+}
+for (const forbidden of ['macos-signing', 'Prepare Apple notarization API key', 'Build signed and notarized macOS packages', 'xcrun notarytool submit', 'xcrun stapler', 'codesign --verify', 'spctl --assess', 'secrets.APPLE_NOTARY', 'secrets.MACOS_DEVELOPER_ID', 'Remove temporary Apple notarization key']) {
+  if (workflow.includes(forbidden)) throw new Error(`macOS unsigned contract forbids signing/notarization gates: ${forbidden}`)
 }
 if (/jobs:\s*[\s\S]*?build:\s*[\s\S]*?env:\s*[\s\S]*?(?:MACOS_DEVELOPER_ID|APPLE_NOTARY)/u.test(workflow.slice(0, workflow.indexOf('steps:')))) throw new Error('Apple signing Secrets must not be exposed at the matrix job level.')
 for (const contract of ['Validate iPhone and iPad simulators', 'Test on iPhone Simulator', 'Test on iPad Simulator', 'needs: [build, ios-simulators]', 'XcodeGen/releases/download/2.46.0/xcodegen.zip', '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806']) {

@@ -55,6 +55,10 @@ test('Wallpaper Engine import accepts local image/video projects only', async ()
 })
 
 test('Wallpaper Engine media cannot escape the project directory', () => {
-  const project = path.join('C:\\wallpapers\\safe', 'project.json')
-  assert.throws(() => safeProjectMediaPath(project, '..\\secret.mp4'), /越过了项目目录/)
+  const windows = process.platform === 'win32'
+  const project = windows
+    ? path.win32.join('C:\\wallpapers\\safe', 'project.json')
+    : path.join(path.sep, 'wallpapers', 'safe', 'project.json')
+  const escape = windows ? '..\\secret.mp4' : '../secret.mp4'
+  assert.throws(() => safeProjectMediaPath(project, escape), /越过了项目目录/)
 })

@@ -87,23 +87,23 @@ test('publisher fails closed unless the desktop manifest is signed and verified 
   assert.match(result.stderr, /HARNESS_COMPONENT_SIGNING_KEY_FILE and HARNESS_COMPONENT_KEY_ID are required/u)
 })
 
-test('desktop publication cannot stage a macOS artifact before the signed build gate succeeds', () => {
+test('desktop publication cannot stage a macOS artifact before the unsigned build gate succeeds', () => {
   const source = read('.github/workflows/release.yml')
   const workflow = YAML.parse(source)
-  assert.equal(workflow.jobs.build.environment.name, "${{ matrix.os == 'macos-latest' && 'macos-signing' || 'desktop-build' }}")
+  assert.equal(workflow.jobs.build.environment.name, 'desktop-build')
   assert.deepEqual(workflow.jobs['stage-draft'].needs, ['build', 'ios-simulators'])
   const steps = workflow.jobs.build.steps
-  const signedBuild = steps.find(step => step.name === 'Build signed and notarized macOS packages')
-  const signedGate = steps.find(step => step.name === 'Verify macOS Developer ID, hardened runtime, notarization, and Gatekeeper')
+  const unsignedBuild = steps.find(step => step.name === 'Build unsigned macOS packages')
+  const unsignedGate = steps.find(step => step.name === 'Verify unsigned macOS packages')
   const upload = steps.find(step => String(step.uses || '').startsWith('actions/upload-artifact@'))
-  assert.equal(signedBuild.if, "runner.os == 'macOS'")
-  assert.equal(signedGate.if, "runner.os == 'macOS'")
-  assert.ok(steps.indexOf(signedBuild) < steps.indexOf(signedGate))
-  assert.ok(steps.indexOf(signedGate) < steps.indexOf(upload))
-  assert.match(signedGate.run, /codesign --verify --deep --strict/u)
-  assert.match(signedGate.run, /spctl --assess --type execute/u)
-  assert.match(signedGate.run, /spctl --assess --type open/u)
+  assert.equal(unsignedBuild.if, "runner.os == 'macOS'")
+  assert.equal(unsignedGate.if, "runner.os == 'macOS'")
+  assert.ok(steps.indexOf(unsignedBuild) < steps.indexOf(unsignedGate))
+  assert.ok(steps.indexOf(unsignedGate) < steps.indexOf(upload))
+  assert.match(unsignedBuild.run, /npm run dist/u)
+  assert.match(unsignedGate.run, /hdiutil attach/u)
   assert.doesNotMatch(source.slice(0, source.indexOf('steps:')), /MACOS_DEVELOPER_ID|APPLE_NOTARY/u)
+  for (const forbidden of ['macos-signing', 'xcrun notarytool submit', 'spctl --assess', 'codesign --verify']) assert.ok(!source.includes(forbidden), forbidden)
 })
 
 test('cloud recovery binds artifacts to the tag and safely resumes any verified subset', () => {

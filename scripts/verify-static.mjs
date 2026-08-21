@@ -218,10 +218,13 @@ for (const bundled of ['component-update-sources.json', 'mobile-relay-sources.js
   if (!pkg.build?.files?.includes(bundled)) throw new Error(`Packaged component updater support file is missing: ${bundled}`)
 }
 if (pkg.scripts?.['dist:mac'] !== 'node scripts/build-release.mjs') throw new Error('macOS release packaging must use the audited fail-closed release builder.')
-if (pkg.build?.mac?.artifactName !== 'Harness-Desktop-${version}-mac-${arch}.${ext}' || pkg.build?.mac?.hardenedRuntime !== true || pkg.build?.mac?.notarize !== true || pkg.build?.mac?.entitlements !== 'build/entitlements.mac.plist' || pkg.build?.mac?.minimumSystemVersion !== '12.0') throw new Error('macOS hardened-runtime packaging contract is incomplete.')
+if (pkg.build?.mac?.artifactName !== 'Harness-Desktop-${version}-mac-${arch}.${ext}' || pkg.build?.mac?.identity !== null || pkg.build?.mac?.hardenedRuntime === true || pkg.build?.mac?.notarize === true || pkg.build?.mac?.minimumSystemVersion !== '12.0') throw new Error('macOS unsigned packaging contract is incomplete (identity must be null, hardened runtime and notarization must stay disabled).')
 const releaseWorkflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8')
-for (const contract of ["matrix.os == 'macos-latest' && 'macos-signing' || 'desktop-build'", 'Prepare Apple notarization API key', 'MACOS_DEVELOPER_ID_P12_BASE64', 'APPLE_NOTARY_API_KEY_P8_BASE64', 'Build signed and notarized macOS packages', 'xcrun notarytool submit', 'xcrun stapler staple', 'codesign --verify --deep --strict', 'Authority=Developer ID Application:', 'spctl --assess --type execute', 'spctl --assess --type open', 'Remove temporary Apple notarization key']) {
-  if (!releaseWorkflow.includes(contract)) throw new Error(`macOS production signing/notarization workflow contract is missing: ${contract}`)
+for (const contract of ['Build unsigned macOS packages', "CSC_IDENTITY_AUTO_DISCOVERY: 'false'", 'Verify unsigned macOS packages', 'ditto -x -k']) {
+  if (!releaseWorkflow.includes(contract)) throw new Error(`macOS unsigned workflow contract is missing: ${contract}`)
+}
+for (const forbidden of ['macos-signing', 'Prepare Apple notarization API key', 'Build signed and notarized macOS packages', 'xcrun notarytool submit', 'xcrun stapler', 'codesign --verify', 'spctl --assess', 'Remove temporary Apple notarization key']) {
+  if (releaseWorkflow.includes(forbidden)) throw new Error(`macOS unsigned workflow contract forbids signing/notarization gates: ${forbidden}`)
 }
 const macTargets = pkg.build?.mac?.target || []
 for (const target of ['dmg', 'zip']) {

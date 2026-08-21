@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-源码审查与自动化门禁未发现需要绕过既有权限边界的设计。正式发布仍必须依次通过干净提交、完整测试、发布契约审计、Windows 真实打包与安装验证、GitHub 多平台矩阵、Android 长期证书、Apple Developer ID/公证、公开资产 SHA-256 和组件 Ed25519 验签。发布后证据在真实工作流完成前不视为通过。
+源码审查与自动化门禁未发现需要绕过既有权限边界的设计。正式发布仍必须依次通过干净提交、完整测试、发布契约审计、Windows 真实打包与安装验证、GitHub 多平台矩阵、Android 长期证书、显式无签名 macOS 包（含一键安装助手）、公开资产 SHA-256 和组件 Ed25519 验签。发布后证据在真实工作流完成前不视为通过。
 
 ## 官方能力和桌面边界
 
@@ -40,7 +40,7 @@
 
 - 桌面、Agent Teams、Android `versionCode 10029`/`versionName 1.0.29`、iOS build/marketing version和工作流目标同步到 1.0.29。
 - Release 绑定单一干净提交和不可变 `v1.0.29` Tag；云端先建立不可覆盖 draft，重新下载精确资产集合、校验 SHA-256 并完成 Windows 安装/自检后才公开。
-- Android 只使用 Actions Secret 中长期 release 证书；macOS 只允许 Developer ID、Hardened Runtime、公证 staple 和 Gatekeeper 全部通过。
+- Android 只使用 Actions Secret 中长期 release 证书；macOS 按显式无签名契约构建（`identity: null`、拒绝签名/公证输入），包内含一键安装助手；未签名包不等同于 Developer ID 签名、公证或 Gatekeeper 验收，用户仍会看到 Gatekeeper 提示。
 - 生产组件使用既有单一 Ed25519 信任根；私钥、恢复资料、keystore、密码和 Token 不进入 Git、聊天、日志或发布资产。
 - CNB 仅由云端 Runner 从 GitHub 镜像并复核大小/哈希；稳定 feed 只在 GitHub、CNB 和精确 18 项清单全部就绪后最后提升。
 

@@ -268,4 +268,4 @@ module.exports.default = afterAllArtifactBuild;
 
 **步骤 7 — release-notes**：正文包含 §7 的 macOS 安装说明模板。
 
-> 说明：彻底消除 macOS 警告的唯一路径是签名 + 公证（需 Apple Developer 会员）。本仓库 mac 配置已预留 `"notarize": true`；**在用户提供会员凭证之前，不实施签名，一律按上述固定流程无签名发布。**
+> 说明：本仓库已采用显式无签名契约（`build.mac.identity: null`，构建时拒绝任何签名/公证输入）。彻底消除 macOS 警告的唯一路径仍是签名 + 公证（需 Apple Developer 会员）；取得会员后需同步升级 `build-release.mjs`、`release-audit.mjs`、`release.yml` 与契约测试，再切换回签名发布。

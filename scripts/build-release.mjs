@@ -79,7 +79,11 @@ if (process.platform === 'win32') {
     path.join(root, 'build', 'installer.iss')
   ])
 } else if (process.platform === 'darwin') {
-  const requiredSigningEnvironment = [
+  // Explicit unsigned contract (no Apple Developer membership): refuse any
+  // Developer ID / notarization input so macOS packages stay deterministically
+  // unsigned. Unsigned packages are NOT equivalent to Developer ID signing,
+  // Apple notarization or Gatekeeper acceptance.
+  const signingInput = [
     'CSC_LINK',
     'CSC_KEY_PASSWORD',
     'APPLE_API_KEY',
@@ -87,16 +91,13 @@ if (process.platform === 'win32') {
     'APPLE_API_ISSUER',
     'APPLE_TEAM_ID'
   ]
-  const missingSigningEnvironment = requiredSigningEnvironment.filter(name => !String(process.env[name] || '').trim())
-  if (missingSigningEnvironment.length > 0) {
-    throw new Error(`macOS release packaging requires Developer ID signing and notarization environment: ${missingSigningEnvironment.join(', ')}`)
+  const presentSigningInput = signingInput.filter(name => String(process.env[name] || '').trim())
+  if (presentSigningInput.length > 0) {
+    throw new Error(`macOS unsigned packaging refuses Developer ID / notarization environment: ${presentSigningInput.join(', ')}`)
   }
-  if (process.env.CSC_IDENTITY_AUTO_DISCOVERY !== 'true') {
-    throw new Error('macOS release packaging requires CSC_IDENTITY_AUTO_DISCOVERY=true.')
+  if (process.env.CSC_IDENTITY_AUTO_DISCOVERY === 'true') {
+    throw new Error('macOS unsigned packaging requires CSC_IDENTITY_AUTO_DISCOVERY != true.')
   }
-  const notarizationKey = path.resolve(process.env.APPLE_API_KEY)
-  if (!path.isAbsolute(process.env.APPLE_API_KEY)) throw new Error('APPLE_API_KEY must be an absolute path to an ephemeral App Store Connect API key.')
-  await access(notarizationKey)
 
   // A single node_modules tree cannot contain reliable native sharp/koffi
   // payloads for both Intel and Apple Silicon. Reinstall and package each

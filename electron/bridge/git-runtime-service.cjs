@@ -2,6 +2,13 @@ const path = require('node:path')
 const { existsSync } = require('node:fs')
 const { spawn } = require('node:child_process')
 
+// Windows runtime paths must be built with win32 semantics regardless of the
+// host OS, so candidate resolution and probes stay deterministic on every
+// CI runner (Linux/macOS run the same logic tests with platform: 'win32').
+function platformPath(platform) {
+  return platform === 'win32' ? path.win32 : path
+}
+
 const DEFAULT_TIMEOUT_MS = 5_000
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024
 const SAFE_ENV_KEYS = Object.freeze([
@@ -12,11 +19,12 @@ const SAFE_ENV_KEYS = Object.freeze([
 const PUBLIC_ACTIONS = Object.freeze(['git-version', 'gcm-version', 'ssh-agent-status'])
 
 function uniquePaths(values, platform = process.platform) {
+  const p = platformPath(platform)
   const seen = new Set()
   const result = []
   for (const value of values) {
     if (!value || !String(value).trim()) continue
-    const resolved = path.resolve(String(value))
+    const resolved = p.resolve(String(value))
     const key = platform === 'win32' ? resolved.toLowerCase() : resolved
     if (seen.has(key)) continue
     seen.add(key)
@@ -26,14 +34,15 @@ function uniquePaths(values, platform = process.platform) {
 }
 
 function bundledGitCandidates(resourcesPath, platform = process.platform) {
+  const p = platformPath(platform)
   const executable = platform === 'win32' ? 'git.exe' : 'git'
-  const root = path.resolve(resourcesPath)
-  const thirdPartyRoots = [path.join(root, 'third_party'), path.join(root, 'app.asar.unpacked', 'third_party')]
+  const root = p.resolve(resourcesPath)
+  const thirdPartyRoots = [p.join(root, 'third_party'), p.join(root, 'app.asar.unpacked', 'third_party')]
   const layouts = [
     ['mingit', 'cmd'], ['MinGit', 'cmd'], ['git', 'cmd'],
     ['mingit', 'bin'], ['MinGit', 'bin'], ['git', 'bin']
   ]
-  return uniquePaths(thirdPartyRoots.flatMap(thirdParty => layouts.map(parts => path.join(thirdParty, ...parts, executable))), platform)
+  return uniquePaths(thirdPartyRoots.flatMap(thirdParty => layouts.map(parts => p.join(thirdParty, ...parts, executable))), platform)
 }
 
 function resolveBundledGit({ resourcesPath, platform = process.platform, exists = existsSync } = {}) {
@@ -44,12 +53,13 @@ function resolveBundledGit({ resourcesPath, platform = process.platform, exists 
 
 function bundledGcmCandidates(resourcesPath, platform = process.platform) {
   if (platform !== 'win32') return []
-  const root = path.resolve(resourcesPath)
+  const p = platformPath(platform)
+  const root = p.resolve(resourcesPath)
   return uniquePaths([
-    path.join(root, 'third_party', 'mingit', 'gcm', 'git-credential-manager.exe'),
-    path.join(root, 'app.asar.unpacked', 'third_party', 'mingit', 'gcm', 'git-credential-manager.exe'),
-    path.join(root, 'third_party', 'mingit', 'mingw64', 'bin', 'git-credential-manager.exe'),
-    path.join(root, 'app.asar.unpacked', 'third_party', 'mingit', 'mingw64', 'bin', 'git-credential-manager.exe')
+    p.join(root, 'third_party', 'mingit', 'gcm', 'git-credential-manager.exe'),
+    p.join(root, 'app.asar.unpacked', 'third_party', 'mingit', 'gcm', 'git-credential-manager.exe'),
+    p.join(root, 'third_party', 'mingit', 'mingw64', 'bin', 'git-credential-manager.exe'),
+    p.join(root, 'app.asar.unpacked', 'third_party', 'mingit', 'mingw64', 'bin', 'git-credential-manager.exe')
   ], platform)
 }
 
@@ -61,10 +71,11 @@ function resolveBundledGcm({ resourcesPath, platform = process.platform, exists 
 
 function bundledGitInstallMarkerCandidates(resourcesPath, platform = process.platform) {
   if (!resourcesPath || platform !== 'win32') return []
-  const root = path.resolve(resourcesPath)
+  const p = platformPath(platform)
+  const root = p.resolve(resourcesPath)
   return uniquePaths([
-    path.join(root, 'third_party', '.bundled-git-installing'),
-    path.join(root, 'app.asar.unpacked', 'third_party', '.bundled-git-installing')
+    p.join(root, 'third_party', '.bundled-git-installing'),
+    p.join(root, 'app.asar.unpacked', 'third_party', '.bundled-git-installing')
   ], platform)
 }
 
@@ -74,13 +85,14 @@ function splitPath(env, platform) {
 }
 
 function systemGitCandidates(env = process.env, platform = process.platform) {
+  const p = platformPath(platform)
   const executable = platform === 'win32' ? 'git.exe' : 'git'
-  const fromPath = splitPath(env, platform).map(directory => path.join(directory, executable))
+  const fromPath = splitPath(env, platform).map(directory => p.join(directory, executable))
   if (platform !== 'win32') return uniquePaths(fromPath, platform)
   const programRoots = [env.ProgramW6432, env.ProgramFiles, env['ProgramFiles(x86)']]
   const conventional = programRoots.filter(Boolean).flatMap(root => [
-    path.join(root, 'Git', 'cmd', executable),
-    path.join(root, 'Git', 'bin', executable)
+    p.join(root, 'Git', 'cmd', executable),
+    p.join(root, 'Git', 'bin', executable)
   ])
   return uniquePaths([...fromPath, ...conventional], platform)
 }
@@ -92,29 +104,31 @@ function resolveSystemGit({ env = process.env, platform = process.platform, exis
 
 function resolveWindowsOpenSsh({ env = process.env, platform = process.platform, exists = existsSync } = {}) {
   if (platform !== 'win32') return null
+  const p = platformPath(platform)
   const systemRoot = env.SystemRoot || env.SYSTEMROOT || env.WINDIR
-  const command = systemRoot && path.join(systemRoot, 'System32', 'OpenSSH', 'ssh.exe')
+  const command = systemRoot && p.join(systemRoot, 'System32', 'OpenSSH', 'ssh.exe')
   return command && exists(command) ? command : null
 }
 
 function buildGitEnvironment(sourceEnv = process.env, { gitCommand, platform = process.platform } = {}) {
+  const p = platformPath(platform)
   const env = Object.create(null)
   for (const key of SAFE_ENV_KEYS) {
     if (typeof sourceEnv[key] === 'string' && sourceEnv[key]) env[key] = sourceEnv[key]
   }
 
-  const gitDirectory = gitCommand ? path.dirname(path.resolve(gitCommand)) : null
-  const gitRoot = gitDirectory && ['cmd', 'bin'].includes(path.basename(gitDirectory).toLowerCase())
-    ? path.dirname(gitDirectory)
+  const gitDirectory = gitCommand ? p.dirname(p.resolve(gitCommand)) : null
+  const gitRoot = gitDirectory && ['cmd', 'bin'].includes(p.basename(gitDirectory).toLowerCase())
+    ? p.dirname(gitDirectory)
     : gitDirectory
   const systemRoot = sourceEnv.SystemRoot || sourceEnv.SYSTEMROOT || sourceEnv.WINDIR
   const pathEntries = uniquePaths([
     gitDirectory,
-    gitRoot && path.join(gitRoot, 'cmd'),
-    gitRoot && path.join(gitRoot, 'bin'),
-    gitRoot && path.join(gitRoot, 'mingw64', 'bin'),
-    gitRoot && path.join(gitRoot, 'usr', 'bin'),
-    systemRoot && path.join(systemRoot, 'System32'),
+    gitRoot && p.join(gitRoot, 'cmd'),
+    gitRoot && p.join(gitRoot, 'bin'),
+    gitRoot && p.join(gitRoot, 'mingw64', 'bin'),
+    gitRoot && p.join(gitRoot, 'usr', 'bin'),
+    systemRoot && p.join(systemRoot, 'System32'),
     systemRoot
   ], platform)
   env.PATH = pathEntries.join(platform === 'win32' ? ';' : path.delimiter)
@@ -134,9 +148,11 @@ function boundedProcess(command, args, {
   env,
   spawnImpl = spawn,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES
+  maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
+  platform = process.platform
 } = {}) {
-  if (!path.isAbsolute(command)) return Promise.reject(new Error('Executable must be an absolute resolved path.'))
+  const p = platformPath(platform)
+  if (!p.isAbsolute(command)) return Promise.reject(new Error('Executable must be an absolute resolved path.'))
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000) return Promise.reject(new Error('Invalid process timeout.'))
   if (!Number.isInteger(maxOutputBytes) || maxOutputBytes < 256 || maxOutputBytes > 1024 * 1024) return Promise.reject(new Error('Invalid output limit.'))
 
@@ -175,7 +191,7 @@ function boundedProcess(command, args, {
 
     try {
       child = spawnImpl(command, args, {
-        cwd: path.dirname(command),
+        cwd: p.dirname(command),
         env,
         shell: false,
         windowsHide: true,
@@ -198,25 +214,27 @@ function boundedProcess(command, args, {
 }
 
 function buildRuntimeGitEnvironment(sourceEnv = process.env, { gitCommand, gcmCommand, sshCommand, platform = process.platform } = {}) {
+  const p = platformPath(platform)
   const env = { ...sourceEnv }
   if (!gitCommand) return env
-  const gitDirectory = path.dirname(path.resolve(gitCommand))
-  const gitRoot = ['cmd', 'bin'].includes(path.basename(gitDirectory).toLowerCase()) ? path.dirname(gitDirectory) : gitDirectory
-  const additions = [gitDirectory, path.join(gitRoot, 'cmd'), path.join(gitRoot, 'bin'), path.join(gitRoot, 'mingw64', 'bin')]
-  if (gcmCommand) additions.unshift(path.dirname(path.resolve(gcmCommand)))
+  const gitDirectory = p.dirname(p.resolve(gitCommand))
+  const gitRoot = ['cmd', 'bin'].includes(p.basename(gitDirectory).toLowerCase()) ? p.dirname(gitDirectory) : gitDirectory
+  const additions = [gitDirectory, p.join(gitRoot, 'cmd'), p.join(gitRoot, 'bin'), p.join(gitRoot, 'mingw64', 'bin')]
+  if (gcmCommand) additions.unshift(p.dirname(p.resolve(gcmCommand)))
   const originalPath = sourceEnv.PATH || sourceEnv.Path || sourceEnv.path || ''
   env.PATH = [...uniquePaths(additions, platform), originalPath].filter(Boolean).join(platform === 'win32' ? ';' : path.delimiter)
   env.GIT_TERMINAL_PROMPT = '0'
   env.GCM_INTERACTIVE = 'Auto'
   if (sshCommand) {
-    env.GIT_SSH_COMMAND = path.resolve(sshCommand).replaceAll('\\', '/')
+    env.GIT_SSH_COMMAND = p.resolve(sshCommand).replaceAll('\\', '/')
     env.GIT_SSH_VARIANT = 'ssh'
   }
   return env
 }
 
-function launchUserVisible(command, args, { env, spawnImpl = spawn, lifetimeMs = 10 * 60_000 } = {}) {
-  if (!path.isAbsolute(command)) return Promise.reject(new Error('Executable must be an absolute resolved path.'))
+function launchUserVisible(command, args, { env, spawnImpl = spawn, lifetimeMs = 10 * 60_000, platform = process.platform } = {}) {
+  const p = platformPath(platform)
+  if (!p.isAbsolute(command)) return Promise.reject(new Error('Executable must be an absolute resolved path.'))
   if (!Number.isInteger(lifetimeMs) || lifetimeMs < 60_000 || lifetimeMs > 15 * 60_000) return Promise.reject(new Error('Invalid authentication lifetime.'))
   return new Promise(resolve => {
     let child
@@ -228,7 +246,7 @@ function launchUserVisible(command, args, { env, spawnImpl = spawn, lifetimeMs =
     }
     try {
       child = spawnImpl(command, args, {
-        cwd: path.dirname(command), env, shell: false, windowsHide: false,
+        cwd: p.dirname(command), env, shell: false, windowsHide: false,
         detached: false, stdio: ['ignore', 'ignore', 'ignore']
       })
     } catch {
@@ -306,10 +324,10 @@ function createGitRuntimeService({
     if (action === 'ssh-agent-status') {
       if (platform !== 'win32') return Object.freeze({ ok: false, code: null, reason: 'unsupported', stdout: '', stderr: '' })
       const systemRoot = env.SystemRoot || env.SYSTEMROOT || env.WINDIR
-      const command = systemRoot && path.join(systemRoot, 'System32', 'sc.exe')
+      const command = systemRoot && platformPath(platform).join(systemRoot, 'System32', 'sc.exe')
       if (!command || !exists(command)) return Object.freeze({ ok: false, code: null, reason: 'unavailable', stdout: '', stderr: '' })
       return boundedProcess(command, ['query', 'ssh-agent'], {
-        env: buildGitEnvironment(env, { platform }), spawnImpl, timeoutMs, maxOutputBytes
+        env: buildGitEnvironment(env, { platform }), spawnImpl, timeoutMs, maxOutputBytes, platform
       })
     }
 
@@ -323,7 +341,8 @@ function createGitRuntimeService({
       env: buildGitEnvironment(env, { gitCommand: runtime.command, platform }),
       spawnImpl,
       timeoutMs,
-      maxOutputBytes
+      maxOutputBytes,
+      platform
     })
   }
 
@@ -391,7 +410,7 @@ function createGitRuntimeService({
       env: childEnv, timeoutMs, maxOutputBytes, spawnImpl, platform, exists
     })
     if (!configured.ok) return Object.freeze({ started: false, provider, reason: 'configure-failed' })
-    const launched = await launchUserVisible(command, args, { env: childEnv, spawnImpl })
+    const launched = await launchUserVisible(command, args, { env: childEnv, spawnImpl, platform })
     return Object.freeze({ started: launched.started, provider, reason: launched.reason })
   }
 
