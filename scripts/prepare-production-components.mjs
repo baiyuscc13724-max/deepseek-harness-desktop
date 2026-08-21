@@ -37,6 +37,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const version = String(argument('version', pkg.version)).replace(/^v/, '')
 if (version !== pkg.version) throw new Error(`Component version ${version} must equal package version ${pkg.version}.`)
+const publishedAtInput = String(argument('published-at')).trim()
+const publishedAtDate = publishedAtInput ? new Date(publishedAtInput) : new Date()
+if (!Number.isFinite(publishedAtDate.getTime())) throw new Error('--published-at must be an ISO-8601 timestamp when provided.')
 const releaseDir = path.resolve(argument('release-dir'))
 if (!argument('release-dir')) throw new Error('--release-dir is required and must contain verified full-package fallbacks.')
 const keyFile = process.env.HARNESS_COMPONENT_SIGNING_KEY_FILE
@@ -63,7 +66,7 @@ await cp(path.join(root, 'build', 'icon.png'), path.join(inputRoot, 'build', 'ic
 await mkdir(assetsRoot, { recursive: true, mode: 0o700 })
 await mkdir(manifestsRoot, { recursive: true, mode: 0o700 })
 
-const publishedAt = new Date().toISOString()
+const publishedAt = publishedAtDate.toISOString()
 const report = { schemaVersion: 1, version, keyId, publishedAt, targets: [] }
 for (const target of TARGETS) {
   const componentName = `desktop-shell-${version}-${target.id}.zip`

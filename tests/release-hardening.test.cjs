@@ -51,7 +51,7 @@ test('desktop publication is gated by authenticated draft installation', async (
   assert.doesNotMatch(workflow, /gh release download|uses: softprops\/action-gh-release|--clobber|overwrite_files: true/u)
 })
 
-test('release recovery transfers only successful Actions artifacts through an empty private draft', async () => {
+test('release recovery binds successful tag artifacts and resumes an exact draft subset', async () => {
   const workflow = await readFile(path.join(root, '.github', 'workflows', 'recover-release-from-actions.yml'), 'utf8')
 
   assert.match(workflow, /workflow_dispatch:[\s\S]*source_run_id:[\s\S]*release_id:/u)
@@ -60,8 +60,10 @@ test('release recovery transfers only successful Actions artifacts through an em
   for (const job of ['Build windows-latest', 'Build macos-latest', 'Build ubuntu-latest', 'Validate iPhone and iPad simulators']) {
     assert.match(workflow, new RegExp(job.replaceAll(' ', '\\s'), 'u'))
   }
-  assert.match(workflow, /\.assets \| length\) == 0/u)
-  assert.match(workflow, /gh release upload "\$RELEASE_TAG" release-files\/\*/u)
+  assert.match(workflow, /\.head_sha == \$sha/u)
+  assert.match(workflow, /Unexpected private draft assets/u)
+  assert.match(workflow, /Preserving verified existing asset/u)
+  assert.match(workflow, /gh release upload "\$RELEASE_TAG" "\$file"/u)
   assert.match(workflow, /releases\/assets\/\$id/u)
   assert.match(workflow, /sha256sum -c SHA256SUMS\.txt/u)
   assert.match(workflow, /diff -u <\(jq -S \. draft-snapshot\.json\) <\(jq -S \. current-draft\.json\)/u)

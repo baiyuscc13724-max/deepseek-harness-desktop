@@ -72,8 +72,15 @@ async function createComponentZip({ inputDir, outputFile, id, version, target, A
   if (typeof AdmZipImpl !== 'function') throw new Error('ZIP 构建组件不可用。')
   const built = await buildComponentIndex({ inputDir, id, version, target })
   const archive = new AdmZipImpl()
-  for (const file of built.files) archive.addFile(file.path, await readFile(file.fullPath))
-  archive.addFile(COMPONENT_INDEX_FILE, Buffer.from(`${JSON.stringify(built.index, null, 2)}\n`, 'utf8'))
+  const deterministicTime = new Date('2000-01-01T00:00:00.000Z')
+  const addDeterministicFile = (name, content) => {
+    archive.addFile(name, content)
+    const entry = archive.getEntry(name)
+    if (!entry) throw new Error(`无法固定 ZIP 条目：${name}`)
+    entry.header.time = deterministicTime
+  }
+  for (const file of built.files) addDeterministicFile(file.path, await readFile(file.fullPath))
+  addDeterministicFile(COMPONENT_INDEX_FILE, Buffer.from(`${JSON.stringify(built.index, null, 2)}\n`, 'utf8'))
   await writeAdmZip(archive, outputFile)
   const info = await stat(outputFile)
   return {

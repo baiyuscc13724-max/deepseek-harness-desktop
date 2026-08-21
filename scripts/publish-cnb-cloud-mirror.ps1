@@ -6,11 +6,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+$GitExecutable = if ($env:HARNESS_RELEASE_GIT) { $env:HARNESS_RELEASE_GIT } else { 'git' }
+if ($GitExecutable -ne 'git' -and -not (Test-Path -LiteralPath $GitExecutable -PathType Leaf)) {
+  throw "HARNESS_RELEASE_GIT does not exist: $GitExecutable"
+}
 
 function Invoke-Git {
   param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
-  & git @Arguments
-  if ($LASTEXITCODE -ne 0) { throw "git failed: git $($Arguments -join ' ')" }
+  & $script:GitExecutable @Arguments
+  if ($LASTEXITCODE -ne 0) { throw "git failed: $script:GitExecutable $($Arguments -join ' ')" }
 }
 
 function Invoke-CnbJson {
@@ -79,11 +83,11 @@ if ($presentStableFeeds.Count -notin @(0, $stableFeedFiles.Count)) { throw 'Stab
 if ($presentStableFeeds.Count -eq $stableFeedFiles.Count) { $mirrorFiles += $stableFeedFiles }
 foreach ($file in $mirrorFiles) {
   if (-not (Test-Path -LiteralPath $file)) { throw "Missing CNB mirror source file: $file" }
-  & git diff --quiet HEAD -- $file
+  & $GitExecutable diff --quiet HEAD -- $file
   if ($LASTEXITCODE -ne 0) { throw "Commit $file before publishing the CNB mirror." }
 }
 
-$remoteUrl = (& git remote get-url $Remote).Trim()
+$remoteUrl = (& $GitExecutable remote get-url $Remote).Trim()
 if ($LASTEXITCODE -ne 0 -or $remoteUrl -notmatch '^https://cnb\.cool/') { throw "Remote '$Remote' must be an HTTPS CNB repository." }
 $repoSlug = ($remoteUrl -replace '^https://cnb\.cool/', '' -replace '\.git$', '')
 if (-not $repoSlug) { throw "Unable to derive the CNB repository slug from $remoteUrl" }
@@ -95,16 +99,16 @@ $env:GIT_INDEX_FILE = $index
 try {
   Invoke-Git read-tree --empty
   foreach ($file in $mirrorFiles) {
-    $blob = (& git hash-object -w $file).Trim()
+    $blob = (& $GitExecutable hash-object -w $file).Trim()
     if ($LASTEXITCODE -ne 0) { throw "Unable to hash $file" }
     Invoke-Git update-index --add --cacheinfo "100644,$blob,$file"
   }
-  $checksumBlob = (& git hash-object -w 'dist/SHA256SUMS.txt').Trim()
+  $checksumBlob = (& $GitExecutable hash-object -w 'dist/SHA256SUMS.txt').Trim()
   if ($LASTEXITCODE -ne 0) { throw 'Unable to hash dist/SHA256SUMS.txt' }
   Invoke-Git update-index --add --cacheinfo "100644,$checksumBlob,SHA256SUMS.txt"
-  $tree = (& git write-tree).Trim()
+  $tree = (& $GitExecutable write-tree).Trim()
   if ($LASTEXITCODE -ne 0) { throw 'Unable to write CNB mirror tree.' }
-  $commit = ("release: trigger CNB cloud mirror $expectedTag" | git commit-tree $tree -p "$Remote/main").Trim()
+  $commit = ("release: trigger CNB cloud mirror $expectedTag" | & $GitExecutable commit-tree $tree -p "$Remote/main").Trim()
   if ($LASTEXITCODE -ne 0) { throw 'Unable to create CNB mirror commit.' }
 } finally {
   if ($null -eq $previousIndex) { Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue }
@@ -114,7 +118,7 @@ try {
 
 $branch = "cnb-cloud-release-$($package.version)"
 Invoke-Git update-ref "refs/heads/$branch" $commit
-& git -c 'credential.helper=' -c 'credential.helper=!npx.cmd --yes @cnbcool/cnb-cli git-credential' push $Remote "refs/heads/$branch`:refs/heads/main"
+& $GitExecutable -c 'credential.helper=' -c 'credential.helper=!npx.cmd --yes @cnbcool/cnb-cli git-credential' push $Remote "refs/heads/$branch`:refs/heads/main"
 if ($LASTEXITCODE -ne 0) { throw 'Unable to push the lightweight CNB mirror commit.' }
 Write-Host "CNB metadata pushed: $commit"
 Write-Host 'Release binaries remain on GitHub; CNB Runner will mirror them in the cloud.'

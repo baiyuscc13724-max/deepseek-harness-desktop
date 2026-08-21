@@ -11,8 +11,13 @@ on:
         description: Failed release run whose platform build jobs all passed
         required: true
       release_id:
-        description: Empty private draft release created by the repository owner
+        description: Exact private draft created by the repository owner (empty or verified desktop subset)
         required: true
+      request_id:
+        description: Unique publisher request identity
+        required: false
+
+run-name: Recover ${{ inputs.tag }} · ${{ inputs.request_id || github.run_id }}
 
 permissions:
   actions: read
@@ -36,7 +41,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag }}
-      - name: Verify immutable tag, successful source jobs, and empty draft
+      - name: Verify immutable source run, successful jobs, and exact draft subset
         shell: bash
         run: |
           set -euo pipefail
@@ -44,6 +49,10 @@ jobs:
           test "$RELEASE_TAG" = "v$version"
           tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
           test "$(git rev-parse HEAD)" = "$tag_commit"
+          source_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
+          jq -e --arg sha "$tag_commit" --arg path '.github/workflows/release.yml' '
+            .head_sha == $sha and .path == $path and (.event == "push" or .event == "workflow_dispatch")
+          ' <<<"$source_run" >/dev/null
           jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100")"
           for name in \
             'Build windows-latest' \
@@ -52,11 +61,24 @@ jobs:
             'Validate iPhone and iPad simulators'; do
             jq -e --arg name "$name" '[.jobs[] | select(.name == $name and .conclusion == "success")] | length == 1' <<<"$jobs" >/dev/null
           done
-          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > empty-draft.json
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > private-draft.json
           jq -e --arg tag "$RELEASE_TAG" --arg target "$tag_commit" --arg name "Harness Desktop $RELEASE_TAG" --rawfile body release-notes.md '
             .tag_name == $tag and .target_commitish == $target and .draft == true and
-            .prerelease == false and .name == $name and .body == $body and (.assets | length) == 0
-          ' empty-draft.json >/dev/null
+            .prerelease == false and .name == $name and .body == $body
+          ' private-draft.json >/dev/null
+          expected="$(printf '%s\n' \
+            "Harness-Desktop-$version-linux-amd64.deb" \
+            "Harness-Desktop-$version-linux-x86_64.AppImage" \
+            "Harness-Desktop-$version-mac-arm64.dmg" \
+            "Harness-Desktop-$version-mac-arm64.zip" \
+            "Harness-Desktop-$version-mac-x64.dmg" \
+            "Harness-Desktop-$version-mac-x64.zip" \
+            "Harness-Desktop-$version-portable-x64.exe" \
+            "Harness-Desktop-$version-win-x64.exe" \
+            'SHA256SUMS.txt' | LC_ALL=C sort)"
+          actual="$(jq -r '.assets[].name' private-draft.json | LC_ALL=C sort)"
+          unexpected="$(comm -23 <(printf '%s\n' "$actual") <(printf '%s\n' "$expected"))"
+          test -z "$unexpected" || { printf 'Unexpected private draft assets:\n%s\n' "$unexpected" >&2; exit 1; }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           github-token: ${{ github.token }}
@@ -87,8 +109,31 @@ jobs:
           actual="$(find release-files -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
           diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
           (cd release-files && sha256sum * > SHA256SUMS.txt)
-          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.assets | length')" = 0
-          gh release upload "$RELEASE_TAG" release-files/* --repo "$GITHUB_REPOSITORY"
+          expected_with_checksum="$(printf '%s\n%s\n' 'SHA256SUMS.txt' "$expected" | LC_ALL=C sort -u)"
+          for file in release-files/*; do
+            name="$(basename "$file")"
+            size="$(stat -c %s "$file")"
+            digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > current-draft.json
+            asset="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' current-draft.json)"
+            if test -n "$asset"; then
+              jq -e --argjson size "$size" --arg digest "$digest" '.size == $size and .digest == $digest' <<<"$asset" >/dev/null || {
+                echo "Existing immutable asset differs from the verified cloud artifact: $name" >&2
+                exit 1
+              }
+              echo "Preserving verified existing asset: $name"
+              continue
+            fi
+            if ! gh release upload "$RELEASE_TAG" "$file" --repo "$GITHUB_REPOSITORY"; then
+              gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > raced-draft.json
+              raced="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' raced-draft.json)"
+              test -n "$raced"
+              jq -e --argjson size "$size" --arg digest "$digest" '.size == $size and .digest == $digest' <<<"$raced" >/dev/null
+              echo "A concurrent verified uploader won the immutable asset race: $name"
+            fi
+          done
+          current="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.assets[].name' | LC_ALL=C sort)"
+          diff -u <(printf '%s\n' "$expected_with_checksum") <(printf '%s\n' "$current")
       - name: Snapshot, re-download by immutable asset id, and publish unchanged draft
         shell: bash
         run: |

@@ -27,6 +27,7 @@
     "release:components": "node scripts/build-component-update.mjs",
     "release:components:production": "node scripts/prepare-production-components.mjs",
     "release:orchestrate": "node scripts/release-orchestrator.mjs",
+    "release:publish": "node scripts/release-publish.mjs",
     "test:component-local": "node scripts/local-component-update-test.mjs",
     "release:cnb-cloud": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/publish-cnb-cloud-mirror.ps1",
     "store:assets": "npx --yes --package @microsoft/winappcli@0.5.0 winapp manifest update-assets store/branding/harness-desktop-store.svg --manifest store/Package.appxmanifest.template",

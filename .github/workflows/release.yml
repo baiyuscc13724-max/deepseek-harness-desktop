@@ -7,11 +7,16 @@ on:
         description: Existing immutable release tag to build and publish
         required: true
         default: v1.0.28
+      request_id:
+        description: Unique publisher request identity
+        required: false
   push:
     tags:
       - 'v*'
     branches:
       - 'release-retry/v1.0.28'
+
+run-name: Release ${{ inputs.tag || github.ref_name }} · ${{ inputs.request_id || github.run_id }}
 
 env:
   RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.28' && 'v1.0.28') || github.ref_name }}

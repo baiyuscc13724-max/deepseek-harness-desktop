@@ -1,6 +1,25 @@
 # Harness Desktop 可恢复发布流程
 
-本文是从源码、打包、双平台发布到用户下载验证的唯一正式流程。换会话后先读取本文件和 `.release-state/v<version>.json`，不要凭记忆重新设计步骤。
+本文是从源码、打包、双平台发布到用户下载验证的唯一正式流程。仓库根目录 `AGENTS.md` 会由 Harness 自动载入，因此换会话后不需要用户重新解释上传步骤。
+
+## 0. 唯一对外发布命令
+
+任何会话收到“打包、发布、上传更新、镜像更新”请求时，只运行统一发布器，不手工拼接下文章节中的内部命令：
+
+```powershell
+# 显示固定阶段和安全保证，不修改远端
+npm run release:publish -- plan --version <package.json 中的版本>
+
+# 首次发布和断点续跑使用同一条命令
+npm run release:publish -- run --version <package.json 中的版本>
+
+# 只查看原子状态
+npm run release:publish -- status --version <package.json 中的版本>
+```
+
+状态保存在 `.release-state/v<version>-publish.json`。发布器固定执行：本地 Windows 门禁 → 不可变 Tag → GitHub 全平台云构建 → 私有 draft 云端恢复/公开 → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
+
+后文章节是发布器和工作流的安全契约及故障排查资料，不是让会话绕过发布器逐条手工执行的操作清单。
 
 ## 1. 默认安全原则
 
@@ -61,7 +80,7 @@ gh run list --workflow release.yml --branch v1.0.28
 gh run watch <run-id> --exit-status
 ```
 
-如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。`workflow_dispatch` 的 `tag` 输入会从既有 Tag 重新 checkout；在无法使用 API/CLI 调度时，只允许推送一次 `release-retry/v1.0.28` 恢复分支触发同一路径。恢复工作流仍重跑全部平台、模拟器、哈希与 draft 门禁，并在已存在 Release 时拒绝修改。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
+如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。统一发布器使用唯一 `request_id` 从既有 Tag 调度，并把来源 run 的 workflow path 与 `head_sha` 强绑定到 Tag 提交；恢复 draft 时逐个保留大小/digest 一致的资产、只补缺失项，因此上传中断后仍可续跑。旧的 `release-retry/v1.0.28` 分支只保留为历史兼容入口，不是新会话的操作方式。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
 
 ## 4. 正式 Android
 
@@ -78,7 +97,7 @@ GitHub 仓库 Actions Secrets 必须已有：
 - `Harness-Mobile-<version>-android-universal.apk`
 - `Harness-Mobile-<version>-android-universal.apk.sha256`
 
-桌面 `SHA256SUMS.txt`、APK 和 APK 独立校验文件一经公开均不覆盖。安全重跑遇到已有 APK 时重新下载既有字节核验；遇到只有 APK 或只有校验文件的半成品状态则失败。首次上传后也从公开 URL 重新下载并验签、验包名、验版本和 SHA-256。
+桌面 `SHA256SUMS.txt`、APK 和 APK 独立校验文件一经公开均不覆盖。安全重跑遇到已有 APK 时重新下载既有字节核验并可补齐缺失校验文件；若只存在校验文件，则本次 Tag 构建的 APK 必须与其哈希一致才允许补齐。首次上传后也从公开 URL 重新下载并验签、验包名、验版本和 SHA-256。
 
 ## 5. 生产组件密钥保管
 
@@ -127,7 +146,7 @@ Remove-Item Env:HARNESS_COMPONENT_KEY_ID
 
 1. **先有可信完整 Bootstrap**：GitHub/CNB 的 v1.0.28 完整安装包均已下载验哈希。
 2. 把三个不可变组件 ZIP、三个不可变目标清单和 `COMPONENT-SHA256SUMS.txt` 放入一次性 `component-release-staging/<version>`；只允许公开签名产物进入 `component-publish/v1.0.28` 临时分支，私钥和恢复资料永不进入。
-3. `Publish Verified Production Components` 工作流先用内置公钥、精确文件集、SHA-256、ZIP 索引、目标架构、CNB/GitHub URL 顺序和完整包兜底绑定复核，再拒绝任何已存在/部分资产，上传后重新下载复核；成功后删除临时分支。
+3. `Publish Verified Production Components` 工作流先用内置公钥、精确文件集、SHA-256、ZIP 索引、目标架构、CNB/GitHub URL 顺序和完整包兜底绑定复核。ZIP 时间戳和清单 `publishedAt` 固定到 Tag，使重跑字节确定；已存在资产只有与本次确定性签名产物大小和 digest 完全一致才保留，只补齐缺失项，上传后重新下载复核。
 4. 把组件 ZIP/不可变清单加入 `release-manifest.json`，先运行 CNB 云端镜像并等待所有附件验哈希成功。
 5. 只有 GitHub 与 CNB 两端资产都可用后，才把三个签名清单复制为：
    - `component-feeds/stable/win32-x64.json`

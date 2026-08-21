@@ -10,6 +10,11 @@ on:
         description: Existing desktop release tag that receives the signed APK
         required: true
         default: v1.0.28
+      request_id:
+        description: Unique publisher request identity
+        required: false
+
+run-name: Android ${{ inputs.tag || github.ref_name }} · ${{ inputs.request_id || github.run_id }}
 
 permissions:
   contents: write
@@ -33,6 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           lfs: true
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
@@ -43,6 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           node -e "const p=require('./package.json'); if(process.argv[1] !== 'v'+p.version) throw new Error('Requested tag must equal v'+p.version)" "$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
           test -n '${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}'
           test -n "$HARNESS_ANDROID_KEY_ALIAS"
           test -n "$HARNESS_ANDROID_STORE_PASSWORD"
@@ -116,19 +123,32 @@ jobs:
         run: |
           set -euo pipefail
           existing="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
-          apk_exists=false
-          checksum_exists=false
-          grep -Fx "$ANDROID_ASSET" <<< "$existing" >/dev/null && apk_exists=true
-          grep -Fx "$ANDROID_CHECKSUM" <<< "$existing" >/dev/null && checksum_exists=true
-          if $apk_exists || $checksum_exists; then
-            $apk_exists && $checksum_exists || { echo 'Only one Android release asset exists; refusing a partial or mutable retry.' >&2; exit 1; }
-            mkdir public-existing
+          mkdir public-existing
+          if grep -Fx "$ANDROID_ASSET" <<< "$existing" >/dev/null; then
             gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ANDROID_ASSET" --dir public-existing
-            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ANDROID_CHECKSUM" --dir public-existing
-            (cd public-existing && sha256sum -c "$ANDROID_CHECKSUM")
-            echo 'Android assets already exist and were preserved byte-for-byte.'
+            (cd public-existing && sha256sum "$ANDROID_ASSET" > "$ANDROID_CHECKSUM")
+            cp "public-existing/$ANDROID_CHECKSUM" "$ANDROID_CHECKSUM"
+            echo 'Preserving the existing immutable APK and deriving its missing checksum when necessary.'
           else
-            gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "$ANDROID_ASSET" "$ANDROID_CHECKSUM"
+            if grep -Fx "$ANDROID_CHECKSUM" <<< "$existing" >/dev/null; then
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ANDROID_CHECKSUM" --dir public-existing
+              cp "public-existing/$ANDROID_CHECKSUM" "$ANDROID_CHECKSUM"
+              sha256sum -c "$ANDROID_CHECKSUM"
+            fi
+            if ! gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "$ANDROID_ASSET"; then
+              raced="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq ".assets[] | select(.name == \"$ANDROID_ASSET\") | .name")"
+              test "$raced" = "$ANDROID_ASSET"
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ANDROID_ASSET" --dir public-existing
+              (cd public-existing && sha256sum "$ANDROID_ASSET" > "$ANDROID_CHECKSUM")
+              cp "public-existing/$ANDROID_CHECKSUM" "$ANDROID_CHECKSUM"
+            fi
+          fi
+          latest="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          if ! grep -Fx "$ANDROID_CHECKSUM" <<< "$latest" >/dev/null; then
+            if ! gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "$ANDROID_CHECKSUM"; then
+              raced="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq ".assets[] | select(.name == \"$ANDROID_CHECKSUM\") | .name")"
+              test "$raced" = "$ANDROID_CHECKSUM"
+            fi
           fi
       - name: Verify public signed APK bytes and identity
         shell: bash

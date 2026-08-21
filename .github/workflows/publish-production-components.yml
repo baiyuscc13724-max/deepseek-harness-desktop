@@ -7,9 +7,14 @@ on:
         description: Existing immutable Bootstrap release tag
         required: true
         default: v1.0.28
+      request_id:
+        description: Unique publisher request identity
+        required: false
   push:
     branches:
       - 'component-publish/v1.0.28'
+
+run-name: Components ${{ inputs.tag || 'v1.0.28' }} · ${{ inputs.request_id || github.run_id }}
 
 permissions:
   contents: read
@@ -67,9 +72,10 @@ jobs:
             "Harness-Desktop-$version-mac-arm64.dmg"; do
             gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$fallback_dir"
           done
+          published_at="$(git show -s --format=%cI "$RELEASE_TAG^{}")"
           HARNESS_COMPONENT_SIGNING_KEY_FILE="$key_file" \
           HARNESS_COMPONENT_KEY_ID='harness-components-02643f81164c594a' \
-            node scripts/prepare-production-components.mjs --version "$version" --release-dir "$fallback_dir" --out "$output_dir"
+            node scripts/prepare-production-components.mjs --version "$version" --published-at "$published_at" --release-dir "$fallback_dir" --out "$output_dir"
           cp "$output_dir"/assets/* "$staging_dir"/
           cp "$output_dir"/manifests/* "$staging_dir"/
           (cd "$staging_dir" && sha256sum components-*.json desktop-shell-*.zip > COMPONENT-SHA256SUMS.txt)
@@ -81,23 +87,47 @@ jobs:
           test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq 'select(.isDraft == false) | .isDraft' | grep -qx false
           node scripts/verify-production-component-staging.mjs --version="$version" --dir="component-release-staging/$version"
-      - name: Refuse replacement or partial component publication
+      - name: Preserve matching assets and identify missing component assets
         shell: bash
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          expected="$(find "component-release-staging/$version" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
-          current="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
-          overlap="$(comm -12 <(printf '%s\n' "$expected") <(printf '%s\n' "$current"))"
-          test -z "$overlap" || { printf 'Immutable component asset already exists:\n%s\n' "$overlap" >&2; exit 1; }
-      - name: Upload immutable signed component assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${RELEASE_TAG#v}"
-          mapfile -t files < <(find "component-release-staging/$version" -maxdepth 1 -type f -print | LC_ALL=C sort)
+          staging="component-release-staging/$version"
+          mapfile -t files < <(find "$staging" -maxdepth 1 -type f -print | LC_ALL=C sort)
           test "${#files[@]}" -eq 7
-          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "${files[@]}"
+          : > "$RUNNER_TEMP/missing-components.txt"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets > "$RUNNER_TEMP/current-components.json"
+          for file in "${files[@]}"; do
+            name="$(basename "$file")"
+            size="$(stat -c %s "$file")"
+            digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            asset="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' "$RUNNER_TEMP/current-components.json")"
+            if test -z "$asset"; then
+              printf '%s\n' "$file" >> "$RUNNER_TEMP/missing-components.txt"
+              continue
+            fi
+            jq -e --argjson size "$size" --arg digest "$digest" '.size == $size and .digest == $digest' <<<"$asset" >/dev/null || {
+              echo "Existing immutable component differs from deterministic signed staging: $name" >&2
+              exit 1
+            }
+            echo "Preserving verified existing component: $name"
+          done
+      - name: Upload only missing immutable signed component assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r file; do
+            test -n "$file" || continue
+            name="$(basename "$file")"
+            size="$(stat -c %s "$file")"
+            digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            if ! gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "$file"; then
+              raced="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq ".assets[] | select(.name == \"$name\")")"
+              test -n "$raced"
+              jq -e --argjson size "$size" --arg digest "$digest" '.size == $size and .digest == $digest' <<<"$raced" >/dev/null
+              echo "A concurrent verified uploader won the immutable component race: $name"
+            fi
+          done < "$RUNNER_TEMP/missing-components.txt"
       - name: Re-download and verify public component assets
         shell: bash
         run: |
