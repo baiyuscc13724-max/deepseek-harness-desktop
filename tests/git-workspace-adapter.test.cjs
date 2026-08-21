@@ -4,17 +4,22 @@ const os = require('node:os')
 const path = require('node:path')
 const { promisify } = require('node:util')
 const { execFile, execFileSync } = require('node:child_process')
-const { realpathSync } = require('node:fs')
+const { existsSync, realpathSync } = require('node:fs')
 const { mkdtemp, mkdir, readFile, rm, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const execFileAsync = promisify(execFile)
 const moduleUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'git-workspace-adapter.js')).href
 const authorityUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'workspace-authority.js')).href
-const gitCommand = process.platform === 'win32'
-  ? path.resolve(__dirname, '..', 'third_party', 'mingit', 'cmd', 'git.exe')
-  : realpathSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim())
-const allowedGitRoot = process.platform === 'win32'
+const bundledGitPath = path.resolve(__dirname, '..', 'third_party', 'mingit', 'cmd', 'git.exe')
+function resolveGitExecutable() {
+  if (process.platform === 'win32' && existsSync(bundledGitPath)) return bundledGitPath
+  const locate = process.platform === 'win32' ? 'where' : 'which'
+  const raw = execFileSync(locate, ['git'], { encoding: 'utf8' }).trim().split(/\r?\n/u)[0]
+  return realpathSync(raw)
+}
+const gitCommand = resolveGitExecutable()
+const allowedGitRoot = gitCommand === bundledGitPath
   ? path.resolve(__dirname, '..', 'third_party', 'mingit')
   : path.dirname(path.dirname(gitCommand))
 
