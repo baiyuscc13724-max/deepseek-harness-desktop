@@ -8,6 +8,8 @@ const directoryPickerRuntime = path.join(root, 'node_modules', '@deepseek-ai', '
 const conversationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
 const tokenMeterRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-token-meter', 'lib', 'index.js')
 const subagentRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js')
+const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
+const subagentContinuationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js')
 
 function dedentOne(source) {
   return source.split('\n').map(line => line.slice(1)).join('\n')
@@ -370,6 +372,7 @@ const SUBAGENT_TRIGGER_POPUP_ORIGINAL = '"aria-haspopup": "tree",'
 const SUBAGENT_TRIGGER_POPUP_PATCHED = '"aria-haspopup": "dialog",'
 const SUBAGENT_TRIGGER_COUNT_ORIGINAL = 'children: t(totalCountKey, { count: descendantCount })'
 const SUBAGENT_TRIGGER_COUNT_PATCHED = 'children: t(currentCount > 0 ? "count.lifecycle" : "count.historyOnly", { running: lifecycle.running, resumable: lifecycle.resumable, history: lifecycle.history })'
+const SUBAGENT_TRIGGER_COUNT_COMPAT = 'children: t("count.compact", { count: descendantCount })'
 const SUBAGENT_MENU_ORIGINAL = String(`\t\t\t\t}), open && (0, react_jsx_runtime.jsx)("div", {
 \t\t\t\t\tclassName: SubagentCatalogAction_module_css_default.menu,
 \t\t\t\t\trole: "tree",
@@ -457,6 +460,76 @@ const SUBAGENT_EN_ACTIVITY_PATCHED = String(`\t\t\t"activity.inactive": "not run
 \t\t\t"count.lifecycle": "Running {running} · Resumable {resumable}",
 \t\t\t"count.historyOnly": "History {history}",`)
 
+const AGENT_LOOP_STREAM_ORIGINAL = String(`\t\t\t\tconst stream = preparedCall?.stream(request) ?? this.loopCtx.llm.stream(request);
+\t\t\t\tsignal.throwIfAborted();
+\t\t\t\tfor await (const chunk of stream) {
+\t\t\t\t\tsignal.throwIfAborted();
+\t\t\t\t\tchunkSeqs.push(this.session.append("assistant/chunk", {
+\t\t\t\t\t\tturn,
+\t\t\t\t\t\tstep,
+\t\t\t\t\t\tchunk
+\t\t\t\t\t}).seq);
+\t\t\t\t\tassembler.push(chunk);
+\t\t\t\t}
+\t\t\t\tsignal.throwIfAborted();`)
+const AGENT_LOOP_STREAM_PATCHED = String(`\t\t\t\tconst stream = preparedCall?.stream(request) ?? this.loopCtx.llm.stream(request);
+\t\t\t\tconst iterator = stream[Symbol.asyncIterator]();
+\t\t\t\ttry {
+\t\t\t\t\twhile (true) {
+\t\t\t\t\t\tconst next = await new Promise((resolve, reject) => {
+\t\t\t\t\t\t\tconst onAbort = () => reject(signal.reason ?? new Error("agent request cancelled"));
+\t\t\t\t\t\t\tif (signal.aborted) return onAbort();
+\t\t\t\t\t\t\tsignal.addEventListener("abort", onAbort, { once: true });
+\t\t\t\t\t\t\tPromise.resolve(iterator.next()).then((value) => {
+\t\t\t\t\t\t\t\tsignal.removeEventListener("abort", onAbort);
+\t\t\t\t\t\t\t\tresolve(value);
+\t\t\t\t\t\t\t}, (error) => {
+\t\t\t\t\t\t\t\tsignal.removeEventListener("abort", onAbort);
+\t\t\t\t\t\t\t\treject(error);
+\t\t\t\t\t\t\t});
+\t\t\t\t\t\t});
+\t\t\t\t\t\tif (next.done) break;
+\t\t\t\t\t\tconst chunk = next.value;
+\t\t\t\t\t\tsignal.throwIfAborted();
+\t\t\t\t\t\tchunkSeqs.push(this.session.append("assistant/chunk", {
+\t\t\t\t\t\t\tturn,
+\t\t\t\t\t\t\tstep,
+\t\t\t\t\t\t\tchunk
+\t\t\t\t\t\t}).seq);
+\t\t\t\t\t\tassembler.push(chunk);
+\t\t\t\t\t}
+\t\t\t\t} finally {
+\t\t\t\t\tif (signal.aborted && typeof iterator.return === "function") {
+\t\t\t\t\t\ttry { void Promise.resolve(iterator.return()).catch(() => void 0); } catch {}
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t\tsignal.throwIfAborted();`)
+const AGENT_LOOP_KICK_ORIGINAL = String(`\t\t\t\tconst { turn, wakeRequested } = this.phase;
+\t\t\t\tthis.setPhase({
+\t\t\t\t\tkind: "idle",
+\t\t\t\t\tlastTurn: turn
+\t\t\t\t});
+\t\t\t\tif (wakeRequested && this.inbox.hasPending) this.wakeDriver();`)
+const AGENT_LOOP_KICK_PATCHED = String(`\t\t\t\tconst { turn } = this.phase;
+\t\t\t\tthis.setPhase({
+\t\t\t\t\tkind: "idle",
+\t\t\t\t\tlastTurn: turn
+\t\t\t\t});
+\t\t\t\tif (this.inbox.hasPending) this.wakeDriver();`)
+const SUBAGENT_SETTLEMENT_ORIGINAL = String(`\t\t\t\tif (!settling.settling) {
+\t\t\t\t\tif (activation.handle.agent.status !== "running") await poked;
+\t\t\t\t\tcontinue;
+\t\t\t\t}`)
+const SUBAGENT_SETTLEMENT_PATCHED = String(`\t\t\t\tif (!settling.settling) {
+\t\t\t\t\tconst agent = activation.handle.agent;
+\t\t\t\t\tif (agent.status !== "running" && activation.accepted.size > 0 && agent.inbox.hasPending) {
+\t\t\t\t\t\tagent.wakeDriver();
+\t\t\t\t\t\tcontinue;
+\t\t\t\t\t}
+\t\t\t\t\tif (agent.status !== "running") await poked;
+\t\t\t\t\tcontinue;
+\t\t\t\t}`)
+
 export function patchRuntimeSource(source) {
   if (source.includes(PATCHED)) return { source, changed: false }
   const previous = source.includes(PATCHED_V2) ? PATCHED_V2 : source.includes(PATCHED_V1) ? PATCHED_V1 : ORIGINAL
@@ -511,6 +584,8 @@ export function patchTokenMeterSource(source) {
 }
 
 export function patchSubagentSource(source) {
+  const compatibleUnifiedDrawer = ['@harness-desktop/subagent-drawer', 'subagentLifecycleCounts', 'filteredEntries.map', 'children: t("count.compact"']
+  if (compatibleUnifiedDrawer.every(marker => source.includes(marker))) return { source, changed: false }
   let output = source
   let changed = false
   const replacements = [
@@ -522,7 +597,7 @@ export function patchSubagentSource(source) {
     [SUBAGENT_COUNTS_ORIGINAL, SUBAGENT_COUNTS_PATCHED, 'lifecycle descendant counts'],
     [SUBAGENT_TRIGGER_POPUP_ORIGINAL, SUBAGENT_TRIGGER_POPUP_PATCHED, 'lifecycle popup semantics'],
     [SUBAGENT_TRIGGER_ARIA_ORIGINAL, SUBAGENT_TRIGGER_ARIA_PATCHED, 'lifecycle trigger label'],
-    [SUBAGENT_TRIGGER_COUNT_ORIGINAL, SUBAGENT_TRIGGER_COUNT_PATCHED, 'lifecycle trigger summary'],
+    [SUBAGENT_TRIGGER_COUNT_ORIGINAL, SUBAGENT_TRIGGER_COUNT_PATCHED, 'lifecycle trigger summary', [SUBAGENT_TRIGGER_COUNT_COMPAT]],
     [SUBAGENT_MENU_ORIGINAL, SUBAGENT_MENU_PATCHED, 'lifecycle menu header'],
     [SUBAGENT_ROOT_FILTER_PROPS_ORIGINAL, SUBAGENT_ROOT_FILTER_PROPS_PATCHED, 'root lifecycle filter'],
     [SUBAGENT_ZH_ACTIVITY_ORIGINAL, SUBAGENT_ZH_ACTIVITY_PATCHED, 'Chinese lifecycle labels'],
@@ -538,13 +613,36 @@ export function patchSubagentSource(source) {
     output = output.replace(SUBAGENT_STYLE_ANCHOR, `${SUBAGENT_STYLE_PATCH}${SUBAGENT_STYLE_ANCHOR}`)
     changed = true
   }
-  for (const [original, patched, label] of replacements) {
-    if (output.includes(patched)) continue
+  for (const [original, patched, label, compatible = []] of replacements) {
+    if (output.includes(patched) || compatible.some(marker => output.includes(marker))) continue
     if (!output.includes(original)) throw new Error(`Pinned DSH ${label} changed; refusing an unsafe desktop lifecycle patch.`)
     output = output.replace(original, patched)
     changed = true
   }
   return { source: output, changed }
+}
+
+export function patchAgentLoopCancellationSource(source) {
+  let output = source
+  let changed = false
+  for (const [original, patched, label] of [
+    [AGENT_LOOP_STREAM_ORIGINAL, AGENT_LOOP_STREAM_PATCHED, 'streaming implementation'],
+    [AGENT_LOOP_KICK_ORIGINAL, AGENT_LOOP_KICK_PATCHED, 'queued-turn recovery implementation']
+  ]) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) throw new Error(`Pinned DSH agent-loop ${label} changed; refusing an unsafe cancellation patch.`)
+    output = output.replace(original, patched)
+    changed = true
+  }
+  return { source: output, changed }
+}
+
+export function patchSubagentContinuationSource(source) {
+  if (source.includes(SUBAGENT_SETTLEMENT_PATCHED)) return { source, changed: false }
+  if (!source.includes(SUBAGENT_SETTLEMENT_ORIGINAL)) {
+    throw new Error('Pinned DSH subagent settlement implementation changed; refusing an unsafe continuation recovery patch.')
+  }
+  return { source: source.replace(SUBAGENT_SETTLEMENT_ORIGINAL, SUBAGENT_SETTLEMENT_PATCHED), changed: true }
 }
 
 export async function patchInstalledRuntime(file = runtimeClient) {
@@ -582,15 +680,33 @@ export async function patchInstalledSubagent(file = subagentRuntime) {
   return patched.changed
 }
 
+export async function patchInstalledAgentLoop(file = agentLoopRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchAgentLoopCancellationSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
+export async function patchInstalledSubagentContinuation(file = subagentContinuationRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchSubagentContinuationSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const sessionChanged = await patchInstalledRuntime()
   const pickerChanged = await patchInstalledDirectoryPicker()
   const conversationChanged = await patchInstalledConversation()
   const tokenMeterChanged = await patchInstalledTokenMeter()
   const subagentChanged = await patchInstalledSubagent()
+  const agentLoopChanged = await patchInstalledAgentLoop()
+  const subagentContinuationChanged = await patchInstalledSubagentContinuation()
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
   process.stdout.write(conversationChanged ? 'Patched conversation telemetry and view navigation.\n' : 'Conversation telemetry and view navigation already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
   process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
+  process.stdout.write(agentLoopChanged ? 'Patched abortable streams and queued-turn recovery.\n' : 'Abortable streams and queued-turn recovery already patched.\n')
+  process.stdout.write(subagentContinuationChanged ? 'Patched continuable subagent idle-inbox recovery.\n' : 'Continuable subagent idle-inbox recovery already patched.\n')
 }

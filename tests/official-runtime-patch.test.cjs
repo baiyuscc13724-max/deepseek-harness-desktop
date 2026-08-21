@@ -74,6 +74,31 @@ test('official rc.8 owns file references and multimodal message handling', () =>
   ]) assert.doesNotMatch(patchSource, new RegExp(obsoleteDesktopPatch))
 })
 
+test('agent cancellation interrupts a provider stream stalled before its first token', async () => {
+  const { patchAgentLoopCancellationSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js'), 'utf8')
+  const first = patchAgentLoopCancellationSource(fixture)
+  assert.equal(first.changed, true)
+  assert.match(first.source, /const iterator = stream\[Symbol\.asyncIterator\]\(\)/u)
+  assert.match(first.source, /signal\.addEventListener\("abort", onAbort, \{ once: true \}\)/u)
+  assert.match(first.source, /Promise\.resolve\(iterator\.next\(\)\)\.then/u)
+  assert.match(first.source, /signal\.removeEventListener\("abort", onAbort\)/u)
+  assert.match(first.source, /Promise\.resolve\(iterator\.return\(\)\)\.catch/u)
+  assert.doesNotMatch(first.source, /for await \(const chunk of stream\)/u)
+  assert.match(first.source, /if \(this\.inbox\.hasPending\) this\.wakeDriver\(\)/u)
+  assert.equal(patchAgentLoopCancellationSource(first.source).changed, false)
+})
+
+test('continuable subagents self-heal an accepted inbox stranded after a failed turn', async () => {
+  const { patchSubagentContinuationSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js'), 'utf8')
+  const first = patchSubagentContinuationSource(fixture)
+  assert.equal(first.changed, true)
+  assert.match(first.source, /activation\.accepted\.size > 0 && agent\.inbox\.hasPending/u)
+  assert.match(first.source, /agent\.wakeDriver\(\)/u)
+  assert.equal(patchSubagentContinuationSource(first.source).changed, false)
+})
+
 test('subagent catalog separates current work from retained history without deleting transcripts', async () => {
   const { patchSubagentSource } = await import('../scripts/patch-official-runtime.mjs')
   const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js'), 'utf8')
@@ -85,7 +110,7 @@ test('subagent catalog separates current work from retained history without dele
   assert.match(first.source, /已结束（仅记录）/)
   assert.match(first.source, /filter\.active/)
   assert.match(first.source, /filter\.history/)
-  assert.match(first.source, /width:560px/)
+  assert.match(first.source, /(?:width:560px|width:min\(440px)/)
   assert.match(first.source, /一次性任务结束后仅保留记录/)
   assert.match(first.source, /openChild\(\{/)
   assert.match(first.source, /childSessionId: entry\.id/)

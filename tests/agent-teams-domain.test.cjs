@@ -112,7 +112,7 @@ test('one fixed root lead may own multiple peer teams with explicit selection', 
     assert.deepEqual(claimed.blockedBy, [])
     assert.deepEqual(claimed.dependencySources, [{ teamId: first.id, teamName: 'Team one', teamStatus: 'active' }])
     await fx.store.mutate(document => { document.teams.find(team => team.id === first.id).state = 'closed' })
-    const afterCompletedSourceClosed = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session').teams.find(team => team.id === second.id).tasks.find(task => task.id === secondTask.id)
+    const afterCompletedSourceClosed = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session', second.id).team.tasks.find(task => task.id === secondTask.id)
     assert.deepEqual(afterCompletedSourceClosed.blockedBy, [])
     assert.deepEqual(afterCompletedSourceClosed.dependencySources, [{ teamId: first.id, teamName: 'Team one', teamStatus: 'closed' }])
     assert.equal(JSON.stringify(afterCompletedSourceClosed).includes('src/'), false)
@@ -123,7 +123,7 @@ test('one fixed root lead may own multiple peer teams with explicit selection', 
       teamId: second.id, title: 'Blocked after source closes', crossTeamDependsOn: [`${closingSource.id}:${incomplete.id}`]
     })).task
     await fx.store.mutate(document => { document.teams.find(team => team.id === closingSource.id).state = 'closed' })
-    const blockedProjection = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session').teams.find(team => team.id === second.id).tasks.find(task => task.id === blockedAfterClose.id)
+    const blockedProjection = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session', second.id).team.tasks.find(task => task.id === blockedAfterClose.id)
     assert.deepEqual(blockedProjection.blockedBy, [`${closingSource.id}:${incomplete.id}`])
     assert.equal(blockedProjection.dependencySources[0].teamStatus, 'closed')
     await assert.rejects(
@@ -365,6 +365,103 @@ test('active tasks expose overlapping file conflict warnings', async () => {
       { id: 'b', title: 'B', state: 'in_progress', dependsOn: [], files: ['src/shared.js'], assigneeSessionId: 'worker-b', createdAt: now, updatedAt: now }
     ]
     assert.deepEqual(fx.mod.deriveTask(tasks[0], tasks).conflictsWith, ['b'])
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('graceful lifecycle waits release their waiter on cancellation and timeout', async () => {
+  const mod = await plugin()
+  for (const scenario of ['abort', 'timeout']) {
+    let cancelled = false
+    const waiter = { promise: new Promise(() => {}), cancel: () => { cancelled = true } }
+    const controller = new AbortController()
+    const waiting = mod.waitForGracefulLifecycle(waiter, controller.signal, scenario === 'timeout' ? 5 : 60_000)
+    if (scenario === 'abort') controller.abort(new Error('user cancelled'))
+    await assert.rejects(waiting, error => scenario === 'abort'
+      ? error?.message === 'user cancelled'
+      : error?.code === 'AGENT_TEAMS_LIFECYCLE_TIMEOUT')
+    assert.equal(cancelled, true)
+  }
+})
+
+test('subagent lifecycle bursts reconcile in one bounded store mutation', async () => {
+  const mod = await plugin()
+  const now = new Date().toISOString()
+  const members = Array.from({ length: 24 }, (_, index) => worker(`child-${index}`, `Worker ${index}`))
+  const document = { teams: [{ id: 'team', state: 'active', updatedAt: now, members }] }
+  let mutations = 0
+  const warnings = []
+  const store = {
+    hasManagedMember: id => members.some(member => member.sessionId === id),
+    mutate: async mutate => { mutations += 1; return mutate(document) }
+  }
+  const reconciler = mod.createSubagentEventReconciler({ logger: { warn: warning => warnings.push(warning) } }, store, Promise.resolve(), 60_000)
+  const events = []
+  for (let index = 0; index < members.length; index += 1) {
+    events.push(reconciler.enqueue('start', { id: `child-${index}`, runId: `run-${index}` }))
+    events.push(reconciler.enqueue('end', { id: `child-${index}`, runId: `run-${index}`, stopReason: 'completed' }))
+  }
+  await reconciler.flush()
+  await Promise.all(events)
+  assert.equal(mutations, 1)
+  assert.equal(warnings.length, 0)
+  assert.ok(members.every(member => member.state === 'ready' && member.runId === undefined))
+  reconciler.close()
+})
+
+test('user-aborted root turns synchronously clear queued wakeups and interrupt only owned team members', async () => {
+  const mod = await plugin()
+  const handlers = {}
+  const cancelCalls = []
+  const interrupts = []
+  const session = { id: 'stopped-root' }
+  const lead = { id: session.id, session, cancel: function () { cancelCalls.push([...arguments]) } }
+  const ctx = {
+    on: (name, handler) => { handlers[name] = handler },
+    agents: { get: id => id === lead.id ? lead : undefined },
+    subagents: { interrupt: (id, authority) => interrupts.push([id, authority]) },
+    logger: { warn: () => {} }
+  }
+  const store = { activeTeamsForRoot: () => [{ teamId: 'stopped-team', childIds: ['child-a', 'child-b'] }] }
+  mod.observeUserStops(ctx, store, new Promise(() => {}))
+  handlers['session/event'](session, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+  assert.deepEqual(cancelCalls, [[{ kind: 'user' }]])
+  assert.deepEqual(interrupts.map(([id]) => id), ['child-a', 'child-b'])
+  assert.ok(interrupts.every(([, authority]) => authority.kind === 'ancestor' && authority.agent === lead))
+})
+
+test('explicit user stop pauses the team, drains members, and rolls active work back to pending', async () => {
+  const fx = await fixture()
+  const timestamp = new Date().toISOString()
+  const stoppedAt = new Date(Date.parse(timestamp) + 1000).toISOString()
+  const lead = { id: 'lead-session' }
+  const team = {
+    id: 'paused-team', rootLeadSessionId: lead.id, name: 'Paused', objective: 'Stop means stop', revision: 1,
+    state: 'active', createdAt: timestamp, updatedAt: timestamp,
+    members: [
+      { id: 'lead', sessionId: lead.id, name: 'Lead', role: 'root lead and coordinator', kind: 'lead', state: 'running', createdAt: timestamp, updatedAt: timestamp },
+      worker('child-session', 'Worker')
+    ],
+    tasks: [{ id: 'task', title: 'Work', state: 'in_progress', dependsOn: [], files: [], assigneeSessionId: 'child-session', createdAt: timestamp, updatedAt: timestamp, claimedAt: timestamp }],
+    messages: []
+  }
+  const drained = []
+  const ctx = {
+    agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+    subagents: { drainContinuableChildren: async (_lead, ids) => { drained.push(...ids) } }
+  }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true; document.teams.push(team) })
+    await fx.mod.pauseTeamsForUserStop(ctx, fx.store, lead, [{ teamId: team.id, childIds: ['child-session'] }], stoppedAt)
+    let snapshot = fx.store.snapshot().teams[0]
+    assert.equal(snapshot.state, 'paused')
+    assert.equal(snapshot.tasks[0].state, 'pending')
+    assert.equal(snapshot.tasks[0].claimedAt, undefined)
+    assert.equal(snapshot.members[1].state, 'ready')
+    assert.deepEqual(drained, ['child-session'])
+    await assert.rejects(fx.mod.updateTask(fx.store, { id: 'child-session' }, { teamId: team.id, taskId: 'task', action: 'claim' }), error => error?.code === 'AGENT_TEAMS_PAUSED')
+    await fx.mod.resumePausedTeam(ctx, fx.store, lead, { teamId: team.id })
+    snapshot = fx.store.snapshot().teams[0]
+    assert.equal(snapshot.state, 'active')
   } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 

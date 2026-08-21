@@ -8,6 +8,7 @@ window.__ModuleLoader__.load({
     var useState = React.useState;
     var useEffect = React.useEffect;
     var useRef = React.useRef;
+    var startTransition = typeof React.startTransition === "function" ? React.startTransition : function (update) { update(); };
     var NS = "agent-teams";
 
     var zh = {
@@ -17,10 +18,10 @@ window.__ModuleLoader__.load({
       research: "调研与核验", researchBody: "研究员收集资料，分析员交叉验证，负责人汇总结论。", build: "开发与审查", buildBody: "开发负责改动，审查负责风险，测试负责验证。", incident: "问题诊断", incidentBody: "诊断、修复与回归验证并行推进。", custom: "自定义团队", customBody: "只填写目标，由 AI 自动设计成员、职责、任务边界和协作方式。",
       active: "协作进行中", closed: "团队已关闭", closedBody: "该团队不再接受成员协作；历史成员、任务和事件仍可查看。", unknown: "未知", status: "状态", objective: "团队目标", connection: "连接", live: "实时", polling: "轮询", stale: "数据可能已过期", disconnected: "重连中",
       members: "成员", tasks: "任务", events: "协作事件", noMembers: "暂无成员", noTasks: "暂无任务", noEvents: "暂无协作事件", lead: "负责人", leadRole: "统筹目标和结果", openConversation: "查看实时工作", currentTask: "当前任务：{value}", model: "模型", mainModel: "主模型", subagentModel: "子代理模型", inheritsMain: "继承主模型",
-      pending: "待处理", in_progress: "进行中", completed: "已完成", blocked: "受阻", ready: "可接收任务", running: "工作中", idle: "当前回合结束", provisioning: "正在启动", shutting_down: "正在停止", closing: "正在关闭", retired: "已退役", failed: "失败", delivered: "已送达", closedStatus: "已关闭",
+      pending: "待处理", paused: "已由用户停止", in_progress: "进行中", completed: "已完成", blocked: "受阻", ready: "可接收任务", running: "工作中", idle: "当前回合结束", provisioning: "正在启动", shutting_down: "正在停止", closing: "正在关闭", retired: "已退役", failed: "失败", delivered: "已送达", closedStatus: "已关闭",
       assignee: "负责人", unassigned: "未分配", blockedBy: "阻塞于：{value}", dependencySources: "跨团队依赖：{value}", conflicts: "冲突任务：{value}", files: "文件：{value}", filesHidden: "文件范围已按安全策略隐藏", taskFallback: "任务 {id}", lastActivity: "最后活动：{value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}",
       quickActions: "快捷提示", addMember: "添加成员", newPeerTeam: "添加协作团队", createTask: "创建任务", coordinate: "协调团队", summarize: "汇总进展", closeTeam: "请求关闭", newTeam: "创建新团队", draftOnly: "操作会写入下方输入框，不会自动发送。", draftSet: "提示词已写入输入框。", creationSent: "创建请求已发送，正在返回对话。", creationSentFallback: "创建请求已发送。请使用上方“对话”标签查看响应。",
-      teamsOverview: "团队总览", teamCount: "共 {count} 个团队", activeTeams: "活跃 {count}", closedTeams: "已关闭 {count}", switchTeam: "切换到团队：{name}", crossTeam: "跨团队动态", noCrossTeam: "暂无跨团队动态", backgroundHint: "切换团队或页面不会停止后台成员。", teamTasks: "{active} 进行中 · {done} 已完成", lastUpdated: "更新于 {value}",
+      teamsOverview: "团队总览", teamCount: "共 {count} 个团队", activeTeams: "活跃 {count}", pausedTeams: "已停止 {count}", closedTeams: "已关闭 {count}", switchTeam: "切换到团队：{name}", crossTeam: "跨团队动态", noCrossTeam: "暂无跨团队动态", backgroundHint: "切换团队或页面不会停止后台成员。", teamTasks: "{active} 进行中 · {done} 已完成", lastUpdated: "更新于 {value}",
       currentSession: "当前会话", revision: "修订 {value}", settingsTitle: "代理团队", settingsDescription: "启用后只需正常描述目标，AI 自动判断是否使用团队；简单任务保持单人执行。更高并发限制可能增加模型用量与费用。", settingsEnabled: "启用自动团队", settingsMaxMembers: "团队成员上限", settingsMaxActiveTurns: "最大并行回合数", settingsSave: "保存设置", settingsSaving: "正在保存…", settingsSaved: "设置已保存", settingsRange: "请输入 1 到 8 之间的整数。", settingsCloseTeamsFirst: "请先在负责人会话中关闭所有活动团队，再关闭代理团队功能。"
     };
     var en = {
@@ -30,10 +31,10 @@ window.__ModuleLoader__.load({
       research: "Research & verify", researchBody: "A researcher gathers evidence, an analyst cross-checks it, and the lead synthesizes findings.", build: "Build & review", buildBody: "Development makes changes, Review checks risk, and Test verifies the result.", incident: "Diagnose an issue", incidentBody: "Diagnosis, remediation, and regression verification move in parallel.", custom: "Custom team", customBody: "Enter only the objective; AI designs the members, responsibilities, task boundaries, and collaboration pattern.",
       active: "Collaboration active", closed: "Team closed", closedBody: "This team no longer accepts member collaboration. Its members, tasks, and events remain available.", unknown: "Unknown", status: "Status", objective: "Team objective", connection: "Connection", live: "Live", polling: "Polling", stale: "Data may be stale", disconnected: "Reconnecting",
       members: "Members", tasks: "Tasks", events: "Collaboration events", noMembers: "No members", noTasks: "No tasks", noEvents: "No collaboration events", lead: "Lead", leadRole: "Plans the goal and owns the result", openConversation: "View live work", currentTask: "Current task: {value}", model: "Model", mainModel: "Main model", subagentModel: "Subagent model", inheritsMain: "inherits main",
-      pending: "Pending", in_progress: "In progress", completed: "Completed", blocked: "Blocked", ready: "Ready for work", running: "Working", idle: "Turn complete", provisioning: "Starting", shutting_down: "Stopping", closing: "Closing", retired: "Retired", failed: "Failed", delivered: "Delivered", closedStatus: "Closed",
+      pending: "Pending", paused: "Stopped by user", in_progress: "In progress", completed: "Completed", blocked: "Blocked", ready: "Ready for work", running: "Working", idle: "Turn complete", provisioning: "Starting", shutting_down: "Stopping", closing: "Closing", retired: "Retired", failed: "Failed", delivered: "Delivered", closedStatus: "Closed",
       assignee: "Assignee", unassigned: "Unassigned", blockedBy: "Blocked by: {value}", dependencySources: "Cross-team dependencies: {value}", conflicts: "Conflicting tasks: {value}", files: "Files: {value}", filesHidden: "File scope hidden by the safety policy", taskFallback: "Task {id}", lastActivity: "Last activity: {value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}",
       quickActions: "Prompt shortcuts", addMember: "Add member", newPeerTeam: "Add peer team", createTask: "Create task", coordinate: "Coordinate team", summarize: "Summarize progress", closeTeam: "Request shutdown", newTeam: "Create another team", draftOnly: "Actions write to the composer and never send automatically.", draftSet: "Prompt added to the composer.", creationSent: "Creation request sent; returning to Chat.", creationSentFallback: "Creation request sent. Use the Chat tab above to view the response.",
-      teamsOverview: "Team overview", teamCount: "{count} teams", activeTeams: "{count} active", closedTeams: "{count} closed", switchTeam: "Switch to team: {name}", crossTeam: "Cross-team activity", noCrossTeam: "No cross-team activity", backgroundHint: "Switching teams or views never stops background members.", teamTasks: "{active} active · {done} done", lastUpdated: "Updated {value}",
+      teamsOverview: "Team overview", teamCount: "{count} teams", activeTeams: "{count} active", pausedTeams: "{count} stopped", closedTeams: "{count} closed", switchTeam: "Switch to team: {name}", crossTeam: "Cross-team activity", noCrossTeam: "No cross-team activity", backgroundHint: "Switching teams or views never stops background members.", teamTasks: "{active} active · {done} done", lastUpdated: "Updated {value}",
       currentSession: "Current session", revision: "Revision {value}", settingsTitle: "Agent Teams", settingsDescription: "After enabling, describe goals normally and AI decides whether to use a team; simple work stays solo. Higher concurrency limits may increase model usage and cost.", settingsEnabled: "Enable automatic teams", settingsMaxMembers: "Maximum team members", settingsMaxActiveTurns: "Maximum active turns", settingsSave: "Save settings", settingsSaving: "Saving…", settingsSaved: "Settings saved", settingsRange: "Enter a whole number from 1 to 8.", settingsCloseTeamsFirst: "Close every active team from its lead conversation before disabling Agent Teams."
     };
     var currentLang = ((typeof navigator !== "undefined" && navigator.language) || "en").toLowerCase().indexOf("zh") === 0 ? "zh" : "en";
@@ -75,10 +76,10 @@ window.__ModuleLoader__.load({
     }
 
     function errorText(error) { return error && error.message ? error.message : String(error || "unknown"); }
-    function stateUrl(sessionId) { return "/api/agent-teams/state?sessionId=" + encodeURIComponent(sessionId); }
-    function eventsUrl(sessionId) { return "/api/agent-teams/events?sessionId=" + encodeURIComponent(sessionId); }
-    function fetchState(sessionId) {
-      return fetch(stateUrl(sessionId), { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" } }).then(function (response) {
+    function stateUrl(sessionId, selectedTeamId) { return "/api/agent-teams/state?sessionId=" + encodeURIComponent(sessionId) + (selectedTeamId ? "&teamId=" + encodeURIComponent(selectedTeamId) : ""); }
+    function eventsUrl(sessionId, selectedTeamId) { return "/api/agent-teams/events?sessionId=" + encodeURIComponent(sessionId) + (selectedTeamId ? "&teamId=" + encodeURIComponent(selectedTeamId) : ""); }
+    function fetchState(sessionId, selectedTeamId) {
+      return fetch(stateUrl(sessionId, selectedTeamId), { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" } }).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) { if (!response.ok) { var error = new Error(data.error || ("HTTP " + response.status)); error.code = data.code; error.status = response.status; throw error; } return data; });
       });
     }
@@ -87,40 +88,89 @@ window.__ModuleLoader__.load({
         return response.json().catch(function () { return {}; }).then(function (data) { if (!response.ok) { var error = new Error(data.error || ("HTTP " + response.status)); error.code = data.code; error.status = response.status; throw error; } return data; });
       });
     }
-    function useTeamState(sessionId) {
+    function useTeamState(sessionId, selectedTeamId) {
       var statePair = useState(null), state = statePair[0], setState = statePair[1];
       var errorPair = useState(""), error = errorPair[0], setError = errorPair[1];
       var connectionPair = useState("disconnected"), connection = connectionPair[0], setConnection = connectionPair[1];
-      var reloadRef = useRef(function () {}), failureRef = useRef(0);
+      var reloadRef = useRef(function () {}), failureRef = useRef(0), cursorRef = useRef("");
       useEffect(function () {
         if (!sessionId) return;
-        var alive = true, source = null, poll = null;
-        function load(silent) {
-          return fetchState(sessionId).then(function (next) { if (alive) { failureRef.current = 0; setState(next); setError(""); if (!source) setConnection("polling"); } return next; }).catch(function (err) { if (alive) { failureRef.current += 1; if (!silent) setError(errorText(err)); else if (failureRef.current >= 2) setConnection("stale"); } throw err; });
+        var alive = true, source = null, pollTimer = null, reconnectTimer = null, frame = null, pendingState = null, inFlight = null, reconnectDelay = 1000;
+        var requestFrame = typeof requestAnimationFrame === "function" ? requestAnimationFrame : function (callback) { return setTimeout(callback, 16); };
+        var cancelFrame = typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : clearTimeout;
+        function apply(next) {
+          if (!alive || !next || typeof next.enabled !== "boolean" || !Object.prototype.hasOwnProperty.call(next, "team")) return false;
+          if (next.cursor && next.cursor === cursorRef.current) return true;
+          pendingState = next;
+          if (frame !== null) return true;
+          frame = requestFrame(function () {
+            frame = null;
+            if (!alive || !pendingState) return;
+            var latest = pendingState;
+            pendingState = null;
+            cursorRef.current = latest.cursor || "";
+            startTransition(function () { setState(latest); });
+            setError("");
+          });
+          return true;
         }
-        function beginPolling() { if (!alive || poll) return; setConnection("polling"); poll = setInterval(function () { load(true).catch(function () {}); }, 4000); }
-        reloadRef.current = function () { return load(false); };
-        load(false).catch(function () {});
-        if (typeof EventSource === "function") {
+        function load(silent) {
+          if (inFlight) return inFlight;
+          inFlight = fetchState(sessionId, selectedTeamId).then(function (next) {
+            if (alive) { failureRef.current = 0; apply(next); if (!source) setConnection("polling"); }
+            return next;
+          }).catch(function (err) {
+            if (alive) { failureRef.current += 1; if (!silent) setError(errorText(err)); else if (failureRef.current >= 2) setConnection("stale"); }
+            throw err;
+          }).finally(function () { inFlight = null; });
+          return inFlight;
+        }
+        function stopPolling() { if (pollTimer !== null) clearTimeout(pollTimer); pollTimer = null; }
+        function schedulePolling(delay) {
+          if (!alive || pollTimer !== null || source) return;
+          setConnection(failureRef.current >= 2 ? "stale" : "polling");
+          pollTimer = setTimeout(function () {
+            pollTimer = null;
+            load(true).catch(function () {}).finally(function () { schedulePolling(document.hidden ? 15000 : 5000); });
+          }, delay == null ? (document.hidden ? 15000 : 5000) : delay);
+        }
+        function connect() {
+          if (!alive || source || typeof EventSource !== "function") { if (typeof EventSource !== "function") schedulePolling(0); return; }
           try {
-            source = new EventSource(eventsUrl(sessionId));
-            source.onopen = function () { if (alive) setConnection("live"); };
+            source = new EventSource(eventsUrl(sessionId, selectedTeamId));
+            source.onopen = function () { if (alive) { failureRef.current = 0; reconnectDelay = 1000; stopPolling(); setConnection("live"); } };
             var update = function (event) {
               if (!alive) return;
               try {
                 var next = JSON.parse(event.data);
-                if (next && typeof next.enabled === "boolean" && Object.prototype.hasOwnProperty.call(next, "team")) { setState(next); setError(""); }
-                else if (next && next.state && typeof next.state.enabled === "boolean") { setState(next.state); setError(""); }
-                else load(true).catch(function () {});
+                if (next && next.state && typeof next.state.enabled === "boolean") next = next.state;
+                if (!apply(next)) load(true).catch(function () {});
               } catch (_) { load(true).catch(function () {}); }
             };
             source.onmessage = update;
             ["snapshot", "state", "update"].forEach(function (name) { source.addEventListener(name, update); });
-            source.onerror = function () { if (source) source.close(); source = null; beginPolling(); };
-          } catch (_) { beginPolling(); }
-        } else beginPolling();
-        return function () { alive = false; if (source) source.close(); if (poll) clearInterval(poll); };
-      }, [sessionId]);
+            source.onerror = function () {
+              if (source) source.close();
+              source = null;
+              if (!alive) return;
+              schedulePolling(1000);
+              if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+              reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, reconnectDelay);
+              reconnectDelay = Math.min(15000, reconnectDelay * 2);
+            };
+          } catch (_) { source = null; schedulePolling(1000); }
+        }
+        reloadRef.current = function () { return load(false); };
+        load(false).catch(function () {});
+        connect();
+        return function () {
+          alive = false;
+          if (source) source.close();
+          stopPolling();
+          if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+          if (frame !== null) cancelFrame(frame);
+        };
+      }, [sessionId, selectedTeamId]);
       return { state: state, setState: setState, error: error, setError: setError, connection: connection, reload: function () { return reloadRef.current(); } };
     }
 
@@ -161,8 +211,9 @@ window.__ModuleLoader__.load({
     function teamsFromSnapshot(snapshot) {
       if (!snapshot) return [];
       var source = Array.isArray(snapshot.teams) ? snapshot.teams : Array.isArray(snapshot.relatedTeams) ? snapshot.relatedTeams : Array.isArray(snapshot.teamHistory) ? snapshot.teamHistory : [];
-      var teams = source.slice();
-      if (snapshot.team && !teams.some(function (item) { return teamId(item) === teamId(snapshot.team); })) teams.unshift(snapshot.team);
+      var detail = snapshot.team;
+      var teams = source.map(function (item) { return detail && teamId(item) === teamId(detail) ? Object.assign({}, item, detail) : item; });
+      if (detail && !teams.some(function (item) { return teamId(item) === teamId(detail); })) teams.unshift(detail);
       return teams;
     }
 
@@ -251,8 +302,11 @@ window.__ModuleLoader__.load({
     function TeamOverview(props) {
       var t = props.t, teams = props.teams;
       var teamsById = {}; teams.forEach(function (team) { teamsById[teamId(team)] = team; });
-      var activeCount = teams.filter(function (team) { return String(team.status || team.state || "").toLowerCase() !== "closed"; }).length;
+      var activeCount = teams.filter(function (team) { return String(team.status || team.state || "").toLowerCase() === "active"; }).length;
+      var pausedCount = teams.filter(function (team) { return String(team.status || team.state || "").toLowerCase() === "paused"; }).length;
+      var closedCount = teams.filter(function (team) { return String(team.status || team.state || "").toLowerCase() === "closed"; }).length;
       var crossEvents = [], seenCrossEvents = {};
+      (props.crossEvents || []).forEach(function (event) { pushUniqueEvent(crossEvents, seenCrossEvents, event, event.fromTeamId, { team: teamsById[event.fromTeamId], event: event }); });
       function addCrossEvent(team, event) {
         if (event.toTeamId && event.toTeamId !== (event.fromTeamId || teamId(team))) pushUniqueEvent(crossEvents, seenCrossEvents, event, teamId(team), { team: team, event: event });
       }
@@ -264,9 +318,9 @@ window.__ModuleLoader__.load({
       return h("section", { className: "dat-overview", "aria-labelledby": "dat-overview-title" },
         h("div", { className: "dat-panel" },
           h("div", { className: "dat-column-head" }, h("h2", { id: "dat-overview-title" }, t("teamsOverview")), h("span", { className: "dat-badge" }, t("teamCount", { count: teams.length }))),
-          h("div", { className: "dat-row", style: { marginBottom: 8 } }, h("span", { className: "dat-badge" }, t("activeTeams", { count: activeCount })), h("span", { className: "dat-badge" }, t("closedTeams", { count: teams.length - activeCount }))),
+          h("div", { className: "dat-row", style: { marginBottom: 8 } }, h("span", { className: "dat-badge" }, t("activeTeams", { count: activeCount })), h("span", { className: "dat-badge" }, t("pausedTeams", { count: pausedCount })), h("span", { className: "dat-badge" }, t("closedTeams", { count: closedCount }))),
           h("ul", { className: "dat-team-list" }, teams.map(function (team) {
-            var tasks = team.tasks || [], active = tasks.filter(function (task) { return (task.status || task.state) === "in_progress"; }).length, done = tasks.filter(function (task) { return (task.status || task.state) === "completed"; }).length;
+            var tasks = team.tasks || [], active = Number(team.activeTaskCount); if (!Number.isFinite(active)) active = tasks.filter(function (task) { return (task.status || task.state) === "in_progress"; }).length; var done = Number(team.completedTaskCount); if (!Number.isFinite(done)) done = tasks.filter(function (task) { return (task.status || task.state) === "completed"; }).length;
             var name = teamName(team, t), selected = teamId(team) === props.selectedId;
             return h("li", { key: teamId(team) }, h("button", { type: "button", className: "dat-team-choice", "aria-current": selected ? "true" : undefined, "aria-label": t("switchTeam", { name: name }), onClick: function () { props.select(teamId(team)); } }, h("strong", { className: "dat-card-title" }, name), h("span", { className: "dat-meta", style: { display: "block", marginTop: 3 } }, teamStatusLabel(t, team.status || team.state), " · ", t("teamTasks", { active: active, done: done })), team.lastActivityAt || team.updatedAt ? h("span", { className: "dat-meta", style: { display: "block" } }, t("lastUpdated", { value: formatTime(team.lastActivityAt || team.updatedAt) })) : null));
           })),
@@ -326,14 +380,14 @@ window.__ModuleLoader__.load({
 
     function TeamView(props) {
       var t = useLocale();
-      var live = useTeamState(props.sessionId);
+      var selectedPair = useState(""), selectedId = selectedPair[0], setSelectedId = selectedPair[1];
+      var live = useTeamState(props.sessionId, selectedId);
       var inputPhase = props.useInput(function (state) { return state.phase; });
       var inputDraft = props.useInput(function (state) { return state.draft; });
       var inputDraftRev = props.useInput(function (state) { return state.draftRev; });
       var busyPair = useState(false), busy = busyPair[0], setBusy = busyPair[1];
       var actionErrorPair = useState(""), actionError = actionErrorPair[0], setActionError = actionErrorPair[1];
       var noticePair = useState(""), notice = noticePair[0], setNotice = noticePair[1];
-      var selectedPair = useState(""), selectedId = selectedPair[0], setSelectedId = selectedPair[1];
       var creationRef = useRef(null), previousPhaseRef = useRef(inputPhase);
       var snapshot = live.state, teams = teamsFromSnapshot(snapshot);
       var preferredId = snapshot && (snapshot.activeTeamId || snapshot.selectedTeamId) || snapshot && snapshot.team && teamId(snapshot.team);
@@ -409,7 +463,7 @@ window.__ModuleLoader__.load({
         snapshot && snapshot.enabled && teams.length === 0 ? h(FirstTeamWizard, { t: t, setDraft: setDraft, setView: props.setView, disable: disable, busy: busy }) : null,
         snapshot && snapshot.enabled && teams.length > 0 ? h(React.Fragment, null,
           h(DisableAutomaticTeams, { t: t, labelId: "dat-disable-teams", disable: disable, busy: busy, hasActive: hasActiveTeams }),
-          h(TeamOverview, { t: t, teams: teams, selectedId: team && teamId(team), select: setSelectedId }),
+          h(TeamOverview, { t: t, teams: teams, crossEvents: snapshot.crossTeamEvents || [], selectedId: team && teamId(team), select: setSelectedId }),
           team ? h(ActiveTeam, { t: t, team: team, teams: teams, closed: closed, setDraft: setDraft, addressFor: addressFor, open: openChild }) : null
         ) : null
       ));

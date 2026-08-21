@@ -351,8 +351,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(followups.at(-1).options.source.kind, 'coordinator')
     const multiState = JSON.parse((await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${rootAgent.id}`))).body)
     assert.equal(multiState.teams.filter(team => team.status !== 'closed').length, 2)
-    const sourceProjection = multiState.teams.find(team => team.id === started.team.id)
-    const targetProjection = multiState.teams.find(team => team.id === sibling.id)
+    const sourceProjection = JSON.parse((await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${rootAgent.id}&teamId=${started.team.id}`))).body).team
+    const targetProjection = JSON.parse((await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${rootAgent.id}&teamId=${sibling.id}`))).body).team
     assert.equal(sourceProjection.messages.at(-1).toName, 'PeerWorker')
     assert.equal('body' in sourceProjection.messages.at(-1), false)
     assert.equal(targetProjection.inboundEvents.length, 1)
@@ -784,6 +784,27 @@ test('model tools create a team, spawn independent members, and relay with non-u
     onGracefulAccepted = undefined
     await tools.get('team_shutdown').execute({ team_id: hotReloadGracefulTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
+    const cancelledWaitTeam = (await tools.get('team_start').execute({ objective: 'Cancelled graceful lifecycle wait' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const cancelledWaitWorker = (await tools.get('team_spawn').execute({ team_id: cancelledWaitTeam.id, name: 'CancelAudit', role: 'cancel wait audit', prompt: 'Wait for cancellation regression' }, { agent: rootAgent, signal: new AbortController().signal })).member
+    manualGracefulLifecycleIds.add(cancelledWaitWorker.sessionId)
+    let cancelledWaitAcceptedResolve
+    const cancelledWaitAccepted = new Promise(resolve => { cancelledWaitAcceptedResolve = resolve })
+    onGracefulAccepted = cancelledWaitAcceptedResolve
+    const cancellation = new AbortController()
+    const cancelledRetirement = tools.get('team_shutdown').execute({ team_id: cancelledWaitTeam.id, member_session_id: cancelledWaitWorker.sessionId }, { agent: rootAgent, signal: cancellation.signal })
+    await cancelledWaitAccepted
+    cancellation.abort(new Error('cancel graceful lifecycle wait'))
+    await assert.rejects(cancelledRetirement, /cancel graceful lifecycle wait/u)
+    const cancelledWaitRecord = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === cancelledWaitTeam.id)
+    const cancelledWaitMember = cancelledWaitRecord.members.find(member => member.sessionId === cancelledWaitWorker.sessionId)
+    assert.equal(cancelledWaitMember.state, 'failed')
+    assert.equal(cancelledWaitMember.shutdownUnconfirmed, true)
+    assert.equal(cancelledWaitMember.stopUnconfirmed, true)
+    assert.match(cancelledWaitMember.error, /cancel graceful lifecycle wait/u)
+    manualGracefulLifecycleIds.delete(cancelledWaitWorker.sessionId)
+    onGracefulAccepted = undefined
+    await tools.get('team_shutdown').execute({ team_id: cancelledWaitTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
+
     const bufferedHotReloadTeam = (await tools.get('team_start').execute({ objective: 'Buffered hot reload end' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const bufferedHotReloadWorker = (await tools.get('team_spawn').execute({ team_id: bufferedHotReloadTeam.id, name: 'FastEndAudit', role: 'fast end audit', prompt: 'End immediately after acceptance' }, { agent: rootAgent, signal: new AbortController().signal })).member
     bufferedGracefulEndIds.add(bufferedHotReloadWorker.sessionId)
@@ -905,6 +926,94 @@ test('model tools create a team, spawn independent members, and relay with non-u
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('external store edits are refreshed and preserved by the next serialized mutation', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-external-store-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  try {
+    const mod = await import(`${pathToFileURL(pluginFile).href}?external-store=${Date.now()}-${Math.random()}`)
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    await store.mutate(document => { document.settings.enabled = true })
+    const team = await mod.createTeam(store, { id: 'external-root' }, { objective: 'Original objective' })
+    const external = JSON.parse(await readFile(file, 'utf8'))
+    external.teams.find(candidate => candidate.id === team.id).objective = 'Objective replaced by an external recovery editor with a different byte length'
+    await writeFile(file, `${JSON.stringify(external)}\n`, 'utf8')
+
+    let publishedObjective
+    const unsubscribe = store.subscribe(document => { publishedObjective = document.teams.find(candidate => candidate.id === team.id)?.objective })
+    await mod.createTask(store, { id: 'external-root' }, { teamId: team.id, title: 'Mutation after external edit' })
+    unsubscribe()
+
+    const merged = await store.read(document => document.teams.find(candidate => candidate.id === team.id))
+    assert.equal(merged.objective, external.teams[0].objective)
+    assert.equal(merged.tasks.at(-1).title, 'Mutation after external edit')
+    assert.equal(publishedObjective, external.teams[0].objective)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('explicit user stop cancels queued wakeups and leaves paused work dormant', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-user-stop-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  try {
+    const mod = await import(`${pathToFileURL(pluginFile).href}?user-stop=${Date.now()}-${Math.random()}`)
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    await store.mutate(document => { document.settings.enabled = true })
+    const leadSession = { id: 'stopped-root' }
+    const lead = { id: leadSession.id, session: leadSession, cancelCalls: [], cancel(reason) { this.cancelCalls.push(reason) } }
+    const team = await mod.createTeam(store, lead, { objective: 'Remain stopped after explicit cancellation' })
+    const timestamp = new Date().toISOString()
+    await store.mutate(document => {
+      const current = document.teams.find(candidate => candidate.id === team.id)
+      current.members.push({ id: 'stop-worker', sessionId: 'stop-child', name: 'StopWorker', role: 'stop regression', kind: 'worker', state: 'running', createdAt: timestamp, updatedAt: timestamp })
+      current.tasks.push({ id: 'stop-task', title: 'Queued work', state: 'in_progress', dependsOn: [], files: [], assigneeSessionId: 'stop-child', createdAt: timestamp, updatedAt: timestamp, claimedAt: timestamp })
+    })
+
+    const handlers = {}
+    const interrupts = []
+    const starts = []
+    const ctx = {
+      on(name, handler) { handlers[name] = handler },
+      agents: { get: id => id === lead.id ? lead : undefined },
+      subagents: {
+        interrupt(id, authority) { interrupts.push({ id, authority }) },
+        async drainContinuableChildren(_parent, ids) { assert.deepEqual(ids, ['stop-child']) },
+        async startContinuable(spec) { starts.push(spec) }
+      },
+      logger: { warn() {} }
+    }
+    let resolvePaused
+    const paused = new Promise(resolve => { resolvePaused = resolve })
+    const unsubscribe = store.subscribe(document => {
+      const current = document.teams.find(candidate => candidate.id === team.id)
+      if (current?.state === 'paused' && current.members.find(member => member.sessionId === 'stop-child')?.state === 'ready') resolvePaused()
+    })
+    mod.observeUserStops(ctx, store, Promise.resolve())
+    handlers['session/event'](leadSession, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+    await paused
+    unsubscribe()
+    await new Promise(resolve => setImmediate(resolve))
+
+    const stopped = await store.read(document => document.teams.find(candidate => candidate.id === team.id))
+    assert.deepEqual(lead.cancelCalls, [{ kind: 'user' }])
+    assert.deepEqual(interrupts.map(entry => entry.id), ['stop-child'])
+    assert.equal(interrupts[0].authority.kind, 'ancestor')
+    assert.equal(stopped.state, 'paused')
+    assert.equal(stopped.tasks[0].state, 'pending')
+    assert.equal(stopped.tasks[0].assigneeSessionId, 'stop-child')
+    assert.equal(starts.length, 0)
+    await assert.rejects(
+      mod.updateTask(store, { id: 'stop-child' }, { teamId: team.id, taskId: 'stop-task', action: 'claim' }),
+      error => error?.code === 'AGENT_TEAMS_PAUSED'
+    )
+    assert.equal((await store.read(document => document.teams.find(candidate => candidate.id === team.id).state)), 'paused')
+  } finally {
     await rm(root, { recursive: true, force: true })
   }
 })

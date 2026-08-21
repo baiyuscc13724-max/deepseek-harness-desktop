@@ -19,6 +19,7 @@
     "dist:mac": "electron-builder --mac dmg zip --x64 --arm64",
     "verify": "node scripts/verify-static.mjs && npm run test:smoke",
     "test:smoke": "node --test tests/*.test.cjs",
+    "benchmark:agent-teams": "node scripts/benchmark-agent-teams.mjs",
     "postinstall": "node scripts/patch-official-runtime.mjs && electron-builder install-app-deps",
     "verify:release": "node scripts/release-audit.mjs",
     "verify:artifact": "node scripts/artifact-audit.mjs dist",

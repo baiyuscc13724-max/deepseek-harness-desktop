@@ -147,9 +147,18 @@ test('settings restore authoritative state after an active-team disable conflict
 
 test('switching conversation views only stops UI subscriptions, never the running team', async () => {
   const source = await clientSource()
-  assert.match(source, /if \(source\) source\.close\(\); if \(poll\) clearInterval\(poll\)/u)
-  assert.doesNotMatch(source, /sessions\.(?:interrupt|stop)|team_shutdown|member-stop|postAction\([^\n]+["']close["']/u)
+  assert.match(source, /if \(source\) source\.close\(\);[\s\S]*?stopPolling\(\);[\s\S]*?clearTimeout\(reconnectTimer\)[\s\S]*?cancelFrame\(frame\)/u)
+  assert.match(source, /requestAnimationFrame[\s\S]*?pendingState[\s\S]*?setState\(latest\)/u)
+  assert.doesNotMatch(source, /setInterval|sessions\.(?:interrupt|stop)|team_shutdown|member-stop|postAction\([^\n]+["']close["']/u)
   assert.match(source, /Switching teams or views never stops background members/u)
+})
+
+test('live team updates are frame-coalesced and transition-prioritized for animated skins', async () => {
+  const source = await clientSource()
+  assert.match(source, /requestAnimationFrame[\s\S]*?pendingState/u)
+  assert.match(source, /startTransition\(function \(\) \{ setState\(latest\); \}\)/u)
+  assert.match(source, /document\.hidden \? 15000 : 5000/u)
+  assert.doesNotMatch(source, /setInterval/u)
 })
 
 test('Agent Teams workspace exposes localized members, tasks, events, and live handoff', async () => {

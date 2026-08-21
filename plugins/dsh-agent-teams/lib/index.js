@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import z from "@deepseek-ai/schemastery";
 import { createUserMessage, HarnessError } from "@deepseek-ai/dsh-llm";
@@ -13,6 +13,11 @@ const LEGACY_STORE_VERSION = 1;
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_TEAM_MESSAGES = 500;
 const MAX_TEAM_TASKS = 1_000;
+const UI_MAX_TASKS_PER_TEAM = 200;
+const UI_MAX_EVENTS_PER_TEAM = 50;
+const SSE_COALESCE_MS = 50;
+const SUBAGENT_RECONCILE_MS = 20;
+const GRACEFUL_LIFECYCLE_TIMEOUT_MS = 120_000;
 const HARD_MAX_MEMBERS = 8;
 const HARD_MAX_TEAMS_PER_ROOT = 8;
 const DEFAULT_SETTINGS = Object.freeze({ enabled: false, maxMembers: 4, maxActiveTurns: 4 });
@@ -25,13 +30,14 @@ const TASK_STATES = Object.freeze(["pending", "in_progress", "completed"]);
 const MEMBER_STATES = Object.freeze([
   "provisioning", "running", "idle", "ready", "failed", "shutting_down", "retired",
 ]);
-const TEAM_STATES = Object.freeze(["active", "closing", "closed"]);
+const TEAM_STATES = Object.freeze(["active", "paused", "closing", "closed"]);
 const TRANSIENT_MEMBER_STATES = new Set(["provisioning", "running", "idle", "shutting_down"]);
 const STORE_MUTATION_CHAINS = new Map();
 const STORE_OPERATION_CHAINS = new Map();
 const TEAM_OPERATION_CHAINS = new Map();
 const GRACEFUL_ACTIVE_RUNS = new Map();
 const GRACEFUL_LIFECYCLE_WAITERS = new Map();
+const USER_PAUSED_TEAMS = new Set();
 const STORE_INSTANCES = new Map();
 const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages"]);
 const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt"]);
@@ -521,39 +527,134 @@ function projectInboundEvents(team, nameTeams = []) {
   }
   return [...inbound.values()];
 }
-function projectTeamForUi(team, nameTeams = []) {
-  const projected = projectTeam(team, nameTeams);
-  return {
-    ...projected,
-    // Cross-team inbound delivery history is metadata-only; message bodies remain host-private.
-    inboundEvents: projectInboundEvents(team, nameTeams),
-    members: projected.members.map((member) => ({
-      id: member.id,
-      sessionId: member.sessionId,
-      name: member.name,
-      displayName: member.displayName,
-      role: member.role,
-      model: member.model,
-      provider: member.provider,
-      modelTier: member.modelTier,
-      inheritsMain: member.inheritsMain,
-      routeSource: member.routeSource,
-      kind: member.kind,
-      state: member.state,
-      status: member.status,
-      createdAt: member.createdAt,
-      updatedAt: member.updatedAt,
-      lastActivityAt: member.lastActivityAt,
-    })),
-    tasks: projected.tasks.map(({ description, files, ...task }) => ({
-      ...task,
+function newestFirst(left, right) {
+  return Date.parse(right.updatedAt ?? right.deliveredAt ?? right.createdAt ?? 0) - Date.parse(left.updatedAt ?? left.deliveredAt ?? left.createdAt ?? 0);
+}
+function selectUiTasks(tasks) {
+  if (tasks.length <= UI_MAX_TASKS_PER_TEAM) return tasks;
+  const active = tasks.filter((task) => task.state !== "completed").sort(newestFirst);
+  const completed = tasks.filter((task) => task.state === "completed").sort(newestFirst);
+  return [...active, ...completed].slice(0, UI_MAX_TASKS_PER_TEAM);
+}
+function selectUiEvents(events) {
+  if (events.length <= UI_MAX_EVENTS_PER_TEAM) return events;
+  return [...events].sort(newestFirst).slice(0, UI_MAX_EVENTS_PER_TEAM);
+}
+function projectUiTasks(team, peerTeams) {
+  const visible = selectUiTasks(team.tasks);
+  const localById = new Map(team.tasks.map((task) => [task.id, task]));
+  const teamsById = new Map(peerTeams.map((candidate) => [candidate.id, candidate]));
+  const taskMapsByTeam = new Map(peerTeams.map((candidate) => [candidate.id, new Map(candidate.tasks.map((task) => [task.id, task]))]));
+  const activeByFile = new Map();
+  for (const candidate of team.tasks) {
+    if (candidate.state !== "in_progress") continue;
+    for (const file of candidate.files ?? []) {
+      const entries = activeByFile.get(file) ?? [];
+      entries.push(candidate);
+      activeByFile.set(file, entries);
+    }
+  }
+  return visible.map((task) => {
+    const files = task.files ?? [];
+    const conflicts = new Set();
+    if (task.state === "in_progress") {
+      for (const file of files) for (const candidate of activeByFile.get(file) ?? []) {
+        if (candidate.id !== task.id && candidate.assigneeSessionId !== task.assigneeSessionId) conflicts.add(candidate.id);
+      }
+    }
+    const crossTeamDependencies = clone(task.crossTeamDependsOn ?? []);
+    const crossReferences = crossTeamDependencies.map(crossTaskReference);
+    const crossBlockedBy = crossTeamDependencies.filter((dependency) => taskMapsByTeam.get(dependency.teamId)?.get(dependency.taskId)?.state !== "completed").map(crossTaskReference);
+    const dependencySources = [...new Map(crossTeamDependencies.map((dependency) => {
+      const source = teamsById.get(dependency.teamId);
+      return [dependency.teamId, { teamId: dependency.teamId, teamName: source?.name ?? dependency.teamId, teamStatus: source?.state ?? "unavailable" }];
+    })).values()];
+    const { description, files: _files, ...safeTask } = clone(task);
+    return {
+      ...safeTask,
+      status: task.state,
+      dependencies: [...task.dependsOn, ...crossReferences],
+      assignee: task.assigneeSessionId ?? null,
+      blockedBy: [
+        ...task.dependsOn.filter((id) => localById.get(id)?.state !== "completed"),
+        ...crossBlockedBy,
+      ],
+      conflictsWith: [...conflicts],
+      crossTeamDependencies,
+      dependencySources,
       // Titles are already bounded and are the only task text safe enough for a brief.
       summary: task.title,
       ...(files.length === 0 ? { fileScope: [] } : {}),
       fileScopeProjection: files.length === 0
         ? { projected: true }
         : { projected: false, reasonCode: "AGENT_TEAMS_FILE_SCOPE_NOT_SAFE_TO_PROJECT" },
-    })),
+    };
+  });
+}
+function projectTeamForUi(team, nameTeams = []) {
+  const peerTeams = Array.isArray(nameTeams) ? nameTeams : [];
+  const names = new Map([team, ...peerTeams].flatMap((candidate) => candidate.members ?? []).map((member) => [member.sessionId, canonicalMemberName(member.name)]));
+  const memberActivity = new Map(team.members.map((member) => [member.sessionId, member.updatedAt]));
+  const touchMember = (sessionId, timestamp) => {
+    if (!memberActivity.has(sessionId) || Date.parse(timestamp ?? 0) > Date.parse(memberActivity.get(sessionId) ?? 0)) memberActivity.set(sessionId, timestamp);
+  };
+  for (const task of team.tasks) if (task.assigneeSessionId !== undefined) touchMember(task.assigneeSessionId, task.updatedAt);
+  for (const message of team.messages) {
+    const timestamp = latestTimestamp([message.createdAt, message.deliveredAt]);
+    touchMember(message.fromSessionId, timestamp);
+    touchMember(message.toSessionId, timestamp);
+  }
+  const visibleMessages = selectUiEvents(team.messages).map((message) => projectMessageEvent(message, names, team.id));
+  const rawInbound = projectInboundEvents(team, peerTeams);
+  const inboundEvents = selectUiEvents(rawInbound);
+  const tasks = projectUiTasks(team, peerTeams);
+  const members = team.members.map((member) => ({
+    id: member.id,
+    sessionId: member.sessionId,
+    name: member.name,
+    displayName: canonicalMemberName(member.name),
+    role: member.role,
+    model: member.model,
+    provider: member.provider,
+    modelTier: member.modelTier,
+    inheritsMain: member.inheritsMain,
+    routeSource: member.routeSource,
+    kind: member.kind,
+    state: member.state,
+    status: member.state,
+    createdAt: member.createdAt,
+    updatedAt: member.updatedAt,
+    lastActivityAt: memberActivity.get(member.sessionId) ?? member.updatedAt,
+  }));
+  const lastActivityAt = latestTimestamp([
+    team.updatedAt,
+    ...memberActivity.values(),
+    ...team.tasks.map((task) => task.updatedAt),
+    ...team.messages.flatMap((message) => [message.createdAt, message.deliveredAt]),
+  ]) ?? team.updatedAt;
+  return {
+    id: team.id,
+    rootLeadSessionId: team.rootLeadSessionId,
+    name: team.name,
+    objective: team.objective,
+    revision: team.revision ?? 1,
+    state: team.state,
+    status: team.state,
+    createdAt: team.createdAt,
+    updatedAt: team.updatedAt,
+    leadSessionId: team.rootLeadSessionId,
+    lastActivityAt,
+    taskCount: team.tasks.length,
+    eventCount: team.messages.length + rawInbound.length,
+    projection: {
+      tasksTruncated: tasks.length < team.tasks.length,
+      eventsTruncated: visibleMessages.length < team.messages.length || inboundEvents.length < rawInbound.length,
+    },
+    // Cross-team inbound delivery history is metadata-only; message bodies remain host-private.
+    inboundEvents,
+    members,
+    tasks,
+    messages: visibleMessages,
   };
 }
 function projectTeamSummary(team) {
@@ -568,6 +669,31 @@ function projectTeamSummary(team) {
     completedTaskCount: team.tasks.filter((task) => task.state === "completed").length,
     updatedAt: team.updatedAt,
   };
+}
+function projectTeamUiSummary(team) {
+  return {
+    ...projectTeamSummary(team),
+    objective: team.objective.slice(0, 1_000),
+    taskCount: team.tasks.length,
+    eventCount: team.messages.length,
+    lastActivityAt: team.updatedAt,
+  };
+}
+function projectCrossTeamEvents(teams) {
+  const names = new Map(teams.flatMap((team) => team.members).map((member) => [member.sessionId, canonicalMemberName(member.name)]));
+  const teamNames = new Map(teams.map((team) => [team.id, boundedTeamDisplayName(team.name)]));
+  const events = [];
+  for (const team of teams) {
+    for (const message of team.messages) {
+      if (message.toTeamId === undefined || message.toTeamId === team.id || !teamNames.has(message.toTeamId)) continue;
+      events.push({
+        ...projectMessageEvent(message, names, team.id),
+        fromTeamName: teamNames.get(team.id),
+        toTeamName: teamNames.get(message.toTeamId),
+      });
+    }
+  }
+  return selectUiEvents(events);
 }
 function defaultDocument(settings = {}) {
   return {
@@ -645,6 +771,25 @@ function registerGracefulLifecycleWaiter(childId) {
   };
   return { promise, accept: waiter.accept, cancel: remove };
 }
+function waitForGracefulLifecycle(waiter, signal, timeoutMs = GRACEFUL_LIFECYCLE_TIMEOUT_MS) {
+  return new Promise((resolve, rejectPromise) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      waiter.cancel();
+      callback(value);
+    };
+    const onAbort = () => finish(rejectPromise, signal.reason ?? new HarnessError("team lifecycle wait was cancelled", "AGENT_TEAMS_CANCELLED"));
+    const timer = setTimeout(() => finish(rejectPromise, new HarnessError("team member did not finish graceful retirement before the lifecycle deadline", "AGENT_TEAMS_LIFECYCLE_TIMEOUT")), timeoutMs);
+    timer.unref?.();
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    waiter.promise.then((value) => finish(resolve, value), (error) => finish(rejectPromise, error));
+  });
+}
 function noteGracefulLifecycleStart(info) {
   const runId = String(info.runId);
   GRACEFUL_ACTIVE_RUNS.set(info.id, runId);
@@ -655,10 +800,14 @@ function noteGracefulLifecycleEnd(info) {
   if (GRACEFUL_ACTIVE_RUNS.get(info.id) === runId) GRACEFUL_ACTIVE_RUNS.delete(info.id);
   for (const waiter of GRACEFUL_LIFECYCLE_WAITERS.get(info.id) ?? []) waiter.end(runId);
 }
-function publishStoreDocument(filePath, document) {
+function publishStoreDocument(filePath, document, stamp) {
   for (const instance of STORE_INSTANCES.get(filePath) ?? []) {
-    instance.document = clone(document);
-    const snapshot = instance.snapshot();
+    // Mutations always clone before editing, so every instance can share this committed,
+    // immutable-by-convention document without multiplying full-store clones.
+    instance.document = document;
+    if (stamp !== undefined) instance.fileStamp = stamp;
+    if (instance.listeners.size === 0) continue;
+    const snapshot = clone(document);
     for (const listener of instance.listeners) {
       try { listener(snapshot); } catch { /* observers never veto committed state */ }
     }
@@ -673,6 +822,7 @@ class AgentTeamsStore {
   constructor(filePath, defaults = {}) {
     this.filePath = filePath;
     this.document = defaultDocument(defaults);
+    this.fileStamp = undefined;
     this.chain = Promise.resolve();
     this.listeners = new Set();
     const instances = STORE_INSTANCES.get(filePath) ?? new Set();
@@ -686,6 +836,7 @@ class AgentTeamsStore {
       const persisted = JSON.parse(await readFile(this.filePath, "utf8"));
       migrated = persisted?.version === LEGACY_STORE_VERSION;
       this.document = validateStoreDocument(persisted);
+      this.fileStamp = await this.#currentFileStamp();
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
       // Disabled-by-default must not create storage on mere plugin activation.
@@ -720,29 +871,34 @@ class AgentTeamsStore {
       changed ||= teamChanged;
     }
     if (changed || migrated) await this.#write(this.document);
-    publishStoreDocument(this.filePath, this.document);
+    publishStoreDocument(this.filePath, this.document, this.fileStamp);
     return this.snapshot();
     }));
   }
   snapshot() {
     return clone(this.document);
   }
+  isEnabled() {
+    return this.document.settings.enabled === true;
+  }
+  hasManagedMember(sessionId) {
+    return this.document.teams.some((team) => team.state !== "closed" && memberOf(team, sessionId) !== undefined);
+  }
+  activeTeamsForRoot(rootSessionId) {
+    return this.document.teams.filter((team) => team.rootLeadSessionId === rootSessionId && team.state === "active").map((team) => ({
+      teamId: team.id,
+      childIds: team.members.filter((member) => member.kind === "worker" && member.state !== "retired").map((member) => member.sessionId),
+    }));
+  }
   async read(reader = (document) => document) {
     await this.chain;
-    return queueStoreMutation(this.filePath, async () => {
-      try { this.document = validateStoreDocument(JSON.parse(await readFile(this.filePath, "utf8"))); }
-      catch (error) { if (error?.code !== "ENOENT") throw error; }
-      return clone(reader(this.document));
-    });
+    return queueStoreMutation(this.filePath, () => clone(reader(this.document)));
   }
   mutate(mutator) {
     const operation = this.chain.then(() => queueStoreMutation(this.filePath, async () => {
-      try {
-        const persisted = validateStoreDocument(JSON.parse(await readFile(this.filePath, "utf8")));
-        if (JSON.stringify(persisted) !== JSON.stringify(this.document)) this.document = persisted;
-      } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
-      }
+      // Same-process instances synchronize at publication. A cheap metadata check keeps
+      // explicit external recovery/test edits visible without reparsing on every event.
+      await this.#refreshFromDiskIfChanged();
       const draft = clone(this.document);
       const previousTeams = new Map(this.document.teams.map((team) => [team.id, team]));
       const value = await mutator(draft);
@@ -761,7 +917,7 @@ class AgentTeamsStore {
       }
       validateStoreDocument(draft);
       await this.#write(draft);
-      publishStoreDocument(this.filePath, draft);
+      publishStoreDocument(this.filePath, draft, this.fileStamp);
       return clone(value);
     }));
     this.chain = operation.catch(() => undefined);
@@ -774,13 +930,26 @@ class AgentTeamsStore {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  async #currentFileStamp() {
+    const info = await stat(this.filePath);
+    return `${info.size}:${info.mtimeMs}`;
+  }
+  async #refreshFromDiskIfChanged() {
+    let stamp;
+    try { stamp = await this.#currentFileStamp(); }
+    catch (error) { if (error?.code === "ENOENT") return; throw error; }
+    if (stamp === this.fileStamp) return;
+    const persisted = validateStoreDocument(JSON.parse(await readFile(this.filePath, "utf8")));
+    this.document = persisted;
+    this.fileStamp = stamp;
+  }
   async #write(document) {
     await mkdir(dirname(this.filePath), { recursive: true });
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
     let handle;
     try {
       handle = await open(temp, "wx", 0o600);
-      await handle.writeFile(`${JSON.stringify(document, null, 2)}\n`, "utf8");
+      await handle.writeFile(`${JSON.stringify(document)}\n`, "utf8");
       await handle.sync();
       await handle.close();
       handle = undefined;
@@ -799,6 +968,7 @@ class AgentTeamsStore {
       await handle?.close().catch(() => undefined);
       await rm(temp, { force: true }).catch(() => undefined);
     }
+    this.fileStamp = await this.#currentFileStamp();
   }
 }
 
@@ -884,6 +1054,7 @@ function requireLiveRootLead(ctx, team, agent) {
   }
 }
 function requireActiveTeam(team) {
+  if (team.state === "paused" || USER_PAUSED_TEAMS.has(team.id)) reject("team is paused after an explicit user stop; resume it from a new direct-human turn before continuing", "AGENT_TEAMS_PAUSED");
   if (team.state !== "active") reject("team is not active", "AGENT_TEAMS_CLOSING");
 }
 function requireOpenTeam(team) {
@@ -1329,6 +1500,63 @@ function confirmMemberRetired(member) {
   member.error = undefined;
   member.updatedAt = now();
 }
+function resetTaskStoppedAfter(task, stoppedAt) {
+  const completedAfterStop = task.state === "completed" && typeof task.completedAt === "string" && task.completedAt >= stoppedAt;
+  if (task.state !== "in_progress" && !completedAfterStop) return;
+  task.state = "pending";
+  task.claimedAt = undefined;
+  task.completedAt = undefined;
+  task.updatedAt = stoppedAt;
+}
+async function pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt) {
+  const teamIds = new Set(selections.map((entry) => entry.teamId));
+  const childIds = [...new Set(selections.flatMap((entry) => entry.childIds))];
+  await store.runOperation(() => store.mutate((document) => {
+    for (const team of document.teams) {
+      if (!teamIds.has(team.id) || team.rootLeadSessionId !== lead.id || team.state === "closed") continue;
+      team.state = "paused";
+      for (const task of team.tasks) resetTaskStoppedAfter(task, stoppedAt);
+      for (const member of team.members) {
+        if (member.kind !== "worker" || member.state === "retired") continue;
+        member.state = "shutting_down";
+        member.updatedAt = stoppedAt;
+      }
+      team.updatedAt = stoppedAt;
+    }
+  }));
+  let drainError;
+  try { await ctx.subagents.drainContinuableChildren(lead, childIds); }
+  catch (error) { drainError = error; }
+  await store.runOperation(() => store.mutate((document) => {
+    for (const team of document.teams) {
+      if (!teamIds.has(team.id) || team.state !== "paused") continue;
+      for (const member of team.members) {
+        if (member.kind !== "worker" || member.state === "retired") continue;
+        member.state = drainError === undefined ? "ready" : "failed";
+        member.runId = undefined;
+        member.shutdownUnconfirmed = drainError === undefined ? undefined : true;
+        member.stopUnconfirmed = drainError === undefined ? undefined : true;
+        member.error = drainError === undefined ? undefined : `user stop could not confirm member quiescence: ${String(drainError)}`;
+        member.updatedAt = now();
+      }
+      team.updatedAt = now();
+    }
+  }));
+}
+async function resumePausedTeam(ctx, store, lead, input) {
+  const teamId = nonEmptyString(input.teamId, "teamId", 256);
+  const result = await store.runOperation(() => store.mutate((document) => {
+    const team = findTeam(document, teamId);
+    requireLiveRootLead(ctx, team, lead);
+    if (team.state !== "paused") reject("team is not paused", "AGENT_TEAMS_CONFLICT");
+    if (team.members.some((member) => member.kind === "worker" && member.state === "shutting_down")) reject("team members are still stopping; retry resume after they become ready", "AGENT_TEAMS_CONFLICT");
+    team.state = "active";
+    team.updatedAt = now();
+    return { teamId: team.id, team: projectTeam(team, document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId)) };
+  }));
+  USER_PAUSED_TEAMS.delete(teamId);
+  return result;
+}
 
 async function retireMember(ctx, store, lead, input, signal) {
   const force = input.force === true;
@@ -1352,7 +1580,7 @@ async function retireMember(ctx, store, lead, input, signal) {
         source: relaySource(lead.id), signal,
       });
       gracefulWaiter.accept();
-      await gracefulWaiter.promise;
+      await waitForGracefulLifecycle(gracefulWaiter, signal);
     }
   } catch (error) {
     gracefulWaiter?.cancel();
@@ -1378,7 +1606,8 @@ async function retireMember(ctx, store, lead, input, signal) {
       confirmMemberRetired(member);
       team.updatedAt = member.updatedAt;
     }
-    return { teamId: team.id, member };
+    if (member === undefined) reject("unknown worker member", "AGENT_TEAMS_NOT_FOUND");
+    return { teamId: team.id, member: clone(member) };
   }));
 }
 
@@ -1415,7 +1644,7 @@ async function shutdownTeam(ctx, store, lead, input, signal) {
           source: relaySource(lead.id), signal,
         });
         waiter.accept();
-        await waiter.promise;
+        await waitForGracefulLifecycle(waiter, signal);
       } catch (error) {
         waiter.cancel();
         throw error;
@@ -1496,7 +1725,7 @@ async function recoverOrphanTeams(ctx, store, caller, input) {
   }));
 }
 
-function teamSnapshot(document, sessionId) {
+function teamSnapshot(document, sessionId, selectedTeamId) {
   const related = sessionId === "settings" ? [] : document.teams.filter((candidate) => memberOf(candidate, sessionId));
   const ordered = [...related].sort((left, right) => {
     const leftClosed = left.state === "closed";
@@ -1504,13 +1733,32 @@ function teamSnapshot(document, sessionId) {
     if (leftClosed !== rightClosed) return leftClosed ? 1 : -1;
     return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
   });
+  const selected = ordered.find((team) => team.id === selectedTeamId) ?? ordered[0];
+  const peerTeams = selected === undefined ? [] : document.teams.filter((candidate) => candidate.rootLeadSessionId === selected.rootLeadSessionId);
   const config = clone(document.settings);
-  const teams = ordered.map((team) => projectTeamForUi(team, document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId)));
-  return { enabled: config.enabled, config, settings: config, teams, team: teams[0] ?? null };
+  const teams = ordered.map(projectTeamUiSummary);
+  const team = selected === undefined ? null : projectTeamForUi(selected, peerTeams);
+  const cursor = JSON.stringify([
+    config.enabled,
+    config.maxMembers,
+    config.maxActiveTurns,
+    selected?.id ?? null,
+    ...ordered.map((candidate) => [candidate.id, candidate.revision ?? 1]),
+  ]);
+  return {
+    enabled: config.enabled,
+    config,
+    settings: config,
+    cursor,
+    activeTeamId: selected?.id ?? null,
+    teams,
+    team,
+    crossTeamEvents: projectCrossTeamEvents(peerTeams),
+  };
 }
 
 function teamSystemPrompt(store) {
-  if (store.snapshot().settings.enabled !== true) {
+  if (!store.isEnabled()) {
     return "Agent Teams automatic-team mode is DISABLED. Do not proactively call any team tool. Work normally without creating, spawning, messaging, or managing teams unless the direct user first enables the feature through its settings. Team members must never create teams.";
   }
   return [
@@ -1519,6 +1767,7 @@ function teamSystemPrompt(store) {
     "The fixed root lead/brain always uses the main model route. The AI autonomously chooses each spawned member's model_tier: default to subagent to reduce cost; use main only for high-complexity reasoning, architecture, security-critical work, or repeated failures. Users do not choose member tiers.",
     "Every spawned member display name must be a plain 2–12 character duty name in the user's language. For Chinese, prefer 2–6 characters such as 界面、安全、测试、文档; for English, use labels such as UI, Test, Security, Docs. Avoid internal or abstract technical terms including 宿主、协调器、执行器、实现者、子代理 and Host, Coordinator, Executor, Implementer, Subagent.",
     "A top-level root may own at most 8 unclosed peer teams, and all peers share maxActiveTurns. Pass team_id when more than one is active. Only their same fixed root lead may relay across teams with target_team_id. Never nest teams or connect different roots. Persist tasks before work, atomically claim pending unblocked tasks, gracefully retire members before closing a team, and use direct-human team_recover only for inactive orphaned teams.",
+    "An explicit UI Stop on a root turn pauses every active team owned by that root, interrupts its members, clears team-generated wakeups, and returns in-progress tasks to pending. Never continue a paused team implicitly. In a later direct-human turn, call team_resume only when the user explicitly asks to continue or resume that team.",
   ].join("\n");
 }
 
@@ -1609,6 +1858,12 @@ function registerTools(ctx, store, ready) {
     presentCall: (args) => present(args.confirm === true ? "Recover orphaned team" : "Inspect orphaned teams", args.team_id),
   }));
   ctx.tools.register(defineTool({
+    name: "team_resume", description: "Resume one team paused by the direct user's explicit Stop action. Requires the same live root lead in a later direct-human turn and never resumes members automatically.",
+    parameters: { team_id: { type: "string", required: true } }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution) => { requireDirectHumanRoot(ctx, execution); return publicResult(await resumePausedTeam(ctx, store, execution.agent, { teamId: args.team_id })); }),
+    presentCall: (args) => present("Resume paused team", args.team_id),
+  }));
+  ctx.tools.register(defineTool({
     name: "team_shutdown", description: "Gracefully retire one member or close the whole team. Force mode drains selected continuable children to quiescence using the exact live parent.",
     parameters: { team_id: { type: "string", required: true }, member_session_id: { type: "string" }, force: { type: "boolean" } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution, signal) => publicResult(await shutdownTeam(ctx, store, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force }, signal))),
@@ -1657,30 +1912,104 @@ async function readJsonBody(req) {
   if (!isRecord(parsed)) throw new TypeError("JSON body must be an object");
   return parsed;
 }
-function sseSnapshot(res, snapshot) {
-  res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+function encodedSseSnapshot(snapshot) {
+  return `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`;
+}
+function writeSseClient(client, payload) {
+  if (client.closed || payload === client.lastPayload || payload === client.pendingPayload) return;
+  if (client.blocked) {
+    // Keep only the newest complete snapshot while the socket applies backpressure.
+    client.pendingPayload = payload;
+    return;
+  }
+  let writable;
+  try { writable = client.response.write(payload); } catch {
+    client.closed = true;
+    return;
+  }
+  client.lastPayload = payload;
+  if (writable !== false) return;
+  client.blocked = true;
+  if (typeof client.response.once !== "function") return;
+  client.response.once("drain", () => {
+    if (client.closed) return;
+    client.blocked = false;
+    const pending = client.pendingPayload;
+    client.pendingPayload = undefined;
+    if (pending !== undefined) writeSseClient(client, pending);
+  });
+}
+function createSseBroadcaster({ delayMs = SSE_COALESCE_MS } = {}) {
+  const clients = new Map();
+  let timer;
+  let pendingDocument;
+  const remove = (client) => {
+    client.closed = true;
+    const entries = clients.get(client.sessionId);
+    entries?.delete(client);
+    if (entries?.size === 0) clients.delete(client.sessionId);
+  };
+  const add = (sessionId, selectedTeamId, response) => {
+    const client = { sessionId, selectedTeamId, response, blocked: false, closed: false, lastPayload: undefined, pendingPayload: undefined };
+    const entries = clients.get(sessionId) ?? new Set();
+    entries.add(client);
+    clients.set(sessionId, entries);
+    return client;
+  };
+  const send = (client, snapshot) => writeSseClient(client, encodedSseSnapshot(snapshot));
+  const flush = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    const document = pendingDocument;
+    pendingDocument = undefined;
+    if (document === undefined) return;
+    const payloads = new Map();
+    for (const [sessionId, entries] of clients) {
+      for (const client of [...entries]) {
+        if (client.closed) { remove(client); continue; }
+        const key = `${sessionId}\u0000${client.selectedTeamId ?? ""}`;
+        let payload = payloads.get(key);
+        if (payload === undefined) {
+          payload = encodedSseSnapshot(teamSnapshot(document, sessionId, client.selectedTeamId));
+          payloads.set(key, payload);
+        }
+        writeSseClient(client, payload);
+      }
+    }
+  };
+  const schedule = (document) => {
+    pendingDocument = document;
+    if (timer !== undefined || clients.size === 0) return;
+    timer = setTimeout(flush, delayMs);
+    timer.unref?.();
+  };
+  const close = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    pendingDocument = undefined;
+    for (const entries of clients.values()) for (const client of entries) {
+      client.closed = true;
+      client.response.end();
+    }
+    clients.clear();
+  };
+  return { add, clients, close, flush, remove, schedule, send };
 }
 
 function registerWebApi(ctx, store, ready) {
-  const clients = new Map();
-  const unsubscribe = store.subscribe((document) => {
-    for (const [sessionId, responses] of clients) {
-      const snapshot = teamSnapshot(document, sessionId);
-      for (const response of responses) {
-        try { sseSnapshot(response, snapshot); } catch { responses.delete(response); }
-      }
-      if (responses.size === 0) clients.delete(sessionId);
-    }
-  });
-  ctx.effect(() => unsubscribe, "agent-teams store subscription");
+  const broadcaster = createSseBroadcaster();
+  const unsubscribe = store.subscribe((document) => broadcaster.schedule(document));
+  ctx.effect(() => () => { unsubscribe(); broadcaster.close(); }, "agent-teams store subscription");
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/state", handler: async (req, res) => {
       if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
       if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
       try {
         await ready;
-        const sessionId = nonEmptyString(new URL(req.url, "http://x").searchParams.get("sessionId"), "sessionId", 256);
-        return json(res, 200, await store.read((document) => teamSnapshot(document, sessionId)));
+        const requestUrl = new URL(req.url, "http://x");
+        const sessionId = nonEmptyString(requestUrl.searchParams.get("sessionId"), "sessionId", 256);
+        const selectedTeamId = optionalString(requestUrl.searchParams.get("teamId"), "teamId", 256);
+        return json(res, 200, await store.read((document) => teamSnapshot(document, sessionId, selectedTeamId)));
       } catch (error) { return json(res, 400, errorPayload(error)); }
     },
   }), "agent-teams state route");
@@ -1690,13 +2019,13 @@ function registerWebApi(ctx, store, ready) {
       if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
       try {
         await ready;
-        const sessionId = nonEmptyString(new URL(req.url, "http://x").searchParams.get("sessionId"), "sessionId", 256);
+        const requestUrl = new URL(req.url, "http://x");
+        const sessionId = nonEmptyString(requestUrl.searchParams.get("sessionId"), "sessionId", 256);
+        const selectedTeamId = optionalString(requestUrl.searchParams.get("teamId"), "teamId", 256);
         res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-content-type-options": "nosniff" });
-        const responses = clients.get(sessionId) ?? new Set();
-        responses.add(res);
-        clients.set(sessionId, responses);
-        sseSnapshot(res, await store.read((document) => teamSnapshot(document, sessionId)));
-        req.once("close", () => { responses.delete(res); if (responses.size === 0) clients.delete(sessionId); });
+        const client = broadcaster.add(sessionId, selectedTeamId, res);
+        broadcaster.send(client, await store.read((document) => teamSnapshot(document, sessionId, selectedTeamId)));
+        req.once("close", () => broadcaster.remove(client));
       } catch (error) { if (!res.headersSent) return json(res, 400, errorPayload(error)); }
     },
   }), "agent-teams events route");
@@ -1728,62 +2057,120 @@ function registerWebApi(ctx, store, ready) {
       }
     },
   }), "agent-teams action route");
-  ctx.effect(() => () => {
-    for (const responses of clients.values()) for (const response of responses) response.end();
-    clients.clear();
-  }, "agent-teams SSE clients");
 }
 
+function createSubagentEventReconciler(ctx, store, ready, delayMs = SUBAGENT_RECONCILE_MS) {
+  let pending = [];
+  let timer;
+  let closed = false;
+  const schedule = () => {
+    if (closed || timer !== undefined) return;
+    timer = setTimeout(flush, delayMs);
+    timer.unref?.();
+  };
+  const flush = async () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    const batch = pending;
+    pending = [];
+    if (batch.length === 0) return;
+    try {
+      await ready;
+      const managedIds = new Set(batch.map((entry) => entry.info.id).filter((id) => store.hasManagedMember(id)));
+      if (managedIds.size > 0) await store.mutate((document) => {
+        const bySession = new Map();
+        for (const team of document.teams) {
+          if (team.state === "closed") continue;
+          for (const member of team.members) if (managedIds.has(member.sessionId) && !bySession.has(member.sessionId)) bySession.set(member.sessionId, { member, team });
+        }
+        for (const { type, info } of batch) {
+          const target = bySession.get(info.id);
+          if (target === undefined) continue;
+          const { member, team } = target;
+          const updatedAt = now();
+          if (type === "start") {
+            if (member.state === "retired") continue;
+            if (member.state !== "shutting_down") {
+              member.state = "running";
+              member.error = undefined;
+            }
+            member.runId = String(info.runId);
+            member.updatedAt = updatedAt;
+            team.updatedAt = updatedAt;
+            continue;
+          }
+          if (member.state === "shutting_down") {
+            if (member.runId !== undefined && info.runId !== undefined && member.runId === String(info.runId)) member.runId = undefined;
+            member.updatedAt = updatedAt;
+            team.updatedAt = updatedAt;
+            continue;
+          }
+          if (member.state !== "retired") {
+            if (["error", "refusal"].includes(info.stopReason)) {
+              member.state = "failed";
+              member.error = `subagent ended with ${info.stopReason}`;
+            } else member.state = "ready";
+            member.runId = undefined;
+            member.updatedAt = updatedAt;
+            team.updatedAt = updatedAt;
+          }
+          member.shutdownUnconfirmed = undefined;
+          member.stopUnconfirmed = undefined;
+        }
+      });
+    } catch (error) {
+      ctx.logger.warn(`agent-teams lifecycle reconciliation failed: ${String(error)}`);
+    } finally {
+      for (const entry of batch) entry.resolve();
+      if (pending.length > 0) schedule();
+    }
+  };
+  const enqueue = (type, info) => new Promise((resolve) => {
+    if (closed) return resolve();
+    pending.push({ type, info, resolve });
+    schedule();
+  });
+  const close = () => {
+    closed = true;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    const abandoned = pending;
+    pending = [];
+    for (const entry of abandoned) entry.resolve();
+  };
+  return { close, enqueue, flush };
+}
 function observeSubagents(ctx, store, ready) {
+  const reconciler = createSubagentEventReconciler(ctx, store, ready);
+  ctx.effect(() => () => reconciler.close(), "agent-teams lifecycle reconciliation");
   ctx.on("subagent/start", (info) => {
     noteGracefulLifecycleStart(info);
-    return ready.then(() => store.runOperation(() => store.mutate((document) => {
-      for (const team of document.teams) {
-        if (team.state === "closed") continue;
-        const member = memberOf(team, info.id);
-        if (member === undefined || member.state === "retired") continue;
-        if (member.state === "shutting_down") {
-          member.runId = String(info.runId);
-          member.updatedAt = now();
-          team.updatedAt = member.updatedAt;
-          return;
-        }
-        member.state = "running";
-        member.runId = String(info.runId);
-        member.error = undefined;
-        member.updatedAt = now();
-        team.updatedAt = member.updatedAt;
-        return;
-      }
-    }))).catch((error) => ctx.logger.warn(`agent-teams start reconciliation failed: ${String(error)}`));
+    return reconciler.enqueue("start", info);
   });
   ctx.on("subagent/end", (info) => {
     noteGracefulLifecycleEnd(info);
-    return ready.then(() => store.mutate((document) => {
-      for (const team of document.teams) {
-        if (team.state === "closed") continue;
-        const member = memberOf(team, info.id);
-        if (member === undefined) continue;
-        if (member.state === "shutting_down") {
-          if (member.runId !== undefined && info.runId !== undefined && member.runId === String(info.runId)) member.runId = undefined;
-          member.updatedAt = now();
-          team.updatedAt = member.updatedAt;
-          return;
-        }
-        if (member.state !== "retired") {
-          if (["error", "refusal"].includes(info.stopReason)) {
-            member.state = "failed";
-            member.error = `subagent ended with ${info.stopReason}`;
-          } else member.state = "ready";
-          member.runId = undefined;
-          member.updatedAt = now();
-          team.updatedAt = member.updatedAt;
-        }
-        member.shutdownUnconfirmed = undefined;
-        member.stopUnconfirmed = undefined;
-        return;
-      }
-    })).catch((error) => ctx.logger.warn(`agent-teams end reconciliation failed: ${String(error)}`));
+    return reconciler.enqueue("end", info);
+  });
+}
+
+function observeUserStops(ctx, store, ready) {
+  ctx.on("session/event", (session, event) => {
+    if (event.type !== "turn/end" || event.data?.reason?.kind !== "aborted" || event.data.reason.reason?.kind !== "user") return;
+    const lead = ctx.agents.get(session.id);
+    if (lead === undefined || lead.session !== session) return;
+    const selections = store.activeTeamsForRoot(lead.id);
+    if (selections.length === 0) return;
+    const stoppedAt = now();
+    for (const selection of selections) USER_PAUSED_TEAMS.add(selection.teamId);
+    // The stock UI cancellation preserves queued inbox work. For a team-owning root,
+    // clear it at the durable turn-end boundary so member reports cannot auto-restart.
+    lead.cancel({ kind: "user" });
+    for (const childId of new Set(selections.flatMap((entry) => entry.childIds))) {
+      try { ctx.subagents.interrupt(childId, { kind: "ancestor", agent: lead }); }
+      catch (error) { ctx.logger.warn(`agent-teams could not interrupt member "${childId}" after user stop: ${String(error)}`); }
+    }
+    void ready.then(() => pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt))
+      .catch((error) => ctx.logger.warn(`agent-teams user-stop reconciliation failed: ${String(error)}`));
   });
 }
 
@@ -1804,6 +2191,7 @@ function apply(ctx, config = {}) {
   registerTools(ctx, store, ready);
   registerWebApi(ctx, store, ready);
   observeSubagents(ctx, store, ready);
+  observeUserStops(ctx, store, ready);
 }
 
 export {
@@ -1811,6 +2199,16 @@ export {
   Config,
   HARD_MAX_MEMBERS,
   HARD_MAX_TEAMS_PER_ROOT,
+  GRACEFUL_LIFECYCLE_TIMEOUT_MS,
+  SSE_COALESCE_MS,
+  SUBAGENT_RECONCILE_MS,
+  UI_MAX_EVENTS_PER_TEAM,
+  UI_MAX_TASKS_PER_TEAM,
+  createSseBroadcaster,
+  createSubagentEventReconciler,
+  pauseTeamsForUserStop,
+  resumePausedTeam,
+  observeUserStops,
   MEMBER_STATES,
   TASK_STATES,
   apply,
@@ -1823,6 +2221,7 @@ export {
   teamSnapshot,
   trustedRequest,
   updateTask,
+  waitForGracefulLifecycle,
   validateMember,
   validateMessage,
   validateStoreDocument,

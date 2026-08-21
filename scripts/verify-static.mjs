@@ -419,7 +419,7 @@ if (!(await readFile(path.join(root, 'electron/bridge/dsh-resolver.cjs'), 'utf8'
 }
 
 const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')
-for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledConversation', 'patchInstalledTokenMeter']) {
+for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledConversation', 'patchInstalledTokenMeter', 'patchInstalledAgentLoop', 'patchInstalledSubagentContinuation', 'signal.addEventListener("abort", onAbort, { once: true })', 'Promise.resolve(iterator.next())', 'if (this.inbox.hasPending) this.wakeDriver()', 'activation.accepted.size > 0 && agent.inbox.hasPending']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Guarded desktop runtime patch is missing: ${contract}`)
 }
 for (const officialRc8Contract of ['patchInstalledMarkdownRenderer', 'patchInstalledModelImageCompatibility', 'desktopMessagesForInputModalities', 'does not accept the image waiting in the prompt', 'patchConversationAttachmentCopySource']) {
