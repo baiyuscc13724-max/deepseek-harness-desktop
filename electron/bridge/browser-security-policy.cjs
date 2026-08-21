@@ -31,13 +31,13 @@ class BrowserSecurityPolicy {
    *           now?: () => number, idFactory?: () => string,
    *           confirmationTtlMs?: number }} options
    */
-  constructor({ authzFile = null, authzRootDir = null, auditMaxEntries, now = () => Date.now(), idFactory = () => randomUUID(), confirmationTtlMs } = {}) {
+  constructor({ authzFile = null, authzRootDir = null, auditMaxEntries, now = () => Date.now(), idFactory = () => randomUUID(), confirmationTtlMs, uploadRoots = [], downloadRoots = [] } = {}) {
     this.now = now
     this.idFactory = idFactory
     this.stopped = false
     this.partition = BROWSER_PARTITION // 固定独立持久化分区，与官方 persist:harness 隔离
     this.authz = new SiteAuthorizationStore({ file: authzFile, rootDir: authzRootDir, now })
-    this.gate = new ActionGate({ now, idFactory, confirmationTtlMs })
+    this.gate = new ActionGate({ now, idFactory, confirmationTtlMs, uploadRoots, downloadRoots })
     this.auditLog = new BrowserAudit({ maxEntries: auditMaxEntries, now })
   }
 
@@ -87,7 +87,11 @@ class BrowserSecurityPolicy {
       if (!tab) throw policyError('no-active-tab', '当前没有可操作的右栏活动标签。')
       if (!tab.visible) throw policyError('tab-not-visible', '模型仅可操作当前可见的右栏活动标签。')
       if (String(tabId) !== tab.id) throw policyError('tab-mismatch', '模型仅可操作当前可见的右栏活动标签，标签不一致。')
-      const nav = checkModelNavigation(url, { authorizedOrigins: this.authz.origins(), base })
+      const nav = checkModelNavigation(url, {
+        authorizedOrigins: this.authz.origins(),
+        authorizedPrivateOrigins: this.authz.privateOrigins(),
+        base
+      })
       this.gate.setActiveTab({ id: tab.id, origin: nav.origin, visible: true })
       this.auditLog.record({ actor: 'model', action: 'navigate', origin: nav.origin, tabId: tab.id, result: 'allowed', code: 'ok' })
       return { normalized: nav.normalized, origin: nav.origin }

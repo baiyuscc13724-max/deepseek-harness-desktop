@@ -26,6 +26,23 @@ test('Agent Teams owns a native conversation view without a duplicate modal or d
   assert.doesNotMatch(source, /https?:\/\//u)
 })
 
+test('Agent Teams coalesces snapshots and recovers SSE without synchronized polling storms', async () => {
+  const source = await clientSource()
+  assert.match(source, /function teamSnapshotVersion\(snapshot\)/u)
+  assert.match(source, /version === versionRef\.current/u)
+  assert.match(source, /requestAnimationFrame === "function" \? requestAnimationFrame\(work\) : setTimeout\(work, 16\)/u)
+  assert.match(source, /publishFrame = requestFrame\(flushSnapshot\)/u)
+  assert.match(source, /startTransition\(function \(\) \{ if \(alive\) \{ setState\(next\); setError\(""\); \} \}\)/u)
+  assert.match(source, /document\.visibilityState === "hidden"/u)
+  assert.match(source, /addEventListener\("visibilitychange", onVisibilityChange\)/u)
+  assert.match(source, /if \(loadPromise\) return loadPromise/u)
+  assert.match(source, /Math\.min\(30000, 4000 \* Math\.pow\(2, Math\.min\(pollAttempt, 3\)\)\)/u)
+  assert.match(source, /Math\.random\(\) \* 0\.4/u)
+  assert.match(source, /Native EventSource keeps reconnecting/u)
+  assert.doesNotMatch(source, /setInterval\(/u)
+  assert.doesNotMatch(source, /source\.onerror = function \(\) \{[^}]*source\.close\(\)/u)
+})
+
 test('Agent Teams prompts through the official composer and never auto-sends', async () => {
   const source = await clientSource()
   assert.match(source, /inputActions\.setDraft\(prompt\)/u)
@@ -79,7 +96,7 @@ test('automatic mode needs only a normal goal and uses plain member labels', asy
   assert.match(source, /h\(FirstTeamWizard, \{ t: t, setDraft: setDraft, setView: props\.setView, disable: disable, busy: busy \}\)/u)
   assert.match(source, /props\.setView\("chat"\)/u)
   assert.match(source, /simpleMemberName\(member, isLead, t\)/u)
-  assert.match(source, /isLead \? t\("leadRole"\) : member\.role/u)
+  assert.match(source, /function openAgentCatalog\(\)/u)
   assert.match(source, /使用用户语言的 2–12 字符直白职责名/u)
   assert.match(source, /plain 2–12 character duty name in the user's language/u)
   assert.match(source, /codePoints\.length > 24 \? codePoints\.slice\(0, 23\)\.join\(""\) \+ "…"/u)
@@ -98,7 +115,7 @@ test('enabled workspaces expose a safe automatic-team disable control', async ()
   assert.match(source, /hasActiveTeams = teams\.some\(function \(item\) \{ return String\(item\.status \|\| item\.state \|\| ""\)\.toLowerCase\(\) !== "closed"; \}\)/u)
   assert.match(source, /disabled: props\.busy \|\| props\.hasActive/u)
   const start = source.indexOf('function disable()')
-  const end = source.indexOf('function addressFor', start)
+  const end = source.indexOf('var connectionKey', start)
   assert.ok(start >= 0 && end > start, 'missing isolated disable handler')
   const disableBody = source.slice(start, end)
   assert.match(disableBody, /postAction\(props\.sessionId, "settings", \{ enabled: false \}\)/u)
@@ -107,34 +124,98 @@ test('enabled workspaces expose a safe automatic-team disable control', async ()
   assert.doesNotMatch(disableBody, /setDraft|setView|inputActions|model|submit/u)
 })
 
-test('one lead can inspect and switch among multiple team projections', async () => {
+test('one lead switches active teams while closed teams stay in history', async () => {
   const source = await clientSource()
-  for (const marker of ['teamsFromSnapshot', 'snapshot.teams', 'snapshot.relatedTeams', 'snapshot.teamHistory', 'TeamOverview', 'selectedTeamId', 'crossEvents', 'setSelectedId']) {
+  for (const marker of ['teamsFromSnapshot', 'snapshot.teams', 'snapshot.relatedTeams', 'snapshot.teamHistory', 'TeamOverview', 'activeTeams', 'archivedTeams', 'setSelectedId']) {
     assert.ok(source.includes(marker), `missing multi-team workspace marker: ${marker}`)
   }
-  for (const label of ['团队总览', '跨团队动态', '切换团队或页面不会停止后台成员']) {
+  for (const label of ['进行中的团队', '历史团队', '切换团队或页面不会停止后台成员']) {
     assert.ok(source.includes(label), `missing multi-team localized label: ${label}`)
   }
-  assert.match(source, /event\.toTeamId && event\.toTeamId !== \(event\.fromTeamId \|\| teamId\(team\)\)/u)
+  assert.match(source, /archivedTeams\.length \? h\("details", \{ className: "dat-disclosure" \}/u)
   assert.match(source, /目标团队：.*team_id:/u)
-  assert.match(source, /crossDelivery/u)
   assert.match(source, /event\.toTeamId === teamId\(team\)/u)
-  assert.match(source, /h\("ul", \{ className: "dat-team-list" \}/u)
-  assert.doesNotMatch(source, /role: "listitem"/u)
   assert.match(source, /aria-current/u)
+  assert.doesNotMatch(source, /dat-cross-list|seenCrossEvents/u)
 })
 
-test('inbound cross-team delivery metadata is merged without duplicate cards', async () => {
+test('inbound cross-team delivery metadata is deduplicated in the on-demand activity sidebar', async () => {
   const source = await clientSource()
-  for (const marker of ['inboundEvents', 'eventIdentity', 'pushUniqueEvent', 'seenCrossEvents', 'seenEvents']) {
-    assert.ok(source.includes(marker), `missing inbound event deduplication marker: ${marker}`)
+  for (const marker of ['inboundEvents', 'eventIdentity', 'pushUniqueEvent', 'seenEvents', 'drawerOpen', 'openActivityPanel']) {
+    assert.ok(source.includes(marker), `missing activity sidebar marker: ${marker}`)
   }
   assert.match(source, /\(team\.inboundEvents \|\| \[\]\)\.forEach/u)
   assert.match(source, /if \(seen\[key\]\) return;/u)
   assert.match(source, /key: eventIdentity\(event, teamId\(team\)\)/u)
   assert.match(source, /event\.fromTeamName \|\| teamName\(teamsById\[event\.fromTeamId\], t\)/u)
   assert.match(source, /event\.toTeamName \|\| teamName\(teamsById\[event\.toTeamId\], t\)/u)
-  assert.match(source, /teamsById: teamsById/u)
+  assert.match(source, /role: "complementary"/u)
+  assert.match(source, /event\.key === "Escape"/u)
+})
+
+test('workspace uses progressive disclosure instead of a permanent three-column card wall', async () => {
+  const source = await clientSource()
+  for (const marker of ['activeTasks', 'completedTasks', 'historyOpen', 'historyLimit', 'dat-history-list', 'dat-inspector', 'dat-inspector-open', 'actionsOpen']) {
+    assert.ok(source.includes(marker), `missing progressive disclosure marker: ${marker}`)
+  }
+  for (const label of ['当前工作', '任务历史', '完成的任务会自动移到这里', '代理目录', '协作动态', '更多操作']) {
+    assert.ok(source.includes(label), `missing progressive disclosure label: ${label}`)
+  }
+  assert.match(source, /toLowerCase\(\) !== "completed"/u)
+  assert.match(source, /toLowerCase\(\) === "completed"/u)
+  assert.match(source, /drawerOpen \? h\(React\.Fragment/u)
+  assert.match(source, /actionsOpen && !props\.closed/u)
+  assert.match(source, /completedTasks\.slice\(0, historyLimit\)/u)
+  assert.match(source, /setHistoryLimit\(historyLimit \+ 40\)/u)
+  assert.match(source, /h\("details", \{ className: "dat-disclosure dat-settings-disclosure" \}/u)
+  assert.doesNotMatch(source, /dat-columns/u)
+})
+
+test('live canvas derives accessible member, task, and relationship nodes without dependencies', async () => {
+  const source = await clientSource()
+  for (const marker of ['TeamCanvas', 'workMode', 'dat-view-toggle', 'dat-canvas-lines', 'dat-canvas-node', 'relationIds(task.dependsOn)', 'relationIds(task.blockedBy)', 'relationIds(task.conflictsWith)']) {
+    assert.ok(source.includes(marker), `missing live canvas marker: ${marker}`)
+  }
+  assert.match(source, /useState\("canvas"\)/u)
+  assert.match(source, /workMode === "canvas" \? h\(TeamCanvas/u)
+  assert.match(source, /task\.assigneeSessionId \|\| task\.assigneeId \|\| task\.assignee \|\| task\.memberId/u)
+  assert.match(source, /completedTasks\.length\) taskNodes\.push\(\{ id: "__completed__"/u)
+  assert.match(source, /markerEnd: "url\(#dat-canvas-arrow\)"/u)
+  assert.match(source, /className: "dat-canvas-row dat-canvas-member-row"/u)
+  assert.match(source, /className: "dat-canvas-row dat-canvas-task-row"/u)
+  assert.match(source, /style: \{ width: width \+ "px", height: height \+ "px" \}/u)
+  assert.match(source, /grid-template-rows:82px 104px 82px/u)
+  assert.match(source, /\.dat-canvas-node\{position:relative;display:block/u)
+  assert.doesNotMatch(source, /className: "dat-canvas-node[^\n]+style: \{ left:/u)
+  assert.match(source, /className: "dat-sr"[^\n]+edges\.map/u)
+  assert.doesNotMatch(source, /(?:reactflow|d3|dagre|cytoscape)/iu)
+})
+
+test('canvas preserves responsive, reduced-motion, history, settings, and member ordering safeguards', async () => {
+  const source = await clientSource()
+  assert.match(source, /function sortMembersByActivity\(members\)/u)
+  assert.match(source, /memberActivityValue\(right\) - memberActivityValue\(left\)/u)
+  assert.match(source, /currentMembers = sortMembersByActivity/u)
+  assert.match(source, /@media\(prefers-reduced-motion:reduce\)/u)
+  assert.match(source, /@media\(max-width:900px\)/u)
+  assert.match(source, /@media\(max-width:620px\)/u)
+  assert.match(source, /completedTasks\.slice\(0, historyLimit\)/u)
+  assert.match(source, /dat-settings-disclosure/u)
+  assert.match(source, /role: "group", "aria-label": t\("currentWork"\)/u)
+  assert.match(source, /onClick: props\.openMembers/u)
+
+  const helperStart = source.indexOf('function memberActivityValue(member)')
+  const helperEnd = source.indexOf('function relationIds(value)', helperStart)
+  const sortMembersByActivity = Function(`function memberId(member) { return member.id; }\n${source.slice(helperStart, helperEnd)}\nreturn sortMembersByActivity`)()
+  const sorted = sortMembersByActivity([
+    { id: 'idle-old', state: 'idle', lastActivityAt: '2026-01-01T00:00:00Z' },
+    { id: 'running-old', state: 'running', lastActivityAt: '2026-01-01T00:00:00Z' },
+    { id: 'failed-new', state: 'failed', lastActivityAt: '2026-01-03T00:00:00Z' },
+    { id: 'starting-new', state: 'provisioning', lastActivityAt: '2026-01-03T00:00:00Z' },
+    { id: 'running-new', state: 'running', lastActivityAt: '2026-01-02T00:00:00Z' },
+    { id: 'idle-new', state: 'idle', lastActivityAt: '2026-01-02T00:00:00Z' }
+  ])
+  assert.deepEqual(sorted.map((member) => member.id), ['starting-new', 'running-new', 'running-old', 'failed-new', 'idle-new', 'idle-old'])
 })
 
 test('settings restore authoritative state after an active-team disable conflict', async () => {
@@ -147,25 +228,25 @@ test('settings restore authoritative state after an active-team disable conflict
 
 test('switching conversation views only stops UI subscriptions, never the running team', async () => {
   const source = await clientSource()
-  assert.match(source, /if \(source\) source\.close\(\); if \(poll\) clearInterval\(poll\)/u)
+  assert.match(source, /if \(source\) source\.close\(\);\s*clearPolling\(\);\s*if \(publishFrame !== null\) cancelFrame\(publishFrame\)/u)
+  assert.match(source, /removeEventListener\("visibilitychange", onVisibilityChange\)/u)
   assert.doesNotMatch(source, /sessions\.(?:interrupt|stop)|team_shutdown|member-stop|postAction\([^\n]+["']close["']/u)
   assert.match(source, /Switching teams or views never stops background members/u)
 })
 
-test('Agent Teams workspace exposes localized members, tasks, events, and live handoff', async () => {
+test('Agent Teams workspace exposes tasks, events, and one unified agent catalog', async () => {
   const source = await clientSource()
-  for (const marker of ['members', 'tasks', 'events', 'blockedBy', 'dependencySources', 'conflictsWith', 'fileScopeProjection', 'lastActivityAt', 'currentTaskFor', 'sessions.subagentAddress', 'sessions.openSubagent']) {
+  for (const marker of ['members', 'tasks', 'events', 'blockedBy', 'dependencySources', 'conflictsWith', 'fileScopeProjection', 'lastActivityAt', 'agentCount', 'setSubagentCatalogOpen', 'SUBAGENT_CATALOG_EVENT']) {
     assert.ok(source.includes(marker), `missing Agent Teams workspace marker: ${marker}`)
   }
-  for (const label of ['正在启动', '正在停止', '正在关闭', '查看实时工作', '主模型', '子代理模型', '文件范围已按安全策略隐藏', '协作事件']) {
+  for (const label of ['正在启动', '正在停止', '正在关闭', '代理目录', '文件范围已按安全策略隐藏', '协作事件']) {
     assert.ok(source.includes(label), `missing localized UX label: ${label}`)
   }
-  assert.match(source, /\[member\.provider, member\.model\]/u)
-  assert.match(source, /member\.modelTier === "main" \|\| isLead/u)
-  assert.match(source, /member\.kind === "lead"/u)
-  assert.match(source, /child\.indexOf\("provisioning:"\) !== 0/u)
-  assert.match(source, /openSubagent\(address\)/u)
-  assert.doesNotMatch(source, /openSubagent\(\{\s*parentSessionId/u)
+  assert.match(source, /props\.sessions\.setSubagentCatalogOpen\(team\.leadSessionId, true\)/u)
+  assert.match(source, /new window\.CustomEvent\(SUBAGENT_CATALOG_EVENT, \{ detail: \{ parentSessionId: team\.leadSessionId \} \}\)/u)
+  assert.match(source, /h\(ActiveTeam, \{ t: t, team: team, teams: teams, closed: closed, paused: paused, setDraft: setDraft, sessions: props\.sessions \}\)/u)
+  assert.match(source, /paused: "已由用户停止"|paused: "Stopped by user"/u)
+  assert.doesNotMatch(source, /function MemberCard|drawerTab|setDrawerTab|sessions\.openSubagent|openSubagent\(address\)/u)
   assert.match(source, /aria-live/u)
   assert.match(source, /h\("h2", \{ className: "dat-title" \}/u)
   assert.match(source, /@media\(max-width:900px\)/u)

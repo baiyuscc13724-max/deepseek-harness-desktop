@@ -16,6 +16,9 @@ test('Codex-style right sidebar browser uses an isolated visible login profile',
   assert.match(html, /id="browserQuickButton"/u)
   assert.match(html, /id="browserSidebar"/u)
   assert.match(html, /id="browserAddress"/u)
+  for (const id of ['browserTabs', 'browserNewTab', 'browserResizeHandle', 'browserWideMode', 'browserHistoryPanel', 'browserDownloadsPanel']) {
+    assert.match(html, new RegExp(`id="${id}"`), `missing browser sidebar control ${id}`)
+  }
   assert.match(html, /请直接在下方真实网页中亲自登录/u)
   assert.match(html, /模型无法读取密码、Cookie、验证码或令牌/u)
   assert.match(html, /browser-sidebar\.js/u)
@@ -38,6 +41,16 @@ test('Codex-style right sidebar browser uses an isolated visible login profile',
   assert.match(renderer, /正在安全重置独立 Profile/u)
   assert.match(html, /清除登录数据、缓存、浏览历史、站点授权与审计元数据/u)
   assert.match(renderer, /privacySummary\.textContent/u)
+  assert.match(renderer, /newBrowserTab/u)
+  assert.match(renderer, /switchBrowserTab/u)
+  assert.match(renderer, /closeBrowserTab/u)
+  assert.match(renderer, /setBrowserPanelWidth/u)
+  assert.match(renderer, /setBrowserWideMode/u)
+  assert.match(renderer, /searchBrowserHistory/u)
+  assert.match(renderer, /openBrowserHistory/u)
+  assert.match(renderer, /removeBrowserHistory/u)
+  assert.match(renderer, /clearBrowserHistory\(\{ confirmed: true \}\)/u)
+  assert.match(renderer, /event\.ctrlKey && event\.shiftKey/u)
   assert.match(main, /request\?\.confirmed === true/u)
   assert.doesNotMatch(renderer, /document\.cookie|executeJavaScript|password/u)
 

@@ -209,7 +209,15 @@ class MobileControlBroker {
     }
     queue.push(command)
     this.queues.set(deviceId, queue)
-    this.pending.set(command.id, { deviceId, command, deliveredAt: null })
+    this.pending.set(command.id, {
+      deviceId,
+      command,
+      deliveredAt: null,
+      cancelRequestedAt: null,
+      cancelReason: null,
+      stopRequestedAt: null,
+      stopReason: null
+    })
     return command
   }
 
@@ -239,6 +247,8 @@ class MobileControlBroker {
       code: safeString(payload.code || (payload.ok ? 'OK' : 'FAILED'), 80),
       message: safeString(payload.message, 500),
       data: payload.data && typeof payload.data === 'object' ? payload.data : null,
+      ...(pending.cancelRequestedAt !== null ? { cancelRequestedAt: new Date(pending.cancelRequestedAt).toISOString(), cancelReason: pending.cancelReason } : {}),
+      ...(pending.stopRequestedAt !== null ? { stopRequestedAt: new Date(pending.stopRequestedAt).toISOString(), stopReason: pending.stopReason } : {}),
       completedAt: new Date(this.now()).toISOString()
     }
     this.pending.delete(id)
@@ -255,15 +265,26 @@ class MobileControlBroker {
   cancel(id, reason = 'USER_CANCELLED') {
     const pending = this.pending.get(String(id))
     if (!pending) return false
-    const queue = this.queues.get(pending.deviceId) || []
-    this.queues.set(pending.deviceId, queue.filter(command => command.id !== pending.command.id))
-    this.pending.delete(pending.command.id)
-    this.#pushDirective(pending.deviceId, 'cancel', { commandId: pending.command.id, reason: safeString(reason, 120) })
+    const safeReason = safeString(reason, 120) || 'USER_CANCELLED'
+    if (pending.deliveredAt === null) {
+      const queue = this.queues.get(pending.deviceId) || []
+      const remaining = queue.filter(command => command.id !== pending.command.id)
+      if (remaining.length) this.queues.set(pending.deviceId, remaining)
+      else this.queues.delete(pending.deviceId)
+      this.#finishPending(pending, safeReason, '尚未派发的手机控制命令已在桌面端取消。')
+      return true
+    }
+    if (pending.cancelRequestedAt === null) {
+      pending.cancelRequestedAt = this.now()
+      pending.cancelReason = safeReason
+      this.#pushDirective(pending.deviceId, 'cancel', { commandId: pending.command.id, reason: safeReason })
+    }
     return true
   }
 
   stop(deviceId = null, reason = 'DESKTOP_STOP') {
-    const ids = deviceId ? [deviceId] : [...new Set([...this.devices.keys(), ...this.queues.keys()])]
+    const pendingDevices = [...this.pending.values()].map(entry => entry.deviceId)
+    const ids = deviceId ? [deviceId] : [...new Set([...this.devices.keys(), ...this.queues.keys(), ...pendingDevices])]
     for (const id of ids) {
       this.clearDevice(id, reason)
       this.#pushDirective(id, 'stop', { reason: safeString(reason, 120) })
@@ -272,12 +293,38 @@ class MobileControlBroker {
   }
 
   clearDevice(deviceId, reason = 'DISCONNECTED') {
+    const safeReason = safeString(reason, 120) || 'DISCONNECTED'
     this.queues.delete(deviceId)
-    for (const [id, pending] of this.pending) {
-      if (pending.deviceId === deviceId) this.pending.delete(id)
+    for (const pending of [...this.pending.values()]) {
+      if (pending.deviceId !== deviceId) continue
+      if (pending.deliveredAt === null) {
+        this.#finishPending(pending, safeReason, '尚未派发的手机控制命令已由桌面端终止。')
+      } else if (pending.stopRequestedAt === null) {
+        pending.stopRequestedAt = this.now()
+        pending.stopReason = safeReason
+      }
     }
     const status = this.devices.get(deviceId)
-    if (status) this.devices.set(deviceId, { ...status, ready: false, phase: 'stopped', detail: safeString(reason, 120), currentCommandId: null })
+    if (status) this.devices.set(deviceId, { ...status, ready: false, phase: 'stopped', detail: safeReason, currentCommandId: null })
+  }
+
+  #finishPending(pending, code, message) {
+    const result = {
+      id: pending.command.id,
+      deviceId: pending.deviceId,
+      action: pending.command.action,
+      ok: false,
+      code: safeString(code, 80) || 'CANCELLED',
+      message: safeString(message, 500),
+      data: null,
+      ...(pending.cancelRequestedAt !== null ? { cancelRequestedAt: new Date(pending.cancelRequestedAt).toISOString(), cancelReason: pending.cancelReason } : {}),
+      ...(pending.stopRequestedAt !== null ? { stopRequestedAt: new Date(pending.stopRequestedAt).toISOString(), stopReason: pending.stopReason } : {}),
+      completedAt: new Date(this.now()).toISOString()
+    }
+    this.pending.delete(pending.command.id)
+    this.results.set(pending.command.id, result)
+    if (this.results.size > 128) this.results.delete(this.results.keys().next().value)
+    return result
   }
 
   #pushDirective(deviceId, action, payload) {
@@ -289,10 +336,17 @@ class MobileControlBroker {
   #expire() {
     const now = this.now()
     for (const [id, pending] of this.pending) {
-      if (Date.parse(pending.command.expiresAt) <= now) {
+      if (Date.parse(pending.command.expiresAt) > now) continue
+      const queue = this.queues.get(pending.deviceId) || []
+      const remaining = queue.filter(command => command.id !== id)
+      if (remaining.length) this.queues.set(pending.deviceId, remaining)
+      else this.queues.delete(pending.deviceId)
+      if (pending.stopRequestedAt !== null) {
+        this.#finishPending(pending, 'STOP_UNCONFIRMED', '桌面已请求停止，但手机未在命令有效期内确认最终状态。')
+      } else if (pending.cancelRequestedAt !== null) {
+        this.#finishPending(pending, 'CANCEL_UNCONFIRMED', '桌面已请求取消，但手机未在命令有效期内确认最终状态。')
+      } else {
         this.pending.delete(id)
-        const queue = this.queues.get(pending.deviceId) || []
-        this.queues.set(pending.deviceId, queue.filter(command => command.id !== id))
       }
     }
   }

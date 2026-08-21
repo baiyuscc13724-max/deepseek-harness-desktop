@@ -1,6 +1,6 @@
 # Security Policy
 
-Harness Desktop 启动本机 DeepSeek Harness Runtime。模型访问、工具执行、工作区文件操作和权限审批都由官方 Harness 工作台负责；桌面壳只提供最小运行与窗口边界。
+Harness Desktop 启动未经分叉的官方 DeepSeek Harness Runtime。模型访问、会话、工作区、工具执行和权限审批由官方 Harness 工作台负责；本仓库只维护 Electron 桌面壳、独立 bridge 与可卸载桌面插件。桌面插件可以增加浏览器、手机、Computer Use、记忆或团队等桌面能力，但不得绕过官方工具权限，也不得复制官方核心后台。
 
 ## 不应提交到仓库
 
@@ -13,19 +13,30 @@ Harness Desktop 启动本机 DeepSeek Harness Runtime。模型访问、工具执
 ## Electron 边界
 
 - Renderer 使用 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`；
-- Preload 只暴露 Runtime 启动/状态、更新偏好/检查和外部链接白名单；
-- 没有任意进程启动、文件系统、终端、Git、Provider、MCP 或插件 IPC；
-- WebView 只能附加和导航到本机 `127.0.0.1` / `localhost` HTTP Runtime；
-- 新窗口默认拒绝；外部 HTTP/HTTPS 链接由系统浏览器打开；
+- Preload 只暴露固定、参数受限的方法，不提供通用 IPC、任意 Node.js、文件系统或进程执行接口；
+- 更新、手机控制、模型路由、本机数据、Computer Use 和系统打开等高权限 IPC 绑定桌面主窗口的精确 `webContents`；
+- 桌宠使用独立 preload 和 `pet:*` 最小通道，官方工作台 WebView 不继承桌面 preload；
+- 官方工作台 WebView 只能附加和导航到本机 `127.0.0.1` / `localhost` Runtime；
+- 桌面浏览器使用独立持久分区、权限拒绝策略和一次性确认，不与官方工作台共享任意网站权限；
+- 新窗口默认拒绝；外部链接和本地路径由受限策略处理；
 - 桌面端只终止自己创建的 Harness 子进程，对已存在的本地 Runtime 只连接不接管。
+
+## 本机与手机 bridge
+
+- 浏览器和手机模型控制端点只监听 loopback；每次服务启动生成随机 Bearer 和 generation，凭据写入用户数据目录的私有状态文件，停止或重启即失效；
+- Computer Use 只控制 Harness Desktop 主窗口；点击、输入和滚动确认绑定当前会话 generation、窗口尺寸及页面 URL，窗口状态变化后旧确认失效；
+- WSS/443 中继传输端到端加密帧，中继不能读取工作台数据；
+- 当前局域网直连手机工作台仍基于用户显式开启的 HTTP bridge，不应在不受信公共 Wi-Fi 使用。完整的 LAN 传输加密需要手机协议同步升级，不能由桌面端虚假宣称已解决。
 
 ## 更新
 
-- 桌面版更新从仓库 GitHub Releases API 检查；
-- DeepSeek Harness 核心只从 DeepSeek 官方 manifest 检查；
-- 更新响应设置超时和最大大小；
-- 核心更新只提示，不在用户机器上静默替换依赖；
-- 每个新核心版本必须随桌面版重新构建并通过兼容性与安装包验收。
+- 桌面更新清单、校验文件和安装包只接受无凭据、无片段、标准 443 的 HTTPS 地址；
+- 每一跳重定向都由应用手动检查，限制次数并拒绝 HTTP 降级和未知来源迁移；
+- 国内/全球源失败时按清单声明的后备源切换，失败残片必须删除；
+- 桌面 `release-manifest.json` 的每条发布记录使用域分离的 Ed25519 签名；应用先用打包内置的生产公钥验签，再解析版本、发布页和资产地址，无签名、未知 key 或篡改一律 fail closed；
+- 安装包同时检查最大尺寸、签名清单声明尺寸和 SHA-256；SHA-256 用于确认实际下载字节与已签名声明一致；
+- 签名组件更新复用同一审计 Ed25519 信任根，清单、路径、大小和组件内容全部验签；
+- DeepSeek Harness 核心只做官方版本提示，不能在用户机器上静默替换；每个新核心版本随桌面版重新构建并通过兼容性与安装包验收。
 
 ## 漏洞报告
 

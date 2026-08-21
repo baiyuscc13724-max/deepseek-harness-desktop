@@ -59,6 +59,19 @@ test('授权参数校验：非法动作、非法 origin、空动作列表拒绝'
   assert.throws(() => store.grant('javascript:alert(1)', { actions: ['read'] }), /http\/https/)
 })
 
+test('localhost/内网默认拒绝，只有真实用户显式授权精确 origin 才生效', () => {
+  const store = new SiteAuthorizationStore({ now: clock().now })
+  for (const origin of ['http://localhost:3000', 'http://127.0.0.1:5173', 'http://192.168.1.8:8080']) {
+    assert.throws(() => store.grant(origin, { actions: ['read'] }), error => error.code === 'private-network-explicit-consent-required')
+    assert.throws(() => store.grant(origin, { actions: ['read'], allowPrivateNetwork: true, by: 'model' }), error => error.code === 'private-network-explicit-consent-required')
+  }
+  const entry = store.grant('http://localhost:3000', { actions: ['read', 'click'], allowPrivateNetwork: true, by: 'user' })
+  assert.equal(entry.privateNetwork, true)
+  assert.deepEqual(store.privateOrigins(), ['http://localhost:3000'])
+  assert.equal(store.authorized('http://localhost:3000', 'read'), true)
+  assert.equal(store.authorized('http://localhost:3001', 'read'), false)
+})
+
 test('TTL：过期后自动失效并被清理', () => {
   const c = clock()
   const store = new SiteAuthorizationStore({ now: c.now, defaultTtlMs: 60_000 })
@@ -139,7 +152,21 @@ test('JSON 持久化：只存权限元数据，绝不落盘 Cookie/密码/token'
   assert.equal(reloaded.authorized('https://example.com', 'submit'), false)
 })
 
-test('策略持久化迁移：v1 布尔授权自动升级为 v2 完整动作集', async t => {
+test('显式私网授权仅持久化安全元数据并可恢复', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-private-authz-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const file = path.join(root, 'policy.json')
+  const c = clock()
+  const store = new SiteAuthorizationStore({ file, now: c.now })
+  store.grant('http://localhost:3000', { actions: ['read'], allowPrivateNetwork: true, by: 'user' })
+  const raw = JSON.parse(await readFile(file, 'utf8'))
+  assert.equal(raw.entries['http://localhost:3000'].privateNetwork, true)
+  const reloaded = new SiteAuthorizationStore({ file, now: c.now })
+  assert.deepEqual(reloaded.privateOrigins(), ['http://localhost:3000'])
+  assert.equal(reloaded.authorized('http://localhost:3000', 'read'), true)
+})
+
+test('策略持久化迁移：v1 布尔授权自动升级为 v3 完整动作集', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-migrate-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const file = path.join(root, 'policy.json')
@@ -160,7 +187,7 @@ test('策略持久化迁移：v1 布尔授权自动升级为 v2 完整动作集'
 
   // 迁移后文件已升级为 v2。
   const raw = JSON.parse(await readFile(file, 'utf8'))
-  assert.equal(raw.schemaVersion, 2)
+  assert.equal(raw.schemaVersion, SCHEMA_VERSION)
   assert.ok(raw.entries['https://legacy.com'])
 })
 

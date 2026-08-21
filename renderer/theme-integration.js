@@ -5,8 +5,8 @@
 
     const request = (action, values = {}) => {
       if (document.documentElement.dataset.harnessMobile === 'true') {
-        if (action === 'choose-theme-background') {
-          window.alert('自定义背景图请先在电脑端选择；主题配色可以直接在手机端保存。')
+        if (action === 'choose-theme-background' || action === 'choose-wallpaper-engine') {
+          window.alert('自定义图片或视频壁纸请先在电脑端选择；主题配色可以直接在手机端保存。')
           return Promise.resolve(null)
         }
         if (action === 'open-external') {
@@ -219,20 +219,23 @@
       .hd-ui-options small { margin-top:2px; color:var(--dsw-alias-label-secondary); font-size:10px; font-weight:400; }
       .hd-ui-options input { width:17px; height:17px; accent-color:var(--dsw-alias-brand-primary); }
       .hd-ui-note { margin:16px 0 0; color:var(--dsw-alias-label-tertiary); font-size:11px; }
-      html[data-hd-ui-mode]:not([data-hd-ui-mode="official"]) [data-composer-card="true"] { transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease,background .2s ease; }
+      html[data-hd-ui-mode]:not([data-hd-ui-mode="official"]) [data-composer-card="true"] { transition:border-color .2s ease,box-shadow .2s ease,background .2s ease; }
+      [data-composer-seat] { overflow-anchor:none; }
       html[data-hd-ui-mode="aurora"] body { box-shadow:inset 0 0 180px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)!important; }
-      html[data-hd-ui-mode="aurora"] [data-slot="sidebar"] > *,html[data-hd-ui-mode="aurora"] [data-composer-card="true"],html[data-hd-ui-mode="aurora"] [role="dialog"] { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 38%,var(--dsw-alias-border-l2))!important; background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 78%,transparent)!important; box-shadow:inset 0 1px rgba(255,255,255,.14),0 22px 58px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,rgba(7,15,30,.18)); backdrop-filter:blur(20px) saturate(1.16); }
-      html[data-hd-ui-mode="aurora"] [data-slot="sidebar"] > *:has([role="dialog"][aria-modal="true"]) { backdrop-filter:none!important; }
-      html[data-hd-ui-mode="aurora"] [data-composer-card="true"] { border-radius:22px!important; outline:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 28%,transparent); transform:translateY(-3px); }
-      html[data-hd-ui-mode="spatial"] [data-slot="sidebar"] > * { opacity:.68; transition:opacity .2s ease,filter .2s ease; }
-      html[data-hd-ui-mode="spatial"] [data-slot="sidebar"]:hover > *,html[data-hd-ui-mode="spatial"] [data-slot="sidebar"]:focus-within > * { opacity:1; }
-      html[data-hd-ui-mode="spatial"] [data-composer-card="true"] { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 30%,var(--dsw-alias-border-l2))!important; border-radius:20px!important; box-shadow:0 34px 82px rgba(7,15,30,.28); transform:translateY(-6px) scale(1.015); }
-      html[data-hd-ui-mode="spatial"] [data-slot="conversation"] p,html[data-hd-ui-mode="spatial"] [data-slot="conversation"] li { line-height:1.72; }
-      html[data-hd-ui-mode="tactile"] [data-composer-card="true"],html[data-hd-ui-mode="tactile"] [role="dialog"] { border:2px solid color-mix(in srgb,var(--dsw-alias-label-primary) 22%,var(--dsw-alias-border-l2))!important; border-radius:14px!important; box-shadow:inset 0 2px rgba(255,255,255,.18),inset 0 -3px rgba(0,0,0,.11),0 15px 32px rgba(7,15,30,.18); }
+      html[data-hd-ui-mode="aurora"] [data-hd-surface="sidebar"],html[data-hd-ui-mode="aurora"] [data-hd-surface="details"],html[data-hd-ui-mode="aurora"] [data-composer-card="true"],html[data-hd-ui-mode="aurora"] [role="dialog"] { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 38%,var(--dsw-alias-border-l2))!important; background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 78%,transparent)!important; box-shadow:inset 0 1px rgba(255,255,255,.14),0 22px 58px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,rgba(7,15,30,.18)); backdrop-filter:blur(20px) saturate(1.16); }
+      html[data-hd-ui-mode="aurora"] [data-hd-surface="sidebar"]:has([role="dialog"][aria-modal="true"]) { backdrop-filter:none!important; }
+      html[data-hd-ui-mode="aurora"] [data-hd-surface="conversation"] { background:radial-gradient(circle at 50% 100%,color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,transparent),transparent 48%)!important; }
+      html[data-hd-ui-mode="aurora"] [data-composer-card="true"] { border-radius:22px!important; outline:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 28%,transparent); }
+      html[data-hd-ui-mode="spatial"] [data-hd-surface="sidebar"],html[data-hd-ui-mode="spatial"] [data-hd-surface="details"] { opacity:.68; filter:saturate(.72); transition:opacity .2s ease,filter .2s ease; }
+      html[data-hd-ui-mode="spatial"] [data-hd-surface="sidebar"]:hover,html[data-hd-ui-mode="spatial"] [data-hd-surface="sidebar"]:focus-within,html[data-hd-ui-mode="spatial"] [data-hd-surface="details"]:hover { opacity:1; filter:none; }
+      html[data-hd-ui-mode="spatial"] [data-hd-surface="conversation"] { box-shadow:0 0 70px color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,transparent); }
+      html[data-hd-ui-mode="spatial"] [data-composer-card="true"] { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 30%,var(--dsw-alias-border-l2))!important; border-radius:20px!important; background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 94%,var(--dsw-alias-brand-primary) 6%)!important; box-shadow:0 18px 54px rgba(7,15,30,.22),0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent); }
+      html[data-hd-ui-mode="spatial"] [data-hd-surface="conversation"] p,html[data-hd-ui-mode="spatial"] [data-hd-surface="conversation"] li { line-height:1.72; }
+      html[data-hd-ui-mode="tactile"] [data-hd-surface="sidebar"],html[data-hd-ui-mode="tactile"] [data-composer-card="true"],html[data-hd-ui-mode="tactile"] [role="dialog"] { border:2px solid color-mix(in srgb,var(--dsw-alias-label-primary) 22%,var(--dsw-alias-border-l2))!important; border-radius:14px!important; box-shadow:inset 0 2px rgba(255,255,255,.18),inset 0 -3px rgba(0,0,0,.11),0 15px 32px rgba(7,15,30,.18); }
       html[data-hd-ui-mode="tactile"] [data-composer-card="true"] button,html[data-hd-ui-mode="tactile"] [role="dialog"] button { box-shadow:inset 0 1px rgba(255,255,255,.12),0 4px 10px rgba(7,15,30,.10); transition:transform .14s ease,box-shadow .14s ease; }
       html[data-hd-ui-mode="tactile"] [data-composer-card="true"] button:active,html[data-hd-ui-mode="tactile"] [role="dialog"] button:active { transform:translateY(1px); box-shadow:inset 0 2px 4px rgba(0,0,0,.16); }
-      html[data-hd-low-performance="true"] [data-slot="sidebar"] > *,html[data-hd-low-performance="true"] [data-composer-card="true"],html[data-hd-low-performance="true"] [role="dialog"] { backdrop-filter:none!important; box-shadow:none!important; }
-      html[data-hd-reduced-motion="true"] .hd-ui-card,html[data-hd-reduced-motion="true"] [data-slot="sidebar"] > *,html[data-hd-reduced-motion="true"] [data-composer-card="true"] button,html[data-hd-reduced-motion="true"] [role="dialog"] button { transition:none!important; }
+      html[data-hd-low-performance="true"] [data-hd-surface],html[data-hd-low-performance="true"] [data-composer-card="true"],html[data-hd-low-performance="true"] [role="dialog"] { backdrop-filter:none!important; box-shadow:none!important; }
+      html[data-hd-reduced-motion="true"] .hd-ui-card,html[data-hd-reduced-motion="true"] [data-hd-surface],html[data-hd-reduced-motion="true"] [data-composer-card="true"] button,html[data-hd-reduced-motion="true"] [role="dialog"] button { transition:none!important; }
       @media (prefers-reduced-motion:reduce) { .hd-ui-card,[data-slot="sidebar"] > *,[data-composer-card="true"] button,[role="dialog"] button { transition:none!important; } }
       @container (max-width:660px) { .hd-custom-layout { grid-template-columns:1fr; } .hd-ui-grid,.hd-ui-options { grid-template-columns:1fr; } }
       @container (max-width:380px) { .hd-custom-heading { flex-direction:column; gap:6px; } .hd-custom-status { align-self:flex-start; } .hd-custom-fields,.hd-custom-range-grid { grid-template-columns:1fr; } .hd-ui-card { grid-template-columns:96px 1fr; } }
@@ -248,6 +251,9 @@
       html[data-hd-theme="custom"] body { background:var(--dsw-alias-bg-base) !important; }
       html[data-hd-theme="custom"] body::before { content:""; position:fixed; z-index:0; inset:calc(-32px - var(--hd-wallpaper-blur,0px)); background:var(--hd-wallpaper) center/cover no-repeat; filter:brightness(var(--hd-wallpaper-brightness,.82)) blur(calc(var(--hd-wallpaper-blur,2px) + 22px)) saturate(.88); pointer-events:none; }
       html[data-hd-theme="custom"] body::after { content:""; position:fixed; z-index:0; inset:0; background-image:linear-gradient(var(--hd-wallpaper-overlay),var(--hd-wallpaper-overlay)),var(--hd-wallpaper-contain,none); background-position:center,center; background-size:cover,contain; background-repeat:no-repeat,no-repeat; filter:brightness(var(--hd-wallpaper-brightness,.82)); pointer-events:none; }
+      html[data-hd-wallpaper-kind="video"] body::before,html[data-hd-wallpaper-kind="video"] body::after { display:none!important; }
+      .hd-wallpaper-video { position:fixed; z-index:0; inset:0; width:100%; height:100%; object-fit:cover; filter:brightness(var(--hd-wallpaper-brightness,.82)); pointer-events:none; }
+      .hd-wallpaper-video-overlay { position:fixed; z-index:0; inset:0; background:var(--hd-wallpaper-overlay); pointer-events:none; }
       html[data-hd-theme]:not([data-hd-theme="official"]) #root > [data-slot="root"] > *,
       html[data-hd-theme]:not([data-hd-theme="official"]) [data-slot="conversation"] > * { background:transparent !important; }
       html[data-hd-theme]:not([data-hd-theme="official"]) [data-slot="sidebar"] > * {
@@ -304,6 +310,7 @@
         id: 'custom', mode: custom.mode,
         preview: `radial-gradient(circle at 18% 14%, ${accent} 0%, transparent 34%), linear-gradient(145deg, ${surface}, ${accent})`,
         customBackgroundDataUrl: state?.customBackgroundDataUrl || '',
+        customBackgroundVideoDataUrl: state?.customBackgroundVideoDataUrl || '',
         wallpaperBrightness: custom.wallpaperBrightness,
         wallpaperBlur: custom.wallpaperBlur,
         wallpaperOverlay: hexWithOpacity(surface, .06 + readability * (custom.mode === 'dark' ? .34 : .27)),
@@ -333,6 +340,52 @@
       }
     }
 
+    const tagLayoutSurfaces = () => {
+      const overlay = document.querySelector('[data-shell-overlay="true"]')
+      const frame = overlay?.parentElement
+      if (!frame) return
+      const columns = [...frame.children].filter(element => element !== overlay && !element.hasAttribute('data-side'))
+      const names = ['sidebar', 'conversation', 'details']
+      columns.slice(0, 3).forEach((element, index) => { element.dataset.hdSurface = names[index] })
+    }
+
+    const syncWallpaperVideo = theme => {
+      const root = document.documentElement
+      const source = theme?.id === 'custom' ? theme.customBackgroundVideoDataUrl : ''
+      let video = document.querySelector('.hd-wallpaper-video')
+      let overlay = document.querySelector('.hd-wallpaper-video-overlay')
+      if (!source) {
+        if (video) {
+          video.pause()
+          video.removeAttribute('src')
+          video.load()
+          video.remove()
+        }
+        overlay?.remove(); root.removeAttribute('data-hd-wallpaper-kind')
+        return
+      }
+      if (!video) {
+        video = document.createElement('video')
+        video.className = 'hd-wallpaper-video'
+        video.muted = true; video.loop = true; video.autoplay = true; video.playsInline = true
+        document.body.prepend(video)
+      }
+      const sourceChanged = video.src !== source
+      if (sourceChanged) video.src = source
+      if (!overlay) {
+        overlay = document.createElement('div')
+        overlay.className = 'hd-wallpaper-video-overlay'
+        video.after(overlay)
+      }
+      root.dataset.hdWallpaperKind = 'video'
+      const shouldPause = root.dataset.hdLowPerformance === 'true' || root.dataset.hdReducedMotion === 'true' || document.hidden
+      if (shouldPause) {
+        if (!video.paused) video.pause()
+      } else if (video.paused || sourceChanged) video.play().catch(() => {})
+    }
+
+    document.addEventListener('visibilitychange', () => syncWallpaperVideo(customThemeFromState(window.__HARNESS_DESKTOP_THEME_STATE__ || {})))
+
     const applyTheme = requestedId => {
       const state = window.__HARNESS_DESKTOP_THEME_STATE__ || { themeId: 'official' }
       const id = requestedId || state.themeId || 'official'
@@ -341,6 +394,7 @@
         old?.remove()
         document.documentElement.removeAttribute('data-hd-theme')
         document.documentElement.removeAttribute('data-hd-skin-tone')
+        syncWallpaperVideo(null)
         window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ = ''
         return
       }
@@ -370,7 +424,7 @@
         '--hd-wallpaper-blur': `${theme.wallpaperBlur}px`
       } : {}
       const themeValues = { ...vars, ...isolatedSurfaces, ...wallpaperVars }
-      const signature = JSON.stringify([theme.id, tone, wallpaper, themeValues])
+      const signature = JSON.stringify([theme.id, tone, wallpaper, theme.customBackgroundVideoDataUrl || '', themeValues])
       if (old && window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ === signature && document.documentElement.dataset.hdTheme === theme.id) return
       old?.remove()
       active.textContent = `
@@ -385,16 +439,18 @@
       document.head.appendChild(active)
       document.documentElement.dataset.hdTheme = theme.id
       document.documentElement.dataset.hdSkinTone = tone
+      syncWallpaperVideo(theme)
       window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ = signature
     }
 
-    const applyUiMode = () => {
+    const applyUiMode = (syncVideo = true) => {
       const state = window.__HARNESS_DESKTOP_THEME_STATE__ || {}
       const mobile = document.documentElement.dataset.harnessMobile === 'true'
       const mode = !mobile && uiModes.some(entry => entry.id === state.uiMode) ? state.uiMode : 'official'
       document.documentElement.dataset.hdUiMode = mode
       document.documentElement.dataset.hdReducedMotion = String(state.reducedMotion === true)
       document.documentElement.dataset.hdLowPerformance = String(state.lowPerformance === true)
+      if (!mobile && syncVideo) syncWallpaperVideo(customThemeFromState(state))
     }
 
     const publishUiPreferences = panel => {
@@ -519,10 +575,12 @@
       }
       const backgroundFile = state?.customTheme?.backgroundFile || ''
       const animated = /\.(?:gif|apng)$/i.test(backgroundFile)
-      panel.querySelector('[data-hd-custom-background-state]').textContent = state.customBackgroundDataUrl
-        ? animated ? '动态壁纸已启用' : '本地壁纸已启用（兼容动态 WebP）'
-        : '当前使用渐变背景'
-      panel.querySelector('[data-hd-clear-background]').disabled = !state.customBackgroundDataUrl
+      panel.querySelector('[data-hd-custom-background-state]').textContent = state.customBackgroundVideoDataUrl
+        ? '本地视频壁纸已启用'
+        : state.customBackgroundDataUrl
+          ? animated ? '动态壁纸已启用' : '本地图片壁纸已启用'
+          : '当前使用渐变背景'
+      panel.querySelector('[data-hd-clear-background]').disabled = !state.customBackgroundDataUrl && !state.customBackgroundVideoDataUrl
       renderUiModes(panel)
     }
 
@@ -537,7 +595,7 @@
         <div class="hd-appearance-pane" data-hd-appearance-pane="themes">
           <div class="hd-theme-grid" data-hd-theme-grid></div>
           <section class="hd-custom-editor">
-            <div class="hd-custom-heading"><div><h3>自定义主题</h3><p>调整配色和壁纸质感；文件只保存在本机，支持 PNG、JPG、WebP、GIF、APNG，最大 50 MB。</p></div><span class="hd-custom-status" data-hd-custom-background-state></span></div>
+            <div class="hd-custom-heading"><div><h3>自定义主题</h3><p>调整配色和壁纸质感；文件只保存在本机，支持常用图片、MP4/WebM 视频及 Wallpaper Engine 图片/视频项目；图片最大 50 MB，视频最大 2 GB。</p></div><span class="hd-custom-status" data-hd-custom-background-state></span></div>
             <div class="hd-custom-layout">
               <section class="hd-custom-group"><h4>基础配色</h4><div class="hd-custom-fields">
                 <label>明暗模式<select data-hd-custom="mode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
@@ -553,7 +611,7 @@
                 <label><span>文字保护 <output data-hd-custom-output="readabilityStrength">72%</output></span><input type="range" min="0" max="100" value="72" data-hd-custom="readabilityStrength"></label>
               </div></section>
             </div>
-            <div class="hd-custom-actions"><button type="button" class="hd-theme-button" data-hd-choose-background>选择本地壁纸或动图</button><button type="button" class="hd-theme-button" data-hd-clear-background>移除壁纸</button><button type="button" class="hd-theme-button hd-theme-primary" data-hd-save-custom>应用并保存</button></div>
+            <div class="hd-custom-actions"><button type="button" class="hd-theme-button" data-hd-choose-background>选择图片或视频</button><button type="button" class="hd-theme-button" data-hd-choose-wallpaper-engine>导入 Wallpaper Engine</button><button type="button" class="hd-theme-button" data-hd-clear-background>移除壁纸</button><button type="button" class="hd-theme-button hd-theme-primary" data-hd-save-custom>应用并保存</button></div>
           </section>
         </div>
         <section class="hd-appearance-pane" data-hd-appearance-pane="modes" hidden>
@@ -584,6 +642,7 @@
         applyTheme('official'); applyUiMode(); renderCards(panel); request(mobile ? 'set-theme' : 'restore-appearance', mobile ? { id: 'official' } : {})
       })
       panel.querySelector('[data-hd-choose-background]').addEventListener('click', () => request('choose-theme-background'))
+      panel.querySelector('[data-hd-choose-wallpaper-engine]').addEventListener('click', () => request('choose-wallpaper-engine'))
       panel.querySelector('[data-hd-clear-background]').addEventListener('click', () => request('clear-theme-background'))
       panel.querySelectorAll('.hd-custom-range-grid input').forEach(input => input.addEventListener('input', () => {
         const output = panel.querySelector(`[data-hd-custom-output="${input.dataset.hdCustom}"]`)
@@ -683,10 +742,11 @@
     }
 
     const mount = (refreshTheme = true) => {
+      tagLayoutSurfaces()
       const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
       if (dialog) ensureNavigation(dialog)
       applySessionLogDock()
-      applyUiMode()
+      applyUiMode(false)
       if (refreshTheme) applyTheme()
       stabilizeWorkbenchViewport()
     }

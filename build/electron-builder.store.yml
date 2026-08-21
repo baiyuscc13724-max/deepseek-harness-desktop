@@ -22,6 +22,11 @@ extraMetadata:
   main: electron/main.cjs
 win:
   icon: store/Assets/app.ico
+  extraResources:
+    - from: third_party/mingit
+      to: third_party/mingit
+      filter:
+        - '**/*'
 icon: store/Assets/app.ico
 npmRebuild: true
 asarUnpack:

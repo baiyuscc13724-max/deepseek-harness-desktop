@@ -110,7 +110,7 @@ class WssRelayAdapter extends EventEmitter {
     if (this.status !== 'connected' || !this.context) return null
     return {
       id: this.id,
-      origin: `http://10.252.77.254:${this.context.port}`,
+      origin: `http://${this.context.mesh.serviceAddress}:${this.context.port}`,
       relayUrl: this.relayUrl,
       roomId: this.context.mesh.relayRoomId,
       tunnelKey: this.context.mesh.relayTunnelKey,

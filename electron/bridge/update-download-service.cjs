@@ -1,5 +1,6 @@
 const { createHash } = require('node:crypto')
 const { open, unlink } = require('node:fs/promises')
+const { DEFAULT_MAX_REDIRECTS, resolveUpdateRedirect, safeHttpsUpdateUrl } = require('./update-service.cjs')
 
 const DEFAULT_MAX_BYTES = 600 * 1024 * 1024
 const DEFAULT_IDLE_TIMEOUT_MS = 20 * 1000
@@ -11,9 +12,26 @@ function assetUrls(asset) {
 }
 
 function safeHttpsUrl(value) {
-  const target = new URL(value)
-  if (target.protocol !== 'https:') throw new Error('更新地址必须使用 HTTPS。')
-  return target.toString()
+  return safeHttpsUpdateUrl(value).toString()
+}
+
+function assetHosts(values) {
+  const hosts = []
+  for (const value of values) {
+    try { hosts.push(safeHttpsUpdateUrl(value).hostname.toLowerCase()) } catch {}
+  }
+  return [...new Set(hosts)]
+}
+
+async function fetchWithSafeRedirects(url, { fetchImpl, signal, headers, maxRedirects = DEFAULT_MAX_REDIRECTS, allowedHosts = [] }) {
+  let current = safeHttpsUrl(url)
+  for (let redirectCount = 0; ; redirectCount += 1) {
+    const response = await fetchImpl(current, { redirect: 'manual', signal, headers })
+    if (response.status < 300 || response.status >= 400) return response
+    const location = response.headers?.get?.('location')
+    if (!location) return response
+    current = resolveUpdateRedirect(current, location, { redirectCount, maxRedirects, allowedHosts })
+  }
 }
 
 function sourceLabel(value) {
@@ -40,6 +58,8 @@ async function downloadFromUrl({
   onProgress,
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
   maxBytes = DEFAULT_MAX_BYTES,
+  maxRedirects = DEFAULT_MAX_REDIRECTS,
+  allowedHosts = [],
   userAgent = 'Harness-Desktop'
 }) {
   const controller = new AbortController()
@@ -47,9 +67,11 @@ async function downloadFromUrl({
   resetIdleTimer(idle, idleTimeoutMs, controller)
   let response
   try {
-    response = await fetchImpl(safeHttpsUrl(url), {
-      redirect: 'follow',
+    response = await fetchWithSafeRedirects(url, {
+      fetchImpl,
       signal: controller.signal,
+      maxRedirects,
+      allowedHosts,
       headers: { 'User-Agent': userAgent, Accept: 'application/octet-stream' }
     })
     resetIdleTimer(idle, idleTimeoutMs, controller)
@@ -95,15 +117,17 @@ async function downloadWithFallback({
   onProgress,
   idleTimeoutMs,
   maxBytes,
+  maxRedirects = DEFAULT_MAX_REDIRECTS,
   userAgent
 }) {
   const urls = assetUrls(asset)
+  const allowedHosts = assetHosts(urls)
   const failures = []
   for (let index = 0; index < urls.length; index += 1) {
     const url = urls[index]
     try {
       onProgress?.({ phase: 'source', source: sourceLabel(url), attempt: index + 1, totalSources: urls.length, received: 0, total: expectedSize || 0 })
-      const downloaded = await downloadFromUrl({ url, destination, expectedSize, fetchImpl, openImpl, onProgress, idleTimeoutMs, maxBytes, userAgent })
+      const downloaded = await downloadFromUrl({ url, destination, expectedSize, fetchImpl, openImpl, onProgress, idleTimeoutMs, maxBytes, maxRedirects, allowedHosts, userAgent })
       if (expectedHash && downloaded.sha256 !== expectedHash) throw new Error('SHA-256 校验失败')
       return { ...downloaded, source: url, attempt: index + 1 }
     } catch (error) {
@@ -114,13 +138,15 @@ async function downloadWithFallback({
   throw new Error(`所有安装包下载源均不可用：${failures.join('；')}`)
 }
 
-async function checksumFromUrl({ url, fileName, fetchImpl, parseChecksum, timeoutMs = DEFAULT_CHECKSUM_TIMEOUT_MS, userAgent = 'Harness-Desktop' }) {
+async function checksumFromUrl({ url, fileName, fetchImpl, parseChecksum, timeoutMs = DEFAULT_CHECKSUM_TIMEOUT_MS, maxRedirects = DEFAULT_MAX_REDIRECTS, allowedHosts = [], userAgent = 'Harness-Desktop' }) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const response = await fetchImpl(safeHttpsUrl(url), {
-      redirect: 'follow',
+    const response = await fetchWithSafeRedirects(url, {
+      fetchImpl,
       signal: controller.signal,
+      maxRedirects,
+      allowedHosts,
       headers: { 'User-Agent': userAgent, Accept: 'text/plain' }
     })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -137,11 +163,13 @@ async function checksumFromUrl({ url, fileName, fetchImpl, parseChecksum, timeou
   }
 }
 
-async function checksumWithFallback({ asset, fileName, fetchImpl, parseChecksum, timeoutMs, userAgent }) {
+async function checksumWithFallback({ asset, fileName, fetchImpl, parseChecksum, timeoutMs, maxRedirects = DEFAULT_MAX_REDIRECTS, userAgent }) {
+  const urls = assetUrls(asset)
+  const allowedHosts = assetHosts(urls)
   const failures = []
-  for (const url of assetUrls(asset)) {
+  for (const url of urls) {
     try {
-      const hash = await checksumFromUrl({ url, fileName, fetchImpl, parseChecksum, timeoutMs, userAgent })
+      const hash = await checksumFromUrl({ url, fileName, fetchImpl, parseChecksum, timeoutMs, maxRedirects, allowedHosts, userAgent })
       if (!/^[a-f0-9]{64}$/i.test(String(hash || ''))) throw new Error('校验文件中没有匹配安装包的 SHA-256')
       return { hash, source: url }
     } catch (error) {
@@ -155,11 +183,13 @@ module.exports = {
   DEFAULT_CHECKSUM_TIMEOUT_MS,
   DEFAULT_IDLE_TIMEOUT_MS,
   DEFAULT_MAX_BYTES,
+  assetHosts,
   assetUrls,
   checksumFromUrl,
   checksumWithFallback,
   downloadFromUrl,
   downloadWithFallback,
+  fetchWithSafeRedirects,
   rejectedInstallerType,
   safeHttpsUrl,
   sourceLabel

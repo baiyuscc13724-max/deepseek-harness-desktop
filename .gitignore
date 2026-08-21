@@ -26,6 +26,7 @@ release-update-sources.local.json
 .artifacts/
 .release-state/
 .component-input/
+/third_party/mingit/
 .android-build/
 *.jks
 *.keystore

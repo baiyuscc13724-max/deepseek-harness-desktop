@@ -10,7 +10,7 @@ final class PairingProfileTests: XCTestCase {
             "pairUrl": "http://192.168.1.20:3081/__harness_mobile__/pair/once",
             "transports": [[
                 "id": "wss-relay",
-                "origin": "http://10.252.77.254:3081",
+                "origin": "http://10.253.77.254:3081",
                 "relayUrl": "wss://relay.example.com/tunnel",
                 "roomId": room,
                 "tunnelKey": key,

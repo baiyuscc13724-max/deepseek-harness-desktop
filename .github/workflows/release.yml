@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing immutable release tag to build and publish
         required: true
-        default: v1.0.28
+        default: v1.0.29
       request_id:
         description: Unique publisher request identity
         required: false
@@ -14,18 +14,18 @@ on:
     tags:
       - 'v*'
     branches:
-      - 'release-retry/v1.0.28'
+      - 'release-retry/v1.0.29'
 
 run-name: Release ${{ inputs.tag || github.ref_name }} · ${{ inputs.request_id || github.run_id }}
 
 env:
-  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.28' && 'v1.0.28') || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.29' && 'v1.0.29') || github.ref_name }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.28' && 'v1.0.28') || github.ref_name }}
+  group: release-${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.29' && 'v1.0.29') || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -36,9 +36,9 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    env:
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    environment:
+      name: ${{ matrix.os == 'macos-latest' && 'macos-signing' || 'desktop-build' }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -74,8 +74,97 @@ jobs:
       - name: Ensure target tag matches package version
         shell: bash
         run: node -e "const p=require('./package.json'); if(process.env.RELEASE_TAG !== 'v'+p.version) { console.error('Target tag must equal v'+p.version); process.exit(1) }"
-      - name: Build desktop packages
+      - name: Build Windows and Linux desktop packages
+        if: runner.os != 'macOS'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run dist
+      - name: Prepare Apple notarization API key
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_NOTARY_API_KEY_P8_BASE64 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID; do
+            test -n "${!name:-}" || { echo "Required macOS signing secret is missing: $name" >&2; exit 1; }
+          done
+          key="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$key"
+          chmod 600 "$key"
+          grep -q 'BEGIN PRIVATE KEY' "$key" || { echo 'Apple notarization API key is invalid.' >&2; exit 1; }
+          echo "APPLE_API_KEY=$key" >> "$GITHUB_ENV"
+      - name: Build signed and notarized macOS packages
+        if: runner.os == 'macOS'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'true'
+          CSC_LINK: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run dist
+      - name: Notarize and staple macOS disk images
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          images=(dist/Harness-Desktop-*-mac-*.dmg)
+          test "${#images[@]}" -eq 2 || { echo "Expected two macOS DMGs, found ${#images[@]}." >&2; exit 1; }
+          for image in "${images[@]}"; do
+            xcrun notarytool submit "$image" --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+            xcrun stapler staple "$image"
+          done
+      - name: Verify macOS Developer ID, hardened runtime, notarization, and Gatekeeper
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          verify_app() {
+            local app="$1" details
+            test -d "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            details="$(codesign -dv --verbose=4 "$app" 2>&1)"
+            grep -q '^Authority=Developer ID Application:' <<< "$details"
+            grep -q "^TeamIdentifier=$APPLE_TEAM_ID$" <<< "$details"
+            grep -Eq '^CodeDirectory .+flags=.*runtime' <<< "$details"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+          }
+          verify_app 'dist/mac/Harness Desktop.app'
+          verify_app 'dist/mac-arm64/Harness Desktop.app'
+          shopt -s nullglob
+          images=(dist/Harness-Desktop-*-mac-*.dmg)
+          archives=(dist/Harness-Desktop-*-mac-*.zip)
+          test "${#images[@]}" -eq 2
+          test "${#archives[@]}" -eq 2
+          for image in "${images[@]}"; do
+            xcrun stapler validate "$image"
+            spctl --assess --type open --context context:primary-signature --verbose=4 "$image"
+            mount="$RUNNER_TEMP/mount-$(basename "$image" .dmg)"
+            mkdir -p "$mount"
+            hdiutil attach "$image" -readonly -nobrowse -mountpoint "$mount"
+            verify_app "$mount/Harness Desktop.app"
+            hdiutil detach "$mount"
+          done
+          for archive in "${archives[@]}"; do
+            extracted="$RUNNER_TEMP/zip-$(basename "$archive" .zip)"
+            mkdir -p "$extracted"
+            ditto -x -k "$archive" "$extracted"
+            verify_app "$extracted/Harness Desktop.app"
+          done
+      - name: Remove temporary Apple notarization key
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: rm -f "${APPLE_API_KEY:-}"
       - name: Run packaged Windows self-test
         if: runner.os == 'Windows'
         shell: pwsh

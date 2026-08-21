@@ -52,6 +52,19 @@ function jsonResponse(payload, status = 200) {
   })
 }
 
+test('mobile runtime bounds the first history attempt even without a caller signal', async () => {
+  let observedSignal = null
+  const runtime = installRuntime(async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url
+    if (!url.includes('/api/session.history')) return new Response('', { status: 404 })
+    observedSignal = init?.signal || null
+    return jsonResponse({ result: { ok: true, value: { events: [] } } })
+  })
+  const response = await runtime.window.fetch('https://mobile.test/api/session.history', { method: 'POST' })
+  assert.equal((await response.json()).result.ok, true)
+  assert.ok(observedSignal)
+})
+
 test('mobile runtime retries session history when the server reports an internal abort', async () => {
   let historyCalls = 0
   const runtime = installRuntime(async input => {
@@ -89,4 +102,60 @@ test('mobile runtime retries subagent history but leaves unrelated requests alon
 
   await runtime.window.fetch('https://mobile.test/api/session.list')
   assert.equal(otherCalls, 2) // initial theme bridge load plus the explicit request
+})
+
+test('mobile runtime reuses a bounded in-memory history response during quick page switches', async () => {
+  let historyCalls = 0
+  const runtime = installRuntime(async input => {
+    const url = typeof input === 'string' ? input : input.url
+    if (url.includes('/api/session.history')) {
+      historyCalls++
+      return jsonResponse({ result: { ok: true, value: { events: [{ id: 'cached' }] } } })
+    }
+    return new Response('', { status: 404 })
+  })
+  const options = { method: 'POST', body: JSON.stringify({ sessionId: 'one' }) }
+  const first = await runtime.window.fetch('https://mobile.test/api/session.history', options)
+  const second = await runtime.window.fetch('https://mobile.test/api/session.history', options)
+  assert.equal(historyCalls, 1)
+  assert.equal((await first.json()).result.ok, true)
+  assert.equal((await second.json()).result.value.events[0].id, 'cached')
+})
+
+test('mobile runtime coalesces identical history loads in flight', async () => {
+  let historyCalls = 0
+  let release
+  const pending = new Promise(resolve => { release = resolve })
+  const runtime = installRuntime(async input => {
+    const url = typeof input === 'string' ? input : input.url
+    if (!url.includes('/api/session.history')) return new Response('', { status: 404 })
+    historyCalls++
+    await pending
+    return jsonResponse({ result: { ok: true, value: { events: [] } } })
+  })
+  const options = { method: 'POST', body: JSON.stringify({ sessionId: 'same' }) }
+  const first = runtime.window.fetch('https://mobile.test/api/session.history', options)
+  const second = runtime.window.fetch('https://mobile.test/api/session.history', options)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(historyCalls, 1)
+  release()
+  assert.equal((await (await first).json()).result.ok, true)
+  assert.equal((await (await second).json()).result.ok, true)
+})
+
+test('mobile runtime does not replay a history request cancelled by page navigation', async () => {
+  let historyCalls = 0
+  const controller = new AbortController()
+  controller.abort()
+  const runtime = installRuntime(async input => {
+    const url = typeof input === 'string' ? input : input.url
+    if (!url.includes('/api/session.history')) return new Response('', { status: 404 })
+    historyCalls++
+    throw new Error('request aborted')
+  })
+  await assert.rejects(
+    runtime.window.fetch('https://mobile.test/api/session.history', { method: 'POST', signal: controller.signal }),
+    /aborted/
+  )
+  assert.equal(historyCalls, 1)
 })

@@ -6,6 +6,14 @@ const METER_SCHEMA_VERSION = 1
 const DEFAULT_CACHE_MS = 60 * 1000
 const DEFAULT_STALE_MS = 5 * 60 * 1000
 
+// Fixed, officially-owned scoped record the desktop meter is allowed to read
+// (read-only) for the Codex WHAM quota path. The official
+// `@deepseek-ai/dsh-credentials-local` provider stores it at
+// `<scope>/<id>` = `llm-pi-ai/openai-codex` with `kind: grant` and an oauth
+// payload. We consume only the non-empty `payload.access` as the meter
+// credential and never return, log, refresh, or write back `refresh`.
+const CODEX_CREDENTIAL_KEY = 'llm-pi-ai/openai-codex'
+
 async function readYaml(file) {
   try {
     const document = YAML.parseDocument(await readFile(file, 'utf8'))
@@ -26,11 +34,71 @@ function configuredProviders(settings) {
   }))
 }
 
+/**
+ * Normalize the official `@deepseek-ai/dsh-credentials-local` v1 document into
+ * `{ refs, records }`. A version-1 document nests references and machine-owned
+ * grant records under `refs:` / `records:`; a pre-1.0 flat document (the shape
+ * the current tests and older stores still write) is itself the refs map. Any
+ * other shape is treated as empty rather than raising: the meter is a
+ * best-effort read and treats an unknown or malformed parsed document shape as
+ * empty. YAML/IO failures still surface normally. No values are logged or echoed here.
+ */
+function credentialDocument(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { refs: {}, records: {} }
+  if (Object.hasOwn(value, 'version')) {
+    if (value.version !== 1) return { refs: {}, records: {} }
+    const { refs, records } = value
+    return {
+      refs: refs && typeof refs === 'object' && !Array.isArray(refs) ? refs : {},
+      records: records && typeof records === 'object' && !Array.isArray(records) ? records : {}
+    }
+  }
+  // A nested document without its schema version is ambiguous and must not be
+  // reinterpreted as the old flat ref map.
+  if (Object.hasOwn(value, 'refs') || Object.hasOwn(value, 'records')) return { refs: {}, records: {} }
+  return { refs: value, records: {} }
+}
+
 function credentialFor(provider, credentials, environment) {
   const reference = String(provider.profile?.apiKeyEnv || '').trim()
   if (!reference) return null
-  const value = environment[reference] ?? credentials[reference]
+  const refs = credentialDocument(credentials).refs
+  const value = environment[reference] ?? refs[reference]
   return typeof value === 'string' && value.trim() ? { reference, value: value.trim() } : { reference, value: '' }
+}
+
+/**
+ * Read-only, scoped extraction of the Codex OAuth grant. Only the exact
+ * `llm-pi-ai/openai-codex` record with `kind: grant` and an `oauth` payload
+ * whose `access` is a non-empty string is admitted; any other scope, provider,
+ * kind, payload type, or an empty/missing access is ignored (returns null).
+ * The matching non-empty `access` string is returned as the meter credential
+ * value; `refresh`, `expires`, and every other payload field are never read
+ * into the returned credential.
+ */
+function grantCredentialValueFor(credentials) {
+  const record = credentialDocument(credentials).records?.[CODEX_CREDENTIAL_KEY]
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null
+  if (record.kind !== 'grant') return null
+  const payload = record.payload
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  if (payload.type !== 'oauth') return null
+  const access = typeof payload.access === 'string' ? payload.access.trim() : ''
+  return access || null
+}
+
+/**
+ * The meter credential for one provider. For Codex the official OAuth grant
+ * takes priority over `apiKeyEnv` so the WHAM OAuth path runs with the
+ * already-logged-in credential; for every other provider the api-key
+ * reference path is unchanged.
+ */
+function meterCredentialFor(provider, credentials, environment) {
+  if (provider.id === 'openai-codex') {
+    const grant = grantCredentialValueFor(credentials)
+    if (grant) return { reference: CODEX_CREDENTIAL_KEY, source: 'grant', value: grant }
+  }
+  return credentialFor(provider, credentials, environment)
 }
 
 function unavailableSnapshot(provider, status, message, adapterId = null) {
@@ -139,9 +207,10 @@ class ProviderMeterRegistry {
     ])
     const providers = configuredProviders(settings)
     const snapshots = await Promise.all(providers.map(provider => this.refreshProvider(provider, {
-      credential: credentialFor(provider, credentials, this.environment),
+      credential: meterCredentialFor(provider, credentials, this.environment),
       secret: name => {
-        const value = this.environment[name] ?? credentials[name]
+        const refs = credentialDocument(credentials).refs
+        const value = this.environment[name] ?? refs[name]
         return typeof value === 'string' ? value.trim() : ''
       },
       fetchImpl,
@@ -172,8 +241,11 @@ module.exports = {
   ProviderMeterRegistry,
   createDefaultProviderMeterRegistry,
   configuredProviders,
+  credentialDocument,
   credentialFor,
+  grantCredentialValueFor,
   loadBundledProviderMeterAdapters,
+  meterCredentialFor,
   safeAction,
   unavailableSnapshot
 }

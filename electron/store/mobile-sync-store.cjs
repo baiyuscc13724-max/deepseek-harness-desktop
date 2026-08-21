@@ -3,9 +3,11 @@ const path = require('node:path')
 
 const DEFAULT_SERVICE_ADDRESS = '10.253.77.254'
 const LEGACY_SERVICE_ADDRESS = '10.254.77.254'
+const SECRET_ENVELOPE_VERSION = 1
+const STATE_SCHEMA_VERSION = 4
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 3,
+  schemaVersion: STATE_SCHEMA_VERSION,
   enabled: false,
   remoteEnabled: true,
   transportPreference: 'auto',
@@ -82,6 +84,7 @@ function normalizeMesh(value) {
   const relayTunnelKey = String(value.relayTunnelKey || '').trim()
   if (relayRoomId && !/^[A-Za-z0-9_-]{40,64}$/.test(relayRoomId)) return null
   if (relayTunnelKey && !/^[A-Za-z0-9_-]{40,64}$/.test(relayTunnelKey)) return null
+  if (Boolean(relayRoomId) !== Boolean(relayTunnelKey)) return null
   return {
     networkName,
     networkSecret,
@@ -98,7 +101,7 @@ function normalizeState(input) {
     ? value.devices.map(normalizeDevice).filter(Boolean).slice(-32)
     : []
   return {
-    schemaVersion: 3,
+    schemaVersion: STATE_SCHEMA_VERSION,
     enabled: value.enabled === true,
     remoteEnabled: value.remoteEnabled !== false,
     transportPreference: ['auto', 'easytier', 'wss-relay', 'tailscale'].includes(value.transportPreference)
@@ -112,22 +115,137 @@ function normalizeState(input) {
   }
 }
 
+function normalizeSecretAdapter(value) {
+  return value && typeof value.protect === 'function' && typeof value.unprotect === 'function'
+    ? { protect: value.protect, unprotect: value.unprotect }
+    : null
+}
+
+function protectedBuffer(value) {
+  if (Buffer.isBuffer(value)) return value
+  if (value instanceof Uint8Array) return Buffer.from(value)
+  throw new Error('Mobile sync secret protection returned an invalid ciphertext.')
+}
+
+function decodeEnvelopeCiphertext(envelope) {
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) throw new Error('Mobile sync secret envelope is missing.')
+  if (envelope.version !== SECRET_ENVELOPE_VERSION || envelope.encoding !== 'base64') throw new Error('Mobile sync secret envelope version is unsupported.')
+  const ciphertext = String(envelope.ciphertext || '')
+  if (!ciphertext || ciphertext.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(ciphertext)) throw new Error('Mobile sync secret envelope is corrupt.')
+  const decoded = Buffer.from(ciphertext, 'base64')
+  if (!decoded.length || decoded.toString('base64') !== ciphertext) throw new Error('Mobile sync secret envelope is corrupt.')
+  return decoded
+}
+
+function publicStoredMesh(mesh, secretAdapter) {
+  if (!mesh) return null
+  if (!secretAdapter) throw new Error('OS-backed mobile sync secret protection is unavailable.')
+  const secretPayload = JSON.stringify({
+    networkSecret: mesh.networkSecret,
+    ...(mesh.relayRoomId && mesh.relayTunnelKey ? { relayRoomId: mesh.relayRoomId, relayTunnelKey: mesh.relayTunnelKey } : {})
+  })
+  let ciphertext
+  try {
+    ciphertext = protectedBuffer(secretAdapter.protect(secretPayload))
+  } catch {
+    throw new Error('Unable to protect mobile sync secrets with OS-backed encryption.')
+  }
+  if (!ciphertext.length) throw new Error('Mobile sync secret protection returned an empty ciphertext.')
+  return {
+    networkName: mesh.networkName,
+    desktopAddress: mesh.desktopAddress,
+    serviceAddress: mesh.serviceAddress,
+    secretEnvelope: {
+      version: SECRET_ENVELOPE_VERSION,
+      encoding: 'base64',
+      ciphertext: ciphertext.toString('base64')
+    }
+  }
+}
+
+function decryptStoredMesh(value, secretAdapter) {
+  if (!secretAdapter) throw new Error('OS-backed mobile sync secret protection is unavailable; protected state cannot be opened.')
+  let secretPayload
+  try {
+    secretPayload = JSON.parse(String(secretAdapter.unprotect(decodeEnvelopeCiphertext(value.secretEnvelope))))
+  } catch {
+    throw new Error('Unable to decrypt mobile sync secrets with OS-backed encryption.')
+  }
+  const normalized = normalizeMesh({
+    networkName: value.networkName,
+    desktopAddress: value.desktopAddress,
+    serviceAddress: value.serviceAddress,
+    networkSecret: secretPayload?.networkSecret,
+    relayRoomId: secretPayload?.relayRoomId,
+    relayTunnelKey: secretPayload?.relayTunnelKey
+  })
+  if (!normalized) throw new Error('Decrypted mobile sync secrets are invalid.')
+  return normalized
+}
+
 class MobileSyncStore {
-  constructor(file) {
+  constructor(file, secretAdapter = null) {
     this.file = file
-    this.state = this.#load()
+    this.secretAdapter = normalizeSecretAdapter(secretAdapter)
+    const loaded = this.#load()
+    this.state = loaded.state
+    if (loaded.rewrite) this.#persist()
   }
 
   #load() {
-    try { return normalizeState(JSON.parse(readFileSync(this.file, 'utf8'))) }
-    catch { return cloneDefaultState() }
+    let source
+    try {
+      source = JSON.parse(readFileSync(this.file, 'utf8'))
+    } catch (error) {
+      if (error?.code === 'ENOENT') return { state: cloneDefaultState(), rewrite: false }
+      throw new Error('Unable to read mobile sync state; the file is missing, unreadable, or invalid.')
+    }
+    if (!source || typeof source !== 'object' || Array.isArray(source)) throw new Error('Mobile sync state must be a JSON object.')
+
+    const storedMesh = source.mesh
+    if (storedMesh?.secretEnvelope != null) {
+      const mesh = decryptStoredMesh(storedMesh, this.secretAdapter)
+      const state = normalizeState({ ...source, mesh })
+      if (!state.mesh) throw new Error('Protected mobile sync mesh is invalid.')
+      const rewrite = Number(source.schemaVersion) !== STATE_SCHEMA_VERSION || storedMesh.serviceAddress !== state.mesh.serviceAddress
+      return { state, rewrite }
+    }
+
+    const state = normalizeState(source)
+    if (state.mesh && !this.secretAdapter) {
+      throw new Error('Legacy plaintext mobile sync secrets require OS-backed encryption before they can be loaded.')
+    }
+    return {
+      state,
+      rewrite: Boolean(state.mesh) || (Number(source.schemaVersion) !== STATE_SCHEMA_VERSION && source.mesh != null)
+    }
+  }
+
+  #diskState() {
+    return {
+      ...this.state,
+      mesh: publicStoredMesh(this.state.mesh, this.secretAdapter)
+    }
   }
 
   #persist() {
+    const serialized = `${JSON.stringify(this.#diskState(), null, 2)}\n`
     mkdirSync(path.dirname(this.file), { recursive: true })
     const temp = `${this.file}.${process.pid}.${Date.now()}.tmp`
-    writeFileSync(temp, `${JSON.stringify(this.state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+    writeFileSync(temp, serialized, { encoding: 'utf8', mode: 0o600 })
     renameSync(temp, this.file)
+  }
+
+  #update(mutator) {
+    const previous = this.get()
+    mutator(this.state)
+    try {
+      this.#persist()
+    } catch (error) {
+      this.state = previous
+      throw error
+    }
+    return this.get()
   }
 
   get() {
@@ -135,21 +253,17 @@ class MobileSyncStore {
   }
 
   setEnabled(enabled) {
-    this.state.enabled = enabled === true
-    this.#persist()
-    return this.get()
+    return this.#update(state => { state.enabled = enabled === true })
   }
 
   setRemoteEnabled(enabled) {
-    this.state.remoteEnabled = enabled === true
-    this.#persist()
-    return this.get()
+    return this.#update(state => { state.remoteEnabled = enabled === true })
   }
 
   setTransportPreference(preference) {
-    this.state.transportPreference = ['auto', 'easytier', 'wss-relay', 'tailscale'].includes(preference) ? preference : 'auto'
-    this.#persist()
-    return this.get()
+    return this.#update(state => {
+      state.transportPreference = ['auto', 'easytier', 'wss-relay', 'tailscale'].includes(preference) ? preference : 'auto'
+    })
   }
 
   ensureMesh(meshFactory) {
@@ -157,9 +271,9 @@ class MobileSyncStore {
     const merged = this.state.mesh ? { ...generated, ...this.state.mesh } : generated
     const normalized = normalizeMesh(merged)
     if (!normalized) throw new Error('Invalid mobile sync mesh configuration.')
+    if (!this.secretAdapter) throw new Error('OS-backed mobile sync secret protection is unavailable.')
     if (JSON.stringify(normalized) !== JSON.stringify(this.state.mesh)) {
-      this.state.mesh = normalized
-      this.#persist()
+      this.#update(state => { state.mesh = normalized })
     }
     return JSON.parse(JSON.stringify(this.state.mesh))
   }
@@ -167,8 +281,7 @@ class MobileSyncStore {
   setPreferredPort(port) {
     const normalized = Number(port)
     if (Number.isInteger(normalized) && normalized >= 1024 && normalized <= 65535) {
-      this.state.preferredPort = normalized
-      this.#persist()
+      return this.#update(state => { state.preferredPort = normalized })
     }
     return this.get()
   }
@@ -176,32 +289,34 @@ class MobileSyncStore {
   addDevice(device) {
     const normalized = normalizeDevice(device)
     if (!normalized) throw new Error('Invalid mobile device record.')
-    this.state.devices = this.state.devices.filter(entry => entry.id !== normalized.id)
-    this.state.devices.push(normalized)
-    this.state.devices = this.state.devices.slice(-32)
-    this.#persist()
-    return this.get()
+    return this.#update(state => {
+      state.devices = state.devices.filter(entry => entry.id !== normalized.id)
+      state.devices.push(normalized)
+      state.devices = state.devices.slice(-32)
+    })
   }
 
   touchDevice(id, date = new Date()) {
     const device = this.state.devices.find(entry => entry.id === id)
     if (!device) return this.get()
-    device.lastSeenAt = date.toISOString()
-    this.#persist()
-    return this.get()
+    return this.#update(state => {
+      state.devices.find(entry => entry.id === id).lastSeenAt = date.toISOString()
+    })
   }
 
   revokeDevice(id) {
-    const before = this.state.devices.length
-    this.state.devices = this.state.devices.filter(entry => entry.id !== id)
-    if (this.state.devices.length !== before) this.#persist()
-    return this.get()
+    if (!this.state.devices.some(entry => entry.id === id)) return this.get()
+    return this.#update(state => {
+      state.devices = state.devices.filter(entry => entry.id !== id)
+    })
   }
 }
 
 module.exports = {
   MobileSyncStore,
   DEFAULT_STATE,
+  SECRET_ENVELOPE_VERSION,
+  STATE_SCHEMA_VERSION,
   normalizeState,
   normalizeDevice,
   normalizeMesh,

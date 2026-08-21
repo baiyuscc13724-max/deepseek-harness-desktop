@@ -115,15 +115,28 @@ test('模型导航档：公网 + origin 已授权双重要求，比用户档更�
   // 已授权但内网 → 拒绝 non-public-network
   assert.throws(
     () => checkModelNavigation('https://127.0.0.1/login', { authorizedOrigins: authorized }),
-    error => error.code === 'non-public-network'
+    error => error.code === 'private-network-not-authorized'
   )
   assert.throws(
     () => checkModelNavigation('http://10.0.0.5/admin', { authorizedOrigins: new Set(['http://10.0.0.5']) }),
-    error => error.code === 'non-public-network'
+    error => error.code === 'private-network-not-authorized'
   )
   assert.throws(
     () => checkModelNavigation('https://localhost/app', { authorizedOrigins: new Set(['https://localhost']) }),
-    error => error.code === 'non-public-network'
+    error => error.code === 'private-network-not-authorized'
+  )
+  const local = checkModelNavigation('http://localhost:3000/app', {
+    authorizedOrigins: new Set(['http://localhost:3000']),
+    authorizedPrivateOrigins: new Set(['http://localhost:3000'])
+  })
+  assert.equal(local.origin, 'http://localhost:3000')
+  assert.equal(local.privateNetwork, true)
+  assert.throws(
+    () => checkModelNavigation('http://localhost:3001/app', {
+      authorizedOrigins: new Set(['http://localhost:3000']),
+      authorizedPrivateOrigins: new Set(['http://localhost:3000'])
+    }),
+    error => error.code === 'private-network-not-authorized'
   )
   // 已授权但协议不符（用户档规则同样适用于模型档）
   assert.throws(

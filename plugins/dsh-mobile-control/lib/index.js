@@ -1,23 +1,40 @@
+import path from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
 const name = 'mobile-control'
 const inject = ['tools']
-const HEADER = { 'X-Harness-Mobile-Control': '1' }
 
-async function origin() {
-  const stateFile = String(process.env.HARNESS_MOBILE_SYNC_STATE_FILE || '').trim()
-  if (!stateFile) throw new Error('Harness Desktop 未提供手机控制状态文件。')
-  const state = await readFile(stateFile, 'utf8').then(JSON.parse).catch(() => ({ preferredPort: 3081 }))
-  const port = Number(state.preferredPort)
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('手机同步服务端口无效。')
-  return `http://127.0.0.1:${port}/__harness_mobile__/control`
+function desktopControlStateFile() {
+  const configured = String(process.env.HARNESS_MOBILE_SYNC_STATE_FILE || '').trim()
+  if (!configured) throw new Error('Harness Desktop 未提供手机控制状态文件。')
+  return path.join(path.dirname(configured), 'mobile-sync.desktop-control.json')
 }
 
-async function request(path, init = {}) {
-  const response = await fetch(`${await origin()}${path}`, {
+async function desktopControlConfig() {
+  const state = await readFile(desktopControlStateFile(), 'utf8').then(JSON.parse).catch(() => null)
+  if (!state || state.version !== 1) throw new Error('手机同步服务未运行或桌面控制凭据已失效。')
+  const port = Number(state.port)
+  const bearer = String(state.bearer || '')
+  const generation = String(state.generation || '')
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || !/^[A-Za-z0-9_-]{32,}$/.test(bearer) || !/^[a-f0-9]{32}$/.test(generation)) {
+    throw new Error('手机同步服务的桌面控制状态无效。')
+  }
+  return {
+    origin: `http://127.0.0.1:${port}/__harness_mobile__/control`,
+    headers: {
+      Authorization: `Bearer ${bearer}`,
+      'X-Harness-Mobile-Control': '1',
+      'X-Harness-Mobile-Control-Generation': generation
+    }
+  }
+}
+
+async function request(requestPath, init = {}) {
+  const config = await desktopControlConfig()
+  const response = await fetch(`${config.origin}${requestPath}`, {
     ...init,
-    headers: { ...HEADER, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}) }
+    headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}), ...config.headers }
   })
   const text = await response.text()
   let payload
@@ -99,15 +116,20 @@ function apply(ctx) {
       const deadline = Date.now() + Math.min(70_000, Number(command.timeoutMs || 15_000) * (Number(command.retryLimit || 0) + 1) + 8_000)
       while (Date.now() < deadline) {
         if (exec.signal?.aborted) {
-          await request('/desktop-stop', { method: 'POST', body: JSON.stringify({ deviceId: device.id }) }).catch(() => {})
+          await request('/desktop-cancel', { method: 'POST', body: JSON.stringify({ commandId: command.id }) }).catch(() => {})
           throw exec.signal.reason || new Error('手机控制已取消。')
         }
         const result = await request(`/desktop-result?id=${encodeURIComponent(command.id)}`)
         if (!result.pending && result.result) return { ok: result.result.ok, deviceId: device.id, command: { id: command.id, action: command.action }, result: result.result }
-        await delay(350, exec.signal)
+        try {
+          await delay(350, exec.signal)
+        } catch (error) {
+          await request('/desktop-cancel', { method: 'POST', body: JSON.stringify({ commandId: command.id }) }).catch(() => {})
+          throw error
+        }
       }
-      await request('/desktop-stop', { method: 'POST', body: JSON.stringify({ deviceId: device.id }) }).catch(() => {})
-      throw new Error('手机未在超时前返回操作回执，已发送停止指令。')
+      await request('/desktop-cancel', { method: 'POST', body: JSON.stringify({ commandId: command.id }) }).catch(() => {})
+      throw new Error('手机未在超时前返回操作回执，已发送取消指令。')
     }
   }))
 }

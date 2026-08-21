@@ -1,0 +1,51 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { readFile } = require('node:fs/promises')
+const path = require('node:path')
+
+const root = path.resolve(__dirname, '..')
+
+test('client mounts through the official settings slot and never auto-submits', async () => {
+  const source = await readFile(path.join(root, 'plugins/dsh-desktop-mcp-manager/lib/client.js'), 'utf8')
+  assert.match(source, /ctx\.slots\.inject\('settings\.section'/)
+  assert.match(source, /id: 'desktop-mcp-manager'/)
+  assert.match(source, /window\.confirm\(/)
+  assert.match(source, /confirm: true/)
+  assert.doesNotMatch(source, /desktopHarness|ipcRenderer|executeJavaScript/)
+  assert.doesNotThrow(() => new Function(source))
+})
+
+test('client uses same-origin API with CSRF header and describes reference-only secrets', async () => {
+  const source = await readFile(path.join(root, 'plugins/dsh-desktop-mcp-manager/lib/client.js'), 'utf8')
+  assert.match(source, /API = '\/api\/desktop-mcp\/servers'/)
+  assert.match(source, /'x-dsh-mcp-manager': '1'/)
+  assert.match(source, /秘密只填写凭据引用名/)
+  assert.doesNotMatch(source, /Authorization:\s*['"]Bearer|password|tokenValue|secretValue/i)
+})
+
+test('MCP settings use the shared responsive card design and preserve user confirmation', async () => {
+  const source = await readFile(path.join(root, 'plugins/dsh-desktop-mcp-manager/lib/client.js'), 'utf8')
+  assert.match(source, /dmm-heading-icon/)
+  assert.match(source, /dmm-notice/)
+  assert.match(source, /dmm-panel-head/)
+  assert.match(source, /dmm-server-list/)
+  assert.match(source, /dmm-empty-icon/)
+  assert.match(source, /var\(--dsw-alias-bg-layer-1\)/)
+  assert.match(source, /@media\(max-width:760px\)/)
+  assert.match(source, /@media\(prefers-reduced-motion:reduce\)/)
+  assert.match(source, /style = document\.querySelector\("style\[data-plugin='dsh-desktop-mcp-manager'\]"\)/)
+  assert.match(source, /if \(!style\.isConnected\) document\.head\.appendChild\(style\)/)
+  assert.match(source, /cache: 'no-store', credentials: 'same-origin'/)
+  assert.match(source, /const created = await act/)
+  assert.match(source, /if \(created\) setDraft\(emptyDraft\(\)\)/)
+  assert.doesNotMatch(source, /style:\s*\{\s*padding:\s*16/)
+})
+
+test('host API requires loopback, CSRF header and explicit write confirmation', async () => {
+  const source = await readFile(path.join(root, 'plugins/dsh-desktop-mcp-manager/lib/index.js'), 'utf8')
+  assert.match(source, /\['localhost', '127\.0\.0\.1', '\[::1\]', '::1'\]/)
+  assert.match(source, /req\.headers\[CSRF_HEADER\] !== '1'/)
+  assert.match(source, /input\.confirm !== true/)
+  assert.match(source, /cache-control.*no-store/)
+  assert.doesNotMatch(source, /electron|ipcMain|child_process/)
+})

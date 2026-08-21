@@ -39,12 +39,20 @@
       <span class="visually-hidden">右栏浏览器</span>
     </button>
     <aside id="browserSidebar" class="browser-sidebar hidden" aria-label="右栏浏览器" aria-hidden="true">
+      <div id="browserResizeHandle" class="browser-resize-handle" role="separator" aria-label="拖动调整浏览器宽度" aria-orientation="vertical" tabindex="0"></div>
       <header class="browser-sidebar-header">
         <strong>浏览器</strong>
         <span id="browserLoading" class="browser-loading" aria-hidden="true"></span>
+        <button id="browserWideMode" type="button" aria-pressed="false" title="宽屏验收模式">宽屏</button>
+        <button id="browserHistoryButton" type="button" aria-controls="browserHistoryPanel" aria-expanded="false" title="浏览历史">历史</button>
+        <button id="browserDownloadsButton" type="button" aria-controls="browserDownloadsPanel" aria-expanded="false" title="下载状态">下载</button>
         <button id="browserProfileButton" type="button" title="Profile 与登录数据">Profile</button>
-        <button id="closeBrowserSidebar" type="button" aria-label="关闭右栏浏览器">×</button>
+        <button id="closeBrowserSidebar" class="browser-sidebar-close" type="button" aria-label="关闭右栏浏览器">×</button>
       </header>
+      <nav class="browser-tab-strip" aria-label="浏览器标签页">
+        <div id="browserTabs" class="browser-tabs" role="tablist"></div>
+        <button id="browserNewTab" type="button" aria-label="新建标签页" title="新建标签页">＋</button>
+      </nav>
       <div class="browser-toolbar">
         <button id="browserBack" type="button" aria-label="后退">←</button>
         <button id="browserForward" type="button" aria-label="前进">→</button>
@@ -52,6 +60,17 @@
         <form id="browserAddressForm"><input id="browserAddress" type="text" maxlength="8192" autocomplete="off" spellcheck="false" aria-label="网址或搜索内容" placeholder="输入网址或搜索" /></form>
         <button id="browserGo" type="button">前往</button>
       </div>
+      <section id="browserHistoryPanel" class="browser-utility-panel hidden" aria-label="浏览历史">
+        <header><h3>浏览历史</h3><button id="closeBrowserHistory" type="button" aria-label="关闭浏览历史">×</button></header>
+        <form id="browserHistorySearchForm" class="browser-history-search"><input id="browserHistorySearch" type="search" maxlength="200" placeholder="搜索标题或网址" aria-label="搜索浏览历史" /><button type="submit">搜索</button></form>
+        <div id="browserHistoryResults" class="browser-utility-list" aria-live="polite"></div>
+        <div class="browser-panel-danger"><label><input id="browserHistoryClearConfirm" type="checkbox" /> 确认清空全部浏览历史</label><button id="browserHistoryClear" class="danger" type="button" disabled>清空历史</button></div>
+      </section>
+      <section id="browserDownloadsPanel" class="browser-utility-panel hidden" aria-label="下载状态">
+        <header><h3>下载状态</h3><button id="closeBrowserDownloads" type="button" aria-label="关闭下载状态">×</button></header>
+        <p>下载文件保存在系统下载目录；模型发起的下载仍受确认、大小和路径限制。</p>
+        <div id="browserDownloadResults" class="browser-utility-list" aria-live="polite"></div>
+      </section>
       <section id="browserProfilePanel" class="browser-profile-panel hidden">
         <h3>独立浏览器 Profile</h3>
         <p>网站登录只保存在 <strong>Harness Browser</strong> 中，与官方 Harness 会话完全隔离。</p>
@@ -62,6 +81,8 @@
           <label><input type="checkbox" value="read" checked /> 读取页面</label>
           <label><input type="checkbox" value="click" /> 点击</label>
           <label><input type="checkbox" value="type" /> 输入普通文本</label>
+          <label><input type="checkbox" value="upload" /> 上传（逐次确认并由用户选文件）</label>
+          <label><input type="checkbox" value="download" /> 下载（逐次确认并限制到下载目录）</label>
           <label><input type="checkbox" value="submit" /> 提交（仍需逐次确认）</label>
           <div><button id="browserGrantCurrent" type="button">授权当前站点</button><button id="browserRevokeCurrent" type="button">撤销当前站点</button><button id="browserResumeModel" type="button">恢复模型控制</button></div>
           <div id="browserPendingActions" class="browser-pending-actions"></div>
@@ -260,7 +281,7 @@
         <div id="skinThemePane" class="skin-picker-pane">
           <div id="skinPickerGrid" class="skin-picker-grid"></div>
           <section class="skin-custom-editor">
-            <div class="skin-custom-heading"><div><h3>自定义主题</h3><p>支持静态壁纸和 GIF、APNG、动态 WebP；文件只保存在本机，文字保护会自动提高透明界面的清晰度。</p></div><span id="skinBackgroundState"></span></div>
+            <div class="skin-custom-heading"><div><h3>自定义主题</h3><p>支持常用图片、MP4/WebM 视频和 Wallpaper Engine 图片/视频项目；图片最大 50 MB，视频最大 2 GB，文件只保存在本机。</p></div><span id="skinBackgroundState"></span></div>
             <div class="skin-custom-layout">
               <section class="skin-custom-group" aria-labelledby="skinPaletteTitle">
                 <h4 id="skinPaletteTitle">基础配色</h4>
@@ -282,7 +303,7 @@
                 </div>
               </section>
             </div>
-            <div class="skin-custom-actions"><button id="skinChooseBackground" type="button">选择本地壁纸或动图</button><button id="skinClearBackground" type="button">移除壁纸</button><button id="skinApplyCustom" class="primary" type="button">应用并保存</button></div>
+            <div class="skin-custom-actions"><button id="skinChooseBackground" type="button">选择图片或视频</button><button id="skinChooseWallpaperEngine" type="button">导入 Wallpaper Engine</button><button id="skinClearBackground" type="button">移除壁纸</button><button id="skinApplyCustom" class="primary" type="button">应用并保存</button></div>
           </section>
         </div>
         <section id="skinModePane" class="skin-picker-pane skin-mode-pane hidden" aria-labelledby="skinModeTitle">

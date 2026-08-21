@@ -12,15 +12,35 @@ function confirmationError(code, message) {
   return Object.assign(new Error(message), { code })
 }
 
+function normalizedSurface(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const generation = Number(value.generation)
+  const width = Number(value.width)
+  const height = Number(value.height)
+  const url = String(value.url || '').slice(0, 4096)
+  if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || !url) return null
+  return { generation, width, height, url }
+}
+
 function confirmationFingerprint(action, parameters = {}) {
   const canonical = JSON.stringify({
     action: String(action || ''),
     x: parameters.x ?? null,
     y: parameters.y ?? null,
     text: parameters.text ?? null,
-    deltaY: parameters.delta_y ?? null
+    deltaY: parameters.delta_y ?? null,
+    surface: normalizedSurface(parameters.surface)
   })
   return createHash('sha256').update(canonical).digest('hex')
+}
+
+function confirmationSummary(action, parameters = {}) {
+  const target = normalizedSurface(parameters.surface)
+  const point = Number.isFinite(Number(parameters.x)) && Number.isFinite(Number(parameters.y))
+    ? ` @ (${Math.round(Number(parameters.x))}, ${Math.round(Number(parameters.y))})`
+    : ''
+  const surface = target ? `，当前窗口 ${target.width}×${target.height}` : ''
+  return `${String(action || '')} Harness Desktop 窗口${point}${surface}`
 }
 
 class ComputerUseConfirmationStore {
@@ -76,7 +96,7 @@ class ComputerUseConfirmationStore {
       id: this.idFactory(),
       action: String(action || ''),
       fingerprint,
-      summary: `${String(action || '')} Harness Desktop 窗口`,
+      summary: confirmationSummary(action, parameters),
       confirmed: false,
       createdAt: now,
       expiresAt: now + this.ttlMs

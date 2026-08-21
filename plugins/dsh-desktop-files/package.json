@@ -1,0 +1,26 @@
+{
+  "name": "dsh-desktop-files",
+  "version": "1.0.29",
+  "description": "User-reviewed workspace file upload, download and edit preparation for DeepSeek Harness Desktop",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "immediately": true
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.8"
+  },
+  "license": "MIT"
+}

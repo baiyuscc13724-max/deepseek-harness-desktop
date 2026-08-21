@@ -10,7 +10,8 @@ test('desktop publication is gated by authenticated draft installation', async (
 
   assert.match(workflow, /stage-draft:[\s\S]*verify-windows-draft:[\s\S]*publish:/u)
   assert.match(workflow, /needs: stage-draft[\s\S]*needs: verify-windows-draft/u)
-  assert.match(workflow, /group: release-\$\{\{ inputs\.tag \|\| \(github\.ref == 'refs\/heads\/release-retry\/v1\.0\.28' && 'v1\.0\.28'\) \|\| github\.ref_name \}\}/u)
+  const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+  assert.ok(workflow.includes(`group: release-\${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v${pkg.version}' && 'v${pkg.version}') || github.ref_name }}`))
   assert.match(workflow, /Refuse an existing release mutation with atomic REST create/u)
   assert.match(workflow, /gh api --method POST "repos\/\$GITHUB_REPOSITORY\/releases"/u)
   assert.match(workflow, /HTTP 422/u)

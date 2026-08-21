@@ -6,21 +6,21 @@ on:
       tag:
         description: Existing immutable Bootstrap release tag
         required: true
-        default: v1.0.28
+        default: v1.0.29
       request_id:
         description: Unique publisher request identity
         required: false
   push:
     branches:
-      - 'component-publish/v1.0.28'
+      - 'component-publish/v1.0.29'
 
-run-name: Components ${{ inputs.tag || 'v1.0.28' }} · ${{ inputs.request_id || github.run_id }}
+run-name: Components ${{ inputs.tag || 'v1.0.29' }} · ${{ inputs.request_id || github.run_id }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: production-components-${{ inputs.tag || 'v1.0.28' }}
+  group: production-components-${{ inputs.tag || 'v1.0.29' }}
   cancel-in-progress: false
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ inputs.tag || 'v1.0.28' }}
+      RELEASE_TAG: ${{ inputs.tag || 'v1.0.29' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -138,3 +138,41 @@ jobs:
             gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir public-components
           done < <(find "component-release-staging/$version" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           node scripts/verify-production-component-staging.mjs --version="$version" --dir=public-components
+      - name: Sign exact desktop release manifest in protected CI
+        shell: bash
+        env:
+          COMPONENT_SIGNING_PRIVATE_KEY_BASE64: ${{ secrets.HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$COMPONENT_SIGNING_PRIVATE_KEY_BASE64" || { echo 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64 is not configured.' >&2; exit 1; }
+          key_file="$RUNNER_TEMP/desktop-release-ed25519-private.pem"
+          manifest_file="$RUNNER_TEMP/release-manifest.json"
+          trap 'rm -f "$key_file" "$manifest_file"' EXIT
+          umask 077
+          printf '%s' "$COMPONENT_SIGNING_PRIVATE_KEY_BASE64" | base64 --decode > "$key_file"
+          HARNESS_COMPONENT_SIGNING_KEY_FILE="$key_file" \
+          HARNESS_COMPONENT_KEY_ID='harness-components-02643f81164c594a' \
+            node scripts/refresh-release-manifest.mjs --version="${RELEASE_TAG#v}" --repo="$GITHUB_REPOSITORY" --output="$manifest_file"
+          git fetch --force origin main
+          tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
+          main_revision="$(git rev-parse origin/main)"
+          git merge-base --is-ancestor "$tag_revision" "$main_revision"
+          branch="release-manifest/$RELEASE_TAG"
+          existing="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
+          if test -n "$existing"; then
+            git fetch --force origin "refs/heads/$branch:refs/remotes/origin/$branch"
+            test "$(git rev-parse "refs/remotes/origin/$branch^")" = "$tag_revision"
+            test "$(git diff-tree --no-commit-id --name-only -r "refs/remotes/origin/$branch")" = 'release-manifest.json'
+            git show "refs/remotes/origin/$branch:release-manifest.json" > "$RUNNER_TEMP/existing-release-manifest.json"
+            cmp "$manifest_file" "$RUNNER_TEMP/existing-release-manifest.json"
+            rm -f "$RUNNER_TEMP/existing-release-manifest.json"
+            echo "Preserving byte-identical signed release manifest branch: $branch"
+            exit 0
+          fi
+          git checkout --detach "$tag_revision"
+          cp "$manifest_file" release-manifest.json
+          git add -- release-manifest.json
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "release: sign $RELEASE_TAG asset manifest" -- release-manifest.json
+          test "$(git rev-parse HEAD^)" = "$tag_revision"
+          test "$(git diff-tree --no-commit-id --name-only -r HEAD)" = 'release-manifest.json'
+          git push origin "HEAD:refs/heads/$branch"

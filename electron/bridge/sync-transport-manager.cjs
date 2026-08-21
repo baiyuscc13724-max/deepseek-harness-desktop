@@ -16,12 +16,25 @@ function createMeshIdentity() {
 }
 
 class SyncTransportManager extends EventEmitter {
-  constructor({ store, adapters = [], now = () => Date.now() }) {
+  constructor({
+    store,
+    adapters = [],
+    now = () => Date.now(),
+    random = Math.random,
+    reconnectBaseMs = 1_000,
+    reconnectMaxMs = 30_000
+  }) {
     super()
     if (!store) throw new Error('SyncTransportManager requires a store.')
     this.store = store
     this.adapters = new Map(adapters.map(adapter => [adapter.id, adapter]))
     this.now = now
+    this.random = random
+    this.reconnectBaseMs = reconnectBaseMs
+    this.reconnectMaxMs = reconnectMaxMs
+    this.reconnectTimer = null
+    this.reconnectAttempt = 0
+    this.reconnectAt = null
     this.active = null
     this.status = 'stopped'
     this.error = null
@@ -50,6 +63,7 @@ class SyncTransportManager extends EventEmitter {
       active: this.active,
       startedAt: this.startedAt ? new Date(this.startedAt).toISOString() : null,
       error: this.error,
+      reconnectAt: this.reconnectAt ? new Date(this.reconnectAt).toISOString() : null,
       adapters: this.orderedAdapterIds().map(id => {
         const adapter = this.adapters.get(id)
         return adapter?.state?.() || { id, available: false, status: 'unavailable', detail: '组件尚未准备' }
@@ -63,11 +77,40 @@ class SyncTransportManager extends EventEmitter {
     return state
   }
 
+  #clearReconnect({ resetAttempt = false } = {}) {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+    this.reconnectAt = null
+    if (resetAttempt) this.reconnectAttempt = 0
+  }
+
+  #scheduleReconnect() {
+    if (this.reconnectTimer || !this.store.get().remoteEnabled || !this.context?.port) return
+    const exponential = Math.min(this.reconnectMaxMs, this.reconnectBaseMs * (2 ** Math.min(this.reconnectAttempt, 8)))
+    const jitter = 0.75 + Math.max(0, Math.min(1, this.random())) * 0.5
+    const delay = Math.max(1, Math.round(exponential * jitter))
+    this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, 9)
+    this.reconnectAt = this.now() + delay
+    this.status = 'reconnecting'
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.reconnectAt = null
+      if (!this.store.get().remoteEnabled || !this.context?.port) return
+      this.start().catch(error => {
+        this.error = error?.message || String(error)
+        this.#scheduleReconnect()
+      })
+    }, delay)
+    this.reconnectTimer.unref?.()
+    this.publish()
+  }
+
   async start(context = this.context) {
     this.context = context || this.context
     if (!this.store.get().remoteEnabled) return this.publish()
     if (!this.context?.port) throw new Error('Remote sync requires a running mobile gateway.')
     if (this.switching) return this.switching
+    this.#clearReconnect()
     this.switching = this.#startAvailable().finally(() => { this.switching = null })
     return this.switching
   }
@@ -98,6 +141,7 @@ class SyncTransportManager extends EventEmitter {
         this.status = 'connected'
         this.startedAt = this.now()
         this.error = null
+        this.#clearReconnect({ resetAttempt: true })
         return this.publish()
       } catch (error) {
         failures.push(`${id}: ${error.message}`)
@@ -108,11 +152,14 @@ class SyncTransportManager extends EventEmitter {
     this.status = 'unavailable'
     this.startedAt = null
     this.error = failures.join('；') || '没有可用的远程连接组件。'
-    return this.publish()
+    const state = this.publish()
+    this.#scheduleReconnect()
+    return state
   }
 
   async stop({ persist = false } = {}) {
     if (persist) this.store.setRemoteEnabled(false)
+    this.#clearReconnect({ resetAttempt: true })
     const stops = [...this.adapters.values()].map(adapter => adapter.stop?.().catch(() => {}))
     await Promise.all(stops)
     this.active = null

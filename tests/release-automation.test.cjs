@@ -32,7 +32,8 @@ test('signed Android publication follows the tag and waits for the verified desk
   const desktopWorkflow = await source(path.join('.github', 'workflows', 'release.yml'))
   assert.match(desktopWorkflow, /overwrite_files: false/u)
   assert.match(desktopWorkflow, /draft: true/u)
-  assert.match(desktopWorkflow, /release-retry\/v1\.0\.28/u)
+  const pkg = JSON.parse(await source('package.json'))
+  assert.ok(desktopWorkflow.includes(`release-retry/v${pkg.version}`))
   assert.match(desktopWorkflow, /ref: \$\{\{ env\.RELEASE_TAG \}\}/u)
   assert.match(desktopWorkflow, /--allow-downgrade --force/u)
   assert.match(desktopWorkflow, /tag_name: \$\{\{ env\.RELEASE_TAG \}\}/u)
@@ -40,6 +41,20 @@ test('signed Android publication follows the tag and waits for the verified desk
   assert.match(desktopWorkflow, /Verify draft assets and publish atomically/u)
   assert.match(desktopWorkflow, /sha256sum -c SHA256SUMS\.txt/u)
   assert.match(workflow, /--json isDraft/u)
+})
+
+test('macOS release artifacts require Developer ID signing, notarization, stapling and Gatekeeper acceptance', async () => {
+  const pkg = JSON.parse(await source('package.json'))
+  const builder = await source('scripts/build-release.mjs')
+  const workflow = await source(path.join('.github', 'workflows', 'release.yml'))
+  assert.equal(pkg.scripts['dist:mac'], 'node scripts/build-release.mjs')
+  for (const contract of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER', 'APPLE_TEAM_ID', "CSC_IDENTITY_AUTO_DISCOVERY !== 'true'", 'await access(notarizationKey)']) assert.ok(builder.includes(contract), contract)
+  assert.match(workflow, /matrix\.os == 'macos-latest' && 'macos-signing' \|\| 'desktop-build'/u)
+  for (const secret of ['MACOS_DEVELOPER_ID_P12_BASE64', 'MACOS_DEVELOPER_ID_P12_PASSWORD', 'APPLE_NOTARY_API_KEY_P8_BASE64', 'APPLE_NOTARY_KEY_ID', 'APPLE_NOTARY_ISSUER_ID', 'APPLE_TEAM_ID']) assert.ok(workflow.includes(`secrets.${secret}`), secret)
+  for (const gate of ['xcrun notarytool submit', 'xcrun stapler staple', 'codesign --verify --deep --strict', 'Authority=Developer ID Application:', 'flags=.*runtime', 'xcrun stapler validate', 'spctl --assess --type execute', 'spctl --assess --type open', 'ditto -x -k']) assert.ok(workflow.includes(gate), gate)
+  assert.match(workflow, /if: always\(\) && runner\.os == 'macOS'[\s\S]*rm -f "\$\{APPLE_API_KEY:-\}"/u)
+  const matrixPrefix = workflow.slice(0, workflow.indexOf('steps:'))
+  assert.doesNotMatch(matrixPrefix, /MACOS_DEVELOPER_ID|APPLE_NOTARY/u)
 })
 
 test('production component preparation binds the private key to target-correct fallbacks', async () => {
@@ -67,6 +82,23 @@ test('production component preparation binds the private key to target-correct f
   assert.match(secretVerifier, /verify-component-signing-key\.mjs/u)
   assert.match(secretVerifier, /trap 'rm -f/u)
   assert.doesNotMatch(secretVerifier, /echo "\$COMPONENT_SIGNING_PRIVATE_KEY_BASE64"/u)
+})
+
+test('desktop release signing reuses the reviewed component Ed25519 trust root without exposing private material', async () => {
+  const componentSources = JSON.parse(await source('component-update-sources.json'))
+  const desktopSources = JSON.parse(await source('release-update-sources.json'))
+  assert.deepEqual(desktopSources.trustedKeys, componentSources.trustedKeys)
+  const contract = await source('electron/bridge/desktop-release-contract.cjs')
+  const refresher = await source('scripts/refresh-release-manifest.mjs')
+  assert.match(contract, /canonicalJson/u)
+  assert.match(contract, /verifySignedObject/u)
+  const main = await source('electron/main.cjs')
+  const trustLoader = main.match(/async function desktopReleaseTrustedKeys\(\) \{[\s\S]*?\n\}/u)?.[0] || ''
+  assert.match(trustLoader, /__HARNESS_COMPONENT_UPDATE__\?\.bundledRoot/u)
+  assert.match(trustLoader, /release-update-sources\.json/u)
+  assert.doesNotMatch(trustLoader, /process\.env|HARNESS_DESKTOP_UPDATE_FEED/u)
+  assert.match(main, /HARNESS_DESKTOP_UPDATE_FEEDS|resolveUpdateFeeds/u)
+  assert.doesNotMatch(refresher, /console\.log\([^\n]*(privateKey|privatePem|SIGNING_KEY_FILE)/u)
 })
 
 test('release orchestration is resumable and defaults to non-publishing verification', async () => {

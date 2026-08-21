@@ -1,37 +1,45 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, screen, session, shell, Tray, WebContentsView } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, safeStorage, screen, session, shell, Tray, WebContentsView } = require('electron')
 const { spawn } = require('node:child_process')
-const { randomUUID } = require('node:crypto')
+const { createHash, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { copyFile, mkdir, readFile, stat, unlink, writeFile } = require('node:fs/promises')
+const { copyFile, mkdir, open, readFile, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 const AdmZip = require('adm-zip')
 const WebSocket = require('ws')
 
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
 const { ensureRuntimeNodeModules } = require('./bridge/runtime-bundle-service.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
+const { createWallpaperVideoResponse, resolveWallpaperEngineInput, wallpaperKind, wallpaperMime } = require('./bridge/wallpaper-service.cjs')
 const { createDefaultProviderMeterRegistry } = require('./bridge/provider-meter-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { ensureMobileControlPlugin } = require('./bridge/mobile-control-plugin-service.cjs')
 const { ensureDesktopDirectoryPickerPlugin } = require('./bridge/desktop-directory-picker-plugin-service.cjs')
 const { ensureDesktopBrowserToolsPlugin } = require('./bridge/desktop-browser-tools-plugin-service.cjs')
 const { ensureDesktopMemoryToolsPlugin } = require('./bridge/desktop-memory-tools-plugin-service.cjs')
+const { ensureDesktopMcpManagerPlugin } = require('./bridge/desktop-mcp-manager-plugin-service.cjs')
+const { ensureDesktopSchedulesPlugin } = require('./bridge/desktop-schedules-plugin-service.cjs')
+const { ensureDesktopFilesPlugin } = require('./bridge/desktop-files-plugin-service.cjs')
+const { ensureDesktopProgressPlugin } = require('./bridge/desktop-progress-plugin-service.cjs')
 const { ensureDesktopComputerUsePlugin } = require('./bridge/desktop-computer-use-plugin-service.cjs')
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
 const { ComputerUseConfirmationStore } = require('./bridge/computer-use-confirmation-store.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
+const { createGitRuntimeService } = require('./bridge/git-runtime-service.cjs')
 const { terminateProcessTree } = require('./bridge/process-tree.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
 const { resolveUserDataOverride } = require('./bridge/user-data-override.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
-const { DEFAULT_APP_FEEDS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile } = require('./bridge/update-service.cjs')
+const { DEFAULT_APP_FEEDS, DEFAULT_MAX_REDIRECTS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile, resolveUpdateRedirect, safeHttpsUpdateUrl } = require('./bridge/update-service.cjs')
 const { checksumWithFallback, downloadWithFallback } = require('./bridge/update-download-service.cjs')
 const { resolveUpdateFeeds } = require('./bridge/update-feed-config.cjs')
 const { openDesktopInstaller } = require('./bridge/update-launcher.cjs')
 const { resolveComponentUpdateConfig } = require('./bridge/component-update-config.cjs')
 const { ComponentUpdateService } = require('./bridge/component-update-service.cjs')
+const { effectiveComponentLastCheck } = require('./bridge/component-update-service.cjs')
 const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { launchComponentUpdateHelper } = require('./bridge/component-update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
@@ -39,8 +47,13 @@ const { StorageManagementService } = require('./bridge/storage-management-servic
 const { MemoryService } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
 const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
+const { DECISIONS: BROWSER_LINK_DECISIONS, routeBrowserLink } = require('./bridge/browser-link-router.cjs')
+const { MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, isSensitiveText } = require('./bridge/browser-action-gate.cjs')
+const { hostPublicInfo } = require('./bridge/browser-url-policy.cjs')
 const { BrowserOperationCoordinator } = require('./bridge/browser-operation-coordinator.cjs')
 const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
+const { BrowserDiagnostics, safeUrl: safeBrowserDiagnosticUrl } = require('./bridge/browser-diagnostics.cjs')
+const { BrowserHistoryStore } = require('./bridge/browser-history-store.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
 const { loadMobileRelayConfig } = require('./bridge/mobile-relay-config.cjs')
 const { createEasyTierComponentInstaller } = require('./bridge/network-component-service.cjs')
@@ -63,6 +76,7 @@ const { mobileBootstrapSource } = require('../renderer/theme-integration.js')
 const desktopPackage = require('../package.json')
 
 const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3080'
+const WALLPAPER_SCHEME = 'harness-wallpaper'
 const LOCAL_RUNTIME_HOSTS = new Set(['127.0.0.1', 'localhost'])
 const SELF_TEST_MODE = process.argv.includes('--self-test')
 const COMPONENT_HEALTH_CHECK_MODE = process.argv.includes('--component-health-check')
@@ -94,10 +108,24 @@ let mobileSyncTransportManager = null
 let componentUpdateServicePromise = null
 let lastComponentUpdateCheck = null
 let storageManagementService = null
+let gitRuntimeService = null
+let gitPreparationPromise = null
 const CACHE_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000
 let cacheMaintenanceTimer = null
 let memoryService = null
 let browserView = null
+let runtimeGuest = null
+const browserTabs = new Map()
+let activeBrowserTabId = null
+let nextBrowserTabSequence = 1
+const browserDiagnostics = new BrowserDiagnostics()
+const browserDownloads = []
+const browserDialogs = new Map()
+const activeBrowserTransfers = new Map()
+let browserTransferTail = Promise.resolve()
+let browserHistoryStore = null
+let browserNetworkDiagnosticsAttached = false
+let browserDownloadTrackingAttached = false
 let browserSecurityPolicy = null
 let browserControlServer = null
 const browserOperations = new BrowserOperationCoordinator()
@@ -138,6 +166,32 @@ function setRuntimeState(next) {
 function ensureStateStore() {
   if (!appStateStore) appStateStore = new AppStateStore(path.join(app.getPath('userData'), 'app-state.json'))
   return appStateStore
+}
+
+function ensureGitRuntimeService() {
+  if (!gitRuntimeService) {
+    gitRuntimeService = createGitRuntimeService({
+      resourcesPath: app.isPackaged ? process.resourcesPath : path.resolve(__dirname, '..'),
+      platform: process.platform,
+      env: process.env
+    })
+  }
+  return gitRuntimeService
+}
+
+function prepareDevelopmentGitRuntime() {
+  if (app.isPackaged) throw new Error('正式安装包应已包含 MinGit；组件缺失时请修复或重新安装应用。')
+  if (process.platform !== 'win32') throw new Error('内置 MinGit 当前只支持 Windows。')
+  if (gitPreparationPromise) return gitPreparationPromise
+  const root = path.resolve(__dirname, '..')
+  gitPreparationPromise = import(pathToFileURL(path.join(root, 'scripts', 'prepare-bundled-git.mjs')).href)
+    .then(module => module.prepareBundledGit({ root }))
+    .then(async () => {
+      ensureGitRuntimeService().refresh()
+      return ensureGitRuntimeService().status()
+    })
+    .finally(() => { gitPreparationPromise = null })
+  return gitPreparationPromise
 }
 
 function ensureStorageManagementService() {
@@ -218,16 +272,34 @@ async function updateMemoryPreferences(patch = {}) {
   return memoryStatusPayload()
 }
 
-const BROWSER_PANEL_WIDTH = 460
+const BROWSER_PANEL_MIN_WIDTH = 360
+const BROWSER_PANEL_DEFAULT_WIDTH = 460
+const BROWSER_PANEL_MAX_WIDTH = 1_400
 const BROWSER_VIEW_TOP = 118
 const BROWSER_VIEW_FOOTER = 34
+let browserPanelWidth = BROWSER_PANEL_DEFAULT_WIDTH
+let browserWideMode = false
 
 function browserPolicyOptions() {
   const root = path.join(desktopRuntimePaths().root, 'browser')
   return {
     authzFile: path.join(root, 'site-authorizations.json'),
-    authzRootDir: root
+    authzRootDir: root,
+    downloadRoots: [app.getPath('downloads')]
   }
+}
+
+function ensureBrowserHistoryStore() {
+  if (!browserHistoryStore) {
+    browserHistoryStore = new BrowserHistoryStore({ file: path.join(desktopRuntimePaths().root, 'browser', 'history.json') })
+  }
+  return browserHistoryStore
+}
+
+function effectiveBrowserPanelWidth(windowWidth) {
+  const width = Math.max(1, Number(windowWidth) || 1)
+  if (browserWideMode) return Math.min(width, Math.max(BROWSER_PANEL_DEFAULT_WIDTH, Math.floor(width * 0.72)))
+  return Math.min(width, Math.max(BROWSER_PANEL_MIN_WIDTH, Math.min(BROWSER_PANEL_MAX_WIDTH, browserPanelWidth)))
 }
 
 function liveBrowserContents() {
@@ -237,10 +309,18 @@ function liveBrowserContents() {
 }
 
 function closeBrowserViewContents() {
-  const contents = browserView?.webContents
+  abortBrowserTransfers()
+  const views = [...browserTabs.values()].map(tab => tab.view)
+  if (browserView && !views.includes(browserView)) views.push(browserView)
   browserView = null
-  if (!contents || typeof contents.isDestroyed !== 'function' || contents.isDestroyed()) return
-  contents.close()
+  browserTabs.clear()
+  browserDialogs.clear()
+  activeBrowserTabId = null
+  for (const view of views) {
+    const contents = view?.webContents
+    if (!contents || typeof contents.isDestroyed !== 'function' || contents.isDestroyed()) continue
+    contents.close()
+  }
 }
 
 function browserNavigationHistory() {
@@ -248,16 +328,20 @@ function browserNavigationHistory() {
 }
 
 function layoutBrowserView() {
-  if (!liveBrowserContents() || !mainWindow || mainWindow.isDestroyed()) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
   const [width, height] = mainWindow.getContentSize()
-  const panelWidth = Math.min(BROWSER_PANEL_WIDTH, width)
-  browserView.setBounds({
+  const panelWidth = effectiveBrowserPanelWidth(width)
+  const bounds = {
     x: Math.max(0, width - panelWidth),
     y: BROWSER_VIEW_TOP,
     width: panelWidth,
     height: Math.max(1, height - BROWSER_VIEW_TOP - BROWSER_VIEW_FOOTER)
-  })
-  browserView.setVisible(browserSidebarVisible && browserContentVisible)
+  }
+  for (const [tabId, tab] of browserTabs) {
+    if (!tab.view?.webContents || tab.view.webContents.isDestroyed()) continue
+    tab.view.setBounds(bounds)
+    tab.view.setVisible(tabId === activeBrowserTabId && browserSidebarVisible && browserContentVisible)
+  }
 }
 
 async function browserStatePayload(patch = {}) {
@@ -288,7 +372,26 @@ async function browserStatePayload(patch = {}) {
     audit: { count: audit.count, total: audit.total, dropped: audit.dropped },
     modelControlStopped: browserSecurityPolicy?.isStopped === true,
     profileResetting: browserOperations.snapshot().resetting,
-    pendingConfirmations: browserSecurityPolicy?.pendingConfirmations() || []
+    pendingConfirmations: browserSecurityPolicy?.pendingConfirmations() || [],
+    activeTabId: activeBrowserTabId,
+    tabs: [...browserTabs.entries()].map(([id, tab]) => ({
+      id,
+      title: safeBrowserText(tab.view.webContents.getTitle() || '新标签页', 160),
+      url: tab.view.webContents.getURL() || '',
+      loading: tab.view.webContents.isLoading()
+    })),
+    downloads: browserDownloads.map(item => ({ ...item })),
+    dialog: {
+      available: browserTabs.get(activeBrowserTabId)?.dialogControl === true,
+      pending: browserDialogs.has(activeBrowserTabId),
+      type: browserDialogs.get(activeBrowserTabId)?.type || null
+    },
+    history: await ensureBrowserHistoryStore().search('', { limit: 50 }),
+    panelWidth: effectiveBrowserPanelWidth(mainWindow?.getContentSize?.()[0] || browserPanelWidth),
+    wideMode: browserWideMode,
+    viewport: liveBrowserContents()
+      ? { width: browserView.getBounds().width, height: browserView.getBounds().height }
+      : { width: 0, height: 0 }
   }
 }
 
@@ -303,7 +406,7 @@ function updateBrowserActiveTab(url) {
   if (!browserSecurityPolicy || !url) return
   try {
     const nav = browserSecurityPolicy.userNavigate(url)
-    browserSecurityPolicy.setActiveTab({ id: 'side-browser-main', origin: nav.origin, visible: browserSidebarVisible && browserContentVisible })
+    browserSecurityPolicy.setActiveTab({ id: activeBrowserTabId || 'side-browser-main', origin: nav.origin, visible: browserSidebarVisible && browserContentVisible })
     browserState.origin = nav.origin
     browserState.error = ''
   } catch {
@@ -315,10 +418,55 @@ function ensureBrowserSidebar() {
   if (liveBrowserContents()) return browserView
   browserView = null
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('主窗口尚未准备好。')
-  browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
+  if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
   const browserSession = session.fromPartition(browserSecurityPolicy.partitionName, { cache: true })
   browserSession.setPermissionCheckHandler(() => false)
   browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+  if (!browserNetworkDiagnosticsAttached) {
+    browserNetworkDiagnosticsAttached = true
+    browserSession.webRequest.onCompleted({ urls: ['http://*/*', 'https://*/*'] }, details => {
+      browserDiagnostics.recordNetwork({
+        id: details.id,
+        method: details.method,
+        url: details.url,
+        status: details.statusCode,
+        resourceType: details.resourceType,
+        fromCache: details.fromCache,
+        completedAt: Date.now()
+      })
+    })
+  }
+  if (!browserDownloadTrackingAttached) {
+    browserDownloadTrackingAttached = true
+    browserSession.on('will-download', (_event, item) => {
+      const anyModelAuthorization = browserSecurityPolicy?.authorizations?.().entries?.some(entry => entry.actions?.length)
+      const blockedWhileModelAuthorized = Boolean(anyModelAuthorization && browserSecurityPolicy?.isStopped !== true)
+      if (blockedWhileModelAuthorized) item.cancel()
+      const unconfirmedModelDownload = blockedWhileModelAuthorized
+      const modelInitiated = false
+      const entry = {
+        id: randomUUID(),
+        filename: safeBrowserText(item.getFilename(), 240),
+        receivedBytes: 0,
+        totalBytes: Math.max(0, Number(item.getTotalBytes()) || 0),
+        state: unconfirmedModelDownload ? 'cancelled' : 'progressing',
+        modelInitiated,
+        blockedUnconfirmed: unconfirmedModelDownload,
+        startedAt: Date.now()
+      }
+      browserDownloads.push(entry)
+      if (browserDownloads.length > 20) browserDownloads.splice(0, browserDownloads.length - 20)
+      const update = state => {
+        entry.receivedBytes = Math.max(0, Number(item.getReceivedBytes()) || 0)
+        entry.totalBytes = Math.max(entry.totalBytes, Number(item.getTotalBytes()) || 0)
+        entry.state = String(state || item.getState() || 'progressing')
+        publishBrowserState().catch(() => {})
+      }
+      item.on('updated', (_itemEvent, state) => update(state))
+      item.once('done', (_itemEvent, state) => update(state))
+      publishBrowserState().catch(() => {})
+    })
+  }
   browserView = new WebContentsView({
     webPreferences: {
       partition: browserSecurityPolicy.partitionName,
@@ -334,6 +482,40 @@ function ensureBrowserSidebar() {
   browserView.setBackgroundColor('#ffffff')
   mainWindow.contentView.addChildView(browserView)
   const contents = browserView.webContents
+  const tabId = `browser-tab-${nextBrowserTabSequence++}`
+  activeBrowserTabId = tabId
+  const browserTab = { id: tabId, view: browserView, createdAt: Date.now(), dialogControl: false, navigationGeneration: 0 }
+  browserTabs.set(tabId, browserTab)
+  try {
+    contents.debugger.attach('1.3')
+    contents.debugger.sendCommand('Page.enable').then(() => { browserTab.dialogControl = true }).catch(() => {})
+    contents.debugger.on('message', (_debuggerEvent, method, parameters) => {
+      if (method === 'Page.javascriptDialogOpening') {
+        const rawDialogMessage = String(parameters?.message || '')
+        browserDialogs.set(tabId, {
+          id: randomUUID(),
+          type: safeBrowserText(parameters?.type || 'alert', 40),
+          message: /(?:^|\D)\d{4,8}(?:\D|$)/.test(rawDialogMessage) ? '[REDACTED:sensitive-browser-content]' : safeBrowserText(rawDialogMessage, 500),
+          hasBrowserHandler: Boolean(parameters?.hasBrowserHandler),
+          at: Date.now()
+        })
+        if (tabId === activeBrowserTabId) publishBrowserState().catch(() => {})
+      } else if (method === 'Page.javascriptDialogClosed') {
+        browserDialogs.delete(tabId)
+        if (tabId === activeBrowserTabId) publishBrowserState().catch(() => {})
+      }
+    })
+    contents.debugger.on('detach', () => { browserTab.dialogControl = false; browserDialogs.delete(tabId) })
+  } catch {}
+  contents.on('console-message', (_event, details) => {
+    if (tabId !== activeBrowserTabId) return
+    browserDiagnostics.recordConsole({
+      level: details.level,
+      message: details.message,
+      source: details.sourceId,
+      line: details.lineNumber
+    })
+  })
   const validateNavigation = (event, url) => {
     if (browserOperations.snapshot().resetting) {
       if (url === 'about:blank') return
@@ -352,20 +534,76 @@ function ensureBrowserSidebar() {
     } catch {}
     return { action: 'deny' }
   })
-  contents.on('did-start-loading', () => publishBrowserState({ loading: true }).catch(() => {}))
-  contents.on('did-stop-loading', () => publishBrowserState({ loading: false }).catch(() => {}))
+  contents.on('did-start-loading', () => { if (tabId === activeBrowserTabId) publishBrowserState({ loading: true }).catch(() => {}) })
+  contents.on('did-stop-loading', () => { if (tabId === activeBrowserTabId) publishBrowserState({ loading: false }).catch(() => {}) })
   const navigated = (_event, url) => {
+    browserTab.navigationGeneration += 1
+    ensureBrowserHistoryStore().add(url, contents.getTitle()).catch(() => {})
+    if (tabId !== activeBrowserTabId) return
     updateBrowserActiveTab(url)
     publishBrowserState({ url }).catch(() => {})
   }
   contents.on('did-navigate', navigated)
   contents.on('did-navigate-in-page', navigated)
-  contents.on('page-title-updated', (_event, title) => publishBrowserState({ title }).catch(() => {}))
+  contents.on('page-title-updated', (_event, title) => {
+    ensureBrowserHistoryStore().updateTitle(contents.getURL(), title).catch(() => {})
+    if (tabId === activeBrowserTabId) publishBrowserState({ title }).catch(() => {})
+  })
   contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
-    if (isMainFrame && code !== -3) publishBrowserState({ loading: false, url, error: description || `加载失败 (${code})` }).catch(() => {})
+    if (tabId === activeBrowserTabId && isMainFrame && code !== -3) publishBrowserState({ loading: false, url, error: description || `加载失败 (${code})` }).catch(() => {})
   })
   layoutBrowserView()
   return browserView
+}
+
+async function createBrowserTab(value = '') {
+  browserOperations.ticket()
+  browserView = null
+  const view = ensureBrowserSidebar()
+  const tabId = activeBrowserTabId
+  const target = String(value || '').trim()
+  if (target) await view.webContents.loadURL(normalizeBrowserAddress(target))
+  else await view.webContents.loadURL('about:blank')
+  layoutBrowserView()
+  await publishBrowserState({ error: '' })
+  return { activeTabId: tabId, state: await browserStatePayload() }
+}
+
+async function switchBrowserTab(tabId) {
+  browserOperations.ticket()
+  const tab = browserTabs.get(String(tabId || ''))
+  if (!tab || tab.view.webContents.isDestroyed()) throw new Error('浏览器标签页不存在。')
+  activeBrowserTabId = tab.id
+  browserView = tab.view
+  const url = tab.view.webContents.getURL()
+  updateBrowserActiveTab(url)
+  layoutBrowserView()
+  return publishBrowserState({
+    url,
+    title: tab.view.webContents.getTitle(),
+    loading: tab.view.webContents.isLoading(),
+    error: ''
+  })
+}
+
+async function closeBrowserTab(tabId) {
+  browserOperations.ticket()
+  const id = String(tabId || activeBrowserTabId || '')
+  const tab = browserTabs.get(id)
+  if (!tab) throw new Error('浏览器标签页不存在。')
+  browserTabs.delete(id)
+  browserDialogs.delete(id)
+  try { mainWindow?.contentView.removeChildView(tab.view) } catch {}
+  if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
+  if (!browserTabs.size) return createBrowserTab()
+  if (id === activeBrowserTabId) {
+    const next = [...browserTabs.values()].at(-1)
+    activeBrowserTabId = next.id
+    browserView = next.view
+    updateBrowserActiveTab(next.view.webContents.getURL())
+  }
+  layoutBrowserView()
+  return publishBrowserState()
 }
 
 function normalizeBrowserAddress(value, base = '') {
@@ -425,6 +663,8 @@ async function clearBrowserSiteData(confirmed) {
   const resetGeneration = browserOperations.beginReset()
   const contents = view.webContents
   const browserSession = contents.session
+  abortBrowserTransfers(origin)
+  await withBrowserTransferLock(async () => {})
   try {
     browserSecurityPolicy.clearPendingControl()
     contents.stop()
@@ -435,6 +675,7 @@ async function clearBrowserSiteData(confirmed) {
     if (typeof browserSession.clearCodeCaches === 'function') await browserSession.clearCodeCaches({ urlsForRequestingOrigins: [origin] })
     if (typeof browserSession.closeAllConnections === 'function') await browserSession.closeAllConnections()
     browserSecurityPolicy.revoke(origin)
+    browserDiagnostics.clear('all')
     browserState = { ...browserState, loading: false, url: 'about:blank', title: '', origin: '', hasSiteData: false, error: '' }
   } finally {
     browserOperations.finishReset(resetGeneration)
@@ -456,7 +697,13 @@ async function grantCurrentBrowserOrigin(actions) {
   if (!browserState.origin) throw new Error('请先打开需要授权的站点。')
   await resumeBrowserModelControl()
   browserOperations.assert(ticket)
-  browserSecurityPolicy.grant(browserState.origin, { actions: Array.isArray(actions) ? actions : [], ttlMs: 2 * 60 * 60 * 1000 })
+  const origin = browserState.origin
+  const privateNetwork = !hostPublicInfo(new URL(origin).hostname).public
+  browserSecurityPolicy.grant(origin, {
+    actions: Array.isArray(actions) ? actions : [],
+    ttlMs: 2 * 60 * 60 * 1000,
+    ...(privateNetwork ? { by: 'user', allowPrivateNetwork: true } : {})
+  })
   return publishBrowserState()
 }
 
@@ -466,6 +713,8 @@ async function clearAllBrowserData(confirmed) {
   const resetGeneration = browserOperations.beginReset()
   const contents = view.webContents
   const browserSession = contents.session
+  abortBrowserTransfers()
+  await withBrowserTransferLock(async () => {})
   try {
     browserSecurityPolicy.clearPendingControl()
     contents.stop()
@@ -481,6 +730,10 @@ async function clearAllBrowserData(confirmed) {
     contents.navigationHistory?.clear()
     browserSecurityPolicy.revokeAll()
     browserSecurityPolicy.clearAudit()
+    browserDiagnostics.clear('all')
+    browserDownloads.length = 0
+    browserDialogs.clear()
+    await ensureBrowserHistoryStore().clear()
     browserState = { ...browserState, loading: false, url: 'about:blank', title: '', origin: '', canGoBack: false, canGoForward: false, hasSiteData: false, error: '' }
   } finally {
     browserOperations.finishReset(resetGeneration)
@@ -497,11 +750,13 @@ function requireVisibleBrowserForModel() {
   const url = view.webContents.getURL()
   updateBrowserActiveTab(url)
   if (!browserState.origin) throw new Error('当前浏览器页面没有可操作的 HTTP(S) 来源。')
-  return { view, url, origin: browserState.origin, tabId: 'side-browser-main', ticket }
+  return { view, url, origin: browserState.origin, tabId: activeBrowserTabId || 'side-browser-main', ticket }
 }
 
 function safeBrowserText(value, maximum = 12000) {
-  return redactSensitiveText(String(value || '').slice(0, maximum)).text
+  const text = String(value || '').slice(0, maximum)
+  if (isSensitiveText(text)) return '[REDACTED:sensitive-browser-content]'
+  return redactSensitiveText(text).text
 }
 
 async function observeBrowserForModel() {
@@ -535,13 +790,265 @@ async function observeBrowserForModel() {
 
 async function browserElementMetadata(view, ref) {
   if (!/^b\d{1,4}$/.test(String(ref || ''))) throw new Error('浏览器元素引用无效，请重新 observe。')
-  return view.webContents.executeJavaScript(`(() => {
+  const metadata = await view.webContents.executeJavaScript(`(() => {
     const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(ref))}]');
     if(!element) return null;
     const label=element.labels?.[0]?.innerText||element.getAttribute('aria-label')||element.placeholder||'';
     const text=String(element.innerText||element.textContent||'').trim().slice(0,300);
-    return { tag:element.tagName.toLowerCase(),type:String(element.type||''),name:String(element.name||''),id:String(element.id||''),role:String(element.getAttribute('role')||''),autocomplete:String(element.autocomplete||''),ariaLabel:String(element.getAttribute('aria-label')||''),label:String(label),baseUrl:location.origin,text,submit:Boolean(element.type==='submit'||element.closest('button[type="submit"],input[type="submit"]')),disabled:Boolean(element.disabled||element.getAttribute('aria-disabled')==='true') };
+    const rect=element.getBoundingClientRect();
+    return { tag:element.tagName.toLowerCase(),type:String(element.type||''),name:String(element.name||''),id:String(element.id||''),role:String(element.getAttribute('role')||''),autocomplete:String(element.autocomplete||''),ariaLabel:String(element.getAttribute('aria-label')||''),label:String(label),baseUrl:location.origin,text,href:String(element.href||''),downloadName:String(element.getAttribute('download')||''),submit:Boolean(element.type==='submit'||element.closest('button[type="submit"],input[type="submit"]')),disabled:Boolean(element.disabled||element.getAttribute('aria-disabled')==='true'),x:Math.round(rect.left+rect.width/2),y:Math.round(rect.top+rect.height/2) };
   })()`, true)
+  if (!metadata || !view.webContents.debugger.isAttached()) return metadata
+  try {
+    const documentNode = await view.webContents.debugger.sendCommand('DOM.getDocument', { depth: 0, pierce: true })
+    const selected = await view.webContents.debugger.sendCommand('DOM.querySelector', { nodeId: documentNode.root.nodeId, selector: `[data-hd-model-ref="${String(ref)}"]` })
+    if (!selected.nodeId) return null
+    const described = await view.webContents.debugger.sendCommand('DOM.describeNode', { nodeId: selected.nodeId })
+    return { ...metadata, backendNodeId: described.node.backendNodeId }
+  } catch {
+    return null
+  }
+}
+
+function authorizeBrowserRead(origin, tabId, tag = 'document') {
+  return browserSecurityPolicy.modelAction({ action: 'read', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag }, payload: {} })
+}
+
+async function captureBrowserForModel(view, parameters) {
+  const preflight = await view.webContents.executeJavaScript(`(() => {
+    const sensitive=/(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc)/i;
+    const visible=element=>{const rect=element.getBoundingClientRect();const style=getComputedStyle(element);return rect.width>0&&rect.height>0&&style.display!=='none'&&style.visibility!=='hidden'};
+    const sensitiveField=[...document.querySelectorAll('input,textarea,select,[contenteditable="true"]')].filter(visible).some(element=>sensitive.test([element.type,element.name,element.id,element.autocomplete,element.getAttribute('aria-label'),element.placeholder].filter(Boolean).join(' ')));
+    return {sensitiveField,text:String(document.body?.innerText||'').slice(0,12000)};
+  })()`, true)
+  const highRisk = redactSensitiveText(preflight?.text || '').types
+  if (preflight?.sensitiveField || highRisk.length || isSensitiveText(preflight?.text || '')) {
+    throw Object.assign(new Error('当前可见页面包含密码、验证码、令牌、支付或账号类敏感内容，模型截图已阻止，请由用户亲自查看。'), { code: 'sensitive-screenshot-blocked' })
+  }
+  const image = await view.webContents.capturePage()
+  const maxWidth = Math.max(320, Math.min(1600, Math.floor(Number(parameters.max_width) || 1200)))
+  const sourceSize = image.getSize()
+  const scaled = sourceSize.width > maxWidth ? image.resize({ width: maxWidth, quality: 'good' }) : image
+  const size = scaled.getSize()
+  return { image: scaled.toDataURL(), mime: 'image/png', width: size.width, height: size.height }
+}
+
+async function browserDomDiagnostics(view) {
+  return view.webContents.executeJavaScript(`(() => {
+    const sensitive=/(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc)/i;
+    const clean=element=>!sensitive.test([element.type,element.name,element.id,element.autocomplete,element.getAttribute('aria-label'),element.placeholder].filter(Boolean).join(' '));
+    const count=selector=>document.querySelectorAll(selector).length;
+    const headings=[...document.querySelectorAll('h1,h2,h3')].filter(clean).slice(0,40).map(node=>({level:node.tagName.toLowerCase(),text:String(node.innerText||node.textContent||'').trim().slice(0,240)}));
+    const landmarks=[...document.querySelectorAll('main,nav,header,footer,aside,[role="main"],[role="navigation"]')].slice(0,40).map(node=>({tag:node.tagName.toLowerCase(),role:String(node.getAttribute('role')||''),label:String(node.getAttribute('aria-label')||'').slice(0,160)}));
+    return {url:location.href,title:document.title,readyState:document.readyState,viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY},counts:{links:count('a'),buttons:count('button,[role="button"]'),forms:count('form'),inputs:count('input,textarea,select'),images:count('img')},headings,landmarks};
+  })()`, true)
+}
+
+async function extractBrowserData(view, { mode = 'text', maxItems = 100, ref = '' } = {}) {
+  const allowedModes = new Set(['text', 'links', 'tables'])
+  if (!allowedModes.has(mode)) throw new Error('extract_mode 仅支持 text、links 或 tables。')
+  if (ref && !/^b\d{1,4}$/.test(ref)) throw new Error('抓取范围引用无效，请重新 observe。')
+  const raw = await view.webContents.executeJavaScript(`(() => {
+    const mode=${JSON.stringify(mode)};
+    const maximum=${Math.max(1, Math.min(200, maxItems))};
+    const requestedRef=${JSON.stringify(ref)};
+    const root=requestedRef?document.querySelector('[data-hd-model-ref="'+requestedRef+'"]'):document;
+    if(!root)return {missingRef:true,items:[],truncated:false};
+    const visible=node=>{if(!(node instanceof Element))return false;const style=getComputedStyle(node);const rect=node.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity||1)>0&&rect.width>0&&rect.height>0};
+    const text=node=>String(node.innerText||node.textContent||'').replace(/\s+/g,' ').trim();
+    let candidates=[];
+    if(mode==='links'){
+      candidates=[...root.querySelectorAll('a[href]')].filter(visible).map(node=>({text:text(node).slice(0,500),url:String(node.href||''),ref:String(node.getAttribute('data-hd-model-ref')||''),rel:String(node.rel||'').slice(0,120)}));
+    }else if(mode==='tables'){
+      candidates=[...root.querySelectorAll('table')].filter(visible).map(table=>({caption:text(table.querySelector('caption')||{textContent:''}).slice(0,300),headers:[...table.querySelectorAll('thead th')].slice(0,50).map(cell=>text(cell).slice(0,500)),rows:[...table.querySelectorAll('tbody tr, tr')].filter(row=>!row.closest('thead')).slice(0,maximum).map(row=>[...row.querySelectorAll(':scope > th, :scope > td')].slice(0,50).map(cell=>text(cell).slice(0,500)))}));
+    }else{
+      const selector='h1,h2,h3,h4,h5,h6,p,li,dt,dd,blockquote,pre,[role="listitem"],[itemprop="name"],[itemprop="price"],[itemprop="description"]';
+      const seen=new Set();
+      candidates=[...root.querySelectorAll(selector)].filter(visible).map(node=>({tag:node.tagName.toLowerCase(),text:text(node).slice(0,2000),ref:String(node.getAttribute('data-hd-model-ref')||'')})).filter(item=>item.text&&!seen.has(item.text)&&(seen.add(item.text),true));
+    }
+    return {missingRef:false,items:candidates.slice(0,maximum),truncated:candidates.length>maximum,totalCandidates:candidates.length};
+  })()`, true)
+  if (raw?.missingRef) throw new Error('抓取范围已失效，请重新 observe。')
+  const safeItems = mode === 'links'
+    ? (raw.items || []).map(item => ({ text: safeBrowserText(item.text, 500), url: safeBrowserDiagnosticUrl(item.url), ref: /^b\d{1,4}$/.test(item.ref) ? item.ref : '', rel: safeBrowserText(item.rel, 120) }))
+    : mode === 'tables'
+      ? (raw.items || []).map(item => ({ caption: safeBrowserText(item.caption, 300), headers: (item.headers || []).map(cell => safeBrowserText(cell, 500)), rows: (item.rows || []).map(row => row.map(cell => safeBrowserText(cell, 500))) }))
+      : (raw.items || []).map(item => ({ tag: safeBrowserText(item.tag, 20), text: safeBrowserText(item.text, 2000), ref: /^b\d{1,4}$/.test(item.ref) ? item.ref : '' }))
+  return { mode, items: safeItems, count: safeItems.length, totalCandidates: Math.max(safeItems.length, Number(raw?.totalCandidates) || 0), truncated: Boolean(raw?.truncated), bounded: true }
+}
+
+function browserDownloadDestination(requested, _targetUrl) {
+  const fallback = `download-${createHash('sha256').update(String(_targetUrl || '')).digest('hex').slice(0, 12)}.bin`
+  const raw = String(requested || fallback).trim()
+  let sanitized = path.basename(raw).replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '').slice(0, 180) || 'download'
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(sanitized)) sanitized = `_${sanitized}`
+  const directory = app.getPath('downloads')
+  let destination = path.join(directory, sanitized)
+  if (!existsSync(destination)) return destination
+  const extension = path.extname(sanitized)
+  const stem = path.basename(sanitized, extension)
+  for (let index = 1; index <= 999; index++) {
+    destination = path.join(directory, `${stem} (${index})${extension}`)
+    if (!existsSync(destination)) return destination
+  }
+  throw new Error('下载目录中同名文件过多，请先整理后重试。')
+}
+
+function withBrowserTransferLock(task) {
+  const previous = browserTransferTail
+  let release
+  browserTransferTail = new Promise(resolve => { release = resolve })
+  return previous.catch(() => {}).then(task).finally(() => release())
+}
+
+function abortBrowserTransfers(origin = '') {
+  for (const transfer of activeBrowserTransfers.values()) {
+    if (!origin || transfer.origin === origin) transfer.controller.abort()
+  }
+}
+
+function assertBrowserTransferNotAborted(controller) {
+  if (controller?.signal?.aborted) throw Object.assign(new Error('浏览器传输已由用户停止或撤权。'), { code: 'browser-transfer-aborted' })
+}
+
+function assertBrowserTransferBinding(view, binding, ticket, requiredAction) {
+  browserOperations.assert(ticket)
+  const tab = browserTabs.get(binding.tabId)
+  if (!browserSidebarVisible || !browserContentVisible || activeBrowserTabId !== binding.tabId || tab?.view !== view) throw new Error('操作期间活动标签已变化，传输已取消。')
+  if (tab.navigationGeneration !== binding.navigationGeneration || view.webContents.getURL() !== binding.url) throw new Error('操作期间页面已导航，传输已取消。')
+  let currentOrigin = ''
+  try { currentOrigin = new URL(view.webContents.getURL()).origin } catch {}
+  const authorization = browserSecurityPolicy?.authorizations?.().entries?.find(entry => entry.origin === binding.origin)
+  if (currentOrigin !== binding.origin || browserSecurityPolicy?.isStopped === true || !authorization?.actions?.includes(requiredAction)) throw new Error('操作期间页面来源、模型控制状态或站点授权已变化，传输已取消。')
+  if (requiredAction === 'upload' && !view.webContents.debugger.isAttached()) throw new Error('文件选择期间固定浏览器控制通道已关闭，上传已取消。')
+}
+
+async function downloadBrowserResource(view, targetUrl, destinationPath, maxBytes, binding, ticket) {
+  const transferId = randomUUID()
+  const controller = new AbortController()
+  activeBrowserTransfers.set(transferId, { origin: binding.origin, controller })
+  try {
+    return await runBrowserResourceDownload(view, targetUrl, destinationPath, maxBytes, binding, ticket, controller)
+  } finally {
+    activeBrowserTransfers.delete(transferId)
+  }
+}
+
+async function runBrowserResourceDownload(view, targetUrl, destinationPath, maxBytes, binding, ticket, controller) {
+  const origin = binding.origin
+  let current = targetUrl
+  let response
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    assertBrowserTransferNotAborted(controller)
+    assertBrowserTransferBinding(view, binding, ticket, 'download')
+    response = await view.webContents.session.fetch(current, { redirect: 'manual', signal: controller.signal })
+    if (![301, 302, 303, 307, 308].includes(response.status)) break
+    const location = response.headers.get('location')
+    if (!location) throw new Error('下载重定向缺少目标地址。')
+    const next = new URL(location, current)
+    if (!['http:', 'https:'].includes(next.protocol) || next.origin !== origin || next.username || next.password) throw new Error('下载重定向离开了已授权 origin，已阻止。')
+    current = next.href
+    if (redirects === 5) throw new Error('下载重定向次数过多。')
+  }
+  assertBrowserTransferNotAborted(controller)
+    assertBrowserTransferBinding(view, binding, ticket, 'download')
+  if (!response?.ok || !response.body) throw new Error(`下载请求失败（HTTP ${response?.status || 0}）。`)
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw new Error('下载大小超过已确认上限。')
+  const entry = { id: randomUUID(), filename: safeBrowserText(path.basename(destinationPath), 240), receivedBytes: 0, totalBytes: Number.isFinite(declaredLength) ? declaredLength : 0, state: 'progressing', modelInitiated: true, startedAt: Date.now() }
+  browserDownloads.push(entry)
+  if (browserDownloads.length > 20) browserDownloads.splice(0, browserDownloads.length - 20)
+  await publishBrowserState().catch(() => {})
+  let handle
+  let destinationCreated = false
+  const reader = response.body.getReader()
+  try {
+    handle = await open(destinationPath, 'wx')
+    destinationCreated = true
+    while (true) {
+      assertBrowserTransferNotAborted(controller)
+    assertBrowserTransferBinding(view, binding, ticket, 'download')
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunk = Buffer.from(value)
+      if (entry.receivedBytes + chunk.length > maxBytes) throw new Error('下载流超过已确认大小上限。')
+      let offset = 0
+      while (offset < chunk.length) {
+        const written = await handle.write(chunk, offset, chunk.length - offset, null)
+        offset += written.bytesWritten
+      }
+      entry.receivedBytes += chunk.length
+      entry.totalBytes = Math.max(entry.totalBytes, entry.receivedBytes)
+      publishBrowserState().catch(() => {})
+    }
+    await withBrowserTransferLock(async () => {
+      assertBrowserTransferNotAborted(controller)
+      assertBrowserTransferBinding(view, binding, ticket, 'download')
+      await handle.sync()
+      assertBrowserTransferNotAborted(controller)
+      entry.state = 'completed'
+    })
+    await publishBrowserState().catch(() => {})
+    return { downloadCompleted: true, filename: entry.filename, bytes: entry.receivedBytes, maxBytes }
+  } catch (error) {
+    entry.state = 'interrupted'
+    await reader.cancel().catch(() => {})
+    await publishBrowserState().catch(() => {})
+    throw error
+  } finally {
+    await handle?.close().catch(() => {})
+    if (destinationCreated && entry.state !== 'completed') await unlink(destinationPath).catch(() => {})
+  }
+}
+
+async function uploadBrowserFileInteractively(view, binding, ticket) {
+  const selection = await dialog.showOpenDialog(mainWindow, {
+    title: '选择要上传到当前网页的文件',
+    buttonLabel: '选择并上传',
+    properties: ['openFile']
+  })
+  assertBrowserTransferBinding(view, binding, ticket, 'upload')
+  if (selection.canceled || !selection.filePaths?.[0]) return { uploaded: false, cancelled: true }
+  const selectedPath = selection.filePaths[0]
+  let handle
+  let info
+  let data
+  try {
+    handle = await open(selectedPath, 'r')
+    info = await handle.stat()
+    if (!info.isFile()) throw new Error('只能上传普通文件。')
+    if (info.size <= 0 || info.size > MAX_UPLOAD_BYTES) throw new Error(`上传文件必须大于 0 字节且不超过 ${MAX_UPLOAD_BYTES} 字节。`)
+    data = await handle.readFile()
+    const after = await handle.stat()
+    if (data.length !== info.size || after.size !== info.size || after.mtimeMs !== info.mtimeMs || data.length > MAX_UPLOAD_BYTES) throw new Error('文件在选择后发生变化，上传已取消。')
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+  assertBrowserTransferBinding(view, binding, ticket, 'upload')
+  const extension = path.extname(selectedPath).toLowerCase()
+  const mediaTypes = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.pdf': 'application/pdf', '.json': 'application/json', '.txt': 'text/plain', '.csv': 'text/csv', '.zip': 'application/zip' }
+  const mediaType = mediaTypes[extension] || 'application/octet-stream'
+  const resolved = await view.webContents.debugger.sendCommand('DOM.resolveNode', { backendNodeId: binding.backendNodeId })
+  const objectId = resolved?.object?.objectId
+  if (!objectId) throw new Error('文件选择控件已失效，请重新 observe 后再试。')
+  let uploaded = false
+  await withBrowserTransferLock(async () => {
+    assertBrowserTransferBinding(view, binding, ticket, 'upload')
+    try {
+      const called = await view.webContents.debugger.sendCommand('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function(base64,name,mediaType){if(!(this instanceof HTMLInputElement)||this.type!=='file'||!this.isConnected)return false;const binary=atob(base64);const bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);const transfer=new DataTransfer();transfer.items.add(new File([bytes],name,{type:mediaType}));this.files=transfer.files;this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));return true}`,
+        arguments: [{ value: data.toString('base64') }, { value: path.basename(selectedPath) }, { value: mediaType }],
+        returnByValue: true,
+        awaitPromise: false
+      })
+      uploaded = called?.result?.value === true && !called?.exceptionDetails
+    } finally {
+      await view.webContents.debugger.sendCommand('Runtime.releaseObject', { objectId }).catch(() => {})
+    }
+  })
+  if (!uploaded) throw new Error('文件选择控件已失效，请重新 observe 后再试。')
+  return { uploaded: true, bytes: data.length, userSelected: true }
 }
 
 async function modelBrowserAction(input = {}) {
@@ -550,14 +1057,139 @@ async function modelBrowserAction(input = {}) {
   if (action === 'status') {
     const authorizations = browserSecurityPolicy?.authorizations() || { entries: [] }
     const current = authorizations.entries.find(entry => entry.origin === browserState.origin)
-    return { visible: browserSidebarVisible && browserContentVisible, origin: browserState.origin || null, title: safeBrowserText(browserState.title, 500), loading: browserState.loading, stopped: browserSecurityPolicy?.isStopped === true, actions: current?.actions || [] }
+    const bounds = browserView?.getBounds?.() || { width: 0, height: 0 }
+    return { visible: browserSidebarVisible && browserContentVisible, origin: browserState.origin || null, title: safeBrowserText(browserState.title, 500), loading: browserState.loading, stopped: browserSecurityPolicy?.isStopped === true, actions: current?.actions || [], activeTabId: activeBrowserTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })), downloads: browserDownloads.map(item => ({ id: item.id, receivedBytes: item.receivedBytes, totalBytes: item.totalBytes, state: item.state, modelInitiated: Boolean(item.modelInitiated) })), dialog: { available: browserTabs.get(activeBrowserTabId)?.dialogControl === true, pending: browserDialogs.has(activeBrowserTabId), type: browserDialogs.get(activeBrowserTabId)?.type || null }, viewport: { width: bounds.width, height: bounds.height }, diagnostics: { console: browserDiagnostics.snapshot('console', { limit: 500 }).console.length, network: browserDiagnostics.snapshot('network', { limit: 500 }).network.length } }
   }
   if (action === 'stop') {
-    browserSecurityPolicy?.stop()
+    abortBrowserTransfers()
+    await withBrowserTransferLock(async () => browserSecurityPolicy?.stop())
     return { stopped: true, message: '模型浏览器控制已停止；网页仍由用户直接控制。' }
   }
   if (action === 'observe') return observeBrowserForModel()
   const { view, origin, tabId, ticket } = requireVisibleBrowserForModel()
+  if (action === 'screenshot') {
+    authorizeBrowserRead(origin, tabId)
+    const result = await captureBrowserForModel(view, parameters)
+    browserOperations.assert(ticket)
+    return result
+  }
+  if (action === 'inspect') {
+    authorizeBrowserRead(origin, tabId)
+    const result = await browserDomDiagnostics(view)
+    browserOperations.assert(ticket)
+    return {
+      ...result,
+      url: safeBrowserDiagnosticUrl(result.url),
+      title: safeBrowserText(result.title, 500),
+      headings: result.headings.map(item => ({ ...item, text: safeBrowserText(item.text, 240) })),
+      landmarks: result.landmarks.map(item => ({ ...item, label: safeBrowserText(item.label, 160) }))
+    }
+  }
+  if (action === 'extract') {
+    authorizeBrowserRead(origin, tabId)
+    const mode = String(parameters.extract_mode || 'text')
+    const maxItems = Math.max(1, Math.min(200, Math.floor(Number(parameters.max_items) || 100)))
+    const result = await extractBrowserData(view, { mode, maxItems, ref: String(parameters.ref || '') })
+    browserOperations.assert(ticket)
+    return { ...result, origin }
+  }
+  if (action === 'console' || action === 'network') {
+    authorizeBrowserRead(origin, tabId)
+    const limit = Math.max(1, Math.min(100, Math.floor(Number(parameters.limit) || 50)))
+    const since = Math.max(0, Number(parameters.since) || 0)
+    const entries = browserDiagnostics.snapshot(action, { limit: 500 })[action].filter(entry => entry.at >= since).slice(-limit)
+    return { entries, count: entries.length, bounded: true, includesHeadersOrBodies: false }
+  }
+  if (action === 'wait') {
+    authorizeBrowserRead(origin, tabId)
+    const timeoutMs = Math.max(0, Math.min(10_000, Math.floor(Number(parameters.timeout_ms) || 1000)))
+    await new Promise(resolve => setTimeout(resolve, timeoutMs))
+    browserOperations.assert(ticket)
+    return { waited: true, timeoutMs, loading: view.webContents.isLoading() }
+  }
+  if (action === 'tabList') {
+    authorizeBrowserRead(origin, tabId)
+    return { activeTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })) }
+  }
+  if (action === 'tabOpen') {
+    const target = String(parameters.url || '').trim()
+    if (!target) throw new Error('模型新建标签页必须提供已授权的 HTTP(S) 地址。')
+    const nav = browserSecurityPolicy.modelNavigate(target, { tabId, base: view.webContents.getURL() })
+    browserOperations.assert(ticket)
+    const created = await createBrowserTab(nav.normalized)
+    return { created: true, activeTabId: created.activeTabId, url: nav.normalized }
+  }
+  if (action === 'tabSwitch') {
+    const targetId = String(parameters.tab_id || '')
+    const target = browserTabs.get(targetId)
+    if (!target) throw new Error('浏览器标签页不存在。')
+    const targetUrl = target.view.webContents.getURL()
+    if (!/^https?:/i.test(targetUrl)) throw new Error('模型不能切换到没有 HTTP(S) 来源的标签页。')
+    browserSecurityPolicy.modelNavigate(targetUrl, { tabId, base: view.webContents.getURL() })
+    await switchBrowserTab(targetId)
+    return { switched: true, activeTabId: targetId, url: targetUrl }
+  }
+  if (action === 'tabClose') {
+    const targetId = String(parameters.tab_id || activeBrowserTabId)
+    if (targetId !== activeBrowserTabId) throw new Error('模型只能关闭当前可见标签页。')
+    authorizeBrowserRead(origin, tabId)
+    await closeBrowserTab(targetId)
+    return { closed: true, activeTabId: activeBrowserTabId }
+  }
+  if (['back', 'forward', 'reload'].includes(action)) {
+    authorizeBrowserRead(origin, tabId)
+    const history = view.webContents.navigationHistory
+    if (action === 'reload') view.webContents.reload()
+    else {
+      const canGo = action === 'back' ? history?.canGoBack() : history?.canGoForward()
+      if (!canGo) return { navigated: false, reason: `cannot-go-${action}` }
+      const index = history.getActiveIndex() + (action === 'back' ? -1 : 1)
+      const entry = history.getEntryAtIndex(index)
+      browserSecurityPolicy.modelNavigate(entry.url, { tabId, base: view.webContents.getURL() })
+      history.goToIndex(index)
+    }
+    return { navigated: true, action }
+  }
+  if (action === 'scroll') {
+    authorizeBrowserRead(origin, tabId)
+    const bounds = view.getBounds()
+    const deltaY = Math.max(-1200, Math.min(1200, Number(parameters.delta_y) || 0))
+    const deltaX = Math.max(-1200, Math.min(1200, Number(parameters.delta_x) || 0))
+    view.webContents.sendInputEvent({ type: 'mouseWheel', x: Math.floor(bounds.width / 2), y: Math.floor(bounds.height / 2), deltaY, deltaX })
+    return { scrolled: true, deltaX, deltaY }
+  }
+  if (action === 'hover') {
+    const field = await browserElementMetadata(view, parameters.ref)
+    browserOperations.assert(ticket)
+    if (!field) throw new Error('元素已失效，请重新 observe。')
+    authorizeBrowserRead(origin, tabId, field.tag)
+    view.webContents.sendInputEvent({ type: 'mouseMove', x: field.x, y: field.y, movementX: 0, movementY: 0 })
+    return { hovered: true, ref: String(parameters.ref) }
+  }
+  if (action === 'keypress') {
+    const key = String(parameters.key || '')
+    const allowedKeys = new Set(['Escape', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End', 'Enter', 'Space'])
+    if (!allowedKeys.has(key)) throw new Error('不支持的按键；模型不能输入任意快捷键或文本。')
+    const effectiveAction = key === 'Enter' || key === 'Space' ? 'submit' : 'read'
+    const decision = browserSecurityPolicy.modelAction({ action: effectiveAction, tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'document', submit: key === 'Enter' }, payload: {}, confirmationId: parameters.confirmation_id })
+    if (!decision.allowed) return decision
+    view.webContents.sendInputEvent({ type: 'keyDown', keyCode: key })
+    view.webContents.sendInputEvent({ type: 'keyUp', keyCode: key })
+    return { pressed: true, key, confirmed: key === 'Enter' }
+  }
+  if (action === 'select') {
+    const field = await browserElementMetadata(view, parameters.ref)
+    browserOperations.assert(ticket)
+    if (!field) throw new Error('元素已失效，请重新 observe。')
+    if (field.tag !== 'select') throw new Error('select 仅适用于下拉选择框。')
+    const value = String(parameters.value || '').slice(0, 500)
+    const decision = browserSecurityPolicy.modelAction({ action: 'type', tabId, declaredOrigin: origin, field, payload: { text: value }, confirmationId: parameters.confirmation_id })
+    if (!decision.allowed) return decision
+    const changed = await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!(element instanceof HTMLSelectElement)) return false; const option=[...element.options].find(item=>item.value===${JSON.stringify(value)}||item.text===${JSON.stringify(value)}); if(!option) return false; element.value=option.value; element.dispatchEvent(new Event('input',{bubbles:true})); element.dispatchEvent(new Event('change',{bubbles:true})); return true; })()`, true)
+    browserOperations.assert(ticket)
+    if (!changed) throw new Error('下拉选项不存在或元素已失效。')
+    return { selected: true, ref: String(parameters.ref) }
+  }
   if (action === 'navigate') {
     const nav = browserSecurityPolicy.modelNavigate(String(parameters.url || ''), { tabId, base: view.webContents.getURL() })
     browserOperations.assert(ticket)
@@ -565,7 +1197,65 @@ async function modelBrowserAction(input = {}) {
     browserOperations.assert(ticket)
     return { navigated: true, origin: nav.origin, url: nav.normalized }
   }
-  if (!['click', 'type'].includes(action)) throw new Error('不支持的浏览器模型操作。')
+  if (action === 'download') {
+    const field = await browserElementMetadata(view, parameters.ref)
+    browserOperations.assert(ticket)
+    if (!field?.href) throw new Error('download 只能用于具有明确 HTTP(S) 地址的链接。')
+    let target
+    try { target = new URL(field.href) } catch { throw new Error('下载链接地址无效。') }
+    if (!['http:', 'https:'].includes(target.protocol) || target.origin !== origin || target.username || target.password) throw new Error('模型下载仅限当前已授权 origin 且不含内嵌凭据的 HTTP(S) 资源。')
+    const destinationPath = browserDownloadDestination(parameters.filename, target.href)
+    const maxBytes = Math.max(1, Math.min(MAX_DOWNLOAD_BYTES, Math.floor(Number(parameters.max_bytes) || Math.min(MAX_DOWNLOAD_BYTES, 50 * 1024 * 1024))))
+    const payload = { destinationPath, maxBytes, targetUrl: target.href, accessibleName: safeBrowserText(field.label || field.text, 160) }
+    const decision = browserSecurityPolicy.modelAction({ action: 'download', tabId, declaredOrigin: origin, field, payload, confirmationId: parameters.confirmation_id })
+    if (!decision.allowed) {
+      publishBrowserState().catch(() => {})
+      return decision
+    }
+    const tab = browserTabs.get(tabId)
+    return downloadBrowserResource(view, target.href, destinationPath, maxBytes, {
+      tabId,
+      origin,
+      url: view.webContents.getURL(),
+      navigationGeneration: tab.navigationGeneration
+    }, ticket)
+  }
+  if (action === 'upload') {
+    const field = await browserElementMetadata(view, parameters.ref)
+    browserOperations.assert(ticket)
+    if (!field || field.tag !== 'input' || field.type !== 'file' || !field.backendNodeId) throw new Error('upload 只能用于可验证身份的可见文件选择控件。')
+    const decision = browserSecurityPolicy.modelAction({ action: 'upload', tabId, declaredOrigin: origin, field, payload: { interactivePicker: true }, confirmationId: parameters.confirmation_id })
+    if (!decision.allowed) {
+      publishBrowserState().catch(() => {})
+      return decision
+    }
+    const tab = browserTabs.get(tabId)
+    return uploadBrowserFileInteractively(view, {
+      tabId,
+      origin,
+      url: view.webContents.getURL(),
+      navigationGeneration: tab.navigationGeneration,
+      backendNodeId: field.backendNodeId
+    }, ticket)
+  }
+  if (action === 'dialog') {
+    const pending = browserDialogs.get(tabId)
+    const tab = browserTabs.get(tabId)
+    if (!pending || !tab?.dialogControl || !view.webContents.debugger.isAttached()) throw new Error('当前页面没有可处理的 JavaScript 对话框。')
+    const accept = parameters.accept === true
+    const promptText = String(parameters.prompt_text || '')
+    if (promptText.length > 1_000) throw new Error('对话框输入最多 1000 个字符。')
+    if (isSensitiveText(promptText) || /(?:^|\D)\d{4,8}(?:\D|$)/.test(promptText)) throw Object.assign(new Error('对话框输入包含账号、邮箱、验证码或其他敏感内容，模型不能填写。'), { code: 'sensitive-value' })
+    const payload = { actionText: accept ? 'accept javascript dialog' : 'dismiss javascript dialog', promptText, dialogId: pending.id, dialogType: pending.type, dialogMessage: pending.message }
+    const decision = browserSecurityPolicy.modelAction({ action: 'submit', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'dialog', submit: true }, payload, confirmationId: parameters.confirmation_id })
+    if (!decision.allowed) return { ...decision, dialog: { id: pending.id, type: pending.type, message: pending.message } }
+    if (browserDialogs.get(tabId)?.id !== pending.id) throw Object.assign(new Error('对话框已变化，旧确认不能继续使用。'), { code: 'confirmation-mismatch' })
+    await view.webContents.debugger.sendCommand('Page.handleJavaScriptDialog', { accept, ...(promptText ? { promptText } : {}) })
+    if (browserDialogs.get(tabId)?.id === pending.id) browserDialogs.delete(tabId)
+    browserOperations.assert(ticket)
+    return { handled: true, accepted: accept, type: pending.type }
+  }
+  if (!['click', 'type'].includes(action)) throw Object.assign(new Error('不支持的浏览器模型操作。'), { code: 'browser-action-unsupported' })
   const field = await browserElementMetadata(view, parameters.ref)
   browserOperations.assert(ticket)
   if (!field) throw new Error('元素已失效，请重新 observe。')
@@ -687,8 +1377,23 @@ function computerUseState() {
   return { enabled: computerUseEnabled, screenshotPolicy: { sessionOnly: true, maxFiles: COMPUTER_USE_SCREENSHOT_MAX_FILES, maxBytes: COMPUTER_USE_SCREENSHOT_MAX_BYTES, maxAgeMs: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS }, pending: computerUseConfirmations.snapshot() }
 }
 
+function computerUseSurface() {
+  if (!mainWindow || mainWindow.isDestroyed()) return null
+  const [width, height] = mainWindow.getContentSize()
+  const urls = [mainWindow.webContents.getURL()]
+  if (runtimeGuest && !runtimeGuest.isDestroyed()) urls.push(runtimeGuest.getURL())
+  const browserContents = browserSidebarVisible ? liveBrowserContents() : null
+  if (browserContents) urls.push(browserContents.getURL())
+  return {
+    generation: computerUseSessionGeneration,
+    width,
+    height,
+    url: urls.filter(Boolean).join('\n')
+  }
+}
+
 function requireComputerConfirmation(action, parameters) {
-  return computerUseConfirmations.authorize(action, parameters)
+  return computerUseConfirmations.authorize(action, { ...parameters, surface: computerUseSurface() })
 }
 
 async function modelComputerUseAction(input = {}) {
@@ -749,6 +1454,25 @@ function assertDesktopShellSender(event) {
   }
 }
 
+function desktopShellOnly(handler) {
+  return (event, ...args) => {
+    assertDesktopShellSender(event)
+    return handler(...args)
+  }
+}
+
+function mobileSyncSecretAdapter() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null
+    return {
+      protect: plaintext => safeStorage.encryptString(String(plaintext)),
+      unprotect: ciphertext => safeStorage.decryptString(Buffer.from(ciphertext))
+    }
+  } catch {
+    return null
+  }
+}
+
 function ensureMobileSyncService() {
   if (mobileSyncService) return mobileSyncService
   const userData = app.getPath('userData')
@@ -756,7 +1480,7 @@ function ensureMobileSyncService() {
   const stateDir = path.join(userData, 'mobile-sync-network')
   mkdirSync(componentRoot, { recursive: true })
   mkdirSync(stateDir, { recursive: true })
-  mobileSyncStore = new MobileSyncStore(path.join(userData, 'mobile-sync.json'))
+  mobileSyncStore = new MobileSyncStore(path.join(userData, 'mobile-sync.json'), mobileSyncSecretAdapter())
   let relayConfig = { enabled: false, relayUrl: '' }
   try {
     relayConfig = loadMobileRelayConfig({
@@ -917,20 +1641,38 @@ function ensurePetSystem() {
 }
 
 const MAX_THEME_BACKGROUND_BYTES = 50 * 1024 * 1024
+const MAX_THEME_VIDEO_BYTES = 2 * 1024 * 1024 * 1024
 
 function themeAssetMime(file) {
-  if (/\.png$/i.test(file)) return 'image/png'
-  if (/\.apng$/i.test(file)) return 'image/apng'
-  if (/\.gif$/i.test(file)) return 'image/gif'
-  if (/\.jpe?g$/i.test(file)) return 'image/jpeg'
-  return 'image/webp'
+  return wallpaperMime(file)
 }
 
-async function readThemeDataUrl(file) {
+async function readThemeImageDataUrl(file) {
+  if (wallpaperKind(file) !== 'image') throw new Error('仅图片壁纸可转换为 data URL。')
   const info = await stat(file)
-  if (!info.isFile() || info.size > MAX_THEME_BACKGROUND_BYTES) throw new Error('主题图片无效或超过 50 MB。')
+  if (!info.isFile() || info.size > MAX_THEME_BACKGROUND_BYTES) throw new Error('图片壁纸无效或超过 50 MB。')
   const data = await readFile(file)
   return `data:${themeAssetMime(file)};base64,${data.toString('base64')}`
+}
+
+function currentWallpaperVideoFile() {
+  const backgroundFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
+  if (!backgroundFile || wallpaperKind(backgroundFile) !== 'video') return null
+  const root = path.join(app.getPath('userData'), 'themes')
+  const file = path.join(root, backgroundFile)
+  return path.dirname(file) === root ? file : null
+}
+
+async function registerWallpaperProtocol() {
+  const targetSession = session.fromPartition('persist:harness')
+  if (targetSession.protocol.isProtocolHandled(WALLPAPER_SCHEME)) return
+  await targetSession.protocol.handle(WALLPAPER_SCHEME, request => {
+    const target = new URL(request.url)
+    if (target.hostname !== 'current' || target.pathname !== '/video') return new Response('Not found', { status: 404 })
+    const file = currentWallpaperVideoFile()
+    if (!file || !existsSync(file)) return new Response('Not found', { status: 404 })
+    return createWallpaperVideoResponse(file, request)
+  })
 }
 
 function syncTitleBarOverlay(appearance = ensureStateStore().get().appearance) {
@@ -948,17 +1690,28 @@ async function appearancePayload() {
   }
   syncTitleBarOverlay(appearance)
   const backgroundFile = appearance.customTheme?.backgroundFile
-  if (!backgroundFile) return { ...appearance, customBackgroundDataUrl: null }
+  if (!backgroundFile) return { ...appearance, customBackgroundDataUrl: null, customBackgroundVideoDataUrl: null, customBackgroundKind: null }
   const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
-  const customBackgroundDataUrl = await readThemeDataUrl(file).catch(() => null)
-  return { ...appearance, customBackgroundDataUrl }
+  const kind = wallpaperKind(file)
+  if (kind === 'video') {
+    const info = await stat(file).catch(() => null)
+    const valid = info?.isFile() && info.size <= MAX_THEME_VIDEO_BYTES
+    return {
+      ...appearance,
+      customBackgroundDataUrl: null,
+      customBackgroundVideoDataUrl: valid ? `${WALLPAPER_SCHEME}://current/video?v=${Math.round(info.mtimeMs)}-${info.size}` : null,
+      customBackgroundKind: valid ? 'video' : null
+    }
+  }
+  const dataUrl = kind === 'image' ? await readThemeImageDataUrl(file).catch(() => null) : null
+  return { ...appearance, customBackgroundDataUrl: dataUrl, customBackgroundVideoDataUrl: null, customBackgroundKind: dataUrl ? 'image' : null }
 }
 
 async function bundledThemeAssets() {
   if (STORE_BUILD) return {}
   const root = path.join(__dirname, '..', 'renderer', 'themes')
   const entries = await Promise.all(BUNDLED_THEME_ASSETS.map(async relative => {
-    const url = await readThemeDataUrl(path.join(root, relative))
+    const url = await readThemeImageDataUrl(path.join(root, relative))
     return [relative, url]
   }))
   return Object.fromEntries(entries)
@@ -984,9 +1737,11 @@ async function mobileAppearancePayload() {
   return {
     state: {
       ...state,
-      customBackgroundDataUrl: customBackgroundFile && existsSync(customBackgroundFile)
+      customBackgroundDataUrl: customBackgroundFile && wallpaperKind(customBackgroundFile) === 'image' && existsSync(customBackgroundFile)
         ? mobileThemeAssetUrl('custom-background')
-        : null
+        : null,
+      customBackgroundVideoDataUrl: null,
+      customBackgroundKind: customBackgroundFile && wallpaperKind(customBackgroundFile) === 'image' ? 'image' : null
     },
     catalog
   }
@@ -1027,19 +1782,40 @@ async function readMobileThemeAsset(relative) {
   return { data: await readFile(file), mime: themeAssetMime(file) }
 }
 
-async function chooseCustomThemeBackground() {
+async function chooseCustomThemeBackground(options = {}) {
+  const wallpaperEngine = options.wallpaperEngine === true
+  let chooseDirectory = false
+  if (wallpaperEngine) {
+    const choice = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: '导入 Wallpaper Engine 项目',
+      message: '请选择导入方式',
+      detail: '支持包含 project.json 的项目目录，也可直接选择 project.json。仅导入 image/video 类型。',
+      buttons: ['选择项目目录', '选择 project.json', '取消'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true
+    })
+    if (choice.response === 2) return appearancePayload()
+    chooseDirectory = choice.response === 0
+  }
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择自定义主题壁纸或动图',
-    properties: ['openFile'],
-    filters: [{ name: '静态或动态图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'apng'] }]
+    title: wallpaperEngine ? (chooseDirectory ? '选择 Wallpaper Engine 项目目录' : '选择 Wallpaper Engine 项目的 project.json') : '选择自定义图片或视频壁纸',
+    properties: [chooseDirectory ? 'openDirectory' : 'openFile'],
+    filters: wallpaperEngine && !chooseDirectory
+      ? [{ name: 'Wallpaper Engine 项目', extensions: ['json'] }]
+      : wallpaperEngine ? [] : [{ name: '图片或视频壁纸', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'apng', 'mp4', 'webm'] }]
   })
   if (result.canceled || !result.filePaths[0]) return appearancePayload()
 
-  const source = path.resolve(result.filePaths[0])
+  let source = path.resolve(result.filePaths[0])
+  if (wallpaperEngine) source = (await resolveWallpaperEngineInput(source)).file
   const extension = path.extname(source).toLowerCase()
-  if (!['.png', '.jpg', '.jpeg', '.webp', '.gif', '.apng'].includes(extension)) throw new Error('仅支持 PNG、JPG、WebP、GIF 和 APNG 图片。')
+  const kind = wallpaperKind(source)
+  if (!kind) throw new Error('仅支持 PNG、JPG、WebP、GIF、APNG、MP4 和 WebM 壁纸。')
   const info = await stat(source)
-  if (!info.isFile() || info.size > MAX_THEME_BACKGROUND_BYTES) throw new Error('背景图片或动图必须小于 50 MB。')
+  const maximum = kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+  if (!info.isFile() || info.size > maximum) throw new Error(kind === 'video' ? '视频壁纸必须小于 2 GB。' : '图片壁纸必须小于 50 MB。')
 
   const directory = path.join(app.getPath('userData'), 'themes')
   const fileName = `custom-background${extension}`
@@ -1161,19 +1937,20 @@ async function startRuntime() {
   try {
     await ensureBrowserControlServer()
     const runtimePaths = desktopRuntimePaths()
+    const runtimeEnv = ensureGitRuntimeService().runtimeEnvironment({
+      ...process.env,
+      ...runtimeProxyEnv,
+      ...resolved.env,
+      HARNESS_MOBILE_SYNC_STATE_FILE: path.join(app.getPath('userData'), 'mobile-sync.json'),
+      HARNESS_DESKTOP_BROWSER_STATE_FILE: browserControlStateFile(),
+      HARNESS_DESKTOP_CAPABILITIES_STATE_FILE: browserControlStateFile()
+    })
     child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0', '--no-open'], {
       cwd: runtimePaths.workspace,
       windowsHide: true,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: desktopRuntimeEnvironment({
-        ...process.env,
-        ...runtimeProxyEnv,
-        ...resolved.env,
-        HARNESS_MOBILE_SYNC_STATE_FILE: path.join(app.getPath('userData'), 'mobile-sync.json'),
-        HARNESS_DESKTOP_BROWSER_STATE_FILE: browserControlStateFile(),
-        HARNESS_DESKTOP_CAPABILITIES_STATE_FILE: browserControlStateFile()
-      }, runtimePaths)
+      env: desktopRuntimeEnvironment(runtimeEnv, runtimePaths)
     })
   } catch (error) {
     setRuntimeState({ status: 'error', url: null, detail: error.message })
@@ -1243,6 +2020,16 @@ function stopRuntime() {
   terminateProcessTree(child)
 }
 
+async function desktopReleaseTrustedKeys() {
+  const packagedRoot = global.__HARNESS_COMPONENT_UPDATE__?.bundledRoot || path.resolve(__dirname, '..')
+  const configPath = path.join(packagedRoot, 'release-update-sources.json')
+  const payload = JSON.parse(await readFile(configPath, 'utf8'))
+  if (!payload.trustedKeys || typeof payload.trustedKeys !== 'object' || Array.isArray(payload.trustedKeys)) {
+    throw new Error('桌面更新源缺少受信任的 Ed25519 公钥。')
+  }
+  return payload.trustedKeys
+}
+
 async function checkUpdates() {
   const store = ensureStateStore()
   const resolved = resolveDshBin({ nodeModulesRoot: runtimeNodeModulesRoot || undefined })
@@ -1250,10 +2037,12 @@ async function checkUpdates() {
     ? resolved.version
     : desktopPackage.dependencies?.['@deepseek-ai/dsh'] || 'unknown'
   const preferences = store.get().updates
+  const trustedKeys = await desktopReleaseTrustedKeys()
+  const packagedUpdateRoot = global.__HARNESS_COMPONENT_UPDATE__?.bundledRoot || path.resolve(__dirname, '..')
   const feedUrls = await resolveUpdateFeeds({
     configPaths: [
-      path.resolve(__dirname, '..', 'release-update-sources.local.json'),
-      path.resolve(__dirname, '..', 'release-update-sources.json')
+      path.join(packagedUpdateRoot, 'release-update-sources.local.json'),
+      path.join(packagedUpdateRoot, 'release-update-sources.json')
     ],
     fallback: DEFAULT_APP_FEEDS
   })
@@ -1267,7 +2056,7 @@ async function checkUpdates() {
         updateAvailable: false,
         storeManaged: true
       })
-    : checkAppUpdate({ currentVersion: app.getVersion(), feedUrls, channel, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
+    : checkAppUpdate({ currentVersion: app.getVersion(), feedUrls, trustedKeys, channel, fetchJsonImpl: fetchJsonWithSystemNetwork }).catch(error => ({
         kind: 'app', configured: Boolean(feedUrls.length), currentVersion: app.getVersion(), updateAvailable: false, error: error.message
       }))
   const [appResult, harnessResult, componentResult] = await Promise.all([
@@ -1339,6 +2128,18 @@ function desktopBrowserToolsPluginOptions() {
 function desktopMemoryToolsPluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-memory-tools') }
 }
+function desktopMcpManagerPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-mcp-manager') }
+}
+function desktopSchedulesPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-schedules') }
+}
+function desktopFilesPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-files') }
+}
+function desktopProgressPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-progress') }
+}
 function desktopComputerUsePluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-computer-use') }
 }
@@ -1346,24 +2147,32 @@ function agentTeamsPluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-agent-teams') }
 }
 
-async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {} } = {}) {
-  const target = new URL(url)
-  if (!['https:', 'http:'].includes(target.protocol)) throw new Error('更新地址只允许 http/https。')
+async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {}, maxRedirects = DEFAULT_MAX_REDIRECTS, allowedHosts = [] } = {}) {
+  let current = safeHttpsUpdateUrl(url, '更新清单地址').toString()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const response = await net.fetch(target.toString(), {
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: { 'User-Agent': 'Harness-Desktop-Update-Checker', Accept: 'application/json', ...headers }
-    })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const text = await response.text()
-    if (Buffer.byteLength(text) > maxBytes) throw new Error('更新响应过大。')
-    try {
-      return JSON.parse(text)
-    } catch (error) {
-      throw new Error(`更新响应不是有效 JSON：${error.message}`)
+    for (let redirectCount = 0; ; redirectCount += 1) {
+      const response = await net.fetch(current, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: { 'User-Agent': 'Harness-Desktop-Update-Checker', Accept: 'application/json', ...headers }
+      })
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location')
+        if (!location) throw new Error(`HTTP ${response.status} 重定向缺少 Location。`)
+        try { await response.body?.cancel?.() } catch {}
+        current = resolveUpdateRedirect(current, location, { redirectCount, maxRedirects, allowedHosts })
+        continue
+      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const text = await response.text()
+      if (Buffer.byteLength(text) > maxBytes) throw new Error('更新响应过大。')
+      try {
+        return JSON.parse(text)
+      } catch (error) {
+        throw new Error(`更新响应不是有效 JSON：${error.message}`)
+      }
     }
   } catch (error) {
     if (error?.name === 'AbortError') throw new Error(`更新检查超时（${timeoutMs}ms）`)
@@ -1399,20 +2208,20 @@ async function ensureComponentUpdateService() {
   return componentUpdateServicePromise
 }
 
+// Reconcile the latest component check plan against the store's active pointer
+// before exposing it to the renderer, so a stale last-check after an applied
+// component update never re-triggers the "update available" notice. The helper
+// lives in component-update-service.cjs for unit-testability.
 async function getComponentUpdateState() {
   const context = await ensureComponentUpdateService()
+  const state = context.enabled ? await context.store.get() : null
+  const pointer = context.enabled ? await context.store.pointer() : null
   return {
     enabled: context.enabled,
     source: context.config.source || '',
-    state: await context.store.get(),
-    pointer: await context.store.pointer(),
-    lastCheck: lastComponentUpdateCheck ? {
-      source: lastComponentUpdateCheck.source,
-      releaseVersion: lastComponentUpdateCheck.manifest.releaseVersion,
-      mode: lastComponentUpdateCheck.plan.mode,
-      components: lastComponentUpdateCheck.plan.components?.map(component => ({ id: component.id, version: component.version, size: component.size })) || [],
-      totalSize: lastComponentUpdateCheck.plan.totalSize || 0
-    } : null
+    state,
+    pointer,
+    lastCheck: effectiveComponentLastCheck(lastComponentUpdateCheck, pointer, state)
   }
 }
 
@@ -1450,6 +2259,9 @@ async function launchReadyComponentUpdate() {
       '--component-health-check'
     ]
   })
+  // The update is being applied and the app is about to restart; drop the stale
+  // in-memory check so nothing reports the (now-applied) release as still pending.
+  lastComponentUpdateCheck = null
   await new Promise(resolve => setTimeout(resolve, 250))
   app.quit()
   return launched
@@ -1562,6 +2374,7 @@ async function runSelfTestMode() {
     resolveDshBin: () => resolveDshBin({ nodeModulesRoot: bundledNodeModulesRoot() }),
     ensurePluginMarketplace,
     marketplaceBundledRoot: pluginMarketplaceOptions().bundledRoot,
+    gitRuntimeProbe: () => ensureGitRuntimeService().status(),
     runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 180_000 }
   })
   const text = `${JSON.stringify(report, null, 2)}\n`
@@ -1586,6 +2399,39 @@ function externalWebUrl(value) {
   } catch {
     return ''
   }
+}
+
+function browserIntentForLink(value, fallback = 'navigation') {
+  try {
+    const target = new URL(value)
+    if (!['http:', 'https:'].includes(target.protocol)) return 'external-app'
+    const oauthPath = /\/(?:oauth2?|authorize|device(?:code)?)(?:[/?#]|$)/i.test(target.pathname)
+    const oauthQuery = ['client_id', 'redirect_uri', 'response_type', 'code_challenge'].some(key => target.searchParams.has(key))
+    if (oauthPath && oauthQuery) return 'oauth'
+    if (/^(?:login\.microsoftonline\.com|accounts\.google\.com)$/i.test(target.hostname) && oauthPath) return 'sso'
+    return fallback
+  } catch {
+    return fallback
+  }
+}
+
+async function openRoutedBrowserLink(value, context = {}) {
+  const intent = String(context.intent || browserIntentForLink(value, 'navigation'))
+  const decision = routeBrowserLink({
+    target: String(value || ''),
+    source: ['user', 'model', 'app', 'developer'].includes(context.source) ? context.source : 'app',
+    intent,
+    userChoice: ['default', 'embedded', 'system'].includes(context.userChoice) ? context.userChoice : 'default'
+  })
+  if (decision.decision === BROWSER_LINK_DECISIONS.REJECT) throw new Error(`链接已被安全策略拒绝：${decision.reason}`)
+  if (decision.decision === BROWSER_LINK_DECISIONS.SYSTEM) {
+    await shell.openExternal(decision.target)
+    return decision
+  }
+  showMainWindow()
+  await createBrowserTab(decision.target)
+  await setBrowserSidebarVisible(true)
+  return decision
 }
 
 async function guestLocalTargetAtPoint(guest, params) {
@@ -1616,7 +2462,8 @@ async function showGuestContextMenu(guest, params) {
     )
   } else if (external) {
     template.push(
-      { label: '打开链接', click: () => shell.openExternal(external).catch(() => {}) },
+      { label: '在内置浏览器打开', click: () => openRoutedBrowserLink(external, { source: 'user', intent: 'navigation', userChoice: 'embedded' }).catch(() => {}) },
+      { label: '用系统浏览器打开', click: () => openRoutedBrowserLink(external, { source: 'user', intent: 'navigation', userChoice: 'system' }).catch(() => {}) },
       { label: '复制链接地址', click: () => clipboard.writeText(external) },
       { type: 'separator' }
     )
@@ -1669,9 +2516,8 @@ async function chooseWorkspaceDirectory() {
 
 function secureGuest(guest) {
   guest.setWindowOpenHandler(details => {
-    const external = externalWebUrl(details.url)
-    if (external) shell.openExternal(external).catch(() => {})
-    else if (/^harness-desktop:\/\/open-local(?:[/?#]|$)/i.test(details.url || '')) openDesktopLocalTarget(details.url).catch(() => {})
+    if (/^harness-desktop:\/\/open-local(?:[/?#]|$)/i.test(details.url || '')) openDesktopLocalTarget(details.url).catch(() => {})
+    else openRoutedBrowserLink(details.url, { source: 'app', intent: browserIntentForLink(details.url), userChoice: 'default' }).catch(() => {})
     return { action: 'deny' }
   })
   guest.on('will-navigate', (event, targetUrl) => {
@@ -1754,7 +2600,11 @@ function createWindow() {
     webPreferences.sandbox = true
     if (!isLocalRuntimeUrl(params.src || DEFAULT_RUNTIME_URL)) event.preventDefault()
   })
-  mainWindow.webContents.on('did-attach-webview', (_event, guest) => secureGuest(guest))
+  mainWindow.webContents.on('did-attach-webview', (_event, guest) => {
+    runtimeGuest = guest
+    guest.once('destroyed', () => { if (runtimeGuest === guest) runtimeGuest = null })
+    secureGuest(guest)
+  })
   mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
     try {
       if (new URL(targetUrl).protocol !== 'file:') event.preventDefault()
@@ -1785,35 +2635,52 @@ function createWindow() {
   }
 }
 
-ipcMain.handle('updates:preferences', () => ensureStateStore().get().updates)
-ipcMain.handle('updates:setPreferences', (_event, patch) => ensureStateStore().updatePreferences(patch || {}).updates)
-ipcMain.handle('updates:check', () => checkUpdates())
-ipcMain.handle('updates:install', () => installAppUpdate())
-ipcMain.handle('updates:launchReady', () => launchReadyAppUpdate())
-ipcMain.handle('componentUpdates:getState', () => getComponentUpdateState())
-ipcMain.handle('componentUpdates:check', () => checkComponentUpdates())
-ipcMain.handle('componentUpdates:stage', () => stageComponentUpdates())
-ipcMain.handle('componentUpdates:apply', () => launchReadyComponentUpdate())
+ipcMain.handle('updates:preferences', desktopShellOnly(() => ensureStateStore().get().updates))
+ipcMain.handle('updates:setPreferences', desktopShellOnly(patch => ensureStateStore().updatePreferences(patch || {}).updates))
+ipcMain.handle('updates:check', desktopShellOnly(() => checkUpdates()))
+ipcMain.handle('updates:install', desktopShellOnly(() => installAppUpdate()))
+ipcMain.handle('updates:launchReady', desktopShellOnly(() => launchReadyAppUpdate()))
+ipcMain.handle('componentUpdates:getState', desktopShellOnly(() => getComponentUpdateState()))
+ipcMain.handle('componentUpdates:check', desktopShellOnly(() => checkComponentUpdates()))
+ipcMain.handle('componentUpdates:stage', desktopShellOnly(() => stageComponentUpdates()))
+ipcMain.handle('componentUpdates:apply', desktopShellOnly(() => launchReadyComponentUpdate()))
+ipcMain.handle('gitRuntime:status', event => {
+  assertDesktopShellSender(event)
+  return ensureGitRuntimeService().status()
+})
+ipcMain.handle('gitRuntime:refresh', event => {
+  assertDesktopShellSender(event)
+  return ensureGitRuntimeService().status()
+})
+ipcMain.handle('gitRuntime:prepare', event => {
+  assertDesktopShellSender(event)
+  return prepareDevelopmentGitRuntime()
+})
+ipcMain.handle('gitRuntime:authenticate', (event, provider) => {
+  assertDesktopShellSender(event)
+  return ensureGitRuntimeService().authenticate(String(provider || 'github'))
+})
 // Applying a ready component update remains intentionally unexposed until the
 // isolated branch is merged and installation testing is explicitly approved.
-ipcMain.handle('distribution:get', () => distributionInfo())
-ipcMain.handle('appearance:get', () => appearancePayload())
-ipcMain.handle('appearance:assets', () => bundledThemeAssets())
-ipcMain.handle('appearance:setTheme', async (_event, themeId) => {
+ipcMain.handle('distribution:get', desktopShellOnly(() => distributionInfo()))
+ipcMain.handle('appearance:get', desktopShellOnly(() => appearancePayload()))
+ipcMain.handle('appearance:assets', desktopShellOnly(() => bundledThemeAssets()))
+ipcMain.handle('appearance:setTheme', desktopShellOnly(async themeId => {
   if (STORE_BUILD && themeId === 'maid-atelier') throw new Error('Microsoft Store 版本不包含非商业授权主题。')
   ensureStateStore().updateAppearance({ themeId })
   return appearancePayload()
-})
-ipcMain.handle('appearance:setUiPreferences', async (_event, patch) => {
+}))
+ipcMain.handle('appearance:setUiPreferences', desktopShellOnly(async patch => {
   ensureStateStore().updateAppearance(patch || {})
   return appearancePayload()
-})
-ipcMain.handle('appearance:saveCustom', async (_event, customTheme) => {
+}))
+ipcMain.handle('appearance:saveCustom', desktopShellOnly(async customTheme => {
   ensureStateStore().updateAppearance({ themeId: 'custom', customTheme })
   return appearancePayload()
-})
-ipcMain.handle('appearance:chooseBackground', () => chooseCustomThemeBackground())
-ipcMain.handle('appearance:clearBackground', () => clearCustomThemeBackground())
+}))
+ipcMain.handle('appearance:chooseBackground', desktopShellOnly(() => chooseCustomThemeBackground()))
+ipcMain.handle('appearance:chooseWallpaperEngine', desktopShellOnly(() => chooseCustomThemeBackground({ wallpaperEngine: true })))
+ipcMain.handle('appearance:clearBackground', desktopShellOnly(() => clearCustomThemeBackground()))
 ipcMain.handle('pet:getState', () => petPayload())
 ipcMain.handle('pet:setPreferences', (_event, patch) => updatePetPreferences(patch || {}))
 ipcMain.handle('pet:feed', (_event, kind) => {
@@ -1829,10 +2696,10 @@ ipcMain.handle('pet:getEnvironment', () => petWindowController?.environment())
 ipcMain.handle('pet:moveTo', (_event, point = {}) => petWindowController?.moveTo(point.x, point.y))
 ipcMain.on('pet:setInteractive', (_event, value) => petWindowController?.setInteractive(value))
 ipcMain.on('pet:setHitProfile', (_event, profile) => petWindowController?.setHitProfile(profile || {}))
-ipcMain.handle('settings:openDocument', () => openHarnessSettingsDocument())
-ipcMain.handle('models:routing:get', () => getModelRouting(modelRoutingOptions()))
-ipcMain.handle('models:routing:save', (_event, routing) => saveModelRouting(modelRoutingOptions(), routing || {}))
-ipcMain.handle('models:meters:get', (_event, force) => getProviderMeters(Boolean(force)))
+ipcMain.handle('settings:openDocument', desktopShellOnly(() => openHarnessSettingsDocument()))
+ipcMain.handle('models:routing:get', desktopShellOnly(() => getModelRouting(modelRoutingOptions())))
+ipcMain.handle('models:routing:save', desktopShellOnly(routing => saveModelRouting(modelRoutingOptions(), routing || {})))
+ipcMain.handle('models:meters:get', desktopShellOnly(force => getProviderMeters(Boolean(force))))
 ipcMain.handle('storage:scan', event => {
   assertDesktopShellSender(event)
   return ensureStorageManagementService().scan()
@@ -1906,9 +2773,56 @@ ipcMain.handle('browser:setContentVisible', (event, visible) => {
   assertDesktopShellSender(event)
   return setBrowserContentVisible(Boolean(visible))
 })
+ipcMain.handle('browser:setPanelWidth', (event, width) => {
+  assertDesktopShellSender(event)
+  browserPanelWidth = Math.max(BROWSER_PANEL_MIN_WIDTH, Math.min(BROWSER_PANEL_MAX_WIDTH, Math.floor(Number(width) || BROWSER_PANEL_DEFAULT_WIDTH)))
+  browserWideMode = false
+  layoutBrowserView()
+  return publishBrowserState()
+})
+ipcMain.handle('browser:setWideMode', (event, enabled) => {
+  assertDesktopShellSender(event)
+  browserWideMode = Boolean(enabled)
+  layoutBrowserView()
+  return publishBrowserState()
+})
+ipcMain.handle('browser:historySearch', async (event, query) => {
+  assertDesktopShellSender(event)
+  return { entries: await ensureBrowserHistoryStore().search(String(query || ''), { limit: 100 }) }
+})
+ipcMain.handle('browser:historyOpen', async (event, id) => {
+  assertDesktopShellSender(event)
+  const entries = await ensureBrowserHistoryStore().search('', { limit: 500 })
+  const entry = entries.find(item => item.id === String(id || ''))
+  if (!entry) throw new Error('浏览历史记录不存在。')
+  return navigateBrowser(entry.url)
+})
+ipcMain.handle('browser:historyRemove', async (event, id) => {
+  assertDesktopShellSender(event)
+  const removed = await ensureBrowserHistoryStore().remove(String(id || ''))
+  return { removed, entries: await ensureBrowserHistoryStore().search('', { limit: 100 }) }
+})
+ipcMain.handle('browser:historyClear', async (event, request) => {
+  assertDesktopShellSender(event)
+  if (request?.confirmed !== true) throw new Error('清空浏览历史需要用户明确确认。')
+  await ensureBrowserHistoryStore().clear()
+  return publishBrowserState()
+})
 ipcMain.handle('browser:navigate', (event, value) => {
   assertDesktopShellSender(event)
   return navigateBrowser(value)
+})
+ipcMain.handle('browser:newTab', (event, value) => {
+  assertDesktopShellSender(event)
+  return createBrowserTab(value)
+})
+ipcMain.handle('browser:switchTab', (event, id) => {
+  assertDesktopShellSender(event)
+  return switchBrowserTab(id)
+})
+ipcMain.handle('browser:closeTab', (event, id) => {
+  assertDesktopShellSender(event)
+  return closeBrowserTab(id)
 })
 ipcMain.handle('browser:back', event => {
   assertDesktopShellSender(event)
@@ -1947,10 +2861,14 @@ ipcMain.handle('browser:grantCurrent', (event, actions) => {
   assertDesktopShellSender(event)
   return grantCurrentBrowserOrigin(actions)
 })
-ipcMain.handle('browser:revokeCurrent', event => {
+ipcMain.handle('browser:revokeCurrent', async event => {
   assertDesktopShellSender(event)
   browserOperations.ticket()
-  if (browserState.origin && browserSecurityPolicy && !browserSecurityPolicy.isStopped) browserSecurityPolicy.revoke(browserState.origin)
+  const origin = browserState.origin
+  if (origin) abortBrowserTransfers(origin)
+  await withBrowserTransferLock(async () => {
+    if (origin && browserSecurityPolicy && !browserSecurityPolicy.isStopped) browserSecurityPolicy.revoke(origin)
+  })
   return publishBrowserState()
 })
 ipcMain.handle('browser:resumeModelControl', event => {
@@ -1973,21 +2891,21 @@ ipcMain.handle('computerUse:state', event => { assertDesktopShellSender(event); 
 ipcMain.handle('computerUse:setEnabled', async (event, enabled) => { assertDesktopShellSender(event); return setComputerUseEnabled(Boolean(enabled)) })
 ipcMain.handle('computerUse:confirm', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.confirm(id); return computerUseState() })
 ipcMain.handle('computerUse:reject', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.reject(id); return computerUseState() })
-ipcMain.handle('mobileSync:getState', () => ensureMobileSyncService().state())
-ipcMain.handle('mobileSync:setEnabled', (_event, enabled) => ensureMobileSyncService().setEnabled(Boolean(enabled)))
-ipcMain.handle('mobileSync:setRemoteEnabled', (_event, enabled) => ensureMobileSyncService().setRemoteEnabled(Boolean(enabled)))
-ipcMain.handle('mobileSync:setTransportPreference', (_event, preference) => ensureMobileSyncService().setTransportPreference(String(preference || 'auto')))
-ipcMain.handle('mobileSync:beginPairing', () => ensureMobileSyncService().beginPairing())
-ipcMain.handle('mobileSync:revokeDevice', (_event, id) => ensureMobileSyncService().revokeDevice(String(id || '')))
-ipcMain.handle('mobileControl:send', (_event, deviceId, command) => ensureMobileSyncService().sendControlCommand(String(deviceId || ''), command || {}))
-ipcMain.handle('mobileControl:cancel', (_event, commandId) => ensureMobileSyncService().cancelControlCommand(String(commandId || '')))
-ipcMain.handle('mobileControl:stop', (_event, deviceId) => ensureMobileSyncService().stopControl(deviceId ? String(deviceId) : null, 'DESKTOP_STOP'))
-ipcMain.handle('mobileSync:copy', (_event, value) => {
+ipcMain.handle('mobileSync:getState', desktopShellOnly(() => ensureMobileSyncService().state()))
+ipcMain.handle('mobileSync:setEnabled', desktopShellOnly(enabled => ensureMobileSyncService().setEnabled(Boolean(enabled))))
+ipcMain.handle('mobileSync:setRemoteEnabled', desktopShellOnly(enabled => ensureMobileSyncService().setRemoteEnabled(Boolean(enabled))))
+ipcMain.handle('mobileSync:setTransportPreference', desktopShellOnly(preference => ensureMobileSyncService().setTransportPreference(String(preference || 'auto'))))
+ipcMain.handle('mobileSync:beginPairing', desktopShellOnly(() => ensureMobileSyncService().beginPairing()))
+ipcMain.handle('mobileSync:revokeDevice', desktopShellOnly(id => ensureMobileSyncService().revokeDevice(String(id || ''))))
+ipcMain.handle('mobileControl:send', desktopShellOnly((deviceId, command) => ensureMobileSyncService().sendControlCommand(String(deviceId || ''), command || {})))
+ipcMain.handle('mobileControl:cancel', desktopShellOnly(commandId => ensureMobileSyncService().cancelControlCommand(String(commandId || ''))))
+ipcMain.handle('mobileControl:stop', desktopShellOnly(deviceId => ensureMobileSyncService().stopControl(deviceId ? String(deviceId) : null, 'DESKTOP_STOP')))
+ipcMain.handle('mobileSync:copy', desktopShellOnly(value => {
   clipboard.writeText(String(value || ''))
   return true
-})
-ipcMain.handle('runtime:start', (_event, options) => startRuntime(options || {}))
-ipcMain.handle('runtime:state', () => runtimeState)
+}))
+ipcMain.handle('runtime:start', desktopShellOnly(options => startRuntime(options || {})))
+ipcMain.handle('runtime:state', desktopShellOnly(() => runtimeState))
 ipcMain.on('window:beginDrag', (event, point) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (event.sender !== mainWindow.webContents && !isLocalRuntimeUrl(event.sender.getURL())) return
@@ -2002,12 +2920,19 @@ ipcMain.on('window:endDrag', event => {
   if (event.sender !== mainWindow?.webContents && !isLocalRuntimeUrl(event.sender.getURL())) return
   endWindowDrag(mainWindow)
 })
-ipcMain.handle('shell:openExternal', async (_event, value) => {
-  const target = new URL(value)
-  if (!['https:', 'http:'].includes(target.protocol)) throw new Error('只允许打开 http/https 链接。')
-  return shell.openExternal(target.toString())
+ipcMain.handle('shell:openLink', (event, value, context = {}) => {
+  assertDesktopShellSender(event)
+  return openRoutedBrowserLink(value, {
+    source: 'user',
+    intent: String(context.intent || browserIntentForLink(value)),
+    userChoice: String(context.userChoice || 'default')
+  })
 })
-ipcMain.handle('shell:openLocal', (_event, value, options = {}) => openDesktopLocalTarget(value, Boolean(options.reveal)))
+ipcMain.handle('shell:openExternal', (event, value) => {
+  assertDesktopShellSender(event)
+  return openRoutedBrowserLink(value, { source: 'user', intent: browserIntentForLink(value), userChoice: 'system' })
+})
+ipcMain.handle('shell:openLocal', desktopShellOnly((value, options = {}) => openDesktopLocalTarget(value, Boolean(options.reveal))))
 ipcMain.handle('workspace:chooseDirectory', event => {
   if (!isLocalRuntimeUrl(event.sender.getURL())) throw new Error('只允许本机 Harness 界面选择工作区。')
   return chooseWorkspaceDirectory()
@@ -2052,6 +2977,7 @@ app.whenReady().then(async () => {
     app.exit(report.ok ? 0 : 1)
     return
   }
+  await registerWallpaperProtocol().catch(error => console.warn(`Unable to register wallpaper media protocol: ${error.message}`))
   await clearComputerUseScreenshots().catch(error => console.warn(`Unable to clear stale Computer Use screenshots: ${error.message}`))
   try { ensureMemoryService() } catch (error) { console.warn(`Unable to initialize local memory: ${error.message}`) }
   runtimeInitializationPromise = (async () => {
@@ -2075,6 +3001,18 @@ app.whenReady().then(async () => {
     })
     await ensureDesktopMemoryToolsPlugin(desktopMemoryToolsPluginOptions()).catch(error => {
       console.warn(`Unable to prepare desktop memory tools plugin: ${error.message}`)
+    })
+    await ensureDesktopMcpManagerPlugin(desktopMcpManagerPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare desktop MCP manager plugin: ${error.message}`)
+    })
+    await ensureDesktopSchedulesPlugin(desktopSchedulesPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare desktop schedules plugin: ${error.message}`)
+    })
+    await ensureDesktopFilesPlugin(desktopFilesPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare desktop files plugin: ${error.message}`)
+    })
+    await ensureDesktopProgressPlugin(desktopProgressPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare desktop progress plugin: ${error.message}`)
     })
     await ensureDesktopComputerUsePlugin(desktopComputerUsePluginOptions()).catch(error => {
       console.warn(`Unable to prepare desktop Computer Use plugin: ${error.message}`)

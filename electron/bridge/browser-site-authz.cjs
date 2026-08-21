@@ -14,7 +14,8 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
-const { canonicalOrigin } = require('./browser-url-policy.cjs')
+const { URL } = require('node:url')
+const { canonicalOrigin, hostPublicInfo } = require('./browser-url-policy.cjs')
 const { assertSafePolicyPath } = require('./browser-session-policy.cjs')
 
 // 模型对站点可被授权的精细动作（与浏览器实际操作一一对应）。
@@ -25,7 +26,7 @@ const DEFAULT_MAX_ENTRIES = 64
 const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000 // 默认 2 小时
 const MIN_TTL_MS = 60 * 1000 // 1 分钟
 const MAX_TTL_MS = 24 * 60 * 60 * 1000 // 24 小时
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 // 策略文件体积上限：超过即视为损坏并安全重建（防内存炸弹）。
 const MAX_AUTHZ_FILE_BYTES = 1024 * 1024
 
@@ -53,7 +54,13 @@ function normalizeEntry(raw, now) {
   const grantedAt = finiteMs(raw.grantedAt, now)
   const expiresAt = finiteMs(raw.expiresAt, Math.min(now + DEFAULT_TTL_MS, now + MAX_TTL_MS))
   if (expiresAt <= now) return null // 已过期条目直接丢弃
-  return { actions: new Set(actions), grantedAt, expiresAt }
+  return { actions: new Set(actions), grantedAt, expiresAt, privateNetwork: raw.privateNetwork === true }
+}
+
+function isPrivateNetworkOrigin(origin) {
+  const normalized = tryOrigin(origin)
+  if (!normalized) return false
+  return !hostPublicInfo(new URL(normalized).hostname).public
 }
 
 class SiteAuthorizationStore {
@@ -93,12 +100,12 @@ class SiteAuthorizationStore {
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
     const version = Number(parsed.schemaVersion)
-    if (version === SCHEMA_VERSION && parsed.entries && typeof parsed.entries === 'object' && !Array.isArray(parsed.entries)) {
+    if ((version === SCHEMA_VERSION || version === 2) && parsed.entries && typeof parsed.entries === 'object' && !Array.isArray(parsed.entries)) {
       const now = this.now()
       for (const [origin, raw] of Object.entries(parsed.entries)) {
         const normalized = tryOrigin(origin)
         if (!normalized) continue
-        const entry = normalizeEntry(raw, now)
+        const entry = normalizeEntry(version === SCHEMA_VERSION ? raw : { ...raw, privateNetwork: false }, now)
         if (entry) this.entries.set(normalized, entry)
       }
       this.migratedOnLoad = false
@@ -108,14 +115,14 @@ class SiteAuthorizationStore {
       for (const origin of Object.keys(parsed.origins)) {
         const normalized = tryOrigin(origin)
         if (!normalized) continue
-        this.entries.set(normalized, { actions: new Set(ACTIONS), grantedAt: now, expiresAt: now + this.defaultTtlMs })
+        this.entries.set(normalized, { actions: new Set(ACTIONS), grantedAt: now, expiresAt: now + this.defaultTtlMs, privateNetwork: false })
       }
       this.migratedOnLoad = true
     } else {
       return // 未知结构：安全降级为空授权
     }
     this.#enforceCapacity()
-    if (this.migratedOnLoad) this.#persist() // 迁移后立即落盘为 v2
+    if (this.migratedOnLoad) this.#persist() // 迁移后立即落盘为当前版本
   }
 
   #enforceCapacity() {
@@ -132,7 +139,8 @@ class SiteAuthorizationStore {
       payload.entries[origin] = {
         actions: [...entry.actions].sort(),
         grantedAt: entry.grantedAt,
-        expiresAt: entry.expiresAt
+        expiresAt: entry.expiresAt,
+        privateNetwork: entry.privateNetwork === true
       }
     }
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
@@ -142,9 +150,15 @@ class SiteAuthorizationStore {
   }
 
   /** 授权（新增或更新，刷新 LRU 顺序与过期时间）。 */
-  grant(origin, { actions = ACTIONS, ttlMs } = {}) {
+  grant(origin, { actions = ACTIONS, ttlMs, allowPrivateNetwork = false, by = null } = {}) {
     const normalized = tryOrigin(origin)
     if (!normalized) throw new Error('授权目标必须是规范化的 http/https origin。')
+    const privateNetwork = isPrivateNetworkOrigin(normalized)
+    if (privateNetwork && !(allowPrivateNetwork === true && by === 'user')) {
+      const error = new Error('localhost/内网站点只能由真实用户针对精确 origin 明确授权。')
+      error.code = 'private-network-explicit-consent-required'
+      throw error
+    }
     const granted = Array.isArray(actions) ? [...new Set(actions.map(a => String(a)))] : []
     if (!granted.length) throw new Error('授权动作列表不能为空。')
     for (const action of granted) {
@@ -156,7 +170,8 @@ class SiteAuthorizationStore {
     this.entries.set(normalized, {
       actions: new Set(granted),
       grantedAt: now,
-      expiresAt: now + ttl
+      expiresAt: now + ttl,
+      privateNetwork
     })
     this.#enforceCapacity()
     this.#persist()
@@ -209,7 +224,15 @@ class SiteAuthorizationStore {
     if (!normalized) return null
     const entry = this.entries.get(normalized)
     if (!entry || entry.expiresAt <= this.now()) return null
-    return { origin: normalized, actions: [...entry.actions].sort(), grantedAt: entry.grantedAt, expiresAt: entry.expiresAt }
+    return { origin: normalized, actions: [...entry.actions].sort(), grantedAt: entry.grantedAt, expiresAt: entry.expiresAt, privateNetwork: entry.privateNetwork === true }
+  }
+
+  /** 仅返回经真实用户显式批准的 localhost/内网精确 origin。 */
+  privateOrigins() {
+    this.prune()
+    return [...this.entries.entries()]
+      .filter(([, entry]) => entry.privateNetwork === true)
+      .map(([origin]) => origin)
   }
 
   /** 撤销单个 origin 的所有授权。 */
@@ -242,7 +265,7 @@ class SiteAuthorizationStore {
   snapshot() {
     this.prune()
     const entries = [...this.entries.entries()]
-      .map(([origin, entry]) => ({ origin, actions: [...entry.actions].sort(), grantedAt: entry.grantedAt, expiresAt: entry.expiresAt }))
+      .map(([origin, entry]) => ({ origin, actions: [...entry.actions].sort(), grantedAt: entry.grantedAt, expiresAt: entry.expiresAt, privateNetwork: entry.privateNetwork === true }))
       .sort((a, b) => a.origin.localeCompare(b.origin))
     return {
       schemaVersion: SCHEMA_VERSION,
@@ -265,6 +288,7 @@ module.exports = {
   SCHEMA_VERSION,
   SiteAuthorizationStore,
   boundedTtl,
+  isPrivateNetworkOrigin,
   normalizeEntry,
   tryOrigin
 }

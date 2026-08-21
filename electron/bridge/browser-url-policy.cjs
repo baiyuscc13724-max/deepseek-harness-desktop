@@ -232,18 +232,22 @@ function checkUserNavigation(value, { base } = {}) {
  * @returns {{ normalized: string, origin: string }} 通过后返回规范化结果。
  * @throws 带 code 的策略错误。
  */
-function checkModelNavigation(value, { authorizedOrigins = [], base } = {}) {
+function checkModelNavigation(value, { authorizedOrigins = [], authorizedPrivateOrigins = [], base } = {}) {
   const nav = classifyNavigation(value, { base })
   if (!nav.allowed) throw policyError(nav.reason, nav.message)
+  const accepted = authorizedOrigins instanceof Set ? authorizedOrigins : new Set(authorizedOrigins)
   const hostInfo = hostPublicInfo(new URL(nav.normalized).hostname)
   if (!hostInfo.public) {
-    throw policyError('non-public-network', '模型不可访问本机、内网或链路本地地址。')
-  }
-  const accepted = authorizedOrigins instanceof Set ? authorizedOrigins : new Set(authorizedOrigins)
-  if (!accepted.has(nav.origin)) {
+    const privateAccepted = authorizedPrivateOrigins instanceof Set
+      ? authorizedPrivateOrigins
+      : new Set(authorizedPrivateOrigins)
+    if (!privateAccepted.has(nav.origin) || !accepted.has(nav.origin)) {
+      throw policyError('private-network-not-authorized', '模型访问本机或内网站点需要真实用户针对该 origin 明确授权。')
+    }
+  } else if (!accepted.has(nav.origin)) {
     throw policyError('origin-not-authorized', '模型访问的目标站点未获得授权。')
   }
-  return { normalized: nav.normalized, origin: nav.origin }
+  return { normalized: nav.normalized, origin: nav.origin, privateNetwork: !hostInfo.public }
 }
 
 module.exports = {

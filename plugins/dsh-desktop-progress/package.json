@@ -1,0 +1,12 @@
+{
+  "name": "dsh-desktop-progress",
+  "version": "1.0.29",
+  "description": "Semantic adaptive progress reporting for DeepSeek Harness Desktop",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT"
+}

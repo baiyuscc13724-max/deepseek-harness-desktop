@@ -1,0 +1,17 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { mkdtemp, readFile, rm } = require('node:fs/promises')
+const { tmpdir } = require('node:os')
+const path = require('node:path')
+const YAML = require('yaml')
+const { ensurePatchEntry } = require('../electron/bridge/desktop-mcp-manager-plugin-service.cjs')
+
+test('MCP manager profile entry is additive and idempotent', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'dsh-mcp-plugin-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const file = path.join(directory, 'cordis.patch.yml')
+  assert.equal(await ensurePatchEntry(file), true)
+  assert.equal(await ensurePatchEntry(file), false)
+  const entries = YAML.parse(await readFile(file, 'utf8')).flatMap(row => row.insert || [])
+  assert.equal(entries.filter(item => item.id === 'desktop-mcp-manager' && item.name === 'dsh-desktop-mcp-manager').length, 1)
+})

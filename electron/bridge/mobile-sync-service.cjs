@@ -1,7 +1,9 @@
 const { EventEmitter } = require('node:events')
 const { createHash, randomBytes, timingSafeEqual } = require('node:crypto')
+const { chmod, mkdir, rename, rm, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const os = require('node:os')
+const path = require('node:path')
 const httpProxy = require('http-proxy')
 const QRCode = require('qrcode')
 const { CONTROL_PROTOCOL_VERSION, MobileControlBroker, isLoopbackAddress } = require('./mobile-control-broker.cjs')
@@ -16,9 +18,10 @@ const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.28'
+const CURRENT_MOBILE_VERSION = '1.0.29'
 const DEFAULT_MOBILE_DOWNLOAD_URL = `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v${CURRENT_MOBILE_VERSION}/Harness-Mobile-${CURRENT_MOBILE_VERSION}-android-universal.apk`
 const DEFAULT_IOS_DOWNLOAD_URL = ''
+const DESKTOP_CONTROL_STATE_FILE = 'mobile-sync.desktop-control.json'
 
 function sha256(value) {
   return createHash('sha256').update(String(value)).digest('hex')
@@ -202,7 +205,8 @@ class MobileSyncService extends EventEmitter {
     setAppearance = null,
     getThemeScript = null,
     readThemeAsset = null,
-    controlBroker = null
+    controlBroker = null,
+    desktopControlStateFile = null
   }) {
     super()
     if (!store) throw new Error('MobileSyncService requires a store.')
@@ -223,6 +227,8 @@ class MobileSyncService extends EventEmitter {
     this.getThemeScript = getThemeScript
     this.readThemeAsset = readThemeAsset
     this.controlBroker = controlBroker || new MobileControlBroker({ now })
+    this.desktopControlStateFile = desktopControlStateFile || path.join(path.dirname(this.store.file || this.stateDir), DESKTOP_CONTROL_STATE_FILE)
+    this.desktopControlAuth = null
     this.server = null
     this.proxy = null
     this.port = null
@@ -290,11 +296,43 @@ class MobileSyncService extends EventEmitter {
     return state
   }
 
+  async #removeDesktopControlState() {
+    this.desktopControlAuth = null
+    await rm(this.desktopControlStateFile, { force: true }).catch(() => {})
+  }
+
+  async #writeDesktopControlState() {
+    const bearer = randomBytes(32).toString('base64url')
+    const generation = randomBytes(16).toString('hex')
+    const state = {
+      version: 1,
+      origin: `http://127.0.0.1:${this.port}/__harness_mobile__/control`,
+      port: this.port,
+      bearer,
+      generation,
+      createdAt: new Date(this.now()).toISOString()
+    }
+    const directory = path.dirname(this.desktopControlStateFile)
+    const temporary = `${this.desktopControlStateFile}.${generation}.tmp`
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    try {
+      await writeFile(temporary, `${JSON.stringify(state)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+      await chmod(temporary, 0o600).catch(() => {})
+      await rename(temporary, this.desktopControlStateFile)
+      await chmod(this.desktopControlStateFile, 0o600).catch(() => {})
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {})
+      throw error
+    }
+    this.desktopControlAuth = { bearer, generation }
+  }
+
   async start({ persist = true } = {}) {
     if (this.server?.listening) {
       if (persist && !this.store.get().enabled) this.store.setEnabled(true)
       return this.publish()
     }
+    await this.#removeDesktopControlState()
     this.proxy = httpProxy.createProxyServer({ ws: true, changeOrigin: true, xfwd: false, secure: false })
     this.proxy.on('proxyReqWs', (proxyRequest, request) => {
       const deviceId = request.__harnessMobileDeviceId
@@ -334,6 +372,12 @@ class MobileSyncService extends EventEmitter {
       await listen(this.server, 0, this.host)
     }
     this.port = this.server.address().port
+    try {
+      await this.#writeDesktopControlState()
+    } catch (error) {
+      await this.stop({ persist: false })
+      throw error
+    }
     if (this.requestedPort !== 0) this.store.setPreferredPort(this.port)
     if (persist) this.store.setEnabled(true)
     if (this.store.get().remoteEnabled) {
@@ -347,6 +391,7 @@ class MobileSyncService extends EventEmitter {
   async stop({ persist = true } = {}) {
     this.pairing = null
     this.controlBroker.stop(null, 'SYNC_STOPPED')
+    await this.#removeDesktopControlState()
     if (persist && this.store.get().enabled) this.store.setEnabled(false)
     if (!this.server) return this.publish()
     const server = this.server
@@ -438,6 +483,15 @@ class MobileSyncService extends EventEmitter {
     return this.controlBroker.result(String(commandId || ''))
   }
 
+  #isDesktopControlAuthorized(request) {
+    const auth = this.desktopControlAuth
+    if (!auth || request.headers['x-harness-mobile-control'] !== '1') return false
+    const authorization = String(request.headers.authorization || '')
+    const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,})$/)
+    const generation = String(request.headers['x-harness-mobile-control-generation'] || '')
+    return Boolean(match && constantTimeHexEqual(sha256(match[1]), sha256(auth.bearer)) && constantTimeHexEqual(sha256(generation), sha256(auth.generation)))
+  }
+
   #deviceFromRequest(request) {
     const token = parseCookies(request.headers.cookie || '')[COOKIE_NAME]
     const [id, secret, extra] = String(token || '').split('.')
@@ -486,8 +540,12 @@ class MobileSyncService extends EventEmitter {
     const requestUrl = new URL(request.url || '/', 'http://harness-mobile.local')
     const isDesktopControlRequest = requestUrl.pathname.startsWith('/__harness_mobile__/control/desktop-')
     if (isDesktopControlRequest) {
-      if (!isLoopbackAddress(request.socket?.remoteAddress) || request.headers['x-harness-mobile-control'] !== '1') {
+      if (!isLoopbackAddress(request.socket?.remoteAddress)) {
         writeResponse(response, 403, JSON.stringify({ ok: false, error: 'Desktop control API is loopback-only.' }), { 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      if (!this.#isDesktopControlAuthorized(request)) {
+        writeResponse(response, 401, JSON.stringify({ ok: false, error: 'Desktop control authorization is invalid or expired.' }), { 'Content-Type': 'application/json; charset=utf-8', 'WWW-Authenticate': 'Bearer' })
         return
       }
       if (requestUrl.pathname === '/__harness_mobile__/control/desktop-state' && request.method === 'GET') {
@@ -500,6 +558,12 @@ class MobileSyncService extends EventEmitter {
         const command = this.sendControlCommand(payload.deviceId, payload.command)
         response.writeHead(202, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
         response.end(JSON.stringify({ ok: true, command }))
+        return
+      }
+      if (requestUrl.pathname === '/__harness_mobile__/control/desktop-cancel' && request.method === 'POST') {
+        const payload = await readJsonBody(request)
+        response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify(this.cancelControlCommand(payload.commandId)))
         return
       }
       if (requestUrl.pathname === '/__harness_mobile__/control/desktop-stop' && request.method === 'POST') {

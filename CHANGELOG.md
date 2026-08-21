@@ -1,6 +1,19 @@
 # Changelog
 
-## 未发布
+## 1.0.29
+
+- 官方 DeepSeek Harness 运行时闭包从 `0.1.0-rc.8` 原子升级到 `0.1.1-rc.2`：采用官方视觉模型、Files API 图片上传复用与自动预处理、Bubblewrap PID namespace 安全修复和子代理谱系导航；桌面缓存明细投影迁移到新的 state/wire 契约，并在官方谱系能力存在时停止覆盖子代理页头。
+- 新增 MCP 管理器，复用官方 `@deepseek-ai/dsh-mcp-client` 的 stdio 与 Streamable HTTP；只保存凭据引用，限制命令、URL 与危险请求头，并在启停本地进程前由用户确认。
+- 启用官方 `@deepseek-ai/dsh-schedule`，新增当前会话定时任务视图、精确任务 ID、下次运行与逾期状态；明确不唤醒系统、恢复会话后再补投递且循环最短 300 秒。
+- 新增工作区文件视图：用户主动上传到 `uploads/`、有界下载普通文件、路径/realpath/symlink 越界防护；编辑只准备官方 `read` / `edit` 请求草稿，不自动发送或绕过文件策略。
+- 新增自适应进度策略与无障碍状态 Dock，按 Todo、Goal、工具状态、里程碑、失败和阻塞等语义事件汇报，不采用固定步数、工具数或时间间隔。
+- 异地组网的 mesh、network 与 tunnel 秘密改为 Electron `safeStorage` 版本化密文；旧明文原子迁移，OS 加密不可用或密文损坏时 fail closed；WSS 与移动端服务地址统一为 `10.253.77.254`，公网 WSS 中继仍默认未配置。
+- Codex Chronicle、Claude auto memory 与 Hermes persistent memory 调研结论均属于持久记忆/指令上下文而非模型权重自训练；因此不新增“自我训练”，只保留明确 opt-in、敏感内容过滤、可查看/删除的本地记忆，并将旧 schema 安全迁移为关闭。
+- 浏览器工作区补齐受控链接路由、历史记录、站点授权、诊断和模型工具；高风险操作继续逐次确认，凭据、验证码、支付与银行内容保持禁止自动输入。
+- Agent Teams 新增活跃排序、历史折叠、无重叠实时画布、自动必要性门禁、静默 Inbox、暂停 epoch 和跨重启冷却；原始会话、成员、用户与设备 ID 不进入公开投影。
+- 新增项目级 Ed25519 RBAC、X25519 E2EE、LAN mTLS/WSS 适配器、独立 bare Git Authority、隔离 worktree、远程 bundle/CAS 精确准入、Workspace 落地日志与崩溃恢复；电脑 A 的源工作树始终不是共享可写 Authority。
+- 新增持久 Runner 编排、签名 TestAttestation/Gate、加密 Defect 生命周期，以及 GitHub/GitLab/Jira 凭据零持久化 Outbox；Stop 后任务与外部投递保持休眠，只有显式 resume 才恢复。
+- 内置受信 MinGit 组件和发布包资源审计；桌面、Android 与 iOS/iPadOS 源码同步到 1.0.29，Electron 固定为 43.2.0。
 
 ## 1.0.28
 

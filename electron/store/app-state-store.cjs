@@ -25,14 +25,14 @@ function normalizeCustomTheme(value = {}) {
     glassTransparency: boundedInteger(value.glassTransparency, 0, 92, 32),
     borderStrength: boundedInteger(value.borderStrength, 0, 100, 48),
     readabilityStrength: boundedInteger(value.readabilityStrength, 0, 100, 72),
-    backgroundFile: /^custom-background\.(?:png|jpe?g|webp|gif|apng)$/i.test(value.backgroundFile || '')
+    backgroundFile: /^custom-background\.(?:png|jpe?g|webp|gif|apng|mp4|webm)$/i.test(value.backgroundFile || '')
       ? value.backgroundFile
       : null
   }
 }
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 7,
+  schemaVersion: 8,
   updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null },
   appearance: {
     themeId: DEFAULT_THEME_ID,
@@ -51,10 +51,10 @@ const DEFAULT_STATE = Object.freeze({
     positionByDisplay: {}
   },
   memory: {
-    enabled: true,
+    enabled: false,
     sensitivityMode: 'reject',
-    autoRecall: true,
-    autoCapture: true
+    autoRecall: false,
+    autoCapture: false
   }
 })
 
@@ -66,12 +66,14 @@ function normalizeState(input) {
   const base = cloneDefaultState()
   const value = input && typeof input === 'object' ? input : {}
   const sourceSchemaVersion = Number(value.schemaVersion || 0)
-  const legacyMemoryDefaults = sourceSchemaVersion < 7
-  const memoryEnabled = legacyMemoryDefaults ? true : value.memory?.enabled !== false
+  // Memory is an explicit opt-in. Versions before schema 8 did not persist a
+  // trustworthy consent marker, so migration fails closed instead of treating
+  // the former automatic default as user approval.
+  const memoryEnabled = sourceSchemaVersion >= 8 && value.memory?.enabled === true
   const savedTheme = VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : DEFAULT_THEME_ID
   const themeId = Number(value.schemaVersion || 0) < 3 && savedTheme === 'official' ? DEFAULT_THEME_ID : savedTheme
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     updates: {
       checkOnStartup: value.updates?.checkOnStartup !== false,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
@@ -97,8 +99,8 @@ function normalizeState(input) {
     memory: {
       enabled: memoryEnabled,
       sensitivityMode: value.memory?.sensitivityMode === 'redact' ? 'redact' : 'reject',
-      autoRecall: memoryEnabled && (legacyMemoryDefaults || value.memory?.autoRecall !== false),
-      autoCapture: memoryEnabled && (legacyMemoryDefaults || value.memory?.autoCapture !== false)
+      autoRecall: memoryEnabled && value.memory?.autoRecall === true,
+      autoCapture: memoryEnabled && value.memory?.autoCapture === true
     }
   }
 }

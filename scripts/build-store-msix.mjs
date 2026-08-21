@@ -32,6 +32,7 @@ const manifestPath = path.join(resolvedDist, 'Package.appxmanifest')
 await writeFile(manifestPath, manifest, 'utf8')
 
 run(process.execPath, ['scripts/store-readiness.mjs', '--require-identity'])
+run(process.execPath, ['scripts/prepare-bundled-git.mjs'])
 run(process.execPath, ['scripts/patch-official-runtime.mjs'])
 run('npx.cmd', ['electron-builder', '--dir', '--win', '--x64', '--publish', 'never', '--config', 'build/electron-builder.store.yml'], {
   ...process.env,

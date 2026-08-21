@@ -9,6 +9,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
+const { validateAndVerifyDesktopReleaseManifest } = require('../electron/bridge/desktop-release-contract.cjs')
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const command = process.argv[2] || 'status'
@@ -19,8 +20,9 @@ const pollSeconds = positiveInteger(argument('poll-seconds', '15'), 'poll-second
 const stateDir = path.join(root, '.release-state')
 const stateFile = path.join(stateDir, `${tag}-publish.json`)
 const lockFile = path.join(stateDir, `${tag}-publish.lock`)
-const portableGit = path.resolve(root, '..', '.tools', 'MinGit', 'cmd', 'git.exe')
-const git = String(process.env.HARNESS_RELEASE_GIT || (existsSync(portableGit) ? portableGit : 'git')).trim()
+const bundledGit = path.join(root, 'third_party', 'mingit', 'cmd', 'git.exe')
+const legacyPortableGit = path.resolve(root, '..', '.tools', 'MinGit', 'cmd', 'git.exe')
+const git = String(process.env.HARNESS_RELEASE_GIT || (existsSync(bundledGit) ? bundledGit : existsSync(legacyPortableGit) ? legacyPortableGit : 'git')).trim()
 const npmCli = String(process.env.npm_execpath || '').trim()
 const PHASES = [
   'local-windows',
@@ -107,12 +109,22 @@ function capture(program, args, options = {}) {
   return execute(program, args, { ...options, capture: true })
 }
 
+function gitEnvironment() {
+  const env = { ...process.env }
+  if (!path.isAbsolute(git)) return env
+  const commandDirectory = path.dirname(git)
+  const gitRoot = ['cmd', 'bin'].includes(path.basename(commandDirectory).toLowerCase()) ? path.dirname(commandDirectory) : commandDirectory
+  const additions = [commandDirectory, path.join(gitRoot, 'bin'), path.join(gitRoot, 'mingw64', 'bin'), path.join(gitRoot, 'usr', 'bin')]
+  env.PATH = `${additions.join(path.delimiter)}${path.delimiter}${env.PATH || ''}`
+  return env
+}
+
 function gitCapture(args) {
-  return capture(git, args)
+  return capture(git, args, { env: gitEnvironment() })
 }
 
 function gitRun(args) {
-  return execute(git, args)
+  return execute(git, args, { env: gitEnvironment() })
 }
 
 function ghCapture(args) {
@@ -129,9 +141,7 @@ function npmRun(args, options = {}) {
 }
 
 function releaseEnvironment() {
-  const env = { ...process.env, HARNESS_RELEASE_GIT: git }
-  if (path.isAbsolute(git)) env.PATH = `${path.dirname(git)}${path.delimiter}${env.PATH || ''}`
-  return env
+  return { ...gitEnvironment(), HARNESS_RELEASE_GIT: git }
 }
 
 function ghJson(args) {
@@ -443,22 +453,77 @@ function commitAndPush(files, message) {
   return gitCapture(['rev-parse', 'HEAD']).toLowerCase()
 }
 
-async function refreshManifest() {
-  execute(process.execPath, ['scripts/refresh-release-manifest.mjs', `--version=${version}`, `--repo=${repo}`])
-  const manifest = JSON.parse(await readFile(path.join(root, 'release-manifest.json'), 'utf8'))
-  if (manifest.length !== 1 || manifest[0].tag_name !== tag || manifest[0].assets.length !== 18) throw new Error('Release manifest is not the exact 18-asset final release.')
-  const checksum = manifest[0].assets.find(asset => asset.name === 'SHA256SUMS.txt')
+async function desktopReleaseTrustedKeys() {
+  const [componentSources, desktopSources] = await Promise.all([
+    readFile(path.join(root, 'component-update-sources.json'), 'utf8').then(JSON.parse),
+    readFile(path.join(root, 'release-update-sources.json'), 'utf8').then(JSON.parse)
+  ])
+  const componentKeys = componentSources.trustedKeys
+  const desktopKeys = desktopSources.trustedKeys
+  if (!componentKeys || typeof componentKeys !== 'object' || !desktopKeys || typeof desktopKeys !== 'object') {
+    throw new Error('Component and desktop Ed25519 trust roots are required for the desktop release manifest.')
+  }
+  const componentEntries = Object.entries(componentKeys).sort(([left], [right]) => left.localeCompare(right, 'en'))
+  const desktopEntries = Object.entries(desktopKeys).sort(([left], [right]) => left.localeCompare(right, 'en'))
+  if (JSON.stringify(componentEntries) !== JSON.stringify(desktopEntries)) {
+    throw new Error('release-update-sources.json trust root drifted from component-update-sources.json.')
+  }
+  return desktopKeys
+}
+
+async function preflightDesktopManifestTrust() {
+  const trustedKeys = await desktopReleaseTrustedKeys()
+  if (!trustedKeys['harness-components-02643f81164c594a']) {
+    throw new Error('The protected CI signing key is not present in the embedded desktop trust root.')
+  }
+}
+
+async function verifiedDesktopRelease(document) {
+  const verified = validateAndVerifyDesktopReleaseManifest(document, await desktopReleaseTrustedKeys())
+  if (verified.length !== 1 || verified[0].tag_name !== tag || verified[0].assets.length !== 18) {
+    throw new Error('Signed release manifest is not the exact 18-asset final release.')
+  }
+  return verified[0]
+}
+
+async function readVerifiedDesktopRelease(file = path.join(root, 'release-manifest.json')) {
+  return verifiedDesktopRelease(JSON.parse(await readFile(file, 'utf8')))
+}
+
+async function adoptCloudSignedManifest() {
+  const branch = `release-manifest/${tag}`
+  const remoteRef = `refs/remotes/origin/${branch}`
+  gitRun(['fetch', '--force', 'origin', 'refs/heads/main:refs/remotes/origin/main', `refs/heads/${branch}:${remoteRef}`])
+  const candidate = gitCapture(['rev-parse', remoteRef]).toLowerCase()
+  const parents = gitCapture(['rev-list', '--parents', '-n', '1', candidate]).toLowerCase().split(/\s+/u)
+  if (parents.length !== 2 || parents[1] !== stateProductRevision) {
+    throw new Error('Cloud-signed release manifest commit is not a direct child of the immutable product tag.')
+  }
+  const changed = gitCapture(['diff-tree', '--no-commit-id', '--name-only', '-r', candidate]).split(/\r?\n/u).filter(Boolean)
+  if (changed.length !== 1 || changed[0] !== 'release-manifest.json') {
+    throw new Error('Cloud-signed release manifest commit contains unexpected files.')
+  }
+  const current = gitCapture(['rev-parse', 'HEAD']).toLowerCase()
+  if (current === stateProductRevision) gitRun(['merge', '--ff-only', candidate])
+  else if (current !== candidate) {
+    const contains = spawnSync(git, ['merge-base', '--is-ancestor', candidate, current], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false })
+    if (contains.status !== 0) throw new Error('Local release branch cannot safely adopt the cloud-signed manifest commit.')
+  }
+  const release = await readVerifiedDesktopRelease()
+  const checksum = release.assets.find(asset => asset.name === 'SHA256SUMS.txt')
   const response = await fetch(checksum.browser_download_url)
   if (!response.ok) throw new Error(`Unable to download public SHA256SUMS.txt: ${response.status}`)
   const bytes = Buffer.from(await response.arrayBuffer())
   if (sha256(bytes) !== checksum.sha256) throw new Error('Public SHA256SUMS.txt digest mismatch.')
   await mkdir(path.join(root, 'dist'), { recursive: true })
   await writeFile(path.join(root, 'dist', 'SHA256SUMS.txt'), bytes)
-  return manifest[0]
+  gitRun(['push', 'origin', 'HEAD:main'])
+  assertClean()
+  return { release, commit: candidate, branch }
 }
 
 async function promoteStableFeeds() {
-  const manifest = JSON.parse(await readFile(path.join(root, 'release-manifest.json'), 'utf8'))[0]
+  const manifest = await readVerifiedDesktopRelease()
   const sources = JSON.parse(await readFile(path.join(root, 'component-update-sources.json'), 'utf8'))
   const { validateAndVerifyManifest } = require('../electron/bridge/component-update-contract.cjs')
   const files = []
@@ -483,6 +548,15 @@ async function promoteStableFeeds() {
 async function finalRemoteCheck() {
   const release = releaseForTag()
   assertReleaseAssets(release, expectedAllNames(), { draft: false })
+  const manifestUrls = [
+    `https://raw.githubusercontent.com/${repo}/main/release-manifest.json`,
+    `https://cnb.cool/${repo}/-/git/raw/main/release-manifest.json`
+  ]
+  const manifestResponses = await Promise.all(manifestUrls.map(url => fetch(url)))
+  if (manifestResponses.some(response => !response.ok)) throw new Error('Signed desktop release manifest HTTP failure.')
+  const manifestBytes = await Promise.all(manifestResponses.map(async response => Buffer.from(await response.arrayBuffer())))
+  if (!manifestBytes[0].equals(manifestBytes[1])) throw new Error('GitHub/CNB signed desktop release manifest mismatch.')
+  await verifiedDesktopRelease(JSON.parse(manifestBytes[0].toString('utf8')))
   for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64']) {
     const github = `https://raw.githubusercontent.com/${repo}/main/component-feeds/stable/${target}.json`
     const cnb = `https://cnb.cool/${repo}/-/git/raw/main/component-feeds/stable/${target}.json`
@@ -530,6 +604,7 @@ let stateProductRevision = ''
 
 async function publish() {
   assertVersion()
+  await preflightDesktopManifestTrust()
   const state = await readState()
   if (state.version !== version || state.tag !== tag || state.repo !== repo) throw new Error('Publication state identity mismatch.')
   const currentHead = gitCapture(['rev-parse', 'HEAD']).toLowerCase()
@@ -622,12 +697,12 @@ async function publish() {
   })
 
   await phase(state, 'release-manifest', async () => {
-    await refreshManifest()
-    const commit = commitAndPush(['release-manifest.json'], `release: publish ${tag} asset manifest`)
-    return { commit }
+    const adopted = await adoptCloudSignedManifest()
+    return { commit: adopted.commit, branch: adopted.branch }
   })
 
   await phase(state, 'cnb-assets', async () => {
+    await readVerifiedDesktopRelease()
     npmRun(['run', 'release:cnb-cloud'], { timeout: 30 * 60 * 1000, env: releaseEnvironment() })
   })
 

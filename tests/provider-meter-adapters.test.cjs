@@ -1,9 +1,34 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const { EventEmitter } = require('node:events')
 
 const { createDeepSeekBalanceAdapter, normalizeDeepSeekBalance } = require('../electron/bridge/provider-meter-adapters/deepseek-balance.cjs')
-const { CODEX_USAGE_URL, createCodexRateLimitsAdapter, normalizeCodexRateLimits, normalizeCodexUsage } = require('../electron/bridge/provider-meter-adapters/codex-rate-limits.cjs')
+const { CODEX_APP_URL, CODEX_USAGE_URL, createCodexRateLimitsAdapter, normalizeCodexRateLimits, normalizeCodexUsage } = require('../electron/bridge/provider-meter-adapters/codex-rate-limits.cjs')
 const { createOpenCodeGoPlanAdapter } = require('../electron/bridge/provider-meter-adapters/opencode-go-plan.cjs')
+
+function spawnErrorChild() {
+  const child = new EventEmitter()
+  child.stdout = new EventEmitter()
+  child.stdin = new EventEmitter()
+  child.stdin.write = () => true
+  child.stdin.on = () => child.stdin
+  child.killed = false
+  child.kill = () => { child.killed = true }
+  process.nextTick(() => child.emit('error', Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' })))
+  return child
+}
+
+function spawnExitChild(code) {
+  const child = new EventEmitter()
+  child.stdout = new EventEmitter()
+  child.stdin = new EventEmitter()
+  child.stdin.write = () => true
+  child.stdin.on = () => child.stdin
+  child.killed = false
+  child.kill = () => { child.killed = true }
+  process.nextTick(() => child.emit('exit', code))
+  return child
+}
 
 test('DeepSeek balance normalizes every returned currency', () => {
   const result = normalizeDeepSeekBalance({
@@ -85,6 +110,35 @@ test('Codex adapter queries official usage with Harness OAuth without exposing c
   assert.equal(result.meters[0].remainingPercent, 75)
   assert.equal(JSON.stringify(result).includes(token), false)
   assert.equal(JSON.stringify(result).includes(accountId), false)
+})
+
+test('Codex without credential and without a discoverable client gives an actionable auth-required state', async () => {
+  const result = await createCodexRateLimitsAdapter().refresh({ spawnImpl: () => spawnErrorChild() })
+  assert.equal(result.status, 'auth-required')
+  assert.equal(result.meters.length, 0)
+  assert.match(result.message, /Codex (CLI|凭据)/)
+  assert.deepEqual(result.action, { label: '查看官方 Codex', url: CODEX_APP_URL })
+})
+
+test('Codex client probe failures (non-zero exit) still stay unavailable', async () => {
+  await assert.rejects(
+    createCodexRateLimitsAdapter().refresh({ spawnImpl: () => spawnExitChild(1) }),
+    error => error.code === 'METER_UNAVAILABLE'
+  )
+})
+
+test('Codex client timeout is a transient unavailable state, not a missing client', async () => {
+  const child = new EventEmitter()
+  child.stdout = new EventEmitter()
+  child.stdin = new EventEmitter()
+  child.stdin.write = () => true
+  child.stdin.on = () => child.stdin
+  child.killed = false
+  child.kill = () => { child.killed = true }
+  await assert.rejects(
+    createCodexRateLimitsAdapter({ timeoutMs: 30 }).refresh({ spawnImpl: () => child }),
+    error => error.code === 'METER_UNAVAILABLE'
+  )
 })
 
 test('OpenCode Go is explicit when its model API key cannot query plan usage', async () => {

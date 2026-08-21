@@ -21,13 +21,14 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class HarnessWebProxy implements AutoCloseable {
     private static final int MAX_HEADER_BYTES = 64 * 1024;
-    private static final int LAN_CONNECT_TIMEOUT_MS = 900;
-    private static final int REMOTE_CONNECT_TIMEOUT_MS = 5000;
+    private static final int LAN_CONNECT_TIMEOUT_MS = 800;
+    private static final int REMOTE_CONNECT_TIMEOUT_MS = 2_200;
     private static final long LAN_RETRY_DELAY_MS = 12_000;
-    private static final long REMOTE_RETRY_DELAY_MS = 4_000;
+    private static final long REMOTE_RETRY_DELAY_MS = 15_000;
 
     private static final int MAX_ACTIVE_CONNECTIONS = 24;
 
@@ -36,9 +37,12 @@ final class HarnessWebProxy implements AutoCloseable {
     private final ExecutorService pipeExecutor = Executors.newFixedThreadPool(MAX_ACTIVE_CONNECTIONS);
     private final ConnectivityManager connectivityManager;
     private final Map<String, Long> retryAfter = new ConcurrentHashMap<>();
+    private final AtomicReference<RoutePreference> lastGoodRoute = new AtomicReference<>();
     private volatile List<PairingProfile.Route> routes = List.of();
     private volatile boolean closed;
     private ServerSocket server;
+
+    private record RoutePreference(String key) {}
 
     HarnessWebProxy(Context context) {
         connectivityManager = context.getSystemService(ConnectivityManager.class);
@@ -57,7 +61,10 @@ final class HarnessWebProxy implements AutoCloseable {
 
     void updateRoutes(List<PairingProfile.Route> values) {
         routes = values == null ? List.of() : List.copyOf(values);
-        retryAfter.keySet().retainAll(routes.stream().map(PairingProfile.Route::key).toList());
+        List<String> routeKeys = routes.stream().map(PairingProfile.Route::key).toList();
+        retryAfter.keySet().retainAll(routeKeys);
+        RoutePreference preferred = lastGoodRoute.get();
+        if (preferred != null && !routeKeys.contains(preferred.key())) lastGoodRoute.compareAndSet(preferred, null);
     }
 
     private void acceptLoop() {
@@ -112,21 +119,38 @@ final class HarnessWebProxy implements AutoCloseable {
     }
 
     private Socket connectRoute() {
-        List<PairingProfile.Route> candidates = new ArrayList<>(routes);
         long now = System.currentTimeMillis();
-        candidates.sort(Comparator.comparingLong(route -> retryAfter.getOrDefault(route.key(), 0L)));
+        RoutePreference preferred = lastGoodRoute.get();
+        List<PairingProfile.Route> candidates = prioritizeRoutes(routes, retryAfter, preferred == null ? null : preferred.key(), now);
         boolean hasReadyRoute = candidates.stream().anyMatch(route -> retryAfter.getOrDefault(route.key(), 0L) <= now);
         for (PairingProfile.Route route : candidates) {
             if (hasReadyRoute && retryAfter.getOrDefault(route.key(), 0L) > now) continue;
             try {
                 Socket socket = connect(route);
                 retryAfter.remove(route.key());
+                lastGoodRoute.set(new RoutePreference(route.key()));
                 return socket;
             } catch (IOException error) {
+                if (preferred != null && route.key().equals(preferred.key())) lastGoodRoute.compareAndSet(preferred, null);
                 retryAfter.put(route.key(), now + ("lan".equals(route.id) ? LAN_RETRY_DELAY_MS : REMOTE_RETRY_DELAY_MS));
             }
         }
         return null;
+    }
+
+    static List<PairingProfile.Route> prioritizeRoutes(
+        List<PairingProfile.Route> values,
+        Map<String, Long> retryAfter,
+        String lastGoodRouteKey,
+        long now
+    ) {
+        List<PairingProfile.Route> candidates = new ArrayList<>(values == null ? List.of() : values);
+        candidates.sort(
+            Comparator.<PairingProfile.Route>comparingInt(route -> retryAfter.getOrDefault(route.key(), 0L) <= now ? 0 : 1)
+                .thenComparingInt(route -> route.key().equals(lastGoodRouteKey) ? 0 : 1)
+                .thenComparingLong(route -> retryAfter.getOrDefault(route.key(), 0L))
+        );
+        return candidates;
     }
 
     private Socket connect(PairingProfile.Route route) throws IOException {

@@ -50,6 +50,22 @@ test('confirmation is bound to the exact action and consumed once', () => {
   assert.throws(() => store.authorize('type', { x: 20, y: 60, text: 'hello', confirmation_id: request.confirmationId }), error => error.code === 'confirmation-invalid')
 })
 
+test('confirmation becomes invalid when the visible desktop surface changes', () => {
+  const { store } = fixture()
+  const surface = { generation: 4, width: 1200, height: 800, url: 'file:///desktop/index.html' }
+  const request = store.authorize('click', { x: 320, y: 180, surface })
+  assert.match(request.summary, /\(320, 180\)/u)
+  assert.match(request.summary, /1200×800/u)
+  store.confirm(request.confirmationId)
+  assert.throws(() => store.authorize('click', {
+    x: 320,
+    y: 180,
+    surface: { ...surface, width: 1000 },
+    confirmation_id: request.confirmationId
+  }), error => error.code === 'confirmation-invalid')
+  assert.equal(store.authorize('click', { x: 320, y: 180, surface, confirmation_id: request.confirmationId }), null)
+})
+
 test('expired confirmations are pruned from state and cannot be confirmed', () => {
   const { store, advance } = fixture()
   const request = store.authorize('click', { x: 1, y: 40 })
@@ -61,7 +77,11 @@ test('expired confirmations are pruned from state and cannot be confirmed', () =
 test('main process delegates confirmation state without retaining plaintext fingerprints', async () => {
   const main = await readFile(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
   assert.match(main, /new ComputerUseConfirmationStore\(\)/)
-  assert.match(main, /computerUseConfirmations\.authorize\(action, parameters\)/)
+  assert.match(main, /computerUseConfirmations\.authorize\(action, \{ \.\.\.parameters, surface: computerUseSurface\(\) \}\)/)
+  assert.match(main, /generation: computerUseSessionGeneration/)
+  assert.match(main, /urls = \[mainWindow\.webContents\.getURL\(\)\]/)
+  assert.match(main, /runtimeGuest && !runtimeGuest\.isDestroyed\(\)/)
+  assert.match(main, /browserContents = browserSidebarVisible \? liveBrowserContents\(\) : null/)
   assert.match(main, /computerUseConfirmations\.snapshot\(\)/)
   assert.match(main, /computerUseConfirmations\.confirm\(id\)/)
   assert.match(main, /computerUseConfirmations\.reject\(id\)/)

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const { once } = require('node:events')
 const WebSocket = require('ws')
 const { createHealthServer, createRelayRouter, validRoomId } = require('../services/wss-relay/server.cjs')
-const { DESKTOP_PEER_ID, safeRelayUrl } = require('../electron/bridge/sync-transports/wss-relay-adapter.cjs')
+const { DESKTOP_PEER_ID, WssRelayAdapter, safeRelayUrl } = require('../electron/bridge/sync-transports/wss-relay-adapter.cjs')
 const { FRAME_TYPES, RelayTunnelCodec } = require('../electron/bridge/relay-tunnel-codec.cjs')
 
 function nextMessage(socket) {
@@ -43,6 +43,20 @@ test('public relay URLs require credential-free WSS', () => {
   assert.throws(() => safeRelayUrl('wss://relay.example.com:8443/tunnel'), /443/)
   assert.throws(() => safeRelayUrl('wss://user:pass@relay.example.com/tunnel'), /credential/)
   assert.equal(validRoomId(Buffer.alloc(32, 3).toString('base64url')), true)
+})
+
+test('WSS pairing uses the encrypted mesh service address without a second hard-coded subnet', () => {
+  const adapter = new WssRelayAdapter({ relayUrl: 'wss://relay.example.com/', WebSocketImpl: WebSocket })
+  adapter.status = 'connected'
+  adapter.context = {
+    port: 3081,
+    mesh: {
+      serviceAddress: '10.253.77.254',
+      relayRoomId: Buffer.alloc(32, 3).toString('base64url'),
+      relayTunnelKey: Buffer.alloc(32, 4).toString('base64url')
+    }
+  }
+  assert.equal(adapter.pairingConfig().origin, 'http://10.253.77.254:3081')
 })
 
 test('blind relay routes opaque packets only between desktop and assigned mobile peer', async t => {

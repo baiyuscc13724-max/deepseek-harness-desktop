@@ -1,4 +1,7 @@
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 const test = require('node:test')
 
 const {
@@ -23,8 +26,8 @@ function authzStub(grants) {
   }
 }
 
-function gateWith(grants, { visible = true, origin = 'https://example.com', id = 'tab-1' } = {}) {
-  const gate = new ActionGate()
+function gateWith(grants, { visible = true, origin = 'https://example.com', id = 'tab-1', uploadRoots = [], downloadRoots = [] } = {}) {
+  const gate = new ActionGate({ uploadRoots, downloadRoots })
   gate.setActiveTab({ id, origin, visible })
   return { gate, grants: authzStub(grants) }
 }
@@ -45,13 +48,16 @@ test('敏感字段识别：密码/银行卡/验证码/令牌/API key/Cookie/Auth
     { tag: 'input', type: 'text', name: 'cookie' },
     { tag: 'input', type: 'text', name: 'authorization' },
     { tag: 'input', type: 'text', name: 'bankAccount', role: 'textbox' },
-    { tag: 'input', type: 'text', selector: '#login-token-input' }
+    { tag: 'input', type: 'text', selector: '#login-token-input' },
+    { tag: 'input', type: 'text', name: 'username' },
+    { tag: 'input', type: 'email', name: 'contact' },
+    { tag: 'button', role: 'button', label: '确认支付' }
   ]
   for (const field of sensitiveCases) {
     assert.equal(isSensitiveField(field), true, `应判定为敏感：${JSON.stringify(field)}`)
   }
   const safeCases = [
-    { tag: 'input', type: 'text', name: 'username' },
+    { tag: 'input', type: 'text', name: 'displayName' },
     { tag: 'textarea', name: 'message' },
     { tag: 'input', type: 'checkbox', name: 'agree' },
     { tag: 'input', type: 'text', ariaLabel: '搜索' },
@@ -192,20 +198,82 @@ test('upload/download/submit/publish/delete 必须人工确认，且确认一次
   assert.equal(gate.gate({ ...base, action: 'submit', confirmationId: submit2.confirmationId }).verdict, 'allow')
 })
 
+test('交互式上传只批准原生选择器，禁止与路径或内容模式混用', () => {
+  const { gate, grants } = gateWith({ 'https://example.com': ['upload'] })
+  const base = { action: 'upload', tabId: 'tab-1', authorizations: grants }
+  const payload = { interactivePicker: true }
+
+  const request = gate.gate({ ...base, payload })
+  assert.equal(request.verdict, 'confirm-required')
+  assert.equal(request.action, 'upload')
+  assert.deepEqual(gate.pendingConfirmations().map(item => ({ action: item.action, origin: item.origin, tabId: item.tabId })), [
+    { action: 'upload', origin: 'https://example.com', tabId: 'tab-1' }
+  ])
+  assert.throws(() => gate.gate({ ...base, payload, confirmationId: request.confirmationId }), error => error.code === 'confirmation-unconfirmed')
+  gate.confirm(request.confirmationId, { by: 'user' })
+  assert.equal(gate.gate({ ...base, payload, confirmationId: request.confirmationId }).verdict, 'allow')
+  assert.throws(() => gate.gate({ ...base, payload, confirmationId: request.confirmationId }), error => error.code === 'confirmation-used')
+
+  for (const confused of [
+    { interactivePicker: true, base64: Buffer.from('secret').toString('base64') },
+    { interactivePicker: true, base64: '' },
+    { interactivePicker: true, filePath: path.resolve('secret.txt') },
+    { interactivePicker: true, filePath: undefined }
+  ]) {
+    assert.throws(() => gate.gate({ ...base, payload: confused }), error => error.code === 'upload-mode-conflict')
+  }
+  assert.throws(() => gate.gate({ ...base, payload: { interactivePicker: false } }), error => error.code === 'invalid-upload-mode')
+})
+
+test('交互式上传确认绑定完整 payload，确认后不能切换模式或换参', () => {
+  const { gate, grants } = gateWith({ 'https://example.com': ['upload'] })
+  const base = { action: 'upload', tabId: 'tab-1', authorizations: grants, field: { tag: 'input', type: 'file', baseUrl: 'https://example.com', backendNodeId: '41' } }
+  const request = gate.gate({ ...base, payload: { interactivePicker: true } })
+  gate.confirm(request.confirmationId, { by: 'user' })
+  assert.throws(
+    () => gate.gate({ ...base, payload: { interactivePicker: true, pickerKind: 'directory' }, confirmationId: request.confirmationId }),
+    error => error.code === 'confirmation-mismatch'
+  )
+  assert.throws(
+    () => gate.gate({ ...base, payload: { base64: Buffer.from('hello').toString('base64') }, confirmationId: request.confirmationId }),
+    error => error.code === 'confirmation-mismatch'
+  )
+  assert.throws(
+    () => gate.gate({ ...base, field: { ...base.field, backendNodeId: '42' }, payload: { interactivePicker: true }, confirmationId: request.confirmationId }),
+    error => error.code === 'confirmation-mismatch'
+  )
+})
+
+test('下载确认绑定规范化目标 URL，链接变化不能复用旧确认', () => {
+  const downloadRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-gate-download-'))
+  const { gate, grants } = gateWith({ 'https://example.com': ['download'] }, { downloadRoots: [downloadRoot] })
+  const basePayload = { destinationPath: path.join(downloadRoot, 'artifact.bin'), maxBytes: 1024, targetUrl: 'https://example.com/private/a' }
+  const request = gate.gate({ action: 'download', tabId: 'tab-1', authorizations: grants, payload: basePayload })
+  gate.confirm(request.confirmationId, { by: 'user' })
+  assert.throws(
+    () => gate.gate({ action: 'download', tabId: 'tab-1', authorizations: grants, payload: { ...basePayload, targetUrl: 'https://example.com/private/b' }, confirmationId: request.confirmationId }),
+    error => error.code === 'confirmation-mismatch'
+  )
+})
+
 test('确认请求 TTL 过期后不可用', () => {
   let time = 0
-  const gate = new ActionGate({ now: () => time, confirmationTtlMs: 60_000 })
+  const downloadRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-gate-download-'))
+  const downloadPayload = { destinationPath: path.join(downloadRoot, 'report.txt'), maxBytes: 1024 }
+  const gate = new ActionGate({ now: () => time, confirmationTtlMs: 60_000, downloadRoots: [downloadRoot] })
   gate.setActiveTab({ id: 'tab-1', origin: 'https://example.com' })
   const grants = authzStub({ 'https://example.com': ['download'] })
-  const req = gate.gate({ action: 'download', tabId: 'tab-1', authorizations: grants, payload: {} })
+  const req = gate.gate({ action: 'download', tabId: 'tab-1', authorizations: grants, payload: downloadPayload })
   assert.equal(req.verdict, 'confirm-required')
   time += 60_001
   assert.throws(() => gate.confirm(req.confirmationId, { by: 'user' }), error => error.code === 'confirmation-expired')
-  assert.throws(() => gate.gate({ action: 'download', tabId: 'tab-1', authorizations: grants, payload: {}, confirmationId: req.confirmationId }), error => error.code === 'confirmation-expired')
+  assert.throws(() => gate.gate({ action: 'download', tabId: 'tab-1', authorizations: grants, payload: downloadPayload, confirmationId: req.confirmationId }), error => error.code === 'confirmation-expired')
 })
 
-test('大小限制：upload base64 与下载体积硬上限', () => {
-  const { gate, grants } = gateWith({ 'https://example.com': ['upload', 'download'] })
+test('大小与路径限制：upload base64 与下载目标硬上限', () => {
+  const downloadRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-gate-download-'))
+  const destinationPath = path.join(downloadRoot, 'artifact.zip')
+  const { gate, grants } = gateWith({ 'https://example.com': ['upload', 'download'] }, { downloadRoots: [downloadRoot] })
   const base = { tabId: 'tab-1', authorizations: grants }
 
   const maxBase64 = Buffer.alloc(MAX_UPLOAD_BYTES).toString('base64')
@@ -217,9 +285,11 @@ test('大小限制：upload base64 与下载体积硬上限', () => {
   assert.throws(() => gate.gate({ ...base, action: 'upload', payload: { base64: 'not!!base64' } }), error => error.code === 'invalid-base64')
   assert.throws(() => gate.gate({ ...base, action: 'upload', payload: {} }), error => error.code === 'empty-input')
 
-  const dl = gate.gate({ ...base, action: 'download', payload: { maxBytes: MAX_DOWNLOAD_BYTES } })
+  const dl = gate.gate({ ...base, action: 'download', payload: { destinationPath, maxBytes: MAX_DOWNLOAD_BYTES } })
   assert.equal(dl.verdict, 'confirm-required')
-  assert.throws(() => gate.gate({ ...base, action: 'download', payload: { maxBytes: MAX_DOWNLOAD_BYTES + 1 } }), error => error.code === 'size-limit')
+  assert.throws(() => gate.gate({ ...base, action: 'download', payload: { destinationPath, maxBytes: MAX_DOWNLOAD_BYTES + 1 } }), error => error.code === 'size-limit')
+  assert.throws(() => gate.gate({ ...base, action: 'download', payload: { destinationPath: path.resolve('outside.zip'), maxBytes: 1 } }), error => error.code === 'file-path-denied')
+  assert.throws(() => gate.gate({ ...base, action: 'download', payload: { destinationPath } }), error => error.code === 'size-required')
   assert.equal(isValidBase64(Buffer.from('x').toString('base64')), true)
   assert.equal(isValidBase64('abcde'), false)
 })
@@ -233,6 +303,24 @@ test('未知动作与缺少授权拒绝', () => {
   const nav = gn.gate({ action: 'navigate', tabId: 'tab-1', authorizations: authzStub({ 'https://example.com': ['read'] }) })
   assert.equal(nav.verdict, 'allow')
   assert.throws(() => gn.gate({ action: 'navigate', tabId: 'tab-1', authorizations: authzStub({}) }), error => error.code === 'origin-not-authorized')
+})
+
+test('确认绑定具体载荷，页面描述不能把金融或账号操作伪装成普通动作', () => {
+  const { gate, grants } = gateWith({ 'https://example.com': ['click', 'submit'] })
+  const common = { tabId: 'tab-1', authorizations: grants }
+  assert.throws(() => gate.gate({ ...common, action: 'click', field: { tag: 'button', label: '立即支付' } }), error => error.code === 'sensitive-field')
+  assert.throws(() => gate.gate({ ...common, action: 'submit', payload: { accessibleName: '提交银行转账' } }), error => error.code === 'sensitive-action')
+
+  const request = gate.gate({ ...common, action: 'submit', payload: { actionText: '提交普通反馈', itemId: 'a' } })
+  gate.confirm(request.confirmationId, { by: 'user' })
+  assert.throws(() => gate.gate({ ...common, action: 'submit', payload: { actionText: '提交普通反馈', itemId: 'b' }, confirmationId: request.confirmationId }), error => error.code === 'confirmation-mismatch')
+})
+
+test('账号值永久禁止读写', () => {
+  const { gate, grants } = gateWith({ 'https://example.com': ['read', 'type'] })
+  assert.equal(isSensitiveText('username=alice'), true)
+  assert.equal(isSensitiveText('alice@example.com'), true)
+  assert.throws(() => gate.gate({ action: 'type', tabId: 'tab-1', authorizations: grants, field: { tag: 'textarea', name: 'memo' }, payload: { text: 'alice@example.com' } }), error => error.code === 'sensitive-value')
 })
 
 test('normalizeField 安全折叠非字符串输入', () => {

@@ -111,6 +111,9 @@ async function runPackagedSelfTest(options = {}) {
     dsh = { source: 'error', version: 'unknown', error: error.message }
   }
 
+  const gitRuntime = typeof options.gitRuntimeProbe === 'function'
+    ? await options.gitRuntimeProbe().catch(() => null)
+    : null
   const checks = {
     rendererEntry: await rendererAvailable(options.rendererEntry),
     bundledHarness: dsh.source === 'bundled' || dsh.source === 'env',
@@ -122,6 +125,7 @@ async function runPackagedSelfTest(options = {}) {
       ? await options.userDataProbe(options.userData)
       : await userDataWritable(options.userData),
     desktopMarketplace: await marketplaceInstallable(options),
+    bundledGit: gitRuntime ? gitRuntime.git?.source === 'bundled' && gitRuntime.git?.available === true && gitRuntime.gcm?.available === true : true,
     webCompatibility: true
   }
 
@@ -141,6 +145,7 @@ async function runPackagedSelfTest(options = {}) {
       version: dsh.version || 'unknown',
       detail: dsh.error || ''
     },
+    git: gitRuntime || { git: { available: false, source: null }, gcm: { available: false, source: null }, sshAgent: { available: false, running: false } },
     generatedAt: new Date().toISOString()
   }
 }

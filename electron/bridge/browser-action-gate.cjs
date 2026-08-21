@@ -16,7 +16,9 @@
 //   6) 大小限制：输入文本、读取结果、上传内容、下载体积均有硬上限。
 // 纯 Node 实现，无 Electron 依赖，可独立用 node:test 测试。
 
-const { randomUUID } = require('node:crypto')
+const { createHash, randomUUID } = require('node:crypto')
+const fs = require('node:fs')
+const path = require('node:path')
 const { detectHighRisk } = require('./memory-censor.cjs')
 const { checkModelNavigation, canonicalOrigin, classifyNavigation } = require('./browser-url-policy.cjs')
 
@@ -49,23 +51,26 @@ const MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 const MAX_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_UPLOAD_BYTES / 3) * 4
 const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 const MAX_CONFIRMATIONS_PENDING = 16
+const MAX_FILE_PATH_LENGTH = 1024
 const DEFAULT_CONFIRMATION_TTL_MS = 60 * 1000
 
 // 敏感输入类型（input[type] / 语义控件类型）。
 const SENSITIVE_INPUT_TYPES = new Set([
   'password', 'passwd', 'pwd', 'cardnumber', 'cc-number', 'cc-csc', 'cvv',
   'cvc', 'ccv', 'cc-exp', 'cc-exp-month', 'cc-exp-year', 'otp', 'one-time-code',
-  'totp', 'token', 'api-key', 'secret', 'authorization', 'cookie'
+  'totp', 'token', 'api-key', 'secret', 'authorization', 'cookie', 'username',
+  'email', 'account', 'account-number'
 ])
 
 // autocomplete 中明示敏感语义的值。
 const SENSITIVE_AUTOCOMPLETE = new Set([
   'current-password', 'new-password', 'one-time-code', 'cc-number', 'cc-csc',
-  'cc-exp', 'cc-exp-month', 'cc-exp-year'
+  'cc-exp', 'cc-exp-month', 'cc-exp-year', 'username', 'email'
 ])
 
 // 字段名/标签/选择器中命中即视为敏感（覆盖中英文常见表达）。
-const SENSITIVE_NAME_RE = /(password|passwd|pwd|口令|密码|card|卡号|cvv|cvc|security\s*code|安全码|otp|验证码|动态码|verif|token|api[_-]?key|secret|密钥|私钥|cookie|authorization|bearer|银行|bank)/i
+const SENSITIVE_NAME_RE = /(password|passwd|pwd|口令|密码|card|卡号|cvv|cvc|security\s*code|安全码|otp|验证码|动态码|verif|token|api[_-]?key|secret|密钥|私钥|cookie|authorization|bearer|银行|bank|payment|payee|支付|付款|account|acct|user(?:name|[_-]?id)|login|e-?mail|账号|帐号|账户|用户名|邮箱)/i
+const SENSITIVE_VALUE_RE = /(?:\b(?:account|acct|username|user[_-]?id|login|e-?mail)\s*[:=]|账号\s*[:：]|帐号\s*[:：]|账户\s*[:：]|用户名\s*[:：]|[\w.+-]+@[\w.-]+\.[a-z]{2,})/i
 
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/
 
@@ -102,6 +107,7 @@ function normalizeField(field) {
     ariaLabel: single(field.ariaLabel),
     label: single(field.label),
     selector: single(field.selector),
+    backendNodeId: single(field.backendNodeId),
     baseUrl: field.baseUrl == null ? null : single(field.baseUrl)
   }
 }
@@ -118,7 +124,8 @@ function isSensitiveField(field) {
 
 /** 文本中出现密码/token/Cookie/卡号等敏感内容即为真。 */
 function isSensitiveText(text) {
-  return detectHighRisk(String(text == null ? '' : text)).length > 0
+  const value = String(text == null ? '' : text)
+  return SENSITIVE_VALUE_RE.test(value) || detectHighRisk(value).length > 0
 }
 
 /** 返回文本命中的敏感类型列表。 */
@@ -132,6 +139,37 @@ function isValidBase64(value) {
 
 function tryCanonicalOrigin(value) {
   try { return canonicalOrigin(value) } catch { return null }
+}
+
+function normalizeRoots(roots) {
+  if (!Array.isArray(roots)) return []
+  return [...new Set(roots.filter(root => typeof root === 'string' && root.length > 0).map(root => path.resolve(root)))]
+}
+
+function pathWithinRoots(candidate, roots) {
+  if (typeof candidate !== 'string' || !candidate || candidate.length > MAX_FILE_PATH_LENGTH || candidate.includes('\0')) return false
+  if (!path.isAbsolute(candidate)) return false
+  let resolved
+  try {
+    const absolute = path.resolve(candidate)
+    resolved = fs.existsSync(absolute)
+      ? fs.realpathSync.native(absolute)
+      : path.join(fs.realpathSync.native(path.dirname(absolute)), path.basename(absolute))
+  } catch {
+    return false // 父目录不存在、不可访问或无法解析符号链接时默认拒绝
+  }
+  return roots.some(root => {
+    let canonicalRoot
+    try { canonicalRoot = fs.realpathSync.native(root) } catch { return false }
+    const relative = path.relative(canonicalRoot, resolved)
+    return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  })
+}
+
+function operationDigest(action, field, payload) {
+  const normalizedField = normalizeField(field)
+  const stable = JSON.stringify({ action, field: normalizedField, payload: payload && typeof payload === 'object' ? payload : {} })
+  return createHash('sha256').update(stable).digest('hex')
 }
 
 // 关键动作的固定摘要文案（不含任何页面内容，天然可进审计）。
@@ -148,10 +186,12 @@ class ActionGate {
    * @param {{ now?: () => number, idFactory?: () => string,
    *           confirmationTtlMs?: number }} options
    */
-  constructor({ now = () => Date.now(), idFactory = () => randomUUID(), confirmationTtlMs = DEFAULT_CONFIRMATION_TTL_MS } = {}) {
+  constructor({ now = () => Date.now(), idFactory = () => randomUUID(), confirmationTtlMs = DEFAULT_CONFIRMATION_TTL_MS, uploadRoots = [], downloadRoots = [] } = {}) {
     this.now = now
     this.idFactory = idFactory
     this.confirmationTtlMs = boundedInt(confirmationTtlMs, 5000, 10 * 60 * 1000, DEFAULT_CONFIRMATION_TTL_MS)
+    this.uploadRoots = normalizeRoots(uploadRoots)
+    this.downloadRoots = normalizeRoots(downloadRoots)
     this.confirmations = new Map() // id -> 确认请求
     this.activeTab = null // { id, origin, visible }
   }
@@ -208,6 +248,17 @@ class ActionGate {
       if (!granted.includes(origin)) throw gateError('origin-not-authorized', '模型未获准访问该 origin。')
     }
 
+    // 页面内容永远视为不可信：字段或动作描述一旦表现为账号、登录、金融、
+    // 凭据等敏感语义，无论页面怎样诱导或用户是否授予普通站点权限都永久拒绝。
+    if (field != null && isSensitiveField(field)) {
+      throw gateError('sensitive-field', '密码、验证码、支付、银行、账号、Cookie、Authorization、API key 等敏感目标禁止模型读写。')
+    }
+    const actionDescriptor = [payloadObject.actionText, payloadObject.accessibleName, payloadObject.label, payloadObject.name]
+      .filter(value => value != null).join(' ')
+    if (actionDescriptor && SENSITIVE_NAME_RE.test(actionDescriptor)) {
+      throw gateError('sensitive-action', '登录、支付、银行、账号或凭据相关动作永久禁止模型执行。')
+    }
+
     // 敏感字段/敏感值 / 大小限制。
     if (action === 'type') {
       if (field == null) throw gateError('missing-field', 'type 动作必须指明目标字段。')
@@ -228,20 +279,43 @@ class ActionGate {
         this.#checkClickDestination(String(payloadObject.navigatesTo), origin, authorizations)
       }
     } else if (action === 'upload') {
-      const base64 = String(payloadObject.base64 == null ? '' : payloadObject.base64)
-      if (!base64) throw gateError('empty-input', 'upload 动作需要 base64 内容。')
-      if (!isValidBase64(base64)) throw gateError('invalid-base64', 'upload 内容不是合法 base64。')
-      if (base64.length > MAX_UPLOAD_BASE64_LENGTH) {
-        throw gateError('size-limit', `upload 内容超过 ${MAX_UPLOAD_BYTES} 字节上限。`)
+      const hasInteractivePicker = Object.prototype.hasOwnProperty.call(payloadObject, 'interactivePicker')
+      const hasFilePath = Object.prototype.hasOwnProperty.call(payloadObject, 'filePath')
+      const hasBase64 = Object.prototype.hasOwnProperty.call(payloadObject, 'base64')
+      if (hasInteractivePicker && payloadObject.interactivePicker !== true) {
+        throw gateError('invalid-upload-mode', 'interactivePicker 仅接受布尔值 true。')
       }
-      const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
-      const decodedBytes = Math.floor(base64.length / 4) * 3 - padding
-      if (decodedBytes > MAX_UPLOAD_BYTES) {
-        throw gateError('size-limit', `upload 内容超过 ${MAX_UPLOAD_BYTES} 字节上限。`)
+      if (payloadObject.interactivePicker === true) {
+        if (hasFilePath || hasBase64) {
+          throw gateError('upload-mode-conflict', '交互式文件选择不得同时携带 filePath 或 base64。')
+        }
+        // 只批准打开原生文件选择器；文件由用户亲自选择，路径和内容不得返回模型。
+        // 后续一次性确认仍由下方统一逻辑绑定 tab/origin/action/完整 payload。
+      } else {
+        if (payloadObject.filePath != null && !pathWithinRoots(payloadObject.filePath, this.uploadRoots)) {
+          throw gateError('file-path-denied', '上传文件必须位于用户配置的允许目录内，且必须使用绝对路径。')
+        }
+        const base64 = String(payloadObject.base64 == null ? '' : payloadObject.base64)
+        if (!base64) throw gateError('empty-input', 'upload 动作需要 base64 内容，或使用 interactivePicker:true 由用户亲自选文件。')
+        if (!isValidBase64(base64)) throw gateError('invalid-base64', 'upload 内容不是合法 base64。')
+        if (base64.length > MAX_UPLOAD_BASE64_LENGTH) {
+          throw gateError('size-limit', `upload 内容超过 ${MAX_UPLOAD_BYTES} 字节上限。`)
+        }
+        const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+        const decodedBytes = Math.floor(base64.length / 4) * 3 - padding
+        if (decodedBytes > MAX_UPLOAD_BYTES) {
+          throw gateError('size-limit', `upload 内容超过 ${MAX_UPLOAD_BYTES} 字节上限。`)
+        }
       }
     } else if (action === 'download') {
+      if (!pathWithinRoots(payloadObject.destinationPath, this.downloadRoots)) {
+        throw gateError('file-path-denied', '下载目标必须位于用户配置的允许目录内，且必须使用绝对路径。')
+      }
       const maxBytes = Number(payloadObject.maxBytes)
-      if (Number.isFinite(maxBytes) && maxBytes > MAX_DOWNLOAD_BYTES) {
+      if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+        throw gateError('size-required', 'download 必须声明正数 maxBytes。')
+      }
+      if (maxBytes > MAX_DOWNLOAD_BYTES) {
         throw gateError('size-limit', `download 超过 ${MAX_DOWNLOAD_BYTES} 字节上限。`)
       }
     } else if (action === 'submit' || action === 'publish' || action === 'delete') {
@@ -250,7 +324,7 @@ class ActionGate {
 
     // 关键动作人工确认（一次性、带 TTL、绑定动作+origin+标签）。
     if (CRITICAL_ACTIONS.has(action)) {
-      const fingerprint = `${action}|${origin}|${tab.id}`
+      const fingerprint = `${action}|${origin}|${tab.id}|${operationDigest(action, field, payloadObject)}`
       if (confirmationId != null) {
         this.#consumeConfirmation(String(confirmationId), fingerprint)
       } else {
@@ -267,8 +341,9 @@ class ActionGate {
     if (!nav.allowed) throw gateError('navigate-denied', '点击跳转目标地址不合法。')
     if (nav.origin === origin) return // 同 origin 跳转无需新增授权
     const grantedOrigins = authorizations && typeof authorizations.origins === 'function' ? authorizations.origins() : []
+    const grantedPrivateOrigins = authorizations && typeof authorizations.privateOrigins === 'function' ? authorizations.privateOrigins() : []
     try {
-      checkModelNavigation(destination, { authorizedOrigins: grantedOrigins }) // 公网 + origin 已授权
+      checkModelNavigation(destination, { authorizedOrigins: grantedOrigins, authorizedPrivateOrigins: grantedPrivateOrigins })
     } catch {
       throw gateError('navigate-denied', '点击跳转目标未获得授权或不在公网。')
     }
@@ -369,6 +444,7 @@ module.exports = {
   DEFAULT_CONFIRMATION_TTL_MS,
   MAX_CONFIRMATIONS_PENDING,
   MAX_DOWNLOAD_BYTES,
+  MAX_FILE_PATH_LENGTH,
   MAX_READ_TEXT_LENGTH,
   MAX_TYPE_LENGTH,
   MAX_UPLOAD_BASE64_LENGTH,
@@ -382,5 +458,8 @@ module.exports = {
   isSensitiveText,
   isValidBase64,
   normalizeField,
+  normalizeRoots,
+  operationDigest,
+  pathWithinRoots,
   sensitiveTypesIn
 }

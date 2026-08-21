@@ -34,6 +34,7 @@ await rm(dist, { recursive: true, force: true })
 run(process.execPath, ['scripts/patch-official-runtime.mjs'])
 
 if (process.platform === 'win32') {
+  run(process.execPath, ['scripts/prepare-bundled-git.mjs'])
   // Native dependencies are already aligned by the package postinstall step.
   // Re-running electron-rebuild here adds no release value and can fail in
   // restricted Windows shells that deny nested child-process forks.
@@ -78,6 +79,25 @@ if (process.platform === 'win32') {
     path.join(root, 'build', 'installer.iss')
   ])
 } else if (process.platform === 'darwin') {
+  const requiredSigningEnvironment = [
+    'CSC_LINK',
+    'CSC_KEY_PASSWORD',
+    'APPLE_API_KEY',
+    'APPLE_API_KEY_ID',
+    'APPLE_API_ISSUER',
+    'APPLE_TEAM_ID'
+  ]
+  const missingSigningEnvironment = requiredSigningEnvironment.filter(name => !String(process.env[name] || '').trim())
+  if (missingSigningEnvironment.length > 0) {
+    throw new Error(`macOS release packaging requires Developer ID signing and notarization environment: ${missingSigningEnvironment.join(', ')}`)
+  }
+  if (process.env.CSC_IDENTITY_AUTO_DISCOVERY !== 'true') {
+    throw new Error('macOS release packaging requires CSC_IDENTITY_AUTO_DISCOVERY=true.')
+  }
+  const notarizationKey = path.resolve(process.env.APPLE_API_KEY)
+  if (!path.isAbsolute(process.env.APPLE_API_KEY)) throw new Error('APPLE_API_KEY must be an absolute path to an ephemeral App Store Connect API key.')
+  await access(notarizationKey)
+
   // A single node_modules tree cannot contain reliable native sharp/koffi
   // payloads for both Intel and Apple Silicon. Reinstall and package each
   // architecture independently so the immutable runtime cache is complete.

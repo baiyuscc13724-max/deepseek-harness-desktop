@@ -3,5 +3,8 @@
   "feeds": [
     "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/release-manifest.json",
     "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/release-manifest.json"
-  ]
+  ],
+  "trustedKeys": {
+    "harness-components-02643f81164c594a": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA+gJlq5Lp+rGkLQDr4AY2XmR8rh+YJnAZf+leHWKYglA=\n-----END PUBLIC KEY-----"
+  }
 }

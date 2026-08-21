@@ -1,7 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import process from 'node:process'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
+const require = createRequire(import.meta.url)
+const { createSignedDesktopReleaseManifest, validateAndVerifyDesktopReleaseManifest } = require('../electron/bridge/desktop-release-contract.cjs')
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 
@@ -17,6 +21,12 @@ const output = path.resolve(root, argument('output', 'release-manifest.json'))
 const tag = `v${version}`
 if (!/^\d+\.\d+\.\d+$/.test(version) || version !== pkg.version) throw new Error(`Release version must match package.json: ${pkg.version}.`)
 if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error('Invalid GitHub repository slug.')
+const keyFile = String(process.env.HARNESS_COMPONENT_SIGNING_KEY_FILE || '').trim()
+const keyId = String(process.env.HARNESS_COMPONENT_KEY_ID || '').trim()
+if (!keyFile || !keyId) throw new Error('HARNESS_COMPONENT_SIGNING_KEY_FILE and HARNESS_COMPONENT_KEY_ID are required to sign the desktop release manifest.')
+const privateKey = await readFile(path.resolve(keyFile), 'utf8')
+const componentSources = JSON.parse(await readFile(path.join(root, 'component-update-sources.json'), 'utf8'))
+if (!componentSources.trustedKeys?.[keyId]) throw new Error(`Component trust root does not trust desktop manifest keyId ${keyId}.`)
 
 const expectedNames = [
   `Harness-Desktop-${version}-win-x64.exe`,
@@ -63,14 +73,16 @@ const manifestAssets = assets.map(asset => {
     mirror_urls: [`https://cnb.cool/${repo}/-/releases/download/${tag}/${encodeURIComponent(asset.name)}`]
   }
 })
-const manifest = [{
+const releases = [{
   tag_name: release.tag_name,
-  name: release.name,
+  name: String(release.name || ''),
   html_url: release.html_url,
   prerelease: Boolean(release.prerelease),
   draft: Boolean(release.draft),
   body: String(release.body || ''),
   assets: manifestAssets
 }]
-await writeFile(output, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
-console.log(JSON.stringify({ ok: true, output, tag, assets: manifestAssets.length }, null, 2))
+const manifest = createSignedDesktopReleaseManifest(releases, { keyId, privateKey })
+validateAndVerifyDesktopReleaseManifest(manifest, componentSources.trustedKeys)
+await writeFile(output, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+console.log(JSON.stringify({ ok: true, output, tag, assets: manifestAssets.length, signed: true }, null, 2))

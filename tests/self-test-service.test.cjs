@@ -62,12 +62,30 @@ test('packaged self-test passes with official Web UI runtime assets', async () =
       nodeRuntime: true,
       userData: true,
       desktopMarketplace: true,
+      bundledGit: true,
       webCompatibility: true
     })
     assert.equal(report.dsh.version, '0.1.0-rc.6')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('packaged self-test requires the bundled Git toolchain when the release probe is enabled', async () => {
+  const report = await runPackagedSelfTest({
+    userData: 'unused', rendererEntry: 'missing',
+    resolveDshBin: () => ({ source: 'bundled', version: '0.1.0-rc.8' }),
+    runtimeProbe: async () => true, marketplaceProbe: async () => true,
+    userDataProbe: async () => true, nodeVersion: '24.1.0',
+    gitRuntimeProbe: async () => ({
+      git: { available: true, source: 'system', version: '2.53.0' },
+      gcm: { available: false, source: null, version: null },
+      sshAgent: { available: true, running: false }
+    })
+  })
+  assert.equal(report.ok, false)
+  assert.equal(report.checks.bundledGit, false)
+  assert.equal(report.git.gcm.available, false)
 })
 
 test('packaged self-test fails when the official Harness binary is unavailable', async () => {

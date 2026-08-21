@@ -76,7 +76,7 @@ test('new installs use Porcelain Mist while preserving an explicitly selected no
 
 test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
   const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
-  assert.equal(migrated.schemaVersion, 7)
+  assert.equal(migrated.schemaVersion, 8)
   assert.equal(migrated.appearance.themeId, 'porcelain-mist')
   const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
   assert.equal(explicitOfficial.appearance.themeId, 'official')
@@ -95,11 +95,11 @@ test('AppStateStore persists validated pet preferences and display positions', (
   assert.equal(restored.positionByDisplay['../bad'], undefined)
 })
 
-test('local memory defaults to safe automatic use and preserves explicit controls', () => {
+test('local memory is opt-in and preserves explicit controls', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-memory-preferences-'))
   const file = path.join(dir, 'app-state.json')
   const store = new AppStateStore(file)
-  assert.deepEqual(store.get().memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
+  assert.deepEqual(store.get().memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
   store.updateMemory({ enabled: true, sensitivityMode: 'redact', autoRecall: false, autoCapture: false, dbPath: '../../escape', token: 'nope' })
   const restored = new AppStateStore(file).get()
   assert.deepEqual(restored.memory, { enabled: true, sensitivityMode: 'redact', autoRecall: false, autoCapture: false })
@@ -109,11 +109,13 @@ test('local memory defaults to safe automatic use and preserves explicit control
   assert.deepEqual(store.get().memory, { enabled: false, sensitivityMode: 'redact', autoRecall: false, autoCapture: false })
 })
 
-test('schema 6 memory preferences migrate once to safe automatic local defaults', () => {
-  const migrated = normalizeState({ schemaVersion: 6, memory: { enabled: false, sensitivityMode: 'reject', autoRecall: false } })
-  assert.deepEqual(migrated.memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
-  const explicitDisabled = normalizeState({ schemaVersion: 7, memory: { enabled: false, autoRecall: true, autoCapture: true } })
-  assert.deepEqual(explicitDisabled.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
+test('pre-consent memory schemas migrate fail closed and schema 8 preserves opt-in', () => {
+  const legacy = normalizeState({ schemaVersion: 6, memory: { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true } })
+  assert.deepEqual(legacy.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
+  const formerDefault = normalizeState({ schemaVersion: 7, memory: { enabled: true, autoRecall: true, autoCapture: true } })
+  assert.deepEqual(formerDefault.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
+  const optedIn = normalizeState({ schemaVersion: 8, memory: { enabled: true, autoRecall: true, autoCapture: true } })
+  assert.deepEqual(optedIn.memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
 })
 
 test('AppStateStore rejects unknown themes and unsafe custom values', () => {

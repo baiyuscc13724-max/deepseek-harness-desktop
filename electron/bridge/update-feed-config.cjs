@@ -7,6 +7,8 @@ function normalizeFeedUrls(value) {
     const url = new URL(item)
     if (url.protocol !== 'https:') throw new Error('更新清单地址必须使用 HTTPS。')
     if (url.username || url.password) throw new Error('更新清单地址不得包含账号或密码。')
+    if (url.hash) throw new Error('更新清单地址不得包含片段。')
+    if (url.port && url.port !== '443') throw new Error('更新清单地址不得使用非标准 HTTPS 端口。')
     return url.toString()
   }))]
 }

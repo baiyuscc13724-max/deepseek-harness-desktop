@@ -1,10 +1,16 @@
 const path = require('node:path')
 const { mkdirSync, writeFileSync } = require('node:fs')
-const { app } = require('electron')
+const { app, protocol } = require('electron')
 const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { confirmComponentActivation, prepareComponentActivation, rollbackUnhealthyActivation } = require('./bridge/component-update-health.cjs')
 const { installComponentModulePaths, resolveComponentLayout } = require('./bridge/component-runtime-resolver.cjs')
 const { applyUserDataOverride } = require('./bridge/user-data-override.cjs')
+
+// Custom schemes must be privileged before any asynchronous bootstrap work can let Electron become ready.
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'harness-wallpaper',
+  privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, bypassCSP: true }
+}])
 
 function reportSelfTestBootstrapFailure(error) {
   const prefix = '--self-test-output='

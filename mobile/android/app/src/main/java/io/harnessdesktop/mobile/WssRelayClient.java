@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -44,7 +45,13 @@ final class WssRelayClient {
     WssRelayClient() {
         ThreadFactory factory = runnable -> { Thread thread = new Thread(runnable, "harness-wss-relay"); thread.setDaemon(true); return thread; };
         workers = Executors.newCachedThreadPool(factory);
-        httpClient = new OkHttpClient.Builder().retryOnConnectionFailure(true).build();
+        httpClient = new OkHttpClient.Builder()
+            .retryOnConnectionFailure(true)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            // OkHttp closes the socket when a pong is not received in the next
+            // interval, turning silent half-open mobile links into a retry.
+            .pingInterval(20, TimeUnit.SECONDS)
+            .build();
     }
 
     synchronized void start(PairingProfile.RelayConfig config, Listener listener) {

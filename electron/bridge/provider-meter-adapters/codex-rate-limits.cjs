@@ -1,6 +1,7 @@
 const { spawn } = require('node:child_process')
 
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+const CODEX_APP_URL = 'https://developers.openai.com/codex/app'
 
 function meterError(code, publicMessage) {
   return Object.assign(new Error(publicMessage), { code, publicMessage })
@@ -140,10 +141,10 @@ function queryCodexAppServer({ spawnImpl = spawn, command = process.env.HARNESS_
     try {
       child = spawnImpl(command, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true })
     } catch {
-      finish(meterError('METER_UNAVAILABLE', '未找到可用的 Codex 客户端。'))
+      finish(meterError('METER_CLIENT_MISSING', '未找到可用的 Codex 客户端。'))
       return
     }
-    child.on('error', () => finish(meterError('METER_UNAVAILABLE', '未找到可用的 Codex 客户端。')))
+    child.on('error', () => finish(meterError('METER_CLIENT_MISSING', '未找到可用的 Codex 客户端。')))
     child.on('exit', code => {
       if (!settled) finish(meterError('METER_UNAVAILABLE', code === 0 ? 'Codex 未返回用量信息。' : 'Codex 账户尚未登录或客户端不可用。'))
     })
@@ -186,12 +187,31 @@ function createCodexRateLimitsAdapter(options = {}) {
       if (credential?.value) {
         return normalizeCodexUsage(await queryCodexUsage({ credential, fetchImpl: fetchImpl || options.fetchImpl }))
       }
-      return normalizeCodexRateLimits(await queryCodexAppServer({ ...options, spawnImpl: spawnImpl || options.spawnImpl }))
+      try {
+        return normalizeCodexRateLimits(await queryCodexAppServer({ ...options, spawnImpl: spawnImpl || options.spawnImpl }))
+      } catch (error) {
+        // A bare spawn failure means no discoverable Codex client on this
+        // machine. That is a persistent environment gap (真无客户端), not a
+        // transient meter outage: surface an actionable auth-required state
+        // (mirroring the OpenCode Go adapter) instead of a dead-end
+        // "unavailable" message. Timeouts, protocol errors and HTTP failures
+        // still reject as METER_UNAVAILABLE further up.
+        if (error?.code === 'METER_CLIENT_MISSING') {
+          return {
+            status: 'auth-required',
+            message: '未找到可用的 Codex 客户端，也未取得可查询官方用量的 Codex 凭据；请安装 Codex CLI，或在服务商设置中配置 Codex 凭据后重试。',
+            action: { label: '查看官方 Codex', url: CODEX_APP_URL },
+            meters: []
+          }
+        }
+        throw error
+      }
     }
   }
 }
 
 module.exports = {
+  CODEX_APP_URL,
   CODEX_USAGE_URL,
   accountIdFromAccessToken,
   createAdapter: createCodexRateLimitsAdapter,

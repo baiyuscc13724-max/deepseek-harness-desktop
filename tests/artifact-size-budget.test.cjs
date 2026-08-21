@@ -33,6 +33,7 @@ test('Windows footprint gate includes locales, ASAR and unpacked limits', async 
     unpackedBytes: 10 * MIB,
     appAsarBytes: 5 * MIB,
     appAsarUnpackedBytes: 2 * MIB,
+    bundledGitBytes: 3 * MIB,
     localesBytes: MIB,
     localeFiles: 2
   }
@@ -40,9 +41,11 @@ test('Windows footprint gate includes locales, ASAR and unpacked limits', async 
     unpackedMiB: 10,
     appAsarMiB: 5,
     appAsarUnpackedMiB: 2,
+    bundledGitMiB: 3,
     localesMiB: 1,
     localesMaxFiles: 2
   }
   assert.doesNotThrow(() => enforceWindowsFootprint(footprint, budget))
+  assert.throws(() => enforceWindowsFootprint({ ...footprint, bundledGitBytes: 3 * MIB + 1 }, budget), /Bundled MinGit, GCM and Git LFS exceeds/)
   assert.throws(() => enforceWindowsFootprint({ ...footprint, localeFiles: 3 }, budget), /locale file count exceeds/)
 })

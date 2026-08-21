@@ -78,13 +78,67 @@ test('sensitive actions always request phone-side confirmation', () => {
   assert.equal(cache.payload.neverClearData, true)
 })
 
-test('stop clears work and delivers an immediate stop directive', () => {
+test('stop immediately terminates queued work that was never delivered', () => {
   const { broker } = readyBroker()
-  broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+  const command = broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
   broker.stop('phone-a')
-  const delivery = broker.poll('phone-a', 1)
-  assert.equal(delivery.command.type, 'stop')
+  assert.equal(broker.result(command.id).code, 'DESKTOP_STOP')
+  assert.equal(broker.result(command.id).ok, false)
+  assert.equal(broker.poll('phone-a', 1).command.type, 'stop')
   assert.equal(broker.state([{ id: 'phone-a', name: 'Pixel' }]).devices[0].ready, false)
+})
+
+test('delivered stop stays pending until the phone reports its real result', () => {
+  const { broker } = readyBroker()
+  const command = broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+  assert.equal(broker.poll('phone-a', 1).command.id, command.id)
+  broker.stop('phone-a')
+  assert.equal(broker.result(command.id), null)
+  assert.equal(broker.poll('phone-a', 1).command.type, 'stop')
+  const result = broker.reportResult('phone-a', { id: command.id, ok: true, code: 'OK', message: 'completed before stop' })
+  assert.equal(result.code, 'OK')
+  assert.equal(result.stopReason, 'DESKTOP_STOP')
+  assert.match(result.stopRequestedAt, /^2026-08-18T/)
+})
+
+test('cancel immediately terminates queued work but delivered work stays pending', () => {
+  const { broker } = readyBroker()
+  const queued = broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+  assert.equal(broker.cancel(queued.id), true)
+  assert.equal(broker.result(queued.id).code, 'USER_CANCELLED')
+  assert.equal(broker.poll('phone-a', 1).command, null)
+
+  const delivered = broker.enqueue('phone-a', { action: 'tap', payload: { x: 3, y: 4 } })
+  assert.equal(broker.poll('phone-a', 1).command.id, delivered.id)
+  assert.equal(broker.cancel(delivered.id), true)
+  assert.equal(broker.result(delivered.id), null)
+  const directive = broker.poll('phone-a', 1).command
+  assert.equal(directive.type, 'cancel')
+  assert.equal(directive.payload.commandId, delivered.id)
+  const result = broker.reportResult('phone-a', { id: delivered.id, ok: false, code: 'CANCELLED_ON_PHONE' })
+  assert.equal(result.code, 'CANCELLED_ON_PHONE')
+  assert.equal(result.cancelReason, 'USER_CANCELLED')
+  assert.match(result.cancelRequestedAt, /^2026-08-18T/)
+})
+
+test('delivered cancel and stop become explicitly unconfirmed only at command TTL', () => {
+  const cancelled = readyBroker()
+  const cancelCommand = cancelled.broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+  cancelled.broker.poll('phone-a', 1)
+  cancelled.broker.cancel(cancelCommand.id)
+  cancelled.advance(2 * 60_000)
+  const cancelResult = cancelled.broker.result(cancelCommand.id)
+  assert.equal(cancelResult.code, 'CANCEL_UNCONFIRMED')
+  assert.equal(cancelResult.cancelReason, 'USER_CANCELLED')
+
+  const stopped = readyBroker()
+  const stopCommand = stopped.broker.enqueue('phone-a', { action: 'tap', payload: { x: 3, y: 4 } })
+  stopped.broker.poll('phone-a', 1)
+  stopped.broker.stop('phone-a')
+  stopped.advance(2 * 60_000)
+  const stopResult = stopped.broker.result(stopCommand.id)
+  assert.equal(stopResult.code, 'STOP_UNCONFIRMED')
+  assert.equal(stopResult.stopReason, 'DESKTOP_STOP')
 })
 
 test('protocol mismatch never dispatches queued actions', () => {

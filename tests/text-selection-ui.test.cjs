@@ -27,7 +27,7 @@ test('official workbench text selection remains visibly highlighted and copyable
 
 test('browser view teardown tolerates webContents already being released', async () => {
   const main = await readFile(path.join(root, 'electron', 'main.cjs'), 'utf8')
-  assert.match(main, /function closeBrowserViewContents\(\) \{\s*const contents = browserView\?\.webContents\s*browserView = null\s*if \(!contents \|\| typeof contents\.isDestroyed !== 'function' \|\| contents\.isDestroyed\(\)\) return\s*contents\.close\(\)/u)
+  assert.match(main, /function closeBrowserViewContents\(\) \{[\s\S]*const views = \[\.\.\.browserTabs\.values\(\)\]\.map\(tab => tab\.view\)[\s\S]*browserView = null[\s\S]*browserTabs\.clear\(\)[\s\S]*for \(const view of views\)[\s\S]*if \(!contents \|\| typeof contents\.isDestroyed !== 'function' \|\| contents\.isDestroyed\(\)\) continue[\s\S]*contents\.close\(\)/u)
   assert.equal((main.match(/closeBrowserViewContents\(\)/gu) || []).length, 3)
   assert.doesNotMatch(main, /browserView && !browserView\.webContents\.isDestroyed\(\)/u)
 })

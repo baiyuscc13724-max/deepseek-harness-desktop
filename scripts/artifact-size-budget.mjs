@@ -43,6 +43,7 @@ export async function windowsFootprint(dist) {
     unpackedBytes: await directorySize(unpackedRoot),
     appAsarBytes: (await stat(appAsar)).size,
     appAsarUnpackedBytes: await directorySize(appAsarUnpacked),
+    bundledGitBytes: await directorySize(path.join(resources, 'third_party', 'mingit')),
     localesBytes: await directorySize(localesRoot),
     localeFiles: localeEntries.filter(entry => entry.isFile()).length
   }
@@ -52,6 +53,7 @@ export function enforceWindowsFootprint(footprint, budget) {
   assertMaximum('Windows unpacked application', footprint.unpackedBytes, budget.unpackedMiB)
   assertMaximum('app.asar', footprint.appAsarBytes, budget.appAsarMiB)
   assertMaximum('app.asar.unpacked', footprint.appAsarUnpackedBytes, budget.appAsarUnpackedMiB)
+  assertMaximum('Bundled MinGit, GCM and Git LFS', footprint.bundledGitBytes || 0, budget.bundledGitMiB)
   assertMaximum('Electron locales', footprint.localesBytes, budget.localesMiB)
   if (footprint.localeFiles > budget.localesMaxFiles) {
     throw new Error(`Electron locale file count exceeds its budget: ${footprint.localeFiles} > ${budget.localesMaxFiles}`)

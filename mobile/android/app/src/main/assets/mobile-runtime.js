@@ -84,6 +84,11 @@
   const installHistoryRecovery = () => {
     if (window.__harnessMobileFetchInstalled || typeof window.fetch !== 'function') return
     const nativeFetch = window.fetch.bind(window)
+    const cache = new Map()
+    const inFlight = new Map()
+    const FRESH_CACHE_MS = 15_000
+    const STALE_CACHE_MS = 5 * 60_000
+    const MAX_CACHE_ENTRIES = 8
     window.__harnessMobileFetchInstalled = true
 
     const isHistoryFailure = async response => {
@@ -98,9 +103,41 @@
       }
     }
 
-    const retrySignal = () => {
-      if (typeof AbortSignal?.timeout !== 'function') return undefined
-      return AbortSignal.timeout(45_000)
+    const requestSignal = (input, init) => init?.signal || (typeof Request !== 'undefined' && input instanceof Request ? input.signal : null)
+    const attemptSignal = (callerSignal, timeoutMs) => {
+      if (typeof AbortSignal?.timeout !== 'function') return callerSignal || undefined
+      const timeout = AbortSignal.timeout(timeoutMs)
+      if (!callerSignal || typeof AbortSignal.any !== 'function') return callerSignal || timeout
+      return AbortSignal.any([callerSignal, timeout])
+    }
+    const historyKey = async (input, init) => {
+      try {
+        const request = typeof Request !== 'undefined' && input instanceof Request
+          ? input.clone()
+          : new Request(input, init)
+        const method = request.method.toUpperCase()
+        const body = method === 'GET' || method === 'HEAD' ? '' : await request.clone().text()
+        return `${method}:${request.url}:${body}`
+      } catch {
+        return `${init?.method || 'GET'}:${typeof input === 'string' ? input : input?.url || ''}`
+      }
+    }
+    const cachedResponse = (key, maxAge) => {
+      const entry = cache.get(key)
+      if (!entry) return null
+      const age = Date.now() - entry.savedAt
+      if (age > maxAge) {
+        if (age > STALE_CACHE_MS) cache.delete(key)
+        return null
+      }
+      cache.delete(key)
+      cache.set(key, entry)
+      return entry.response.clone()
+    }
+    const remember = (key, response) => {
+      cache.delete(key)
+      cache.set(key, { savedAt: Date.now(), response: response.clone() })
+      while (cache.size > MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value)
     }
 
     window.fetch = async (input, init) => {
@@ -108,28 +145,49 @@
       const isHistory = /\/api\/(?:session|subagent)\.history(?:[/?#]|$)/i.test(url)
       if (!isHistory) return nativeFetch(input, init)
 
+      const key = await historyKey(input, init)
+      const fresh = cachedResponse(key, FRESH_CACHE_MS)
+      if (fresh) return fresh
+      if (inFlight.has(key)) return (await inFlight.get(key)).clone()
+
+      const callerSignal = requestSignal(input, init)
       const replayInput = typeof Request !== 'undefined' && input instanceof Request ? input.clone() : input
-      let lastError = null
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const attemptInit = attempt === 0 ? init : { ...(init || {}), signal: retrySignal() }
-          if (attempt > 0 && attemptInit.signal === undefined) delete attemptInit.signal
-          const requestInput = attempt === 0
-            ? input
-            : typeof Request !== 'undefined' && replayInput instanceof Request
-              ? replayInput.clone()
-              : replayInput
-          const response = await nativeFetch(requestInput, attemptInit)
-          if (!await isHistoryFailure(response) || document.visibilityState === 'hidden' || attempt === 2) return response
-        } catch (error) {
-          lastError = error
-          const retryable = /abort|failed|network|timeout/i.test(String(error?.message || error))
-          if (!retryable || document.visibilityState === 'hidden' || attempt === 2) throw error
+      const request = (async () => {
+        let lastError = null
+        let lastResponse = null
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const attemptInit = { ...(init || {}), signal: attemptSignal(callerSignal, attempt === 0 ? 8_000 : 12_000) }
+            if (attemptInit.signal === undefined) delete attemptInit.signal
+            const requestInput = attempt === 0
+              ? input
+              : typeof Request !== 'undefined' && replayInput instanceof Request
+                ? replayInput.clone()
+                : replayInput
+            const response = await nativeFetch(requestInput, attemptInit)
+            lastResponse = response
+            if (!await isHistoryFailure(response)) {
+              remember(key, response)
+              return response
+            }
+            if (callerSignal?.aborted || document.visibilityState === 'hidden' || attempt === 2) break
+          } catch (error) {
+            lastError = error
+            const retryable = /abort|failed|network|timeout/i.test(String(error?.message || error))
+            if (!retryable || callerSignal?.aborted || document.visibilityState === 'hidden' || attempt === 2) break
+          }
+          const backoff = 300 * (2 ** attempt) + Math.round(Math.random() * 120)
+          await new Promise(resolve => setTimeout(resolve, backoff))
         }
-        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 350 : 900))
-      }
-      if (lastError) throw lastError
-      throw new Error('历史记录重试未能完成')
+        const stale = cachedResponse(key, STALE_CACHE_MS)
+        if (stale) return stale
+        if (lastError) throw lastError
+        if (lastResponse) return lastResponse
+        throw new Error('历史记录重试未能完成')
+      })()
+      inFlight.set(key, request)
+      try { return (await request).clone() }
+      finally { if (inFlight.get(key) === request) inFlight.delete(key) }
     }
   }
 
@@ -177,11 +235,21 @@
 
   mount()
   if (!window.__harnessMobileUiObserver) {
-    let timer = 0
-    window.__harnessMobileUiObserver = new MutationObserver(() => {
-      clearTimeout(timer)
-      timer = setTimeout(mount, 80)
-    })
+    let scheduled = false
+    const scheduleMount = () => {
+      if (scheduled || document.visibilityState === 'hidden') return
+      scheduled = true
+      setTimeout(() => {
+        scheduled = false
+        mount()
+      }, 160)
+    }
+    // Throttle instead of restarting a debounce for every streamed token. This
+    // keeps page switches responsive and caps expensive full-DOM decoration.
+    window.__harnessMobileUiObserver = new MutationObserver(scheduleMount)
     window.__harnessMobileUiObserver.observe(root, { childList: true, subtree: true })
+    document.addEventListener?.('visibilitychange', () => {
+      if (document.visibilityState === 'visible') scheduleMount()
+    })
   }
 })()

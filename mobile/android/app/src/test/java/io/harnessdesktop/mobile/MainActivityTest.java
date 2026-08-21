@@ -10,6 +10,8 @@ import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.List;
+import java.util.Map;
 
 public final class MainActivityTest {
     @Test public void acceptsOnlyPrivateLanPairingLinks() {
@@ -36,7 +38,7 @@ public final class MainActivityTest {
         String pairUrl = "http://192.168.1.8:3081/__harness_mobile__/pair/abc";
         JSONObject transport = new JSONObject()
             .put("id", "wss-relay")
-            .put("origin", "http://10.252.77.254:3081")
+            .put("origin", "http://10.253.77.254:3081")
             .put("relayUrl", "wss://relay.example.com/tunnel")
             .put("roomId", "r".repeat(43))
             .put("tunnelKey", "k".repeat(43))
@@ -71,6 +73,22 @@ public final class MainActivityTest {
         assertFalse(policy.lost(10L));
         assertTrue(policy.lost(11L));
         assertFalse(policy.hasUsableNetwork());
+    }
+
+    @Test public void webProxyPrefersTheLastGoodReadyRouteAndDefersCoolingRoutes() {
+        PairingProfile.Route lan = new PairingProfile.Route("lan", "192.168.1.5", 3081);
+        PairingProfile.Route relay = new PairingProfile.Route("wss-relay", "10.253.77.254", 3081, "127.0.0.1", 4100);
+        PairingProfile.Route remote = new PairingProfile.Route("remote", "10.0.0.8", 3081);
+        long now = 1_000L;
+        List<PairingProfile.Route> prioritized = HarnessWebProxy.prioritizeRoutes(
+            List.of(lan, relay, remote),
+            Map.of(lan.key(), now + 12_000L),
+            relay.key(),
+            now
+        );
+        assertEquals(relay.key(), prioritized.get(0).key());
+        assertEquals(remote.key(), prioritized.get(1).key());
+        assertEquals(lan.key(), prioritized.get(2).key());
     }
 
     @Test public void parsesOnlyVersionedFixedControlActions() throws Exception {

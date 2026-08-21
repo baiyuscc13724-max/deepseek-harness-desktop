@@ -5,6 +5,57 @@ const { downloadWithFallback } = require('./update-download-service.cjs')
 const { extractAndVerifyZip, verifyExtractedComponent } = require('./component-update-archive.cjs')
 const { createComponentUpdatePlan, validateAndVerifyManifest } = require('./component-update-contract.cjs')
 const { componentDirectoryName } = require('./component-update-store.cjs')
+const { compareVersions } = require('./update-service.cjs')
+
+// Reconcile the latest component check plan against the store's active pointer
+// (the components actually installed/active). After a component update has been
+// applied and confirmed, the pointer already carries the target versions, yet a
+// stale in-memory last-check still reports mode "components". Without this guard
+// the renderer keeps showing "update available" even though the running
+// components are already the latest. Returns a display-safe last-check record.
+function effectiveComponentLastCheck(checkResult, pointer, storeState) {
+  if (!checkResult) return null
+  const plan = checkResult.plan || {}
+  const manifest = checkResult.manifest || {}
+  const releaseVersion = manifest.releaseVersion || ''
+  const components = Array.isArray(plan.components) ? plan.components : []
+  const mode = plan.mode
+
+  if (mode !== 'components') {
+    return { source: checkResult.source || '', releaseVersion, mode, components: [], totalSize: plan.totalSize || 0 }
+  }
+
+  // A staged/ready/in-flight update is genuinely actionable; keep it visible.
+  const pendingPhase = Boolean(storeState?.phase) && !['idle', 'failed'].includes(storeState.phase)
+  if (pendingPhase) {
+    return {
+      source: checkResult.source || '',
+      releaseVersion,
+      mode,
+      components: components.map(component => ({ id: component.id, version: component.version, size: component.size || 0 })),
+      totalSize: plan.totalSize || 0
+    }
+  }
+
+  // Otherwise compare against active versions: if every planned component is
+  // already active at the same version, there is nothing left to update.
+  const active = new Map((Array.isArray(pointer?.components) ? pointer.components : []).map(component => [component.id, component]))
+  const allActive = components.length > 0 && components.every(component => {
+    const installed = active.get(component.id)
+    return installed && compareVersions(component.version, installed.version) === 0
+  })
+  if (allActive) {
+    return { source: checkResult.source || '', releaseVersion, mode: 'none', components: [], totalSize: 0 }
+  }
+
+  return {
+    source: checkResult.source || '',
+    releaseVersion,
+    mode,
+    components: components.map(component => ({ id: component.id, version: component.version, size: component.size || 0 })),
+    totalSize: plan.totalSize || 0
+  }
+}
 
 function safeManifestUrl(value) {
   const url = new URL(String(value || '').trim())
@@ -174,6 +225,7 @@ module.exports = {
   ComponentUpdateService,
   commitImmutableComponent,
   currentComponentMap,
+  effectiveComponentLastCheck,
   fetchVerifiedManifestWithFallback,
   safeManifestUrl
 }

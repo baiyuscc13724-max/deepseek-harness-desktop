@@ -26,6 +26,10 @@ function binaryResponse(value, type = 'application/octet-stream') {
   }
 }
 
+function redirectResponse(location) {
+  return { ok: false, status: 302, headers: headers({ location }), body: null }
+}
+
 test('installer download rejects a bad CNB file before accepting the verified GitHub fallback', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'harness-update-'))
   const destination = path.join(temp, 'setup.exe')
@@ -80,7 +84,55 @@ test('checksum download skips a share page and accepts the next valid SHA-256 fi
   assert.equal(calls.length, 2)
 })
 
-test('update files require HTTPS addresses', () => {
+test('installer redirects stay manual, HTTPS, source-limited, and bounded before fallback', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'harness-update-redirect-'))
+  const destination = path.join(temp, 'setup.exe')
+  const good = Buffer.from('verified-installer')
+  const expectedHash = createHash('sha256').update(good).digest('hex')
+  const calls = []
+  try {
+    const result = await downloadWithFallback({
+      asset: { urls: ['https://github.com/example/setup.exe', 'https://fallback.example/setup.exe'] },
+      destination,
+      expectedSize: good.length,
+      expectedHash,
+      maxRedirects: 1,
+      fetchImpl: async (url, options) => {
+        calls.push([url, options.redirect])
+        if (url === 'https://github.com/example/setup.exe') return redirectResponse('https://release-assets.githubusercontent.com/example/setup.exe')
+        if (url.includes('release-assets.githubusercontent.com')) return redirectResponse('/example/again.exe')
+        return binaryResponse(good)
+      }
+    })
+    assert.equal(result.source, 'https://fallback.example/setup.exe')
+    assert.deepEqual(calls.map(([, redirect]) => redirect), ['manual', 'manual', 'manual'])
+  } finally {
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+
+test('checksum redirects reject HTTPS downgrade and unapproved host migration before fallback', async () => {
+  const fileName = 'Harness-Desktop-1.2.3-win-x64.exe'
+  const digest = 'c'.repeat(64)
+  const calls = []
+  const result = await checksumWithFallback({
+    asset: { urls: ['https://cnb.cool/example/SHA256SUMS.txt', 'https://github.example/SHA256SUMS.txt'] },
+    fileName,
+    parseChecksum: parseChecksumFile,
+    fetchImpl: async (url, options) => {
+      calls.push([url, options.redirect])
+      if (url.includes('cnb.cool')) return redirectResponse('http://cnb.cool/example/SHA256SUMS.txt')
+      return { ok: true, status: 200, headers: headers({ 'content-type': 'text/plain' }), text: async () => `${digest}  ${fileName}\n` }
+    }
+  })
+  assert.equal(result.hash, digest)
+  assert.equal(result.source, 'https://github.example/SHA256SUMS.txt')
+  assert.deepEqual(calls.map(([, redirect]) => redirect), ['manual', 'manual'])
+})
+
+test('update files require public HTTPS addresses', () => {
   assert.throws(() => safeHttpsUrl('http://example.test/setup.exe'), /HTTPS/)
+  assert.throws(() => safeHttpsUrl('https://user:pass@example.test/setup.exe'), /凭据/)
+  assert.throws(() => safeHttpsUrl('https://example.test:8443/setup.exe'), /端口/)
   assert.equal(safeHttpsUrl('https://example.test/setup.exe'), 'https://example.test/setup.exe')
 })

@@ -20,6 +20,7 @@ Desktop Bridge API 版本保持为 2。二维码 payload 版本保持为 2，`tr
 3. 客户端得到 `HttpOnly; SameSite=Strict` 的 `harness_mobile_auth` Cookie。
 4. Android 保存经过校验的配对资料；iOS/iPadOS 将包含中继密钥的资料写入 `AfterFirstUnlockThisDeviceOnly` Keychain。
 5. 忘记或撤销设备后，Desktop 立即关闭该设备当前的 HTTP/WebSocket 与控制连接。
+6. Desktop 的 EasyTier network secret、WSS room ID 与 tunnel key 只以版本化密文 envelope 落盘；密钥由 Electron `safeStorage` 委托操作系统凭据保护。旧版 0600 明文状态仅在 OS 加密可用时加载，并在同一次启动中立即原子改写为密文；OS 加密不可用或密文损坏时远程 mesh fail closed，不生成新的明文秘密。
 
 二维码的本地 setup URL 只是为了兼容普通相机；实际 payload 同时可由 `harnessmobile://pair?payload=...` 深链承载。客户端只接受私网/覆盖网 IPv4 上的 HTTP pairing URL，拒绝公网 HTTP、HTTPS 替换、低端口、用户信息和任意重定向。
 
@@ -40,7 +41,7 @@ Android 使用 `ConnectivityManager.NetworkCallback`，iOS 使用 `NWPathMonitor
 ```json
 {
   "id": "wss-relay",
-  "origin": "http://10.252.77.254:3081",
+  "origin": "http://10.253.77.254:3081",
   "relayUrl": "wss://relay.example.com/",
   "roomId": "<32 random bytes, base64url>",
   "tunnelKey": "<32 random bytes, base64url>",
@@ -92,7 +93,9 @@ Desktop 与客户端对最近 4096 个 nonce 做重放拒绝。WebSocket 顺序�
 
 ## 平台能力边界
 
-Android 在用户明确启用无障碍服务并逐项确认敏感动作后，可以执行固定手机控制动作。iOS/iPadOS 普通 App 无权读取或操纵其他 App，iOS 客户端仅提供 Harness 工作台、二维码、上传/相机等系统允许能力。协议和 UI 必须明确显示这一差异，不能承诺或模拟 Android 式跨 App 控制。
+Android 在用户明确启用无障碍服务并逐项确认敏感动作后，可以执行固定手机控制动作。桌面模型插件只经随机 Bearer + generation 保护的 loopback API 提交动作；固定请求头不是认证凭据。动作一旦派发，桌面取消只能作为请求送达手机，必须等待客户端最终回执或明确报告 `*_UNCONFIRMED`，不能宣称已经抢占停止。
+
+iOS/iPadOS 普通 App 无权读取或操纵其他 App，iOS 客户端仅提供 Harness 工作台、二维码、上传/相机等系统允许能力。协议和 UI 必须明确显示这一差异，不能承诺或模拟 Android 式跨 App 控制。
 
 ## 发布条件
 

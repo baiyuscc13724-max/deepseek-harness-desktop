@@ -134,6 +134,21 @@ test('登录由用户在真实页面完成：模型结构上接触不到密码/C
   assert.ok(!JSON.stringify(policy.auditSnapshot().entries).includes('AbCdEf123456'))
 })
 
+test('localhost 开发站点必须由用户显式授权，且授权精确绑定 origin', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-localhost-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const policy = new BrowserSecurityPolicy({ authzRootDir: root })
+  policy.userNavigate('http://localhost:3000/app')
+  policy.setActiveTab({ id: 'tab-local', origin: 'http://localhost:3000', visible: true })
+
+  assert.throws(() => policy.grant('http://localhost:3000', { actions: ['read'] }), error => error.code === 'private-network-explicit-consent-required')
+  assert.throws(() => policy.grant('http://localhost:3000', { actions: ['read'], allowPrivateNetwork: true, by: 'model' }), error => error.code === 'private-network-explicit-consent-required')
+  policy.grant('http://localhost:3000', { actions: ['read'], allowPrivateNetwork: true, by: 'user' })
+  assert.equal(policy.modelNavigate('http://localhost:3000/next', { tabId: 'tab-local' }).origin, 'http://localhost:3000')
+  assert.equal(policy.modelAction({ action: 'read', tabId: 'tab-local', payload: { text: 'local dev page' } }).allowed, true)
+  assert.throws(() => policy.modelNavigate('http://localhost:3001/other', { tabId: 'tab-local' }), error => error.code === 'private-network-not-authorized')
+})
+
 test('模型动作必须作用于当前可见活动标签（tabId/来源强校验）', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-tab-'))
   t.after(() => rm(root, { recursive: true, force: true }))

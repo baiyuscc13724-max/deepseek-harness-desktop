@@ -2,6 +2,9 @@
   "schemaVersion": 1,
   "feeds": [
     "https://cnb.cool/YOUR_REPO_SLUG/-/git/raw/main/release-manifest.json",
-    "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/release-manifest.json"
-  ]
+    "https://raw.githubusercontent.com/YOUR_REPO_SLUG/main/release-manifest.json"
+  ],
+  "trustedKeys": {
+    "YOUR_REVIEWED_KEY_ID": "-----BEGIN PUBLIC KEY-----\nYOUR_REVIEWED_ED25519_PUBLIC_KEY\n-----END PUBLIC KEY-----"
+  }
 }

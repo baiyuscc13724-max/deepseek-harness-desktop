@@ -33,3 +33,11 @@ Do not run individual publication commands merely because an earlier phase faile
 ## Working tree safety
 
 Other sessions may have unrelated uncommitted changes. Do not discard, overwrite, stage, or commit them. The publisher intentionally refuses a dirty tree; finish and commit the requested product changes before starting a release.
+
+## Repository discovery and local Git
+
+This checkout is not the upstream DSH monorepo and does not have top-level `apps/` or `packages/` directories. Discover from the repository root with the filesystem glob tool before narrowing the search root; do not call glob against an assumed directory that has not been observed.
+
+On Windows, plain `git` may be absent from the inherited PowerShell `PATH`. Use the repository-owned `third_party\\mingit\\cmd\\git.exe` executable for source inspection. Do not install Git, mutate the user PATH, or treat a missing global command as evidence that this checkout is not a Git repository.
+
+If a low-cost delegated route fails before producing output, do not repeatedly spawn replacements or fill an Agent Team blindly. Preserve the failure evidence, inspect team status, reuse or retire the exact failed member as appropriate, and continue on the main route when the review is still necessary.

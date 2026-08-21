@@ -5,7 +5,7 @@ const { mkdir, mkdtemp, rename, rm, writeFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const { ComponentUpdateStore, componentDirectoryName } = require('../electron/bridge/component-update-store.cjs')
-const { ComponentUpdateService, safeManifestUrl } = require('../electron/bridge/component-update-service.cjs')
+const { ComponentUpdateService, effectiveComponentLastCheck, safeManifestUrl } = require('../electron/bridge/component-update-service.cjs')
 const { createSignedComponentDescriptor, createSignedReleaseManifest } = require('../electron/bridge/component-update-builder.cjs')
 
 function signedFixture() {
@@ -132,4 +132,59 @@ test('staging failure is persisted and never becomes ready', async t => {
   assert.equal(state.phase, 'failed')
   assert.match(state.failure.message, /network failed/)
   assert.equal(state.pending, null)
+})
+
+test('effectiveComponentLastCheck downgrades a stale check whose components are already active', () => {
+  const staleCheck = {
+    source: 'https://github.example/components.json',
+    manifest: { releaseVersion: '1.0.24' },
+    plan: {
+      mode: 'components',
+      totalSize: 150,
+      components: [
+        { id: 'desktop-shell', version: '1.0.24', size: 100 },
+        { id: 'desktop-plugins', version: '1.0.23', size: 50 }
+      ]
+    }
+  }
+  // Active pointer already carries the exact target versions and phase is idle:
+  // the update was applied, so the stale "components" check must not re-trigger.
+  const pointer = {
+    releaseVersion: '1.0.24',
+    components: [
+      { id: 'desktop-shell', version: '1.0.24', sha256: 'a'.repeat(64) },
+      { id: 'desktop-plugins', version: '1.0.23', sha256: 'b'.repeat(64) }
+    ]
+  }
+  const reconciled = effectiveComponentLastCheck(staleCheck, pointer, { phase: 'idle' })
+  assert.equal(reconciled.mode, 'none')
+  assert.equal(reconciled.releaseVersion, '1.0.24')
+  assert.deepEqual(reconciled.components, [])
+})
+
+test('effectiveComponentLastCheck keeps a genuinely pending component update visible', () => {
+  const check = {
+    source: 'https://github.example/components.json',
+    manifest: { releaseVersion: '1.0.24' },
+    plan: {
+      mode: 'components',
+      totalSize: 150,
+      components: [{ id: 'desktop-shell', version: '1.0.24', size: 100 }]
+    }
+  }
+  // Not yet applied: the store is mid-flight (staging/ready), so it stays a real update.
+  const pending = effectiveComponentLastCheck(check, null, { phase: 'ready' })
+  assert.equal(pending.mode, 'components')
+  assert.equal(pending.components.length, 1)
+
+  // Even at idle, if the active pointer does NOT yet have the target, keep it.
+  const notYetActive = effectiveComponentLastCheck(check, { releaseVersion: '1.0.23', components: [] }, { phase: 'idle' })
+  assert.equal(notYetActive.mode, 'components')
+  assert.equal(notYetActive.components.length, 1)
+})
+
+test('effectiveComponentLastCheck passes through non-component and null results', () => {
+  assert.equal(effectiveComponentLastCheck(null, null, null), null)
+  const none = effectiveComponentLastCheck({ source: 's', manifest: { releaseVersion: '1.0.24' }, plan: { mode: 'none' } }, null, { phase: 'idle' })
+  assert.equal(none.mode, 'none')
 })

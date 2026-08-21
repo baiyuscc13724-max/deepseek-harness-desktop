@@ -38,14 +38,51 @@ async function invoke(route, req) {
   return res.done
 }
 
+function assertLosslessJson(value) {
+  assert.deepEqual(value, JSON.parse(JSON.stringify(value)))
+}
+
+async function crossRealDshJsonOutputBoundary(value) {
+  const [{ Context }, { SystemPrompt }, { ToolRuntime, defineTool }] = await Promise.all([
+    import('@deepseek-ai/cordis'),
+    import('@deepseek-ai/dsh-system-prompt'),
+    import('@deepseek-ai/dsh-tools')
+  ])
+  const runtime = new Context()
+  runtime.plugin(SystemPrompt)
+  runtime.plugin(ToolRuntime)
+  await new Promise(resolve => setImmediate(resolve))
+  runtime.tools.register(defineTool({
+    name: 'agent_teams_output_boundary',
+    description: 'Exercise the installed DSH tool output boundary.',
+    parameters: {},
+    output: { schema: { type: 'json' }, render: (_args, result) => [{ type: 'text', text: JSON.stringify(result) }] },
+    execute: async () => value
+  }))
+  return runtime.tools.execute({
+    callId: `agent-teams-boundary-${Date.now()}-${Math.random()}`,
+    name: 'agent_teams_output_boundary',
+    arguments: {},
+    signal: new AbortController().signal
+  })
+}
+
 test('per-team operation tails are deleted only after their current settled promise completes', async () => {
   const source = await readFile(pluginFile, 'utf8')
   assert.match(source, /TEAM_OPERATION_CHAINS\.set\(key, settled\);[\s\S]*?void settled\.then\(\(\) => \{[\s\S]*?TEAM_OPERATION_CHAINS\.get\(key\) === settled[\s\S]*?TEAM_OPERATION_CHAINS\.delete\(key\)/u)
 })
 
+test('busy lead relays steer inside the active turn instead of queuing delayed ordinary turns', async () => {
+  const source = await readFile(pluginFile, 'utf8')
+  assert.match(source, /if \(lead\.status === "idle"\) lead\.followup\(message\);\s*else lead\.steer\(message\);/u)
+  assert.match(source, /relayToLead\(lead, createUserMessage\(\{ content, source: relaySource\(caller\.id\) \}\)\)/u)
+  assert.doesNotMatch(source, /await lead\.followup\(createUserMessage/u)
+})
+
 test('model tools create a team, spawn independent members, and relay with non-user authority', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-runtime-'))
   const previousHome = process.env.DSH_HOME
+  const effectCleanups = []
   process.env.DSH_HOME = root
   try {
     await writeFile(path.join(root, 'harness-desktop-model-routing.json'), `${JSON.stringify({
@@ -60,6 +97,21 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const listeners = new Map()
     const promptSections = []
     const followups = []
+    const leadFollowups = []
+    const leadSteers = []
+    const leadInboxNextTurn = []
+    const leadInboxNextStep = []
+    const leadInbox = {
+      get nextTurn() { return leadInboxNextTurn },
+      get nextStep() { return leadInboxNextStep },
+      remove(messageId) {
+        for (const queue of [leadInboxNextTurn, leadInboxNextStep]) {
+          const index = queue.findIndex(message => message.id === messageId)
+          if (index >= 0) { queue.splice(index, 1); return true }
+        }
+        return false
+      }
+    }
     const starts = []
     let relayGate
     let relayEntered
@@ -88,6 +140,16 @@ test('model tools create a team, spawn independent members, and relay with non-u
       session: { events: [
         { type: 'turn/start', data: {} },
         { type: 'user/message', data: { source: { kind: 'user' } } }
+      ] },
+      inbox: leadInbox,
+      followup(message) { leadFollowups.push(message); leadInboxNextTurn.push(message) },
+      steer(message) { leadSteers.push(message); leadInboxNextStep.push(message) }
+    }
+    const workerAgent = {
+      id: 'worker-session', status: 'running', options: { provider: 'test-provider', model: 'test-model' },
+      session: { events: [
+        { type: 'turn/start', data: {} },
+        { type: 'user/message', data: { source: { kind: 'coordinator' } } }
       ] }
     }
     const recoveryAgent = {
@@ -103,10 +165,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
       tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
       systemPrompt: { section(section) { promptSections.push(section); return () => {} } },
       webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
-      effect(setup) { setup() },
+      effect(setup) { const cleanup = setup(); if (typeof cleanup === 'function') effectCleanups.push(cleanup) },
       on(event, handler) { listeners.set(event, handler); return () => listeners.delete(event) },
       agents: {
-        get(id) { if (leadAvailable && id === rootAgent.id) return rootAgent; if (id === recoveryAgent.id) return recoveryAgent },
+        get(id) { if (leadAvailable && id === rootAgent.id) return rootAgent; if (id === workerAgent.id) return workerAgent; if (id === recoveryAgent.id) return recoveryAgent },
         roots() { return [...(leadAvailable ? [rootAgent] : []), recoveryAgent] },
         currentInitiator() { return activeInitiator }
       },
@@ -288,6 +350,32 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(uiResearcher.inheritsMain, false)
     assert.equal(uiResearcher.routeSource, 'live-lead-explicit-model')
 
+    activeInitiator = workerAgent
+    const busyLeadRelay = await tools.get('team_message').execute({
+      team_id: started.team.id, recipient_session_id: rootAgent.id, message: 'Intermediate progress while lead is working'
+    }, { agent: workerAgent, signal: new AbortController().signal })
+    activeInitiator = rootAgent
+    assert.equal(busyLeadRelay.ok, true)
+    assert.equal(leadSteers.length, 1)
+    assert.equal(leadFollowups.length, 0)
+    assert.match(leadSteers[0].content[0].text, /Intermediate progress while lead is working/u)
+    assert.equal(leadSteers[0].source.kind, 'coordinator')
+    assert.equal(leadSteers[0].source.form, 'notice')
+
+    rootAgent.status = 'idle'
+    activeInitiator = workerAgent
+    const idleLeadRelay = await tools.get('team_message').execute({
+      team_id: started.team.id, recipient_session_id: rootAgent.id, message: 'Progress while lead is idle'
+    }, { agent: workerAgent, signal: new AbortController().signal })
+    activeInitiator = rootAgent
+    rootAgent.status = 'running'
+    assert.equal(idleLeadRelay.ok, true)
+    assert.equal(leadSteers.length, 1)
+    assert.equal(leadFollowups.length, 1)
+    assert.equal(leadInboxNextStep.length, 1)
+    assert.equal(leadInboxNextTurn.length, 1)
+    assert.match(leadFollowups[0].content[0].text, /Progress while lead is idle/u)
+
     const sibling = (await tools.get('team_start').execute({ objective: 'Coordinate peer team' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const peerSpawn = await tools.get('team_spawn').execute({
       team_id: sibling.id, name: 'PeerWorker', role: 'peer collaboration', prompt: 'High-complexity architecture and security review', model_tier: 'main'
@@ -313,6 +401,13 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }))
     assert.equal(restoreSharedTurnLimit.status, 200)
     const multiTeamStatus = await tools.get('team_status').execute({}, { agent: rootAgent, signal: new AbortController().signal })
+    assertLosslessJson(multiTeamStatus)
+    const rejectedUndefined = await crossRealDshJsonOutputBoundary({ optional: undefined })
+    assert.equal(rejectedUndefined.isError, true)
+    assert.match(rejectedUndefined.error.message, /not lossless JSON/u)
+    const acceptedStatus = await crossRealDshJsonOutputBoundary(multiTeamStatus)
+    assert.equal(acceptedStatus.isError, false)
+    assert.deepEqual(acceptedStatus.value, multiTeamStatus)
     assert.equal(multiTeamStatus.selectionRequired, true)
     assert.equal(multiTeamStatus.team, null)
     assert.deepEqual(new Set(multiTeamStatus.teams.map(team => team.id)), new Set([started.team.id, sibling.id]))
@@ -324,6 +419,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
       assert.equal('messages' in summary, false)
     }
     const explicitTeamStatus = await tools.get('team_status').execute({ team_id: sibling.id }, { agent: rootAgent, signal: new AbortController().signal })
+    assertLosslessJson(explicitTeamStatus)
     assert.equal(explicitTeamStatus.selectionRequired, false)
     assert.equal(explicitTeamStatus.team.id, sibling.id)
     assert.equal(explicitTeamStatus.teams.length, 1)
@@ -332,6 +428,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }, { agent: rootAgent, signal: new AbortController().signal })).task
     assert.deepEqual(peerTask.blockedBy, [`${started.team.id}:${projectedTask.task.id}`])
     assert.deepEqual(peerTask.dependencySources, [{ teamId: started.team.id, teamName: started.team.name, teamStatus: 'active' }])
+    const listedPeerTasks = await tools.get('team_task_list').execute({ team_id: sibling.id }, { agent: rootAgent, signal: new AbortController().signal })
+    assertLosslessJson(listedPeerTasks)
     assert.equal('files' in peerTask.dependencySources[0], false)
     await assert.rejects(
       tools.get('team_task_update').execute({ team_id: sibling.id, task_id: peerTask.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal }),
@@ -340,6 +438,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
     await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal })
     await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'complete' }, { agent: rootAgent, signal: new AbortController().signal })
     const unblockedPeer = await tools.get('team_task_update').execute({ team_id: sibling.id, task_id: peerTask.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal })
+    assertLosslessJson(unblockedPeer)
+    const acceptedTaskUpdate = await crossRealDshJsonOutputBoundary(unblockedPeer)
+    assert.equal(acceptedTaskUpdate.isError, false)
+    assert.deepEqual(acceptedTaskUpdate.value, unblockedPeer)
     assert.deepEqual(unblockedPeer.task.blockedBy, [])
     const crossTeam = await tools.get('team_message').execute({
       team_id: started.team.id, target_team_id: sibling.id, recipient_session_id: 'PeerWorker', message: 'Coordinate across peer teams'
@@ -349,10 +451,11 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(crossTeam.message.toTeamId, sibling.id)
     assert.equal(crossTeam.message.toName, 'PeerWorker')
     assert.equal(followups.at(-1).options.source.kind, 'coordinator')
-    const multiState = JSON.parse((await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${rootAgent.id}`))).body)
-    assert.equal(multiState.teams.filter(team => team.status !== 'closed').length, 2)
-    const sourceProjection = multiState.teams.find(team => team.id === started.team.id)
-    const targetProjection = multiState.teams.find(team => team.id === sibling.id)
+    const sourceState = JSON.parse((await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${rootAgent.id}&teamId=${started.team.id}`))).body)
+    assert.equal(sourceState.teams.filter(team => team.status !== 'closed').length, 2)
+    const sourceProjection = sourceState.team
+    const targetState = JSON.parse((await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${rootAgent.id}&teamId=${sibling.id}`))).body)
+    const targetProjection = targetState.team
     assert.equal(sourceProjection.messages.at(-1).toName, 'PeerWorker')
     assert.equal('body' in sourceProjection.messages.at(-1), false)
     assert.equal(targetProjection.inboundEvents.length, 1)
@@ -412,6 +515,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const persistedTeam = persisted.teams.find(team => team.id === started.team.id)
     assert.equal(persistedTeam.state, 'closed')
     assert.equal(persistedTeam.messages.find(message => message.body === 'Race with shutdown').status, 'delivered')
+    assert.equal(leadSteers.length, 1)
+    assert.equal(leadFollowups.length, 1)
+    assert.equal(leadInboxNextStep.length, 0)
+    assert.equal(leadInboxNextTurn.length, 0)
     const closedStateResponse = await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${rootAgent.id}`))
     assert.equal(closedStateResponse.status, 200)
     assert.equal(JSON.parse(closedStateResponse.body).teams.find(team => team.id === started.team.id).status, 'closed')
@@ -540,10 +647,12 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const publicationFailureRecord = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === publicationFailureTeam.id)
     const unpublishedMember = publicationFailureRecord.members.find(member => member.name === 'PublishTest')
     assert.equal(unpublishedMember.state, 'failed')
-    assert.equal(unpublishedMember.shutdownUnconfirmed, undefined)
-    assert.equal(unpublishedMember.stopUnconfirmed, undefined)
+    assert.equal(unpublishedMember.shutdownUnconfirmed, false)
+    assert.equal(unpublishedMember.stopUnconfirmed, false)
     assert.match(unpublishedMember.error, /after confirmed drain/u)
     assert.equal(followups.some(followup => followup.content?.[0]?.text?.includes('Never publish this work')), false)
+    const publicationRetry = await tools.get('team_spawn').execute({ team_id: publicationFailureTeam.id, name: 'PublishRetry', role: 'replacement after confirmed drain', prompt: 'Replacement starts without a leaked member slot' }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(publicationRetry.member.state, 'running')
     await tools.get('team_shutdown').execute({ team_id: publicationFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
     const unconfirmedPublicationTeam = (await tools.get('team_start').execute({ objective: 'Unconfirmed publication rollback' }, { agent: rootAgent, signal: new AbortController().signal })).team
@@ -590,8 +699,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     let workFailureMember = workFailureRecord.members.find(member => member.name === 'WorkAudit')
     assert.equal(workFailureMember.sessionId, expectedWorkFailureChild)
     assert.equal(workFailureMember.state, 'failed')
-    assert.equal(workFailureMember.shutdownUnconfirmed, undefined)
-    assert.equal(workFailureMember.stopUnconfirmed, undefined)
+    assert.equal(workFailureMember.shutdownUnconfirmed, false)
+    assert.equal(workFailureMember.stopUnconfirmed, false)
     assert.match(workFailureMember.error, /initial work followup failed after child became live after confirmed drain/u)
     await tools.get('team_shutdown').execute({ team_id: workFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
@@ -903,8 +1012,97 @@ test('model tools create a team, spawn independent members, and relay with non-u
     leadAvailable = true
     activeInitiator = rootAgent
   } finally {
+    for (const cleanup of effectCleanups.reverse()) await cleanup()
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('external store edits are refreshed and preserved by the next serialized mutation', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-external-store-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  try {
+    const mod = await import(`${pathToFileURL(pluginFile).href}?external-store=${Date.now()}-${Math.random()}`)
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    await store.mutate(document => { document.settings.enabled = true })
+    const team = await mod.createTeam(store, { id: 'external-root' }, { objective: 'Original objective' })
+    const external = JSON.parse(await readFile(file, 'utf8'))
+    external.teams.find(candidate => candidate.id === team.id).objective = 'Objective replaced by an external recovery editor with a different byte length'
+    await writeFile(file, `${JSON.stringify(external)}\n`, 'utf8')
+
+    let publishedObjective
+    const unsubscribe = store.subscribe(document => { publishedObjective = document.teams.find(candidate => candidate.id === team.id)?.objective })
+    await mod.createTask(store, { id: 'external-root' }, { teamId: team.id, title: 'Mutation after external edit' })
+    unsubscribe()
+
+    const merged = await store.read(document => document.teams.find(candidate => candidate.id === team.id))
+    assert.equal(merged.objective, external.teams[0].objective)
+    assert.equal(merged.tasks.at(-1).title, 'Mutation after external edit')
+    assert.equal(publishedObjective, external.teams[0].objective)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('explicit user stop cancels queued wakeups and leaves paused work dormant', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-user-stop-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  try {
+    const mod = await import(`${pathToFileURL(pluginFile).href}?user-stop=${Date.now()}-${Math.random()}`)
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    await store.mutate(document => { document.settings.enabled = true })
+    const leadSession = { id: 'stopped-root' }
+    const lead = { id: leadSession.id, session: leadSession, cancelCalls: [], cancel(reason) { this.cancelCalls.push(reason) } }
+    const team = await mod.createTeam(store, lead, { objective: 'Remain stopped after explicit cancellation' })
+    const timestamp = new Date().toISOString()
+    await store.mutate(document => {
+      const current = document.teams.find(candidate => candidate.id === team.id)
+      current.members.push({ id: 'stop-worker', sessionId: 'stop-child', name: 'StopWorker', role: 'stop regression', kind: 'worker', state: 'running', createdAt: timestamp, updatedAt: timestamp })
+      current.tasks.push({ id: 'stop-task', title: 'Queued work', state: 'in_progress', dependsOn: [], files: [], assigneeSessionId: 'stop-child', createdAt: timestamp, updatedAt: timestamp, claimedAt: timestamp })
+    })
+
+    const handlers = {}
+    const interrupts = []
+    const starts = []
+    const ctx = {
+      on(name, handler) { handlers[name] = handler },
+      agents: { get: id => id === lead.id ? lead : undefined },
+      subagents: {
+        interrupt(id, authority) { interrupts.push({ id, authority }) },
+        async drainContinuableChildren(_parent, ids) { assert.deepEqual(ids, ['stop-child']) },
+        async startContinuable(spec) { starts.push(spec) }
+      },
+      logger: { warn() {} }
+    }
+    let resolvePaused
+    const paused = new Promise(resolve => { resolvePaused = resolve })
+    const unsubscribe = store.subscribe(document => {
+      const current = document.teams.find(candidate => candidate.id === team.id)
+      if (current?.state === 'paused' && current.members.find(member => member.sessionId === 'stop-child')?.state === 'ready') resolvePaused()
+    })
+    mod.observeUserStops(ctx, store, Promise.resolve())
+    handlers['session/event'](leadSession, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+    await paused
+    unsubscribe()
+    await new Promise(resolve => setImmediate(resolve))
+
+    const stopped = await store.read(document => document.teams.find(candidate => candidate.id === team.id))
+    assert.deepEqual(lead.cancelCalls, [{ kind: 'user' }])
+    assert.deepEqual(interrupts.map(entry => entry.id), ['stop-child'])
+    assert.equal(interrupts[0].authority.kind, 'ancestor')
+    assert.equal(stopped.state, 'paused')
+    assert.equal(stopped.tasks[0].state, 'pending')
+    assert.equal(stopped.tasks[0].assigneeSessionId, 'stop-child')
+    assert.equal(starts.length, 0)
+    await assert.rejects(
+      mod.updateTask(store, { id: 'stop-child' }, { teamId: team.id, taskId: 'stop-task', action: 'claim' }),
+      error => error?.code === 'AGENT_TEAMS_PAUSED'
+    )
+    assert.equal((await store.read(document => document.teams.find(candidate => candidate.id === team.id).state)), 'paused')
+  } finally {
     await rm(root, { recursive: true, force: true })
   }
 })

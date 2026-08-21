@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict')
-const { execFileSync } = require('node:child_process')
+const { execFileSync, spawnSync } = require('node:child_process')
 const { readFileSync } = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
@@ -56,6 +56,56 @@ test('publisher resumes atomically and never downloads Actions binaries locally'
   assert.ok(source.indexOf("'stable-components'") < source.indexOf("'cnb-stable'"))
 })
 
+test('publisher fails closed unless the desktop manifest is signed and verified before commit or mirroring', () => {
+  const publisher = read('scripts/release-publish.mjs')
+  const refresher = read('scripts/refresh-release-manifest.mjs')
+  assert.match(refresher, /HARNESS_COMPONENT_SIGNING_KEY_FILE/u)
+  assert.match(refresher, /HARNESS_COMPONENT_KEY_ID/u)
+  assert.match(refresher, /createSignedDesktopReleaseManifest/u)
+  assert.match(refresher, /validateAndVerifyDesktopReleaseManifest/u)
+  assert.match(publisher, /release-update-sources\.json trust root drifted from component-update-sources\.json/u)
+  assert.match(publisher, /Object\.entries\(componentKeys\)[\s\S]*Object\.entries\(desktopKeys\)/u)
+  const components = read('.github/workflows/publish-production-components.yml')
+  assert.match(components, /Sign exact desktop release manifest in protected CI/u)
+  assert.match(components, /HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64/u)
+  assert.match(components, /refresh-release-manifest\.mjs[\s\S]*release-manifest\/\$RELEASE_TAG/u)
+  assert.match(components, /trap 'rm -f "\$key_file" "\$manifest_file"'/u)
+  assert.match(publisher, /preflightDesktopManifestTrust/u)
+  assert.match(publisher, /await preflightDesktopManifestTrust\(\)/u)
+  assert.match(publisher, /adoptCloudSignedManifest/u)
+  assert.match(publisher, /parents\.length !== 2 \|\| parents\[1\] !== stateProductRevision/u)
+  assert.match(publisher, /changed\.length !== 1 \|\| changed\[0\] !== 'release-manifest\.json'/u)
+  assert.match(publisher, /readVerifiedDesktopRelease/u)
+  assert.match(publisher, /await readVerifiedDesktopRelease\(\)[\s\S]*gitRun\(\['push', 'origin', 'HEAD:main'\]\)/u)
+  assert.match(publisher, /phase\(state, 'release-manifest'[\s\S]*await adoptCloudSignedManifest\(\)[\s\S]*phase\(state, 'cnb-assets'/u)
+  const pkg = JSON.parse(read('package.json'))
+  const env = { ...process.env }
+  delete env.HARNESS_COMPONENT_SIGNING_KEY_FILE
+  delete env.HARNESS_COMPONENT_KEY_ID
+  const result = spawnSync(process.execPath, ['scripts/refresh-release-manifest.mjs', `--version=${pkg.version}`], { cwd: root, encoding: 'utf8', env })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /HARNESS_COMPONENT_SIGNING_KEY_FILE and HARNESS_COMPONENT_KEY_ID are required/u)
+})
+
+test('desktop publication cannot stage a macOS artifact before the signed build gate succeeds', () => {
+  const source = read('.github/workflows/release.yml')
+  const workflow = YAML.parse(source)
+  assert.equal(workflow.jobs.build.environment.name, "${{ matrix.os == 'macos-latest' && 'macos-signing' || 'desktop-build' }}")
+  assert.deepEqual(workflow.jobs['stage-draft'].needs, ['build', 'ios-simulators'])
+  const steps = workflow.jobs.build.steps
+  const signedBuild = steps.find(step => step.name === 'Build signed and notarized macOS packages')
+  const signedGate = steps.find(step => step.name === 'Verify macOS Developer ID, hardened runtime, notarization, and Gatekeeper')
+  const upload = steps.find(step => String(step.uses || '').startsWith('actions/upload-artifact@'))
+  assert.equal(signedBuild.if, "runner.os == 'macOS'")
+  assert.equal(signedGate.if, "runner.os == 'macOS'")
+  assert.ok(steps.indexOf(signedBuild) < steps.indexOf(signedGate))
+  assert.ok(steps.indexOf(signedGate) < steps.indexOf(upload))
+  assert.match(signedGate.run, /codesign --verify --deep --strict/u)
+  assert.match(signedGate.run, /spctl --assess --type execute/u)
+  assert.match(signedGate.run, /spctl --assess --type open/u)
+  assert.doesNotMatch(source.slice(0, source.indexOf('steps:')), /MACOS_DEVELOPER_ID|APPLE_NOTARY/u)
+})
+
 test('cloud recovery binds artifacts to the tag and safely resumes any verified subset', () => {
   const workflowText = read('.github/workflows/recover-release-from-actions.yml')
   const workflow = YAML.parse(workflowText)
@@ -98,6 +148,9 @@ test('component and CNB publication retries preserve only byte-identical output'
   assert.match(prepare, /publishedAtInput/u)
   assert.match(cnb, /HARNESS_RELEASE_GIT/u)
   assert.match(publisher, /HARNESS_RELEASE_GIT: git/u)
+  assert.match(publisher, /third_party['"], 'mingit['"], 'cmd['"], 'git\.exe'/u)
+  assert.match(publisher, /gitEnvironment\(\)[\s\S]*mingw64['"], 'bin/u)
+  assert.match(publisher, /gitCapture\(args\)[\s\S]*gitEnvironment\(\)/u)
 })
 
 test('Harness automatically receives the fixed publisher instruction in future sessions', () => {

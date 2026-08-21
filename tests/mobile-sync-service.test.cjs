@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtempSync } = require('node:fs')
+const { existsSync, mkdtempSync, readFileSync, statSync } = require('node:fs')
 const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
@@ -26,9 +26,29 @@ async function createRuntime(label) {
   }
 }
 
+function secretAdapter() {
+  const transform = value => Buffer.from(value).map(byte => byte ^ 0xa5)
+  return {
+    protect: plaintext => transform(Buffer.from(String(plaintext), 'utf8')),
+    unprotect: ciphertext => transform(Buffer.from(ciphertext)).toString('utf8')
+  }
+}
+
 function createStore() {
   const directory = mkdtempSync(path.join(os.tmpdir(), 'harness-mobile-service-'))
-  return new MobileSyncStore(path.join(directory, 'mobile-sync.json'))
+  return new MobileSyncStore(path.join(directory, 'mobile-sync.json'), secretAdapter())
+}
+
+function desktopControlCredentials(service) {
+  const state = JSON.parse(readFileSync(service.desktopControlStateFile, 'utf8'))
+  return {
+    state,
+    headers: {
+      Authorization: `Bearer ${state.bearer}`,
+      'X-Harness-Mobile-Control': '1',
+      'X-Harness-Mobile-Control-Generation': state.generation
+    }
+  }
 }
 
 async function pair(service) {
@@ -118,7 +138,7 @@ test('one QR downloads the Android app in browsers without consuming app pairing
 
 test('pairing payload is OS-neutral and carries the WSS/443 fallback for iPhone and Android', async t => {
   const relay = {
-    id: 'wss-relay', origin: 'http://10.252.77.254:3081', relayUrl: 'wss://relay.example.test/',
+    id: 'wss-relay', origin: 'http://10.253.77.254:3081', relayUrl: 'wss://relay.example.test/',
     roomId: 'r'.repeat(43), tunnelKey: 'k'.repeat(43), protocolVersion: 1, secureMode: true
   }
   const transportManager = {
@@ -292,11 +312,17 @@ test('versioned mobile control endpoints require pairing and desktop commands ar
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ deviceId, command: { action: 'tap', payload: { x: 1, y: 2 } } })
   })
-  assert.equal(forbidden.status, 403)
+  assert.equal(forbidden.status, 401)
 
+  const auxiliaryHeaderOnly = await fetch(`${origin}/__harness_mobile__/control/desktop-state`, {
+    headers: { 'X-Harness-Mobile-Control': '1' }
+  })
+  assert.equal(auxiliaryHeaderOnly.status, 401)
+
+  const control = desktopControlCredentials(service)
   const submitted = await fetch(`${origin}/__harness_mobile__/control/desktop-command`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Harness-Mobile-Control': '1' },
+    headers: { ...control.headers, 'Content-Type': 'application/json' },
     body: JSON.stringify({ deviceId, command: { action: 'tap', payload: { x: 10, y: 20 } } })
   })
   assert.equal(submitted.status, 202)
@@ -310,6 +336,83 @@ test('versioned mobile control endpoints require pairing and desktop commands ar
     body: JSON.stringify({ id: command.id, ok: true, code: 'OK' })
   })
   assert.equal(receipt.status, 200)
+
+  const secondSubmission = await fetch(`${origin}/__harness_mobile__/control/desktop-command`, {
+    method: 'POST',
+    headers: { ...control.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, command: { action: 'tap', payload: { x: 30, y: 40 } } })
+  })
+  const secondCommand = (await secondSubmission.json()).command
+  const cancelled = await fetch(`${origin}/__harness_mobile__/control/desktop-cancel`, {
+    method: 'POST',
+    headers: { ...control.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commandId: secondCommand.id })
+  })
+  assert.deepEqual(await cancelled.json(), { ok: true })
+  const cancelledResult = await fetch(`${origin}/__harness_mobile__/control/desktop-result?id=${encodeURIComponent(secondCommand.id)}`, { headers: control.headers })
+  assert.equal(cancelledResult.status, 200)
+  assert.equal((await cancelledResult.json()).result.code, 'USER_CANCELLED')
+
+  const deliveredSubmission = await fetch(`${origin}/__harness_mobile__/control/desktop-command`, {
+    method: 'POST',
+    headers: { ...control.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, command: { action: 'tap', payload: { x: 50, y: 60 } } })
+  })
+  const deliveredCommand = (await deliveredSubmission.json()).command
+  const deliveredPoll = await fetch(`${origin}/__harness_mobile__/control/poll?protocolVersion=1`, { headers: { Cookie: paired.cookie } })
+  assert.equal((await deliveredPoll.json()).command.id, deliveredCommand.id)
+  await fetch(`${origin}/__harness_mobile__/control/desktop-cancel`, {
+    method: 'POST',
+    headers: { ...control.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commandId: deliveredCommand.id })
+  })
+  const stillPending = await fetch(`${origin}/__harness_mobile__/control/desktop-result?id=${encodeURIComponent(deliveredCommand.id)}`, { headers: control.headers })
+  assert.equal(stillPending.status, 202)
+  assert.equal((await stillPending.json()).pending, true)
+  const cancelPoll = await fetch(`${origin}/__harness_mobile__/control/poll?protocolVersion=1`, { headers: { Cookie: paired.cookie } })
+  assert.equal((await cancelPoll.json()).command.type, 'cancel')
+  await fetch(`${origin}/__harness_mobile__/control/result`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ id: deliveredCommand.id, ok: false, code: 'CANCELLED_ON_PHONE' })
+  })
+  const confirmedCancel = await fetch(`${origin}/__harness_mobile__/control/desktop-result?id=${encodeURIComponent(deliveredCommand.id)}`, { headers: control.headers })
+  const confirmedPayload = await confirmedCancel.json()
+  assert.equal(confirmedPayload.result.code, 'CANCELLED_ON_PHONE')
+  assert.equal(confirmedPayload.result.cancelReason, 'USER_CANCELLED')
+  assert.ok(confirmedPayload.result.cancelRequestedAt)
+})
+
+test('desktop control bearer is private, rotates per service generation, and is removed on stop', async t => {
+  const store = createStore()
+  const service = new MobileSyncService({
+    store,
+    getRuntimeTarget: () => null,
+    host: '127.0.0.1',
+    port: 0
+  })
+  t.after(() => service.stop())
+
+  await service.start()
+  const first = desktopControlCredentials(service)
+  assert.equal(first.state.version, 1)
+  assert.equal(first.state.port, service.state().port)
+  assert.match(first.state.bearer, /^[A-Za-z0-9_-]{43}$/)
+  assert.match(first.state.generation, /^[a-f0-9]{32}$/)
+  if (process.platform !== 'win32') assert.equal(statSync(service.desktopControlStateFile).mode & 0o077, 0)
+
+  const firstOrigin = service.state().origins[0]
+  assert.equal((await fetch(`${firstOrigin}/__harness_mobile__/control/desktop-state`, { headers: first.headers })).status, 200)
+  await service.stop({ persist: false })
+  assert.equal(existsSync(service.desktopControlStateFile), false)
+
+  await service.start({ persist: false })
+  const second = desktopControlCredentials(service)
+  assert.notEqual(second.state.bearer, first.state.bearer)
+  assert.notEqual(second.state.generation, first.state.generation)
+  const secondOrigin = service.state().origins[0]
+  assert.equal((await fetch(`${secondOrigin}/__harness_mobile__/control/desktop-state`, { headers: first.headers })).status, 401)
+  assert.equal((await fetch(`${secondOrigin}/__harness_mobile__/control/desktop-state`, { headers: second.headers })).status, 200)
 })
 
 test('paired phones can load and update the desktop appearance bridge', async t => {
@@ -368,4 +471,25 @@ test('paired phones can load and update the desktop appearance bridge', async t 
   const customAsset = await fetch(`${origin}/__harness_mobile__/theme-assets/custom-background`, { headers })
   assert.equal(customAsset.headers.get('cache-control'), 'no-store')
   assert.equal(await customAsset.text(), 'theme-asset')
+})
+
+test('desktop mobile state projections never expose mesh or relay secrets', () => {
+  const store = createStore()
+  const networkSecret = 'n'.repeat(43)
+  const relayRoomId = 'r'.repeat(43)
+  const relayTunnelKey = 'k'.repeat(43)
+  store.ensureMesh(() => ({
+    networkName: 'harness-0123456789abcdef',
+    networkSecret,
+    desktopAddress: '10.254.77.1',
+    serviceAddress: '10.253.77.254',
+    relayRoomId,
+    relayTunnelKey
+  }))
+  const service = new MobileSyncService({ store, getRuntimeTarget: () => null })
+  const projected = JSON.stringify(service.state())
+  assert.equal(projected.includes(networkSecret), false)
+  assert.equal(projected.includes(relayRoomId), false)
+  assert.equal(projected.includes(relayTunnelKey), false)
+  assert.equal(projected.includes('mesh'), false)
 })

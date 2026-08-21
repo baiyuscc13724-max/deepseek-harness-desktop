@@ -26,6 +26,16 @@ electron-builder is licensed under the MIT License. See its upstream project for
 
 `cross-spawn` is licensed under the MIT License. Harness Desktop uses it to launch the bundled Harness command consistently across supported platforms without routing arguments through a shell.
 
+## Bundled Git for Windows, Git Credential Manager and Git LFS
+
+Windows builds bundle the pinned **MinGit 2.53.0.2** distribution from Git for Windows. Git is licensed under **GPL-2.0-only**; the distribution also contains components under their respective compatible licenses. The original license files remain inside `resources/third_party/mingit`, and the corresponding source for the exact Git for Windows release is available at https://github.com/git-for-windows/git/tree/v2.53.0.windows.2 and from the release's source archives. Harness Desktop does not modify MinGit.
+
+Windows builds also bundle **Git Credential Manager 2.7.0**, licensed under the MIT License. Its original license file remains in the bundled GCM directory. Source: https://github.com/git-ecosystem/git-credential-manager/tree/v2.7.0
+
+Windows builds additionally bundle **Git LFS 3.7.1**, licensed under the MIT License, so repository LFS hooks remain enforceable without a machine-wide installation. The official Windows AMD64 archive is pinned by size and SHA-256, and its original license remains beside `git-lfs.exe`. Source: https://github.com/git-lfs/git-lfs/tree/v3.7.1
+
+Git Credential Manager stores authorized credentials through the operating system's credential store. Harness Desktop never displays or returns passwords, access tokens, browser cookies, one-time codes, or SSH private keys. Windows OpenSSH and `ssh-agent` are detected as operating-system components and are not redistributed by this project.
+
 ## Phone sync dependencies
 
 - `http-proxy` is licensed under the MIT License and is used by the desktop phone-sync gateway to forward authenticated HTTP and WebSocket traffic to the loopback Harness runtime.

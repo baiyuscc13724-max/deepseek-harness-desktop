@@ -33,6 +33,7 @@ const skinLowPerformance = document.querySelector('#skinLowPerformance')
 const closeSkinPickerButton = document.querySelector('#closeSkinPicker')
 const restoreOfficialThemeButton = document.querySelector('#restoreOfficialTheme')
 const skinChooseBackgroundButton = document.querySelector('#skinChooseBackground')
+const skinChooseWallpaperEngineButton = document.querySelector('#skinChooseWallpaperEngine')
 const skinClearBackgroundButton = document.querySelector('#skinClearBackground')
 const skinApplyCustomButton = document.querySelector('#skinApplyCustom')
 const skinBackgroundState = document.querySelector('#skinBackgroundState')
@@ -75,6 +76,12 @@ const updateNoticeInstall = document.querySelector('#updateNoticeInstall')
 
 let pendingUpdateKind = 'installer'
 let pendingComponentUpdate = null
+let gitRuntimeState = {
+  loading: true, authenticating: false, preparing: false, message: '',
+  git: { available: false, source: null, version: null },
+  gcm: { available: false, source: null, version: null },
+  sshAgent: { available: false, running: false }
+}
 let updateState = {
   checking: false,
   installing: false,
@@ -343,7 +350,7 @@ function renderSkinPicker() {
   })
   skinPickerGrid.querySelectorAll('[data-source]').forEach(button => button.addEventListener('click', event => {
     event.stopPropagation()
-    api.openExternal(event.currentTarget.dataset.source || '').catch(() => {})
+    api.openLink(event.currentTarget.dataset.source || '').catch(() => {})
   }))
   const custom = { ...customThemeDefaults, ...(appearanceState.customTheme || {}) }
   document.querySelector('#skinCustomMode').value = custom.mode
@@ -356,12 +363,14 @@ function renderSkinPicker() {
     input.value = String(custom[name])
     output.textContent = `${custom[name]}${field.suffix}`
   }
-  skinClearBackgroundButton.disabled = !appearanceState.customBackgroundDataUrl
+  skinClearBackgroundButton.disabled = !appearanceState.customBackgroundDataUrl && !appearanceState.customBackgroundVideoDataUrl
   const backgroundFile = appearanceState.customTheme?.backgroundFile || ''
   const animated = /\.(?:gif|apng)$/i.test(backgroundFile)
-  skinBackgroundState.textContent = appearanceState.customBackgroundDataUrl
-    ? animated ? '动态壁纸已启用' : '本地壁纸已启用（兼容动态 WebP）'
-    : '当前使用渐变背景'
+  skinBackgroundState.textContent = appearanceState.customBackgroundVideoDataUrl
+    ? '本地视频壁纸已启用'
+    : appearanceState.customBackgroundDataUrl
+      ? animated ? '动态壁纸已启用' : '本地图片壁纸已启用'
+      : '当前使用渐变背景'
   renderUiModePicker()
 }
 
@@ -488,8 +497,19 @@ function showUpdateNotice(result, { force = false } = {}) {
 function showComponentUpdateNotice(componentState, { force = false } = {}) {
   const check = componentState?.lastCheck
   if (!componentState?.enabled || check?.mode !== 'components' || !check.releaseVersion) return false
+  const planned = Array.isArray(check.components) ? check.components : []
+  // Defense-in-depth: if the last check still lists components that are already
+  // active at the same version (and no update is mid-flight), the "update
+  // available" notice must not reappear after the update was applied.
+  const active = new Map((Array.isArray(componentState?.pointer?.components) ? componentState.pointer.components : []).map(component => [component.id, component]))
+  const midFlight = Boolean(componentState?.state?.phase) && !['idle', 'failed'].includes(componentState.state.phase)
+  const allAlreadyActive = planned.length > 0 && planned.every(component => {
+    const installed = active.get(component.id)
+    return installed && installed.version === component.version
+  })
+  if (allAlreadyActive && !midFlight) return false
   pendingComponentUpdate = componentState
-  const components = Array.isArray(check.components) ? check.components : []
+  const components = planned
   showUpdateNotice({
     updateAvailable: true,
     latestVersion: check.releaseVersion,
@@ -666,6 +686,17 @@ function officialSettingsBootstrap() {
     #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"] { background:var(--dsw-alias-brand-primary,#315efb); }
     #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"]::after { background:#fff; transform:translateX(18px); }
     #harness-desktop-mobile-sync-row .hd-mobile-switch:disabled { cursor:wait; opacity:.6; }
+    #harness-desktop-git-row { border-bottom:1px solid var(--dsw-alias-border-l2); padding:16px 0; color:var(--dsw-alias-label-primary); }
+    #harness-desktop-git-row .hd-git-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+    #harness-desktop-git-row .hd-git-title { font-size:14px; line-height:22px; }
+    #harness-desktop-git-row .hd-git-summary, #harness-desktop-git-row .hd-git-note { margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
+    #harness-desktop-git-row .hd-git-actions { display:flex; flex:none; gap:8px; }
+    #harness-desktop-git-row button { box-sizing:border-box; min-height:34px; border:0; border-radius:8px; padding:6px 12px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); font:inherit; font-size:13px; cursor:pointer; }
+    #harness-desktop-git-row button:hover { background:var(--dsw-alias-interactive-bg-hover); }
+    #harness-desktop-git-row button:disabled { cursor:wait; opacity:.55; }
+    #harness-desktop-git-row .hd-git-lines { display:grid; gap:6px; margin-top:12px; }
+    #harness-desktop-git-row .hd-git-line { display:flex; justify-content:space-between; gap:12px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
+    #harness-desktop-git-row .hd-git-line strong { color:var(--dsw-alias-label-primary); font-weight:400; text-align:right; }
   `
   document.head.appendChild(style)
 
@@ -777,6 +808,57 @@ function officialSettingsBootstrap() {
     }
   }
 
+  const paintGit = () => {
+    const state = window.__HARNESS_DESKTOP_GIT_STATE__ || {}
+    const row = document.querySelector('#harness-desktop-git-row')
+    if (!row) return
+    const git = state.git || {}
+    const gcm = state.gcm || {}
+    const ssh = state.sshAgent || {}
+    const preparation = state.preparation || {}
+    const gitSource = git.source === 'bundled' ? '内置 MinGit' : git.source === 'system' ? '系统 Git' : '不可用'
+    const ready = Boolean(git.available && gcm.available)
+    const canPrepare = preparation.canPrepare === true
+    setText(row.querySelector('[data-hd-git-summary]'), state.message || (ready ? `${gitSource} 已就绪，可直接在项目中使用` : canPrepare ? '开发环境尚未准备组件，可在此安全安装内置 MinGit' : '未找到可用 Git；Windows 正式包会内置 MinGit'))
+    setText(row.querySelector('[data-hd-git-version]'), git.available ? `${gitSource} ${git.version || ''}`.trim() : (state.preparing ? '正在安装…' : '不可用'))
+    setText(row.querySelector('[data-hd-gcm-status]'), gcm.available ? `Git Credential Manager ${gcm.version || ''} · Windows 安全凭据` : (state.preparing ? '正在安装…' : '不可用'))
+    setText(row.querySelector('[data-hd-ssh-status]'), ssh.available && ssh.clientAvailable ? (ssh.running ? 'Windows OpenSSH + ssh-agent 正在运行' : 'Windows OpenSSH 已就绪，ssh-agent 尚未运行') : 'Windows OpenSSH / ssh-agent 不可用')
+    const refresh = row.querySelector('[data-hd-git-refresh]')
+    const authenticate = row.querySelector('[data-hd-git-auth]')
+    refresh.disabled = Boolean(state.loading || state.authenticating || state.preparing)
+    authenticate.disabled = Boolean(state.loading || state.authenticating || state.preparing || (!ready && !canPrepare))
+    setText(refresh, state.loading ? '正在检查…' : '刷新状态')
+    setText(authenticate, state.preparing ? '正在安装…' : state.authenticating ? '正在打开登录…' : ready ? '连接 GitHub' : '安装内置 Git')
+  }
+
+  const mountGit = section => {
+    if (!section || section.querySelector('#harness-desktop-git-row')) {
+      paintGit()
+      return
+    }
+    const row = document.createElement('div')
+    row.id = 'harness-desktop-git-row'
+    row.innerHTML = `
+      <div class="hd-git-head">
+        <div><div class="hd-git-title">Git 与仓库连接</div><div class="hd-git-summary" data-hd-git-summary>正在检查 Git 组件…</div></div>
+        <div class="hd-git-actions"><button type="button" data-hd-git-refresh>刷新状态</button><button type="button" data-hd-git-auth>连接 GitHub</button></div>
+      </div>
+      <div class="hd-git-lines">
+        <div class="hd-git-line"><span>Git</span><strong data-hd-git-version>正在检查…</strong></div>
+        <div class="hd-git-line"><span>HTTPS 凭据</span><strong data-hd-gcm-status>正在检查…</strong></div>
+        <div class="hd-git-line"><span>GitHub / CNB SSH</span><strong data-hd-ssh-status>正在检查…</strong></div>
+      </div>
+      <div class="hd-git-note">首次 GitHub 授权由你亲自在系统浏览器中完成，之后由 Windows Credential Manager 复用。CNB 可使用 Windows ssh-agent。Harness 不读取或显示密码、Token、Cookie、验证码或 SSH 私钥。</div>
+    `
+    row.querySelector('[data-hd-git-refresh]').addEventListener('click', () => request('refresh-git-runtime'))
+    row.querySelector('[data-hd-git-auth]').addEventListener('click', () => {
+      const state = window.__HARNESS_DESKTOP_GIT_STATE__ || {}
+      request(state.preparation?.canPrepare ? 'prepare-git-runtime' : 'authenticate-github')
+    })
+    section.appendChild(row)
+    paintGit()
+  }
+
   const paintMobile = () => {
     const state = window.__HARNESS_DESKTOP_MOBILE_SYNC_STATE__ || {}
     const row = document.querySelector('#harness-desktop-mobile-sync-row')
@@ -851,6 +933,7 @@ function officialSettingsBootstrap() {
     const content = dialog.querySelector(':scope > nav + div')
     const options = content?.lastElementChild
     const section = slot?.parentElement || options?.firstElementChild || options
+    mountGit(section)
     mountMobile(section)
     if (!section || section.querySelector('#harness-desktop-update-row')) {
       paint()
@@ -901,7 +984,12 @@ function officialSettingsBootstrap() {
   window.__HARNESS_DESKTOP_RENDER_UPDATES__ = () => {
     mount()
     paint()
+    paintGit()
     paintMobile()
+  }
+  window.__HARNESS_DESKTOP_RENDER_GIT__ = () => {
+    mount()
+    paintGit()
   }
   window.__HARNESS_DESKTOP_RENDER_MOBILE_SYNC__ = () => {
     mount()
@@ -1077,6 +1165,24 @@ async function publishUpdateState() {
   await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_UPDATE_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_UPDATES__?.();`, true).catch(() => {})
 }
 
+async function publishGitRuntimeState() {
+  if (!runtimeView.getURL()) return
+  const serialized = JSON.stringify(gitRuntimeState).replaceAll('<', '\\u003c')
+  await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_GIT_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_GIT__?.();`, true).catch(() => {})
+}
+
+async function refreshGitRuntimeStatus() {
+  gitRuntimeState = { ...gitRuntimeState, loading: true, message: '' }
+  await publishGitRuntimeState()
+  try {
+    const status = await api.refreshGitRuntimeStatus()
+    gitRuntimeState = { ...gitRuntimeState, ...status, loading: false, message: '' }
+  } catch (error) {
+    gitRuntimeState = { ...gitRuntimeState, loading: false, message: `Git 状态检查失败：${error.message}` }
+  }
+  await publishGitRuntimeState()
+}
+
 async function publishMobileSyncState() {
   if (!runtimeView.getURL()) return
   const serialized = JSON.stringify(mobileSyncState).replaceAll('<', '\\u003c')
@@ -1143,6 +1249,7 @@ runtimeView.addEventListener('dom-ready', async () => {
   await modelRoutingIntegration.install(runtimeView).catch(() => {})
   await workspaceLinksIntegration.install(runtimeView).catch(() => {})
   await publishUpdateState()
+  await publishGitRuntimeState()
   await publishMobileSyncState()
   await publishAppearanceState()
   await publishModelRoutingState()
@@ -1166,16 +1273,42 @@ runtimeView.addEventListener('will-navigate', event => {
     })
   } else if (target.hostname === 'open-release') {
     const url = target.searchParams.get('url')
-    if (url) api.openExternal(url).catch(() => {})
+    if (url) api.openLink(url).catch(() => {})
   } else if (target.hostname === 'open-external') {
     const url = target.searchParams.get('url')
-    if (url) api.openExternal(url).catch(() => {})
+    if (url) api.openLink(url).catch(() => {})
   } else if (target.hostname === 'open-local') {
     const localPath = target.searchParams.get('path')
     const reveal = target.searchParams.get('reveal') === '1'
     if (localPath) api.openLocal(localPath, { reveal }).catch(() => {})
   } else if (target.hostname === 'open-config-file') {
     api.openHarnessSettings().catch(() => {})
+  } else if (target.hostname === 'refresh-git-runtime') {
+    refreshGitRuntimeStatus()
+  } else if (target.hostname === 'prepare-git-runtime') {
+    gitRuntimeState = { ...gitRuntimeState, preparing: true, message: '正在下载并校验官方 MinGit 与 Git Credential Manager…' }
+    publishGitRuntimeState()
+    api.prepareGitRuntime().then(status => {
+      gitRuntimeState = { ...gitRuntimeState, ...status, preparing: false, loading: false, message: '内置 Git 已准备完成；重启 Harness Desktop 后任务进程即可直接使用。' }
+      publishGitRuntimeState()
+    }).catch(error => {
+      gitRuntimeState = { ...gitRuntimeState, preparing: false, message: `内置 Git 安装失败：${error.message}` }
+      publishGitRuntimeState()
+    })
+  } else if (target.hostname === 'authenticate-github') {
+    gitRuntimeState = { ...gitRuntimeState, authenticating: true, message: '正在打开由你亲自操作的 GitHub 登录…' }
+    publishGitRuntimeState()
+    api.openGitAuthentication('github').then(result => {
+      gitRuntimeState = {
+        ...gitRuntimeState,
+        authenticating: false,
+        message: result?.started ? 'GitHub 登录已打开；完成一次授权后，Windows 会安全复用凭据。' : '未能启动 GitHub 登录，请刷新状态后重试。'
+      }
+      publishGitRuntimeState()
+    }).catch(error => {
+      gitRuntimeState = { ...gitRuntimeState, authenticating: false, message: `GitHub 登录启动失败：${error.message}` }
+      publishGitRuntimeState()
+    })
   } else if (target.hostname === 'open-mobile-sync') {
     openMobileSync()
   } else if (target.hostname === 'mobile-control-stop') {
@@ -1253,13 +1386,18 @@ runtimeView.addEventListener('will-navigate', event => {
       publishAppearanceState()
     })
   } else if (target.hostname === 'save-custom-theme') {
-    const fields = ['mode', 'accent', 'surface', 'text', 'wallpaperBrightness', 'wallpaperBlur', 'glassTransparency', 'borderStrength']
+    const fields = ['mode', 'accent', 'surface', 'text', 'wallpaperBrightness', 'wallpaperBlur', 'glassTransparency', 'borderStrength', 'readabilityStrength']
     api.saveCustomTheme(Object.fromEntries(fields.map(name => [name, target.searchParams.get(name)]))).then(state => {
       appearanceState = state
       publishAppearanceState()
     })
   } else if (target.hostname === 'choose-theme-background') {
     api.chooseThemeBackground().then(state => {
+      appearanceState = state
+      publishAppearanceState()
+    })
+  } else if (target.hostname === 'choose-wallpaper-engine') {
+    api.chooseWallpaperEngine().then(state => {
       appearanceState = state
       publishAppearanceState()
     })
@@ -1376,7 +1514,7 @@ updateReadyOverlay.addEventListener('click', event => {
 updateNoticeLater.addEventListener('click', closeUpdateNotice)
 updateNoticeRelease.addEventListener('click', () => {
   const url = updateNoticeRelease.dataset.url
-  if (url) api.openExternal(url).catch(() => {})
+  if (url) api.openLink(url).catch(() => {})
 })
 updateNoticeInstall.addEventListener('click', () => {
   updateNoticeOverlay.classList.add('hidden')
@@ -1416,6 +1554,11 @@ restoreOfficialThemeButton.addEventListener('click', async () => {
 })
 skinChooseBackgroundButton.addEventListener('click', async () => {
   appearanceState = await api.chooseThemeBackground()
+  await publishAppearanceState()
+  renderSkinPicker()
+})
+skinChooseWallpaperEngineButton.addEventListener('click', async () => {
+  appearanceState = await api.chooseWallpaperEngine()
   await publishAppearanceState()
   renderSkinPicker()
 })
@@ -1463,8 +1606,9 @@ async function startOfficialWorkspace() {
   updateState = { ...updateState, preferences: await api.getUpdatePreferences(), distribution: distributionState }
   appearanceState = await api.getAppearance()
   petState = await api.getPetState()
-  const [routing, meters] = await Promise.all([api.getModelRouting(), api.getProviderMeters(false)])
+  const [routing, meters, gitStatus] = await Promise.all([api.getModelRouting(), api.getProviderMeters(false), api.getGitRuntimeStatus()])
   modelRoutingState = { ...routing, meters: { ...meters, loading: false, error: '' }, saving: false, saved: false, error: '' }
+  gitRuntimeState = { ...gitRuntimeState, ...gitStatus, loading: false }
   mobileSyncState = await api.getMobileSyncState()
   const themeAssets = await api.getThemeAssets()
   themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)
