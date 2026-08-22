@@ -13,6 +13,9 @@ on:
       release_id:
         description: Exact private draft created by the repository owner (empty or verified desktop subset)
         required: true
+      publisher_revision:
+        description: Optional exact main revision containing a post-tag publisher recovery fix
+        required: false
       request_id:
         description: Unique publisher request identity
         required: false
@@ -37,6 +40,8 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       SOURCE_RUN_ID: ${{ inputs.source_run_id }}
       RELEASE_ID: ${{ inputs.release_id }}
+      PUBLISHER_REVISION: ${{ inputs.publisher_revision }}
+      WORKFLOW_REVISION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -45,27 +50,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ -n "$PUBLISHER_REVISION" ]; then
+            test "$WORKFLOW_REVISION" = "$PUBLISHER_REVISION" || { echo 'Post-tag recovery workflow revision mismatch.' >&2; exit 1; }
+          fi
           version="$(node -p "require('./package.json').version")"
-          test "$RELEASE_TAG" = "v$version"
+          test "$RELEASE_TAG" = "v$version" || { echo 'Release tag does not match package version.' >&2; exit 1; }
           tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
-          test "$(git rev-parse HEAD)" = "$tag_commit"
+          test "$(git rev-parse HEAD)" = "$tag_commit" || { echo 'Recovery checkout is not the immutable product tag.' >&2; exit 1; }
           source_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
           jq -e --arg sha "$tag_commit" --arg path '.github/workflows/release.yml' '
             .head_sha == $sha and .path == $path and (.event == "push" or .event == "workflow_dispatch")
-          ' <<<"$source_run" >/dev/null
+          ' <<<"$source_run" >/dev/null || { echo 'Source workflow identity mismatch.' >&2; exit 1; }
           jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100")"
           for name in \
             'Build windows-latest' \
             'Build macos-latest' \
             'Build ubuntu-latest' \
             'Validate iPhone and iPad simulators'; do
-            jq -e --arg name "$name" '[.jobs[] | select(.name == $name and .conclusion == "success")] | length == 1' <<<"$jobs" >/dev/null
+            jq -e --arg name "$name" '[.jobs[] | select(.name == $name and .conclusion == "success")] | length == 1' <<<"$jobs" >/dev/null || {
+              printf 'Required successful source job mismatch: %s\n' "$name" >&2
+              exit 1
+            }
           done
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > private-draft.json
           jq -e --arg tag "$RELEASE_TAG" --arg target "$tag_commit" --arg name "Harness Desktop $RELEASE_TAG" --rawfile body release-notes.md '
             .tag_name == $tag and .target_commitish == $target and .draft == true and
             .prerelease == false and .name == $name and .body == $body
-          ' private-draft.json >/dev/null
+          ' private-draft.json >/dev/null || { echo 'Private draft metadata does not exactly match the immutable tag.' >&2; exit 1; }
           expected="$(printf '%s\n' \
             "Harness-Desktop-$version-linux-amd64.deb" \
             "Harness-Desktop-$version-linux-x86_64.AppImage" \
