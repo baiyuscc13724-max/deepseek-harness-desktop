@@ -75,6 +75,7 @@ test('publisher fails closed unless the desktop manifest is signed and verified 
   assert.match(components, /refs\/tags\/\$RELEASE_TAG/u)
   assert.match(components, /git rev-parse 'FETCH_HEAD\^\{\}'/u)
   assert.match(components, /main_revision="\$\(git rev-parse HEAD\)"/u)
+  assert.match(components, /git reset --hard HEAD[\s\S]*git clean -fd[\s\S]*git checkout --detach "\$tag_revision"/u)
   assert.match(components, /trap 'rm -f "\$key_file" "\$manifest_file"'/u)
   assert.match(publisher, /preflightDesktopManifestTrust/u)
   assert.match(publisher, /await preflightDesktopManifestTrust\(\)/u)

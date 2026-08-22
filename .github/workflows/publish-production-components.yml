@@ -171,6 +171,8 @@ jobs:
             echo "Preserving byte-identical signed release manifest branch: $branch"
             exit 0
           fi
+          git reset --hard HEAD
+          git clean -fd
           git checkout --detach "$tag_revision"
           cp "$manifest_file" release-manifest.json
           git add -- release-manifest.json
