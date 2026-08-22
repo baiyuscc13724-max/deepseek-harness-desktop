@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing desktop release tag that receives the signed APK
         required: true
-        default: v1.0.34
+        default: v1.0.35
       request_id:
         description: Unique publisher request identity
         required: false

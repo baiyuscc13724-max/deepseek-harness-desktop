@@ -1,10 +1,10 @@
-# Harness Desktop v1.0.34 安全、权限与隐私审查
+# Harness Desktop v1.0.35 安全、权限与隐私审查
 
 范围：启动与更新修复、设置/模型/会话/定时任务界面、右侧浏览器稳定性、代理团队项目入口、局域网与跨网络配对，以及既有不可变发布链。
 
 ## 当前结论
 
-v1.0.34 不改变官方 Harness 主对话所有权，不增加任意脚本、凭据读取或绕过用户确认的写接口。完整源码测试与 npm 生产/开发依赖审计均通过；正式发布继续使用统一可恢复发布器、Windows 隔离安装/更新/卸载实测、GitHub 多平台矩阵、Android 长期证书、显式无签名 macOS 双架构包、组件签名、18 项清单和 CNB 云镜像。
+v1.0.35 不改变官方 Harness 主对话所有权，不增加任意脚本、凭据读取或绕过用户确认的写接口。完整源码测试与 npm 生产/开发依赖审计均通过；正式发布继续使用统一可恢复发布器、Windows 隔离安装/更新/卸载实测、GitHub 多平台矩阵、Android 长期证书、显式无签名 macOS 双架构包、组件签名、18 项清单和 CNB 云镜像。
 
 ## 启动、安装与更新
 
@@ -28,12 +28,12 @@ v1.0.34 不改变官方 Harness 主对话所有权，不增加任意脚本、凭
 
 ## 供应链与发布
 
-- 桌面、Desktop 插件、Android `versionCode 10034`/`versionName 1.0.34`、iOS build/marketing version和工作流目标同步到 1.0.34。
-- Release 绑定单一干净提交和不可变 `v1.0.34` Tag；stable feed 只在本地更新下载/安装/卸载、GitHub/CNB 资产、签名组件和精确 18 项清单全部通过后最后提升。
+- 桌面、Desktop 插件、Android `versionCode 10035`/`versionName 1.0.35`、iOS build/marketing version和工作流目标同步到 1.0.35。
+- Release 绑定单一干净提交和不可变 `v1.0.35` Tag；stable feed 只在本地更新下载/安装/卸载、GitHub/CNB 资产、签名组件和精确 18 项清单全部通过后最后提升。
 - 第一次 CNB 阶段仍逐项镜像并校验全部 18 个不可变资产；stable 提升后的第二次同步只校验三份签名 feed，不重复下载资产。
 - Android 继续只使用 Actions Secret 中长期 release 证书；macOS 完全沿用 v1.0.32 的显式无签名契约（`identity: null`、拒绝签名/公证输入）和 `安装.command`，未修改 Apple 助手或会员相关流程。
 
 ## 发布候选验证记录
 
 - `npm run verify`、`npm run verify:release` 和 Windows 本地阶段必须由统一发布器通过。
-- 安装版/便携版、打包后自检、真实更新下载/安装/卸载、GitHub 桌面矩阵、Android、组件、清单和 CNB 双源结果由 `.release-state/v1.0.34-publish.json` 原子记录；真实工作流和外部 URL 核验完成前不视为发布成功。
+- 安装版/便携版、打包后自检、真实更新下载/安装/卸载、GitHub 桌面矩阵、Android、组件、清单和 CNB 双源结果由 `.release-state/v1.0.35-publish.json` 原子记录；真实工作流和外部 URL 核验完成前不视为发布成功。

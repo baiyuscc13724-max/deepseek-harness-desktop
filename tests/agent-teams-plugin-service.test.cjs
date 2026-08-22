@@ -14,7 +14,7 @@ test('Agent Teams plugin installs into the Web profile idempotently', async () =
     const second = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot })
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.version, '1.0.34')
+    assert.equal(first.version, '1.0.35')
 
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-agent-teams/g) || []).length, 1)
@@ -31,6 +31,9 @@ test('Agent Teams plugin installs into the Web profile idempotently', async () =
     assert.match(client, /conversation\.view/u)
     assert.doesNotMatch(client, /conversation\.session\.header\.actions|conversation\.input\.dock/u)
     assert.match(client, /\/api\/agent-teams\/events/u)
+    const manifest = JSON.parse(await readFile(path.join(first.destination, 'package.json'), 'utf8'))
+    assert.equal(manifest.dependencies['@peculiar/x509'], '2.0.0')
+    assert.equal(manifest.dependencies['reflect-metadata'], '0.2.2')
   } finally {
     await rm(root, { recursive: true, force: true })
   }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-teams",
-  "version": "1.0.34",
+  "version": "1.0.35",
   "description": "First-class durable local agent teams for DeepSeek Harness Desktop",
   "type": "module",
   "main": "lib/index.js",
@@ -19,6 +19,10 @@
       ],
       "immediately": true
     }
+  },
+  "dependencies": {
+    "@peculiar/x509": "2.0.0",
+    "reflect-metadata": "0.2.2"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.8",

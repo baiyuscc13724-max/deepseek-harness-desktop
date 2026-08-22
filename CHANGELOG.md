@@ -1,13 +1,13 @@
 # Changelog
 
-## 1.0.34
+## 1.0.35
 
 - 修复桌面启动时 Computer Use 注入缺少 `systemPrompt` 能力导致的 Harness 启动失败，并让安装器在升级前关闭占用 DLL 的运行实例。
 - 修复 Chromium 取消手动重定向导致的更新校验失败，保留旧客户端可读取的兼容清单和 SHA-256 校验；右侧浏览器工作区不再重复开关。
 - 重整设置、模型和“已安排的任务”页面；恢复可见的账户额度与子模型选择，并把会话 ID 收入 Codex 风格会话菜单。
 - 修复本机建队、局域网自动 mTLS 与跨网络邀请/批准流程；设备批准中的局域网凭据由 X25519 派生密钥和 AES-256-GCM 保护。
 - 第二次 CNB stable 同步改为 metadata-only，避免重复下载和校验 18 项不可变资产；保持 v1.0.32 的 macOS 显式无签名契约和 `安装.command` 不变。
-- 桌面、插件、Android 与 iOS/iPadOS 源码版本同步到 1.0.34；Android `versionCode` 更新为 10034。
+- 桌面、插件、Android 与 iOS/iPadOS 源码版本同步到 1.0.35；Android `versionCode` 更新为 10035。
 
 ## 1.0.32
 

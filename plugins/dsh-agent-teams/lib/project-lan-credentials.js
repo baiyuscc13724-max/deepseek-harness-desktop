@@ -1,9 +1,16 @@
-import "reflect-metadata";
 import { randomBytes, webcrypto } from "node:crypto";
+import { createRequire } from "node:module";
 import { networkInterfaces } from "node:os";
 import { isIP } from "node:net";
-import * as x509 from "@peculiar/x509";
 import { assertPrivateBindHost } from "./project-lan-transport.js";
+
+// Agent Teams is installed into the user's isolated DSH profile. ESM package
+// resolution ignores NODE_PATH there, while the desktop deliberately exposes
+// its audited runtime dependencies through NODE_PATH. createRequire keeps the
+// plugin relocatable without copying a second dependency tree into user data.
+const require = createRequire(import.meta.url);
+require("reflect-metadata");
+const x509 = require("@peculiar/x509");
 
 const CREDENTIAL_VERSION = 1;
 const CERTIFICATE_LIFETIME_MS = 2 * 365 * 24 * 60 * 60 * 1_000;
