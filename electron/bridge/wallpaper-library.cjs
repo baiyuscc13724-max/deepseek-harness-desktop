@@ -6,6 +6,10 @@
 // as a fallback when no Steam library is found.
 const path = require('node:path')
 
+function platformPath(platform) {
+  return platform === 'win32' ? path.win32 : path
+}
+
 const WORKSHOP_CONTENT_ID = '431960'
 const MAX_SCANNED_PROJECTS = 500
 const MAX_TITLE_LENGTH = 160
@@ -15,18 +19,19 @@ const MAX_TITLE_LENGTH = 160
 // common Program Files and per-user install layouts.
 function defaultSteamRootCandidates(env = process.env, platform = process.platform) {
   if (platform !== 'win32') return []
+  const p = platformPath(platform)
   const candidates = new Set()
   for (const variable of ['ProgramFiles(x86)', 'ProgramFiles']) {
     const root = env[variable]
     if (!root) continue
-    candidates.add(path.join(root, 'Steam'))
+    candidates.add(p.join(root, 'Steam'))
   }
   const { LOCALAPPDATA, USERPROFILE } = env
   if (LOCALAPPDATA) {
-    candidates.add(path.join(LOCALAPPDATA, 'Programs', 'Steam'))
-    candidates.add(path.join(LOCALAPPDATA, 'Steam'))
+    candidates.add(p.join(LOCALAPPDATA, 'Programs', 'Steam'))
+    candidates.add(p.join(LOCALAPPDATA, 'Steam'))
   }
-  if (USERPROFILE) candidates.add(path.join(USERPROFILE, 'Steam'))
+  if (USERPROFILE) candidates.add(p.join(USERPROFILE, 'Steam'))
   return [...candidates]
 }
 
@@ -45,21 +50,26 @@ function parseLibraryFolders(vdf) {
 
 // The two places Wallpaper Engine puts projects: the Steam Workshop content
 // folder for subscribed wallpapers and the local install's projects folder.
-function normalizeSteamRoot(value) {
-  const resolved = path.resolve(String(value || '').trim())
-  return path.basename(resolved).toLowerCase() === 'steamapps' ? path.dirname(resolved) : resolved
+function normalizeSteamRoot(value, platform = process.platform) {
+  const p = platformPath(platform)
+  const raw = String(value || '').trim()
+  const platformValue = platform === 'win32' ? raw.replaceAll('/', '\\') : raw.replaceAll('\\', '/')
+  const resolved = p.resolve(platformValue)
+  return p.basename(resolved).toLowerCase() === 'steamapps' ? p.dirname(resolved) : resolved
 }
 
 // Expand the primary Steam install into every library mounted through
 // libraryfolders.vdf. Values ending in steamapps are normalized for older VDF
 // layouts and test fixtures; duplicates are folded case-insensitively on Windows.
 async function discoverSteamRoots(candidates, deps) {
+  const platform = deps.platform || process.platform
+  const p = platformPath(platform)
   const roots = []
   const seen = new Set()
   function add(value) {
     if (!String(value || '').trim()) return
-    const normalized = normalizeSteamRoot(value)
-    const key = process.platform === 'win32' ? normalized.toLowerCase() : normalized
+    const normalized = normalizeSteamRoot(value, platform)
+    const key = platform === 'win32' ? normalized.toLowerCase() : normalized
     if (seen.has(key)) return
     seen.add(key)
     roots.push(normalized)
@@ -67,7 +77,7 @@ async function discoverSteamRoots(candidates, deps) {
   for (const candidate of [].concat(candidates || [])) add(candidate)
   for (const root of roots.slice()) {
     try {
-      const vdf = await deps.readFile(path.join(root, 'steamapps', 'libraryfolders.vdf'), 'utf8')
+      const vdf = await deps.readFile(p.join(root, 'steamapps', 'libraryfolders.vdf'), 'utf8')
       for (const library of parseLibraryFolders(vdf)) add(library)
     } catch {
       // Missing/unreadable Steam metadata simply leaves the known candidates.
