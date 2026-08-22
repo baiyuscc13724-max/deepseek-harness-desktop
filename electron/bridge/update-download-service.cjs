@@ -1,10 +1,10 @@
 const { createHash } = require('node:crypto')
 const { open, unlink } = require('node:fs/promises')
-const { DEFAULT_MAX_REDIRECTS, resolveUpdateRedirect, safeHttpsUpdateUrl } = require('./update-service.cjs')
+const { DEFAULT_MAX_REDIRECTS, isAllowedUpdateRedirect, resolveUpdateRedirect, safeHttpsUpdateUrl } = require('./update-service.cjs')
 
 const DEFAULT_MAX_BYTES = 600 * 1024 * 1024
 const DEFAULT_IDLE_TIMEOUT_MS = 20 * 1000
-const DEFAULT_CHECKSUM_TIMEOUT_MS = 10 * 1000
+const DEFAULT_CHECKSUM_TIMEOUT_MS = 30 * 1000
 
 function assetUrls(asset) {
   const values = Array.isArray(asset?.urls) ? asset.urls : [asset?.url || asset]
@@ -23,10 +23,29 @@ function assetHosts(values) {
   return [...new Set(hosts)]
 }
 
+function isRedirectCancellation(error) {
+  return /redirect(?: was)? cancelled/i.test(String(error?.message || error || ''))
+}
+
 async function fetchWithSafeRedirects(url, { fetchImpl, signal, headers, maxRedirects = DEFAULT_MAX_REDIRECTS, allowedHosts = [] }) {
   let current = safeHttpsUrl(url)
   for (let redirectCount = 0; ; redirectCount += 1) {
-    const response = await fetchImpl(current, { redirect: 'manual', signal, headers })
+    let response
+    try {
+      response = await fetchImpl(current, { redirect: 'manual', signal, headers })
+    } catch (error) {
+      // Electron net.fetch may reject an otherwise valid redirect before a
+      // manual 3xx response becomes observable ("Redirect was cancelled").
+      // Retry once with Chromium's bounded redirect handling, then apply the
+      // same HTTPS/source-family gate to the final effective URL.
+      if (!isRedirectCancellation(error)) throw error
+      response = await fetchImpl(current, { redirect: 'follow', signal, headers })
+      const finalUrl = safeHttpsUrl(response?.url || current)
+      if (finalUrl !== current && !isAllowedUpdateRedirect(current, finalUrl, allowedHosts)) {
+        throw new Error(`更新请求拒绝跨来源重定向：${new URL(current).hostname} → ${new URL(finalUrl).hostname}`)
+      }
+      return response
+    }
     if (response.status < 300 || response.status >= 400) return response
     const location = response.headers?.get?.('location')
     if (!location) return response

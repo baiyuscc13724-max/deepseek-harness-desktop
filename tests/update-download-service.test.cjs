@@ -5,8 +5,10 @@ const { mkdtemp, readFile, rm } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const {
+  DEFAULT_CHECKSUM_TIMEOUT_MS,
   checksumWithFallback,
   downloadWithFallback,
+  fetchWithSafeRedirects,
   safeHttpsUrl
 } = require('../electron/bridge/update-download-service.cjs')
 const { parseChecksumFile } = require('../electron/bridge/update-service.cjs')
@@ -130,7 +132,32 @@ test('checksum redirects reject HTTPS downgrade and unapproved host migration be
   assert.deepEqual(calls.map(([, redirect]) => redirect), ['manual', 'manual'])
 })
 
-test('update files require public HTTPS addresses', () => {
+test('Electron cancelled manual redirects retry with follow only for a trusted final host', async () => {
+  const calls = []
+  const response = await fetchWithSafeRedirects('https://cnb.cool/example/SHA256SUMS.txt', {
+    allowedHosts: ['cnb.cool'],
+    fetchImpl: async (url, options) => {
+      calls.push([url, options.redirect])
+      if (options.redirect === 'manual') throw new Error('Redirect was cancelled')
+      return { ok: true, status: 200, url: 'https://assets.cnb.cool/example/SHA256SUMS.txt', headers: headers() }
+    }
+  })
+  assert.equal(response.status, 200)
+  assert.deepEqual(calls.map(([, redirect]) => redirect), ['manual', 'follow'])
+})
+
+test('Electron redirect fallback still rejects an untrusted final host', async () => {
+  await assert.rejects(fetchWithSafeRedirects('https://cnb.cool/example/SHA256SUMS.txt', {
+    allowedHosts: ['cnb.cool'],
+    fetchImpl: async (url, options) => {
+      if (options.redirect === 'manual') throw new Error('Redirect was cancelled')
+      return { ok: true, status: 200, url: 'https://evil.example/SHA256SUMS.txt', headers: headers() }
+    }
+  }), /拒绝跨来源重定向/)
+})
+
+test('update files require public HTTPS addresses and checksum requests allow slow public mirrors', () => {
+  assert.equal(DEFAULT_CHECKSUM_TIMEOUT_MS, 30_000)
   assert.throws(() => safeHttpsUrl('http://example.test/setup.exe'), /HTTPS/)
   assert.throws(() => safeHttpsUrl('https://user:pass@example.test/setup.exe'), /凭据/)
   assert.throws(() => safeHttpsUrl('https://example.test:8443/setup.exe'), /端口/)
