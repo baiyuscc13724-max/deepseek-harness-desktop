@@ -70,6 +70,7 @@ test('publisher fails closed unless the desktop manifest is signed and verified 
   const components = read('.github/workflows/publish-production-components.yml')
   assert.match(components, /Sign exact desktop release manifest in protected CI/u)
   assert.match(components, /HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64/u)
+  assert.match(components, /fetch-depth: 0/u)
   assert.match(components, /refresh-release-manifest\.mjs[\s\S]*release-manifest\/\$RELEASE_TAG/u)
   assert.match(components, /refs\/tags\/\$RELEASE_TAG/u)
   assert.match(components, /git rev-parse 'FETCH_HEAD\^\{\}'/u)
