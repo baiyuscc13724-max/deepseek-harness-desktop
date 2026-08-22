@@ -45,6 +45,7 @@ const BUILD_JOBS = [
   'Validate iPhone and iPad simulators'
 ]
 const POST_TAG_PUBLISHER_FIX_FILES = new Set([
+  '.cnb.yml',
   '.github/workflows/recover-release-from-actions.yml',
   'scripts/publish-cnb-cloud-mirror.ps1',
   'scripts/release-publish.mjs',

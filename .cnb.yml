@@ -9,7 +9,7 @@ main:
             apk add --no-cache jq
             for feed in component-feeds/stable/win32-x64.json component-feeds/stable/darwin-x64.json component-feeds/stable/darwin-arm64.json; do
               test -s "$feed"
-              jq -e '.schemaVersion and .version and .target and .signature' "$feed" >/dev/null
+              jq -e '.schemaVersion == 1 and .releaseVersion and .channel == "stable" and .keyId and (.components | length > 0) and .signature' "$feed" >/dev/null
             done
         - name: Prepare verified GitHub release assets
           if: test ! -f .cnb-stable-only
