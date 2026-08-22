@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-experience",
-  "version": "1.0.33",
+  "version": "1.0.34",
   "description": "会话与附件体验：归档历史入口、会话 ID 复制/快速定位，以及输入框回形针附件入口。",
   "type": "module",
   "main": "lib/index.js",

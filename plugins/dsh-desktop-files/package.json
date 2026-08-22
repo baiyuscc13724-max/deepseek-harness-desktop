@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-files",
-  "version": "1.0.33",
+  "version": "1.0.34",
   "description": "User-reviewed workspace file upload, download and edit preparation for DeepSeek Harness Desktop",
   "type": "module",
   "main": "lib/index.js",

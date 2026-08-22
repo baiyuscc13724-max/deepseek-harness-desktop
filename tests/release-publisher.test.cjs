@@ -74,8 +74,8 @@ test('second CNB synchronization is metadata-only and never repeats the 18-asset
   assert.match(publisher, /if \(\$StableOnly\)[\s\S]*CNB stable feed verified/u)
   assert.match(pipeline, /Validate stable metadata-only synchronization/u)
   assert.match(pipeline, /if: test -f \.cnb-stable-only/u)
-  assert.match(pipeline, /Prepare verified GitHub release assets\n\s+if: test ! -f \.cnb-stable-only/u)
-  assert.match(pipeline, /Upload verified assets with official plugin\n\s+if: test ! -f \.cnb-stable-only/u)
+  assert.match(pipeline, /Prepare verified GitHub release assets\r?\n\s+if: test ! -f \.cnb-stable-only/u)
+  assert.match(pipeline, /Upload verified assets with official plugin\r?\n\s+if: test ! -f \.cnb-stable-only/u)
 })
 
 test('publisher deterministically selects the one exact draft when cloud and local creation race', () => {
