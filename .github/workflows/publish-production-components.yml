@@ -159,6 +159,18 @@ jobs:
           main_revision="$(git rev-parse HEAD)"
           echo "Signing manifest for tag revision $tag_revision from main revision $main_revision"
           git merge-base --is-ancestor "$tag_revision" "$main_revision"
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && "$GITHUB_REF" == 'refs/heads/main' ]]; then
+            git reset --hard HEAD
+            git clean -fd
+            git checkout --detach "$main_revision"
+            cp "$manifest_file" release-manifest.json
+            git add -- release-manifest.json
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "release: refresh $RELEASE_TAG signed manifest" -- release-manifest.json
+            test "$(git rev-parse HEAD^)" = "$main_revision"
+            test "$(git diff-tree --no-commit-id --name-only -r HEAD)" = 'release-manifest.json'
+            git push origin "HEAD:refs/heads/main"
+            exit 0
+          fi
           branch="release-manifest/$RELEASE_TAG"
           existing="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
           if test -n "$existing"; then
