@@ -57,7 +57,7 @@ function boundedRuleCount(value) {
 }
 
 function canonicalPath(value) {
-  return path.normalize(String(value || '')).replace(/[/\\]+$/, '')
+  return path.win32.normalize(String(value || '')).replace(/[/\\]+$/, '')
 }
 
 function lowerIdentity(value) {
