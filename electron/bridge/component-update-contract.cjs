@@ -203,6 +203,18 @@ function componentApplies(component, platform, arch) {
 
 function createComponentUpdatePlan({ manifest, current = {}, bootstrapVersion, platform = process.platform, arch = process.arch }) {
   const bootstrap = normalizeVersion(bootstrapVersion, '当前 Bootstrap 版本')
+  const releaseVersion = normalizeVersion(manifest.releaseVersion, '组件发布版本')
+
+  // A full desktop installation already contains the components shipped for its
+  // own release. The user-data pointer can be absent on a fresh install or still
+  // describe an older incremental activation after an installer upgrade, so it
+  // must not make the current (or an older) release appear as a new component
+  // update. Only a strictly newer component release is actionable.
+  if (compareVersions(releaseVersion, bootstrap) <= 0) {
+    const desiredComponents = Object.entries(current).map(([id, component]) => ({ id, ...component }))
+    return { mode: 'none', reason: 'release-not-newer', releaseVersion, components: [], desiredComponents }
+  }
+
   const incompatible = compareVersions(bootstrap, manifest.bootstrap.minVersion) < 0
     || (manifest.bootstrap.maxVersion && compareVersions(bootstrap, manifest.bootstrap.maxVersion) > 0)
   if (incompatible) {

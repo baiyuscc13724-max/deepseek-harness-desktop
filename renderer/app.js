@@ -848,7 +848,7 @@ function officialSettingsBootstrap() {
         <div class="hd-git-line"><span>HTTPS 凭据</span><strong data-hd-gcm-status>正在检查…</strong></div>
         <div class="hd-git-line"><span>GitHub / CNB SSH</span><strong data-hd-ssh-status>正在检查…</strong></div>
       </div>
-      <div class="hd-git-note">首次 GitHub 授权由你亲自在系统浏览器中完成，之后由 Windows Credential Manager 复用。CNB 可使用 Windows ssh-agent。Harness 不读取或显示密码、Token、Cookie、验证码或 SSH 私钥。</div>
+      <div class="hd-git-note">首次 GitHub 授权使用 GCM 设备登录，由你亲自在 GitHub HTTPS 页面完成，不使用临时 127.0.0.1 回调；之后由 Windows Credential Manager 复用。CNB 可使用 Windows ssh-agent。Harness 不读取或显示密码、Token、Cookie、验证码或 SSH 私钥。</div>
     `
     row.querySelector('[data-hd-git-refresh]').addEventListener('click', () => request('refresh-git-runtime'))
     row.querySelector('[data-hd-git-auth]').addEventListener('click', () => {
@@ -1302,7 +1302,7 @@ runtimeView.addEventListener('will-navigate', event => {
       gitRuntimeState = {
         ...gitRuntimeState,
         authenticating: false,
-        message: result?.started ? 'GitHub 登录已打开；完成一次授权后，Windows 会安全复用凭据。' : '未能启动 GitHub 登录，请刷新状态后重试。'
+        message: result?.started ? 'GitHub 设备登录已打开；请在 GitHub HTTPS 页面完成授权，Windows 随后会安全复用凭据。' : '未能启动 GitHub 登录，请刷新状态后重试。'
       }
       publishGitRuntimeState()
     }).catch(error => {

@@ -72,6 +72,26 @@ test('check falls back across signed manifest sources and preserves unchanged co
   assert.equal(result.plan.desiredComponents.length, 2)
 })
 
+test('full desktop version suppresses its own component release without an active pointer', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harness-component-current-release-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const fixture = signedFixture()
+  const service = new ComponentUpdateService({
+    store: new ComponentUpdateStore(root),
+    manifestUrls: ['https://github.example/components.json'],
+    trustedKeys: fixture.trustedKeys,
+    bootstrapVersion: '1.0.24',
+    platform: 'win32',
+    arch: 'x64',
+    fetchJson: async () => fixture.manifest
+  })
+
+  const result = await service.check({ now: Date.parse('2026-08-19T01:00:00.000Z') })
+  assert.equal(result.plan.mode, 'none')
+  assert.equal(result.plan.reason, 'release-not-newer')
+  assert.deepEqual(result.plan.components, [])
+})
+
 test('stage downloads only changed components and marks the full desired pointer ready', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harness-component-stage-'))
   t.after(() => rm(root, { recursive: true, force: true }))

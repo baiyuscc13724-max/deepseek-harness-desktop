@@ -402,7 +402,10 @@ function createGitRuntimeService({
     const runtime = runtimes[source]
     const direct = source === 'bundled' && bundledGcm
     const command = direct ? bundledGcm.command : runtime.command
-    const args = direct ? ['github', 'login'] : ['credential-manager', 'github', 'login']
+    // Device flow stays on GitHub's HTTPS pages and does not navigate the user's
+    // browser to a short-lived 127.0.0.1 callback after authorization. GCM owns
+    // the interactive prompt; Harness still never receives credentials or codes.
+    const args = direct ? ['github', 'login', '--device'] : ['credential-manager', 'github', 'login', '--device']
     const childEnv = buildGitEnvironment(env, { gitCommand: runtime.command, platform })
     for (const key of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM']) delete childEnv[key]
     childEnv.GCM_INTERACTIVE = 'Always'

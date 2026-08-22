@@ -80,6 +80,29 @@ test('signed component manifest verifies and selects only changed components', (
   assert.equal(plan.totalSize, 12345)
 })
 
+test('current or older component releases never reappear after a full desktop update', () => {
+  const { manifest, trustedKeys } = fixture()
+  const verified = validateAndVerifyManifest(manifest, trustedKeys, { now: Date.parse('2026-08-19T01:00:00.000Z') })
+
+  for (const bootstrapVersion of ['1.0.24', '1.0.25']) {
+    const plan = createComponentUpdatePlan({
+      manifest: verified,
+      bootstrapVersion,
+      platform: 'win32',
+      arch: 'x64',
+      // A full installer can legitimately leave no component pointer, or retain
+      // the pointer from an older incremental activation in user data.
+      current: bootstrapVersion === '1.0.24'
+        ? {}
+        : { 'desktop-shell': { version: '1.0.23', sha256: 'c'.repeat(64) } }
+    })
+    assert.equal(plan.mode, 'none')
+    assert.equal(plan.reason, 'release-not-newer')
+    assert.equal(plan.releaseVersion, '1.0.24')
+    assert.deepEqual(plan.components, [])
+  }
+})
+
 test('manifest or component tampering is rejected', () => {
   const first = fixture()
   first.manifest.notes = 'tampered'
