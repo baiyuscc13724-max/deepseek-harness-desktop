@@ -46,6 +46,7 @@ const BUILD_JOBS = [
 ]
 const POST_TAG_PUBLISHER_FIX_FILES = new Set([
   '.github/workflows/recover-release-from-actions.yml',
+  'scripts/publish-cnb-cloud-mirror.ps1',
   'scripts/release-publish.mjs',
   'scripts/release-publish-selection.cjs',
   'tests/release-publisher.test.cjs'

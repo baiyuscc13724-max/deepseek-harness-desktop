@@ -25,6 +25,18 @@ function Invoke-CnbJson {
   return (($output -join "`n") | ConvertFrom-Json)
 }
 
+function Get-Sha256Hex {
+  param([Parameter(Mandatory = $true)][string]$LiteralPath)
+  $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $LiteralPath))
+  $algorithm = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    return ([System.BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $algorithm.Dispose()
+    $stream.Dispose()
+  }
+}
+
 $package = Get-Content -LiteralPath 'package.json' -Raw -Encoding UTF8 | ConvertFrom-Json
 $manifest = @(Get-Content -LiteralPath 'release-manifest.json' -Raw -Encoding UTF8 | ConvertFrom-Json)
 if ($manifest.Count -ne 1) { throw 'release-manifest.json must contain exactly one release.' }
@@ -62,7 +74,7 @@ foreach ($asset in $release.assets) {
 if (-not $StableOnly) {
   if (-not (Test-Path -LiteralPath 'dist/SHA256SUMS.txt')) { throw 'Missing audited release file: dist/SHA256SUMS.txt' }
   $checksumAsset = @($release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1)[0]
-  $localChecksumHash = (Get-FileHash -LiteralPath 'dist/SHA256SUMS.txt' -Algorithm SHA256).Hash.ToLowerInvariant()
+  $localChecksumHash = Get-Sha256Hex -LiteralPath 'dist/SHA256SUMS.txt'
   if ($localChecksumHash -ne [string]$checksumAsset.sha256) { throw 'dist/SHA256SUMS.txt does not match the public GitHub release asset.' }
   foreach ($asset in $release.assets) {
     if ($asset.browser_download_url -notlike 'https://github.com/*') { throw "Untrusted GitHub source URL for $($asset.name)" }
@@ -162,8 +174,8 @@ if ($StableOnly) {
     $temporary = Join-Path $env:TEMP ("cnb-stable-feed-" + [guid]::NewGuid().ToString('N') + '.json')
     try {
       Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $temporary -MaximumRedirection 8 -TimeoutSec 90
-      $localHash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
-      $remoteHash = (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash
+      $localHash = Get-Sha256Hex -LiteralPath $file
+      $remoteHash = Get-Sha256Hex -LiteralPath $temporary
       if ($localHash -ne $remoteHash) { throw "CNB stable feed does not match committed bytes: $file" }
       Write-Host "CNB stable feed verified: $file"
     } finally {
