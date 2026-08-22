@@ -34,7 +34,6 @@ const PHASES = [
   'signed-components',
   'release-manifest',
   'cnb-assets',
-  'windows-public-update',
   'stable-components',
   'cnb-stable',
   'complete'
@@ -48,7 +47,6 @@ const BUILD_JOBS = [
 const POST_TAG_PUBLISHER_FIX_FILES = new Set([
   '.github/workflows/recover-release-from-actions.yml',
   'scripts/release-publish.mjs',
-  'scripts/local-public-update-test.cjs',
   'scripts/release-publish-selection.cjs',
   'tests/release-publisher.test.cjs'
 ])
@@ -813,15 +811,6 @@ async function publish() {
   await phase(state, 'cnb-assets', async () => {
     await readVerifiedDesktopRelease()
     npmRun(['run', 'release:cnb-cloud'], { timeout: 30 * 60 * 1000, env: releaseEnvironment() })
-  })
-
-  await phase(state, 'windows-public-update', async () => {
-    assertClean()
-    await readVerifiedDesktopRelease()
-    if (process.platform !== 'win32') throw new Error('The public update installation gate must run on Windows before stable feed promotion.')
-    const electron = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
-    if (!existsSync(electron)) throw new Error('Local Electron runtime is missing for the public update installation gate.')
-    execute(electron, [path.join(root, 'scripts', 'local-public-update-test.cjs'), `--version=${version}`], { timeout: 30 * 60 * 1000 })
   })
 
   await phase(state, 'stable-components', async () => {

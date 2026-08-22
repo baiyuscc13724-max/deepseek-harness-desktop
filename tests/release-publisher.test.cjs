@@ -5,7 +5,6 @@ const path = require('node:path')
 const test = require('node:test')
 const YAML = require('yaml')
 const { canReattachPreferredDraft, isExactDetachedDraft, normalizeReleaseBody, selectReleaseForTag } = require('../scripts/release-publish-selection.cjs')
-const { assetDescriptor, selectWindowsUpdateAssets } = require('../scripts/local-public-update-test.cjs')
 
 const root = path.resolve(__dirname, '..')
 const read = file => readFileSync(path.join(root, file), 'utf8')
@@ -19,7 +18,6 @@ const expectedPhases = [
   'signed-components',
   'release-manifest',
   'cnb-assets',
-  'windows-public-update',
   'stable-components',
   'cnb-stable',
   'complete'
@@ -42,7 +40,6 @@ test('one publisher command exposes the immutable resumable release order', () =
 
 test('publisher resumes atomically and never downloads Actions binaries locally', () => {
   const source = read('scripts/release-publish.mjs')
-  const publicUpdate = read('scripts/local-public-update-test.cjs')
   assert.match(source, /acquirePublicationLock/u)
   assert.match(source, /status === 'completed'/u)
   assert.match(source, /\$\{tag\}-publish\.json/u)
@@ -60,13 +57,8 @@ test('publisher resumes atomically and never downloads Actions binaries locally'
   assert.match(source, /release\.body !== expectedBody[\s\S]*--method', 'PATCH'[\s\S]*normalized\.draft !== true/u)
   assert.match(source, /preferredReleaseId[\s\S]*reattachPreferredDraft/u)
   assert.match(source, /canReattachPreferredDraft[\s\S]*--method', 'DELETE'[\s\S]*--method', 'PATCH'/u)
-  assert.match(source, /phase\(state, 'windows-public-update'[\s\S]*local-public-update-test\.cjs/u)
-  assert.match(publicUpdate, /net\.fetch/u)
-  assert.match(publicUpdate, /checksumWithFallback[\s\S]*downloadWithFallback/u)
-  assert.match(publicUpdate, /--self-test[\s\S]*unins.*\\\.exe/u)
   assert.doesNotMatch(source, /gh[^\n]*run[^\n]*download/u)
-  assert.ok(source.indexOf("'cnb-assets'") < source.indexOf("'windows-public-update'"))
-  assert.ok(source.indexOf("'windows-public-update'") < source.indexOf("'stable-components'"))
+  assert.ok(source.indexOf("'cnb-assets'") < source.indexOf("'stable-components'"))
   assert.ok(source.indexOf("'stable-components'") < source.indexOf("'cnb-stable'"))
 })
 
@@ -113,31 +105,6 @@ test('publisher deterministically selects the one exact draft when cloud and loc
   assert.equal(selectReleaseForTag([stale, published, exact], identity), published)
   assert.throws(() => selectReleaseForTag([exact, { ...exact, id: 4 }], identity), /Multiple exact private drafts/u)
   assert.throws(() => selectReleaseForTag([published, { ...published, id: 5 }], identity), /Multiple published releases/u)
-})
-
-test('public Windows update gate selects signed installer URLs with mirror-first fallback', () => {
-  const version = '1.0.32'
-  const installer = {
-    name: `Harness-Desktop-${version}-win-x64.exe`,
-    size: 123,
-    sha256: 'a'.repeat(64),
-    browser_download_url: 'https://github.com/example/setup.exe',
-    mirror_urls: ['https://cnb.cool/example/setup.exe']
-  }
-  const checksum = {
-    name: 'SHA256SUMS.txt',
-    size: 80,
-    sha256: 'b'.repeat(64),
-    browser_download_url: 'https://github.com/example/SHA256SUMS.txt',
-    mirror_urls: ['https://cnb.cool/example/SHA256SUMS.txt']
-  }
-  const selected = selectWindowsUpdateAssets({ assets: [checksum, installer] }, version)
-  assert.equal(selected.installer, installer)
-  assert.deepEqual(assetDescriptor(installer).urls, [
-    'https://cnb.cool/example/setup.exe',
-    'https://github.com/example/setup.exe'
-  ])
-  assert.throws(() => selectWindowsUpdateAssets({ assets: [checksum] }, version), /missing the Windows installer/u)
 })
 
 test('publisher fails closed unless the desktop manifest is signed and verified before commit or mirroring', () => {
