@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.29",
+  "version": "1.0.30",
   "private": false,
   "description": "Open-source Windows and macOS desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, mobile pairing, packaged self-test, and release gates.",
   "author": {
@@ -91,6 +91,7 @@
       "plugins/dsh-desktop-progress/**/*",
       "plugins/dsh-desktop-computer-use/**/*",
       "plugins/dsh-agent-teams/**/*",
+      "plugins/dsh-session-experience/**/*",
       "!renderer/pet/pet-glb-rig.js",
       "!renderer/pet/pet-rig.js",
       "!renderer/pet/pet-rig-motion.js",
@@ -198,6 +199,7 @@
       "plugins/dsh-desktop-progress/**/*",
       "plugins/dsh-desktop-computer-use/**/*",
       "plugins/dsh-agent-teams/**/*",
+      "plugins/dsh-session-experience/**/*",
       "scripts/component-update-helper.cjs",
       "electron/bridge/component-update-*.cjs"
     ],

@@ -661,7 +661,9 @@
       const nav = dialog.querySelector('nav')
       const content = dialog.querySelector(':scope > nav + div')
       if (!nav || !content) return
+      const mobile = document.documentElement.dataset.harnessMobile === 'true'
       let skinButton = nav.querySelector('[data-hd-theme-nav]')
+      if (!mobile && skinButton) return
       let panel = content.querySelector('[data-hd-theme-panel]')
       if (skinButton && panel) {
         const themesVisible = skinButton.getAttribute('aria-current') === 'true'
@@ -684,6 +686,12 @@
       const icon = skinButton.querySelector('svg')
       if (icon) icon.outerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.1a6.9 6.9 0 1 0 0 13.8h1.1a1.35 1.35 0 0 0 .55-2.58.72.72 0 0 1 .3-1.38h1.15A3.8 3.8 0 0 0 14.9 7.1 6 6 0 0 0 8 1.1Zm-3.05 7A1.05 1.05 0 1 1 4.95 6a1.05 1.05 0 0 1 0 2.1Zm1.7-3A1.05 1.05 0 1 1 6.65 3a1.05 1.05 0 0 1 0 2.1Zm3.1-.15a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Zm2 2.2a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Z" fill="currentColor"/></svg>'
       general.parentElement.appendChild(skinButton)
+      if (!mobile) {
+        // Desktop settings: the appearance subpage lives on the native shell,
+        // so open the in-project page instead of injecting a browser page.
+        skinButton.addEventListener('click', () => request('open-appearance'))
+        return
+      }
       panel = createPanel()
       content.appendChild(panel)
       const nativeSections = () => [...content.children].filter(child => child !== panel)

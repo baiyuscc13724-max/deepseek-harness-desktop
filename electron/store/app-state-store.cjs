@@ -14,6 +14,19 @@ function boundedInteger(value, minimum, maximum, fallback) {
   return Math.min(maximum, Math.max(minimum, Math.round(number)))
 }
 
+// Bound Wallpaper Engine project directory for one-click import/sync. Only
+// absolute local paths are accepted; the value is trimmed of trailing
+// separators and capped in length to keep the state file small.
+function normalizeWallpaperEngineProject(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim().replace(/[\\/]+$/g, '')
+  if (!trimmed || trimmed.length > 4096) return null
+  const absolute = /^[a-zA-Z]:[\\/]/.test(trimmed) || /^\\\\/.test(trimmed) || /^\//.test(trimmed)
+  return absolute ? trimmed : null
+}
+
+const WALLPAPER_ENGINE_SIGNATURE = /^[\d.:-]{1,200}$/
+
 function normalizeCustomTheme(value = {}) {
   return {
     mode: value.mode === 'light' ? 'light' : 'dark',
@@ -27,6 +40,10 @@ function normalizeCustomTheme(value = {}) {
     readabilityStrength: boundedInteger(value.readabilityStrength, 0, 100, 72),
     backgroundFile: /^custom-background\.(?:png|jpe?g|webp|gif|apng|mp4|webm)$/i.test(value.backgroundFile || '')
       ? value.backgroundFile
+      : null,
+    wallpaperEngineProject: normalizeWallpaperEngineProject(value.wallpaperEngineProject),
+    wallpaperEngineSignature: WALLPAPER_ENGINE_SIGNATURE.test(String(value.wallpaperEngineSignature || ''))
+      ? String(value.wallpaperEngineSignature)
       : null
   }
 }

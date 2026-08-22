@@ -155,6 +155,44 @@ test('cache metrics separate the latest warm request from the cold-start cumulat
   assert.equal(patchConversationCacheSource(conversationPatch.source).changed, false)
 })
 
+test('screenshots and image attachments have no arbitrary side-length or normalization resize cap', async () => {
+  const { patchAttachmentProfileSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-base', 'cordis.patch.yml'), 'utf8')
+  const first = patchAttachmentProfileSource(fixture)
+  assert.match(first.source, /maxImagePixels: 64000000/u, 'decoded-pixel resource budget remains explicit')
+  assert.match(first.source, /maxImageDimension: 2147483647/u, 'per-side admission cap is effectively removed')
+  assert.match(first.source, /normalizedImageMaxDimension: 2147483647/u, 'accepted originals are not resized for a fixed side length')
+  assert.match(first.source, /normalizedImageMaxBytes: 20971520/u, 'normalization retains the existing encoded-byte safety budget')
+  assert.doesNotMatch(first.source, /maxImageDimension:\s*8192/u)
+  assert.doesNotMatch(first.source, /normalizedImageMaxDimension:\s*2048/u)
+  assert.equal(patchAttachmentProfileSource(first.source).changed, false)
+  const drifted = fixture.replace("name: '@deepseek-ai/dsh-attachment-local'", "name: '@deepseek-ai/dsh-attachment-local-next'")
+  if (drifted !== fixture) assert.throws(() => patchAttachmentProfileSource(drifted), /attachment-local profile changed/u)
+})
+
+test('extreme-aspect-ratio images retain their dimensions under the desktop attachment policy', async () => {
+  const sharp = (await import('sharp')).default
+  const { prepareImageFile } = await import('@deepseek-ai/dsh-attachment-local')
+  const data = await sharp({ create: { width: 10000, height: 2, channels: 4, background: { r: 8, g: 16, b: 32, alpha: 1 } } }).png().toBuffer()
+  const limits = {
+    maxImageBytes: 20 * 1024 * 1024,
+    maxImagesPerMessage: 20,
+    maxMessageImageBytes: 200 * 1024 * 1024,
+    maxImagePixels: 64000000,
+    maxImageDimension: 2147483647,
+    mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+  }
+  const prepared = await prepareImageFile({ data, mediaType: 'image/png', name: 'ultrawide.png' }, limits, { maxDimension: 2147483647, maxBytes: 20 * 1024 * 1024 })
+  assert.equal(prepared.ref.width, 10000)
+  assert.equal(prepared.ref.height, 2)
+  assert.equal(prepared.ref.mediaType, 'image/png')
+  assert.equal(prepared.ref.originalDimensions, undefined)
+  await assert.rejects(
+    prepareImageFile({ data, mediaType: 'image/png' }, { ...limits, maxImageDimension: 8192 }, { maxDimension: 2048, maxBytes: 4 * 1024 * 1024 }),
+    error => error?.code === 'IMAGE_DIMENSION_TOO_LARGE'
+  )
+})
+
 test('official Harness owns file references and multimodal message handling', () => {
   const patchSource = readFileSync(path.resolve(__dirname, '..', 'scripts', 'patch-official-runtime.mjs'), 'utf8')
   for (const obsoleteDesktopPatch of [

@@ -1,8 +1,8 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, safeStorage, screen, session, shell, Tray, WebContentsView } = require('electron')
-const { spawn } = require('node:child_process')
+const { spawn, execFile } = require('node:child_process')
 const { createHash, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { copyFile, mkdir, open, readFile, stat, unlink, writeFile } = require('node:fs/promises')
+const { copyFile, mkdir, open, readFile, readdir, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -12,7 +12,8 @@ const WebSocket = require('ws')
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
 const { ensureRuntimeNodeModules } = require('./bridge/runtime-bundle-service.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
-const { createWallpaperVideoResponse, resolveWallpaperEngineInput, wallpaperKind, wallpaperMime } = require('./bridge/wallpaper-service.cjs')
+const { createWallpaperVideoResponse, resolveWallpaperEngineInput, resolveWallpaperEngineProject, wallpaperKind, wallpaperMime } = require('./bridge/wallpaper-service.cjs')
+const { defaultSteamRootCandidates, scanWallpaperEngineLibrary } = require('./bridge/wallpaper-library.cjs')
 const { createDefaultProviderMeterRegistry } = require('./bridge/provider-meter-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { ensureMobileControlPlugin } = require('./bridge/mobile-control-plugin-service.cjs')
@@ -25,6 +26,7 @@ const { ensureDesktopFilesPlugin } = require('./bridge/desktop-files-plugin-serv
 const { ensureDesktopProgressPlugin } = require('./bridge/desktop-progress-plugin-service.cjs')
 const { ensureDesktopComputerUsePlugin } = require('./bridge/desktop-computer-use-plugin-service.cjs')
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
+const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
 const { ComputerUseConfirmationStore } = require('./bridge/computer-use-confirmation-store.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
@@ -1683,7 +1685,7 @@ function syncTitleBarOverlay(appearance = ensureStateStore().get().appearance) {
   mainWindow.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#f4f7ff' : '#202124', height: 36 })
 }
 
-async function appearancePayload() {
+async function readAppearancePayload() {
   let appearance = ensureStateStore().get().appearance
   if (STORE_BUILD && appearance.themeId === 'maid-atelier') {
     appearance = ensureStateStore().updateAppearance({ themeId: 'porcelain-mist' }).appearance
@@ -1705,6 +1707,43 @@ async function appearancePayload() {
   }
   const dataUrl = kind === 'image' ? await readThemeImageDataUrl(file).catch(() => null) : null
   return { ...appearance, customBackgroundDataUrl: dataUrl, customBackgroundVideoDataUrl: null, customBackgroundKind: dataUrl ? 'image' : null }
+}
+
+// Signature of a bound Wallpaper Engine project: project.json and its resolved
+// media file, so the one-click sync can detect content changes cheaply.
+async function boundWallpaperEngineSignature(projectFile, mediaFile) {
+  const [projectInfo, mediaInfo] = await Promise.all([stat(projectFile), stat(mediaFile)]).catch(() => [null, null])
+  if (!projectInfo?.isFile() || !mediaInfo?.isFile()) return ''
+  return `${Math.round(projectInfo.mtimeMs)}:${projectInfo.size}:${Math.round(mediaInfo.mtimeMs)}:${mediaInfo.size}`
+}
+
+// Re-import the bound Wallpaper Engine project whenever its files changed.
+// Silent by design: a removed/unreadable project keeps the last applied
+// background instead of wiping it, and never opens dialogs.
+async function syncBoundWallpaperEngine() {
+  const custom = ensureStateStore().get().appearance.customTheme
+  const projectDir = custom?.wallpaperEngineProject
+  if (!projectDir) return { changed: false, synchronized: false, reason: 'unbound' }
+  const projectFile = path.join(projectDir, 'project.json')
+  const resolution = await resolveWallpaperEngineInput(projectFile)
+  const signature = await boundWallpaperEngineSignature(projectFile, resolution.file)
+  if (!signature) return { changed: false, synchronized: false, reason: 'unreadable' }
+  if (signature === custom?.wallpaperEngineSignature) {
+    return { changed: false, synchronized: true, reason: 'current' }
+  }
+  const fileName = await installCustomThemeBackground(resolution.file)
+  ensureStateStore().updateAppearance({
+    themeId: 'custom',
+    customTheme: { backgroundFile: fileName, wallpaperEngineSignature: signature }
+  })
+  return { changed: true, synchronized: true, reason: 'resynced' }
+}
+
+async function appearancePayload() {
+  const wallpaperEngineSync = process.platform === 'win32'
+    ? await syncBoundWallpaperEngine().catch(() => ({ changed: false, synchronized: false, reason: 'unavailable' }))
+    : { changed: false, synchronized: false, reason: 'unavailable' }
+  return { ...(await readAppearancePayload()), wallpaperEngineSync }
 }
 
 async function bundledThemeAssets() {
@@ -1782,8 +1821,76 @@ async function readMobileThemeAsset(relative) {
   return { data: await readFile(file), mime: themeAssetMime(file) }
 }
 
+// Copy a local media file into the theme store and return the new file name.
+// The caller decides which appearance record (plain background vs bound
+// Wallpaper Engine project) is persisted afterwards.
+async function installCustomThemeBackground(source) {
+  const extension = path.extname(source).toLowerCase()
+  const kind = wallpaperKind(source)
+  if (!kind) throw new Error('仅支持 PNG、JPG、WebP、GIF、APNG、MP4 和 WebM 壁纸。')
+  const info = await stat(source)
+  const maximum = kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+  if (!info.isFile() || info.size > maximum) throw new Error(kind === 'video' ? '视频壁纸必须小于 2 GB。' : '图片壁纸必须小于 50 MB。')
+  const directory = path.join(app.getPath('userData'), 'themes')
+  const fileName = `custom-background${extension}`
+  const previousFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
+  await mkdir(directory, { recursive: true })
+  await copyFile(source, path.join(directory, fileName))
+  if (previousFile && previousFile !== fileName) {
+    await unlink(path.join(directory, previousFile)).catch(error => {
+      if (error?.code !== 'ENOENT') throw error
+    })
+  }
+  return fileName
+}
+
+// Steam install root from the HKCU Valve\Steam registry value, when present.
+function readWallpaperEngineRegistryPath() {
+  return new Promise(resolve => {
+    if (process.platform !== 'win32') return resolve('')
+    execFile('reg', ['query', 'HKCU\\Software\\Valve\\Steam', '/v', 'SteamPath'], { windowsHide: true, timeout: 5000 }, (error, stdout) => {
+      if (error) return resolve('')
+      const match = /SteamPath\s+REG_(?:SZ|EXPAND_SZ)\s+(.+)/i.exec(String(stdout || ''))
+      resolve(match ? match[1].trim().replace(/"$/, '') : '')
+    })
+  })
+}
+
+// One-click library scan: registry Steam path first, common install roots as
+// fallback, then resolve every image/video project found.
+async function wallpaperEngineLibraryScan() {
+  const registryRoot = await readWallpaperEngineRegistryPath().catch(() => '')
+  const steamRoots = [registryRoot, ...defaultSteamRootCandidates(process.env, process.platform)]
+  return scanWallpaperEngineLibrary({
+    steamRoots,
+    readdir: directory => readdir(directory, { withFileTypes: true }),
+    readFile: (file, encoding) => readFile(file, encoding),
+    stat: file => stat(file),
+    resolveProject: resolveWallpaperEngineProject
+  })
+}
+
 async function chooseCustomThemeBackground(options = {}) {
   const wallpaperEngine = options.wallpaperEngine === true
+  let projectFile = null
+  if (wallpaperEngine && options.source) {
+    const sourceValue = String(options.source).trim()
+    if (!sourceValue) return appearancePayload()
+    if (/\.json$/i.test(sourceValue)) projectFile = path.resolve(sourceValue)
+    else projectFile = path.join(path.resolve(sourceValue), 'project.json')
+    const { file } = await resolveWallpaperEngineInput(sourceValue)
+    const fileName = await installCustomThemeBackground(file)
+    const signature = await boundWallpaperEngineSignature(projectFile, file)
+    ensureStateStore().updateAppearance({
+      themeId: 'custom',
+      customTheme: {
+        backgroundFile: fileName,
+        wallpaperEngineProject: path.dirname(projectFile),
+        wallpaperEngineSignature: signature || null
+      }
+    })
+    return appearancePayload()
+  }
   let chooseDirectory = false
   if (wallpaperEngine) {
     const choice = await dialog.showMessageBox(mainWindow, {
@@ -1809,26 +1916,26 @@ async function chooseCustomThemeBackground(options = {}) {
   if (result.canceled || !result.filePaths[0]) return appearancePayload()
 
   let source = path.resolve(result.filePaths[0])
-  if (wallpaperEngine) source = (await resolveWallpaperEngineInput(source)).file
-  const extension = path.extname(source).toLowerCase()
-  const kind = wallpaperKind(source)
-  if (!kind) throw new Error('仅支持 PNG、JPG、WebP、GIF、APNG、MP4 和 WebM 壁纸。')
-  const info = await stat(source)
-  const maximum = kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
-  if (!info.isFile() || info.size > maximum) throw new Error(kind === 'video' ? '视频壁纸必须小于 2 GB。' : '图片壁纸必须小于 50 MB。')
-
-  const directory = path.join(app.getPath('userData'), 'themes')
-  const fileName = `custom-background${extension}`
-  const previousFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
-  await mkdir(directory, { recursive: true })
-  await copyFile(source, path.join(directory, fileName))
-  if (previousFile && previousFile !== fileName) {
-    await unlink(path.join(directory, previousFile)).catch(error => {
-      if (error?.code !== 'ENOENT') throw error
-    })
+  if (wallpaperEngine) {
+    if (/\.json$/i.test(source)) projectFile = source
+    else projectFile = path.join(source, 'project.json')
+    source = (await resolveWallpaperEngineInput(source)).file
   }
-  ensureStateStore().updateAppearance({ themeId: 'custom', customTheme: { backgroundFile: fileName } })
+  const fileName = await installCustomThemeBackground(source)
+  const bound = wallpaperEngine && projectFile
+    ? {
+        wallpaperEngineProject: path.dirname(projectFile),
+        wallpaperEngineSignature: (await boundWallpaperEngineSignature(projectFile, source)) || null
+      }
+    : {}
+  ensureStateStore().updateAppearance({ themeId: 'custom', customTheme: { backgroundFile: fileName, ...bound } })
   return appearancePayload()
+}
+
+// Apply a picked Wallpaper Engine project (directory or project.json) in one
+// step and bind it so later launches or the sync button refresh it.
+async function applyWallpaperEngineProject(value) {
+  return chooseCustomThemeBackground({ wallpaperEngine: true, source: value })
 }
 
 async function removeCustomThemeBackground() {
@@ -1839,7 +1946,9 @@ async function removeCustomThemeBackground() {
       if (error?.code !== 'ENOENT') throw error
     })
   }
-  ensureStateStore().updateAppearance({ customTheme: { backgroundFile: null } })
+  ensureStateStore().updateAppearance({
+    customTheme: { backgroundFile: null, wallpaperEngineProject: null, wallpaperEngineSignature: null }
+  })
 }
 
 async function clearCustomThemeBackground() {
@@ -2145,6 +2254,9 @@ function desktopComputerUsePluginOptions() {
 }
 function agentTeamsPluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-agent-teams') }
+}
+function sessionExperiencePluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-session-experience') }
 }
 
 async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {}, maxRedirects = DEFAULT_MAX_REDIRECTS, allowedHosts = [] } = {}) {
@@ -2680,6 +2792,9 @@ ipcMain.handle('appearance:saveCustom', desktopShellOnly(async customTheme => {
 }))
 ipcMain.handle('appearance:chooseBackground', desktopShellOnly(() => chooseCustomThemeBackground()))
 ipcMain.handle('appearance:chooseWallpaperEngine', desktopShellOnly(() => chooseCustomThemeBackground({ wallpaperEngine: true })))
+ipcMain.handle('appearance:listWallpaperEngineProjects', desktopShellOnly(() => wallpaperEngineLibraryScan()))
+ipcMain.handle('appearance:applyWallpaperEngineProject', desktopShellOnly(value => applyWallpaperEngineProject(value)))
+ipcMain.handle('appearance:syncWallpaperEngine', desktopShellOnly(() => appearancePayload()))
 ipcMain.handle('appearance:clearBackground', desktopShellOnly(() => clearCustomThemeBackground()))
 ipcMain.handle('pet:getState', () => petPayload())
 ipcMain.handle('pet:setPreferences', (_event, patch) => updatePetPreferences(patch || {}))
@@ -2904,6 +3019,10 @@ ipcMain.handle('mobileSync:copy', desktopShellOnly(value => {
   clipboard.writeText(String(value || ''))
   return true
 }))
+ipcMain.handle('shell:copyText', desktopShellOnly(value => {
+  clipboard.writeText(String(value || ''))
+  return true
+}))
 ipcMain.handle('runtime:start', desktopShellOnly(options => startRuntime(options || {})))
 ipcMain.handle('runtime:state', desktopShellOnly(() => runtimeState))
 ipcMain.on('window:beginDrag', (event, point) => {
@@ -3019,6 +3138,9 @@ app.whenReady().then(async () => {
     })
     await ensureAgentTeamsPlugin(agentTeamsPluginOptions()).catch(error => {
       console.warn(`Unable to prepare Agent Teams plugin: ${error.message}`)
+    })
+    await ensureSessionExperiencePlugin(sessionExperiencePluginOptions()).catch(error => {
+      console.warn(`Unable to prepare session & attachment experience plugin: ${error.message}`)
     })
   })()
   runtimeInitializationPromise.then(startManagedCacheMaintenance)

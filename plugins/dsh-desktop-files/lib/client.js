@@ -485,14 +485,13 @@ window.__ModuleLoader__.load({
         )
       );
     }
-    function apply(ctx) {
-      injectStyles();
-      ctx.slots.inject("conversation.view", function () {
-        return ctx.slots.register({ name: "conversation.view", id: "desktop-files", order: 21, locale: NS, label: function () { return t("title"); } }, FilesView);
-      });
-    }
+    // The standalone Files conversation page is intentionally retired. File
+    // management APIs remain available for tools and compatibility, while the
+    // user-facing upload affordance now lives on the chat composer paperclip in
+    // dsh-session-experience.
+    function apply() {}
     exports.apply = apply;
-    exports.inject = ["slots"];
+    exports.inject = [];
     return module.exports;
   }
 });

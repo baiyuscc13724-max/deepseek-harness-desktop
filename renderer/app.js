@@ -37,6 +37,27 @@ const skinChooseWallpaperEngineButton = document.querySelector('#skinChooseWallp
 const skinClearBackgroundButton = document.querySelector('#skinClearBackground')
 const skinApplyCustomButton = document.querySelector('#skinApplyCustom')
 const skinBackgroundState = document.querySelector('#skinBackgroundState')
+const skinWallpaperEngineSync = document.querySelector('#skinWallpaperEngineSync')
+const skinWallpaperEnginePicker = document.querySelector('#skinWallpaperEnginePicker')
+const skinWallpaperEngineStatus = document.querySelector('#skinWallpaperEngineStatus')
+const skinWallpaperEngineItems = document.querySelector('#skinWallpaperEngineItems')
+const skinWallpaperEngineRescan = document.querySelector('#skinWallpaperEngineRescan')
+const skinWallpaperEngineManual = document.querySelector('#skinWallpaperEngineManual')
+const skinWallpaperEngineClose = document.querySelector('#skinWallpaperEngineClose')
+const modelRoutingOverlay = document.querySelector('#modelRoutingOverlay')
+const closeModelRoutingButton = document.querySelector('#closeModelRouting')
+const modelRoutingMainProvider = document.querySelector('#modelRoutingMainProvider')
+const modelRoutingMainModel = document.querySelector('#modelRoutingMainModel')
+const modelRoutingSubInherit = document.querySelector('#modelRoutingSubInherit')
+const modelRoutingSubIndependent = document.querySelector('#modelRoutingSubIndependent')
+const modelRoutingSubSummary = document.querySelector('#modelRoutingSubSummary')
+const modelRoutingSubFields = document.querySelector('#modelRoutingSubFields')
+const modelRoutingSubProvider = document.querySelector('#modelRoutingSubProvider')
+const modelRoutingSubModel = document.querySelector('#modelRoutingSubModel')
+const modelRoutingRefreshMeters = document.querySelector('#modelRoutingRefreshMeters')
+const modelRoutingMeters = document.querySelector('#modelRoutingMeters')
+const modelRoutingStatus = document.querySelector('#modelRoutingStatus')
+const modelRoutingSave = document.querySelector('#modelRoutingSave')
 const mobileSyncOverlay = document.querySelector('#mobileSyncOverlay')
 const closeMobileSyncButton = document.querySelector('#closeMobileSync')
 const mobileSyncToggle = document.querySelector('#mobileSyncToggle')
@@ -366,11 +387,16 @@ function renderSkinPicker() {
   skinClearBackgroundButton.disabled = !appearanceState.customBackgroundDataUrl && !appearanceState.customBackgroundVideoDataUrl
   const backgroundFile = appearanceState.customTheme?.backgroundFile || ''
   const animated = /\.(?:gif|apng)$/i.test(backgroundFile)
+  const wallpaperEngineBound = Boolean(appearanceState.customTheme?.wallpaperEngineProject)
+  skinWallpaperEngineSync.disabled = !wallpaperEngineBound
+  skinChooseWallpaperEngineButton.disabled = false
+  skinWallpaperEngineSync.title = wallpaperEngineBound ? '重新读取已绑定项目，文件变化后自动应用最新壁纸' : '先一键导入 Wallpaper Engine 项目后可用'
+  const wallpaperPrefix = wallpaperEngineBound ? '已绑定 Wallpaper Engine 项目，文件变化自动同步；' : ''
   skinBackgroundState.textContent = appearanceState.customBackgroundVideoDataUrl
-    ? '本地视频壁纸已启用'
+    ? `${wallpaperPrefix}本地视频壁纸已启用`
     : appearanceState.customBackgroundDataUrl
-      ? animated ? '动态壁纸已启用' : '本地图片壁纸已启用'
-      : '当前使用渐变背景'
+      ? animated ? `${wallpaperPrefix}动态壁纸已启用` : `${wallpaperPrefix}本地图片壁纸已启用`
+      : wallpaperEngineBound ? `${wallpaperPrefix}等待项目同步` : '当前使用渐变背景'
   renderUiModePicker()
 }
 
@@ -432,6 +458,177 @@ function closeSkinPicker() {
   skinPickerOverlay.classList.add('hidden')
   skinPickerOverlay.setAttribute('aria-hidden', 'true')
   skinQuickButton.focus()
+}
+
+function openWallpaperEnginePicker() {
+  skinWallpaperEnginePicker.classList.remove('hidden')
+  skinWallpaperEngineStatus.textContent = '正在扫描本机 Steam 库…'
+  skinWallpaperEngineItems.innerHTML = ''
+  skinChooseWallpaperEngineButton.disabled = true
+  api.listWallpaperEngineProjects().then(library => {
+    renderWallpaperEnginePicker(library)
+  }).catch(error => {
+    skinWallpaperEngineStatus.textContent = `扫描失败：${error.message}`
+  }).finally(() => {
+    skinChooseWallpaperEngineButton.disabled = false
+  })
+}
+
+function renderWallpaperEnginePicker(library) {
+  const projects = (library && library.projects) || []
+  const skipped = (library && library.skipped) || {}
+  if (!projects.length) {
+    skinWallpaperEngineStatus.textContent = '未在本机 Steam 库中找到可导入的 Wallpaper Engine 项目；可点击“没有找到？手动选择项目目录…”。'
+    skinWallpaperEngineItems.innerHTML = ''
+    return
+  }
+  const skippedNote = skipped.unsupported ? `；跳过 ${skipped.unsupported} 个 scene/web 项目` : ''
+  skinWallpaperEngineStatus.textContent = `找到 ${projects.length} 个项目${skippedNote}，单击即可一键导入并开始自动同步`
+  skinWallpaperEngineItems.innerHTML = projects.map(project => `
+    <button type="button" class="skin-wallpaper-item" data-project-dir="${escapeHtml(project.directory)}">
+      <span class="skin-wallpaper-item-title">${escapeHtml(project.title)}</span>
+      <span class="skin-wallpaper-item-meta">${project.kind === 'video' ? '视频' : '图片'} · ${project.source === 'workshop' ? '创意工坊' : '本地项目'} · ${escapeHtml(project.directory)}</span>
+    </button>`).join('')
+  skinWallpaperEngineItems.querySelectorAll('[data-project-dir]').forEach(item => item.addEventListener('click', () => activateWallpaperEngineProject(item.dataset.projectDir)))
+}
+
+async function activateWallpaperEngineProject(directory) {
+  skinWallpaperEnginePicker.classList.add('hidden')
+  skinWallpaperEngineStatus.textContent = '正在导入并绑定…'
+  skinChooseWallpaperEngineButton.disabled = true
+  try {
+    appearanceState = await api.applyWallpaperEngineProject(directory)
+    await publishAppearanceState()
+    renderSkinPicker()
+    skinWallpaperEngineStatus.textContent = '已导入并绑定；项目内容变化后会自动同步最新壁纸'
+  } catch (error) {
+    skinWallpaperEngineStatus.textContent = `导入失败：${error.message}`
+    skinChooseWallpaperEngineButton.disabled = false
+  }
+}
+
+let modelRoutingDirty = false
+
+function shellModelMeterAmount(value, unit) {
+  if (value === null || value === undefined || value === '') return '—'
+  const number = Number(value)
+  if (!Number.isFinite(number)) return `${escapeHtml(value)}${unit ? ` ${escapeHtml(unit)}` : ''}`
+  if (/^[A-Z]{3}$/.test(unit || '')) {
+    try { return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: unit }).format(number) } catch {}
+  }
+  return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(number)}${unit ? ` ${escapeHtml(unit)}` : ''}`
+}
+
+function shellModelMeterPercent(value) {
+  return `${Math.max(0, Math.min(100, Number(value) || 0)).toFixed(0)}%`
+}
+
+function shellModelResetText(seconds) {
+  if (!seconds) return ''
+  const date = new Date(Number(seconds) * 1000)
+  return Number.isNaN(date.getTime()) ? '' : `重置：${new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)}`
+}
+
+function shellModelMeterRow(meter) {
+  if (meter.kind === 'balance') return `
+    <div class="model-routing-meter-row"><div class="model-routing-meter-row-head"><span>${escapeHtml(meter.label || '余额')}</span><span>${escapeHtml(meter.currency || '')}</span></div>
+    <div class="model-routing-meter-value">${shellModelMeterAmount(meter.total, meter.currency)}</div>
+    <div class="model-routing-meter-detail">赠送 ${shellModelMeterAmount(meter.granted, meter.currency)} · 充值 ${shellModelMeterAmount(meter.toppedUp, meter.currency)}</div></div>`
+  if (meter.kind === 'usage-window') return `
+    <div class="model-routing-meter-row"><div class="model-routing-meter-row-head"><span>${escapeHtml(meter.label || '套餐用量')}</span><span>剩余 ${shellModelMeterPercent(meter.remainingPercent)}</span></div>
+    <div class="model-routing-meter-bar"><span style="width:${shellModelMeterPercent(meter.usedPercent)}"></span></div>
+    <div class="model-routing-meter-detail">已用 ${shellModelMeterPercent(meter.usedPercent)}${shellModelResetText(meter.resetsAt) ? ` · ${escapeHtml(shellModelResetText(meter.resetsAt))}` : ''}</div></div>`
+  if (meter.kind === 'spending-budget') return `
+    <div class="model-routing-meter-row"><div class="model-routing-meter-row-head"><span>${escapeHtml(meter.label || '消费限额')}</span><span>剩余 ${shellModelMeterPercent(meter.remainingPercent)}</span></div>
+    <div class="model-routing-meter-value">${escapeHtml(meter.used)} / ${escapeHtml(meter.limit)}</div>
+    <div class="model-routing-meter-detail">${escapeHtml(shellModelResetText(meter.resetsAt))}</div></div>`
+  if (meter.kind === 'token-counter') return `
+    <div class="model-routing-meter-row"><div class="model-routing-meter-row-head"><span>${escapeHtml(meter.label || '用量')}</span></div><div class="model-routing-meter-value">${shellModelMeterAmount(meter.value, meter.unit)}</div></div>`
+  return ''
+}
+
+function shellModelMeterStateLabel(snapshot) {
+  return ({ ready: snapshot.stale ? '上次结果' : '实时', unsupported: '暂不支持', 'auth-required': '需授权', unavailable: '不可用', error: '刷新失败' })[snapshot.status] || snapshot.status
+}
+
+function shellModelFillSelect(select, rows, selected, placeholder) {
+  const normalized = rows.map(row => typeof row === 'string' ? { value: row, label: row } : row).filter(row => row.value)
+  if (selected && !normalized.some(row => row.value === selected)) normalized.unshift({ value: selected, label: selected })
+  const html = `<option value="">${escapeHtml(placeholder)}</option>${normalized.map(row => `<option value="${escapeHtml(row.value)}">${escapeHtml(row.label || row.value)}</option>`).join('')}`
+  if (select.innerHTML !== html) select.innerHTML = html
+  select.value = selected || ''
+}
+
+function setShellModelSubagentMode(inherited) {
+  modelRoutingSubInherit.setAttribute('aria-pressed', String(inherited))
+  modelRoutingSubIndependent.setAttribute('aria-pressed', String(!inherited))
+  modelRoutingSubFields.hidden = inherited
+  modelRoutingSubSummary.hidden = !inherited
+}
+
+function renderShellModelMeters() {
+  const metersState = modelRoutingState.meters || {}
+  const snapshots = metersState.snapshots || []
+  modelRoutingMeters.innerHTML = snapshots.length ? snapshots.map(snapshot => `
+    <div class="model-routing-meter-provider">
+      <div class="model-routing-meter-provider-head"><strong>${escapeHtml(snapshot.provider?.name || snapshot.provider?.id || '服务商')}</strong><span class="model-routing-meter-state">${escapeHtml(shellModelMeterStateLabel(snapshot))}</span></div>
+      ${(snapshot.meters || []).map(shellModelMeterRow).join('')}
+      ${snapshot.message ? `<div class="model-routing-meter-message">${escapeHtml(snapshot.message)}</div>` : ''}
+      ${snapshot.action ? `<a href="#" class="model-routing-meter-action" data-hd-meter-url="${escapeHtml(snapshot.action.url)}">${escapeHtml(snapshot.action.label)}</a>` : ''}
+    </div>`).join('') : `<div class="model-routing-meter-message">${metersState.error ? `额度读取失败：${escapeHtml(metersState.error)}` : '没有已配置的服务商。'}</div>`
+  modelRoutingMeters.querySelectorAll('[data-hd-meter-url]').forEach(link => link.addEventListener('click', event => {
+    event.preventDefault()
+    api.openLink(link.dataset.hdMeterUrl || '').catch(() => {})
+  }))
+  modelRoutingRefreshMeters.disabled = Boolean(metersState.loading)
+  modelRoutingRefreshMeters.textContent = metersState.loading ? '刷新中…' : '刷新额度'
+}
+
+function renderModelRoutingPage() {
+  const state = modelRoutingState
+  const providerRows = (state.providers || []).map(row => ({ value: row.id, label: row.name && row.name !== row.id ? `${row.name} (${row.id})` : row.id }))
+  const initialMain = (window.harnessModelRoutingIntegration || {}).selectInitialRoute
+    ? window.harnessModelRoutingIntegration.selectInitialRoute(state)
+    : { provider: state.main?.provider || '', model: state.main?.model || '' }
+  const modelsFor = provider => state.providers?.find(row => row.id === provider)?.models || []
+  const mainProviderValue = modelRoutingDirty ? modelRoutingMainProvider.value : (initialMain.provider || state.main?.provider || '')
+  const mainModelValue = modelRoutingDirty ? modelRoutingMainModel.value : (initialMain.model || state.main?.model || '')
+  const subProviderValue = modelRoutingDirty ? modelRoutingSubProvider.value : ((state.subagent?.provider || initialMain.provider) || '')
+  const subModelValue = modelRoutingDirty ? modelRoutingSubModel.value : ((state.subagent?.model || initialMain.model) || '')
+  shellModelFillSelect(modelRoutingMainProvider, providerRows, mainProviderValue, '选择服务商')
+  shellModelFillSelect(modelRoutingMainModel, modelsFor(modelRoutingMainProvider.value).map(value => ({ value, label: value })), mainModelValue, '选择模型')
+  shellModelFillSelect(modelRoutingSubProvider, providerRows, subProviderValue, '选择服务商')
+  shellModelFillSelect(modelRoutingSubModel, modelsFor(modelRoutingSubProvider.value).map(value => ({ value, label: value })), subModelValue, '选择模型')
+  const inherited = modelRoutingDirty ? modelRoutingSubInherit.getAttribute('aria-pressed') === 'true' : state.subagent?.inheritMain !== false
+  setShellModelSubagentMode(inherited)
+  modelRoutingSubSummary.textContent = modelRoutingMainProvider.value && modelRoutingMainModel.value
+    ? `${modelRoutingMainProvider.value} / ${modelRoutingMainModel.value}`
+    : '先选择主模型'
+  modelRoutingStatus.dataset.error = state.error ? 'true' : 'false'
+  modelRoutingStatus.textContent = state.error
+    ? `保存失败：${state.error}`
+    : state.saved
+      ? '已保存；主模型和子代理路由从下一次新建会话起生效。'
+      : `当前基于 ${state.basePreset || 'standard'} Agent 预设；配置保存在用户目录，不受官方更新覆盖。`
+  modelRoutingSave.disabled = Boolean(state.saving)
+  modelRoutingSave.textContent = state.saving ? '正在保存…' : '保存模型路由'
+  renderShellModelMeters()
+}
+
+function openModelRouting() {
+  closePetPanel()
+  closeSkinPicker()
+  modelRoutingDirty = false
+  renderModelRoutingPage()
+  modelRoutingOverlay.classList.remove('hidden')
+  modelRoutingOverlay.setAttribute('aria-hidden', 'false')
+  closeModelRoutingButton.focus()
+}
+
+function closeModelRouting() {
+  modelRoutingOverlay.classList.add('hidden')
+  modelRoutingOverlay.setAttribute('aria-hidden', 'true')
+  modelRoutingDirty = false
 }
 
 function showUpdateReady(version, kind = 'installer') {
@@ -1277,6 +1474,9 @@ runtimeView.addEventListener('will-navigate', event => {
   } else if (target.hostname === 'open-external') {
     const url = target.searchParams.get('url')
     if (url) api.openLink(url).catch(() => {})
+  } else if (target.hostname === 'copy-session-id') {
+    const value = target.searchParams.get('value')
+    if (value) api.copyText(value).catch(() => {})
   } else if (target.hostname === 'open-local') {
     const localPath = target.searchParams.get('path')
     const reveal = target.searchParams.get('reveal') === '1'
@@ -1311,6 +1511,10 @@ runtimeView.addEventListener('will-navigate', event => {
     })
   } else if (target.hostname === 'open-mobile-sync') {
     openMobileSync()
+  } else if (target.hostname === 'open-appearance') {
+    openSkinPicker()
+  } else if (target.hostname === 'open-model-routing') {
+    openModelRouting()
   } else if (target.hostname === 'mobile-control-stop') {
     api.stopMobileControl(null).then(result => {
       renderMobileSync({ control: result.state })
@@ -1542,6 +1746,7 @@ updateNowButton.addEventListener('click', async () => {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !petPanel.classList.contains('hidden')) closePetPanel()
   if (event.key === 'Escape' && !skinPickerOverlay.classList.contains('hidden')) closeSkinPicker()
+  if (event.key === 'Escape' && !modelRoutingOverlay.classList.contains('hidden')) closeModelRouting()
   if (event.key === 'Escape' && !mobileSyncOverlay.classList.contains('hidden')) closeMobileSync()
   if (event.key === 'Escape' && !updateReadyOverlay.classList.contains('hidden')) closeUpdateReady()
   if (event.key === 'Escape' && !updateNoticeOverlay.classList.contains('hidden')) closeUpdateNotice()
@@ -1557,10 +1762,40 @@ skinChooseBackgroundButton.addEventListener('click', async () => {
   await publishAppearanceState()
   renderSkinPicker()
 })
-skinChooseWallpaperEngineButton.addEventListener('click', async () => {
-  appearanceState = await api.chooseWallpaperEngine()
-  await publishAppearanceState()
-  renderSkinPicker()
+skinChooseWallpaperEngineButton.addEventListener('click', openWallpaperEnginePicker)
+skinWallpaperEngineRescan.addEventListener('click', openWallpaperEnginePicker)
+skinWallpaperEngineManual.addEventListener('click', async () => {
+  skinWallpaperEnginePicker.classList.add('hidden')
+  try {
+    appearanceState = await api.chooseWallpaperEngine()
+    await publishAppearanceState()
+    renderSkinPicker()
+  } catch (error) {
+    skinBackgroundState.textContent = `手动导入失败：${error.message}`
+  }
+})
+skinWallpaperEngineClose.addEventListener('click', () => {
+  skinWallpaperEnginePicker.classList.add('hidden')
+})
+skinWallpaperEngineSync.addEventListener('click', async () => {
+  skinWallpaperEngineSync.disabled = true
+  skinWallpaperEngineSync.textContent = '正在同步…'
+  try {
+    appearanceState = await api.syncWallpaperEngine()
+    await publishAppearanceState()
+    renderSkinPicker()
+    const sync = appearanceState.wallpaperEngineSync || {}
+    skinBackgroundState.textContent = sync.changed
+      ? '已同步 Wallpaper Engine 项目的最新内容'
+      : sync.reason === 'unavailable' || sync.reason === 'unreadable'
+        ? '已绑定项目暂时不可读，保留上次壁纸；恢复后会自动同步'
+        : '已是最新；项目内容未变化'
+    skinWallpaperEngineSync.textContent = '一键同步已绑定项目'
+  } catch (error) {
+    skinBackgroundState.textContent = `同步失败：${error.message}`
+    skinWallpaperEngineSync.textContent = '一键同步已绑定项目'
+    skinWallpaperEngineSync.disabled = false
+  }
 })
 skinClearBackgroundButton.addEventListener('click', async () => {
   appearanceState = await api.clearThemeBackground()
@@ -1577,6 +1812,62 @@ skinApplyCustomButton.addEventListener('click', async () => {
   appearanceState = await api.saveCustomTheme(readShellCustomTheme())
   await publishAppearanceState()
   closeSkinPicker()
+})
+closeModelRoutingButton.addEventListener('click', closeModelRouting)
+modelRoutingOverlay.addEventListener('click', event => {
+  if (event.target === modelRoutingOverlay) closeModelRouting()
+})
+modelRoutingMainProvider.addEventListener('change', () => {
+  modelRoutingDirty = true
+  modelRoutingMainModel.value = ''
+  renderModelRoutingPage()
+})
+modelRoutingMainModel.addEventListener('change', () => { modelRoutingDirty = true; renderModelRoutingPage() })
+modelRoutingSubProvider.addEventListener('change', () => {
+  modelRoutingDirty = true
+  modelRoutingSubModel.value = ''
+  renderModelRoutingPage()
+})
+modelRoutingSubModel.addEventListener('change', () => { modelRoutingDirty = true; renderModelRoutingPage() })
+modelRoutingSubInherit.addEventListener('click', () => {
+  modelRoutingDirty = true
+  setShellModelSubagentMode(true)
+  renderModelRoutingPage()
+})
+modelRoutingSubIndependent.addEventListener('click', () => {
+  modelRoutingDirty = true
+  setShellModelSubagentMode(false)
+  renderModelRoutingPage()
+})
+modelRoutingRefreshMeters.addEventListener('click', async () => {
+  modelRoutingState = { ...modelRoutingState, meters: { ...(modelRoutingState.meters || {}), loading: true, error: '' } }
+  renderShellModelMeters()
+  try {
+    const meters = await api.getProviderMeters(true)
+    modelRoutingState = { ...modelRoutingState, meters: { ...meters, loading: false, error: '' } }
+  } catch (error) {
+    modelRoutingState = { ...modelRoutingState, meters: { ...(modelRoutingState.meters || {}), loading: false, error: error.message } }
+  }
+  renderShellModelMeters()
+})
+modelRoutingSave.addEventListener('click', async () => {
+  modelRoutingState = { ...modelRoutingState, saving: true, saved: false, error: '' }
+  renderModelRoutingPage()
+  try {
+    const saved = await api.saveModelRouting({
+      mainProvider: modelRoutingMainProvider.value.trim(),
+      mainModel: modelRoutingMainModel.value.trim(),
+      subInherit: modelRoutingSubInherit.getAttribute('aria-pressed') === 'true' ? '1' : '0',
+      subProvider: modelRoutingSubProvider.value.trim(),
+      subModel: modelRoutingSubModel.value.trim(),
+      basePreset: modelRoutingState.basePreset
+    })
+    modelRoutingState = { ...saved, meters: modelRoutingState.meters, saving: false, saved: true, error: '' }
+    modelRoutingDirty = false
+  } catch (error) {
+    modelRoutingState = { ...modelRoutingState, saving: false, saved: false, error: error.message }
+  }
+  renderModelRoutingPage()
 })
 
 api.onRuntimeState(renderRuntimeState)

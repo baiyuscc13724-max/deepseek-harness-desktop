@@ -32,7 +32,8 @@ test('AppStateStore persists only validated appearance fields', () => {
   assert.deepEqual(restored.customTheme, {
     mode: 'light', accent: '#aabbcc', surface: '#112233', text: '#f0f0f0',
     wallpaperBrightness: 118, wallpaperBlur: 9, glassTransparency: 86, borderStrength: 71,
-    readabilityStrength: 88, backgroundFile: 'custom-background.gif'
+    readabilityStrength: 88, backgroundFile: 'custom-background.gif',
+    wallpaperEngineProject: null, wallpaperEngineSignature: null
   })
 })
 
@@ -46,7 +47,8 @@ test('AppStateStore persists only validated interface mode preferences', () => {
     customTheme: {
       mode: 'dark', accent: '#6f8cff', surface: '#171b29', text: '#f4f7ff',
       wallpaperBrightness: 82, wallpaperBlur: 2, glassTransparency: 32, borderStrength: 48,
-      readabilityStrength: 72, backgroundFile: null
+      readabilityStrength: 72, backgroundFile: null,
+      wallpaperEngineProject: null, wallpaperEngineSignature: null
     },
     uiMode: 'spatial', reducedMotion: true, lowPerformance: true
   })

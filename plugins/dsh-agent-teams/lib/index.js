@@ -6,6 +6,7 @@ import { createUserMessage, HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COLLABORATION_REASONS } from "./collaboration-broker.js";
 import { AgentCollaborationService } from "./collaboration-service.js";
+import { ProjectEntryService } from "./project-entry-service.js";
 
 /** Host-only agent-team coordinator. A future client bundle is advertised by package metadata. */
 const name = "agent-teams";
@@ -2183,6 +2184,43 @@ function registerWebApi(ctx, store, ready) {
   }), "agent-teams action route");
 }
 
+function registerProjectEntryApi(ctx, projectEntry) {
+  const statusRoute = async (req, res) => {
+    if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
+    if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
+    try { return json(res, 200, publicResult({ status: await projectEntry.status() })); }
+    catch (error) { return json(res, 400, errorPayload(error)); }
+  };
+  const actionRoute = async (req, res) => {
+    if (req.method !== "POST") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
+    if (!trustedRequest(req) || req.headers["x-harness-agent-teams"] !== "1") return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
+    let body;
+    try { body = await readJsonBody(req); } catch (error) { return json(res, error?.status === 413 ? 413 : 400, errorPayload(error, error?.status === 413 ? "AGENT_TEAMS_BODY_TOO_LARGE" : "AGENT_TEAMS_INVALID_REQUEST")); }
+    try {
+      const action = nonEmptyString(body.action, "action", 64);
+      const payload = isRecord(body.payload) ? body.payload : {};
+      let result;
+      switch (action) {
+        case "create-project": result = await projectEntry.createProject(payload); break;
+        case "create-invite": result = await projectEntry.createInvite(payload); break;
+        case "redeem-invite": result = await projectEntry.redeemInvite(payload); break;
+        case "set-relay": result = await projectEntry.setRelay(payload); break;
+        case "connect-remote": result = await projectEntry.connectRemote(payload); break;
+        case "disconnect-remote": result = await projectEntry.disconnectRemote(); break;
+        case "lan-status": result = projectEntry.lanStatus(); break;
+        case "start-lan": result = await projectEntry.startLan(payload); break;
+        case "stop-lan": result = await projectEntry.stopLan(); break;
+        default: throw new TypeError(`unsupported project entry action ${action}`);
+      }
+      return json(res, 200, publicResult({ result, status: await projectEntry.status() }));
+    } catch (error) {
+      return json(res, 400, errorPayload(error));
+    }
+  };
+  ctx.effect(() => ctx.webServer.register({ kind: "exact", path: "/api/agent-teams/project/status", handler: statusRoute }), "agent-teams project status route");
+  ctx.effect(() => ctx.webServer.register({ kind: "exact", path: "/api/agent-teams/project/action", handler: actionRoute }), "agent-teams project action route");
+}
+
 function createSubagentEventReconciler(ctx, store, ready, delayMs = SUBAGENT_RECONCILE_MS) {
   let pending = [];
   let timer;
@@ -2311,6 +2349,23 @@ function apply(ctx, config = {}) {
   if (typeof dshHome !== "string" || dshHome.length === 0) throw new Error("dsh-agent-teams requires DSH_HOME");
   const store = new AgentTeamsStore(join(dshHome, "storages", "agent_teams.json"), defaults);
   const collaboration = new AgentCollaborationService(join(dshHome, "storages", "agent_collaboration.json"));
+  // Product wiring for the already-implemented project collaboration domain: create
+  // the project authority, issue/ redeem remote invites, and manage the real WSS
+  // relay transport. The service never fakes LAN auto-discovery or an unconfigured
+  // relay; every entry reports its true capability state.
+  const projectEntry = new ProjectEntryService({
+    dshHome,
+    resolveWebSocket: async () => {
+      try {
+        const loaded = await import("ws");
+        return loaded?.default ?? loaded?.WebSocket;
+      } catch {
+        // The relay transport stays honestly disabled when no WebSocket
+        // implementation is resolvable from the plugin runtime.
+        return undefined;
+      }
+    },
+  });
   const ready = store.init();
   ready.catch((error) => ctx.logger.error(`agent-teams store initialization failed: ${String(error)}`));
   void ready.then((document) => document.teams.length > 0 ? collaboration.syncTeams(document) : undefined)
@@ -2323,10 +2378,12 @@ function apply(ctx, config = {}) {
     return async () => {
       unsubscribe();
       await collaboration.close();
+      await projectEntry.close();
     };
   }, "agent-teams collaboration presence");
   registerTools(ctx, store, ready, collaboration);
   registerWebApi(ctx, store, ready);
+  registerProjectEntryApi(ctx, projectEntry);
   observeSubagents(ctx, store, ready);
   observeUserStops(ctx, store, ready);
 }

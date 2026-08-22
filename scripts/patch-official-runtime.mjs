@@ -21,6 +21,7 @@ const modelSelectionRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'd
 const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
 const subagentContinuationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js')
 const fsSearchRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-tool-fs-search', 'lib', 'index.js')
+const attachmentProfileRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-base', 'cordis.patch.yml')
 
 function dedentOne(source) {
   return source.split('\n').map(line => line.slice(1)).join('\n')
@@ -181,6 +182,19 @@ const MARKDOWN_SANITIZE_PATCHED = dedentOne(`	function desktopLocalHref(url) {
 			return "";
 		}
 	}`)
+
+const ATTACHMENT_PROFILE_ORIGINAL = `    - id: attachment-local
+      name: '@deepseek-ai/dsh-attachment-local'`
+const ATTACHMENT_PROFILE_PATCHED = `    - id: attachment-local
+      name: '@deepseek-ai/dsh-attachment-local'
+      config:
+        # Do not reject or resize ordinary screenshots merely because one side
+        # exceeds an arbitrary UI-oriented dimension. The decoded-pixel and
+        # encoded-byte budgets remain authoritative resource-safety boundaries.
+        maxImagePixels: 64000000
+        maxImageDimension: 2147483647
+        normalizedImageMaxDimension: 2147483647
+        normalizedImageMaxBytes: 20971520`
 
 const CONVERSATION_MENTIONS_ORIGINAL = 'fileMentions: (owner) => ctx.get("chatFileMentions")?.forClosing(owner),'
 const CONVERSATION_MENTIONS_PATCHED = dedentOne(`						fileMentions: (owner) => ctx.get("chatFileMentions")?.forClosing(owner) ?? { resolve(value) {
@@ -837,6 +851,14 @@ export function patchRuntimeSource(source) {
   return { source: output, changed }
 }
 
+export function patchAttachmentProfileSource(source) {
+  if (source.includes(ATTACHMENT_PROFILE_PATCHED)) return { source, changed: false }
+  if (!source.includes(ATTACHMENT_PROFILE_ORIGINAL)) {
+    throw new Error('Pinned DSH attachment-local profile changed; refusing an unsafe image-limit patch.')
+  }
+  return { source: source.replace(ATTACHMENT_PROFILE_ORIGINAL, ATTACHMENT_PROFILE_PATCHED), changed: true }
+}
+
 export function patchDirectoryPickerSource(source) {
   if (source.includes(DIRECTORY_PICKER_PATCHED)) return { source, changed: false }
   if (!source.includes(DIRECTORY_PICKER_ORIGINAL)) {
@@ -1143,6 +1165,13 @@ export async function patchInstalledRuntime(file = runtimeClient) {
   return patched.changed
 }
 
+export async function patchInstalledAttachmentProfile(file = attachmentProfileRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchAttachmentProfileSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 export async function patchInstalledDirectoryPicker(file = directoryPickerRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchDirectoryPickerSource(source)
@@ -1244,6 +1273,7 @@ export async function patchInstalledFsSearch(file = fsSearchRuntime) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const sessionChanged = await patchInstalledRuntime()
+  const attachmentProfileChanged = await patchInstalledAttachmentProfile()
   const pickerChanged = await patchInstalledDirectoryPicker()
   const conversationChanged = await patchInstalledConversation()
   const tokenMeterChanged = await patchInstalledTokenMeter()
@@ -1259,6 +1289,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const modelSelectionChanged = await patchInstalledModelSelection()
   const fsSearchChanged = await patchInstalledFsSearch()
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
+  process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
   process.stdout.write(conversationChanged ? 'Patched conversation telemetry and view navigation.\n' : 'Conversation telemetry and view navigation already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')

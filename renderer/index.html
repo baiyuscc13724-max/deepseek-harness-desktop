@@ -303,7 +303,16 @@
                 </div>
               </section>
             </div>
-            <div class="skin-custom-actions"><button id="skinChooseBackground" type="button">选择图片或视频</button><button id="skinChooseWallpaperEngine" type="button">导入 Wallpaper Engine</button><button id="skinClearBackground" type="button">移除壁纸</button><button id="skinApplyCustom" class="primary" type="button">应用并保存</button></div>
+            <div class="skin-custom-actions"><button id="skinChooseBackground" type="button">选择图片或视频</button><button id="skinChooseWallpaperEngine" type="button">一键导入 Wallpaper Engine</button><button id="skinWallpaperEngineSync" type="button" disabled>一键同步已绑定项目</button><button id="skinClearBackground" type="button">移除壁纸</button><button id="skinApplyCustom" class="primary" type="button">应用并保存</button></div>
+            <section id="skinWallpaperEnginePicker" class="skin-wallpaper-picker hidden" aria-live="polite">
+              <div class="skin-wallpaper-picker-heading"><strong>Wallpaper Engine 一键导入</strong><span id="skinWallpaperEngineStatus">正在扫描本机 Steam 库…</span></div>
+              <div id="skinWallpaperEngineItems" class="skin-wallpaper-items"></div>
+              <div class="skin-wallpaper-picker-actions">
+                <button id="skinWallpaperEngineRescan" type="button">重新扫描</button>
+                <button id="skinWallpaperEngineManual" type="button">没有找到？手动选择项目目录…</button>
+                <button id="skinWallpaperEngineClose" type="button">收起</button>
+              </div>
+            </section>
           </section>
         </div>
         <section id="skinModePane" class="skin-picker-pane skin-mode-pane hidden" aria-labelledby="skinModeTitle">
@@ -315,6 +324,46 @@
           </section>
           <p class="skin-mode-note">旧用户默认保持“官方经典”；任何模式都可立即切回，不会重载会话。</p>
         </section>
+      </div>
+    </section>
+    <section id="modelRoutingOverlay" class="model-routing-overlay hidden" aria-hidden="true">
+      <div class="model-routing-dialog" role="dialog" aria-modal="true" aria-labelledby="modelRoutingTitle">
+        <header class="model-routing-header">
+          <div><h2 id="modelRoutingTitle">模型路由与额度</h2><p>配置主模型与子代理路由，查看各服务商账户额度；配置只保存在本机，不受官方更新覆盖。</p></div>
+          <div class="model-routing-header-actions"><button id="closeModelRouting" class="model-routing-close" type="button" aria-label="关闭">×</button></div>
+        </header>
+        <div class="model-routing-content">
+          <section class="model-routing-cards" aria-label="模型路由">
+            <div class="model-routing-card">
+              <div class="model-routing-title">主模型</div>
+              <label class="model-routing-field">服务商<select id="modelRoutingMainProvider"></select></label>
+              <label class="model-routing-field">模型<select id="modelRoutingMainModel"></select></label>
+            </div>
+            <div class="model-routing-card">
+              <div class="model-routing-title">子代理</div>
+              <div class="model-routing-mode">
+                <button type="button" id="modelRoutingSubInherit" aria-pressed="true">跟随主模型</button>
+                <button type="button" id="modelRoutingSubIndependent" aria-pressed="false">单独指定</button>
+              </div>
+              <div id="modelRoutingSubSummary" class="model-routing-summary" hidden></div>
+              <div id="modelRoutingSubFields" class="model-routing-fields">
+                <label class="model-routing-field">服务商<select id="modelRoutingSubProvider"></select></label>
+                <label class="model-routing-field">模型<select id="modelRoutingSubModel"></select></label>
+              </div>
+            </div>
+          </section>
+          <section class="model-routing-meters" aria-labelledby="modelRoutingMetersTitle">
+            <div class="model-routing-meters-head">
+              <div><h3 id="modelRoutingMetersTitle">账户额度</h3><p>不同服务商会按余额、套餐用量或消费限额显示；外部额度页仍走受控链接。</p></div>
+              <button type="button" id="modelRoutingRefreshMeters">刷新额度</button>
+            </div>
+            <div id="modelRoutingMeters" class="model-routing-meter-grid" aria-live="polite"></div>
+          </section>
+          <div class="model-routing-footer">
+            <span id="modelRoutingStatus" class="model-routing-status" role="status"></span>
+            <button type="button" id="modelRoutingSave" class="primary">保存模型路由</button>
+          </div>
+        </div>
       </div>
     </section>
     <section id="updateReadyOverlay" class="update-ready-overlay hidden" aria-hidden="true">

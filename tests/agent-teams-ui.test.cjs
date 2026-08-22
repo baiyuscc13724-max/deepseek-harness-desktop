@@ -244,11 +244,109 @@ test('Agent Teams workspace exposes tasks, events, and one unified agent catalog
   }
   assert.match(source, /props\.sessions\.setSubagentCatalogOpen\(team\.leadSessionId, true\)/u)
   assert.match(source, /new window\.CustomEvent\(SUBAGENT_CATALOG_EVENT, \{ detail: \{ parentSessionId: team\.leadSessionId \} \}\)/u)
-  assert.match(source, /h\(ActiveTeam, \{ t: t, team: team, teams: teams, closed: closed, paused: paused, setDraft: setDraft, sessions: props\.sessions \}\)/u)
+  assert.match(source, /h\(ActiveTeam, \{ t: t, team: team, teams: teams, closed: closed, paused: paused, setDraft: setDraft, sessions: props\.sessions, connection: live\.connection \}\)/u)
   assert.match(source, /paused: "已由用户停止"|paused: "Stopped by user"/u)
   assert.doesNotMatch(source, /function MemberCard|drawerTab|setDrawerTab|sessions\.openSubagent|openSubagent\(address\)/u)
   assert.match(source, /aria-live/u)
   assert.match(source, /h\("h2", \{ className: "dat-title" \}/u)
   assert.match(source, /@media\(max-width:900px\)/u)
   assert.match(source, /@media\(max-width:620px\)/u)
+})
+
+test('canvas exposes canonical member and task state kinds for complete status presentation', async () => {
+  const source = await clientSource()
+  for (const marker of ['function normalizeState(value)', 'function memberStateKind(member)', 'function taskStateKind(task)', 'data-state']) {
+    assert.ok(source.includes(marker), `missing canvas state-kind marker: ${marker}`)
+  }
+  const helperStart = source.indexOf('function relationIds(value)')
+  const helperEnd = source.indexOf('function TeamCanvas(props)')
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'canvas helpers must sit between relationIds and TeamCanvas')
+  const helpers = Function(`${source.slice(helperStart, helperEnd)}\nreturn { normalizeState, memberStateKind, taskStateKind };`)()
+  assert.equal(helpers.normalizeState('in-progress'), 'in_progress')
+  assert.equal(helpers.normalizeState('working'), 'running')
+  assert.equal(helpers.normalizeState('shutting-down'), 'shutting_down')
+  assert.equal(helpers.normalizeState(''), '')
+  assert.equal(helpers.memberStateKind({ state: 'working' }), 'running')
+  assert.equal(helpers.memberStateKind({ status: 'provisioning' }), 'provisioning')
+  assert.equal(helpers.memberStateKind({ state: 'idle' }), 'idle')
+  assert.equal(helpers.memberStateKind({ state: 'retired' }), 'retired')
+  assert.equal(helpers.memberStateKind({ state: 'failed' }), 'failed')
+  assert.equal(helpers.memberStateKind({}), 'unknown')
+  assert.equal(helpers.taskStateKind({ status: 'completed' }), 'completed')
+  assert.equal(helpers.taskStateKind({ status: 'in_progress', blockedBy: ['task-2'] }), 'blocked')
+  assert.equal(helpers.taskStateKind({ status: 'in_progress', blockedBy: [] }), 'in_progress')
+  assert.equal(helpers.taskStateKind({ status: 'pending' }), 'pending')
+  assert.equal(helpers.taskStateKind({ completedAggregate: true }), 'completed')
+  assert.equal(helpers.taskStateKind({}), 'pending')
+  assert.match(source, /task\.status \|\| task\.state \|\| "pending"\)\.toLowerCase\(\) !== "completed"/u)
+  assert.match(source, /statesByKey\[key\] = taskStateKind\(task\)/u)
+})
+
+test('canvas animates only genuine running and transfer states and honors reduced motion', async () => {
+  const source = await clientSource()
+  for (const marker of ['"data-state": stateKind', 'stateKind = taskStateKind(task)', 'dat-canvas-line-flow', 'dat-canvas-live', 'dat-canvas-live-paused', 'dat-canvas-swatch', '@keyframes dat-canvas-flow', '@keyframes dat-canvas-pulse']) {
+    assert.ok(source.includes(marker), `missing canvas motion marker: ${marker}`)
+  }
+  assert.match(source, /addEdge\(memberLookup\[String\(assigned \|\| ""\)\], target, "assigned", targetState === "in_progress"\)/u)
+  assert.match(source, /stateKind === "running" \? " dat-canvas-live" : ""/u)
+  assert.match(source, /edge\.flow \? " dat-canvas-line-flow" : ""/u)
+  assert.match(source, /\.dat-canvas-task\[data-state=in_progress\]\{/u)
+  assert.match(source, /\.dat-canvas-task\[data-state=blocked\]\{/u)
+  assert.match(source, /\.dat-canvas-node\[data-state=failed\] \.dat-canvas-dot\{/u)
+  assert.match(source, /\.dat-canvas-node\[data-state=retired\]\{opacity:\.55\}/u)
+  assert.match(source, /\.dat-canvas-node\[data-state=running\] \.dat-canvas-dot::after\{/u)
+  assert.match(source, /@media\(prefers-reduced-motion:reduce\)\{\.dat-canvas-node\{transition:none\}\.dat-canvas-member:hover\{transform:none\}\.dat-canvas-line-flow,\.dat-canvas-node\[data-state=running\] \.dat-canvas-dot::after\{animation:none\}\}/u)
+  assert.match(source, /prefers-reduced-motion/u)
+  assert.doesNotMatch(source, /(reactflow|d3|dagre|cytoscape|framer-motion|react-spring|gsap)/iu)
+})
+
+test('native team page exposes local, LAN, and remote project collaboration entrances honestly', async () => {
+  const source = await clientSource()
+  for (const marker of ['ProjectTeamEntry', '/api/agent-teams/project/status', '/api/agent-teams/project/action', 'create-project', 'create-invite', 'lan-status', 'set-relay', 'connect-remote', 'disconnect-remote']) {
+    assert.ok(source.includes(marker), `missing project collaboration entry marker: ${marker}`)
+  }
+  for (const label of ['组建协作团队', '同一局域网', '不在同一网络', '生成远程邀请', '安全发现信标尚未实现', 'HypoMux 仅用于 Windows 多网卡下载聚合']) {
+    assert.ok(source.includes(label), `missing project collaboration label: ${label}`)
+  }
+  assert.match(source, /h\(ProjectTeamEntry, \{ t: t \}\)/u)
+  assert.match(source, /navigator\.clipboard\.writeText\(value\)/u)
+  assert.match(source, /readOnly: true, value: inviteCode/u)
+  assert.match(source, /x-harness-agent-teams/u)
+  assert.doesNotMatch(source, /start-lan|stop-lan/u, 'the UI must not ask users to paste private mTLS certificate material')
+  assert.doesNotMatch(source, /HypoMux.*(?:import|require|script src)/iu)
+})
+
+test('task cards and canvas nodes open a live native task detail sidebar with assignee model and relationships', async () => {
+  const source = await clientSource()
+  for (const marker of ['function TaskDetailSidebar', 'function memberModelText(member, t)', 'dat-task-open', 'dat-canvas-task-open', 'selectedTaskId', 'selectedTask = tasks.filter', 'openTask: openTaskDetail', 'onClick: function (event) { props.openTask(event, task); }', 'props.onOpen(event, task)', 'taskDetailRef', 't("taskDetail")', 't("taskEvents")', 't("taskRef")', 't("taskDependencies")', 'memberModelText(assignee, t)', 'task.fileScopeProjection && task.fileScopeProjection.projected === false']) {
+    assert.ok(source.includes(marker), `missing task detail marker: ${marker}`)
+  }
+  assert.equal((source.match(/role: "complementary"/gu) || []).length, 2, 'activity and task detail inspectors are both complementary sidebars')
+  assert.match(source, /memberModel: modelFor, onOpen: openTaskDetail/u)
+  assert.match(source, /arrayText\(task\.blockedBy\)\.map\(refTitle\)\.join\(", "\)\)/u)
+  assert.match(source, /task\.dependencies\.map\(refTitle\)\.join\(", "\)/u)
+  assert.match(source, /setSelectedTaskId\(taskId\(task\)\)/u)
+  assert.match(source, /setSelectedTaskId\(""\)/u)
+  assert.match(source, /dat-task-events/u)
+  const modelStart = source.indexOf('function memberModelText(member, t)')
+  const modelEnd = source.indexOf('function taskId(task)', modelStart)
+  assert.ok(modelStart >= 0 && modelEnd > modelStart, 'memberModelText must be a standalone pure helper')
+  const memberModelText = Function(`${source.slice(modelStart, modelEnd)}\nreturn memberModelText`)()
+  const identity = (key) => key
+  const mainText = memberModelText({ model: 'gpt-4.1', modelTier: 'main', inheritsMain: true }, identity)
+  assert.ok(mainText.includes('gpt-4.1') && mainText.includes('mainModel') && mainText.includes('inheritsMain'), `unexpected model text: ${mainText}`)
+  assert.equal(memberModelText({ modelTier: 'subagent' }, identity), 'subagentModel')
+  assert.equal(memberModelText({}, identity), '')
+})
+
+test('task detail refreshes from the shared SSE snapshot and stays keyboard accessible', async () => {
+  const source = await clientSource()
+  assert.match(source, /selectedTaskId \? h\(React\.Fragment/u)
+  assert.match(source, /if \(event\.key === "Escape"\) \{ if \(drawerOpen\) closePanel\(\); else closeTaskDetail\(\); \}/u)
+  assert.match(source, /tabIndex: -1, ref: props\.detailRef/u)
+  assert.match(source, /focusTarget = drawerOpen \? drawerRef\.current : taskDetailRef\.current/u)
+  assert.match(source, /setDrawerOpen\(false\); setSelectedTaskId\(""\); \}, \[teamId\(team\), props\.closed\]\)/u)
+  assert.match(source, /events\.filter\(relevantToTask\)/u)
+  assert.match(source, /t\("taskDetailUnavailable"\)/u)
+  assert.doesNotMatch(source, /(reactflow|d3|dagre|cytoscape|framer-motion|react-spring|gsap)/iu)
 })
