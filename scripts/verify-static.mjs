@@ -497,6 +497,9 @@ const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runt
 for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledConversation', 'patchInstalledTokenMeter', 'patchInstalledAgentLoop', 'patchInstalledSubagentContinuation', 'const iterator = stream[Symbol.asyncIterator]()', 'activation.accepted.size > 0 && agent.inbox.hasPending', 'internal team queue filtering', '[Agent team message ']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Guarded desktop runtime patch is missing: ${contract}`)
 }
+for (const contract of ['patchInstalledFsSearch', 'patchFsSearchSource', 'Do NOT repeat this same search call', 'First use glob to discover which paths actually exist under the workspace', 'narrow the grep path to that existing subtree', 'refusing an unsafe search-recovery patch', 'fails closed as a search error (ripgrep exit 2)']) {
+  if (!runtimePatch.includes(contract)) throw new Error(`Guarded search exit-2 recovery runtime patch is missing: ${contract}`)
+}
 for (const officialHarnessContract of ['patchInstalledMarkdownRenderer', 'patchInstalledModelImageCompatibility', 'desktopMessagesForInputModalities', 'does not accept the image waiting in the prompt', 'patchConversationAttachmentCopySource']) {
   if (runtimePatch.includes(officialHarnessContract)) throw new Error(`Desktop must defer file references and multimodal handling to official Harness rc.2: ${officialHarnessContract}`)
 }

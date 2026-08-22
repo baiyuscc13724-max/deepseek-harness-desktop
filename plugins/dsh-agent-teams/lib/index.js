@@ -1485,6 +1485,11 @@ async function updateTask(store, caller, input) {
     const blockedBy = deriveTaskAcrossTeams(task, team, document.teams).blockedBy;
     const isLead = caller.id === team.rootLeadSessionId;
     if (action === "claim") {
+      if (task.state === "in_progress" && task.assigneeSessionId === caller.id) {
+        // A retried claim by the same claimant is a safe idempotent no-op: the caller
+        // already holds this task, so neither blocks nor timestamps are re-evaluated.
+        return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams) };
+      }
       if (task.state !== "pending") reject(`only a pending task can be claimed (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       if (task.assigneeSessionId !== undefined && task.assigneeSessionId !== caller.id) reject("task is assigned to another team member", "AGENT_TEAMS_UNAUTHORIZED");
       if (blockedBy.length > 0) reject(`task is blocked by: ${blockedBy.join(", ")}`, "AGENT_TEAMS_TASK_BLOCKED");
@@ -1515,9 +1520,14 @@ async function updateTask(store, caller, input) {
       task.claimedAt = undefined;
     } else if (action === "assign") {
       if (!isLead) reject("only the team lead can assign a task", "AGENT_TEAMS_UNAUTHORIZED");
-      if (task.state !== "pending") reject(`only a pending task can be assigned (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       const assignee = resolveMember(team, input.assigneeSessionId).sessionId;
       authenticateParticipant(team, assignee);
+      if (task.assigneeSessionId === assignee && (task.state === "pending" || task.state === "in_progress")) {
+        // Re-assigning the current holder (a pending pre-assignment or an in-progress
+        // claimant) is a safe idempotent no-op; a retried assign never switches holders.
+        return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams) };
+      }
+      if (task.state !== "pending") reject(`only a pending task can be assigned (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       task.assigneeSessionId = assignee;
     } else {
       if (!isLead) reject("only the team lead can unassign a task", "AGENT_TEAMS_UNAUTHORIZED");
@@ -1902,8 +1912,8 @@ function registerTools(ctx, store, ready, collaboration) {
     })), presentCall: () => present("List team tasks"),
   }));
   ctx.tools.register(defineTool({
-    name: "team_task_update", description: "Atomically claim, release, complete, reopen, or assign a team task. Claim rejects unmet dependencies and competing claims.",
-    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", enum: ["claim", "release", "complete", "reopen", "assign", "unassign"] }, state: { type: "string", enum: TASK_STATES }, assignee_session_id: { type: "string" } }, output: TOOL_OUTPUT,
+    name: "team_task_update", description: "Atomically claim, release, complete, reopen, assign, or unassign a team task. Claim rejects unmet dependencies; competing claims and reassignments to a different member while a task is in progress stay rejected. Repeating a claim by the same claimant, or the lead re-assigning the current assignee, is a safe idempotent no-op.",
+    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", enum: ["claim", "release", "complete", "reopen", "assign", "unassign"], description: "requested transition; repeated claim by the same claimant and lead assign of the current assignee are safe no-ops" }, state: { type: "string", enum: TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => publicResult(await updateTask(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, action: args.action, state: args.state, assigneeSessionId: args.assignee_session_id }))),
     presentCall: (args) => present("Update team task", `${args.action}: ${args.task_id}`),
   }));

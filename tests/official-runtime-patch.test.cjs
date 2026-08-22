@@ -191,6 +191,55 @@ test('continuable subagents self-heal an accepted inbox stranded after a failed 
   assert.equal(patchSubagentContinuationSource(first.source).changed, false)
 })
 
+test('search exit-2 path/permission failures get do-not-repeat and glob-first guidance, fail-closed', async () => {
+  const { patchFsSearchSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-tool-fs-search', 'lib', 'index.js'), 'utf8')
+  const first = patchFsSearchSource(fixture)
+  assert.equal(first.changed, !fixture.includes('Do NOT repeat this same search call'))
+  assert.match(first.source, /if \(exitCode === 2 && \/no such file\|permission denied\|access is denied\|os error\|cannot find the path\|unable to read\|is not a directory\/i\.test\(stderr\)\)/)
+  assert.match(first.source, /Do NOT repeat this same search call and do not auto-retry it/u)
+  assert.match(first.source, /First use glob to discover which paths actually exist under the workspace, then narrow the \$\{toolName\} path to the existing subtree/u)
+  assert.match(first.source, /no partial results are returned/u)
+  assert.match(first.source, /Use the grep tool — not shell grep or rg — to search file contents\. Use read on a matched file when you need surrounding context\. A missing or unreadable target path fails closed as a search error \(ripgrep exit 2\): do NOT repeat the same call and do not auto-retry — first glob to discover which paths actually exist, then narrow the grep path to that existing subtree before searching again\./u)
+  assert.match(first.source, /A missing or unreadable target path fails closed as a search error \(ripgrep exit 2\): partial results are never returned and the same call is never auto-retried — glob first to discover existing paths, then narrow the path to the existing subtree before retrying\./u)
+  assert.equal(patchFsSearchSource(first.source).changed, false)
+
+  const classifierStart = first.source.indexOf('function classifyRunFailure(')
+  const classifierEnd = first.source.indexOf('\n}', classifierStart) + 2
+  const classifierChunk = first.source.slice(classifierStart, classifierEnd)
+  class StubSearchError extends Error {
+    constructor(message, code, options) { super(message, options); this.code = code; }
+  }
+  const stderrExcerpt = (text, truncated) => {
+    const t = text.trim();
+    return t.length === 0 ? '' : truncated ? `${t} [stderr truncated]` : t;
+  }
+  const classifyRunFailure = Function('SearchError', 'stderrExcerpt', `${classifierChunk}; return classifyRunFailure`)(StubSearchError, stderrExcerpt)
+  const missing = classifyRunFailure('grep', 2, 'error: No such file or directory (os error 2)\n', false)
+  assert.equal(missing.code, 'SEARCH_FAILED')
+  assert.match(missing.message, /Do NOT repeat this same search call/)
+  assert.match(missing.message, /glob to discover which paths actually exist/)
+  assert.doesNotMatch(missing.message, /SEARCH_INVALID_PATTERN/)
+  const denied = classifyRunFailure('grep', 2, 'error: Permission denied (os error 13)\n', false)
+  assert.equal(denied.code, 'SEARCH_FAILED')
+  assert.match(denied.message, /Do NOT repeat this same search call/)
+  const windows = classifyRunFailure('grep', 2, 'error: The system cannot find the path specified. (os error 3)\n', false)
+  assert.equal(windows.code, 'SEARCH_FAILED')
+  assert.match(windows.message, /Do NOT repeat this same search call/)
+  assert.match(windows.message, /narrow the grep path to the existing subtree/)
+  const invalidPattern = classifyRunFailure('grep', 2, 'regex parse error: unbalanced group\n', false)
+  assert.equal(invalidPattern.code, 'SEARCH_INVALID_PATTERN')
+  assert.doesNotMatch(invalidPattern.message, /Do NOT repeat this same search call/)
+  const otherExit = classifyRunFailure('grep', 3, 'some other rg failure\n', false)
+  assert.equal(otherExit.code, 'SEARCH_FAILED')
+  assert.doesNotMatch(otherExit.message, /Do NOT repeat this same search call/)
+  assert.match(otherExit.message, /search failed \(exit 3\)/)
+
+  const drifted = first.source.replace('const stderr = stderrExcerpt(stderrText, stderrTruncated);', 'const stderr = stderrExcerpt(/* upstream drift */ stderrText, stderrTruncated);')
+  assert.notEqual(drifted, first.source)
+  assert.throws(() => patchFsSearchSource(drifted), /Pinned DSH search exit-2 failure classifier changed/)
+})
+
 test('subagent catalog separates current work from retained history without deleting transcripts', async () => {
   const { patchSubagentSource } = await import('../scripts/patch-official-runtime.mjs')
   const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js'), 'utf8')

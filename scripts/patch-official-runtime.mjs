@@ -20,6 +20,7 @@ const windowsAclRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-s
 const modelSelectionRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
 const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
 const subagentContinuationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js')
+const fsSearchRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-tool-fs-search', 'lib', 'index.js')
 
 function dedentOne(source) {
   return source.split('\n').map(line => line.slice(1)).join('\n')
@@ -717,6 +718,22 @@ const SUBAGENT_ZH_DRAWER_PATCHED = `${SUBAGENT_ZH_DRAWER_ORIGINAL}\n\t\t\t"count
 const SUBAGENT_EN_DRAWER_ORIGINAL = '\t\t\t"count.historyOnly": "History {history}",'
 const SUBAGENT_EN_DRAWER_PATCHED = `${SUBAGENT_EN_DRAWER_ORIGINAL}\n\t\t\t"count.compact": "Subagents {count}",\n\t\t\t"drawer.title": "Subagent sessions",\n\t\t\t"drawer.close": "Close subagent catalog",`
 
+const SEARCH_CLASSIFY_EXIT2_ORIGINAL = String(`function classifyRunFailure(toolName, exitCode, stderrText, stderrTruncated) {
+\tconst stderr = stderrExcerpt(stderrText, stderrTruncated);
+\tif (/regex parse error|error parsing glob/i.test(stderr)) return new SearchError(\`\${toolName} pattern rejected by ripgrep: \${stderr}\`, "SEARCH_INVALID_PATTERN");
+\treturn new SearchError(\`\${toolName} search failed (exit \${exitCode})\${stderr.length > 0 ? \`: \${stderr}\` : ""}\`, "SEARCH_FAILED");
+}`)
+const SEARCH_CLASSIFY_EXIT2_PATCHED = String(`function classifyRunFailure(toolName, exitCode, stderrText, stderrTruncated) {
+\tconst stderr = stderrExcerpt(stderrText, stderrTruncated);
+\tif (/regex parse error|error parsing glob/i.test(stderr)) return new SearchError(\`\${toolName} pattern rejected by ripgrep: \${stderr}\`, "SEARCH_INVALID_PATTERN");
+\tif (exitCode === 2 && /no such file|permission denied|access is denied|os error|cannot find the path|unable to read|is not a directory/i.test(stderr)) return new SearchError(\`\${toolName} search failed (exit 2): \${stderr}. Do NOT repeat this same search call and do not auto-retry it: the target path is missing or unreadable, so no partial results are returned. First use glob to discover which paths actually exist under the workspace, then narrow the \${toolName} path to the existing subtree and search again.\`, "SEARCH_FAILED");
+\treturn new SearchError(\`\${toolName} search failed (exit \${exitCode})\${stderr.length > 0 ? \`: \${stderr}\` : ""}\`, "SEARCH_FAILED");
+}`)
+const SEARCH_GREP_PROMPT_ORIGINAL = '\t\ttext: "Use the grep tool — not shell grep or rg — to search file contents. Use read on a matched file when you need surrounding context."'
+const SEARCH_GREP_PROMPT_PATCHED = '\t\ttext: "Use the grep tool — not shell grep or rg — to search file contents. Use read on a matched file when you need surrounding context. A missing or unreadable target path fails closed as a search error (ripgrep exit 2): do NOT repeat the same call and do not auto-retry — first glob to discover which paths actually exist, then narrow the grep path to that existing subtree before searching again."'
+const SEARCH_GREP_DESCRIPTION_ORIGINAL = '\t\tdescription: `Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. Returns the first ${caps.maxMatches} matches inline; a capped result reports where the complete match list was saved. Use read on a matched file for surrounding context.`,'
+const SEARCH_GREP_DESCRIPTION_PATCHED = '\t\tdescription: `Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. Returns the first ${caps.maxMatches} matches inline; a capped result reports where the complete match list was saved. A missing or unreadable target path fails closed as a search error (ripgrep exit 2): partial results are never returned and the same call is never auto-retried — glob first to discover existing paths, then narrow the path to the existing subtree before retrying. Use read on a matched file for surrounding context.`,'
+
 const SANDBOX_APPROVAL_REQUEST_ORIGINAL = `\tconst outcome = await approval.approver.request({`
 const SANDBOX_APPROVAL_REQUEST_PATCHED = `\tif (typeof approval.approver.effectivePolicy === "function" && approval.approver.effectivePolicy(approval.agent.session) === "never") throw new Error("sandbox escalation is unavailable because approval prompts are disabled in this session");
 \tconst outcome = await approval.approver.request({`
@@ -1103,6 +1120,22 @@ export function patchSubagentContinuationSource(source) {
   return { source: source.replace(SUBAGENT_SETTLEMENT_ORIGINAL, SUBAGENT_SETTLEMENT_PATCHED), changed: true }
 }
 
+export function patchFsSearchSource(source) {
+  let output = source
+  let changed = false
+  for (const [original, patched, label] of [
+    [SEARCH_CLASSIFY_EXIT2_ORIGINAL, SEARCH_CLASSIFY_EXIT2_PATCHED, 'search exit-2 failure classifier'],
+    [SEARCH_GREP_PROMPT_ORIGINAL, SEARCH_GREP_PROMPT_PATCHED, 'grep system-prompt recovery guidance'],
+    [SEARCH_GREP_DESCRIPTION_ORIGINAL, SEARCH_GREP_DESCRIPTION_PATCHED, 'grep tool description']
+  ]) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) throw new Error(`Pinned DSH ${label} changed; refusing an unsafe search-recovery patch.`)
+    output = output.replace(original, patched)
+    changed = true
+  }
+  return { source: output, changed }
+}
+
 export async function patchInstalledRuntime(file = runtimeClient) {
   const source = await readFile(file, 'utf8')
   const patched = patchRuntimeSource(source)
@@ -1202,6 +1235,13 @@ export async function patchInstalledModelSelection(file = modelSelectionRuntime)
   return patched.changed
 }
 
+export async function patchInstalledFsSearch(file = fsSearchRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchFsSearchSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const sessionChanged = await patchInstalledRuntime()
   const pickerChanged = await patchInstalledDirectoryPicker()
@@ -1217,6 +1257,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const bashSandboxChanged = await patchInstalledBashSandbox()
   const windowsAclChanged = await patchInstalledWindowsAcl()
   const modelSelectionChanged = await patchInstalledModelSelection()
+  const fsSearchChanged = await patchInstalledFsSearch()
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
   process.stdout.write(conversationChanged ? 'Patched conversation telemetry and view navigation.\n' : 'Conversation telemetry and view navigation already patched.\n')
@@ -1230,4 +1271,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(pwshSandboxChanged || bashSandboxChanged ? 'Patched confined nested-pipe denial classification.\n' : 'Confined nested-pipe denial classification already applied.\n')
   process.stdout.write(windowsAclChanged ? 'Patched Windows ACL token-default DACL intersection.\n' : 'Windows ACL token-default DACL intersection already applied.\n')
   process.stdout.write(modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
+  process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
 }

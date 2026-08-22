@@ -352,10 +352,84 @@ test('task updates distinguish invalid state from caller permission failures', a
         error => error?.code === 'AGENT_TEAMS_UNAUTHORIZED' && /claimant or team lead/u.test(error.message)
       )
     }
+    // Re-claiming by the same claimant is a safe no-op instead of a conflict.
+    const replayed = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: task.id, action: 'claim' })).task
+    assert.equal(replayed.status, 'in_progress')
+    assert.equal(replayed.assignee, 'lead-session')
+    // A different member still conflicts with the held claim.
     await assert.rejects(
-      fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: task.id, action: 'claim' }),
+      fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: task.id, action: 'claim' }),
       error => error?.code === 'AGENT_TEAMS_TASK_CONFLICT' && /in_progress/u.test(error.message)
     )
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('repeated claim and assign are idempotent while different members still conflict', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Idempotent task handoff' })
+    await fx.store.mutate(document => {
+      const current = document.teams.find(item => item.id === team.id)
+      current.members.push(worker('worker-a', 'Alpha'), worker('worker-b', 'Beta'))
+    })
+    const storedTask = id => fx.store.snapshot().teams.find(item => item.id === team.id).tasks.find(candidate => candidate.id === id)
+
+    const task = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Handoff', files: ['src/handoff.js'] })).task
+    const claimed = (await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: task.id, action: 'claim' })).task
+    assert.equal(claimed.status, 'in_progress')
+    assert.equal(claimed.assignee, 'worker-a')
+
+    // A retried claim by the same claimant leaves the record byte-identical.
+    const beforeReplay = storedTask(task.id)
+    const replayed = (await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: task.id, action: 'claim' })).task
+    assert.equal(replayed.status, 'in_progress')
+    assert.equal(replayed.assignee, 'worker-a')
+    assert.equal(JSON.stringify(storedTask(task.id)), JSON.stringify(beforeReplay))
+
+    // A different member still conflicts with the held claim.
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, { id: 'worker-b' }, { teamId: team.id, taskId: task.id, action: 'claim' }),
+      error => error?.code === 'AGENT_TEAMS_TASK_CONFLICT' && /in_progress/u.test(error.message)
+    )
+
+    // The lead re-assigning the current in-progress assignee is a safe no-op.
+    const beforeReassign = storedTask(task.id)
+    const reassigned = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: task.id, action: 'assign', assigneeSessionId: 'worker-a' })).task
+    assert.equal(reassigned.status, 'in_progress')
+    assert.equal(reassigned.assignee, 'worker-a')
+    assert.equal(JSON.stringify(storedTask(task.id)), JSON.stringify(beforeReassign))
+
+    // Assigning a different member while the task is in progress stays a conflict.
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: task.id, action: 'assign', assigneeSessionId: 'worker-b' }),
+      error => error?.code === 'AGENT_TEAMS_TASK_CONFLICT' && /in_progress/u.test(error.message)
+    )
+    // Non-lead members can never assign, even idempotently.
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: task.id, action: 'assign', assigneeSessionId: 'worker-a' }),
+      error => error?.code === 'AGENT_TEAMS_UNAUTHORIZED'
+    )
+
+    // Re-assigning the same pending assignee is also a safe no-op.
+    const assigned = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Preassigned', assigneeSessionId: 'worker-b' })).task
+    const beforePendingReassign = storedTask(assigned.id)
+    const reassignedPending = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: assigned.id, action: 'assign', assigneeSessionId: 'worker-b' })).task
+    assert.equal(reassignedPending.status, 'pending')
+    assert.equal(reassignedPending.assignee, 'worker-b')
+    assert.equal(JSON.stringify(storedTask(assigned.id)), JSON.stringify(beforePendingReassign))
+
+    // Races still admit exactly one claimant: the replay fulfils while the other member stays rejected.
+    const target = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Raced' })).task
+    await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: target.id, action: 'claim' })
+    const outcomes = await Promise.allSettled([
+      fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: target.id, action: 'claim' }),
+      fx.mod.updateTask(fx.store, { id: 'worker-b' }, { teamId: team.id, taskId: target.id, action: 'claim' })
+    ])
+    assert.equal(outcomes.filter(result => result.status === 'fulfilled').length, 1)
+    assert.equal(outcomes.filter(result => result.status === 'rejected').length, 1)
+    assert.equal(storedTask(target.id).assigneeSessionId, 'worker-a')
+    assert.equal(storedTask(target.id).state, 'in_progress')
   } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 
