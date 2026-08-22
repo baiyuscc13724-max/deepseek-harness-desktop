@@ -159,7 +159,7 @@ for (const contract of [`verify-component-signing-secret/${releaseTag}`, 'HARNES
   if (!signingSecretWorkflow.includes(contract)) throw new Error(`Component signing Secret verification must remain isolated and non-exporting: ${contract}`)
 }
 const manifestRefresher = await readFile(path.join(root, 'scripts/refresh-release-manifest.mjs'), 'utf8')
-for (const contract of ['assets: manifestAssets.length', 'asset.digest', 'Unexpected public release asset set', 'mirror_urls', 'COMPONENT-SHA256SUMS.txt']) {
+for (const contract of ['assets: manifestAssets.length', 'asset.digest', 'Unexpected public release asset set', 'mirror_urls', 'COMPONENT-SHA256SUMS.txt', "assetName === 'SHA256SUMS.txt'", '/-/git/raw/main/SHA256SUMS.txt']) {
   if (!manifestRefresher.includes(contract)) throw new Error(`Final release manifest must bind the exact public asset set to GitHub digests and CNB mirrors: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')

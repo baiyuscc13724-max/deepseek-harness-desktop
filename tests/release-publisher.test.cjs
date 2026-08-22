@@ -63,6 +63,8 @@ test('publisher fails closed unless the desktop manifest is signed and verified 
   assert.match(refresher, /HARNESS_COMPONENT_KEY_ID/u)
   assert.match(refresher, /createSignedDesktopReleaseManifest/u)
   assert.match(refresher, /validateAndVerifyDesktopReleaseManifest/u)
+  assert.match(refresher, /assetName === 'SHA256SUMS\.txt'/u)
+  assert.match(refresher, /-\/git\/raw\/main\/SHA256SUMS\.txt/u)
   assert.match(publisher, /release-update-sources\.json trust root drifted from component-update-sources\.json/u)
   assert.match(publisher, /Object\.entries\(componentKeys\)[\s\S]*Object\.entries\(desktopKeys\)/u)
   const components = read('.github/workflows/publish-production-components.yml')

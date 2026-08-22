@@ -59,6 +59,18 @@ const assets = [...release.assets].sort((a, b) => a.name.localeCompare(b.name, '
 if (JSON.stringify(assets.map(asset => asset.name)) !== JSON.stringify(expectedNames)) {
   throw new Error(`Unexpected public release asset set for ${tag}.`)
 }
+function mirrorUrlsForAsset(assetName) {
+  const encoded = encodeURIComponent(assetName)
+  const releaseMirror = `https://cnb.cool/${repo}/-/releases/download/${tag}/${encoded}`
+  // Old Electron clients cannot observe some manual redirects from CNB/GitHub
+  // release download endpoints. CNB mirrors SHA256SUMS.txt into repository main,
+  // providing a stable HTTPS text endpoint without an attachment redirect.
+  if (assetName === 'SHA256SUMS.txt') {
+    return [`https://cnb.cool/${repo}/-/git/raw/main/SHA256SUMS.txt`, releaseMirror]
+  }
+  return [releaseMirror]
+}
+
 const manifestAssets = assets.map(asset => {
   const digest = String(asset.digest || '')
   if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new Error(`GitHub SHA-256 digest missing: ${asset.name}`)
@@ -70,7 +82,7 @@ const manifestAssets = assets.map(asset => {
     browser_download_url: asset.browser_download_url,
     size: asset.size,
     sha256: digest.slice('sha256:'.length),
-    mirror_urls: [`https://cnb.cool/${repo}/-/releases/download/${tag}/${encodeURIComponent(asset.name)}`]
+    mirror_urls: mirrorUrlsForAsset(asset.name)
   }
 })
 const releases = [{
