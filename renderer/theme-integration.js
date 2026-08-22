@@ -714,35 +714,6 @@
       renderCards(panel)
     }
 
-    const applySessionLogDock = () => {
-      if (document.documentElement.dataset.harnessMobile === 'true') {
-        for (const element of document.querySelectorAll('[data-hd-session-log-docked="true"]')) {
-          for (const property of ['position', 'top', 'right', 'left', 'translate', 'z-index']) element.style.removeProperty(property)
-          delete element.dataset.hdSessionLogDocked
-        }
-        return
-      }
-      const candidates = [...document.querySelectorAll('button,a')].filter(element => /Session log|会话日志|会话记录/i.test(element.textContent || ''))
-      const active = new Set()
-      for (const element of candidates) {
-        const rect = element.getBoundingClientRect()
-        if (rect.top > 54 && element.dataset.hdSessionLogDocked !== 'true') continue
-        element.dataset.hdSessionLogDocked = 'true'
-        element.style.setProperty('position', 'fixed', 'important')
-        element.style.setProperty('top', '40px', 'important')
-        element.style.setProperty('right', '12px', 'important')
-        element.style.setProperty('left', 'auto', 'important')
-        element.style.setProperty('translate', 'none', 'important')
-        element.style.setProperty('z-index', '2147483000', 'important')
-        active.add(element)
-      }
-      for (const element of document.querySelectorAll('[data-hd-session-log-docked="true"]')) {
-        if (active.has(element)) continue
-        for (const property of ['position', 'top', 'right', 'left', 'translate', 'z-index']) element.style.removeProperty(property)
-        delete element.dataset.hdSessionLogDocked
-      }
-    }
-
     const stabilizeWorkbenchViewport = () => {
       const root = document.documentElement
       if (root.dataset.harnessMobile === 'true' || root.dataset.hdTheme === 'official') return
@@ -753,14 +724,12 @@
       tagLayoutSurfaces()
       const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
       if (dialog) ensureNavigation(dialog)
-      applySessionLogDock()
       applyUiMode(false)
       if (refreshTheme) applyTheme()
       stabilizeWorkbenchViewport()
     }
     window.__HARNESS_DESKTOP_RENDER_THEMES__ = mount
     let mutationTimer = null
-    let resizeFrame = null
     new MutationObserver(() => {
       clearTimeout(mutationTimer)
       mutationTimer = setTimeout(() => {
@@ -768,13 +737,6 @@
         mount(false)
       }, 120)
     }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
-    window.addEventListener('resize', () => {
-      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
-      resizeFrame = requestAnimationFrame(() => {
-        resizeFrame = null
-        applySessionLogDock()
-      })
-    })
     mount()
   }
 

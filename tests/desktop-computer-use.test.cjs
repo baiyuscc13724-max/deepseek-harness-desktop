@@ -19,6 +19,7 @@ test('Computer Use is built in, cross-application, policy bound and confirmation
       readFile(path.join(repositoryRoot, 'electron', 'preload.cjs'), 'utf8')
     ])
 
+    assert.match(plugin, /const inject = \['systemPrompt', 'tools'\]/u)
     assert.match(plugin, /Computer Use is a built-in desktop skill/u)
     assert.match(plugin, /never ask the user to install it or add a skill card/u)
     assert.match(plugin, /'targets', 'select', 'screenshot', 'click', 'type', 'scroll'/u)

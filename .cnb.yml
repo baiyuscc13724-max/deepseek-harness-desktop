@@ -1,7 +1,18 @@
 main:
   push:
     - stages:
+        - name: Validate stable metadata-only synchronization
+          if: test -f .cnb-stable-only
+          image: alpine:3.20
+          script: |
+            set -eu
+            apk add --no-cache jq
+            for feed in component-feeds/stable/win32-x64.json component-feeds/stable/darwin-x64.json component-feeds/stable/darwin-arm64.json; do
+              test -s "$feed"
+              jq -e '.schemaVersion and .version and .target and .signature' "$feed" >/dev/null
+            done
         - name: Prepare verified GitHub release assets
+          if: test ! -f .cnb-stable-only
           image: alpine:3.20
           script: |
             set -eu
@@ -58,7 +69,7 @@ main:
             attachments: CNB_RELEASE_ATTACHMENTS
             release_tag: CNB_RELEASE_TAG
         - name: Upload verified assets with official plugin
-          if: test -n "$CNB_RELEASE_ATTACHMENTS"
+          if: test ! -f .cnb-stable-only && test -n "$CNB_RELEASE_ATTACHMENTS"
           image: cnbcool/attachments:latest
           settings:
             type: UPLOAD

@@ -176,13 +176,15 @@ export class LanProjectTransport {
       const opened = channel.open(packet, { tlsPeer });
       await this.onDelivery(opened);
       if (!socket.destroyed && socket.writable !== false) socket.write(`${JSON.stringify({ ok: true, packetRef: opened.packetRef, status: "delivered" })}\n`);
-    } catch {
+    } catch (error) {
+      this.lastError = error;
       rejectFrame(socket);
     }
   }
 }
 
 export {
+  assertPrivateBindHost,
   DEFAULT_IDLE_TIMEOUT_MS,
   DEFAULT_MAX_CONNECTIONS,
   DEFAULT_MAX_FRAME_BYTES,

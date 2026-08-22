@@ -47,25 +47,15 @@ test('a refreshed provider catalog never overwrites an explicit route', () => {
   assert.deepEqual(plain(selected), { provider: 'explicit-provider', model: 'explicit-model' })
 })
 
-test('desktop model settings route to the native shell page while the injected browser panel stays mobile-only', () => {
+test('desktop model settings keep routing, subagent and quota controls visible in the Models section', () => {
   const integration = readFileSync(path.resolve(__dirname, '..', 'renderer', 'model-routing-integration.js'), 'utf8')
-  const shell = readFileSync(path.resolve(__dirname, '..', 'renderer', 'app.js'), 'utf8')
-  const html = readFileSync(path.resolve(__dirname, '..', 'renderer', 'index.html'), 'utf8')
-  assert.match(integration, /const mobile = document\.documentElement\.dataset\.harnessMobile === 'true'/)
-  assert.match(integration, /if \(!mobile && modelsNav\) \{/)
-  assert.match(integration, /request\('open-model-routing'\)/)
-  assert.match(integration, /dialog\.dataset\.hdModelNativeWired/)
   assert.match(integration, /panel = createPanel\(\)/)
-  assert.match(shell, /\} else if \(target\.hostname === 'open-model-routing'\) \{\s*openModelRouting\(\)/u)
-  assert.match(shell, /function openModelRouting\(\) \{/)
-  assert.match(shell, /function closeModelRouting\(\) \{/)
-  assert.match(shell, /api\.saveModelRouting\(/)
-  assert.match(shell, /api\.getProviderMeters\(true\)/)
-  assert.match(html, /id="modelRoutingOverlay"/)
-  assert.match(html, /id="modelRoutingMainProvider"/)
-  assert.match(html, /id="modelRoutingSubInherit"/)
-  assert.match(html, /id="modelRoutingMeters"/)
-  assert.match(html, /id="modelRoutingRefreshMeters"/)
+  assert.match(integration, /data-hd-sub-mode="independent"/)
+  assert.match(integration, /data-hd-sub-provider/)
+  assert.match(integration, /data-hd-sub-model/)
+  assert.match(integration, /data-hd-model-view="meters"/)
+  assert.match(integration, /data-hd-meter-refresh/)
+  assert.doesNotMatch(integration, /hdModelNativeWired/)
 })
 
 test('native model routing page provides shell-styled balance, usage and budget meters', () => {

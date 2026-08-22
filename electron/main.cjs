@@ -38,8 +38,8 @@ const { terminateProcessTree } = require('./bridge/process-tree.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
 const { resolveUserDataOverride } = require('./bridge/user-data-override.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
-const { DEFAULT_APP_FEEDS, DEFAULT_MAX_REDIRECTS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile, resolveUpdateRedirect, safeHttpsUpdateUrl } = require('./bridge/update-service.cjs')
-const { checksumWithFallback, downloadWithFallback } = require('./bridge/update-download-service.cjs')
+const { DEFAULT_APP_FEEDS, DEFAULT_MAX_REDIRECTS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile, safeHttpsUpdateUrl } = require('./bridge/update-service.cjs')
+const { checksumWithFallback, downloadWithFallback, fetchWithSafeRedirects } = require('./bridge/update-download-service.cjs')
 const { resolveUpdateFeeds } = require('./bridge/update-feed-config.cjs')
 const { openDesktopInstaller } = require('./bridge/update-launcher.cjs')
 const { resolveComponentUpdateConfig } = require('./bridge/component-update-config.cjs')
@@ -91,6 +91,7 @@ const HAS_SINGLE_INSTANCE_LOCK = SELF_TEST_MODE || COMPONENT_HEALTH_CHECK_MODE |
 const STORE_BUILD = isStoreDistribution()
 
 let mainWindow = null
+const detachedSessionWindows = new Set()
 let providerMeterRegistryPromise = null
 let runtime = null
 let runtimeOwnedByDesktop = false
@@ -2658,31 +2659,24 @@ function sessionExperiencePluginOptions() {
 }
 
 async function fetchJsonWithSystemNetwork(url, { timeoutMs = 6000, maxBytes = 1024 * 1024, headers = {}, maxRedirects = DEFAULT_MAX_REDIRECTS, allowedHosts = [] } = {}) {
-  let current = safeHttpsUpdateUrl(url, '更新清单地址').toString()
+  const current = safeHttpsUpdateUrl(url, '更新清单地址').toString()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    for (let redirectCount = 0; ; redirectCount += 1) {
-      const response = await net.fetch(current, {
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: { 'User-Agent': 'Harness-Desktop-Update-Checker', Accept: 'application/json', ...headers }
-      })
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get('location')
-        if (!location) throw new Error(`HTTP ${response.status} 重定向缺少 Location。`)
-        try { await response.body?.cancel?.() } catch {}
-        current = resolveUpdateRedirect(current, location, { redirectCount, maxRedirects, allowedHosts })
-        continue
-      }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const text = await response.text()
-      if (Buffer.byteLength(text) > maxBytes) throw new Error('更新响应过大。')
-      try {
-        return JSON.parse(text)
-      } catch (error) {
-        throw new Error(`更新响应不是有效 JSON：${error.message}`)
-      }
+    const response = await fetchWithSafeRedirects(current, {
+      fetchImpl: net.fetch,
+      signal: controller.signal,
+      maxRedirects,
+      allowedHosts,
+      headers: { 'User-Agent': 'Harness-Desktop-Update-Checker', Accept: 'application/json', ...headers }
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const text = await response.text()
+    if (Buffer.byteLength(text) > maxBytes) throw new Error('更新响应过大。')
+    try {
+      return JSON.parse(text)
+    } catch (error) {
+      throw new Error(`更新响应不是有效 JSON：${error.message}`)
     }
   } catch (error) {
     if (error?.name === 'AbortError') throw new Error(`更新检查超时（${timeoutMs}ms）`)
@@ -3039,6 +3033,62 @@ function secureGuest(guest) {
   })
 }
 
+function openDetachedSessionWindow(sessionId) {
+  const value = String(sessionId || '')
+  if (!value || value.length > 256 || value.trim() !== value) throw new Error('会话 ID 无效。')
+  if (runtimeState.status !== 'ready' || !runtimeState.url) throw new Error('Harness 运行时尚未就绪。')
+  const target = new URL(runtimeState.url)
+  target.searchParams.set('harness-desktop-session', value)
+  const iconPath = STORE_BUILD
+    ? path.join(__dirname, '..', 'store', 'Assets', 'AppList.targetsize-256.png')
+    : path.join(__dirname, '..', 'build', 'icon.png')
+  const detached = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    minWidth: 760,
+    minHeight: 520,
+    backgroundColor: '#f7f8fa',
+    icon: existsSync(iconPath) ? iconPath : undefined,
+    title: 'Harness Desktop',
+    webPreferences: {
+      partition: 'persist:harness',
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  })
+  detachedSessionWindows.add(detached)
+  detached.webContents.setWindowOpenHandler(details => {
+    openRoutedBrowserLink(details.url, { source: 'app', intent: browserIntentForLink(details.url), userChoice: 'default' }).catch(() => {})
+    return { action: 'deny' }
+  })
+  detached.webContents.on('will-navigate', (event, targetUrl) => {
+    if (/^harness-desktop:\/\/copy-session-id(?:[/?#]|$)/i.test(targetUrl)) {
+      event.preventDefault()
+      try {
+        const copyTarget = new URL(targetUrl)
+        const copyValue = copyTarget.searchParams.get('value')
+        if (copyValue) clipboard.writeText(copyValue)
+      } catch {}
+      return
+    }
+    if (/^harness-desktop:\/\/open-session-window(?:[/?#]|$)/i.test(targetUrl)) {
+      event.preventDefault()
+      try {
+        const openTarget = new URL(targetUrl)
+        const openValue = openTarget.searchParams.get('sessionId')
+        if (openValue) openDetachedSessionWindow(openValue)
+      } catch {}
+      return
+    }
+    if (!isLocalRuntimeUrl(targetUrl)) event.preventDefault()
+  })
+  detached.webContents.on('will-attach-webview', event => event.preventDefault())
+  detached.on('closed', () => detachedSessionWindows.delete(detached))
+  detached.loadURL(target.toString())
+  return true
+}
+
 function showMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow()
   if (mainWindow.isMinimized()) mainWindow.restore()
@@ -3147,6 +3197,7 @@ function createWindow() {
 }
 
 ipcMain.handle('updates:preferences', desktopShellOnly(() => ensureStateStore().get().updates))
+ipcMain.handle('session:openWindow', desktopShellOnly(sessionId => openDetachedSessionWindow(sessionId)))
 ipcMain.handle('updates:setPreferences', desktopShellOnly(patch => ensureStateStore().updatePreferences(patch || {}).updates))
 ipcMain.handle('updates:check', desktopShellOnly(() => checkUpdates()))
 ipcMain.handle('updates:install', desktopShellOnly(() => installAppUpdate()))

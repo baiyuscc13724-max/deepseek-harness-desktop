@@ -1,6 +1,7 @@
 param(
   [string]$Remote = 'cnb',
-  [int]$WaitMinutes = 20
+  [int]$WaitMinutes = 20,
+  [switch]$StableOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,17 +59,19 @@ if (@(Compare-Object ($assetNames | Sort-Object) ($manifestNames | Sort-Object))
 foreach ($asset in $release.assets) {
   if ([string]$asset.sha256 -notmatch '^[0-9a-f]{64}$') { throw "Manifest SHA-256 missing for $($asset.name)" }
 }
-if (-not (Test-Path -LiteralPath 'dist/SHA256SUMS.txt')) { throw 'Missing audited release file: dist/SHA256SUMS.txt' }
-$checksumAsset = @($release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1)[0]
-$localChecksumHash = (Get-FileHash -LiteralPath 'dist/SHA256SUMS.txt' -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($localChecksumHash -ne [string]$checksumAsset.sha256) { throw 'dist/SHA256SUMS.txt does not match the public GitHub release asset.' }
-foreach ($asset in $release.assets) {
-  if ($asset.browser_download_url -notlike 'https://github.com/*') { throw "Untrusted GitHub source URL for $($asset.name)" }
-  $sourceResponse = Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -Method Head -MaximumRedirection 8 -TimeoutSec 90
-  $sourceRawLength = @($sourceResponse.Headers['Content-Length'])[0]
-  $sourceLength = if ($sourceRawLength) { [long]$sourceRawLength } else { [long]$sourceResponse.RawContentLength }
-  if ($sourceResponse.StatusCode -ne 200 -or $sourceLength -ne [long]$asset.size) {
-    throw "GitHub source verification failed for $($asset.name): status=$($sourceResponse.StatusCode), size=$sourceLength"
+if (-not $StableOnly) {
+  if (-not (Test-Path -LiteralPath 'dist/SHA256SUMS.txt')) { throw 'Missing audited release file: dist/SHA256SUMS.txt' }
+  $checksumAsset = @($release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1)[0]
+  $localChecksumHash = (Get-FileHash -LiteralPath 'dist/SHA256SUMS.txt' -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($localChecksumHash -ne [string]$checksumAsset.sha256) { throw 'dist/SHA256SUMS.txt does not match the public GitHub release asset.' }
+  foreach ($asset in $release.assets) {
+    if ($asset.browser_download_url -notlike 'https://github.com/*') { throw "Untrusted GitHub source URL for $($asset.name)" }
+    $sourceResponse = Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -Method Head -MaximumRedirection 8 -TimeoutSec 90
+    $sourceRawLength = @($sourceResponse.Headers['Content-Length'])[0]
+    $sourceLength = if ($sourceRawLength) { [long]$sourceRawLength } else { [long]$sourceResponse.RawContentLength }
+    if ($sourceResponse.StatusCode -ne 200 -or $sourceLength -ne [long]$asset.size) {
+      throw "GitHub source verification failed for $($asset.name): status=$($sourceResponse.StatusCode), size=$sourceLength"
+    }
   }
 }
 
@@ -80,6 +83,7 @@ $stableFeedFiles = @(
 )
 $presentStableFeeds = @($stableFeedFiles | Where-Object { Test-Path -LiteralPath $_ })
 if ($presentStableFeeds.Count -notin @(0, $stableFeedFiles.Count)) { throw 'Stable component feeds must be absent or complete for all three targets.' }
+if ($StableOnly -and $presentStableFeeds.Count -ne $stableFeedFiles.Count) { throw 'Stable-only CNB synchronization requires all three promoted stable feeds.' }
 if ($presentStableFeeds.Count -eq $stableFeedFiles.Count) { $mirrorFiles += $stableFeedFiles }
 foreach ($file in $mirrorFiles) {
   if (-not (Test-Path -LiteralPath $file)) { throw "Missing CNB mirror source file: $file" }
@@ -103,12 +107,19 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Unable to hash $file" }
     Invoke-Git update-index --add --cacheinfo "100644,$blob,$file"
   }
-  $checksumBlob = (& $GitExecutable hash-object -w 'dist/SHA256SUMS.txt').Trim()
-  if ($LASTEXITCODE -ne 0) { throw 'Unable to hash dist/SHA256SUMS.txt' }
-  Invoke-Git update-index --add --cacheinfo "100644,$checksumBlob,SHA256SUMS.txt"
+  if ($StableOnly) {
+    $markerBlob = ("stable metadata only`n" | & $GitExecutable hash-object -w --stdin).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to create the stable-only CNB marker.' }
+    Invoke-Git update-index --add --cacheinfo "100644,$markerBlob,.cnb-stable-only"
+  } else {
+    $checksumBlob = (& $GitExecutable hash-object -w 'dist/SHA256SUMS.txt').Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to hash dist/SHA256SUMS.txt' }
+    Invoke-Git update-index --add --cacheinfo "100644,$checksumBlob,SHA256SUMS.txt"
+  }
   $tree = (& $GitExecutable write-tree).Trim()
   if ($LASTEXITCODE -ne 0) { throw 'Unable to write CNB mirror tree.' }
-  $commit = ("release: trigger CNB cloud mirror $expectedTag" | & $GitExecutable commit-tree $tree -p "$Remote/main").Trim()
+  $commitMessage = if ($StableOnly) { "release: sync CNB stable metadata $expectedTag" } else { "release: trigger CNB cloud mirror $expectedTag" }
+  $commit = ($commitMessage | & $GitExecutable commit-tree $tree -p "$Remote/main").Trim()
   if ($LASTEXITCODE -ne 0) { throw 'Unable to create CNB mirror commit.' }
 } finally {
   if ($null -eq $previousIndex) { Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue }
@@ -121,7 +132,8 @@ Invoke-Git update-ref "refs/heads/$branch" $commit
 & $GitExecutable -c 'credential.helper=' -c 'credential.helper=!npx.cmd --yes @cnbcool/cnb-cli git-credential' push $Remote "refs/heads/$branch`:refs/heads/main"
 if ($LASTEXITCODE -ne 0) { throw 'Unable to push the lightweight CNB mirror commit.' }
 Write-Host "CNB metadata pushed: $commit"
-Write-Host 'Release binaries remain on GitHub; CNB Runner will mirror them in the cloud.'
+if ($StableOnly) { Write-Host 'Stable-only mode: CNB Runner will validate metadata without downloading the 18 immutable assets again.' }
+else { Write-Host 'Release binaries remain on GitHub; CNB Runner will mirror them in the cloud.' }
 
 $build = $null
 $discoveryDeadline = (Get-Date).AddMinutes(2)
@@ -143,6 +155,24 @@ do {
   Start-Sleep -Seconds 10
 } while ((Get-Date) -lt $deadline)
 if ($status -ne 'success') { throw "CNB cloud mirror timed out: $($build.buildLogUrl)" }
+
+if ($StableOnly) {
+  foreach ($file in $stableFeedFiles) {
+    $url = "https://cnb.cool/$repoSlug/-/git/raw/main/$file"
+    $temporary = Join-Path $env:TEMP ("cnb-stable-feed-" + [guid]::NewGuid().ToString('N') + '.json')
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $temporary -MaximumRedirection 8 -TimeoutSec 90
+      $localHash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+      $remoteHash = (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash
+      if ($localHash -ne $remoteHash) { throw "CNB stable feed does not match committed bytes: $file" }
+      Write-Host "CNB stable feed verified: $file"
+    } finally {
+      Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+  }
+  Write-Host "CNB stable metadata synchronization complete: https://cnb.cool/$repoSlug"
+  exit 0
+}
 
 foreach ($asset in $release.assets) {
   $url = @($asset.mirror_urls | Where-Object { $_ -like 'https://cnb.cool/*' } | Select-Object -First 1)[0]

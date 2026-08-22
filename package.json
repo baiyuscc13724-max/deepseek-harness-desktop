@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.32",
+  "version": "1.0.33",
   "private": false,
   "description": "Open-source Windows and macOS desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, mobile pairing, packaged self-test, and release gates.",
   "author": {
@@ -58,11 +58,13 @@
     "@deepseek-ai/dsh-timeout": "0.1.1-rc.2",
     "@deepseek-ai/dsh-workflow": "0.1.1-rc.2",
     "@earendil-works/pi-ai": "0.82.1",
+    "@peculiar/x509": "2.0.0",
     "adm-zip": "^0.6.0",
     "cross-spawn": "7.0.6",
     "dsh-plugin-marketplace": "https://codeload.github.com/baiyuscc13724-max/DSH-Plugins-Marketplace/tar.gz/41cf453f1267b535258720dda3966b8643f3a224",
     "http-proxy": "1.18.1",
     "qrcode": "1.5.4",
+    "reflect-metadata": "0.2.2",
     "ws": "^8.21.3",
     "yaml": "2.9.0"
   },

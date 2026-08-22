@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   getBrowserState: () => ipcRenderer.invoke('browser:state'),
   setBrowserVisible: visible => ipcRenderer.invoke('browser:setVisible', Boolean(visible)),
   setBrowserContentVisible: visible => ipcRenderer.invoke('browser:setContentVisible', Boolean(visible)),
+  openSessionWindow: sessionId => ipcRenderer.invoke('session:openWindow', sessionId),
   setBrowserPanelWidth: width => ipcRenderer.invoke('browser:setPanelWidth', Number(width)),
   setBrowserWideMode: enabled => ipcRenderer.invoke('browser:setWideMode', Boolean(enabled)),
   searchBrowserHistory: query => ipcRenderer.invoke('browser:historySearch', String(query || '')),

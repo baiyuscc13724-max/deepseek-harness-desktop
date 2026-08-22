@@ -852,7 +852,22 @@ function officialSettingsBootstrap() {
   const style = document.createElement('style')
   style.dataset.harnessDesktop = 'updates'
   style.textContent = `
-    #harness-desktop-update-row { border-bottom: 1px solid var(--dsw-alias-border-l2); padding: 16px 0; color: var(--dsw-alias-label-primary); }
+    [role="dialog"][aria-modal="true"][data-hd-settings-layout="true"] { width:min(1120px,calc(100vw - 56px)); height:min(820px,calc(100vh - 48px)); border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 82%,transparent); background:color-mix(in srgb,var(--dsw-alias-bg-layer-2) 96%,transparent); box-shadow:0 24px 80px rgba(24,55,66,.18); }
+    [data-hd-settings-layout="true"] > nav { width:216px; gap:20px; padding:24px 14px 18px; border-right:1px solid var(--dsw-alias-border-l2); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 72%,transparent); }
+    [data-hd-settings-layout="true"] > nav > :first-child { padding:0 14px 2px; font-size:18px; font-weight:650; letter-spacing:.01em; }
+    [data-hd-settings-layout="true"] > nav button { min-height:42px; height:auto; border-radius:12px; padding:10px 14px; }
+    [data-hd-settings-layout="true"] > nav button[aria-current="true"] { box-shadow:inset 3px 0 0 color-mix(in srgb,var(--dsw-alias-brand-primary,#178f84) 88%,transparent); }
+    [data-hd-settings-layout="true"] [data-hd-settings-content="true"] { background:linear-gradient(145deg,color-mix(in srgb,var(--dsw-alias-bg-layer-2) 96%,#dff8f3 4%),var(--dsw-alias-bg-layer-2) 62%); }
+    [data-hd-settings-layout="true"] [data-hd-settings-options="true"] { padding:8px 32px 32px; }
+    [data-hd-settings-layout="true"] [data-slot="settings.general.item"] > * { box-sizing:border-box; margin:0 0 10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
+    [data-hd-settings-layout="true"] [data-slot="settings.general.item"] > :last-child { margin-bottom:0; }
+    [data-hd-settings-layout="true"] [data-slot="settings.general.item"] > * > :last-child { border-bottom:0; }
+    @media (max-width:860px) {
+      [role="dialog"][aria-modal="true"][data-hd-settings-layout="true"] { width:calc(100vw - 24px); height:calc(100vh - 24px); border-radius:18px; }
+      [data-hd-settings-layout="true"] > nav { width:176px; padding-inline:10px; }
+      [data-hd-settings-layout="true"] [data-hd-settings-options="true"] { padding:6px 18px 22px; }
+    }
+    #harness-desktop-update-row { box-sizing:border-box; margin-top:10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; color:var(--dsw-alias-label-primary); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
     #harness-desktop-update-row .hd-update-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
     #harness-desktop-update-row .hd-update-title { font-size:14px; line-height:22px; }
     #harness-desktop-update-row .hd-update-status { margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
@@ -869,7 +884,7 @@ function officialSettingsBootstrap() {
     #harness-desktop-update-row button:hover, #harness-desktop-update-row a:hover { background:var(--dsw-alias-interactive-bg-hover); }
     #harness-desktop-update-row button:disabled { cursor:default; opacity:.55; }
     #harness-desktop-update-row label { display:flex; align-items:center; gap:7px; margin-left:auto; color:var(--dsw-alias-label-secondary); font-size:12px; cursor:pointer; }
-    #harness-desktop-mobile-sync-row { display:flex; align-items:center; justify-content:space-between; gap:18px; border-bottom:1px solid var(--dsw-alias-border-l2); padding:16px 0; color:var(--dsw-alias-label-primary); }
+    #harness-desktop-mobile-sync-row { box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:18px; margin-top:10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; color:var(--dsw-alias-label-primary); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
     #harness-desktop-mobile-sync-row .hd-mobile-copy { min-width:0; }
     #harness-desktop-mobile-sync-row .hd-mobile-title { font-size:14px; line-height:22px; }
     #harness-desktop-mobile-sync-row .hd-mobile-status { overflow:hidden; margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
@@ -883,7 +898,7 @@ function officialSettingsBootstrap() {
     #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"] { background:var(--dsw-alias-brand-primary,#315efb); }
     #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"]::after { background:#fff; transform:translateX(18px); }
     #harness-desktop-mobile-sync-row .hd-mobile-switch:disabled { cursor:wait; opacity:.6; }
-    #harness-desktop-git-row { border-bottom:1px solid var(--dsw-alias-border-l2); padding:16px 0; color:var(--dsw-alias-label-primary); }
+    #harness-desktop-git-row { box-sizing:border-box; margin-top:10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; color:var(--dsw-alias-label-primary); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
     #harness-desktop-git-row .hd-git-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
     #harness-desktop-git-row .hd-git-title { font-size:14px; line-height:22px; }
     #harness-desktop-git-row .hd-git-summary, #harness-desktop-git-row .hd-git-note { margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
@@ -1115,6 +1130,13 @@ function officialSettingsBootstrap() {
   const mount = () => {
     const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
     if (!dialog) return
+    dialog.dataset.hdSettingsLayout = 'true'
+    const settingsNav = dialog.querySelector(':scope > nav')
+    const content = dialog.querySelector(':scope > nav + div')
+    const options = content?.lastElementChild
+    if (settingsNav) settingsNav.dataset.hdSettingsNav = 'true'
+    if (content) content.dataset.hdSettingsContent = 'true'
+    if (options) options.dataset.hdSettingsOptions = 'true'
     const configButton = [...dialog.querySelectorAll('button')].find(button => /打开配置文件|Open configuration file/i.test(button.textContent || ''))
     if (configButton && !configButton.dataset.hdDesktopOpen) {
       configButton.dataset.hdDesktopOpen = 'true'
@@ -1127,8 +1149,6 @@ function officialSettingsBootstrap() {
     const general = [...dialog.querySelectorAll('nav button')].find(button => /通用设置|General/i.test(button.textContent || ''))
     if (!general || general.getAttribute('aria-current') !== 'true') return
     const slot = dialog.querySelector('[data-slot="settings.general.item"]')
-    const content = dialog.querySelector(':scope > nav + div')
-    const options = content?.lastElementChild
     const section = slot?.parentElement || options?.firstElementChild || options
     mountGit(section)
     mountMobile(section)
@@ -1477,6 +1497,9 @@ runtimeView.addEventListener('will-navigate', event => {
   } else if (target.hostname === 'copy-session-id') {
     const value = target.searchParams.get('value')
     if (value) api.copyText(value).catch(() => {})
+  } else if (target.hostname === 'open-session-window') {
+    const sessionId = target.searchParams.get('sessionId')
+    if (sessionId) api.openSessionWindow(sessionId).catch(() => {})
   } else if (target.hostname === 'preview-local') {
     const localPath = target.searchParams.get('path')
     if (localPath && window.harnessDesktopRightWorkspace?.openLocalDocument) window.harnessDesktopRightWorkspace.openLocalDocument(localPath)

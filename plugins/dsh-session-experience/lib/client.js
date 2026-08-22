@@ -36,10 +36,6 @@ window.__ModuleLoader__.load({
       var style = document.createElement("style");
       style.id = "dsh-session-experience-style";
       style.textContent = [
-        ".hd-session-copy{display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;min-height:28px;max-width:220px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:3px 10px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);font-size:12px;cursor:pointer}",
-        ".hd-session-copy:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}",
-        ".hd-session-copy code{font-family:var(--ds-font-family-code);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-        ".hd-session-id{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
         ".dse-attach{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:0;border-radius:8px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer}",
         ".dse-attach:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}",
         ".dse-attach:disabled{cursor:default;opacity:.5}",
@@ -83,21 +79,31 @@ window.__ModuleLoader__.load({
       fallback();
     }
 
-    function SessionIdAffordance(props) {
-      var sessionId = props.sessionId;
-      var copiedPair = useState(false), copied = copiedPair[0], setCopied = copiedPair[1];
-      useEffect(function () {
-        var bridge = window.harnessDesktopGuest;
-        if (sessionId && bridge && typeof bridge.publishRightWorkspaceContext === "function") bridge.publishRightWorkspaceContext({ sessionId: sessionId });
-      }, [sessionId]);
-      if (!sessionId) return null;
-      function copy() {
-        copySessionId(sessionId, function () { setCopied(true); setTimeout(function () { setCopied(false); }, 1400); }, function () { setCopied(false); });
+    function openRequestedDesktopSession(ctx) {
+      var sessionId = "";
+      try { sessionId = new URL(window.location.href).searchParams.get("harness-desktop-session") || ""; } catch (_) {}
+      if (!sessionId || sessionId.length > 256 || sessionId.trim() !== sessionId) return function () {};
+      var settled = false;
+      var unsubscribe = null;
+      var timer = null;
+      function cleanup() {
+        if (unsubscribe) unsubscribe();
+        unsubscribe = null;
+        if (timer) clearTimeout(timer);
+        timer = null;
       }
-      return h("button", { type: "button", className: "hd-session-copy", onClick: copy, title: translate("copyId"), "aria-label": translate("copyId") },
-        h("code", { className: "hd-session-id" }, sessionId),
-        h("span", null, copied ? translate("copied") : translate("copyId"))
-      );
+      function attempt() {
+        if (settled) return true;
+        var snapshot = ctx.sessions.list && typeof ctx.sessions.list.getSnapshot === "function" ? ctx.sessions.list.getSnapshot() : {};
+        if (!snapshot.byId || !snapshot.byId[sessionId]) return false;
+        settled = true;
+        cleanup();
+        try { Promise.resolve(ctx.sessions.open(sessionId)).catch(function () {}); } catch (_) {}
+        return true;
+      }
+      if (!attempt() && ctx.sessions.list && typeof ctx.sessions.list.subscribe === "function") unsubscribe = ctx.sessions.list.subscribe(attempt);
+      timer = setTimeout(cleanup, 15000);
+      return cleanup;
     }
 
     function PaperclipButton(props) {
@@ -107,6 +113,10 @@ window.__ModuleLoader__.load({
       var statusPair = useState(""), status = statusPair[0], setStatus = statusPair[1];
       var errorPair = useState(false), isError = errorPair[0], setError = errorPair[1];
       var fileRef = useRef(null);
+      useEffect(function () {
+        var bridge = window.harnessDesktopGuest;
+        if (sessionId && bridge && typeof bridge.publishRightWorkspaceContext === "function") bridge.publishRightWorkspaceContext({ sessionId: sessionId });
+      }, [sessionId]);
       useEffect(function () {
         var bridge = window.harnessDesktopGuest;
         if (!bridge || typeof bridge.onRightWorkspaceCommand !== "function") return;
@@ -248,9 +258,9 @@ window.__ModuleLoader__.load({
       injectStyles();
       try { ctx.effect(function () { return ctx.locale.register(NS, { zh: zh, en: en }); }, "session-experience: dictionaries"); } catch (_) {}
       try { ctx.locale.subscribe(function () { try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {} }); } catch (_) {}
+      try { ctx.effect(function () { return openRequestedDesktopSession(ctx); }, "session-experience: detached session window"); } catch (_) { openRequestedDesktopSession(ctx); }
       function ArchiveEntry(props) { return h(ArchiveView, Object.assign({}, props, { sessions: ctx.sessions, workspaces: ctx.workspaces })); }
       ctx.slots.inject("conversation.view", function () { return ctx.slots.register({ name: "conversation.view", id: "session-archive", order: 24, locale: NS, label: function () { return translate("archiveView"); } }, ArchiveEntry); });
-      ctx.slots.inject("conversation.session.header.utilities", function () { return ctx.slots.register({ name: "conversation.session.header.utilities", id: "session-id", order: 10, locale: NS }, SessionIdAffordance); });
       ctx.slots.inject("conversation.input.right", function () { return ctx.slots.register({ name: "conversation.input.right", id: "session-attach", order: 30, locale: NS }, PaperclipButton); });
     }
 

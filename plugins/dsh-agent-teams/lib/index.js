@@ -2239,11 +2239,15 @@ function registerProjectEntryApi(ctx, projectEntry) {
         case "create-project": result = await projectEntry.createProject(payload); break;
         case "create-invite": result = await projectEntry.createInvite(payload); break;
         case "redeem-invite": result = await projectEntry.redeemInvite(payload); break;
+        case "prepare-join": result = await projectEntry.createJoinRequest(payload); break;
+        case "approve-join": result = await projectEntry.approveJoinRequest(payload); break;
+        case "complete-join": result = await projectEntry.completeJoinRequest(payload); break;
         case "set-relay": result = await projectEntry.setRelay(payload); break;
         case "connect-remote": result = await projectEntry.connectRemote(payload); break;
         case "disconnect-remote": result = await projectEntry.disconnectRemote(); break;
         case "lan-status": result = projectEntry.lanStatus(); break;
         case "start-lan": result = await projectEntry.startLan(payload); break;
+        case "connect-lan": result = await projectEntry.connectLan(payload); break;
         case "stop-lan": result = await projectEntry.stopLan(); break;
         default: throw new TypeError(`unsupported project entry action ${action}`);
       }

@@ -62,6 +62,20 @@ test('publisher resumes atomically and never downloads Actions binaries locally'
   assert.doesNotMatch(source, /gh[^\n]*run[^\n]*download/u)
   assert.ok(source.indexOf("'cnb-assets'") < source.indexOf("'stable-components'"))
   assert.ok(source.indexOf("'stable-components'") < source.indexOf("'cnb-stable'"))
+  assert.match(source, /'release:cnb-cloud', '--', '-StableOnly'/u)
+})
+
+test('second CNB synchronization is metadata-only and never repeats the 18-asset mirror', () => {
+  const publisher = read('scripts/publish-cnb-cloud-mirror.ps1')
+  const pipeline = read('.cnb.yml')
+  assert.match(publisher, /\[switch\]\$StableOnly/u)
+  assert.match(publisher, /\.cnb-stable-only/u)
+  assert.match(publisher, /Stable-only mode: CNB Runner will validate metadata/u)
+  assert.match(publisher, /if \(\$StableOnly\)[\s\S]*CNB stable feed verified/u)
+  assert.match(pipeline, /Validate stable metadata-only synchronization/u)
+  assert.match(pipeline, /if: test -f \.cnb-stable-only/u)
+  assert.match(pipeline, /Prepare verified GitHub release assets\n\s+if: test ! -f \.cnb-stable-only/u)
+  assert.match(pipeline, /Upload verified assets with official plugin\n\s+if: test ! -f \.cnb-stable-only/u)
 })
 
 test('publisher deterministically selects the one exact draft when cloud and local creation race', () => {

@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
+import { patchWorkspaceSessionMenuSource } from './workspace-session-menu-patch.mjs'
 
 export { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 
@@ -18,6 +19,7 @@ const pwshSandboxRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-
 const bashSandboxRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-bash-sandbox', 'lib', 'index.js')
 const windowsAclRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-sandbox-windows-acl', 'lib', 'types-CNjZgO4h.js')
 const modelSelectionRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
+const workspaceUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js')
 const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
 const subagentContinuationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js')
 const fsSearchRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-tool-fs-search', 'lib', 'index.js')
@@ -1264,6 +1266,13 @@ export async function patchInstalledModelSelection(file = modelSelectionRuntime)
   return patched.changed
 }
 
+export async function patchInstalledWorkspaceUi(file = workspaceUiRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchWorkspaceSessionMenuSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 export async function patchInstalledFsSearch(file = fsSearchRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchFsSearchSource(source)
@@ -1287,6 +1296,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const bashSandboxChanged = await patchInstalledBashSandbox()
   const windowsAclChanged = await patchInstalledWindowsAcl()
   const modelSelectionChanged = await patchInstalledModelSelection()
+  const workspaceUiChanged = await patchInstalledWorkspaceUi()
   const fsSearchChanged = await patchInstalledFsSearch()
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
@@ -1302,5 +1312,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(pwshSandboxChanged || bashSandboxChanged ? 'Patched confined nested-pipe denial classification.\n' : 'Confined nested-pipe denial classification already applied.\n')
   process.stdout.write(windowsAclChanged ? 'Patched Windows ACL token-default DACL intersection.\n' : 'Windows ACL token-default DACL intersection already applied.\n')
   process.stdout.write(modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
+  process.stdout.write(workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n')
   process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
 }

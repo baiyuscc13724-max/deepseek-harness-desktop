@@ -267,17 +267,6 @@
       const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
       if (!dialog) return
       const modelsNav = [...dialog.querySelectorAll('nav button')].find(button => /模型|Models/i.test(button.textContent || ''))
-      const mobile = document.documentElement.dataset.harnessMobile === 'true'
-      if (!mobile && modelsNav) {
-        // Desktop: the model routing/quota subpage lives on the native shell,
-        // so open the in-project page instead of injecting a browser panel.
-        if (!dialog.dataset.hdModelNativeWired) {
-          dialog.dataset.hdModelNativeWired = 'true'
-          modelsNav.addEventListener('click', () => request('open-model-routing'))
-        }
-        dialog.querySelectorAll('#harness-desktop-model-routing,#harness-desktop-model-tabs').forEach(element => element.remove())
-        return
-      }
       if (!modelsNav || modelsNav.getAttribute('aria-current') !== 'true') {
         dialog.querySelectorAll('[data-hd-model-native-hidden]').forEach(element => element.removeAttribute('data-hd-model-native-hidden'))
         dialog.querySelectorAll('[data-hd-model-settings-content]').forEach(element => element.removeAttribute('data-hd-model-settings-content'))

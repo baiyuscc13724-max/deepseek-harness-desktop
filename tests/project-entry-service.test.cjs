@@ -5,6 +5,9 @@ const path = require('node:path')
 const { generateKeyPairSync } = require('node:crypto')
 const { mkdtemp, readFile, rm } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
+const { once } = require('node:events')
+const WebSocket = require('ws')
+const { createHealthServer, createRelayRouter } = require('../services/wss-relay/server.cjs')
 
 const serviceUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-entry-service.js')).href
 
@@ -26,7 +29,7 @@ test('project entry reports honest LAN and remote capability before project crea
   assert.equal(status.project, null)
   assert.deepEqual(status.lan.autoDiscovery, {
     implemented: false,
-    reason: 'LAN auto-discovery beacon is not implemented; the base layer requires explicit mTLS certificate pinning, so discovery cannot be pretended.'
+    reason: 'LAN discovery is not broadcast; the one-time pairing response carries the pinned endpoint and mTLS credential.'
   })
   assert.equal(status.lan.implemented, true)
   assert.equal(status.lan.listening, false)
@@ -108,3 +111,98 @@ test('remote relay stays disabled until a credential-free WSS endpoint and room 
   assert.equal(status.relay.connected, false)
   assert.equal(status.relay.channelReady, false)
 }))
+
+test('two desktops complete the invitation handshake and exchange authenticated E2EE relay presence', async t => {
+  const authorityHome = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-authority-'))
+  const collaboratorHome = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-collaborator-'))
+  const server = createHealthServer()
+  const router = createRelayRouter({ server })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const localUrl = `ws://127.0.0.1:${server.address().port}`
+  class LocalRelaySocket extends WebSocket {
+    constructor(_publicUrl, options) { super(localUrl, options) }
+  }
+  const { ProjectEntryService } = await import(`${serviceUrl}?pairing=${Date.now()}-${Math.random()}`)
+  const authority = new ProjectEntryService({ dshHome: authorityHome, WebSocketImpl: LocalRelaySocket, now: () => 80_000_000 })
+  const collaborator = new ProjectEntryService({ dshHome: collaboratorHome, WebSocketImpl: LocalRelaySocket, now: () => 80_000_000 })
+  t.after(async () => {
+    await collaborator.close()
+    await authority.close()
+    for (const client of router.wss.clients) client.terminate()
+    await router.close().catch(() => {})
+    await new Promise(resolve => server.close(resolve))
+    await rm(authorityHome, { recursive: true, force: true })
+    await rm(collaboratorHome, { recursive: true, force: true })
+  })
+
+  await authority.createProject({ projectName: 'Paired Project', displayName: 'Owner' })
+  await authority.setRelay({ relayUrl: 'wss://relay.example.com/project' })
+  const invite = await authority.createInvite({ displayName: 'Reviewer', role: 'reviewer' })
+  const request = await collaborator.createJoinRequest({ inviteCode: invite.inviteCode, displayName: 'Reviewer' })
+  assert.match(request.joinRequest, /^joinreq_[A-Za-z0-9_-]+$/u)
+  const pendingJoin = await readFile(path.join(collaboratorHome, 'storages', 'agent_project_pending_join.json'), 'utf8')
+  assert.equal(pendingJoin.includes(invite.inviteCode), false, 'the reusable invitation credential must not be persisted with pending device keys')
+  assert.equal((await collaborator.status()).pairing.pending, true)
+  const approval = await authority.approveJoinRequest({ joinRequest: request.joinRequest })
+  assert.match(approval.joinResponse, /^joinack_[A-Za-z0-9_-]+$/u)
+  const approvalPayload = JSON.parse(Buffer.from(approval.joinResponse.slice('joinack_'.length), 'base64url').toString('utf8'))
+  assert.equal(approvalPayload.lan, undefined)
+  assert.equal(approvalPayload.relayUrl, undefined)
+  assert.equal(typeof approvalPayload.pairingCipher?.ciphertext, 'string')
+  assert.equal(JSON.stringify(approvalPayload).includes('BEGIN PRIVATE KEY'), false)
+  const joined = await collaborator.completeJoinRequest({ joinResponse: approval.joinResponse })
+  assert.equal(joined.member.role, 'reviewer')
+  assert.equal(joined.status.project.role, 'reviewer')
+  assert.equal(joined.status.relay.channelReady, true)
+  assert.equal((await authority.status()).project.memberCount, 2)
+
+  await authority.connectRemote()
+  await collaborator.connectRemote()
+  for (let index = 0; index < 200; index += 1) {
+    const [authorityStatus, collaboratorStatus] = await Promise.all([authority.status(), collaborator.status()])
+    if (authorityStatus.relay.lastDelivery?.type === 'presence' && collaboratorStatus.relay.lastDelivery?.type === 'presence.ack') return
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  assert.fail('paired desktops did not exchange E2EE presence through the relay')
+})
+
+test('two paired desktops automatically establish a real LAN mTLS and E2EE connection without exposing PEM fields', async t => {
+  const authorityHome = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-lan-authority-'))
+  const collaboratorHome = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-lan-collaborator-'))
+  const { ProjectEntryService } = await import(`${serviceUrl}?lan-pairing=${Date.now()}-${Math.random()}`)
+  const fixedNow = Date.now()
+  const authority = new ProjectEntryService({ dshHome: authorityHome, now: () => fixedNow })
+  const collaborator = new ProjectEntryService({ dshHome: collaboratorHome, now: () => fixedNow })
+  t.after(async () => {
+    await collaborator.close()
+    await authority.close()
+    await rm(authorityHome, { recursive: true, force: true })
+    await rm(collaboratorHome, { recursive: true, force: true })
+  })
+
+  await authority.createProject({ projectName: 'LAN Project', displayName: 'Owner' })
+  const listening = await authority.startLan({ host: '127.0.0.1' })
+  assert.equal(listening.listening, true)
+  assert.equal(listening.requiresExplicitCertificates, false)
+  assert.deepEqual(Object.keys(listening.endpoint).sort(), ['host', 'port'])
+
+  const invite = await authority.createInvite({ displayName: 'LAN Reviewer', role: 'reviewer' })
+  const request = await collaborator.createJoinRequest({ inviteCode: invite.inviteCode, displayName: 'LAN Reviewer' })
+  const approval = await authority.approveJoinRequest({ joinRequest: request.joinRequest })
+  assert.equal(approval.joinResponse.includes('BEGIN PRIVATE KEY'), false, 'the transfer stays encoded instead of rendering PEM in the UI')
+  const tamperedApproval = JSON.parse(Buffer.from(approval.joinResponse.slice('joinack_'.length), 'base64url').toString('utf8'))
+  tamperedApproval.pairingCipher.ciphertext = `${tamperedApproval.pairingCipher.ciphertext.slice(0, -1)}${tamperedApproval.pairingCipher.ciphertext.endsWith('A') ? 'B' : 'A'}`
+  const tamperedJoinResponse = `joinack_${Buffer.from(JSON.stringify(tamperedApproval), 'utf8').toString('base64url')}`
+  await assert.rejects(collaborator.completeJoinRequest({ joinResponse: tamperedJoinResponse }), error => error?.code === 'PROJECT_ENTRY_INVITE_INVALID' && /authority signature/u.test(error.message))
+  await collaborator.completeJoinRequest({ joinResponse: approval.joinResponse })
+  const collaboratorStatus = await collaborator.status()
+  assert.deepEqual(collaboratorStatus.lan.endpoint, listening.endpoint)
+
+  let connected
+  try { connected = await collaborator.connectLan() }
+  catch (error) { assert.fail(`${error?.stack || error}\nserver rejection: ${authority.lanTransport?.lastError?.stack || authority.lanTransport?.lastError}`) }
+  assert.equal(connected.connected, true)
+  assert.equal((await collaborator.status()).lan.connected, true)
+  assert.equal((await authority.status()).relay.lastDelivery.type, 'presence')
+})

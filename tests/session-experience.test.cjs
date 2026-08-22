@@ -57,13 +57,13 @@ test('session experience plugin installation is additive and idempotent', async 
   assert.equal(entries.filter(item => item.id === 'session-experience' && item.name === 'dsh-session-experience').length, 1)
 })
 
-test('client registers archive history, copyable session id, and an in-composer paperclip — never a separate file page', async () => {
+test('client registers archive history and an in-composer paperclip — never a separate file page or header id pill', async () => {
   const source = await readFile(path.join(root, 'plugins/dsh-session-experience/lib/client.js'), 'utf8')
   assert.match(source, /window\.__ModuleLoader__\.load/u)
   assert.match(source, /ctx\.slots\.inject\("conversation\.view"/u)
   assert.match(source, /id: "session-archive"/u)
   assert.match(source, /label: function \(\) \{ return translate\("archiveView"\);/u)
-  assert.match(source, /conversation\.session\.header\.utilities/u)
+  assert.doesNotMatch(source, /conversation\.session\.header\.utilities/u)
   assert.match(source, /conversation\.input\.right/u)
   assert.match(source, /archivedSessionIds/u)
   assert.match(source, /sessions\.open/u)
@@ -81,14 +81,28 @@ test('client registers archive history, copyable session id, and an in-composer 
   assert.doesNotThrow(() => new Function(source))
 })
 
-test('client surfaces dedicated affordances for session id copy and archive viewing', async () => {
+test('client keeps session id copy in archive and sidebar paths without a top-right affordance', async () => {
   const source = await readFile(path.join(root, 'plugins/dsh-session-experience/lib/client.js'), 'utf8')
   for (const label of ['归档历史', '复制会话 ID', '按会话 ID 定位', '附加文件']) {
     assert.ok(source.includes(label), `missing localized label: ${label}`)
   }
-  assert.match(source, /function SessionIdAffordance/u)
+  assert.doesNotMatch(source, /function SessionIdAffordance/u)
+  assert.doesNotMatch(source, /hd-session-copy/u)
   assert.match(source, /function PaperclipButton/u)
   assert.match(source, /function ArchiveView/u)
+  assert.match(source, /harness-desktop-session/u)
+  assert.match(source, /openRequestedDesktopSession/u)
   assert.match(source, /exports\.apply = apply/u)
   assert.match(source, /exports\.inject = \["slots", "locale", "sessions", "workspaces"\]/u)
+})
+
+test('official workspace sidebar receives the persistent Codex-style session menu', async () => {
+  const source = await readFile(path.join(root, 'node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js'), 'utf8')
+  for (const marker of [
+    'harness.desktop.session-menu.v1', '置顶', '标记为未读', '复制会话 ID',
+    '在新窗口中打开', 'open-session-window', 'moveSession', 'react_dom.createPortal',
+    'id.length <= 256', 'window.innerWidth - 464'
+  ]) assert.ok(source.includes(marker), `missing sidebar session menu marker: ${marker}`)
+  assert.doesNotMatch(source, /id: "fork"/u)
+  assert.doesNotThrow(() => new Function(source))
 })

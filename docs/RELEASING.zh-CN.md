@@ -17,7 +17,7 @@ npm run release:publish -- run --version <package.json 中的版本>
 npm run release:publish -- status --version <package.json 中的版本>
 ```
 
-状态保存在 `.release-state/v<version>-publish.json`。发布器固定执行：本地 Windows 门禁 → 不可变 Tag → GitHub 全平台云构建 → 私有 draft 云端恢复/公开 → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
+状态保存在 `.release-state/v<version>-publish.json`。发布器固定执行：本地 Windows 门禁 → 不可变 Tag → GitHub 全平台云构建 → 私有 draft 云端恢复/公开 → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。第二次 CNB 同步固定使用 metadata-only 模式，只校验并同步三个 stable feed，不再重复下载和校验 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
 
 后文章节是发布器和工作流的安全契约及故障排查资料，不是让会话绕过发布器逐条手工执行的操作清单。
 
@@ -166,6 +166,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/configure-compon
 - 桌面清单迁移保持 JSON 顶层数组和既有 18 项资产字段不变，只给每条发布记录增加 `schemaVersion`、`kind`、`keyId`、`signature`。旧桌面版本会忽略新增字段并继续更新；启用新验签逻辑的版本对无签名、未知 key 或任何字段篡改一律 fail closed。
 - 源码仓库可暂存未签名开发态清单，但它绝不能被生产更新器接受，也不得进入 CNB 镜像或发布完成状态。迁移发布必须先用旧客户端可读取的兼容格式生成签名清单，再分发强制验签的新桌面版本。
 - 官方 `cnbcool/attachments:latest` 插件负责上传；流水线短期 `CNB_TOKEN` 自动注入、结束销毁。
+- stable feed 提升后的第二次同步由发布器传入 `-StableOnly`，CNB Runner 只验证三份签名 feed；18 个不可变资产已由前一 `cnb-assets` 原子阶段完成镜像和逐项校验，不得再次全量下载。
 - GitHub 桌面、APK 和七项组件资产全部公开并复核后，发布器从 GitHub API 的不可变 `sha256:` digest 生成精确 18 项清单，签名并自验；不得绕过仓库统一 `release:publish` 命令单独运行下面的内部脚本：
 
 ```powershell

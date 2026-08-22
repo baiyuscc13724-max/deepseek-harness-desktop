@@ -43,7 +43,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-CloseApplications=no
+CloseApplications=yes
 RestartApplications=no
 MinVersion=10.0
 

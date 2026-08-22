@@ -824,7 +824,7 @@ async function publish() {
   })
 
   await phase(state, 'cnb-stable', async () => {
-    npmRun(['run', 'release:cnb-cloud'], { timeout: 30 * 60 * 1000, env: releaseEnvironment() })
+    npmRun(['run', 'release:cnb-cloud', '--', '-StableOnly'], { timeout: 10 * 60 * 1000, env: releaseEnvironment() })
   })
 
   await phase(state, 'complete', async () => {

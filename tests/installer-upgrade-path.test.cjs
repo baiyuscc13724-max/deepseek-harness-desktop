@@ -18,3 +18,9 @@ test('Windows installer preserves both current Inno and legacy NSIS install dire
   assert.match(installer, /RegQueryStringValue\(RootKey, Subkey, 'DisplayIcon'/)
   assert.match(installer, /FileExists\(AddBackslash\(Directory\) \+ '\{#MyAppExeName\}'\)/)
 })
+
+test('Windows installer closes the running desktop before replacing locked runtime DLLs', () => {
+  assert.match(installer, /^CloseApplications=yes$/m)
+  assert.match(installer, /^RestartApplications=no$/m)
+  assert.doesNotMatch(installer, /^CloseApplications=no$/m)
+})

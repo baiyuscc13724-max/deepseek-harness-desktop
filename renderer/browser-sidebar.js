@@ -388,8 +388,10 @@
   async function open() {
     try {
       const workspace = window.harnessDesktopRightWorkspace
-      if (workspace) await workspace.openMode('browser')
-      render(await api.setBrowserVisible(true))
+      if (workspace) {
+        await workspace.openMode('browser')
+        render(await api.getBrowserState())
+      } else render(await api.setBrowserVisible(true))
       await syncNativeVisibility()
       address.focus()
       address.select()

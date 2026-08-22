@@ -300,19 +300,21 @@ test('canvas animates only genuine running and transfer states and honors reduce
   assert.doesNotMatch(source, /(reactflow|d3|dagre|cytoscape|framer-motion|react-spring|gsap)/iu)
 })
 
-test('native team page exposes local, LAN, and remote project collaboration entrances honestly', async () => {
+test('native team page pairs two desktops before enabling the real remote E2EE channel', async () => {
   const source = await clientSource()
-  for (const marker of ['ProjectTeamEntry', '/api/agent-teams/project/status', '/api/agent-teams/project/action', 'create-project', 'create-invite', 'lan-status', 'set-relay', 'connect-remote', 'disconnect-remote']) {
+  for (const marker of ['ProjectTeamEntry', '/api/agent-teams/project/status', '/api/agent-teams/project/action', 'create-project', 'create-invite', 'prepare-join', 'approve-join', 'complete-join', 'lan-status', 'start-lan', 'connect-lan', 'stop-lan', 'set-relay', 'connect-remote', 'disconnect-remote']) {
     assert.ok(source.includes(marker), `missing project collaboration entry marker: ${marker}`)
   }
-  for (const label of ['组建协作团队', '同一局域网', '不在同一网络', '生成远程邀请', '安全发现信标尚未实现', 'HypoMux 仅用于 Windows 多网卡下载聚合']) {
+  for (const label of ['组建协作团队', '同一局域网', '不在同一网络', '生成远程邀请', '加入已有团队', '生成加入请求', '批准加入', '完成加入', '端到端通道已就绪', '不广播设备扫描', 'HypoMux 仅用于 Windows 多网卡下载聚合']) {
     assert.ok(source.includes(label), `missing project collaboration label: ${label}`)
   }
   assert.match(source, /h\(ProjectTeamEntry, \{ t: t \}\)/u)
   assert.match(source, /navigator\.clipboard\.writeText\(value\)/u)
   assert.match(source, /readOnly: true, value: inviteCode/u)
   assert.match(source, /x-harness-agent-teams/u)
-  assert.doesNotMatch(source, /start-lan|stop-lan/u, 'the UI must not ask users to paste private mTLS certificate material')
+  assert.match(source, /一次性批准信息会安全携带固定入口和设备凭据/u)
+  assert.match(source, /run\("connect-lan", \{ host: lanHost\.trim\(\), port: Number\(lanPort\) \}\)/u)
+  assert.doesNotMatch(source, /h\("textarea", \{[^}]*projectLanKey/u, 'the UI must never render a private mTLS key field')
   assert.doesNotMatch(source, /HypoMux.*(?:import|require|script src)/iu)
 })
 

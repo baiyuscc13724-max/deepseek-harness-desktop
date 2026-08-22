@@ -2,7 +2,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readFile } from 'node:fs/promises'
 
 const name = 'desktop-computer-use'
-const inject = ['tools']
+const inject = ['systemPrompt', 'tools']
 
 async function execute(action, payload) {
   const file = process.env.HARNESS_DESKTOP_CAPABILITIES_STATE_FILE

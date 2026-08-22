@@ -18,6 +18,16 @@
   let schedulesQuery = ''
   let filesSnapshot = null
   let schedulesSnapshot = null
+  let requestedBrowserContentVisible = null
+
+  function setBrowserContentVisible(visible) {
+    const next = Boolean(visible)
+    if (requestedBrowserContentVisible === next) return
+    requestedBrowserContentVisible = next
+    api.setBrowserContentVisible(next).catch(() => {
+      if (requestedBrowserContentVisible === next) requestedBrowserContentVisible = null
+    })
+  }
 
   function element(tag, className, text) {
     const node = document.createElement(tag)
@@ -345,7 +355,7 @@
     for (const node of browserOnly) node.classList.toggle('hidden', !browser)
     for (const node of modeButtons) node.setAttribute('aria-pressed', String(node.dataset.rightWorkspaceMode === active))
     document.body.classList.toggle('browser-sidebar-open', controller.isOpen())
-    api.setBrowserContentVisible(controller.isOpen() && browser).catch(() => {})
+    setBrowserContentVisible(controller.isOpen() && browser)
   }
 
   async function openMode(id, options = {}) {
@@ -384,7 +394,7 @@
   controller.on('replace', syncChrome)
   controller.on('close', () => {
     document.body.classList.remove('browser-sidebar-open')
-    api.setBrowserContentVisible(false).catch(() => {})
+    setBrowserContentVisible(false)
     api.setBrowserVisible(false).catch(() => {})
     host.classList.add('hidden')
   })
