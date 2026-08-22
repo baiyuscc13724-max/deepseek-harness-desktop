@@ -109,7 +109,7 @@ function execute(program, args, options = {}) {
     const detail = options.capture ? `\n${String(stderr || stdout).trim()}` : ''
     throw new Error(`${program} ${args.join(' ')} exited with code ${result.status}.${detail}`)
   }
-  return options.capture ? stdout.trim() : ''
+  return options.capture ? (options.trim === false ? stdout : stdout.trim()) : ''
 }
 
 function capture(program, args, options = {}) {
@@ -128,6 +128,10 @@ function gitEnvironment() {
 
 function gitCapture(args) {
   return capture(git, args, { env: gitEnvironment() })
+}
+
+function gitCaptureRaw(args) {
+  return capture(git, args, { env: gitEnvironment(), trim: false })
 }
 
 function gitRun(args) {
@@ -216,7 +220,7 @@ function assertVersion() {
 }
 
 function assertClean(pathsAllowed = []) {
-  const lines = gitCapture(['status', '--porcelain=v1', '--untracked-files=normal']).split(/\r?\n/u).filter(Boolean)
+  const lines = gitCaptureRaw(['status', '--porcelain=v1', '--untracked-files=normal']).split(/\r?\n/u).filter(Boolean)
   const unexpected = lines.filter(line => !pathsAllowed.includes(line.slice(3).replaceAll('\\', '/')))
   if (unexpected.length > 0) throw new Error(`Publication requires a clean tree. Commit or remove:\n${unexpected.join('\n')}`)
   return lines

@@ -42,6 +42,8 @@ test('publisher resumes atomically and never downloads Actions binaries locally'
   const source = read('scripts/release-publish.mjs')
   assert.match(source, /acquirePublicationLock/u)
   assert.match(source, /status === 'completed'/u)
+  assert.match(source, /function gitCaptureRaw[\s\S]*trim: false/u)
+  assert.match(source, /function assertClean[\s\S]*gitCaptureRaw\(\['status'/u)
   assert.match(source, /\$\{tag\}-publish\.json/u)
   assert.match(source, /release:orchestrate[\s\S]*--through', 'windows'/u)
   assert.match(source, /recover-release-from-actions\.yml/u)
