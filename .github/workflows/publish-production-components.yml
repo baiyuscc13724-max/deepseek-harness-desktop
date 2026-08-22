@@ -153,7 +153,7 @@ jobs:
           HARNESS_COMPONENT_SIGNING_KEY_FILE="$key_file" \
           HARNESS_COMPONENT_KEY_ID='harness-components-02643f81164c594a' \
             node scripts/refresh-release-manifest.mjs --version="${RELEASE_TAG#v}" --repo="$GITHUB_REPOSITORY" --output="$manifest_file"
-          git fetch --force origin main
+          git fetch --force origin main "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
           main_revision="$(git rev-parse origin/main)"
           git merge-base --is-ancestor "$tag_revision" "$main_revision"
