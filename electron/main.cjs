@@ -29,6 +29,8 @@ const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
 const { ComputerUseConfirmationStore } = require('./bridge/computer-use-confirmation-store.cjs')
+const { ComputerUseAppPolicy } = require('./bridge/computer-use-app-policy.cjs')
+const { WindowsComputerUse } = require('./bridge/windows-computer-use.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { createGitRuntimeService } = require('./bridge/git-runtime-service.cjs')
 const { terminateProcessTree } = require('./bridge/process-tree.cjs')
@@ -46,7 +48,7 @@ const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { launchComponentUpdateHelper } = require('./bridge/component-update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
-const { MemoryService } = require('./bridge/memory-service.cjs')
+const { MemoryService, createMemoryPack } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
 const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
 const { DECISIONS: BROWSER_LINK_DECISIONS, routeBrowserLink } = require('./bridge/browser-link-router.cjs')
@@ -137,6 +139,14 @@ let workspacePickerPromise = null
 let computerUseEnabled = false
 let computerUseSessionGeneration = 0
 let computerUseScreenshotStore = null
+let computerUseAppPolicy = null
+let windowsComputerUse = null
+let computerUseCurrentTarget = null
+let computerUseHarnessSurface = null
+let computerUseScreenLocked = false
+const computerUseTargets = new Map()
+const computerUseKnownApps = new Map()
+const computerUsePolicyRows = new Map()
 let computerUseQuitCleanupStarted = false
 let computerUseQuitCleanupComplete = false
 const computerUseConfirmations = new ComputerUseConfirmationStore()
@@ -1291,38 +1301,91 @@ function browserControlStateFile() {
   return path.join(app.getPath('userData'), 'browser-control.json')
 }
 
+function boundedMemoryReference(value, field, max = 1024, required = false) {
+  if (value === undefined || value === null || value === '') {
+    if (required) throw new Error(`${field} 不能为空。`)
+    return null
+  }
+  const text = String(value).trim()
+  if ((!text && required) || text.length > max || /[\u0000-\u001f\u007f]/u.test(text)) throw new Error(`无效的 ${field}。`)
+  return text || null
+}
+
+function modelMemoryScopes(parameters = {}) {
+  let values = parameters.scopes
+  if (values === undefined && parameters.scope_type) values = [{ type: parameters.scope_type, ref: parameters.scope_ref }]
+  if (values === undefined) values = [{ type: 'personal' }]
+  if (!Array.isArray(values) || values.length < 1 || values.length > 8) throw new Error('记忆作用域必须是 1 到 8 项。')
+  const seen = new Set()
+  return values.flatMap(value => {
+    const type = String(value?.type || value?.scopeType || '')
+    if (!['personal', 'project', 'team', 'task'].includes(type)) throw new Error('无效的记忆作用域。')
+    const ref = type === 'personal' ? null : boundedMemoryReference(value?.ref ?? value?.scopeRef, 'scopeRef', 1024, true)
+    const key = `${type}\u0000${ref || ''}`
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [{ type, ref }]
+  })
+}
+
+function projectMemoryScope(parameters = {}) {
+  const scopes = modelMemoryScopes(parameters)
+  const selected = scopes.find(scope => scope.type === String(parameters.scope_type || ''))
+    || scopes.find(scope => scope.type === 'project')
+    || scopes[0]
+  return { scopeType: selected.type, scopeRef: selected.ref }
+}
+
+function publicMemoryHit(hit) {
+  return {
+    id: hit.id,
+    title: safeBrowserText(hit.title, 300),
+    content: safeBrowserText(hit.content, 2000),
+    tags: hit.tags,
+    matched: hit.matched,
+    snippet: safeBrowserText(hit.snippet, 500),
+    scopeType: hit.scopeType,
+    scopeRef: safeBrowserText(hit.scopeRef, 1024),
+    sourceType: hit.sourceType,
+    sourceRef: safeBrowserText(hit.sourceRef, 1024),
+    revision: hit.revision,
+    verifiedAt: hit.verifiedAt,
+    expiresAt: hit.expiresAt,
+    pinned: hit.pinned
+  }
+}
+
 async function modelMemoryAction(input = {}) {
   const action = String(input.action || '')
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
   const preferences = ensureStateStore().get().memory
   if (action === 'status') {
+    const serviceStatus = preferences.enabled ? ensureMemoryService().status() : null
     return {
       enabled: preferences.enabled,
       recallAllowed: preferences.enabled && preferences.autoRecall,
       captureAllowed: preferences.enabled && preferences.autoCapture,
-      count: preferences.enabled ? ensureMemoryService().status().counts.entries : 0
+      count: serviceStatus?.counts.entries || 0,
+      candidates: serviceStatus?.counts.candidates || 0,
+      schemaVersion: serviceStatus?.schemaVersion || null
     }
   }
   if (!preferences.enabled) throw Object.assign(new Error('用户尚未开启本地记忆。'), { code: 'memory-disabled' })
-  if (action === 'search') {
+  if (action === 'search' || action === 'pack') {
     if (!preferences.autoRecall) throw Object.assign(new Error('用户尚未允许模型按需召回本地记忆。'), { code: 'memory-recall-disabled' })
     const query = String(parameters.query || '').trim()
-    const maxResults = Math.max(1, Math.min(8, Math.floor(Number(parameters.max_results) || 5)))
-    const recalled = await ensureMemoryService().recall(query, { maxResults })
-    return {
-      query: recalled.query,
-      total: recalled.total,
-      hits: recalled.hits.map(hit => ({
-        id: hit.id,
-        title: safeBrowserText(hit.title, 300),
-        content: safeBrowserText(hit.content, 2000),
-        tags: hit.tags,
-        matched: hit.matched,
-        snippet: safeBrowserText(hit.snippet, 500)
-      }))
-    }
+    const maxResults = action === 'pack'
+      ? Math.max(1, Math.min(5, Math.floor(Number(parameters.max_results) || 5)))
+      : Math.max(1, Math.min(8, Math.floor(Number(parameters.max_results) || 5)))
+    const scopes = modelMemoryScopes(parameters)
+    const recalled = await ensureMemoryService().recall(query, { maxResults, scopes })
+    const hits = recalled.hits.map(publicMemoryHit)
+    if (action === 'search') return { query: recalled.query, total: recalled.total, scopes, hits }
+    const teamId = boundedMemoryReference(parameters.team_id, 'team_id', 128, true)
+    const taskId = boundedMemoryReference(parameters.task_id, 'task_id', 128, true)
+    return { pack: createMemoryPack(hits, { teamId, taskId }) }
   }
-  if (action === 'remember') {
+  if (action === 'remember' || action === 'suggest') {
     if (!preferences.autoCapture) throw Object.assign(new Error('用户尚未允许自动保存稳定偏好。'), { code: 'memory-capture-disabled' })
     const content = String(parameters.content || '').trim().slice(0, 2000)
     if (!content) throw new Error('本地记忆内容不能为空。')
@@ -1331,20 +1394,32 @@ async function modelMemoryAction(input = {}) {
     const tags = Array.isArray(parameters.tags)
       ? parameters.tags.map(value => String(value || '').trim().slice(0, 40)).filter(Boolean).slice(0, 8)
       : []
+    const scopes = modelMemoryScopes(parameters)
+    const scope = projectMemoryScope({ ...parameters, scopes })
+    const status = action === 'suggest' ? 'candidate' : 'active'
     const service = ensureMemoryService()
-    const probe = await service.search(content.slice(0, 200), { maxResults: 20 })
-    const duplicate = probe.hits.find(hit => hit.content === content && hit.title === title)
-    if (duplicate) return { stored: false, duplicate: true, id: duplicate.id }
+    const probe = await service.search(content.slice(0, 200), { maxResults: 20, statuses: [status], scopes: [scope] })
+    const duplicate = probe.hits.find(hit => hit.content === content && hit.title === title && hit.scopeType === scope.scopeType && hit.scopeRef === scope.scopeRef)
+    if (duplicate) return { stored: false, duplicate: true, candidate: status === 'candidate', id: duplicate.id }
+    const sourceSessionId = boundedMemoryReference(parameters.source_session_id, 'source_session_id', 128, false)
+    const sourceType = ['manual', 'session', 'goal', 'task', 'file', 'import'].includes(parameters.source_type)
+      ? parameters.source_type
+      : (sourceSessionId ? 'session' : 'manual')
     const entry = await service.add({
       kind,
       title,
       content,
       tags,
-      sourceSessionId: String(parameters.source_session_id || '').slice(0, 128),
+      sourceSessionId,
+      sourceType,
+      sourceRef: boundedMemoryReference(parameters.source_ref, 'source_ref', 1024, false) || sourceSessionId,
+      scopeType: scope.scopeType,
+      scopeRef: scope.scopeRef,
+      status,
       sensitivity: 0,
       recallPolicy: 'auto'
     })
-    return { stored: true, duplicate: false, id: entry.id }
+    return { stored: true, duplicate: false, candidate: status === 'candidate', id: entry.id, scopeType: entry.scopeType, scopeRef: entry.scopeRef }
   }
   throw new Error('不支持的本地记忆操作。')
 }
@@ -1358,16 +1433,222 @@ function ensureComputerUseScreenshotStore() {
   return computerUseScreenshotStore
 }
 
+function ensureWindowsComputerUse() {
+  if (!computerUseAppPolicy) {
+    const rootDir = path.join(desktopRuntimePaths().root, 'computer-use')
+    computerUseAppPolicy = new ComputerUseAppPolicy({ file: path.join(rootDir, 'app-policy.json'), rootDir })
+  }
+  if (!windowsComputerUse) windowsComputerUse = new WindowsComputerUse({ policy: computerUseAppPolicy })
+  return windowsComputerUse
+}
+
+function computerUseCrossAppCapability() {
+  const native = ensureWindowsComputerUse().capabilities().native
+  const required = ['windowEnumeration', 'identity', 'screenshot', 'input']
+  const missing = !native ? required : required.filter(name => native[name] !== true)
+  return {
+    available: missing.length === 0,
+    reason: missing.length ? `缺少安全的 Windows 原生能力：${missing.join(', ')}` : '',
+    native: native || null
+  }
+}
+
+function computerUseDefaultAccessForUi(value) {
+  if (value === 'trusted') return 'allow'
+  if (value === 'never') return 'deny'
+  return 'ask'
+}
+
+function computerUseDefaultAccessFromUi(value) {
+  if (value === 'allow') return 'trusted'
+  if (value === 'deny') return 'never'
+  if (value === 'ask') return 'untrusted'
+  throw new Error('default_app_access 只支持 ask、allow 或 deny。')
+}
+
+function computerUseRuleForIdentity(identity) {
+  if (identity?.aumid) return { aumid: identity.aumid }
+  if (identity?.publisher && identity?.product) return { publisher_name: identity.publisher, product_name: identity.product, ...(identity.exeName ? { binary_name: identity.exeName } : {}) }
+  if (identity?.exePath) return { exe: identity.exePath }
+  if (identity?.exeName) return { exe: identity.exeName }
+  return null
+}
+
+function computerUseAppId(identity) {
+  const stable = [identity?.aumid, identity?.publisher, identity?.product, identity?.exeName, identity?.exePath].map(value => String(value || '').toLowerCase()).join('\n')
+  return `app-${createHash('sha256').update(stable).digest('hex').slice(0, 24)}`
+}
+
+function computerUseTargetId(window, fingerprint) {
+  const stable = [computerUseSessionGeneration, window?.hwnd, window?.pid, fingerprint].join('\n')
+  return `window-${createHash('sha256').update(stable).digest('hex').slice(0, 24)}`
+}
+
+function computerUseAuthorizationReason(authorization) {
+  if (authorization?.nonBypassable) return `永久禁止：${authorization.code || authorization.reason}`
+  if (authorization?.reason === 'allowlist') return '已持久允许'
+  if (authorization?.reason === 'denylist') return '已持久拒绝'
+  if (authorization?.reason === 'allowlist-invalidated') return '应用身份已变化，旧授权已失效'
+  if (authorization?.status === 'allowed') return '跟随默认应用访问：允许'
+  if (authorization?.status === 'denied') return '跟随默认应用访问：拒绝'
+  return '尚未建立持久应用授权'
+}
+
+async function refreshComputerUseTargets() {
+  const service = ensureWindowsComputerUse()
+  computerUseTargets.clear()
+  computerUseKnownApps.clear()
+  computerUsePolicyRows.clear()
+  computerUseTargets.set('harness', { id: 'harness', kind: 'harness', label: 'Harness Desktop' })
+  let windows = []
+  try {
+    windows = await service.windows()
+  } catch (error) {
+    if (error?.code !== 'capability-unavailable') throw error
+  }
+  for (const window of windows.slice(0, 96)) {
+    try {
+      const bound = await service.bind(window.hwnd, window)
+      const appId = computerUseAppId(bound.identity)
+      const targetId = computerUseTargetId(window, bound.fingerprint)
+      const label = String(bound.identity.program || bound.identity.product || bound.identity.exeName || 'Windows 应用').slice(0, 120)
+      const target = { id: targetId, kind: 'window', hwnd: window.hwnd, window, identity: bound.identity, fingerprint: bound.fingerprint, authorization: bound.authorization, appId, label, lastSize: { width: window.width, height: window.height, sourceWidth: window.width, sourceHeight: window.height } }
+      computerUseTargets.set(targetId, target)
+      const existing = computerUseKnownApps.get(appId)
+      if (!existing || bound.authorization.nonBypassable || (!existing.authorization.nonBypassable && bound.authorization.status === 'denied')) {
+        computerUseKnownApps.set(appId, { id: appId, identity: bound.identity, authorization: bound.authorization, window, label })
+      }
+    } catch {
+      // 无法安全解析身份的窗口不暴露给模型，也不能建立授权。
+    }
+  }
+  return computerUseTargets
+}
+
+function reconcileComputerUseCurrentTarget() {
+  if (!computerUseCurrentTarget || computerUseCurrentTarget.kind !== 'window') return
+  const latest = computerUseTargets.get(computerUseCurrentTarget.id)
+  if (!latest || latest.authorization.status !== 'allowed' || !latest.fingerprint) {
+    computerUseCurrentTarget = null
+    computerUseConfirmations.clear()
+  } else {
+    computerUseCurrentTarget = latest
+  }
+}
+
+function computerUsePolicySnapshot() {
+  const service = ensureWindowsComputerUse()
+  const policy = service.policySnapshot()
+  const apps = []
+  const observedRules = new Set()
+  for (const app of computerUseKnownApps.values()) {
+    const matched = app.authorization?.matchedBy
+    if (matched) observedRules.add(`${app.authorization.reason === 'denylist' ? 'denylist' : 'allowlist'}:${matched.kind}:${String(matched.value).toLowerCase()}`)
+    apps.push({
+      id: app.id,
+      name: app.label,
+      executable: app.identity.exeName || '',
+      decision: app.authorization?.reason === 'allowlist' ? 'allow' : app.authorization?.reason === 'denylist' ? 'deny' : null,
+      reason: computerUseAuthorizationReason(app.authorization),
+      immutable: app.authorization?.nonBypassable === true
+    })
+  }
+  for (const list of ['allowlist', 'denylist']) {
+    for (const rule of policy[list] || []) {
+      const key = `${list}:${rule.kind}:${String(rule.value).toLowerCase()}`
+      if (observedRules.has(key)) continue
+      const id = `rule-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
+      computerUsePolicyRows.set(id, { list, rule })
+      apps.push({ id, name: rule.value, executable: rule.kind, decision: list === 'allowlist' ? 'allow' : 'deny', reason: '应用当前未打开；持久规则仍有效', immutable: false })
+    }
+  }
+  const target = computerUseCurrentTarget
+  return {
+    defaultAccess: computerUseDefaultAccessForUi(policy.defaultAppAccess),
+    apps,
+    currentTarget: target ? { app: target.label, window: target.kind === 'window' ? String(target.window?.title || '').slice(0, 160) : 'Harness Desktop', reason: target.kind === 'window' ? computerUseAuthorizationReason(target.authorization) : '内置窗口' } : null,
+    capability: computerUseCrossAppCapability()
+  }
+}
+
+async function getComputerUsePolicy() {
+  await refreshComputerUseTargets()
+  reconcileComputerUseCurrentTarget()
+  return computerUsePolicySnapshot()
+}
+
+async function setComputerUseDefaultAccess(access) {
+  ensureWindowsComputerUse().setDefaultAccess(computerUseDefaultAccessFromUi(access), { by: 'user' })
+  await refreshComputerUseTargets()
+  reconcileComputerUseCurrentTarget()
+  return computerUsePolicySnapshot()
+}
+
+async function setComputerUseAppOverride(id, decision) {
+  const service = ensureWindowsComputerUse()
+  const value = String(decision || '')
+  if (!['allow', 'deny', 'default'].includes(value)) throw new Error('应用策略只支持 allow、deny 或 default。')
+  let app = computerUseKnownApps.get(String(id || ''))
+  const persisted = computerUsePolicyRows.get(String(id || ''))
+  if (!app && !persisted) {
+    await refreshComputerUseTargets()
+    app = computerUseKnownApps.get(String(id || ''))
+  }
+  if (persisted && value === 'default') {
+    service.revoke(persisted.rule, { list: persisted.list, by: 'user' })
+  } else if (app) {
+    const rule = computerUseRuleForIdentity(app.identity)
+    if (!rule) throw new Error('无法建立此应用的持久身份规则。')
+    if (value === 'default') {
+      service.revoke(rule, { list: 'allowlist', by: 'user' })
+      service.revoke(rule, { list: 'denylist', by: 'user' })
+    } else if (value === 'allow') {
+      if (app.authorization?.nonBypassable) throw Object.assign(new Error('系统、UAC、提权和敏感窗口永久禁止，不能授权。'), { code: 'window-denied' })
+      service.revoke(rule, { list: 'denylist', by: 'user' })
+      service.allow(app.identity, { by: 'user' })
+    } else {
+      service.revoke(rule, { list: 'allowlist', by: 'user' })
+      service.deny(app.identity, { by: 'user' })
+    }
+  } else {
+    throw new Error('该应用当前未打开；请撤销旧规则后，在应用打开时重新授权。')
+  }
+  await refreshComputerUseTargets()
+  reconcileComputerUseCurrentTarget()
+  return computerUsePolicySnapshot()
+}
+
+async function revokeComputerUseAppOverride(id) {
+  const app = computerUseKnownApps.get(String(id || ''))
+  const persisted = computerUsePolicyRows.get(String(id || ''))
+  const service = ensureWindowsComputerUse()
+  if (persisted) service.revoke(persisted.rule, { list: persisted.list, by: 'user' })
+  else if (app) {
+    const rule = computerUseRuleForIdentity(app.identity)
+    if (rule) {
+      service.revoke(rule, { list: 'allowlist', by: 'user' })
+      service.revoke(rule, { list: 'denylist', by: 'user' })
+    }
+  }
+  await refreshComputerUseTargets()
+  reconcileComputerUseCurrentTarget()
+  return computerUsePolicySnapshot()
+}
+
 async function clearComputerUseScreenshots() {
   return ensureComputerUseScreenshotStore().clear()
 }
 
 async function setComputerUseEnabled(enabled) {
   const next = enabled === true
+  if (next && computerUseScreenLocked) throw Object.assign(new Error('计算机锁定或挂起期间不能开启 Computer Use。'), { code: 'computer-use-locked' })
   if (next === computerUseEnabled) return computerUseState()
   computerUseSessionGeneration += 1
   if (next) await clearComputerUseScreenshots()
   computerUseEnabled = next
+  computerUseCurrentTarget = null
+  computerUseHarnessSurface = null
+  computerUseTargets.clear()
   if (!computerUseEnabled) {
     computerUseConfirmations.clear()
     await clearComputerUseScreenshots()
@@ -1376,26 +1657,99 @@ async function setComputerUseEnabled(enabled) {
 }
 
 function computerUseState() {
-  return { enabled: computerUseEnabled, screenshotPolicy: { sessionOnly: true, maxFiles: COMPUTER_USE_SCREENSHOT_MAX_FILES, maxBytes: COMPUTER_USE_SCREENSHOT_MAX_BYTES, maxAgeMs: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS }, pending: computerUseConfirmations.snapshot() }
+  return {
+    available: true,
+    enabled: computerUseEnabled,
+    generation: computerUseSessionGeneration,
+    currentTarget: computerUseCurrentTarget ? { id: computerUseCurrentTarget.id, app: computerUseCurrentTarget.label, kind: computerUseCurrentTarget.kind } : null,
+    crossApp: computerUseCrossAppCapability(),
+    screenshotPolicy: { sessionOnly: true, maxFiles: COMPUTER_USE_SCREENSHOT_MAX_FILES, maxBytes: COMPUTER_USE_SCREENSHOT_MAX_BYTES, maxAgeMs: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS },
+    pending: computerUseConfirmations.snapshot()
+  }
 }
 
-function computerUseSurface() {
+function computerUseSurface(target = computerUseCurrentTarget) {
+  if (target?.kind === 'window') {
+    return {
+      generation: computerUseSessionGeneration,
+      width: Math.max(1, Number(target.lastSize?.width) || Number(target.window?.width) || 1),
+      height: Math.max(1, Number(target.lastSize?.height) || Number(target.window?.height) || 1),
+      url: `app://${target.id}/${target.fingerprint || 'unresolved'}`,
+      label: target.label
+    }
+  }
   if (!mainWindow || mainWindow.isDestroyed()) return null
-  const [width, height] = mainWindow.getContentSize()
+  const [sourceWidth, sourceHeight] = mainWindow.getContentSize()
+  const width = computerUseHarnessSurface?.width || sourceWidth
+  const height = computerUseHarnessSurface?.height || sourceHeight
   const urls = [mainWindow.webContents.getURL()]
   if (runtimeGuest && !runtimeGuest.isDestroyed()) urls.push(runtimeGuest.getURL())
   const browserContents = browserSidebarVisible ? liveBrowserContents() : null
   if (browserContents) urls.push(browserContents.getURL())
-  return {
-    generation: computerUseSessionGeneration,
-    width,
-    height,
-    url: urls.filter(Boolean).join('\n')
-  }
+  return { generation: computerUseSessionGeneration, width, height, url: urls.filter(Boolean).join('\n'), label: 'Harness Desktop' }
 }
 
-function requireComputerConfirmation(action, parameters) {
-  return computerUseConfirmations.authorize(action, { ...parameters, surface: computerUseSurface() })
+function requireComputerConfirmation(action, parameters, target = computerUseCurrentTarget) {
+  return computerUseConfirmations.authorize(action, { ...parameters, surface: computerUseSurface(target) })
+}
+
+async function revalidateComputerUseTarget(target) {
+  if (!target || target.kind !== 'window') return target
+  const service = ensureWindowsComputerUse()
+  const windows = await service.windows()
+  const window = windows.find(item => Number(item.hwnd) === Number(target.hwnd) && Number(item.pid) === Number(target.window?.pid))
+  if (!window) {
+    computerUseCurrentTarget = null
+    computerUseConfirmations.clear()
+    throw Object.assign(new Error('目标窗口已关闭或身份已变化，请重新选择。'), { code: 'target-stale' })
+  }
+  const bound = await service.bind(window.hwnd, window)
+  if (!bound.fingerprint || bound.fingerprint !== target.fingerprint || bound.authorization.status !== 'allowed') {
+    computerUseCurrentTarget = null
+    computerUseConfirmations.clear()
+    throw Object.assign(new Error('目标应用身份或授权已变化，请重新选择。'), { code: 'target-stale' })
+  }
+  Object.assign(target, { window, identity: bound.identity, authorization: bound.authorization })
+  if (!target.lastSize) target.lastSize = { width: window.width, height: window.height, sourceWidth: window.width, sourceHeight: window.height }
+  return target
+}
+
+async function captureHarnessComputerUseScreenshot() {
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) throw new Error('Harness Desktop 主窗口当前不可见。')
+  const image = await mainWindow.capturePage()
+  const size = image.getSize()
+  const scaled = size.width > 1280 ? image.resize({ width: 1280, quality: 'good' }) : image
+  const displayed = scaled.getSize()
+  computerUseHarnessSurface = { width: displayed.width, height: displayed.height, sourceWidth: size.width, sourceHeight: size.height }
+  const file = await ensureComputerUseScreenshotStore().save(scaled.toPNG())
+  return { file, width: displayed.width, height: displayed.height, sourceWidth: size.width, sourceHeight: size.height, scope: 'Harness Desktop window', target_id: 'harness' }
+}
+
+async function captureExternalComputerUseScreenshot(target) {
+  const shot = await ensureWindowsComputerUse().screenshot(target.hwnd, target.identity, target.window)
+  if (shot.blank) throw Object.assign(new Error('目标窗口返回空白/受保护画面，拒绝伪造截图。'), { code: 'screenshot-protected' })
+  target.lastCaptureHash = createHash('sha256').update(shot.bgra).digest('hex')
+  const bitmap = Buffer.from(shot.bgra)
+  for (let index = 3; index < bitmap.length; index += 4) bitmap[index] = 255
+  const image = nativeImage.createFromBitmap(bitmap, { width: shot.width, height: shot.height, scaleFactor: 1 })
+  if (image.isEmpty()) throw Object.assign(new Error('目标窗口截图无法安全解码。'), { code: 'screenshot-failed' })
+  const scaled = shot.width > 1280 ? image.resize({ width: 1280, quality: 'good' }) : image
+  const displayed = scaled.getSize()
+  target.lastSize = { width: displayed.width, height: displayed.height, sourceWidth: shot.width, sourceHeight: shot.height }
+  const file = await ensureComputerUseScreenshotStore().save(scaled.toPNG())
+  return { file, width: displayed.width, height: displayed.height, sourceWidth: shot.width, sourceHeight: shot.height, scope: target.label, target_id: target.id }
+}
+
+async function verifyExternalComputerUseSurface(target) {
+  if (!target.lastCaptureHash) throw Object.assign(new Error('跨应用输入前必须先截取并检查目标窗口。'), { code: 'screenshot-required' })
+  const shot = await ensureWindowsComputerUse().screenshot(target.hwnd, target.identity, target.window)
+  if (shot.blank) throw Object.assign(new Error('目标窗口返回空白/受保护画面，已取消输入。'), { code: 'screenshot-protected' })
+  const currentHash = createHash('sha256').update(shot.bgra).digest('hex')
+  if (currentHash !== target.lastCaptureHash) {
+    target.lastCaptureHash = null
+    computerUseConfirmations.clear()
+    throw Object.assign(new Error('目标窗口在确认期间已变化，请重新截图并确认。'), { code: 'target-surface-changed' })
+  }
 }
 
 async function modelComputerUseAction(input = {}) {
@@ -1403,39 +1757,78 @@ async function modelComputerUseAction(input = {}) {
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
   if (action === 'status') return computerUseState()
   if (action === 'stop') return setComputerUseEnabled(false)
-  if (!computerUseEnabled) throw Object.assign(new Error('用户尚未开启本次 Computer Use。'), { code: 'computer-use-disabled' })
-  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) throw new Error('Harness Desktop 主窗口当前不可见。')
+  if (!computerUseEnabled || computerUseScreenLocked) throw Object.assign(new Error('用户尚未开启本次 Computer Use，或计算机已锁定。'), { code: 'computer-use-disabled' })
+  if (action === 'targets') {
+    await refreshComputerUseTargets()
+    const targets = [...computerUseTargets.values()].filter(target => target.kind === 'harness' || (target.authorization?.status === 'allowed' && target.fingerprint)).map(target => ({ target_id: target.id, app: target.label, kind: target.kind, width: target.window?.width, height: target.window?.height }))
+    return { targets, crossApp: computerUseCrossAppCapability() }
+  }
+  if (action === 'select') {
+    const requested = String(parameters.target_id || '')
+    if (!requested) throw new Error('请选择 targets 返回的 target_id。')
+    if (!computerUseTargets.size) await refreshComputerUseTargets()
+    const target = computerUseTargets.get(requested)
+    if (!target) throw Object.assign(new Error('目标不存在、已过期或未被持久策略允许。'), { code: 'target-unavailable' })
+    if (target.kind === 'window') {
+      await revalidateComputerUseTarget(target)
+      if (target.authorization.status !== 'allowed') throw Object.assign(new Error('该应用未被持久策略允许。'), { code: 'window-untrusted' })
+    }
+    computerUseCurrentTarget = target
+    computerUseConfirmations.clear()
+    return { selected: true, target: { target_id: target.id, app: target.label, kind: target.kind } }
+  }
+  const target = computerUseCurrentTarget || computerUseTargets.get('harness') || { id: 'harness', kind: 'harness', label: 'Harness Desktop' }
+  if (target.kind === 'window') await revalidateComputerUseTarget(target)
   if (action === 'screenshot') {
     const sessionGeneration = computerUseSessionGeneration
-    const image = await mainWindow.capturePage()
-    if (!computerUseEnabled || sessionGeneration !== computerUseSessionGeneration) throw Object.assign(new Error('Computer Use 会话已停止。'), { code: 'computer-use-disabled' })
-    const size = image.getSize()
-    const scaled = size.width > 1280 ? image.resize({ width: 1280, quality: 'good' }) : image
-    const file = await ensureComputerUseScreenshotStore().save(scaled.toPNG())
+    const result = target.kind === 'window' ? await captureExternalComputerUseScreenshot(target) : await captureHarnessComputerUseScreenshot()
     if (!computerUseEnabled || sessionGeneration !== computerUseSessionGeneration) {
       await clearComputerUseScreenshots()
       throw Object.assign(new Error('Computer Use 会话已停止。'), { code: 'computer-use-disabled' })
     }
-    return { file, width: scaled.getSize().width, height: scaled.getSize().height, scope: 'Harness Desktop window only' }
+    return result
   }
   if (!['click', 'type', 'scroll'].includes(action)) throw new Error('不支持的 Computer Use 操作。')
   if (action === 'type' && redactSensitiveText(String(parameters.text || '')).types.length) throw Object.assign(new Error('Computer Use 永久禁止输入密码、令牌、验证码、银行卡或其他秘密。'), { code: 'sensitive-input-blocked' })
-  const confirmation = requireComputerConfirmation(action, parameters)
+  if (target.kind === 'window' && !target.lastCaptureHash) throw Object.assign(new Error('跨应用输入前必须先截取并检查目标窗口。'), { code: 'screenshot-required' })
+  const confirmation = requireComputerConfirmation(action, parameters, target)
   if (confirmation) return confirmation
-  const [width, height] = mainWindow.getContentSize()
+  if (target.kind === 'window') await verifyExternalComputerUseSurface(target)
+  const surface = computerUseSurface(target)
   const x = Math.round(Number(parameters.x)); const y = Math.round(Number(parameters.y))
-  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 36 || x >= width || y >= height) throw new Error('操作坐标超出 Harness Desktop 可控区域。')
-  if (action === 'click') {
-    mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
-    mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
-  } else if (action === 'scroll') {
-    mainWindow.webContents.sendInputEvent({ type: 'mouseWheel', x, y, deltaY: Math.max(-800, Math.min(800, Number(parameters.delta_y) || 0)), deltaX: 0 })
+  const targetScale = target.kind === 'window' ? target.lastSize : computerUseHarnessSurface
+  const sourceWidth = Math.max(1, Number(targetScale?.sourceWidth) || surface.width)
+  const sourceHeight = Math.max(1, Number(targetScale?.sourceHeight) || surface.height)
+  const minimumY = target.kind === 'harness' ? Math.ceil(36 * surface.height / sourceHeight) : 0
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < minimumY || x >= surface.width || y >= surface.height) throw new Error('操作坐标超出当前目标的可控区域。')
+  const sourceX = Math.max(0, Math.min(sourceWidth - 1, Math.round(x * sourceWidth / surface.width)))
+  const sourceY = Math.max(0, Math.min(sourceHeight - 1, Math.round(y * sourceHeight / surface.height)))
+  if (target.kind === 'window') {
+    await revalidateComputerUseTarget(target)
+    try {
+      if (action === 'click') await ensureWindowsComputerUse().click(target.hwnd, { x: sourceX, y: sourceY }, target.identity, target.window)
+      else if (action === 'scroll') await ensureWindowsComputerUse().scroll(target.hwnd, { x: sourceX, y: sourceY, deltaY: Math.max(-800, Math.min(800, Number(parameters.delta_y) || 0)) }, target.identity, target.window)
+      else {
+        await ensureWindowsComputerUse().click(target.hwnd, { x: sourceX, y: sourceY }, target.identity, target.window)
+        await ensureWindowsComputerUse().type(target.hwnd, { text: String(parameters.text || '').slice(0, 500) }, target.identity, target.window)
+      }
+    } finally {
+      target.lastCaptureHash = null
+    }
   } else {
-    mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
-    mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
-    for (const character of String(parameters.text || '').slice(0, 2000)) mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: character })
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) throw new Error('Harness Desktop 主窗口当前不可见。')
+    if (action === 'click') {
+      mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: sourceX, y: sourceY, button: 'left', clickCount: 1 })
+      mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: sourceX, y: sourceY, button: 'left', clickCount: 1 })
+    } else if (action === 'scroll') {
+      mainWindow.webContents.sendInputEvent({ type: 'mouseWheel', x: sourceX, y: sourceY, deltaY: Math.max(-800, Math.min(800, Number(parameters.delta_y) || 0)), deltaX: 0 })
+    } else {
+      mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: sourceX, y: sourceY, button: 'left', clickCount: 1 })
+      mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: sourceX, y: sourceY, button: 'left', clickCount: 1 })
+      for (const character of String(parameters.text || '').slice(0, 2000)) mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: character })
+    }
   }
-  return { completed: true, action, x, y }
+  return { completed: true, action, x, y, target_id: target.id, app: target.label }
 }
 
 async function desktopModelToolAction(input = {}) {
@@ -3006,6 +3399,10 @@ ipcMain.handle('computerUse:state', event => { assertDesktopShellSender(event); 
 ipcMain.handle('computerUse:setEnabled', async (event, enabled) => { assertDesktopShellSender(event); return setComputerUseEnabled(Boolean(enabled)) })
 ipcMain.handle('computerUse:confirm', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.confirm(id); return computerUseState() })
 ipcMain.handle('computerUse:reject', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.reject(id); return computerUseState() })
+ipcMain.handle('computerUse:policy', desktopShellOnly(() => getComputerUsePolicy()))
+ipcMain.handle('computerUse:setDefaultAccess', desktopShellOnly(access => setComputerUseDefaultAccess(access)))
+ipcMain.handle('computerUse:setAppOverride', desktopShellOnly((id, decision) => setComputerUseAppOverride(id, decision)))
+ipcMain.handle('computerUse:revokeAppOverride', desktopShellOnly(id => revokeComputerUseAppOverride(id)))
 ipcMain.handle('mobileSync:getState', desktopShellOnly(() => ensureMobileSyncService().state()))
 ipcMain.handle('mobileSync:setEnabled', desktopShellOnly(enabled => ensureMobileSyncService().setEnabled(Boolean(enabled))))
 ipcMain.handle('mobileSync:setRemoteEnabled', desktopShellOnly(enabled => ensureMobileSyncService().setRemoteEnabled(Boolean(enabled))))
@@ -3098,6 +3495,16 @@ app.whenReady().then(async () => {
   }
   await registerWallpaperProtocol().catch(error => console.warn(`Unable to register wallpaper media protocol: ${error.message}`))
   await clearComputerUseScreenshots().catch(error => console.warn(`Unable to clear stale Computer Use screenshots: ${error.message}`))
+  powerMonitor.on('lock-screen', () => {
+    computerUseScreenLocked = true
+    setComputerUseEnabled(false).catch(() => {})
+  })
+  powerMonitor.on('unlock-screen', () => { computerUseScreenLocked = false })
+  powerMonitor.on('suspend', () => {
+    computerUseScreenLocked = true
+    setComputerUseEnabled(false).catch(() => {})
+  })
+  powerMonitor.on('resume', () => { computerUseScreenLocked = false })
   try { ensureMemoryService() } catch (error) { console.warn(`Unable to initialize local memory: ${error.message}`) }
   runtimeInitializationPromise = (async () => {
     await ensureBundledRuntime()
@@ -3175,6 +3582,8 @@ app.on('before-quit', event => {
   browserSecurityPolicy?.stop()
   browserControlServer?.stop().catch(() => {})
   computerUseEnabled = false
+  computerUseCurrentTarget = null
+  computerUseHarnessSurface = null
   computerUseSessionGeneration += 1
   computerUseConfirmations.clear()
   if (!computerUseQuitCleanupComplete) {

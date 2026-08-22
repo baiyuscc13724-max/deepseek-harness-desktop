@@ -28,9 +28,14 @@ const SENSITIVITY_LEVELS = Object.freeze({
 })
 const SENSITIVITY_MAX = 3
 const RECALL_POLICIES = Object.freeze(['auto', 'never'])
+const MEMORY_STATUSES = Object.freeze(['candidate', 'active', 'stale', 'superseded', 'conflict', 'archived'])
+const MEMORY_SCOPE_TYPES = Object.freeze(['personal', 'project', 'team', 'task'])
+const MEMORY_SOURCE_TYPES = Object.freeze(['manual', 'session', 'goal', 'task', 'file', 'import'])
 const MAX_TAGS = 20
 const MAX_TAG_CHARS = 40
 const MAX_SOURCE_CHARS = 128
+const MAX_SCOPE_REF_CHARS = 1024
+const MAX_SOURCE_REF_CHARS = 1024
 const MAX_QUERY_CEILING = 500
 
 const DEFAULT_CONFIG = Object.freeze({
@@ -89,7 +94,51 @@ function defaultSqliteFactory() {
   }
 }
 
-const ENTRY_COLUMNS = 'id, kind, title, content, tags, sourceSessionId, createdAt, updatedAt, lastUsedAt, sensitivity, recallPolicy'
+const ENTRY_COLUMNS = [
+  'id', 'kind', 'title', 'content', 'tags', 'sourceSessionId',
+  'scopeType', 'scopeRef', 'sourceType', 'sourceRef', 'status', 'revision',
+  'verifiedAt', 'expiresAt', 'pinned', 'supersedesId',
+  'createdAt', 'updatedAt', 'lastUsedAt', 'sensitivity', 'recallPolicy'
+].join(', ')
+
+function createMemoryPack(hits, { teamId, taskId, now = Date.now(), maxItems = 5, maxCharacters = 1200, ttlMs = 30 * 60 * 1000 } = {}) {
+  const itemLimit = clampInt(maxItems, 5, 1, 5)
+  const characterLimit = clampInt(maxCharacters, 1200, 1, 1200)
+  const safeTtl = clampInt(ttlMs, 30 * 60 * 1000, 60 * 1000, 30 * 60 * 1000)
+  const items = []
+  const lines = []
+  let used = 0
+  for (const hit of (Array.isArray(hits) ? hits : []).slice(0, itemLimit)) {
+    const prefix = `${lines.length + 1}. `
+    const separator = lines.length ? 1 : 0
+    const available = characterLimit - used - separator - prefix.length
+    if (available <= 0) break
+    const title = String(hit?.title || '').trim()
+    const body = String(hit?.content || '').trim()
+    const text = `${title ? `${title}: ` : ''}${body}`.slice(0, available)
+    if (!text) continue
+    const line = `${prefix}${text}`
+    lines.push(line)
+    used += separator + line.length
+    items.push({
+      id: String(hit.id || ''),
+      revision: Math.max(1, Number(hit.revision) || 1),
+      text,
+      sourceType: hit.sourceType || 'manual',
+      sourceRef: hit.sourceRef ?? null
+    })
+  }
+  return {
+    schemaVersion: 1,
+    teamId: String(teamId || ''),
+    taskId: String(taskId || ''),
+    ephemeral: true,
+    expiresAt: new Date(Number(now) + safeTtl).toISOString(),
+    maxCharacters: characterLimit,
+    content: lines.join('\n'),
+    items
+  }
+}
 
 class MemoryService {
   constructor(options = {}) {
@@ -153,11 +202,23 @@ class MemoryService {
     let counts = { entries: 0 }
     let dbPath = null
     let sqliteVersion = null
+    let schemaVersion = null
     if (this.db && this.db.isOpen) {
       dbPath = this.cfg.dbPath
-      counts = { entries: Number(this.db.prepare('SELECT count(*) AS c FROM entries').get().c) }
+      const entries = Number(this.db.prepare('SELECT count(*) AS c FROM entries').get().c)
+      const grouped = Object.fromEntries(this.db.prepare('SELECT status, count(*) AS c FROM entries GROUP BY status').all().map(row => [row.status, Number(row.c)]))
+      counts = {
+        entries,
+        active: grouped.active || 0,
+        candidates: grouped.candidate || 0,
+        stale: grouped.stale || 0,
+        superseded: grouped.superseded || 0,
+        conflict: grouped.conflict || 0,
+        archived: grouped.archived || 0
+      }
       try {
         sqliteVersion = String(this.db.prepare('SELECT sqlite_version() AS v').get().v)
+        schemaVersion = Number(this.db.prepare('PRAGMA user_version').get().user_version)
       } catch {}
     }
     return {
@@ -168,6 +229,7 @@ class MemoryService {
       secureDelete: this.secureDelete,
       dbPath,
       sqliteVersion,
+      schemaVersion,
       counts,
       limits: {
         maxEntries: this.cfg.maxEntries,
@@ -199,11 +261,12 @@ class MemoryService {
     }
     try {
       this.db.prepare(
-        `INSERT INTO entries (${ENTRY_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO entries (${ENTRY_COLUMNS}) VALUES (${ENTRY_COLUMNS.split(', ').map(() => '?').join(', ')})`
       ).run(
-        safe.id, safe.kind, safe.title, safe.content, JSON.stringify(safe.tags),
-        safe.sourceSessionId, safe.createdAt, safe.updatedAt, safe.lastUsedAt,
-        safe.sensitivity, safe.recallPolicy
+        safe.id, safe.kind, safe.title, safe.content, JSON.stringify(safe.tags), safe.sourceSessionId,
+        safe.scopeType, safe.scopeRef, safe.sourceType, safe.sourceRef, safe.status, safe.revision,
+        safe.verifiedAt, safe.expiresAt, safe.pinned ? 1 : 0, safe.supersedesId,
+        safe.createdAt, safe.updatedAt, safe.lastUsedAt, safe.sensitivity, safe.recallPolicy
       )
     } catch (error) {
       if (String(error.message).includes('UNIQUE')) {
@@ -225,10 +288,14 @@ class MemoryService {
     const { entry: safe, types } = this.#applySensitivityPolicy(merged, 'update')
     this.db.prepare(
       `UPDATE entries SET kind = ?, title = ?, content = ?, tags = ?, sourceSessionId = ?,
-        updatedAt = ?, sensitivity = ?, recallPolicy = ? WHERE id = ?`
+        scopeType = ?, scopeRef = ?, sourceType = ?, sourceRef = ?, status = ?, revision = ?,
+        verifiedAt = ?, expiresAt = ?, pinned = ?, supersedesId = ?, updatedAt = ?,
+        sensitivity = ?, recallPolicy = ? WHERE id = ?`
     ).run(
-      safe.kind, safe.title, safe.content, JSON.stringify(safe.tags),
-      safe.sourceSessionId, safe.updatedAt, safe.sensitivity, safe.recallPolicy, safe.id
+      safe.kind, safe.title, safe.content, JSON.stringify(safe.tags), safe.sourceSessionId,
+      safe.scopeType, safe.scopeRef, safe.sourceType, safe.sourceRef, safe.status, safe.revision,
+      safe.verifiedAt, safe.expiresAt, safe.pinned ? 1 : 0, safe.supersedesId, safe.updatedAt,
+      safe.sensitivity, safe.recallPolicy, safe.id
     )
     this.#audit('update', true, { id: safe.id, types: types.length ? types : undefined, redacted: types.length > 0 })
     return this.#rowToEntry(this.db.prepare('SELECT * FROM entries WHERE id = ?').get(safe.id))
@@ -290,14 +357,16 @@ class MemoryService {
     return this.#rowToEntry(this.db.prepare('SELECT * FROM entries WHERE id = ?').get(key))
   }
 
-  async list({ page = 1, pageSize = 50 } = {}) {
+  async list({ page = 1, pageSize = 50, ...selectionOptions } = {}) {
     this.#requireEnabled()
     const size = clampInt(pageSize, 50, 1, 200)
     const pageNum = clampInt(page, 1, 1, 1000000)
-    const total = this.#entryCount()
+    const selection = this.#selectionSql(selectionOptions)
+    const where = selection.clause ? ` WHERE ${selection.clause}` : ''
+    const total = Number(this.db.prepare(`SELECT count(*) AS c FROM entries${where}`).get(...selection.params).c)
     const rows = this.db.prepare(
-      `SELECT ${ENTRY_COLUMNS} FROM entries ORDER BY updatedAt DESC LIMIT ? OFFSET ?`
-    ).all(size, (pageNum - 1) * size)
+      `SELECT ${ENTRY_COLUMNS} FROM entries${where} ORDER BY pinned DESC, updatedAt DESC LIMIT ? OFFSET ?`
+    ).all(...selection.params, size, (pageNum - 1) * size)
     return {
       entries: rows.map(row => this.#rowToEntry(row)),
       page: pageNum,
@@ -312,11 +381,12 @@ class MemoryService {
    * 中文等子串场景下 FTS 命中不足时自动用 LIKE 补充。
    * 返回每条命中的来源（source）与命中字段（matched）/ 片段（snippet）。
    */
-  async search(query, { maxResults } = {}) {
+  async search(query, { maxResults, ...selectionOptions } = {}) {
     this.#requireEnabled()
     const q = this.#validateQuery(query)
     const limit = clampInt(maxResults, this.cfg.maxResults, 1, MAX_QUERY_CEILING)
-    const fts = this.fts5 ? this.#searchFts(q, limit) : { used: false, error: 'fts-unavailable', hits: [] }
+    const selection = this.#selectionSql(selectionOptions, 'e')
+    const fts = this.fts5 ? this.#searchFts(q, limit, selection) : { used: false, error: 'fts-unavailable', hits: [] }
     const seen = new Set()
     let hits = []
     let source = 'like'
@@ -326,7 +396,7 @@ class MemoryService {
       if (hits.length) source = 'fts5'
     }
     if (hits.length < limit) {
-      const extra = this.#searchLike(q, limit - hits.length, seen)
+      const extra = this.#searchLike(q, limit - hits.length, seen, selection)
       if (extra.length) {
         hits = hits.concat(extra)
         source = fts.used && !fts.error ? 'fts5+like' : 'like'
@@ -347,10 +417,15 @@ class MemoryService {
    * 不超过配置上限）的命中，并更新每条命中 lastUsedAt。
    * 显式 search() 不受该策略限制——用户主动查询仍然可用。
    */
-  async recall(query, { maxResults } = {}) {
+  async recall(query, { maxResults, ...selectionOptions } = {}) {
     this.#requireEnabled()
     const limit = clampInt(maxResults, this.cfg.recallMaxResults, 1, 100)
-    const probe = await this.search(query, { maxResults: Math.min(MAX_QUERY_CEILING, limit * 4) })
+    const probe = await this.search(query, {
+      ...selectionOptions,
+      statuses: ['active'],
+      includeExpired: false,
+      maxResults: Math.min(MAX_QUERY_CEILING, limit * 4)
+    })
     const allowed = probe.hits.filter(hit =>
       hit.recallPolicy !== 'never' && Number(hit.sensitivity) <= this.cfg.recallMaxSensitivity
     ).slice(0, limit)
@@ -403,7 +478,7 @@ class MemoryService {
     const rows = this.db.prepare(`SELECT ${ENTRY_COLUMNS} FROM entries ORDER BY updatedAt DESC`).all()
     const payload = {
       format: 'dsh-memory-export',
-      version: 1,
+      version: 2,
       exportedAt: new Date(this.now()).toISOString(),
       counts: { entries: rows.length },
       entries: rows.map(row => this.#rowToEntry(row))
@@ -465,6 +540,16 @@ class MemoryService {
         content TEXT NOT NULL,
         tags TEXT NOT NULL DEFAULT '[]',
         sourceSessionId TEXT,
+        scopeType TEXT NOT NULL DEFAULT 'personal',
+        scopeRef TEXT,
+        sourceType TEXT NOT NULL DEFAULT 'manual',
+        sourceRef TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        revision INTEGER NOT NULL DEFAULT 1,
+        verifiedAt TEXT,
+        expiresAt TEXT,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        supersedesId TEXT,
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL,
         lastUsedAt TEXT,
@@ -475,10 +560,31 @@ class MemoryService {
       CREATE INDEX IF NOT EXISTS idx_entries_kind ON entries(kind);
       CREATE INDEX IF NOT EXISTS idx_entries_source ON entries(sourceSessionId);
     `)
-    const versionRow = this.db.prepare('PRAGMA user_version').get()
-    if (Number(versionRow.user_version ?? 0) < 1) {
-      this.db.exec('PRAGMA user_version = 1')
+    const columns = new Set(this.db.prepare('PRAGMA table_info(entries)').all().map(row => row.name))
+    const additions = {
+      scopeType: "TEXT NOT NULL DEFAULT 'personal'",
+      scopeRef: 'TEXT',
+      sourceType: "TEXT NOT NULL DEFAULT 'manual'",
+      sourceRef: 'TEXT',
+      status: "TEXT NOT NULL DEFAULT 'active'",
+      revision: 'INTEGER NOT NULL DEFAULT 1',
+      verifiedAt: 'TEXT',
+      expiresAt: 'TEXT',
+      pinned: 'INTEGER NOT NULL DEFAULT 0',
+      supersedesId: 'TEXT'
     }
+    for (const [column, declaration] of Object.entries(additions)) {
+      if (!columns.has(column)) this.db.exec(`ALTER TABLE entries ADD COLUMN ${column} ${declaration}`)
+    }
+    this.db.exec(`
+      UPDATE entries SET sourceType = 'session', sourceRef = sourceSessionId
+        WHERE sourceSessionId IS NOT NULL AND (sourceRef IS NULL OR sourceRef = '');
+      UPDATE entries SET verifiedAt = updatedAt WHERE status = 'active' AND verifiedAt IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_entries_scope ON entries(scopeType, scopeRef);
+      CREATE INDEX IF NOT EXISTS idx_entries_status ON entries(status, expiresAt);
+      CREATE INDEX IF NOT EXISTS idx_entries_pinned ON entries(pinned, updatedAt);
+      PRAGMA user_version = 2;
+    `)
     if (!this.fts5) return
     this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
@@ -533,6 +639,27 @@ class MemoryService {
         throw new Error('无效的 sourceSessionId。')
       }
     }
+    const scopeType = input.scopeType === undefined ? (existing ? existing.scopeType : 'personal') : String(input.scopeType)
+    if (!MEMORY_SCOPE_TYPES.includes(scopeType)) throw new Error('无效的记忆作用域 scopeType。')
+    const rawScopeRef = input.scopeRef === undefined ? (existing ? existing.scopeRef : null) : input.scopeRef
+    const scopeRef = scopeType === 'personal' ? null : this.#boundedReference(rawScopeRef, 'scopeRef', MAX_SCOPE_REF_CHARS, true)
+    const sourceType = input.sourceType === undefined
+      ? (existing ? existing.sourceType : (sourceSessionId ? 'session' : 'manual'))
+      : String(input.sourceType)
+    if (!MEMORY_SOURCE_TYPES.includes(sourceType)) throw new Error('无效的记忆来源 sourceType。')
+    const rawSourceRef = input.sourceRef === undefined
+      ? (existing ? existing.sourceRef : (sourceSessionId || null))
+      : input.sourceRef
+    const sourceRef = this.#boundedReference(rawSourceRef, 'sourceRef', MAX_SOURCE_REF_CHARS, false)
+    const status = input.status === undefined ? (existing ? existing.status : 'active') : String(input.status)
+    if (!MEMORY_STATUSES.includes(status)) throw new Error('无效的记忆状态 status。')
+    const expiresAt = input.expiresAt === undefined ? (existing ? existing.expiresAt : null) : this.#timestamp(input.expiresAt, 'expiresAt')
+    let verifiedAt = input.verifiedAt === undefined ? (existing ? existing.verifiedAt : null) : this.#timestamp(input.verifiedAt, 'verifiedAt')
+    if (status === 'active' && (!existing || existing.status !== 'active') && input.verifiedAt === undefined) verifiedAt = nowIso
+    const pinned = input.pinned === undefined ? (existing ? existing.pinned : false) : input.pinned === true
+    const rawSupersedesId = input.supersedesId === undefined ? (existing ? existing.supersedesId : null) : input.supersedesId
+    const supersedesId = rawSupersedesId == null || rawSupersedesId === '' ? null : this.#validateId(rawSupersedesId)
+    if (supersedesId === id) throw new Error('记忆不能替代自身。')
     const sensitivity = input.sensitivity === undefined
       ? (existing ? existing.sensitivity : 0)
       : (() => {
@@ -549,7 +676,11 @@ class MemoryService {
         return input.recallPolicy
       })()
     return {
-      id, kind, title, content, tags, sourceSessionId, sensitivity, recallPolicy,
+      id, kind, title, content, tags, sourceSessionId,
+      scopeType, scopeRef, sourceType, sourceRef, status,
+      revision: existing ? Number(existing.revision || 1) + 1 : 1,
+      verifiedAt, expiresAt, pinned, supersedesId,
+      sensitivity, recallPolicy,
       createdAt: existing ? existing.createdAt : nowIso,
       updatedAt: nowIso,
       lastUsedAt: existing ? existing.lastUsedAt : null
@@ -580,9 +711,33 @@ class MemoryService {
     return out
   }
 
+  #boundedReference(value, field, maxChars, required) {
+    if (value === undefined || value === null || value === '') {
+      if (required) throw new Error(`${field} 不能为空。`)
+      return null
+    }
+    const text = String(value).trim()
+    if ((!text && required) || text.length > maxChars || /[\u0000-\u001f\u007f]/u.test(text)) throw new Error(`无效的 ${field}。`)
+    return text || null
+  }
+
+  #timestamp(value, field) {
+    if (value === undefined || value === null || value === '') return null
+    const date = new Date(String(value))
+    if (!Number.isFinite(date.getTime())) throw new Error(`无效的 ${field}。`)
+    return date.toISOString()
+  }
+
   // 敏感度策略：reject（默认）拒绝保存；redact 先脱敏再保存。
   // 返回 { entry, types }；types 为空表示无风险。
   #applySensitivityPolicy(entry, op = 'add') {
+    const referenceTypes = censor.detectHighRisk([entry.sourceSessionId, entry.scopeRef, entry.sourceRef].filter(Boolean).join('\n'))
+    if (referenceTypes.length) {
+      this.#audit(op, false, { id: entry.id, types: referenceTypes, detail: 'high-risk-reference-rejected' })
+      const error = new Error(`记忆来源或作用域引用包含高风险内容（${referenceTypes.join('、')}），已拒绝保存。`)
+      error.code = 'HIGH_RISK_REJECTED'
+      throw error
+    }
     const text = [entry.title, entry.content, ...entry.tags].join('\n')
     const types = censor.detectHighRisk(text)
     if (!types.length) return { entry, types }
@@ -599,18 +754,67 @@ class MemoryService {
     return { entry: safe, types }
   }
 
-  #searchFts(query, limit) {
+  #selectionSql(options = {}, alias = '') {
+    const prefix = alias ? `${alias}.` : ''
+    const clauses = []
+    const params = []
+    const rawStatuses = options.statuses ?? (options.status === undefined ? [] : [options.status])
+    if (rawStatuses !== undefined && !Array.isArray(rawStatuses)) throw new Error('statuses 必须是数组。')
+    const statuses = [...new Set((rawStatuses || []).map(String))]
+    if (statuses.some(status => !MEMORY_STATUSES.includes(status))) throw new Error('无效的记忆状态筛选。')
+    if (statuses.length) {
+      clauses.push(`${prefix}status IN (${statuses.map(() => '?').join(', ')})`)
+      params.push(...statuses)
+    }
+    let scopes = options.scopes
+    if (scopes === undefined && options.scopeType !== undefined) {
+      const type = String(options.scopeType)
+      if (!MEMORY_SCOPE_TYPES.includes(type)) throw new Error('无效的记忆作用域筛选。')
+      if (options.scopeRef === undefined) {
+        clauses.push(`${prefix}scopeType = ?`)
+        params.push(type)
+        scopes = []
+      } else {
+        scopes = [{ type, ref: options.scopeRef }]
+      }
+    }
+    if (scopes !== undefined) {
+      if (!Array.isArray(scopes) || scopes.length > 16) throw new Error('scopes 必须是最多 16 项的数组。')
+      const scopeClauses = []
+      for (const item of scopes) {
+        const type = String(item?.type || item?.scopeType || '')
+        if (!MEMORY_SCOPE_TYPES.includes(type)) throw new Error('无效的记忆作用域筛选。')
+        if (type === 'personal') {
+          scopeClauses.push(`(${prefix}scopeType = ? AND ${prefix}scopeRef IS NULL)`)
+          params.push(type)
+        } else {
+          const ref = this.#boundedReference(item?.ref ?? item?.scopeRef, 'scopeRef', MAX_SCOPE_REF_CHARS, true)
+          scopeClauses.push(`(${prefix}scopeType = ? AND ${prefix}scopeRef = ?)`)
+          params.push(type, ref)
+        }
+      }
+      if (scopeClauses.length) clauses.push(`(${scopeClauses.join(' OR ')})`)
+    }
+    if (options.includeExpired === false) {
+      clauses.push(`(${prefix}expiresAt IS NULL OR ${prefix}expiresAt > ?)`)
+      params.push(new Date(this.now()).toISOString())
+    }
+    return { clause: clauses.join(' AND '), params }
+  }
+
+  #searchFts(query, limit, selection = { clause: '', params: [] }) {
     try {
+      const selectionSql = selection.clause ? ` AND ${selection.clause}` : ''
       const rows = this.db.prepare(
         `SELECT ${ENTRY_COLUMNS.split(', ').map(col => `e.${col}`).join(', ')},
                 snippet(entries_fts, 0, '[', ']', '…', 12) AS snipTitle,
                 snippet(entries_fts, 1, '[', ']', '…', 12) AS snipContent,
                 snippet(entries_fts, 2, '[', ']', '…', 12) AS snipTags
          FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid
-         WHERE entries_fts MATCH ?
-         ORDER BY bm25(entries_fts)
+         WHERE entries_fts MATCH ?${selectionSql}
+         ORDER BY e.pinned DESC, bm25(entries_fts), e.updatedAt DESC
          LIMIT ?`
-      ).all(query, limit)
+      ).all(query, ...selection.params, limit)
       return {
         used: true,
         error: null,
@@ -623,14 +827,15 @@ class MemoryService {
     }
   }
 
-  #searchLike(query, limit, exclude) {
+  #searchLike(query, limit, exclude, selection = { clause: '', params: [] }) {
     const escape = value => value.replace(/[\\%_]/g, char => '\\' + char)
     const pattern = `%${escape(query)}%`
+    const selectionSql = selection.clause ? ` AND ${selection.clause}` : ''
     const rows = this.db.prepare(
-      `SELECT ${ENTRY_COLUMNS} FROM entries
-       WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'
-       ORDER BY updatedAt DESC LIMIT ?`
-    ).all(pattern, pattern, pattern, limit + exclude.size + 16)
+      `SELECT ${ENTRY_COLUMNS.split(', ').map(col => `e.${col}`).join(', ')} FROM entries e
+       WHERE (e.title LIKE ? ESCAPE '\\' OR e.content LIKE ? ESCAPE '\\' OR e.tags LIKE ? ESCAPE '\\')${selectionSql}
+       ORDER BY e.pinned DESC, e.updatedAt DESC LIMIT ?`
+    ).all(pattern, pattern, pattern, ...selection.params, limit + exclude.size + 16)
     const lower = query.toLowerCase()
     const hits = []
     for (const row of rows) {
@@ -686,6 +891,16 @@ class MemoryService {
       content: row.content,
       tags,
       sourceSessionId: row.sourceSessionId ?? null,
+      scopeType: row.scopeType || 'personal',
+      scopeRef: row.scopeRef ?? null,
+      sourceType: row.sourceType || (row.sourceSessionId ? 'session' : 'manual'),
+      sourceRef: row.sourceRef ?? row.sourceSessionId ?? null,
+      status: row.status || 'active',
+      revision: Math.max(1, Number(row.revision) || 1),
+      verifiedAt: row.verifiedAt ?? null,
+      expiresAt: row.expiresAt ?? null,
+      pinned: Number(row.pinned) === 1,
+      supersedesId: row.supersedesId ?? null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       lastUsedAt: row.lastUsedAt ?? null,
@@ -728,6 +943,10 @@ module.exports = {
   MAX_TAG_CHARS,
   MAX_TAGS,
   MemoryService,
+  createMemoryPack,
+  MEMORY_SCOPE_TYPES,
+  MEMORY_SOURCE_TYPES,
+  MEMORY_STATUSES,
   RECALL_POLICIES,
   SENSITIVITY_LEVELS,
   SENSITIVITY_MAX,

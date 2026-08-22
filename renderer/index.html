@@ -88,10 +88,28 @@
           <div id="browserPendingActions" class="browser-pending-actions"></div>
         </section>
         <section class="browser-model-permissions">
-          <h4>受限 Computer Use</h4>
-          <p>仅可截取和操作 Harness Desktop 窗口；点击、输入、滚动均逐次确认。</p>
+          <h4>内置 Computer Use</h4>
+          <p>只可操控 Harness Desktop 与持久策略允许的应用窗口；点击、输入、滚动等受限动作仍逐次确认。</p>
           <button id="computerUseToggle" type="button">开启本次控制</button>
+          <div id="computerUseSessionState" class="computer-use-session-state" aria-live="polite"></div>
           <div id="computerUsePending" class="browser-pending-actions"></div>
+        </section>
+        <section class="browser-model-permissions" aria-labelledby="computerUsePolicyTitle">
+          <h4 id="computerUsePolicyTitle">跨应用访问策略（持久）</h4>
+          <p>默认应用访问未单独列出的应用；每个应用可单独允许/拒绝并随时撤销持久授权。该策略只决定模型能否访问，不替代受限动作的逐次确认。</p>
+          <p class="computer-use-permanent-notice"><strong>永久禁止：</strong>敏感、系统、UAC 与提权窗口任何策略都不可放行，也不可撤销该限制。</p>
+          <div id="computerUsePolicyControls" class="computer-use-policy-controls">
+            <label class="computer-use-default-row">默认应用访问
+              <select id="computerUseDefaultAccess">
+                <option value="ask">每次询问（推荐）</option>
+                <option value="allow">始终允许</option>
+                <option value="deny">始终拒绝</option>
+              </select>
+            </label>
+            <div id="computerUseCurrentTarget" class="computer-use-current-target" aria-live="polite"></div>
+            <div id="computerUseAppList" class="computer-use-app-list" aria-live="polite"></div>
+            <div id="computerUsePolicyMessage" class="computer-use-policy-message" role="status"></div>
+          </div>
         </section>
         <label><input id="browserClearSiteConfirm" type="checkbox" /> 确认清除当前站点登录数据</label>
         <button id="browserClearSite" class="danger" type="button" disabled>清除当前站点</button>
@@ -245,6 +263,25 @@
               <input id="memoryTitleInput" type="text" maxlength="200" placeholder="标题（可选）" />
               <textarea id="memoryContentInput" maxlength="20000" rows="4" placeholder="只保存你希望以后复用的偏好或事实"></textarea>
               <div><input id="memoryTagsInput" type="text" maxlength="300" placeholder="标签，用逗号分隔" /><button id="memoryAdd" class="primary" type="button">保存</button></div>
+            </section>
+            <section class="memory-review-card" aria-labelledby="memoryReviewTitle">
+              <div class="memory-review-heading"><h3 id="memoryReviewTitle">记忆审核</h3><span>候选记忆需批准后才会参与自动召回；停用与“永不召回”条目不会被自动召回。</span></div>
+              <div class="memory-review-toolbar" role="group" aria-label="记忆审核筛选">
+                <label>状态筛选
+                  <select id="memoryStateFilter">
+                    <option value="all">全部状态</option>
+                    <option value="candidate">待批准候选</option>
+                    <option value="active">有效</option>
+                    <option value="stale">已过期</option>
+                    <option value="superseded">已替代</option>
+                    <option value="conflict">冲突</option>
+                    <option value="archived">已停用</option>
+                  </select>
+                </label>
+                <label>作用域
+                  <select id="memoryScopeFilter"><option value="all">全部作用域</option></select>
+                </label>
+              </div>
             </section>
             <section class="memory-search-card">
               <div class="memory-search-row"><input id="memorySearchInput" type="search" maxlength="200" placeholder="搜索本地记忆" /><button id="memorySearch" type="button">搜索</button><button id="memoryRefresh" type="button">全部</button></div>

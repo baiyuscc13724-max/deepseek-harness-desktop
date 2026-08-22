@@ -59,3 +59,45 @@ test('Codex-style right sidebar browser uses an isolated visible login profile',
     assert.ok(main.includes(channel), `main missing ${channel}`)
   }
 })
+
+test('Computer Use keeps per-action confirmation and adds a persistent app policy editor', async () => {
+  const [html, renderer, styles] = await Promise.all([
+    readFile(path.join(root, 'renderer', 'index.html'), 'utf8'),
+    readFile(path.join(root, 'renderer', 'browser-sidebar.js'), 'utf8'),
+    readFile(path.join(root, 'renderer', 'styles.css'), 'utf8')
+  ])
+
+  for (const id of ['computerUseToggle', 'computerUseSessionState', 'computerUsePending', 'computerUsePolicyTitle', 'computerUsePolicyControls', 'computerUseDefaultAccess', 'computerUseCurrentTarget', 'computerUseAppList', 'computerUsePolicyMessage']) {
+    assert.match(html, new RegExp(`id="${id}"`), `missing computer use control ${id}`)
+  }
+  assert.match(html, /内置 Computer Use/u)
+  assert.match(html, /跨应用访问策略（持久）/u)
+  assert.match(html, /默认应用访问/u)
+  assert.match(html, /受限动作仍逐次确认/u)
+  for (const value of ['ask', 'allow', 'deny']) {
+    assert.match(html, new RegExp(`<option value="${value}">`), `missing default access option ${value}`)
+  }
+  assert.match(html, /每次询问（推荐）/u)
+  assert.match(html, /永久禁止：<\/strong>敏感、系统、UAC 与提权窗口任何策略都不可放行，也不可撤销该限制。/u)
+  assert.doesNotMatch(html, /技能卡/u)
+  assert.doesNotMatch(html, /computerUseInstall/u)
+
+  assert.match(renderer, /getComputerUseState/u)
+  assert.match(renderer, /setComputerUseEnabled/u)
+  assert.match(renderer, /api\.confirmComputerUseAction\(item\.id\)/u)
+  assert.match(renderer, /api\.rejectComputerUseAction\(item\.id\)/u)
+  assert.match(renderer, /本次允许/u)
+  assert.match(renderer, /renderComputerUsePending\(/u)
+  assert.match(renderer, /typeof api\.getComputerUsePolicy !== 'function'/u)
+  assert.match(renderer, /策略后端未接通/u)
+  assert.match(renderer, /能力不可用原因：/u)
+  assert.match(renderer, /api\.setComputerUseDefaultAccess\(/u)
+  assert.match(renderer, /api\.setComputerUseAppOverride\(/u)
+  assert.match(renderer, /api\.revokeComputerUseAppOverride\(/u)
+  assert.match(renderer, /撤销持久授权/u)
+  assert.match(renderer, /永久禁止/u)
+
+  for (const selector of ['.computer-use-session-state', '.computer-use-permanent-notice', '.computer-use-policy-controls', '.computer-use-app-row', '.computer-use-policy-message', '.computer-use-current-target', '.computer-use-app-list']) {
+    assert.match(styles, new RegExp(selector.replace('.', '\\.')), `missing style ${selector}`)
+  }
+})

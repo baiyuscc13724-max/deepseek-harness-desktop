@@ -4,10 +4,14 @@ const path = require('node:path')
 const { mkdtemp, rm, readFile, writeFile } = require('node:fs/promises')
 const { existsSync } = require('node:fs')
 const os = require('node:os')
+const { DatabaseSync } = require('node:sqlite')
 
 const {
   DEFAULT_CONFIG,
   MemoryService,
+  createMemoryPack,
+  MEMORY_SCOPE_TYPES,
+  MEMORY_STATUSES,
   RECALL_POLICIES,
   SENSITIVITY_LEVELS,
   sanitizeConfig
@@ -110,6 +114,7 @@ test('enable 创建本地数据库并报告 FTS5 与 SQLite 版本', async () =>
     assert.equal(status.enabled, true)
     assert.equal(status.fts5, true)
     assert.equal(status.counts.entries, 0)
+    assert.equal(status.schemaVersion, 2)
     assert.ok(status.sqliteVersion && status.sqliteVersion.length > 0)
     assert.equal(existsSync(path.join(root, 'mem', 'memory.db')), true)
     // 幂等：同一路径重复 enable 不报错。
@@ -169,6 +174,143 @@ test('CRUD：add/get/update/delete 与全部字段', async () => {
   }
 })
 
+test('Schema v1 原地幂等迁移到 v2 并保留旧记忆', async () => {
+  const root = await fixture()
+  const dbPath = path.join(root, 'legacy.db')
+  try {
+    const legacy = new DatabaseSync(dbPath)
+    legacy.exec(`
+      CREATE TABLE entries (
+        rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL DEFAULT 'note',
+        title TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL,
+        tags TEXT NOT NULL DEFAULT '[]',
+        sourceSessionId TEXT,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        lastUsedAt TEXT,
+        sensitivity INTEGER NOT NULL DEFAULT 0,
+        recallPolicy TEXT NOT NULL DEFAULT 'auto'
+      );
+      PRAGMA user_version = 1;
+    `)
+    legacy.prepare(`INSERT INTO entries
+      (id, kind, title, content, tags, sourceSessionId, createdAt, updatedAt, sensitivity, recallPolicy)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('legacy-1', 'project', '旧决定', '保留旧库内容', '["legacy"]', 'session-old', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z', 0, 'auto')
+    legacy.close()
+
+    const service = makeService(root)
+    await service.enable({ dbPath })
+    assert.equal(service.status().schemaVersion, 2)
+    const migrated = await service.get('legacy-1')
+    assert.equal(migrated.content, '保留旧库内容')
+    assert.equal(migrated.scopeType, 'personal')
+    assert.equal(migrated.scopeRef, null)
+    assert.equal(migrated.sourceType, 'session')
+    assert.equal(migrated.sourceRef, 'session-old')
+    assert.equal(migrated.status, 'active')
+    assert.equal(migrated.revision, 1)
+    assert.equal(migrated.verifiedAt, '2026-01-02T00:00:00.000Z')
+    assert.equal(migrated.pinned, false)
+    service.disable()
+
+    await service.enable({ dbPath })
+    assert.equal(service.status().schemaVersion, 2)
+    assert.equal((await service.list()).total, 1)
+    assert.equal((await service.search('旧库')).total, 1)
+    service.disable()
+  } finally {
+    await destroy(root)
+  }
+})
+
+test('v2 作用域、候选审核、过期过滤与有界配装检索', async () => {
+  const root = await fixture()
+  try {
+    const fixedNow = Date.parse('2026-08-22T10:00:00.000Z')
+    let seq = 0
+    const service = makeService(root, { now: () => fixedNow, idFactory: () => `v2-${++seq}` })
+    await service.enable({ dbPath: path.join(root, 'm.db') })
+    try {
+      const personal = await service.add({ content: 'shared personal rule', pinned: true })
+      const project = await service.add({
+        content: 'shared project rule', scopeType: 'project', scopeRef: 'D:\\repo',
+        sourceType: 'file', sourceRef: 'docs/decision.md'
+      })
+      const candidate = await service.add({
+        content: 'shared candidate rule', status: 'candidate', scopeType: 'project', scopeRef: 'D:\\repo',
+        sourceType: 'goal', sourceRef: 'goal-1'
+      })
+      await service.add({
+        content: 'shared expired rule', scopeType: 'project', scopeRef: 'D:\\repo',
+        expiresAt: '2026-01-01T00:00:00.000Z'
+      })
+      await service.add({ content: 'shared other team rule', scopeType: 'team', scopeRef: 'team-other' })
+
+      assert.equal(service.status().counts.candidates, 1)
+      const candidates = await service.list({ status: 'candidate', scopeType: 'project', scopeRef: 'D:\\repo' })
+      assert.equal(candidates.total, 1)
+      assert.equal(candidates.entries[0].id, candidate.id)
+      const explicit = await service.search('shared', { statuses: ['candidate'], scopeType: 'project', scopeRef: 'D:\\repo' })
+      assert.deepEqual(explicit.hits.map(hit => hit.id), [candidate.id])
+
+      const recalled = await service.recall('shared', {
+        maxResults: 5,
+        scopes: [{ type: 'personal' }, { type: 'project', ref: 'D:\\repo' }]
+      })
+      assert.deepEqual(new Set(recalled.hits.map(hit => hit.id)), new Set([personal.id, project.id]))
+      assert.equal(recalled.hits[0].id, personal.id, 'pinned memory ranks first')
+      assert.ok(recalled.hits.every(hit => hit.status === 'active'))
+
+      const approved = await service.update(candidate.id, { status: 'active' })
+      assert.equal(approved.revision, 2)
+      assert.equal(approved.verifiedAt, '2026-08-22T10:00:00.000Z')
+      assert.equal((await service.recall('candidate', { scopes: [{ type: 'project', ref: 'D:\\repo' }] })).total, 1)
+      const archived = await service.update(candidate.id, { status: 'archived', recallPolicy: 'never' })
+      assert.equal(archived.status, 'archived')
+      assert.equal(archived.revision, 3)
+      assert.equal((await service.recall('candidate', { scopes: [{ type: 'project', ref: 'D:\\repo' }] })).total, 0)
+
+      await assert.rejects(service.add({ content: 'bad', scopeType: 'project' }), /scopeRef/)
+      await assert.rejects(service.add({ content: 'bad', scopeType: 'global' }), /scopeType/)
+      await assert.rejects(service.add({ content: 'bad', status: 'approved' }), /status/)
+      await assert.rejects(service.add({ content: 'bad', expiresAt: 'not-a-date' }), /expiresAt/)
+      await assert.rejects(service.search('shared', { statuses: ['unknown'] }), /状态筛选/)
+      assert.ok(MEMORY_SCOPE_TYPES.includes('team'))
+      assert.ok(MEMORY_STATUSES.includes('conflict'))
+    } finally {
+      service.disable()
+    }
+  } finally {
+    await destroy(root)
+  }
+})
+
+test('临时 Memory Pack 严格限制为五条、1200 字符和 30 分钟', () => {
+  const hits = Array.from({ length: 10 }, (_, index) => ({
+    id: `m-${index}`,
+    revision: index + 1,
+    title: `标题${index}`,
+    content: '内容'.repeat(500),
+    sourceType: 'session',
+    sourceRef: `session-${index}`
+  }))
+  const now = Date.parse('2026-08-22T10:00:00.000Z')
+  const pack = createMemoryPack(hits, { teamId: 'team-1', taskId: 'task-1', now, maxItems: 99, maxCharacters: 99999, ttlMs: 99999999 })
+  assert.equal(pack.schemaVersion, 1)
+  assert.equal(pack.teamId, 'team-1')
+  assert.equal(pack.taskId, 'task-1')
+  assert.equal(pack.ephemeral, true)
+  assert.ok(pack.items.length <= 5)
+  assert.ok(pack.content.length <= 1200)
+  assert.equal(pack.maxCharacters, 1200)
+  assert.equal(pack.expiresAt, '2026-08-22T10:30:00.000Z')
+  assert.ok(pack.items.every(item => !('content' in item)))
+})
+
 test('输入校验：大小/标签/敏感级别/召回策略均有约束', async () => {
   const root = await fixture()
   try {
@@ -185,6 +327,7 @@ test('输入校验：大小/标签/敏感级别/召回策略均有约束', async
       await assert.rejects(service.add({ content: 'x', tags: ['A'.repeat(41)] }), /标签过长/)
       await assert.rejects(service.add({ content: 'x', sensitivity: 99 }), /敏感级别/)
       await assert.rejects(service.add({ content: 'x', recallPolicy: 'sometimes' }), /召回策略/)
+      await assert.rejects(service.add({ content: 'x', sourceType: 'file', sourceRef: 'api_key=sk-abcdefghijklmnop' }), /来源或作用域引用包含高风险内容/)
       await assert.rejects(service.get('bad id!'), /无效/)
       await assert.rejects(service.search(''), /不能为空/)
       await assert.rejects(service.search(' '.repeat(10)), /不能为空/)
@@ -557,7 +700,7 @@ test('导出：JSON 原子写出、限定目录、不含审计与秘密', async 
       assert.equal(result.format, 'dsh-memory-export')
       assert.equal(existsSync(target), true)
       const payload = JSON.parse(await readFile(target, 'utf8'))
-      assert.equal(payload.version, 1)
+      assert.equal(payload.version, 2)
       assert.equal(payload.entries.length, 1)
       assert.equal(payload.entries[0].id, entry.id)
       assert.deepEqual(payload.entries[0].tags, ['重要'])

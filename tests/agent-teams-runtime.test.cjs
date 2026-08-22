@@ -79,6 +79,40 @@ test('busy lead relays steer inside the active turn instead of queuing delayed o
   assert.doesNotMatch(source, /await lead\.followup\(createUserMessage/u)
 })
 
+test('new team members re-read the latest tier route instead of using a hard-coded provider', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-team-live-routing-'))
+  try {
+    const stateDirectory = path.join(root, 'teams')
+    const store = { filePath: path.join(stateDirectory, 'agent-teams.json') }
+    const routingFile = path.join(root, 'harness-desktop-model-routing.json')
+    await writeFile(routingFile, JSON.stringify({
+      main: { provider: 'old-main', model: 'main-model' },
+      subagent: { inheritMain: false, provider: 'old-sub', model: 'sub-model-a' }
+    }))
+    const mod = await import(`${pathToFileURL(pluginFile).href}?live-routing=${Date.now()}`)
+    const first = await mod.resolveModelSelection(store, 'subagent', undefined, { provider: 'live-lead', model: 'lead-model' })
+    assert.equal(first.provider, 'old-sub')
+    assert.equal(first.model, 'sub-model-a')
+    assert.equal(first.routeSource, 'routing-subagent')
+
+    await writeFile(routingFile, JSON.stringify({
+      main: { provider: 'old-main', model: 'main-model' },
+      subagent: { inheritMain: false, provider: 'new-sub', model: 'sub-model-b' }
+    }))
+    const second = await mod.resolveModelSelection(store, 'subagent', undefined, { provider: 'live-lead', model: 'lead-model' })
+    assert.equal(second.provider, 'new-sub')
+    assert.equal(second.model, 'sub-model-b')
+    assert.equal(second.routeSource, 'routing-subagent')
+    assert.equal(first.provider, 'old-sub', 'already-created member descriptors remain immutable')
+
+    const main = await mod.resolveModelSelection(store, 'main', undefined, { provider: 'live-lead', model: 'lead-model' })
+    assert.equal(main.provider, 'old-main', 'changing only the subagent route must not alter main-tier members')
+    assert.equal(main.routeSource, 'routing-main')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('model tools create a team, spawn independent members, and relay with non-user authority', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-runtime-'))
   const previousHome = process.env.DSH_HOME
@@ -258,6 +292,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(enabledPrompt, /active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent/u)
     assert.match(enabledPrompt, /Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph/u)
     assert.match(enabledPrompt, /report that need to the root, which decides whether to spawn another visible member under maxActiveTurns/u)
+    assert.match(enabledPrompt, /Every new member re-reads the latest route for its chosen tier/u)
+    assert.match(enabledPrompt, /changing the subagent route never changes main-tier members/u)
+    assert.match(tools.get('team_spawn').description, /existing members retain their creation route/u)
     assert.match(tools.get('team_start').description, /Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count/u)
     assert.match(tools.get('team_start').description, /one continuable helper should use ordinary subagent instead/u)
     assert.match(tools.get('team_start').description, /explicit user team request may override this automatic threshold/u)
@@ -349,6 +386,49 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(uiResearcher.modelTier, 'subagent')
     assert.equal(uiResearcher.inheritsMain, false)
     assert.equal(uiResearcher.routeSource, 'live-lead-explicit-model')
+
+    const memoryTask = await tools.get('team_task_create').execute({
+      team_id: started.team.id,
+      title: 'Use bounded memory pack',
+      assignee_session_id: spawned.member.sessionId
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    const packContent = 'project constraint only for this task'
+    const packExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+    const packDelivery = await tools.get('team_memory_pack').execute({
+      team_id: started.team.id,
+      task_id: memoryTask.task.id,
+      recipient_session_id: spawned.member.sessionId,
+      content: packContent,
+      expires_at: packExpiry
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(packDelivery.ok, true)
+    assert.match(followups.at(-1).content[0].text, /Ephemeral Memory Pack/u)
+    assert.match(followups.at(-1).content[0].text, new RegExp(packContent, 'u'))
+    const persistedAfterPack = await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')
+    assert.doesNotMatch(persistedAfterPack, new RegExp(packContent, 'u'))
+    assert.match(persistedAfterPack, /ephemeral memory pack omitted/u)
+    activeInitiator = workerAgent
+    await assert.rejects(
+      tools.get('team_memory_pack').execute({
+        team_id: started.team.id,
+        task_id: memoryTask.task.id,
+        recipient_session_id: rootAgent.id,
+        content: packContent,
+        expires_at: packExpiry
+      }, { agent: workerAgent, signal: new AbortController().signal }),
+      error => error && error.code === 'AGENT_TEAMS_UNAUTHORIZED'
+    )
+    activeInitiator = rootAgent
+    await assert.rejects(
+      tools.get('team_memory_pack').execute({
+        team_id: started.team.id,
+        task_id: memoryTask.task.id,
+        recipient_session_id: spawned.member.sessionId,
+        content: 'x'.repeat(1201),
+        expires_at: packExpiry
+      }, { agent: rootAgent, signal: new AbortController().signal }),
+      /at most 1200|must be at most 1200|memory pack content/u
+    )
 
     activeInitiator = workerAgent
     const busyLeadRelay = await tools.get('team_message').execute({

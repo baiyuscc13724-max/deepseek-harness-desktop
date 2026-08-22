@@ -66,6 +66,16 @@ test('confirmation becomes invalid when the visible desktop surface changes', ()
   assert.equal(store.authorize('click', { x: 320, y: 180, surface, confirmation_id: request.confirmationId }), null)
 })
 
+test('cross-application confirmations bind the exact target label and key', () => {
+  const { store } = fixture()
+  const surface = { generation: 7, width: 900, height: 640, url: 'app://opaque-target-1', label: 'Allowed Editor' }
+  const request = store.authorize('keypress', { x: 40, y: 60, key: 'ENTER', surface })
+  assert.match(request.summary, /Allowed Editor/u)
+  store.confirm(request.confirmationId)
+  assert.throws(() => store.authorize('keypress', { x: 40, y: 60, key: 'ESCAPE', surface, confirmation_id: request.confirmationId }), error => error.code === 'confirmation-invalid')
+  assert.equal(store.authorize('keypress', { x: 40, y: 60, key: 'ENTER', surface, confirmation_id: request.confirmationId }), null)
+})
+
 test('expired confirmations are pruned from state and cannot be confirmed', () => {
   const { store, advance } = fixture()
   const request = store.authorize('click', { x: 1, y: 40 })
@@ -77,7 +87,10 @@ test('expired confirmations are pruned from state and cannot be confirmed', () =
 test('main process delegates confirmation state without retaining plaintext fingerprints', async () => {
   const main = await readFile(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
   assert.match(main, /new ComputerUseConfirmationStore\(\)/)
-  assert.match(main, /computerUseConfirmations\.authorize\(action, \{ \.\.\.parameters, surface: computerUseSurface\(\) \}\)/)
+  assert.match(main, /computerUseConfirmations\.authorize\(action, \{ \.\.\.parameters, surface: computerUseSurface\(target\) \}\)/)
+  assert.match(main, /await revalidateComputerUseTarget\(target\)/)
+  assert.match(main, /sourceX = Math\.max\(0, Math\.min\(sourceWidth - 1/)
+  assert.match(main, /target\.fingerprint/)
   assert.match(main, /generation: computerUseSessionGeneration/)
   assert.match(main, /urls = \[mainWindow\.webContents\.getURL\(\)\]/)
   assert.match(main, /runtimeGuest && !runtimeGuest\.isDestroyed\(\)/)

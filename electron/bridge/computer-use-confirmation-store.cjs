@@ -18,8 +18,9 @@ function normalizedSurface(value) {
   const width = Number(value.width)
   const height = Number(value.height)
   const url = String(value.url || '').slice(0, 4096)
+  const label = String(value.label || 'Harness Desktop').trim().slice(0, 160) || 'Harness Desktop'
   if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || !url) return null
-  return { generation, width, height, url }
+  return { generation, width, height, url, label }
 }
 
 function confirmationFingerprint(action, parameters = {}) {
@@ -29,6 +30,7 @@ function confirmationFingerprint(action, parameters = {}) {
     y: parameters.y ?? null,
     text: parameters.text ?? null,
     deltaY: parameters.delta_y ?? null,
+    key: parameters.key ?? null,
     surface: normalizedSurface(parameters.surface)
   })
   return createHash('sha256').update(canonical).digest('hex')
@@ -39,8 +41,9 @@ function confirmationSummary(action, parameters = {}) {
   const point = Number.isFinite(Number(parameters.x)) && Number.isFinite(Number(parameters.y))
     ? ` @ (${Math.round(Number(parameters.x))}, ${Math.round(Number(parameters.y))})`
     : ''
-  const surface = target ? `，当前窗口 ${target.width}×${target.height}` : ''
-  return `${String(action || '')} Harness Desktop 窗口${point}${surface}`
+  const label = target?.label || 'Harness Desktop'
+  const surface = target ? `，窗口 ${target.width}×${target.height}` : ''
+  return `${String(action || '')} ${label}${point}${surface}`
 }
 
 class ComputerUseConfirmationStore {

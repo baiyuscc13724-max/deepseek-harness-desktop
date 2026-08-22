@@ -1349,6 +1349,23 @@ async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
     authenticateParticipant(targetTeam, recipient.sessionId);
     const recipientId = recipient.sessionId;
     if (recipient.sessionId === caller.id) reject("cannot relay a team message to self", "AGENT_TEAMS_INVALID_MESSAGE");
+    let deliveryBody = nonEmptyString(input.message, "message", 65_536);
+    let persistedBody = deliveryBody;
+    if (input.memoryPack !== undefined) {
+      if (targetTeam !== sourceTeam) reject("memory packs cannot cross team boundaries", "AGENT_TEAMS_CROSS_TEAM_FORBIDDEN");
+      requireLiveRootLead(ctx, sourceTeam, caller);
+      const taskId = nonEmptyString(input.memoryPack.taskId, "memoryPack.taskId", 256);
+      const task = sourceTeam.tasks.find((candidate) => candidate.id === taskId);
+      if (task === undefined || !["pending", "in_progress"].includes(task.state)) reject("memory pack task is unavailable", "AGENT_TEAMS_INVALID_TASK");
+      if (task.assigneeSessionId !== recipient.sessionId) reject("memory pack recipient must be the task assignee", "AGENT_TEAMS_FORBIDDEN");
+      deliveryBody = nonEmptyString(input.message, "memory pack content", 1_200);
+      const expiresAt = nonEmptyString(input.memoryPack.expiresAt, "memoryPack.expiresAt", 64);
+      const expiresMs = Date.parse(expiresAt);
+      const currentMs = Date.parse(now());
+      if (!Number.isFinite(expiresMs) || expiresMs <= currentMs || expiresMs > currentMs + 30 * 60 * 1_000) reject("memory pack expiry must be within the next 30 minutes", "AGENT_TEAMS_INVALID_MESSAGE");
+      persistedBody = `[ephemeral memory pack omitted: task=${task.id}; expires=${new Date(expiresMs).toISOString()}]`;
+      deliveryBody = `[Ephemeral Memory Pack for task ${task.id}; expires ${new Date(expiresMs).toISOString()}]\n${deliveryBody}`;
+    }
     if (recipient.kind === "worker" && ["ready", "idle"].includes(recipient.state)) {
       if (activeWorkerTurnsForLead(document, targetTeam.rootLeadSessionId) >= document.settings.maxActiveTurns) reject("root lead active-turn limit reached across its teams", "AGENT_TEAMS_ACTIVE_TURN_LIMIT");
       recipient.state = "running";
@@ -1360,7 +1377,7 @@ async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
       fromSessionId: caller.id,
       toSessionId: recipientId,
       ...(targetTeam === sourceTeam ? {} : { toTeamId: targetTeam.id }),
-      body: nonEmptyString(input.message, "message", 65_536),
+      body: persistedBody,
       status: "pending",
       createdAt: now(),
     };
@@ -1377,12 +1394,13 @@ async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
       sender: clone(memberOf(sourceTeam, caller.id)),
       recipient: clone(recipient),
       message,
+      deliveryBody,
     };
   }));
   try {
     const targetTeam = await store.read((document) => findTeam(document, prepared.targetTeamId));
     const lead = exactLiveLead(ctx, targetTeam);
-    const content = textContent(`[Agent team message ${prepared.message.id} from ${prepared.sender?.name ?? caller.id}]\n${prepared.message.body}`);
+    const content = textContent(`[Agent team message ${prepared.message.id} from ${prepared.sender?.name ?? caller.id}]\n${prepared.deliveryBody}`);
     if (prepared.recipient.kind === "lead") {
       relayToLead(lead, createUserMessage({ content, source: relaySource(caller.id) }));
     } else {
@@ -1823,7 +1841,7 @@ function teamSystemPrompt(store) {
   return [
     "Agent Teams automatic-team mode is ENABLED.",
     "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively call team_start only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns.",
-    "The fixed root lead/brain always uses the main model route. The AI autonomously chooses each spawned member's model_tier: default to subagent to reduce cost; use main only for high-complexity reasoning, architecture, security-critical work, or repeated failures. Users do not choose member tiers.",
+    "The fixed root lead/brain always uses the main model route. The AI autonomously chooses each spawned member's model_tier: default to subagent to reduce cost; use main only for high-complexity reasoning, architecture, security-critical work, or repeated failures. Users do not choose member tiers. Every new member re-reads the latest route for its chosen tier; changing the subagent route never changes main-tier members, and already-created continuable members keep their creation route.",
     "Every spawned member display name must be a plain 2–12 character duty name in the user's language. For Chinese, prefer 2–6 characters such as 界面、安全、测试、文档; for English, use labels such as UI, Test, Security, Docs. Avoid internal or abstract technical terms including 宿主、协调器、执行器、实现者、子代理 and Host, Coordinator, Executor, Implementer, Subagent.",
     "A top-level root may own at most 8 unclosed peer teams, and all peers share maxActiveTurns. Pass team_id when more than one is active. Only their same fixed root lead may relay across teams with target_team_id. Never nest teams or connect different roots. Persist tasks before work, atomically claim pending unblocked tasks, gracefully retire members before closing a team, and use direct-human team_recover only for inactive orphaned teams.",
     "An explicit UI Stop on a root turn pauses every active team owned by that root, interrupts its members, clears team-generated wakeups, and returns in-progress tasks to pending. Never continue a paused team implicitly. In a later direct-human turn, call team_resume only when the user explicitly asks to continue or resume that team.",
@@ -1858,7 +1876,7 @@ function registerTools(ctx, store, ready, collaboration) {
   }));
   ctx.tools.register(defineTool({
     name: "team_spawn",
-    description: "Provision a continuable independent-context member. The AI chooses the tier by task: subagent by default for cost, main only for complex reasoning, architecture, security, or repeated failures; this is not a user choice.",
+    description: "Provision a continuable independent-context member. The AI chooses the tier by task: subagent by default for cost, main only for complex reasoning, architecture, security, or repeated failures; this is not a user choice. New members read the latest selected-tier route, while existing members retain their creation route and main-tier members ignore subagent-route changes.",
     parameters: {
       team_id: { type: "string", required: true }, name: { type: "string", required: true },
       role: { type: "string", required: true }, prompt: { type: "string", required: true },
@@ -1890,6 +1908,23 @@ function registerTools(ctx, store, ready, collaboration) {
     parameters: { team_id: { type: "string" }, target_team_id: { type: "string", description: "Optional peer team owned by the same fixed root lead." }, recipient_session_id: { type: "string", required: true, description: "Recipient session id, member id, or unique member name in the target team." }, message: { type: "string", required: true } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution, signal) => publicResult(await sendTeamMessage(ctx, store, execution.agent, { teamId: args.team_id, targetTeamId: args.target_team_id, recipientSessionId: args.recipient_session_id, message: args.message }, signal))),
     presentCall: (args) => present("Relay team message", args.recipient_session_id),
+  }));
+  ctx.tools.register(defineTool({
+    name: "team_memory_pack", description: "Deliver one root-created ephemeral Memory Pack to the exact assignee of an active local task. The pack is limited to 1200 characters, expires within 30 minutes, cannot cross teams, and its content is never persisted in the team store.",
+    parameters: {
+      team_id: { type: "string", required: true },
+      task_id: { type: "string", required: true },
+      recipient_session_id: { type: "string", required: true, description: "Exact task assignee session id, member id, or unique member name." },
+      content: { type: "string", required: true, description: "Content returned by local_memory pack; at most 1200 characters." },
+      expires_at: { type: "string", required: true, description: "Pack expiry returned by local_memory; must be within the next 30 minutes." },
+    }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution, signal) => publicResult(await sendTeamMessage(ctx, store, execution.agent, {
+      teamId: args.team_id,
+      recipientSessionId: args.recipient_session_id,
+      message: args.content,
+      memoryPack: { taskId: args.task_id, expiresAt: args.expires_at },
+    }, signal))),
+    presentCall: (args) => present("Deliver ephemeral memory pack", args.task_id),
   }));
   ctx.tools.register(defineTool({
     name: "team_task_create", description: "Create a durable pending task with local dependencies or fixed-root-lead-authorized peer-team dependencies.",
@@ -2413,7 +2448,9 @@ export {
   deriveTask,
   inject,
   name,
+  readModelRouting,
   resolveConfig,
+  resolveModelSelection,
   teamSnapshot,
   trustedRequest,
   updateTask,
