@@ -169,10 +169,11 @@
         "size": 831,
         "sha256": "0f5d8b5d035c7dc58298e9318a32c5cbcdd7efca5f9ae4c888b5b69fc00f5484",
         "mirror_urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/SHA256SUMS.txt",
           "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.31/SHA256SUMS.txt"
         ]
       }
     ],
-    "signature": "xNnen283x6d8hscPMlSX4bNCWfmJS/ypacmYwV2iM1jORszIa3uLQzOolbRVbmcYuWuMhVMmD/uvLtbFMYygAw=="
+    "signature": "YToOBWzawT9mNQiK9ndQTuZqaJRpISqOu8FINKDg+/3d5KJunER89yThDJsR6XBhzrK/b+Qk0729n93D9V4eDQ=="
   }
 ]
