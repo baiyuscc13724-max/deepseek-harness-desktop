@@ -4,6 +4,8 @@ const { readFileSync } = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
 const YAML = require('yaml')
+const { canReattachPreferredDraft, isExactDetachedDraft, normalizeReleaseBody, selectReleaseForTag } = require('../scripts/release-publish-selection.cjs')
+const { assetDescriptor, selectWindowsUpdateAssets } = require('../scripts/local-public-update-test.cjs')
 
 const root = path.resolve(__dirname, '..')
 const read = file => readFileSync(path.join(root, file), 'utf8')
@@ -17,6 +19,7 @@ const expectedPhases = [
   'signed-components',
   'release-manifest',
   'cnb-assets',
+  'windows-public-update',
   'stable-components',
   'cnb-stable',
   'complete'
@@ -39,6 +42,7 @@ test('one publisher command exposes the immutable resumable release order', () =
 
 test('publisher resumes atomically and never downloads Actions binaries locally', () => {
   const source = read('scripts/release-publish.mjs')
+  const publicUpdate = read('scripts/local-public-update-test.cjs')
   assert.match(source, /acquirePublicationLock/u)
   assert.match(source, /status === 'completed'/u)
   assert.match(source, /\$\{tag\}-publish\.json/u)
@@ -51,9 +55,89 @@ test('publisher resumes atomically and never downloads Actions binaries locally'
   assert.match(source, /Workflow completed without successful required jobs/u)
   assert.match(source, /failedBuild \? null : run/u)
   assert.match(source, /promoteStableFeeds/u)
+  assert.match(source, /publishPostTagRecoveryFix[\s\S]*publisher_revision[\s\S]*recoverySource\.ref/u)
+  assert.match(source, /normalizeReleaseBody\(readFileSync[\s\S]*release-notes\.md/u)
+  assert.match(source, /release\.body !== expectedBody[\s\S]*--method', 'PATCH'[\s\S]*normalized\.draft !== true/u)
+  assert.match(source, /preferredReleaseId[\s\S]*reattachPreferredDraft/u)
+  assert.match(source, /canReattachPreferredDraft[\s\S]*--method', 'DELETE'[\s\S]*--method', 'PATCH'/u)
+  assert.match(source, /phase\(state, 'windows-public-update'[\s\S]*local-public-update-test\.cjs/u)
+  assert.match(publicUpdate, /net\.fetch/u)
+  assert.match(publicUpdate, /checksumWithFallback[\s\S]*downloadWithFallback/u)
+  assert.match(publicUpdate, /--self-test[\s\S]*unins.*\\\.exe/u)
   assert.doesNotMatch(source, /gh[^\n]*run[^\n]*download/u)
-  assert.ok(source.indexOf("'cnb-assets'") < source.indexOf("'stable-components'"))
+  assert.ok(source.indexOf("'cnb-assets'") < source.indexOf("'windows-public-update'"))
+  assert.ok(source.indexOf("'windows-public-update'") < source.indexOf("'stable-components'"))
   assert.ok(source.indexOf("'stable-components'") < source.indexOf("'cnb-stable'"))
+})
+
+test('publisher deterministically selects the one exact draft when cloud and local creation race', () => {
+  const identity = {
+    tag: 'v1.0.32',
+    productRevision: 'a'.repeat(40),
+    name: 'Harness Desktop v1.0.32',
+    body: '# exact notes\n'
+  }
+  const stale = {
+    id: 1,
+    tag_name: identity.tag,
+    target_commitish: identity.productRevision,
+    name: identity.name,
+    body: '# stale notes\n',
+    draft: true,
+    prerelease: false,
+    assets: []
+  }
+  const exact = {
+    id: 2,
+    tag_name: identity.tag,
+    target_commitish: identity.productRevision,
+    name: identity.name,
+    body: identity.body.replaceAll('\n', '\r\n'),
+    draft: true,
+    prerelease: false,
+    assets: [{ name: 'SHA256SUMS.txt' }]
+  }
+  assert.equal(normalizeReleaseBody(exact.body), identity.body)
+  assert.equal(selectReleaseForTag([stale, exact], identity), exact)
+  assert.equal(selectReleaseForTag([exact, stale], identity), exact)
+
+  const repairIdentity = { ...identity, expectedAssetNames: ['SHA256SUMS.txt'] }
+  const detached = { ...exact, tag_name: 'untagged-48bc97277dc744d45c4e' }
+  const emptyClaimant = { ...stale, body: identity.body.replace(/\n$/u, ''), assets: [] }
+  assert.equal(isExactDetachedDraft(detached, repairIdentity), true)
+  assert.equal(canReattachPreferredDraft(detached, emptyClaimant, repairIdentity), true)
+  assert.equal(canReattachPreferredDraft(detached, { ...emptyClaimant, assets: [{ name: 'unexpected.bin' }] }, repairIdentity), false)
+  assert.equal(canReattachPreferredDraft({ ...detached, assets: [] }, emptyClaimant, repairIdentity), false)
+
+  const published = { ...exact, id: 3, draft: false }
+  assert.equal(selectReleaseForTag([stale, published, exact], identity), published)
+  assert.throws(() => selectReleaseForTag([exact, { ...exact, id: 4 }], identity), /Multiple exact private drafts/u)
+  assert.throws(() => selectReleaseForTag([published, { ...published, id: 5 }], identity), /Multiple published releases/u)
+})
+
+test('public Windows update gate selects signed installer URLs with mirror-first fallback', () => {
+  const version = '1.0.32'
+  const installer = {
+    name: `Harness-Desktop-${version}-win-x64.exe`,
+    size: 123,
+    sha256: 'a'.repeat(64),
+    browser_download_url: 'https://github.com/example/setup.exe',
+    mirror_urls: ['https://cnb.cool/example/setup.exe']
+  }
+  const checksum = {
+    name: 'SHA256SUMS.txt',
+    size: 80,
+    sha256: 'b'.repeat(64),
+    browser_download_url: 'https://github.com/example/SHA256SUMS.txt',
+    mirror_urls: ['https://cnb.cool/example/SHA256SUMS.txt']
+  }
+  const selected = selectWindowsUpdateAssets({ assets: [checksum, installer] }, version)
+  assert.equal(selected.installer, installer)
+  assert.deepEqual(assetDescriptor(installer).urls, [
+    'https://cnb.cool/example/setup.exe',
+    'https://github.com/example/setup.exe'
+  ])
+  assert.throws(() => selectWindowsUpdateAssets({ assets: [checksum] }, version), /missing the Windows installer/u)
 })
 
 test('publisher fails closed unless the desktop manifest is signed and verified before commit or mirroring', () => {
@@ -84,6 +168,9 @@ test('publisher fails closed unless the desktop manifest is signed and verified 
   assert.match(publisher, /adoptCloudSignedManifest/u)
   assert.match(publisher, /parents\.length !== 2 \|\| parents\[1\] !== stateProductRevision/u)
   assert.match(publisher, /changed\.length !== 1 \|\| changed\[0\] !== 'release-manifest\.json'/u)
+  assert.match(publisher, /POST_TAG_PUBLISHER_FIX_FILES[\s\S]*scripts\/release-publish-selection\.cjs/u)
+  assert.match(publisher, /postTagChanges\.some\(file => !POST_TAG_PUBLISHER_FIX_FILES\.has\(file\)\)/u)
+  assert.match(publisher, /gitRun\(\['cherry-pick', candidate\]\)/u)
   assert.match(publisher, /readVerifiedDesktopRelease/u)
   assert.match(publisher, /await readVerifiedDesktopRelease\(\)[\s\S]*gitRun\(\['push', 'origin', 'HEAD:main'\]\)/u)
   assert.match(publisher, /phase\(state, 'release-manifest'[\s\S]*await adoptCloudSignedManifest\(\)[\s\S]*phase\(state, 'cnb-assets'/u)
@@ -137,6 +224,9 @@ test('manual workflow recovery is uniquely identified and always builds the immu
   assert.match(source, /requestId[\s\S]*request_id/u)
   assert.match(source, /displayTitle\?\.includes\(requestId\)/u)
   assert.match(source, /async function dispatchWorkflow\(file, fields = \[\], ref = tag\)/u)
+  assert.match(source, /gitRun\(\['push', 'origin', 'HEAD:main'\]\)[\s\S]*publisher_revision/u)
+  assert.match(recovery, /publisher_revision:/u)
+  assert.match(recovery, /WORKFLOW_REVISION[\s\S]*Post-tag recovery workflow revision mismatch/u)
   for (const workflow of [release, android, recovery]) {
     assert.match(workflow, /request_id:/u)
     assert.match(workflow, /run-name:/u)

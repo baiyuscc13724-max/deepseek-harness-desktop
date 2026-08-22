@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
 const { validateAndVerifyDesktopReleaseManifest } = require('../electron/bridge/desktop-release-contract.cjs')
+const { canReattachPreferredDraft, isExactDetachedDraft, normalizeReleaseBody, selectReleaseForTag } = require('./release-publish-selection.cjs')
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const command = process.argv[2] || 'status'
@@ -33,6 +34,7 @@ const PHASES = [
   'signed-components',
   'release-manifest',
   'cnb-assets',
+  'windows-public-update',
   'stable-components',
   'cnb-stable',
   'complete'
@@ -43,6 +45,13 @@ const BUILD_JOBS = [
   'Build ubuntu-latest',
   'Validate iPhone and iPad simulators'
 ]
+const POST_TAG_PUBLISHER_FIX_FILES = new Set([
+  '.github/workflows/recover-release-from-actions.yml',
+  'scripts/release-publish.mjs',
+  'scripts/local-public-update-test.cjs',
+  'scripts/release-publish-selection.cjs',
+  'tests/release-publisher.test.cjs'
+])
 
 function argument(name, fallback = '') {
   const exact = process.argv.indexOf(`--${name}`)
@@ -224,6 +233,27 @@ function assertMainFastForward() {
   return { head, remoteMain }
 }
 
+function publishPostTagRecoveryFix() {
+  const current = gitCapture(['rev-parse', 'HEAD']).toLowerCase()
+  if (current === stateProductRevision) return { ref: tag, fields: [] }
+  assertClean()
+  gitRun(['fetch', 'origin', 'main'])
+  const remoteMain = gitCapture(['rev-parse', 'origin/main']).toLowerCase()
+  const productAncestor = spawnSync(git, ['merge-base', '--is-ancestor', stateProductRevision, current], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false })
+  const remoteAncestor = spawnSync(git, ['merge-base', '--is-ancestor', remoteMain, current], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false })
+  const changes = gitCapture(['diff', '--name-only', `${stateProductRevision}..${current}`]).split(/\r?\n/u).filter(Boolean)
+  if (
+    productAncestor.status !== 0 ||
+    remoteAncestor.status !== 0 ||
+    changes.length === 0 ||
+    changes.some(file => !POST_TAG_PUBLISHER_FIX_FILES.has(file))
+  ) {
+    throw new Error('Post-tag recovery revision contains changes outside the bounded publisher fix.')
+  }
+  if (remoteMain !== current) gitRun(['push', 'origin', 'HEAD:main'])
+  return { ref: 'main', fields: [['publisher_revision', current]] }
+}
+
 function localTagRevision() {
   const exists = spawnSync(git, ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`], { cwd: root, stdio: 'ignore', shell: false })
   return exists.status === 0 ? gitCapture(['rev-list', '-n', '1', `refs/tags/${tag}`]).toLowerCase() : ''
@@ -280,8 +310,21 @@ function releaseList() {
   return ghJson(['api', '--method', 'GET', `repos/${repo}/releases?per_page=100`]) || []
 }
 
+function releaseById(id) {
+  return ghJson(['api', '--method', 'GET', `repos/${repo}/releases/${id}`])
+}
+
+function releaseNotesBody() {
+  return normalizeReleaseBody(readFileSync(path.join(root, 'release-notes.md'), 'utf8'))
+}
+
 function releaseForTag() {
-  return releaseList().find(item => item.tag_name === tag) || null
+  return selectReleaseForTag(releaseList(), {
+    tag,
+    productRevision: stateProductRevision,
+    name: `Harness Desktop ${tag}`,
+    body: releaseNotesBody()
+  })
 }
 
 function assertReleaseAssets(release, expectedNames, { draft, allowAdditional = false } = {}) {
@@ -401,8 +444,50 @@ async function sleep() {
   await new Promise(resolve => setTimeout(resolve, pollSeconds * 1000))
 }
 
-async function ensureExactDraft() {
-  let release = releaseForTag()
+async function reattachPreferredDraft(release) {
+  const expectedBody = releaseNotesBody()
+  const identity = {
+    tag,
+    productRevision: stateProductRevision,
+    name: `Harness Desktop ${tag}`,
+    body: expectedBody,
+    expectedAssetNames: expectedDesktopNames()
+  }
+  if (!isExactDetachedDraft(release, identity)) {
+    throw new Error('Recorded private draft is not an exact detachable recovery candidate.')
+  }
+  const claimants = releaseList().filter(candidate => candidate.tag_name === tag)
+  if (claimants.length > 1 || (claimants.length === 1 && !canReattachPreferredDraft(release, claimants[0], identity))) {
+    throw new Error('Immutable tag is not held by one safely removable empty private draft.')
+  }
+  if (claimants.length === 1) {
+    ghRun(['api', '--method', 'DELETE', `repos/${repo}/releases/${claimants[0].id}`])
+  }
+  await mkdir(stateDir, { recursive: true })
+  const payloadPath = path.join(stateDir, `${tag}-reattach-draft.json`)
+  await writeFile(payloadPath, JSON.stringify({ tag_name: tag, body: expectedBody }), 'utf8')
+  const repaired = ghJson(['api', '--method', 'PATCH', `repos/${repo}/releases/${release.id}`, '--input', payloadPath])
+  const beforeNames = (release.assets || []).map(asset => asset.name).sort()
+  const afterNames = (repaired?.assets || []).map(asset => asset.name).sort()
+  if (
+    repaired?.id !== release.id ||
+    repaired.tag_name !== tag ||
+    repaired.target_commitish !== stateProductRevision ||
+    repaired.name !== `Harness Desktop ${tag}` ||
+    repaired.body !== expectedBody ||
+    repaired.draft !== true ||
+    JSON.stringify(afterNames) !== JSON.stringify(beforeNames)
+  ) {
+    throw new Error('Private draft reattachment did not preserve its immutable identity and assets.')
+  }
+  return repaired
+}
+
+async function ensureExactDraft(preferredReleaseId = 0) {
+  let release = preferredReleaseId > 0 ? releaseById(preferredReleaseId) : releaseForTag()
+  const expectedBody = releaseNotesBody()
+  if (release?.draft === true && release.tag_name !== tag) release = await reattachPreferredDraft(release)
+  const expectedPrerelease = tag.includes('-')
   if (!release) {
     await mkdir(stateDir, { recursive: true })
     const payloadPath = path.join(stateDir, `${tag}-empty-draft.json`)
@@ -410,9 +495,9 @@ async function ensureExactDraft() {
       tag_name: tag,
       target_commitish: stateProductRevision,
       name: `Harness Desktop ${tag}`,
-      body: await readFile(path.join(root, 'release-notes.md'), 'utf8'),
+      body: expectedBody,
       draft: true,
-      prerelease: tag.includes('-')
+      prerelease: expectedPrerelease
     }
     await writeFile(payloadPath, JSON.stringify(payload), 'utf8')
     release = ghJson(['api', '--method', 'POST', `repos/${repo}/releases`, '--input', payloadPath])
@@ -421,12 +506,27 @@ async function ensureExactDraft() {
     assertReleaseAssets(release, expectedDesktopNames(), { draft: false, allowAdditional: true })
     return release
   }
-  if (release.target_commitish !== stateProductRevision || release.name !== `Harness Desktop ${tag}` || release.body !== await readFile(path.join(root, 'release-notes.md'), 'utf8')) {
+  if (
+    release.target_commitish !== stateProductRevision ||
+    release.name !== `Harness Desktop ${tag}` ||
+    Boolean(release.prerelease) !== expectedPrerelease ||
+    normalizeReleaseBody(release.body) !== expectedBody
+  ) {
     throw new Error('Existing private draft metadata does not exactly match the immutable product tag.')
   }
   const names = (release.assets || []).map(asset => asset.name).sort()
   const expected = expectedDesktopNames()
   if (!names.every(name => expected.includes(name))) throw new Error('Existing private draft has unexpected assets; refusing mutation.')
+  if (release.body !== expectedBody) {
+    await mkdir(stateDir, { recursive: true })
+    const payloadPath = path.join(stateDir, `${tag}-normalized-draft.json`)
+    await writeFile(payloadPath, JSON.stringify({ body: expectedBody }), 'utf8')
+    const normalized = ghJson(['api', '--method', 'PATCH', `repos/${repo}/releases/${release.id}`, '--input', payloadPath])
+    if (normalized?.id !== release.id || normalized.body !== expectedBody || normalized.draft !== true) {
+      throw new Error('Private draft line-ending normalization did not preserve its immutable identity.')
+    }
+    release = normalized
+  }
   return release
 }
 
@@ -507,7 +607,14 @@ async function adoptCloudSignedManifest() {
   if (current === stateProductRevision) gitRun(['merge', '--ff-only', candidate])
   else if (current !== candidate) {
     const contains = spawnSync(git, ['merge-base', '--is-ancestor', candidate, current], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false })
-    if (contains.status !== 0) throw new Error('Local release branch cannot safely adopt the cloud-signed manifest commit.')
+    if (contains.status !== 0) {
+      const descendsFromProduct = spawnSync(git, ['merge-base', '--is-ancestor', stateProductRevision, current], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false })
+      const postTagChanges = gitCapture(['diff', '--name-only', `${stateProductRevision}..${current}`]).split(/\r?\n/u).filter(Boolean)
+      if (descendsFromProduct.status !== 0 || postTagChanges.length === 0 || postTagChanges.some(file => !POST_TAG_PUBLISHER_FIX_FILES.has(file))) {
+        throw new Error('Local release branch cannot safely adopt the cloud-signed manifest commit.')
+      }
+      gitRun(['cherry-pick', candidate])
+    }
   }
   const release = await readVerifiedDesktopRelease()
   const checksum = release.assets.find(asset => asset.name === 'SHA256SUMS.txt')
@@ -660,14 +767,16 @@ async function publish() {
   const desktopRunId = Number(desktopPhase.runId || state.phases['desktop-cloud-builds']?.runId)
 
   await phase(state, 'desktop-publication', async () => {
-    let release = await ensureExactDraft()
+    let release = await ensureExactDraft(Number(state.phases['desktop-publication']?.releaseId || 0))
     if (!release.draft) return { releaseId: release.id, url: release.html_url }
     const storedRecovery = reusableWorkflowRun(Number(state.phases['desktop-publication']?.recoveryRunId || 0))
+    const recoverySource = storedRecovery ? null : publishPostTagRecoveryFix()
     const recoveryRunId = storedRecovery?.databaseId || await dispatchWorkflow('recover-release-from-actions.yml', [
       ['tag', tag],
       ['source_run_id', desktopRunId],
-      ['release_id', release.id]
-    ])
+      ['release_id', release.id],
+      ...recoverySource.fields
+    ], recoverySource.ref)
     await checkpoint(state, 'desktop-publication', { releaseId: release.id, recoveryRunId })
     await waitForRun(recoveryRunId)
     release = releaseForTag()
@@ -704,6 +813,15 @@ async function publish() {
   await phase(state, 'cnb-assets', async () => {
     await readVerifiedDesktopRelease()
     npmRun(['run', 'release:cnb-cloud'], { timeout: 30 * 60 * 1000, env: releaseEnvironment() })
+  })
+
+  await phase(state, 'windows-public-update', async () => {
+    assertClean()
+    await readVerifiedDesktopRelease()
+    if (process.platform !== 'win32') throw new Error('The public update installation gate must run on Windows before stable feed promotion.')
+    const electron = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+    if (!existsSync(electron)) throw new Error('Local Electron runtime is missing for the public update installation gate.')
+    execute(electron, [path.join(root, 'scripts', 'local-public-update-test.cjs'), `--version=${version}`], { timeout: 30 * 60 * 1000 })
   })
 
   await phase(state, 'stable-components', async () => {
