@@ -233,6 +233,8 @@ test('component and CNB publication retries preserve only byte-identical output'
   assert.match(publisher, /third_party['"], 'mingit['"], 'cmd['"], 'git\.exe'/u)
   assert.match(publisher, /gitEnvironment\(\)[\s\S]*mingw64['"], 'bin/u)
   assert.match(publisher, /gitCapture\(args\)[\s\S]*gitEnvironment\(\)/u)
+  assert.match(publisher, /key\.toLowerCase\(\) === 'path'/u)
+  assert.match(publisher, /WindowsPowerShell['"], 'v1\.0'/u)
 })
 
 test('Harness automatically receives the fixed publisher instruction in future sessions', () => {

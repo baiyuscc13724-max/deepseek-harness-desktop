@@ -122,7 +122,13 @@ function gitEnvironment() {
   const commandDirectory = path.dirname(git)
   const gitRoot = ['cmd', 'bin'].includes(path.basename(commandDirectory).toLowerCase()) ? path.dirname(commandDirectory) : commandDirectory
   const additions = [commandDirectory, path.join(gitRoot, 'bin'), path.join(gitRoot, 'mingw64', 'bin'), path.join(gitRoot, 'usr', 'bin')]
-  env.PATH = `${additions.join(path.delimiter)}${path.delimiter}${env.PATH || ''}`
+  if (process.platform === 'win32') {
+    additions.push(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0'))
+  }
+  const inheritedPathKey = Object.keys(env).find(key => key.toLowerCase() === 'path')
+  const inheritedPath = inheritedPathKey ? String(env[inheritedPathKey] || '') : ''
+  if (inheritedPathKey && inheritedPathKey !== 'PATH') delete env[inheritedPathKey]
+  env.PATH = `${additions.join(path.delimiter)}${path.delimiter}${inheritedPath}`
   return env
 }
 
