@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.31",
+  "version": "1.0.32",
   "private": false,
   "description": "Open-source Windows and macOS desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, mobile pairing, packaged self-test, and release gates.",
   "author": {
@@ -43,6 +43,7 @@
     "@deepseek-ai/dsh-bash-local": "0.1.1-rc.2",
     "@deepseek-ai/dsh-code-runtime": "0.1.1-rc.2",
     "@deepseek-ai/dsh-compaction": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-compaction-basic": "0.1.1-rc.2",
     "@deepseek-ai/dsh-fs": "0.1.1-rc.2",
     "@deepseek-ai/dsh-invariants": "0.1.1-rc.2",
     "@deepseek-ai/dsh-output-retention": "0.1.1-rc.2",
@@ -89,6 +90,7 @@
       "plugins/dsh-desktop-schedules/**/*",
       "plugins/dsh-desktop-files/**/*",
       "plugins/dsh-desktop-progress/**/*",
+      "plugins/dsh-desktop-compaction/**/*",
       "plugins/dsh-desktop-computer-use/**/*",
       "plugins/dsh-agent-teams/**/*",
       "plugins/dsh-session-experience/**/*",
@@ -197,6 +199,7 @@
       "plugins/dsh-desktop-schedules/**/*",
       "plugins/dsh-desktop-files/**/*",
       "plugins/dsh-desktop-progress/**/*",
+      "plugins/dsh-desktop-compaction/**/*",
       "plugins/dsh-desktop-computer-use/**/*",
       "plugins/dsh-agent-teams/**/*",
       "plugins/dsh-session-experience/**/*",

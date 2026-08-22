@@ -4,9 +4,23 @@ const { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } = require('node:
 const os = require('node:os')
 const path = require('node:path')
 const YAML = require('yaml')
+const jsYaml = require('js-yaml')
 const { ROUTING_PRESET_ID, ensureModelRouting, getModelRouting, saveModelRouting } = require('../electron/bridge/model-routing-service.cjs')
 
 const shippedPresetRoot = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh', 'config', 'agent-presets')
+
+function allRows(rows) {
+  const result = []
+  const visit = value => {
+    if (!Array.isArray(value)) return
+    for (const row of value) {
+      result.push(row)
+      if (Array.isArray(row?.config)) visit(row.config)
+    }
+  }
+  visit(rows)
+  return result
+}
 
 test('model routing stores main selection and creates an update-safe subagent preset', async t => {
   const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-routing-'))
@@ -39,6 +53,9 @@ test('model routing stores main selection and creates an update-safe subagent pr
 
   const compositionText = await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, 'agent.cordis.yml'), 'utf8')
   assert.match(compositionText, /!!js process\.platform/)
+  const { entryListSchema } = await import('@deepseek-ai/cordis-plugin-include')
+  const accepted = jsYaml.load(compositionText, { schema: entryListSchema })
+  assert.equal(accepted.find(row => row.id === 'tool-bash').disabled.__jsExpr, "process.platform === 'win32'")
   const nestedSkill = await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, 'skills', 'cordis-plugin-development', 'SKILL.md'), 'utf8')
   assert.match(nestedSkill, /Cordis/i)
   const composition = YAML.parseDocument(compositionText).toJS()
@@ -46,6 +63,22 @@ test('model routing stores main selection and creates an update-safe subagent pr
   const localTools = delegation.config.filter(row => row.name === '@deepseek-ai/dsh-tool-subagent' && ['spawn', 'fork'].includes(row.config?.provider))
   assert.ok(localTools.length >= 2)
   for (const row of localTools) assert.deepEqual(row.config.agentOptions, { provider: 'worker-provider', model: 'worker-model' })
+  const compactionGroup = composition.find(row => row.id === 'compaction')
+  const compaction = allRows(composition).find(row => row.name === 'dsh-desktop-compaction')
+  assert.deepEqual(compactionGroup.isolate, { compaction: true, toolResultPruner: true })
+  assert.equal(allRows(composition).some(row => row.name === '@deepseek-ai/dsh-compaction-basic'), false)
+  assert.equal(allRows(composition).filter(row => row.name === '@deepseek-ai/dsh-command-compact').length, 1)
+  assert.equal(allRows(composition).filter(row => row.name === '@deepseek-ai/dsh-compaction-tool-result-pruner').length, 1)
+  assert.doesNotMatch(compositionText, /(?:[A-Za-z]:\\|file:\/\/)/u)
+  assert.equal(compaction.config.thresholdRatio, 0.72)
+  assert.equal(compaction.config.maxOverflowRetries, 3)
+  assert.deepEqual(compaction.config.modelPolicies[0], {
+    provider: 'openai-codex', model: 'gpt-5.6-sol', thresholdRatio: 0.68,
+    retainRatio: 0.1, compactionRetries: 2, maxOverflowRetries: 3
+  })
+  const marker = JSON.parse(await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, '.harness-desktop-managed.json'), 'utf8'))
+  assert.equal(marker.compactionPlugin, 'dsh-desktop-compaction')
+  assert.match(marker.baseFingerprint, /^[a-f0-9]{64}$/u)
 })
 
 test('subagents follow the main model unless the user explicitly configures a separate route', async t => {
@@ -63,7 +96,7 @@ test('subagents follow the main model unless the user explicitly configures a se
   })
   assert.deepEqual(result.subagent, { inheritMain: true, provider: 'new-provider', model: 'new-model' })
   const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
-  assert.equal(settings['agent-presets'].default, 'standard')
+  assert.equal(settings['agent-presets'].default, ROUTING_PRESET_ID)
   const compatibilityPreset = await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, 'agent.cordis.yml'), 'utf8')
   assert.match(compatibilityPreset, /provider: new-provider/)
   assert.match(compatibilityPreset, /model: new-model/)
@@ -111,7 +144,7 @@ test('the official Harness default model is authoritative over legacy duplicated
   const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
   assert.deepEqual(settings['agent-default-model'], { provider: 'settings-provider', model: 'settings-model' })
   const migratedState = JSON.parse(await readFile(path.join(dshHome, 'harness-desktop-model-routing.json'), 'utf8'))
-  assert.equal(migratedState.schemaVersion, 3)
+  assert.equal(migratedState.schemaVersion, 4)
   assert.deepEqual(migratedState.main, { provider: 'settings-provider', model: 'settings-model' })
 })
 
@@ -123,7 +156,7 @@ test('first startup stores key-free main and subagent routes for trusted hosts',
   const result = await ensureModelRouting({ dshHome, shippedPresetRoot })
   assert.deepEqual(result.main, { provider: 'official-provider', model: 'official-model' })
   const stored = JSON.parse(await readFile(path.join(dshHome, 'harness-desktop-model-routing.json'), 'utf8'))
-  assert.equal(stored.schemaVersion, 3)
+  assert.equal(stored.schemaVersion, 4)
   assert.deepEqual(stored.main, { provider: 'official-provider', model: 'official-model' })
   assert.deepEqual(stored.subagent, { inheritMain: true, provider: 'official-provider', model: 'official-model' })
   assert.deepEqual(Object.keys(stored).sort(), ['basePreset', 'main', 'schemaVersion', 'subagent'])
@@ -148,7 +181,7 @@ test('startup leaves an unchanged routing configuration untouched', async t => {
   assert.equal((await stat(stateFile)).mtimeMs, beforeState.mtimeMs)
 })
 
-test('startup repairs a stale schema v3 main mirror even when subagent routing is current', async t => {
+test('startup repairs a stale current-schema main mirror even when subagent routing is current', async t => {
   const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-main-mirror-'))
   t.after(() => rm(dshHome, { recursive: true, force: true }))
   const stateFile = path.join(dshHome, 'harness-desktop-model-routing.json')
@@ -161,7 +194,7 @@ test('startup repairs a stale schema v3 main mirror even when subagent routing i
   await ensureModelRouting({ dshHome, shippedPresetRoot })
 
   const repaired = JSON.parse(await readFile(stateFile, 'utf8'))
-  assert.equal(repaired.schemaVersion, 3)
+  assert.equal(repaired.schemaVersion, 4)
   assert.deepEqual(repaired.main, { provider: 'authoritative-provider', model: 'authoritative-model' })
   assert.deepEqual(repaired.subagent, { inheritMain: true, provider: 'authoritative-provider', model: 'authoritative-model' })
 })
@@ -183,15 +216,88 @@ test('startup restores a missing desktop preset for existing sessions without ch
   await ensureModelRouting({ dshHome, shippedPresetRoot })
 
   const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
-  assert.equal(settings['agent-presets'].default, 'standard')
+  assert.equal(settings['agent-presets'].default, ROUTING_PRESET_ID)
   assert.equal((await readFile(path.join(userPreset, 'preset.yml'), 'utf8')).trim(), 'name: 小说闭环协调器')
   const restored = await readFile(path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID, 'agent.cordis.yml'), 'utf8')
   assert.match(restored, /provider: opencode-go/)
   assert.match(restored, /model: deepseek-v4-flash/)
   const migrated = JSON.parse(await readFile(path.join(dshHome, 'harness-desktop-model-routing.json'), 'utf8'))
-  assert.equal(migrated.schemaVersion, 3)
+  assert.equal(migrated.schemaVersion, 4)
   assert.deepEqual(migrated.main, { provider: 'opencode-go', model: 'deepseek-v4-flash' })
   assert.deepEqual(migrated.subagent, { provider: 'opencode-go', model: 'deepseek-v4-flash', inheritMain: true })
+})
+
+test('preset projection fails loudly instead of silently losing Desktop compaction', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harness-model-no-compaction-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const dshHome = path.join(root, 'home')
+  const presetRoot = path.join(root, 'presets')
+  const standard = path.join(presetRoot, 'standard')
+  await mkdir(standard, { recursive: true })
+  await writeFile(path.join(standard, 'preset.yml'), 'name: Standard\n')
+  await writeFile(path.join(standard, 'agent.cordis.yml'), [
+    '- id: delegation',
+    '  name: cordis:group',
+    '  config:',
+    '    - id: spawn',
+    '      name: "@deepseek-ai/dsh-tool-subagent"',
+    '      config: { provider: spawn }',
+    ''
+  ].join('\n'))
+  await mkdir(dshHome, { recursive: true })
+  await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: demo\n  model: demo\n')
+  await assert.rejects(ensureModelRouting({ dshHome, shippedPresetRoot: presetRoot }), /没有可替换的上下文压缩服务/u)
+  const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
+  assert.equal(settings['agent-presets'].default, 'standard')
+})
+
+test('managed preset rebuilds from an updated official base and reapplies the Desktop compaction plugin', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harness-model-upstream-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const dshHome = path.join(root, 'home')
+  const presetRoot = path.join(root, 'presets')
+  const standard = path.join(presetRoot, 'standard')
+  await mkdir(standard, { recursive: true })
+  await writeFile(path.join(standard, 'preset.yml'), 'name: Standard\n')
+  await writeFile(path.join(standard, 'agent.cordis.yml'), [
+    '- id: compaction',
+    '  name: cordis:group',
+    '  config:',
+    '    - id: compaction-basic',
+    '      name: "@deepseek-ai/dsh-compaction-basic"',
+    '- id: delegation',
+    '  name: cordis:group',
+    '  config:',
+    '    - id: spawn',
+    '      name: "@deepseek-ai/dsh-tool-subagent"',
+    '      config: { provider: spawn }',
+    '    - id: fork',
+    '      name: "@deepseek-ai/dsh-tool-subagent"',
+    '      config: { provider: fork }',
+    ''
+  ].join('\n'))
+  await mkdir(dshHome, { recursive: true })
+  await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: openai-codex\n  model: gpt-5.6-sol\n')
+
+  await ensureModelRouting({ dshHome, shippedPresetRoot: presetRoot })
+  const managed = path.join(dshHome, '.agent-presets', ROUTING_PRESET_ID)
+  const firstMarker = JSON.parse(await readFile(path.join(managed, '.harness-desktop-managed.json'), 'utf8'))
+  await writeFile(path.join(standard, 'upstream-version.txt'), 'official-update-2\n')
+  await ensureModelRouting({ dshHome, shippedPresetRoot: presetRoot })
+
+  const secondMarker = JSON.parse(await readFile(path.join(managed, '.harness-desktop-managed.json'), 'utf8'))
+  assert.notEqual(secondMarker.baseFingerprint, firstMarker.baseFingerprint)
+  assert.equal(await readFile(path.join(managed, 'upstream-version.txt'), 'utf8'), 'official-update-2\n')
+  const compositionFile = path.join(managed, 'agent.cordis.yml')
+  const rows = YAML.parse(await readFile(compositionFile, 'utf8'))
+  assert.equal(allRows(rows).filter(row => row.name === 'dsh-desktop-compaction').length, 1)
+  assert.equal(allRows(rows).some(row => row.name === '@deepseek-ai/dsh-compaction-basic'), false)
+
+  await writeFile(compositionFile, (await readFile(compositionFile, 'utf8')).replace('dsh-desktop-compaction', '@deepseek-ai/dsh-compaction-basic'))
+  await ensureModelRouting({ dshHome, shippedPresetRoot: presetRoot })
+  const healed = YAML.parse(await readFile(compositionFile, 'utf8'))
+  assert.equal(allRows(healed).filter(row => row.name === 'dsh-desktop-compaction').length, 1)
+  assert.equal(allRows(healed).some(row => row.name === '@deepseek-ai/dsh-compaction-basic'), false)
 })
 
 test('a failed settings projection rolls back the authoritative desktop route', async t => {

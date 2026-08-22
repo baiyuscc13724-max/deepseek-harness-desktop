@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing immutable release tag to build and publish
         required: true
-        default: v1.0.31
+        default: v1.0.32
       request_id:
         description: Unique publisher request identity
         required: false
@@ -14,18 +14,18 @@ on:
     tags:
       - 'v*'
     branches:
-      - 'release-retry/v1.0.31'
+      - 'release-retry/v1.0.32'
 
 run-name: Release ${{ inputs.tag || github.ref_name }} · ${{ inputs.request_id || github.run_id }}
 
 env:
-  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.31' && 'v1.0.31') || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.32' && 'v1.0.32') || github.ref_name }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.31' && 'v1.0.31') || github.ref_name }}
+  group: release-${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.32' && 'v1.0.32') || github.ref_name }}
   cancel-in-progress: false
 
 jobs:

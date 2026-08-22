@@ -34,19 +34,44 @@ function sessionIdFrom(req) {
   return value
 }
 
+function scheduleHistory(events, seedLength = 0, limit = 50) {
+  const records = new Map()
+  const history = []
+  for (const event of events.slice(seedLength)) {
+    if (event?.type !== 'schedule/change' || event.data?.version !== 1) continue
+    const change = event.data
+    if (change.operation === 'create' && change.schedule?.id) {
+      const record = { ...change.schedule }
+      records.set(record.id, record)
+      history.push({ id: record.id, operation: 'created', prompt: record.prompt, kind: record.kind, schedule: { ...record }, scheduledAt: record.scheduledAt, occurredAt: record.scheduledAt })
+      continue
+    }
+    const record = records.get(change.id)
+    if (!record) continue
+    if (change.operation === 'delete') {
+      history.push({ id: record.id, operation: 'deleted', prompt: record.prompt, kind: record.kind, schedule: { ...record }, scheduledAt: record.scheduledAt, occurredAt: null })
+      records.delete(record.id)
+    } else if (change.operation === 'dispatch') {
+      history.push({ id: record.id, operation: 'dispatched', prompt: record.prompt, kind: record.kind, schedule: { ...record }, scheduledAt: record.scheduledAt, occurredAt: change.acceptedAt || record.scheduledAt })
+      if (record.kind !== 'every') records.delete(record.id)
+    }
+  }
+  return history.slice(-Math.max(1, Math.min(100, Number(limit) || 50))).reverse()
+}
+
 function snapshot(ctx, sessionId, now = Date.now()) {
   const agent = ctx.agents.get(sessionId)
   if (!agent || !ctx.agents.roots().includes(agent)) {
-    return { schemaVersion: 1, available: false, live: false, sessionId, schedules: [], limitation: 'session-local' }
+    return { schemaVersion: 2, available: false, live: false, sessionId, schedules: [], history: [], limitation: 'session-local' }
   }
   try {
     const events = Array.isArray(agent.session?.events) ? agent.session.events : []
     const seedLength = agent.session?.header?.seedLength ?? 0
     const folded = foldScheduleEvents(events, seedLength)
     const schedules = folded.active.map(record => scheduleView(record, now)).sort((left, right) => Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt) || left.id.localeCompare(right.id))
-    return { schemaVersion: 1, available: true, live: true, sessionId, schedules, limitation: 'session-local', minimumEverySeconds: 300 }
+    return { schemaVersion: 2, available: true, live: true, sessionId, schedules, history: scheduleHistory(events, seedLength), limitation: 'session-local', minimumEverySeconds: 300 }
   } catch {
-    return { schemaVersion: 1, available: true, live: true, sessionId, schedules: [], limitation: 'session-local', error: { code: 'corrupt_schedule_log', message: '当前会话的定时任务记录无法安全读取。' } }
+    return { schemaVersion: 2, available: true, live: true, sessionId, schedules: [], history: [], limitation: 'session-local', error: { code: 'corrupt_schedule_log', message: '当前会话的定时任务记录无法安全读取。' } }
   }
 }
 
@@ -63,4 +88,4 @@ function apply(ctx) {
   }), 'desktop-schedules state route')
 }
 
-export { apply, inject, name, snapshot, trustedRequest }
+export { apply, inject, name, scheduleHistory, snapshot, trustedRequest }

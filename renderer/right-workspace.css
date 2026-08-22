@@ -1,0 +1,210 @@
+/*!
+ * right-workspace.css — 「右侧工作区」统一骨架样式。
+ *
+ * 命名约定：所有类名以 dsh-right-workspace 前缀，避免与现有
+ * browser-sidebar / pet / overlay 等样式冲突。状态类 is-open / is-overlay
+ * 由 right-workspace.js 控制器切换；body 级状态类
+ * dsh-right-workspace-open / dsh-right-workspace-overlay 供接线方联动
+ * 主内容区（参考现有 body.browser-sidebar-open 模式）。
+ *
+ * 布局断点：
+ *  - 默认（>900px）：桌面右侧分栏，宽度 = var(--dsh-right-workspace-width)，
+ *    主内容由接线方收窄，面板本身不遮挡。
+ *  - ≤900px：近全宽覆盖层（calc(100vw - 48px)），is-overlay 生效。
+ *  - ≤620px：全宽覆盖层（100vw）。
+ *  - prefers-reduced-motion: 关闭位移与过渡，只保留不透明切换。
+ *
+ * 该面板不处理主内容收窄职责本身（那是接线方/其他模块的事），
+ * 但提供了与 browser-sidebar 一致的辅助规则示例（见文末注释）。
+ */
+:root {
+  --dsh-right-workspace-width: 460px;
+}
+
+/* ---------- 根容器 ---------- */
+.dsh-right-workspace {
+  position: fixed;
+  z-index: 8;
+  top: 36px; /* 与 browser-sidebar 一致，避开顶部快捷按钮条 */
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(var(--dsh-right-workspace-width), 100vw);
+  color: var(--shell-text, #1f2937);
+  background: var(--shell-surface, #f7f8fa);
+  border-left: 1px solid var(--shell-border, rgba(127, 127, 127, .22));
+  box-shadow: -12px 0 30px rgba(0, 0, 0, .12);
+  transition: transform .22s ease, visibility 0s linear .22s;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+/* 关闭态：移出视口且不可交互（保留在 DOM 中，便于复用 host/slot） */
+.dsh-right-workspace:not(.is-open) {
+  visibility: hidden;
+  transform: translateX(104%);
+  pointer-events: none;
+}
+
+/* ---------- 拖拽手柄 ---------- */
+.dsh-right-workspace__handle {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.dsh-right-workspace__handle:focus-visible,
+.dsh-right-workspace__handle:hover {
+  background: color-mix(in srgb, var(--shell-accent, #315efb) 35%, transparent);
+}
+
+/* ---------- 头部 ---------- */
+.dsh-right-workspace__header {
+  display: flex;
+  flex: none;
+  height: 30px;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid var(--shell-border, rgba(127, 127, 127, .22));
+  padding: 0 6px 0 8px;
+  background: var(--shell-layer, #ffffff);
+}
+.dsh-right-workspace__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--shell-text, #1f2937);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-right-workspace__back,
+.dsh-right-workspace__close {
+  flex: none;
+  min-width: 24px;
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: var(--shell-text-secondary, #667085);
+  background: transparent;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dsh-right-workspace__back:hover:not(:disabled),
+.dsh-right-workspace__close:hover {
+  background: var(--shell-hover, rgba(31, 41, 55, .07));
+  color: var(--shell-text, #1f2937);
+}
+.dsh-right-workspace__close:hover {
+  color: #d92d20;
+}
+.dsh-right-workspace__back {
+  opacity: 0;
+  pointer-events: none;
+}
+.dsh-right-workspace__back.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.dsh-right-workspace__back:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+.dsh-right-workspace__back:focus-visible,
+.dsh-right-workspace__close:focus-visible,
+.dsh-right-workspace__handle:focus-visible {
+  outline: 2px solid var(--shell-accent, #315efb);
+  outline-offset: -1px;
+}
+
+/* ---------- 内容槽（承载当前模式视图） ---------- */
+.dsh-right-workspace__slot {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--shell-surface, #f7f8fa);
+}
+
+/* ---------- 窄屏覆盖态 ---------- */
+@media (max-width: 900px) {
+  .dsh-right-workspace {
+    width: calc(100vw - 48px); /* 近全宽覆盖层 */
+  }
+}
+@media (max-width: 620px) {
+  .dsh-right-workspace {
+    width: 100vw; /* 全宽覆盖层 */
+  }
+}
+
+/* ---------- 减少动态效果 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .dsh-right-workspace {
+    transition: none !important; /* 仅保留显隐，不做位移动画 */
+  }
+}
+
+/* ---------- Harness Desktop 接线层 ---------- */
+.dsh-right-workspace.browser-sidebar {
+  width: min(var(--browser-panel-width, var(--dsh-right-workspace-width)), 100vw);
+}
+.dsh-right-workspace__header.browser-sidebar-header { z-index: 5; }
+.right-workspace-modes { display:flex; min-width:0; gap:3px; }
+.right-workspace-modes button { min-height:24px; border:0; border-bottom:2px solid transparent; border-radius:0; padding:0 7px; color:var(--shell-text-secondary); background:transparent; cursor:pointer; }
+.right-workspace-modes button:hover { color:var(--shell-text); }
+.right-workspace-modes button[aria-pressed="true"] { border-bottom-color:var(--shell-accent); color:var(--shell-text); }
+.dsh-right-workspace__slot { position:relative; overflow:hidden; }
+.right-workspace-pane { box-sizing:border-box; width:100%; height:100%; min-height:0; }
+.right-workspace-browser-pane { position:relative; overflow:hidden; }
+.right-workspace-browser-pane .browser-profile-panel,.right-workspace-browser-pane .browser-utility-panel { top:52px; }
+.right-workspace-data-pane,.right-workspace-document-pane { overflow:auto; padding:18px; color:var(--shell-text); background:var(--shell-surface); }
+.right-workspace-data-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }
+.right-workspace-data-heading h2 { margin:0; font-size:18px; }
+.right-workspace-data-heading p { margin:4px 0 0; color:var(--shell-text-secondary); font-size:12px; line-height:1.5; }
+.right-workspace-secondary,.right-workspace-primary,.right-workspace-chip { min-height:32px; border:1px solid var(--shell-border); border-radius:8px; padding:0 11px; color:var(--shell-text); background:var(--shell-layer-2); cursor:pointer; }
+.right-workspace-primary { border-color:var(--shell-accent); color:#fff; background:var(--shell-accent); }
+.right-workspace-search { display:block; margin:15px 0 12px; }
+.right-workspace-search input,.right-workspace-schedule-form input,.right-workspace-schedule-form select { box-sizing:border-box; width:100%; min-height:36px; border:1px solid var(--shell-border); border-radius:9px; padding:0 10px; color:var(--shell-text); background:var(--shell-layer-2); font:inherit; }
+.right-workspace-search input:focus-visible,.right-workspace-schedule-form input:focus-visible,.right-workspace-schedule-form select:focus-visible,.right-workspace-modes button:focus-visible,.right-workspace-secondary:focus-visible,.right-workspace-primary:focus-visible,.right-workspace-chip:focus-visible,.right-workspace-row-main:focus-visible { outline:2px solid var(--shell-accent); outline-offset:1px; }
+.right-workspace-status { margin-top:12px; border:1px dashed var(--shell-border); border-radius:10px; padding:28px 14px; color:var(--shell-text-secondary); text-align:center; }
+.right-workspace-status.is-error,.right-workspace-inline-status.is-error { color:#d92d20; }
+.right-workspace-subheading { margin:18px 0 8px; color:var(--shell-text-secondary); font-size:13px; font-weight:600; }
+.right-workspace-list { display:grid; gap:0; }
+.right-workspace-row { display:flex; align-items:center; gap:10px; border:0; border-bottom:1px solid color-mix(in srgb,var(--shell-border) 72%,transparent); border-radius:0; padding:11px 2px; background:transparent; }
+.right-workspace-row:last-child { border-bottom:0; }
+.right-workspace-row-copy { display:grid; flex:1; min-width:0; gap:4px; }
+.right-workspace-row-main { display:flex; min-width:0; align-items:center; gap:8px; overflow:hidden; border:0; padding:0; color:var(--shell-text); background:transparent; font:inherit; font-weight:600; text-align:left; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+.right-workspace-file-mark { color:var(--shell-accent); }
+.right-workspace-row-meta { overflow:hidden; color:var(--shell-text-secondary); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.right-workspace-schedule-form { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(100px,.7fr) minmax(110px,.8fr) auto; gap:7px; margin:14px 0 4px; }
+.right-workspace-inline-status { min-height:18px; margin:5px 0; color:var(--shell-text-secondary); font-size:11px; }
+.right-workspace-suggestions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:10px 0 14px; color:var(--shell-text-secondary); font-size:11px; }
+.right-workspace-chip { min-height:27px; border-radius:999px; padding:0 9px; font-size:11px; }
+.right-workspace-document-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--shell-border); padding-bottom:12px; }
+.right-workspace-document-header strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.right-workspace-document-header span { flex:none; color:var(--shell-text-secondary); font-size:11px; }
+.right-workspace-document-text { box-sizing:border-box; min-height:calc(100% - 45px); margin:0; overflow:auto; padding:16px 2px; color:var(--shell-text); background:transparent; font:12px/1.65 "Cascadia Code",Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; tab-size:2; }
+body.dsh-right-workspace-open #runtimeView { width:calc(100% - min(var(--browser-panel-width, var(--dsh-right-workspace-width)),100vw)); }
+body.dsh-right-workspace-open .runtime-status { right:min(var(--browser-panel-width, var(--dsh-right-workspace-width)),100vw); }
+@media (max-width:900px) {
+  .right-workspace-modes button { padding:0 6px; }
+  body.dsh-right-workspace-open #runtimeView { width:100%; }
+  body.dsh-right-workspace-open .runtime-status { right:0; }
+}
+@media (max-width:620px) {
+  .right-workspace-modes button { font-size:11px; }
+  .right-workspace-browser-only { display:none!important; }
+  .right-workspace-data-pane,.right-workspace-document-pane { padding:14px; }
+  .right-workspace-schedule-form { grid-template-columns:1fr; }
+  .right-workspace-row { align-items:flex-start; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .right-workspace-modes button,.right-workspace-secondary,.right-workspace-primary,.right-workspace-chip { transition:none!important; }
+}

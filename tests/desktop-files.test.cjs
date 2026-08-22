@@ -47,6 +47,33 @@ test('downloads require a regular workspace-contained relative path', async t =>
   await assert.rejects(resolveDownload(directory, path.join(outside, 'outside.txt')), error => error.code === 'FILES_INVALID_PATH')
 })
 
+test('right-workspace previews are bounded text and preserve workspace containment', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'dsh-preview-'))
+  const outside = await mkdtemp(path.join(tmpdir(), 'dsh-preview-outside-'))
+  t.after(() => Promise.all([rm(directory, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]))
+  await writeFile(path.join(directory, 'notes.md'), '# Notes\n\nHello')
+  await writeFile(path.join(directory, 'binary.bin'), Buffer.from([0, 1, 2, 3]))
+  await writeFile(path.join(outside, 'secret.txt'), 'outside')
+  const { MAX_PREVIEW_BYTES, previewFile } = await plugin()
+  const notes = await previewFile(directory, 'notes.md')
+  assert.equal(notes.previewable, true)
+  assert.equal(notes.text, '# Notes\n\nHello')
+  assert.equal(notes.maxPreviewBytes, MAX_PREVIEW_BYTES)
+  assert.deepEqual(await previewFile(directory, 'binary.bin'), {
+    path: 'binary.bin', name: 'binary.bin', size: 4, extension: '.bin', previewable: false, reason: 'unsupported'
+  })
+  await assert.rejects(previewFile(directory, '../secret.txt'), error => error.code === 'FILES_PATH_ESCAPE')
+})
+
+test('file plugin registers a GET-only text preview route beside download', async () => {
+  const source = await readFile(path.join(root, 'plugins/dsh-desktop-files/lib/index.js'), 'utf8')
+  assert.match(source, /path: '\/api\/desktop-files\/preview'/u)
+  assert.match(source, /previewFile\(cwd, requestedPath\)/u)
+  assert.match(source, /req\.method !== 'GET'/u)
+  assert.match(source, /trustedRequest\(req\)/u)
+  assert.doesNotMatch(source, /text\/html/u)
+})
+
 test('file plugin installation is additive and idempotent', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'dsh-file-plugin-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

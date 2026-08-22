@@ -319,13 +319,18 @@
     state = { ...state, ...next }
     const visible = state.visible === true
     const resetting = state.profileResetting === true
-    sidebar.classList.toggle('hidden', !visible)
-    sidebar.setAttribute('aria-hidden', String(!visible))
-    quickButton.setAttribute('aria-expanded', String(visible))
-    document.body.classList.toggle('browser-sidebar-open', visible)
+    const workspace = window.harnessDesktopRightWorkspace
+    if (workspace) workspace.syncBrowserState(state)
+    else {
+      sidebar.classList.toggle('hidden', !visible)
+      sidebar.setAttribute('aria-hidden', String(!visible))
+      quickButton.setAttribute('aria-expanded', String(visible))
+      document.body.classList.toggle('browser-sidebar-open', visible)
+    }
     if (Number.isFinite(Number(state.panelWidth))) document.documentElement.style.setProperty('--browser-panel-width', `${Number(state.panelWidth)}px`)
     wideModeButton.setAttribute('aria-pressed', String(state.wideMode === true))
-    wideModeButton.textContent = state.wideMode ? '退出宽屏' : '宽屏'
+    wideModeButton.textContent = state.wideMode ? '▣' : '□'
+    wideModeButton.setAttribute('aria-label', state.wideMode ? '退出宽屏验收模式' : '进入宽屏验收模式')
     renderTabs(state.tabs || [])
     renderDownloads(state.downloads || [])
     if (!historyPanel.classList.contains('hidden') && Array.isArray(state.history) && !historySearch.value.trim()) renderHistory(state.history)
@@ -382,6 +387,8 @@
 
   async function open() {
     try {
+      const workspace = window.harnessDesktopRightWorkspace
+      if (workspace) await workspace.openMode('browser')
       render(await api.setBrowserVisible(true))
       await syncNativeVisibility()
       address.focus()
@@ -395,7 +402,9 @@
     for (const panel of utilityPanels) panel.classList.add('hidden')
     historyButton.setAttribute('aria-expanded', 'false')
     downloadsButton.setAttribute('aria-expanded', 'false')
-    render(await api.setBrowserVisible(false).catch(() => ({ visible: false })))
+    const workspace = window.harnessDesktopRightWorkspace
+    if (workspace) await workspace.close('browser-close')
+    else render(await api.setBrowserVisible(false).catch(() => ({ visible: false })))
     quickButton.focus()
   }
 
@@ -409,8 +418,12 @@
     finally { goButton.disabled = false }
   }
 
-  quickButton.addEventListener('click', () => state.visible ? close() : open())
-  closeButton.addEventListener('click', close)
+  quickButton.addEventListener('click', () => {
+    const workspace = window.harnessDesktopRightWorkspace
+    if (workspace?.controller?.isOpen() && workspace.controller.getActiveModeId() === 'browser') close()
+    else open()
+  })
+  if (!window.harnessDesktopRightWorkspace) closeButton.addEventListener('click', close)
   newTabButton.addEventListener('click', async () => {
     render(stateFromResult(await api.newBrowserTab('')))
     address.focus()
@@ -459,7 +472,9 @@
   document.addEventListener('keydown', event => {
     if (!(event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'b')) return
     event.preventDefault()
-    state.visible ? close() : open()
+    const workspace = window.harnessDesktopRightWorkspace
+    if (workspace?.controller?.isOpen() && workspace.controller.getActiveModeId() === 'browser') close()
+    else open()
   })
   addressForm.addEventListener('submit', event => { event.preventDefault(); navigate() })
   goButton.addEventListener('click', navigate)

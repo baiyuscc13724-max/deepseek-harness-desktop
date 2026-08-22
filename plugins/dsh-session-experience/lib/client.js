@@ -86,6 +86,10 @@ window.__ModuleLoader__.load({
     function SessionIdAffordance(props) {
       var sessionId = props.sessionId;
       var copiedPair = useState(false), copied = copiedPair[0], setCopied = copiedPair[1];
+      useEffect(function () {
+        var bridge = window.harnessDesktopGuest;
+        if (sessionId && bridge && typeof bridge.publishRightWorkspaceContext === "function") bridge.publishRightWorkspaceContext({ sessionId: sessionId });
+      }, [sessionId]);
       if (!sessionId) return null;
       function copy() {
         copySessionId(sessionId, function () { setCopied(true); setTimeout(function () { setCopied(false); }, 1400); }, function () { setCopied(false); });
@@ -103,6 +107,16 @@ window.__ModuleLoader__.load({
       var statusPair = useState(""), status = statusPair[0], setStatus = statusPair[1];
       var errorPair = useState(false), isError = errorPair[0], setError = errorPair[1];
       var fileRef = useRef(null);
+      useEffect(function () {
+        var bridge = window.harnessDesktopGuest;
+        if (!bridge || typeof bridge.onRightWorkspaceCommand !== "function") return;
+        return bridge.onRightWorkspaceCommand(function (command) {
+          if (!command || command.type !== "set-draft" || command.sessionId !== sessionId || !inputActions || typeof inputActions.setDraft !== "function") return;
+          inputActions.setDraft(command.text);
+          setStatus(currentLang === "zh" ? "请求已放入输入框，请检查后手动发送。" : "Request added to the composer. Review it, then send manually.");
+          setError(false);
+        });
+      }, [sessionId, inputActions]);
       function pick() {
         setStatus(""); setError(false);
         if (fileRef.current) { fileRef.current.value = ""; fileRef.current.click(); }

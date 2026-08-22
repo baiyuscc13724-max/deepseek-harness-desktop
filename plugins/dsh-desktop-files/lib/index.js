@@ -7,7 +7,12 @@ const inject = ['agents', 'webServer']
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 const MAX_LIST_ITEMS = 100
+const MAX_PREVIEW_BYTES = 1024 * 1024
 const UPLOAD_DIRECTORY = 'uploads'
+const TEXT_PREVIEW_EXTENSIONS = new Set([
+  '.c', '.cc', '.conf', '.cpp', '.css', '.csv', '.go', '.h', '.hpp', '.html', '.ini', '.java', '.js', '.json', '.jsonl',
+  '.jsx', '.log', '.md', '.markdown', '.mjs', '.mts', '.ps1', '.py', '.rs', '.sh', '.sql', '.toml', '.ts', '.tsx', '.txt', '.xml', '.yaml', '.yml'
+])
 
 function json(res, status, value) {
   const body = Buffer.from(JSON.stringify(value))
@@ -168,6 +173,24 @@ async function resolveDownload(cwd, requestedPath) {
   return { resolved, info, name: path.basename(resolved) }
 }
 
+async function previewFile(cwd, requestedPath) {
+  const file = await resolveDownload(cwd, requestedPath)
+  const extension = path.extname(file.name).toLowerCase()
+  const base = { path: String(requestedPath).split(path.sep).join('/'), name: file.name, size: file.info.size, extension }
+  if (!TEXT_PREVIEW_EXTENSIONS.has(extension)) return { ...base, previewable: false, reason: 'unsupported' }
+  if (file.info.size > MAX_PREVIEW_BYTES) return { ...base, previewable: false, reason: 'too-large', maxPreviewBytes: MAX_PREVIEW_BYTES }
+  const handle = await open(file.resolved, 'r')
+  let bytes
+  try {
+    const buffer = Buffer.alloc(MAX_PREVIEW_BYTES + 1)
+    const read = await handle.read(buffer, 0, buffer.length, 0)
+    if (read.bytesRead > MAX_PREVIEW_BYTES) return { ...base, size: read.bytesRead, previewable: false, reason: 'too-large', maxPreviewBytes: MAX_PREVIEW_BYTES }
+    bytes = buffer.subarray(0, read.bytesRead)
+  } finally { await handle.close() }
+  if (bytes.includes(0)) return { ...base, previewable: false, reason: 'binary' }
+  return { ...base, previewable: true, text: bytes.toString('utf8'), truncated: false, maxPreviewBytes: MAX_PREVIEW_BYTES }
+}
+
 function downloadHeaders(name, size) {
   const ascii = name.replace(/[^\x20-\x7e]/gu, '_').replace(/["\\]/gu, '_') || 'download'
   return {
@@ -210,6 +233,19 @@ function apply(ctx) {
     }
   }), 'desktop-files upload route')
   ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: '/api/desktop-files/preview', handler: async (req, res) => {
+      if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed', code: 'FILES_METHOD_NOT_ALLOWED' })
+      if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden', code: 'FILES_FORBIDDEN' })
+      try {
+        const params = query(req)
+        const sessionId = requiredQuery(params, 'sessionId', 256)
+        const requestedPath = requiredQuery(params, 'path', 4096)
+        const { cwd } = rootAgent(ctx, sessionId)
+        return json(res, 200, { schemaVersion: 1, sessionId, file: await previewFile(cwd, requestedPath) })
+      } catch (error) { return json(res, error.status || 400, errorPayload(error)) }
+    }
+  }), 'desktop-files preview route')
+  ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/api/desktop-files/download', handler: async (req, res) => {
       if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed', code: 'FILES_METHOD_NOT_ALLOWED' })
       if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden', code: 'FILES_FORBIDDEN' })
@@ -227,6 +263,7 @@ function apply(ctx) {
 }
 
 export {
-  MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_DIRECTORY, apply, collectBody, downloadHeaders, inject,
-  listUploads, name, resolveDownload, safeFileName, saveUpload, trustedRequest
+  MAX_DOWNLOAD_BYTES, MAX_PREVIEW_BYTES, MAX_UPLOAD_BYTES, TEXT_PREVIEW_EXTENSIONS, UPLOAD_DIRECTORY,
+  apply, collectBody, downloadHeaders, inject, listUploads, name, previewFile, resolveDownload,
+  safeFileName, saveUpload, trustedRequest
 }

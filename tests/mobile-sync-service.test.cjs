@@ -6,7 +6,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { WebSocket, WebSocketServer } = require('ws')
 
-const { MobileSyncService, lanAddresses, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
+const { BROWSER_FORBIDDEN_PORTS, MobileSyncService, browserSafePort, lanAddresses, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
 const { MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
 
 async function createRuntime(label) {
@@ -269,6 +269,27 @@ test('revoking a paired phone immediately closes its live connection and rejects
   await closed
   assert.equal(service.state().devices.length, 0)
   assert.equal((await fetch(`${origin}/`, { headers: { Cookie: paired.cookie } })).status, 401)
+})
+
+test('mobile pairing never advertises a browser-forbidden port', () => {
+  for (const port of [1, 21, 2049, 6000, 6667, 10080]) {
+    assert.equal(BROWSER_FORBIDDEN_PORTS.has(port), true)
+    assert.equal(browserSafePort(port), false)
+  }
+  assert.equal(browserSafePort(0), false)
+  assert.equal(browserSafePort(49152), true)
+  assert.equal(browserSafePort(65535), true)
+})
+
+test('a persisted forbidden mobile port is replaced with a safe ephemeral listener', async t => {
+  const service = new MobileSyncService({
+    store: createStore(), getRuntimeTarget: () => null, host: '127.0.0.1', port: 6000,
+    qrFactory: async value => `qr:${value}`
+  })
+  t.after(() => service.stop())
+  await service.start()
+  assert.equal(browserSafePort(service.state().port), true)
+  assert.notEqual(service.state().port, 6000)
 })
 
 test('LAN address selection prefers physical private IPv4 interfaces', () => {

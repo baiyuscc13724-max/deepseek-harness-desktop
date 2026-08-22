@@ -44,8 +44,8 @@
         code.dataset.hdLocalTarget = target
         code.tabIndex = 0
         code.setAttribute('role', 'link')
-        code.setAttribute('aria-label', `打开本机路径 ${target}`)
-        code.title = `${target}\n单击打开；右键可复制或在文件夹中显示`
+        code.setAttribute('aria-label', `在右侧工作区预览本机文档 ${target}`)
+        code.title = `${target}\n单击在右侧预览；右键可复制、在文件夹中显示或用系统应用打开`
       }
     }
 
@@ -70,7 +70,7 @@
       if (!code) return
       event.preventDefault()
       event.stopPropagation()
-      route('open-local', { path: code.dataset.hdLocalTarget })
+      route('preview-local', { path: code.dataset.hdLocalTarget })
     }, true)
 
     document.addEventListener('keydown', event => {
@@ -78,7 +78,7 @@
       const code = event.target.closest?.('code[data-hd-local-target]')
       if (!code) return
       event.preventDefault()
-      route('open-local', { path: code.dataset.hdLocalTarget })
+      route('preview-local', { path: code.dataset.hdLocalTarget })
     }, true)
 
     decorate(document)

@@ -2,7 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativ
 const { spawn, execFile } = require('node:child_process')
 const { createHash, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { copyFile, mkdir, open, readFile, readdir, stat, unlink, writeFile } = require('node:fs/promises')
+const { copyFile, mkdir, open, readFile, readdir, realpath, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -24,6 +24,7 @@ const { ensureDesktopMcpManagerPlugin } = require('./bridge/desktop-mcp-manager-
 const { ensureDesktopSchedulesPlugin } = require('./bridge/desktop-schedules-plugin-service.cjs')
 const { ensureDesktopFilesPlugin } = require('./bridge/desktop-files-plugin-service.cjs')
 const { ensureDesktopProgressPlugin } = require('./bridge/desktop-progress-plugin-service.cjs')
+const { ensureDesktopCompactionPlugin } = require('./bridge/desktop-compaction-plugin-service.cjs')
 const { ensureDesktopComputerUsePlugin } = require('./bridge/desktop-computer-use-plugin-service.cjs')
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
@@ -48,6 +49,7 @@ const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { launchComponentUpdateHelper } = require('./bridge/component-update-launcher.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
+const { loadRightWorkspaceResource, previewLocalDocument } = require('./bridge/right-workspace-service.cjs')
 const { MemoryService, createMemoryPack } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
 const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
@@ -2642,6 +2644,9 @@ function desktopFilesPluginOptions() {
 function desktopProgressPluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-progress') }
 }
+function desktopCompactionPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-compaction') }
+}
 function desktopComputerUsePluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-computer-use') }
 }
@@ -2960,6 +2965,7 @@ async function showGuestContextMenu(guest, params) {
 
   if (local) {
     template.push(
+      { label: '在右侧工作区预览', click: () => send('rightWorkspace:previewLocal', localValue) },
       { label: '打开文件或项目', click: () => openDesktopLocalTarget(localValue).catch(() => {}) },
       { label: '在文件夹中显示', click: () => openDesktopLocalTarget(localValue, true).catch(() => {}) },
       { label: '复制本机路径', click: () => clipboard.writeText(local.path) },
@@ -3269,6 +3275,21 @@ ipcMain.handle('memory:export', event => {
   const destination = path.join(desktopRuntimePaths().root, 'memory-exports', `memory-export-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
   return ensureMemoryService().export({ to: destination })
 })
+ipcMain.handle('rightWorkspace:resource', (event, kind, payload) => {
+  assertDesktopShellSender(event)
+  return loadRightWorkspaceResource({
+    runtimeUrl: runtimeState.status === 'ready' ? runtimeState.url : null,
+    kind: String(kind || ''),
+    sessionId: payload?.sessionId,
+    path: payload?.path,
+    fetchImpl: (url, options) => net.fetch(url.toString(), options)
+  })
+})
+ipcMain.handle('rightWorkspace:previewLocal', (event, value) => {
+  assertDesktopShellSender(event)
+  const target = normalizeLocalTarget(value)
+  return previewLocalDocument(target.path, { realpathImpl: realpath, statImpl: stat, openImpl: open })
+})
 ipcMain.handle('browser:state', event => {
   assertDesktopShellSender(event)
   return browserStatePayload()
@@ -3508,9 +3529,8 @@ app.whenReady().then(async () => {
   try { ensureMemoryService() } catch (error) { console.warn(`Unable to initialize local memory: ${error.message}`) }
   runtimeInitializationPromise = (async () => {
     await ensureBundledRuntime()
-    await ensureModelRouting(modelRoutingOptions()).catch(error => {
-      console.warn(`Unable to restore desktop model routing: ${error.message}`)
-    })
+    await ensureDesktopCompactionPlugin(desktopCompactionPluginOptions())
+    await ensureModelRouting(modelRoutingOptions())
     await ensurePluginMarketplace(pluginMarketplaceOptions()).then(result => {
       if (result.warning) console.warn(result.warning)
     }).catch(error => {

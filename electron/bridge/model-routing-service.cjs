@@ -1,10 +1,30 @@
+const { createHash } = require('node:crypto')
 const { mkdir, readFile, readdir, rename, rm, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 const YAML = require('yaml')
 
 const ROUTING_PRESET_ID = 'harness-desktop-routing'
 const ROUTING_STATE_FILE = 'harness-desktop-model-routing.json'
-const ROUTING_SCHEMA_VERSION = 3
+const ROUTING_SCHEMA_VERSION = 4
+const MANAGED_PRESET_MARKER = '.harness-desktop-managed.json'
+const DESKTOP_COMPACTION_PLUGIN = 'dsh-desktop-compaction'
+const DESKTOP_COMPACTION_POLICY_VERSION = 1
+const DESKTOP_COMPACTION_CONFIG = Object.freeze({
+  thresholdRatio: 0.72,
+  retainRatio: 0.12,
+  maxTokens: 8192,
+  compactionRetries: 2,
+  maxOverflowRetries: 3,
+  auto: true,
+  modelPolicies: [{
+    provider: 'openai-codex',
+    model: 'gpt-5.6-sol',
+    thresholdRatio: 0.68,
+    retainRatio: 0.1,
+    compactionRetries: 2,
+    maxOverflowRetries: 3
+  }]
+})
 const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/
 const MODEL_ID = /^\S{1,256}$/
 const PRESET_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/
@@ -122,9 +142,9 @@ async function getModelRouting(options) {
   const settings = document.toJS() || {}
   const stored = await readJson(paths.stateFile)
   const settingsMain = optionalRoute(settings?.['agent-default-model']) || { provider: '', model: '' }
-  // The official Harness model picker remains authoritative. Schema v3 mirrors
-  // only the key-free provider/model pair so trusted hosts (including Agent
-  // Teams) can select main and subagent routes without reading settings.yaml.
+  // The official Harness model picker remains authoritative. Schema v4 mirrors
+  // only the key-free provider/model pair and selects a Desktop-regenerated
+  // preset so compaction policy survives official runtime preset updates.
   // A v2 document has no main field; older documents may still supply the
   // migration fallback when the official setting is absent.
   const storedMain = optionalRoute(stored?.main)
@@ -183,8 +203,66 @@ async function copyPresetDirectory(source, destination) {
   }
 }
 
+async function presetFingerprint(root) {
+  const hash = createHash('sha256')
+  const visit = async (directory, relative = '') => {
+    const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))
+    for (const entry of entries) {
+      const childRelative = relative ? `${relative}/${entry.name}` : entry.name
+      const child = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        hash.update(`d\0${childRelative}\0`)
+        await visit(child, childRelative)
+      } else if (entry.isFile()) {
+        hash.update(`f\0${childRelative}\0`)
+        hash.update(await readFile(child))
+        hash.update('\0')
+      } else {
+        throw new Error(`Unsupported entry in Agent preset: ${childRelative}`)
+      }
+    }
+  }
+  await visit(root)
+  return hash.digest('hex')
+}
+
+function compactionConfig(existing) {
+  const source = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {}
+  const configuredPolicies = Array.isArray(source.modelPolicies) ? source.modelPolicies : []
+  const policies = new Map(configuredPolicies.map(policy => [`${String(policy?.provider || '')}\u0000${String(policy?.model || '')}`, { ...policy }]))
+  for (const policy of DESKTOP_COMPACTION_CONFIG.modelPolicies) {
+    const key = `${policy.provider}\u0000${policy.model}`
+    const configured = policies.get(key) || {}
+    policies.set(key, {
+      ...configured,
+      ...policy,
+      thresholdRatio: Math.min(Number(configured.thresholdRatio) || policy.thresholdRatio, policy.thresholdRatio),
+      retainRatio: Math.min(Number(configured.retainRatio) || policy.retainRatio, policy.retainRatio)
+    })
+  }
+  const result = { ...source, ...DESKTOP_COMPACTION_CONFIG, modelPolicies: [...policies.values()] }
+  delete result.retainTokens
+  return result
+}
+
+function patchCompactionRows(rows, pathParts, document) {
+  let changed = 0
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]
+    const rowPath = [...pathParts, index]
+    if (['@deepseek-ai/dsh-compaction-basic', DESKTOP_COMPACTION_PLUGIN].includes(row?.name)) {
+      document.setIn([...rowPath, 'name'], DESKTOP_COMPACTION_PLUGIN)
+      document.setIn([...rowPath, 'config'], compactionConfig(row?.config))
+      changed += 1
+    }
+    if (Array.isArray(row?.config)) changed += patchCompactionRows(row.config, [...rowPath, 'config'], document)
+  }
+  return changed
+}
+
 async function buildManagedPreset(paths, basePreset, subagentRoute) {
   const source = await resolvePresetSource(paths, basePreset)
+  const baseFingerprint = await presetFingerprint(source)
   const temporary = path.join(paths.userPresetRoot, `.${ROUTING_PRESET_ID}.tmp-${process.pid}-${Date.now()}`)
   await mkdir(paths.userPresetRoot, { recursive: true, mode: 0o700 })
   try {
@@ -196,35 +274,31 @@ async function buildManagedPreset(paths, basePreset, subagentRoute) {
     const composition = YAML.parseDocument(await readText(compositionFile))
     if (composition.errors.length) throw new Error(`基础 Agent 预设无法解析：${composition.errors[0].message}`)
     const rows = composition.toJS()
-    const changed = Array.isArray(rows) ? visitRows(rows, [], composition, subagentRoute) : 0
-    if (!changed) throw new Error(`基础 Agent 预设 ${basePreset} 没有可配置的内置子代理。`)
+    const delegationChanged = Array.isArray(rows) ? visitRows(rows, [], composition, subagentRoute) : 0
+    const compactionChanged = Array.isArray(rows) ? patchCompactionRows(rows, [], composition) : 0
+    if (!delegationChanged) throw new Error(`基础 Agent 预设 ${basePreset} 没有可配置的内置子代理。`)
+    if (!compactionChanged) throw new Error(`基础 Agent 预设 ${basePreset} 没有可替换的上下文压缩服务。`)
     await writeFile(compositionFile, String(composition), { encoding: 'utf8', mode: 0o600 })
 
     const metadataFile = path.join(temporary, 'preset.yml')
     const metadata = YAML.parseDocument(await readText(metadataFile, '{}'))
-    metadata.set('name', `桌面模型路由（${basePreset}）`)
-    metadata.set('description', '由 Harness Desktop 管理：保留官方预设能力，并为内置子代理指定独立服务商与模型。')
+    metadata.set('name', `桌面增强预设（${basePreset}）`)
+    metadata.set('description', '由 Harness Desktop 从最新官方预设重建：保留上游能力，加入独立子代理路由与可恢复上下文压缩。')
     metadata.delete('order')
     await writeFile(metadataFile, String(metadata), { encoding: 'utf8', mode: 0o600 })
+    await writeFile(path.join(temporary, MANAGED_PRESET_MARKER), `${JSON.stringify({
+      schemaVersion: 1,
+      basePreset,
+      baseFingerprint,
+      compactionPlugin: DESKTOP_COMPACTION_PLUGIN,
+      compactionPolicyVersion: DESKTOP_COMPACTION_POLICY_VERSION
+    }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
 
     await rm(paths.managedPreset, { recursive: true, force: true })
     await rename(temporary, paths.managedPreset)
   } catch (error) {
     await rm(temporary, { recursive: true, force: true }).catch(() => {})
     throw error
-  }
-}
-
-async function buildHistoricalManagedPreset(paths, basePreset, subagentRoute) {
-  try {
-    await buildManagedPreset(paths, basePreset, subagentRoute)
-  } catch (error) {
-    if (basePreset === 'standard') throw error
-    // Existing sessions store the preset id in their header. Even when the
-    // current configuration follows the main model, keep that id resolvable.
-    // A custom user preset that cannot be projected must never block startup;
-    // use the shipped standard preset only for this compatibility copy.
-    await buildManagedPreset(paths, 'standard', subagentRoute)
   }
 }
 
@@ -235,6 +309,7 @@ function routesEqual(left, right) {
 function managedRowsMatch(rows, route) {
   let found = 0
   let matched = 0
+  let compaction = 0
   const visit = value => {
     if (!Array.isArray(value)) return
     for (const row of value) {
@@ -242,19 +317,28 @@ function managedRowsMatch(rows, route) {
         found += 1
         if (routesEqual(optionalRoute(row?.config?.agentOptions), route)) matched += 1
       }
+      if (row?.name === DESKTOP_COMPACTION_PLUGIN) {
+        const config = row.config || {}
+        const gpt = config.modelPolicies?.find?.(policy => policy?.provider === 'openai-codex' && policy?.model === 'gpt-5.6-sol')
+        if (config.thresholdRatio === 0.72 && config.maxOverflowRetries === 3 && gpt?.thresholdRatio === 0.68) compaction += 1
+      }
       if (Array.isArray(row?.config)) visit(row.config)
     }
   }
   visit(rows)
-  return found > 0 && matched === found
+  return found > 0 && matched === found && compaction === 1
 }
 
-async function managedPresetMatches(paths, route) {
+async function managedPresetMatches(paths, route, basePreset) {
   const source = await readText(path.join(paths.managedPreset, 'agent.cordis.yml'))
   if (!source) return false
   try {
     const document = YAML.parseDocument(source)
-    return document.errors.length === 0 && managedRowsMatch(document.toJS(), route)
+    const marker = await readJson(path.join(paths.managedPreset, MANAGED_PRESET_MARKER))
+    if (document.errors.length || !managedRowsMatch(document.toJS(), route)) return false
+    if (marker?.schemaVersion !== 1 || marker?.basePreset !== basePreset || marker?.compactionPlugin !== DESKTOP_COMPACTION_PLUGIN || marker?.compactionPolicyVersion !== DESKTOP_COMPACTION_POLICY_VERSION) return false
+    const baseSource = await resolvePresetSource(paths, basePreset)
+    return marker.baseFingerprint === await presetFingerprint(baseSource)
   } catch {
     return false
   }
@@ -266,9 +350,8 @@ async function routingAlreadyCurrent(paths, stored, current, subagent, inheritMa
   if (stored?.subagent?.inheritMain !== inheritMain || !routesEqual(optionalRoute(stored?.subagent), subagent)) return false
   const settings = settingsDocument(await readText(paths.settingsFile)).toJS() || {}
   if (!routesEqual(optionalRoute(settings?.['agent-default-model']), current.main)) return false
-  const expectedPreset = inheritMain ? current.basePreset : ROUTING_PRESET_ID
-  if (String(settings?.['agent-presets']?.default || '').trim() !== expectedPreset) return false
-  return managedPresetMatches(paths, subagent)
+  if (String(settings?.['agent-presets']?.default || '').trim() !== ROUTING_PRESET_ID) return false
+  return managedPresetMatches(paths, subagent, current.basePreset)
 }
 
 async function saveModelRouting(options, next) {
@@ -286,11 +369,10 @@ async function saveModelRouting(options, next) {
     ? requestedBase
     : selectedBasePreset(settings, stored)
 
-  if (!inheritMain) await buildManagedPreset(paths, basePreset, subagent)
-  else await buildHistoricalManagedPreset(paths, basePreset, subagent)
+  await buildManagedPreset(paths, basePreset, subagent)
   document.setIn(['agent-default-model', 'provider'], main.provider)
   document.setIn(['agent-default-model', 'model'], main.model)
-  document.setIn(['agent-presets', 'default'], inheritMain ? basePreset : ROUTING_PRESET_ID)
+  document.setIn(['agent-presets', 'default'], ROUTING_PRESET_ID)
   await mkdir(paths.home, { recursive: true, mode: 0o700 })
   const atomicWrite = options.writeFileAtomic || writeFileAtomic
   const stateText = `${JSON.stringify({ schemaVersion: ROUTING_SCHEMA_VERSION, main, subagent: { ...subagent, inheritMain }, basePreset }, null, 2)}\n`
@@ -326,8 +408,13 @@ async function ensureModelRouting(options) {
 }
 
 module.exports = {
+  DESKTOP_COMPACTION_CONFIG,
+  DESKTOP_COMPACTION_PLUGIN,
+  DESKTOP_COMPACTION_POLICY_VERSION,
   ROUTING_PRESET_ID,
+  ROUTING_SCHEMA_VERSION,
   ensureModelRouting,
   getModelRouting,
+  presetFingerprint,
   saveModelRouting
 }

@@ -1477,6 +1477,10 @@ runtimeView.addEventListener('will-navigate', event => {
   } else if (target.hostname === 'copy-session-id') {
     const value = target.searchParams.get('value')
     if (value) api.copyText(value).catch(() => {})
+  } else if (target.hostname === 'preview-local') {
+    const localPath = target.searchParams.get('path')
+    if (localPath && window.harnessDesktopRightWorkspace?.openLocalDocument) window.harnessDesktopRightWorkspace.openLocalDocument(localPath)
+    else if (localPath) api.openLocal(localPath).catch(() => {})
   } else if (target.hostname === 'open-local') {
     const localPath = target.searchParams.get('path')
     const reveal = target.searchParams.get('reveal') === '1'

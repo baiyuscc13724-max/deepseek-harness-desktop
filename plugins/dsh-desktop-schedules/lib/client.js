@@ -9,9 +9,29 @@ window.__ModuleLoader__.load({
     var useState = React.useState;
     var NS = "desktop-schedules";
     var zh = {
-      title: "定时任务",
+      title: "已安排的任务",
       scope: "当前会话",
-      intro: "管理当前会话的提醒，创建前会先将请求放入输入框供你确认。",
+      intro: "让 Harness 安排任务、设置提醒或定期检查；所有变更都会先进入输入框供你确认。",
+      search: "搜索已安排任务",
+      all: "全部",
+      activeFilter: "活动",
+      disabledFilter: "已停用",
+      suggestions: "建议",
+      suggestionDaily: "每日简报",
+      suggestionDailyHint: "工作日早上整理日历、未读消息和优先事项",
+      suggestionWeekly: "每周回顾",
+      suggestionWeeklyHint: "每周五整理最近的工作进展",
+      suggestionMonitor: "跟进监控",
+      suggestionMonitorHint: "检查最近的构建和部署状态",
+      historyTitle: "最近活动",
+      historyEmpty: "暂无运行或停用记录",
+      showCreate: "创建",
+      hideCreate: "收起创建",
+      disable: "准备停用",
+      enable: "准备重新创建",
+      created: "已创建",
+      deleted: "已停用",
+      dispatched: "已触发",
       limitationTitle: "仅在会话运行时触发",
       limitation: "仅当前会话运行：退出应用或会话未恢复时不会唤醒系统；重新打开会话后，逾期任务会补发。",
       loading: "正在读取定时任务…",
@@ -47,9 +67,29 @@ window.__ModuleLoader__.load({
       sessionLocal: "会话级"
     };
     var en = {
-      title: "Schedules",
+      title: "Scheduled tasks",
       scope: "Current session",
-      intro: "Manage reminders for this session. New requests are placed in the composer for review first.",
+      intro: "Let Harness schedule work, reminders, or recurring checks. Every change is placed in the composer for review first.",
+      search: "Search scheduled tasks",
+      all: "All",
+      activeFilter: "Active",
+      disabledFilter: "Disabled",
+      suggestions: "Suggestions",
+      suggestionDaily: "Daily briefing",
+      suggestionDailyHint: "Review the calendar, unread messages, and priorities each workday morning",
+      suggestionWeekly: "Weekly recap",
+      suggestionWeeklyHint: "Summarize recent progress every Friday",
+      suggestionMonitor: "Follow-up monitor",
+      suggestionMonitorHint: "Check recent build and deployment status",
+      historyTitle: "Recent activity",
+      historyEmpty: "No run or disabled history yet",
+      showCreate: "Create",
+      hideCreate: "Hide create form",
+      disable: "Prepare disable",
+      enable: "Prepare recreate",
+      created: "Created",
+      deleted: "Disabled",
+      dispatched: "Ran",
       limitationTitle: "Runs only while this session is active",
       limitation: "Session-local only: closing the app or leaving the session does not wake the OS. Overdue reminders are delivered after this session resumes.",
       loading: "Loading schedules…",
@@ -136,26 +176,38 @@ window.__ModuleLoader__.load({
       }
       style.textContent = `
         .dds-view{box-sizing:border-box;height:auto;min-height:100%;overflow:visible;padding:30px clamp(20px,4vw,48px) 72px;color:var(--dsw-alias-label-primary)}
-        .dds-shell{width:min(100%,980px);margin:0 auto;display:grid;gap:18px}
+        .dds-shell{width:min(100%,760px);margin:0 auto;display:grid;gap:18px}
         .dds-head{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:2px 2px 4px}
         .dds-heading{display:flex;align-items:center;gap:14px;min-width:0}
-        .dds-heading-icon{width:42px;height:42px;display:grid;place-items:center;flex:none;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,var(--dsw-alias-border-l1));border-radius:13px;color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,var(--dsw-alias-bg-layer-1));box-shadow:0 8px 24px color-mix(in srgb,var(--dsw-alias-brand-primary) 8%,transparent)}
-        .dds-kicker{margin:0 0 2px;color:var(--dsw-alias-brand-primary);font-size:12px;font-weight:600;letter-spacing:.02em}
-        .dds-title{margin:0;font-size:22px;line-height:30px;font-weight:600;letter-spacing:-.01em}
+        .dds-heading-icon,.dds-kicker{display:none}
+        .dds-title{margin:0;font-size:28px;line-height:36px;font-weight:600;letter-spacing:-.02em}
         .dds-sub{max-width:680px;margin:4px 0 0;color:var(--dsw-alias-label-secondary);font-size:14px;line-height:21px}
+        .dds-head-actions{display:flex;align-items:center;gap:8px}
+        .dds-search{position:relative;display:block}
+        .dds-search input{box-sizing:border-box;width:100%;height:38px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:0 16px 0 38px;color:var(--dsw-alias-label-primary);background:var(--dsw-specific-input-major);font:inherit}
+        .dds-search::before{content:"⌕";position:absolute;left:14px;top:8px;color:var(--dsw-alias-label-tertiary);font-size:17px}
+        .dds-filters{display:flex;align-items:center;gap:4px;margin-top:-10px}.dds-filter{min-height:30px;border:0;border-bottom:2px solid transparent;border-radius:0;padding:0 9px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer}.dds-filter:hover{color:var(--dsw-alias-label-primary)}.dds-filter[aria-pressed="true"]{border-bottom-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}
+        .dds-suggestions{display:grid;gap:4px;padding:2px 6px}
+        .dds-section-label{margin:0 0 7px;color:var(--dsw-alias-label-secondary);font-size:14px;font-weight:500}
+        .dds-suggestion{display:grid;grid-template-columns:24px minmax(0,1fr);gap:3px 10px;width:100%;border:0;border-radius:10px;padding:10px;color:var(--dsw-alias-label-primary);background:transparent;text-align:left;cursor:pointer}
+        .dds-suggestion:hover{background:var(--dsw-alias-bg-layer-2)}
+        .dds-suggestion .dds-icon{grid-row:1/3;width:17px;height:17px;margin-top:2px;color:var(--dsw-alias-brand-primary)}
+        .dds-suggestion strong{font-size:14px;font-weight:500}.dds-suggestion span{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dds-create.is-collapsed{display:none}
+        .dds-history-list{display:grid;gap:6px}.dds-history-item{display:flex;align-items:center;gap:10px;border-top:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 70%,transparent);padding:10px 2px}.dds-history-item:first-child{border-top:0}.dds-history-copy{display:grid;flex:1;min-width:0;gap:3px}.dds-history-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dds-history-copy span{color:var(--dsw-alias-label-tertiary);font-size:12px}
         .dds-icon{width:19px;height:19px;display:block;flex:none}
         .dds-button{box-sizing:border-box;min-height:36px;display:inline-flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;padding:0 13px;color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--dsw-specific-button-secondary) 88%,transparent);font:inherit;font-size:13px;cursor:pointer;transition:border-color .16s ease,background .16s ease,transform .16s ease,box-shadow .16s ease}
         .dds-button:hover:not(:disabled){border-color:var(--dsw-alias-border-l2);background:var(--dsw-specific-button-secondary-hover)}
         .dds-button:active:not(:disabled){transform:translateY(1px)}
         .dds-button:focus-visible,.dds-input:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent);border-color:var(--dsw-alias-brand-primary)}
         .dds-button:disabled{cursor:default;opacity:.55}
-        .dds-refresh{flex:none;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 82%,transparent);box-shadow:0 5px 16px color-mix(in srgb,#000 5%,transparent)}
+        .dds-refresh{width:38px;flex:none;padding:0;background:transparent;box-shadow:none}.dds-refresh span{display:none}
         .dds-notice{display:flex;align-items:flex-start;gap:12px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 20%,var(--dsw-alias-border-l1));border-radius:12px;padding:12px 14px;color:var(--dsw-alias-label-secondary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-1));font-size:13px;line-height:20px}
         .dds-notice-icon{width:30px;height:30px;display:grid;place-items:center;flex:none;border-radius:9px;color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,transparent)}
         .dds-notice-icon .dds-icon{width:17px;height:17px}
         .dds-notice strong{display:block;margin-bottom:1px;color:var(--dsw-alias-label-primary);font-weight:600}
         .dds-notice p{margin:0}
-        .dds-panel{overflow:hidden;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 88%,transparent);border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 94%,transparent);box-shadow:0 10px 34px color-mix(in srgb,#000 5%,transparent)}
+        .dds-panel{overflow:hidden;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 82%,transparent);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:none}
         .dds-panel-head{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:15px 17px;border-bottom:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 75%,transparent)}
         .dds-panel-title{display:flex;align-items:center;gap:10px;min-width:0}
         .dds-panel-title-icon{width:30px;height:30px;display:grid;place-items:center;flex:none;border-radius:9px;color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,transparent)}
@@ -168,21 +220,21 @@ window.__ModuleLoader__.load({
         .dds-input{box-sizing:border-box;width:100%;height:40px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;padding:8px 11px;color:var(--dsw-alias-label-primary);background:var(--dsw-specific-input-major);font:inherit;font-size:14px;transition:border-color .16s ease,box-shadow .16s ease,background .16s ease}
         .dds-input:hover{border-color:var(--dsw-alias-border-l2)}
         .dds-input::placeholder{color:var(--dsw-alias-label-dimmed)}
-        .dds-primary{height:40px;border-color:transparent;padding:0 16px;color:var(--dsw-specific-button-primary-label);background:var(--dsw-specific-button-primary);box-shadow:0 7px 18px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent);font-weight:600}
-        .dds-primary:hover:not(:disabled){border-color:transparent;background:var(--dsw-specific-button-primary-hover,var(--dsw-specific-button-primary));box-shadow:0 9px 22px color-mix(in srgb,var(--dsw-alias-brand-primary) 24%,transparent)}
+        .dds-primary{height:40px;border-color:transparent;padding:0 16px;color:var(--dsw-specific-button-primary-label);background:var(--dsw-specific-button-primary);box-shadow:none;font-weight:600}
+        .dds-primary:hover:not(:disabled){border-color:transparent;background:var(--dsw-specific-button-primary-hover,var(--dsw-specific-button-primary));box-shadow:none}
         .dds-status{display:flex;align-items:center;min-height:20px;margin:-4px 2px 0;padding:0 2px;color:var(--dsw-alias-state-success-primary);font-size:12px;line-height:18px}
         .dds-error{color:var(--dsw-alias-state-error-primary)}
         .dds-feedback{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px}
-        .dds-empty{min-height:178px;display:grid;place-items:center;padding:24px;text-align:center}
+        .dds-empty{min-height:132px;display:grid;place-items:center;border-color:transparent;background:transparent;padding:20px;text-align:center}
         .dds-empty-inner{max-width:420px;display:grid;justify-items:center}
         .dds-empty-icon{width:48px;height:48px;display:grid;place-items:center;margin-bottom:12px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 14%,var(--dsw-alias-border-l1));border-radius:15px;color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 7%,var(--dsw-alias-bg-layer-2))}
         .dds-empty-icon .dds-icon{width:23px;height:23px}
         .dds-empty h2{margin:0;font-size:15px;line-height:23px;font-weight:600}
         .dds-empty p{max-width:390px;margin:5px 0 0;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px}
-        .dds-list{display:grid;gap:10px}
+        .dds-list{display:grid;gap:0}
         .dds-list-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 2px}
         .dds-list-head h2{margin:0;font-size:14px;line-height:22px;font-weight:600}
-        .dds-item{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:14px;align-items:center;padding:15px 16px}
+        .dds-item{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:14px;align-items:center;border:0;border-bottom:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 70%,transparent);border-radius:0;padding:14px 2px;background:transparent}.dds-item:last-child{border-bottom:0}
         .dds-badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 9px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);font-size:12px;white-space:nowrap}
         .dds-badge::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent)}
         .dds-overdue{color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 9%,var(--dsw-alias-bg-layer-2))}
@@ -234,6 +286,9 @@ window.__ModuleLoader__.load({
       var modePair = useState("after"), mode = modePair[0], setMode = modePair[1];
       var valuePair = useState(""), value = valuePair[0], setValue = valuePair[1];
       var notePair = useState(""), note = notePair[0], setNote = notePair[1];
+      var searchPair = useState(""), search = searchPair[0], setSearch = searchPair[1];
+      var filterPair = useState("all"), filter = filterPair[0], setFilter = filterPair[1];
+      var createPair = useState(false), showCreate = createPair[0], setShowCreate = createPair[1];
       function reload(silent) {
         if (!silent) setLoading(true);
         setError("");
@@ -257,7 +312,7 @@ window.__ModuleLoader__.load({
         }).finally(function () {
           if (alive) setLoading(false);
         });
-        var timer = setInterval(guarded, 5000);
+        var timer = setInterval(guarded, 15000);
         function visible() { if (document.visibilityState === "visible") guarded(); }
         document.addEventListener("visibilitychange", visible);
         window.addEventListener("focus", visible);
@@ -289,7 +344,26 @@ window.__ModuleLoader__.load({
       function remove(id) {
         setDraft(lang === "zh" ? ("请删除当前会话中任务 ID 为 " + JSON.stringify(id) + " 的定时任务，并告诉我结果。") : ("Delete the schedule with exact id " + JSON.stringify(id) + " in this session and report the result."));
       }
+      function suggest(text, nextMode, nextValue) {
+        setPrompt(text); setMode(nextMode); setValue(nextValue); setShowCreate(true); setNote("");
+      }
+      function recreate(item) {
+        var record = item && item.schedule ? item.schedule : item;
+        if (!record || !record.prompt) return;
+        if (record.kind === "every") return setDraft(requestText("every", record.prompt, record.everySeconds));
+        if (record.kind === "after") return setDraft(requestText("after", record.prompt, record.afterSeconds));
+        var message = lang === "zh" ? ("请在当前会话重新创建一次性定时任务：" + JSON.stringify(record.prompt) + "。原计划时间为 " + record.scheduledAt + "，请先向我确认新的未来时间，不要直接创建。") : ("Recreate the one-time schedule " + JSON.stringify(record.prompt) + ". Its former target was " + record.scheduledAt + "; ask me for a new future time before creating it.");
+        return setDraft(message);
+      }
       var schedules = state && Array.isArray(state.schedules) ? state.schedules : [];
+      var history = state && Array.isArray(state.history) ? state.history : [];
+      var needle = search.trim().toLocaleLowerCase();
+      var activeIds = new Set(schedules.map(function (item) { return item.id; }));
+      var visibleSchedules = (filter === "disabled" ? [] : schedules).filter(function (item) { return !needle || (item.prompt + " " + item.id + " " + item.kind).toLocaleLowerCase().indexOf(needle) >= 0; });
+      var visibleHistory = history.filter(function (item) {
+        var stateMatch = filter === "all" || (filter === "active" ? activeIds.has(item.id) : item.operation === "deleted");
+        return stateMatch && (!needle || ((item.prompt || "") + " " + item.id + " " + item.operation).toLocaleLowerCase().indexOf(needle) >= 0);
+      }).slice(0, 20);
       var noteIsError = note === t("invalid") || note === t("draftUnavailable");
       return h("main", { className: "dds-view", "aria-labelledby": "dds-title" },
         h("div", { className: "dds-shell" },
@@ -302,15 +376,26 @@ window.__ModuleLoader__.load({
                 h("p", { className: "dds-sub" }, t("intro"))
               )
             ),
-            h("button", { className: "dds-button dds-refresh", type: "button", disabled: loading, onClick: function () { reload(false); } },
-              h(Icon, { name: "refresh" }), h("span", null, t("refresh"))
+            h("div", { className: "dds-head-actions" },
+              h("button", { className: "dds-button dds-refresh", type: "button", disabled: loading, onClick: function () { reload(false); } }, h(Icon, { name: "refresh" }), h("span", null, t("refresh"))),
+              h("button", { className: "dds-button dds-primary", type: "button", onClick: function () { setShowCreate(!showCreate); } }, h(Icon, { name: "plus" }), showCreate ? t("hideCreate") : t("showCreate"))
             )
           ),
+          h("label", { className: "dds-search" }, h("span", { className: "visually-hidden" }, t("search")), h("input", { type: "search", value: search, maxLength: 200, onChange: function (event) { setSearch(event.target.value); }, placeholder: t("search") })),
+          h("nav", { className: "dds-filters", "aria-label": t("title") }, [
+            ["all", "all"], ["active", "activeFilter"], ["disabled", "disabledFilter"]
+          ].map(function (entry) { return h("button", { key: entry[0], className: "dds-filter", type: "button", "aria-pressed": filter === entry[0], onClick: function () { setFilter(entry[0]); } }, t(entry[1])); })),
+          !search && filter !== "disabled" ? h("section", { className: "dds-suggestions", "aria-labelledby": "dds-suggestions-title" },
+            h("h2", { id: "dds-suggestions-title", className: "dds-section-label" }, t("suggestions")),
+            h("button", { className: "dds-suggestion", type: "button", onClick: function () { suggest(lang === "zh" ? "每天早上整理日历、未读消息和优先事项" : "Review my calendar, unread messages, and priorities each workday morning", "every", "86400"); } }, h(Icon, { name: "notice" }), h("strong", null, t("suggestionDaily")), h("span", null, t("suggestionDailyHint"))),
+            h("button", { className: "dds-suggestion", type: "button", onClick: function () { suggest(lang === "zh" ? "每周五整理最近的工作进展" : "Summarize my recent progress every Friday", "every", "604800"); } }, h(Icon, { name: "calendar" }), h("strong", null, t("suggestionWeekly")), h("span", null, t("suggestionWeeklyHint"))),
+            h("button", { className: "dds-suggestion", type: "button", onClick: function () { suggest(lang === "zh" ? "检查最近的构建和部署状态" : "Check recent build and deployment status", "every", "3600"); } }, h(Icon, { name: "clock" }), h("strong", null, t("suggestionMonitor")), h("span", null, t("suggestionMonitorHint")))
+          ) : null,
           h("aside", { className: "dds-notice", role: "note" },
             h("span", { className: "dds-notice-icon" }, h(Icon, { name: "notice" })),
             h("div", null, h("strong", null, t("limitationTitle")), h("p", null, t("limitation")))
           ),
-          h("section", { className: "dds-panel dds-create", "aria-labelledby": "dds-create-title" },
+          showCreate ? h("section", { className: "dds-panel dds-create", "aria-labelledby": "dds-create-title" },
             h("div", { className: "dds-panel-head" },
               h("div", { className: "dds-panel-title" },
                 h("span", { className: "dds-panel-title-icon" }, h(Icon, { name: "plus" })),
@@ -333,7 +418,7 @@ window.__ModuleLoader__.load({
               ),
               h("button", { className: "dds-button dds-primary", type: "submit" }, h(Icon, { name: "plus" }), t("create"))
             )
-          ),
+          ) : null,
           note ? h("div", { className: "dds-status" + (noteIsError ? " dds-error" : ""), role: "status", "aria-live": "polite" }, note) : null,
           loading ? h("section", { className: "dds-panel dds-feedback", role: "status" }, t("loading")) : null,
           error ? h("section", { className: "dds-panel dds-feedback dds-error", role: "alert" },
@@ -342,16 +427,16 @@ window.__ModuleLoader__.load({
           ) : null,
           !loading && !error && state && !state.available ? h("section", { className: "dds-panel dds-feedback" }, t("unavailable")) : null,
           !loading && !error && state && state.available && state.error ? h("section", { className: "dds-panel dds-feedback dds-error", role: "alert" }, state.error.message) : null,
-          !loading && !error && state && state.available && !state.error && schedules.length === 0 ? h("section", { className: "dds-panel dds-empty" },
+          !loading && !error && state && state.available && !state.error && filter !== "disabled" && visibleSchedules.length === 0 ? h("section", { className: "dds-panel dds-empty" },
             h("div", { className: "dds-empty-inner" },
               h("span", { className: "dds-empty-icon" }, h(Icon, { name: "clock" })),
-              h("h2", null, t("none")),
-              h("p", null, t("emptyHint"))
+              h("h2", null, search ? t("none") : t("none")),
+              h("p", null, search ? t("search") : t("emptyHint"))
             )
           ) : null,
-          schedules.length ? h("section", { className: "dds-list", "aria-labelledby": "dds-active-title" },
-            h("div", { className: "dds-list-head" }, h("h2", { id: "dds-active-title" }, t("activeTitle")), h("span", { className: "dds-count" }, t("count", { count: schedules.length }))),
-            schedules.map(function (item) {
+          visibleSchedules.length ? h("section", { className: "dds-list", "aria-labelledby": "dds-active-title" },
+            h("div", { className: "dds-list-head" }, h("h2", { id: "dds-active-title" }, t("activeTitle")), h("span", { className: "dds-count" }, t("count", { count: visibleSchedules.length }))),
+            visibleSchedules.map(function (item) {
               return h("article", { className: "dds-panel dds-item", key: item.id },
                 h("span", { className: "dds-badge" + (item.state === "overdue" ? " dds-overdue" : "") }, item.state === "overdue" ? t("overdue") : t("scheduled")),
                 h("div", { className: "dds-item-copy" },
@@ -364,10 +449,20 @@ window.__ModuleLoader__.load({
                   )
                 ),
                 h("button", { className: "dds-button dds-delete", type: "button", "aria-label": t("deleteAria", { id: item.id }), onClick: function () { remove(item.id); } },
-                  h(Icon, { name: "trash" }), h("span", null, t("delete"))
+                  h(Icon, { name: "trash" }), h("span", null, t("disable"))
                 )
               );
             })
+          ) : null,
+          !loading && !error && state && state.available ? h("section", { className: "dds-list", "aria-labelledby": "dds-history-title" },
+            h("div", { className: "dds-list-head" }, h("h2", { id: "dds-history-title" }, t("historyTitle")), h("span", { className: "dds-count" }, t("count", { count: visibleHistory.length }))),
+            visibleHistory.length ? h("div", { className: "dds-history-list" }, visibleHistory.map(function (item, index) {
+              return h("article", { className: "dds-history-item", key: item.id + "-" + item.operation + "-" + index },
+                h("span", { className: "dds-badge" }, t(item.operation)),
+                h("div", { className: "dds-history-copy" }, h("strong", null, item.prompt || item.id), h("span", null, (item.occurredAt ? dateLabel(item.occurredAt) + " · " : "") + item.id)),
+                item.operation === "deleted" ? h("button", { className: "dds-button", type: "button", onClick: function () { recreate(item); } }, t("enable")) : null
+              );
+            })) : h("div", { className: "dds-panel dds-feedback" }, t("historyEmpty"))
           ) : null
         )
       );

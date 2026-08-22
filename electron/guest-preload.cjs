@@ -3,8 +3,33 @@ let activeDrag = null
 let pendingPoint = null
 let pendingFrame = 0
 
+function safeSessionContext(value) {
+  const sessionId = typeof value?.sessionId === 'string' ? value.sessionId : ''
+  if (!sessionId || sessionId.length > 256 || sessionId.trim() !== sessionId) return null
+  return Object.freeze({ sessionId })
+}
+
+function subscribeRightWorkspaceCommands(listener) {
+  if (typeof listener !== 'function') return () => {}
+  const wrapped = (_event, value) => {
+    const type = typeof value?.type === 'string' ? value.type : ''
+    const sessionId = typeof value?.sessionId === 'string' ? value.sessionId : ''
+    const text = typeof value?.text === 'string' ? value.text : ''
+    if (type !== 'set-draft' || !sessionId || sessionId.length > 256 || sessionId.trim() !== sessionId || !text || text.length > 12_000) return
+    listener(Object.freeze({ type, sessionId, text }))
+  }
+  ipcRenderer.on('right-workspace:command', wrapped)
+  return () => ipcRenderer.removeListener('right-workspace:command', wrapped)
+}
+
 contextBridge.exposeInMainWorld('harnessDesktopGuest', Object.freeze({
-  chooseWorkspaceDirectory: () => ipcRenderer.invoke('workspace:chooseDirectory')
+  chooseWorkspaceDirectory: () => ipcRenderer.invoke('workspace:chooseDirectory'),
+  publishRightWorkspaceContext: value => {
+    const context = safeSessionContext(value)
+    if (context) ipcRenderer.sendToHost('right-workspace:context', context)
+    return Boolean(context)
+  },
+  onRightWorkspaceCommand: subscribeRightWorkspaceCommands
 }))
 
 const interactiveSelector = [

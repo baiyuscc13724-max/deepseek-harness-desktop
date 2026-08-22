@@ -18,7 +18,7 @@ const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.31'
+const CURRENT_MOBILE_VERSION = '1.0.32'
 const DEFAULT_MOBILE_DOWNLOAD_URL = `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v${CURRENT_MOBILE_VERSION}/Harness-Mobile-${CURRENT_MOBILE_VERSION}-android-universal.apk`
 const DEFAULT_IOS_DOWNLOAD_URL = ''
 const DESKTOP_CONTROL_STATE_FILE = 'mobile-sync.desktop-control.json'
@@ -172,6 +172,18 @@ function readJsonBody(request, limit = 64 * 1024) {
   })
 }
 
+const BROWSER_FORBIDDEN_PORTS = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
+  101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179,
+  389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601,
+  636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000,
+  6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080
+])
+
+function browserSafePort(value) {
+  return Number.isInteger(value) && value > 0 && value <= 65535 && !BROWSER_FORBIDDEN_PORTS.has(value)
+}
+
 function listen(server, port, host) {
   return new Promise((resolve, reject) => {
     const onError = error => {
@@ -186,6 +198,26 @@ function listen(server, port, host) {
     server.once('listening', onListening)
     server.listen(port, host)
   })
+}
+
+function closeListener(server) {
+  return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+}
+
+async function listenBrowserSafe(server, preferredPort, host, maxAttempts = 32) {
+  let candidate = browserSafePort(preferredPort) ? preferredPort : 0
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try { await listen(server, candidate, host) }
+    catch (error) {
+      if (candidate !== 0 && error.code === 'EADDRINUSE') { candidate = 0; continue }
+      throw error
+    }
+    const address = server.address()
+    if (address && browserSafePort(address.port)) return address
+    await closeListener(server)
+    candidate = 0
+  }
+  throw Object.assign(new Error('Unable to allocate a browser-safe mobile sync port.'), { code: 'MOBILE_SYNC_NO_SAFE_PORT' })
 }
 
 class MobileSyncService extends EventEmitter {
@@ -365,13 +397,8 @@ class MobileSyncService extends EventEmitter {
     })
     this.server.on('upgrade', (request, socket, head) => this.#handleUpgrade(request, socket, head))
     const preferredPort = this.requestedPort ?? this.store.get().preferredPort
-    try {
-      await listen(this.server, preferredPort, this.host)
-    } catch (error) {
-      if (error.code !== 'EADDRINUSE') throw error
-      await listen(this.server, 0, this.host)
-    }
-    this.port = this.server.address().port
+    const address = await listenBrowserSafe(this.server, preferredPort, this.host)
+    this.port = address.port
     try {
       await this.#writeDesktopControlState()
     } catch (error) {
@@ -748,6 +775,8 @@ module.exports = {
   MOBILE_PROTOCOL_DESCRIPTOR,
   COOKIE_NAME,
   PAIRING_TTL_MS,
+  BROWSER_FORBIDDEN_PORTS,
+  browserSafePort,
   constantTimeHexEqual,
   deviceDescriptorFromUserAgent,
   isPrivateIpv4,

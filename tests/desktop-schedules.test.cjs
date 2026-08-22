@@ -52,12 +52,32 @@ test('observable schedule snapshot folds the official schedule event log', async
   }
   const ctx = { agents: { get: id => id === sessionId ? agent : undefined, roots: () => [agent] } }
   const result = snapshot(ctx, sessionId, Date.parse('2026-08-21T08:00:00.000Z'))
+  assert.equal(result.schemaVersion, 2)
   assert.equal(result.available, true)
   assert.equal(result.minimumEverySeconds, 300)
   assert.deepEqual(result.schedules, [{
     id: 'schedule-1', kind: 'after', prompt: 'Review the build', afterSeconds: 60,
     scheduledAt: '2026-08-21T08:01:00.000Z', state: 'scheduled', deliveryMode: 'session-local'
   }])
+  assert.deepEqual(result.history, [{
+    id: 'schedule-1', operation: 'created', prompt: 'Review the build', kind: 'after',
+    schedule: { id: 'schedule-1', kind: 'after', prompt: 'Review the build', afterSeconds: 60, scheduledAt: '2026-08-21T08:01:00.000Z' },
+    scheduledAt: '2026-08-21T08:01:00.000Z', occurredAt: '2026-08-21T08:01:00.000Z'
+  }])
+})
+
+test('schedule history is bounded, newest-first, and preserves recreate rules', async () => {
+  const { scheduleHistory } = await plugin()
+  const schedule = { id: 'repeat-1', kind: 'every', prompt: 'Check builds', everySeconds: 300, scheduledAt: '2026-08-21T08:00:00.000Z' }
+  const events = [
+    { type: 'schedule/change', data: { version: 1, operation: 'create', schedule } },
+    { type: 'schedule/change', data: { version: 1, operation: 'dispatch', id: schedule.id, acceptedAt: '2026-08-21T08:05:00.000Z' } },
+    { type: 'schedule/change', data: { version: 1, operation: 'delete', id: schedule.id } }
+  ]
+  const history = scheduleHistory(events, 0, 2)
+  assert.deepEqual(history.map(item => item.operation), ['deleted', 'dispatched'])
+  assert.equal(history[0].schedule.everySeconds, 300)
+  assert.equal(history[1].occurredAt, '2026-08-21T08:05:00.000Z')
 })
 
 test('schedule state route accepts only loopback same-origin requests', async () => {
@@ -74,6 +94,16 @@ test('schedule client observes state and only prepares user-reviewed requests', 
   assert.match(source, /inputActions\.setDraft/)
   assert.match(source, /Review it, then send manually/)
   assert.match(source, /仅当前会话运行/)
+  assert.match(source, /已安排的任务/u)
+  assert.match(source, /搜索已安排任务/u)
+  assert.match(source, /suggestionDaily/u)
+  assert.match(source, /activeFilter/u)
+  assert.match(source, /disabledFilter/u)
+  assert.match(source, /dds-filters/u)
+  assert.match(source, /visibleSchedules/u)
+  assert.match(source, /visibleHistory/u)
+  assert.match(source, /function recreate\(item\)/u)
+  assert.match(source, /setInterval\(guarded, 15000\)/u)
   assert.doesNotMatch(source, /method:\s*["']POST["']/)
   assert.doesNotMatch(source, /inputActions\.(submit|send)/)
   assert.doesNotThrow(() => new Function(source))
