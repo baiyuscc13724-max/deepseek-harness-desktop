@@ -71,6 +71,7 @@ test('publisher fails closed unless the desktop manifest is signed and verified 
   assert.match(components, /Sign exact desktop release manifest in protected CI/u)
   assert.match(components, /HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64/u)
   assert.match(components, /refresh-release-manifest\.mjs[\s\S]*release-manifest\/\$RELEASE_TAG/u)
+  assert.match(components, /refs\/heads\/main:refs\/remotes\/origin\/main/u)
   assert.match(components, /refs\/tags\/\$RELEASE_TAG:refs\/tags\/\$RELEASE_TAG/u)
   assert.match(components, /trap 'rm -f "\$key_file" "\$manifest_file"'/u)
   assert.match(publisher, /preflightDesktopManifestTrust/u)
