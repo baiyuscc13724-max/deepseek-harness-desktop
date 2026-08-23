@@ -438,16 +438,19 @@ async function waitForDesktopBuildDiscovery() {
   return workflowRun(runId)
 }
 
-async function waitForRun(runId) {
+async function waitForRunCompletion(runId) {
   for (;;) {
     const run = ghJson(['run', 'view', String(runId), '--repo', repo, '--json', 'status,conclusion,url'])
     console.log(`Workflow ${runId}: ${run.status}${run.conclusion ? `/${run.conclusion}` : ''}`)
-    if (run.status === 'completed') {
-      if (run.conclusion !== 'success') throw new Error(`Workflow failed: ${run.url}`)
-      return run
-    }
+    if (run.status === 'completed') return run
     await sleep()
   }
+}
+
+async function waitForRun(runId) {
+  const run = await waitForRunCompletion(runId)
+  if (run.conclusion !== 'success') throw new Error(`Workflow failed: ${run.url}`)
+  return run
 }
 
 async function sleep() {
@@ -783,6 +786,13 @@ async function publish() {
   const desktopRunId = Number(desktopPhase.runId || state.phases['desktop-cloud-builds']?.runId)
 
   await phase(state, 'desktop-publication', async () => {
+    const sourceRun = await waitForRunCompletion(desktopRunId)
+    await checkpoint(state, 'desktop-publication', { sourceRunId: desktopRunId, sourceRunConclusion: sourceRun.conclusion })
+    if (sourceRun.conclusion === 'success') {
+      const release = releaseForTag()
+      assertReleaseAssets(release, expectedDesktopNames(), { draft: false, allowAdditional: true })
+      return { releaseId: release.id, recoveryRunId: null, url: release.html_url }
+    }
     let release = await ensureExactDraft(Number(state.phases['desktop-publication']?.releaseId || 0))
     if (!release.draft) return { releaseId: release.id, url: release.html_url }
     const storedRecovery = reusableWorkflowRun(Number(state.phases['desktop-publication']?.recoveryRunId || 0))
