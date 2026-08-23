@@ -200,6 +200,54 @@ test('desktop publication cannot stage a macOS artifact before the unsigned buil
   for (const forbidden of ['macos-signing', 'xcrun notarytool submit', 'spctl --assess', 'codesign --verify']) assert.ok(!source.includes(forbidden), forbidden)
 })
 
+test('Linux Electron gates install and configure the SUID sandbox before exercising Electron', () => {
+  const workflows = [
+    { file: '.github/workflows/ci.yml', job: 'verify', exercise: 'Verify browser navigation security in Electron' },
+    { file: '.github/workflows/release.yml', job: 'build', exercise: 'Verify browser navigation security in Electron (Linux)' }
+  ]
+
+  for (const contract of workflows) {
+    const source = read(contract.file)
+    const workflow = YAML.parse(source)
+    const steps = workflow.jobs[contract.job].steps
+    const installDependencies = steps.find(step => /^npm ci(?:\s|$)/u.test(String(step.run || '')))
+    const configure = steps.find(step => String(step.name || '').startsWith('Configure Electron sandbox'))
+    const exercise = steps.find(step => step.name === contract.exercise)
+    assert.ok(installDependencies, `${contract.file} must install dependencies`)
+    assert.ok(configure, `${contract.file} must configure the Electron sandbox`)
+    assert.ok(exercise, `${contract.file} must exercise Electron`)
+    assert.ok(steps.indexOf(installDependencies) < steps.indexOf(configure))
+    assert.ok(steps.indexOf(configure) < steps.indexOf(exercise))
+    assert.match(configure.run, /set -euo pipefail/u)
+    assert.match(configure.run, /node node_modules\/electron\/install\.js/u)
+    assert.match(configure.run, /sandbox="\$GITHUB_WORKSPACE\/node_modules\/electron\/dist\/chrome-sandbox"/u)
+    assert.match(configure.run, /test -f "\$sandbox"/u)
+    assert.match(configure.run, /test ! -L "\$sandbox"/u)
+    assert.match(configure.run, /sudo chown root:root "\$sandbox"/u)
+    assert.match(configure.run, /sudo chmod 4755 "\$sandbox"/u)
+    assert.match(configure.run, /stat -c '%u:%g:%a' "\$sandbox"/u)
+    const sandboxOrder = [
+      'node node_modules/electron/install.js',
+      'test -f "$sandbox"',
+      'test ! -L "$sandbox"',
+      'sudo chown root:root',
+      'sudo chmod 4755',
+      "stat -c '%u:%g:%a'"
+    ].map(fragment => configure.run.indexOf(fragment))
+    assert.ok(sandboxOrder.every((index, position) => index >= 0 && (position === 0 || sandboxOrder[position - 1] < index)))
+    assert.doesNotMatch(source, /--no-sandbox|--disable-setuid-sandbox|ELECTRON_DISABLE_SANDBOX/u)
+  }
+
+  const release = YAML.parse(read('.github/workflows/release.yml'))
+  const releaseSteps = release.jobs.build.steps
+  const linuxConfigure = releaseSteps.find(step => step.name === 'Configure Electron sandbox for Linux')
+  const linuxExercise = releaseSteps.find(step => step.name === 'Verify browser navigation security in Electron (Linux)')
+  const desktopExercise = releaseSteps.find(step => step.name === 'Verify browser navigation security in Electron (Windows and macOS)')
+  assert.equal(linuxConfigure.if, "runner.os == 'Linux'")
+  assert.equal(linuxExercise.if, "runner.os == 'Linux'")
+  assert.equal(desktopExercise.if, "runner.os != 'Linux'")
+})
+
 test('primary desktop publication proves an exact signed stable in-place Windows upgrade before going public', () => {
   const workflowText = read('.github/workflows/release.yml')
   const workflow = YAML.parse(workflowText)

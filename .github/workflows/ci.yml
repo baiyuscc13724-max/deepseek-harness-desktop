@@ -24,6 +24,16 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - run: npm run verify
+      - name: Configure Electron sandbox
+        run: |
+          set -euo pipefail
+          node node_modules/electron/install.js
+          sandbox="$GITHUB_WORKSPACE/node_modules/electron/dist/chrome-sandbox"
+          test -f "$sandbox"
+          test ! -L "$sandbox"
+          sudo chown root:root "$sandbox"
+          sudo chmod 4755 "$sandbox"
+          test "$(stat -c '%u:%g:%a' "$sandbox")" = '0:0:4755'
       - name: Verify browser navigation security in Electron
         env:
           HARNESS_BROWSER_TEST_REAL_INPUT: '1'
