@@ -1,5 +1,30 @@
 (function exposeThemeIntegration(root) {
-  function guestThemeBootstrap() {
+  function createSettingsDialogCloser(documentObject) {
+    return panel => {
+      const dialogs = [...documentObject.querySelectorAll('[role="dialog"][aria-modal="true"]')]
+      const dialog = panel?.closest?.('[role="dialog"]')
+        || dialogs.find(candidate => candidate.dataset.hdAppearanceHost === 'true')
+        || dialogs.find(candidate => candidate.querySelector('[data-hd-theme-nav]'))
+      if (!dialog) return false
+      const buttons = [...dialog.querySelectorAll('button')]
+      const close = buttons.find(button => {
+        const ariaLabel = button.getAttribute('aria-label')?.trim() || ''
+        const title = button.title?.trim() || ''
+        const text = button.textContent?.trim() || ''
+        return /^(?:关闭|close)$/i.test(ariaLabel)
+          || /^(?:关闭|close)$/i.test(title)
+          || /^(?:关闭|close|×)$/i.test(text)
+      }) || buttons.find(button => {
+        const label = `${button.getAttribute('aria-label') || ''} ${button.title || ''}`
+        return /关闭(?:设置|窗口|对话框)|close (?:settings|window|dialog)/i.test(label)
+      })
+      if (!close) return false
+      close.click()
+      return true
+    }
+  }
+
+  function guestThemeBootstrap(createSettingsDialogCloser) {
     if (window.__HARNESS_DESKTOP_THEME_INSTALLED__) return
     window.__HARNESS_DESKTOP_THEME_INSTALLED__ = true
 
@@ -57,6 +82,43 @@
       const shadow = brightText ? '0,0,0' : '255,255,255'
       const amount = Math.min(1, Math.max(0, strength / 100))
       return `0 1px 2px rgba(${shadow},${(.18 + amount * .58).toFixed(2)}),0 0 12px rgba(${shadow},${(.06 + amount * .24).toFixed(2)})`
+    }
+    const readableBackdrop = (text, strength, minimum, maximum, brightness = 100) => {
+      const match = /^#([0-9a-f]{6})$/i.exec(text || '')
+      const rgb = match ? [0, 2, 4].map(offset => Number.parseInt(match[1].slice(offset, offset + 2), 16)) : [255, 255, 255]
+      const linearChannel = value => {
+        const normalized = value / 255
+        return normalized <= .04045 ? normalized / 12.92 : ((normalized + .055) / 1.055) ** 2.4
+      }
+      const luminance = color => color.reduce((total, value, index) => total + linearChannel(value) * [.2126, .7152, .0722][index], 0)
+      const contrast = (left, right) => {
+        const light = Math.max(luminance(left), luminance(right))
+        const dark = Math.min(luminance(left), luminance(right))
+        return (light + .05) / (dark + .05)
+      }
+      const darkBackdrop = [0, 0, 0]
+      const lightBackdrop = [255, 255, 255]
+      const darkContrast = contrast(rgb, darkBackdrop)
+      const lightContrast = contrast(rgb, lightBackdrop)
+      const darkBackdropWins = darkContrast >= lightContrast
+      const backdropRgb = darkBackdropWins ? darkBackdrop : lightBackdrop
+      const backdrop = backdropRgb.join(',')
+      const maximumContrast = Math.max(darkContrast, lightContrast)
+      const targetContrast = maximumContrast >= 8 ? 7 : 4.5
+      if (maximumContrast < targetContrast) return `rgba(${backdrop},0.99)`
+      const worstWallpaper = darkBackdropWins ? lightBackdrop : darkBackdrop
+      const composite = opacity => backdropRgb.map((value, index) => value * opacity + worstWallpaper[index] * (1 - opacity))
+      let safeLow = 0
+      let safeHigh = .99
+      for (let index = 0; index < 16; index += 1) {
+        const candidate = (safeLow + safeHigh) / 2
+        if (contrast(rgb, composite(candidate)) >= targetContrast) safeHigh = candidate
+        else safeLow = candidate
+      }
+      const amount = Math.min(1, Math.max(0, strength / 100))
+      const brightnessBoost = Math.min(.10, Math.max(0, (brightness - 100) / 40) * .10)
+      const opacity = Math.min(.99, Math.max(safeHigh, minimum + amount * (maximum - minimum)) + brightnessBoost)
+      return `rgba(${backdrop},${(Math.ceil(opacity * 100) / 100).toFixed(2)})`
     }
     const customThemeValues = state => {
       const custom = state?.customTheme || {}
@@ -276,6 +338,25 @@
         border-color:var(--dsw-alias-border-l2) !important;
         box-shadow:0 12px 38px var(--hd-theme-panel-shadow,rgba(0,0,0,.18));
       }
+      html[data-hd-theme="custom"] [data-hd-surface="conversation"] {
+        background:
+          linear-gradient(to bottom,var(--hd-theme-readable-scrim-strong) 0,transparent 92px,transparent calc(100% - 150px),var(--hd-theme-readable-scrim-strong) 100%),
+          linear-gradient(var(--hd-theme-readable-scrim-soft),var(--hd-theme-readable-scrim-soft)) !important;
+      }
+      html[data-hd-theme="custom"] [data-composer-card="true"] {
+        background:linear-gradient(var(--hd-theme-readable-surface),var(--hd-theme-readable-surface)),var(--hd-theme-input) !important;
+      }
+      html[data-hd-theme="custom"] [data-hd-surface="conversation"] :not(pre) > code {
+        color:var(--dsw-alias-label-primary) !important;
+        background:var(--hd-theme-readable-chip) !important;
+        box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2);
+        text-shadow:var(--hd-theme-text-shadow,none);
+      }
+      html[data-hd-theme="custom"] [data-hd-surface="conversation"] a {
+        text-shadow:var(--hd-theme-text-shadow,none);
+        text-decoration-thickness:max(1px,.08em);
+        text-underline-offset:.14em;
+      }
       html[data-hd-theme="custom"] #root { text-shadow:var(--hd-theme-text-shadow,none); }
       html[data-hd-theme="custom"] input::placeholder,
       html[data-hd-theme="custom"] textarea::placeholder { color:var(--dsw-alias-label-secondary) !important; opacity:1; text-shadow:var(--hd-theme-text-shadow,none); }
@@ -321,8 +402,8 @@
           '--dsw-alias-bg-layer-3': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .24)),
           '--dsw-alias-bg-module-platform': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .05)),
           '--dsw-alias-label-primary': text,
-          '--dsw-alias-label-secondary': hexWithAlpha(text, 'c7'),
-          '--dsw-alias-label-tertiary': hexWithAlpha(text, '91'),
+          '--dsw-alias-label-secondary': hexWithOpacity(text, .78 + readability * .16),
+          '--dsw-alias-label-tertiary': hexWithOpacity(text, .57 + readability * .28),
           '--dsw-alias-brand-primary': accent,
           '--dsw-alias-brand-text': accent,
           '--dsw-alias-border-l1': hexWithOpacity(text, borderOpacity * .16),
@@ -335,6 +416,10 @@
           '--dsw-alias-markdown-code-block': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .08)),
           '--hd-theme-glass-blur': `${Math.round(10 + custom.glassTransparency * .22)}px`,
           '--hd-theme-text-shadow': readableTextShadow(text, custom.readabilityStrength),
+          '--hd-theme-readable-scrim-strong': readableBackdrop(text, custom.readabilityStrength, .46, .72, custom.wallpaperBrightness),
+          '--hd-theme-readable-scrim-soft': readableBackdrop(text, custom.readabilityStrength, .24, .50, custom.wallpaperBrightness),
+          '--hd-theme-readable-surface': readableBackdrop(text, custom.readabilityStrength, .34, .58, custom.wallpaperBrightness),
+          '--hd-theme-readable-chip': readableBackdrop(text, custom.readabilityStrength, .52, .76, custom.wallpaperBrightness),
           '--hd-theme-panel-shadow': `rgba(0,0,0,${(.06 + readability * .18).toFixed(2)})`
         }
       }
@@ -464,13 +549,11 @@
       renderUiModes(panel)
     }
 
-    const closeSettingsDialog = panel => {
-      const dialog = panel.closest('[role="dialog"]')
-      const close = [...(dialog?.querySelectorAll('button') || [])].find(button => {
-        const label = `${button.getAttribute('aria-label') || ''} ${button.title || ''} ${button.textContent || ''}`
-        return /关闭|close/i.test(label) || button.textContent?.trim() === '×'
-      })
-      close?.click()
+    const closeSettingsDialog = createSettingsDialogCloser(document)
+    window.__HARNESS_DESKTOP_CLOSE_SETTINGS_DIALOG__ = () => {
+      const closed = closeSettingsDialog(window.__HARNESS_DESKTOP_APPEARANCE_HOST_DIALOG__)
+      if (closed) window.__HARNESS_DESKTOP_APPEARANCE_HOST_DIALOG__ = null
+      return closed
     }
 
     const renderUiModes = panel => {
@@ -689,7 +772,11 @@
       if (!mobile) {
         // Desktop settings: the appearance subpage lives on the native shell,
         // so open the in-project page instead of injecting a browser page.
-        skinButton.addEventListener('click', () => request('open-appearance'))
+        skinButton.addEventListener('click', () => {
+          window.__HARNESS_DESKTOP_APPEARANCE_HOST_DIALOG__ = dialog
+          dialog.dataset.hdAppearanceHost = 'true'
+          request('open-appearance', { source: 'settings' })
+        })
         return
       }
       panel = createPanel()
@@ -751,7 +838,7 @@
   }
 
   async function install(webview) {
-    await webview.executeJavaScript(`(${guestThemeBootstrap.toString()})()`, true)
+    await webview.executeJavaScript(`(${guestThemeBootstrap.toString()})(${createSettingsDialogCloser.toString()})`, true)
   }
 
   async function publish(webview, state, catalog) {
@@ -761,11 +848,52 @@
     await webview.executeJavaScript(`window.__HARNESS_DESKTOP_THEME_STATE__=${serializedState};window.__HARNESS_DESKTOP_THEMES__=${serializedCatalog};window.__HARNESS_DESKTOP_RENDER_THEMES__?.();`, true)
   }
 
+  async function closeDesktopSettingsDialog(webview) {
+    if (!webview?.getURL?.()) return false
+    return Boolean(await webview.executeJavaScript('Boolean(window.__HARNESS_DESKTOP_CLOSE_SETTINGS_DIALOG__?.())', true))
+  }
+
+  function createSkinPickerHost({ overlay, trigger, closeSettingsDialog }) {
+    let openedFromSettings = false
+
+    const hide = () => {
+      overlay.classList.add('hidden')
+      overlay.setAttribute('aria-hidden', 'true')
+      trigger?.focus?.()
+    }
+
+    return {
+      open({ fromSettings = false } = {}) {
+        openedFromSettings = fromSettings === true
+        overlay.classList.remove('hidden')
+        overlay.setAttribute('aria-hidden', 'false')
+      },
+      close() {
+        openedFromSettings = false
+        hide()
+      },
+      async apply(operation, applied = () => true) {
+        const value = await operation()
+        if (!applied(value)) return value
+        const shouldCloseSettings = openedFromSettings
+        openedFromSettings = false
+        hide()
+        if (shouldCloseSettings) {
+          try { await closeSettingsDialog?.() } catch {}
+        }
+        return value
+      }
+    }
+  }
+
   const api = {
     install,
     prepareCatalog,
     publish,
-    mobileBootstrapSource: `(${guestThemeBootstrap.toString()})()`
+    closeDesktopSettingsDialog,
+    createSkinPickerHost,
+    createSettingsDialogCloser,
+    mobileBootstrapSource: `(${guestThemeBootstrap.toString()})(${createSettingsDialogCloser.toString()})`
   }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   if (root) root.harnessThemeIntegration = api

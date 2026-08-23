@@ -361,6 +361,48 @@ const CONVERSATION_CACHE_PATCHED = `			const cacheDetails = [];
 
 const CONVERSATION_TOOLTIP_ORIGINAL = 'label: line,\n\t\t\t\tside: "top",\n\t\t\t\tdelayMs: 500,\n\t\t\t\tdisabled: !truncated,'
 const CONVERSATION_TOOLTIP_PATCHED = 'label: tooltipLine,\n\t\t\t\tside: "top",\n\t\t\t\tdelayMs: 500,\n\t\t\t\tdisabled: !truncated && tooltipLine === line,'
+const CONVERSATION_STATS_CSS_ORIGINAL = 'const css$20 = ".FJxK0a_root{text-align:center;max-width:var(--dsh-chat-content-width);box-sizing:border-box;width:100%;padding:4px calc(var(--dsh-composer-side-clearance) + 16px) 0px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;margin:0 auto;font-size:12px;line-height:20px;display:block;overflow:hidden}.FJxK0a_sep{color:var(--dsw-alias-separator-primary);margin:0 10px}";'
+const CONVERSATION_STATS_CSS_PATCHED_V1 = 'const css$20 = ".FJxK0a_root{text-align:center;max-width:var(--dsh-chat-content-width);box-sizing:border-box;width:100%;max-height:40px;padding:4px calc(var(--dsh-composer-side-clearance) + 16px) 0;color:var(--dsw-alias-label-secondary);margin:0 auto;font-size:12px;line-height:20px;display:flex;flex-wrap:wrap;justify-content:center;align-content:flex-start;gap:0 18px;overflow:hidden;user-select:text;cursor:text}.FJxK0a_root>span{min-width:0;max-width:100%;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}";'
+const CONVERSATION_STATS_CSS_PATCHED = 'const css$20 = ".FJxK0a_root{text-align:center;max-width:var(--dsh-chat-content-width);box-sizing:border-box;width:100%;max-height:44px;padding:4px calc(var(--dsh-composer-side-clearance) + 16px) 0;color:var(--dsw-alias-label-secondary);margin:0 auto;font-size:12px;line-height:20px;display:flex;flex-wrap:wrap;justify-content:center;align-content:flex-start;gap:0 18px;overflow:hidden;user-select:text;cursor:text}.FJxK0a_root>span{min-width:0;max-width:100%;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}";'
+const CONVERSATION_STATS_RENDER_ORIGINAL = dedentOne(`\t\t\t\tconst rootRef = (0, react.useRef)(null);
+\t\t\t\tconst [truncated, setTruncated] = (0, react.useState)(false);
+\t\t\t\t(0, react.useLayoutEffect)(() => {
+\t\t\t\t\tconst el = rootRef.current;
+\t\t\t\t\tif (el === null) return;
+\t\t\t\t\tconst measure = () => {
+\t\t\t\t\t\tsetTruncated(el.scrollWidth > el.clientWidth);
+\t\t\t\t\t};
+\t\t\t\t\tmeasure();
+\t\t\t\t\tif (typeof ResizeObserver === "undefined") return;
+\t\t\t\t\tconst observer = new ResizeObserver(measure);
+\t\t\t\t\tobserver.observe(el);
+\t\t\t\t\treturn () => {
+\t\t\t\t\t\tobserver.disconnect();
+\t\t\t\t\t};
+\t\t\t\t}, [line]);
+\t\t\t\tif (groups.length === 0) return null;
+\t\t\t\treturn (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+\t\t\t\t\tlabel: tooltipLine,
+\t\t\t\t\tside: "top",
+\t\t\t\t\tdelayMs: 500,
+\t\t\t\t\tdisabled: !truncated && tooltipLine === line,
+\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)("div", {
+\t\t\t\t\t\tref: rootRef,
+\t\t\t\t\t\tclassName: StatsLine_module_css_default.root,
+\t\t\t\t\t\tchildren: groups.map((group, i) => (0, react_jsx_runtime.jsxs)(react.Fragment, { children: [i > 0 && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)("span", {
+\t\t\t\t\t\t\tclassName: StatsLine_module_css_default.sep,
+\t\t\t\t\t\t\t"aria-hidden": true,
+\t\t\t\t\t\t\tchildren: "|"
+\t\t\t\t\t\t}), " "] }), (0, react_jsx_runtime.jsx)("span", { children: group })] }, group))
+\t\t\t\t\t})
+\t\t\t\t});`)
+const CONVERSATION_STATS_RENDER_PATCHED = dedentOne(`\t\t\t\tif (groups.length === 0) return null;
+\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {
+\t\t\t\t\tclassName: StatsLine_module_css_default.root,
+\t\t\t\t\ttitle: tooltipLine,
+\t\t\t\t\t"aria-label": tooltipLine,
+\t\t\t\t\tchildren: groups.map((group) => (0, react_jsx_runtime.jsx)("span", { children: group }, group))
+\t\t\t\t});`)
 const CONVERSATION_CACHE_ZH_ORIGINAL = '"stats.cacheHit": "缓存命中 {percent}%",'
 const CONVERSATION_CACHE_ZH_PATCHED = `			"stats.cacheHit": "累计缓存读取 {percent}%",
 			"stats.cacheLast": "最近一步缓存读取 {percent}%",
@@ -399,9 +441,61 @@ const CONVERSATION_ROOT_VIEW_ORIGINAL = 'children: [renderSlot("conversation.ses
 const CONVERSATION_ROOT_VIEW_PATCHED = 'children: [sessionView, composerSeat]'
 const CONVERSATION_ACTIVE_VIEW_ATTRIBUTE_ORIGINAL = 'className: ConversationRoot_module_css_default.viewArea,\n\t\t\t\tchildren: active !== void 0 && renderSlot("conversation.view", {'
 const CONVERSATION_ACTIVE_VIEW_ATTRIBUTE_PATCHED = 'className: ConversationRoot_module_css_default.viewArea,\n\t\t\t\t"data-conversation-view": active?.id,\n\t\t\t\tchildren: active !== void 0 && renderSlot("conversation.view", {'
+const CONVERSATION_SECONDARY_VIEW_STATE_ORIGINAL = 'const hideChrome = useSession((s) => s.blank) && composerPhase === "blank";'
+const CONVERSATION_SECONDARY_VIEW_STATE_PATCHED = `const hideChrome = useSession((s) => s.blank) && composerPhase === "blank";
+			const secondaryViewIds = /* @__PURE__ */ new Set(["desktop-schedules", "session-archive"]);
+			const primaryTabs = tabs.filter((view) => !secondaryViewIds.has(view.id));
+			const secondaryTabs = tabs.filter((view) => secondaryViewIds.has(view.id));
+			const [secondaryOpen, setSecondaryOpen] = (0, react.useState)(false);
+			(0, react.useEffect)(() => {
+				if (!secondaryOpen) return;
+				const closeOnEscape = (event) => { if (event.key === "Escape") setSecondaryOpen(false); };
+				document.addEventListener("keydown", closeOnEscape, true);
+				return () => document.removeEventListener("keydown", closeOnEscape, true);
+			}, [secondaryOpen]);
+			(0, react.useEffect)(() => { setSecondaryOpen(false); }, [sessionId, active?.id]);`
+const CONVERSATION_SECONDARY_VIEW_TABS_ORIGINAL = `tabs.length > 1 && (0, react_jsx_runtime.jsx)("div", {
+					className: ConversationRoot_module_css_default.tabs,
+					role: "tablist",
+					children: tabs.map((viewTab) => (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						role: "tab",
+						"aria-selected": viewTab.id === active?.id,
+						className: clsx(ConversationRoot_module_css_default.tab, viewTab.id === active?.id && ConversationRoot_module_css_default.tabActive),
+						onClick: () => {
+							actions.setView(viewTab.id);
+						},
+						children: viewTab.label
+					}, viewTab.id))
+				})`
+const CONVERSATION_SECONDARY_VIEW_TABS_PATCHED = `tabs.length > 1 && (0, react_jsx_runtime.jsxs)("div", {
+					className: ConversationRoot_module_css_default.tabs,
+					role: "tablist",
+					children: [primaryTabs.map((viewTab) => (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						role: "tab",
+						"aria-selected": viewTab.id === active?.id,
+						className: clsx(ConversationRoot_module_css_default.tab, viewTab.id === active?.id && ConversationRoot_module_css_default.tabActive),
+						onClick: () => {
+							setSecondaryOpen(false);
+							actions.setView(viewTab.id);
+						},
+						children: viewTab.label
+					}, viewTab.id)), secondaryTabs.length > 0 && (0, react_jsx_runtime.jsxs)("div", { className: "hd-conversation-more", children: [(0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						role: "tab",
+						className: clsx(ConversationRoot_module_css_default.tab, secondaryTabs.some((view) => view.id === active?.id) && ConversationRoot_module_css_default.tabActive),
+						"aria-label": (document.documentElement.lang || navigator.language || "").toLowerCase().startsWith("zh") ? "更多视图" : "More views",
+						"aria-haspopup": "menu",
+						"aria-expanded": secondaryOpen,
+						onClick: () => setSecondaryOpen((value) => !value),
+						children: "•••"
+					}), secondaryOpen && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)("button", { type: "button", tabIndex: -1, className: "hd-conversation-more-dismiss", "aria-label": "Close", onClick: () => setSecondaryOpen(false) }), (0, react_jsx_runtime.jsx)("div", { className: "hd-conversation-more-panel", role: "menu", children: secondaryTabs.map((viewTab) => (0, react_jsx_runtime.jsx)("button", { type: "button", role: "menuitem", className: "hd-conversation-more-action", "aria-current": viewTab.id === active?.id ? "page" : void 0, onClick: () => { setSecondaryOpen(false); actions.setView(viewTab.id); }, children: viewTab.label }, viewTab.id)) })] })] })]
+				})`
 const CONVERSATION_NON_CHAT_COMPOSER_CSS_ORIGINAL = '\t\t\ttag.textContent = css$6;'
 const CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED_V1 = '\t\t\ttag.textContent = css$6 + "[data-conversation-scroll]:has([data-conversation-view]:not([data-conversation-view=\\\"chat\\\"]))>[data-composer-seat]{display:none}";'
-const CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED = '\t\t\ttag.textContent = css$6 + "[data-conversation-scroll]:has([data-conversation-view]:not([data-conversation-view=\\\"chat\\\"]))>[data-composer-seat]{display:none}[data-phase]:has(>[data-conversation-scroll] [data-conversation-view=\\\"desktop-files\\\"]){position:relative}[data-phase]:has(>[data-conversation-scroll] [data-conversation-view=\\\"desktop-files\\\"])::after{content:\'\';position:absolute;z-index:20;left:0;right:0;bottom:0;height:34px;pointer-events:none;background:linear-gradient(180deg,transparent 0%,color-mix(in srgb,var(--dsw-alias-bg-base) 94%,transparent) 88%);backdrop-filter:blur(2px)}";'
+const CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED_V2 = '\t\t\ttag.textContent = css$6 + "[data-conversation-scroll]:has([data-conversation-view]:not([data-conversation-view=\\\"chat\\\"]))>[data-composer-seat]{display:none}[data-phase]:has(>[data-conversation-scroll] [data-conversation-view=\\\"desktop-files\\\"]){position:relative}[data-phase]:has(>[data-conversation-scroll] [data-conversation-view=\\\"desktop-files\\\"])::after{content:\'\';position:absolute;z-index:20;left:0;right:0;bottom:0;height:34px;pointer-events:none;background:linear-gradient(180deg,transparent 0%,color-mix(in srgb,var(--dsw-alias-bg-base) 94%,transparent) 88%);backdrop-filter:blur(2px)}";'
+const CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED = '\t\t\ttag.textContent = css$6 + "[data-conversation-scroll]:has([data-conversation-view]:not([data-conversation-view=\\\"chat\\\"]))>[data-composer-seat]{display:none}[data-phase]:has(>[data-conversation-scroll] [data-conversation-view=\\\"desktop-files\\\"]){position:relative}[data-phase]:has(>[data-conversation-scroll] [data-conversation-view=\\\"desktop-files\\\"])::after{content:\'\';position:absolute;z-index:20;left:0;right:0;bottom:0;height:34px;pointer-events:none;background:linear-gradient(180deg,transparent 0%,color-mix(in srgb,var(--dsw-alias-bg-base) 94%,transparent) 88%);backdrop-filter:blur(2px)}.hd-conversation-more{position:relative;display:flex}.hd-conversation-more-dismiss{position:fixed;z-index:2147482400;inset:0;width:100vw;height:100vh;border:0;padding:0;background:transparent;cursor:default}.hd-conversation-more-panel{position:absolute;z-index:2147482500;top:calc(100% + 7px);left:-8px;box-sizing:border-box;width:190px;padding:6px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 82%,transparent);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-base) 96%,var(--dsw-alias-label-primary) 4%);box-shadow:0 14px 40px rgba(0,0,0,.2);backdrop-filter:blur(20px)}.hd-conversation-more-action{display:block;width:100%;min-height:34px;border:0;border-radius:7px;padding:6px 10px;color:var(--dsw-alias-label-primary);background:transparent;font:inherit;font-size:13px;text-align:left;cursor:pointer}.hd-conversation-more-action:hover,.hd-conversation-more-action:focus-visible{outline:0;background:var(--dsw-alias-interactive-bg-hover)}.hd-conversation-more-action[aria-current=page]{font-weight:600}";'
 
 const SUBAGENT_LIFECYCLE_HELPERS_ANCHOR = '\t\t/** Render one catalog level and recurse only through explicitly expanded rows. */'
 const SUBAGENT_LIFECYCLE_HELPERS_MARKER = 'function subagentLifecycleBucket(entry) {'
@@ -872,16 +966,28 @@ export function patchDirectoryPickerSource(source) {
 export function patchConversationCacheSource(source) {
   let output = source
   let changed = false
-  if (output.includes(CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED_V1) && !output.includes(CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED)) {
-    output = output.replace(CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED_V1, CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED)
+  if (!output.includes(CONVERSATION_STATS_RENDER_PATCHED) && !output.includes(CONVERSATION_TOOLTIP_PATCHED)) {
+    if (!output.includes(CONVERSATION_TOOLTIP_ORIGINAL)) throw new Error('Pinned DSH cache detail tooltip changed; refusing an unsafe desktop runtime patch.')
+    output = output.replace(CONVERSATION_TOOLTIP_ORIGINAL, CONVERSATION_TOOLTIP_PATCHED)
     changed = true
+  }
+  if (output.includes(CONVERSATION_STATS_CSS_PATCHED_V1) && !output.includes(CONVERSATION_STATS_CSS_PATCHED)) {
+    output = output.replace(CONVERSATION_STATS_CSS_PATCHED_V1, CONVERSATION_STATS_CSS_PATCHED)
+    changed = true
+  }
+  for (const previous of [CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED_V1, CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED_V2]) {
+    if (output.includes(previous) && !output.includes(CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED)) {
+      output = output.replace(previous, CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED)
+      changed = true
+    }
   }
   const replacements = [
     [CONVERSATION_VIEW_OWNER_ORIGINAL, CONVERSATION_VIEW_OWNER_PATCHED, 'conversation view navigation action'],
     [CONVERSATION_QUEUE_ORIGINAL, CONVERSATION_QUEUE_PATCHED, 'internal team queue filtering'],
     [CONVERSATION_USAGE_ORIGINAL, CONVERSATION_USAGE_PATCHED, 'token projection consumer'],
     [CONVERSATION_CACHE_ORIGINAL, CONVERSATION_CACHE_PATCHED, 'cache summary'],
-    [CONVERSATION_TOOLTIP_ORIGINAL, CONVERSATION_TOOLTIP_PATCHED, 'cache detail tooltip'],
+    [CONVERSATION_STATS_CSS_ORIGINAL, CONVERSATION_STATS_CSS_PATCHED, 'conversation stats layout'],
+    [CONVERSATION_STATS_RENDER_ORIGINAL, CONVERSATION_STATS_RENDER_PATCHED, 'conversation stats rendering'],
     [CONVERSATION_CACHE_ZH_ORIGINAL, CONVERSATION_CACHE_ZH_PATCHED, 'Chinese cache labels'],
     [CONVERSATION_CACHE_EN_ORIGINAL, CONVERSATION_CACHE_EN_PATCHED, 'English cache labels'],
     [CONVERSATION_TIMELINE_ORIGINAL, CONVERSATION_TIMELINE_PATCHED, 'chat timeline selector'],
@@ -890,6 +996,8 @@ export function patchConversationCacheSource(source) {
     [CONVERSATION_ROOT_HEADER_ORIGINAL, CONVERSATION_ROOT_HEADER_PATCHED, 'conversation header slot reuse'],
     [CONVERSATION_ROOT_VIEW_ORIGINAL, CONVERSATION_ROOT_VIEW_PATCHED, 'conversation view slot reuse'],
     [CONVERSATION_ACTIVE_VIEW_ATTRIBUTE_ORIGINAL, CONVERSATION_ACTIVE_VIEW_ATTRIBUTE_PATCHED, 'active conversation view marker'],
+    [CONVERSATION_SECONDARY_VIEW_STATE_ORIGINAL, CONVERSATION_SECONDARY_VIEW_STATE_PATCHED, 'secondary conversation view state'],
+    [CONVERSATION_SECONDARY_VIEW_TABS_ORIGINAL, CONVERSATION_SECONDARY_VIEW_TABS_PATCHED, 'secondary conversation view menu'],
     [CONVERSATION_NON_CHAT_COMPOSER_CSS_ORIGINAL, CONVERSATION_NON_CHAT_COMPOSER_CSS_PATCHED, 'non-chat composer visibility']
   ]
   for (const [original, patched, label] of replacements) {

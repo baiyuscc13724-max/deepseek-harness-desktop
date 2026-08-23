@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   chooseWallpaperEngine: () => ipcRenderer.invoke('appearance:chooseWallpaperEngine'),
   listWallpaperEngineProjects: () => ipcRenderer.invoke('appearance:listWallpaperEngineProjects'),
   applyWallpaperEngineProject: value => ipcRenderer.invoke('appearance:applyWallpaperEngineProject', value),
+  applyWallpaper: value => ipcRenderer.invoke('appearance:applyWallpaper', value),
+  deleteWallpaper: value => ipcRenderer.invoke('appearance:deleteWallpaper', value),
   syncWallpaperEngine: () => ipcRenderer.invoke('appearance:syncWallpaperEngine'),
   clearThemeBackground: () => ipcRenderer.invoke('appearance:clearBackground'),
   getPetState: () => ipcRenderer.invoke('pet:getState'),

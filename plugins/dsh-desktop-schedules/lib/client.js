@@ -184,6 +184,7 @@ window.__ModuleLoader__.load({
         .dds-sub{max-width:680px;margin:4px 0 0;color:var(--dsw-alias-label-secondary);font-size:14px;line-height:21px}
         .dds-head-actions{display:flex;align-items:center;gap:8px}
         .dds-controls{display:grid;grid-template-columns:minmax(280px,1fr) auto;align-items:center;gap:14px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 82%,transparent);border-radius:14px;padding:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent)}
+        .dds-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;margin:-1px!important;padding:0!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;clip-path:inset(50%)!important;border:0!important;white-space:nowrap!important}
         .dds-search{position:relative;display:block}
         .dds-search input{box-sizing:border-box;width:100%;height:38px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:0 16px 0 38px;color:var(--dsw-alias-label-primary);background:var(--dsw-specific-input-major);font:inherit}
         .dds-search::before{content:"⌕";position:absolute;left:14px;top:8px;color:var(--dsw-alias-label-tertiary);font-size:17px}
@@ -383,7 +384,7 @@ window.__ModuleLoader__.load({
             )
           ),
           h("div", { className: "dds-controls" },
-            h("label", { className: "dds-search" }, h("span", { className: "visually-hidden" }, t("search")), h("input", { type: "search", value: search, maxLength: 200, onChange: function (event) { setSearch(event.target.value); }, placeholder: t("search") })),
+            h("label", { className: "dds-search" }, h("span", { className: "dds-visually-hidden" }, t("search")), h("input", { type: "search", value: search, maxLength: 200, onChange: function (event) { setSearch(event.target.value); }, placeholder: t("search") })),
             h("nav", { className: "dds-filters", "aria-label": t("title") }, [
               ["all", "all"], ["active", "activeFilter"], ["disabled", "disabledFilter"]
             ].map(function (entry) { return h("button", { key: entry[0], className: "dds-filter", type: "button", "aria-pressed": filter === entry[0], onClick: function () { setFilter(entry[0]); } }, t(entry[1])); }))

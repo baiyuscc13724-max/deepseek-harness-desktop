@@ -28,5 +28,7 @@ test('installation carries the safe route selector into the isolated official We
 
   assert.match(installed, /guestModelRoutingBootstrap/u)
   assert.match(installed, /selectInitialRoute/u)
+  assert.match(installed, /resolveSubagentDisplay/u)
+  assert.match(installed, /select\.disabled = inherited/u)
   assert.match(installed, /state\.configured === true/u)
 })

@@ -5,9 +5,15 @@ const os = require('node:os')
 const path = require('node:path')
 const YAML = require('yaml')
 const jsYaml = require('js-yaml')
+const vm = require('node:vm')
+const { readFileSync } = require('node:fs')
 const { ROUTING_PRESET_ID, ensureModelRouting, getModelRouting, saveModelRouting } = require('../electron/bridge/model-routing-service.cjs')
 
 const shippedPresetRoot = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh', 'config', 'agent-presets')
+const rendererRoutingSource = readFileSync(path.resolve(__dirname, '..', 'renderer', 'model-routing-integration.js'), 'utf8')
+const rendererRoutingSandbox = { window: {} }
+vm.runInNewContext(rendererRoutingSource, rendererRoutingSandbox)
+const { createModelRoutingSavePayload } = rendererRoutingSandbox.window.harnessModelRoutingIntegration
 
 function allRows(rows) {
   const result = []
@@ -21,6 +27,50 @@ function allRows(rows) {
   visit(rows)
   return result
 }
+
+test('renderer model save payload is accepted by the routing service contract', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harness-model-renderer-contract-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const dshHome = path.join(root, 'home')
+  const presetRoot = path.join(root, 'presets')
+  const standard = path.join(presetRoot, 'standard')
+  await mkdir(standard, { recursive: true })
+  await mkdir(dshHome, { recursive: true })
+  await writeFile(path.join(standard, 'preset.yml'), 'name: Standard\n')
+  await writeFile(path.join(standard, 'agent.cordis.yml'), [
+    '- id: compaction',
+    '  name: cordis:group',
+    '  config:',
+    '    - id: compaction-basic',
+    '      name: "@deepseek-ai/dsh-compaction-basic"',
+    '- id: delegation',
+    '  name: cordis:group',
+    '  config:',
+    '    - id: spawn',
+    '      name: "@deepseek-ai/dsh-tool-subagent"',
+    '      config: { provider: spawn }',
+    '    - id: fork',
+    '      name: "@deepseek-ai/dsh-tool-subagent"',
+    '      config: { provider: fork }',
+    ''
+  ].join('\n'))
+  await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-presets:\n  default: standard\nagent-default-model:\n  provider: old-provider\n  model: old-model\n')
+
+  const payload = createModelRoutingSavePayload({
+    mainProvider: ' primary-provider ',
+    mainModel: ' primary-model ',
+    subInherit: false,
+    subProvider: ' worker-provider ',
+    subModel: ' worker-model ',
+    basePreset: ' standard '
+  })
+  const result = await saveModelRouting({ dshHome, shippedPresetRoot: presetRoot }, payload)
+
+  assert.deepEqual(result.main, { provider: 'primary-provider', model: 'primary-model' })
+  assert.deepEqual(result.subagent, { inheritMain: false, provider: 'worker-provider', model: 'worker-model' })
+  const settings = YAML.parse(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8'))
+  assert.deepEqual(settings['agent-default-model'], result.main)
+})
 
 test('model routing stores main selection and creates an update-safe subagent preset', async t => {
   const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-routing-'))
@@ -40,10 +90,13 @@ test('model routing stores main selection and creates an update-safe subagent pr
     ''
   ].join('\n'))
 
-  const result = await saveModelRouting({ dshHome, shippedPresetRoot }, {
-    main: { provider: 'primary-provider', model: 'primary-model' },
-    subagent: { inheritMain: false, provider: 'worker-provider', model: 'worker-model' }
-  })
+  const result = await saveModelRouting({ dshHome, shippedPresetRoot }, createModelRoutingSavePayload({
+    mainProvider: 'primary-provider',
+    mainModel: 'primary-model',
+    subInherit: false,
+    subProvider: 'worker-provider',
+    subModel: 'worker-model'
+  }))
   assert.equal(result.subagent.inheritMain, false)
   assert.equal(result.basePreset, 'cordis')
 

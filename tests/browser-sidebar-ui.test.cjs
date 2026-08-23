@@ -60,6 +60,14 @@ test('Codex-style right sidebar browser uses an isolated visible login profile',
   }
 })
 
+test('native browser content visibility never rebroadcasts sidebar visibility', async () => {
+  const main = await readFile(path.join(root, 'electron', 'main.cjs'), 'utf8')
+  const body = main.match(/async function setBrowserContentVisible\(visible\) \{[\s\S]*?\n\}/u)?.[0] || ''
+  assert.match(body, /browserContentVisible = Boolean\(visible\)/u)
+  assert.match(body, /return browserStatePayload\(\)/u)
+  assert.doesNotMatch(body, /publishBrowserState/u)
+})
+
 test('Computer Use keeps per-action confirmation and adds a persistent app policy editor', async () => {
   const [html, renderer, styles] = await Promise.all([
     readFile(path.join(root, 'renderer', 'index.html'), 'utf8'),

@@ -673,7 +673,13 @@ async function finalRemoteCheck() {
   if (manifestResponses.some(response => !response.ok)) throw new Error('Signed desktop release manifest HTTP failure.')
   const manifestBytes = await Promise.all(manifestResponses.map(async response => Buffer.from(await response.arrayBuffer())))
   if (!manifestBytes[0].equals(manifestBytes[1])) throw new Error('GitHub/CNB signed desktop release manifest mismatch.')
-  await verifiedDesktopRelease(JSON.parse(manifestBytes[0].toString('utf8')))
+  const desktopManifest = await verifiedDesktopRelease(JSON.parse(manifestBytes[0].toString('utf8')))
+  const checksumAsset = desktopManifest.assets.find(asset => asset.name === 'SHA256SUMS.txt')
+  const legacyChecksumUrl = `https://cnb.cool/${repo}/-/git/raw/main/SHA256SUMS.txt`
+  const legacyChecksumResponse = await fetch(legacyChecksumUrl)
+  if (!legacyChecksumResponse.ok) throw new Error('Legacy desktop checksum mirror HTTP failure.')
+  const legacyChecksumBytes = Buffer.from(await legacyChecksumResponse.arrayBuffer())
+  if (sha256(legacyChecksumBytes) !== checksumAsset.sha256) throw new Error('Legacy desktop checksum mirror digest mismatch.')
   for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64']) {
     const github = `https://raw.githubusercontent.com/${repo}/main/component-feeds/stable/${target}.json`
     const cnb = `https://cnb.cool/${repo}/-/git/raw/main/component-feeds/stable/${target}.json`

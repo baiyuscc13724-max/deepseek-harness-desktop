@@ -500,7 +500,7 @@ class MemoryService {
 
   #requireEnabled() {
     if (!this.enabled || !this.db || !this.db.isOpen) {
-      throw new Error('本地记忆服务未启用（默认关闭，需显式 enable 开启）。')
+      throw new Error('本地记忆服务未启用，请在设置中开启。')
     }
   }
 

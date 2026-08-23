@@ -23,6 +23,9 @@ const SUBAGENT_RECONCILE_MS = 20;
 const GRACEFUL_LIFECYCLE_TIMEOUT_MS = 120_000;
 const HARD_MAX_MEMBERS = 8;
 const HARD_MAX_TEAMS_PER_ROOT = 8;
+const MAX_EXPANSION_WORKSTREAMS = 4;
+const MAX_EXPANSION_BOUNDARIES = 16;
+const MAX_EXPANSION_REQUEST_CHARS = 24_000;
 const DEFAULT_SETTINGS = Object.freeze({ enabled: false, maxMembers: 4, maxActiveTurns: 4 });
 const MODEL_ROUTING_FILE = "harness-desktop-model-routing.json";
 const MODEL_TIERS = Object.freeze(["main", "subagent"]);
@@ -45,6 +48,7 @@ const STORE_INSTANCES = new Map();
 const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages"]);
 const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt"]);
 const CROSS_DEPENDENCY_KEYS = new Set(["teamId", "taskId"]);
+const EXPANSION_WORKSTREAM_KEYS = new Set(["title", "deliverable", "acceptance_criteria", "files", "resources"]);
 const Config = z.object({
   enabled: z.boolean().default(false),
   maxMembers: z.number().step(1).min(1).max(HARD_MAX_MEMBERS).default(4),
@@ -196,6 +200,117 @@ function assertStringArray(value, field) {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.length === 0)) {
     throw new TypeError(`${field} must be an array of non-empty strings`);
   }
+}
+
+function normalizeExpansionBoundary(value, field, { file = false } = {}) {
+  let normalized = nonEmptyString(value, field, 1_024).normalize("NFKC");
+  if (/[\p{Cc}\p{Cf}\p{Cs}]/u.test(normalized)) reject(`${field} contains unsupported control characters`, "AGENT_TEAMS_INVALID_EXPANSION");
+  if (!file) return normalized;
+  normalized = normalized.replace(/\\/gu, "/").replace(/\/{2,}/gu, "/");
+  let previous;
+  do {
+    previous = normalized;
+    normalized = normalized.replace(/(^|\/)\.(?:\/|$)/gu, "$1").replace(/\/{2,}/gu, "/");
+  } while (normalized !== previous);
+  if (normalized.length === 0) reject(`${field} must identify a file or directory boundary`, "AGENT_TEAMS_INVALID_EXPANSION");
+  if (normalized.split("/").includes("..")) reject(`${field} must not contain parent-directory traversal`, "AGENT_TEAMS_INVALID_EXPANSION");
+  return normalized;
+}
+function caseInsensitiveExpansionFiles({ platform = process.platform, caseInsensitive } = {}) {
+  return caseInsensitive ?? platform === "win32";
+}
+function comparableExpansionFileBoundary(value, options = {}) {
+  let normalized = normalizeExpansionBoundary(value, "file boundary", { file: true });
+  if (normalized.length > 1 && !/^[A-Za-z]:\/$/u.test(normalized)) normalized = normalized.replace(/\/+$/u, "");
+  return caseInsensitiveExpansionFiles(options) ? normalized.toLocaleLowerCase("en-US") : normalized;
+}
+function literalExpansionPathOverlap(left, right) {
+  const leftDescendants = left.endsWith("/") ? left : `${left}/`;
+  const rightDescendants = right.endsWith("/") ? right : `${right}/`;
+  return left === right || left.startsWith(rightDescendants) || right.startsWith(leftDescendants);
+}
+function expansionGlobPrefix(boundary) {
+  const index = boundary.search(/[*?[\]{}]/u);
+  return index < 0 ? { glob: false, prefix: boundary } : { glob: true, prefix: boundary.slice(0, index) };
+}
+/** Conservative file-ownership overlap: exact, directory descendants, and glob literal prefixes. */
+function fileBoundaryOverlap(left, right, options = {}) {
+  const leftBoundary = comparableExpansionFileBoundary(left, options);
+  const rightBoundary = comparableExpansionFileBoundary(right, options);
+  const leftPattern = expansionGlobPrefix(leftBoundary);
+  const rightPattern = expansionGlobPrefix(rightBoundary);
+  if (!leftPattern.glob && !rightPattern.glob) return literalExpansionPathOverlap(leftBoundary, rightBoundary);
+  if (leftPattern.glob && rightPattern.glob) {
+    if (leftPattern.prefix.length === 0 || rightPattern.prefix.length === 0) return true;
+    return leftPattern.prefix.startsWith(rightPattern.prefix) || rightPattern.prefix.startsWith(leftPattern.prefix);
+  }
+  const pattern = leftPattern.glob ? leftPattern : rightPattern;
+  const literal = leftPattern.glob ? rightBoundary : leftBoundary;
+  if (pattern.prefix.length === 0 || literal.startsWith(pattern.prefix)) return true;
+  const directoryPrefix = pattern.prefix.endsWith("/") ? pattern.prefix.slice(0, -1) : pattern.prefix;
+  return directoryPrefix.length > 0 && literalExpansionPathOverlap(directoryPrefix, literal);
+}
+function comparableExpansionResourceBoundary(value) {
+  const normalized = normalizeExpansionBoundary(value, "resource boundary");
+  return normalized.length > 1 ? normalized.replace(/\/+$/u, "") : normalized;
+}
+/** Resource claims are proposal-local and use exact or slash-delimited hierarchy only. */
+function resourceBoundaryOverlap(left, right) {
+  return literalExpansionPathOverlap(comparableExpansionResourceBoundary(left), comparableExpansionResourceBoundary(right));
+}
+function normalizeExpansionBoundaryList(value, field, { file = false, platform = process.platform } = {}) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_EXPANSION_BOUNDARIES) {
+    reject(`${field} must be an array of at most ${MAX_EXPANSION_BOUNDARIES} boundaries`, "AGENT_TEAMS_INVALID_EXPANSION");
+  }
+  const normalized = value.map((item, index) => normalizeExpansionBoundary(item, `${field}[${index}]`, { file }));
+  const overlap = file ? (left, right) => fileBoundaryOverlap(left, right, { platform }) : resourceBoundaryOverlap;
+  for (let index = 0; index < normalized.length; index += 1) for (let candidate = 0; candidate < index; candidate += 1) {
+    if (overlap(normalized[index], normalized[candidate])) {
+      reject(`${field} contains overlapping boundaries ${JSON.stringify(normalized[candidate])} and ${JSON.stringify(normalized[index])}`, "AGENT_TEAMS_EXPANSION_CONFLICT");
+    }
+  }
+  return normalized;
+}
+function normalizeExpansionRequest(input, { platform = process.platform } = {}) {
+  const sourceTaskId = nonEmptyString(input.sourceTaskId, "sourceTaskId", 256);
+  const parallelBenefit = nonEmptyString(input.parallelBenefit, "parallelBenefit", 2_000);
+  if (!Array.isArray(input.workstreams) || input.workstreams.length < 1 || input.workstreams.length > MAX_EXPANSION_WORKSTREAMS) {
+    reject(`workstreams must contain 1 through ${MAX_EXPANSION_WORKSTREAMS} independent outcomes`, "AGENT_TEAMS_INVALID_EXPANSION");
+  }
+  const workstreams = input.workstreams.map((candidate, index) => {
+    if (!isRecord(candidate)) reject(`workstreams[${index}] must be an object`, "AGENT_TEAMS_INVALID_EXPANSION");
+    const unknown = Object.keys(candidate).filter((key) => !EXPANSION_WORKSTREAM_KEYS.has(key));
+    if (unknown.length > 0) reject(`workstreams[${index}] contains unsupported fields: ${unknown.join(", ")}`, "AGENT_TEAMS_INVALID_EXPANSION");
+    const files = normalizeExpansionBoundaryList(candidate.files, `workstreams[${index}].files`, { file: true, platform });
+    const resources = normalizeExpansionBoundaryList(candidate.resources, `workstreams[${index}].resources`);
+    if (files.length + resources.length === 0) {
+      reject(`workstreams[${index}] must declare at least one file or external-resource boundary`, "AGENT_TEAMS_INVALID_EXPANSION");
+    }
+    return {
+      title: nonEmptyString(candidate.title, `workstreams[${index}].title`, 200),
+      deliverable: nonEmptyString(candidate.deliverable, `workstreams[${index}].deliverable`, 2_000),
+      acceptanceCriteria: nonEmptyString(candidate.acceptance_criteria, `workstreams[${index}].acceptance_criteria`, 2_000),
+      files,
+      resources,
+    };
+  });
+  const titleKeys = workstreams.map((workstream) => workstream.title.normalize("NFKC").toLocaleLowerCase("en-US"));
+  if (new Set(titleKeys).size !== titleKeys.length) reject("workstream titles must be unique", "AGENT_TEAMS_INVALID_EXPANSION");
+  for (const kind of ["files", "resources"]) {
+    const owners = [];
+    const overlap = kind === "files" ? (left, right) => fileBoundaryOverlap(left, right, { platform }) : resourceBoundaryOverlap;
+    for (const workstream of workstreams) for (const boundary of workstream[kind]) {
+      const conflict = owners.find((owner) => overlap(owner.boundary, boundary));
+      if (conflict !== undefined) reject(`proposed workstreams ${JSON.stringify(conflict.title)} and ${JSON.stringify(workstream.title)} overlap on ${kind} boundaries ${JSON.stringify(conflict.boundary)} and ${JSON.stringify(boundary)}`, "AGENT_TEAMS_EXPANSION_CONFLICT");
+      owners.push({ boundary, title: workstream.title });
+    }
+  }
+  const normalized = { sourceTaskId, parallelBenefit, workstreams };
+  if (JSON.stringify(normalized).length > MAX_EXPANSION_REQUEST_CHARS) {
+    reject(`expansion request must serialize to at most ${MAX_EXPANSION_REQUEST_CHARS} characters`, "AGENT_TEAMS_INVALID_EXPANSION");
+  }
+  return normalized;
 }
 
 /** Validate one persisted member record. Exported for focused host tests. */
@@ -1145,7 +1260,101 @@ function registrationPrompt(teamId, memberName, role) {
   return `You are being provisioned as ${memberName} (${role}) for agent team ${teamId}. Do not begin any task in this turn. Do not infer work from prior context. Reply only that you are waiting for the coordinator registration follow-up; membership must be durably persisted before work starts.`;
 }
 function workPrompt(teamId, memberId, prompt) {
-  return `Coordinator registration complete. Team ${teamId}; member ${memberId}. You may now begin the assigned work. Use agent-team tools for team tasks and coordinator relays. You cannot create or fork agents. If the assignment needs more parallel work, report that need to the root coordinator so it can create a visible managed member without bypassing maxActiveTurns. Assignment:\n${prompt}`;
+  return `Coordinator registration complete. Team ${teamId}; member ${memberId}. You may now begin the assigned work. Use agent-team tools for team tasks and coordinator relays. You cannot create or fork agents. If your in-progress task can be split into genuinely independent parallel outcomes, use team_expansion_request with explicit deliverables, acceptance criteria, and non-overlapping file/resource boundaries. This is only a proposal: the root coordinator decides whether to create persistent tasks and visible peer members without bypassing maxMembers or maxActiveTurns. Assignment:\n${prompt}`;
+}
+
+function validateExpansionRequestForDelivery(document, team, caller, request, { platform = process.platform } = {}) {
+  const requester = authenticateParticipant(team, caller.id);
+  if (requester.kind !== "worker" || !["running", "idle", "ready"].includes(requester.state)) {
+    reject("team expansion requests require a current active worker", "AGENT_TEAMS_EXPANSION_WORKER_REQUIRED");
+  }
+  const sourceTask = team.tasks.find((task) => task.id === request.sourceTaskId);
+  if (sourceTask === undefined) reject("expansion source task does not exist", "AGENT_TEAMS_NOT_FOUND");
+  if (sourceTask.state !== "in_progress" || sourceTask.assigneeSessionId !== caller.id) {
+    reject("expansion source task must be in progress and assigned to the requesting worker", "AGENT_TEAMS_EXPANSION_TASK_REQUIRED");
+  }
+  const memberSlots = Math.max(0, document.settings.maxMembers - team.members.filter(workerConsumesMemberSlot).length);
+  const recordedActiveTurns = activeWorkerTurnsForLead(document, team.rootLeadSessionId);
+  // Exact live tool execution attests that the requester consumes a turn even when
+  // the batched subagent/start reconciler has not moved its durable state to running yet.
+  const attestedActiveTurns = ["provisioning", "running", "shutting_down"].includes(requester.state) ? recordedActiveTurns : recordedActiveTurns + 1;
+  const activeTurnSlots = Math.max(0, document.settings.maxActiveTurns - attestedActiveTurns);
+  const taskSlots = Math.max(0, MAX_TEAM_TASKS - team.tasks.length);
+  const availableWorkstreams = Math.min(memberSlots, activeTurnSlots, taskSlots, MAX_EXPANSION_WORKSTREAMS);
+  if (request.workstreams.length > availableWorkstreams) {
+    reject(`expansion request needs ${request.workstreams.length} slots but only ${availableWorkstreams} are currently available`, "AGENT_TEAMS_EXPANSION_CAPACITY");
+  }
+  const activeFileOwners = [];
+  for (const task of team.tasks) {
+    // The request explicitly splits this parent task. Comparing the proposed child
+    // scopes against it would make every useful split of a broad parent impossible.
+    // The root must release/restructure that parent scope before peers start.
+    if (task.state !== "in_progress" || task.id === sourceTask.id) continue;
+    for (const file of task.files ?? []) activeFileOwners.push({ file, taskId: task.id });
+  }
+  for (const workstream of request.workstreams) for (const file of workstream.files) {
+    const owner = activeFileOwners.find((candidate) => fileBoundaryOverlap(candidate.file, file, { platform }));
+    if (owner !== undefined) {
+      reject(`proposed file boundary ${JSON.stringify(file)} overlaps boundary ${JSON.stringify(owner.file)} of in-progress task ${owner.taskId}`, "AGENT_TEAMS_EXPANSION_CONFLICT");
+    }
+  }
+  return {
+    sourceTask,
+    requester,
+    capacity: { memberSlots, activeTurnSlots, taskSlots, availableWorkstreams },
+  };
+}
+function expansionRequestRelayBody(request) {
+  return [
+    `[Structured agent-team expansion request ${request.id}]`,
+    JSON.stringify({
+      requestId: request.id,
+      sourceTaskId: request.sourceTaskId,
+      sourceTaskTitle: request.sourceTaskTitle,
+      requestedBy: request.requestedBy,
+      parallelBenefit: request.parallelBenefit,
+      workstreams: request.workstreams,
+      capacity: request.capacity,
+      requestedAt: request.requestedAt,
+    }, null, 2),
+    "This is a proposal, never an automatic spawn instruction. Approve only genuinely independent work with clear acceptance and non-conflicting ownership when critical-path or independent-review benefit exceeds coordination cost. The Host checks proposed file scopes against other in-progress task files, but it does not persist or verify existing external-resource ownership; the root must verify that state. If approving a split from a broad parent task, first release/restructure that parent so its in-progress file scope no longer overlaps, then create one durable task for every accepted workstream, and only then spawn visible same-level peer members. Never create a nested or hidden worker. If rejecting, tell the requester why.",
+  ].join("\n");
+}
+async function submitExpansionRequest(ctx, store, caller, input, signal) {
+  const teamId = optionalString(input.teamId, "teamId", 256);
+  const normalized = normalizeExpansionRequest(input);
+  const identity = await store.read((document) => {
+    const team = resolveTeamForCaller(document, teamId, caller.id);
+    const requester = authenticateParticipant(team, caller.id);
+    if (requester.kind !== "worker" || !["running", "idle", "ready"].includes(requester.state)) {
+      reject("team expansion requests require a current active worker", "AGENT_TEAMS_EXPANSION_WORKER_REQUIRED");
+    }
+    return { teamId: team.id, rootLeadSessionId: team.rootLeadSessionId };
+  });
+  const requestId = randomUUID();
+  const requestedAt = now();
+  return sendTeamMessage(ctx, store, caller, {
+    teamId: identity.teamId,
+    recipientSessionId: identity.rootLeadSessionId,
+    prepareMessage(document, sourceTeam, targetTeam, recipient) {
+      if (targetTeam !== sourceTeam || recipient.sessionId !== sourceTeam.rootLeadSessionId || recipient.kind !== "lead") {
+        reject("expansion request must target the fixed root lead", "AGENT_TEAMS_UNAUTHORIZED");
+      }
+      const checked = validateExpansionRequestForDelivery(document, sourceTeam, caller, normalized);
+      const request = {
+        id: requestId,
+        teamId: sourceTeam.id,
+        sourceTaskId: checked.sourceTask.id,
+        sourceTaskTitle: checked.sourceTask.title,
+        requestedBy: { memberId: checked.requester.id, name: checked.requester.name },
+        parallelBenefit: normalized.parallelBenefit,
+        workstreams: normalized.workstreams,
+        capacity: checked.capacity,
+        requestedAt,
+      };
+      return { message: expansionRequestRelayBody(request), result: { expansionRequest: request } };
+    },
+  }, signal);
 }
 
 async function createTeam(store, lead, input) {
@@ -1349,8 +1558,23 @@ async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
     authenticateParticipant(targetTeam, recipient.sessionId);
     const recipientId = recipient.sessionId;
     if (recipient.sessionId === caller.id) reject("cannot relay a team message to self", "AGENT_TEAMS_INVALID_MESSAGE");
-    let deliveryBody = nonEmptyString(input.message, "message", 65_536);
-    let persistedBody = deliveryBody;
+    let deliveryBody;
+    let persistedBody;
+    let result;
+    if (typeof input.prepareMessage === "function") {
+      if (input.memoryPack !== undefined || input.message !== undefined) throw new TypeError("prepared team messages cannot include a raw message or memory pack");
+      const preparedMessage = input.prepareMessage(document, sourceTeam, targetTeam, recipient);
+      if (!isRecord(preparedMessage)) throw new TypeError("prepared team message must be an object");
+      deliveryBody = nonEmptyString(preparedMessage.message, "prepared message", 65_536);
+      persistedBody = deliveryBody;
+      if (preparedMessage.result !== undefined) {
+        if (!isRecord(preparedMessage.result)) throw new TypeError("prepared team message result must be an object");
+        result = clone(preparedMessage.result);
+      }
+    } else {
+      deliveryBody = nonEmptyString(input.message, "message", 65_536);
+      persistedBody = deliveryBody;
+    }
     if (input.memoryPack !== undefined) {
       if (targetTeam !== sourceTeam) reject("memory packs cannot cross team boundaries", "AGENT_TEAMS_CROSS_TEAM_FORBIDDEN");
       requireLiveRootLead(ctx, sourceTeam, caller);
@@ -1395,6 +1619,7 @@ async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
       recipient: clone(recipient),
       message,
       deliveryBody,
+      ...(result === undefined ? {} : { result }),
     };
   }));
   try {
@@ -1412,14 +1637,14 @@ async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
       const message = currentTeam.messages.find((candidate) => candidate.id === prepared.message.id);
       const names = new Map([...currentTeam.members, ...currentTarget.members].map((member) => [member.sessionId, canonicalMemberName(member.name)]));
       const event = () => message === undefined ? undefined : projectMessageEvent(message, names, currentTeam.id);
-      if (currentTeam.state === "closed") return { teamId: currentTeam.id, targetTeamId: currentTarget.id, message: event() };
+      if (currentTeam.state === "closed") return { teamId: currentTeam.id, targetTeamId: currentTarget.id, message: event(), ...(prepared.result ?? {}) };
       if (message !== undefined) {
         message.status = "delivered";
         message.deliveredAt = now();
         message.deliveryError = undefined;
       }
       currentTeam.updatedAt = now();
-      return { teamId: currentTeam.id, targetTeamId: currentTarget.id, message: event() };
+      return { teamId: currentTeam.id, targetTeamId: currentTarget.id, message: event(), ...(prepared.result ?? {}) };
     }));
   } catch (error) {
     await store.runOperation(() => store.mutate((document) => {
@@ -1840,7 +2065,8 @@ function teamSystemPrompt(store) {
   }
   return [
     "Agent Teams automatic-team mode is ENABLED.",
-    "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively call team_start only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns.",
+    "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively call team_start only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
+    "For every team_expansion_request, the fixed root lead approves only when the remaining outcomes are genuinely parallel and independent, inputs and acceptance criteria are explicit, file/external-resource ownership does not conflict, the handoff context is small, critical-path reduction or independent-review value materially exceeds coordination cost, and current member/turn/task budget is sufficient. The Host compares proposed file scopes with other in-progress task files and checks proposal-internal resource hierarchy, but existing external-resource ownership is not persisted and must be verified by the root. If a broad source task is split, first release/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn for visible same-level peers. If rejected, explain the reason to the requester. Never invent a leader→group-leader→hidden-worker hierarchy.",
     "The fixed root lead/brain always uses the main model route. The AI autonomously chooses each spawned member's model_tier: default to subagent to reduce cost; use main only for high-complexity reasoning, architecture, security-critical work, or repeated failures. Users do not choose member tiers. Every new member re-reads the latest route for its chosen tier; changing the subagent route never changes main-tier members, and already-created continuable members keep their creation route.",
     "Every spawned member display name must be a plain 2–12 character duty name in the user's language. For Chinese, prefer 2–6 characters such as 界面、安全、测试、文档; for English, use labels such as UI, Test, Security, Docs. Avoid internal or abstract technical terms including 宿主、协调器、执行器、实现者、子代理 and Host, Coordinator, Executor, Implementer, Subagent.",
     "A top-level root may own at most 8 unclosed peer teams, and all peers share maxActiveTurns. Pass team_id when more than one is active. Only their same fixed root lead may relay across teams with target_team_id. Never nest teams or connect different roots. Persist tasks before work, atomically claim pending unblocked tasks, gracefully retire members before closing a team, and use direct-human team_recover only for inactive orphaned teams.",
@@ -1908,6 +2134,35 @@ function registerTools(ctx, store, ready, collaboration) {
     parameters: { team_id: { type: "string" }, target_team_id: { type: "string", description: "Optional peer team owned by the same fixed root lead." }, recipient_session_id: { type: "string", required: true, description: "Recipient session id, member id, or unique member name in the target team." }, message: { type: "string", required: true } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution, signal) => publicResult(await sendTeamMessage(ctx, store, execution.agent, { teamId: args.team_id, targetTeamId: args.target_team_id, recipientSessionId: args.recipient_session_id, message: args.message }, signal))),
     presentCall: (args) => present("Relay team message", args.recipient_session_id),
+  }));
+  ctx.tools.register(defineTool({
+    name: "team_expansion_request",
+    description: "Submit a structured, durable expansion proposal from the exact active worker that owns the cited in-progress task to its fixed root lead. This never spawns, creates tasks, or grants delegation authority. The Host enforces current capacity, proposal-internal file/resource separation, and proposed-file conflicts with other in-progress task files; existing external-resource ownership remains a root approval check. The root must reject or first release/restructure a broad source scope, persist accepted tasks, and then spawn visible same-level peers.",
+    parameters: {
+      team_id: { type: "string", description: "Required only if the caller could participate in more than one unclosed team." },
+      source_task_id: { type: "string", required: true, description: "The requesting worker's own in-progress durable task." },
+      parallel_benefit: { type: "string", required: true, description: "Concrete critical-path or independent-review benefit that exceeds coordination cost." },
+      workstreams: {
+        type: "array", required: true, description: `One through ${MAX_EXPANSION_WORKSTREAMS} independent outcomes, each intended for one visible peer member.`,
+        items: {
+          type: "object", additionalProperties: false,
+          properties: {
+            title: { type: "string", required: true, description: "Short unique outcome title." },
+            deliverable: { type: "string", required: true, description: "Self-contained result the peer must return." },
+            acceptance_criteria: { type: "string", required: true, description: "Observable checks the root/requester can verify." },
+            files: { type: "array", items: { type: "string" }, description: "Exclusive writable file boundaries; may be empty for read-only work." },
+            resources: { type: "array", items: { type: "string" }, description: "Exclusive external/read-only resource boundaries. At least one file or resource is required." },
+          },
+        },
+      },
+    }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution, signal) => publicResult(await submitExpansionRequest(ctx, store, execution.agent, {
+      teamId: args.team_id,
+      sourceTaskId: args.source_task_id,
+      parallelBenefit: args.parallel_benefit,
+      workstreams: args.workstreams,
+    }, signal))),
+    presentCall: (args) => present("Request visible team expansion", args.source_task_id),
   }));
   ctx.tools.register(defineTool({
     name: "team_memory_pack", description: "Deliver one root-created ephemeral Memory Pack to the exact assignee of an active local task. The pack is limited to 1200 characters, expires within 30 minutes, cannot cross teams, and its content is never persisted in the team store.",
@@ -2441,6 +2696,9 @@ export {
   UI_MAX_TASKS_PER_TEAM,
   createSseBroadcaster,
   createSubagentEventReconciler,
+  fileBoundaryOverlap,
+  normalizeExpansionRequest,
+  resourceBoundaryOverlap,
   pauseTeamsForUserStop,
   resumePausedTeam,
   observeUserStops,

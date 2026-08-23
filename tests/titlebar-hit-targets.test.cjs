@@ -76,6 +76,15 @@ test('visible titlebar tools collapse hidden storage and memory slots', () => {
   assert.match(styles, /\.pet-quick-button\[hidden\] ~ \.browser-quick-button \{ right:176px;/)
 })
 
+test('Windows guest header reserves the native controls and desktop quick tools', () => {
+  const guestPreload = readFileSync(path.resolve(__dirname, '..', 'electron', 'guest-preload.cjs'), 'utf8')
+
+  assert.match(guestPreload, /function installWindowsTitlebarSafeArea\(\)/)
+  assert.match(guestPreload, /process\.platform !== 'win32'/)
+  assert.match(guestPreload, /header:has\(\.nL4_yW_sessionLogButton\)\{padding-right:260px!important\}/)
+  assert.match(guestPreload, /installWindowsTitlebarSafeArea\(\)/)
+})
+
 test('desktop pet card closes when the user clicks outside it', () => {
   const source = readFileSync(path.resolve(__dirname, '..', 'renderer', 'app.js'), 'utf8')
 

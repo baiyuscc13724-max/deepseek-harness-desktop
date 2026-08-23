@@ -109,6 +109,18 @@ $repoSlug = ($remoteUrl -replace '^https://cnb\.cool/', '' -replace '\.git$', ''
 if (-not $repoSlug) { throw "Unable to derive the CNB repository slug from $remoteUrl" }
 Invoke-Git fetch $Remote main
 
+$stableChecksumBlob = ''
+if ($StableOnly) {
+  # The first CNB publication writes a redirect-free checksum file into main
+  # for legacy Electron clients.  Keep that exact verified blob when the later
+  # stable-feed-only commit rebuilds the lightweight CNB tree.
+  $stableChecksumBlob = [string](& $GitExecutable rev-parse "$Remote/main`:SHA256SUMS.txt")
+  $stableChecksumBlob = $stableChecksumBlob.Trim()
+  if ($LASTEXITCODE -ne 0 -or $stableChecksumBlob -notmatch '^[0-9a-f]{40,64}$') {
+    throw 'Stable-only CNB synchronization requires the verified SHA256SUMS.txt from the asset mirror phase.'
+  }
+}
+
 $index = Join-Path $env:TEMP ("cnb-cloud-index-" + [guid]::NewGuid().ToString('N'))
 $previousIndex = $env:GIT_INDEX_FILE
 $env:GIT_INDEX_FILE = $index
@@ -120,6 +132,7 @@ try {
     Invoke-Git update-index --add --cacheinfo "100644,$blob,$file"
   }
   if ($StableOnly) {
+    Invoke-Git update-index --add --cacheinfo "100644,$stableChecksumBlob,SHA256SUMS.txt"
     $markerBlob = ("stable metadata only`n" | & $GitExecutable hash-object -w --stdin).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Unable to create the stable-only CNB marker.' }
     Invoke-Git update-index --add --cacheinfo "100644,$markerBlob,.cnb-stable-only"

@@ -42,6 +42,14 @@ const interactiveSelector = [
 const interactiveCursors = new Set(['pointer', 'text', 'grab', 'grabbing', 'move', 'crosshair',
   'col-resize', 'row-resize', 'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize'])
 
+function installWindowsTitlebarSafeArea() {
+  if (process.platform !== 'win32' || document.querySelector('style[data-hd-titlebar-safe-area]')) return
+  const style = document.createElement('style')
+  style.dataset.hdTitlebarSafeArea = 'true'
+  style.textContent = '@media (min-width:980px){header:has(.nL4_yW_sessionLogButton){padding-right:260px!important}}'
+  document.head.appendChild(style)
+}
+
 function pointTouchesText(x, y) {
   const caret = document.caretRangeFromPoint?.(x, y)
   const node = caret?.startContainer
@@ -54,6 +62,7 @@ function pointTouchesText(x, y) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  installWindowsTitlebarSafeArea()
   const sendPendingMove = () => {
     pendingFrame = 0
     if (activeDrag && pendingPoint) ipcRenderer.send('window:moveDrag', pendingPoint)

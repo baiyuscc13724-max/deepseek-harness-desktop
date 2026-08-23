@@ -239,25 +239,31 @@ function launchUserVisible(command, args, { env, spawnImpl = spawn, lifetimeMs =
   return new Promise(resolve => {
     let child
     let settled = false
+    let started = false
+    let timer
     const finish = result => {
       if (settled) return
       settled = true
+      clearTimeout(timer)
       resolve(Object.freeze(result))
     }
     try {
       child = spawnImpl(command, args, {
-        cwd: p.dirname(command), env, shell: false, windowsHide: false,
+        cwd: p.dirname(command), env, shell: false, windowsHide: true,
         detached: false, stdio: ['ignore', 'ignore', 'ignore']
       })
     } catch {
       finish({ started: false, reason: 'spawn-error' })
       return
     }
-    child.once('error', () => finish({ started: false, reason: 'spawn-error' }))
-    child.once('spawn', () => finish({ started: true, reason: null }))
-    const timer = setTimeout(() => { try { child.kill() } catch {} }, lifetimeMs)
+    child.once('error', () => finish({ started, completed: false, ok: false, reason: 'spawn-error' }))
+    child.once('spawn', () => { started = true })
+    child.once('close', code => finish({ started, completed: true, ok: code === 0, reason: code === 0 ? null : 'exit' }))
+    timer = setTimeout(() => {
+      try { child.kill() } catch {}
+      finish({ started, completed: false, ok: false, reason: 'timeout' })
+    }, lifetimeMs)
     timer.unref?.()
-    child.once('close', () => clearTimeout(timer))
   })
 }
 
@@ -291,6 +297,7 @@ function createGitRuntimeService({
   let bundledGcm
   let windowsOpenSsh
   let preparation
+  let authenticationPromise = null
 
   // Resolution is deliberately repeatable. Development installs may populate the
   // fixed third_party location after Electron has already created this service.
@@ -391,21 +398,38 @@ function createGitRuntimeService({
     })
     const sshResult = await execute('ssh-agent-status')
     const sshAgent = Object.freeze({ available: sshResult.available, running: sshResult.running, clientAvailable: Boolean(windowsOpenSsh) })
-    return Object.freeze({ git: selectedGit, gcm, sshAgent, preparation })
+    let github = Object.freeze({ connected: false, accountCount: 0 })
+    if (gcm.available) {
+      const runtime = runtimes[gcm.source]
+      const direct = gcm.source === 'bundled' && bundledGcm
+      const command = direct ? bundledGcm.command : runtime.command
+      const args = direct ? ['github', 'list', '--no-ui'] : ['credential-manager', 'github', 'list', '--no-ui']
+      const accountResult = await boundedProcess(command, args, {
+        env: buildGitEnvironment(env, { gitCommand: runtime.command, platform }),
+        spawnImpl,
+        timeoutMs,
+        maxOutputBytes,
+        platform
+      })
+      const accountCount = accountResult.ok
+        ? Math.min(20, String(accountResult.stdout).split(/\r?\n/u).filter(line => line.trim()).length)
+        : 0
+      github = Object.freeze({ connected: accountCount > 0, accountCount })
+    }
+    return Object.freeze({ git: selectedGit, gcm, github, sshAgent, preparation })
   }
 
-  const authenticate = async (provider = 'github') => {
-    if (provider !== 'github') throw new Error('Unsupported Git authentication provider.')
+  const authenticateGitHub = async provider => {
     const current = await status()
     const source = current.gcm.source
     if (!source) return Object.freeze({ started: false, provider, reason: 'gcm-unavailable' })
     const runtime = runtimes[source]
     const direct = source === 'bundled' && bundledGcm
     const command = direct ? bundledGcm.command : runtime.command
-    // Device flow stays on GitHub's HTTPS pages and does not navigate the user's
-    // browser to a short-lived 127.0.0.1 callback after authorization. GCM owns
-    // the interactive prompt; Harness still never receives credentials or codes.
-    const args = direct ? ['github', 'login', '--device'] : ['credential-manager', 'github', 'login', '--device']
+    // Browser OAuth is explicitly selected so GCM opens the user's default browser,
+    // owns its short-lived loopback callback, and exits only after authorization.
+    // Harness receives only the exit result and never credentials or authorization codes.
+    const args = direct ? ['github', 'login', '--browser'] : ['credential-manager', 'github', 'login', '--browser']
     const childEnv = buildGitEnvironment(env, { gitCommand: runtime.command, platform })
     for (const key of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM']) delete childEnv[key]
     childEnv.GCM_INTERACTIVE = 'Always'
@@ -414,7 +438,19 @@ function createGitRuntimeService({
     })
     if (!configured.ok) return Object.freeze({ started: false, provider, reason: 'configure-failed' })
     const launched = await launchUserVisible(command, args, { env: childEnv, spawnImpl, platform })
-    return Object.freeze({ started: launched.started, provider, reason: launched.reason })
+    if (!launched.ok) return Object.freeze({ started: launched.started, completed: launched.completed, connected: false, provider, reason: launched.reason })
+    const currentAfterLogin = await status()
+    return Object.freeze({ started: true, completed: true, connected: currentAfterLogin.github.connected, provider, reason: currentAfterLogin.github.connected ? null : 'credential-not-found' })
+  }
+
+  const authenticate = (provider = 'github') => {
+    if (provider !== 'github') return Promise.reject(new Error('Unsupported Git authentication provider.'))
+    if (authenticationPromise) return authenticationPromise
+    const pending = authenticateGitHub(provider).finally(() => {
+      if (authenticationPromise === pending) authenticationPromise = null
+    })
+    authenticationPromise = pending
+    return pending
   }
 
   const runtimeEnvironment = sourceEnv => {

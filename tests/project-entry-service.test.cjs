@@ -137,7 +137,6 @@ test('two desktops complete the invitation handshake and exchange authenticated 
   })
 
   await authority.createProject({ projectName: 'Paired Project', displayName: 'Owner' })
-  await authority.setRelay({ relayUrl: 'wss://relay.example.com/project' })
   const invite = await authority.createInvite({ displayName: 'Reviewer', role: 'reviewer' })
   const request = await collaborator.createJoinRequest({ inviteCode: invite.inviteCode, displayName: 'Reviewer' })
   assert.match(request.joinRequest, /^joinreq_[A-Za-z0-9_-]+$/u)
@@ -155,7 +154,16 @@ test('two desktops complete the invitation handshake and exchange authenticated 
   assert.equal(joined.member.role, 'reviewer')
   assert.equal(joined.status.project.role, 'reviewer')
   assert.equal(joined.status.relay.channelReady, true)
+  assert.equal(joined.status.relay.enabled, false, 'approval before relay setup must still complete without pretending the relay is configured')
+  assert.equal(joined.status.relay.roomRef, invite.roomRef, 'the approved opaque room remains available for later manual relay setup')
   assert.equal((await authority.status()).project.memberCount, 2)
+
+  await authority.setRelay({ relayUrl: 'wss://relay.example.com/project' })
+  assert.equal((await collaborator.status()).relay.enabled, false, 'the collaborator does not silently learn a relay URL configured after approval')
+  await assert.rejects(collaborator.setRelay({ relayUrl: 'wss://user:secret@relay.example.com/project' }), /credential-free wss/u)
+  const rescued = await collaborator.setRelay({ relayUrl: 'wss://relay.example.com/project' })
+  assert.equal(rescued.enabled, true)
+  assert.equal(rescued.roomRef, invite.roomRef, 'manual setup reuses the authenticated room instead of requiring another invitation')
 
   await authority.connectRemote()
   await collaborator.connectRemote()

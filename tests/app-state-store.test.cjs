@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtempSync } = require('node:fs')
+const { mkdtempSync, readFileSync, writeFileSync } = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { AppStateStore, normalizeState } = require('../electron/store/app-state-store.cjs')
@@ -50,6 +50,7 @@ test('AppStateStore persists only validated interface mode preferences', () => {
       readabilityStrength: 72, backgroundFile: null,
       wallpaperEngineProject: null, wallpaperEngineSignature: null
     },
+    wallpaperLibrary: { activeId: null, items: [] },
     uiMode: 'spatial', reducedMotion: true, lowPerformance: true
   })
   assert.equal('token' in new AppStateStore(file).get().appearance, false)
@@ -78,7 +79,7 @@ test('new installs use Porcelain Mist while preserving an explicitly selected no
 
 test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
   const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
-  assert.equal(migrated.schemaVersion, 8)
+  assert.equal(migrated.schemaVersion, 9)
   assert.equal(migrated.appearance.themeId, 'porcelain-mist')
   const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
   assert.equal(explicitOfficial.appearance.themeId, 'official')
@@ -97,11 +98,11 @@ test('AppStateStore persists validated pet preferences and display positions', (
   assert.equal(restored.positionByDisplay['../bad'], undefined)
 })
 
-test('local memory is opt-in and preserves explicit controls', () => {
+test('new profiles enable bounded automatic local memory and preserve explicit controls', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-memory-preferences-'))
   const file = path.join(dir, 'app-state.json')
   const store = new AppStateStore(file)
-  assert.deepEqual(store.get().memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
+  assert.deepEqual(store.get().memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
   store.updateMemory({ enabled: true, sensitivityMode: 'redact', autoRecall: false, autoCapture: false, dbPath: '../../escape', token: 'nope' })
   const restored = new AppStateStore(file).get()
   assert.deepEqual(restored.memory, { enabled: true, sensitivityMode: 'redact', autoRecall: false, autoCapture: false })
@@ -111,13 +112,34 @@ test('local memory is opt-in and preserves explicit controls', () => {
   assert.deepEqual(store.get().memory, { enabled: false, sensitivityMode: 'redact', autoRecall: false, autoCapture: false })
 })
 
-test('pre-consent memory schemas migrate fail closed and schema 8 preserves opt-in', () => {
-  const legacy = normalizeState({ schemaVersion: 6, memory: { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true } })
-  assert.deepEqual(legacy.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
-  const formerDefault = normalizeState({ schemaVersion: 7, memory: { enabled: true, autoRecall: true, autoCapture: true } })
-  assert.deepEqual(formerDefault.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
-  const optedIn = normalizeState({ schemaVersion: 8, memory: { enabled: true, autoRecall: true, autoCapture: true } })
-  assert.deepEqual(optedIn.memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
+test('memory migration defaults missing preferences on without overriding an explicit saved false', () => {
+  const missing = normalizeState({ schemaVersion: 8 })
+  assert.equal(missing.schemaVersion, 9)
+  assert.deepEqual(missing.memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
+
+  const disabled = normalizeState({ schemaVersion: 8, memory: { enabled: false, autoRecall: true, autoCapture: true } })
+  assert.deepEqual(disabled.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
+
+  const partiallyConfigured = normalizeState({ schemaVersion: 8, memory: { enabled: true, autoRecall: false } })
+  assert.deepEqual(partiallyConfigured.memory, { enabled: true, sensitivityMode: 'reject', autoRecall: false, autoCapture: true })
+
+  const legacyDisabled = normalizeState({ schemaVersion: 6, memory: { enabled: false } })
+  assert.deepEqual(legacyDisabled.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
+})
+
+test('explicit memory disable survives migration and later unrelated persistence', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-memory-disabled-migration-'))
+  const file = path.join(dir, 'app-state.json')
+  writeFileSync(file, JSON.stringify({ schemaVersion: 8, memory: { enabled: false, autoRecall: false, autoCapture: false } }))
+
+  const store = new AppStateStore(file)
+  assert.equal(store.get().memory.enabled, false)
+  store.updatePreferences({ checkOnStartup: false })
+
+  const persisted = JSON.parse(readFileSync(file, 'utf8'))
+  assert.equal(persisted.schemaVersion, 9)
+  assert.deepEqual(persisted.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
+  assert.equal(new AppStateStore(file).get().memory.enabled, false)
 })
 
 test('AppStateStore rejects unknown themes and unsafe custom values', () => {
@@ -137,6 +159,40 @@ test('AppStateStore rejects unknown themes and unsafe custom values', () => {
   assert.equal(state.appearance.customTheme.glassTransparency, 92)
   assert.equal(state.appearance.customTheme.borderStrength, 100)
   assert.equal(state.appearance.customTheme.readabilityStrength, 0)
+})
+
+test('wallpaper library migrates the former single wallpaper and bounds persisted card fields', () => {
+  const projectDir = process.platform === 'win32' ? 'C:\\Steam\\wallpapers\\42' : '/Steam/wallpapers/42'
+  const legacy = normalizeState({ appearance: { customTheme: {
+    backgroundFile: 'custom-background.webp',
+    wallpaperEngineProject: projectDir,
+    wallpaperEngineSignature: '1:2:3:4'
+  } } })
+  assert.equal(legacy.appearance.wallpaperLibrary.activeId, 'legacy-background')
+  assert.deepEqual(legacy.appearance.wallpaperLibrary.items[0], {
+    id: 'legacy-background', title: '42', kind: 'image', source: 'wallpaper-engine',
+    cachedFile: 'custom-background.webp', projectDir, signature: '1:2:3:4',
+    sourceStatus: 'ready', lastSyncedAt: null, addedAt: null
+  })
+
+  const normalized = normalizeState({ appearance: {
+    customTheme: { backgroundFile: 'wallpaper-good-id.mp4' },
+    wallpaperLibrary: { activeId: 'good-id', items: [
+      { id: 'good-id', title: `  Demo\u0000 ${'x'.repeat(220)}  `, cachedFile: 'wallpaper-good-id.mp4', kind: 'video', source: 'local', projectDir: '../../escape', token: 'discard' },
+      { id: '../escape', title: 'bad', cachedFile: '../../secret.png', kind: 'image' },
+      { id: 'duplicate-file', title: 'duplicate', cachedFile: 'wallpaper-good-id.mp4', kind: 'video' }
+    ] }
+  } })
+  assert.equal(normalized.appearance.wallpaperLibrary.activeId, 'good-id')
+  assert.equal(normalized.appearance.wallpaperLibrary.items.length, 1)
+  assert.equal(normalized.appearance.wallpaperLibrary.items[0].title.length, 160)
+  assert.equal(normalized.appearance.wallpaperLibrary.items[0].projectDir, null)
+  assert.equal('token' in normalized.appearance.wallpaperLibrary.items[0], false)
+
+  const bounded = normalizeState({ appearance: { wallpaperLibrary: { items: Array.from({ length: 80 }, (_, index) => ({
+    id: `card-${index}`, title: `Card ${index}`, cachedFile: `wallpaper-card-${index}.webp`, kind: 'image'
+  })) } } })
+  assert.equal(bounded.appearance.wallpaperLibrary.items.length, 48)
 })
 
 test('normalizeState discards unknown mutable fields', () => {

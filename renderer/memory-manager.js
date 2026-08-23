@@ -22,7 +22,7 @@
   // listMemories / searchMemories 过滤选项：{ status, scopeType }（v1 忽略未知键是安全的；
   //   本页同时在客户端对整页结果做过滤兜底，保证 v1 下筛选仍正确）。
   // status().counts 可选扩展：candidates/active/stale…；缺省回退 entries。
-  // 保持默认私有（拒绝敏感内容、记忆库显式开启）、安全删除与可访问性不变。
+  // 保持默认私有（拒绝敏感内容、用户可随时关闭）、安全删除与可访问性不变。
 
   const MEMORY_STATUS = Object.freeze({
     CANDIDATE: 'candidate',
@@ -160,6 +160,7 @@
     }
     statusDetail.textContent = enabled ? detail : '已停用；数据库会保留但不会读取或写入，可在下方全部删除。'
     enableToggle.textContent = enabled ? '关闭本地记忆' : '开启本地记忆'
+    enableToggle.disabled = false
     enabledContent.classList.toggle('hidden', !enabled)
     sensitivity.value = (next.preferences?.sensitivityMode ?? next.limits?.sensitivityMode ?? 'reject') === 'redact' ? 'redact' : 'reject'
     autoRecall.checked = next.preferences?.autoRecall === true

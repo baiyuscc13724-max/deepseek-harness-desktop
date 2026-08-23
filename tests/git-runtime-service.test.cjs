@@ -211,6 +211,7 @@ test('status reports versions and availability but never commands, environment, 
       system: { available: true, version: '2.49.0.windows.1' }
     },
     gcm: { available: true, version: '2.6.1', source: 'bundled' },
+    github: { connected: false, accountCount: 0 },
     sshAgent: { available: true, running: true, clientAvailable: true },
     preparation: { state: 'ready', canPrepare: false }
   })
@@ -218,11 +219,12 @@ test('status reports versions and availability but never commands, environment, 
   assert.doesNotMatch(serialized, /do-not-leak|Program Files|Harness|command|env|PATH/i)
 })
 
-test('GitHub authentication launches only GCM with fixed arguments and returns no credentials', async () => {
+test('GitHub authentication opens browser OAuth once, waits for completion, and returns no credentials', async () => {
   const calls = []
   const spawnImpl = (command, args, options) => {
     calls.push({ command, args, options })
     if (command === bundledGcm && args[0] === '--version') return fakeChild({ stdout: '2.7.0\n' })
+    if (command === bundledGcm && args[0] === 'github' && args[1] === 'list') return fakeChild({ stdout: 'octocat\n' })
     if (args[0] === '--version') return fakeChild({ stdout: 'git version 2.53.0.windows.2\n' })
     if (args[0] === 'query') return fakeChild({ stdout: 'STATE : 4 RUNNING\n' })
     return fakeChild()
@@ -233,19 +235,55 @@ test('GitHub authentication launches only GCM with fixed arguments and returns n
     platform: 'win32', exists: winExists, spawnImpl
   })
   await assert.rejects(service.authenticate('cnb'), /Unsupported/)
-  const result = await service.authenticate('github')
-  assert.deepEqual(result, { started: true, provider: 'github', reason: null })
-  const configure = calls.at(-2)
+  const authentication = service.authenticate('github')
+  const duplicateAuthentication = service.authenticate('github')
+  assert.equal(duplicateAuthentication, authentication)
+  const [result, duplicateResult] = await Promise.all([authentication, duplicateAuthentication])
+  assert.deepEqual(result, { started: true, completed: true, connected: true, provider: 'github', reason: null })
+  assert.deepEqual(duplicateResult, result)
+  const configure = calls.find(call => call.args[0] === 'configure')
   assert.deepEqual(configure.args, ['configure'])
   assert.equal(configure.options.env.GIT_CONFIG_GLOBAL, undefined)
-  const launch = calls.at(-1)
+  const launch = calls.find(call => call.args[0] === 'github' && call.args[1] === 'login')
   assert.equal(launch.command, bundledGcm)
-  assert.deepEqual(launch.args, ['github', 'login', '--device'])
-  assert.equal(launch.args.includes('--browser'), false)
+  assert.deepEqual(launch.args, ['github', 'login', '--browser'])
+  assert.equal(launch.args.includes('--device'), false)
   assert.equal(launch.options.shell, false)
+  assert.equal(launch.options.windowsHide, true)
   assert.equal(launch.options.env.GCM_INTERACTIVE, 'Always')
   assert.equal(launch.options.env.GH_TOKEN, undefined)
   assert.equal(JSON.stringify(result).includes('token'), false)
+  assert.equal(calls.filter(call => call.args[0] === 'configure').length, 1)
+  assert.equal(calls.filter(call => call.args[0] === 'github' && call.args[1] === 'login').length, 1)
+})
+
+test('GitHub authentication clears a failed single flight so a later attempt can retry', async () => {
+  let configureAttempts = 0
+  const calls = []
+  const spawnImpl = (command, args, options) => {
+    calls.push({ command, args, options })
+    if (command === bundledGcm && args[0] === '--version') return fakeChild({ stdout: '2.7.0\n' })
+    if (command === bundledGcm && args[0] === 'github' && args[1] === 'list') return fakeChild({ stdout: 'octocat\n' })
+    if (command === bundledGcm && args[0] === 'configure') {
+      configureAttempts += 1
+      return fakeChild({ code: configureAttempts === 1 ? 1 : 0 })
+    }
+    if (args[0] === '--version') return fakeChild({ stdout: 'git version 2.53.0.windows.2\n' })
+    if (args[0] === 'query') return fakeChild({ stdout: 'STATE : 4 RUNNING\n' })
+    return fakeChild()
+  }
+  const service = createGitRuntimeService({
+    resourcesPath: resources,
+    env: { PATH: win.dirname(system), ProgramFiles: 'C:\\Program Files', SystemRoot: 'C:\\Windows' },
+    platform: 'win32', exists: winExists, spawnImpl
+  })
+
+  const failed = await service.authenticate('github')
+  assert.deepEqual(failed, { started: false, provider: 'github', reason: 'configure-failed' })
+  const retried = await service.authenticate('github')
+  assert.deepEqual(retried, { started: true, completed: true, connected: true, provider: 'github', reason: null })
+  assert.equal(configureAttempts, 2)
+  assert.equal(calls.filter(call => call.args[0] === 'github' && call.args[1] === 'login').length, 1)
 })
 
 test('ssh-agent parser distinguishes an absent service from a stopped service', () => {

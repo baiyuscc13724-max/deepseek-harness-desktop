@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src http://127.0.0.1:* http://localhost:*;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: harness-wallpaper:; media-src 'self' harness-wallpaper:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src http://127.0.0.1:* http://localhost:*;" />
   <title>Harness Desktop</title>
   <link rel="stylesheet" href="./styles.css" />
   <link rel="stylesheet" href="./right-workspace.css" />
@@ -257,7 +257,7 @@
         <div class="memory-content">
           <section class="memory-status-card">
             <div><strong id="memoryStatusTitle">正在检查本地记忆</strong><span id="memoryStatusDetail">数据只保存在 HarnessData/memory。</span></div>
-            <button id="memoryEnableToggle" class="primary" type="button">开启本地记忆</button>
+            <button id="memoryEnableToggle" class="primary" type="button" disabled>正在读取…</button>
           </section>
           <div id="memoryEnabledContent" class="hidden">
             <section class="memory-preferences">
@@ -316,50 +316,65 @@
     <section id="skinPickerOverlay" class="skin-picker-overlay hidden" aria-hidden="true">
       <div class="skin-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="skinPickerTitle">
         <header class="skin-picker-header">
-          <div><h2 id="skinPickerTitle">外观与界面模式</h2><p>皮肤控制颜色与壁纸，界面模式控制材质与层级。</p></div>
+          <div><h2 id="skinPickerTitle">外观与界面模式</h2><p>主题、持久壁纸库与界面材质分别设置，切换时互不丢失。</p></div>
           <div class="skin-picker-header-actions"><button id="restoreOfficialTheme" type="button">恢复官方外观</button><button id="closeSkinPicker" class="skin-picker-close" type="button" aria-label="关闭">×</button></div>
         </header>
         <nav class="skin-picker-tabs" aria-label="外观类型">
-          <button id="skinThemeTab" type="button" aria-selected="true">皮肤</button>
+          <button id="skinThemeTab" type="button" aria-selected="true">主题皮肤</button>
+          <button id="skinWallpaperTab" type="button" aria-selected="false">壁纸库</button>
           <button id="skinModeTab" type="button" aria-selected="false">界面模式</button>
         </nav>
         <div id="skinThemePane" class="skin-picker-pane">
           <div id="skinPickerGrid" class="skin-picker-grid"></div>
           <section class="skin-custom-editor">
-            <div class="skin-custom-heading"><div><h3>自定义主题</h3><p>支持常用图片、MP4/WebM 视频和 Wallpaper Engine 图片/视频项目；图片最大 50 MB，视频最大 2 GB，文件只保存在本机。</p></div><span id="skinBackgroundState"></span></div>
-            <div class="skin-custom-layout">
-              <section class="skin-custom-group" aria-labelledby="skinPaletteTitle">
-                <h4 id="skinPaletteTitle">基础配色</h4>
-                <div class="skin-custom-colors">
-                  <label>明暗模式<select id="skinCustomMode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
-                  <label>强调色<input id="skinCustomAccent" type="color" value="#6f8cff" /></label>
-                  <label>表面色<input id="skinCustomSurface" type="color" value="#171b29" /></label>
-                  <label>文字色<input id="skinCustomText" type="color" value="#f4f7ff" /></label>
-                </div>
-              </section>
-              <section class="skin-custom-group skin-wallpaper-controls" aria-labelledby="skinWallpaperTitle">
-                <h4 id="skinWallpaperTitle">壁纸质感</h4>
-                <div class="skin-range-grid">
-                  <label><span>壁纸明暗 <output id="skinBrightnessValue">82%</output></span><input id="skinWallpaperBrightness" type="range" min="40" max="140" value="82" /></label>
-                  <label><span>填充背景模糊 <output id="skinBlurValue">2px</output></span><input id="skinWallpaperBlur" type="range" min="0" max="24" value="2" /></label>
-                  <label><span>面板通透 <output id="skinGlassValue">32%</output></span><input id="skinGlassTransparency" type="range" min="0" max="92" value="32" /></label>
-                  <label><span>边框清晰 <output id="skinBorderValue">48%</output></span><input id="skinBorderStrength" type="range" min="0" max="100" value="48" /></label>
-                  <label><span>文字保护 <output id="skinReadabilityValue">72%</output></span><input id="skinReadabilityStrength" type="range" min="0" max="100" value="72" /></label>
-                </div>
-              </section>
-            </div>
-            <div class="skin-custom-actions"><button id="skinChooseBackground" type="button">选择图片或视频</button><button id="skinChooseWallpaperEngine" type="button">一键导入 Wallpaper Engine</button><button id="skinWallpaperEngineSync" type="button" disabled>一键同步已绑定项目</button><button id="skinClearBackground" type="button">移除壁纸</button><button id="skinApplyCustom" class="primary" type="button">应用并保存</button></div>
-            <section id="skinWallpaperEnginePicker" class="skin-wallpaper-picker hidden" aria-live="polite">
-              <div class="skin-wallpaper-picker-heading"><strong>Wallpaper Engine 一键导入</strong><span id="skinWallpaperEngineStatus">正在扫描本机 Steam 库…</span></div>
-              <div id="skinWallpaperEngineItems" class="skin-wallpaper-items"></div>
-              <div class="skin-wallpaper-picker-actions">
-                <button id="skinWallpaperEngineRescan" type="button">重新扫描</button>
-                <button id="skinWallpaperEngineManual" type="button">没有找到？手动选择项目目录…</button>
-                <button id="skinWallpaperEngineClose" type="button">收起</button>
+            <div class="skin-custom-heading"><div><h3>自定义主题</h3><p>调整明暗与基础配色；壁纸统一在“壁纸库”中导入和切换。</p></div></div>
+            <section class="skin-custom-group" aria-labelledby="skinPaletteTitle">
+              <h4 id="skinPaletteTitle">基础配色</h4>
+              <div class="skin-custom-colors">
+                <label>明暗模式<select id="skinCustomMode"><option value="dark">深色</option><option value="light">浅色</option></select></label>
+                <label>强调色<input id="skinCustomAccent" type="color" value="#6f8cff" /></label>
+                <label>表面色<input id="skinCustomSurface" type="color" value="#171b29" /></label>
+                <label>文字色<input id="skinCustomText" type="color" value="#f4f7ff" /></label>
               </div>
             </section>
+            <div class="skin-custom-actions"><button id="skinApplyCustom" class="primary" type="button">应用并保存主题</button></div>
           </section>
         </div>
+        <section id="skinWallpaperPane" class="skin-picker-pane skin-wallpaper-pane hidden" aria-labelledby="skinWallpaperLibraryTitle">
+          <div class="skin-wallpaper-library-heading">
+            <div><h3 id="skinWallpaperLibraryTitle">壁纸库</h3><p>导入内容会复制到 HarnessData 的受控目录；图片最大 50 MB、视频最大 2 GB、壁纸库总计最多 8 GB，Wallpaper Engine 或 Steam 关闭后仍可使用。</p></div>
+            <span id="skinBackgroundState"></span>
+          </div>
+          <div class="skin-wallpaper-library-actions">
+            <button id="skinChooseBackground" type="button">导入本地图片或视频</button>
+            <button id="skinChooseWallpaperEngine" type="button">一键导入 Wallpaper Engine</button>
+            <button id="skinWallpaperEngineSync" type="button" disabled>同步当前项目源</button>
+            <button id="skinClearBackground" type="button">停用当前壁纸</button>
+          </div>
+          <p id="skinWallpaperLibraryMessage" class="skin-wallpaper-library-message" role="status"></p>
+          <div id="skinWallpaperLibraryItems" class="skin-wallpaper-library-grid" role="list" aria-label="已导入壁纸"></div>
+          <div id="skinWallpaperLibraryEmpty" class="skin-wallpaper-library-empty">还没有已导入的壁纸。导入后会在这里长期保留，双击卡片即可使用。</div>
+          <section id="skinWallpaperEnginePicker" class="skin-wallpaper-picker hidden" aria-live="polite">
+            <div class="skin-wallpaper-picker-heading"><strong>可导入的 Wallpaper Engine 图片/视频项目</strong><span id="skinWallpaperEngineStatus">正在扫描本机 Steam 库…</span></div>
+            <div id="skinWallpaperEngineItems" class="skin-wallpaper-items"></div>
+            <div class="skin-wallpaper-picker-actions">
+              <button id="skinWallpaperEngineRescan" type="button">重新扫描</button>
+              <button id="skinWallpaperEngineManual" type="button">手动选择项目目录…</button>
+              <button id="skinWallpaperEngineClose" type="button">收起扫描结果</button>
+            </div>
+          </section>
+          <section class="skin-custom-group skin-wallpaper-controls" aria-labelledby="skinWallpaperTitle">
+            <h4 id="skinWallpaperTitle">当前壁纸质感与可读性</h4>
+            <div class="skin-range-grid">
+              <label><span>壁纸明暗 <output id="skinBrightnessValue">82%</output></span><input id="skinWallpaperBrightness" type="range" min="40" max="140" value="82" /></label>
+              <label><span>填充背景模糊 <output id="skinBlurValue">2px</output></span><input id="skinWallpaperBlur" type="range" min="0" max="24" value="2" /></label>
+              <label><span>面板通透 <output id="skinGlassValue">32%</output></span><input id="skinGlassTransparency" type="range" min="0" max="92" value="32" /></label>
+              <label><span>边框清晰 <output id="skinBorderValue">48%</output></span><input id="skinBorderStrength" type="range" min="0" max="100" value="48" /></label>
+              <label><span>文字保护 <output id="skinReadabilityValue">72%</output></span><input id="skinReadabilityStrength" type="range" min="0" max="100" value="72" /></label>
+            </div>
+            <div class="skin-custom-actions"><button id="skinApplyWallpaperAppearance" class="primary" type="button">保存壁纸显示参数</button></div>
+          </section>
+        </section>
         <section id="skinModePane" class="skin-picker-pane skin-mode-pane hidden" aria-labelledby="skinModeTitle">
           <div class="skin-mode-heading"><div><h3 id="skinModeTitle">界面模式</h3><p>模式只改变材质、层级和克制动效；当前皮肤、配色和壁纸保持不变。</p></div><strong id="skinModeCurrent">官方经典</strong></div>
           <div id="skinModeGrid" class="skin-mode-grid"></div>
@@ -390,7 +405,7 @@
                 <button type="button" id="modelRoutingSubInherit" aria-pressed="true">跟随主模型</button>
                 <button type="button" id="modelRoutingSubIndependent" aria-pressed="false">单独指定</button>
               </div>
-              <div id="modelRoutingSubSummary" class="model-routing-summary" hidden></div>
+              <div id="modelRoutingSubSummary" class="model-routing-summary" role="status" aria-live="polite"></div>
               <div id="modelRoutingSubFields" class="model-routing-fields">
                 <label class="model-routing-field">服务商<select id="modelRoutingSubProvider"></select></label>
                 <label class="model-routing-field">模型<select id="modelRoutingSubModel"></select></label>

@@ -486,10 +486,16 @@ export class ProjectEntryService {
             }
           : undefined,
       };
-      await atomicWriteJson(this.deviceFile, device);
-      if (typeof pairing.relayUrl === "string" && pairing.relayUrl !== "" && typeof pairing.roomRef === "string") {
-        await atomicWriteJson(this.relayFile, { version: RELAY_VERSION, enabled: true, relayUrl: safeRelayUrl(pairing.relayUrl), roomRef: pairing.roomRef });
+      const relayUrl = typeof pairing.relayUrl === "string" && pairing.relayUrl !== "" ? safeRelayUrl(pairing.relayUrl) : "";
+      const roomRef = typeof pairing.roomRef === "string" && pairing.roomRef !== "" ? pairing.roomRef : pending.roomRef;
+      if (!/^[A-Za-z0-9_-]{43}$/u.test(roomRef) || (pairing.roomRef !== undefined && pairing.roomRef !== roomRef)) {
+        throw entryError("PROJECT_ENTRY_INVITE_INVALID", "join response relay room reference is invalid");
       }
+      // Keep the approved room even when the owner has not configured a relay yet.
+      // The collaborator can then enter the same credential-free WSS URL later,
+      // without requiring a second invitation or another exchange of device keys.
+      await atomicWriteJson(this.relayFile, { version: RELAY_VERSION, enabled: relayUrl !== "", relayUrl, roomRef });
+      await atomicWriteJson(this.deviceFile, device);
       await rm(this.pendingJoinFile, { force: true });
       this.device = device;
       return { projectRef: device.projectRef, member: response.member, status: await this.#buildStatus() };

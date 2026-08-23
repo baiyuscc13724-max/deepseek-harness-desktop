@@ -5,7 +5,7 @@ const path = require('node:path')
 
 const root = path.resolve(__dirname, '..')
 const source = file => readFile(path.join(root, file), 'utf8')
-const { createCore, isShortcutPressed } = require('../renderer/right-workspace.js')
+const { createCore, isShortcutPressed, browserStateModeAction } = require('../renderer/right-workspace.js')
 
 test('right workspace core provides bounded width and deterministic pane history', () => {
   const core = createCore({ width: 460 })
@@ -23,6 +23,31 @@ test('right workspace core provides bounded width and deterministic pane history
   assert.equal(restored.restore(saved), true)
   assert.equal(restored.activeId, 'files')
   assert.equal(isShortcutPressed({ key: ']', ctrlKey: true, shiftKey: true }), true)
+})
+
+test('background browser state cannot replace an explicitly selected workspace mode', () => {
+  for (const activeModeId of ['files', 'schedules', 'document']) {
+    assert.equal(browserStateModeAction({
+      restorePending: false,
+      nativeVisible: true,
+      workspaceOpen: true,
+      activeModeId
+    }), 'sync-only', `${activeModeId} must keep focus when a loading/title event reports visible=true`)
+  }
+
+  assert.equal(browserStateModeAction({
+    restorePending: true,
+    nativeVisible: true,
+    workspaceOpen: false,
+    activeModeId: 'browser'
+  }), 'restore-browser', 'the initial renderer hydration may restore an already-visible browser')
+
+  assert.equal(browserStateModeAction({
+    restorePending: true,
+    nativeVisible: false,
+    workspaceOpen: false,
+    activeModeId: 'browser'
+  }), 'sync-only', 'a hidden native browser does not open the workspace')
 })
 
 test('Desktop shell exposes one unified right workspace with browser, files and schedules', async () => {
@@ -52,6 +77,10 @@ test('Desktop shell exposes one unified right workspace with browser, files and 
   assert.match(browser, /harnessDesktopRightWorkspace/u)
   assert.match(integration, /requestedBrowserContentVisible === next/u)
   assert.match(integration, /function setBrowserContentVisible\(visible\)/u)
+  assert.match(integration, /browserStateModeAction\(/u)
+  assert.match(integration, /if \(action === 'restore-browser'\) openMode\('browser', \{ nativeAlreadyVisible: true \}\)/u)
+  assert.match(integration, /else \{[\s\S]{0,220}api\.setBrowserVisible\(false\)/u)
+  assert.doesNotMatch(integration, /next\?\.visible === true[^\n]*openMode\('browser'\)/u)
   assert.doesNotMatch(browser, /workspace\) await workspace\.openMode\('browser'\)[\s\S]{0,80}api\.setBrowserVisible\(true\)/u)
   assert.match(app, /target\.hostname === 'preview-local'/u)
   assert.match(app, /harnessDesktopRightWorkspace\?\.openLocalDocument/u)

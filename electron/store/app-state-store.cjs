@@ -6,6 +6,14 @@ const VALID_THEME_IDS = new Set(THEME_CATALOG.map(theme => theme.id))
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 const DEFAULT_THEME_ID = 'porcelain-mist'
 const VALID_UI_MODES = new Set(['official', 'aurora', 'spatial', 'tactile'])
+const CURRENT_SCHEMA_VERSION = 9
+const MAX_WALLPAPER_LIBRARY_ITEMS = 48
+const WALLPAPER_ID = /^[a-z0-9][a-z0-9-]{0,79}$/
+const WALLPAPER_FILE = /^(?:custom-background|wallpaper-[a-z0-9-]{1,80})\.(?:png|jpe?g|webp|gif|apng|mp4|webm)$/i
+
+function hasOwn(value, key) {
+  return !!value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key)
+}
 
 function boundedInteger(value, minimum, maximum, fallback) {
   if (value === null || value === '' || typeof value === 'boolean') return fallback
@@ -38,7 +46,7 @@ function normalizeCustomTheme(value = {}) {
     glassTransparency: boundedInteger(value.glassTransparency, 0, 92, 32),
     borderStrength: boundedInteger(value.borderStrength, 0, 100, 48),
     readabilityStrength: boundedInteger(value.readabilityStrength, 0, 100, 72),
-    backgroundFile: /^custom-background\.(?:png|jpe?g|webp|gif|apng|mp4|webm)$/i.test(value.backgroundFile || '')
+    backgroundFile: WALLPAPER_FILE.test(value.backgroundFile || '')
       ? value.backgroundFile
       : null,
     wallpaperEngineProject: normalizeWallpaperEngineProject(value.wallpaperEngineProject),
@@ -49,11 +57,12 @@ function normalizeCustomTheme(value = {}) {
 }
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 8,
+  schemaVersion: CURRENT_SCHEMA_VERSION,
   updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null },
   appearance: {
     themeId: DEFAULT_THEME_ID,
     customTheme: normalizeCustomTheme(),
+    wallpaperLibrary: { activeId: null, items: [] },
     uiMode: 'official',
     reducedMotion: false,
     lowPerformance: false
@@ -68,10 +77,10 @@ const DEFAULT_STATE = Object.freeze({
     positionByDisplay: {}
   },
   memory: {
-    enabled: false,
+    enabled: true,
     sensitivityMode: 'reject',
-    autoRecall: false,
-    autoCapture: false
+    autoRecall: true,
+    autoCapture: true
   }
 })
 
@@ -82,15 +91,19 @@ function cloneDefaultState() {
 function normalizeState(input) {
   const base = cloneDefaultState()
   const value = input && typeof input === 'object' ? input : {}
-  const sourceSchemaVersion = Number(value.schemaVersion || 0)
-  // Memory is an explicit opt-in. Versions before schema 8 did not persist a
-  // trustworthy consent marker, so migration fails closed instead of treating
-  // the former automatic default as user approval.
-  const memoryEnabled = sourceSchemaVersion >= 8 && value.memory?.enabled === true
+  const memory = value.memory && typeof value.memory === 'object' ? value.memory : null
+  // New profiles use bounded automatic local memory. A saved boolean is an
+  // explicit user preference, so migrations must never turn a stored `false`
+  // back on. Missing fields inherit the new defaults independently, allowing
+  // old partial state files to migrate without discarding saved sub-controls.
+  const memoryEnabled = hasOwn(memory, 'enabled') ? memory.enabled === true : base.memory.enabled
+  const memoryAutoRecall = hasOwn(memory, 'autoRecall') ? memory.autoRecall === true : base.memory.autoRecall
+  const memoryAutoCapture = hasOwn(memory, 'autoCapture') ? memory.autoCapture === true : base.memory.autoCapture
   const savedTheme = VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : DEFAULT_THEME_ID
   const themeId = Number(value.schemaVersion || 0) < 3 && savedTheme === 'official' ? DEFAULT_THEME_ID : savedTheme
+  const customTheme = normalizeCustomTheme(value.appearance?.customTheme)
   return {
-    schemaVersion: 8,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     updates: {
       checkOnStartup: value.updates?.checkOnStartup !== false,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
@@ -99,7 +112,8 @@ function normalizeState(input) {
     },
     appearance: {
       themeId,
-      customTheme: normalizeCustomTheme(value.appearance?.customTheme),
+      customTheme,
+      wallpaperLibrary: normalizeWallpaperLibrary(value.appearance?.wallpaperLibrary, customTheme),
       uiMode: VALID_UI_MODES.has(value.appearance?.uiMode) ? value.appearance.uiMode : 'official',
       reducedMotion: value.appearance?.reducedMotion === true,
       lowPerformance: value.appearance?.lowPerformance === true
@@ -115,11 +129,90 @@ function normalizeState(input) {
     },
     memory: {
       enabled: memoryEnabled,
-      sensitivityMode: value.memory?.sensitivityMode === 'redact' ? 'redact' : 'reject',
-      autoRecall: memoryEnabled && value.memory?.autoRecall === true,
-      autoCapture: memoryEnabled && value.memory?.autoCapture === true
+      sensitivityMode: memory?.sensitivityMode === 'redact' ? 'redact' : 'reject',
+      autoRecall: memoryEnabled && memoryAutoRecall,
+      autoCapture: memoryEnabled && memoryAutoCapture
     }
   }
+}
+
+function wallpaperFileKind(value) {
+  if (!WALLPAPER_FILE.test(value || '')) return null
+  return /\.(?:mp4|webm)$/i.test(value) ? 'video' : 'image'
+}
+
+function safeWallpaperTitle(value, fallback = '已导入的壁纸') {
+  const title = String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)
+  return title || fallback
+}
+
+function normalizeWallpaperItem(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const id = String(value.id || '').toLowerCase()
+  const cachedFile = String(value.cachedFile || '')
+  const kind = wallpaperFileKind(cachedFile)
+  if (!WALLPAPER_ID.test(id) || !kind || (value.kind && value.kind !== kind)) return null
+  const source = value.source === 'wallpaper-engine' ? 'wallpaper-engine' : 'local'
+  const projectDir = source === 'wallpaper-engine' ? normalizeWallpaperEngineProject(value.projectDir) : null
+  return {
+    id,
+    title: safeWallpaperTitle(value.title),
+    kind,
+    source,
+    cachedFile,
+    projectDir,
+    signature: projectDir && WALLPAPER_ENGINE_SIGNATURE.test(String(value.signature || '')) ? String(value.signature) : null,
+    sourceStatus: projectDir && ['ready', 'unavailable'].includes(value.sourceStatus) ? value.sourceStatus : projectDir ? 'ready' : null,
+    lastSyncedAt: projectDir && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(String(value.lastSyncedAt || '')) ? String(value.lastSyncedAt) : null,
+    addedAt: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(String(value.addedAt || '')) ? String(value.addedAt) : null
+  }
+}
+
+function legacyWallpaperItem(customTheme) {
+  const cachedFile = customTheme?.backgroundFile
+  const kind = wallpaperFileKind(cachedFile)
+  if (!kind) return null
+  const projectDir = normalizeWallpaperEngineProject(customTheme.wallpaperEngineProject)
+  return {
+    id: 'legacy-background',
+    title: projectDir ? safeWallpaperTitle(path.basename(projectDir), 'Wallpaper Engine 壁纸') : '已导入的壁纸',
+    kind,
+    source: projectDir ? 'wallpaper-engine' : 'local',
+    cachedFile,
+    projectDir,
+    signature: projectDir && WALLPAPER_ENGINE_SIGNATURE.test(String(customTheme.wallpaperEngineSignature || ''))
+      ? String(customTheme.wallpaperEngineSignature)
+      : null,
+    sourceStatus: projectDir ? 'ready' : null,
+    lastSyncedAt: null,
+    addedAt: null
+  }
+}
+
+function normalizeWallpaperLibrary(value, customTheme = {}) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const seenIds = new Set()
+  const seenFiles = new Set()
+  const items = []
+  for (const candidate of Array.isArray(input.items) ? input.items.slice(0, MAX_WALLPAPER_LIBRARY_ITEMS * 2) : []) {
+    const item = normalizeWallpaperItem(candidate)
+    if (!item) continue
+    const fileKey = item.cachedFile.toLowerCase()
+    if (seenIds.has(item.id) || seenFiles.has(fileKey)) continue
+    seenIds.add(item.id)
+    seenFiles.add(fileKey)
+    items.push(item)
+    if (items.length >= MAX_WALLPAPER_LIBRARY_ITEMS) break
+  }
+  const legacy = legacyWallpaperItem(customTheme)
+  if (legacy && !seenFiles.has(legacy.cachedFile.toLowerCase()) && items.length < MAX_WALLPAPER_LIBRARY_ITEMS) {
+    if (seenIds.has(legacy.id)) legacy.id = 'legacy-background-import'
+    items.push(legacy)
+  }
+  const requestedActiveId = WALLPAPER_ID.test(String(input.activeId || '').toLowerCase()) ? String(input.activeId).toLowerCase() : null
+  const byActiveId = items.find(item => item.id === requestedActiveId)
+  const byBackgroundFile = items.find(item => item.cachedFile.toLowerCase() === String(customTheme?.backgroundFile || '').toLowerCase())
+  return { activeId: (byActiveId || byBackgroundFile)?.id || null, items }
 }
 
 function normalizePetPositions(value) {
@@ -181,6 +274,9 @@ class AppStateStore {
         ...patch.customTheme
       })
     }
+    if (hasOwn(patch, 'wallpaperLibrary')) {
+      this.state.appearance.wallpaperLibrary = normalizeWallpaperLibrary(patch.wallpaperLibrary, this.state.appearance.customTheme)
+    }
     if (Object.prototype.hasOwnProperty.call(patch, 'uiMode')) {
       this.state.appearance.uiMode = VALID_UI_MODES.has(patch.uiMode) ? patch.uiMode : 'official'
     }
@@ -224,4 +320,14 @@ class AppStateStore {
   }
 }
 
-module.exports = { AppStateStore, DEFAULT_STATE, DEFAULT_THEME_ID, VALID_THEME_IDS, normalizeState, normalizePetPositions }
+module.exports = {
+  AppStateStore,
+  DEFAULT_STATE,
+  DEFAULT_THEME_ID,
+  MAX_WALLPAPER_LIBRARY_ITEMS,
+  VALID_THEME_IDS,
+  normalizeState,
+  normalizePetPositions,
+  normalizeWallpaperItem,
+  normalizeWallpaperLibrary
+}

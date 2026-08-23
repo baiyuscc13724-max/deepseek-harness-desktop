@@ -23,8 +23,10 @@ const skinQuickButton = document.querySelector('#skinQuickButton')
 const skinPickerOverlay = document.querySelector('#skinPickerOverlay')
 const skinPickerGrid = document.querySelector('#skinPickerGrid')
 const skinThemeTab = document.querySelector('#skinThemeTab')
+const skinWallpaperTab = document.querySelector('#skinWallpaperTab')
 const skinModeTab = document.querySelector('#skinModeTab')
 const skinThemePane = document.querySelector('#skinThemePane')
+const skinWallpaperPane = document.querySelector('#skinWallpaperPane')
 const skinModePane = document.querySelector('#skinModePane')
 const skinModeGrid = document.querySelector('#skinModeGrid')
 const skinModeCurrent = document.querySelector('#skinModeCurrent')
@@ -44,6 +46,10 @@ const skinWallpaperEngineItems = document.querySelector('#skinWallpaperEngineIte
 const skinWallpaperEngineRescan = document.querySelector('#skinWallpaperEngineRescan')
 const skinWallpaperEngineManual = document.querySelector('#skinWallpaperEngineManual')
 const skinWallpaperEngineClose = document.querySelector('#skinWallpaperEngineClose')
+const skinWallpaperLibraryItems = document.querySelector('#skinWallpaperLibraryItems')
+const skinWallpaperLibraryEmpty = document.querySelector('#skinWallpaperLibraryEmpty')
+const skinWallpaperLibraryMessage = document.querySelector('#skinWallpaperLibraryMessage')
+const skinApplyWallpaperAppearance = document.querySelector('#skinApplyWallpaperAppearance')
 const modelRoutingOverlay = document.querySelector('#modelRoutingOverlay')
 const closeModelRoutingButton = document.querySelector('#closeModelRouting')
 const modelRoutingMainProvider = document.querySelector('#modelRoutingMainProvider')
@@ -51,7 +57,6 @@ const modelRoutingMainModel = document.querySelector('#modelRoutingMainModel')
 const modelRoutingSubInherit = document.querySelector('#modelRoutingSubInherit')
 const modelRoutingSubIndependent = document.querySelector('#modelRoutingSubIndependent')
 const modelRoutingSubSummary = document.querySelector('#modelRoutingSubSummary')
-const modelRoutingSubFields = document.querySelector('#modelRoutingSubFields')
 const modelRoutingSubProvider = document.querySelector('#modelRoutingSubProvider')
 const modelRoutingSubModel = document.querySelector('#modelRoutingSubModel')
 const modelRoutingRefreshMeters = document.querySelector('#modelRoutingRefreshMeters')
@@ -116,7 +121,7 @@ let distributionState = {
   channel: 'direct', store: false, appUpdatesManagedByStore: false,
   nonCommercialContentAvailable: true, desktopPetAvailable: true, links: {}
 }
-let appearanceState = { themeId: 'porcelain-mist', customTheme: {}, customBackgroundDataUrl: null, uiMode: 'official', reducedMotion: false, lowPerformance: false }
+let appearanceState = { themeId: 'porcelain-mist', customTheme: {}, wallpaperLibrary: { activeId: null, items: [] }, customBackgroundDataUrl: null, uiMode: 'official', reducedMotion: false, lowPerformance: false }
 let petState = {
   status: 'idle', fullness: 80, inventory: { refined: 0, standard: 0, fragments: 0 },
   preferences: { enabled: true, awake: false, alwaysOnTop: true, autoFeed: true }
@@ -133,6 +138,7 @@ let mobileSyncState = {
   remote: { enabled: true, preference: 'auto', status: 'disabled', active: null, adapters: {} }
 }
 let themeCatalog = []
+let selectedWallpaperId = null
 let startupRuntimeReady = false
 let startupWebviewReady = false
 let startupFailed = false
@@ -147,6 +153,11 @@ let updateNoticeShownVersion = null
 const themeIntegration = window.harnessThemeIntegration
 const modelRoutingIntegration = window.harnessModelRoutingIntegration
 const workspaceLinksIntegration = window.HarnessDesktopWorkspaceLinks
+const skinPickerHost = themeIntegration.createSkinPickerHost({
+  overlay: skinPickerOverlay,
+  trigger: skinQuickButton,
+  closeSettingsDialog: () => themeIntegration.closeDesktopSettingsDialog(runtimeView)
+})
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -320,11 +331,105 @@ function applyShellTheme() {
 }
 
 function showSkinPickerPane(name) {
+  const showWallpapers = name === 'wallpapers'
   const showModes = name === 'modes'
-  skinThemeTab.setAttribute('aria-selected', String(!showModes))
+  skinThemeTab.setAttribute('aria-selected', String(!showWallpapers && !showModes))
+  skinWallpaperTab.setAttribute('aria-selected', String(showWallpapers))
   skinModeTab.setAttribute('aria-selected', String(showModes))
-  skinThemePane.classList.toggle('hidden', showModes)
+  skinThemePane.classList.toggle('hidden', showWallpapers || showModes)
+  skinWallpaperPane.classList.toggle('hidden', !showWallpapers)
   skinModePane.classList.toggle('hidden', !showModes)
+}
+
+function wallpaperLibraryMessage(message = '', error = false) {
+  skinWallpaperLibraryMessage.textContent = message
+  skinWallpaperLibraryMessage.dataset.error = String(error)
+}
+
+async function applySavedWallpaper(id) {
+  wallpaperLibraryMessage('正在从本地副本应用壁纸…')
+  try {
+    await skinPickerHost.apply(async () => {
+      appearanceState = await api.applyWallpaper(id)
+      await publishAppearanceState()
+      renderSkinPicker()
+    })
+  } catch (error) {
+    wallpaperLibraryMessage(`应用失败：${error.message}`, true)
+  }
+}
+
+async function deleteSavedWallpaper(id) {
+  const item = appearanceState.wallpaperLibrary?.items?.find(entry => entry.id === id)
+  if (!item) return
+  if (!window.confirm(`从壁纸库移除“${item.title}”？只会删除 Harness 管理的本地副本，不会修改原始文件。`)) return
+  wallpaperLibraryMessage('正在移除壁纸记录…')
+  try {
+    appearanceState = await api.deleteWallpaper(id)
+    if (selectedWallpaperId === id) selectedWallpaperId = null
+    await publishAppearanceState()
+    renderSkinPicker()
+    wallpaperLibraryMessage('已移除壁纸记录。')
+  } catch (error) {
+    wallpaperLibraryMessage(`移除失败：${error.message}`, true)
+  }
+}
+
+function selectWallpaperCard(id) {
+  selectedWallpaperId = id
+  skinWallpaperLibraryItems.querySelectorAll('[data-wallpaper-id]').forEach(card => {
+    card.dataset.selected = String(card.dataset.wallpaperId === id)
+  })
+}
+
+function renderWallpaperLibrary() {
+  const library = appearanceState.wallpaperLibrary || { activeId: null, items: [] }
+  const items = Array.isArray(library.items) ? library.items : []
+  if (!items.some(item => item.id === selectedWallpaperId)) selectedWallpaperId = library.activeId || items[0]?.id || null
+  skinWallpaperLibraryEmpty.classList.toggle('hidden', items.length > 0)
+  skinWallpaperLibraryItems.classList.toggle('hidden', items.length === 0)
+  skinWallpaperLibraryItems.innerHTML = items.map(item => {
+    const current = appearanceState.themeId === 'custom' && library.activeId === item.id
+    const sourceUnavailable = item.source === 'wallpaper-engine' && item.sourceStatus === 'unavailable'
+    const previewStyle = item.previewUrl ? ` style="background-image:url(&quot;${escapeHtml(item.previewUrl)}&quot;)"` : ''
+    const badge = !item.available
+      ? '<span class="skin-wallpaper-badge" data-warning="true">副本失效</span>'
+      : current
+        ? '<span class="skin-wallpaper-badge" data-active="true">正在使用</span>'
+        : sourceUnavailable
+          ? '<span class="skin-wallpaper-badge" data-warning="true">源不可同步</span>'
+          : '<span class="skin-wallpaper-badge">已保存</span>'
+    const sourceText = item.source === 'wallpaper-engine'
+      ? sourceUnavailable ? 'Wallpaper Engine · 本地副本仍可使用' : 'Wallpaper Engine · 已复制到本机'
+      : '本地导入 · 已复制到本机'
+    return `
+      <article class="skin-wallpaper-library-card" role="listitem" tabindex="0" data-wallpaper-id="${escapeHtml(item.id)}" data-selected="${item.id === selectedWallpaperId}" data-unavailable="${!item.available}" aria-label="${escapeHtml(item.title)}，${item.kind === 'video' ? '视频' : '图片'}">
+        <span class="skin-wallpaper-library-preview" data-kind="${escapeHtml(item.kind)}" data-unavailable="${!item.available}"${previewStyle}></span>
+        <div class="skin-wallpaper-library-body">
+          <div class="skin-wallpaper-library-title"><strong>${escapeHtml(item.title)}</strong>${badge}</div>
+          <div class="skin-wallpaper-library-meta">${item.kind === 'video' ? '视频' : '图片'} · ${sourceText}</div>
+          <div class="skin-wallpaper-library-card-actions">
+            <button type="button" data-action="apply" ${item.available ? '' : 'disabled'}>${current ? '重新应用' : '应用'}</button>
+            <button type="button" data-action="delete">${item.available ? '移除' : '移除失效记录'}</button>
+          </div>
+        </div>
+      </article>`
+  }).join('')
+  skinWallpaperLibraryItems.querySelectorAll('[data-wallpaper-id]').forEach(card => {
+    card.addEventListener('click', event => {
+      if (!event.target.closest('button')) selectWallpaperCard(card.dataset.wallpaperId)
+    })
+    card.addEventListener('dblclick', event => {
+      if (!event.target.closest('button') && card.dataset.unavailable !== 'true') applySavedWallpaper(card.dataset.wallpaperId)
+    })
+    card.addEventListener('keydown', event => {
+      if (event.target.closest('button') || (event.key !== 'Enter' && event.key !== ' ')) return
+      event.preventDefault()
+      selectWallpaperCard(card.dataset.wallpaperId)
+    })
+    card.querySelector('[data-action="apply"]').addEventListener('click', () => applySavedWallpaper(card.dataset.wallpaperId))
+    card.querySelector('[data-action="delete"]').addEventListener('click', () => deleteSavedWallpaper(card.dataset.wallpaperId))
+  })
 }
 
 function renderUiModePicker() {
@@ -356,9 +461,10 @@ function renderSkinPicker() {
     </article>`).join('')
   skinPickerGrid.querySelectorAll('[data-skin-id]').forEach(card => {
     const apply = async () => {
-      appearanceState = await api.setTheme(card.dataset.skinId || 'official')
-      await publishAppearanceState()
-      closeSkinPicker()
+      await skinPickerHost.apply(async () => {
+        appearanceState = await api.setTheme(card.dataset.skinId || 'official')
+        await publishAppearanceState()
+      })
     }
     card.addEventListener('dblclick', event => {
       if (!event.target.closest('[data-source]')) apply().catch(() => {})
@@ -390,13 +496,14 @@ function renderSkinPicker() {
   const wallpaperEngineBound = Boolean(appearanceState.customTheme?.wallpaperEngineProject)
   skinWallpaperEngineSync.disabled = !wallpaperEngineBound
   skinChooseWallpaperEngineButton.disabled = false
-  skinWallpaperEngineSync.title = wallpaperEngineBound ? '重新读取已绑定项目，文件变化后自动应用最新壁纸' : '先一键导入 Wallpaper Engine 项目后可用'
-  const wallpaperPrefix = wallpaperEngineBound ? '已绑定 Wallpaper Engine 项目，文件变化自动同步；' : ''
+  skinWallpaperEngineSync.title = wallpaperEngineBound ? '仅在你主动点击时读取项目源并更新受控本地副本' : '当前壁纸不是 Wallpaper Engine 项目'
+  const wallpaperPrefix = wallpaperEngineBound ? 'Wallpaper Engine 本地副本；' : ''
   skinBackgroundState.textContent = appearanceState.customBackgroundVideoDataUrl
-    ? `${wallpaperPrefix}本地视频壁纸已启用`
+    ? `${wallpaperPrefix}${appearanceState.themeId === 'custom' ? '视频壁纸正在使用' : '视频壁纸已保存'}`
     : appearanceState.customBackgroundDataUrl
-      ? animated ? `${wallpaperPrefix}动态壁纸已启用` : `${wallpaperPrefix}本地图片壁纸已启用`
-      : wallpaperEngineBound ? `${wallpaperPrefix}等待项目同步` : '当前使用渐变背景'
+      ? animated ? `${wallpaperPrefix}${appearanceState.themeId === 'custom' ? '动态壁纸正在使用' : '动态壁纸已保存'}` : `${wallpaperPrefix}${appearanceState.themeId === 'custom' ? '图片壁纸正在使用' : '图片壁纸已保存'}`
+      : '当前未使用壁纸'
+  renderWallpaperLibrary()
   renderUiModePicker()
 }
 
@@ -443,21 +550,19 @@ function closePetPanel() {
   petQuickButton.setAttribute('aria-expanded', 'false')
 }
 
-function openSkinPicker() {
+function openSkinPicker({ fromSettings = false } = {}) {
   closePetPanel()
   applyShellTheme()
   applyShellUiMode()
   showSkinPickerPane('themes')
+  wallpaperLibraryMessage('')
   renderSkinPicker()
-  skinPickerOverlay.classList.remove('hidden')
-  skinPickerOverlay.setAttribute('aria-hidden', 'false')
+  skinPickerHost.open({ fromSettings })
   closeSkinPickerButton.focus()
 }
 
 function closeSkinPicker() {
-  skinPickerOverlay.classList.add('hidden')
-  skinPickerOverlay.setAttribute('aria-hidden', 'true')
-  skinQuickButton.focus()
+  skinPickerHost.close()
 }
 
 function openWallpaperEnginePicker() {
@@ -483,31 +588,34 @@ function renderWallpaperEnginePicker(library) {
     return
   }
   const skippedNote = skipped.unsupported ? `；跳过 ${skipped.unsupported} 个 scene/web 项目` : ''
-  skinWallpaperEngineStatus.textContent = `找到 ${projects.length} 个项目${skippedNote}，单击即可一键导入并开始自动同步`
+  skinWallpaperEngineStatus.textContent = `找到 ${projects.length} 个项目${skippedNote}；导入后会保存受控本地副本`
   skinWallpaperEngineItems.innerHTML = projects.map(project => `
-    <button type="button" class="skin-wallpaper-item" data-project-dir="${escapeHtml(project.directory)}">
+    <article class="skin-wallpaper-item">
       <span class="skin-wallpaper-item-title">${escapeHtml(project.title)}</span>
       <span class="skin-wallpaper-item-meta">${project.kind === 'video' ? '视频' : '图片'} · ${project.source === 'workshop' ? '创意工坊' : '本地项目'} · ${escapeHtml(project.directory)}</span>
-    </button>`).join('')
-  skinWallpaperEngineItems.querySelectorAll('[data-project-dir]').forEach(item => item.addEventListener('click', () => activateWallpaperEngineProject(item.dataset.projectDir)))
+      <button type="button" data-import-project="${escapeHtml(project.directory)}">导入并使用</button>
+    </article>`).join('')
+  skinWallpaperEngineItems.querySelectorAll('[data-import-project]').forEach(item => item.addEventListener('click', () => activateWallpaperEngineProject(item.dataset.importProject)))
 }
 
 async function activateWallpaperEngineProject(directory) {
-  skinWallpaperEnginePicker.classList.add('hidden')
-  skinWallpaperEngineStatus.textContent = '正在导入并绑定…'
+  skinWallpaperEngineStatus.textContent = '正在导入并复制到 Harness 本地目录…'
   skinChooseWallpaperEngineButton.disabled = true
   try {
-    appearanceState = await api.applyWallpaperEngineProject(directory)
-    await publishAppearanceState()
-    renderSkinPicker()
-    skinWallpaperEngineStatus.textContent = '已导入并绑定；项目内容变化后会自动同步最新壁纸'
+    await skinPickerHost.apply(async () => {
+      appearanceState = await api.applyWallpaperEngineProject(directory)
+      await publishAppearanceState()
+      renderSkinPicker()
+    })
   } catch (error) {
     skinWallpaperEngineStatus.textContent = `导入失败：${error.message}`
+    skinWallpaperEnginePicker.classList.remove('hidden')
     skinChooseWallpaperEngineButton.disabled = false
   }
 }
 
 let modelRoutingDirty = false
+let modelRoutingSubDraft = { provider: '', model: '' }
 
 function shellModelMeterAmount(value, unit) {
   if (value === null || value === undefined || value === '') return '—'
@@ -562,8 +670,10 @@ function shellModelFillSelect(select, rows, selected, placeholder) {
 function setShellModelSubagentMode(inherited) {
   modelRoutingSubInherit.setAttribute('aria-pressed', String(inherited))
   modelRoutingSubIndependent.setAttribute('aria-pressed', String(!inherited))
-  modelRoutingSubFields.hidden = inherited
-  modelRoutingSubSummary.hidden = !inherited
+  for (const select of [modelRoutingSubProvider, modelRoutingSubModel]) {
+    select.disabled = inherited
+    select.setAttribute('aria-disabled', String(inherited))
+  }
 }
 
 function renderShellModelMeters() {
@@ -593,17 +703,26 @@ function renderModelRoutingPage() {
   const modelsFor = provider => state.providers?.find(row => row.id === provider)?.models || []
   const mainProviderValue = modelRoutingDirty ? modelRoutingMainProvider.value : (initialMain.provider || state.main?.provider || '')
   const mainModelValue = modelRoutingDirty ? modelRoutingMainModel.value : (initialMain.model || state.main?.model || '')
-  const subProviderValue = modelRoutingDirty ? modelRoutingSubProvider.value : ((state.subagent?.provider || initialMain.provider) || '')
-  const subModelValue = modelRoutingDirty ? modelRoutingSubModel.value : ((state.subagent?.model || initialMain.model) || '')
+  if (!modelRoutingDirty) {
+    modelRoutingSubDraft = {
+      provider: (state.subagent?.provider || initialMain.provider) || '',
+      model: (state.subagent?.model || initialMain.model) || ''
+    }
+  }
   shellModelFillSelect(modelRoutingMainProvider, providerRows, mainProviderValue, '选择服务商')
   shellModelFillSelect(modelRoutingMainModel, modelsFor(modelRoutingMainProvider.value).map(value => ({ value, label: value })), mainModelValue, '选择模型')
+  const inherited = modelRoutingDirty ? modelRoutingSubInherit.getAttribute('aria-pressed') === 'true' : state.subagent?.inheritMain !== false
+  const subProviderValue = inherited ? modelRoutingMainProvider.value : modelRoutingSubDraft.provider
+  const subModelValue = inherited ? modelRoutingMainModel.value : modelRoutingSubDraft.model
   shellModelFillSelect(modelRoutingSubProvider, providerRows, subProviderValue, '选择服务商')
   shellModelFillSelect(modelRoutingSubModel, modelsFor(modelRoutingSubProvider.value).map(value => ({ value, label: value })), subModelValue, '选择模型')
-  const inherited = modelRoutingDirty ? modelRoutingSubInherit.getAttribute('aria-pressed') === 'true' : state.subagent?.inheritMain !== false
   setShellModelSubagentMode(inherited)
-  modelRoutingSubSummary.textContent = modelRoutingMainProvider.value && modelRoutingMainModel.value
-    ? `${modelRoutingMainProvider.value} / ${modelRoutingMainModel.value}`
-    : '先选择主模型'
+  const subRoute = modelRoutingSubProvider.value && modelRoutingSubModel.value
+    ? `${modelRoutingSubProvider.value} / ${modelRoutingSubModel.value}`
+    : inherited ? '等待主模型选择' : '尚未完整指定'
+  modelRoutingSubSummary.textContent = inherited
+    ? `跟随主模型：当前同步为 ${subRoute}；切换到“单独指定”即可编辑。`
+    : `单独指定：当前为 ${subRoute}；下方服务商和模型可直接编辑。`
   modelRoutingStatus.dataset.error = state.error ? 'true' : 'false'
   modelRoutingStatus.textContent = state.error
     ? `保存失败：${state.error}`
@@ -1026,12 +1145,13 @@ function officialSettingsBootstrap() {
     if (!row) return
     const git = state.git || {}
     const gcm = state.gcm || {}
+    const github = state.github || {}
     const ssh = state.sshAgent || {}
     const preparation = state.preparation || {}
     const gitSource = git.source === 'bundled' ? '内置 MinGit' : git.source === 'system' ? '系统 Git' : '不可用'
     const ready = Boolean(git.available && gcm.available)
     const canPrepare = preparation.canPrepare === true
-    setText(row.querySelector('[data-hd-git-summary]'), state.message || (ready ? `${gitSource} 已就绪，可直接在项目中使用` : canPrepare ? '开发环境尚未准备组件，可在此安全安装内置 MinGit' : '未找到可用 Git；Windows 正式包会内置 MinGit'))
+    setText(row.querySelector('[data-hd-git-summary]'), state.message || (github.connected ? `GitHub 已连接 · ${gitSource} 可直接使用` : ready ? `${gitSource} 已就绪，可直接在项目中使用` : canPrepare ? '开发环境尚未准备组件，可在此安全安装内置 MinGit' : '未找到可用 Git；Windows 正式包会内置 MinGit'))
     setText(row.querySelector('[data-hd-git-version]'), git.available ? `${gitSource} ${git.version || ''}`.trim() : (state.preparing ? '正在安装…' : '不可用'))
     setText(row.querySelector('[data-hd-gcm-status]'), gcm.available ? `Git Credential Manager ${gcm.version || ''} · Windows 安全凭据` : (state.preparing ? '正在安装…' : '不可用'))
     setText(row.querySelector('[data-hd-ssh-status]'), ssh.available && ssh.clientAvailable ? (ssh.running ? 'Windows OpenSSH + ssh-agent 正在运行' : 'Windows OpenSSH 已就绪，ssh-agent 尚未运行') : 'Windows OpenSSH / ssh-agent 不可用')
@@ -1040,7 +1160,7 @@ function officialSettingsBootstrap() {
     refresh.disabled = Boolean(state.loading || state.authenticating || state.preparing)
     authenticate.disabled = Boolean(state.loading || state.authenticating || state.preparing || (!ready && !canPrepare))
     setText(refresh, state.loading ? '正在检查…' : '刷新状态')
-    setText(authenticate, state.preparing ? '正在安装…' : state.authenticating ? '正在打开登录…' : ready ? '连接 GitHub' : '安装内置 Git')
+    setText(authenticate, state.preparing ? '正在安装…' : state.authenticating ? '等待浏览器授权…' : ready ? (github.connected ? '重新连接 GitHub' : '连接 GitHub') : '安装内置 Git')
   }
 
   const mountGit = section => {
@@ -1060,7 +1180,7 @@ function officialSettingsBootstrap() {
         <div class="hd-git-line"><span>HTTPS 凭据</span><strong data-hd-gcm-status>正在检查…</strong></div>
         <div class="hd-git-line"><span>GitHub / CNB SSH</span><strong data-hd-ssh-status>正在检查…</strong></div>
       </div>
-      <div class="hd-git-note">首次 GitHub 授权使用 GCM 设备登录，由你亲自在 GitHub HTTPS 页面完成，不使用临时 127.0.0.1 回调；之后由 Windows Credential Manager 复用。CNB 可使用 Windows ssh-agent。Harness 不读取或显示密码、Token、Cookie、验证码或 SSH 私钥。</div>
+      <div class="hd-git-note">首次 GitHub 授权会由 GCM 拉起默认浏览器，并通过短期本机回调完成登录；之后由 Windows Credential Manager 复用。授权页与凭据均由 GitHub 和 GCM 处理，Harness 不读取或显示密码、Token、Cookie、验证码或 SSH 私钥。CNB 可使用 Windows ssh-agent。</div>
     `
     row.querySelector('[data-hd-git-refresh]').addEventListener('click', () => request('refresh-git-runtime'))
     row.querySelector('[data-hd-git-auth]').addEventListener('click', () => {
@@ -1130,12 +1250,17 @@ function officialSettingsBootstrap() {
   const mount = () => {
     const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
     if (!dialog) return
-    dialog.dataset.hdSettingsLayout = 'true'
     const settingsNav = dialog.querySelector(':scope > nav')
+    const general = settingsNav
+      ? [...settingsNav.querySelectorAll('button')].find(button => /通用设置|General/i.test(button.textContent || ''))
+      : null
+    if (!settingsNav || !general) return
     const content = dialog.querySelector(':scope > nav + div')
+    if (!content) return
     const options = content?.lastElementChild
-    if (settingsNav) settingsNav.dataset.hdSettingsNav = 'true'
-    if (content) content.dataset.hdSettingsContent = 'true'
+    dialog.dataset.hdSettingsLayout = 'true'
+    settingsNav.dataset.hdSettingsNav = 'true'
+    content.dataset.hdSettingsContent = 'true'
     if (options) options.dataset.hdSettingsOptions = 'true'
     const configButton = [...dialog.querySelectorAll('button')].find(button => /打开配置文件|Open configuration file/i.test(button.textContent || ''))
     if (configButton && !configButton.dataset.hdDesktopOpen) {
@@ -1146,8 +1271,7 @@ function officialSettingsBootstrap() {
         request('open-config-file')
       }, true)
     }
-    const general = [...dialog.querySelectorAll('nav button')].find(button => /通用设置|General/i.test(button.textContent || ''))
-    if (!general || general.getAttribute('aria-current') !== 'true') return
+    if (general.getAttribute('aria-current') !== 'true') return
     const slot = dialog.querySelector('[data-slot="settings.general.item"]')
     const section = slot?.parentElement || options?.firstElementChild || options
     mountGit(section)
@@ -1523,15 +1647,21 @@ runtimeView.addEventListener('will-navigate', event => {
       publishGitRuntimeState()
     })
   } else if (target.hostname === 'authenticate-github') {
+    if (gitRuntimeState.authenticating) return
     gitRuntimeState = { ...gitRuntimeState, authenticating: true, message: '正在打开由你亲自操作的 GitHub 登录…' }
     publishGitRuntimeState()
-    api.openGitAuthentication('github').then(result => {
-      gitRuntimeState = {
-        ...gitRuntimeState,
-        authenticating: false,
-        message: result?.started ? 'GitHub 设备登录已打开；请在 GitHub HTTPS 页面完成授权，Windows 随后会安全复用凭据。' : '未能启动 GitHub 登录，请刷新状态后重试。'
+    api.openGitAuthentication('github').then(async result => {
+      if (result?.connected) {
+        const status = await api.refreshGitRuntimeStatus()
+        gitRuntimeState = { ...gitRuntimeState, ...status, authenticating: false, loading: false, message: 'GitHub 授权完成，连接状态已自动刷新。' }
+      } else {
+        gitRuntimeState = {
+          ...gitRuntimeState,
+          authenticating: false,
+          message: result?.started ? 'GitHub 授权未完成或未写入 Windows 凭据，请重试。' : '未能启动 GitHub 登录，请刷新状态后重试。'
+        }
       }
-      publishGitRuntimeState()
+      await publishGitRuntimeState()
     }).catch(error => {
       gitRuntimeState = { ...gitRuntimeState, authenticating: false, message: `GitHub 登录启动失败：${error.message}` }
       publishGitRuntimeState()
@@ -1539,7 +1669,7 @@ runtimeView.addEventListener('will-navigate', event => {
   } else if (target.hostname === 'open-mobile-sync') {
     openMobileSync()
   } else if (target.hostname === 'open-appearance') {
-    openSkinPicker()
+    openSkinPicker({ fromSettings: target.searchParams.get('source') === 'settings' })
   } else if (target.hostname === 'open-model-routing') {
     openModelRouting()
   } else if (target.hostname === 'mobile-control-stop') {
@@ -1579,18 +1709,14 @@ runtimeView.addEventListener('will-navigate', event => {
   } else if (target.hostname === 'save-model-routing') {
     modelRoutingState = { ...modelRoutingState, saving: true, saved: false, error: '' }
     publishModelRoutingState()
-    api.saveModelRouting({
-      main: {
-        provider: target.searchParams.get('mainProvider') || '',
-        model: target.searchParams.get('mainModel') || ''
-      },
-      subagent: {
-        inheritMain: target.searchParams.get('subInherit') !== '0',
-        provider: target.searchParams.get('subProvider') || '',
-        model: target.searchParams.get('subModel') || ''
-      },
+    api.saveModelRouting(window.harnessModelRoutingIntegration.createModelRoutingSavePayload({
+      mainProvider: target.searchParams.get('mainProvider'),
+      mainModel: target.searchParams.get('mainModel'),
+      subInherit: target.searchParams.get('subInherit') !== '0',
+      subProvider: target.searchParams.get('subProvider'),
+      subModel: target.searchParams.get('subModel'),
       basePreset: modelRoutingState.basePreset
-    }).then(state => {
+    })).then(state => {
       modelRoutingState = { ...state, meters: modelRoutingState.meters, saving: false, saved: true, error: '' }
       publishModelRoutingState()
     }).catch(error => {
@@ -1647,6 +1773,7 @@ retryRuntime.addEventListener('click', () => {
 
 skinQuickButton.addEventListener('click', openSkinPicker)
 skinThemeTab.addEventListener('click', () => showSkinPickerPane('themes'))
+skinWallpaperTab.addEventListener('click', () => { showSkinPickerPane('wallpapers'); renderWallpaperLibrary() })
 skinModeTab.addEventListener('click', () => { showSkinPickerPane('modes'); renderUiModePicker() })
 skinReducedMotion.addEventListener('change', async () => {
   appearanceState = await api.setUiPreferences({ reducedMotion: skinReducedMotion.checked })
@@ -1779,26 +1906,44 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !updateNoticeOverlay.classList.contains('hidden')) closeUpdateNotice()
 })
 restoreOfficialThemeButton.addEventListener('click', async () => {
-  appearanceState = await api.setTheme('official')
-  appearanceState = await api.setUiPreferences({ uiMode: 'official', reducedMotion: false, lowPerformance: false })
-  await publishAppearanceState()
-  closeSkinPicker()
+  await skinPickerHost.apply(async () => {
+    appearanceState = await api.setTheme('official')
+    appearanceState = await api.setUiPreferences({ uiMode: 'official', reducedMotion: false, lowPerformance: false })
+    await publishAppearanceState()
+  })
 })
 skinChooseBackgroundButton.addEventListener('click', async () => {
-  appearanceState = await api.chooseThemeBackground()
-  await publishAppearanceState()
-  renderSkinPicker()
+  const before = JSON.stringify(appearanceState.wallpaperLibrary || {})
+  wallpaperLibraryMessage('请选择要复制到 Harness 壁纸库的图片或视频…')
+  try {
+    await skinPickerHost.apply(async () => {
+      appearanceState = await api.chooseThemeBackground()
+      await publishAppearanceState()
+      renderSkinPicker()
+      const imported = JSON.stringify(appearanceState.wallpaperLibrary || {}) !== before
+      if (!imported) wallpaperLibraryMessage('没有导入新壁纸。')
+      return imported
+    }, Boolean)
+  } catch (error) {
+    wallpaperLibraryMessage(`导入失败：${error.message}`, true)
+  }
 })
 skinChooseWallpaperEngineButton.addEventListener('click', openWallpaperEnginePicker)
 skinWallpaperEngineRescan.addEventListener('click', openWallpaperEnginePicker)
 skinWallpaperEngineManual.addEventListener('click', async () => {
   skinWallpaperEnginePicker.classList.add('hidden')
   try {
-    appearanceState = await api.chooseWallpaperEngine()
-    await publishAppearanceState()
-    renderSkinPicker()
+    const before = JSON.stringify(appearanceState.wallpaperLibrary || {})
+    await skinPickerHost.apply(async () => {
+      appearanceState = await api.chooseWallpaperEngine()
+      await publishAppearanceState()
+      renderSkinPicker()
+      const imported = JSON.stringify(appearanceState.wallpaperLibrary || {}) !== before
+      if (!imported) wallpaperLibraryMessage('没有导入新壁纸。')
+      return imported
+    }, Boolean)
   } catch (error) {
-    skinBackgroundState.textContent = `手动导入失败：${error.message}`
+    wallpaperLibraryMessage(`手动导入失败：${error.message}`, true)
   }
 })
 skinWallpaperEngineClose.addEventListener('click', () => {
@@ -1806,21 +1951,21 @@ skinWallpaperEngineClose.addEventListener('click', () => {
 })
 skinWallpaperEngineSync.addEventListener('click', async () => {
   skinWallpaperEngineSync.disabled = true
-  skinWallpaperEngineSync.textContent = '正在同步…'
+  skinWallpaperEngineSync.textContent = '正在读取项目源…'
   try {
     appearanceState = await api.syncWallpaperEngine()
     await publishAppearanceState()
     renderSkinPicker()
     const sync = appearanceState.wallpaperEngineSync || {}
-    skinBackgroundState.textContent = sync.changed
-      ? '已同步 Wallpaper Engine 项目的最新内容'
-      : sync.reason === 'unavailable' || sync.reason === 'unreadable'
-        ? '已绑定项目暂时不可读，保留上次壁纸；恢复后会自动同步'
-        : '已是最新；项目内容未变化'
-    skinWallpaperEngineSync.textContent = '一键同步已绑定项目'
+    wallpaperLibraryMessage(sync.changed
+      ? '已更新受控本地副本并应用最新壁纸。'
+      : ['unavailable', 'unreadable', 'source-unavailable'].includes(sync.reason)
+        ? '项目源不可同步；已保存的本地副本仍可正常使用。'
+        : '本地副本已是最新。', ['unavailable', 'unreadable', 'source-unavailable'].includes(sync.reason))
+    skinWallpaperEngineSync.textContent = '同步当前项目源'
   } catch (error) {
-    skinBackgroundState.textContent = `同步失败：${error.message}`
-    skinWallpaperEngineSync.textContent = '一键同步已绑定项目'
+    wallpaperLibraryMessage(`同步失败：${error.message}；本地副本不受影响。`, true)
+    skinWallpaperEngineSync.textContent = '同步当前项目源'
     skinWallpaperEngineSync.disabled = false
   }
 })
@@ -1828,6 +1973,7 @@ skinClearBackgroundButton.addEventListener('click', async () => {
   appearanceState = await api.clearThemeBackground()
   await publishAppearanceState()
   renderSkinPicker()
+  wallpaperLibraryMessage('已停用当前壁纸；壁纸卡仍保留在本地库中。')
 })
 for (const field of Object.values(customThemeRangeFields)) {
   const input = document.querySelector(field.input)
@@ -1836,9 +1982,16 @@ for (const field of Object.values(customThemeRangeFields)) {
   })
 }
 skinApplyCustomButton.addEventListener('click', async () => {
-  appearanceState = await api.saveCustomTheme(readShellCustomTheme())
-  await publishAppearanceState()
-  closeSkinPicker()
+  await skinPickerHost.apply(async () => {
+    appearanceState = await api.saveCustomTheme(readShellCustomTheme())
+    await publishAppearanceState()
+  })
+})
+skinApplyWallpaperAppearance.addEventListener('click', async () => {
+  await skinPickerHost.apply(async () => {
+    appearanceState = await api.saveCustomTheme(readShellCustomTheme())
+    await publishAppearanceState()
+  })
 })
 closeModelRoutingButton.addEventListener('click', closeModelRouting)
 modelRoutingOverlay.addEventListener('click', event => {
@@ -1852,10 +2005,14 @@ modelRoutingMainProvider.addEventListener('change', () => {
 modelRoutingMainModel.addEventListener('change', () => { modelRoutingDirty = true; renderModelRoutingPage() })
 modelRoutingSubProvider.addEventListener('change', () => {
   modelRoutingDirty = true
-  modelRoutingSubModel.value = ''
+  modelRoutingSubDraft = { provider: modelRoutingSubProvider.value, model: '' }
   renderModelRoutingPage()
 })
-modelRoutingSubModel.addEventListener('change', () => { modelRoutingDirty = true; renderModelRoutingPage() })
+modelRoutingSubModel.addEventListener('change', () => {
+  modelRoutingDirty = true
+  modelRoutingSubDraft = { provider: modelRoutingSubProvider.value, model: modelRoutingSubModel.value }
+  renderModelRoutingPage()
+})
 modelRoutingSubInherit.addEventListener('click', () => {
   modelRoutingDirty = true
   setShellModelSubagentMode(true)
@@ -1881,14 +2038,14 @@ modelRoutingSave.addEventListener('click', async () => {
   modelRoutingState = { ...modelRoutingState, saving: true, saved: false, error: '' }
   renderModelRoutingPage()
   try {
-    const saved = await api.saveModelRouting({
+    const saved = await api.saveModelRouting(window.harnessModelRoutingIntegration.createModelRoutingSavePayload({
       mainProvider: modelRoutingMainProvider.value.trim(),
       mainModel: modelRoutingMainModel.value.trim(),
-      subInherit: modelRoutingSubInherit.getAttribute('aria-pressed') === 'true' ? '1' : '0',
+      subInherit: modelRoutingSubInherit.getAttribute('aria-pressed') === 'true',
       subProvider: modelRoutingSubProvider.value.trim(),
       subModel: modelRoutingSubModel.value.trim(),
       basePreset: modelRoutingState.basePreset
-    })
+    }))
     modelRoutingState = { ...saved, meters: modelRoutingState.meters, saving: false, saved: true, error: '' }
     modelRoutingDirty = false
   } catch (error) {

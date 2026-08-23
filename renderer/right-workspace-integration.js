@@ -19,6 +19,7 @@
   let filesSnapshot = null
   let schedulesSnapshot = null
   let requestedBrowserContentVisible = null
+  let browserRestorePending = true
 
   function setBrowserContentVisible(visible) {
     const next = Boolean(visible)
@@ -200,6 +201,7 @@
   }
 
   async function openDocument(path) {
+    browserRestorePending = false
     documentView.replaceChildren(statusPanel('正在打开文档…'))
     controller.push('document')
     syncChrome()
@@ -212,6 +214,7 @@
   }
 
   async function openLocalDocument(target) {
+    browserRestorePending = false
     documentView.replaceChildren(statusPanel('正在安全读取本机文档…'))
     controller.push('document')
     controller.open()
@@ -360,11 +363,20 @@
 
   async function openMode(id, options = {}) {
     if (!controller.hasMode(id)) return false
+    browserRestorePending = false
     if (options.push) controller.push(id)
     else controller.replace(id)
     controller.open()
     host.classList.remove('hidden')
-    if (id === 'browser') await api.setBrowserVisible(true).catch(() => null)
+    if (id === 'browser') {
+      // During renderer hydration Electron already owns the visible browser;
+      // avoid echoing the same visibility command back into the state stream.
+      if (options.nativeAlreadyVisible !== true) await api.setBrowserVisible(true).catch(() => null)
+    } else {
+      // A non-browser pane is an explicit user intent. Keep the native state
+      // aligned so later title/loading events cannot carry stale visible=true.
+      await api.setBrowserVisible(false).catch(() => null)
+    }
     syncChrome()
     if (id === 'files') loadFiles()
     if (id === 'schedules') loadSchedules()
@@ -372,6 +384,7 @@
   }
 
   async function closeWorkspace(reason = 'api') {
+    browserRestorePending = false
     controller.setOpen(false, reason)
     syncChrome()
     await api.setBrowserVisible(false).catch(() => null)
@@ -393,6 +406,7 @@
   controller.on('push', syncChrome)
   controller.on('replace', syncChrome)
   controller.on('close', () => {
+    browserRestorePending = false
     document.body.classList.remove('browser-sidebar-open')
     setBrowserContentVisible(false)
     api.setBrowserVisible(false).catch(() => {})
@@ -416,8 +430,14 @@
     setContext,
     getContext: () => ({ ...context }),
     syncBrowserState(next) {
-      if (next?.visible === true && (!controller.isOpen() || controller.getActiveModeId() !== 'browser')) openMode('browser')
-      if (next?.visible === false && controller.isOpen() && controller.getActiveModeId() === 'browser') controller.setOpen(false, 'browser-state')
+      const action = factory.browserStateModeAction({
+        restorePending: browserRestorePending,
+        nativeVisible: next?.visible === true,
+        workspaceOpen: controller.isOpen(),
+        activeModeId: controller.getActiveModeId()
+      })
+      browserRestorePending = false
+      if (action === 'restore-browser') openMode('browser', { nativeAlreadyVisible: true })
       syncChrome()
     }
   })

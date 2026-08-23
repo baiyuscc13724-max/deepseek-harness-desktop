@@ -2,7 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativ
 const { spawn, execFile } = require('node:child_process')
 const { createHash, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { copyFile, mkdir, open, readFile, readdir, realpath, stat, unlink, writeFile } = require('node:fs/promises')
+const { mkdir, open, readFile, readdir, realpath, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -12,7 +12,7 @@ const WebSocket = require('ws')
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
 const { ensureRuntimeNodeModules } = require('./bridge/runtime-bundle-service.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
-const { createWallpaperVideoResponse, resolveWallpaperEngineInput, resolveWallpaperEngineProject, wallpaperKind, wallpaperMime } = require('./bridge/wallpaper-service.cjs')
+const { assertWallpaperLibraryCapacity, cleanupOrphanedWallpaperStorage, createWallpaperMediaResponse, createWallpaperMutationQueue, createWallpaperVideoResponse, installManagedWallpaperCopy, isManagedWallpaperFileName, resolveWallpaperEngineInput, resolveWallpaperEngineProject, revalidateProjectMediaPath, safeManagedWallpaperPath, wallpaperKind, wallpaperMime, wallpaperStorageUsageBytes } = require('./bridge/wallpaper-service.cjs')
 const { defaultSteamRootCandidates, scanWallpaperEngineLibrary } = require('./bridge/wallpaper-library.cjs')
 const { createDefaultProviderMeterRegistry } = require('./bridge/provider-meter-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
@@ -71,7 +71,7 @@ const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
 const { beginWindowDrag, moveWindowDrag, endWindowDrag } = require('./bridge/window-drag-service.cjs')
 const { createDesktopTray } = require('./desktop-tray.cjs')
 const { distributionInfo, isStoreDistribution } = require('./distribution.cjs')
-const { AppStateStore } = require('./store/app-state-store.cjs')
+const { AppStateStore, MAX_WALLPAPER_LIBRARY_ITEMS } = require('./store/app-state-store.cjs')
 const { MobileSyncStore } = require('./store/mobile-sync-store.cjs')
 const { PetDomainService } = require('./pet/pet-domain-service.cjs')
 const { PetEventAdapter } = require('./pet/pet-event-adapter.cjs')
@@ -657,7 +657,10 @@ async function setBrowserContentVisible(visible) {
     layoutBrowserView()
   }
   browserOperations.assert(ticket)
-  return publishBrowserState()
+  // Content visibility is an internal WebContentsView detail. Broadcasting it
+  // as a sidebar state races browser:setVisible during open/close and can feed
+  // a transient, opposite sidebar value back into the renderer indefinitely.
+  return browserStatePayload()
 }
 
 async function navigateBrowser(value) {
@@ -2040,6 +2043,7 @@ function ensurePetSystem() {
 
 const MAX_THEME_BACKGROUND_BYTES = 50 * 1024 * 1024
 const MAX_THEME_VIDEO_BYTES = 2 * 1024 * 1024 * 1024
+const wallpaperMutationQueue = createWallpaperMutationQueue()
 
 function themeAssetMime(file) {
   return wallpaperMime(file)
@@ -2056,21 +2060,78 @@ async function readThemeImageDataUrl(file) {
 function currentWallpaperVideoFile() {
   const backgroundFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
   if (!backgroundFile || wallpaperKind(backgroundFile) !== 'video') return null
-  const root = path.join(app.getPath('userData'), 'themes')
-  const file = path.join(root, backgroundFile)
-  return path.dirname(file) === root ? file : null
+  return wallpaperAssetPath(backgroundFile)
+}
+
+function currentWallpaperImageFile() {
+  const backgroundFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
+  if (!backgroundFile || wallpaperKind(backgroundFile) !== 'image') return null
+  return wallpaperAssetPath(backgroundFile)
+}
+
+function wallpaperAssetPath(fileName) {
+  return safeManagedWallpaperPath(path.join(app.getPath('userData'), 'themes'), fileName)
+}
+
+function wallpaperLibraryItem(id, appearance = ensureStateStore().get().appearance) {
+  const normalizedId = String(id || '').toLowerCase()
+  if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(normalizedId)) return null
+  return appearance.wallpaperLibrary?.items?.find(item => item.id === normalizedId) || null
+}
+
+async function assertManagedWallpaperLibraryCapacity(library, replacingId, incomingBytes, temporaryFile = null) {
+  const replacing = library?.items?.find(item => item.id === replacingId)
+  const storedBytes = await wallpaperStorageUsageBytes(path.join(app.getPath('userData'), 'themes'), {
+    excludeFileNames: [replacing?.cachedFile, temporaryFile].filter(Boolean)
+  })
+  return assertWallpaperLibraryCapacity([{ id: 'managed-storage', bytes: storedBytes }], {
+    incomingBytes,
+    sizeOf: item => item.bytes
+  })
+}
+
+async function wallpaperLibraryPayload(appearance) {
+  const library = appearance.wallpaperLibrary || { activeId: null, items: [] }
+  const items = await Promise.all((library.items || []).map(async item => {
+    const file = wallpaperAssetPath(item.cachedFile)
+    const info = file ? await stat(file).catch(() => null) : null
+    const maximum = item.kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+    const available = Boolean(info?.isFile() && info.size <= maximum && wallpaperKind(file) === item.kind)
+    return {
+      ...item,
+      available,
+      previewUrl: available && item.kind === 'image'
+        ? `${WALLPAPER_SCHEME}://library/${encodeURIComponent(item.id)}/media?v=${Math.round(info.mtimeMs)}-${info.size}`
+        : null
+    }
+  }))
+  return { activeId: library.activeId || null, items }
 }
 
 async function registerWallpaperProtocol() {
-  const targetSession = session.fromPartition('persist:harness')
-  if (targetSession.protocol.isProtocolHandled(WALLPAPER_SCHEME)) return
-  await targetSession.protocol.handle(WALLPAPER_SCHEME, request => {
+  const handler = async request => {
     const target = new URL(request.url)
-    if (target.hostname !== 'current' || target.pathname !== '/video') return new Response('Not found', { status: 404 })
-    const file = currentWallpaperVideoFile()
+    let file = null
+    if (target.hostname === 'current' && target.pathname === '/video') {
+      file = currentWallpaperVideoFile()
+    } else if (target.hostname === 'current' && target.pathname === '/image') {
+      file = currentWallpaperImageFile()
+    } else if (target.hostname === 'library') {
+      const match = /^\/([a-z0-9][a-z0-9-]{0,79})\/media$/i.exec(target.pathname)
+      const item = match ? wallpaperLibraryItem(match[1]) : null
+      file = item ? wallpaperAssetPath(item.cachedFile) : null
+    }
     if (!file || !existsSync(file)) return new Response('Not found', { status: 404 })
-    return createWallpaperVideoResponse(file, request)
-  })
+    const info = await stat(file).catch(() => null)
+    const maximum = wallpaperKind(file) === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+    if (!info?.isFile() || info.size > maximum) return new Response('Not found', { status: 404 })
+    return wallpaperKind(file) === 'video'
+      ? createWallpaperVideoResponse(file, request)
+      : createWallpaperMediaResponse(file, request)
+  }
+  for (const targetSession of [session.defaultSession, session.fromPartition('persist:harness')]) {
+    if (!targetSession.protocol.isProtocolHandled(WALLPAPER_SCHEME)) await targetSession.protocol.handle(WALLPAPER_SCHEME, handler)
+  }
 }
 
 function syncTitleBarOverlay(appearance = ensureStateStore().get().appearance) {
@@ -2087,22 +2148,28 @@ async function readAppearancePayload() {
     appearance = ensureStateStore().updateAppearance({ themeId: 'porcelain-mist' }).appearance
   }
   syncTitleBarOverlay(appearance)
+  const wallpaperLibrary = await wallpaperLibraryPayload(appearance)
   const backgroundFile = appearance.customTheme?.backgroundFile
-  if (!backgroundFile) return { ...appearance, customBackgroundDataUrl: null, customBackgroundVideoDataUrl: null, customBackgroundKind: null }
-  const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
+  if (!backgroundFile) return { ...appearance, wallpaperLibrary, customBackgroundDataUrl: null, customBackgroundVideoDataUrl: null, customBackgroundKind: null }
+  const file = wallpaperAssetPath(backgroundFile)
+  if (!file) return { ...appearance, wallpaperLibrary, customBackgroundDataUrl: null, customBackgroundVideoDataUrl: null, customBackgroundKind: null }
   const kind = wallpaperKind(file)
   if (kind === 'video') {
     const info = await stat(file).catch(() => null)
     const valid = info?.isFile() && info.size <= MAX_THEME_VIDEO_BYTES
     return {
       ...appearance,
+      wallpaperLibrary,
       customBackgroundDataUrl: null,
       customBackgroundVideoDataUrl: valid ? `${WALLPAPER_SCHEME}://current/video?v=${Math.round(info.mtimeMs)}-${info.size}` : null,
       customBackgroundKind: valid ? 'video' : null
     }
   }
-  const dataUrl = kind === 'image' ? await readThemeImageDataUrl(file).catch(() => null) : null
-  return { ...appearance, customBackgroundDataUrl: dataUrl, customBackgroundVideoDataUrl: null, customBackgroundKind: dataUrl ? 'image' : null }
+  const info = kind === 'image' ? await stat(file).catch(() => null) : null
+  const dataUrl = info?.isFile() && info.size <= MAX_THEME_BACKGROUND_BYTES
+    ? `${WALLPAPER_SCHEME}://current/image?v=${Math.round(info.mtimeMs)}-${info.size}`
+    : null
+  return { ...appearance, wallpaperLibrary, customBackgroundDataUrl: dataUrl, customBackgroundVideoDataUrl: null, customBackgroundKind: dataUrl ? 'image' : null }
 }
 
 // Signature of a bound Wallpaper Engine project: project.json and its resolved
@@ -2113,33 +2180,77 @@ async function boundWallpaperEngineSignature(projectFile, mediaFile) {
   return `${Math.round(projectInfo.mtimeMs)}:${projectInfo.size}:${Math.round(mediaInfo.mtimeMs)}:${mediaInfo.size}`
 }
 
-// Re-import the bound Wallpaper Engine project whenever its files changed.
-// Silent by design: a removed/unreadable project keeps the last applied
-// background instead of wiping it, and never opens dialogs.
-async function syncBoundWallpaperEngine() {
-  const custom = ensureStateStore().get().appearance.customTheme
-  const projectDir = custom?.wallpaperEngineProject
+// Refresh the active Wallpaper Engine source only after the user explicitly
+// requests synchronization. A removed/unreadable source marks the card while
+// preserving the managed copy and never opens dialogs.
+async function syncBoundWallpaperEngineUnlocked() {
+  const appearance = ensureStateStore().get().appearance
+  const custom = appearance.customTheme
+  const activeId = appearance.wallpaperLibrary?.activeId
+  const active = wallpaperLibraryItem(activeId, appearance)
+  const projectDir = active?.projectDir || custom?.wallpaperEngineProject
   if (!projectDir) return { changed: false, synchronized: false, reason: 'unbound' }
   const projectFile = path.join(projectDir, 'project.json')
-  const resolution = await resolveWallpaperEngineInput(projectFile)
+  let resolution
+  try {
+    resolution = await resolveWallpaperEngineInput(projectFile)
+  } catch {
+    if (active) {
+      const items = appearance.wallpaperLibrary.items.map(item => item.id === active.id ? { ...item, sourceStatus: 'unavailable' } : item)
+      ensureStateStore().updateAppearance({ wallpaperLibrary: { ...appearance.wallpaperLibrary, items } })
+    }
+    return { changed: false, synchronized: false, reason: 'source-unavailable' }
+  }
   const signature = await boundWallpaperEngineSignature(projectFile, resolution.file)
-  if (!signature) return { changed: false, synchronized: false, reason: 'unreadable' }
-  if (signature === custom?.wallpaperEngineSignature) {
+  if (!signature) {
+    if (active) {
+      const items = appearance.wallpaperLibrary.items.map(item => item.id === active.id ? { ...item, sourceStatus: 'unavailable' } : item)
+      ensureStateStore().updateAppearance({ wallpaperLibrary: { ...appearance.wallpaperLibrary, items } })
+    }
+    return { changed: false, synchronized: false, reason: 'unreadable' }
+  }
+  const cachedFile = active ? wallpaperAssetPath(active.cachedFile) : null
+  const cachedInfo = cachedFile ? await stat(cachedFile).catch(() => null) : null
+  const cachedMaximum = active?.kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+  const cachedAvailable = Boolean(cachedInfo?.isFile() && cachedInfo.size <= cachedMaximum && wallpaperKind(cachedFile) === active?.kind)
+  if (signature === (active?.signature || custom?.wallpaperEngineSignature) && cachedAvailable) {
+    if (active?.sourceStatus !== 'ready') {
+      const items = appearance.wallpaperLibrary.items.map(item => item.id === active.id ? { ...item, sourceStatus: 'ready' } : item)
+      ensureStateStore().updateAppearance({ wallpaperLibrary: { ...appearance.wallpaperLibrary, items } })
+    }
     return { changed: false, synchronized: true, reason: 'current' }
   }
-  const fileName = await installCustomThemeBackground(resolution.file)
-  ensureStateStore().updateAppearance({
-    themeId: 'custom',
-    customTheme: { backgroundFile: fileName, wallpaperEngineSignature: signature }
-  })
+  let fileName = null
+  try {
+    fileName = await installCustomThemeBackground(resolution.file, {
+      projectRoot: resolution.projectRoot,
+      beforeCopy: (info, context) => assertManagedWallpaperLibraryCapacity(appearance.wallpaperLibrary, active?.id, info.size, context?.temporaryFile)
+    })
+    const now = new Date().toISOString()
+    const items = active
+      ? appearance.wallpaperLibrary.items.map(item => item.id === active.id ? { ...item, cachedFile: fileName, kind: resolution.kind, signature, sourceStatus: 'ready', lastSyncedAt: now } : item)
+      : appearance.wallpaperLibrary.items
+    ensureStateStore().updateAppearance({
+      themeId: 'custom',
+      customTheme: { backgroundFile: fileName, wallpaperEngineSignature: signature },
+      wallpaperLibrary: { ...appearance.wallpaperLibrary, activeId: active?.id || appearance.wallpaperLibrary.activeId, items }
+    })
+  } catch (error) {
+    if (fileName) await removeWallpaperAsset(fileName).catch(() => {})
+    throw error
+  }
+  if (active?.cachedFile && active.cachedFile !== fileName) scheduleWallpaperAssetRemoval(active.cachedFile)
   return { changed: true, synchronized: true, reason: 'resynced' }
 }
 
+async function syncBoundWallpaperEngine() {
+  return wallpaperMutationQueue.run(syncBoundWallpaperEngineUnlocked)
+}
+
 async function appearancePayload() {
-  const wallpaperEngineSync = process.platform === 'win32'
-    ? await syncBoundWallpaperEngine().catch(() => ({ changed: false, synchronized: false, reason: 'unavailable' }))
-    : { changed: false, synchronized: false, reason: 'unavailable' }
-  return { ...(await readAppearancePayload()), wallpaperEngineSync }
+  // Startup and ordinary card application always use the managed local copy.
+  // The source project is consulted only by the explicit sync action.
+  return readAppearancePayload()
 }
 
 async function bundledThemeAssets() {
@@ -2162,7 +2273,7 @@ async function mobileAppearancePayload() {
     state = ensureStateStore().updateAppearance({ themeId: 'porcelain-mist' }).appearance
   }
   const backgroundFile = state.customTheme?.backgroundFile
-  const customBackgroundFile = backgroundFile && path.join(app.getPath('userData'), 'themes', backgroundFile)
+  const customBackgroundFile = backgroundFile && wallpaperAssetPath(backgroundFile)
   const catalog = THEME_CATALOG
     .filter(theme => !STORE_BUILD || !theme.nonCommercial)
     .map(theme => ({
@@ -2204,8 +2315,8 @@ async function readMobileThemeAsset(relative) {
   if (relative === 'custom-background') {
     const backgroundFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
     if (!backgroundFile) return null
-    const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
-    if (!existsSync(file)) return null
+    const file = wallpaperAssetPath(backgroundFile)
+    if (!file || !existsSync(file)) return null
     const info = await stat(file)
     if (!info.isFile() || info.size > MAX_THEME_BACKGROUND_BYTES) return null
     return { data: await readFile(file), mime: themeAssetMime(file) }
@@ -2217,27 +2328,129 @@ async function readMobileThemeAsset(relative) {
   return { data: await readFile(file), mime: themeAssetMime(file) }
 }
 
-// Copy a local media file into the theme store and return the new file name.
-// The caller decides which appearance record (plain background vs bound
-// Wallpaper Engine project) is persisted afterwards.
-async function installCustomThemeBackground(source) {
-  const extension = path.extname(source).toLowerCase()
+// Copy every imported wallpaper into a unique managed file. Applying a card
+// later never needs Wallpaper Engine, Steam, or the original source file.
+async function installCustomThemeBackground(source, options = {}) {
+  if (options.projectRoot) source = (await revalidateProjectMediaPath(options.projectRoot, source)).file
   const kind = wallpaperKind(source)
   if (!kind) throw new Error('仅支持 PNG、JPG、WebP、GIF、APNG、MP4 和 WebM 壁纸。')
   const info = await stat(source)
-  const maximum = kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+  let maximum = kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
   if (!info.isFile() || info.size > maximum) throw new Error(kind === 'video' ? '视频壁纸必须小于 2 GB。' : '图片壁纸必须小于 50 MB。')
-  const directory = path.join(app.getPath('userData'), 'themes')
-  const fileName = `custom-background${extension}`
-  const previousFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
-  await mkdir(directory, { recursive: true })
-  await copyFile(source, path.join(directory, fileName))
-  if (previousFile && previousFile !== fileName) {
-    await unlink(path.join(directory, previousFile)).catch(error => {
-      if (error?.code !== 'ENOENT') throw error
-    })
+  if (typeof options.beforeCopy === 'function') await options.beforeCopy(info)
+  if (options.projectRoot) source = (await revalidateProjectMediaPath(options.projectRoot, source)).file
+  const finalKind = wallpaperKind(source)
+  const finalInfo = await stat(source)
+  maximum = finalKind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+  if (!finalKind || finalKind !== kind || !finalInfo.isFile() || finalInfo.size > maximum) {
+    throw new Error('壁纸源文件在导入期间已发生变化，请重试。')
   }
-  return fileName
+  if (finalInfo.size !== info.size && typeof options.beforeCopy === 'function') await options.beforeCopy(finalInfo)
+  const extension = path.extname(source).toLowerCase()
+  const directory = path.join(app.getPath('userData'), 'themes')
+  const fileName = `wallpaper-${randomUUID().toLowerCase()}${extension}`
+  const installed = await installManagedWallpaperCopy({
+    source,
+    directory,
+    fileName,
+    expectedKind: kind,
+    maximumBytes: maximum,
+    afterCopyValidate: options.projectRoot
+      ? async () => {
+          const validated = await revalidateProjectMediaPath(options.projectRoot, source)
+          if (path.relative(source, validated.file) !== '') throw new Error('壁纸源文件在复制期间已发生变化，请重试。')
+        }
+      : null,
+    beforeFinalize: typeof options.beforeCopy === 'function' ? options.beforeCopy : null
+  })
+  return installed.fileName
+}
+
+async function removeWallpaperAsset(fileName) {
+  const file = wallpaperAssetPath(fileName)
+  if (!file) return
+  await unlink(file).catch(error => {
+    if (error?.code !== 'ENOENT') throw error
+  })
+}
+
+function scheduleWallpaperAssetRemoval(fileName, attempt = 0) {
+  const delays = [800, 2500, 8000]
+  const timer = setTimeout(() => {
+    removeWallpaperAsset(fileName).catch(() => {
+      if (attempt + 1 < delays.length) scheduleWallpaperAssetRemoval(fileName, attempt + 1)
+    })
+  }, delays[attempt])
+  timer.unref?.()
+}
+
+async function cleanupOrphanedWallpaperAssetsUnlocked() {
+  const appearance = ensureStateStore().get().appearance
+  const referenced = [
+    appearance.customTheme?.backgroundFile,
+    ...(appearance.wallpaperLibrary?.items || []).map(item => item.cachedFile)
+  ].filter(Boolean)
+  const result = await cleanupOrphanedWallpaperStorage(path.join(app.getPath('userData'), 'themes'), referenced)
+  for (const fileName of result.failed) {
+    if (isManagedWallpaperFileName(fileName)) scheduleWallpaperAssetRemoval(fileName)
+  }
+  return result
+}
+
+async function cleanupOrphanedWallpaperAssets() {
+  return wallpaperMutationQueue.run(cleanupOrphanedWallpaperAssetsUnlocked)
+}
+
+async function importWallpaperRecordUnlocked({ source, title, projectDir = null, projectRoot = null, signature = null }) {
+  const appearance = ensureStateStore().get().appearance
+  const library = appearance.wallpaperLibrary || { activeId: null, items: [] }
+  const existing = projectDir
+    ? library.items.find(item => item.source === 'wallpaper-engine' && String(item.projectDir || '').toLowerCase() === String(projectDir).toLowerCase())
+    : null
+  if (!existing && library.items.length >= MAX_WALLPAPER_LIBRARY_ITEMS) {
+    throw new Error(`壁纸库最多保存 ${MAX_WALLPAPER_LIBRARY_ITEMS} 项，请先移除不再使用的壁纸。`)
+  }
+  const fileName = await installCustomThemeBackground(source, {
+    projectRoot,
+    beforeCopy: (info, context) => assertManagedWallpaperLibraryCapacity(library, existing?.id, info.size, context?.temporaryFile)
+  })
+  const id = existing?.id || randomUUID().toLowerCase()
+  const now = new Date().toISOString()
+  const item = {
+    id,
+    title: String(title || path.basename(source, path.extname(source))).slice(0, 160),
+    kind: wallpaperKind(fileName),
+    source: projectDir ? 'wallpaper-engine' : 'local',
+    cachedFile: fileName,
+    projectDir,
+    signature: projectDir ? signature : null,
+    sourceStatus: projectDir ? 'ready' : null,
+    lastSyncedAt: projectDir ? now : null,
+    addedAt: existing?.addedAt || now
+  }
+  const items = existing
+    ? library.items.map(entry => entry.id === existing.id ? item : entry)
+    : [item, ...library.items]
+  try {
+    ensureStateStore().updateAppearance({
+      themeId: 'custom',
+      customTheme: {
+        backgroundFile: fileName,
+        wallpaperEngineProject: projectDir,
+        wallpaperEngineSignature: projectDir ? signature : null
+      },
+      wallpaperLibrary: { activeId: id, items }
+    })
+  } catch (error) {
+    await removeWallpaperAsset(fileName).catch(() => {})
+    throw error
+  }
+  if (existing?.cachedFile && existing.cachedFile !== fileName) scheduleWallpaperAssetRemoval(existing.cachedFile)
+  return appearancePayload()
+}
+
+async function importWallpaperRecord(options) {
+  return wallpaperMutationQueue.run(() => importWallpaperRecordUnlocked(options))
 }
 
 // Steam install root from the HKCU Valve\Steam registry value, when present.
@@ -2274,18 +2487,15 @@ async function chooseCustomThemeBackground(options = {}) {
     if (!sourceValue) return appearancePayload()
     if (/\.json$/i.test(sourceValue)) projectFile = path.resolve(sourceValue)
     else projectFile = path.join(path.resolve(sourceValue), 'project.json')
-    const { file } = await resolveWallpaperEngineInput(sourceValue)
-    const fileName = await installCustomThemeBackground(file)
-    const signature = await boundWallpaperEngineSignature(projectFile, file)
-    ensureStateStore().updateAppearance({
-      themeId: 'custom',
-      customTheme: {
-        backgroundFile: fileName,
-        wallpaperEngineProject: path.dirname(projectFile),
-        wallpaperEngineSignature: signature || null
-      }
+    const resolution = await resolveWallpaperEngineInput(sourceValue)
+    const signature = await boundWallpaperEngineSignature(projectFile, resolution.file)
+    return importWallpaperRecord({
+      source: resolution.file,
+      title: resolution.title,
+      projectDir: path.dirname(projectFile),
+      projectRoot: resolution.projectRoot,
+      signature: signature || null
     })
-    return appearancePayload()
   }
   let chooseDirectory = false
   if (wallpaperEngine) {
@@ -2312,20 +2522,19 @@ async function chooseCustomThemeBackground(options = {}) {
   if (result.canceled || !result.filePaths[0]) return appearancePayload()
 
   let source = path.resolve(result.filePaths[0])
+  let title = path.basename(source, path.extname(source))
+  let projectRoot = null
   if (wallpaperEngine) {
     if (/\.json$/i.test(source)) projectFile = source
     else projectFile = path.join(source, 'project.json')
-    source = (await resolveWallpaperEngineInput(source)).file
+    const resolution = await resolveWallpaperEngineInput(source)
+    source = resolution.file
+    title = resolution.title
+    projectRoot = resolution.projectRoot
   }
-  const fileName = await installCustomThemeBackground(source)
-  const bound = wallpaperEngine && projectFile
-    ? {
-        wallpaperEngineProject: path.dirname(projectFile),
-        wallpaperEngineSignature: (await boundWallpaperEngineSignature(projectFile, source)) || null
-      }
-    : {}
-  ensureStateStore().updateAppearance({ themeId: 'custom', customTheme: { backgroundFile: fileName, ...bound } })
-  return appearancePayload()
+  const projectDir = wallpaperEngine && projectFile ? path.dirname(projectFile) : null
+  const signature = projectDir ? (await boundWallpaperEngineSignature(projectFile, source)) || null : null
+  return importWallpaperRecord({ source, title, projectDir, projectRoot, signature })
 }
 
 // Apply a picked Wallpaper Engine project (directory or project.json) in one
@@ -2334,22 +2543,77 @@ async function applyWallpaperEngineProject(value) {
   return chooseCustomThemeBackground({ wallpaperEngine: true, source: value })
 }
 
-async function removeCustomThemeBackground() {
-  const backgroundFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
-  if (backgroundFile) {
-    const file = path.join(app.getPath('userData'), 'themes', backgroundFile)
-    await unlink(file).catch(error => {
-      if (error?.code !== 'ENOENT') throw error
-    })
+async function applyWallpaperLibraryItemUnlocked(value) {
+  const id = String(value || '').toLowerCase()
+  const appearance = ensureStateStore().get().appearance
+  const item = wallpaperLibraryItem(id, appearance)
+  if (!item) throw new Error('壁纸记录不存在或已被移除。')
+  const file = wallpaperAssetPath(item.cachedFile)
+  const info = file ? await stat(file).catch(() => null) : null
+  const maximum = item.kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+  if (!info?.isFile() || info.size > maximum || wallpaperKind(file) !== item.kind) {
+    throw new Error('壁纸的本地副本已失效；请移除该记录后重新导入。')
   }
   ensureStateStore().updateAppearance({
-    customTheme: { backgroundFile: null, wallpaperEngineProject: null, wallpaperEngineSignature: null }
+    themeId: 'custom',
+    customTheme: {
+      backgroundFile: item.cachedFile,
+      wallpaperEngineProject: item.projectDir,
+      wallpaperEngineSignature: item.signature
+    },
+    wallpaperLibrary: { ...appearance.wallpaperLibrary, activeId: item.id }
   })
+  return appearancePayload()
+}
+
+async function applyWallpaperLibraryItem(value) {
+  return wallpaperMutationQueue.run(() => applyWallpaperLibraryItemUnlocked(value))
+}
+
+async function deleteWallpaperLibraryItemUnlocked(value) {
+  const id = String(value || '').toLowerCase()
+  const appearance = ensureStateStore().get().appearance
+  const item = wallpaperLibraryItem(id, appearance)
+  if (!item) return appearancePayload()
+  const active = appearance.wallpaperLibrary?.activeId === item.id
+  ensureStateStore().updateAppearance({
+    customTheme: active ? { backgroundFile: null, wallpaperEngineProject: null, wallpaperEngineSignature: null } : {},
+    wallpaperLibrary: {
+      activeId: active ? null : appearance.wallpaperLibrary.activeId,
+      items: appearance.wallpaperLibrary.items.filter(entry => entry.id !== item.id)
+    }
+  })
+  const payload = await appearancePayload()
+  scheduleWallpaperAssetRemoval(item.cachedFile)
+  return payload
+}
+
+async function deleteWallpaperLibraryItem(value) {
+  return wallpaperMutationQueue.run(() => deleteWallpaperLibraryItemUnlocked(value))
+}
+
+async function removeCustomThemeBackgroundUnlocked() {
+  const appearance = ensureStateStore().get().appearance
+  ensureStateStore().updateAppearance({
+    customTheme: { backgroundFile: null, wallpaperEngineProject: null, wallpaperEngineSignature: null },
+    wallpaperLibrary: { ...appearance.wallpaperLibrary, activeId: null }
+  })
+}
+
+async function removeCustomThemeBackground() {
+  return wallpaperMutationQueue.run(removeCustomThemeBackgroundUnlocked)
 }
 
 async function clearCustomThemeBackground() {
   await removeCustomThemeBackground()
   return appearancePayload()
+}
+
+async function syncWallpaperEngineBackground() {
+  const wallpaperEngineSync = process.platform === 'win32'
+    ? await syncBoundWallpaperEngine()
+    : { changed: false, synchronized: false, reason: 'unavailable' }
+  return { ...(await appearancePayload()), wallpaperEngineSync }
 }
 
 async function openHarnessSettingsDocument() {
@@ -3244,7 +3508,9 @@ ipcMain.handle('appearance:chooseBackground', desktopShellOnly(() => chooseCusto
 ipcMain.handle('appearance:chooseWallpaperEngine', desktopShellOnly(() => chooseCustomThemeBackground({ wallpaperEngine: true })))
 ipcMain.handle('appearance:listWallpaperEngineProjects', desktopShellOnly(() => wallpaperEngineLibraryScan()))
 ipcMain.handle('appearance:applyWallpaperEngineProject', desktopShellOnly(value => applyWallpaperEngineProject(value)))
-ipcMain.handle('appearance:syncWallpaperEngine', desktopShellOnly(() => appearancePayload()))
+ipcMain.handle('appearance:applyWallpaper', desktopShellOnly(value => applyWallpaperLibraryItem(value)))
+ipcMain.handle('appearance:deleteWallpaper', desktopShellOnly(value => deleteWallpaperLibraryItem(value)))
+ipcMain.handle('appearance:syncWallpaperEngine', desktopShellOnly(() => syncWallpaperEngineBackground()))
 ipcMain.handle('appearance:clearBackground', desktopShellOnly(() => clearCustomThemeBackground()))
 ipcMain.handle('pet:getState', () => petPayload())
 ipcMain.handle('pet:setPreferences', (_event, patch) => updatePetPreferences(patch || {}))
@@ -3565,6 +3831,7 @@ app.whenReady().then(async () => {
     app.exit(report.ok ? 0 : 1)
     return
   }
+  await cleanupOrphanedWallpaperAssets().catch(error => console.warn(`Unable to clean stale managed wallpapers: ${error.message}`))
   await registerWallpaperProtocol().catch(error => console.warn(`Unable to register wallpaper media protocol: ${error.message}`))
   await clearComputerUseScreenshots().catch(error => console.warn(`Unable to clear stale Computer Use screenshots: ${error.message}`))
   powerMonitor.on('lock-screen', () => {

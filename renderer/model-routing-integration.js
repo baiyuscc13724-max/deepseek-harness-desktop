@@ -18,7 +18,36 @@
     return { provider: String(provider.id).trim(), model: firstModel }
   }
 
-  function guestModelRoutingBootstrap(selectInitialRoute) {
+  function resolveSubagentDisplay({ inherited = true, mainProvider = '', mainModel = '', independentProvider = '', independentModel = '' } = {}) {
+    const provider = String((inherited ? mainProvider : independentProvider) || '').trim()
+    const model = String((inherited ? mainModel : independentModel) || '').trim()
+    const route = provider && model ? `${provider} / ${model}` : inherited ? '等待主模型选择' : '尚未完整指定'
+    return {
+      provider,
+      model,
+      disabled: Boolean(inherited),
+      message: inherited
+        ? `跟随主模型：当前同步为 ${route}；切换到“单独指定”即可编辑。`
+        : `单独指定：当前为 ${route}；下方服务商和模型可直接编辑。`
+    }
+  }
+
+  function createModelRoutingSavePayload({ mainProvider = '', mainModel = '', subInherit = true, subProvider = '', subModel = '', basePreset = '' } = {}) {
+    return {
+      main: {
+        provider: String(mainProvider || '').trim(),
+        model: String(mainModel || '').trim()
+      },
+      subagent: {
+        inheritMain: subInherit !== false,
+        provider: String(subProvider || '').trim(),
+        model: String(subModel || '').trim()
+      },
+      basePreset: String(basePreset || '').trim()
+    }
+  }
+
+  function guestModelRoutingBootstrap(selectInitialRoute, resolveSubagentDisplay) {
     if (window.__HARNESS_DESKTOP_MODEL_ROUTING_INSTALLED__) return
     window.__HARNESS_DESKTOP_MODEL_ROUTING_INSTALLED__ = true
 
@@ -51,8 +80,8 @@
       #harness-desktop-model-routing .hd-route-mode { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin:2px 0 10px; border:1px solid var(--dsw-alias-border-l2); border-radius:10px; padding:3px; background:var(--dsw-alias-bg-layer-1); }
       #harness-desktop-model-routing .hd-route-mode button { min-height:30px; border-radius:7px; padding:4px 8px; color:var(--dsw-alias-label-secondary); background:transparent; }
       #harness-desktop-model-routing .hd-route-mode button[aria-pressed="true"] { color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-3); box-shadow:0 1px 4px rgba(0,0,0,.08); }
-      #harness-desktop-model-routing .hd-route-summary { min-height:76px; display:grid; place-content:center; border:1px dashed var(--dsw-alias-border-l2); border-radius:9px; color:var(--dsw-alias-label-secondary); text-align:center; font-size:12px; }
-      #harness-desktop-model-routing .hd-route-fields[hidden], #harness-desktop-model-routing .hd-route-summary[hidden] { display:none; }
+      #harness-desktop-model-routing .hd-route-summary { margin-bottom:2px; border:1px dashed var(--dsw-alias-border-l2); border-radius:9px; padding:8px 10px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
+      #harness-desktop-model-routing select:disabled { cursor:not-allowed; opacity:.72; background:var(--dsw-alias-bg-layer-3); }
       #harness-desktop-model-routing .hd-route-footer { display:flex; align-items:center; gap:12px; margin-top:14px; }
       #harness-desktop-model-routing .hd-route-status { flex:1; color:var(--dsw-alias-label-tertiary); font-size:12px; line-height:18px; }
       #harness-desktop-model-routing .hd-route-status[data-error="true"] { color:var(--dsw-alias-state-error-primary); }
@@ -90,8 +119,10 @@
       panel.dataset.subInherit = inherited ? 'true' : 'false'
       panel.querySelector('[data-hd-sub-mode="inherit"]').setAttribute('aria-pressed', String(inherited))
       panel.querySelector('[data-hd-sub-mode="independent"]').setAttribute('aria-pressed', String(!inherited))
-      panel.querySelector('[data-hd-sub-fields]').hidden = inherited
-      panel.querySelector('[data-hd-sub-summary]').hidden = !inherited
+      panel.querySelectorAll('[data-hd-sub-fields] select').forEach(select => {
+        select.disabled = inherited
+        select.setAttribute('aria-disabled', String(inherited))
+      })
     }
 
     const percent = value => `${Math.max(0, Math.min(100, Number(value) || 0)).toFixed(0)}%`
@@ -163,14 +194,19 @@
       }
       const mainProviderValue = panel.dataset.dirty ? mainProvider.value : initialMain.provider
       const mainModelValue = panel.dataset.dirty ? mainModel.value : initialMain.model
-      const subProviderValue = panel.dataset.dirty ? subProvider.value : panel.dataset.subProvider
-      const subModelValue = panel.dataset.dirty ? subModel.value : panel.dataset.subModel
       fillSelect(mainProvider, providerRows, mainProviderValue, '选择服务商')
       fillSelect(mainModel, modelsFor(state, mainProvider.value).map(value => ({ value, label: value })), mainModelValue, '选择模型')
-      fillSelect(subProvider, providerRows, subProviderValue, '选择服务商')
-      fillSelect(subModel, modelsFor(state, subProvider.value).map(value => ({ value, label: value })), subModelValue, '选择模型')
-      setSubagentMode(panel, inherited)
-      panel.querySelector('[data-hd-sub-summary]').textContent = mainProvider.value && mainModel.value ? `${mainProvider.value} / ${mainModel.value}` : '先选择主模型'
+      const subagentDisplay = resolveSubagentDisplay({
+        inherited,
+        mainProvider: mainProvider.value,
+        mainModel: mainModel.value,
+        independentProvider: panel.dataset.subProvider,
+        independentModel: panel.dataset.subModel
+      })
+      fillSelect(subProvider, providerRows, subagentDisplay.provider, '选择服务商')
+      fillSelect(subModel, modelsFor(state, subProvider.value).map(value => ({ value, label: value })), subagentDisplay.model, '选择模型')
+      setSubagentMode(panel, subagentDisplay.disabled)
+      panel.querySelector('[data-hd-sub-summary]').textContent = subagentDisplay.message
       const status = panel.querySelector('[data-hd-route-status]')
       status.dataset.error = state.error ? 'true' : 'false'
       status.textContent = state.error
@@ -198,7 +234,7 @@
           <div class="hd-route-card">
             <div class="hd-route-title">子代理</div>
             <div class="hd-route-mode"><button type="button" data-hd-sub-mode="inherit">跟随主模型</button><button type="button" data-hd-sub-mode="independent">单独指定</button></div>
-            <div class="hd-route-summary" data-hd-sub-summary></div>
+            <div class="hd-route-summary" data-hd-sub-summary role="status" aria-live="polite"></div>
             <div class="hd-route-fields" data-hd-sub-fields>
               <label class="hd-route-field">服务商<select data-hd-sub-provider></select></label>
               <label class="hd-route-field">模型<select data-hd-sub-model></select></label>
@@ -214,7 +250,12 @@
       panel.querySelectorAll('select').forEach(select => select.addEventListener('change', () => {
         panel.dataset.dirty = 'true'
         if (select.matches('[data-hd-main-provider]')) panel.querySelector('[data-hd-main-model]').value = ''
-        if (select.matches('[data-hd-sub-provider]')) panel.querySelector('[data-hd-sub-model]').value = ''
+        if (select.matches('[data-hd-sub-provider]')) {
+          panel.dataset.subProvider = select.value
+          panel.dataset.subModel = ''
+          panel.querySelector('[data-hd-sub-model]').value = ''
+        }
+        if (select.matches('[data-hd-sub-model]')) panel.dataset.subModel = select.value
         paint(panel)
       }))
       panel.querySelectorAll('[data-hd-sub-mode]').forEach(button => button.addEventListener('click', () => {
@@ -321,7 +362,7 @@
   }
 
   async function install(webview) {
-    await webview.executeJavaScript(`(${guestModelRoutingBootstrap.toString()})(${selectInitialRoute.toString()})`, true)
+    await webview.executeJavaScript(`(${guestModelRoutingBootstrap.toString()})(${selectInitialRoute.toString()},${resolveSubagentDisplay.toString()})`, true)
   }
 
   async function publish(webview, state) {
@@ -330,5 +371,5 @@
     await webview.executeJavaScript(`window.__HARNESS_DESKTOP_MODEL_ROUTING_STATE__=${serialized};window.__HARNESS_DESKTOP_RENDER_MODEL_ROUTING__?.();`, true)
   }
 
-  root.harnessModelRoutingIntegration = { install, publish, selectInitialRoute }
+  root.harnessModelRoutingIntegration = { install, publish, selectInitialRoute, resolveSubagentDisplay, createModelRoutingSavePayload }
 })(window)

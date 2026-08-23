@@ -22,7 +22,7 @@ const required = [
   'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/computer-use-screenshot-store.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-link-router.test.cjs', 'tests/browser-link-integration.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-codex-parity.test.cjs', 'tests/browser-diagnostics.test.cjs', 'tests/browser-history-store.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-operation-coordinator.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-mcp-manager-plugin-service.test.cjs', 'tests/mcp-manager-domain.test.cjs', 'tests/mcp-manager-runtime.test.cjs', 'tests/mcp-manager-ui.test.cjs', 'tests/desktop-schedules.test.cjs', 'tests/desktop-files.test.cjs', 'tests/right-workspace-service.test.cjs', 'tests/right-workspace-ui.test.cjs', 'tests/desktop-progress.test.cjs', 'tests/desktop-compaction.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/computer-use-confirmation-store.test.cjs', 'tests/agent-teams-plugin-service.test.cjs', 'tests/agent-teams-domain.test.cjs', 'tests/agent-teams-runtime.test.cjs', 'tests/agent-teams-ui.test.cjs', 'tests/session-experience.test.cjs', 'tests/text-selection-ui.test.cjs', 'tests/ui-mode-integration.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
   'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/desktop-release-contract.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/release-automation.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-version-sync.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
-  'docs/ARCHITECTURE.zh-CN.md', 'docs/COMPETITOR-FEATURE-BENCHMARK.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.35.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
+  'docs/ARCHITECTURE.zh-CN.md', 'docs/COMPETITOR-FEATURE-BENCHMARK.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.36.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
   '.github/workflows/apple-virtual-tests.yml', '.github/workflows/android-mobile-release.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/prepare-bundled-git.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/component-update-helper.cjs', 'scripts/create-component-signing-key.mjs', 'scripts/create-android-release-keystore.ps1', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'mobile/mobile-app-update.example.json', 'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
   'mobile/android/RELEASE-SIGNING.zh-CN.md', 'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
@@ -181,8 +181,28 @@ if (!rendererScript.includes('api.getModelRouting()') || !rendererScript.include
 for (const contract of ['api.getProviderMeters(false)', 'api.getProviderMeters(true)', "target.hostname === 'refresh-provider-meters'", 'meters: { ...meters']) {
   if (!rendererScript.includes(contract)) throw new Error(`Provider meter renderer contract is missing: ${contract}`)
 }
-for (const contract of ['openSkinPicker', 'closeSkinPicker()', "card.addEventListener('dblclick'", "api.setTheme(card.dataset.skinId", 'skinPickerOverlay.classList.add']) {
+for (const contract of [
+  'openSkinPicker',
+  'closeSkinPicker()',
+  "card.addEventListener('dblclick'",
+  "api.setTheme(card.dataset.skinId",
+  'themeIntegration.createSkinPickerHost(',
+  'skinPickerHost.open({ fromSettings })',
+  'skinPickerHost.close()',
+  'skinPickerHost.apply(',
+  "openSkinPicker({ fromSettings: target.searchParams.get('source') === 'settings' })"
+]) {
   if (!rendererScript.includes(contract)) throw new Error(`Standalone skin picker behavior is missing: ${contract}`)
+}
+for (const contract of [
+  "request('open-appearance', { source: 'settings' })",
+  '__HARNESS_DESKTOP_APPEARANCE_HOST_DIALOG__',
+  '__HARNESS_DESKTOP_CLOSE_SETTINGS_DIALOG__',
+  'createSettingsDialogCloser',
+  '/^(?:关闭|close|×)$/i.test(text)',
+  'closeDesktopSettingsDialog'
+]) {
+  if (!themeIntegration.includes(contract)) throw new Error(`Settings-hosted appearance close behavior is missing: ${contract}`)
 }
 
 const modelRoutingIntegration = await readFile(path.join(root, 'renderer/model-routing-integration.js'), 'utf8')
@@ -398,13 +418,24 @@ if (main.includes('protocol.registerSchemesAsPrivileged')) throw new Error('Wall
 if (main.includes("customBackgroundVideoDataUrl: kind === 'video' ? dataUrl")) {
   throw new Error('Video wallpapers must stream through the controlled local protocol instead of being serialized as data URLs.')
 }
-for (const protocolContract of ["session.fromPartition('persist:harness')", "target.hostname !== 'current'", "target.pathname !== '/video'", 'createWallpaperVideoResponse(file, request)']) {
+for (const protocolContract of [
+  'session.defaultSession',
+  "session.fromPartition('persist:harness')",
+  "target.hostname === 'current' && target.pathname === '/video'",
+  "target.hostname === 'library'",
+  'wallpaperLibraryItem(match[1])',
+  'wallpaperAssetPath(item.cachedFile)',
+  'createWallpaperVideoResponse(file, request)',
+  'createWallpaperMediaResponse(file, request)'
+]) {
   if (!main.includes(protocolContract)) throw new Error(`Wallpaper protocol boundary missing: ${protocolContract}`)
 }
 for (const streamingContract of ['createReadStream', 'Readable.toWeb', 'Accept-Ranges', 'Content-Range', 'Content-Type', 'parseByteRange', "request.headers?.get?.('range')"]) {
   if (!wallpaperService.includes(streamingContract)) throw new Error(`Wallpaper video Range streaming contract missing: ${streamingContract}`)
 }
-const videoPayloadBranch = main.match(/if \(kind === 'video'\) \{([\s\S]*?)\s*\}\s*const dataUrl/)?.[1] || ''
+const videoPayloadStart = main.indexOf("if (kind === 'video')", main.indexOf('async function readAppearancePayload'))
+const videoPayloadEnd = main.indexOf("const info = kind === 'image'", videoPayloadStart)
+const videoPayloadBranch = videoPayloadStart >= 0 && videoPayloadEnd > videoPayloadStart ? main.slice(videoPayloadStart, videoPayloadEnd) : ''
 if (!videoPayloadBranch || /readFile|readThemeImageDataUrl|base64/.test(videoPayloadBranch) || !videoPayloadBranch.includes('MAX_THEME_VIDEO_BYTES')) {
   throw new Error('The 2 GB video appearance payload must publish only a streamed URL without reading the video into memory.')
 }
@@ -412,6 +443,24 @@ const videoResponseBody = wallpaperService.match(/async function createWallpaper
 if (!videoResponseBody.includes('createReadStream') || /readFile/.test(videoResponseBody)) {
   throw new Error('The wallpaper protocol handler must stream file ranges and never read the whole video.')
 }
+const imageResponseBody = wallpaperService.match(/async function createWallpaperMediaResponse[\s\S]*?\n\}/)?.[0] || ''
+if (!imageResponseBody.includes('createReadStream') || /readFile/.test(imageResponseBody)) {
+  throw new Error('Wallpaper library previews must stream managed images instead of serializing every card into memory.')
+}
+for (const libraryContract of [
+  'MAX_WALLPAPER_LIBRARY_ITEMS',
+  'safeManagedWallpaperPath',
+  'appearance:applyWallpaper',
+  'appearance:deleteWallpaper',
+  'wallpaper-${randomUUID().toLowerCase()}',
+  'Startup and ordinary card application always use the managed local copy.'
+]) {
+  if (!main.includes(libraryContract)) throw new Error(`Persistent managed wallpaper library contract missing: ${libraryContract}`)
+}
+for (const libraryServiceContract of ['MAX_WALLPAPER_LIBRARY_BYTES', 'assertWallpaperLibraryCapacity', 'cleanupOrphanedWallpaperStorage', 'createWallpaperMutationQueue', 'installManagedWallpaperCopy', 'revalidateProjectMediaPath', 'wallpaperStorageUsageBytes']) {
+  if (!wallpaperService.includes(libraryServiceContract)) throw new Error(`Wallpaper library service contract missing: ${libraryServiceContract}`)
+}
+if (!main.includes('wallpaperMutationQueue.run')) throw new Error('Wallpaper mutations must share a serialized main-process queue.')
 for (const rule of themeIntegration.matchAll(/([^{}]*html\[data-hd-ui-mode="(?:aurora|spatial|tactile)"\][^{}]*)\{([^}]*)\}/g)) {
   const targetsRoot = /\[(?:data-composer-card="true"|data-hd-surface="conversation")\]\s*(?:,|$)/.test(rule[1])
   if (targetsRoot && /transform\s*:\s*[^;]*(?:translate|scale)/.test(rule[2])) {

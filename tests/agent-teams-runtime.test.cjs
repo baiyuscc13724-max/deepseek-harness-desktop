@@ -79,6 +79,33 @@ test('busy lead relays steer inside the active turn instead of queuing delayed o
   assert.doesNotMatch(source, /await lead\.followup\(createUserMessage/u)
 })
 
+test('expansion boundary overlap is hierarchical, glob-aware, and platform-sensitive', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?expansion-boundaries=${Date.now()}`)
+  assert.equal(mod.fileBoundaryOverlap('src', 'src/a.js', { platform: 'linux' }), true)
+  assert.equal(mod.fileBoundaryOverlap('src/**', 'src/a.js', { platform: 'linux' }), true)
+  assert.equal(mod.fileBoundaryOverlap('src', 'src-a', { platform: 'linux' }), false)
+  assert.equal(mod.fileBoundaryOverlap('src', 'src2/a.js', { platform: 'linux' }), false)
+  assert.equal(mod.fileBoundaryOverlap('Foo.js', 'foo.js', { platform: 'linux' }), false)
+  assert.equal(mod.fileBoundaryOverlap('Src/**', 'src/a.js', { platform: 'linux' }), false)
+  assert.equal(mod.fileBoundaryOverlap('Foo.js', 'foo.js', { platform: 'win32' }), true)
+  assert.equal(mod.fileBoundaryOverlap('Src/**', 'src/a.js', { platform: 'win32' }), true)
+  assert.equal(mod.fileBoundaryOverlap('Foo.js', 'foo.js', { platform: 'linux', caseInsensitive: true }), true)
+  assert.equal(mod.resourceBoundaryOverlap('database/orders', 'database/orders/row-1'), true)
+  assert.equal(mod.resourceBoundaryOverlap('database/order', 'database/orders'), false)
+  const expansionInput = (left, right) => ({
+    sourceTaskId: 'source-task',
+    parallelBenefit: 'The two isolated files can be checked in parallel.',
+    workstreams: [{ title: 'Left', deliverable: 'Left result', acceptance_criteria: 'Left check', files: [left], resources: [] },
+      { title: 'Right', deliverable: 'Right result', acceptance_criteria: 'Right check', files: [right], resources: [] }]
+  })
+  assert.doesNotThrow(() => mod.normalizeExpansionRequest(expansionInput('src', 'src-a'), { platform: 'linux' }))
+  assert.doesNotThrow(() => mod.normalizeExpansionRequest(expansionInput('Foo.js', 'foo.js'), { platform: 'linux' }))
+  assert.throws(
+    () => mod.normalizeExpansionRequest(expansionInput('Foo.js', 'foo.js'), { platform: 'win32' }),
+    error => error && error.code === 'AGENT_TEAMS_EXPANSION_CONFLICT'
+  )
+})
+
 test('new team members re-read the latest tier route instead of using a hard-coded provider', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-team-live-routing-'))
   try {
@@ -292,12 +319,19 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(enabledPrompt, /active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent/u)
     assert.match(enabledPrompt, /Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph/u)
     assert.match(enabledPrompt, /report that need to the root, which decides whether to spawn another visible member under maxActiveTurns/u)
+    assert.match(enabledPrompt, /team_expansion_request; the request is a proposal, never authority to spawn/u)
+    assert.match(enabledPrompt, /critical-path reduction or independent-review value materially exceeds coordination cost/u)
+    assert.match(enabledPrompt, /existing external-resource ownership is not persisted and must be verified by the root/u)
+    assert.match(enabledPrompt, /first release\/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn/u)
+    assert.match(enabledPrompt, /Never invent a leader→group-leader→hidden-worker hierarchy/u)
     assert.match(enabledPrompt, /Every new member re-reads the latest route for its chosen tier/u)
     assert.match(enabledPrompt, /changing the subagent route never changes main-tier members/u)
     assert.match(tools.get('team_spawn').description, /existing members retain their creation route/u)
     assert.match(tools.get('team_start').description, /Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count/u)
     assert.match(tools.get('team_start').description, /one continuable helper should use ordinary subagent instead/u)
     assert.match(tools.get('team_start').description, /explicit user team request may override this automatic threshold/u)
+    assert.match(tools.get('team_expansion_request').description, /never spawns, creates tasks, or grants delegation authority/u)
+    assert.match(tools.get('team_expansion_request').description, /existing external-resource ownership remains a root approval check/u)
 
     const started = await tools.get('team_start').execute({ objective: 'Implement and verify collaboration' }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(started.ok, true)
@@ -328,8 +362,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(spawned.member.provider, 'test-provider')
     assert.equal(spawned.member.model, 'special-model')
     assert.match(starts[0].request.prompt[0].text, /Do not begin any task/u)
-    assert.match(followups[0].content[0].text, /If the assignment needs more parallel work, report that need to the root coordinator/u)
-    assert.match(followups[0].content[0].text, /without bypassing maxActiveTurns/u)
+    assert.match(followups[0].content[0].text, /use team_expansion_request with explicit deliverables, acceptance criteria, and non-overlapping file\/resource boundaries/u)
+    assert.match(followups[0].content[0].text, /root coordinator decides whether to create persistent tasks and visible peer members without bypassing maxMembers or maxActiveTurns/u)
     assert.equal(followups[0].options.source.kind, 'coordinator')
     assert.equal(followups[0].childId, 'worker-session')
 
@@ -455,6 +489,118 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(leadInboxNextStep.length, 1)
     assert.equal(leadInboxNextTurn.length, 1)
     assert.match(leadFollowups[0].content[0].text, /Progress while lead is idle/u)
+
+    const expansionSource = (await tools.get('team_task_create').execute({
+      team_id: started.team.id,
+      title: 'Own integration stream',
+      assignee_session_id: spawned.member.sessionId,
+      files: ['src']
+    }, { agent: rootAgent, signal: new AbortController().signal })).task
+    const otherActiveFileTask = (await tools.get('team_task_create').execute({
+      team_id: started.team.id,
+      title: 'Other active file owner',
+      files: ['packages/app']
+    }, { agent: rootAgent, signal: new AbortController().signal })).task
+    await tools.get('team_task_update').execute({
+      team_id: started.team.id, task_id: otherActiveFileTask.id, action: 'claim'
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    const validExpansionWorkstreams = [{
+      title: 'Read-only evidence',
+      deliverable: 'Return a concise evidence table.',
+      acceptance_criteria: 'Every claim cites one checked source.',
+      files: [],
+      resources: ['upstream-docs:read-only']
+    }, {
+      title: 'Regression fixture',
+      deliverable: 'Add a focused independent regression fixture.',
+      acceptance_criteria: 'The new fixture fails before the fix and passes after it.',
+      files: ['src/peer.js'],
+      resources: []
+    }]
+    await assert.rejects(
+      tools.get('team_expansion_request').execute({
+        team_id: started.team.id,
+        source_task_id: expansionSource.id,
+        parallel_benefit: 'Run independent evidence and regression work in parallel.',
+        workstreams: validExpansionWorkstreams
+      }, { agent: rootAgent, signal: new AbortController().signal }),
+      error => error && error.code === 'AGENT_TEAMS_EXPANSION_WORKER_REQUIRED'
+    )
+    activeInitiator = workerAgent
+    await assert.rejects(
+      tools.get('team_expansion_request').execute({
+        team_id: started.team.id,
+        source_task_id: expansionSource.id,
+        parallel_benefit: 'Run independent evidence and regression work in parallel.',
+        workstreams: validExpansionWorkstreams
+      }, { agent: workerAgent, signal: new AbortController().signal }),
+      error => error && error.code === 'AGENT_TEAMS_EXPANSION_TASK_REQUIRED'
+    )
+    await tools.get('team_task_update').execute({
+      team_id: started.team.id, task_id: expansionSource.id, action: 'claim'
+    }, { agent: workerAgent, signal: new AbortController().signal })
+    await assert.rejects(
+      tools.get('team_expansion_request').execute({
+        team_id: started.team.id,
+        source_task_id: expansionSource.id,
+        parallel_benefit: 'Two proposals must not claim the same resource hierarchy.',
+        workstreams: [{
+          title: 'Resource parent', deliverable: 'Inspect the resource.', acceptance_criteria: 'Report the result.',
+          files: [], resources: ['database/orders']
+        }, {
+          title: 'Resource child', deliverable: 'Inspect the child resource.', acceptance_criteria: 'Report the result.',
+          files: [], resources: ['database/orders/row-1']
+        }]
+      }, { agent: workerAgent, signal: new AbortController().signal }),
+      error => error && error.code === 'AGENT_TEAMS_EXPANSION_CONFLICT'
+    )
+    await assert.rejects(
+      tools.get('team_expansion_request').execute({
+        team_id: started.team.id,
+        source_task_id: expansionSource.id,
+        parallel_benefit: 'A glob that covers another active task would not be safe.',
+        workstreams: [{
+          title: 'Conflicting edit', deliverable: 'Edit another owner scope.', acceptance_criteria: 'The edit passes.',
+          files: ['packages/**'], resources: []
+        }]
+      }, { agent: workerAgent, signal: new AbortController().signal }),
+      error => error && error.code === 'AGENT_TEAMS_EXPANSION_CONFLICT'
+    )
+    await assert.rejects(
+      tools.get('team_expansion_request').execute({
+        team_id: started.team.id,
+        source_task_id: expansionSource.id,
+        parallel_benefit: 'Four branches exceed the three currently free member/turn slots.',
+        workstreams: Array.from({ length: 4 }, (_, index) => ({
+          title: `Capacity ${index}`, deliverable: `Outcome ${index}`, acceptance_criteria: `Check ${index}`,
+          files: [], resources: [`capacity-resource-${index}`]
+        }))
+      }, { agent: workerAgent, signal: new AbortController().signal }),
+      error => error && error.code === 'AGENT_TEAMS_EXPANSION_CAPACITY'
+    )
+    const expansion = await tools.get('team_expansion_request').execute({
+      team_id: started.team.id,
+      source_task_id: expansionSource.id,
+      parallel_benefit: 'Evidence collection and an isolated fixture shorten the critical path and add independent verification.',
+      workstreams: validExpansionWorkstreams
+    }, { agent: workerAgent, signal: new AbortController().signal })
+    activeInitiator = rootAgent
+    assertLosslessJson(expansion)
+    assert.equal(expansion.ok, true)
+    assert.equal(expansion.expansionRequest.sourceTaskId, expansionSource.id)
+    assert.equal(expansion.expansionRequest.requestedBy.name, 'Researcher')
+    assert.equal(expansion.expansionRequest.workstreams.length, 2)
+    assert.equal(expansion.expansionRequest.workstreams[1].files[0], 'src/peer.js', 'the broad source parent is excluded at proposal time')
+    assert.equal(expansion.expansionRequest.capacity.availableWorkstreams, 3)
+    assert.equal(expansion.message.status, 'delivered')
+    assert.equal(starts.length, 1, 'an expansion request must never spawn a member automatically')
+    assert.equal(leadSteers.length, 2)
+    assert.match(leadSteers.at(-1).content[0].text, /Structured agent-team expansion request/u)
+    assert.match(leadSteers.at(-1).content[0].text, /does not persist or verify existing external-resource ownership/u)
+    assert.match(leadSteers.at(-1).content[0].text, /first release\/restructure that parent so its in-progress file scope no longer overlaps/u)
+    const expansionPersisted = await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')
+    assert.match(expansionPersisted, new RegExp(expansion.expansionRequest.id, 'u'))
+    assert.match(expansionPersisted, /Structured agent-team expansion request/u)
 
     const sibling = (await tools.get('team_start').execute({ objective: 'Coordinate peer team' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const peerSpawn = await tools.get('team_spawn').execute({
@@ -595,7 +741,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const persistedTeam = persisted.teams.find(team => team.id === started.team.id)
     assert.equal(persistedTeam.state, 'closed')
     assert.equal(persistedTeam.messages.find(message => message.body === 'Race with shutdown').status, 'delivered')
-    assert.equal(leadSteers.length, 1)
+    assert.equal(leadSteers.length, 2)
     assert.equal(leadFollowups.length, 1)
     assert.equal(leadInboxNextStep.length, 0)
     assert.equal(leadInboxNextTurn.length, 0)

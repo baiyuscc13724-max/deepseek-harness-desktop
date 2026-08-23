@@ -22,6 +22,12 @@ test('desktop Git status UI is wired through fixed IPC methods', async () => {
   assert.ok(renderer.includes("'authenticate-github'"))
   assert.ok(renderer.includes("'prepare-git-runtime'"))
   assert.ok(renderer.includes("api.openGitAuthentication('github')"))
+  assert.match(renderer, /target\.hostname === 'authenticate-github'\) \{\s*if \(gitRuntimeState\.authenticating\) return/u)
+  assert.match(renderer, /等待浏览器授权/u)
+  assert.match(renderer, /GCM 拉起默认浏览器，并通过短期本机回调完成登录/u)
+  assert.doesNotMatch(renderer, /不使用临时 127\.0\.0\.1 回调/u)
+  assert.match(renderer, /GitHub 授权完成，连接状态已自动刷新/u)
+  assert.match(renderer, /const status = await api\.refreshGitRuntimeStatus\(\)/u)
 })
 
 test('Git renderer boundary publishes only normalized status and never requests secrets', async () => {

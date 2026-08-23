@@ -179,6 +179,20 @@
     }
   }
 
+  // Native browser events (loading/title/history) carry a visibility snapshot,
+  // but they are not navigation intents. The sole exception is the first
+  // renderer hydration: if Electron already has the browser sidebar open, the
+  // renderer may restore that browser surface. Once the user has selected or
+  // closed any workspace mode, restorePending is false and background browser
+  // events must never steal the active pane.
+  function browserStateModeAction({ restorePending, nativeVisible, workspaceOpen, activeModeId } = {}) {
+    const canRestore = restorePending === true
+      && nativeVisible === true
+      && workspaceOpen !== true
+      && (activeModeId == null || activeModeId === 'browser')
+    return canRestore ? 'restore-browser' : 'sync-only'
+  }
+
   /* ------------------------------------------------------------------ *
    * DOM 接线层：挂在真实页面上                                          *
    * ------------------------------------------------------------------ */
@@ -580,6 +594,7 @@
     DEFAULTS,
     create: createWorkspace,
     createCore, // 纯逻辑核心，Node 测试可直接使用
+    browserStateModeAction,
     isShortcutPressed: (event) => {
       const key = String(event?.key || '').toLowerCase()
       return Boolean(event && (event.ctrlKey || event.metaKey) && event.shiftKey && (key === ']' || key === '}'))
