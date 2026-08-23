@@ -40,6 +40,7 @@ test('desktop tray exposes low-profile data controls and explicit exit actions',
 test('closing the main window hides it while tray exit performs the real quit', () => {
   const source = readFileSync(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
+  assert.match(source, /mainWindow\.on\('session-end', \(\) =>[\s\S]*isQuitting = true[\s\S]*stopRuntime\(\)[\s\S]*app\.quit\(\)/)
   assert.match(source, /mainWindow\.on\('close',[\s\S]*if \(isQuitting\) return[\s\S]*event\.preventDefault\(\)[\s\S]*mainWindow\.hide\(\)/)
   assert.match(source, /quitApp:\s*\(\) => app\.quit\(\)/)
   assert.match(source, /app\.on\('before-quit',[\s\S]*isQuitting = true/)

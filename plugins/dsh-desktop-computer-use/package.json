@@ -1,1 +1,1 @@
-{"name":"dsh-desktop-computer-use","version":"1.0.37","type":"module","description":"Harness Desktop constrained window-only computer use tool","license":"MIT","exports":"./lib/index.js"}
+{"name":"dsh-desktop-computer-use","version":"1.0.38","type":"module","description":"Harness Desktop constrained window-only computer use tool","license":"MIT","exports":"./lib/index.js"}

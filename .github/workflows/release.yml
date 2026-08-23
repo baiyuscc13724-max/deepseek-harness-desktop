@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing immutable release tag to build and publish
         required: true
-        default: v1.0.37
+        default: v1.0.38
       request_id:
         description: Unique publisher request identity
         required: false
@@ -14,18 +14,18 @@ on:
     tags:
       - 'v*'
     branches:
-      - 'release-retry/v1.0.37'
+      - 'release-retry/v1.0.38'
 
 run-name: Release ${{ inputs.tag || github.ref_name }} · ${{ inputs.request_id || github.run_id }}
 
 env:
-  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.37' && 'v1.0.37') || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.38' && 'v1.0.38') || github.ref_name }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.37' && 'v1.0.37') || github.ref_name }}
+  group: release-${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.38' && 'v1.0.38') || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -291,13 +291,16 @@ jobs:
           set -euo pipefail
           prerelease=false
           [[ "$RELEASE_TAG" == *-* ]] && prerelease=true
+          jq -n \
+            --arg tag_name "$RELEASE_TAG" \
+            --arg target_commitish "$(git rev-parse HEAD)" \
+            --arg name "Harness Desktop $RELEASE_TAG" \
+            --rawfile body release-notes.md \
+            --argjson prerelease "$prerelease" \
+            '{tag_name:$tag_name,target_commitish:$target_commitish,name:$name,body:$body,draft:true,prerelease:$prerelease}' \
+            > create-release-request.json
           if ! gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
-            -f tag_name="$RELEASE_TAG" \
-            -f target_commitish="$(git rev-parse HEAD)" \
-            -f name="Harness Desktop $RELEASE_TAG" \
-            --raw-field "body=$(cat release-notes.md)" \
-            -F draft=true \
-            -F prerelease="$prerelease" \
+            --input create-release-request.json \
             > created-release.json 2> create-release-error.txt; then
             if grep -q 'HTTP 422' create-release-error.txt; then
               echo "HTTP 422: release $RELEASE_TAG already exists; refusing mutation." >&2
@@ -307,26 +310,130 @@ jobs:
             exit 1
           fi
           release_id="$(jq -er '.id' created-release.json)"
-          test "$(jq -r '.tag_name' created-release.json)" = "$RELEASE_TAG"
-          test "$(jq -r '.draft' created-release.json)" = true
-          # gh release upload keeps its default duplicate-name refusal.
-          gh release upload "$RELEASE_TAG" release-files/* --repo "$GITHUB_REPOSITORY"
+          jq -e --argjson id "$release_id" --slurpfile expected create-release-request.json '
+            .id == $id and .tag_name == $expected[0].tag_name and
+            .target_commitish == $expected[0].target_commitish and .name == $expected[0].name and
+            .body == $expected[0].body and .draft == $expected[0].draft and .prerelease == $expected[0].prerelease
+          ' created-release.json >/dev/null
+          for file in release-files/*; do
+            name="$(basename "$file")"
+            size="$(stat -c %s "$file")"
+            encoded_name="$(jq -rn --arg value "$name" '$value | @uri')"
+            # Never resolve the upload target by tag: GitHub can retain more than
+            # one draft for a tag, so only this atomic create's immutable id is safe.
+            curl --fail-with-body --silent --show-error \
+              --retry 3 --retry-all-errors --retry-delay 2 \
+              --request POST \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              --header 'Content-Type: application/octet-stream' \
+              --data-binary "@$file" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$encoded_name" \
+              > uploaded-asset.json
+            jq -e --arg name "$name" --argjson size "$size" '.name == $name and .size == $size' uploaded-asset.json >/dev/null
+          done
           gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
             --jq '{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}' > draft-snapshot.json
       - name: Verify exact draft assets and immutable snapshot metadata
         shell: bash
         run: |
           set -euo pipefail
-          test "$(jq -r '.draft' draft-snapshot.json)" = true
-          test "$(jq -r '.tag_name' draft-snapshot.json)" = "$RELEASE_TAG"
+          release_id="$(jq -er '.id' created-release.json)"
+          jq -e --argjson id "$release_id" --slurpfile expected create-release-request.json '
+            .id == $id and .tag_name == $expected[0].tag_name and
+            .target_commitish == $expected[0].target_commitish and .name == $expected[0].name and
+            .body == $expected[0].body and .draft == $expected[0].draft and .prerelease == $expected[0].prerelease
+          ' draft-snapshot.json >/dev/null || { echo 'Initial private draft identity differs from the exact create request.' >&2; exit 1; }
           expected="$(find release-files -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
           actual="$(jq -r '.assets[].name' draft-snapshot.json | LC_ALL=C sort)"
           diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
           jq -e 'all(.assets[]; (.id | type == "number") and (.name | type == "string") and (.size | type == "number") and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))' draft-snapshot.json >/dev/null
+      - name: Bind the signed previous stable Windows installer to an exact public asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs')
+          const { compareVersions, validateAndVerifyManifest } = require('./electron/bridge/component-update-contract.cjs')
+          const { validateAndVerifyDesktopReleaseManifest } = require('./electron/bridge/desktop-release-contract.cjs')
+
+          const repository = String(process.env.GITHUB_REPOSITORY || '')
+          if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error('GitHub repository identity is invalid.')
+          const currentVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version
+          if (!/^\d+\.\d+\.\d+$/.test(currentVersion)) throw new Error('Current product version is not a stable semantic version.')
+          const desktopSources = JSON.parse(fs.readFileSync('release-update-sources.json', 'utf8'))
+          const componentSources = JSON.parse(fs.readFileSync('component-update-sources.json', 'utf8'))
+          const desktopManifest = validateAndVerifyDesktopReleaseManifest(
+            JSON.parse(fs.readFileSync('release-manifest.json', 'utf8')),
+            desktopSources.trustedKeys
+          )
+          const stable = validateAndVerifyManifest(
+            JSON.parse(fs.readFileSync('component-feeds/stable/win32-x64.json', 'utf8')),
+            componentSources.trustedKeys
+          )
+          if (stable.channel !== 'stable' || !/^\d+\.\d+\.\d+$/.test(stable.releaseVersion)) throw new Error('Windows feed is not a stable release.')
+          if (compareVersions(stable.releaseVersion, currentVersion) >= 0) throw new Error('Signed Windows stable version is not older than the product tag.')
+          if (!stable.fallback || stable.fallback.version !== stable.releaseVersion) throw new Error('Signed Windows stable feed has no same-version full-installer fallback.')
+
+          const stableTag = `v${stable.releaseVersion}`
+          const matches = desktopManifest.filter(release => release.tag_name === stableTag && release.draft === false && release.prerelease === false)
+          if (matches.length !== 1) throw new Error('Signed desktop manifest does not contain exactly one matching public stable release.')
+          const release = matches[0]
+          const expectedReleaseName = `Harness Desktop ${stableTag}`
+          const expectedReleaseUrl = `https://github.com/${repository}/releases/tag/${stableTag}`
+          if (release.name !== expectedReleaseName || release.html_url !== expectedReleaseUrl) throw new Error('Signed previous stable release identity is not the expected GitHub release.')
+          const assetName = `Harness-Desktop-${stable.releaseVersion}-win-x64.exe`
+          const assets = release.assets.filter(asset => asset.name === assetName)
+          if (assets.length !== 1) throw new Error('Signed desktop manifest does not contain exactly one previous stable Windows installer.')
+          const asset = assets[0]
+          const expectedAssetUrl = `https://github.com/${repository}/releases/download/${stableTag}/${assetName}`
+          if (asset.browser_download_url !== expectedAssetUrl) throw new Error('Signed previous stable installer URL is not the exact GitHub tag asset.')
+          if (stable.fallback.size !== asset.size || stable.fallback.sha256 !== asset.sha256 || !stable.fallback.urls.includes(expectedAssetUrl)) {
+            throw new Error('Signed Windows stable fallback does not match the signed desktop installer asset.')
+          }
+          fs.writeFileSync('previous-stable-selection.json', `${JSON.stringify({
+            version: stable.releaseVersion,
+            tag: stableTag,
+            releaseName: expectedReleaseName,
+            releaseHtmlUrl: expectedReleaseUrl,
+            desktopKeyId: release.keyId,
+            componentKeyId: stable.keyId,
+            asset: {
+              name: assetName,
+              size: asset.size,
+              sha256: asset.sha256,
+              browserDownloadUrl: expectedAssetUrl
+            }
+          }, null, 2)}\n`)
+          NODE
+
+          stable_tag="$(jq -er '.tag' previous-stable-selection.json)"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$stable_tag" > previous-public-release.json
+          jq -e --slurpfile release previous-public-release.json '
+            . as $expected |
+            ($release[0].assets | map(select(.name == $expected.asset.name))) as $assets |
+            $release[0].tag_name == $expected.tag and $release[0].draft == false and $release[0].prerelease == false and
+            $release[0].name == $expected.releaseName and $release[0].html_url == $expected.releaseHtmlUrl and
+            ($assets | length) == 1 and $assets[0].size == $expected.asset.size and
+            $assets[0].digest == ("sha256:" + $expected.asset.sha256) and
+            $assets[0].browser_download_url == $expected.asset.browserDownloadUrl
+          ' previous-stable-selection.json >/dev/null || { echo 'Exact public previous stable release differs from the signed tag manifests.' >&2; exit 1; }
+          jq --slurpfile release previous-public-release.json '
+            . as $expected |
+            ($release[0].assets | map(select(.name == $expected.asset.name)) | .[0]) as $asset |
+            . + { releaseId: $release[0].id, asset: (.asset + { id: $asset.id, digest: $asset.digest }) }
+          ' previous-stable-selection.json > previous-stable.json
+          jq -e '
+            (.releaseId | type == "number") and (.asset.id | type == "number") and
+            (.asset.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+          ' previous-stable.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: draft-snapshot
-          path: draft-snapshot.json
+          path: |
+            draft-snapshot.json
+            previous-stable.json
           if-no-files-found: error
           retention-days: 14
 
@@ -334,7 +441,7 @@ jobs:
     name: Install authenticated Windows draft
     needs: stage-draft
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     # GitHub App tokens need contents:write to read private draft releases by ID
     # and to download their assets before publication; this job never mutates them.
     permissions:
@@ -346,7 +453,7 @@ jobs:
         with:
           name: draft-snapshot
           path: draft-state
-      - name: Authenticated draft download, checksum, install, self-test, and uninstall
+      - name: Authenticated draft download, checksum, stable upgrade, self-test, and uninstall
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -354,9 +461,32 @@ jobs:
           $installRoot = Join-Path $env:RUNNER_TEMP 'authenticated-draft-install'
           $profileRoot = Join-Path $env:RUNNER_TEMP 'authenticated-draft-profile'
           $reportPath = Join-Path $env:RUNNER_TEMP 'authenticated-installed-selftest.json'
+          $previousReportPath = Join-Path $env:RUNNER_TEMP 'authenticated-previous-stable-selftest.json'
+          $previousInstallerPath = Join-Path $env:RUNNER_TEMP 'authenticated-previous-stable-installer.exe'
+          $upgradeLog = Join-Path $env:RUNNER_TEMP 'authenticated-upgrade-installer.log'
           $portableProfile = Join-Path $env:RUNNER_TEMP 'authenticated-portable-profile'
           $portableReport = Join-Path $env:RUNNER_TEMP 'authenticated-portable-selftest.json'
-          Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
+          $trackedProcessIds = @()
+          function Get-InstalledAppProcesses {
+            param([string] $Executable)
+            $expectedPath = [IO.Path]::GetFullPath($Executable)
+            return @(Get-Process -Name 'Harness Desktop' -ErrorAction SilentlyContinue | Where-Object {
+              try { [String]::Equals([IO.Path]::GetFullPath($_.Path), $expectedPath, [StringComparison]::OrdinalIgnoreCase) } catch { $false }
+            })
+          }
+          function Find-DllHoldingProcess {
+            param([string] $Executable, [string] $DllPath)
+            $expectedDll = [IO.Path]::GetFullPath($DllPath)
+            foreach ($candidate in @(Get-InstalledAppProcesses -Executable $Executable)) {
+              try {
+                foreach ($module in @($candidate.Modules)) {
+                  if ([String]::Equals([IO.Path]::GetFullPath($module.FileName), $expectedDll, [StringComparison]::OrdinalIgnoreCase)) { return $candidate }
+                }
+              } catch {}
+            }
+            return $null
+          }
+          Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           try {
             $snapshotText = (Get-Content 'draft-state/draft-snapshot.json' -Raw).Trim()
             $snapshot = $snapshotText | ConvertFrom-Json
@@ -373,6 +503,22 @@ jobs:
               'X-GitHub-Api-Version' = '2022-11-28'
               'User-Agent' = 'harness-desktop-release-gate'
             }
+            $version = $env:RELEASE_TAG -replace '^v', ''
+            $previous = Get-Content 'draft-state/previous-stable.json' -Raw | ConvertFrom-Json
+            if ($previous.version -notmatch '^\d+\.\d+\.\d+$' -or [version]$previous.version -ge [version]$version) { throw 'Bound previous stable version is invalid or not older than the draft.' }
+            if ($previous.tag -ne "v$($previous.version)" -or $previous.releaseId -notmatch '^\d+$' -or $previous.asset.id -notmatch '^\d+$') { throw 'Bound previous stable release identity is invalid.' }
+            if ($previous.asset.name -ne "Harness-Desktop-$($previous.version)-win-x64.exe" -or $previous.asset.digest -ne "sha256:$($previous.asset.sha256)") { throw 'Bound previous stable installer identity is invalid.' }
+            $previousRelease = gh api "repos/$env:GITHUB_REPOSITORY/releases/$($previous.releaseId)" --jq '{id,tag_name,draft,prerelease,name,html_url,assets:([.assets[] | {id,name,size,digest,browser_download_url}] | sort_by(.name))}' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw 'Authenticated exact-id lookup for the previous public stable release failed.' }
+            $previousAssets = @($previousRelease.assets | Where-Object { $_.name -eq $previous.asset.name })
+            if ($previousRelease.id.ToString() -ne $previous.releaseId.ToString() -or $previousRelease.tag_name -ne $previous.tag -or $previousRelease.draft -or $previousRelease.prerelease) { throw 'Previous stable release is no longer the exact public release bound by the signed manifests.' }
+            if ($previousRelease.name -ne $previous.releaseName -or $previousRelease.html_url -ne $previous.releaseHtmlUrl -or $previousAssets.Count -ne 1) { throw 'Previous stable release metadata changed after signed-manifest binding.' }
+            $previousAsset = $previousAssets[0]
+            if ($previousAsset.id.ToString() -ne $previous.asset.id.ToString() -or $previousAsset.size -ne [int64]$previous.asset.size -or $previousAsset.digest -ne $previous.asset.digest -or $previousAsset.browser_download_url -ne $previous.asset.browserDownloadUrl) { throw 'Previous stable installer asset changed after signed-manifest binding.' }
+            $previousInstaller = $previousInstallerPath
+            Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($previous.asset.id)" -Headers $headers -OutFile $previousInstaller
+            if ((Get-Item -LiteralPath $previousInstaller).Length -ne [int64]$previous.asset.size) { throw 'Previous stable installer size mismatch.' }
+            if ((Get-FileHash -LiteralPath $previousInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $previous.asset.sha256) { throw 'Previous stable installer SHA-256 mismatch.' }
             foreach ($asset in $snapshot.assets) {
               if ($asset.id -notmatch '^\d+$' -or [IO.Path]::GetFileName($asset.name) -ne $asset.name -or $asset.digest -notmatch '^sha256:([0-9a-f]{64})$') { throw "Unsafe or incomplete snapshot asset metadata: $($asset.name)" }
               $expectedDigest = $asset.digest.Substring(7)
@@ -403,7 +549,6 @@ jobs:
               if ($actualHash -ne $entry.Value) { throw "SHA-256 mismatch for $($entry.Key)." }
             }
 
-            $version = $env:RELEASE_TAG -replace '^v', ''
             $portable = Join-Path $downloadRoot "Harness-Desktop-$version-portable-x64.exe"
             if (-not (Test-Path -LiteralPath $portable -PathType Leaf)) { throw "Expected portable executable is missing: $portable" }
             $portableSelfTest = Start-Process -FilePath $portable -ArgumentList @('--self-test', "--self-test-output=$portableReport", "--user-data-dir=$portableProfile", "--harness-user-data-dir=$portableProfile") -Wait -PassThru
@@ -414,26 +559,73 @@ jobs:
 
             $installer = Join-Path $downloadRoot "Harness-Desktop-$version-win-x64.exe"
             if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Expected installer is missing: $installer" }
-            $install = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -Wait -PassThru
-            if ($install.ExitCode -ne 0) { throw "Downloaded installer exited with code $($install.ExitCode)." }
+            New-Item -ItemType Directory -Path $profileRoot | Out-Null
+            $markerPath = Join-Path $profileRoot 'stable-upgrade-profile.marker'
+            $markerValue = "stable-$($previous.version)-to-$version-$([Guid]::NewGuid().ToString('N'))"
+            [IO.File]::WriteAllText($markerPath, $markerValue, [Text.UTF8Encoding]::new($false))
+
+            $previousInstall = Start-Process -FilePath $previousInstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -Wait -PassThru
+            if ($previousInstall.ExitCode -ne 0) { throw "Previous stable installer exited with code $($previousInstall.ExitCode)." }
             $installedExe = Join-Path $installRoot 'Harness Desktop.exe'
             $installedAsar = Join-Path $installRoot 'resources/app.asar'
-            if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) { throw 'Installed executable is missing.' }
-            if (-not (Test-Path -LiteralPath $installedAsar -PathType Leaf)) { throw 'Installed app.asar is missing.' }
+            $installedD3d = Join-Path $installRoot 'd3dcompiler_47.dll'
+            if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf) -or -not (Test-Path -LiteralPath $installedAsar -PathType Leaf) -or -not (Test-Path -LiteralPath $installedD3d -PathType Leaf)) { throw 'Previous stable installation is missing the executable, app.asar, or d3dcompiler_47.dll.' }
+            $previousSelfTest = Start-Process -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$previousReportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -Wait -PassThru
+            if ($previousSelfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $previousReportPath -PathType Leaf)) { throw 'Previous stable installed --self-test failed or omitted its JSON report.' }
+            $previousReport = Get-Content -LiteralPath $previousReportPath -Raw | ConvertFrom-Json
+            $previousReport | ConvertTo-Json -Depth 8
+            if (-not $previousReport.ok -or $previousReport.product.version -ne $previous.version) { throw 'Previous stable installed self-test JSON failed or reported the wrong version.' }
+            if ([IO.File]::ReadAllText($markerPath) -cne $markerValue) { throw 'Previous stable self-test did not preserve the upgrade profile marker.' }
+
+            $oldLauncher = Start-Process -FilePath $installedExe -ArgumentList @("--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -PassThru
+            $lockingProcess = $null
+            for ($i = 0; $i -lt 90 -and -not $lockingProcess; $i++) {
+              Start-Sleep -Milliseconds 500
+              $lockingProcess = Find-DllHoldingProcess -Executable $installedExe -DllPath $installedD3d
+            }
+            if (-not $lockingProcess) { throw 'Previous stable desktop never loaded its installed d3dcompiler_47.dll.' }
+            $trackedProcessIds = @(Get-InstalledAppProcesses -Executable $installedExe | ForEach-Object Id)
+            if ($trackedProcessIds.Count -eq 0 -or $trackedProcessIds -notcontains $lockingProcess.Id) { throw 'Could not bind the running previous stable desktop process set.' }
+
+            # v1.0.35 hides its BrowserWindow instead of exiting when Restart
+            # Manager asks it to close. The candidate installer must carry the
+            # CloseApplications=force contract itself; do not override it here,
+            # otherwise this gate could pass while the shipped installer regressed.
+            # Never restart the old application after the upgrade.
+            # Do not pass /CLOSEAPPLICATIONS: legacy installers translate that
+            # old updater flag into an interactive compatibility wizard.
+            $upgrade = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NORESTARTAPPLICATIONS', '/LOGCLOSEAPPLICATIONS', "/LOG=$upgradeLog", "/DIR=$installRoot") -Wait -PassThru
+            if ($upgrade.ExitCode -ne 0) {
+              if (Test-Path -LiteralPath $upgradeLog -PathType Leaf) { Get-Content -LiteralPath $upgradeLog }
+              throw "Authenticated draft upgrade installer exited with code $($upgrade.ExitCode)."
+            }
+            for ($i = 0; $i -lt 40 -and @(Get-InstalledAppProcesses -Executable $installedExe).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }
+            $aliveOldProcesses = @($trackedProcessIds | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+            if ($aliveOldProcesses.Count -ne 0) { throw 'Authenticated draft installer did not close every previous stable desktop process.' }
+            Start-Sleep -Seconds 3
+            if (@(Get-InstalledAppProcesses -Executable $installedExe).Count -ne 0) { throw 'RestartApplications=no contract failed: the desktop restarted after the silent upgrade.' }
+            if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf) -or -not (Test-Path -LiteralPath $installedAsar -PathType Leaf)) { throw 'Upgraded executable or app.asar is missing.' }
+            if ([IO.File]::ReadAllText($markerPath) -cne $markerValue) { throw 'Authenticated draft upgrade did not preserve the same profile marker.' }
             $selfTest = Start-Process -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$reportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -Wait -PassThru
-            if ($selfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Installed --self-test failed or omitted its JSON report.' }
+            if ($selfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Upgraded installed --self-test failed or omitted its JSON report.' }
             $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
             $report | ConvertTo-Json -Depth 8
-            if (-not $report.ok -or $report.product.version -ne $version) { throw 'Installed self-test JSON failed or reported the wrong version.' }
+            if (-not $report.ok -or $report.product.version -ne $version) { throw 'Upgraded installed self-test JSON failed or reported the wrong version.' }
+            if ([IO.File]::ReadAllText($markerPath) -cne $markerValue) { throw 'Upgraded self-test did not preserve the same profile marker.' }
             $uninstaller = Get-ChildItem -LiteralPath $installRoot -File -Filter 'unins*.exe' | Select-Object -First 1
-            if (-not $uninstaller) { throw 'Installed uninstaller is missing.' }
+            if (-not $uninstaller) { throw 'Upgraded installed uninstaller is missing.' }
             $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
             if ($uninstall.ExitCode -ne 0) { throw "Windows uninstaller exited with code $($uninstall.ExitCode)." }
             for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $installRoot); $i++) { Start-Sleep -Milliseconds 500 }
             if (Test-Path -LiteralPath $installRoot) { throw 'Uninstaller left the temporary installation directory behind.' }
           }
           finally {
-            Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
+            foreach ($trackedId in @($trackedProcessIds)) { Stop-Process -Id $trackedId -Force -ErrorAction SilentlyContinue }
+            try {
+              $cleanupUninstaller = Get-ChildItem -LiteralPath $installRoot -File -Filter 'unins*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($cleanupUninstaller) { Start-Process -FilePath $cleanupUninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -ErrorAction SilentlyContinue | Out-Null }
+            } catch {}
+            Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           }
 
   publish:
@@ -450,15 +642,21 @@ jobs:
         with:
           name: draft-snapshot
           path: draft-state
-      - name: Reconfirm draft and assets are unchanged before publication
+      - name: Reconfirm exact draft and publish by immutable release id
         shell: bash
         run: |
           set -euo pipefail
+          projection='{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}'
           snapshot_id="$(jq -er '.id' draft-state/draft-snapshot.json)"
-          gh api "repos/$GITHUB_REPOSITORY/releases/$snapshot_id" \
-            --jq '{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}' > current-draft.json
+          gh api "repos/$GITHUB_REPOSITORY/releases/$snapshot_id" --jq "$projection" > current-draft.json
           test "$(jq -r '.draft' current-draft.json)" = true
           test "$(jq -r '.tag_name' current-draft.json)" = "$RELEASE_TAG"
           diff -u <(jq -S . draft-state/draft-snapshot.json) <(jq -S . current-draft.json)
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
-          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = false
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$snapshot_id" -F draft=false --jq "$projection" > published.json
+          jq -e --arg tag "$RELEASE_TAG" --arg id "$snapshot_id" '
+            (.id | tostring) == $id and .tag_name == $tag and .draft == false and .prerelease == false
+          ' published.json >/dev/null
+          jq '.draft = false' draft-state/draft-snapshot.json > expected-published.json
+          diff -u <(jq -S . expected-published.json) <(jq -S . published.json)
+          gh api "repos/$GITHUB_REPOSITORY/releases/$snapshot_id" --jq "$projection" > current-published.json
+          diff -u <(jq -S . expected-published.json) <(jq -S . current-published.json)

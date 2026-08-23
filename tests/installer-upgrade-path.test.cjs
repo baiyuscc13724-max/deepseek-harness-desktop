@@ -20,7 +20,8 @@ test('Windows installer preserves both current Inno and legacy NSIS install dire
 })
 
 test('Windows installer closes the running desktop before replacing locked runtime DLLs', () => {
-  assert.match(installer, /^CloseApplications=yes$/m)
+  assert.match(installer, /^CloseApplications=force$/m)
   assert.match(installer, /^RestartApplications=no$/m)
+  assert.doesNotMatch(installer, /^CloseApplications=yes$/m)
   assert.doesNotMatch(installer, /^CloseApplications=no$/m)
 })

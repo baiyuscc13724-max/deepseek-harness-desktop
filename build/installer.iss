@@ -43,7 +43,10 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-CloseApplications=yes
+; Legacy tray builds turn WM_CLOSE into hide-to-tray and can leave the bundled
+; Electron-as-Node runtime locking app DLLs. Force is required so those already
+; installed versions can still be upgraded; current builds also honor WM_ENDSESSION.
+CloseApplications=force
 RestartApplications=no
 MinVersion=10.0
 

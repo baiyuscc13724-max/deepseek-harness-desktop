@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-memory-tools",
-  "version": "1.0.37",
+  "version": "1.0.38",
   "type": "module",
   "description": "Harness Desktop privacy-bounded automatic local memory tool",
   "license": "MIT",

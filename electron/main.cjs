@@ -3439,6 +3439,16 @@ function createWindow() {
   })
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
+  mainWindow.on('session-end', () => {
+    // Windows Restart Manager sends WM_ENDSESSION with ENDSESSION_CLOSEAPP
+    // before replacing locked files. Older Harness builds hide on WM_CLOSE
+    // because the tray owns the normal close lifecycle, so explicitly enter
+    // the real quit path and release the bundled runtime for every committed
+    // Windows session end (which can no longer be cancelled at this stage).
+    isQuitting = true
+    stopRuntime()
+    app.quit()
+  })
   mainWindow.on('close', event => {
     if (isQuitting) return
     event.preventDefault()

@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing immutable product tag
         required: true
-        default: v1.0.28
+        default: v1.0.38
       source_run_id:
         description: Failed release run whose platform build jobs all passed
         required: true
@@ -317,6 +317,7 @@ jobs:
           $reportPath = Join-Path $env:RUNNER_TEMP 'recovered-installed-selftest.json'
           $previousReportPath = Join-Path $env:RUNNER_TEMP 'recovered-previous-stable-selftest.json'
           $previousInstallerPath = Join-Path $env:RUNNER_TEMP 'recovered-previous-stable-installer.exe'
+          $upgradeLog = Join-Path $env:RUNNER_TEMP 'recovered-upgrade-installer.log'
           $portableProfile = Join-Path $env:RUNNER_TEMP 'recovered-portable-profile'
           $portableReport = Join-Path $env:RUNNER_TEMP 'recovered-portable-selftest.json'
           $trackedProcessIds = @()
@@ -339,7 +340,7 @@ jobs:
             }
             return $null
           }
-          Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           try {
             $snapshotText = (Get-Content 'draft-state/draft-snapshot.json' -Raw).Trim()
             $snapshot = $snapshotText | ConvertFrom-Json
@@ -441,8 +442,18 @@ jobs:
             $trackedProcessIds = @(Get-InstalledAppProcesses -Executable $installedExe | ForEach-Object Id)
             if ($trackedProcessIds.Count -eq 0 -or $trackedProcessIds -notcontains $lockingProcess.Id) { throw 'Could not bind the running previous stable desktop process set.' }
 
-            $upgrade = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -Wait -PassThru
-            if ($upgrade.ExitCode -ne 0) { throw "Recovered draft upgrade installer exited with code $($upgrade.ExitCode)." }
+            # v1.0.35 hides its BrowserWindow instead of exiting when Restart
+            # Manager asks it to close. The candidate installer must carry the
+            # CloseApplications=force contract itself; do not override it here,
+            # otherwise this gate could pass while the shipped installer regressed.
+            # Never restart the old application after the upgrade.
+            # Do not pass /CLOSEAPPLICATIONS: legacy installers translate that
+            # old updater flag into an interactive compatibility wizard.
+            $upgrade = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NORESTARTAPPLICATIONS', '/LOGCLOSEAPPLICATIONS', "/LOG=$upgradeLog", "/DIR=$installRoot") -Wait -PassThru
+            if ($upgrade.ExitCode -ne 0) {
+              if (Test-Path -LiteralPath $upgradeLog -PathType Leaf) { Get-Content -LiteralPath $upgradeLog }
+              throw "Recovered draft upgrade installer exited with code $($upgrade.ExitCode)."
+            }
             for ($i = 0; $i -lt 40 -and @(Get-InstalledAppProcesses -Executable $installedExe).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }
             $aliveOldProcesses = @($trackedProcessIds | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
             if ($aliveOldProcesses.Count -ne 0) { throw 'Recovered draft installer did not close every previous stable desktop process.' }
@@ -469,7 +480,7 @@ jobs:
               $cleanupUninstaller = Get-ChildItem -LiteralPath $installRoot -File -Filter 'unins*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
               if ($cleanupUninstaller) { Start-Process -FilePath $cleanupUninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -ErrorAction SilentlyContinue | Out-Null }
             } catch {}
-            Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           }
 
   publish:

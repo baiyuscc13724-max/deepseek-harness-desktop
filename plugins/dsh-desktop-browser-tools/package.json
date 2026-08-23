@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-browser-tools",
-  "version": "1.0.37",
+  "version": "1.0.38",
   "type": "module",
   "description": "Harness Desktop first-party browser control tool adapter",
   "license": "MIT",

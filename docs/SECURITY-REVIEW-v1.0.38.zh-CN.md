@@ -1,15 +1,15 @@
-# Harness Desktop v1.0.37 安全、权限与隐私审查
+# Harness Desktop v1.0.38 安全、权限与隐私审查
 
 范围：启动与覆盖更新、旧版更新兼容、设置/模型/会话/定时任务界面、右侧浏览器和 Git 授权、持久壁纸库、本地记忆默认值、扁平代理团队扩员，以及既有不可变发布链。
 
 ## 当前结论
 
-v1.0.37 以修复缺陷和减少重复工作为主，不改变官方 Harness 主对话所有权，不增加任意脚本执行、Provider 凭据读取或绕过用户确认的写接口。新增的壁纸库是用户已明确请求的现有壁纸能力持久化入口；代理团队扩员仍由固定负责人审批，没有新增隐藏第三层。正式发布继续由统一可恢复发布器完成全部源码、Windows、云端、签名和双源门禁；这些真实结果完成前，本审查不把候选版本表述为已发布或已验证通过。
+v1.0.38 以修复缺陷和减少重复工作为主，不改变官方 Harness 主对话所有权，不增加任意脚本执行、Provider 凭据读取或绕过用户确认的写接口。新增的壁纸库是用户已明确请求的现有壁纸能力持久化入口；代理团队扩员仍由固定负责人审批，没有新增隐藏第三层。正式发布继续由统一可恢复发布器完成全部源码、Windows、云端、签名和双源门禁；这些真实结果完成前，本审查不把候选版本表述为已发布或已验证通过。
 
 ## 启动、安装与旧版更新兼容
 
 - Computer Use 只恢复既有 `systemPrompt` 与 `tools` 注入点，不扩大工具权限或改变操作确认。
-- Inno Setup 在覆盖旧安装前关闭占用 Harness Desktop DLL 的旧实例，且不自动重启应用，避免跳过文件或形成半更新状态。
+- Inno Setup 使用 `CloseApplications=force`，确保覆盖旧安装前执行关闭占用 Harness Desktop DLL 的旧实例；桌面进程收到 Windows Restart Manager 会话结束通知后进入真实退出路径并优雅停止运行时，解决运行中旧版导致的错误码 5。`RestartApplications=no` 保持不变，升级后不自动重启旧应用。
 - 更新器兼容 v1.0.29 起旧客户端可读取的清单结构，并只在既有 HTTPS/可信来源/最大跳转次数边界内处理 Chromium redirect-cancel；生产清单签名和 SHA-256 仍为强制条件，不接受无签名或摘要不一致的下载。
 
 ## 界面、浏览器与 Git 授权
@@ -38,12 +38,12 @@ v1.0.37 以修复缺陷和减少重复工作为主，不改变官方 Harness 主
 
 ## 供应链与发布
 
-- 桌面、全部随包内置插件、Android `versionCode 10037`/`versionName 1.0.37`、iOS build/marketing version与发布工作流默认目标同步到 1.0.37。
-- 正式 Release 只允许绑定单一干净提交和不可变 `v1.0.37` Tag；stable feed 仍在本地真实下载/安装/更新/回滚/卸载、GitHub/CNB 资产、签名组件和精确 18 项清单全部通过后最后提升。
+- 桌面、全部随包内置插件、Android `versionCode 10038`/`versionName 1.0.38`、iOS build/marketing version与发布工作流默认目标同步到 1.0.38。
+- 正式 Release 只允许绑定单一干净提交和不可变 `v1.0.38` Tag；stable feed 仍在本地真实下载/安装/更新/回滚/卸载、GitHub/CNB 资产、签名组件和精确 18 项清单全部通过后最后提升。
 - GitHub→CNB 镜像保持云到云，禁止本机上传大文件；第二次 CNB 同步只处理三份已签名 stable feed，减少重复传输但不减少首次 18 项资产逐项大小、SHA-256 与签名复核。
 - Android 继续只使用 Actions Secret 中的长期 release 证书。macOS 完全沿用显式无签名契约（`identity: null`、拒绝签名/公证输入）、双架构 DMG/ZIP 与 `安装.command`；未修改无会员助手、Apple Secret 或会员相关流程。
 
 ## 发布候选验证要求
 
 - `npm run verify`、`npm run verify:release` 与 Windows 本地阶段必须由统一发布器在干净提交上通过。
-- 安装版/便携版、打包后自检、真实更新下载/安装/回滚/卸载、GitHub 桌面矩阵、Android、组件、清单与 CNB 双源结果由 `.release-state/v1.0.37-publish.json` 原子记录；真实工作流和外部 URL 核验完成前不得让普通客户端检测到 v1.0.37 stable 更新。
+- 安装版/便携版、打包后自检、真实更新下载/安装/回滚/卸载、GitHub 桌面矩阵、Android、组件、清单与 CNB 双源结果由 `.release-state/v1.0.38-publish.json` 原子记录；真实工作流和外部 URL 核验完成前不得让普通客户端检测到 v1.0.38 stable 更新。
