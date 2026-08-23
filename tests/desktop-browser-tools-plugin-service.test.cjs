@@ -57,7 +57,7 @@ test('desktop browser tools installs into the DSH Web profile idempotently', asy
   try {
     const first = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
     const second = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
-    assert.equal(first.version, '1.0.36')
+    assert.equal(first.version, '1.0.37')
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
     assert.match(readFileSync(path.join(first.destination, 'lib', 'index.js'), 'utf8'), /browser_control/)

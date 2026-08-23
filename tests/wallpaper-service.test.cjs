@@ -73,7 +73,11 @@ test('Wallpaper Engine import accepts local image/video projects only', async ()
   await writeFile(path.join(root, 'assets', 'loop.mp4'), 'video')
   const project = path.join(root, 'project.json')
   await writeFile(project, JSON.stringify({ title: 'Loop', type: 'video', file: 'assets/loop.mp4' }))
-  const expected = { file: path.join(root, 'assets', 'loop.mp4'), kind: 'video', title: 'Loop', projectRoot: root }
+  const [projectRoot, file] = await Promise.all([
+    realpath(root),
+    realpath(path.join(root, 'assets', 'loop.mp4'))
+  ])
+  const expected = { file, kind: 'video', title: 'Loop', projectRoot }
   assert.deepEqual(await resolveWallpaperEngineProject(project), expected)
   assert.deepEqual(await resolveWallpaperEngineInput(root), expected)
   assert.deepEqual(await resolveWallpaperEngineInput(project), expected)
