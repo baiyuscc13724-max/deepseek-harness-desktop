@@ -28,7 +28,7 @@ test('browser screenshots become model-visible image attachments instead of JSON
 
 test('browser host provides visual input, tabs, diagnostics and explicit localhost grants', async () => {
   const main = await source('electron/main.cjs')
-  for (const contract of ['new BrowserDiagnostics()', 'new BrowserHistoryStore(', 'capturePage()', 'extractBrowserData', 'sensitive-screenshot-blocked', 'sendInputEvent', 'browserTabs', 'activeBrowserTabId', 'recordConsole', 'recordNetwork', 'allowPrivateNetwork: true', 'interactivePicker: true', 'uploadBrowserFileInteractively', 'browserDownloadDestination', 'downloadBrowserResource', 'blockedWhileModelAuthorized', 'activeBrowserTransfers', 'withBrowserTransferLock', 'AbortController', 'Page.handleJavaScriptDialog']) {
+  for (const contract of ['new BrowserDiagnostics()', 'new BrowserHistoryStore(', 'capturePage()', 'extractBrowserData', 'sensitive-screenshot-blocked', 'sendInputEvent', 'browserTabs', 'activeBrowserTabId', 'recordConsole', 'recordNetwork', 'allowPrivateNetwork: true', 'interactivePicker: true', 'uploadBrowserFileInteractively', 'browserDownloadDestination', 'downloadBrowserResource', 'consumeTrustedDownloadIntent', 'activeBrowserTransfers', 'withBrowserTransferLock', 'AbortController', 'Page.handleJavaScriptDialog']) {
     assert.ok(main.includes(contract), `browser host missing ${contract}`)
   }
   assert.match(main, /key === 'Enter' \|\| key === 'Space'[^\n]*\? 'submit'/)
@@ -43,7 +43,8 @@ test('browser host provides visual input, tabs, diagnostics and explicit localho
   assert.match(main, /dialogId: pending\.id/)
   assert.match(main, /targetUrl: target\.href/)
   assert.match(main, /assertBrowserTransferBinding/)
-  assert.match(main, /blockedWhileModelAuthorized/)
+  assert.match(main, /browser-provenance-preload\.cjs/)
+  assert.match(main, /Input\.dispatchMouseEvent/)
   assert.doesNotMatch(main, /webContents\.downloadURL/)
   assert.doesNotMatch(main, /details\.timestamp\s*\?\s*details\.timestamp\s*\*\s*1000/)
 })

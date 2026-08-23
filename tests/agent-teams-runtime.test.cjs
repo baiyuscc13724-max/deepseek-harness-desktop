@@ -79,6 +79,91 @@ test('busy lead relays steer inside the active turn instead of queuing delayed o
   assert.doesNotMatch(source, /await lead\.followup\(createUserMessage/u)
 })
 
+test('team worker admission is globally bounded, exact-root fair, and run-id precise', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-fairness=${Date.now()}-${Math.random()}`)
+  assert.equal(mod.GLOBAL_TEAM_ACTIVE_ACTIVATIONS, 8)
+  assert.equal(mod.MAX_TEAM_ADMISSION_QUEUE, 32)
+  assert.equal(mod.MAX_TEAM_ADMISSION_QUEUE_PER_ROOT, 8)
+  assert.equal(mod.TEAM_ADMISSION_TIMEOUT_MS, 30_000)
+
+  const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 8, maxQueuedPerRoot: 4, waitMs: 1_000 })
+  const rootA = { id: 'fair-root-a' }
+  const rootB = { id: 'fair-root-b' }
+  const order = []
+  const start = (root, childId, runId) => admission.run(root, childId, new AbortController().signal, async () => {
+    order.push(childId)
+    assert.equal(admission.noteStart({ id: childId, runId }), true)
+    return childId
+  })
+
+  await start(rootA, 'a-1', 'run-a-1')
+  const a2 = start(rootA, 'a-2', 'run-a-2')
+  const b1 = start(rootB, 'b-1', 'run-b-1')
+  const a3 = start(rootA, 'a-3', 'run-a-3')
+  const b2 = start(rootB, 'b-2', 'run-b-2')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(order, ['a-1'])
+  assert.equal(admission.noteEnd({ id: 'a-1', runId: 'stale-run' }), false)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(order, ['a-1'], 'a stale lifecycle end must not release the active slot')
+
+  assert.equal(admission.noteEnd({ id: 'a-1', runId: 'run-a-1' }), true)
+  await a2
+  assert.equal(admission.noteEnd({ id: 'a-2', runId: 'run-a-2' }), true)
+  await b1
+  assert.equal(admission.noteEnd({ id: 'b-1', runId: 'run-b-1' }), true)
+  await a3
+  assert.equal(admission.noteEnd({ id: 'a-3', runId: 'run-a-3' }), true)
+  await b2
+  assert.equal(admission.noteEnd({ id: 'b-2', runId: 'run-b-2' }), true)
+  assert.deepEqual(order, ['a-1', 'a-2', 'b-1', 'a-3', 'b-2'])
+  assert.deepEqual(admission.snapshot(), { active: 0, queued: 0, closed: false, limit: 1, maxQueued: 8, maxQueuedPerRoot: 4, waitMs: 1_000 })
+  admission.close()
+})
+
+test('team worker admission bounds queues and removes cancelled, timed-out, and closed waiters', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-bounds=${Date.now()}-${Math.random()}`)
+  const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 20 })
+  const blocker = { id: 'queue-blocker' }
+  const sameIdOld = { id: 'same-root-id' }
+  const sameIdReplacement = { id: 'same-root-id' }
+  await admission.run(blocker, 'blocker-child', new AbortController().signal, async () => {
+    admission.noteStart({ id: 'blocker-child', runId: 'blocker-run' })
+  })
+
+  const abortController = new AbortController()
+  const aborted = admission.run(sameIdOld, 'aborted-child', abortController.signal, async () => assert.fail('cancelled work must not start'))
+  const abortedCheck = assert.rejects(aborted, error => error?.code === 'AGENT_TEAMS_ADMISSION_CANCELLED')
+  abortController.abort()
+  await abortedCheck
+
+  const otherRoot = { id: 'other-root' }
+  const timeout = admission.run(otherRoot, 'timeout-child', new AbortController().signal, async () => assert.fail('timed-out work must not start'))
+  await assert.rejects(timeout, error => error?.code === 'AGENT_TEAMS_ADMISSION_TIMEOUT')
+
+  const replacement = admission.run(sameIdReplacement, 'replacement-child', new AbortController().signal, async () => {
+    admission.noteStart({ id: 'replacement-child', runId: 'replacement-run' })
+    return 'replacement-admitted'
+  })
+  const sameRootOverflow = admission.run(sameIdReplacement, 'same-root-overflow', new AbortController().signal, async () => {})
+  await assert.rejects(sameRootOverflow, error => error?.code === 'AGENT_TEAMS_ADMISSION_QUEUE_FULL')
+
+  assert.equal(admission.noteEnd({ id: 'blocker-child', runId: 'blocker-run' }), true)
+  assert.equal(await replacement, 'replacement-admitted')
+  assert.equal(admission.noteEnd({ id: 'replacement-child', runId: 'replacement-run' }), true)
+
+  await admission.run(blocker, 'close-blocker', new AbortController().signal, async () => admission.noteStart({ id: 'close-blocker', runId: 'close-run' }))
+  const closedWaiter = admission.run(otherRoot, 'closed-child', new AbortController().signal, async () => assert.fail('closed work must not start'))
+  const closedCheck = assert.rejects(closedWaiter, error => error?.code === 'AGENT_TEAMS_ADMISSION_CLOSED')
+  admission.close()
+  await closedCheck
+  await assert.rejects(
+    admission.run(blocker, 'close-blocker', new AbortController().signal, async () => assert.fail('closed admission must reject hot delivery too')),
+    error => error?.code === 'AGENT_TEAMS_ADMISSION_CLOSED'
+  )
+  assert.equal(admission.noteEnd({ id: 'close-blocker', runId: 'close-run' }), true)
+})
+
 test('expansion boundary overlap is hierarchical, glob-aware, and platform-sensitive', async () => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?expansion-boundaries=${Date.now()}`)
   assert.equal(mod.fileBoundaryOverlap('src', 'src/a.js', { platform: 'linux' }), true)
@@ -240,7 +325,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
             spawnEntered()
             await spawnGate
           }
-          return { childId: forcedChildId || (starts.length === 1 ? 'worker-session' : `worker-session-${starts.length}`), messageId: `initial-message-${starts.length}` }
+          const childId = forcedChildId || spec.childId
+          if (starts.length === 1 && forcedChildId === undefined) workerAgent.id = childId
+          return { childId, messageId: `initial-message-${starts.length}` }
         },
         async followup(parent, childId, content, options) {
           followups.push({ parent, childId, content, options })
@@ -260,7 +347,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
             return `accepted-${childId}`
           }
           if (graceful && bufferedGracefulEndIds.has(childId)) {
-            await listeners.get('subagent/end')({ id: childId, runId: `buffered-hot-reload-${++gracefulLifecycleRun}`, stopReason: 'completed' })
+            const runId = `buffered-hot-reload-${++gracefulLifecycleRun}`
+            await listeners.get('subagent/start')({ id: childId, runId })
+            await listeners.get('subagent/end')({ id: childId, runId, stopReason: 'completed' })
             return `accepted-${childId}`
           }
           if (graceful && manualGracefulLifecycleIds.has(childId)) {
@@ -272,7 +361,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
             await listeners.get('subagent/start')({ id: childId, runId })
             await listeners.get('subagent/end')({ id: childId, runId, stopReason: 'completed' })
           }
-          if (failWorkFollowupIds.has(childId) && content?.[0]?.text?.includes('Coordinator registration complete')) throw new Error('work followup failed')
+          if ((failWorkFollowupIds.has(childId) || failWorkFollowupIds.has('*')) && content?.[0]?.text?.includes('Coordinator registration complete')) {
+            failWorkFollowupIds.delete('*')
+            throw new Error('work followup failed')
+          }
           if (relayGate && content?.[0]?.text?.includes('Race with shutdown')) {
             relayEntered()
             await relayGate
@@ -285,7 +377,11 @@ test('model tools create a team, spawn independent members, and relay with non-u
           onDrain?.([...childIds])
           if (deferDrain) await new Promise(resolve => { releaseDrain = resolve })
           for (const childId of childIds) {
-            if (!coldDrainIds.has(childId) && !childId.startsWith('provisioning:')) await listeners.get('subagent/end')?.({ id: childId, stopReason: 'interrupted' })
+            if (!coldDrainIds.has(childId) && !childId.startsWith('provisioning:')) {
+              const runId = `drain-lifecycle-${++gracefulLifecycleRun}`
+              await listeners.get('subagent/start')?.({ id: childId, runId })
+              await listeners.get('subagent/end')?.({ id: childId, runId, stopReason: 'interrupted' })
+            }
           }
         }
       }
@@ -304,6 +400,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(settings.status, 200)
     const enabledPrompt = teamsPrompt.text({})
     assert.match(enabledPrompt, /automatic-team mode is ENABLED/u)
+    assert.match(enabledPrompt, /Before substantive work on every ordinary direct-human root turn, apply the three-level gate below/u)
+    assert.match(enabledPrompt, /When the Level 3 conditions are met, you must call team_start in that same turn and must not replace the required visible managed members with multiple hidden ordinary subagents/u)
     assert.match(enabledPrompt, /Only the outermost top-level root lead\/brain evaluates each ordinary direct-user goal using a strict three-level gate/u)
     assert.match(enabledPrompt, /Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone/u)
     assert.match(enabledPrompt, /Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns/u)
@@ -327,6 +425,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(enabledPrompt, /Every new member re-reads the latest route for its chosen tier/u)
     assert.match(enabledPrompt, /changing the subagent route never changes main-tier members/u)
     assert.match(tools.get('team_spawn').description, /existing members retain their creation route/u)
+    assert.match(tools.get('team_start').description, /Call this in the current direct-human root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination/u)
+    assert.match(tools.get('team_start').description, /do not substitute multiple ordinary subagents/u)
     assert.match(tools.get('team_start').description, /Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count/u)
     assert.match(tools.get('team_start').description, /one continuable helper should use ordinary subagent instead/u)
     assert.match(tools.get('team_start').description, /explicit user team request may override this automatic threshold/u)
@@ -365,10 +465,11 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(followups[0].content[0].text, /use team_expansion_request with explicit deliverables, acceptance criteria, and non-overlapping file\/resource boundaries/u)
     assert.match(followups[0].content[0].text, /root coordinator decides whether to create persistent tasks and visible peer members without bypassing maxMembers or maxActiveTurns/u)
     assert.equal(followups[0].options.source.kind, 'coordinator')
-    assert.equal(followups[0].childId, 'worker-session')
+    assert.equal(starts[0].childId, spawned.member.sessionId)
+    assert.equal(followups[0].childId, spawned.member.sessionId)
 
     const forbiddenWorkerControl = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
-      sessionId: 'worker-session', action: 'member-stop', memberId: 'worker-session', mode: 'retire'
+      sessionId: spawned.member.sessionId, action: 'member-stop', memberId: spawned.member.sessionId, mode: 'retire'
     }))
     assert.equal(forbiddenWorkerControl.status, 403)
     const forbiddenSpoofedLeadControl = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
@@ -376,12 +477,23 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }))
     assert.equal(forbiddenSpoofedLeadControl.status, 403)
 
-    await tools.get('team_message').execute({ team_id: started.team.id, recipient_session_id: 'Researcher', message: 'Verify source B' }, { agent: rootAgent, signal: new AbortController().signal })
+    const sameTeamRelay = await tools.get('team_message').execute({ team_id: started.team.id, recipient_session_id: 'Researcher', message: 'Verify source B' }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(followups[1].options.source.kind, 'coordinator')
     assert.equal(followups[1].options.source.form, 'notice')
     assert.equal(followups[1].options.source.summary, 'Agent Teams')
     assert.equal(followups[1].options.source.senderSessionId, rootAgent.id)
     assert.match(followups[1].content[0].text, /from Lead/u)
+    const sameTeamEnvelopeLine = followups[1].content[0].text.split('\n')[1]
+    assert.match(sameTeamEnvelopeLine, /^\[Agent team envelope \{.*\}\]$/u)
+    const sameTeamEnvelope = JSON.parse(sameTeamEnvelopeLine.slice('[Agent team envelope '.length, -1))
+    assert.deepEqual(sameTeamEnvelope, {
+      version: 1,
+      messageId: sameTeamRelay.message.id,
+      sourceTeamId: started.team.id,
+      targetTeamId: started.team.id,
+      senderMemberId: `lead:${rootAgent.id}`,
+      recipientMemberId: spawned.member.id
+    })
     assert.ok(followups.every(item => item.options.source.kind === 'coordinator'))
 
     await assert.rejects(
@@ -677,6 +789,16 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(crossTeam.message.toTeamId, sibling.id)
     assert.equal(crossTeam.message.toName, 'PeerWorker')
     assert.equal(followups.at(-1).options.source.kind, 'coordinator')
+    const crossTeamEnvelopeLine = followups.at(-1).content[0].text.split('\n')[1]
+    const crossTeamEnvelope = JSON.parse(crossTeamEnvelopeLine.slice('[Agent team envelope '.length, -1))
+    assert.deepEqual(crossTeamEnvelope, {
+      version: 1,
+      messageId: crossTeam.message.id,
+      sourceTeamId: started.team.id,
+      targetTeamId: sibling.id,
+      senderMemberId: `lead:${rootAgent.id}`,
+      recipientMemberId: peerSpawn.member.id
+    })
     const sourceState = JSON.parse((await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${rootAgent.id}&teamId=${started.team.id}`))).body)
     assert.equal(sourceState.teams.filter(team => team.status !== 'closed').length, 2)
     const sourceProjection = sourceState.team
@@ -827,7 +949,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     spawnGate = undefined
 
     const duplicateChildTeam = (await tools.get('team_start').execute({ objective: 'Duplicate child id safety' }, { agent: rootAgent, signal: new AbortController().signal })).team
-    forcedChildId = 'worker-session'
+    forcedChildId = spawned.member.sessionId
     const drainsBeforeDuplicate = drains.length
     await assert.rejects(
       tools.get('team_spawn').execute({ team_id: duplicateChildTeam.id, name: 'IdSafety', role: 'id safety test', prompt: 'Never drain the existing child' }, { agent: rootAgent, signal: new AbortController().signal }),
@@ -914,12 +1036,12 @@ test('model tools create a team, spawn independent members, and relay with non-u
     await tools.get('team_shutdown').execute({ team_id: unconfirmedPublicationTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
     const workFailureTeam = (await tools.get('team_start').execute({ objective: 'Work followup cleanup' }, { agent: rootAgent, signal: new AbortController().signal })).team
-    const expectedWorkFailureChild = starts.length === 0 ? 'worker-session' : `worker-session-${starts.length + 1}`
-    failWorkFollowupIds.add(expectedWorkFailureChild)
+    failWorkFollowupIds.add('*')
     await assert.rejects(
       tools.get('team_spawn').execute({ team_id: workFailureTeam.id, name: 'WorkAudit', role: 'work failure audit', prompt: 'Fail the first work followup' }, { agent: rootAgent, signal: new AbortController().signal }),
       /work followup failed/u
     )
+    const expectedWorkFailureChild = starts.at(-1).childId
     failWorkFollowupIds.delete(expectedWorkFailureChild)
     let workFailureRecord = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === workFailureTeam.id)
     let workFailureMember = workFailureRecord.members.find(member => member.name === 'WorkAudit')
@@ -931,13 +1053,13 @@ test('model tools create a team, spawn independent members, and relay with non-u
     await tools.get('team_shutdown').execute({ team_id: workFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
     const unconfirmedWorkFailureTeam = (await tools.get('team_start').execute({ objective: 'Unconfirmed work followup cleanup' }, { agent: rootAgent, signal: new AbortController().signal })).team
-    const expectedUnconfirmedWorkChild = starts.length === 0 ? 'worker-session' : `worker-session-${starts.length + 1}`
-    failWorkFollowupIds.add(expectedUnconfirmedWorkChild)
+    failWorkFollowupIds.add('*')
     failDrain = true
     await assert.rejects(
       tools.get('team_spawn').execute({ team_id: unconfirmedWorkFailureTeam.id, name: 'WorkDrain', role: 'work drain audit', prompt: 'Fail work and cleanup drain' }, { agent: rootAgent, signal: new AbortController().signal }),
       /work followup failed/u
     )
+    const expectedUnconfirmedWorkChild = starts.at(-1).childId
     failDrain = false
     failWorkFollowupIds.delete(expectedUnconfirmedWorkChild)
     workFailureRecord = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === unconfirmedWorkFailureTeam.id)
@@ -1013,7 +1135,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
 
     const coldTeam = (await tools.get('team_start').execute({ objective: 'Cold child shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const coldMember = (await tools.get('team_spawn').execute({ team_id: coldTeam.id, name: 'ColdTester', role: 'cold shutdown test', prompt: 'Become cold before shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).member
-    await listeners.get('subagent/end')({ id: coldMember.sessionId, stopReason: 'completed' })
+    await listeners.get('subagent/start')({ id: coldMember.sessionId, runId: 'cold-member-run' })
+    await listeners.get('subagent/end')({ id: coldMember.sessionId, runId: 'cold-member-run', stopReason: 'completed' })
     const coldReady = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === coldTeam.id).members.find(member => member.sessionId === coldMember.sessionId)
     assert.equal(coldReady.state, 'ready')
     coldDrainIds.add(coldMember.sessionId)
@@ -1112,6 +1235,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(hotReloadRetirementSettled, false)
     const acceptedButActive = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === hotReloadGracefulTeam.id).members.find(member => member.sessionId === hotReloadGracefulWorker.sessionId)
     assert.equal(acceptedButActive.state, 'shutting_down')
+    await listeners.get('subagent/start')({ id: hotReloadGracefulWorker.sessionId, runId: 'hot-reload-first-end' })
     await listeners.get('subagent/end')({ id: hotReloadGracefulWorker.sessionId, runId: 'hot-reload-first-end', stopReason: 'completed' })
     const hotReloadRetirementResult = await hotReloadRetirement
     assert.equal(hotReloadRetirementResult.member.state, 'retired')
@@ -1158,6 +1282,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     let multiGracefulSettled = false
     const multiGracefulShutdown = tools.get('team_shutdown').execute({ team_id: multiGracefulTeam.id }, { agent: rootAgent, signal: new AbortController().signal }).then(value => { multiGracefulSettled = true; return value })
     await multiAccepted
+    await listeners.get('subagent/start')({ id: multiGracefulA.sessionId, runId: 'multi-graceful-a' })
+    await listeners.get('subagent/start')({ id: multiGracefulB.sessionId, runId: 'multi-graceful-b' })
     await listeners.get('subagent/end')({ id: multiGracefulA.sessionId, runId: 'multi-graceful-a', stopReason: 'completed' })
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(multiGracefulSettled, false)
@@ -1309,8 +1435,14 @@ test('explicit user stop cancels queued wakeups and leaves paused work dormant',
       const current = document.teams.find(candidate => candidate.id === team.id)
       if (current?.state === 'paused' && current.members.find(member => member.sessionId === 'stop-child')?.state === 'ready') resolvePaused()
     })
-    mod.observeUserStops(ctx, store, Promise.resolve())
+    const admission = mod.createTeamTurnAdmission({ limit: 1, waitMs: 1_000 })
+    const blocker = { id: 'stop-admission-blocker' }
+    await admission.run(blocker, 'stop-blocker-child', new AbortController().signal, async () => admission.noteStart({ id: 'stop-blocker-child', runId: 'stop-blocker-run' }))
+    const queuedWorker = admission.run(lead, 'stop-queued-child', new AbortController().signal, async () => assert.fail('explicit Stop must cancel queued worker admission'))
+    const queuedCancelled = assert.rejects(queuedWorker, error => error?.code === 'AGENT_TEAMS_ADMISSION_CANCELLED')
+    mod.observeUserStops(ctx, store, Promise.resolve(), admission)
     handlers['session/event'](leadSession, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+    await queuedCancelled
     await paused
     unsubscribe()
     await new Promise(resolve => setImmediate(resolve))
@@ -1323,6 +1455,8 @@ test('explicit user stop cancels queued wakeups and leaves paused work dormant',
     assert.equal(stopped.tasks[0].state, 'pending')
     assert.equal(stopped.tasks[0].assigneeSessionId, 'stop-child')
     assert.equal(starts.length, 0)
+    assert.equal(admission.noteEnd({ id: 'stop-blocker-child', runId: 'stop-blocker-run' }), true)
+    admission.close()
     await assert.rejects(
       mod.updateTask(store, { id: 'stop-child' }, { teamId: team.id, taskId: 'stop-task', action: 'claim' }),
       error => error?.code === 'AGENT_TEAMS_PAUSED'

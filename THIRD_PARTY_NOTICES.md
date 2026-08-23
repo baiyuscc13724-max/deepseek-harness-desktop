@@ -46,7 +46,7 @@ Git Credential Manager stores authorized credentials through the operating syste
 
 ## DSH Plugin Marketplace
 
-`dsh-plugin-marketplace` version 1.2.0 is licensed under the MIT License and is maintained by bradeGithub. Harness Desktop bundles the pinned upstream release and installs it into the user's DSH Web profile so the official Harness settings can display, install, and update community plugins.
+`dsh-plugin-marketplace` version 1.5.5 is licensed under the MIT License and is maintained by bradeGithub. Harness Desktop bundles upstream commit `dfe32cb8620658b55441787725f7f03e0491d15e` and installs it into the user's DSH Web profile so the official Harness settings can display, install, and update community plugins.
 
 Source: https://github.com/bradeGithub/DSH-Plugins-Marketplace
 
@@ -57,6 +57,16 @@ The marketplace lists and can execute installation code from independent third-p
 ## node-pty
 
 `node-pty` is licensed under the MIT License. Harness Desktop does not implement a separate native terminal, but the bundled official DeepSeek Harness dependency graph uses `node-pty` for its own local subprocess support. Its native binary is rebuilt for Electron and unpacked from ASAR.
+
+## dashi-taskboard
+
+Harness Desktop adapts the task-board presentation from `chuspeeism/dashi-taskboard` at commit `f12f473c0049757bd0090be418f9d969a1d91194`.
+
+Source: https://github.com/chuspeeism/dashi-taskboard/tree/f12f473c0049757bd0090be418f9d969a1d91194
+
+License: Apache License 2.0
+
+The Harness Desktop version is modified and limited to an adapted task-board presentation inside the existing Agent Teams workbench. It does not incorporate the upstream server, task database, automation runtime, or application shell. The complete upstream license is retained in `third_party/licenses/dashi-taskboard-Apache-2.0-LICENSE.txt`.
 
 ## Built-in open-source theme palettes
 

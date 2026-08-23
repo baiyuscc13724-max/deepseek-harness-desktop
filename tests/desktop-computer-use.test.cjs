@@ -30,6 +30,7 @@ test('Computer Use is built in, cross-application, policy bound and confirmation
     assert.match(main, /new ComputerUseAppPolicy/u)
     assert.match(main, /new WindowsComputerUse/u)
     assert.match(main, /refreshComputerUseTargets/u)
+    assert.match(main, /Number\(window\.pid\) === process\.pid/u)
     assert.match(main, /revalidateComputerUseTarget/u)
     assert.match(main, /requireComputerConfirmation/u)
     assert.match(main, /computerUseConfirmations\.authorize/u)

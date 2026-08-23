@@ -11,6 +11,7 @@ const MAX_WALLPAPER_LIBRARY_BYTES = 8 * 1024 * 1024 * 1024
 const WALLPAPER_LIBRARY_QUOTA_MESSAGE = '壁纸库的受控本地副本总量最多为 8 GB，请先移除不再使用的壁纸。'
 const MANAGED_WALLPAPER_FILE_PATTERN = /^(?:custom-background|wallpaper-[a-z0-9-]{1,80})\.(?:png|jpe?g|webp|gif|apng|mp4|webm)$/i
 const TEMPORARY_WALLPAPER_FILE_PATTERN = /^\.(?:custom-background|wallpaper-[a-z0-9-]{1,80})\.(?:png|jpe?g|webp|gif|apng|mp4|webm)\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/i
+const WALLPAPER_LIBRARY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,79}$/
 
 function wallpaperKind(file) {
   const extension = path.extname(String(file || '')).toLowerCase()
@@ -26,6 +27,24 @@ function wallpaperMime(file) {
     '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
     '.mp4': 'video/mp4', '.webm': 'video/webm'
   }[extension] || 'application/octet-stream'
+}
+
+// Library cards use the same managed protocol for both images and videos.
+// Keeping URL construction here makes the renderer contract independent of
+// the original source path and prevents arbitrary path material from entering
+// a privileged custom-scheme URL.
+function wallpaperMediaRevision(info = {}) {
+  const mtimeMs = Number(info.mtimeMs)
+  const size = Number(info.size)
+  if (!Number.isFinite(mtimeMs) || mtimeMs < 0 || !Number.isSafeInteger(size) || size < 0) return null
+  return `${Math.round(mtimeMs)}-${size}`
+}
+
+function wallpaperLibraryMediaUrl(id, info = {}) {
+  const normalizedId = String(id || '').toLowerCase()
+  const revision = wallpaperMediaRevision(info)
+  if (!WALLPAPER_LIBRARY_ID_PATTERN.test(normalizedId) || !revision) return null
+  return `harness-wallpaper://library/${encodeURIComponent(normalizedId)}/media?v=${revision}`
 }
 
 function safeManagedWallpaperPath(root, cachedFile) {
@@ -295,6 +314,8 @@ module.exports = {
   WALLPAPER_LIBRARY_QUOTA_MESSAGE,
   wallpaperKind,
   wallpaperMime,
+  wallpaperMediaRevision,
+  wallpaperLibraryMediaUrl,
   safeManagedWallpaperPath,
   isManagedWallpaperFileName,
   isTemporaryWallpaperFileName,

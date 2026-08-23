@@ -274,7 +274,7 @@ class ActionGate {
         if (text.length > MAX_READ_TEXT_LENGTH) throw gateError('size-limit', `读取结果超过 ${MAX_READ_TEXT_LENGTH} 字节上限。`)
         if (isSensitiveText(text)) throw gateError('sensitive-value', '读取结果包含密码、token、Cookie 等敏感信息，禁止模型读取。')
       }
-    } else if (action === 'click') {
+    } else if (action === 'click' || action === 'submit') {
       if (payloadObject.navigatesTo != null && String(payloadObject.navigatesTo) !== '') {
         this.#checkClickDestination(String(payloadObject.navigatesTo), origin, authorizations)
       }

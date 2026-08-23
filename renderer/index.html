@@ -347,33 +347,39 @@
           </div>
           <div class="skin-wallpaper-library-actions">
             <button id="skinChooseBackground" type="button">导入本地图片或视频</button>
-            <button id="skinChooseWallpaperEngine" type="button">一键导入 Wallpaper Engine</button>
+            <button id="skinChooseWallpaperEngine" class="primary" type="button">导入当前 Wallpaper Engine 壁纸</button>
+            <button id="skinBrowseWallpaperEngine" type="button">浏览 Wallpaper Engine 壁纸…</button>
             <button id="skinWallpaperEngineSync" type="button" disabled>同步当前项目源</button>
             <button id="skinClearBackground" type="button">停用当前壁纸</button>
           </div>
-          <p id="skinWallpaperLibraryMessage" class="skin-wallpaper-library-message" role="status"></p>
-          <div id="skinWallpaperLibraryItems" class="skin-wallpaper-library-grid" role="list" aria-label="已导入壁纸"></div>
-          <div id="skinWallpaperLibraryEmpty" class="skin-wallpaper-library-empty">还没有已导入的壁纸。导入后会在这里长期保留，双击卡片即可使用。</div>
-          <section id="skinWallpaperEnginePicker" class="skin-wallpaper-picker hidden" aria-live="polite">
-            <div class="skin-wallpaper-picker-heading"><strong>可导入的 Wallpaper Engine 图片/视频项目</strong><span id="skinWallpaperEngineStatus">正在扫描本机 Steam 库…</span></div>
-            <div id="skinWallpaperEngineItems" class="skin-wallpaper-items"></div>
-            <div class="skin-wallpaper-picker-actions">
-              <button id="skinWallpaperEngineRescan" type="button">重新扫描</button>
-              <button id="skinWallpaperEngineManual" type="button">手动选择项目目录…</button>
-              <button id="skinWallpaperEngineClose" type="button">收起扫描结果</button>
+          <div class="skin-wallpaper-workbench">
+            <div class="skin-wallpaper-library-content">
+              <p id="skinWallpaperLibraryMessage" class="skin-wallpaper-library-message" role="status"></p>
+              <div id="skinWallpaperLibraryItems" class="skin-wallpaper-library-grid" role="list" aria-label="已导入壁纸"></div>
+              <div id="skinWallpaperLibraryEmpty" class="skin-wallpaper-library-empty">还没有已导入的壁纸。导入后会立即显示预览卡片；点击“使用”或双击卡片即可切换。</div>
+              <section id="skinWallpaperEnginePicker" class="skin-wallpaper-picker hidden" aria-live="polite">
+                <div class="skin-wallpaper-picker-heading"><strong>可导入的 Wallpaper Engine 图片/视频项目</strong><span id="skinWallpaperEngineStatus">正在扫描本机 Steam 库…</span></div>
+                <div id="skinWallpaperEngineItems" class="skin-wallpaper-items"></div>
+                <div class="skin-wallpaper-picker-actions">
+                  <button id="skinWallpaperEngineRescan" type="button">重新扫描</button>
+                  <button id="skinWallpaperEngineManual" type="button">手动选择项目目录…</button>
+                  <button id="skinWallpaperEngineClose" type="button">收起扫描结果</button>
+                </div>
+              </section>
             </div>
-          </section>
-          <section class="skin-custom-group skin-wallpaper-controls" aria-labelledby="skinWallpaperTitle">
-            <h4 id="skinWallpaperTitle">当前壁纸质感与可读性</h4>
-            <div class="skin-range-grid">
-              <label><span>壁纸明暗 <output id="skinBrightnessValue">82%</output></span><input id="skinWallpaperBrightness" type="range" min="40" max="140" value="82" /></label>
-              <label><span>填充背景模糊 <output id="skinBlurValue">2px</output></span><input id="skinWallpaperBlur" type="range" min="0" max="24" value="2" /></label>
-              <label><span>面板通透 <output id="skinGlassValue">32%</output></span><input id="skinGlassTransparency" type="range" min="0" max="92" value="32" /></label>
-              <label><span>边框清晰 <output id="skinBorderValue">48%</output></span><input id="skinBorderStrength" type="range" min="0" max="100" value="48" /></label>
-              <label><span>文字保护 <output id="skinReadabilityValue">72%</output></span><input id="skinReadabilityStrength" type="range" min="0" max="100" value="72" /></label>
-            </div>
-            <div class="skin-custom-actions"><button id="skinApplyWallpaperAppearance" class="primary" type="button">保存壁纸显示参数</button></div>
-          </section>
+            <section class="skin-custom-group skin-wallpaper-controls" aria-labelledby="skinWallpaperTitle">
+              <div class="skin-wallpaper-controls-heading"><div><h4 id="skinWallpaperTitle">透明度与可读性</h4><span>拖动即可精确调整</span></div><button id="skinResetWallpaperAppearance" type="button">恢复推荐参数</button></div>
+              <div class="skin-range-grid">
+                <label><span>壁纸明暗 <output id="skinBrightnessValue">82%</output></span><input id="skinWallpaperBrightness" type="range" min="40" max="140" step="1" value="82" /></label>
+                <label><span>填充背景模糊 <output id="skinBlurValue">2px</output></span><input id="skinWallpaperBlur" type="range" min="0" max="24" step="1" value="2" /></label>
+                <label><span>面板通透 <output id="skinGlassValue">32%</output></span><input id="skinGlassTransparency" type="range" min="0" max="100" step="1" value="32" /></label>
+                <label><span>边框清晰 <output id="skinBorderValue">48%</output></span><input id="skinBorderStrength" type="range" min="0" max="100" step="1" value="48" /></label>
+                <label><span>文字保护 <output id="skinReadabilityValue">72%</output></span><input id="skinReadabilityStrength" type="range" min="0" max="100" step="1" value="72" /></label>
+              </div>
+              <p class="skin-wallpaper-controls-note">面板通透和文字保护都可调到 0–100%；将文字保护调到 0 时不会再强制增加遮罩。</p>
+              <div class="skin-custom-actions"><button id="skinApplyWallpaperAppearance" class="primary" type="button">保存壁纸显示参数</button></div>
+            </section>
+          </div>
         </section>
         <section id="skinModePane" class="skin-picker-pane skin-mode-pane hidden" aria-labelledby="skinModeTitle">
           <div class="skin-mode-heading"><div><h3 id="skinModeTitle">界面模式</h3><p>模式只改变材质、层级和克制动效；当前皮肤、配色和壁纸保持不变。</p></div><strong id="skinModeCurrent">官方经典</strong></div>

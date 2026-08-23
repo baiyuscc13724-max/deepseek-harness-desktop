@@ -16,7 +16,8 @@ test('Agent Teams owns a native conversation view without a duplicate modal or d
   assert.match(source, /name: "conversation\.view", id: "agent-teams"/u)
   assert.doesNotMatch(source, /conversation\.session\.header\.actions/u)
   assert.doesNotMatch(source, /conversation\.input\.dock/u)
-  assert.doesNotMatch(source, /dat-overlay|dat-modal|role:\s*["']dialog["']/u)
+  assert.doesNotMatch(source, /dat-overlay|dat-modal/u)
+  assert.match(source, /role: props\.modal \? "dialog" : "complementary"/u)
   assert.match(source, /\/api\/agent-teams\/state/u)
   assert.match(source, /\/api\/agent-teams\/events/u)
   assert.match(source, /x-harness-agent-teams/iu)
@@ -35,6 +36,16 @@ test('Agent Teams coalesces snapshots and recovers SSE without synchronized poll
   assert.match(source, /startTransition\(function \(\) \{ if \(alive\) \{ setState\(next\); setError\(""\); \} \}\)/u)
   assert.match(source, /document\.visibilityState === "hidden"/u)
   assert.match(source, /addEventListener\("visibilitychange", onVisibilityChange\)/u)
+  assert.match(source, /if \(hidden\(\)\) \{ closeSource\(true\); return; \}/u)
+  assert.match(source, /if \(!hidden\(\)\) \{ openSource\(\); if \(!source\) load\(false, streamEpoch\)/u)
+  assert.match(source, /current\.onopen = null;[\s\S]*current\.onmessage = null;[\s\S]*current\.onerror = null;[\s\S]*current\.close\(\)/u)
+  assert.match(source, /generation === loadGeneration && \(expectedStreamEpoch === undefined \|\| streamEpoch === expectedStreamEpoch\)/u)
+  assert.match(source, /streamEpoch \+= 1; clearSnapshotFallback\(\); queueSnapshot/u)
+  assert.match(source, /snapshotFallbackTimer = setTimeout/u)
+  assert.match(source, /typeof current\.addEventListener !== "function" \|\| typeof current\.close !== "function"/u)
+  assert.match(source, /if \(current && typeof current\.close === "function"\) current\.close\(\)/u)
+  assert.match(source, /if \(!alive \|\| hidden\(\) \|\| sourceOpen \|\| pollTimer\) return/u)
+  assert.match(source, /if \(!alive \|\| hidden\(\) \|\| source\) return/u)
   assert.match(source, /if \(loadPromise\) return loadPromise/u)
   assert.match(source, /Math\.min\(30000, 4000 \* Math\.pow\(2, Math\.min\(pollAttempt, 3\)\)\)/u)
   assert.match(source, /Math\.random\(\) \* 0\.4/u)
@@ -82,7 +93,7 @@ test('creation drafts remain in the Teams view until a genuine successful submis
   assert.doesNotMatch(source, /setDraft\(prompt[^\n]+(?:setView|activateChat|sessions\.open)/u)
   assert.match(source, /typeof props\.setView === "function"\) \{[\s\S]*?props\.setView\("chat"\);[\s\S]*?\} else setNotice\(t\("creationSentFallback"\)\)/u)
   assert.match(source, /creationSentFallback: "创建请求已发送。请使用上方“对话”标签查看响应。"/u)
-  assert.doesNotMatch(source, /querySelector|\.click\(\)|history\.(?:pushState|replaceState)/u)
+  assert.doesNotMatch(source, /document\.querySelector(?:All)?|\.click\(\)|history\.(?:pushState|replaceState)/u)
   const transition = source.indexOf('previousPhaseRef.current === "submitting" && inputPhase === "plain"')
   const switchView = source.indexOf('props.setView("chat")', transition)
   assert.ok(transition >= 0 && switchView > transition, 'Chat switch must follow successful submission settlement')
@@ -93,7 +104,8 @@ test('automatic mode needs only a normal goal and uses plain member labels', asy
   const source = await clientSource()
   assert.match(source, /启用后，你只需像平常一样描述目标/u)
   assert.match(source, /自动团队已开启/u)
-  assert.match(source, /h\(FirstTeamWizard, \{ t: t, setDraft: setDraft, setView: props\.setView, disable: disable, busy: busy \}\)/u)
+  assert.match(source, /h\(EmptyTaskBoardWorkspace, \{ t: t, setDraft: setDraft, setView: props\.setView, disable: disable, busy: busy \}\)/u)
+  assert.match(source, /h\(FirstTeamWizard, \{ t: t, setDraft: props\.setDraft, setView: props\.setView, disable: props\.disable, busy: props\.busy \}\)/u)
   assert.match(source, /props\.setView\("chat"\)/u)
   assert.match(source, /simpleMemberName\(member, isLead, t\)/u)
   assert.match(source, /function openAgentCatalog\(\)/u)
@@ -106,11 +118,11 @@ test('enabled workspaces expose a safe automatic-team disable control', async ()
   const source = await clientSource()
   assert.match(source, /disable: "关闭自动团队"/u)
   assert.match(source, /disableActiveHint: "存在活动团队时无法关闭自动团队/u)
-  assert.match(source, /h\(DisableAutomaticTeams, \{ t: t, labelId: "dat-disable-empty", disable: props\.disable, busy: props\.busy, hasActive: false \}\)/u)
-  const intro = source.indexOf('h("div", { className: "dat-empty"')
-  const emptyDisable = source.indexOf('h(DisableAutomaticTeams, { t: t, labelId: "dat-disable-empty"')
-  const templates = source.indexOf('t("chooseTemplate")', emptyDisable)
-  assert.ok(intro >= 0 && emptyDisable > intro && templates > emptyDisable, 'disable control must be above the template wizard fields')
+  assert.match(source, /className: "dat-team-mode-switch"/u)
+  assert.match(source, /type: "checkbox", role: "switch", checked: true, disabled: props\.busy/u)
+  assert.match(source, /if \(!event\.target\.checked\) props\.disable\(\)/u)
+  assert.match(source, /h\("details", \{ className: "dat-onboarding-details" \}/u)
+  assert.doesNotMatch(source, /h\("details", \{ className: "dat-onboarding-details", open:/u)
   assert.match(source, /h\(DisableAutomaticTeams, \{ t: t, labelId: "dat-disable-teams", disable: disable, busy: busy, hasActive: hasActiveTeams \}\)/u)
   assert.match(source, /hasActiveTeams = teams\.some\(function \(item\) \{ return String\(item\.status \|\| item\.state \|\| ""\)\.toLowerCase\(\) !== "closed"; \}\)/u)
   assert.match(source, /disabled: props\.busy \|\| props\.hasActive/u)
@@ -149,7 +161,7 @@ test('inbound cross-team delivery metadata is deduplicated in the on-demand acti
   assert.match(source, /key: eventIdentity\(event, teamId\(team\)\)/u)
   assert.match(source, /event\.fromTeamName \|\| teamName\(teamsById\[event\.fromTeamId\], t\)/u)
   assert.match(source, /event\.toTeamName \|\| teamName\(teamsById\[event\.toTeamId\], t\)/u)
-  assert.match(source, /role: "complementary"/u)
+  assert.match(source, /role: inspectorModal \? "dialog" : "complementary"/u)
   assert.match(source, /event\.key === "Escape"/u)
 })
 
@@ -173,7 +185,7 @@ test('workspace uses progressive disclosure instead of a permanent three-column 
 
 test('live canvas derives accessible member, task, and relationship nodes without dependencies', async () => {
   const source = await clientSource()
-  for (const marker of ['TeamCanvas', 'workMode', 'dat-view-toggle', 'dat-canvas-lines', 'dat-canvas-node', 'relationIds(task.dependsOn)', 'relationIds(task.blockedBy)', 'relationIds(task.conflictsWith)']) {
+  for (const marker of ['TeamCanvas', 'workMode', 'dat-view-toggle', 'dat-canvas-lines', 'dat-canvas-node', 'eachBoundedRelation(task.dependsOn', 'eachBoundedRelation(task.blockedBy', 'eachBoundedRelation(task.conflictsWith']) {
     assert.ok(source.includes(marker), `missing live canvas marker: ${marker}`)
   }
   assert.match(source, /useState\("canvas"\)/u)
@@ -183,12 +195,35 @@ test('live canvas derives accessible member, task, and relationship nodes withou
   assert.match(source, /markerEnd: "url\(#dat-canvas-arrow\)"/u)
   assert.match(source, /className: "dat-canvas-row dat-canvas-member-row"/u)
   assert.match(source, /className: "dat-canvas-row dat-canvas-task-row"/u)
-  assert.match(source, /style: \{ width: width \+ "px", height: height \+ "px" \}/u)
-  assert.match(source, /grid-template-rows:82px 104px 82px/u)
-  assert.match(source, /\.dat-canvas-node\{position:relative;display:block/u)
-  assert.doesNotMatch(source, /className: "dat-canvas-node[^\n]+style: \{ left:/u)
+  assert.match(source, /function buildCanvasLayout\(members, taskNodes, viewportWidth, viewportHeight\)/u)
+  assert.match(source, /new ResizeObserver\(measure\)/u)
+  assert.match(source, /world\.style\.transform = "scale\(" \+ scale \+ "\)"/u)
+  assert.match(source, /className: "dat-canvas-stage", ref: stageRef/u)
+  assert.match(source, /gridTemplateColumns: "repeat\(" \+ layout\.taskColumns/u)
+  assert.match(source, /role: "region", "aria-label": t\("canvasViewport"\)/u)
+  assert.match(source, /role: "group", "aria-label": t\("canvasControls"\)/u)
   assert.match(source, /className: "dat-sr"[^\n]+edges\.map/u)
   assert.doesNotMatch(source, /(?:reactflow|d3|dagre|cytoscape)/iu)
+
+  const layoutStart = source.indexOf('var CANVAS_NODE_WIDTH')
+  const layoutEnd = source.indexOf('function TeamCanvas(props)', layoutStart)
+  assert.ok(layoutStart >= 0 && layoutEnd > layoutStart, 'adaptive canvas helpers must precede TeamCanvas')
+  const helpers = Function(`function memberId(member) { return member.id; }\nfunction taskId(task) { return task.id; }\n${source.slice(layoutStart, layoutEnd)}\nreturn { buildCanvasLayout, clampCanvasZoom, canvasEdgePoints };`)()
+  const members = [{ id: 'lead' }]
+  const tasks = Array.from({ length: 35 }, (_, index) => ({ id: `task-${index}` }))
+  const layout = helpers.buildCanvasLayout(members, tasks, 920, 500)
+  assert.equal(layout.columns, 7)
+  assert.equal(Math.ceil(tasks.length / layout.taskColumns), 5)
+  assert.ok(layout.width < 1500, '35 tasks should wrap instead of creating a 6k-wide row')
+  assert.ok(layout.height > 326, 'world height should grow with wrapped rows')
+  const positions = Object.values(layout.positions)
+  assert.equal(new Set(positions.map((position) => `${position.x}:${position.y}`)).size, positions.length)
+  assert.ok(positions.every((position) => position.x >= 0 && position.y >= 0 && position.x + 152 <= layout.width && position.y + 82 <= layout.height))
+  const large = helpers.buildCanvasLayout(Array.from({ length: 8 }, (_, index) => ({ id: `member-${index}` })), Array.from({ length: 200 }, (_, index) => ({ id: `task-${index}` })), 900, 500)
+  assert.ok(large.columns >= 10 && large.columns <= 20)
+  assert.equal(Object.keys(large.positions).length, 208)
+  assert.equal(helpers.clampCanvasZoom(0.01), 0.1)
+  assert.equal(helpers.clampCanvasZoom(3), 2)
 })
 
 test('canvas preserves responsive, reduced-motion, history, settings, and member ordering safeguards', async () => {
@@ -228,7 +263,7 @@ test('settings restore authoritative state after an active-team disable conflict
 
 test('switching conversation views only stops UI subscriptions, never the running team', async () => {
   const source = await clientSource()
-  assert.match(source, /if \(source\) source\.close\(\);\s*clearPolling\(\);\s*if \(publishFrame !== null\) cancelFrame\(publishFrame\)/u)
+  assert.match(source, /alive = false;\s*acceptRef\.current = function \(\) \{\};\s*closeSource\(true\);\s*if \(publishFrame !== null\) cancelFrame\(publishFrame\)/u)
   assert.match(source, /removeEventListener\("visibilitychange", onVisibilityChange\)/u)
   assert.doesNotMatch(source, /sessions\.(?:interrupt|stop)|team_shutdown|member-stop|postAction\([^\n]+["']close["']/u)
   assert.match(source, /Switching teams or views never stops background members/u)
@@ -287,8 +322,8 @@ test('canvas animates only genuine running and transfer states and honors reduce
   for (const marker of ['"data-state": stateKind', 'stateKind = taskStateKind(task)', 'dat-canvas-line-flow', 'dat-canvas-live', 'dat-canvas-live-paused', 'dat-canvas-swatch', '@keyframes dat-canvas-flow', '@keyframes dat-canvas-pulse']) {
     assert.ok(source.includes(marker), `missing canvas motion marker: ${marker}`)
   }
-  assert.match(source, /addEdge\(memberLookup\[String\(assigned \|\| ""\)\], target, "assigned", targetState === "in_progress"\)/u)
-  assert.match(source, /stateKind === "running" \? " dat-canvas-live" : ""/u)
+  assert.match(source, /addEdge\(memberLookup\[String\(assigned \|\| ""\)\], target, "assigned", \(statesByKey\[target\] \|\| ""\) === "in_progress"\)/u)
+  assert.match(source, /className: "dat-canvas-node dat-canvas-member", "data-state": stateKind/u)
   assert.match(source, /edge\.flow \? " dat-canvas-line-flow" : ""/u)
   assert.match(source, /\.dat-canvas-task\[data-state=in_progress\]\{/u)
   assert.match(source, /\.dat-canvas-task\[data-state=blocked\]\{/u)
@@ -305,7 +340,7 @@ test('native team page pairs two desktops before enabling the real remote E2EE c
   for (const marker of ['ProjectTeamEntry', '/api/agent-teams/project/status', '/api/agent-teams/project/action', 'create-project', 'create-invite', 'prepare-join', 'approve-join', 'complete-join', 'lan-status', 'start-lan', 'connect-lan', 'stop-lan', 'set-relay', 'connect-remote', 'disconnect-remote']) {
     assert.ok(source.includes(marker), `missing project collaboration entry marker: ${marker}`)
   }
-  for (const label of ['组建协作团队', '同一局域网', '不在同一网络', '生成远程邀请', '加入已有团队', '生成加入请求', '批准加入', '完成加入', '端到端通道已就绪', '不广播设备扫描', 'HypoMux 仅用于 Windows 多网卡下载聚合']) {
+  for (const label of ['多人安全接入', '连接预览', '同一局域网', '不在同一网络', '生成远程邀请', '加入已有团队', '生成加入请求', '批准加入', '完成加入', '端到端通道已就绪', '不广播设备扫描', 'HypoMux 仅用于 Windows 多网卡下载聚合']) {
     assert.ok(source.includes(label), `missing project collaboration label: ${label}`)
   }
   assert.match(source, /h\(ProjectTeamEntry, \{ t: t \}\)/u)
@@ -327,7 +362,11 @@ test('task cards and canvas nodes open a live native task detail sidebar with as
   for (const marker of ['function TaskDetailSidebar', 'function memberModelText(member, t)', 'dat-task-open', 'dat-canvas-task-open', 'selectedTaskId', 'selectedTask = tasks.filter', 'openTask: openTaskDetail', 'onClick: function (event) { props.openTask(event, task); }', 'props.onOpen(event, task)', 'taskDetailRef', 't("taskDetail")', 't("taskEvents")', 't("taskRef")', 't("taskDependencies")', 'memberModelText(assignee, t)', 'task.fileScopeProjection && task.fileScopeProjection.projected === false']) {
     assert.ok(source.includes(marker), `missing task detail marker: ${marker}`)
   }
-  assert.equal((source.match(/role: "complementary"/gu) || []).length, 2, 'activity and task detail inspectors are both complementary sidebars')
+  assert.match(source, /role: props\.modal \? "dialog" : "complementary"/u)
+  assert.match(source, /role: inspectorModal \? "dialog" : "complementary"/u)
+  assert.match(source, /"aria-modal": props\.modal \? true : undefined/u)
+  assert.match(source, /inert: detailModal \? "" : undefined/u)
+  assert.match(source, /inert: inspectorModal \? "" : undefined/u)
   assert.match(source, /memberModel: modelFor, onOpen: openTaskDetail/u)
   assert.match(source, /arrayText\(task\.blockedBy\)\.map\(refTitle\)\.join\(", "\)\)/u)
   assert.match(source, /task\.dependencies\.map\(refTitle\)\.join\(", "\)/u)
@@ -348,11 +387,64 @@ test('task cards and canvas nodes open a live native task detail sidebar with as
 test('task detail refreshes from the shared SSE snapshot and stays keyboard accessible', async () => {
   const source = await clientSource()
   assert.match(source, /selectedTaskId \? h\(React\.Fragment/u)
-  assert.match(source, /if \(event\.key === "Escape"\) \{ if \(drawerOpen\) closePanel\(\); else closeTaskDetail\(\); \}/u)
+  assert.match(source, /if \(event\.key === "Escape"\) \{ event\.preventDefault\(\); event\.stopPropagation\(\); if \(drawerOpen\) closePanel\(\); else closeTaskDetail\(\); \}/u)
   assert.match(source, /tabIndex: -1, ref: props\.detailRef/u)
   assert.match(source, /focusTarget = drawerOpen \? drawerRef\.current : taskDetailRef\.current/u)
+  assert.match(source, /function trapInspectorTab\(event, element\)/u)
+  assert.match(source, /function useInspectorModal\(elementRef, open\)/u)
+  assert.match(source, /style\.position !== "fixed"/u)
+  assert.match(source, /!element\.contains\(active\)/u)
+  assert.match(source, /else trapInspectorTab\(event, focusTarget\)/u)
+  assert.match(source, /"aria-labelledby": "dat-task-detail-title"/u)
   assert.match(source, /setDrawerOpen\(false\); setSelectedTaskId\(""\); \}, \[teamId\(team\), props\.closed\]\)/u)
-  assert.match(source, /events\.filter\(relevantToTask\)/u)
+  assert.match(source, /events\.filter\(function \(event\) \{ return eventRelatesToTask\(event, selectedTask\); \}\)/u)
+  assert.match(source, /function eventRelatesToTask\(event, task\)/u)
   assert.match(source, /t\("taskDetailUnavailable"\)/u)
   assert.doesNotMatch(source, /(reactflow|d3|dagre|cytoscape|framer-motion|react-spring|gsap)/iu)
+})
+
+test('fixed inspectors contain keyboard focus while sticky desktop sidebars stay non-modal', async () => {
+  const source = await clientSource()
+  const start = source.indexOf('    function trapInspectorTab(event, element)')
+  const end = source.indexOf('    function useInspectorModal(elementRef, open)', start)
+  assert.ok(start >= 0 && end > start, 'focus helper must remain independently testable')
+
+  let active
+  const first = { hidden: false, closest: () => null, focus: () => { active = first } }
+  const last = { hidden: false, closest: () => null, focus: () => { active = last } }
+  const outside = {}
+  const element = {
+    ownerDocument: { get activeElement() { return active } },
+    querySelectorAll: () => [first, last],
+    contains: (node) => node === element || node === first || node === last,
+    focus: () => { active = element }
+  }
+  const fakeWindow = { getComputedStyle: (node) => node === element ? { position: 'fixed', display: 'block', visibility: 'visible' } : { display: 'block', visibility: 'visible' } }
+  const trapInspectorTab = Function('window', `${source.slice(start, end)}\nreturn trapInspectorTab`)(fakeWindow)
+  const key = (shiftKey = false) => ({ key: 'Tab', shiftKey, prevented: false, preventDefault() { this.prevented = true } })
+
+  active = outside
+  const fromOutside = key()
+  trapInspectorTab(fromOutside, element)
+  assert.equal(fromOutside.prevented, true)
+  assert.equal(active, first)
+
+  active = last
+  const wrapsForward = key()
+  trapInspectorTab(wrapsForward, element)
+  assert.equal(wrapsForward.prevented, true)
+  assert.equal(active, first)
+
+  active = first
+  const wrapsBackward = key(true)
+  trapInspectorTab(wrapsBackward, element)
+  assert.equal(wrapsBackward.prevented, true)
+  assert.equal(active, last)
+
+  fakeWindow.getComputedStyle = () => ({ position: 'sticky', display: 'block', visibility: 'visible' })
+  active = outside
+  const desktopTab = key()
+  trapInspectorTab(desktopTab, element)
+  assert.equal(desktopTab.prevented, false)
+  assert.equal(active, outside)
 })

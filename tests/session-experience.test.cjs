@@ -102,8 +102,11 @@ test('official workspace sidebar receives the persistent Codex-style session men
     'harness.desktop.session-menu.v1', '置顶', '标记为未读', '复制会话 ID',
     '在新窗口中打开', 'open-session-window', 'moveSession', 'react_dom.createPortal',
     'id.length <= 256', 'window.innerWidth - 228', 'hd-session-menu-dismiss',
-    'document.addEventListener("scroll", close, true)'
+    'document.addEventListener("scroll", close, true)', 'HD_SESSION_MENU_ICONS',
+    'hd-session-menu-icon-slot', 'icon: "rename"', 'icon: "newWindow"',
+    'strokeWidth: "1.35"', 'shape-rendering:geometricPrecision'
   ]) assert.ok(source.includes(marker), `missing sidebar session menu marker: ${marker}`)
   assert.doesNotMatch(source, /id: "fork"/u)
+  assert.doesNotMatch(source, /glyph:\s*"[⌃✎◉▣▱▢↗]"/u)
   assert.doesNotThrow(() => new Function(source))
 })

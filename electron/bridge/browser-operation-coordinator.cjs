@@ -7,6 +7,7 @@ function coordinatorError(code, message) {
 class BrowserOperationCoordinator {
   constructor() {
     this.generation = 0
+    this.modelGeneration = 0
     this.resetting = false
   }
 
@@ -15,11 +16,33 @@ class BrowserOperationCoordinator {
     return this.generation
   }
 
+  modelTicket(signal = null) {
+    if (this.resetting) throw coordinatorError('profile-resetting', '独立浏览器 Profile 正在重置，请稍后重试。')
+    if (signal?.aborted) throw coordinatorError('browser-action-cancelled', '浏览器模型操作已取消。')
+    return {
+      profileGeneration: this.generation,
+      modelGeneration: this.modelGeneration,
+      signal
+    }
+  }
+
   assert(ticket) {
-    if (this.resetting || ticket !== this.generation) {
+    const modelTicket = ticket && typeof ticket === 'object'
+      && Number.isInteger(ticket.profileGeneration)
+      && Number.isInteger(ticket.modelGeneration)
+    const profileGeneration = modelTicket ? ticket.profileGeneration : ticket
+    if (this.resetting || profileGeneration !== this.generation) {
       throw coordinatorError('profile-resetting', '浏览器操作已被 Profile 重置取消。')
     }
+    if (modelTicket && (ticket.modelGeneration !== this.modelGeneration || ticket.signal?.aborted)) {
+      throw coordinatorError('browser-action-cancelled', '浏览器模型操作已取消。')
+    }
     return true
+  }
+
+  cancelModelActions() {
+    this.modelGeneration += 1
+    return this.modelGeneration
   }
 
   beginReset() {
@@ -39,7 +62,7 @@ class BrowserOperationCoordinator {
   }
 
   snapshot() {
-    return { resetting: this.resetting, generation: this.generation }
+    return { resetting: this.resetting, generation: this.generation, modelGeneration: this.modelGeneration }
   }
 }
 

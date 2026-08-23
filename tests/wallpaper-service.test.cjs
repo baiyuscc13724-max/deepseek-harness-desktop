@@ -5,15 +5,18 @@ const os = require('node:os')
 const path = require('node:path')
 
 const { normalizeState } = require('../electron/store/app-state-store.cjs')
-const { MAX_WALLPAPER_LIBRARY_BYTES, assertWallpaperLibraryCapacity, cleanupOrphanedWallpaperStorage, createWallpaperMediaResponse, createWallpaperMutationQueue, createWallpaperVideoResponse, installManagedWallpaperCopy, parseByteRange, wallpaperKind, wallpaperMime, safeManagedWallpaperPath, safeProjectMediaPath, resolveWallpaperEngineInput, resolveWallpaperEngineProject, wallpaperStorageUsageBytes } = require('../electron/bridge/wallpaper-service.cjs')
+const { MAX_WALLPAPER_LIBRARY_BYTES, assertWallpaperLibraryCapacity, cleanupOrphanedWallpaperStorage, createWallpaperMediaResponse, createWallpaperMutationQueue, createWallpaperVideoResponse, installManagedWallpaperCopy, parseByteRange, wallpaperKind, wallpaperLibraryMediaUrl, wallpaperMediaRevision, wallpaperMime, safeManagedWallpaperPath, safeProjectMediaPath, resolveWallpaperEngineInput, resolveWallpaperEngineProject, wallpaperStorageUsageBytes } = require('../electron/bridge/wallpaper-service.cjs')
 
 test('wallpaper scheme privileges register before asynchronous Electron bootstrap', async () => {
   const bootstrap = await readFile(path.join(__dirname, '..', 'electron', 'bootstrap.cjs'), 'utf8')
   const main = await readFile(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  const renderer = await readFile(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8')
   assert.match(bootstrap, /protocol\.registerSchemesAsPrivileged/)
   assert.match(bootstrap, /scheme: 'harness-wallpaper'/)
   assert.match(bootstrap, /bypassCSP: true/)
   assert.doesNotMatch(main, /protocol\.registerSchemesAsPrivileged/)
+  assert.match(renderer, /img-src 'self' data: harness-wallpaper:/)
+  assert.match(renderer, /media-src 'self' harness-wallpaper:/)
 })
 
 test('wallpaper media types distinguish images and videos', () => {
@@ -21,6 +24,25 @@ test('wallpaper media types distinguish images and videos', () => {
   assert.equal(wallpaperKind('wallpaper.MP4'), 'video')
   assert.equal(wallpaperKind('scene.pkg'), null)
   assert.equal(wallpaperMime('movie.webm'), 'video/webm')
+})
+
+test('wallpaper library gives images and videos the same managed preview route', async () => {
+  const info = { mtimeMs: 1234.6, size: 4096 }
+  assert.equal(wallpaperMediaRevision(info), '1235-4096')
+  assert.equal(wallpaperMediaRevision({ mtimeMs: -1, size: 4096 }), null)
+  assert.equal(wallpaperMediaRevision({ mtimeMs: 1, size: -1 }), null)
+  assert.equal(
+    wallpaperLibraryMediaUrl('A-Managed-Video', info),
+    'harness-wallpaper://library/a-managed-video/media?v=1235-4096'
+  )
+  assert.equal(wallpaperLibraryMediaUrl('../../secret', info), null)
+  assert.equal(wallpaperLibraryMediaUrl('valid-id', { mtimeMs: 1, size: -1 }), null)
+
+  const main = await readFile(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  assert.match(main, /previewUrl:\s*available\s*\?\s*wallpaperLibraryMediaUrl\(item\.id, info\)\s*:\s*null/)
+  assert.doesNotMatch(main, /previewUrl:\s*available\s*&&\s*item\.kind\s*===\s*['"]image['"]/)
+  assert.match(main, /target\.searchParams\.get\('v'\) !== wallpaperMediaRevision\(info\)/)
+  assert.match(main, /activeWallpaper\?\.previewUrl \|\| `\$\{WALLPAPER_SCHEME\}:\/\/current\/video\?v=\$\{wallpaperMediaRevision\(info\)\}`/)
 })
 
 test('video responses stream exact byte ranges with the correct MIME type', async () => {

@@ -156,6 +156,18 @@ test('click 动作：跨 origin 跳转目标必须公网且已授权', () => {
   assert.equal(cross.verdict, 'allow') // 已授权公网目标 ✓
 })
 
+test('submit 表单目标与 click 一样必须经过跨 origin 导航授权', () => {
+  const { gate, grants } = gateWith({ 'https://example.com': ['submit'] }, { origin: 'https://example.com' })
+  const common = { action: 'submit', tabId: 'tab-1', authorizations: grants }
+
+  assert.throws(
+    () => gate.gate({ ...common, payload: { navigatesTo: 'https://evil.example/collect' } }),
+    error => error.code === 'navigate-denied'
+  )
+  const request = gate.gate({ ...common, payload: { navigatesTo: 'https://example.com/feedback' } })
+  assert.equal(request.verdict, 'confirm-required')
+})
+
 test('upload/download/submit/publish/delete 必须人工确认，且确认一次性有效', () => {
   const { gate, grants } = gateWith({
     'https://example.com': ['upload', 'download', 'submit']

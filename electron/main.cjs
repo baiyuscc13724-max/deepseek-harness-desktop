@@ -12,8 +12,8 @@ const WebSocket = require('ws')
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
 const { ensureRuntimeNodeModules } = require('./bridge/runtime-bundle-service.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
-const { assertWallpaperLibraryCapacity, cleanupOrphanedWallpaperStorage, createWallpaperMediaResponse, createWallpaperMutationQueue, createWallpaperVideoResponse, installManagedWallpaperCopy, isManagedWallpaperFileName, resolveWallpaperEngineInput, resolveWallpaperEngineProject, revalidateProjectMediaPath, safeManagedWallpaperPath, wallpaperKind, wallpaperMime, wallpaperStorageUsageBytes } = require('./bridge/wallpaper-service.cjs')
-const { defaultSteamRootCandidates, scanWallpaperEngineLibrary } = require('./bridge/wallpaper-library.cjs')
+const { assertWallpaperLibraryCapacity, cleanupOrphanedWallpaperStorage, createWallpaperMediaResponse, createWallpaperMutationQueue, createWallpaperVideoResponse, installManagedWallpaperCopy, isManagedWallpaperFileName, resolveWallpaperEngineInput, resolveWallpaperEngineProject, revalidateProjectMediaPath, safeManagedWallpaperPath, wallpaperKind, wallpaperLibraryMediaUrl, wallpaperMediaRevision, wallpaperMime, wallpaperStorageUsageBytes } = require('./bridge/wallpaper-service.cjs')
+const { currentWallpaperEngineProjectDirectories, defaultSteamRootCandidates, discoverSteamRoots, scanWallpaperEngineLibrary, wallpaperEngineConfigSelection, wallpaperEngineSearchRoots } = require('./bridge/wallpaper-library.cjs')
 const { createDefaultProviderMeterRegistry } = require('./bridge/provider-meter-service.cjs')
 const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service.cjs')
 const { ensureMobileControlPlugin } = require('./bridge/mobile-control-plugin-service.cjs')
@@ -57,6 +57,7 @@ const { DECISIONS: BROWSER_LINK_DECISIONS, routeBrowserLink } = require('./bridg
 const { MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, isSensitiveText } = require('./bridge/browser-action-gate.cjs')
 const { hostPublicInfo } = require('./bridge/browser-url-policy.cjs')
 const { BrowserOperationCoordinator } = require('./bridge/browser-operation-coordinator.cjs')
+const { BrowserNavigationLane, attachBrowserNavigationGuard } = require('./bridge/browser-navigation-guard.cjs')
 const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
 const { BrowserDiagnostics, safeUrl: safeBrowserDiagnosticUrl } = require('./bridge/browser-diagnostics.cjs')
 const { BrowserHistoryStore } = require('./bridge/browser-history-store.cjs')
@@ -69,6 +70,7 @@ const { createWssRelayAdapter } = require('./bridge/sync-transports/wss-relay-ad
 const { createTailscaleAdapter } = require('./bridge/sync-transports/tailscale-adapter.cjs')
 const { runPackagedSelfTest } = require('./bridge/self-test-service.cjs')
 const { beginWindowDrag, moveWindowDrag, endWindowDrag } = require('./bridge/window-drag-service.cjs')
+const { resolveTitleBarSymbolColor } = require('./bridge/titlebar-appearance.cjs')
 const { createDesktopTray } = require('./desktop-tray.cjs')
 const { distributionInfo, isStoreDistribution } = require('./distribution.cjs')
 const { AppStateStore, MAX_WALLPAPER_LIBRARY_ITEMS } = require('./store/app-state-store.cjs')
@@ -385,7 +387,7 @@ async function browserStatePayload(patch = {}) {
     },
     authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [] },
     audit: { count: audit.count, total: audit.total, dropped: audit.dropped },
-    modelControlStopped: browserSecurityPolicy?.isStopped === true,
+    modelControlStopped: browserSecurityPolicy?.isModelStopped === true,
     profileResetting: browserOperations.snapshot().resetting,
     pendingConfirmations: browserSecurityPolicy?.pendingConfirmations() || [],
     activeTabId: activeBrowserTabId,
@@ -429,6 +431,87 @@ function updateBrowserActiveTab(url) {
   }
 }
 
+function browserNavigationLane(tabId = activeBrowserTabId) {
+  return browserTabs.get(String(tabId || ''))?.navigationLane || null
+}
+
+function browserTabForContents(contents) {
+  if (!contents) return null
+  for (const tab of browserTabs.values()) {
+    if (tab.view?.webContents === contents) return tab
+  }
+  return null
+}
+
+function markBrowserModelNavigation(tabId, reason) {
+  const lane = browserNavigationLane(tabId)
+  if (!lane) throw Object.assign(new Error('浏览器标签页缺少导航来源状态。'), { code: 'navigation-lane-missing' })
+  lane.markModel(reason)
+  return lane
+}
+
+function markBrowserUserNavigation(tabId = activeBrowserTabId, reason = 'browser-ui') {
+  browserOperations.cancelModelActions()
+  browserNavigationLane(tabId)?.markUser(reason)
+}
+
+async function dispatchModelBrowserInput(tabId, reason, contents, events) {
+  const lane = markBrowserModelNavigation(tabId, reason)
+  const finish = lane.beginModelInput(reason)
+  try {
+    if (!contents.debugger?.isAttached?.() || browserTabs.get(String(tabId || ''))?.fileChooserControl !== true) {
+      throw Object.assign(new Error('后台浏览器输入通道当前不可用。'), { code: 'browser-input-unavailable' })
+    }
+    for (const input of events) {
+      if (['mouseDown', 'mouseUp', 'mouseMove', 'mouseWheel'].includes(input.type)) {
+        const type = input.type === 'mouseDown'
+          ? 'mousePressed'
+          : input.type === 'mouseUp'
+            ? 'mouseReleased'
+            : input.type === 'mouseMove'
+              ? 'mouseMoved'
+              : input.type
+        await contents.debugger.sendCommand('Input.dispatchMouseEvent', {
+          type,
+          x: Math.round(Number(input.x) || 0),
+          y: Math.round(Number(input.y) || 0),
+          ...(input.button ? { button: input.button } : {}),
+          ...(input.clickCount ? { clickCount: input.clickCount } : {}),
+          ...(input.type === 'mouseWheel' ? { deltaX: Number(input.deltaX) || 0, deltaY: Number(input.deltaY) || 0 } : {})
+        })
+        continue
+      }
+      if (['keyDown', 'keyUp', 'char'].includes(input.type)) {
+        const keyCode = String(input.keyCode || '')
+        const key = keyCode === 'Space' ? ' ' : keyCode
+        const virtualKeyCode = {
+          Escape: 27, Tab: 9, Enter: 13, Space: 32,
+          PageUp: 33, PageDown: 34, End: 35, Home: 36,
+          ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40
+        }[keyCode]
+        const text = input.type === 'char'
+          ? key
+          : input.type === 'keyDown' && keyCode === 'Enter'
+            ? '\r'
+            : input.type === 'keyDown' && keyCode === 'Space'
+              ? ' '
+              : ''
+        await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: input.type,
+          key,
+          code: keyCode,
+          ...(virtualKeyCode ? { windowsVirtualKeyCode: virtualKeyCode } : {}),
+          ...(text ? { text } : {})
+        })
+        continue
+      }
+      throw Object.assign(new Error(`不支持的后台浏览器输入类型：${input.type}`), { code: 'browser-input-unsupported' })
+    }
+  } finally {
+    finish()
+  }
+}
+
 function ensureBrowserSidebar() {
   if (liveBrowserContents()) return browserView
   browserView = null
@@ -453,12 +536,15 @@ function ensureBrowserSidebar() {
   }
   if (!browserDownloadTrackingAttached) {
     browserDownloadTrackingAttached = true
-    browserSession.on('will-download', (_event, item) => {
-      const anyModelAuthorization = browserSecurityPolicy?.authorizations?.().entries?.some(entry => entry.actions?.length)
-      const blockedWhileModelAuthorized = Boolean(anyModelAuthorization && browserSecurityPolicy?.isStopped !== true)
-      if (blockedWhileModelAuthorized) item.cancel()
-      const unconfirmedModelDownload = blockedWhileModelAuthorized
-      const modelInitiated = false
+    browserSession.on('will-download', (_event, item, originatingContents) => {
+      const tab = browserTabForContents(originatingContents)
+      const lane = tab?.navigationLane || null
+      const actor = lane?.snapshot().actor || 'unknown'
+      const targetUrl = typeof item.getURL === 'function' ? item.getURL() : ''
+      const trustedUserIntent = lane?.consumeTrustedDownloadIntent(targetUrl, { base: originatingContents?.getURL?.() }) === true
+      const unconfirmedModelDownload = !lane || (actor !== 'user' && !trustedUserIntent)
+      if (unconfirmedModelDownload) item.cancel()
+      const modelInitiated = actor === 'model' || actor === 'cancelled-model'
       const entry = {
         id: randomUUID(),
         filename: safeBrowserText(item.getFilename(), 240),
@@ -485,6 +571,7 @@ function ensureBrowserSidebar() {
   browserView = new WebContentsView({
     webPreferences: {
       partition: browserSecurityPolicy.partitionName,
+      preload: path.join(__dirname, 'browser-provenance-preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -499,11 +586,17 @@ function ensureBrowserSidebar() {
   const contents = browserView.webContents
   const tabId = `browser-tab-${nextBrowserTabSequence++}`
   activeBrowserTabId = tabId
-  const browserTab = { id: tabId, view: browserView, createdAt: Date.now(), dialogControl: false, navigationGeneration: 0 }
+  const browserTab = { id: tabId, view: browserView, createdAt: Date.now(), dialogControl: false, fileChooserControl: false, fileChooserGeneration: 0, navigationGeneration: 0, navigationLane: new BrowserNavigationLane() }
   browserTabs.set(tabId, browserTab)
   try {
     contents.debugger.attach('1.3')
-    contents.debugger.sendCommand('Page.enable').then(() => { browserTab.dialogControl = true }).catch(() => {})
+    contents.debugger.sendCommand('Page.enable')
+      .then(() => contents.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true, cancel: true }))
+      .then(() => {
+        browserTab.dialogControl = true
+        browserTab.fileChooserControl = true
+      })
+      .catch(() => {})
     contents.debugger.on('message', (_debuggerEvent, method, parameters) => {
       if (method === 'Page.javascriptDialogOpening') {
         const rawDialogMessage = String(parameters?.message || '')
@@ -518,9 +611,18 @@ function ensureBrowserSidebar() {
       } else if (method === 'Page.javascriptDialogClosed') {
         browserDialogs.delete(tabId)
         if (tabId === activeBrowserTabId) publishBrowserState().catch(() => {})
+      } else if (method === 'Page.fileChooserOpened') {
+        browserTab.fileChooserGeneration += 1
+        browserDiagnostics.recordConsole({
+          level: 'warning',
+          message: '页面原生文件选择已拦截；文件只能通过经用户逐次确认的 upload 动作提供。',
+          source: contents.getURL(),
+          line: 0
+        })
+        if (tabId === activeBrowserTabId) publishBrowserState({ error: '页面原生文件选择已拦截；请使用需要逐次确认的 upload 动作。' }).catch(() => {})
       }
     })
-    contents.debugger.on('detach', () => { browserTab.dialogControl = false; browserDialogs.delete(tabId) })
+    contents.debugger.on('detach', () => { browserTab.dialogControl = false; browserTab.fileChooserControl = false; browserDialogs.delete(tabId) })
   } catch {}
   contents.on('console-message', (_event, details) => {
     if (tabId !== activeBrowserTabId) return
@@ -531,23 +633,13 @@ function ensureBrowserSidebar() {
       line: details.lineNumber
     })
   })
-  const validateNavigation = (event, url) => {
-    if (browserOperations.snapshot().resetting) {
-      if (url === 'about:blank') return
-      return event.preventDefault()
-    }
-    try { browserSecurityPolicy.userNavigate(url) }
-    catch { event.preventDefault() }
-  }
-  contents.on('will-navigate', validateNavigation)
-  contents.on('will-redirect', validateNavigation)
-  contents.setWindowOpenHandler(details => {
-    if (browserOperations.snapshot().resetting) return { action: 'deny' }
-    try {
-      const nav = browserSecurityPolicy.userNavigate(details.url)
-      contents.loadURL(nav.normalized).catch(() => {})
-    } catch {}
-    return { action: 'deny' }
+  attachBrowserNavigationGuard({
+    contents,
+    tabId,
+    lane: browserTab.navigationLane,
+    policy: () => browserSecurityPolicy,
+    isResetting: () => browserOperations.snapshot().resetting,
+    onDenied: () => {}
   })
   contents.on('did-start-loading', () => { if (tabId === activeBrowserTabId) publishBrowserState({ loading: true }).catch(() => {}) })
   contents.on('did-stop-loading', () => { if (tabId === activeBrowserTabId) publishBrowserState({ loading: false }).catch(() => {}) })
@@ -571,13 +663,22 @@ function ensureBrowserSidebar() {
   return browserView
 }
 
-async function createBrowserTab(value = '') {
+async function createBrowserTab(value = '', { modelNavigation = null } = {}) {
   browserOperations.ticket()
   browserView = null
   const view = ensureBrowserSidebar()
   const tabId = activeBrowserTabId
   const target = String(value || '').trim()
-  if (target) await view.webContents.loadURL(normalizeBrowserAddress(target))
+  if (modelNavigation) {
+    markBrowserModelNavigation(tabId, 'tab-open')
+    browserSecurityPolicy.setActiveTab({ id: tabId, origin: modelNavigation.origin, visible: browserSidebarVisible && browserContentVisible })
+    await view.webContents.loadURL(modelNavigation.normalized)
+  } else if (target) {
+    const normalized = normalizeBrowserAddress(target)
+    markBrowserUserNavigation(tabId, 'new-tab')
+    browserNavigationLane(tabId)?.noteBrowserUiNavigationIntent(normalized)
+    await view.webContents.loadURL(normalized)
+  }
   else await view.webContents.loadURL('about:blank')
   layoutBrowserView()
   await publishBrowserState({ error: '' })
@@ -667,6 +768,8 @@ async function navigateBrowser(value) {
   const ticket = browserOperations.ticket()
   const view = ensureBrowserSidebar()
   const target = normalizeBrowserAddress(value, view.webContents.getURL())
+  markBrowserUserNavigation(activeBrowserTabId, 'address-bar')
+  browserNavigationLane(activeBrowserTabId)?.noteBrowserUiNavigationIntent(target, { base: view.webContents.getURL() })
   browserOperations.assert(ticket)
   await view.webContents.loadURL(target)
   browserOperations.assert(ticket)
@@ -705,8 +808,10 @@ async function clearBrowserSiteData(confirmed) {
 async function resumeBrowserModelControl() {
   browserOperations.ticket()
   if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
+  else browserSecurityPolicy.resumeModelControl()
   const contents = liveBrowserContents()
   if (contents) updateBrowserActiveTab(contents.getURL())
+  browserControlServer?.resumeScope('browser')
   return publishBrowserState()
 }
 
@@ -760,11 +865,11 @@ async function clearAllBrowserData(confirmed) {
   return publishBrowserState()
 }
 
-function requireVisibleBrowserForModel() {
-  const ticket = browserOperations.ticket()
+function requireVisibleBrowserForModel(signal = null) {
+  const ticket = browserOperations.modelTicket(signal)
   const view = ensureBrowserSidebar()
   if (!browserSidebarVisible || !browserContentVisible) throw Object.assign(new Error('模型只能操作当前可见的右栏浏览器页面。'), { code: 'tab-not-visible' })
-  if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) throw Object.assign(new Error('浏览器模型控制已停止；需要用户在右栏重新启用。'), { code: 'stopped' })
+  if (!browserSecurityPolicy || browserSecurityPolicy.isModelStopped) throw Object.assign(new Error('浏览器模型控制已停止；需要用户在右栏重新启用。'), { code: 'stopped' })
   const url = view.webContents.getURL()
   updateBrowserActiveTab(url)
   if (!browserState.origin) throw new Error('当前浏览器页面没有可操作的 HTTP(S) 来源。')
@@ -777,8 +882,25 @@ function safeBrowserText(value, maximum = 12000) {
   return redactSensitiveText(text).text
 }
 
-async function observeBrowserForModel() {
-  const { view, origin, tabId, ticket } = requireVisibleBrowserForModel()
+function waitForModelBrowserDelay(timeoutMs, ticket) {
+  const signal = ticket && typeof ticket === 'object' ? ticket.signal : null
+  if (signal?.aborted) return Promise.reject(Object.assign(new Error('浏览器模型操作已取消。'), { code: 'browser-action-cancelled' }))
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', cancel)
+      resolve()
+    }, timeoutMs)
+    const cancel = () => {
+      clearTimeout(timer)
+      reject(Object.assign(new Error('浏览器模型操作已取消。'), { code: 'browser-action-cancelled' }))
+    }
+    signal?.addEventListener('abort', cancel, { once: true })
+  })
+}
+
+async function observeBrowserForModel(signal = null) {
+  const { view, origin, tabId, ticket } = requireVisibleBrowserForModel(signal)
+  markBrowserModelNavigation(tabId, 'observe')
   browserSecurityPolicy.modelAction({ action: 'read', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'document' }, payload: {} })
   const raw = await view.webContents.executeJavaScript(`(() => {
     const sensitive = /(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc)/i;
@@ -795,7 +917,7 @@ async function observeBrowserForModel() {
       if (interactive.length>=120) break;
     }
     return { title:document.title, text:String(document.body?.innerText||'').slice(0,12000), interactive };
-  })()`, true)
+  })()`, false)
   browserOperations.assert(ticket)
   const result = {
     origin,
@@ -814,8 +936,11 @@ async function browserElementMetadata(view, ref) {
     const label=element.labels?.[0]?.innerText||element.getAttribute('aria-label')||element.placeholder||'';
     const text=String(element.innerText||element.textContent||'').trim().slice(0,300);
     const rect=element.getBoundingClientRect();
-    return { tag:element.tagName.toLowerCase(),type:String(element.type||''),name:String(element.name||''),id:String(element.id||''),role:String(element.getAttribute('role')||''),autocomplete:String(element.autocomplete||''),ariaLabel:String(element.getAttribute('aria-label')||''),label:String(label),baseUrl:location.origin,text,href:String(element.href||''),downloadName:String(element.getAttribute('download')||''),submit:Boolean(element.type==='submit'||element.closest('button[type="submit"],input[type="submit"]')),disabled:Boolean(element.disabled||element.getAttribute('aria-disabled')==='true'),x:Math.round(rect.left+rect.width/2),y:Math.round(rect.top+rect.height/2) };
-  })()`, true)
+    const form=element.form||element.closest?.('form')||null;
+    const submit=Boolean(element.type==='submit'||element.type==='image'||element.matches?.('button:not([type]),button[type="submit"],input[type="submit"],input[type="image"]'));
+    const formAction=submit&&form?String(element.formAction||form.action||''):'';
+    return { tag:element.tagName.toLowerCase(),type:String(element.type||''),name:String(element.name||''),id:String(element.id||''),role:String(element.getAttribute('role')||''),autocomplete:String(element.autocomplete||''),ariaLabel:String(element.getAttribute('aria-label')||''),label:String(label),baseUrl:location.origin,text,href:String(element.href||''),formAction,download:Boolean(element.hasAttribute('download')),downloadName:String(element.getAttribute('download')||''),submit,disabled:Boolean(element.disabled||element.getAttribute('aria-disabled')==='true'),x:Math.round(rect.left+rect.width/2),y:Math.round(rect.top+rect.height/2) };
+  })()`, false)
   if (!metadata || !view.webContents.debugger.isAttached()) return metadata
   try {
     const documentNode = await view.webContents.debugger.sendCommand('DOM.getDocument', { depth: 0, pierce: true })
@@ -838,7 +963,7 @@ async function captureBrowserForModel(view, parameters) {
     const visible=element=>{const rect=element.getBoundingClientRect();const style=getComputedStyle(element);return rect.width>0&&rect.height>0&&style.display!=='none'&&style.visibility!=='hidden'};
     const sensitiveField=[...document.querySelectorAll('input,textarea,select,[contenteditable="true"]')].filter(visible).some(element=>sensitive.test([element.type,element.name,element.id,element.autocomplete,element.getAttribute('aria-label'),element.placeholder].filter(Boolean).join(' ')));
     return {sensitiveField,text:String(document.body?.innerText||'').slice(0,12000)};
-  })()`, true)
+  })()`, false)
   const highRisk = redactSensitiveText(preflight?.text || '').types
   if (preflight?.sensitiveField || highRisk.length || isSensitiveText(preflight?.text || '')) {
     throw Object.assign(new Error('当前可见页面包含密码、验证码、令牌、支付或账号类敏感内容，模型截图已阻止，请由用户亲自查看。'), { code: 'sensitive-screenshot-blocked' })
@@ -859,7 +984,7 @@ async function browserDomDiagnostics(view) {
     const headings=[...document.querySelectorAll('h1,h2,h3')].filter(clean).slice(0,40).map(node=>({level:node.tagName.toLowerCase(),text:String(node.innerText||node.textContent||'').trim().slice(0,240)}));
     const landmarks=[...document.querySelectorAll('main,nav,header,footer,aside,[role="main"],[role="navigation"]')].slice(0,40).map(node=>({tag:node.tagName.toLowerCase(),role:String(node.getAttribute('role')||''),label:String(node.getAttribute('aria-label')||'').slice(0,160)}));
     return {url:location.href,title:document.title,readyState:document.readyState,viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY},counts:{links:count('a'),buttons:count('button,[role="button"]'),forms:count('form'),inputs:count('input,textarea,select'),images:count('img')},headings,landmarks};
-  })()`, true)
+  })()`, false)
 }
 
 async function extractBrowserData(view, { mode = 'text', maxItems = 100, ref = '' } = {}) {
@@ -885,7 +1010,7 @@ async function extractBrowserData(view, { mode = 'text', maxItems = 100, ref = '
       candidates=[...root.querySelectorAll(selector)].filter(visible).map(node=>({tag:node.tagName.toLowerCase(),text:text(node).slice(0,2000),ref:String(node.getAttribute('data-hd-model-ref')||'')})).filter(item=>item.text&&!seen.has(item.text)&&(seen.add(item.text),true));
     }
     return {missingRef:false,items:candidates.slice(0,maximum),truncated:candidates.length>maximum,totalCandidates:candidates.length};
-  })()`, true)
+  })()`, false)
   if (raw?.missingRef) throw new Error('抓取范围已失效，请重新 observe。')
   const safeItems = mode === 'links'
     ? (raw.items || []).map(item => ({ text: safeBrowserText(item.text, 500), url: safeBrowserDiagnosticUrl(item.url), ref: /^b\d{1,4}$/.test(item.ref) ? item.ref : '', rel: safeBrowserText(item.rel, 120) }))
@@ -937,17 +1062,22 @@ function assertBrowserTransferBinding(view, binding, ticket, requiredAction) {
   let currentOrigin = ''
   try { currentOrigin = new URL(view.webContents.getURL()).origin } catch {}
   const authorization = browserSecurityPolicy?.authorizations?.().entries?.find(entry => entry.origin === binding.origin)
-  if (currentOrigin !== binding.origin || browserSecurityPolicy?.isStopped === true || !authorization?.actions?.includes(requiredAction)) throw new Error('操作期间页面来源、模型控制状态或站点授权已变化，传输已取消。')
+  if (currentOrigin !== binding.origin || browserSecurityPolicy?.isModelStopped === true || !authorization?.actions?.includes(requiredAction)) throw new Error('操作期间页面来源、模型控制状态或站点授权已变化，传输已取消。')
   if (requiredAction === 'upload' && !view.webContents.debugger.isAttached()) throw new Error('文件选择期间固定浏览器控制通道已关闭，上传已取消。')
 }
 
 async function downloadBrowserResource(view, targetUrl, destinationPath, maxBytes, binding, ticket) {
   const transferId = randomUUID()
   const controller = new AbortController()
+  const requestSignal = ticket && typeof ticket === 'object' ? ticket.signal : null
+  const cancelFromRequest = () => controller.abort(requestSignal?.reason)
+  if (requestSignal?.aborted) cancelFromRequest()
+  else requestSignal?.addEventListener('abort', cancelFromRequest, { once: true })
   activeBrowserTransfers.set(transferId, { origin: binding.origin, controller })
   try {
     return await runBrowserResourceDownload(view, targetUrl, destinationPath, maxBytes, binding, ticket, controller)
   } finally {
+    requestSignal?.removeEventListener('abort', cancelFromRequest)
     activeBrowserTransfers.delete(transferId)
   }
 }
@@ -1069,22 +1199,33 @@ async function uploadBrowserFileInteractively(view, binding, ticket) {
   return { uploaded: true, bytes: data.length, userSelected: true }
 }
 
-async function modelBrowserAction(input = {}) {
+async function modelBrowserAction(input = {}, context = {}) {
   const action = String(input.action || '')
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
   if (action === 'status') {
     const authorizations = browserSecurityPolicy?.authorizations() || { entries: [] }
     const current = authorizations.entries.find(entry => entry.origin === browserState.origin)
     const bounds = browserView?.getBounds?.() || { width: 0, height: 0 }
-    return { visible: browserSidebarVisible && browserContentVisible, origin: browserState.origin || null, title: safeBrowserText(browserState.title, 500), loading: browserState.loading, stopped: browserSecurityPolicy?.isStopped === true, actions: current?.actions || [], activeTabId: activeBrowserTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })), downloads: browserDownloads.map(item => ({ id: item.id, receivedBytes: item.receivedBytes, totalBytes: item.totalBytes, state: item.state, modelInitiated: Boolean(item.modelInitiated) })), dialog: { available: browserTabs.get(activeBrowserTabId)?.dialogControl === true, pending: browserDialogs.has(activeBrowserTabId), type: browserDialogs.get(activeBrowserTabId)?.type || null }, viewport: { width: bounds.width, height: bounds.height }, diagnostics: { console: browserDiagnostics.snapshot('console', { limit: 500 }).console.length, network: browserDiagnostics.snapshot('network', { limit: 500 }).network.length } }
+    return { visible: browserSidebarVisible && browserContentVisible, origin: browserState.origin || null, title: safeBrowserText(browserState.title, 500), loading: browserState.loading, stopped: browserSecurityPolicy?.isModelStopped === true, actions: current?.actions || [], activeTabId: activeBrowserTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })), downloads: browserDownloads.map(item => ({ id: item.id, receivedBytes: item.receivedBytes, totalBytes: item.totalBytes, state: item.state, modelInitiated: Boolean(item.modelInitiated) })), dialog: { available: browserTabs.get(activeBrowserTabId)?.dialogControl === true, pending: browserDialogs.has(activeBrowserTabId), type: browserDialogs.get(activeBrowserTabId)?.type || null }, viewport: { width: bounds.width, height: bounds.height }, diagnostics: { console: browserDiagnostics.snapshot('console', { limit: 500 }).console.length, network: browserDiagnostics.snapshot('network', { limit: 500 }).network.length } }
   }
   if (action === 'stop') {
+    browserOperations.cancelModelActions()
+    for (const tab of browserTabs.values()) {
+      const before = tab.navigationLane?.snapshot?.() || {}
+      const cancelled = tab.navigationLane?.cancelModel('model-control-stop') === true
+      if (cancelled && !before.userNavigationInFlight) {
+        try { tab.view.webContents.stop() } catch {}
+      }
+    }
     abortBrowserTransfers()
-    await withBrowserTransferLock(async () => browserSecurityPolicy?.stop())
+    if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
+    await withBrowserTransferLock(async () => browserSecurityPolicy?.pauseModelControl())
+    await publishBrowserState()
     return { stopped: true, message: '模型浏览器控制已停止；网页仍由用户直接控制。' }
   }
-  if (action === 'observe') return observeBrowserForModel()
-  const { view, origin, tabId, ticket } = requireVisibleBrowserForModel()
+  if (action === 'observe') return observeBrowserForModel(context.signal)
+  const { view, origin, tabId, ticket } = requireVisibleBrowserForModel(context.signal)
+  markBrowserModelNavigation(tabId, action || 'unknown-action')
   if (action === 'screenshot') {
     authorizeBrowserRead(origin, tabId)
     const result = await captureBrowserForModel(view, parameters)
@@ -1121,7 +1262,7 @@ async function modelBrowserAction(input = {}) {
   if (action === 'wait') {
     authorizeBrowserRead(origin, tabId)
     const timeoutMs = Math.max(0, Math.min(10_000, Math.floor(Number(parameters.timeout_ms) || 1000)))
-    await new Promise(resolve => setTimeout(resolve, timeoutMs))
+    await waitForModelBrowserDelay(timeoutMs, ticket)
     browserOperations.assert(ticket)
     return { waited: true, timeoutMs, loading: view.webContents.isLoading() }
   }
@@ -1134,7 +1275,8 @@ async function modelBrowserAction(input = {}) {
     if (!target) throw new Error('模型新建标签页必须提供已授权的 HTTP(S) 地址。')
     const nav = browserSecurityPolicy.modelNavigate(target, { tabId, base: view.webContents.getURL() })
     browserOperations.assert(ticket)
-    const created = await createBrowserTab(nav.normalized)
+    const created = await createBrowserTab('', { modelNavigation: nav })
+    browserOperations.assert(ticket)
     return { created: true, activeTabId: created.activeTabId, url: nav.normalized }
   }
   if (action === 'tabSwitch') {
@@ -1144,7 +1286,9 @@ async function modelBrowserAction(input = {}) {
     const targetUrl = target.view.webContents.getURL()
     if (!/^https?:/i.test(targetUrl)) throw new Error('模型不能切换到没有 HTTP(S) 来源的标签页。')
     browserSecurityPolicy.modelNavigate(targetUrl, { tabId, base: view.webContents.getURL() })
+    markBrowserModelNavigation(targetId, 'tab-switch')
     await switchBrowserTab(targetId)
+    browserOperations.assert(ticket)
     return { switched: true, activeTabId: targetId, url: targetUrl }
   }
   if (action === 'tabClose') {
@@ -1152,18 +1296,23 @@ async function modelBrowserAction(input = {}) {
     if (targetId !== activeBrowserTabId) throw new Error('模型只能关闭当前可见标签页。')
     authorizeBrowserRead(origin, tabId)
     await closeBrowserTab(targetId)
+    browserOperations.assert(ticket)
     return { closed: true, activeTabId: activeBrowserTabId }
   }
   if (['back', 'forward', 'reload'].includes(action)) {
     authorizeBrowserRead(origin, tabId)
     const history = view.webContents.navigationHistory
-    if (action === 'reload') view.webContents.reload()
+    if (action === 'reload') {
+      markBrowserModelNavigation(tabId, 'reload')
+      view.webContents.reload()
+    }
     else {
       const canGo = action === 'back' ? history?.canGoBack() : history?.canGoForward()
       if (!canGo) return { navigated: false, reason: `cannot-go-${action}` }
       const index = history.getActiveIndex() + (action === 'back' ? -1 : 1)
       const entry = history.getEntryAtIndex(index)
       browserSecurityPolicy.modelNavigate(entry.url, { tabId, base: view.webContents.getURL() })
+      markBrowserModelNavigation(tabId, action)
       history.goToIndex(index)
     }
     return { navigated: true, action }
@@ -1173,7 +1322,8 @@ async function modelBrowserAction(input = {}) {
     const bounds = view.getBounds()
     const deltaY = Math.max(-1200, Math.min(1200, Number(parameters.delta_y) || 0))
     const deltaX = Math.max(-1200, Math.min(1200, Number(parameters.delta_x) || 0))
-    view.webContents.sendInputEvent({ type: 'mouseWheel', x: Math.floor(bounds.width / 2), y: Math.floor(bounds.height / 2), deltaY, deltaX })
+    await dispatchModelBrowserInput(tabId, 'scroll', view.webContents, [{ type: 'mouseWheel', x: Math.floor(bounds.width / 2), y: Math.floor(bounds.height / 2), deltaY, deltaX }])
+    browserOperations.assert(ticket)
     return { scrolled: true, deltaX, deltaY }
   }
   if (action === 'hover') {
@@ -1181,7 +1331,8 @@ async function modelBrowserAction(input = {}) {
     browserOperations.assert(ticket)
     if (!field) throw new Error('元素已失效，请重新 observe。')
     authorizeBrowserRead(origin, tabId, field.tag)
-    view.webContents.sendInputEvent({ type: 'mouseMove', x: field.x, y: field.y, movementX: 0, movementY: 0 })
+    await dispatchModelBrowserInput(tabId, 'hover', view.webContents, [{ type: 'mouseMove', x: field.x, y: field.y, movementX: 0, movementY: 0 }])
+    browserOperations.assert(ticket)
     return { hovered: true, ref: String(parameters.ref) }
   }
   if (action === 'keypress') {
@@ -1191,8 +1342,11 @@ async function modelBrowserAction(input = {}) {
     const effectiveAction = key === 'Enter' || key === 'Space' ? 'submit' : 'read'
     const decision = browserSecurityPolicy.modelAction({ action: effectiveAction, tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'document', submit: key === 'Enter' }, payload: {}, confirmationId: parameters.confirmation_id })
     if (!decision.allowed) return decision
-    view.webContents.sendInputEvent({ type: 'keyDown', keyCode: key })
-    view.webContents.sendInputEvent({ type: 'keyUp', keyCode: key })
+    await dispatchModelBrowserInput(tabId, 'keypress', view.webContents, [
+      { type: 'keyDown', keyCode: key },
+      { type: 'keyUp', keyCode: key }
+    ])
+    browserOperations.assert(ticket)
     return { pressed: true, key, confirmed: key === 'Enter' }
   }
   if (action === 'select') {
@@ -1203,7 +1357,8 @@ async function modelBrowserAction(input = {}) {
     const value = String(parameters.value || '').slice(0, 500)
     const decision = browserSecurityPolicy.modelAction({ action: 'type', tabId, declaredOrigin: origin, field, payload: { text: value }, confirmationId: parameters.confirmation_id })
     if (!decision.allowed) return decision
-    const changed = await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!(element instanceof HTMLSelectElement)) return false; const option=[...element.options].find(item=>item.value===${JSON.stringify(value)}||item.text===${JSON.stringify(value)}); if(!option) return false; element.value=option.value; element.dispatchEvent(new Event('input',{bubbles:true})); element.dispatchEvent(new Event('change',{bubbles:true})); return true; })()`, true)
+    markBrowserModelNavigation(tabId, 'select')
+    const changed = await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!(element instanceof HTMLSelectElement)) return false; const option=[...element.options].find(item=>item.value===${JSON.stringify(value)}||item.text===${JSON.stringify(value)}); if(!option) return false; element.value=option.value; element.dispatchEvent(new Event('input',{bubbles:true})); element.dispatchEvent(new Event('change',{bubbles:true})); return true; })()`, false)
     browserOperations.assert(ticket)
     if (!changed) throw new Error('下拉选项不存在或元素已失效。')
     return { selected: true, ref: String(parameters.ref) }
@@ -1211,6 +1366,7 @@ async function modelBrowserAction(input = {}) {
   if (action === 'navigate') {
     const nav = browserSecurityPolicy.modelNavigate(String(parameters.url || ''), { tabId, base: view.webContents.getURL() })
     browserOperations.assert(ticket)
+    markBrowserModelNavigation(tabId, 'navigate')
     await view.webContents.loadURL(nav.normalized)
     browserOperations.assert(ticket)
     return { navigated: true, origin: nav.origin, url: nav.normalized }
@@ -1248,6 +1404,7 @@ async function modelBrowserAction(input = {}) {
       return decision
     }
     const tab = browserTabs.get(tabId)
+    markBrowserModelNavigation(tabId, 'upload')
     return uploadBrowserFileInteractively(view, {
       tabId,
       origin,
@@ -1268,6 +1425,7 @@ async function modelBrowserAction(input = {}) {
     const decision = browserSecurityPolicy.modelAction({ action: 'submit', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'dialog', submit: true }, payload, confirmationId: parameters.confirmation_id })
     if (!decision.allowed) return { ...decision, dialog: { id: pending.id, type: pending.type, message: pending.message } }
     if (browserDialogs.get(tabId)?.id !== pending.id) throw Object.assign(new Error('对话框已变化，旧确认不能继续使用。'), { code: 'confirmation-mismatch' })
+    markBrowserModelNavigation(tabId, 'dialog')
     await view.webContents.debugger.sendCommand('Page.handleJavaScriptDialog', { accept, ...(promptText ? { promptText } : {}) })
     if (browserDialogs.get(tabId)?.id === pending.id) browserDialogs.delete(tabId)
     browserOperations.assert(ticket)
@@ -1285,9 +1443,16 @@ async function modelBrowserAction(input = {}) {
       return decision
     }
     browserOperations.assert(ticket)
-    await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!element) return false; const setter=Object.getOwnPropertyDescriptor(element instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value')?.set; if(setter) setter.call(element,${JSON.stringify(String(parameters.text || ''))}); else if(element.isContentEditable) element.textContent=${JSON.stringify(String(parameters.text || ''))}; else return false; element.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'})); element.dispatchEvent(new Event('change',{bubbles:true})); element.focus(); return true; })()`, true)
+    markBrowserModelNavigation(tabId, 'type')
+    await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!element) return false; const setter=Object.getOwnPropertyDescriptor(element instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value')?.set; if(setter) setter.call(element,${JSON.stringify(String(parameters.text || ''))}); else if(element.isContentEditable) element.textContent=${JSON.stringify(String(parameters.text || ''))}; else return false; element.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'})); element.dispatchEvent(new Event('change',{bubbles:true})); element.focus(); return true; })()`, false)
     browserOperations.assert(ticket)
     return { typed: true, ref: String(parameters.ref), origin }
+  }
+  if (field.tag === 'input' && field.type === 'file') {
+    throw Object.assign(new Error('文件选择控件必须使用 upload 动作并由用户逐次确认。'), { code: 'upload-action-required' })
+  }
+  if (field.download === true) {
+    throw Object.assign(new Error('下载链接必须使用 download 动作并由用户逐次确认。'), { code: 'download-action-required' })
   }
   const targetDescription = `${field.text} ${field.label} ${field.ariaLabel}`
   if (/(?:purchase|pay|buy|checkout|bank|card|付款|支付|购买|结账|银行|银行卡)/i.test(targetDescription)) {
@@ -1295,10 +1460,13 @@ async function modelBrowserAction(input = {}) {
   }
   const dangerous = field.submit || /(?:submit|publish|delete|remove|发送|提交|发布|删除|移除)/i.test(targetDescription)
   const effectiveAction = dangerous ? 'submit' : 'click'
-  const decision = browserSecurityPolicy.modelAction({ action: effectiveAction, tabId, declaredOrigin: origin, field, payload: {}, confirmationId: parameters.confirmation_id })
+  const navigatesTo = field.href || field.formAction || ''
+  const actionPayload = navigatesTo ? { navigatesTo } : {}
+  const decision = browserSecurityPolicy.modelAction({ action: effectiveAction, tabId, declaredOrigin: origin, field, payload: actionPayload, confirmationId: parameters.confirmation_id })
   if (!decision.allowed) return decision
   browserOperations.assert(ticket)
-  await view.webContents.executeJavaScript(`document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]')?.click()`, true)
+  markBrowserModelNavigation(tabId, 'click')
+  await view.webContents.executeJavaScript(`document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]')?.click()`, false)
   browserOperations.assert(ticket)
   return { clicked: true, ref: String(parameters.ref), origin, confirmed: dangerous }
 }
@@ -1513,6 +1681,7 @@ async function refreshComputerUseTargets() {
     if (error?.code !== 'capability-unavailable') throw error
   }
   for (const window of windows.slice(0, 96)) {
+    if (Number(window.pid) === process.pid) continue
     try {
       const bound = await service.bind(window.hwnd, window)
       const appId = computerUseAppId(bound.identity)
@@ -1837,10 +2006,10 @@ async function modelComputerUseAction(input = {}) {
   return { completed: true, action, x, y, target_id: target.id, app: target.label }
 }
 
-async function desktopModelToolAction(input = {}) {
+async function desktopModelToolAction(input = {}, context = {}) {
   if (input.scope === 'memory') return modelMemoryAction(input)
   if (input.scope === 'computer') return modelComputerUseAction(input)
-  return modelBrowserAction(input)
+  return modelBrowserAction(input, context)
 }
 
 async function ensureBrowserControlServer() {
@@ -2100,9 +2269,10 @@ async function wallpaperLibraryPayload(appearance) {
     return {
       ...item,
       available,
-      previewUrl: available && item.kind === 'image'
-        ? `${WALLPAPER_SCHEME}://library/${encodeURIComponent(item.id)}/media?v=${Math.round(info.mtimeMs)}-${info.size}`
-        : null
+      // Videos intentionally receive the same controlled preview URL as
+      // images. Chromium requests byte ranges through this route, so cards can
+      // render a real frame without buffering a multi-gigabyte file in memory.
+      previewUrl: available ? wallpaperLibraryMediaUrl(item.id, info) : null
     }
   }))
   return { activeId: library.activeId || null, items }
@@ -2125,6 +2295,10 @@ async function registerWallpaperProtocol() {
     const info = await stat(file).catch(() => null)
     const maximum = wallpaperKind(file) === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
     if (!info?.isFile() || info.size > maximum) return new Response('Not found', { status: 404 })
+    // A custom-scheme URL identifies one immutable revision. In particular,
+    // an old video decoder must never receive byte ranges from the wallpaper
+    // that became current after its request was created.
+    if (target.searchParams.get('v') !== wallpaperMediaRevision(info)) return new Response('Not found', { status: 404 })
     return wallpaperKind(file) === 'video'
       ? createWallpaperVideoResponse(file, request)
       : createWallpaperMediaResponse(file, request)
@@ -2138,8 +2312,8 @@ function syncTitleBarOverlay(appearance = ensureStateStore().get().appearance) {
   if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return
   const theme = THEME_CATALOG.find(entry => entry.id === appearance.themeId)
   const requestedMode = appearance.themeId === 'custom' ? appearance.customTheme?.mode : theme?.mode
-  const dark = requestedMode === 'dark' || (requestedMode === 'adaptive' && nativeTheme.shouldUseDarkColors)
-  mainWindow.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#f4f7ff' : '#202124', height: 36 })
+  const symbolColor = resolveTitleBarSymbolColor(requestedMode, nativeTheme.shouldUseDarkColors)
+  mainWindow.setTitleBarOverlay({ color: '#00000000', symbolColor, height: 36 })
 }
 
 async function readAppearancePayload() {
@@ -2154,20 +2328,29 @@ async function readAppearancePayload() {
   const file = wallpaperAssetPath(backgroundFile)
   if (!file) return { ...appearance, wallpaperLibrary, customBackgroundDataUrl: null, customBackgroundVideoDataUrl: null, customBackgroundKind: null }
   const kind = wallpaperKind(file)
+  const activeWallpaper = wallpaperLibrary.items.find(item =>
+    item.id === wallpaperLibrary.activeId &&
+    item.cachedFile === backgroundFile &&
+    item.available &&
+    item.kind === kind
+  )
   if (kind === 'video') {
     const info = await stat(file).catch(() => null)
     const valid = info?.isFile() && info.size <= MAX_THEME_VIDEO_BYTES
+    const mediaUrl = valid
+      ? activeWallpaper?.previewUrl || `${WALLPAPER_SCHEME}://current/video?v=${wallpaperMediaRevision(info)}`
+      : null
     return {
       ...appearance,
       wallpaperLibrary,
       customBackgroundDataUrl: null,
-      customBackgroundVideoDataUrl: valid ? `${WALLPAPER_SCHEME}://current/video?v=${Math.round(info.mtimeMs)}-${info.size}` : null,
-      customBackgroundKind: valid ? 'video' : null
+      customBackgroundVideoDataUrl: mediaUrl,
+      customBackgroundKind: mediaUrl ? 'video' : null
     }
   }
   const info = kind === 'image' ? await stat(file).catch(() => null) : null
   const dataUrl = info?.isFile() && info.size <= MAX_THEME_BACKGROUND_BYTES
-    ? `${WALLPAPER_SCHEME}://current/image?v=${Math.round(info.mtimeMs)}-${info.size}`
+    ? activeWallpaper?.previewUrl || `${WALLPAPER_SCHEME}://current/image?v=${wallpaperMediaRevision(info)}`
     : null
   return { ...appearance, wallpaperLibrary, customBackgroundDataUrl: dataUrl, customBackgroundVideoDataUrl: null, customBackgroundKind: dataUrl ? 'image' : null }
 }
@@ -2465,11 +2648,18 @@ function readWallpaperEngineRegistryPath() {
   })
 }
 
-// One-click library scan: registry Steam path first, common install roots as
-// fallback, then resolve every image/video project found.
-async function wallpaperEngineLibraryScan() {
+async function wallpaperEngineSteamRoots() {
   const registryRoot = await readWallpaperEngineRegistryPath().catch(() => '')
-  const steamRoots = [registryRoot, ...defaultSteamRootCandidates(process.env, process.platform)]
+  return discoverSteamRoots(
+    [registryRoot, ...defaultSteamRootCandidates(process.env, process.platform)],
+    { platform: process.platform, readFile: (file, encoding) => readFile(file, encoding) }
+  )
+}
+
+// Library browsing is deliberately read-only. Import remains a separate,
+// explicit operation so a scan can never copy dozens of large videos.
+async function wallpaperEngineLibraryScan(knownRoots = null) {
+  const steamRoots = knownRoots || await wallpaperEngineSteamRoots()
   return scanWallpaperEngineLibrary({
     steamRoots,
     readdir: directory => readdir(directory, { withFileTypes: true }),
@@ -2600,6 +2790,125 @@ async function removeCustomThemeBackgroundUnlocked() {
   })
 }
 
+async function currentWallpaperEngineSelection() {
+  const steamRoots = await wallpaperEngineSteamRoots()
+  const searchRoots = wallpaperEngineSearchRoots(steamRoots)
+  const realSearchRoots = (await Promise.all(searchRoots.map(root => realpath(root.directory).catch(() => null)))).filter(Boolean)
+  const candidateDirectories = []
+  const selectedFiles = new Set()
+  let readableConfigs = 0
+  let ambiguousProfiles = false
+  for (const root of steamRoots) {
+    const configFile = path.join(root, 'steamapps', 'common', 'wallpaper_engine', 'config.json')
+    const document = await readFile(configFile, 'utf8').catch(() => null)
+    if (!document) continue
+    readableConfigs += 1
+    const selection = wallpaperEngineConfigSelection(document, process.env.USERNAME || process.env.USER || '')
+    if (selection.reason === 'ambiguous-profile') ambiguousProfiles = true
+    for (const file of selection.files) selectedFiles.add(file)
+    candidateDirectories.push(...currentWallpaperEngineProjectDirectories(document, searchRoots, process.platform, process.env.USERNAME || process.env.USER || ''))
+  }
+
+  const projects = []
+  const seen = new Set()
+  let unsupported = 0
+  const pathKey = value => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value)
+  const isWithin = (root, candidate) => {
+    const relative = path.relative(root, candidate)
+    return relative !== '' && !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`)
+  }
+  for (const directory of candidateDirectories) {
+    let resolution
+    try {
+      resolution = await resolveWallpaperEngineInput(directory)
+    } catch (error) {
+      if (/仅支持 Wallpaper Engine 的图片和视频项目/.test(String(error?.message || ''))) unsupported += 1
+      continue
+    }
+    if (!realSearchRoots.some(root => isWithin(root, resolution.projectRoot))) continue
+    let matchesSelectedFile = false
+    for (const selectedFile of selectedFiles) {
+      const lexicalFile = path.resolve(selectedFile)
+      if (!isWithin(path.resolve(directory), lexicalFile)) continue
+      const realSelectedFile = await realpath(lexicalFile).catch(() => null)
+      if (realSelectedFile && pathKey(realSelectedFile) === pathKey(resolution.file)) {
+        matchesSelectedFile = true
+        break
+      }
+    }
+    if (!matchesSelectedFile) continue
+    const key = pathKey(resolution.projectRoot)
+    if (seen.has(key)) continue
+    seen.add(key)
+    projects.push({
+      directory: resolution.projectRoot,
+      file: resolution.file,
+      kind: resolution.kind,
+      title: resolution.title,
+      source: /[\\/]steamapps[\\/]workshop[\\/]content[\\/]431960[\\/]/i.test(resolution.projectRoot) ? 'workshop' : 'projects'
+    })
+  }
+
+  const reason = projects.length > 1
+    ? 'multiple-current'
+    : readableConfigs === 0
+      ? 'config-unavailable'
+      : ambiguousProfiles
+        ? 'ambiguous-profile'
+      : selectedFiles.size === 0
+        ? 'no-current'
+        : unsupported > 0
+          ? 'unsupported-current'
+          : 'current-unavailable'
+  return { steamRoots, projects, reason }
+}
+
+// The primary Wallpaper Engine action imports only one unambiguous, currently
+// selected image/video project. Multiple monitors with different supported
+// projects are surfaced for user choice instead of silently guessing.
+async function importCurrentWallpaperEngine() {
+  const current = await currentWallpaperEngineSelection()
+  if (current.projects.length === 1) {
+    const project = current.projects[0]
+    const appearance = ensureStateStore().get().appearance
+    const projectKey = process.platform === 'win32' ? path.resolve(project.directory).toLowerCase() : path.resolve(project.directory)
+    const existing = appearance.wallpaperLibrary?.items?.find(item => {
+      if (item.source !== 'wallpaper-engine' || !item.projectDir) return false
+      const itemKey = process.platform === 'win32' ? path.resolve(item.projectDir).toLowerCase() : path.resolve(item.projectDir)
+      return itemKey === projectKey
+    })
+    const signature = await boundWallpaperEngineSignature(path.join(project.directory, 'project.json'), project.file)
+    const cachedFile = existing ? wallpaperAssetPath(existing.cachedFile) : null
+    const cachedInfo = cachedFile ? await stat(cachedFile).catch(() => null) : null
+    const cachedMaximum = existing?.kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+    const canReuse = Boolean(
+      existing && signature && existing.signature === signature && cachedInfo?.isFile() &&
+      cachedInfo.size <= cachedMaximum && wallpaperKind(cachedFile) === existing.kind
+    )
+    return {
+      status: 'imported',
+      project: { title: project.title, kind: project.kind },
+      reused: canReuse,
+      appearance: canReuse
+        ? await applyWallpaperLibraryItem(existing.id)
+        : await applyWallpaperEngineProject(project.directory)
+    }
+  }
+  const library = await wallpaperEngineLibraryScan(current.steamRoots)
+  const currentDirectories = new Set(current.projects.map(project => process.platform === 'win32' ? project.directory.toLowerCase() : project.directory))
+  return {
+    status: 'selection-required',
+    reason: current.reason,
+    library: {
+      ...library,
+      projects: library.projects.map(project => ({
+        ...project,
+        current: currentDirectories.has(process.platform === 'win32' ? project.directory.toLowerCase() : project.directory)
+      }))
+    }
+  }
+}
+
 async function removeCustomThemeBackground() {
   return wallpaperMutationQueue.run(removeCustomThemeBackgroundUnlocked)
 }
@@ -2694,6 +3003,13 @@ async function startRuntime() {
       return runtimeState
     }
   } else await ensureBundledRuntime()
+  try {
+    const marketplace = await ensurePluginMarketplace(pluginMarketplaceOptions())
+    if (marketplace.warning) console.warn(marketplace.warning)
+  } catch (error) {
+    setRuntimeState({ status: 'error', url: null, detail: `插件市场兼容层准备失败，已停止启动：${error.message}` })
+    return runtimeState
+  }
   const resolved = resolveDshBin({ nodeModulesRoot: bundledNodeModulesRoot() })
   let systemProxyRules = ''
   if (!hasExplicitProxy(process.env)) {
@@ -2710,6 +3026,7 @@ async function startRuntime() {
       ...process.env,
       ...runtimeProxyEnv,
       ...resolved.env,
+      HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER: '1',
       HARNESS_MOBILE_SYNC_STATE_FILE: path.join(app.getPath('userData'), 'mobile-sync.json'),
       HARNESS_DESKTOP_BROWSER_STATE_FILE: browserControlStateFile(),
       HARNESS_DESKTOP_CAPABILITIES_STATE_FILE: browserControlStateFile()
@@ -3516,6 +3833,7 @@ ipcMain.handle('appearance:saveCustom', desktopShellOnly(async customTheme => {
 }))
 ipcMain.handle('appearance:chooseBackground', desktopShellOnly(() => chooseCustomThemeBackground()))
 ipcMain.handle('appearance:chooseWallpaperEngine', desktopShellOnly(() => chooseCustomThemeBackground({ wallpaperEngine: true })))
+ipcMain.handle('appearance:importCurrentWallpaperEngine', desktopShellOnly(() => importCurrentWallpaperEngine()))
 ipcMain.handle('appearance:listWallpaperEngineProjects', desktopShellOnly(() => wallpaperEngineLibraryScan()))
 ipcMain.handle('appearance:applyWallpaperEngineProject', desktopShellOnly(value => applyWallpaperEngineProject(value)))
 ipcMain.handle('appearance:applyWallpaper', desktopShellOnly(value => applyWallpaperLibraryItem(value)))
@@ -3664,6 +3982,16 @@ ipcMain.handle('browser:historyClear', async (event, request) => {
   await ensureBrowserHistoryStore().clear()
   return publishBrowserState()
 })
+ipcMain.on('browser-page:user-navigation-intent', (event, payload) => {
+  event.returnValue = false
+  const tab = browserTabForContents(event.sender)
+  if (!tab || tab.view.webContents.isDestroyed()) return
+  const accepted = tab.navigationLane.noteTrustedNavigationIntent(payload?.url, {
+    base: tab.view.webContents.getURL()
+  })
+  if (accepted) browserOperations.cancelModelActions()
+  event.returnValue = accepted
+})
 ipcMain.handle('browser:navigate', (event, value) => {
   assertDesktopShellSender(event)
   return navigateBrowser(value)
@@ -3674,6 +4002,7 @@ ipcMain.handle('browser:newTab', (event, value) => {
 })
 ipcMain.handle('browser:switchTab', (event, id) => {
   assertDesktopShellSender(event)
+  markBrowserUserNavigation(id, 'tab-switch')
   return switchBrowserTab(id)
 })
 ipcMain.handle('browser:closeTab', (event, id) => {
@@ -3684,19 +4013,26 @@ ipcMain.handle('browser:back', event => {
   assertDesktopShellSender(event)
   browserOperations.ticket()
   const history = browserNavigationHistory()
-  if (history?.canGoBack()) history.goBack()
+  if (history?.canGoBack()) {
+    markBrowserUserNavigation(activeBrowserTabId, 'back-button')
+    history.goBack()
+  }
   return browserStatePayload()
 })
 ipcMain.handle('browser:forward', event => {
   assertDesktopShellSender(event)
   browserOperations.ticket()
   const history = browserNavigationHistory()
-  if (history?.canGoForward()) history.goForward()
+  if (history?.canGoForward()) {
+    markBrowserUserNavigation(activeBrowserTabId, 'forward-button')
+    history.goForward()
+  }
   return browserStatePayload()
 })
 ipcMain.handle('browser:reload', event => {
   assertDesktopShellSender(event)
   browserOperations.ticket()
+  markBrowserUserNavigation(activeBrowserTabId, 'reload-button')
   ensureBrowserSidebar().webContents.reload()
   return browserStatePayload()
 })

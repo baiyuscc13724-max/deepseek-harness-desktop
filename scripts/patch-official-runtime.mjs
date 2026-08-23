@@ -431,6 +431,17 @@ const CONVERSATION_TIMELINE_ORIGINAL = 'const timeline = useSession((s) => s.cha
 const CONVERSATION_TIMELINE_PATCHED = 'const runningTurnStart = useSession((s) => runningTurnStartTime(s.chat.timeline));'
 const CONVERSATION_RUNNING_TURN_ORIGINAL = 'const runningTurnStart = (0, react.useMemo)(() => runningTurnStartTime(timeline), [timeline]);'
 const CONVERSATION_RUNNING_TURN_PATCHED = '// runningTurnStart is a scalar selector so timeline identity churn does not re-render ChatView.'
+const CONVERSATION_SETTLE_FOLLOW_REF_ORIGINAL = 'const atBottomRef = (0, react.useRef)(true);\n\t\t\tconst [atBottom, setAtBottom] = (0, react.useState)(true);'
+const CONVERSATION_SETTLE_FOLLOW_REF_PATCHED = `${CONVERSATION_SETTLE_FOLLOW_REF_ORIGINAL}
+\t\t\tconst previousRunningRef = (0, react.useRef)(running);`
+const CONVERSATION_SETTLE_FOLLOW_EFFECT_ORIGINAL = 'const el = scrollerOf(local);\n\t\t\t\tif (openState === "open" && !openedRef.current) {'
+const CONVERSATION_SETTLE_FOLLOW_EFFECT_PATCHED = `const el = scrollerOf(local);
+\t\t\t\t// Preserve the pre-commit follow intent while stopping removes transient rows.
+\t\t\t\tconst settledWhileFollowing = previousRunningRef.current && !running && atBottomRef.current;
+\t\t\t\tpreviousRunningRef.current = running;
+\t\t\t\tif (openState === "open" && !openedRef.current) {`
+const CONVERSATION_SETTLE_FOLLOW_CONDITION_ORIGINAL = 'if (appendedUser || appendedSteering || tipMoved && atBottomRef.current) toBottom(el);'
+const CONVERSATION_SETTLE_FOLLOW_CONDITION_PATCHED = 'if (appendedUser || appendedSteering || settledWhileFollowing || tipMoved && atBottomRef.current) toBottom(el);'
 const CONVERSATION_ROOT_SLOT_MEMO_ORIGINAL = 'const composerBlock = useComposerBlock((block) => block);'
 const CONVERSATION_ROOT_SLOT_MEMO_PATCHED = `${CONVERSATION_ROOT_SLOT_MEMO_ORIGINAL}
 			const sessionHeader = (0, react.useMemo)(() => renderSlot("conversation.session.header", {}), [renderSlot]);
@@ -992,6 +1003,9 @@ export function patchConversationCacheSource(source) {
     [CONVERSATION_CACHE_EN_ORIGINAL, CONVERSATION_CACHE_EN_PATCHED, 'English cache labels'],
     [CONVERSATION_TIMELINE_ORIGINAL, CONVERSATION_TIMELINE_PATCHED, 'chat timeline selector'],
     [CONVERSATION_RUNNING_TURN_ORIGINAL, CONVERSATION_RUNNING_TURN_PATCHED, 'chat running-turn scalar'],
+    [CONVERSATION_SETTLE_FOLLOW_REF_ORIGINAL, CONVERSATION_SETTLE_FOLLOW_REF_PATCHED, 'chat stop follow-state capture'],
+    [CONVERSATION_SETTLE_FOLLOW_EFFECT_ORIGINAL, CONVERSATION_SETTLE_FOLLOW_EFFECT_PATCHED, 'chat stop follow-state transition'],
+    [CONVERSATION_SETTLE_FOLLOW_CONDITION_ORIGINAL, CONVERSATION_SETTLE_FOLLOW_CONDITION_PATCHED, 'chat stop follow-state restoration'],
     [CONVERSATION_ROOT_SLOT_MEMO_ORIGINAL, CONVERSATION_ROOT_SLOT_MEMO_PATCHED, 'conversation session slot memoization'],
     [CONVERSATION_ROOT_HEADER_ORIGINAL, CONVERSATION_ROOT_HEADER_PATCHED, 'conversation header slot reuse'],
     [CONVERSATION_ROOT_VIEW_ORIGINAL, CONVERSATION_ROOT_VIEW_PATCHED, 'conversation view slot reuse'],

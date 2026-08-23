@@ -71,7 +71,7 @@ async function runtimeWebBootable(dsh, options = {}) {
   let exited = false
   try {
     child = spawnImpl(dsh.command, [...dsh.argsPrefix, 'web', '--port', '0', '--no-open'], {
-      env: { ...process.env, ...(dsh.env || {}), DSH_HOME: runtimeHome },
+      env: { ...process.env, ...(dsh.env || {}), DSH_HOME: runtimeHome, HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER: '1' },
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     })

@@ -21,6 +21,10 @@ const UI_MAX_EVENTS_PER_TEAM = 50;
 const SSE_COALESCE_MS = 50;
 const SUBAGENT_RECONCILE_MS = 20;
 const GRACEFUL_LIFECYCLE_TIMEOUT_MS = 120_000;
+const GLOBAL_TEAM_ACTIVE_ACTIVATIONS = 8;
+const MAX_TEAM_ADMISSION_QUEUE = 32;
+const MAX_TEAM_ADMISSION_QUEUE_PER_ROOT = 8;
+const TEAM_ADMISSION_TIMEOUT_MS = 30_000;
 const HARD_MAX_MEMBERS = 8;
 const HARD_MAX_TEAMS_PER_ROOT = 8;
 const MAX_EXPANSION_WORKSTREAMS = 4;
@@ -863,6 +867,200 @@ function queueTeamOperations(filePath, teamIds, operation) {
   }
   return queued();
 }
+function admissionFailure(message, code) {
+  return new HarnessError(message, code);
+}
+function admissionCancellation() {
+  return admissionFailure("team worker admission was cancelled before activation", "AGENT_TEAMS_ADMISSION_CANCELLED");
+}
+function createTeamTurnAdmission({
+  limit = GLOBAL_TEAM_ACTIVE_ACTIVATIONS,
+  maxQueued = MAX_TEAM_ADMISSION_QUEUE,
+  maxQueuedPerRoot = MAX_TEAM_ADMISSION_QUEUE_PER_ROOT,
+  waitMs = TEAM_ADMISSION_TIMEOUT_MS,
+} = {}) {
+  for (const [field, value] of [["limit", limit], ["maxQueued", maxQueued], ["maxQueuedPerRoot", maxQueuedPerRoot], ["waitMs", waitMs]]) {
+    if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`${field} must be a positive safe integer`);
+  }
+  let active = 0;
+  let queued = 0;
+  let closed = false;
+  const queues = new Map();
+  const rootRing = [];
+  const leases = new Map();
+
+  const removeRootFromRing = (root) => {
+    const index = rootRing.indexOf(root);
+    if (index >= 0) rootRing.splice(index, 1);
+  };
+  const cleanupWaiter = (waiter) => {
+    if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+    waiter.signal?.removeEventListener?.("abort", waiter.onAbort);
+  };
+  const rejectWaiter = (waiter, error) => {
+    if (waiter.settled) return;
+    waiter.settled = true;
+    cleanupWaiter(waiter);
+    waiter.reject(error);
+  };
+  const releaseSlot = () => {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      active = Math.max(0, active - 1);
+      pump();
+    };
+  };
+  const grant = (waiter) => {
+    if (waiter.settled) return;
+    waiter.settled = true;
+    cleanupWaiter(waiter);
+    active += 1;
+    waiter.resolve(releaseSlot());
+  };
+  const detach = (waiter) => {
+    if (waiter.settled) return false;
+    const rootQueue = queues.get(waiter.root);
+    const index = rootQueue?.indexOf(waiter) ?? -1;
+    if (index < 0) return false;
+    rootQueue.splice(index, 1);
+    queued -= 1;
+    if (rootQueue.length === 0) {
+      queues.delete(waiter.root);
+      removeRootFromRing(waiter.root);
+    }
+    return true;
+  };
+  function pump() {
+    while (!closed && active < limit && rootRing.length > 0) {
+      const root = rootRing.shift();
+      const rootQueue = queues.get(root);
+      if (rootQueue === undefined || rootQueue.length === 0) {
+        queues.delete(root);
+        continue;
+      }
+      const waiter = rootQueue.shift();
+      queued -= 1;
+      if (rootQueue.length === 0) queues.delete(root);
+      else rootRing.push(root);
+      grant(waiter);
+    }
+  }
+  const acquire = (root, signal) => {
+    if ((typeof root !== "object" && typeof root !== "function") || root === null) throw new TypeError("root must be the exact live root Agent object");
+    if (closed) return Promise.reject(admissionFailure("team worker admission is closed", "AGENT_TEAMS_ADMISSION_CLOSED"));
+    if (signal?.aborted) return Promise.reject(admissionCancellation());
+    if (active < limit && rootRing.length === 0) {
+      active += 1;
+      return Promise.resolve(releaseSlot());
+    }
+    const rootQueue = queues.get(root) ?? [];
+    if (queued >= maxQueued || rootQueue.length >= maxQueuedPerRoot) {
+      return Promise.reject(admissionFailure("team worker admission queue is full; retry after active work settles", "AGENT_TEAMS_ADMISSION_QUEUE_FULL"));
+    }
+    return new Promise((resolve, rejectPromise) => {
+      const waiter = { root, signal, resolve, reject: rejectPromise, settled: false, timer: undefined, onAbort: undefined };
+      waiter.onAbort = () => {
+        if (!detach(waiter)) return;
+        rejectWaiter(waiter, admissionCancellation());
+        pump();
+      };
+      waiter.timer = setTimeout(() => {
+        if (!detach(waiter)) return;
+        rejectWaiter(waiter, admissionFailure("team worker admission timed out before activation; retry later", "AGENT_TEAMS_ADMISSION_TIMEOUT"));
+        pump();
+      }, waitMs);
+      waiter.timer.unref?.();
+      signal?.addEventListener?.("abort", waiter.onAbort, { once: true });
+      rootQueue.push(waiter);
+      queued += 1;
+      if (!queues.has(root)) {
+        queues.set(root, rootQueue);
+        rootRing.push(root);
+      }
+      pump();
+    });
+  };
+  const abandon = (childId) => {
+    const lease = leases.get(childId);
+    if (lease === undefined || lease.runId !== undefined) return false;
+    leases.delete(childId);
+    lease.release();
+    return true;
+  };
+  const run = async (root, childId, signal, operation) => {
+    nonEmptyString(childId, "childId", 256);
+    if (typeof operation !== "function") throw new TypeError("team worker admission operation must be a function");
+    if (closed) throw admissionFailure("team worker admission is closed", "AGENT_TEAMS_ADMISSION_CLOSED");
+    let lease = leases.get(childId);
+    let created = false;
+    if (lease === undefined) {
+      const release = await acquire(root, signal);
+      if (closed) {
+        release();
+        throw admissionFailure("team worker admission is closed", "AGENT_TEAMS_ADMISSION_CLOSED");
+      }
+      if (signal?.aborted) {
+        release();
+        throw admissionCancellation();
+      }
+      lease = leases.get(childId);
+      if (lease === undefined) {
+        lease = { root, runId: undefined, release };
+        leases.set(childId, lease);
+        created = true;
+      } else release();
+    }
+    if (lease.root !== root) reject("team worker activation belongs to another exact root", "AGENT_TEAMS_UNAUTHORIZED");
+    if (signal?.aborted) {
+      if (created) abandon(childId);
+      throw admissionCancellation();
+    }
+    try {
+      return await operation();
+    } catch (error) {
+      if (created && leases.get(childId) === lease && lease.runId === undefined) abandon(childId);
+      throw error;
+    }
+  };
+  const noteStart = (info) => {
+    const lease = leases.get(info?.id);
+    if (lease === undefined || info?.runId === undefined) return false;
+    const runId = String(info.runId);
+    if (lease.runId !== undefined && lease.runId !== runId) return false;
+    lease.runId = runId;
+    return true;
+  };
+  const noteEnd = (info) => {
+    const lease = leases.get(info?.id);
+    if (lease === undefined || lease.runId === undefined || info?.runId === undefined || lease.runId !== String(info.runId)) return false;
+    leases.delete(info.id);
+    lease.release();
+    return true;
+  };
+  const cancelRoot = (root, error = admissionCancellation()) => {
+    const rootQueue = queues.get(root);
+    if (rootQueue === undefined) return 0;
+    queues.delete(root);
+    removeRootFromRing(root);
+    queued -= rootQueue.length;
+    for (const waiter of rootQueue) rejectWaiter(waiter, error);
+    pump();
+    return rootQueue.length;
+  };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    const error = admissionFailure("team worker admission closed before activation", "AGENT_TEAMS_ADMISSION_CLOSED");
+    for (const rootQueue of queues.values()) for (const waiter of rootQueue) rejectWaiter(waiter, error);
+    queues.clear();
+    rootRing.length = 0;
+    queued = 0;
+  };
+  const snapshot = () => ({ active, queued, closed, limit, maxQueued, maxQueuedPerRoot, waitMs });
+  return { abandon, cancelRoot, close, noteEnd, noteStart, run, snapshot };
+}
 function registerGracefulLifecycleWaiter(childId) {
   const initialRunId = GRACEFUL_ACTIVE_RUNS.get(childId);
   let resolve;
@@ -1230,6 +1428,12 @@ function exactLiveLead(ctx, team) {
   if (lead === undefined || !ctx.agents.roots().includes(lead)) reject("the exact live root lead is unavailable", "AGENT_TEAMS_LEAD_UNAVAILABLE");
   return lead;
 }
+function requireExactRootAgent(ctx, lead) {
+  if (ctx.agents.get(lead.id) !== lead || !ctx.agents.roots().includes(lead)) {
+    reject("the exact live root lead changed while team worker admission was pending", "AGENT_TEAMS_LEAD_UNAVAILABLE");
+  }
+  return lead;
+}
 function activeWorkerTurns(team) {
   return team.members.filter((member) => member.kind === "worker" && ["provisioning", "running", "shutting_down"].includes(member.state)).length;
 }
@@ -1320,7 +1524,7 @@ function expansionRequestRelayBody(request) {
     "This is a proposal, never an automatic spawn instruction. Approve only genuinely independent work with clear acceptance and non-conflicting ownership when critical-path or independent-review benefit exceeds coordination cost. The Host checks proposed file scopes against other in-progress task files, but it does not persist or verify existing external-resource ownership; the root must verify that state. If approving a split from a broad parent task, first release/restructure that parent so its in-progress file scope no longer overlaps, then create one durable task for every accepted workstream, and only then spawn visible same-level peer members. Never create a nested or hidden worker. If rejecting, tell the requester why.",
   ].join("\n");
 }
-async function submitExpansionRequest(ctx, store, caller, input, signal) {
+async function submitExpansionRequest(ctx, store, admission, caller, input, signal) {
   const teamId = optionalString(input.teamId, "teamId", 256);
   const normalized = normalizeExpansionRequest(input);
   const identity = await store.read((document) => {
@@ -1333,7 +1537,7 @@ async function submitExpansionRequest(ctx, store, caller, input, signal) {
   });
   const requestId = randomUUID();
   const requestedAt = now();
-  return sendTeamMessage(ctx, store, caller, {
+  return sendTeamMessage(ctx, store, admission, caller, {
     teamId: identity.teamId,
     recipientSessionId: identity.rootLeadSessionId,
     prepareMessage(document, sourceTeam, targetTeam, recipient) {
@@ -1435,7 +1639,7 @@ async function settleSpawnedChildFailure(ctx, store, lead, cleanup) {
   }));
   return drainError;
 }
-async function spawnMember(ctx, store, lead, input, signal) {
+async function spawnMember(ctx, store, admission, lead, input, signal) {
   const modelSelection = await resolveModelSelection(store, input.modelTier ?? "subagent", input.model, lead.options);
   const reservation = await store.runOperation(() => store.mutate((document) => {
     assertEnabled(document);
@@ -1449,7 +1653,7 @@ async function spawnMember(ctx, store, lead, input, signal) {
     if (team.members.some((member) => memberNameKey(member.name) === memberNameIdentity)) reject("a team member already uses this normalized display name", "AGENT_TEAMS_DUPLICATE_MEMBER_NAME");
     const timestamp = now();
     const memberId = randomUUID();
-    const reservation = { teamId: team.id, memberId, placeholderSessionId: `provisioning:${memberId}`, name: memberName, role: nonEmptyString(input.role, "role", 500), prompt: nonEmptyString(input.prompt, "prompt", 65_536), ...modelSelection };
+    const reservation = { teamId: team.id, memberId, childId: randomUUID(), placeholderSessionId: `provisioning:${memberId}`, name: memberName, role: nonEmptyString(input.role, "role", 500), prompt: nonEmptyString(input.prompt, "prompt", 65_536), ...modelSelection };
     team.members.push({ id: memberId, sessionId: reservation.placeholderSessionId, name: reservation.name, role: reservation.role, ...(reservation.model === undefined ? {} : { model: reservation.model }), ...(reservation.provider === undefined ? {} : { provider: reservation.provider }), modelTier: reservation.modelTier, inheritsMain: reservation.inheritsMain, routeSource: reservation.routeSource, kind: "worker", state: "provisioning", createdAt: timestamp, updatedAt: timestamp });
     team.updatedAt = timestamp;
     return reservation;
@@ -1468,16 +1672,20 @@ async function spawnMember(ctx, store, lead, input, signal) {
     if (!admitted) reject("team stopped accepting members before provisioning started", "AGENT_TEAMS_CLOSING");
     let started;
     try {
-      started = await ctx.subagents.startContinuable({
-        provider: "spawn",
-        label: reservation.name,
-        request: {
-          parent: lead,
-          prompt: textContent(registrationPrompt(reservation.teamId, reservation.name, reservation.role)),
-          toolFilter: { deny: [...MANAGED_MEMBER_DENIED_TOOLS] },
-          ...(reservation.provider === undefined && reservation.model === undefined ? {} : { agentOptions: { ...(reservation.provider === undefined ? {} : { provider: reservation.provider }), ...(reservation.model === undefined ? {} : { model: reservation.model }) } }),
-        },
-        signal,
+      started = await admission.run(lead, reservation.childId, signal, async () => {
+        requireExactRootAgent(ctx, lead);
+        return ctx.subagents.startContinuable({
+          childId: reservation.childId,
+          provider: "spawn",
+          label: reservation.name,
+          request: {
+            parent: lead,
+            prompt: textContent(registrationPrompt(reservation.teamId, reservation.name, reservation.role)),
+            toolFilter: { deny: [...MANAGED_MEMBER_DENIED_TOOLS] },
+            ...(reservation.provider === undefined && reservation.model === undefined ? {} : { agentOptions: { ...(reservation.provider === undefined ? {} : { provider: reservation.provider }), ...(reservation.model === undefined ? {} : { model: reservation.model }) } }),
+          },
+          signal,
+        });
       });
     } catch (error) {
       await store.runOperation(() => store.mutate((document) => {
@@ -1485,7 +1693,18 @@ async function spawnMember(ctx, store, lead, input, signal) {
         team.members = team.members.filter((candidate) => candidate.id !== reservation.memberId);
         team.updatedAt = now();
       }));
+      if (typeof error?.code === "string" && error.code.startsWith("AGENT_TEAMS_ADMISSION_")) throw error;
       throw new HarnessError(`member provisioning failed before publication: ${String(error)}`, "AGENT_TEAMS_SPAWN_FAILED");
+    }
+    if (started.childId !== reservation.childId) {
+      const cause = new HarnessError("subagent provider returned a different child id than the reserved identity", "AGENT_TEAMS_CONFLICT");
+      const cleanup = await settleSpawnedChildFailure(ctx, store, lead, { phase: "publication", teamId: reservation.teamId, memberId: reservation.memberId, childId: started.childId, cause });
+      // A contract-violating provider can return an identity whose lifecycle was
+      // not observable under the reserved child id. Keep the generic slot fail-closed
+      // until the unexpected child was conclusively drained (or was an existing child
+      // that cleanup intentionally did not touch).
+      if (cleanup === undefined || cleanup?.drainSkipped === true) admission.abandon(reservation.childId);
+      throw cause;
     }
     let publication;
     try {
@@ -1513,7 +1732,10 @@ async function spawnMember(ctx, store, lead, input, signal) {
     if (publication.duplicateChildId) reject("subagent provider returned a child id already owned by another member", "AGENT_TEAMS_CONFLICT");
     const member = publication.member;
     try {
-      await ctx.subagents.followup(lead, started.childId, textContent(workPrompt(reservation.teamId, reservation.memberId, reservation.prompt)), { source: relaySource(lead.id), signal });
+      await admission.run(lead, started.childId, signal, async () => {
+        requireExactRootAgent(ctx, lead);
+        return ctx.subagents.followup(lead, started.childId, textContent(workPrompt(reservation.teamId, reservation.memberId, reservation.prompt)), { source: relaySource(lead.id), signal });
+      });
     } catch (error) {
       await settleSpawnedChildFailure(ctx, store, lead, { phase: "work-followup", teamId: reservation.teamId, memberId: reservation.memberId, childId: started.childId, cause: error });
       throw error;
@@ -1531,15 +1753,15 @@ async function spawnMember(ctx, store, lead, input, signal) {
   });
 }
 
-async function sendTeamMessage(ctx, store, caller, input, signal) {
+async function sendTeamMessage(ctx, store, admission, caller, input, signal) {
   const teamIds = await store.read((document) => {
     const sourceTeam = resolveTeamForCaller(document, optionalString(input.teamId, "teamId", 256), caller.id);
     const targetTeamId = optionalString(input.targetTeamId, "targetTeamId", 256);
     return [sourceTeam.id, targetTeamId ?? sourceTeam.id];
   });
-  return queueTeamOperations(store.filePath, teamIds, () => sendTeamMessageUnlocked(ctx, store, caller, input, signal));
+  return queueTeamOperations(store.filePath, teamIds, () => sendTeamMessageUnlocked(ctx, store, admission, caller, input, signal));
 }
-async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
+async function sendTeamMessageUnlocked(ctx, store, admission, caller, input, signal) {
   const prepared = await store.runOperation(() => store.mutate((document) => {
     assertEnabled(document);
     const sourceTeam = resolveTeamForCaller(document, optionalString(input.teamId, "teamId", 256), caller.id);
@@ -1625,11 +1847,22 @@ async function sendTeamMessageUnlocked(ctx, store, caller, input, signal) {
   try {
     const targetTeam = await store.read((document) => findTeam(document, prepared.targetTeamId));
     const lead = exactLiveLead(ctx, targetTeam);
-    const content = textContent(`[Agent team message ${prepared.message.id} from ${prepared.sender?.name ?? caller.id}]\n${prepared.deliveryBody}`);
+    const envelope = JSON.stringify({
+      version: 1,
+      messageId: prepared.message.id,
+      sourceTeamId: prepared.teamId,
+      targetTeamId: prepared.targetTeamId,
+      senderMemberId: prepared.sender?.id,
+      recipientMemberId: prepared.recipient.id,
+    });
+    const content = textContent(`[Agent team message ${prepared.message.id} from ${prepared.sender?.name ?? caller.id}]\n[Agent team envelope ${envelope}]\n${prepared.deliveryBody}`);
     if (prepared.recipient.kind === "lead") {
       relayToLead(lead, createUserMessage({ content, source: relaySource(caller.id) }));
     } else {
-      await ctx.subagents.followup(lead, prepared.recipient.sessionId, content, { source: relaySource(caller.id), signal });
+      await admission.run(lead, prepared.recipient.sessionId, signal, async () => {
+        requireExactRootAgent(ctx, lead);
+        return ctx.subagents.followup(lead, prepared.recipient.sessionId, content, { source: relaySource(caller.id), signal });
+      });
     }
     return store.runOperation(() => store.mutate((document) => {
       const currentTeam = findTeam(document, prepared.teamId);
@@ -1858,7 +2091,7 @@ async function resumePausedTeam(ctx, store, lead, input) {
   return result;
 }
 
-async function retireMember(ctx, store, lead, input, signal) {
+async function retireMember(ctx, store, admission, lead, input, signal) {
   const force = input.force === true;
   const prepared = await store.runOperation(() => store.mutate((document) => {
     const team = findTeam(document, nonEmptyString(input.teamId, "teamId", 256));
@@ -1876,8 +2109,11 @@ async function retireMember(ctx, store, lead, input, signal) {
   try {
     if (force) await ctx.subagents.drainContinuableChildren(lead, [prepared.member.sessionId]);
     else {
-      await ctx.subagents.followup(lead, prepared.member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
-        source: relaySource(lead.id), signal,
+      await admission.run(lead, prepared.member.sessionId, signal, async () => {
+        requireExactRootAgent(ctx, lead);
+        return ctx.subagents.followup(lead, prepared.member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
+          source: relaySource(lead.id), signal,
+        });
       });
       gracefulWaiter.accept();
       await waitForGracefulLifecycle(gracefulWaiter, signal);
@@ -1911,10 +2147,10 @@ async function retireMember(ctx, store, lead, input, signal) {
   }));
 }
 
-async function shutdownTeam(ctx, store, lead, input, signal) {
+async function shutdownTeam(ctx, store, admission, lead, input, signal) {
   const teamId = nonEmptyString(input.teamId, "teamId", 256);
   if (input.memberSessionId !== undefined && input.memberSessionId !== "") {
-    return queueTeamOperation(store.filePath, teamId, () => retireMember(ctx, store, lead, input, signal));
+    return queueTeamOperation(store.filePath, teamId, () => retireMember(ctx, store, admission, lead, input, signal));
   }
   const force = input.force === true;
   const prepared = await queueTeamOperation(store.filePath, teamId, () => store.runOperation(() => store.mutate((document) => {
@@ -1940,8 +2176,11 @@ async function shutdownTeam(ctx, store, lead, input, signal) {
     const gracefulRequests = prepared.workers.map((member) => ({ member, waiter: registerGracefulLifecycleWaiter(member.sessionId) }));
     outcomes = await Promise.allSettled(gracefulRequests.map(async ({ member, waiter }) => {
       try {
-        await ctx.subagents.followup(lead, member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
-          source: relaySource(lead.id), signal,
+        await admission.run(lead, member.sessionId, signal, async () => {
+          requireExactRootAgent(ctx, lead);
+          return ctx.subagents.followup(lead, member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
+            source: relaySource(lead.id), signal,
+          });
         });
         waiter.accept();
         await waitForGracefulLifecycle(waiter, signal);
@@ -2065,6 +2304,7 @@ function teamSystemPrompt(store) {
   }
   return [
     "Agent Teams automatic-team mode is ENABLED.",
+    "Before substantive work on every ordinary direct-human root turn, apply the three-level gate below. When the Level 3 conditions are met, you must call team_start in that same turn and must not replace the required visible managed members with multiple hidden ordinary subagents.",
     "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively call team_start only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
     "For every team_expansion_request, the fixed root lead approves only when the remaining outcomes are genuinely parallel and independent, inputs and acceptance criteria are explicit, file/external-resource ownership does not conflict, the handoff context is small, critical-path reduction or independent-review value materially exceeds coordination cost, and current member/turn/task budget is sufficient. The Host compares proposed file scopes with other in-progress task files and checks proposal-internal resource hierarchy, but existing external-resource ownership is not persisted and must be verified by the root. If a broad source task is split, first release/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn for visible same-level peers. If rejected, explain the reason to the requester. Never invent a leader→group-leader→hidden-worker hierarchy.",
     "The fixed root lead/brain always uses the main model route. The AI autonomously chooses each spawned member's model_tier: default to subagent to reduce cost; use main only for high-complexity reasoning, architecture, security-critical work, or repeated failures. Users do not choose member tiers. Every new member re-reads the latest route for its chosen tier; changing the subagent route never changes main-tier members, and already-created continuable members keep their creation route.",
@@ -2076,7 +2316,7 @@ function teamSystemPrompt(store) {
   ].join("\n");
 }
 
-function registerTools(ctx, store, ready, collaboration) {
+function registerTools(ctx, store, ready, collaboration, admission) {
   ctx.systemPrompt.section({
     name: "tool:agent-teams",
     order: 116,
@@ -2091,7 +2331,7 @@ function registerTools(ctx, store, ready, collaboration) {
   };
   ctx.tools.register(defineTool({
     name: "team_start",
-    description: "Start a durable peer team owned by this fixed top-level root lead. Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count, and one continuable helper should use ordinary subagent instead. An explicit user team request may override this automatic threshold. At most 8 teams may remain unclosed, and all peers share maxActiveTurns. Requires direct-human root authority in the current open turn.",
+    description: "Start a durable peer team owned by this fixed top-level root lead. Call this in the current direct-human root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination; do not substitute multiple ordinary subagents. Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count, and one continuable helper should use ordinary subagent instead. An explicit user team request may override this automatic threshold. At most 8 teams may remain unclosed, and all peers share maxActiveTurns. Requires direct-human root authority in the current open turn.",
     parameters: {
       objective: { type: "string", required: true, description: "Concrete objective shared by the team." },
       name: { type: "string", description: "Optional short team display name." },
@@ -2109,7 +2349,7 @@ function registerTools(ctx, store, ready, collaboration) {
       model_tier: { type: "string", enum: MODEL_TIERS, description: "AI-selected route tier; defaults to subagent. Choose main only under the documented complexity criteria." },
       model: { type: "string", description: "Optional explicit model override; for backward compatibility its provider is inherited from the exact live lead, not from model_tier." },
     }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => publicResult(await spawnMember(ctx, store, execution.agent, { teamId: args.team_id, name: args.name, role: args.role, prompt: args.prompt, modelTier: args.model_tier, model: args.model }, signal))),
+    execute: run(async (args, execution, signal) => publicResult(await spawnMember(ctx, store, admission, execution.agent, { teamId: args.team_id, name: args.name, role: args.role, prompt: args.prompt, modelTier: args.model_tier, model: args.model }, signal))),
     presentCall: (args) => present("Spawn team member", args.name),
   }));
   ctx.tools.register(defineTool({
@@ -2132,7 +2372,7 @@ function registerTools(ctx, store, ready, collaboration) {
   ctx.tools.register(defineTool({
     name: "team_message", description: "Send an authenticated coordinator relay. Cross-team delivery requires target_team_id and is allowed only when the caller is the same fixed root lead of both peer teams.",
     parameters: { team_id: { type: "string" }, target_team_id: { type: "string", description: "Optional peer team owned by the same fixed root lead." }, recipient_session_id: { type: "string", required: true, description: "Recipient session id, member id, or unique member name in the target team." }, message: { type: "string", required: true } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => publicResult(await sendTeamMessage(ctx, store, execution.agent, { teamId: args.team_id, targetTeamId: args.target_team_id, recipientSessionId: args.recipient_session_id, message: args.message }, signal))),
+    execute: run(async (args, execution, signal) => publicResult(await sendTeamMessage(ctx, store, admission, execution.agent, { teamId: args.team_id, targetTeamId: args.target_team_id, recipientSessionId: args.recipient_session_id, message: args.message }, signal))),
     presentCall: (args) => present("Relay team message", args.recipient_session_id),
   }));
   ctx.tools.register(defineTool({
@@ -2156,7 +2396,7 @@ function registerTools(ctx, store, ready, collaboration) {
         },
       },
     }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => publicResult(await submitExpansionRequest(ctx, store, execution.agent, {
+    execute: run(async (args, execution, signal) => publicResult(await submitExpansionRequest(ctx, store, admission, execution.agent, {
       teamId: args.team_id,
       sourceTaskId: args.source_task_id,
       parallelBenefit: args.parallel_benefit,
@@ -2173,7 +2413,7 @@ function registerTools(ctx, store, ready, collaboration) {
       content: { type: "string", required: true, description: "Content returned by local_memory pack; at most 1200 characters." },
       expires_at: { type: "string", required: true, description: "Pack expiry returned by local_memory; must be within the next 30 minutes." },
     }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => publicResult(await sendTeamMessage(ctx, store, execution.agent, {
+    execute: run(async (args, execution, signal) => publicResult(await sendTeamMessage(ctx, store, admission, execution.agent, {
       teamId: args.team_id,
       recipientSessionId: args.recipient_session_id,
       message: args.content,
@@ -2281,7 +2521,7 @@ function registerTools(ctx, store, ready, collaboration) {
   ctx.tools.register(defineTool({
     name: "team_shutdown", description: "Gracefully retire one member or close the whole team. Force mode drains selected continuable children to quiescence using the exact live parent.",
     parameters: { team_id: { type: "string", required: true }, member_session_id: { type: "string" }, force: { type: "boolean" } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => publicResult(await shutdownTeam(ctx, store, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force }, signal))),
+    execute: run(async (args, execution, signal) => publicResult(await shutdownTeam(ctx, store, admission, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force }, signal))),
     presentCall: (args) => present("Shut down team", args.team_id),
   }));
 }
@@ -2596,20 +2836,22 @@ function createSubagentEventReconciler(ctx, store, ready, delayMs = SUBAGENT_REC
   };
   return { close, enqueue, flush };
 }
-function observeSubagents(ctx, store, ready) {
+function observeSubagents(ctx, store, ready, admission) {
   const reconciler = createSubagentEventReconciler(ctx, store, ready);
   ctx.effect(() => () => reconciler.close(), "agent-teams lifecycle reconciliation");
   ctx.on("subagent/start", (info) => {
     noteGracefulLifecycleStart(info);
+    admission.noteStart(info);
     return reconciler.enqueue("start", info);
   });
   ctx.on("subagent/end", (info) => {
     noteGracefulLifecycleEnd(info);
+    admission.noteEnd(info);
     return reconciler.enqueue("end", info);
   });
 }
 
-function observeUserStops(ctx, store, ready) {
+function observeUserStops(ctx, store, ready, admission) {
   ctx.on("session/event", (session, event) => {
     if (event.type !== "turn/end" || event.data?.reason?.kind !== "aborted" || event.data.reason.reason?.kind !== "user") return;
     const lead = ctx.agents.get(session.id);
@@ -2618,6 +2860,7 @@ function observeUserStops(ctx, store, ready) {
     if (selections.length === 0) return;
     const stoppedAt = now();
     for (const selection of selections) USER_PAUSED_TEAMS.add(selection.teamId);
+    admission?.cancelRoot?.(lead, admissionCancellation());
     // The stock UI cancellation preserves queued inbox work. For a team-owning root,
     // clear it at the durable turn-end boundary so member reports cannot auto-restart.
     lead.cancel({ kind: "user" });
@@ -2643,6 +2886,11 @@ function apply(ctx, config = {}) {
   if (typeof dshHome !== "string" || dshHome.length === 0) throw new Error("dsh-agent-teams requires DSH_HOME");
   const store = new AgentTeamsStore(join(dshHome, "storages", "agent_teams.json"), defaults);
   const collaboration = new AgentCollaborationService(join(dshHome, "storages", "agent_collaboration.json"));
+  // This process-local gate covers only Agent Teams-managed continuable workers.
+  // Root turns, ordinary subagents, Schedule root wakeups, and provider retries remain
+  // upstream runtime concerns and must not be represented as covered by this limit.
+  const admission = createTeamTurnAdmission();
+  ctx.effect(() => () => admission.close(), "agent-teams worker admission");
   // Product wiring for the already-implemented project collaboration domain: create
   // the project authority, issue/ redeem remote invites, and manage the real WSS
   // relay transport. The service never fakes LAN auto-discovery or an unconfigured
@@ -2675,11 +2923,11 @@ function apply(ctx, config = {}) {
       await projectEntry.close();
     };
   }, "agent-teams collaboration presence");
-  registerTools(ctx, store, ready, collaboration);
+  registerTools(ctx, store, ready, collaboration, admission);
   registerWebApi(ctx, store, ready);
   registerProjectEntryApi(ctx, projectEntry);
-  observeSubagents(ctx, store, ready);
-  observeUserStops(ctx, store, ready);
+  observeSubagents(ctx, store, ready, admission);
+  observeUserStops(ctx, store, ready, admission);
 }
 
 export {
@@ -2687,15 +2935,20 @@ export {
   AgentTeamsStore,
   COLLABORATION_REASONS,
   Config,
+  GLOBAL_TEAM_ACTIVE_ACTIVATIONS,
   HARD_MAX_MEMBERS,
   HARD_MAX_TEAMS_PER_ROOT,
   GRACEFUL_LIFECYCLE_TIMEOUT_MS,
+  MAX_TEAM_ADMISSION_QUEUE,
+  MAX_TEAM_ADMISSION_QUEUE_PER_ROOT,
   SSE_COALESCE_MS,
   SUBAGENT_RECONCILE_MS,
+  TEAM_ADMISSION_TIMEOUT_MS,
   UI_MAX_EVENTS_PER_TEAM,
   UI_MAX_TASKS_PER_TEAM,
   createSseBroadcaster,
   createSubagentEventReconciler,
+  createTeamTurnAdmission,
   fileBoundaryOverlap,
   normalizeExpansionRequest,
   resourceBoundaryOverlap,

@@ -193,6 +193,32 @@ test('完整 Profile 重置可清除全部浏览器策略审计元数据', async
   assert.deepEqual(policy.auditSnapshot(), { maxEntries: 512, count: 0, total: 0, dropped: 0, stopped: false, entries: [] })
 })
 
+test('暂停模型控制不会停止用户浏览或审计，且只能由用户侧显式恢复', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-model-pause-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const policy = new BrowserSecurityPolicy({ authzRootDir: root })
+  policy.grant(ORIGIN, { actions: ['read'] })
+  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
+
+  assert.deepEqual(policy.pauseModelControl(), { stopped: true, changed: true })
+  assert.deepEqual(policy.pauseModelControl(), { stopped: true, changed: false })
+  assert.equal(policy.isModelStopped, true)
+  assert.equal(policy.isStopped, false)
+  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'stopped')
+
+  const userNavigation = policy.userNavigate('https://example.com/user-page')
+  assert.equal(userNavigation.origin, ORIGIN)
+  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
+  assert.equal(policy.auditSnapshot().stopped, false)
+
+  assert.deepEqual(policy.resumeModelControl(), { stopped: false, changed: true })
+  assert.deepEqual(policy.resumeModelControl(), { stopped: false, changed: false })
+  assert.equal(policy.isModelStopped, false)
+  assert.equal(policy.modelAction({ action: 'read', tabId: 'tab-1' }).allowed, true)
+  assert.ok(policy.auditSnapshot().entries.some(entry => entry.action === 'model-control-stop'))
+  assert.ok(policy.auditSnapshot().entries.some(entry => entry.action === 'model-control-resume'))
+})
+
 test('未授权动作与未知动作给出可识别错误码，且审计有 denied 记录', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-deny-'))
   t.after(() => rm(root, { recursive: true, force: true }))

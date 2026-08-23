@@ -36,6 +36,7 @@ const closeSkinPickerButton = document.querySelector('#closeSkinPicker')
 const restoreOfficialThemeButton = document.querySelector('#restoreOfficialTheme')
 const skinChooseBackgroundButton = document.querySelector('#skinChooseBackground')
 const skinChooseWallpaperEngineButton = document.querySelector('#skinChooseWallpaperEngine')
+const skinBrowseWallpaperEngineButton = document.querySelector('#skinBrowseWallpaperEngine')
 const skinClearBackgroundButton = document.querySelector('#skinClearBackground')
 const skinApplyCustomButton = document.querySelector('#skinApplyCustom')
 const skinBackgroundState = document.querySelector('#skinBackgroundState')
@@ -50,6 +51,7 @@ const skinWallpaperLibraryItems = document.querySelector('#skinWallpaperLibraryI
 const skinWallpaperLibraryEmpty = document.querySelector('#skinWallpaperLibraryEmpty')
 const skinWallpaperLibraryMessage = document.querySelector('#skinWallpaperLibraryMessage')
 const skinApplyWallpaperAppearance = document.querySelector('#skinApplyWallpaperAppearance')
+const skinResetWallpaperAppearance = document.querySelector('#skinResetWallpaperAppearance')
 const modelRoutingOverlay = document.querySelector('#modelRoutingOverlay')
 const closeModelRoutingButton = document.querySelector('#closeModelRouting')
 const modelRoutingMainProvider = document.querySelector('#modelRoutingMainProvider')
@@ -194,7 +196,8 @@ function shellReadableTextShadow(text, strength) {
   const rgb = match ? [0, 2, 4].map(offset => Number.parseInt(match[1].slice(offset, offset + 2), 16)) : [255, 255, 255]
   const shadow = rgb[0] * .299 + rgb[1] * .587 + rgb[2] * .114 >= 150 ? '0,0,0' : '255,255,255'
   const amount = Math.min(1, Math.max(0, Number(strength) / 100))
-  return `0 1px 2px rgba(${shadow},${(.18 + amount * .58).toFixed(2)}),0 0 12px rgba(${shadow},${(.06 + amount * .24).toFixed(2)})`
+  if (amount === 0) return 'none'
+  return `0 1px 2px rgba(${shadow},${(amount * .76).toFixed(2)}),0 0 12px rgba(${shadow},${(amount * .30).toFixed(2)})`
 }
 
 function readShellCustomTheme() {
@@ -276,7 +279,7 @@ function themePreview(theme) {
   if (theme.id === 'custom' && appearanceState.customBackgroundDataUrl) {
     const custom = { ...customThemeDefaults, ...(appearanceState.customTheme || {}) }
     const readability = custom.readabilityStrength / 100
-    const overlay = shellColorWithOpacity(custom.surface, .06 + readability * (custom.mode === 'dark' ? .34 : .27))
+    const overlay = shellColorWithOpacity(custom.surface, readability * (custom.mode === 'dark' ? .40 : .33))
     const image = `url("${appearanceState.customBackgroundDataUrl}")`
     return `linear-gradient(${overlay},${overlay}),${image} center/contain no-repeat,${image} center/cover no-repeat`
   }
@@ -306,9 +309,9 @@ function applyShellTheme() {
   const glassOpacity = 1 - custom.glassTransparency / 100
   const vars = theme.id === 'custom'
     ? {
-        '--dsw-alias-bg-base': shellColorWithOpacity(custom.surface, Math.max(.08, glassOpacity)),
-        '--dsw-alias-bg-layer-1': shellColorWithOpacity(custom.surface, Math.min(1, glassOpacity + .08)),
-        '--dsw-alias-bg-layer-2': shellColorWithOpacity(custom.surface, Math.min(1, glassOpacity + .16)),
+        '--dsw-alias-bg-base': shellColorWithOpacity(custom.surface, glassOpacity),
+        '--dsw-alias-bg-layer-1': shellColorWithOpacity(custom.surface, Math.min(1, glassOpacity * 1.08)),
+        '--dsw-alias-bg-layer-2': shellColorWithOpacity(custom.surface, Math.min(1, glassOpacity * 1.16)),
         '--dsw-alias-label-primary': custom.text,
         '--dsw-alias-label-secondary': custom.text,
         '--dsw-alias-border-l2': shellColorWithOpacity(custom.text, custom.borderStrength / 100 * .34),
@@ -333,6 +336,7 @@ function applyShellTheme() {
 function showSkinPickerPane(name) {
   const showWallpapers = name === 'wallpapers'
   const showModes = name === 'modes'
+  if (!showWallpapers) disposeWallpaperCardPreviews()
   skinThemeTab.setAttribute('aria-selected', String(!showWallpapers && !showModes))
   skinWallpaperTab.setAttribute('aria-selected', String(showWallpapers))
   skinModeTab.setAttribute('aria-selected', String(showModes))
@@ -348,6 +352,7 @@ function wallpaperLibraryMessage(message = '', error = false) {
 
 async function applySavedWallpaper(id) {
   wallpaperLibraryMessage('正在从本地副本应用壁纸…')
+  disposeWallpaperCardPreviews()
   try {
     await skinPickerHost.apply(async () => {
       appearanceState = await api.applyWallpaper(id)
@@ -382,16 +387,55 @@ function selectWallpaperCard(id) {
   })
 }
 
+function pauseWallpaperCardPreview(card) {
+  const video = card?.querySelector('video[data-wallpaper-preview]')
+  if (!video) return
+  video.pause()
+  try { video.currentTime = 0 } catch {}
+}
+
+function disposeWallpaperCardPreview(video) {
+  if (!video) return
+  video.pause()
+  video.removeAttribute('src')
+  video.load()
+}
+
+function disposeWallpaperCardPreviews(except = null) {
+  skinWallpaperLibraryItems.querySelectorAll('video[data-wallpaper-preview]').forEach(video => {
+    if (video !== except) disposeWallpaperCardPreview(video)
+  })
+}
+
+function playWallpaperCardPreview(card) {
+  if (document.documentElement.dataset.shellLowPerformance === 'true' || matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  const video = card?.querySelector('video[data-wallpaper-preview]')
+  if (!video) return
+  disposeWallpaperCardPreviews(video)
+  if (!video.getAttribute('src')) {
+    const source = video.dataset.previewSrc || ''
+    if (!source) return
+    video.src = source
+    video.load()
+  }
+  video.play().catch(() => {})
+}
+
 function renderWallpaperLibrary() {
   const library = appearanceState.wallpaperLibrary || { activeId: null, items: [] }
   const items = Array.isArray(library.items) ? library.items : []
   if (!items.some(item => item.id === selectedWallpaperId)) selectedWallpaperId = library.activeId || items[0]?.id || null
   skinWallpaperLibraryEmpty.classList.toggle('hidden', items.length > 0)
   skinWallpaperLibraryItems.classList.toggle('hidden', items.length === 0)
+  disposeWallpaperCardPreviews()
   skinWallpaperLibraryItems.innerHTML = items.map(item => {
     const current = appearanceState.themeId === 'custom' && library.activeId === item.id
     const sourceUnavailable = item.source === 'wallpaper-engine' && item.sourceStatus === 'unavailable'
-    const previewStyle = item.previewUrl ? ` style="background-image:url(&quot;${escapeHtml(item.previewUrl)}&quot;)"` : ''
+    const preview = item.available && item.previewUrl
+      ? item.kind === 'video'
+        ? `<video data-wallpaper-preview data-preview-src="${escapeHtml(item.previewUrl)}" preload="none" muted loop playsinline aria-hidden="true"></video><span class="skin-wallpaper-preview-kind" aria-hidden="true">悬停预览视频</span>`
+        : `<img data-wallpaper-preview src="${escapeHtml(item.previewUrl)}" alt="" loading="lazy" decoding="async" />`
+      : `<span class="skin-wallpaper-preview-placeholder">${item.available ? (item.kind === 'video' ? '视频预览载入中' : '预览载入中') : '本地副本已失效'}</span>`
     const badge = !item.available
       ? '<span class="skin-wallpaper-badge" data-warning="true">副本失效</span>'
       : current
@@ -404,12 +448,12 @@ function renderWallpaperLibrary() {
       : '本地导入 · 已复制到本机'
     return `
       <article class="skin-wallpaper-library-card" role="listitem" tabindex="0" data-wallpaper-id="${escapeHtml(item.id)}" data-selected="${item.id === selectedWallpaperId}" data-unavailable="${!item.available}" aria-label="${escapeHtml(item.title)}，${item.kind === 'video' ? '视频' : '图片'}">
-        <span class="skin-wallpaper-library-preview" data-kind="${escapeHtml(item.kind)}" data-unavailable="${!item.available}"${previewStyle}></span>
+        <span class="skin-wallpaper-library-preview" data-kind="${escapeHtml(item.kind)}" data-unavailable="${!item.available}">${preview}</span>
         <div class="skin-wallpaper-library-body">
           <div class="skin-wallpaper-library-title"><strong>${escapeHtml(item.title)}</strong>${badge}</div>
           <div class="skin-wallpaper-library-meta">${item.kind === 'video' ? '视频' : '图片'} · ${sourceText}</div>
           <div class="skin-wallpaper-library-card-actions">
-            <button type="button" data-action="apply" ${item.available ? '' : 'disabled'}>${current ? '重新应用' : '应用'}</button>
+            <button type="button" data-action="apply" ${item.available ? '' : 'disabled'}>${current ? '正在使用' : '使用此壁纸'}</button>
             <button type="button" data-action="delete">${item.available ? '移除' : '移除失效记录'}</button>
           </div>
         </div>
@@ -426,6 +470,12 @@ function renderWallpaperLibrary() {
       if (event.target.closest('button') || (event.key !== 'Enter' && event.key !== ' ')) return
       event.preventDefault()
       selectWallpaperCard(card.dataset.wallpaperId)
+    })
+    card.addEventListener('pointerenter', () => playWallpaperCardPreview(card))
+    card.addEventListener('pointerleave', () => pauseWallpaperCardPreview(card))
+    card.addEventListener('focusin', () => playWallpaperCardPreview(card))
+    card.addEventListener('focusout', event => {
+      if (!card.contains(event.relatedTarget)) pauseWallpaperCardPreview(card)
     })
     card.querySelector('[data-action="apply"]').addEventListener('click', () => applySavedWallpaper(card.dataset.wallpaperId))
     card.querySelector('[data-action="delete"]').addEventListener('click', () => deleteSavedWallpaper(card.dataset.wallpaperId))
@@ -562,6 +612,7 @@ function openSkinPicker({ fromSettings = false } = {}) {
 }
 
 function closeSkinPicker() {
+  disposeWallpaperCardPreviews()
   skinPickerHost.close()
 }
 
@@ -569,33 +620,68 @@ function openWallpaperEnginePicker() {
   skinWallpaperEnginePicker.classList.remove('hidden')
   skinWallpaperEngineStatus.textContent = '正在扫描本机 Steam 库…'
   skinWallpaperEngineItems.innerHTML = ''
-  skinChooseWallpaperEngineButton.disabled = true
+  skinBrowseWallpaperEngineButton.disabled = true
   api.listWallpaperEngineProjects().then(library => {
     renderWallpaperEnginePicker(library)
   }).catch(error => {
     skinWallpaperEngineStatus.textContent = `扫描失败：${error.message}`
   }).finally(() => {
-    skinChooseWallpaperEngineButton.disabled = false
+    skinBrowseWallpaperEngineButton.disabled = false
   })
 }
 
-function renderWallpaperEnginePicker(library) {
+function renderWallpaperEnginePicker(library, reason = '') {
   const projects = (library && library.projects) || []
   const skipped = (library && library.skipped) || {}
+  const reasonText = {
+    'multiple-current': '检测到多个显示器正在使用不同的可导入壁纸，请选择一个。',
+    'ambiguous-profile': 'Wallpaper Engine 配置中有多个用户，无法可靠确定当前用户，请选择一个壁纸。',
+    'unsupported-current': '当前 Wallpaper Engine 壁纸是暂不支持的 scene、web 或 application 项目，请另选图片或视频项目。',
+    'config-unavailable': '无法读取 Wallpaper Engine 当前选择，请从已安装项目中选择一个。',
+    'no-current': 'Wallpaper Engine 当前没有已选择的壁纸，请从已安装项目中选择一个。',
+    'current-unavailable': '当前壁纸项目已移动或不可读取，请从可用项目中选择一个。'
+  }[reason] || ''
   if (!projects.length) {
-    skinWallpaperEngineStatus.textContent = '未在本机 Steam 库中找到可导入的 Wallpaper Engine 项目；可点击“没有找到？手动选择项目目录…”。'
+    skinWallpaperEngineStatus.textContent = `${reasonText ? `${reasonText} ` : ''}未在本机 Steam 库中找到可导入的图片或视频项目；可手动选择项目目录。`
     skinWallpaperEngineItems.innerHTML = ''
     return
   }
   const skippedNote = skipped.unsupported ? `；跳过 ${skipped.unsupported} 个 scene/web 项目` : ''
-  skinWallpaperEngineStatus.textContent = `找到 ${projects.length} 个项目${skippedNote}；导入后会保存受控本地副本`
+  skinWallpaperEngineStatus.textContent = `${reasonText ? `${reasonText} ` : ''}找到 ${projects.length} 个项目${skippedNote}；选择后只复制这一项并立即使用。`
   skinWallpaperEngineItems.innerHTML = projects.map(project => `
     <article class="skin-wallpaper-item">
       <span class="skin-wallpaper-item-title">${escapeHtml(project.title)}</span>
-      <span class="skin-wallpaper-item-meta">${project.kind === 'video' ? '视频' : '图片'} · ${project.source === 'workshop' ? '创意工坊' : '本地项目'} · ${escapeHtml(project.directory)}</span>
-      <button type="button" data-import-project="${escapeHtml(project.directory)}">导入并使用</button>
+      <span class="skin-wallpaper-item-meta">${project.kind === 'video' ? '视频' : '图片'} · ${project.source === 'workshop' ? '创意工坊' : '本地项目'}${project.current ? ' · 当前显示器正在使用' : ''} · ${escapeHtml(project.directory)}</span>
+      <button type="button" data-import-project="${escapeHtml(project.directory)}">选择并使用</button>
     </article>`).join('')
   skinWallpaperEngineItems.querySelectorAll('[data-import-project]').forEach(item => item.addEventListener('click', () => activateWallpaperEngineProject(item.dataset.importProject)))
+}
+
+async function importCurrentWallpaperEngineProject() {
+  skinWallpaperEnginePicker.classList.add('hidden')
+  skinChooseWallpaperEngineButton.disabled = true
+  skinChooseWallpaperEngineButton.textContent = '正在识别并复制…'
+  wallpaperLibraryMessage('正在读取 Wallpaper Engine 当前选择；只会复制当前的一项壁纸…')
+  try {
+    const result = await api.importCurrentWallpaperEngine()
+    if (result?.status === 'imported' && result.appearance) {
+      await skinPickerHost.apply(async () => {
+        appearanceState = result.appearance
+        await publishAppearanceState()
+        renderSkinPicker()
+        return true
+      })
+      return
+    }
+    skinWallpaperEnginePicker.classList.remove('hidden')
+    renderWallpaperEnginePicker(result?.library, result?.reason)
+    wallpaperLibraryMessage('未找到唯一且受支持的当前壁纸，请在下方选择一个；扫描不会复制任何文件。')
+  } catch (error) {
+    wallpaperLibraryMessage(`导入当前壁纸失败：${error.message}`, true)
+  } finally {
+    skinChooseWallpaperEngineButton.disabled = false
+    skinChooseWallpaperEngineButton.textContent = '导入当前 Wallpaper Engine 壁纸'
+  }
 }
 
 async function activateWallpaperEngineProject(directory) {
@@ -1928,7 +2014,8 @@ skinChooseBackgroundButton.addEventListener('click', async () => {
     wallpaperLibraryMessage(`导入失败：${error.message}`, true)
   }
 })
-skinChooseWallpaperEngineButton.addEventListener('click', openWallpaperEnginePicker)
+skinChooseWallpaperEngineButton.addEventListener('click', () => importCurrentWallpaperEngineProject())
+skinBrowseWallpaperEngineButton.addEventListener('click', openWallpaperEnginePicker)
 skinWallpaperEngineRescan.addEventListener('click', openWallpaperEnginePicker)
 skinWallpaperEngineManual.addEventListener('click', async () => {
   skinWallpaperEnginePicker.classList.add('hidden')
@@ -1975,11 +2062,38 @@ skinClearBackgroundButton.addEventListener('click', async () => {
   renderSkinPicker()
   wallpaperLibraryMessage('已停用当前壁纸；壁纸卡仍保留在本地库中。')
 })
-for (const field of Object.values(customThemeRangeFields)) {
+let wallpaperAppearancePreviewFrame = 0
+function previewWallpaperAppearance(name, value) {
+  appearanceState = {
+    ...appearanceState,
+    themeId: 'custom',
+    customTheme: { ...(appearanceState.customTheme || {}), [name]: value }
+  }
+  if (wallpaperAppearancePreviewFrame) return
+  wallpaperAppearancePreviewFrame = requestAnimationFrame(() => {
+    wallpaperAppearancePreviewFrame = 0
+    publishAppearanceState().catch(() => {})
+  })
+}
+
+async function persistWallpaperAppearance() {
+  if (wallpaperAppearancePreviewFrame) {
+    cancelAnimationFrame(wallpaperAppearancePreviewFrame)
+    wallpaperAppearancePreviewFrame = 0
+  }
+  appearanceState = await api.saveCustomTheme(readShellCustomTheme())
+  await publishAppearanceState()
+  renderSkinPicker()
+  wallpaperLibraryMessage('壁纸显示参数已保存。')
+}
+
+for (const [name, field] of Object.entries(customThemeRangeFields)) {
   const input = document.querySelector(field.input)
   input.addEventListener('input', () => {
     document.querySelector(field.output).textContent = `${input.value}${field.suffix}`
+    previewWallpaperAppearance(name, Number(input.value))
   })
+  input.addEventListener('change', () => persistWallpaperAppearance().catch(error => wallpaperLibraryMessage(`保存显示参数失败：${error.message}`, true)))
 }
 skinApplyCustomButton.addEventListener('click', async () => {
   await skinPickerHost.apply(async () => {
@@ -1989,9 +2103,32 @@ skinApplyCustomButton.addEventListener('click', async () => {
 })
 skinApplyWallpaperAppearance.addEventListener('click', async () => {
   await skinPickerHost.apply(async () => {
-    appearanceState = await api.saveCustomTheme(readShellCustomTheme())
-    await publishAppearanceState()
+    await persistWallpaperAppearance()
   })
+})
+skinResetWallpaperAppearance.addEventListener('click', async () => {
+  skinResetWallpaperAppearance.disabled = true
+  try {
+    const recommended = {}
+    for (const [name, field] of Object.entries(customThemeRangeFields)) {
+      recommended[name] = customThemeDefaults[name]
+      const input = document.querySelector(field.input)
+      input.value = String(customThemeDefaults[name])
+      document.querySelector(field.output).textContent = `${customThemeDefaults[name]}${field.suffix}`
+    }
+    appearanceState = {
+      ...appearanceState,
+      themeId: 'custom',
+      customTheme: { ...(appearanceState.customTheme || {}), ...recommended }
+    }
+    await publishAppearanceState()
+    await persistWallpaperAppearance()
+    wallpaperLibraryMessage('已恢复推荐显示参数并保存；当前壁纸和主题配色保持不变。')
+  } catch (error) {
+    wallpaperLibraryMessage(`恢复推荐参数失败：${error.message}`, true)
+  } finally {
+    skinResetWallpaperAppearance.disabled = false
+  }
 })
 closeModelRoutingButton.addEventListener('click', closeModelRouting)
 modelRoutingOverlay.addEventListener('click', event => {

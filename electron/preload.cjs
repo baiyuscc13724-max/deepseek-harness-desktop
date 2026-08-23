@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   saveCustomTheme: customTheme => ipcRenderer.invoke('appearance:saveCustom', customTheme),
   chooseThemeBackground: () => ipcRenderer.invoke('appearance:chooseBackground'),
   chooseWallpaperEngine: () => ipcRenderer.invoke('appearance:chooseWallpaperEngine'),
+  importCurrentWallpaperEngine: () => ipcRenderer.invoke('appearance:importCurrentWallpaperEngine'),
   listWallpaperEngineProjects: () => ipcRenderer.invoke('appearance:listWallpaperEngineProjects'),
   applyWallpaperEngineProject: value => ipcRenderer.invoke('appearance:applyWallpaperEngineProject', value),
   applyWallpaper: value => ipcRenderer.invoke('appearance:applyWallpaper', value),

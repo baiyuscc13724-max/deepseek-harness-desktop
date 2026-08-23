@@ -43,8 +43,15 @@ if (process.platform === 'win32') {
     ...runtimePackages.map(name => `node_modules/@deepseek-ai/${name}/package.json`),
     'node_modules/@deepseek-ai/cordis-plugin-group/lib/index.js',
     'node_modules/dsh-plugin-marketplace/package.json',
+    'node_modules/dsh-plugin-marketplace/LICENSE',
+    'node_modules/dsh-plugin-marketplace/cordis.patch.yml',
+    'node_modules/dsh-plugin-marketplace/adaptor.json',
+    'node_modules/dsh-plugin-marketplace/registry.json',
+    'node_modules/dsh-plugin-marketplace/skills.json',
     'node_modules/dsh-plugin-marketplace/lib/index.js',
     'node_modules/dsh-plugin-marketplace/lib/client.js',
+    'node_modules/dsh-plugin-marketplace/lib/skin-manifest.js',
+    'third_party/licenses/dashi-taskboard-Apache-2.0-LICENSE.txt',
     'node_modules/yaml/dist/doc/directives.js'
   ]) {
     try { extractPackagedFile(required) }
@@ -52,8 +59,20 @@ if (process.platform === 'win32') {
   }
   const marketplacePackage = JSON.parse(extractPackagedFile('node_modules/dsh-plugin-marketplace/package.json').toString('utf8'))
   const marketplaceRuntime = extractPackagedFile('node_modules/dsh-plugin-marketplace/lib/index.js').toString('utf8')
-  if (marketplacePackage.version !== '1.2.2' || !marketplaceRuntime.includes('process.env.ComSpec') || !marketplaceRuntime.includes('"npm.cmd", ...args')) {
-    throw new Error('Packaged marketplace is missing the verified Electron/Node 24 Windows npm launcher.')
+  for (const contract of [
+    'export const inject = ["webServer"]',
+    'windowsHide: true',
+    'execFileAsync("cmd.exe", ["/c", "npm.cmd", ...args]',
+    'execFileAsync("cmd.exe", ["/d", "/s", "/c", "pnpm", ...args]'
+  ]) {
+    if (!marketplaceRuntime.includes(contract)) throw new Error(`Packaged marketplace is missing its audited v1.5.5 runtime contract: ${contract}`)
+  }
+  if (marketplacePackage.version !== '1.5.5' || marketplacePackage.repository?.url !== 'https://github.com/bradeGithub/DSH-Plugins-Marketplace.git' || marketplacePackage.dsh?.bundle?.patch !== './cordis.patch.yml') {
+    throw new Error('Packaged marketplace is not the audited upstream v1.5.5 package.')
+  }
+  const dashiLicense = extractPackagedFile('third_party/licenses/dashi-taskboard-Apache-2.0-LICENSE.txt').toString('utf8')
+  if (!dashiLicense.includes('Apache License') || !dashiLicense.includes('Version 2.0, January 2004')) {
+    throw new Error('Packaged dashi task-board attribution is missing the complete Apache-2.0 license text.')
   }
   const directoryPicker = extractPackagedFile('node_modules/@deepseek-ai/dsh-host-directory-picker-native/lib/index.js').toString('utf8')
   if (!directoryPicker.includes('System.Windows.Forms.FolderBrowserDialog') || !directoryPicker.includes('"-EncodedCommand"')) {
@@ -73,6 +92,13 @@ if (process.platform === 'win32') {
   try {
     await access(unpackedRuntime)
     throw new Error('The JavaScript DSH runtime must stay inside app.asar instead of expanding thousands of installer files.')
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+  const unpackedMarketplace = path.join(unpacked, 'node_modules', 'dsh-plugin-marketplace')
+  try {
+    await access(unpackedMarketplace)
+    throw new Error('The marketplace runtime must stay inside app.asar instead of exhausting the physical unpacked-file budget.')
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error
   }

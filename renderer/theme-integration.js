@@ -81,7 +81,8 @@
       const brightText = rgb[0] * .299 + rgb[1] * .587 + rgb[2] * .114 >= 150
       const shadow = brightText ? '0,0,0' : '255,255,255'
       const amount = Math.min(1, Math.max(0, strength / 100))
-      return `0 1px 2px rgba(${shadow},${(.18 + amount * .58).toFixed(2)}),0 0 12px rgba(${shadow},${(.06 + amount * .24).toFixed(2)})`
+      if (amount === 0) return 'none'
+      return `0 1px 2px rgba(${shadow},${(amount * .76).toFixed(2)}),0 0 12px rgba(${shadow},${(amount * .30).toFixed(2)})`
     }
     const readableBackdrop = (text, strength, minimum, maximum, brightness = 100) => {
       const match = /^#([0-9a-f]{6})$/i.exec(text || '')
@@ -105,7 +106,10 @@
       const backdrop = backdropRgb.join(',')
       const maximumContrast = Math.max(darkContrast, lightContrast)
       const targetContrast = maximumContrast >= 8 ? 7 : 4.5
-      if (maximumContrast < targetContrast) return `rgba(${backdrop},0.99)`
+      const amount = Math.min(1, Math.max(0, strength / 100))
+      if (amount === 0) return `rgba(${backdrop},0.00)`
+      const protection = Math.min(1, amount / .72)
+      if (maximumContrast < targetContrast) return `rgba(${backdrop},${(.99 * protection).toFixed(2)})`
       const worstWallpaper = darkBackdropWins ? lightBackdrop : darkBackdrop
       const composite = opacity => backdropRgb.map((value, index) => value * opacity + worstWallpaper[index] * (1 - opacity))
       let safeLow = 0
@@ -115,9 +119,9 @@
         if (contrast(rgb, composite(candidate)) >= targetContrast) safeHigh = candidate
         else safeLow = candidate
       }
-      const amount = Math.min(1, Math.max(0, strength / 100))
       const brightnessBoost = Math.min(.10, Math.max(0, (brightness - 100) / 40) * .10)
-      const opacity = Math.min(.99, Math.max(safeHigh, minimum + amount * (maximum - minimum)) + brightnessBoost)
+      const requestedOpacity = (minimum + amount * (maximum - minimum)) * protection
+      const opacity = Math.min(.99, Math.max(safeHigh * protection, requestedOpacity) + brightnessBoost * protection)
       return `rgba(${backdrop},${(Math.ceil(opacity * 100) / 100).toFixed(2)})`
     }
     const customThemeValues = state => {
@@ -129,7 +133,7 @@
         text: custom.text || '#f4f7ff',
         wallpaperBrightness: boundedNumber(custom.wallpaperBrightness, 40, 140, 82),
         wallpaperBlur: boundedNumber(custom.wallpaperBlur, 0, 24, 2),
-        glassTransparency: boundedNumber(custom.glassTransparency, 0, 92, 32),
+        glassTransparency: boundedNumber(custom.glassTransparency, 0, 100, 32),
         borderStrength: boundedNumber(custom.borderStrength, 0, 100, 48),
         readabilityStrength: boundedNumber(custom.readabilityStrength, 0, 100, 72)
       }
@@ -245,7 +249,9 @@
       .hd-custom-range-grid { display:grid; grid-template-columns:repeat(2,minmax(140px,1fr)); gap:10px 16px; }
       .hd-custom-range-grid label > span { display:flex; justify-content:space-between; gap:8px; }
       .hd-custom-range-grid output { color:var(--dsw-alias-label-primary); font-variant-numeric:tabular-nums; }
-      .hd-custom-range-grid input[type="range"] { width:100%; margin:0; accent-color:var(--dsw-alias-brand-primary); }
+      .hd-custom-range-grid input[type="range"] { width:100%; height:22px; margin:0; appearance:none; -webkit-appearance:none; background:transparent; cursor:ew-resize; touch-action:none; }
+      .hd-custom-range-grid input[type="range"]::-webkit-slider-runnable-track { height:6px; border:1px solid var(--dsw-alias-border-l2); border-radius:999px; background:linear-gradient(90deg,color-mix(in srgb,var(--dsw-alias-brand-primary) 72%,transparent),color-mix(in srgb,var(--dsw-alias-bg-layer-1) 88%,transparent)); }
+      .hd-custom-range-grid input[type="range"]::-webkit-slider-thumb { width:17px; height:17px; margin-top:-6px; appearance:none; -webkit-appearance:none; border:2px solid var(--dsw-alias-bg-layer-1); border-radius:50%; background:var(--dsw-alias-brand-primary); box-shadow:0 0 0 1px var(--dsw-alias-border-l2),0 2px 7px rgba(0,0,0,.22); }
       .hd-custom-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin-top:14px; }
       .hd-custom-actions .hd-theme-primary { border-color:var(--dsw-alias-brand-primary); color:var(--dsw-alias-label-primary-foreground); background:var(--dsw-alias-brand-primary); }
       .hd-custom-actions button:disabled { cursor:not-allowed; opacity:.45; }
@@ -384,7 +390,7 @@
     const customThemeFromState = state => {
       const custom = customThemeValues(state)
       const { accent, surface, text } = custom
-      const surfaceOpacity = Math.max(.08, 1 - custom.glassTransparency / 100)
+      const surfaceOpacity = 1 - custom.glassTransparency / 100
       const borderOpacity = custom.borderStrength / 100
       const readability = custom.readabilityStrength / 100
       return {
@@ -394,13 +400,13 @@
         customBackgroundVideoDataUrl: state?.customBackgroundVideoDataUrl || '',
         wallpaperBrightness: custom.wallpaperBrightness,
         wallpaperBlur: custom.wallpaperBlur,
-        wallpaperOverlay: hexWithOpacity(surface, .06 + readability * (custom.mode === 'dark' ? .34 : .27)),
+        wallpaperOverlay: hexWithOpacity(surface, readability * (custom.mode === 'dark' ? .40 : .33)),
         vars: {
           '--dsw-alias-bg-base': hexWithOpacity(surface, surfaceOpacity),
-          '--dsw-alias-bg-layer-1': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .08)),
-          '--dsw-alias-bg-layer-2': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .16)),
-          '--dsw-alias-bg-layer-3': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .24)),
-          '--dsw-alias-bg-module-platform': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .05)),
+          '--dsw-alias-bg-layer-1': hexWithOpacity(surface, Math.min(1, surfaceOpacity * 1.08)),
+          '--dsw-alias-bg-layer-2': hexWithOpacity(surface, Math.min(1, surfaceOpacity * 1.16)),
+          '--dsw-alias-bg-layer-3': hexWithOpacity(surface, Math.min(1, surfaceOpacity * 1.24)),
+          '--dsw-alias-bg-module-platform': hexWithOpacity(surface, Math.min(1, surfaceOpacity * 1.05)),
           '--dsw-alias-label-primary': text,
           '--dsw-alias-label-secondary': hexWithOpacity(text, .78 + readability * .16),
           '--dsw-alias-label-tertiary': hexWithOpacity(text, .57 + readability * .28),
@@ -410,10 +416,10 @@
           '--dsw-alias-border-l2': hexWithOpacity(text, borderOpacity * .34),
           '--dsw-alias-border-l3': hexWithOpacity(text, borderOpacity * .52),
           '--dsw-alias-interactive-bg-hover': hexWithAlpha(accent, '24'),
-          '--dsw-specific-sidebar-fill': hexWithOpacity(surface, Math.max(.08, surfaceOpacity * .48)),
-          '--dsw-specific-input-major': hexWithOpacity(surface, Math.max(.18, surfaceOpacity * .7)),
-          '--dsw-specific-menu': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .24)),
-          '--dsw-alias-markdown-code-block': hexWithOpacity(surface, Math.min(1, surfaceOpacity + .08)),
+          '--dsw-specific-sidebar-fill': hexWithOpacity(surface, surfaceOpacity * .48),
+          '--dsw-specific-input-major': hexWithOpacity(surface, surfaceOpacity * .70),
+          '--dsw-specific-menu': hexWithOpacity(surface, Math.min(1, surfaceOpacity * 1.24)),
+          '--dsw-alias-markdown-code-block': hexWithOpacity(surface, Math.min(1, surfaceOpacity * 1.08)),
           '--hd-theme-glass-blur': `${Math.round(10 + custom.glassTransparency * .22)}px`,
           '--hd-theme-text-shadow': readableTextShadow(text, custom.readabilityStrength),
           '--hd-theme-readable-scrim-strong': readableBackdrop(text, custom.readabilityStrength, .46, .72, custom.wallpaperBrightness),
@@ -434,6 +440,14 @@
       columns.slice(0, 3).forEach((element, index) => { element.dataset.hdSurface = names[index] })
     }
 
+    const releaseWallpaperVideo = video => {
+      if (!video) return
+      video.pause()
+      video.removeAttribute('src')
+      delete video.dataset.hdWallpaperSource
+      video.load()
+    }
+
     const syncWallpaperVideo = theme => {
       const root = document.documentElement
       const source = theme?.id === 'custom' ? theme.customBackgroundVideoDataUrl : ''
@@ -441,9 +455,7 @@
       let overlay = document.querySelector('.hd-wallpaper-video-overlay')
       if (!source) {
         if (video) {
-          video.pause()
-          video.removeAttribute('src')
-          video.load()
+          releaseWallpaperVideo(video)
           video.remove()
         }
         overlay?.remove(); root.removeAttribute('data-hd-wallpaper-kind')
@@ -455,8 +467,16 @@
         video.muted = true; video.loop = true; video.autoplay = true; video.playsInline = true
         document.body.prepend(video)
       }
-      const sourceChanged = video.src !== source
-      if (sourceChanged) video.src = source
+      const sourceChanged = video.dataset.hdWallpaperSource !== source
+      if (sourceChanged) {
+        // Fully release the previous decoder and byte-range stream before the
+        // next source is attached. Reassigning src alone can leave Chromium's
+        // old media pipeline alive while a new wallpaper is becoming current.
+        releaseWallpaperVideo(video)
+        video.dataset.hdWallpaperSource = source
+        video.src = source
+        video.load()
+      }
       if (!overlay) {
         overlay = document.createElement('div')
         overlay.className = 'hd-wallpaper-video-overlay'
@@ -469,7 +489,11 @@
       } else if (video.paused || sourceChanged) video.play().catch(() => {})
     }
 
-    document.addEventListener('visibilitychange', () => syncWallpaperVideo(customThemeFromState(window.__HARNESS_DESKTOP_THEME_STATE__ || {})))
+    const activeWallpaperTheme = state => state?.themeId === 'custom' ? customThemeFromState(state) : null
+
+    document.addEventListener('visibilitychange', () => {
+      syncWallpaperVideo(activeWallpaperTheme(window.__HARNESS_DESKTOP_THEME_STATE__ || {}))
+    })
 
     const applyTheme = requestedId => {
       const state = window.__HARNESS_DESKTOP_THEME_STATE__ || { themeId: 'official' }
@@ -510,7 +534,10 @@
       } : {}
       const themeValues = { ...vars, ...isolatedSurfaces, ...wallpaperVars }
       const signature = JSON.stringify([theme.id, tone, wallpaper, theme.customBackgroundVideoDataUrl || '', themeValues])
-      if (old && window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ === signature && document.documentElement.dataset.hdTheme === theme.id) return
+      if (old && window.__HARNESS_DESKTOP_ACTIVE_THEME_SIGNATURE__ === signature && document.documentElement.dataset.hdTheme === theme.id) {
+        syncWallpaperVideo(theme)
+        return
+      }
       old?.remove()
       active.textContent = `
         html[data-hd-theme="${theme.id}"],
@@ -535,7 +562,7 @@
       document.documentElement.dataset.hdUiMode = mode
       document.documentElement.dataset.hdReducedMotion = String(state.reducedMotion === true)
       document.documentElement.dataset.hdLowPerformance = String(state.lowPerformance === true)
-      if (!mobile && syncVideo) syncWallpaperVideo(customThemeFromState(state))
+      if (!mobile && syncVideo) syncWallpaperVideo(activeWallpaperTheme(state))
     }
 
     const publishUiPreferences = panel => {
@@ -689,7 +716,7 @@
               <section class="hd-custom-group"><h4>壁纸质感</h4><div class="hd-custom-range-grid">
                 <label><span>壁纸明暗 <output data-hd-custom-output="wallpaperBrightness">82%</output></span><input type="range" min="40" max="140" value="82" data-hd-custom="wallpaperBrightness"></label>
                 <label><span>填充背景模糊 <output data-hd-custom-output="wallpaperBlur">2px</output></span><input type="range" min="0" max="24" value="2" data-hd-custom="wallpaperBlur"></label>
-                <label><span>面板通透 <output data-hd-custom-output="glassTransparency">32%</output></span><input type="range" min="0" max="92" value="32" data-hd-custom="glassTransparency"></label>
+                <label><span>面板通透 <output data-hd-custom-output="glassTransparency">32%</output></span><input type="range" min="0" max="100" step="1" value="32" data-hd-custom="glassTransparency"></label>
                 <label><span>边框清晰 <output data-hd-custom-output="borderStrength">48%</output></span><input type="range" min="0" max="100" value="48" data-hd-custom="borderStrength"></label>
                 <label><span>文字保护 <output data-hd-custom-output="readabilityStrength">72%</output></span><input type="range" min="0" max="100" value="72" data-hd-custom="readabilityStrength"></label>
               </div></section>

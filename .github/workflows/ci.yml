@@ -24,4 +24,8 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - run: npm run verify
+      - name: Verify browser navigation security in Electron
+        env:
+          HARNESS_BROWSER_TEST_REAL_INPUT: '1'
+        run: xvfb-run -a npm run test:browser-electron
       - run: npm run verify:release

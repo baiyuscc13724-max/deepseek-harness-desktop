@@ -34,12 +34,23 @@ test('custom wallpapers derive a lightweight contrast surface from the semantic 
   assert.match(guest, /const lightContrast = contrast\(rgb, lightBackdrop\)/)
   assert.match(guest, /const darkBackdropWins = darkContrast >= lightContrast/)
   assert.match(guest, /const maximumContrast = Math\.max\(darkContrast, lightContrast\)/)
-  assert.match(guest, /if \(maximumContrast < targetContrast\) return `rgba\(\$\{backdrop\},0\.99\)`/)
+  assert.match(guest, /if \(amount === 0\) return `rgba\(\$\{backdrop\},0\.00\)`/)
+  assert.match(guest, /const protection = Math\.min\(1, amount \/ \.72\)/)
+  assert.match(guest, /Math\.max\(safeHigh \* protection, requestedOpacity\)/)
   assert.match(guest, /const brightnessBoost = Math\.min\(\.10, Math\.max\(0, \(brightness - 100\) \/ 40\) \* \.10\)/)
   assert.match(guest, /'--hd-theme-readable-scrim-strong': readableBackdrop\(text, custom\.readabilityStrength, \.46, \.72, custom\.wallpaperBrightness\)/)
   assert.match(guest, /'--hd-theme-readable-scrim-soft': readableBackdrop\(text, custom\.readabilityStrength, \.24, \.50, custom\.wallpaperBrightness\)/)
   assert.match(guest, /'--dsw-alias-label-secondary': hexWithOpacity\(text, \.78 \+ readability \* \.16\)/)
   assert.match(guest, /'--dsw-alias-label-tertiary': hexWithOpacity\(text, \.57 \+ readability \* \.28\)/)
+})
+
+test('zero text protection removes the automatic wallpaper scrim and shadow floor', () => {
+  for (const text of ['#f4f7ff', '#171b29', '#4385ff']) {
+    assert.equal(parseColor(readableBackdrop(text, 0, 0.24, 0.50, 140)).opacity, 0)
+  }
+  assert.match(guest, /if \(amount === 0\) return 'none'/)
+  assert.doesNotMatch(guest, /Math\.max\(\.08, 1 - custom\.glassTransparency \/ 100\)/)
+  assert.doesNotMatch(guest, /Math\.max\(\.18, surfaceOpacity \* \.7\)/)
 })
 
 test('soft scrim keeps ordinary bright and dark text above 4.5:1 at wallpaper brightness 100 and 140', () => {

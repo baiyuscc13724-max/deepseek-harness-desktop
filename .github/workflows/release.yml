@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing immutable release tag to build and publish
         required: true
-        default: v1.0.38
+        default: v1.0.39
       request_id:
         description: Unique publisher request identity
         required: false
@@ -14,18 +14,18 @@ on:
     tags:
       - 'v*'
     branches:
-      - 'release-retry/v1.0.38'
+      - 'release-retry/v1.0.39'
 
 run-name: Release ${{ inputs.tag || github.ref_name }} · ${{ inputs.request_id || github.run_id }}
 
 env:
-  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.38' && 'v1.0.38') || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.39' && 'v1.0.39') || github.ref_name }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.38' && 'v1.0.38') || github.ref_name }}
+  group: release-${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.39' && 'v1.0.39') || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -69,6 +69,14 @@ jobs:
         run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - name: Verify source and smoke tests
         run: npm run verify
+      - name: Verify browser navigation security in Electron (Linux)
+        if: runner.os == 'Linux'
+        env:
+          HARNESS_BROWSER_TEST_REAL_INPUT: '1'
+        run: xvfb-run -a npm run test:browser-electron
+      - name: Verify browser navigation security in Electron (Windows and macOS)
+        if: runner.os != 'Linux'
+        run: npm run test:browser-electron
       - name: Audit release contract
         run: npm run verify:release
       - name: Ensure target tag matches package version

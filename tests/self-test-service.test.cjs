@@ -36,6 +36,7 @@ test('runtime probe uses the isolated prepared DSH home', async () => {
     assert.deepEqual(spawned.args, ['cli.js', 'web', '--port', '0', '--no-open'])
     assert.equal(spawned.options.env.DSH_HOME, runtimeHome)
     assert.equal(spawned.options.env.ELECTRON_RUN_AS_NODE, '1')
+    assert.equal(spawned.options.env.HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER, '1')
   } finally {
     await rm(runtimeHome, { recursive: true, force: true })
   }

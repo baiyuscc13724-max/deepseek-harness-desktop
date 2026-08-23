@@ -55,7 +55,37 @@ const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harn
 				project: "Project", copy: "Copy", copyId: "Copy session ID", copyTitle: "Copy name", newWindow: "Open in new window", noProjects: "No other projects", dismiss: "Close session menu"
 			};
 		}
-		function SessionMenuAction({ glyph, label, onSelect, onHover, disabled = false, checked = false, submenu = false }) {
+		const HD_SESSION_MENU_ICONS = {
+			pin: [["path", { d: "M5.25 2.25h5.5M6.15 2.25l.45 3.1-2.2 2.2v1.2h7.2v-1.2l-2.2-2.2.45-3.1M8 8.75v4.75" }]],
+			unpin: [["path", { d: "M5.25 2.25h5.5M6.15 2.25l.45 3.1-1.35 1.35M8 8.75v4.75M10.35 6.3l1.25 1.25v1.2H8.8" }], ["path", { d: "M2.5 2.5l11 11" }]],
+			rename: [["path", { d: "M3 12.75l.5-2.35 6.7-6.7a1.2 1.2 0 0 1 1.7 0l.4.4a1.2 1.2 0 0 1 0 1.7l-6.7 6.7-2.6.25Z" }], ["path", { d: "M9.35 4.55l2.1 2.1" }]],
+			unread: [["rect", { x: "2.25", y: "4.25", width: "10.25", height: "8", rx: "1.35" }], ["path", { d: "m2.8 5.25 4.55 3.4 4.55-3.4" }], ["circle", { cx: "12.45", cy: "3.55", r: "1.55", fill: "currentColor", stroke: "var(--dsw-specific-menu)" }]],
+			archive: [["path", { d: "M2.25 3h11.5v2.5H2.25zM3 5.5v7.25h10V5.5" }], ["path", { d: "M6.15 8.25h3.7" }]],
+			project: [["path", { d: "M2 4.25h3.75l1.3 1.5H14v6.1a1.15 1.15 0 0 1-1.15 1.15h-9.7A1.15 1.15 0 0 1 2 11.85v-7.6Z" }], ["path", { d: "M2 5.75h12" }]],
+			copy: [["rect", { x: "5", y: "2.25", width: "8.25", height: "8.75", rx: "1.25" }], ["rect", { x: "2.25", y: "5", width: "8.25", height: "8.75", rx: "1.25" }]],
+			copyId: [["path", { d: "M5.75 2.5 4.5 13.5M11.5 2.5l-1.25 11M3 6h10M2.5 10h10" }]],
+			copyTitle: [["path", { d: "M3 3.25h10M8 3.25v9.5M5.5 12.75h5" }]],
+			newWindow: [["path", { d: "M9 2.5h4.5V7M13.5 2.5 7.25 8.75" }], ["path", { d: "M11.5 8.75v2.8a1.2 1.2 0 0 1-1.2 1.2H3.7a1.2 1.2 0 0 1-1.2-1.2v-6.6a1.2 1.2 0 0 1 1.2-1.2h2.8" }]],
+			chevron: [["path", { d: "m6 3.5 4.5 4.5L6 12.5" }]]
+		};
+		function SessionMenuIcon({ name, className = "" }) {
+			const shapes = HD_SESSION_MENU_ICONS[name] ?? [];
+			return (0, react_jsx_runtime.jsx)("svg", {
+				className: "hd-session-menu-icon" + (className ? " " + className : ""),
+				viewBox: "0 0 16 16",
+				width: "16",
+				height: "16",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: "1.35",
+				strokeLinecap: "round",
+				strokeLinejoin: "round",
+				focusable: "false",
+				"aria-hidden": "true",
+				children: shapes.map(([tag, attributes], index) => (0, react_jsx_runtime.jsx)(tag, attributes, name + "-" + index))
+			});
+		}
+		function SessionMenuAction({ icon, label, onSelect, onHover, disabled = false, submenu = false }) {
 			return (0, react_jsx_runtime.jsxs)("button", {
 				type: "button",
 				role: "menuitem",
@@ -66,7 +96,7 @@ const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harn
 					event.stopPropagation();
 					if (!disabled) onSelect?.();
 				},
-				children: [(0, react_jsx_runtime.jsx)("span", { className: "hd-session-menu-glyph", "aria-hidden": "true", children: checked ? "✓" : glyph }), (0, react_jsx_runtime.jsx)("span", { className: "hd-session-menu-label", children: label }), submenu && (0, react_jsx_runtime.jsx)("span", { className: "hd-session-menu-chevron", "aria-hidden": "true", children: "›" })]
+				children: [(0, react_jsx_runtime.jsx)("span", { className: "hd-session-menu-icon-slot", "aria-hidden": "true", children: icon ? (0, react_jsx_runtime.jsx)(SessionMenuIcon, { name: icon }) : null }), (0, react_jsx_runtime.jsx)("span", { className: "hd-session-menu-label", children: label }), submenu && (0, react_jsx_runtime.jsx)(SessionMenuIcon, { name: "chevron", className: "hd-session-menu-chevron" })]
 			});
 		}
 		function SessionNodeMenu({ node, title, pinned, onRename, onArchive, onMove, workspaces }) {
@@ -112,20 +142,20 @@ const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harn
 				style: position,
 				onClick: (event) => event.stopPropagation(),
 				children: [
-					(0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "⌃", label: pinned ? labels.unpin : labels.pin, checked: pinned, onHover: () => setSubmenu(null), onSelect: () => finish(() => setSessionMenuFlag(node.id, "pinned", !pinned)) }),
-					(0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "✎", label: labels.rename, onHover: () => setSubmenu(null), onSelect: () => finish(() => onRename(node.id, node.title)) }),
-					(0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "◉", label: labels.unread, onHover: () => setSubmenu(null), onSelect: () => finish(() => setSessionMenuFlag(node.id, "unread", true)) }),
-					(0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "▣", label: labels.archive, onHover: () => setSubmenu(null), onSelect: () => finish(() => onArchive(node.id)) }),
+					(0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: pinned ? "unpin" : "pin", label: pinned ? labels.unpin : labels.pin, onHover: () => setSubmenu(null), onSelect: () => finish(() => setSessionMenuFlag(node.id, "pinned", !pinned)) }),
+					(0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: "rename", label: labels.rename, onHover: () => setSubmenu(null), onSelect: () => finish(() => onRename(node.id, node.title)) }),
+					(0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: "unread", label: labels.unread, onHover: () => setSubmenu(null), onSelect: () => finish(() => setSessionMenuFlag(node.id, "unread", true)) }),
+					(0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: "archive", label: labels.archive, onHover: () => setSubmenu(null), onSelect: () => finish(() => onArchive(node.id)) }),
 					(0, react_jsx_runtime.jsx)("span", { className: "hd-session-menu-separator", role: "separator" }),
 					(0, react_jsx_runtime.jsxs)("div", { className: "hd-session-menu-submenu-owner", children: [
-						(0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "▱", label: labels.project, submenu: true, onHover: () => setSubmenu("project"), onSelect: () => setSubmenu(submenu === "project" ? null : "project") }),
-						submenu === "project" && (0, react_jsx_runtime.jsx)("div", { className: "hd-session-menu-submenu", role: "menu", children: projectItems.length === 0 ? (0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "", label: labels.noProjects, disabled: true }) : projectItems.map((workspace) => (0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "▱", label: workspace.title, onSelect: () => finish(() => onMove(node.id, workspace.workspaceId)) }, workspace.workspaceId)) })
+						(0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: "project", label: labels.project, submenu: true, onHover: () => setSubmenu("project"), onSelect: () => setSubmenu(submenu === "project" ? null : "project") }),
+						submenu === "project" && (0, react_jsx_runtime.jsx)("div", { className: "hd-session-menu-submenu", role: "menu", children: projectItems.length === 0 ? (0, react_jsx_runtime.jsx)(SessionMenuAction, { label: labels.noProjects, disabled: true }) : projectItems.map((workspace) => (0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: "project", label: workspace.title, onSelect: () => finish(() => onMove(node.id, workspace.workspaceId)) }, workspace.workspaceId)) })
 					] }),
 					(0, react_jsx_runtime.jsxs)("div", { className: "hd-session-menu-submenu-owner", children: [
-						(0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "▢", label: labels.copy, submenu: true, onHover: () => setSubmenu("copy"), onSelect: () => setSubmenu(submenu === "copy" ? null : "copy") }),
-						submenu === "copy" && (0, react_jsx_runtime.jsxs)("div", { className: "hd-session-menu-submenu", role: "menu", children: [(0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "#", label: labels.copyId, onSelect: () => finish(() => desktopSessionMenuNavigate("copy-session-id", { value: node.id })) }), (0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "T", label: labels.copyTitle, onSelect: () => finish(() => desktopSessionMenuNavigate("copy-session-id", { value: title })) })] })
+						(0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: "copy", label: labels.copy, submenu: true, onHover: () => setSubmenu("copy"), onSelect: () => setSubmenu(submenu === "copy" ? null : "copy") }),
+						submenu === "copy" && (0, react_jsx_runtime.jsxs)("div", { className: "hd-session-menu-submenu", role: "menu", children: [(0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: "copyId", label: labels.copyId, onSelect: () => finish(() => desktopSessionMenuNavigate("copy-session-id", { value: node.id })) }), (0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: "copyTitle", label: labels.copyTitle, onSelect: () => finish(() => desktopSessionMenuNavigate("copy-session-id", { value: title })) })] })
 					] }),
-					(0, react_jsx_runtime.jsx)(SessionMenuAction, { glyph: "↗", label: labels.newWindow, onHover: () => setSubmenu(null), onSelect: () => finish(() => desktopSessionMenuNavigate("open-session-window", { sessionId: node.id })) })
+					(0, react_jsx_runtime.jsx)(SessionMenuAction, { icon: "newWindow", label: labels.newWindow, onHover: () => setSubmenu(null), onSelect: () => finish(() => desktopSessionMenuNavigate("open-session-window", { sessionId: node.id })) })
 				]
 			});
 			return (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)("button", {
@@ -178,7 +208,7 @@ const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harn
 					children: [
 						(!flat || showStatus) && (0, react_jsx_runtime.jsx)("span", { className: Rows_module_css_default.slot, children: showStatus && (0, react_jsx_runtime.jsx)(SessionStatusDots, { statuses }) }),
 						unread && (0, react_jsx_runtime.jsx)("span", { className: "hd-session-unread-mark", "aria-label": sessionMenuLabels().unread }),
-						(0, react_jsx_runtime.jsxs)("span", { className: Rows_module_css_default.title, children: [pinned && (0, react_jsx_runtime.jsx)("span", { className: "hd-session-pinned-mark", "aria-hidden": "true", children: "⌃" }), title] }),
+						(0, react_jsx_runtime.jsxs)("span", { className: Rows_module_css_default.title, children: [pinned && (0, react_jsx_runtime.jsx)("span", { className: "hd-session-pinned-mark", "aria-hidden": "true", children: (0, react_jsx_runtime.jsx)(SessionMenuIcon, { name: "pin" }) }), title] }),
 						!row.blank && (0, react_jsx_runtime.jsx)("span", { className: Rows_module_css_default.time, children: timeLabel(row.updatedAt, now, t) }),
 						!row.blank && (0, react_jsx_runtime.jsx)("span", { className: Rows_module_css_default.rowActions, onClick: (event) => event.stopPropagation(), children: (0, react_jsx_runtime.jsx)(SessionNodeMenu, { node, title, pinned, onRename, onArchive, onMove, workspaces }) })
 					]
@@ -195,19 +225,23 @@ const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harn
 const SESSION_MENU_CSS = `
 .hd-session-row-unread{font-weight:600}
 .hd-session-unread-mark{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px var(--dsw-alias-bg-layer-1)}
-.hd-session-pinned-mark{display:inline-block;margin-right:4px;color:var(--dsw-alias-label-tertiary);font-size:11px}
+.hd-session-pinned-mark{display:inline-grid;width:12px;height:12px;margin-right:4px;place-items:center;color:var(--dsw-alias-label-tertiary);vertical-align:-1px}
+.hd-session-pinned-mark .hd-session-menu-icon{width:11px;height:11px}
 .hd-session-menu-dismiss{position:fixed;z-index:2147482400;inset:0;width:100vw;height:100vh;border:0;padding:0;background:transparent;cursor:default}
 .hd-session-menu-panel,.hd-session-menu-submenu{box-sizing:border-box;width:220px;min-width:220px;padding:6px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 82%,transparent);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-base) 96%,var(--dsw-alias-label-primary) 4%);box-shadow:0 14px 40px rgba(0,0,0,.22),0 2px 8px rgba(0,0,0,.1);backdrop-filter:blur(22px) saturate(1.08);color:var(--dsw-alias-label-primary);z-index:2147482500}
 .hd-session-menu-panel{position:fixed}
 .hd-session-menu-submenu-owner{position:relative}
 .hd-session-menu-submenu{position:absolute;left:calc(100% + 7px);top:-5px;max-height:min(360px,70vh);overflow:auto}
-.hd-session-menu-action{display:grid;grid-template-columns:24px minmax(0,1fr) 14px;align-items:center;width:100%;min-height:34px;padding:5px 8px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.hd-session-menu-action{display:grid;grid-template-columns:22px minmax(0,1fr) 16px;column-gap:2px;align-items:center;width:100%;min-height:36px;padding:5px 8px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:13px;text-align:left;cursor:pointer}
 .hd-session-menu-action:hover:not(:disabled),.hd-session-menu-action:focus-visible:not(:disabled){outline:none;background:var(--dsw-alias-interactive-bg-hover)}
 .hd-session-menu-action:disabled{opacity:.5;cursor:default}
-.hd-session-menu-glyph{display:inline-grid;width:18px;place-items:center;color:var(--dsw-alias-label-secondary);font-size:15px;line-height:1}
+.hd-session-menu-icon-slot{display:grid;width:18px;height:18px;place-items:center;color:var(--dsw-alias-label-secondary);transition:color .12s ease,transform .12s ease}
+.hd-session-menu-icon{display:block;width:16px;height:16px;overflow:visible;shape-rendering:geometricPrecision}
+.hd-session-menu-action:hover:not(:disabled) .hd-session-menu-icon-slot,.hd-session-menu-action:focus-visible:not(:disabled) .hd-session-menu-icon-slot{color:var(--dsw-alias-brand-primary);transform:translateX(1px)}
 .hd-session-menu-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hd-session-menu-chevron{font-size:18px;color:var(--dsw-alias-label-tertiary);text-align:right}
+.hd-session-menu-chevron{justify-self:end;width:13px;height:13px;color:var(--dsw-alias-label-tertiary)}
 .hd-session-menu-separator{display:block;height:1px;margin:5px 3px;background:var(--dsw-alias-border-l2)}
+@media(prefers-reduced-motion:reduce){.hd-session-menu-icon-slot{transition:none}}
 `
 
 function replaceOnce(source, original, patched, label) {

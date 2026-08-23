@@ -156,7 +156,7 @@ test('AppStateStore rejects unknown themes and unsafe custom values', () => {
   assert.equal(state.appearance.customTheme.backgroundFile, null)
   assert.equal(state.appearance.customTheme.wallpaperBrightness, 140)
   assert.equal(state.appearance.customTheme.wallpaperBlur, 0)
-  assert.equal(state.appearance.customTheme.glassTransparency, 92)
+  assert.equal(state.appearance.customTheme.glassTransparency, 100)
   assert.equal(state.appearance.customTheme.borderStrength, 100)
   assert.equal(state.appearance.customTheme.readabilityStrength, 0)
 })

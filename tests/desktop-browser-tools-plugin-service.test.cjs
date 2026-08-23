@@ -41,7 +41,7 @@ async function withBrowserEndpoint(responder, fn) {
     process.env.HARNESS_DESKTOP_BROWSER_STATE_FILE = stateFile
     globalThis.fetch = async (url, init) => {
       const body = JSON.parse(init.body)
-      return responder(body.action, body.payload)
+      return responder(body.action, body.payload, body, init)
     }
     return await fn()
   } finally {
@@ -57,7 +57,7 @@ test('desktop browser tools installs into the DSH Web profile idempotently', asy
   try {
     const first = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
     const second = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
-    assert.equal(first.version, '1.0.38')
+    assert.equal(first.version, '1.0.39')
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
     assert.match(readFileSync(path.join(first.destination, 'lib', 'index.js'), 'utf8'), /browser_control/)
@@ -117,18 +117,21 @@ test('browser_control token comes only from the state file and hits exactly its 
     const previousFetch = globalThis.fetch
     process.env.HARNESS_DESKTOP_BROWSER_STATE_FILE = stateFile
     let captured
+    const controller = new AbortController()
     globalThis.fetch = async (url, init) => {
-      captured = { url, headers: init.headers, body: JSON.parse(init.body) }
+      captured = { url, headers: init.headers, body: JSON.parse(init.body), signal: init.signal }
       return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, action: 'status' }) }
     }
     try {
-      const result = await tool.execute({ action: 'status' }, {})
+      const result = await tool.execute({ action: 'status' }, { signal: controller.signal })
       assert.deepEqual(result, { ok: true, action: 'status' })
       // Token must be the one from the state file, declared only as a Bearer header.
       assert.equal(captured.headers.Authorization, 'Bearer secret-from-state')
       assert.equal(new URL(captured.url).origin, 'http://127.0.0.1:9347')
       assert.equal(new URL(captured.url).pathname, '/action')
       assert.equal(captured.body.action, 'status')
+      assert.match(captured.body.request_id, /^[0-9a-f-]{36}$/u)
+      assert.equal(captured.signal, controller.signal)
       // Arbitrary args are never used as the credential.
       assert.equal(JSON.stringify(tool.parameters).includes('secret-from-state'), false)
     } finally {
@@ -167,6 +170,82 @@ test('browser_control rejects a non-loopback origin from the state file', async 
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('browser_control derives a retry-stable request id from the tool call and propagates cancellation', async () => {
+  const { tool } = await loadPluginTool()
+  const requestIds = []
+  const controller = new AbortController()
+  await withBrowserEndpoint(async (_action, _payload, body, init) => {
+    requestIds.push(body.request_id)
+    assert.equal(init.signal, controller.signal)
+    return httpResponse(200, { ok: true, result: { done: true } })
+  }, async () => {
+    const agent = { id: 'agent-1' }
+    await tool.execute({ action: 'status' }, { agent, rootCallId: 'turn-7', callId: 'tool-call-17', signal: controller.signal })
+    await tool.execute({ action: 'status' }, { agent, rootCallId: 'turn-7', callId: 'tool-call-17', signal: controller.signal })
+    await tool.execute({ action: 'status' }, { agent, rootCallId: 'turn-7', callId: 'tool-call-18', signal: controller.signal })
+  })
+  assert.equal(requestIds[0], requestIds[1])
+  assert.notEqual(requestIds[1], requestIds[2])
+  assert.match(requestIds[0], /^call_[0-9a-f]{32}$/u)
+
+  const cancelled = new AbortController()
+  cancelled.abort()
+  await withBrowserEndpoint(async (_action, _payload, _body, init) => {
+    assert.equal(init.signal.aborted, true)
+    throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+  }, async () => {
+    await assert.rejects(
+      () => tool.execute({ action: 'status' }, { agent: { id: 'agent-1' }, rootCallId: 'turn-7', callId: 'tool-call-cancelled', signal: cancelled.signal }),
+      error => error.code === 'browser-action-cancelled'
+    )
+  })
+
+  const bodyCancelled = new AbortController()
+  await withBrowserEndpoint(async () => ({
+    ok: true,
+    status: 200,
+    text: async () => {
+      bodyCancelled.abort()
+      throw Object.assign(new Error('response body aborted'), { name: 'AbortError' })
+    }
+  }), async () => {
+    await assert.rejects(
+      () => tool.execute({ action: 'status' }, { agent: { id: 'agent-1' }, callId: 'body-cancelled', signal: bodyCancelled.signal }),
+      error => error.code === 'browser-action-cancelled'
+    )
+  })
+})
+
+test('browser_control request ids are namespaced by agent and preserve server error metadata', async () => {
+  const { tool } = await loadPluginTool()
+  const requestIds = []
+  await withBrowserEndpoint(async (_action, _payload, body) => {
+    requestIds.push(body.request_id)
+    return httpResponse(409, { ok: false, error: 'request conflict', code: 'browser-request-id-conflict', requestId: body.request_id })
+  }, async () => {
+    for (const agentId of ['agent-a', 'agent-b']) {
+      await assert.rejects(
+        () => tool.execute({ action: 'click', ref: 'b1' }, { agent: { id: agentId }, rootCallId: 'turn-1', callId: 'call-1' }),
+        error => error.code === 'browser-request-id-conflict' && error.statusCode === 409 && error.requestId === requestIds.at(-1)
+      )
+    }
+  })
+  assert.notEqual(requestIds[0], requestIds[1])
+})
+
+test('browser_control never blindly retries a mutation whose network outcome is unknown', async () => {
+  const { tool } = await loadPluginTool()
+  await withBrowserEndpoint(async () => { throw new Error('socket reset after write') }, async () => {
+    await assert.rejects(
+      () => tool.execute({ action: 'click', ref: 'b1' }, { agent: { id: 'agent-unknown' }, callId: 'unknown-click' }),
+      error => error.code === 'browser-outcome-unknown'
+        && error.retryable === false
+        && /^call_[0-9a-f]{32}$/u.test(error.requestId)
+        && /不得自动重试/u.test(error.message)
+    )
+  })
 })
 
 test('browser_control screenshot emits an image attachment and safely degrades without image capability', async () => {

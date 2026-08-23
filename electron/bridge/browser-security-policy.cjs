@@ -35,6 +35,7 @@ class BrowserSecurityPolicy {
     this.now = now
     this.idFactory = idFactory
     this.stopped = false
+    this.modelStopped = false
     this.partition = BROWSER_PARTITION // 固定独立持久化分区，与官方 persist:harness 隔离
     this.authz = new SiteAuthorizationStore({ file: authzFile, rootDir: authzRootDir, now })
     this.gate = new ActionGate({ now, idFactory, confirmationTtlMs, uploadRoots, downloadRoots })
@@ -60,6 +61,10 @@ class BrowserSecurityPolicy {
     return this.stopped
   }
 
+  get isModelStopped() {
+    return this.stopped || this.modelStopped
+  }
+
   /** 由集成方上报当前可见的右栏活动标签（DID-NAVIGATE / 标签切换时）。 */
   setActiveTab(tab) {
     if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
@@ -81,7 +86,7 @@ class BrowserSecurityPolicy {
    * 成功后活动标签 origin 随之更新（同一标签发生了导航）。
    */
   modelNavigate(url, { tabId, base } = {}) {
-    if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
+    if (this.isModelStopped) throw policyError('stopped', '浏览器模型控制已停止。')
     try {
       const tab = this.gate.activeTabInfo
       if (!tab) throw policyError('no-active-tab', '当前没有可操作的右栏活动标签。')
@@ -108,7 +113,7 @@ class BrowserSecurityPolicy {
    * @throws 带 code 的拒绝错误（门禁拒绝）。
    */
   modelAction({ action, tabId, declaredOrigin, field, payload, confirmationId } = {}) {
-    if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
+    if (this.isModelStopped) throw policyError('stopped', '浏览器模型控制已停止。')
     let origin = null
     try {
       const decision = this.gate.gate({ action, tabId, declaredOrigin, field, payload, confirmationId, authorizations: this.authz })
@@ -193,10 +198,31 @@ class BrowserSecurityPolicy {
     return this.auditLog.clear()
   }
 
+  /** 仅暂停模型控制；用户浏览、授权管理与审计继续工作。 */
+  pauseModelControl() {
+    if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
+    if (this.modelStopped) return { stopped: true, changed: false }
+    this.modelStopped = true
+    this.gate.clearActiveTab()
+    this.gate.clearConfirmations()
+    this.auditLog.record({ actor: 'system', action: 'model-control-stop', origin: null, result: 'info', code: 'ok' })
+    return { stopped: true, changed: true }
+  }
+
+  /** 用户显式恢复模型控制；调用方随后重新绑定当前可见标签。 */
+  resumeModelControl() {
+    if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
+    if (!this.modelStopped) return { stopped: false, changed: false }
+    this.modelStopped = false
+    this.auditLog.record({ actor: 'user', action: 'model-control-resume', origin: null, result: 'info', code: 'ok' })
+    return { stopped: false, changed: true }
+  }
+
   /** 停机：停止接受一切新操作并关闭审计；幂等。 */
   stop() {
     if (this.stopped) return this.auditSnapshot()
     this.stopped = true
+    this.modelStopped = true
     this.gate.clearActiveTab()
     this.gate.clearConfirmations()
     this.auditLog.record({ actor: 'system', action: 'stop', origin: null, result: 'info', code: 'ok' })

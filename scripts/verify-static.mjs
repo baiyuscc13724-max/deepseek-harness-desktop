@@ -5,12 +5,12 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
-  'electron/bootstrap.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/guest-preload.cjs', 'electron/desktop-tray.cjs',
+  'electron/bootstrap.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/guest-preload.cjs', 'electron/browser-provenance-preload.cjs', 'electron/desktop-tray.cjs',
   'electron/bridge/dsh-resolver.cjs', 'electron/bridge/dsh-home.cjs', 'electron/bridge/process-spawn.cjs', 'electron/bridge/process-tree.cjs', 'electron/bridge/git-runtime-service.cjs', 'electron/bridge/runtime-proxy.cjs', 'electron/bridge/runtime-bundle-service.cjs',
   'electron/bridge/update-service.cjs', 'electron/bridge/desktop-release-contract.cjs', 'electron/bridge/update-download-service.cjs', 'electron/bridge/update-feed-config.cjs', 'electron/bridge/update-launcher.cjs', 'electron/bridge/self-test-service.cjs', 'electron/bridge/model-routing-service.cjs', 'electron/bridge/provider-meter-service.cjs', 'electron/bridge/plugin-marketplace-service.cjs', 'electron/bridge/local-target-service.cjs',
   'electron/bridge/component-update-contract.cjs', 'electron/bridge/component-update-archive.cjs', 'electron/bridge/component-update-builder.cjs', 'electron/bridge/component-update-config.cjs', 'electron/bridge/component-update-store.cjs', 'electron/bridge/component-update-service.cjs', 'electron/bridge/component-update-helper.cjs', 'electron/bridge/component-update-launcher.cjs', 'electron/bridge/component-update-health.cjs', 'electron/bridge/component-runtime-resolver.cjs',
   'electron/bridge/relay-tunnel-codec.cjs', 'electron/bridge/mobile-relay-config.cjs', 'electron/bridge/sync-transport-manager.cjs', 'electron/bridge/sync-transports/wss-relay-adapter.cjs', 'services/wss-relay/server.cjs', 'services/wss-relay/README.zh-CN.md',
-  'electron/bridge/capability-broker.cjs', 'electron/bridge/computer-use-screenshot-store.cjs', 'electron/bridge/storage-scan-service.cjs', 'electron/bridge/storage-cleanup-service.cjs', 'electron/bridge/storage-management-service.cjs', 'electron/bridge/memory-censor.cjs', 'electron/bridge/memory-service.cjs', 'electron/bridge/browser-link-router.cjs', 'electron/bridge/browser-url-policy.cjs', 'electron/bridge/browser-session-policy.cjs', 'electron/bridge/browser-site-authz.cjs', 'electron/bridge/browser-action-gate.cjs', 'electron/bridge/browser-audit.cjs', 'electron/bridge/browser-diagnostics.cjs', 'electron/bridge/browser-history-store.cjs', 'electron/bridge/browser-security-policy.cjs', 'electron/bridge/browser-operation-coordinator.cjs', 'electron/bridge/browser-control-server.cjs', 'electron/bridge/computer-use-confirmation-store.cjs',
+  'electron/bridge/capability-broker.cjs', 'electron/bridge/computer-use-screenshot-store.cjs', 'electron/bridge/storage-scan-service.cjs', 'electron/bridge/storage-cleanup-service.cjs', 'electron/bridge/storage-management-service.cjs', 'electron/bridge/memory-censor.cjs', 'electron/bridge/memory-service.cjs', 'electron/bridge/browser-link-router.cjs', 'electron/bridge/browser-url-policy.cjs', 'electron/bridge/browser-session-policy.cjs', 'electron/bridge/browser-site-authz.cjs', 'electron/bridge/browser-action-gate.cjs', 'electron/bridge/browser-audit.cjs', 'electron/bridge/browser-diagnostics.cjs', 'electron/bridge/browser-history-store.cjs', 'electron/bridge/browser-security-policy.cjs', 'electron/bridge/browser-navigation-guard.cjs', 'electron/bridge/browser-operation-coordinator.cjs', 'electron/bridge/browser-control-server.cjs', 'electron/bridge/computer-use-confirmation-store.cjs',
   'electron/bridge/desktop-directory-picker-plugin-service.cjs', 'plugins/dsh-desktop-directory-picker/package.json', 'plugins/dsh-desktop-directory-picker/lib/index.js', 'plugins/dsh-desktop-directory-picker/lib/client.js', 'electron/bridge/desktop-browser-tools-plugin-service.cjs', 'plugins/dsh-desktop-browser-tools/package.json', 'plugins/dsh-desktop-browser-tools/lib/index.js', 'electron/bridge/desktop-memory-tools-plugin-service.cjs', 'plugins/dsh-desktop-memory-tools/package.json', 'plugins/dsh-desktop-memory-tools/lib/index.js', 'electron/bridge/desktop-mcp-manager-plugin-service.cjs', 'plugins/dsh-desktop-mcp-manager/package.json', 'plugins/dsh-desktop-mcp-manager/lib/index.js', 'plugins/dsh-desktop-mcp-manager/lib/client.js', 'electron/bridge/desktop-schedules-plugin-service.cjs', 'plugins/dsh-desktop-schedules/package.json', 'plugins/dsh-desktop-schedules/lib/index.js', 'plugins/dsh-desktop-schedules/lib/client.js', 'electron/bridge/desktop-files-plugin-service.cjs', 'electron/bridge/right-workspace-service.cjs', 'plugins/dsh-desktop-files/package.json', 'plugins/dsh-desktop-files/lib/index.js', 'plugins/dsh-desktop-files/lib/client.js', 'electron/bridge/desktop-progress-plugin-service.cjs', 'plugins/dsh-desktop-progress/package.json', 'plugins/dsh-desktop-progress/lib/index.js', 'electron/bridge/desktop-compaction-plugin-service.cjs', 'plugins/dsh-desktop-compaction/package.json', 'plugins/dsh-desktop-compaction/lib/index.js', 'electron/bridge/desktop-computer-use-plugin-service.cjs', 'plugins/dsh-desktop-computer-use/package.json', 'plugins/dsh-desktop-computer-use/lib/index.js', 'electron/bridge/agent-teams-plugin-service.cjs', 'plugins/dsh-agent-teams/package.json', 'plugins/dsh-agent-teams/lib/index.js', 'plugins/dsh-agent-teams/lib/client.js', 'electron/bridge/session-experience-plugin-service.cjs', 'plugins/dsh-session-experience/package.json', 'plugins/dsh-session-experience/lib/index.js', 'plugins/dsh-session-experience/lib/client.js',
   'electron/store/app-state-store.cjs', 'electron/store/mobile-sync-store.cjs',
   'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js', 'renderer/workspace-links-integration.js', 'renderer/storage-manager.js', 'renderer/memory-manager.js', 'renderer/right-workspace.js', 'renderer/right-workspace-integration.js', 'renderer/right-workspace.css', 'renderer/browser-sidebar.js', 'renderer/pet/pet-sprite-rig.js', 'renderer/pets/maid-whale/atlas/maid-whale.atlas.json',
@@ -19,10 +19,10 @@ const required = [
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/computer-use-screenshot-store.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-link-router.test.cjs', 'tests/browser-link-integration.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-codex-parity.test.cjs', 'tests/browser-diagnostics.test.cjs', 'tests/browser-history-store.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-operation-coordinator.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-mcp-manager-plugin-service.test.cjs', 'tests/mcp-manager-domain.test.cjs', 'tests/mcp-manager-runtime.test.cjs', 'tests/mcp-manager-ui.test.cjs', 'tests/desktop-schedules.test.cjs', 'tests/desktop-files.test.cjs', 'tests/right-workspace-service.test.cjs', 'tests/right-workspace-ui.test.cjs', 'tests/desktop-progress.test.cjs', 'tests/desktop-compaction.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/computer-use-confirmation-store.test.cjs', 'tests/agent-teams-plugin-service.test.cjs', 'tests/agent-teams-domain.test.cjs', 'tests/agent-teams-runtime.test.cjs', 'tests/agent-teams-ui.test.cjs', 'tests/session-experience.test.cjs', 'tests/text-selection-ui.test.cjs', 'tests/ui-mode-integration.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
+  'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/computer-use-screenshot-store.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-link-router.test.cjs', 'tests/browser-link-integration.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-codex-parity.test.cjs', 'tests/browser-diagnostics.test.cjs', 'tests/browser-history-store.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-navigation-guard.test.cjs', 'tests/fixtures/browser-navigation-guard-electron.cjs', 'tests/browser-operation-coordinator.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-mcp-manager-plugin-service.test.cjs', 'tests/mcp-manager-domain.test.cjs', 'tests/mcp-manager-runtime.test.cjs', 'tests/mcp-manager-ui.test.cjs', 'tests/desktop-schedules.test.cjs', 'tests/desktop-files.test.cjs', 'tests/right-workspace-service.test.cjs', 'tests/right-workspace-ui.test.cjs', 'tests/desktop-progress.test.cjs', 'tests/desktop-compaction.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/computer-use-confirmation-store.test.cjs', 'tests/agent-teams-plugin-service.test.cjs', 'tests/agent-teams-domain.test.cjs', 'tests/agent-teams-runtime.test.cjs', 'tests/agent-teams-ui.test.cjs', 'tests/session-experience.test.cjs', 'tests/text-selection-ui.test.cjs', 'tests/ui-mode-integration.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
   'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/desktop-release-contract.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/release-automation.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-version-sync.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
-  'docs/ARCHITECTURE.zh-CN.md', 'docs/COMPETITOR-FEATURE-BENCHMARK.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.38.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
+  'docs/ARCHITECTURE.zh-CN.md', 'docs/COMPETITOR-FEATURE-BENCHMARK.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.39.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
   '.github/workflows/apple-virtual-tests.yml', '.github/workflows/android-mobile-release.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/prepare-bundled-git.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/component-update-helper.cjs', 'scripts/create-component-signing-key.mjs', 'scripts/create-android-release-keystore.ps1', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'mobile/mobile-app-update.example.json', 'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
   'mobile/android/RELEASE-SIGNING.zh-CN.md', 'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
@@ -106,7 +106,7 @@ const workspaceLinksIntegration = await readFile(path.join(root, 'renderer/works
 for (const contract of ['data-hd-local-target', 'harness-desktop://${host}', 'MutationObserver', '右键可复制']) {
   if (!workspaceLinksIntegration.includes(contract)) throw new Error(`Workspace local-link integration is missing: ${contract}`)
 }
-if (!rendererScript.includes('api.openHarnessSettings()') || !rendererScript.includes('api.chooseThemeBackground()') || !rendererScript.includes('api.chooseWallpaperEngine()') || !rendererScript.includes('themeIntegration.prepareCatalog')) {
+if (!rendererScript.includes('api.openHarnessSettings()') || !rendererScript.includes('api.chooseThemeBackground()') || !rendererScript.includes('api.chooseWallpaperEngine()') || !rendererScript.includes('api.importCurrentWallpaperEngine()') || !rendererScript.includes('themeIntegration.prepareCatalog')) {
   throw new Error('Official settings must integrate desktop file opening, theme selection, local media backgrounds, and Wallpaper Engine imports.')
 }
 
@@ -145,10 +145,10 @@ const auroraDialogSafety = 'html[data-hd-ui-mode="aurora"] [data-hd-surface="sid
 if (!themeIntegration.includes(auroraDialogSafety) || themeIntegration.indexOf(auroraDialogSafety) < themeIntegration.indexOf(auroraSidebarRule)) {
   throw new Error('Aurora mode must remove the sidebar containing block while the official fixed settings dialog is open.')
 }
-if (!themeIntegration.includes('Math.max(.08, surfaceOpacity * .48)') || !themeIntegration.includes('Math.max(.18, surfaceOpacity * .7)')) {
-  throw new Error('The custom sidebar and composer must remain translucent enough for the wallpaper to continue behind them.')
+if (!themeIntegration.includes('hexWithOpacity(surface, surfaceOpacity * .48)') || !themeIntegration.includes('hexWithOpacity(surface, surfaceOpacity * .70)')) {
+  throw new Error('The custom sidebar and composer must follow the full 0-100 transparency range without hidden opacity floors.')
 }
-for (const readabilityContract of ['readabilityStrength', '--hd-theme-text-shadow', 'readableTextShadow', 'input::placeholder', 'max="92"']) {
+for (const readabilityContract of ['readabilityStrength', '--hd-theme-text-shadow', 'readableTextShadow', 'input::placeholder', 'max="100"']) {
   if (!themeIntegration.includes(readabilityContract) && !html.includes(readabilityContract)) {
     throw new Error(`Transparent custom themes must preserve readable text and expose the extended glass range: ${readabilityContract}`)
   }
@@ -324,17 +324,41 @@ for (const dependency of [
 }
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
-if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'https://codeload.github.com/baiyuscc13724-max/DSH-Plugins-Marketplace/tar.gz/41cf453f1267b535258720dda3966b8643f3a224') {
+if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'https://codeload.github.com/bradeGithub/DSH-Plugins-Marketplace/tar.gz/dfe32cb8620658b55441787725f7f03e0491d15e') {
   throw new Error('The in-app DSH plugin marketplace must remain pinned to the audited upstream commit.')
 }
 const marketplacePackage = JSON.parse(await readFile(path.join(root, 'node_modules/dsh-plugin-marketplace/package.json'), 'utf8'))
 const marketplaceRuntime = await readFile(path.join(root, 'node_modules/dsh-plugin-marketplace/lib/index.js'), 'utf8')
-if (marketplacePackage.version !== '1.2.2' || !marketplaceRuntime.includes('process.env.ComSpec') || !marketplaceRuntime.includes('"npm.cmd", ...args')) {
-  throw new Error('The bundled marketplace must include the verified Electron/Node 24 Windows npm launcher.')
+for (const contract of [
+  'export const inject = ["webServer"]',
+  'windowsHide: true',
+  'execFileAsync("cmd.exe", ["/c", "npm.cmd", ...args]',
+  'execFileAsync("cmd.exe", ["/d", "/s", "/c", "pnpm", ...args]'
+]) {
+  if (!marketplaceRuntime.includes(contract)) throw new Error(`The bundled marketplace is missing its audited v1.5.5 runtime contract: ${contract}`)
+}
+if (marketplacePackage.version !== '1.5.5' || marketplacePackage.repository?.url !== 'https://github.com/bradeGithub/DSH-Plugins-Marketplace.git' || marketplacePackage.dsh?.bundle?.patch !== './cordis.patch.yml') {
+  throw new Error('The bundled marketplace must be the audited upstream v1.5.5 package.')
+}
+if (pkg.build?.asarUnpack?.includes('node_modules/dsh-plugin-marketplace/**/*')) {
+  throw new Error('The bundled marketplace must stay inside app.asar instead of exhausting the physical unpacked-file budget.')
 }
 const marketplaceService = await readFile(path.join(root, 'electron/bridge/plugin-marketplace-service.cjs'), 'utf8')
+const marketplaceMain = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
 for (const contract of ['HARNESS_DESKTOP_AUTO_ZH_SUMMARY_V1', 'automaticChineseDescription', '查看英文原文', 'translationReady']) {
   if (!marketplaceService.includes(contract)) throw new Error(`Managed marketplace Chinese translation overlay is missing: ${contract}`)
+}
+for (const contract of ['MARKETPLACE_RUNTIME_FILES', 'await writeFile(to, await readFile(from)', 'ensurePatchOwnershipCompatibility(destination)', 'removeProfileBundle(profileManifestFile)', 'ensureProfilePatch(patchFile)', 'installedRepository !== MARKETPLACE_REPOSITORY.toLowerCase()', "if (action === 'conflict')", 'compatibilityReady: false']) {
+  if (!marketplaceService.includes(contract)) throw new Error(`Managed marketplace patch ownership or conflict fail-closed contract is missing: ${contract}`)
+}
+if (marketplaceService.includes('ensureProfileBundle(profileManifestFile)')) {
+  throw new Error('The desktop-managed v1.5.5 marketplace must not be shadowed through DSH installation-first profile bundle resolution.')
+}
+if (!pkg.build?.files?.includes('third_party/licenses/dashi-taskboard-Apache-2.0-LICENSE.txt')) {
+  throw new Error('The complete Apache-2.0 license for the adapted dashi task-board UI must ship with the application.')
+}
+for (const contract of ["HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER: '1'", '插件市场兼容层准备失败，已停止启动']) {
+  if (!marketplaceMain.includes(contract)) throw new Error(`Every desktop-owned runtime start must preserve marketplace patch ownership: ${contract}`)
 }
 if (pkg.dependencies?.['node-pty']) throw new Error('node-pty must not return as a normal dependency with the removed native terminal.')
 if (pkg.optionalDependencies?.['node-pty'] !== '1.2.0-beta.15') throw new Error('Official DSH macOS/Linux terminal support requires the pinned optional node-pty runtime.')
@@ -408,6 +432,7 @@ for (const gitIpc of ['gitRuntime:status', 'gitRuntime:refresh', 'gitRuntime:pre
 }
 const earlyBootstrap = await readFile(path.join(root, 'electron/bootstrap.cjs'), 'utf8')
 const wallpaperService = await readFile(path.join(root, 'electron/bridge/wallpaper-service.cjs'), 'utf8')
+const wallpaperLibrary = await readFile(path.join(root, 'electron/bridge/wallpaper-library.cjs'), 'utf8')
 for (const wallpaperContract of ['MAX_THEME_BACKGROUND_BYTES', 'MAX_THEME_VIDEO_BYTES', "'png', 'jpg', 'jpeg', 'webp', 'gif', 'apng', 'mp4', 'webm'", 'appearance:chooseWallpaperEngine', 'customBackgroundVideoDataUrl', 'registerWallpaperProtocol', 'createWallpaperVideoResponse(file, request)', 'harness-wallpaper']) {
   if (!main.includes(wallpaperContract)) throw new Error(`Image/video wallpaper contract missing: ${wallpaperContract}`)
 }
@@ -452,6 +477,7 @@ for (const libraryContract of [
   'safeManagedWallpaperPath',
   'appearance:applyWallpaper',
   'appearance:deleteWallpaper',
+  'appearance:importCurrentWallpaperEngine',
   'wallpaper-${randomUUID().toLowerCase()}',
   'Startup and ordinary card application always use the managed local copy.'
 ]) {
@@ -461,6 +487,9 @@ for (const libraryServiceContract of ['MAX_WALLPAPER_LIBRARY_BYTES', 'assertWall
   if (!wallpaperService.includes(libraryServiceContract)) throw new Error(`Wallpaper library service contract missing: ${libraryServiceContract}`)
 }
 if (!main.includes('wallpaperMutationQueue.run')) throw new Error('Wallpaper mutations must share a serialized main-process queue.')
+for (const currentImportContract of ['wallpaperEngineConfigSelection', 'currentWallpaperEngineProjectDirectories', 'ambiguous-profile']) {
+  if (!wallpaperLibrary.includes(currentImportContract) && !main.includes(currentImportContract)) throw new Error(`Current Wallpaper Engine import contract missing: ${currentImportContract}`)
+}
 for (const rule of themeIntegration.matchAll(/([^{}]*html\[data-hd-ui-mode="(?:aurora|spatial|tactile)"\][^{}]*)\{([^}]*)\}/g)) {
   const targetsRoot = /\[(?:data-composer-card="true"|data-hd-surface="conversation")\]\s*(?:,|$)/.test(rule[1])
   if (targetsRoot && /transform\s*:\s*[^;]*(?:translate|scale)/.test(rule[2])) {
@@ -473,8 +502,12 @@ for (const wallpaperEngineContract of ['resolveWallpaperEngineInput', 'resolveWa
 for (const directoryImportContract of ["buttons: ['选择项目目录', '选择 project.json', '取消']", "properties: [chooseDirectory ? 'openDirectory' : 'openFile']", 'resolveWallpaperEngineInput(source)']) {
   if (!main.includes(directoryImportContract)) throw new Error(`Wallpaper Engine directory/project.json chooser contract missing: ${directoryImportContract}`)
 }
-for (const titleBarContract of ['syncTitleBarOverlay', 'setTitleBarOverlay', "dark ? '#f4f7ff' : '#202124'", "nativeTheme.on('updated'"]) {
+for (const titleBarContract of ['syncTitleBarOverlay', 'setTitleBarOverlay', 'resolveTitleBarSymbolColor(requestedMode, nativeTheme.shouldUseDarkColors)', "nativeTheme.on('updated'"]) {
   if (!main.includes(titleBarContract)) throw new Error(`Native Windows controls must remain visible over the active light or dark skin: ${titleBarContract}`)
+}
+const titleBarAppearance = await readFile(path.join(root, 'electron/bridge/titlebar-appearance.cjs'), 'utf8')
+for (const titleBarContract of ["normalizedMode === 'dark'", "normalizedMode === 'light'", "'#f4f7ff'", "'#202124'", 'shouldUseDarkColors === true']) {
+  if (!titleBarAppearance.includes(titleBarContract)) throw new Error(`Native Windows title-bar color policy is incomplete: ${titleBarContract}`)
 }
 const bootstrap = await readFile(path.join(root, 'electron/bootstrap.cjs'), 'utf8')
 for (const contract of ['prepareComponentActivation', 'resolveComponentLayout', 'installComponentModulePaths', '__HARNESS_COMPONENT_UPDATE__', 'require(layout.shellEntry)']) {
@@ -583,7 +616,7 @@ if (pkg.scripts?.postinstall !== 'node scripts/patch-official-runtime.mjs && ele
 }
 
 const preload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
-for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'launchReadyUpdate', 'getComponentUpdateState', 'checkComponentUpdates', 'stageComponentUpdates', 'onComponentUpdateProgress', 'getGitRuntimeStatus', 'refreshGitRuntimeStatus', 'prepareGitRuntime', 'openGitAuthentication', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'chooseWallpaperEngine', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openLink', 'openExternal', 'openLocal', 'onUpdateResult', 'onUpdateInstallProgress']) {
+for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'launchReadyUpdate', 'getComponentUpdateState', 'checkComponentUpdates', 'stageComponentUpdates', 'onComponentUpdateProgress', 'getGitRuntimeStatus', 'refreshGitRuntimeStatus', 'prepareGitRuntime', 'openGitAuthentication', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'chooseWallpaperEngine', 'importCurrentWallpaperEngine', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openLink', 'openExternal', 'openLocal', 'onUpdateResult', 'onUpdateInstallProgress']) {
   if (!preload.includes(api)) throw new Error(`preload API missing: ${api}`)
 }
 for (const removedApi of ['getProviderSettings', 'runDiagnostics', 'listSessions', 'listWorkspaceDirectory', 'startTerminal']) {

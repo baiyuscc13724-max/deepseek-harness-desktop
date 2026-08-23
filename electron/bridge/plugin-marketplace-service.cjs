@@ -1,13 +1,24 @@
-const { cp, mkdir, readFile, rename, rm, writeFile } = require('node:fs/promises')
+const { mkdir, readFile, rename, rm, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 const YAML = require('yaml')
-const { physicalUnpackedPath } = require('./dsh-resolver.cjs')
 
 const MARKETPLACE_ID = 'plugin-marketplace'
 const MARKETPLACE_PACKAGE = 'dsh-plugin-marketplace'
 const MARKETPLACE_REPOSITORY = 'bradeGithub/DSH-Plugins-Marketplace'
 const MARKETPLACE_STATE_FILE = 'harness-desktop-marketplace.json'
 const CHINESE_OVERLAY_MARKER = 'HARNESS_DESKTOP_AUTO_ZH_SUMMARY_V1'
+const PATCH_OWNERSHIP_MARKER = 'HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER_V1'
+const MARKETPLACE_RUNTIME_FILES = Object.freeze([
+  'package.json',
+  'LICENSE',
+  'cordis.patch.yml',
+  'adaptor.json',
+  'registry.json',
+  'skills.json',
+  'lib/index.js',
+  'lib/client.js',
+  'lib/skin-manifest.js'
+])
 
 async function readText(file, fallback = '') {
   return readFile(file, 'utf8').catch(error => {
@@ -47,31 +58,131 @@ function compareVersions(left, right) {
   return a.prerelease.localeCompare(b.prerelease, 'en', { numeric: true })
 }
 
-function hasMarketplaceEntry(document) {
-  const rows = document.toJS() || []
-  if (!Array.isArray(rows)) return false
-  return rows.some(row => Array.isArray(row?.insert) && row.insert.some(item => item?.id === MARKETPLACE_ID || item?.name === MARKETPLACE_PACKAGE))
+async function atomicWriteText(file, text) {
+  const temporary = `${file}.desktop-${process.pid}-${Date.now()}`
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+  try {
+    await writeFile(temporary, text, { encoding: 'utf8', mode: 0o600 })
+    await rename(temporary, file)
+  } finally {
+    await rm(temporary, { force: true }).catch(() => {})
+  }
 }
 
 async function ensureProfilePatch(file) {
   const text = await readText(file, '[]\n')
   const document = YAML.parseDocument(text || '[]\n')
   if (document.errors.length) throw new Error(`DSH Web 配置补丁无法解析：${document.errors[0].message}`)
-  if (hasMarketplaceEntry(document)) return false
   const current = document.toJS()
   if (current == null) document.contents = document.createNode([])
   else if (!Array.isArray(current)) throw new Error('DSH Web 配置补丁必须是顶层数组。')
   document.contents.flow = false
-  document.add({ insert: [{ id: MARKETPLACE_ID, name: MARKETPLACE_PACKAGE }] })
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-  await writeFile(file, String(document), { encoding: 'utf8', mode: 0o600 })
+  const matches = []
+  if (YAML.isSeq(document.contents)) {
+    document.contents.items.forEach((row, rowIndex) => {
+      const insert = document.getIn([rowIndex, 'insert'], true)
+      if (!YAML.isSeq(insert)) return
+      insert.items.forEach((entry, entryIndex) => {
+        if (!YAML.isMap(entry)) return
+        if (entry.get('id') === MARKETPLACE_ID || entry.get('name') === MARKETPLACE_PACKAGE) {
+          matches.push({ rowIndex, entryIndex, entry })
+        }
+      })
+    })
+  }
+
+  let changed = false
+  if (!matches.length) {
+    document.add({ insert: [{ id: MARKETPLACE_ID, name: MARKETPLACE_PACKAGE, inject: ['webServer'] }] })
+    changed = true
+  } else {
+    const [canonical, ...duplicates] = matches
+    if (canonical.entry.get('id') !== MARKETPLACE_ID) {
+      document.setIn([canonical.rowIndex, 'insert', canonical.entryIndex, 'id'], MARKETPLACE_ID)
+      changed = true
+    }
+    if (canonical.entry.get('name') !== MARKETPLACE_PACKAGE) {
+      document.setIn([canonical.rowIndex, 'insert', canonical.entryIndex, 'name'], MARKETPLACE_PACKAGE)
+      changed = true
+    }
+    const inject = canonical.entry.get('inject', true)
+    if (!YAML.isSeq(inject) || inject.items.length !== 1 || inject.items[0]?.value !== 'webServer') {
+      document.setIn([canonical.rowIndex, 'insert', canonical.entryIndex, 'inject'], ['webServer'])
+      changed = true
+    }
+    for (const duplicate of duplicates.reverse()) {
+      document.deleteIn([duplicate.rowIndex, 'insert', duplicate.entryIndex])
+      changed = true
+    }
+    for (let rowIndex = document.contents.items.length - 1; rowIndex >= 0; rowIndex -= 1) {
+      const insert = document.getIn([rowIndex, 'insert'], true)
+      if (!YAML.isSeq(insert) || insert.items.length !== 0) continue
+      document.deleteIn([rowIndex, 'insert'])
+      const row = document.getIn([rowIndex], true)
+      if (YAML.isMap(row) && row.items.length === 0) document.deleteIn([rowIndex])
+    }
+  }
+  if (!changed) return false
+  await atomicWriteText(file, String(document))
+  return true
+}
+
+async function removeProfileBundle(file) {
+  const text = await readText(file)
+  if (!text) return false
+  let manifest
+  try { manifest = JSON.parse(text) } catch {
+    throw new Error('DSH Web profile package.json 无法解析。')
+  }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error('DSH Web profile package.json 必须是对象。')
+  }
+  if (manifest.dsh != null && (typeof manifest.dsh !== 'object' || Array.isArray(manifest.dsh))) {
+    throw new Error('DSH Web profile 的 dsh 配置必须是对象。')
+  }
+  const dsh = manifest.dsh
+  if (!dsh) return false
+  if (dsh.profile != null && (typeof dsh.profile !== 'object' || Array.isArray(dsh.profile))) {
+    throw new Error('DSH Web profile 配置必须是对象。')
+  }
+  const profile = dsh.profile
+  if (!profile) return false
+  if (profile.bundles != null && !Array.isArray(profile.bundles)) {
+    throw new Error('DSH Web profile 的 bundles 必须是数组。')
+  }
+  if (!profile.bundles?.includes(MARKETPLACE_PACKAGE)) return false
+  profile.bundles = profile.bundles.filter(name => name !== MARKETPLACE_PACKAGE)
+  await atomicWriteText(file, `${JSON.stringify(manifest, null, 2)}\n`)
+  return true
+}
+
+async function ensurePatchOwnershipCompatibility(destination) {
+  const runtimeFile = path.join(destination, 'lib', 'index.js')
+  const original = await readText(runtimeFile)
+  if (!original) throw new Error('内置 DSH 插件市场缺少服务端入口。')
+  if (original.includes(PATCH_OWNERSHIP_MARKER)) return false
+  const cleanupAnchor = '  (async () => {\n    try {\n      const patchText = await readFile(PATCH_FILE, "utf8").catch(() => "");\n      if (patchText && hasPatchEntry(patchText, "dsh-plugin-marketplace")) {'
+  if (!original.includes(cleanupAnchor)) {
+    throw new Error('DSH 插件市场的注册自愈结构已变化，无法安全接管桌面版 patch。')
+  }
+  const replacement = `  // ${PATCH_OWNERSHIP_MARKER}\n` +
+    '  if (process.env.HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER !== "1") (async () => {\n' +
+    '    try {\n' +
+    '      const patchText = await readFile(PATCH_FILE, "utf8").catch(() => "");\n' +
+    '      if (patchText && hasPatchEntry(patchText, "dsh-plugin-marketplace")) {'
+  await atomicWriteText(runtimeFile, original.replace(cleanupAnchor, replacement))
   return true
 }
 
 async function replaceDirectory(source, destination) {
   const temporary = `${destination}.desktop-${process.pid}-${Date.now()}`
   await rm(temporary, { recursive: true, force: true })
-  await cp(source, temporary, { recursive: true, force: true })
+  for (const relative of MARKETPLACE_RUNTIME_FILES) {
+    const from = path.join(source, ...relative.split('/'))
+    const to = path.join(temporary, ...relative.split('/'))
+    await mkdir(path.dirname(to), { recursive: true, mode: 0o700 })
+    await writeFile(to, await readFile(from), { mode: 0o600 })
+  }
   await rm(destination, { recursive: true, force: true })
   await rename(temporary, destination)
 }
@@ -130,15 +241,16 @@ async function ensureChineseTranslationOverlay(destination) {
 
 async function ensurePluginMarketplace({ dshHome, bundledRoot }) {
   const home = path.resolve(dshHome)
-  // electron-builder keeps node_modules in app.asar.unpacked. Electron can
-  // read individual files through the app.asar virtual path, but fs.cp cannot
-  // enumerate a directory there. Always move to the physical unpacked tree
-  // before copying the bundled marketplace into a fresh user's DSH profile.
-  const source = path.resolve(physicalUnpackedPath(path.resolve(bundledRoot)))
+  // Copy a fixed audited runtime file set with readFile instead of recursively
+  // enumerating the package. Electron can read these paths directly from ASAR,
+  // which keeps the large offline indexes compressed inside the application
+  // boundary and avoids inflating app.asar.unpacked by the whole source tree.
+  const source = path.resolve(bundledRoot)
   const profileRoot = path.join(home, 'profiles', 'web')
   const destination = path.join(profileRoot, 'node_modules', MARKETPLACE_PACKAGE)
   const stateFile = path.join(home, MARKETPLACE_STATE_FILE)
   const patchFile = path.join(profileRoot, 'cordis.patch.yml')
+  const profileManifestFile = path.join(profileRoot, 'package.json')
   const bundledPackage = await readJson(path.join(source, 'package.json'))
   if (bundledPackage?.name !== MARKETPLACE_PACKAGE) throw new Error('内置 DSH 插件市场包无效。')
   const bundledRepository = repositoryIdentity(bundledPackage.repository)
@@ -155,38 +267,60 @@ async function ensurePluginMarketplace({ dshHome, bundledRoot }) {
     action = 'installed'
   } else {
     const installedRepository = repositoryIdentity(installedPackage.repository)
-    if (installedRepository && installedRepository !== MARKETPLACE_REPOSITORY.toLowerCase()) {
+    if (installedRepository !== MARKETPLACE_REPOSITORY.toLowerCase()) {
       action = 'conflict'
-      warning = `已存在同名插件，但来源是 ${installedRepository}；桌面版未覆盖它。`
-    } else if (state?.managed === true && compareVersions(installedPackage.version, bundledPackage.version) < 0) {
+      warning = `已存在同名插件，但来源是 ${installedRepository || '未知来源'}；桌面版未覆盖或激活它。`
+    } else if (compareVersions(installedPackage.version, bundledPackage.version) < 0) {
       await replaceDirectory(source, destination)
       action = 'updated'
     }
   }
 
-  const patchChanged = await ensureProfilePatch(patchFile)
-  if (action !== 'conflict') {
-    const currentPackage = await readJson(path.join(destination, 'package.json'))
-    const managed = state?.managed === true || action === 'installed' || action === 'updated'
-    const translationOverlayApplied = managed && compareVersions(currentPackage?.version, bundledPackage.version) <= 0
-      ? await ensureChineseTranslationOverlay(destination)
-      : false
-    await mkdir(home, { recursive: true, mode: 0o700 })
-    await writeFile(stateFile, `${JSON.stringify({
-      schemaVersion: 1,
-      managed: state?.managed === true || action === 'installed' || action === 'updated',
-      installedVersion: currentPackage?.version || null,
-      bundledVersion: bundledPackage.version,
-      repository: MARKETPLACE_REPOSITORY,
-      updatedAt: new Date().toISOString()
-    }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  if (action === 'conflict') {
+    const installedClient = await readText(path.join(destination, 'lib', 'client.js'))
+    return {
+      action,
+      warning,
+      patchChanged: false,
+      bundleRemoved: false,
+      compatibilityReady: false,
+      destination,
+      translationReady: installedClient.includes(CHINESE_OVERLAY_MARKER),
+      installedVersion: installedPackage?.version || null,
+      bundledVersion: bundledPackage.version
+    }
   }
+
+  // The desktop ships the upstream package as a source dependency, so DSH's
+  // installation-first bundle resolver would otherwise shadow a newer copy in
+  // the user's profile. Desktop therefore owns exactly one registration path:
+  // the profile patch. Patch the upstream self-cleaner first, remove any bundle
+  // registration left by the official CLI, then add the idempotent user layer.
+  await ensurePatchOwnershipCompatibility(destination)
+  const bundleRemoved = await removeProfileBundle(profileManifestFile)
+  const patchChanged = await ensureProfilePatch(patchFile)
+  const currentPackage = await readJson(path.join(destination, 'package.json'))
+  const managed = state?.managed === true || action === 'installed' || action === 'updated'
+  const translationOverlayApplied = managed && compareVersions(currentPackage?.version, bundledPackage.version) <= 0
+    ? await ensureChineseTranslationOverlay(destination)
+    : false
+  await mkdir(home, { recursive: true, mode: 0o700 })
+  await writeFile(stateFile, `${JSON.stringify({
+    schemaVersion: 1,
+    managed: state?.managed === true || action === 'installed' || action === 'updated',
+    installedVersion: currentPackage?.version || null,
+    bundledVersion: bundledPackage.version,
+    repository: MARKETPLACE_REPOSITORY,
+    updatedAt: new Date().toISOString()
+  }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
 
   const installedClient = await readText(path.join(destination, 'lib', 'client.js'))
   return {
     action,
     warning,
     patchChanged,
+    bundleRemoved,
+    compatibilityReady: true,
     destination,
     translationReady: installedClient.includes(CHINESE_OVERLAY_MARKER),
     installedVersion: (await readJson(path.join(destination, 'package.json')))?.version || null,
@@ -198,9 +332,12 @@ module.exports = {
   MARKETPLACE_ID,
   MARKETPLACE_PACKAGE,
   MARKETPLACE_REPOSITORY,
+  MARKETPLACE_RUNTIME_FILES,
   compareVersions,
   ensureChineseTranslationOverlay,
+  ensurePatchOwnershipCompatibility,
   ensurePluginMarketplace,
   ensureProfilePatch,
+  removeProfileBundle,
   repositoryIdentity
 }

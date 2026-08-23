@@ -105,6 +105,74 @@ function wallpaperEngineSearchRoots(steamRoots) {
   return searchRoots
 }
 
+// Wallpaper Engine stores the active wallpaper per monitor in config.json.
+// Read only that narrow field: other profile data and wallpaper properties do
+// not belong in the desktop shell. The returned paths are candidates only;
+// callers must still prove that they live below a known Wallpaper Engine
+// project root and resolve a supported project.json before importing anything.
+function wallpaperEngineConfigSelection(config, username = '') {
+  let document = config
+  if (typeof document === 'string') {
+    try { document = JSON.parse(document) } catch { return { files: [], reason: 'invalid-config' } }
+  }
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return { files: [], reason: 'invalid-config' }
+  const profiles = Object.entries(document).filter(([, value]) => value?.general && typeof value.general === 'object')
+  const requested = String(username || '').trim().toLowerCase()
+  const matched = requested ? profiles.find(([name]) => name.toLowerCase() === requested) : null
+  const profile = matched || (profiles.length === 1 ? profiles[0] : null)
+  if (!profile) return { files: [], reason: profiles.length > 1 ? 'ambiguous-profile' : 'no-profile' }
+  const files = []
+  const seen = new Set()
+  const selected = profile[1].general?.wallpaperconfig?.selectedwallpapers
+  if (selected && typeof selected === 'object' && !Array.isArray(selected)) {
+    for (const value of Object.values(selected)) {
+      const file = typeof value === 'string' ? value : value?.file
+      const normalized = String(file || '').trim()
+      if (!normalized || seen.has(normalized)) continue
+      seen.add(normalized)
+      files.push(normalized)
+    }
+  }
+  return { files, reason: files.length ? 'current' : 'no-current' }
+}
+
+function selectedWallpaperEngineFiles(config, username = '') {
+  return wallpaperEngineConfigSelection(config, username).files
+}
+
+// Convert current-media paths into project directory candidates without ever
+// walking outside the known Workshop/local-project roots. A current file can
+// be nested below the project directory; the first segment under each search
+// root is the only directory we are willing to probe for project.json.
+function currentWallpaperEngineProjectDirectories(config, searchRoots, platform = process.platform, username = '') {
+  const p = platformPath(platform)
+  const directories = []
+  const seen = new Set()
+  const roots = [].concat(searchRoots || []).map(searchRoot => {
+    const rootValue = String(searchRoot?.directory || '').trim()
+    const platformRoot = platform === 'win32' ? rootValue.replaceAll('/', '\\') : rootValue.replaceAll('\\', '/')
+    return rootValue ? p.resolve(platformRoot) : ''
+  }).filter(Boolean).sort((left, right) => right.length - left.length)
+  for (const rawFile of selectedWallpaperEngineFiles(config, username)) {
+    const platformFile = platform === 'win32' ? rawFile.replaceAll('/', '\\') : rawFile.replaceAll('\\', '/')
+    if (!p.isAbsolute(platformFile)) continue
+    const file = p.resolve(platformFile)
+    for (const root of roots) {
+      const relative = p.relative(root, file)
+      if (!relative || p.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${p.sep}`)) continue
+      const firstSegment = relative.split(p.sep)[0]
+      if (!firstSegment || firstSegment === '.' || firstSegment === '..') continue
+      const directory = p.join(root, firstSegment)
+      const key = platform === 'win32' ? directory.toLowerCase() : directory
+      if (seen.has(key)) break
+      seen.add(key)
+      directories.push(directory)
+      break
+    }
+  }
+  return directories
+}
+
 // Enumerate every project directory under the search roots and resolve each
 // project.json. Unsupported (scene/web/application) projects are skipped with
 // a counting reason so the UI can explain partial scans.
@@ -166,6 +234,9 @@ module.exports = {
   normalizeSteamRoot,
   discoverSteamRoots,
   wallpaperEngineSearchRoots,
+  wallpaperEngineConfigSelection,
+  selectedWallpaperEngineFiles,
+  currentWallpaperEngineProjectDirectories,
   collectWallpaperEngineProjects,
   scanWallpaperEngineLibrary
 }

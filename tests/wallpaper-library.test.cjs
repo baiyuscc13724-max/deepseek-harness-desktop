@@ -4,7 +4,7 @@ const { mkdtemp, mkdir, writeFile, readdir, readFile, stat } = require('node:fs/
 const os = require('node:os')
 const path = require('node:path')
 
-const { defaultSteamRootCandidates, parseLibraryFolders, discoverSteamRoots, wallpaperEngineSearchRoots, collectWallpaperEngineProjects, scanWallpaperEngineLibrary, WORKSHOP_CONTENT_ID } = require('../electron/bridge/wallpaper-library.cjs')
+const { currentWallpaperEngineProjectDirectories, defaultSteamRootCandidates, parseLibraryFolders, discoverSteamRoots, selectedWallpaperEngineFiles, wallpaperEngineConfigSelection, wallpaperEngineSearchRoots, collectWallpaperEngineProjects, scanWallpaperEngineLibrary, WORKSHOP_CONTENT_ID } = require('../electron/bridge/wallpaper-library.cjs')
 const { resolveWallpaperEngineProject } = require('../electron/bridge/wallpaper-service.cjs')
 
 test('libraryfolders.vdf keeps every mounted Steam library path', () => {
@@ -61,6 +61,42 @@ test('Wallpaper Engine search roots cover workshop and nested local projects per
     { kind: 'projects', directory: path.join(local, 'myprojects') },
     { kind: 'projects', directory: path.join(local, 'defaultprojects') }
   ])
+})
+
+test('current Wallpaper Engine config resolves only projects below known library roots', () => {
+  const config = JSON.stringify({
+    '?installdirectory': 'D:/Steam/steamapps/common/wallpaper_engine',
+    Alice: { general: { wallpaperconfig: { selectedwallpapers: {
+      Monitor0: { file: 'D:/Steam/steamapps/workshop/content/431960/1234/media/loop.mp4' },
+      Monitor1: { file: 'D:/Steam/steamapps/common/wallpaper_engine/projects/myprojects/Calm/art.png' },
+      Unsafe: { file: 'D:/Secrets/private.png' }
+    } } } }
+  })
+  assert.deepEqual(selectedWallpaperEngineFiles(config), [
+    'D:/Steam/steamapps/workshop/content/431960/1234/media/loop.mp4',
+    'D:/Steam/steamapps/common/wallpaper_engine/projects/myprojects/Calm/art.png',
+    'D:/Secrets/private.png'
+  ])
+  assert.deepEqual(currentWallpaperEngineProjectDirectories(config, [
+    { directory: 'D:\\Steam\\steamapps\\workshop\\content\\431960' },
+    { directory: 'D:\\Steam\\steamapps\\common\\wallpaper_engine\\projects' },
+    { directory: 'D:\\Steam\\steamapps\\common\\wallpaper_engine\\projects\\myprojects' }
+  ], 'win32'), [
+    'D:\\Steam\\steamapps\\workshop\\content\\431960\\1234',
+    'D:\\Steam\\steamapps\\common\\wallpaper_engine\\projects\\myprojects\\Calm'
+  ])
+  assert.deepEqual(selectedWallpaperEngineFiles('{broken'), [])
+  assert.deepEqual(currentWallpaperEngineProjectDirectories({ Alice: { general: { wallpaperconfig: { selectedwallpapers: { Monitor0: { file: '../outside.mp4' } } } } } }, [], 'win32'), [])
+})
+
+test('current Wallpaper Engine config uses the Windows user profile without merging profiles', () => {
+  const config = {
+    Alice: { general: { wallpaperconfig: { selectedwallpapers: { Monitor0: { file: 'D:/Alice/current.mp4' } } } } },
+    Bob: { general: { wallpaperconfig: { selectedwallpapers: { Monitor0: { file: 'D:/Bob/current.png' } } } } }
+  }
+  assert.deepEqual(wallpaperEngineConfigSelection(config, 'aLiCe'), { files: ['D:/Alice/current.mp4'], reason: 'current' })
+  assert.deepEqual(wallpaperEngineConfigSelection(config, 'Unknown'), { files: [], reason: 'ambiguous-profile' })
+  assert.deepEqual(wallpaperEngineConfigSelection({ Alice: config.Alice }, 'Unknown'), { files: ['D:/Alice/current.mp4'], reason: 'current' })
 })
 
 test('library scan finds workshop and local image/video projects and skips unsupported scene projects', async () => {
