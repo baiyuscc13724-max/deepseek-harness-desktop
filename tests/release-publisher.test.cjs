@@ -594,9 +594,11 @@ test('pre-Tag candidate proves an exact signed stable in-place Windows upgrade b
   assert.match(windowsRuns, /Upgraded installed self-test JSON failed or reported the wrong version/u)
   assert.match(windowsRuns, /Upgraded installed uninstaller is missing/u)
   assert.match(windowsRuns, /Uninstaller left the temporary installation directory behind/u)
+  assert.match(windowsRuns, /function Invoke-BoundedDownload[\s\S]*CancellationTokenSource[\s\S]*CancelAfter\([\s\S]*ResponseHeadersRead[\s\S]*CopyToAsync\(\$target, 1048576, \$cts\.Token\)[\s\S]*Authenticated previous-stable download timed out/u)
+  assert.match(windowsRuns, /Invoke-BoundedDownload[^\n]*-TimeoutSeconds 300/u)
   assert.match(windowsRuns, /function Invoke-BoundedProcess[\s\S]*WaitForExit\(\$TimeoutSeconds \* 1000\)[\s\S]*taskkill\.exe \/PID \$process\.Id \/T \/F[\s\S]*timed out after \$TimeoutSeconds seconds/u)
   for (const label of ['Current-run portable self-test', 'Previous stable installer', 'Previous stable installed self-test', 'Current-run candidate upgrade installer', 'Upgraded installed self-test', 'Upgraded Windows uninstaller', 'Cleanup Windows uninstaller']) assert.match(windowsRuns, new RegExp(`-Label '${label}'`, 'u'))
-  assert.doesNotMatch(windowsRuns, /Start-Process[^\n]*-Wait|\$install = Start-Process -FilePath \$installer|Downloaded installer exited/u)
+  assert.doesNotMatch(windowsRuns, /Invoke-WebRequest|Start-Process[^\n]*-Wait|\$install = Start-Process -FilePath \$installer|Downloaded installer exited/u)
 })
 
 test('desktop workflow is dispatch-only build/test mode and cannot publish on Tag push', () => {

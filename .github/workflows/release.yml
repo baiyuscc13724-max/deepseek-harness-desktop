@@ -485,6 +485,46 @@ jobs:
           $portableProfile = Join-Path $env:RUNNER_TEMP 'authenticated-portable-profile'
           $portableReport = Join-Path $env:RUNNER_TEMP 'authenticated-portable-selftest.json'
           $trackedProcessIds = @()
+          function Invoke-BoundedDownload {
+            param(
+              [Parameter(Mandatory)][uri] $Uri,
+              [Parameter(Mandatory)][string] $OutFile,
+              [Parameter(Mandatory)][ValidateRange(1, 900)][int] $TimeoutSeconds
+            )
+            Write-Host "Starting bounded authenticated download (timeout ${TimeoutSeconds}s)"
+            $handler = [Net.Http.HttpClientHandler]::new()
+            $handler.AllowAutoRedirect = $true
+            $client = [Net.Http.HttpClient]::new($handler)
+            $client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+            $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $Uri)
+            $request.Headers.Accept.ParseAdd('application/octet-stream')
+            $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $env:GH_TOKEN)
+            $request.Headers.UserAgent.ParseAdd('harness-desktop-release-gate')
+            $null = $request.Headers.TryAddWithoutValidation('X-GitHub-Api-Version', '2022-11-28')
+            $cts = [Threading.CancellationTokenSource]::new()
+            $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSeconds))
+            $response = $source = $target = $null
+            try {
+              $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token).GetAwaiter().GetResult()
+              $null = $response.EnsureSuccessStatusCode()
+              $source = $response.Content.ReadAsStreamAsync($cts.Token).GetAwaiter().GetResult()
+              $target = [IO.File]::Open($OutFile, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+              $source.CopyToAsync($target, 1048576, $cts.Token).GetAwaiter().GetResult()
+              Write-Host 'Completed bounded authenticated download.'
+            }
+            catch [OperationCanceledException] {
+              throw "Authenticated previous-stable download timed out after $TimeoutSeconds seconds."
+            }
+            finally {
+              if ($target) { $target.Dispose() }
+              if ($source) { $source.Dispose() }
+              if ($response) { $response.Dispose() }
+              $request.Dispose()
+              $client.Dispose()
+              $handler.Dispose()
+              $cts.Dispose()
+            }
+          }
           function Invoke-BoundedProcess {
             param(
               [Parameter(Mandatory)][string] $FilePath,
@@ -539,12 +579,6 @@ jobs:
               if ($candidate.Length -le 0) { throw "Current-run Windows candidate is empty: $($candidate.Name)" }
               Copy-Item -LiteralPath $candidate.FullName -Destination (Join-Path $downloadRoot $candidate.Name)
             }
-            $headers = @{
-              Accept = 'application/octet-stream'
-              Authorization = "Bearer $env:GH_TOKEN"
-              'X-GitHub-Api-Version' = '2022-11-28'
-              'User-Agent' = 'harness-desktop-release-gate'
-            }
             $previous = Get-Content 'candidate-state/previous-stable.json' -Raw | ConvertFrom-Json
             if ($previous.version -notmatch '^\d+\.\d+\.\d+$' -or [version]$previous.version -ge [version]$version) { throw 'Bound previous stable version is invalid or not older than the candidate.' }
             if ($previous.tag -ne "v$($previous.version)" -or $previous.releaseId -notmatch '^\d+$' -or $previous.asset.id -notmatch '^\d+$') { throw 'Bound previous stable release identity is invalid.' }
@@ -557,7 +591,7 @@ jobs:
             $previousAsset = $previousAssets[0]
             if ($previousAsset.id.ToString() -ne $previous.asset.id.ToString() -or $previousAsset.size -ne [int64]$previous.asset.size -or $previousAsset.digest -ne $previous.asset.digest -or $previousAsset.browser_download_url -ne $previous.asset.browserDownloadUrl) { throw 'Previous stable installer asset changed after signed-manifest binding.' }
             $previousInstaller = $previousInstallerPath
-            Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($previous.asset.id)" -Headers $headers -OutFile $previousInstaller
+            Invoke-BoundedDownload -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($previous.asset.id)" -OutFile $previousInstaller -TimeoutSeconds 300
             if ((Get-Item -LiteralPath $previousInstaller).Length -ne [int64]$previous.asset.size) { throw 'Previous stable installer size mismatch.' }
             if ((Get-FileHash -LiteralPath $previousInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $previous.asset.sha256) { throw 'Previous stable installer SHA-256 mismatch.' }
 
