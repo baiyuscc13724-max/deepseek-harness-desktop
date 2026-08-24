@@ -457,7 +457,7 @@ jobs:
     name: Verify Windows candidate upgrade and installation
     needs: prepare-windows-candidate
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
@@ -485,6 +485,30 @@ jobs:
           $portableProfile = Join-Path $env:RUNNER_TEMP 'authenticated-portable-profile'
           $portableReport = Join-Path $env:RUNNER_TEMP 'authenticated-portable-selftest.json'
           $trackedProcessIds = @()
+          function Invoke-BoundedProcess {
+            param(
+              [Parameter(Mandatory)][string] $FilePath,
+              [Parameter(Mandatory)][string[]] $ArgumentList,
+              [Parameter(Mandatory)][ValidateRange(1, 900)][int] $TimeoutSeconds,
+              [Parameter(Mandatory)][string] $Label
+            )
+            Write-Host "Starting bounded process: $Label (timeout ${TimeoutSeconds}s)"
+            $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+            try {
+              if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+                try { & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null } catch {}
+                if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+                $null = $process.WaitForExit(10000)
+                throw "$Label timed out after $TimeoutSeconds seconds."
+              }
+              $process.Refresh()
+              Write-Host "Completed bounded process: $Label (exit $($process.ExitCode))"
+              return [int]$process.ExitCode
+            }
+            finally {
+              $process.Dispose()
+            }
+          }
           function Get-InstalledAppProcesses {
             param([string] $Executable)
             $expectedPath = [IO.Path]::GetFullPath($Executable)
@@ -539,8 +563,8 @@ jobs:
 
             $portable = Join-Path $downloadRoot "Harness-Desktop-$version-portable-x64.exe"
             if (-not (Test-Path -LiteralPath $portable -PathType Leaf)) { throw "Expected portable executable is missing: $portable" }
-            $portableSelfTest = Start-Process -FilePath $portable -ArgumentList @('--self-test', "--self-test-output=$portableReport", "--user-data-dir=$portableProfile", "--harness-user-data-dir=$portableProfile") -Wait -PassThru
-            if ($portableSelfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $portableReport -PathType Leaf)) { throw 'Downloaded portable --self-test failed or omitted its JSON report.' }
+            $portableSelfTestExit = Invoke-BoundedProcess -FilePath $portable -ArgumentList @('--self-test', "--self-test-output=$portableReport", "--user-data-dir=$portableProfile", "--harness-user-data-dir=$portableProfile") -TimeoutSeconds 180 -Label 'Current-run portable self-test'
+            if ($portableSelfTestExit -ne 0 -or -not (Test-Path -LiteralPath $portableReport -PathType Leaf)) { throw 'Downloaded portable --self-test failed or omitted its JSON report.' }
             $portableResult = Get-Content -LiteralPath $portableReport -Raw | ConvertFrom-Json
             $portableResult | ConvertTo-Json -Depth 8
             if (-not $portableResult.ok -or $portableResult.product.version -ne $version) { throw 'Downloaded portable self-test JSON failed or reported the wrong version.' }
@@ -552,14 +576,14 @@ jobs:
             $markerValue = "stable-$($previous.version)-to-$version-$([Guid]::NewGuid().ToString('N'))"
             [IO.File]::WriteAllText($markerPath, $markerValue, [Text.UTF8Encoding]::new($false))
 
-            $previousInstall = Start-Process -FilePath $previousInstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -Wait -PassThru
-            if ($previousInstall.ExitCode -ne 0) { throw "Previous stable installer exited with code $($previousInstall.ExitCode)." }
+            $previousInstallExit = Invoke-BoundedProcess -FilePath $previousInstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -TimeoutSeconds 300 -Label 'Previous stable installer'
+            if ($previousInstallExit -ne 0) { throw "Previous stable installer exited with code $previousInstallExit." }
             $installedExe = Join-Path $installRoot 'Harness Desktop.exe'
             $installedAsar = Join-Path $installRoot 'resources/app.asar'
             $installedD3d = Join-Path $installRoot 'd3dcompiler_47.dll'
             if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf) -or -not (Test-Path -LiteralPath $installedAsar -PathType Leaf) -or -not (Test-Path -LiteralPath $installedD3d -PathType Leaf)) { throw 'Previous stable installation is missing the executable, app.asar, or d3dcompiler_47.dll.' }
-            $previousSelfTest = Start-Process -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$previousReportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -Wait -PassThru
-            if ($previousSelfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $previousReportPath -PathType Leaf)) { throw 'Previous stable installed --self-test failed or omitted its JSON report.' }
+            $previousSelfTestExit = Invoke-BoundedProcess -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$previousReportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -TimeoutSeconds 180 -Label 'Previous stable installed self-test'
+            if ($previousSelfTestExit -ne 0 -or -not (Test-Path -LiteralPath $previousReportPath -PathType Leaf)) { throw 'Previous stable installed --self-test failed or omitted its JSON report.' }
             $previousReport = Get-Content -LiteralPath $previousReportPath -Raw | ConvertFrom-Json
             $previousReport | ConvertTo-Json -Depth 8
             if (-not $previousReport.ok -or $previousReport.product.version -ne $previous.version) { throw 'Previous stable installed self-test JSON failed or reported the wrong version.' }
@@ -582,10 +606,10 @@ jobs:
             # Never restart the old application after the upgrade.
             # Do not pass /CLOSEAPPLICATIONS: legacy installers translate that
             # old updater flag into an interactive compatibility wizard.
-            $upgrade = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NORESTARTAPPLICATIONS', '/LOGCLOSEAPPLICATIONS', "/LOG=$upgradeLog", "/DIR=$installRoot") -Wait -PassThru
-            if ($upgrade.ExitCode -ne 0) {
+            $upgradeExit = Invoke-BoundedProcess -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NORESTARTAPPLICATIONS', '/LOGCLOSEAPPLICATIONS', "/LOG=$upgradeLog", "/DIR=$installRoot") -TimeoutSeconds 300 -Label 'Current-run candidate upgrade installer'
+            if ($upgradeExit -ne 0) {
               if (Test-Path -LiteralPath $upgradeLog -PathType Leaf) { Get-Content -LiteralPath $upgradeLog }
-              throw "Current-run candidate upgrade installer exited with code $($upgrade.ExitCode)."
+              throw "Current-run candidate upgrade installer exited with code $upgradeExit."
             }
             for ($i = 0; $i -lt 40 -and @(Get-InstalledAppProcesses -Executable $installedExe).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }
             $aliveOldProcesses = @($trackedProcessIds | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
@@ -594,16 +618,16 @@ jobs:
             if (@(Get-InstalledAppProcesses -Executable $installedExe).Count -ne 0) { throw 'RestartApplications=no contract failed: the desktop restarted after the silent upgrade.' }
             if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf) -or -not (Test-Path -LiteralPath $installedAsar -PathType Leaf)) { throw 'Upgraded executable or app.asar is missing.' }
             if ([IO.File]::ReadAllText($markerPath) -cne $markerValue) { throw 'Current-run candidate upgrade did not preserve the same profile marker.' }
-            $selfTest = Start-Process -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$reportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -Wait -PassThru
-            if ($selfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Upgraded installed --self-test failed or omitted its JSON report.' }
+            $selfTestExit = Invoke-BoundedProcess -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$reportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -TimeoutSeconds 180 -Label 'Upgraded installed self-test'
+            if ($selfTestExit -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Upgraded installed --self-test failed or omitted its JSON report.' }
             $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
             $report | ConvertTo-Json -Depth 8
             if (-not $report.ok -or $report.product.version -ne $version) { throw 'Upgraded installed self-test JSON failed or reported the wrong version.' }
             if ([IO.File]::ReadAllText($markerPath) -cne $markerValue) { throw 'Upgraded self-test did not preserve the same profile marker.' }
             $uninstaller = Get-ChildItem -LiteralPath $installRoot -File -Filter 'unins*.exe' | Select-Object -First 1
             if (-not $uninstaller) { throw 'Upgraded installed uninstaller is missing.' }
-            $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
-            if ($uninstall.ExitCode -ne 0) { throw "Windows uninstaller exited with code $($uninstall.ExitCode)." }
+            $uninstallExit = Invoke-BoundedProcess -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 300 -Label 'Upgraded Windows uninstaller'
+            if ($uninstallExit -ne 0) { throw "Windows uninstaller exited with code $uninstallExit." }
             for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $installRoot); $i++) { Start-Sleep -Milliseconds 500 }
             if (Test-Path -LiteralPath $installRoot) { throw 'Uninstaller left the temporary installation directory behind.' }
           }
@@ -611,7 +635,7 @@ jobs:
             foreach ($trackedId in @($trackedProcessIds)) { Stop-Process -Id $trackedId -Force -ErrorAction SilentlyContinue }
             try {
               $cleanupUninstaller = Get-ChildItem -LiteralPath $installRoot -File -Filter 'unins*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($cleanupUninstaller) { Start-Process -FilePath $cleanupUninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -ErrorAction SilentlyContinue | Out-Null }
+              if ($cleanupUninstaller) { $null = Invoke-BoundedProcess -FilePath $cleanupUninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 120 -Label 'Cleanup Windows uninstaller' }
             } catch {}
             Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           }

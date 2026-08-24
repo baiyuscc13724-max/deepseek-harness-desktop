@@ -560,7 +560,7 @@ test('pre-Tag candidate proves an exact signed stable in-place Windows upgrade b
   const windows = workflow.jobs['verify-windows-candidate']
   assert.equal(windows.needs, 'prepare-windows-candidate')
   assert.equal(windows.name, 'Verify Windows candidate upgrade and installation')
-  assert.equal(windows['timeout-minutes'], 90)
+  assert.equal(windows['timeout-minutes'], 45)
 
   const bindStep = stage.steps.find(step => step.name === 'Bind the signed previous stable Windows installer to an exact public asset')
   const bindingUpload = stage.steps.find(step => step.with?.name === 'previous-stable-windows-binding')
@@ -594,7 +594,9 @@ test('pre-Tag candidate proves an exact signed stable in-place Windows upgrade b
   assert.match(windowsRuns, /Upgraded installed self-test JSON failed or reported the wrong version/u)
   assert.match(windowsRuns, /Upgraded installed uninstaller is missing/u)
   assert.match(windowsRuns, /Uninstaller left the temporary installation directory behind/u)
-  assert.doesNotMatch(windowsRuns, /\$install = Start-Process -FilePath \$installer|Downloaded installer exited/u)
+  assert.match(windowsRuns, /function Invoke-BoundedProcess[\s\S]*WaitForExit\(\$TimeoutSeconds \* 1000\)[\s\S]*taskkill\.exe \/PID \$process\.Id \/T \/F[\s\S]*timed out after \$TimeoutSeconds seconds/u)
+  for (const label of ['Current-run portable self-test', 'Previous stable installer', 'Previous stable installed self-test', 'Current-run candidate upgrade installer', 'Upgraded installed self-test', 'Upgraded Windows uninstaller', 'Cleanup Windows uninstaller']) assert.match(windowsRuns, new RegExp(`-Label '${label}'`, 'u'))
+  assert.doesNotMatch(windowsRuns, /Start-Process[^\n]*-Wait|\$install = Start-Process -FilePath \$installer|Downloaded installer exited/u)
 })
 
 test('desktop workflow is dispatch-only build/test mode and cannot publish on Tag push', () => {
