@@ -96,15 +96,15 @@
         </section>
         <section class="browser-model-permissions">
           <h4>内置 Computer Use</h4>
-          <p>只可操控 Harness Desktop 与持久策略允许的应用窗口；点击、输入、滚动等受限动作仍逐次确认。</p>
-          <button id="computerUseToggle" type="button">开启本次控制</button>
+          <p>模型需要桌面控制时会在对话框上方推送授权卡片；你可选择本次授权或永久授权。授权后进入无限制桌面控制，不再逐次确认。</p>
+          <div><button id="computerUseToggle" type="button">请求无限制桌面控制</button><button id="computerUseRevokePermanent" class="hidden" type="button">撤销永久授权</button></div>
           <div id="computerUseSessionState" class="computer-use-session-state" aria-live="polite"></div>
           <div id="computerUsePending" class="browser-pending-actions"></div>
         </section>
         <section class="browser-model-permissions" aria-labelledby="computerUsePolicyTitle">
-          <h4 id="computerUsePolicyTitle">跨应用访问策略（持久）</h4>
-          <p>默认应用访问未单独列出的应用；每个应用可单独允许/拒绝并随时撤销持久授权。该策略只决定模型能否访问，不替代受限动作的逐次确认。</p>
-          <p class="computer-use-permanent-notice"><strong>永久禁止：</strong>敏感、系统、UAC 与提权窗口任何策略都不可放行，也不可撤销该限制。</p>
+          <h4 id="computerUsePolicyTitle">跨应用访问策略（受限模式）</h4>
+          <p>未授予无限制控制时，默认应用访问与单个应用允许/拒绝仍可作为受限模式策略；无限制授权生效后这些策略不再拦截。</p>
+          <p class="computer-use-permanent-notice"><strong>无限制授权：</strong>将同时取消 UAC、系统/提权窗口与敏感输入等原有硬禁令，可在上方随时停止或撤销永久授权。</p>
           <div id="computerUsePolicyControls" class="computer-use-policy-controls">
             <label class="computer-use-default-row">默认应用访问
               <select id="computerUseDefaultAccess">
@@ -133,7 +133,15 @@
         <div><strong>女仆鲸</strong><span id="petPanelStatus">正在休息</span></div>
         <button id="closePetPanel" type="button" aria-label="关闭">×</button>
       </header>
-      <div class="pet-fullness-row"><span>饱食度</span><progress id="petFullness" max="100" value="80"></progress><strong id="petFullnessText">80%</strong></div>
+      <section class="pet-bond-card" aria-label="陪伴关系">
+        <div class="pet-bond-heading"><span><strong id="petBondTitle">初见</strong><small id="petBondLevel">Lv.1</small></span><span id="petBondSummary">今天还没有共同任务</span></div>
+        <progress id="petBondProgress" max="100" value="0" aria-label="默契成长进度"></progress>
+      </section>
+      <div class="pet-vitals" aria-label="女仆鲸状态">
+        <label><span>饱食</span><progress id="petFullness" max="100" value="80"></progress><strong id="petFullnessText">80%</strong></label>
+        <label><span>活力</span><progress id="petEnergy" max="100" value="78"></progress><strong id="petEnergyText">78%</strong></label>
+        <label><span>心情</span><progress id="petMood" max="100" value="72"></progress><strong id="petMoodText">愉快</strong></label>
+      </div>
       <div class="pet-inventory" aria-label="TOK 仓库">
         <span title="精炼 TOK">精炼 <strong id="petRefinedCount">0</strong></span>
         <span title="标准 TOK">标准 <strong id="petStandardCount">0</strong></span>
@@ -145,7 +153,9 @@
       </div>
       <label class="pet-panel-check"><input id="petAutoFeed" type="checkbox" checked /> 自动喂食</label>
       <label class="pet-panel-check"><input id="petAlwaysOnTop" type="checkbox" checked /> 宠物保持置顶</label>
-      <p class="pet-panel-note">TOK 只根据本机模型使用量结算，不读取对话内容或文件。</p>
+      <label class="pet-panel-check"><input id="petProactive" type="checkbox" checked /> 根据任务节奏主动陪伴</label>
+      <label class="pet-panel-select"><span>陪伴风格</span><select id="petCompanionStyle"><option value="calm">克制</option><option value="warm" selected>温柔</option><option value="playful">元气</option></select></label>
+      <p class="pet-panel-note">智能陪伴使用任务状态与会话标识、模型/Token 用量、时长和互动记录；不读取对话正文、屏幕或文件。</p>
     </section>
     <section id="mobileSyncOverlay" class="mobile-sync-overlay hidden" aria-hidden="true">
       <div class="mobile-sync-dialog" role="dialog" aria-modal="true" aria-labelledby="mobileSyncTitle">
@@ -307,6 +317,25 @@
       </div>
     </section>
     <webview id="runtimeView" partition="persist:harness"></webview>
+    <section id="computerUseAuthorizationOverlay" class="computer-use-authorization-overlay hidden" aria-hidden="true">
+      <div class="computer-use-authorization-card" role="alertdialog" aria-modal="true" aria-labelledby="computerUseAuthorizationTitle" aria-describedby="computerUseAuthorizationDescription">
+        <header>
+          <div>
+            <span class="computer-use-authorization-badge">模型请求授权</span>
+            <h2 id="computerUseAuthorizationTitle">Computer Use 无限制桌面控制</h2>
+          </div>
+          <button id="computerUseAuthorizationClose" class="computer-use-authorization-close" type="button" aria-label="关闭并拒绝授权">×</button>
+        </header>
+        <p id="computerUseAuthorizationDescription">授权后模型可直接点击、输入和滚动，不再逐次确认，并取消 UAC、系统/提权窗口、敏感窗口和敏感输入等全部原有硬禁令。</p>
+        <div class="computer-use-authorization-actions">
+          <button id="computerUseAuthorizationSession" class="primary" type="button">本次授权</button>
+          <button id="computerUseAuthorizationForever" type="button">永久授权</button>
+          <button id="computerUseAuthorizationDecline" class="danger" type="button">拒绝</button>
+        </div>
+        <p class="computer-use-authorization-note">本次授权仅在当前应用运行期间有效；永久授权将保存并在重启后自动生效，可随时在 Profile 面板撤销。</p>
+        <p id="computerUseAuthorizationStatus" class="computer-use-authorization-status" role="status"></p>
+      </div>
+    </section>
     <section id="runtimeStatus" class="runtime-status" aria-live="polite">
       <img src="./assets/deepseek-icon.svg" alt="" />
       <strong id="runtimeStatusTitle">正在启动 DeepSeek Harness…</strong>
@@ -358,8 +387,14 @@
               <div id="skinWallpaperLibraryItems" class="skin-wallpaper-library-grid" role="list" aria-label="已导入壁纸"></div>
               <div id="skinWallpaperLibraryEmpty" class="skin-wallpaper-library-empty">还没有已导入的壁纸。导入后会立即显示预览卡片；点击“使用”或双击卡片即可切换。</div>
               <section id="skinWallpaperEnginePicker" class="skin-wallpaper-picker hidden" aria-live="polite">
-                <div class="skin-wallpaper-picker-heading"><strong>可导入的 Wallpaper Engine 图片/视频项目</strong><span id="skinWallpaperEngineStatus">正在扫描本机 Steam 库…</span></div>
-                <div id="skinWallpaperEngineItems" class="skin-wallpaper-items"></div>
+                <div class="skin-wallpaper-picker-heading"><strong>可导入的 Wallpaper Engine 图片/视频项目</strong><span id="skinWallpaperEngineStatus" role="status">正在扫描本机 Steam 库…</span></div>
+                <div class="skin-wallpaper-picker-search">
+                  <label for="skinWallpaperEngineSearch" class="visually-hidden">搜索 Wallpaper Engine 壁纸</label>
+                  <input id="skinWallpaperEngineSearch" type="search" maxlength="200" autocomplete="off" placeholder="搜索标题、类型或项目路径" aria-controls="skinWallpaperEngineItems" />
+                  <button id="skinWallpaperEngineSearchClear" type="button" aria-label="清空搜索" disabled>清空</button>
+                </div>
+                <div id="skinWallpaperEngineItems" class="skin-wallpaper-items" role="list" aria-label="Wallpaper Engine 扫描结果"></div>
+                <div id="skinWallpaperEngineEmpty" class="skin-wallpaper-picker-empty hidden" role="status">没有匹配的壁纸。请尝试其他关键词。</div>
                 <div class="skin-wallpaper-picker-actions">
                   <button id="skinWallpaperEngineRescan" type="button">重新扫描</button>
                   <button id="skinWallpaperEngineManual" type="button">手动选择项目目录…</button>

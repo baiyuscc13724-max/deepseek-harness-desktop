@@ -72,6 +72,8 @@ const DEFAULT_STATE = Object.freeze({
     awake: false,
     alwaysOnTop: true,
     autoFeed: true,
+    proactive: true,
+    companionStyle: 'warm',
     motion: 'system',
     muted: true,
     positionByDisplay: {}
@@ -123,6 +125,8 @@ function normalizeState(input) {
       awake: value.pet?.awake === true,
       alwaysOnTop: value.pet?.alwaysOnTop !== false,
       autoFeed: value.pet?.autoFeed !== false,
+      proactive: value.pet?.proactive !== false,
+      companionStyle: ['calm', 'warm', 'playful'].includes(value.pet?.companionStyle) ? value.pet.companionStyle : 'warm',
       motion: ['system', 'full', 'reduced', 'still'].includes(value.pet?.motion) ? value.pet.motion : 'system',
       muted: value.pet?.muted !== false,
       positionByDisplay: normalizePetPositions(value.pet?.positionByDisplay)
@@ -288,11 +292,14 @@ class AppStateStore {
   }
 
   updatePet(patch = {}) {
-    for (const key of ['enabled', 'awake', 'alwaysOnTop', 'autoFeed', 'muted']) {
+    for (const key of ['enabled', 'awake', 'alwaysOnTop', 'autoFeed', 'proactive', 'muted']) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) this.state.pet[key] = Boolean(patch[key])
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'motion')) {
       this.state.pet.motion = ['system', 'full', 'reduced', 'still'].includes(patch.motion) ? patch.motion : 'system'
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'companionStyle')) {
+      this.state.pet.companionStyle = ['calm', 'warm', 'playful'].includes(patch.companionStyle) ? patch.companionStyle : 'warm'
     }
     if (patch.positionByDisplay && typeof patch.positionByDisplay === 'object') {
       this.state.pet.positionByDisplay = normalizePetPositions({

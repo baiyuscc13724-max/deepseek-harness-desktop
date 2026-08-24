@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, open, realpath, rename, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rename, rm, stat } from "node:fs/promises";
 import { ArtifactContentAddressedStore } from "./artifact-cas.js";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -109,9 +109,17 @@ function immutable(value) {
   else if (isRecord(value)) for (const nested of Object.values(value)) immutable(nested);
   return Object.freeze(value);
 }
-function normalizeChangeSetDeclaration(value, repositoryRef) {
-  if (!isRecord(value)) throw new TypeError("changeSet must be an object");
-  const changeSetRef = safeRef(value.changeSetRef, "changeSet.changeSetRef");
+function normalizeChangeSetDeclaration(value, repositoryRef, field = "changeSet", { allowAdmission = false, maxBundleBytes = DEFAULT_MAX_BUNDLE_BYTES } = {}) {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const admissionFields = ["bundleDigest", "bundleSize", "admitted"], allowed = new Set(["version", "projectRef", "repositoryRef", "authorityEpoch", "collaboratorRef", "taskRef", "baseCommit", "parentCommit", "commit", "diffDigest", "treeDigest", "files", "claimRefs", "message", "changeSetRef", "contentDigest", "state", "createdAt", "updatedAt", "mergeGroupRef", "landedCommit", ...(allowAdmission ? admissionFields : [])]), extras = Object.keys(value).filter((key) => !allowed.has(key));
+  if (extras.length > 0) throw new TypeError(`${field} contains unsupported fields: ${extras.join(", ")}`);
+  const presentAdmissionFields = admissionFields.filter((key) => Object.hasOwn(value, key));
+  if (presentAdmissionFields.length > 0) {
+    if (!allowAdmission || presentAdmissionFields.length !== admissionFields.length || value.admitted !== true) throw new TypeError(`${field} admission receipt is incomplete or invalid`);
+    digestRef(value.bundleDigest, `${field}.bundleDigest`);
+    if (!Number.isSafeInteger(value.bundleSize) || value.bundleSize < 1 || value.bundleSize > maxBundleBytes) throw new TypeError(`${field}.bundleSize is invalid`);
+  }
+  const changeSetRef = safeRef(value.changeSetRef, `${field}.changeSetRef`);
   if (value.repositoryRef !== repositoryRef) throw new Error("ChangeSet belongs to another repository");
   return {
     changeSetRef,
@@ -123,6 +131,8 @@ function normalizeChangeSetDeclaration(value, repositoryRef) {
     files: declaredFiles(value.files, "changeSet.files"),
   };
 }
+async function writeAll(handle, buffer, position) { let offset = 0; while (offset < buffer.length) { const result = await handle.write(buffer, offset, buffer.length - offset, position + offset); if (!Number.isSafeInteger(result?.bytesWritten) || result.bytesWritten < 1 || result.bytesWritten > buffer.length - offset) throw new Error("Git bundle write made no progress"); offset += result.bytesWritten; } }
+
 function parseNulPaths(bytes) {
   if (bytes.length === 0) return [];
   const parts = bytes.toString("utf8").split("\0");
@@ -137,7 +147,7 @@ function parseNulPaths(bytes) {
 }
 
 export class GitWorkspaceAdapter {
-  constructor({ gitCommand, allowedGitRoot, authorityRoot, sourceWorkspaceRoot, workspaceRoot, repositoryRef, spawnImpl = spawn, env = process.env, timeoutMs = DEFAULT_GIT_TIMEOUT_MS, maxBundleBytes = DEFAULT_MAX_BUNDLE_BYTES } = {}) {
+  constructor({ gitCommand, allowedGitRoot, authorityRoot, sourceWorkspaceRoot, workspaceRoot, repositoryRef, spawnImpl = spawn, openImpl = open, env = process.env, timeoutMs = DEFAULT_GIT_TIMEOUT_MS, maxBundleBytes = DEFAULT_MAX_BUNDLE_BYTES } = {}) {
     this.gitCommand = normalizedPath(gitCommand, "gitCommand");
     this.allowedGitRoot = normalizedPath(allowedGitRoot, "allowedGitRoot");
     this.authorityRoot = normalizedPath(authorityRoot, "authorityRoot");
@@ -148,10 +158,13 @@ export class GitWorkspaceAdapter {
     ensureDisjoint(this.sourceWorkspaceRoot, this.workspaceRoot, "sourceWorkspaceRoot", "workspaceRoot");
     this.repositoryRef = safeRef(repositoryRef, "repositoryRef");
     if (typeof spawnImpl !== "function") throw new TypeError("spawnImpl must be a function");
+    if (typeof openImpl !== "function") throw new TypeError("openImpl must be a function");
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 5 * 60_000) throw new TypeError("timeoutMs is invalid");
     this.spawnImpl = spawnImpl;
-    this.sourceEnv = env;
-    this.env = buildEnvironment(env, this.gitCommand);
+    this.openImpl = openImpl;
+    this.sourceEnv = Object.create(null);
+    for (const key of SAFE_ENV_KEYS) if (typeof env[key] === "string" && env[key] !== "") this.sourceEnv[key] = env[key];
+    this.env = buildEnvironment(this.sourceEnv, this.gitCommand);
     this.timeoutMs = timeoutMs;
     if (!Number.isSafeInteger(maxBundleBytes) || maxBundleBytes < 1 || maxBundleBytes > DEFAULT_MAX_BUNDLE_BYTES) throw new TypeError("maxBundleBytes is invalid");
     this.maxBundleBytes = maxBundleBytes;
@@ -159,36 +172,47 @@ export class GitWorkspaceAdapter {
     this.mergeWorkspaceRoot = resolve(this.authorityRoot, "merge-workspaces");
     this.bundleRoot = resolve(this.authorityRoot, "git-bundles");
     this.ready = false;
+    this.closing = false;
+    this.closePromise = undefined;
+    this.active = new Set();
+    this.children = new Set();
   }
 
-  toJSON() {
-    return { repositoryRef: this.repositoryRef, ready: this.ready, objectFormat: this.objectFormat };
+  toJSON() { return this.#snapshot(); }
+
+  probeSource() { return this.#run(() => this.#probeSource()); }
+  initialize(input) { return this.#run(() => this.#initialize(input)); }
+  head() { return this.#run(() => this.#head()); }
+  ensureTaskWorkspace(input) { return this.#run(() => this.#ensureTaskWorkspace(input)); }
+  createTaskWorkspace(input) { return this.ensureTaskWorkspace(input); }
+  inspectChangeSet(input) { return this.#run(() => this.#inspectChangeSet(input)); }
+  exportChangeSetBundle(input) { return this.#run(() => this.#exportChangeSetBundle(input)); }
+  exportBoundChangeSetBundle(input) { return this.#run(() => this.#exportBoundChangeSetBundle(input)); }
+  importChangeSetBundle(input) { return this.#run(() => this.#importChangeSetBundle(input)); }
+  readAndVerifyMergeGroupResult(input) { return this.#run(() => this.#readAndVerifyMergeGroupResult(input)); }
+  mergeChangeSets(input) { return this.#run(() => this.#mergeChangeSets(input)); }
+  compareAndSwapHead(input) { return this.#run(() => this.#compareAndSwapHead(input)); }
+  closeTaskWorkspace(input) { return this.#run(() => this.#closeTaskWorkspace(input)); }
+  removeTaskWorkspace(input) { return this.closeTaskWorkspace(input); }
+
+  async #probeSource() {
+    try {
+      const command = await realpath(this.gitCommand), root = await realpath(this.allowedGitRoot), source = await realpath(this.sourceWorkspaceRoot);
+      if (!samePath(source, this.sourceWorkspaceRoot) || !isSameOrWithin(root, command) || !/^git(?:\.exe)?$/iu.test(basename(command))) throw new Error("untrusted source boundary");
+      this.gitCommand = command; this.sourceWorkspaceRoot = source; this.env = buildEnvironment(this.sourceEnv, command);
+      const topLevel = (await this.#git(["-C", source, "rev-parse", "--show-toplevel"], { cwd: source })).stdout.toString("utf8").trim(); if (!samePath(resolve(topLevel), source)) throw new Error("source is not the exact Git root");
+      const sourceHead = commitRef((await this.#git(["-C", source, "rev-parse", "HEAD"], { cwd: source })).stdout.toString("utf8").trim(), "source HEAD"), objectFormat = (await this.#git(["-C", source, "rev-parse", "--show-object-format"], { cwd: source })).stdout.toString("utf8").trim(); if (!new Set(["sha1", "sha256"]).has(objectFormat)) throw new Error("unsupported object format");
+      const sourceDirty = (await this.#git(["-C", source, "status", "--porcelain=v1", "-z"], { maxOutputBytes: 4 * 1024 * 1024, cwd: source })).stdout.length > 0;
+      return immutable({ repositoryRef: this.repositoryRef, sourceHead, objectFormat, sourceDirty, statusCode: sourceDirty ? "GIT_SOURCE_DIRTY" : "GIT_SOURCE_READY" });
+    } catch (cause) { if (cause?.code === "GIT_WORKSPACE_ADAPTER_CLOSED") throw cause; const error = new Error("fixed source is not an exact supported Git worktree root"); error.code = "GIT_SOURCE_INVALID"; throw error; }
   }
 
-  async initialize({ expectedInitialHead } = {}) {
-    await mkdir(this.authorityRoot, { recursive: true, mode: 0o700 });
-    await mkdir(this.workspaceRoot, { recursive: true, mode: 0o700 });
-    const command = await realpath(this.gitCommand);
-    const root = await realpath(this.allowedGitRoot);
-    if (!isSameOrWithin(root, command)) throw new Error("Git executable is outside the fixed allowed runtime root");
-    if (!/^git(?:\.exe)?$/iu.test(basename(command))) throw new Error("fixed Git executable name is invalid");
-    this.gitCommand = command;
-    this.env = buildEnvironment(this.sourceEnv, command);
-    this.sourceWorkspaceRoot = await realpath(this.sourceWorkspaceRoot);
-    this.authorityRoot = await realpath(this.authorityRoot);
-    this.workspaceRoot = await realpath(this.workspaceRoot);
-    ensureDisjoint(this.authorityRoot, this.sourceWorkspaceRoot, "authorityRoot", "sourceWorkspaceRoot");
-    ensureDisjoint(this.authorityRoot, this.workspaceRoot, "authorityRoot", "workspaceRoot");
-    ensureDisjoint(this.sourceWorkspaceRoot, this.workspaceRoot, "sourceWorkspaceRoot", "workspaceRoot");
-    this.repositoryPath = resolve(this.authorityRoot, "repositories", `${this.repositoryRef}.git`);
-    this.mergeWorkspaceRoot = resolve(this.authorityRoot, "merge-workspaces");
-    this.bundleRoot = resolve(this.authorityRoot, "git-bundles");
-    const topLevel = (await this.#git(["-C", this.sourceWorkspaceRoot, "rev-parse", "--show-toplevel"])).stdout.toString("utf8").trim();
-    if (!samePath(resolve(topLevel), this.sourceWorkspaceRoot)) throw new Error("sourceWorkspaceRoot must be the exact Git worktree root");
-    const sourceHead = commitRef((await this.#git(["-C", this.sourceWorkspaceRoot, "rev-parse", "HEAD"])).stdout.toString("utf8").trim(), "source HEAD");
-    const objectFormat = (await this.#git(["-C", this.sourceWorkspaceRoot, "rev-parse", "--show-object-format"])).stdout.toString("utf8").trim();
-    if (!new Set(["sha1", "sha256"]).has(objectFormat)) throw new Error("source Git object format is unsupported");
-    this.objectFormat = objectFormat;
+  async #initialize({ expectedInitialHead } = {}) {
+    const probed = await this.#probeSource(), { sourceHead, objectFormat } = probed;
+    await mkdir(this.authorityRoot, { recursive: true, mode: 0o700 }); await mkdir(this.workspaceRoot, { recursive: true, mode: 0o700 });
+    this.authorityRoot = await realpath(this.authorityRoot); this.workspaceRoot = await realpath(this.workspaceRoot);
+    ensureDisjoint(this.authorityRoot, this.sourceWorkspaceRoot, "authorityRoot", "sourceWorkspaceRoot"); ensureDisjoint(this.authorityRoot, this.workspaceRoot, "authorityRoot", "workspaceRoot"); ensureDisjoint(this.sourceWorkspaceRoot, this.workspaceRoot, "sourceWorkspaceRoot", "workspaceRoot");
+    this.repositoryPath = resolve(this.authorityRoot, "repositories", `${this.repositoryRef}.git`); this.mergeWorkspaceRoot = resolve(this.authorityRoot, "merge-workspaces"); this.bundleRoot = resolve(this.authorityRoot, "git-bundles"); this.objectFormat = objectFormat;
     if (expectedInitialHead !== undefined && sourceHead !== commitRef(expectedInitialHead, "expectedInitialHead")) throw new Error("source HEAD does not match the expected initial authority head");
     await mkdir(dirname(this.repositoryPath), { recursive: true, mode: 0o700 });
     await mkdir(this.mergeWorkspaceRoot, { recursive: true, mode: 0o700 });
@@ -204,28 +228,27 @@ export class GitWorkspaceAdapter {
       const authorityFormat = (await this.#git(["--git-dir", this.repositoryPath, "rev-parse", "--show-object-format"])).stdout.toString("utf8").trim();
       if (authorityFormat !== objectFormat) throw new Error("authority repository object format does not match the source");
     }
-    const head = await this.head();
+    const head = await this.#head();
     await this.#git(["--git-dir", this.repositoryPath, "fsck", "--no-dangling", "--no-progress"]);
     this.ready = true;
-    return immutable({ repositoryRef: this.repositoryRef, headCommit: head, sourceHead, objectFormat, sourceDirty: (await this.#git(["-C", this.sourceWorkspaceRoot, "status", "--porcelain=v1", "-z"], { maxOutputBytes: 4 * 1024 * 1024 })).stdout.length > 0 });
+    return immutable({ repositoryRef: this.repositoryRef, headCommit: head, sourceHead, objectFormat, sourceDirty: probed.sourceDirty });
   }
 
-  async head() {
+  async #head() {
     return commitRef((await this.#git(["--git-dir", this.repositoryPath, "rev-parse", "refs/heads/authority"])).stdout.toString("utf8").trim(), "authority HEAD");
   }
 
-  async createTaskWorkspace({ workspaceRef, baseCommit } = {}) {
-    const ref = safeRef(workspaceRef, "workspaceRef");
-    const base = commitRef(baseCommit, "baseCommit");
-    this.#requireReady();
-    await this.#git(["--git-dir", this.repositoryPath, "cat-file", "-e", `${base}^{commit}`]);
-    const workspacePath = this.#workspacePath(ref);
-    if (await pathExists(workspacePath)) throw new Error("isolated task workspace path already exists");
-    await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", workspacePath, base]);
-    return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: true });
+  async #ensureTaskWorkspace({ workspaceRef, baseCommit } = {}) {
+    const ref = safeRef(workspaceRef, "workspaceRef"), base = commitRef(baseCommit, "baseCommit");
+    this.#requireReady(); await this.#git(["--git-dir", this.repositoryPath, "cat-file", "-e", `${base}^{commit}`]);
+    const workspacePath = this.#workspacePath(ref); await this.#git(["--git-dir", this.repositoryPath, "worktree", "prune", "--expire", "now"], { allowFailure: true });
+    if (await pathExists(workspacePath)) { await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: false }); }
+    const added = await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", workspacePath, base], { allowFailure: true });
+    if (!added.ok) { if (!(await pathExists(workspacePath))) throw new Error("isolated task workspace could not be created"); await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: false }); }
+    await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: true });
   }
 
-  async inspectChangeSet({ workspaceRef, expectedBaseCommit } = {}) {
+  async #inspectChangeSet({ workspaceRef, expectedBaseCommit } = {}) {
     const ref = safeRef(workspaceRef, "workspaceRef");
     const expectedBase = commitRef(expectedBaseCommit, "expectedBaseCommit");
     this.#requireReady();
@@ -244,43 +267,34 @@ export class GitWorkspaceAdapter {
     return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, commit, parentCommit, diffDigest: digest(patch), treeDigest: digest(tree), files });
   }
 
-  async exportChangeSetBundle({ changeSet, workspaceRef, cas } = {}) {
+  async #exportChangeSetBundle({ changeSet, workspaceRef, cas } = {}) {
     const declaration = normalizeChangeSetDeclaration(changeSet, this.repositoryRef);
     const ref = safeRef(workspaceRef, "workspaceRef");
     if (!(cas instanceof ArtifactContentAddressedStore)) throw new TypeError("cas must be an ArtifactContentAddressedStore");
     this.#requireReady();
-    const inspected = await this.inspectChangeSet({ workspaceRef: ref, expectedBaseCommit: declaration.parentCommit });
+    const inspected = await this.#inspectChangeSet({ workspaceRef: ref, expectedBaseCommit: declaration.parentCommit });
     this.#assertChangeSetMatches(declaration, inspected);
     const anchorRef = `refs/harness/change-sets/${declaration.changeSetRef}`;
     await this.#bindExactRef(anchorRef, declaration.commit, "ChangeSet ref is already bound to another commit");
-    const temporary = resolve(this.bundleRoot, "outgoing", `${declaration.changeSetRef}.${randomUUID()}.bundle.tmp`);
-    try {
-      await this.#git(["--git-dir", this.repositoryPath, "bundle", "create", temporary, anchorRef, `^${declaration.parentCommit}`]);
-      const metadata = await hashFile(temporary, this.maxBundleBytes);
-      const uploadRef = `upload_${createHash("sha256").update(`${this.repositoryRef}\u0000${declaration.changeSetRef}\u0000${metadata.digest}`).digest("base64url")}`;
-      const begun = await cas.beginUpload({ uploadRef, expectedDigest: metadata.digest, expectedSize: metadata.size });
-      if (begun.complete !== true) {
-        const handle = await open(temporary, "r");
-        try {
-          let offset = begun.offset;
-          while (offset < metadata.size) {
-            const buffer = Buffer.alloc(Math.min(BUNDLE_CHUNK_BYTES, metadata.size - offset));
-            const result = await handle.read(buffer, 0, buffer.length, offset);
-            if (result.bytesRead < 1) throw new Error("Git bundle ended before its declared size");
-            const chunk = buffer.subarray(0, result.bytesRead);
-            const appended = await cas.appendChunk({ uploadRef, offset, bytes: chunk, chunkDigest: digest(chunk) });
-            offset = appended.offset;
-          }
-        } finally { await handle.close(); }
-        await cas.finalizeUpload(uploadRef);
-      }
-      return immutable({ repositoryRef: this.repositoryRef, changeSetRef: declaration.changeSetRef, commit: declaration.commit, bundleDigest: metadata.digest, bundleSize: metadata.size });
-    } finally {
-      await rm(temporary, { force: true }).catch(() => undefined);
-    }
+    return this.#exportAnchoredBundle(declaration, cas, anchorRef);
   }
 
-  async importChangeSetBundle({ changeSet, bundleDigest, cas } = {}) {
+  async #exportBoundChangeSetBundle({ changeSet, cas } = {}) {
+    const declaration = normalizeChangeSetDeclaration(changeSet, this.repositoryRef); if (!(cas instanceof ArtifactContentAddressedStore)) throw new TypeError("cas must be an ArtifactContentAddressedStore"); this.#requireReady();
+    const anchorRef = `refs/harness/change-sets/${declaration.changeSetRef}`, anchored = await this.#git(["--git-dir", this.repositoryPath, "rev-parse", "--verify", "--quiet", anchorRef], { allowFailure: true }); if (!anchored.ok) throw new Error("immutable ChangeSet ref is unavailable");
+    const anchoredCommit = commitRef(anchored.stdout.toString("utf8").trim(), "anchored ChangeSet"); if (anchoredCommit !== declaration.commit) throw new Error("immutable ChangeSet ref drifted from its declaration");
+    this.#assertChangeSetMatches(declaration, await this.#inspectBareCommit(anchoredCommit, declaration.parentCommit)); return this.#exportAnchoredBundle(declaration, cas, anchorRef);
+  }
+
+  async #exportAnchoredBundle(declaration, cas, anchorRef) {
+    const temporary = resolve(this.bundleRoot, "outgoing", `${declaration.changeSetRef}.${randomUUID()}.bundle.tmp`);
+    try { await this.#git(["--git-dir", this.repositoryPath, "bundle", "create", temporary, anchorRef, `^${declaration.parentCommit}`]); const metadata = await hashFile(temporary, this.maxBundleBytes), uploadRef = `upload_${createHash("sha256").update(`${this.repositoryRef}\u0000${declaration.changeSetRef}\u0000${metadata.digest}`).digest("base64url")}`, begun = await cas.beginUpload({ uploadRef, expectedDigest: metadata.digest, expectedSize: metadata.size });
+      if (begun.complete !== true) { const handle = await open(temporary, "r"); try { let offset = begun.offset; while (offset < metadata.size) { const buffer = Buffer.alloc(Math.min(BUNDLE_CHUNK_BYTES, metadata.size - offset)), result = await handle.read(buffer, 0, buffer.length, offset); if (result.bytesRead < 1) throw new Error("Git bundle ended before its declared size"); const chunk = buffer.subarray(0, result.bytesRead), appended = await cas.appendChunk({ uploadRef, offset, bytes: chunk, chunkDigest: digest(chunk) }); offset = appended.offset; } } finally { await handle.close(); } await cas.finalizeUpload(uploadRef); }
+      return immutable({ repositoryRef: this.repositoryRef, changeSetRef: declaration.changeSetRef, commit: declaration.commit, bundleDigest: metadata.digest, bundleSize: metadata.size });
+    } finally { await rm(temporary, { force: true }).catch(() => undefined); }
+  }
+
+  async #importChangeSetBundle({ changeSet, bundleDigest, cas } = {}) {
     const declaration = normalizeChangeSetDeclaration(changeSet, this.repositoryRef);
     const expectedBundleDigest = digestRef(bundleDigest, "bundleDigest");
     if (!(cas instanceof ArtifactContentAddressedStore)) throw new TypeError("cas must be an ArtifactContentAddressedStore");
@@ -288,13 +302,13 @@ export class GitWorkspaceAdapter {
     const metadata = await cas.inspect(expectedBundleDigest);
     if (!metadata.present || metadata.size > this.maxBundleBytes) throw new Error("declared Git bundle is unavailable or exceeds its bound");
     const temporary = resolve(this.bundleRoot, "incoming", `${declaration.changeSetRef}.${randomUUID()}.bundle.tmp`);
-    const handle = await open(temporary, "wx", 0o600);
+    const handle = await this.openImpl(temporary, "wx", 0o600);
     try {
       let offset = 0;
       while (offset < metadata.size) {
         const chunk = await cas.readChunk({ digest: expectedBundleDigest, offset, length: Math.min(BUNDLE_CHUNK_BYTES, metadata.size - offset) });
         if (chunk.bytes.length < 1) throw new Error("CAS bundle ended before its declared size");
-        await handle.write(chunk.bytes, 0, chunk.bytes.length, offset);
+        await writeAll(handle, chunk.bytes, offset);
         offset += chunk.bytes.length;
       }
       await handle.sync();
@@ -322,42 +336,58 @@ export class GitWorkspaceAdapter {
     }
   }
 
-  async mergeChangeSets({ mergeGroupRef, baseHead, changeSets } = {}) {
-    const groupRef = safeRef(mergeGroupRef, "mergeGroupRef");
-    const base = commitRef(baseHead, "baseHead");
-    this.#requireReady();
-    if (!Array.isArray(changeSets) || changeSets.length < 1 || changeSets.length > 32) throw new TypeError("changeSets must contain from 1 through 32 entries");
-    const commits = changeSets.map((entry, index) => commitRef(entry?.commit, `changeSets[${index}].commit`));
-    if (new Set(commits).size !== commits.length) throw new Error("merge group contains duplicate commits");
-    const mergePath = resolve(this.mergeWorkspaceRoot, groupRef);
-    await this.#removeWorktree(mergePath);
-    await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", mergePath, base]);
-    try {
-      for (const commit of commits) {
-        const result = await this.#git(["-C", mergePath, "-c", "user.name=Harness Workspace Authority", "-c", "user.email=noreply@localhost", "cherry-pick", "--no-edit", "--allow-empty", commit], { allowFailure: true });
-        if (!result.ok) {
-          const conflicts = parseNulPaths((await this.#git(["-C", mergePath, "diff", "--name-only", "--diff-filter=U", "-z"], { allowFailure: true, maxOutputBytes: 4 * 1024 * 1024 })).stdout);
-          await this.#git(["-C", mergePath, "cherry-pick", "--abort"], { allowFailure: true });
-          return immutable({ repositoryRef: this.repositoryRef, mergeGroupRef: groupRef, merged: false, conflicts });
-        }
-      }
-      const resultCommit = commitRef((await this.#git(["-C", mergePath, "rev-parse", "HEAD"])).stdout.toString("utf8").trim(), "merge result");
-      const tree = (await this.#git(["-C", mergePath, "ls-tree", "-r", "-z", "--full-tree", resultCommit])).stdout;
-      await this.#git(["--git-dir", this.repositoryPath, "update-ref", `refs/harness/merge-groups/${groupRef}`, resultCommit]);
-      return immutable({ repositoryRef: this.repositoryRef, mergeGroupRef: groupRef, merged: true, resultCommit, treeDigest: digest(tree), conflicts: [] });
-    } finally {
-      await this.#removeWorktree(mergePath);
+  async #verifyMergeGroupResult({ groupRef, base, declarations, resultCommit }) {
+    const ancestor = await this.#git(["--git-dir", this.repositoryPath, "merge-base", "--is-ancestor", base, resultCommit], { allowFailure: true });
+    if (!ancestor.ok) throw new Error("merge result receipt does not descend from its declared base");
+    const lines = (await this.#git(["--git-dir", this.repositoryPath, "rev-list", "--reverse", "--first-parent", `${base}..${resultCommit}`])).stdout.toString("utf8").trim();
+    const generated = lines === "" ? [] : lines.split(/\r?\n/u).map((value, index) => commitRef(value, `merge result commit[${index}]`));
+    if (generated.length !== declarations.length) throw new Error("merge result receipt commit count does not match its ChangeSets");
+    for (let index = 0; index < declarations.length; index += 1) {
+      const declaration = declarations[index];
+      const original = await this.#inspectBareCommit(declaration.commit, declaration.parentCommit);
+      this.#assertChangeSetMatches(declaration, original);
+      const parent = index === 0 ? base : generated[index - 1];
+      const applied = await this.#inspectBareCommit(generated[index], parent);
+      if (applied.diffDigest !== declaration.diffDigest || JSON.stringify(applied.files) !== JSON.stringify(declaration.files)) throw new Error("merge result receipt changed or reordered a declared ChangeSet");
     }
+    const tree = (await this.#git(["--git-dir", this.repositoryPath, "ls-tree", "-r", "-z", "--full-tree", resultCommit])).stdout;
+    return immutable({ repositoryRef: this.repositoryRef, mergeGroupRef: groupRef, merged: true, resultCommit, treeDigest: digest(tree), conflicts: [] });
   }
 
-  async compareAndSwapHead({ mergeGroupRef, expectedHead, resultCommit } = {}) {
+  async #readAndVerifyMergeGroupResult({ mergeGroupRef, baseHead, changeSets } = {}) {
+    const groupRef = safeRef(mergeGroupRef, "mergeGroupRef"), base = commitRef(baseHead, "baseHead"), declarations = this.#normalizeMergeChangeSets(changeSets); this.#requireReady();
+    const receiptRef = `refs/harness/merge-groups/${groupRef}`, anchored = await this.#git(["--git-dir", this.repositoryPath, "rev-parse", "--verify", "--quiet", receiptRef], { allowFailure: true }); if (!anchored.ok) return undefined;
+    const resultCommit = commitRef(anchored.stdout.toString("utf8").trim(), "merge result receipt");
+    return this.#verifyMergeGroupResult({ groupRef, base, declarations, resultCommit });
+  }
+
+  async #mergeChangeSets(input = {}) {
+    const existing = await this.#readAndVerifyMergeGroupResult(input); if (existing !== undefined) return existing;
+    const groupRef = safeRef(input.mergeGroupRef, "mergeGroupRef"), base = commitRef(input.baseHead, "baseHead"), declarations = this.#normalizeMergeChangeSets(input.changeSets); this.#requireReady();
+    for (const declaration of declarations) this.#assertChangeSetMatches(declaration, await this.#inspectBareCommit(declaration.commit, declaration.parentCommit));
+    const mergePath = resolve(this.mergeWorkspaceRoot, `${groupRef}.${randomUUID().replaceAll("-", "")}`); await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", mergePath, base]);
+    try {
+      for (const declaration of declarations) { const result = await this.#git(["-C", mergePath, "-c", "user.name=Harness Workspace Authority", "-c", "user.email=noreply@localhost", "cherry-pick", "--no-edit", "--allow-empty", declaration.commit], { allowFailure: true }); if (!result.ok) { const conflicts = parseNulPaths((await this.#git(["-C", mergePath, "diff", "--name-only", "--diff-filter=U", "-z"], { allowFailure: true, maxOutputBytes: 4 * 1024 * 1024 })).stdout); await this.#git(["-C", mergePath, "cherry-pick", "--abort"], { allowFailure: true }); return immutable({ repositoryRef: this.repositoryRef, mergeGroupRef: groupRef, merged: false, conflicts }); } }
+      const resultCommit = commitRef((await this.#git(["-C", mergePath, "rev-parse", "HEAD"])).stdout.toString("utf8").trim(), "merge result"), receiptRef = `refs/harness/merge-groups/${groupRef}`;
+      // Validate the entire generated chain before publishing its immutable receipt.
+      // A crash after the bind is therefore always recoverable, while an empty or
+      // semantically changed cherry-pick can never poison the permanent group ref.
+      await this.#verifyMergeGroupResult({ groupRef, base, declarations, resultCommit });
+      try { await this.#bindExactRef(receiptRef, resultCommit, "merge group receipt is already immutably bound"); } catch (error) { const winner = await this.#readAndVerifyMergeGroupResult(input); if (winner !== undefined) return winner; throw error; }
+      const anchored = await this.#readAndVerifyMergeGroupResult(input);
+      if (anchored === undefined) throw new Error("merge group receipt disappeared after immutable bind");
+      return anchored;
+    } finally { await this.#removeWorktree(mergePath); }
+  }
+
+  async #compareAndSwapHead({ mergeGroupRef, expectedHead, resultCommit } = {}) {
     const groupRef = safeRef(mergeGroupRef, "mergeGroupRef");
     const expected = commitRef(expectedHead, "expectedHead");
     const result = commitRef(resultCommit, "resultCommit");
     this.#requireReady();
     const anchored = commitRef((await this.#git(["--git-dir", this.repositoryPath, "rev-parse", `refs/harness/merge-groups/${groupRef}`])).stdout.toString("utf8").trim(), "anchored merge result");
     if (anchored !== result) throw new Error("result commit is not bound to the exact merge group");
-    const current = await this.head();
+    const current = await this.#head();
     if (current !== expected) {
       const error = new Error("authority Git head changed before compare-and-swap");
       error.code = "AUTHORITY_HEAD_CONFLICT";
@@ -373,11 +403,34 @@ export class GitWorkspaceAdapter {
     return immutable({ repositoryRef: this.repositoryRef, previousHead: expected, headCommit: result, advanced: true });
   }
 
-  async removeTaskWorkspace(workspaceRef) {
-    const ref = safeRef(workspaceRef, "workspaceRef");
-    this.#requireReady();
-    await this.#removeWorktree(this.#workspacePath(ref));
-    return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, removed: true });
+  async #closeTaskWorkspace(input) {
+    const raw = isRecord(input) ? input.workspaceRef : input, ref = safeRef(raw, "workspaceRef"), workspacePath = this.#workspacePath(ref); this.#requireReady();
+    let removed = false;
+    if (await pathExists(workspacePath)) { await this.#verifyTaskWorkspace(workspacePath, undefined, { requireClean: false }); const result = await this.#git(["--git-dir", this.repositoryPath, "worktree", "remove", "--force", workspacePath], { allowFailure: true }); if (!result.ok && await pathExists(workspacePath)) throw new Error("isolated task workspace could not be removed"); await rm(workspacePath, { recursive: true, force: true }); removed = true; }
+    await this.#git(["--git-dir", this.repositoryPath, "worktree", "prune", "--expire", "now"], { allowFailure: true }); const registrations = await this.#worktreeRegistrations(); if (registrations.some((entry) => samePath(entry.path, workspacePath))) throw new Error("isolated task workspace registration survived close");
+    return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, removed });
+  }
+
+  close() {
+    if (this.closePromise !== undefined) return this.closePromise;
+    this.closing = true;
+    this.closePromise = (async () => {
+      await Promise.all([...this.active]);
+      await Promise.allSettled([...this.children]);
+      this.ready = false;
+      for (const source of [this.env, this.sourceEnv]) for (const key of Object.keys(source)) { source[key] = ""; delete source[key]; }
+    })();
+    return this.closePromise;
+  }
+
+  #snapshot() { return { repositoryRef: this.repositoryRef, ready: this.ready, objectFormat: this.objectFormat }; }
+  #assertOpen() { if (this.closing) { const error = new Error("Git Workspace Adapter is closed"); error.code = "GIT_WORKSPACE_ADAPTER_CLOSED"; throw error; } }
+  #run(operation) {
+    try { this.#assertOpen(); } catch (error) { return Promise.reject(error); }
+    let release;
+    const active = new Promise((resolvePromise) => { release = resolvePromise; });
+    this.active.add(active);
+    return Promise.resolve().then(operation).finally(() => { this.active.delete(active); release(); });
   }
 
   async #bindExactRef(ref, commit, conflictMessage) {
@@ -409,6 +462,29 @@ export class GitWorkspaceAdapter {
     if (declaration.commit !== inspected.commit || declaration.parentCommit !== inspected.parentCommit || declaration.diffDigest !== inspected.diffDigest || declaration.treeDigest !== inspected.treeDigest || JSON.stringify(declaration.files) !== JSON.stringify(inspected.files)) throw new Error("Git objects do not match the exact declared ChangeSet");
   }
 
+  #normalizeMergeChangeSets(changeSets) {
+    if (!Array.isArray(changeSets) || changeSets.length < 1 || changeSets.length > 32) throw new TypeError("changeSets must contain from 1 through 32 complete declarations"); const declarations = changeSets.map((entry, index) => normalizeChangeSetDeclaration(entry, this.repositoryRef, `changeSets[${index}]`, { allowAdmission: true, maxBundleBytes: this.maxBundleBytes }));
+    if (new Set(declarations.map((entry) => entry.changeSetRef)).size !== declarations.length || new Set(declarations.map((entry) => entry.commit)).size !== declarations.length) throw new Error("merge group contains duplicate ChangeSets or commits"); return declarations;
+  }
+
+  async #worktreeRegistrations() {
+    const output = (await this.#git(["--git-dir", this.repositoryPath, "worktree", "list", "--porcelain"])).stdout.toString("utf8").replaceAll("\r\n", "\n"), entries = [];
+    for (const block of output.split(/\n\n+/u)) { if (block.trim() === "") continue; const lines = block.split("\n"), pathLine = lines.find((line) => line.startsWith("worktree ")), headLine = lines.find((line) => line.startsWith("HEAD ")); if (pathLine !== undefined) entries.push({ path: resolve(pathLine.slice(9)), head: headLine === undefined ? undefined : commitRef(headLine.slice(5), "registered worktree HEAD"), detached: lines.includes("detached") }); }
+    return entries;
+  }
+
+  async #verifyTaskWorkspace(workspacePath, expectedBase, { requireClean = true } = {}) {
+    const metadata = await lstat(workspacePath); if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error("isolated task workspace path is not a real directory");
+    const actualPath = await realpath(workspacePath); if (!samePath(actualPath, workspacePath)) throw new Error("isolated task workspace real path is not its fixed child path");
+    const top = resolve((await this.#git(["-C", workspacePath, "rev-parse", "--show-toplevel"])).stdout.toString("utf8").trim()); if (!samePath(top, workspacePath)) throw new Error("isolated task workspace is not its exact Git top level");
+    const commonRaw = (await this.#git(["-C", workspacePath, "rev-parse", "--git-common-dir"])).stdout.toString("utf8").trim(), common = resolve(workspacePath, commonRaw), repository = await realpath(this.repositoryPath); if (!samePath(await realpath(common), repository)) throw new Error("isolated task workspace belongs to another repository");
+    const registrations = (await this.#worktreeRegistrations()).filter((entry) => samePath(entry.path, workspacePath)); if (registrations.length !== 1 || !registrations[0].detached) throw new Error("isolated task workspace is not exactly registered as detached");
+    const symbolic = await this.#git(["-C", workspacePath, "symbolic-ref", "-q", "HEAD"], { allowFailure: true }); if (symbolic.ok) throw new Error("isolated task workspace HEAD must be detached");
+    const head = commitRef((await this.#git(["-C", workspacePath, "rev-parse", "HEAD"])).stdout.toString("utf8").trim(), "isolated workspace HEAD"); if (registrations[0].head !== head || (expectedBase !== undefined && head !== expectedBase)) throw new Error("isolated task workspace HEAD does not match its fixed base");
+    const status = await this.#git(["-C", workspacePath, "status", "--porcelain=v1", "-z"], { maxOutputBytes: 4 * 1024 * 1024 }); if (requireClean && status.stdout.length > 0) throw new Error("isolated task workspace must be clean for recovery");
+    return head;
+  }
+
   #workspacePath(ref) {
     const value = resolve(this.workspaceRoot, ref);
     if (!isSameOrWithin(this.workspaceRoot, value) || value === this.workspaceRoot) throw new Error("workspace reference escapes its root");
@@ -426,9 +502,9 @@ export class GitWorkspaceAdapter {
     if (!this.ready) throw new Error("Git Workspace Adapter is not initialized");
   }
 
-  #git(args, { allowFailure = false, maxOutputBytes = MAX_GIT_OUTPUT_BYTES } = {}) {
+  #git(args, { allowFailure = false, maxOutputBytes = MAX_GIT_OUTPUT_BYTES, cwd = this.authorityRoot } = {}) {
     if (!Array.isArray(args) || args.some((value) => typeof value !== "string" || value.includes("\0"))) return Promise.reject(new TypeError("Git arguments are invalid"));
-    return new Promise((resolvePromise, rejectPromise) => {
+    const operation = new Promise((resolvePromise, rejectPromise) => {
       let child;
       let stdout = Buffer.alloc(0);
       let stderr = Buffer.alloc(0);
@@ -455,7 +531,7 @@ export class GitWorkspaceAdapter {
         else stderr = Buffer.concat([stderr, value]);
       };
       try {
-        child = this.spawnImpl(this.gitCommand, args, { cwd: this.authorityRoot, env: this.env, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+        child = this.spawnImpl(this.gitCommand, args, { cwd, env: this.env, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
       } catch { finish({ ok: false, code: null, reason: "spawn" }); return; }
       child.stdout?.on("data", (chunk) => append("stdout", chunk));
       child.stderr?.on("data", (chunk) => append("stderr", chunk));
@@ -464,6 +540,9 @@ export class GitWorkspaceAdapter {
       timer = setTimeout(() => { child?.kill?.(); finish({ ok: false, code: null, reason: "timeout" }); }, this.timeoutMs);
       timer.unref?.();
     });
+    this.children.add(operation);
+    operation.then(() => this.children.delete(operation), () => this.children.delete(operation));
+    return operation;
   }
 }
 

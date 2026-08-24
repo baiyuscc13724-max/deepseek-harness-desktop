@@ -11,7 +11,7 @@ const required = [
   'electron/bridge/component-update-contract.cjs', 'electron/bridge/component-update-archive.cjs', 'electron/bridge/component-update-builder.cjs', 'electron/bridge/component-update-config.cjs', 'electron/bridge/component-update-store.cjs', 'electron/bridge/component-update-service.cjs', 'electron/bridge/component-update-helper.cjs', 'electron/bridge/component-update-launcher.cjs', 'electron/bridge/component-update-health.cjs', 'electron/bridge/component-runtime-resolver.cjs',
   'electron/bridge/relay-tunnel-codec.cjs', 'electron/bridge/mobile-relay-config.cjs', 'electron/bridge/sync-transport-manager.cjs', 'electron/bridge/sync-transports/wss-relay-adapter.cjs', 'services/wss-relay/server.cjs', 'services/wss-relay/README.zh-CN.md',
   'electron/bridge/capability-broker.cjs', 'electron/bridge/computer-use-screenshot-store.cjs', 'electron/bridge/storage-scan-service.cjs', 'electron/bridge/storage-cleanup-service.cjs', 'electron/bridge/storage-management-service.cjs', 'electron/bridge/memory-censor.cjs', 'electron/bridge/memory-service.cjs', 'electron/bridge/browser-link-router.cjs', 'electron/bridge/browser-url-policy.cjs', 'electron/bridge/browser-session-policy.cjs', 'electron/bridge/browser-site-authz.cjs', 'electron/bridge/browser-action-gate.cjs', 'electron/bridge/browser-audit.cjs', 'electron/bridge/browser-diagnostics.cjs', 'electron/bridge/browser-history-store.cjs', 'electron/bridge/browser-security-policy.cjs', 'electron/bridge/browser-navigation-guard.cjs', 'electron/bridge/browser-operation-coordinator.cjs', 'electron/bridge/browser-control-server.cjs', 'electron/bridge/computer-use-confirmation-store.cjs',
-  'electron/bridge/desktop-directory-picker-plugin-service.cjs', 'plugins/dsh-desktop-directory-picker/package.json', 'plugins/dsh-desktop-directory-picker/lib/index.js', 'plugins/dsh-desktop-directory-picker/lib/client.js', 'electron/bridge/desktop-browser-tools-plugin-service.cjs', 'plugins/dsh-desktop-browser-tools/package.json', 'plugins/dsh-desktop-browser-tools/lib/index.js', 'electron/bridge/desktop-memory-tools-plugin-service.cjs', 'plugins/dsh-desktop-memory-tools/package.json', 'plugins/dsh-desktop-memory-tools/lib/index.js', 'electron/bridge/desktop-mcp-manager-plugin-service.cjs', 'plugins/dsh-desktop-mcp-manager/package.json', 'plugins/dsh-desktop-mcp-manager/lib/index.js', 'plugins/dsh-desktop-mcp-manager/lib/client.js', 'electron/bridge/desktop-schedules-plugin-service.cjs', 'plugins/dsh-desktop-schedules/package.json', 'plugins/dsh-desktop-schedules/lib/index.js', 'plugins/dsh-desktop-schedules/lib/client.js', 'electron/bridge/desktop-files-plugin-service.cjs', 'electron/bridge/right-workspace-service.cjs', 'plugins/dsh-desktop-files/package.json', 'plugins/dsh-desktop-files/lib/index.js', 'plugins/dsh-desktop-files/lib/client.js', 'electron/bridge/desktop-progress-plugin-service.cjs', 'plugins/dsh-desktop-progress/package.json', 'plugins/dsh-desktop-progress/lib/index.js', 'electron/bridge/desktop-compaction-plugin-service.cjs', 'plugins/dsh-desktop-compaction/package.json', 'plugins/dsh-desktop-compaction/lib/index.js', 'electron/bridge/desktop-computer-use-plugin-service.cjs', 'plugins/dsh-desktop-computer-use/package.json', 'plugins/dsh-desktop-computer-use/lib/index.js', 'electron/bridge/agent-teams-plugin-service.cjs', 'plugins/dsh-agent-teams/package.json', 'plugins/dsh-agent-teams/lib/index.js', 'plugins/dsh-agent-teams/lib/client.js', 'electron/bridge/session-experience-plugin-service.cjs', 'plugins/dsh-session-experience/package.json', 'plugins/dsh-session-experience/lib/index.js', 'plugins/dsh-session-experience/lib/client.js',
+  'electron/bridge/desktop-directory-picker-plugin-service.cjs', 'plugins/dsh-desktop-directory-picker/package.json', 'plugins/dsh-desktop-directory-picker/lib/index.js', 'plugins/dsh-desktop-directory-picker/lib/client.js', 'electron/bridge/desktop-browser-tools-plugin-service.cjs', 'plugins/dsh-desktop-browser-tools/package.json', 'plugins/dsh-desktop-browser-tools/lib/index.js', 'electron/bridge/desktop-memory-tools-plugin-service.cjs', 'plugins/dsh-desktop-memory-tools/package.json', 'plugins/dsh-desktop-memory-tools/lib/index.js', 'electron/bridge/desktop-mcp-manager-plugin-service.cjs', 'plugins/dsh-desktop-mcp-manager/package.json', 'plugins/dsh-desktop-mcp-manager/lib/index.js', 'plugins/dsh-desktop-mcp-manager/lib/client.js', 'electron/bridge/desktop-schedules-plugin-service.cjs', 'plugins/dsh-desktop-schedules/package.json', 'plugins/dsh-desktop-schedules/lib/index.js', 'plugins/dsh-desktop-schedules/lib/client.js', 'electron/bridge/desktop-files-plugin-service.cjs', 'electron/bridge/right-workspace-service.cjs', 'plugins/dsh-desktop-files/package.json', 'plugins/dsh-desktop-files/lib/index.js', 'plugins/dsh-desktop-files/lib/client.js', 'electron/bridge/desktop-progress-plugin-service.cjs', 'plugins/dsh-desktop-progress/package.json', 'plugins/dsh-desktop-progress/lib/index.js', 'electron/bridge/desktop-compaction-plugin-service.cjs', 'plugins/dsh-desktop-compaction/package.json', 'plugins/dsh-desktop-compaction/lib/index.js', 'electron/bridge/desktop-computer-use-plugin-service.cjs', 'plugins/dsh-desktop-computer-use/package.json', 'plugins/dsh-desktop-computer-use/lib/index.js', 'electron/bridge/agent-teams-plugin-service.cjs', 'plugins/dsh-agent-teams/package.json', 'plugins/dsh-agent-teams/lib/index.js', 'plugins/dsh-agent-teams/lib/client.js', 'electron/bridge/model-admission-plugin-service.cjs', 'plugins/dsh-model-admission/package.json', 'plugins/dsh-model-admission/lib/index.js', 'electron/bridge/session-experience-plugin-service.cjs', 'plugins/dsh-session-experience/package.json', 'plugins/dsh-session-experience/lib/index.js', 'plugins/dsh-session-experience/lib/client.js',
   'electron/store/app-state-store.cjs', 'electron/store/mobile-sync-store.cjs',
   'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js', 'renderer/workspace-links-integration.js', 'renderer/storage-manager.js', 'renderer/memory-manager.js', 'renderer/right-workspace.js', 'renderer/right-workspace-integration.js', 'renderer/right-workspace.css', 'renderer/browser-sidebar.js', 'renderer/pet/pet-sprite-rig.js', 'renderer/pets/maid-whale/atlas/maid-whale.atlas.json',
   'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -19,15 +19,92 @@ const required = [
   'renderer/themes/maid-atelier/maid-atelier-palace-day-v4.webp',
   'renderer/themes/maid-atelier/maid-atelier-palace-night-v4.webp',
   'renderer/assets/deepseek-icon.svg', 'build/icon.png',
-  'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/computer-use-screenshot-store.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-link-router.test.cjs', 'tests/browser-link-integration.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-codex-parity.test.cjs', 'tests/browser-diagnostics.test.cjs', 'tests/browser-history-store.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-navigation-guard.test.cjs', 'tests/fixtures/browser-navigation-guard-electron.cjs', 'tests/browser-operation-coordinator.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-mcp-manager-plugin-service.test.cjs', 'tests/mcp-manager-domain.test.cjs', 'tests/mcp-manager-runtime.test.cjs', 'tests/mcp-manager-ui.test.cjs', 'tests/desktop-schedules.test.cjs', 'tests/desktop-files.test.cjs', 'tests/right-workspace-service.test.cjs', 'tests/right-workspace-ui.test.cjs', 'tests/desktop-progress.test.cjs', 'tests/desktop-compaction.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/computer-use-confirmation-store.test.cjs', 'tests/agent-teams-plugin-service.test.cjs', 'tests/agent-teams-domain.test.cjs', 'tests/agent-teams-runtime.test.cjs', 'tests/agent-teams-ui.test.cjs', 'tests/session-experience.test.cjs', 'tests/text-selection-ui.test.cjs', 'tests/ui-mode-integration.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
+  'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/computer-use-screenshot-store.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-link-router.test.cjs', 'tests/browser-link-integration.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-codex-parity.test.cjs', 'tests/browser-diagnostics.test.cjs', 'tests/browser-history-store.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-navigation-guard.test.cjs', 'tests/fixtures/browser-navigation-guard-electron.cjs', 'tests/browser-operation-coordinator.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-mcp-manager-plugin-service.test.cjs', 'tests/mcp-manager-domain.test.cjs', 'tests/mcp-manager-runtime.test.cjs', 'tests/mcp-manager-ui.test.cjs', 'tests/desktop-schedules.test.cjs', 'tests/desktop-files.test.cjs', 'tests/right-workspace-service.test.cjs', 'tests/right-workspace-ui.test.cjs', 'tests/desktop-progress.test.cjs', 'tests/desktop-compaction.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/computer-use-confirmation-store.test.cjs', 'tests/agent-teams-plugin-service.test.cjs', 'tests/agent-teams-domain.test.cjs', 'tests/agent-teams-runtime.test.cjs', 'tests/agent-teams-ui.test.cjs', 'tests/model-admission-plugin-service.test.cjs', 'tests/model-admission-runtime.test.cjs', 'tests/session-experience.test.cjs', 'tests/text-selection-ui.test.cjs', 'tests/ui-mode-integration.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
   'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/desktop-release-contract.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/release-automation.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-version-sync.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
-  'docs/ARCHITECTURE.zh-CN.md', 'docs/COMPETITOR-FEATURE-BENCHMARK.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.40.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
+  'docs/ARCHITECTURE.zh-CN.md', 'docs/COMPETITOR-FEATURE-BENCHMARK.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.41.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
   '.github/workflows/apple-virtual-tests.yml', '.github/workflows/android-mobile-release.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/prepare-bundled-git.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/component-update-helper.cjs', 'scripts/create-component-signing-key.mjs', 'scripts/create-android-release-keystore.ps1', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'mobile/mobile-app-update.example.json', 'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
   'mobile/android/RELEASE-SIGNING.zh-CN.md', 'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json', 'release-mirrors.example.json', 'release-update-sources.json', 'release-update-sources.example.json', 'component-update-sources.json', 'mobile-relay-sources.json', 'component-release.example.json', 'component-release.macos-arm64.example.json'
 ]
+
+// Agent Teams M2-M5 are executable product surfaces, not optional design files.
+// Keep every security boundary and its regression suite inside the static release gate.
+required.push(
+  'docs/AGENT-TEAMS-ARCHITECTURE.zh-CN.md',
+  'docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md',
+  'electron/bridge/git-runtime-service.cjs',
+  'plugins/dsh-agent-teams/lib/artifact-cas.js',
+  'plugins/dsh-agent-teams/lib/defect-lifecycle.js',
+  'plugins/dsh-agent-teams/lib/defect-lifecycle-service.js',
+  'plugins/dsh-agent-teams/lib/desktop-git-capability.js',
+  'plugins/dsh-agent-teams/lib/external-defect-connectors.js',
+  'plugins/dsh-agent-teams/lib/external-defect-outbox.js',
+  'plugins/dsh-agent-teams/lib/git-workspace-adapter.js',
+  'plugins/dsh-agent-teams/lib/project-automation-domain.js',
+  'plugins/dsh-agent-teams/lib/project-automation-service.js',
+  'plugins/dsh-agent-teams/lib/project-automation-store.js',
+  'plugins/dsh-agent-teams/lib/project-automation-web.js',
+  'plugins/dsh-agent-teams/lib/project-business-sync-domain.js',
+  'plugins/dsh-agent-teams/lib/project-business-sync-runtime.js',
+  'plugins/dsh-agent-teams/lib/project-business-sync-service.js',
+  'plugins/dsh-agent-teams/lib/project-business-sync-store.js',
+  'plugins/dsh-agent-teams/lib/project-authority-service.js',
+  'plugins/dsh-agent-teams/lib/project-entry-service.js',
+  'plugins/dsh-agent-teams/lib/project-foundations-runtime.js',
+  'plugins/dsh-agent-teams/lib/project-lan-transport.js',
+  'plugins/dsh-agent-teams/lib/project-secure-channel.js',
+  'plugins/dsh-agent-teams/lib/project-state-store.js',
+  'plugins/dsh-agent-teams/lib/project-wss-relay-transport.js',
+  'plugins/dsh-agent-teams/lib/project-task-actor.js',
+  'plugins/dsh-agent-teams/lib/project-task-crypto.js',
+  'plugins/dsh-agent-teams/lib/project-task-domain.js',
+  'plugins/dsh-agent-teams/lib/project-task-service.js',
+  'plugins/dsh-agent-teams/lib/project-task-store.js',
+  'plugins/dsh-agent-teams/lib/project-task-web.js',
+  'plugins/dsh-agent-teams/lib/quality-evidence.js',
+  'plugins/dsh-agent-teams/lib/test-orchestrator.js',
+  'plugins/dsh-agent-teams/lib/test-orchestrator-service.js',
+  'plugins/dsh-agent-teams/lib/workspace-authority.js',
+  'plugins/dsh-agent-teams/lib/workspace-authority-service.js',
+  'tests/artifact-cas.test.cjs',
+  'tests/defect-lifecycle.test.cjs',
+  'tests/defect-lifecycle-service.test.cjs',
+  'tests/desktop-git-capability.test.cjs',
+  'tests/external-defect-connectors.test.cjs',
+  'tests/external-defect-outbox.test.cjs',
+  'tests/git-bundle-transfer.test.cjs',
+  'tests/git-runtime-service.test.cjs',
+  'tests/git-workspace-adapter.test.cjs',
+  'tests/project-automation-domain.test.cjs',
+  'tests/project-automation-service.test.cjs',
+  'tests/project-automation-store.test.cjs',
+  'tests/project-automation-web.test.cjs',
+  'tests/project-business-sync-domain.test.cjs',
+  'tests/project-business-sync-api.test.cjs',
+  'tests/project-business-sync-runtime.test.cjs',
+  'tests/project-business-sync-service.test.cjs',
+  'tests/project-business-sync-store.test.cjs',
+  'tests/project-authority-service.test.cjs',
+  'tests/project-entry-service.test.cjs',
+  'tests/project-foundations-runtime.test.cjs',
+  'tests/project-foundations-tools.test.cjs',
+  'tests/project-lan-transport.test.cjs',
+  'tests/project-secure-channel.test.cjs',
+  'tests/project-state-store.test.cjs',
+  'tests/project-wss-relay-transport.test.cjs',
+  'tests/project-task-api.test.cjs',
+  'tests/project-task-domain.test.cjs',
+  'tests/project-task-service.test.cjs',
+  'tests/project-task-store.test.cjs',
+  'tests/project-task-web.test.cjs',
+  'tests/quality-evidence.test.cjs',
+  'tests/test-orchestrator.test.cjs',
+  'tests/test-orchestrator-service.test.cjs',
+  'tests/workspace-authority.test.cjs',
+  'tests/workspace-authority-service.test.cjs',
+)
 for (const relative of required) await access(path.join(root, relative))
 
 const removed = [
@@ -236,6 +313,14 @@ if (pkg.scripts?.['release:components'] !== 'node scripts/build-component-update
 if (pkg.scripts?.['test:component-local'] !== 'node scripts/local-component-update-test.mjs') throw new Error('Local component restart/rollback test command is missing.')
 for (const helperPath of ['scripts/component-update-helper.cjs', 'electron/bridge/component-update-*.cjs']) {
   if (!pkg.build?.asarUnpack?.includes(helperPath)) throw new Error(`Detached component helper must be unpacked: ${helperPath}`)
+}
+const modelAdmissionBundle = 'plugins/dsh-model-admission/**/*'
+if (!pkg.build?.files?.includes(modelAdmissionBundle) || !pkg.build?.asarUnpack?.includes(modelAdmissionBundle)) {
+  throw new Error('The Host-only model admission plugin must be packaged and unpacked for profile installation.')
+}
+const modelAdmissionManifest = JSON.parse(await readFile(path.join(root, 'plugins/dsh-model-admission/package.json'), 'utf8'))
+if (modelAdmissionManifest.name !== 'dsh-model-admission' || modelAdmissionManifest.version !== pkg.version || modelAdmissionManifest.type !== 'module' || modelAdmissionManifest.main !== 'lib/index.js' || modelAdmissionManifest.exports?.['.'] !== './lib/index.js' || modelAdmissionManifest.dsh?.client !== undefined) {
+  throw new Error('The bundled model admission manifest must match the desktop version and remain Host-only.')
 }
 for (const bundled of ['component-update-sources.json', 'mobile-relay-sources.json', 'scripts/component-update-helper.cjs']) {
   if (!pkg.build?.files?.includes(bundled)) throw new Error(`Packaged component updater support file is missing: ${bundled}`)

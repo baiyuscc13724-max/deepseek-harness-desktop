@@ -17,6 +17,7 @@ test('wallpaper scheme privileges register before asynchronous Electron bootstra
   assert.doesNotMatch(main, /protocol\.registerSchemesAsPrivileged/)
   assert.match(renderer, /img-src 'self' data: harness-wallpaper:/)
   assert.match(renderer, /media-src 'self' harness-wallpaper:/)
+  assert.doesNotMatch(renderer, /(?:img-src|media-src)[^;]*\bfile:/)
 })
 
 test('wallpaper media types distinguish images and videos', () => {
@@ -43,6 +44,18 @@ test('wallpaper library gives images and videos the same managed preview route',
   assert.doesNotMatch(main, /previewUrl:\s*available\s*&&\s*item\.kind\s*===\s*['"]image['"]/)
   assert.match(main, /target\.searchParams\.get\('v'\) !== wallpaperMediaRevision\(info\)/)
   assert.match(main, /activeWallpaper\?\.previewUrl \|\| `\$\{WALLPAPER_SCHEME\}:\/\/current\/video\?v=\$\{wallpaperMediaRevision\(info\)\}`/)
+})
+
+test('Wallpaper Engine scan previews use opaque revision-bound media routes', async () => {
+  const main = await readFile(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  assert.match(main, /const wallpaperEnginePreviewFiles = new Map\(\)/)
+  assert.match(main, /async function wallpaperEngineLibraryWithPreviews\(library\)/)
+  assert.match(main, /createHash\('sha256'\)[\s\S]*?project\.projectFile[\s\S]*?project\.file[\s\S]*?\.slice\(0, 32\)/u)
+  assert.match(main, /previewUrl: `\$\{WALLPAPER_SCHEME\}:\/\/engine-preview\/\$\{previewId\}\/media\?v=\$\{revision\}`/)
+  assert.match(main, /target\.hostname === 'engine-preview'[\s\S]*?wallpaperEnginePreviewFiles\.get\(match\[1\]\.toLowerCase\(\)\)/u)
+  assert.match(main, /expectedKind && kind !== expectedKind/)
+  assert.match(main, /return wallpaperEngineLibraryWithPreviews\(library\)/)
+  assert.doesNotMatch(main, /engine-preview\/\$\{encodeURIComponent\(project\.file\)\}/)
 })
 
 test('video responses stream exact byte ranges with the correct MIME type', async () => {

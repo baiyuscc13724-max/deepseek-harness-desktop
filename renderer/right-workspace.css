@@ -18,14 +18,16 @@
  * 但提供了与 browser-sidebar 一致的辅助规则示例（见文末注释）。
  */
 :root {
-  --dsh-right-workspace-width: 460px;
+  /* The official workbench owns both rows above this boundary. */
+  --dsh-workbench-header-height: 76px;
+  --dsh-right-workspace-width: 640px;
 }
 
 /* ---------- 根容器 ---------- */
 .dsh-right-workspace {
   position: fixed;
   z-index: 8;
-  top: 36px; /* 与 browser-sidebar 一致，避开顶部快捷按钮条 */
+  top: var(--dsh-workbench-header-height); /* 全局标题与会话导航保留在右栏上方 */
   right: 0;
   bottom: 0;
   display: flex;
@@ -34,7 +36,7 @@
   color: var(--shell-text, #1f2937);
   background: var(--shell-surface, #f7f8fa);
   border-left: 1px solid var(--shell-border, rgba(127, 127, 127, .22));
-  box-shadow: -12px 0 30px rgba(0, 0, 0, .12);
+  box-shadow: inset 0 1px 0 var(--shell-border, rgba(127, 127, 127, .22));
   transition: transform .22s ease, visibility 0s linear .22s;
   app-region: no-drag;
   -webkit-app-region: no-drag;

@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
-const { createHash, generateKeyPairSync } = require('node:crypto')
+const { createHash, createHmac, generateKeyPairSync } = require('node:crypto')
 const { pathToFileURL } = require('node:url')
 
 const moduleUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'defect-lifecycle.js')).href
@@ -13,12 +13,26 @@ function digest(value) {
   return `sha256:${createHash('sha256').update(String(value)).digest('hex')}`
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`
+}
+
+function authenticatedEmptyState(repositoryRef) {
+  const state = {
+    version: 1, stateKind: 'defect-lifecycle-host', projectRef: 'project_opaque', repositoryRef,
+    secret: 'defect-state-secret-with-twenty-four-characters', signals: [], occurrences: [], defects: [], fixes: [], verifications: [], releaseObservations: []
+  }
+  return { ...state, stateMac: createHmac('sha256', state.secret).update(canonicalJson(state)).digest('base64url') }
+}
+
 async function fixture() {
   const mod = await import(moduleUrl)
   let now = 40_000_000
   const attestations = new Map()
   const lifecycle = new mod.DefectLifecycle({
-    projectRef: 'project_opaque', repositoryRef: 'repo_opaque', now: () => now,
+    projectRef: 'project_opaque', repositoryRef: 'repository_opaque', now: () => now,
     resolveAttestation: ref => attestations.get(ref)
   })
   return {
@@ -28,13 +42,28 @@ async function fixture() {
         attestationRef: ref,
         result,
         evidenceDigest: digest(`${ref}-evidence`),
-        binding: { projectRef: 'project_opaque', repositoryRef: 'repo_opaque', resultCommit: commit, artifactSetRef }
+        binding: { projectRef: 'project_opaque', repositoryRef: 'repository_opaque', resultCommit: commit, artifactSetRef }
       }
       attestations.set(ref, record)
       return record
     }
   }
 }
+
+test('DefectLifecycle accepts only the canonical repository_* reference across construction and Host restore', async () => {
+  const { DefectLifecycle } = await import(moduleUrl)
+  const options = { projectRef: 'project_opaque', now: () => 40_000_000, resolveAttestation: () => undefined }
+  const lifecycle = new DefectLifecycle({ ...options, repositoryRef: 'repository_opaque', secret: 'defect-state-secret-with-twenty-four-characters' })
+  assert.equal(lifecycle.repositoryRef, 'repository_opaque')
+  const exported = lifecycle.exportHostState()
+  assert.equal(exported.repositoryRef, 'repository_opaque')
+  assert.equal(DefectLifecycle.restore(exported, options).repositoryRef, 'repository_opaque')
+
+  for (const repositoryRef of ['repo_opaque', 'gitrepo_opaque', 'Repository_opaque', 'repository-', 'repository_short']) {
+    assert.throws(() => new DefectLifecycle({ ...options, repositoryRef }), /repositoryRef must be an opaque public reference/u)
+    assert.throws(() => DefectLifecycle.restore(authenticatedEmptyState(repositoryRef), options), /repositoryRef must be an opaque public reference/u)
+  }
+})
 
 function signal(lifecycle, overrides = {}) {
   return lifecycle.recordSignal({
@@ -142,13 +171,13 @@ test('Defect Verification consumes an admitted signed quality attestation withou
   const qualityKeys = generateKeyPairSync('ed25519')
   const runnerKeys = generateKeyPairSync('ed25519')
   const quality = new qualityMod.QualityEvidenceAuthority({
-    projectRef: 'project_opaque', repositoryRef: 'repo_opaque',
+    projectRef: 'project_opaque', repositoryRef: 'repository_opaque',
     secret: 'integration-quality-secret-with-twenty-four-characters', qualityPrivateKey: qualityKeys.privateKey, now: () => 40_000_000
   })
   const runner = quality.registerRunner({ runnerHandle: 'private-verifier', displayName: 'Verifier', trust: 'trusted', capabilities: ['verification'], publicKey: runnerKeys.publicKey })
   const plan = quality.createPlan({ name: 'Defect verification', suites: [{ suiteRef: 'verification', tier: 'integration', minimumTrust: 'trusted', minimumTests: 1 }] })
   const exactBinding = {
-    projectRef: 'project_opaque', repositoryRef: 'repo_opaque', authorityEpoch: 1,
+    projectRef: 'project_opaque', repositoryRef: 'repository_opaque', authorityEpoch: 1,
     mergeGroupRef: 'mergegroup_fix001', baseHead: OBSERVED, resultCommit: FIX,
     artifactSetRef: 'artifactset_fixed01', manifestDigest: digest('fix-manifest')
   }
@@ -160,7 +189,7 @@ test('Defect Verification consumes an admitted signed quality attestation withou
   })
   const signed = qualityMod.signTestAttestation(prepared, runnerKeys.privateKey)
   const admitted = quality.submitAttestation({ attestation: signed, signature: signed.signature }).attestation
-  const lifecycle = new defectMod.DefectLifecycle({ projectRef: 'project_opaque', repositoryRef: 'repo_opaque', now: () => 40_000_000, resolveAttestation: ref => quality.getAttestation(ref) })
+  const lifecycle = new defectMod.DefectLifecycle({ projectRef: 'project_opaque', repositoryRef: 'repository_opaque', now: () => 40_000_000, resolveAttestation: ref => quality.getAttestation(ref) })
   const source = signal(lifecycle)
   const observed = occurrence(lifecycle, source)
   const defect = lifecycle.triageOccurrence({ occurrenceRef: observed.occurrenceRef, ownerCollaboratorRef: 'collaborator_owner01' })

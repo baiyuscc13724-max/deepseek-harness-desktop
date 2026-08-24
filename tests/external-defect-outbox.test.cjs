@@ -138,3 +138,20 @@ test('connector Host snapshot authenticates private mapping and replay state', a
   assert.deepEqual(restored.toJSON(), state.outbox.connector.toJSON())
   assert.throws(() => state.connectorMod.ExternalDefectConnector.restore({ ...hostState, projectLocator: 'attacker/repository' }, { credentialProvider: state.credentialProvider, webhookSecretProvider: state.webhookSecretProvider, request: state.request }), /authentication failed/u)
 }))
+
+test('close drains accepted outbox persistence and rejects delivery with one store close', async () => usingFixture(async state => {
+  const originalSave = state.store.save.bind(state.store), originalClose = state.store.close.bind(state.store)
+  let release, closeCalls = 0
+  const barrier = new Promise(resolve => { release = resolve })
+  state.store.save = async (...args) => { await barrier; return originalSave(...args) }
+  state.store.close = () => { closeCalls += 1; return originalClose() }
+  const accepted = state.outbox.enqueueDefect(defect({ defectRef: 'defect_close01' }))
+  const closing = state.outbox.close()
+  assert.equal(state.outbox.close(), closing)
+  await assert.rejects(state.outbox.deliverNext(), error => error.code === 'EXTERNAL_DEFECT_OUTBOX_CLOSED')
+  release()
+  assert.equal((await accepted).duplicate, false)
+  await closing
+  assert.equal(closeCalls, 1)
+  await assert.rejects(state.outbox.pause(), error => error.code === 'EXTERNAL_DEFECT_OUTBOX_CLOSED')
+}))

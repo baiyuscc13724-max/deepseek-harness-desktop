@@ -78,3 +78,23 @@ test('competing services never publish a mutation that lost encrypted-store CAS'
   assert.equal(retried.revision, 4)
   assert.equal(competing.toJSON().memberCount, 3)
 }))
+
+test('closing persisted authority drains accepted mutation and closes its encrypted key store', async () => usingFixture(async state => {
+  const ownerKeys = generateKeyPairSync('ed25519')
+  const pending = state.service.mutate('registerDevice', {
+    userHandle: 'owner-close', deviceHandle: 'owner-close-device', displayName: 'Owner', role: 'owner', publicKey: ownerKeys.publicKey
+  })
+  const closing = state.service.close()
+  assert.equal(state.service.close(), closing)
+  assert.throws(() => state.service.read('listMembers'), error => error?.code === 'PROJECT_AUTHORITY_CLOSED')
+  assert.throws(() => state.service.mutate('registerDevice', {}), error => error?.code === 'PROJECT_AUTHORITY_CLOSED')
+  assert.throws(() => state.service.refresh(), error => error?.code === 'PROJECT_AUTHORITY_CLOSED')
+  assert.equal((await pending).revision, 2)
+  await closing
+  assert.equal(state.service.store.encryptionKey.every(byte => byte === 0), true)
+
+  const reopenedStore = new state.storeMod.EncryptedProjectStateStore(state.filePath, { projectRef: state.service.toJSON().projectRef, encryptionKey: state.key })
+  const reopened = await state.serviceMod.PersistedProjectAuthority.open({ store: reopenedStore, now: () => 70_000_000 })
+  assert.equal(reopened.toJSON().memberCount, 1)
+  await reopened.close()
+}))

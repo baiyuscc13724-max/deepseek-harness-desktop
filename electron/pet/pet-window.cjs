@@ -56,7 +56,9 @@ class PetWindowController {
   }
 
   moveTo(x, y) {
+    if (this.quitting) return null
     const window = this.ensure()
+    if (!window || window.isDestroyed()) return null
     const current = window.getBounds()
     const point = {
       x: Math.round(Number.isFinite(Number(x)) ? Number(x) + current.width / 2 : current.x + current.width / 2),
@@ -70,6 +72,7 @@ class PetWindowController {
     // a small recovery strip visible so the pet can never become unreachable.
     const minimumY = area.y - current.height + 34
     const nextY = Math.max(minimumY, Math.min(Math.round(Number(y) || 0), area.y + area.height - current.height))
+    if (window.isDestroyed() || !Number.isSafeInteger(nextX) || !Number.isSafeInteger(nextY)) return null
     window.setPosition(nextX, nextY, false)
     const bounds = window.getBounds()
     const mainBounds = this.getMainBounds?.() || null

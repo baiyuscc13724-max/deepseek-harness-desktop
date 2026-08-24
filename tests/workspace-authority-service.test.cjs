@@ -104,6 +104,16 @@ test('Workspace mutations publish only after encrypted revision CAS and reopen e
   assert.equal(records.group.resultCommit, RESULT)
 }))
 
+test('closeWorkspace is a persisted fenced mutation and survives reopen', async () => usingFixture(async state => {
+  const openInput = { collaboratorRef: 'collaborator_closepersist', taskRef: 'task_closepersist', workspacePath: path.join(state.roots.workspaceRoot, 'workspace-closepersist'), baseCommit: HEAD }, opened = (await state.service.mutate('openWorkspace', openInput)).result
+  assert.deepEqual((await state.service.mutate('openWorkspace', openInput)).result, opened); assert.equal(state.service.toJSON().activeWorkspaceCount, 1)
+  const claimInput = { workspaceRef: opened.workspaceRef, mode: 'write', resources: ['src/close.js'] }, claim = (await state.service.mutate('claimResources', claimInput)).result
+  assert.deepEqual((await state.service.mutate('claimResources', claimInput)).result, claim); assert.equal(state.service.toJSON().activeClaimCount, 1)
+  const closed = await state.service.mutate('closeWorkspace', { workspaceRef: opened.workspaceRef, fencingToken: opened.fencingToken }); assert.equal(closed.result.state, 'closed')
+  const persisted = state.service.authority.exportHostState(); assert.equal(persisted.claims.find(item => item.claimRef === claim.claimRef).state, 'released')
+  const reopenedStore = new state.storeMod.EncryptedAuthorityStateStore(state.filePath, { projectRef: PROJECT, encryptionKey: state.key }), reopened = await state.serviceMod.PersistedWorkspaceAuthority.open({ store: reopenedStore, gitAdapter: state.gitAdapter, now: () => 110_000_000, verifyGateReceipt: state.verifyGateReceipt, expected: state.roots }); assert.equal(reopened.toJSON().activeWorkspaceCount, 0); assert.equal((await reopened.mutate('closeWorkspace', { workspaceRef: opened.workspaceRef, fencingToken: opened.fencingToken })).result.state, 'closed'); await reopened.close()
+}))
+
 test('landing journal atomically advances Git then encrypted state', async () => usingFixture(async state => {
   const records = await buildReadyGroup(state)
   const result = await state.service.landMergeGroup({
@@ -161,4 +171,22 @@ test('pending journal refuses recovery when an unrelated Git head won', async ()
   await assert.rejects(state.serviceMod.PersistedWorkspaceAuthority.open({
     store: recoveryStore, gitAdapter: state.gitAdapter, now: () => 110_000_000, verifyGateReceipt: state.verifyGateReceipt
   }), error => error?.code === 'WORKSPACE_RECOVERY_CONFLICT')
+}))
+
+test('close drains an accepted authority mutation and gates status before one store close', async () => usingFixture(async state => {
+  const originalSave = state.store.save.bind(state.store), originalClose = state.store.close.bind(state.store)
+  let release, closeCalls = 0
+  const barrier = new Promise(resolve => { release = resolve })
+  state.store.save = async (...args) => { await barrier; return originalSave(...args) }
+  state.store.close = () => { closeCalls += 1; return originalClose() }
+  const accepted = state.service.mutate('openWorkspace', { collaboratorRef: 'collaborator_close01', taskRef: 'task_close01', workspacePath: path.join(state.roots.workspaceRoot, 'workspace-close'), baseCommit: HEAD })
+  const closing = state.service.close()
+  assert.equal(state.service.close(), closing)
+  assert.throws(() => state.service.readStatus(), error => error.code === 'WORKSPACE_AUTHORITY_CLOSED')
+  await assert.rejects(state.service.refresh(), error => error.code === 'WORKSPACE_AUTHORITY_CLOSED')
+  await assert.rejects(state.service.mutate('not-a-method'), error => error.code === 'WORKSPACE_AUTHORITY_CLOSED')
+  release()
+  assert.equal((await accepted).revision, 2)
+  await closing
+  assert.equal(closeCalls, 1)
 }))

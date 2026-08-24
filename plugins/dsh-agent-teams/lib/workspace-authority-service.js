@@ -3,7 +3,7 @@ import { GitWorkspaceAdapter } from "./git-workspace-adapter.js";
 import { WorkspaceAuthority } from "./workspace-authority.js";
 
 const SERVICE_STATE_VERSION = 1;
-const MUTATING_METHODS = new Set(["openWorkspace", "claimResources", "publishChangeSet", "enqueueChangeSet", "planMergeGroup", "recordMergeResult", "recordArtifactSet", "advanceAuthorityEpoch"]);
+const MUTATING_METHODS = new Set(["openWorkspace", "closeWorkspace", "claimResources", "publishChangeSet", "enqueueChangeSet", "planMergeGroup", "recordMergeResult", "recordArtifactSet", "advanceAuthorityEpoch"]);
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -82,6 +82,8 @@ export class PersistedWorkspaceAuthority {
     this.revision = revision;
     this.phase = phase;
     this.operationTail = Promise.resolve();
+    this.closing = false;
+    this.closePromise = undefined;
   }
 
   static async create({ store, gitAdapter, authority } = {}) {
@@ -129,15 +131,12 @@ export class PersistedWorkspaceAuthority {
     return new PersistedWorkspaceAuthority({ store, gitAdapter, authority, revision, phase });
   }
 
-  toJSON() {
-    return { ...this.authority.status(), persistedRevision: this.revision, persistencePhase: this.phase };
-  }
+  toJSON() { return this.#snapshot(); }
 
-  readStatus() {
-    return this.toJSON();
-  }
+  readStatus() { this.#assertOpen(); return this.#snapshot(); }
 
   mutate(method, input) {
+    try { this.#assertOpen(); } catch (error) { return Promise.reject(error); }
     const name = nonEmptyString(method, "method", 64);
     if (!MUTATING_METHODS.has(name)) throw new Error(`Workspace Authority mutation method ${name} is not allowed`);
     return this.#queue(async () => {
@@ -189,22 +188,33 @@ export class PersistedWorkspaceAuthority {
       const loaded = await this.store.load();
       if (loaded === undefined) throw new Error("persisted Workspace Authority disappeared");
       if (loaded.revision < this.revision) throw new Error("persisted Workspace Authority rollback was detected");
-      if (loaded.revision === this.revision) return this.toJSON();
+      if (loaded.revision === this.revision) return this.#snapshot();
       const state = normalizeServiceState(loaded.state);
       if (state.phase !== "ready") throw new Error("persisted Workspace Authority requires landing recovery by reopening the service");
       const authority = WorkspaceAuthority.restore(state.authorityState, { now: this.authority.now, verifyGateReceipt: this.authority.verifyGateReceipt });
       if (await this.gitAdapter.head() !== authority.headCommit) throw new Error("persisted Workspace Authority head diverges from bare Git");
       this.authority = authority;
       this.revision = loaded.revision;
-      return this.toJSON();
+      return this.#snapshot();
     });
   }
+
+  close() {
+    if (this.closePromise !== undefined) return this.closePromise;
+    this.closing = true;
+    this.closePromise = this.operationTail.then(() => this.store.close());
+    return this.closePromise;
+  }
+
+  #snapshot() { return { ...this.authority.status(), persistedRevision: this.revision, persistencePhase: this.phase }; }
+  #assertOpen() { if (this.closing) { const error = new Error("Workspace Authority service is closed"); error.code = "WORKSPACE_AUTHORITY_CLOSED"; throw error; } }
 
   #requireReady() {
     if (this.phase !== "ready") throw new Error("Workspace Authority is waiting for landing recovery");
   }
 
   #queue(operation) {
+    try { this.#assertOpen(); } catch (error) { return Promise.reject(error); }
     const result = this.operationTail.then(operation, operation);
     this.operationTail = result.then(() => undefined, () => undefined);
     return result;

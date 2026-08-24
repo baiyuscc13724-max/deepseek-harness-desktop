@@ -64,6 +64,8 @@ test('Desktop shell exposes one unified right workspace with browser, files and 
   assert.match(html, /right-workspace-integration\.js/u)
   for (const mode of ['browser', 'files', 'schedules', 'document']) assert.match(integration, new RegExp(`id: '${mode}'`))
   assert.match(integration, /getRightWorkspaceResource/u)
+  assert.match(integration, /resource\('filePreview', \{ path: target \}\)/u)
+  assert.doesNotMatch(integration, /api\.previewRightWorkspaceLocal/u)
   assert.match(integration, /runtimeView\.addEventListener\('ipc-message'/u)
   assert.match(integration, /runtimeView\.send\('right-workspace:command'/u)
   assert.match(integration, /schedulesSnapshot\.history/u)
@@ -85,6 +87,9 @@ test('Desktop shell exposes one unified right workspace with browser, files and 
   assert.match(app, /target\.hostname === 'preview-local'/u)
   assert.match(app, /harnessDesktopRightWorkspace\?\.openLocalDocument/u)
   assert.match(links, /route\('preview-local'/u)
+  assert.match(links, /anchor\.getAttribute\('href'\)/u)
+  assert.match(links, /withoutLocation/u)
+  assert.match(links, /HTML 和程序源码不会执行/u)
   assert.match(links, /单击在右侧预览/u)
 })
 

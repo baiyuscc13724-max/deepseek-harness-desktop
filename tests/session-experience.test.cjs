@@ -13,6 +13,34 @@ async function plugin() {
   return import(pathToFileURL(path.join(root, 'plugins/dsh-session-experience/lib/index.js')).href)
 }
 
+async function clientPlugin() {
+  const source = await readFile(path.join(root, 'plugins/dsh-session-experience/lib/client.js'), 'utf8')
+  let registration
+  const browser = { __ModuleLoader__: { load(value) { registration = value } } }
+  new Function('window', source)(browser)
+  assert.ok(registration?.factory, 'client module registration missing')
+  return registration.factory(name => {
+    if (name !== 'react') throw new Error(`unexpected client dependency: ${name}`)
+    return { createElement() {}, useState() {}, useEffect() {}, useRef() {} }
+  })
+}
+
+function completionSnapshot(current, completedIds = [], updatedAt = 1) {
+  const ids = ['session-1', 'session-3']
+  const completed = new Set(completedIds)
+  return {
+    phase: 'ready',
+    current,
+    ids,
+    byId: Object.fromEntries(ids.map(id => [id, {
+      id,
+      displayTitle: id === 'session-1' ? '会话 1' : '会话 3',
+      updatedAt,
+      ...(completed.has(id) ? { completed: true } : {})
+    }]))
+  }
+}
+
 test('attachment upload names are normalized and cannot create paths', async () => {
   const { safeFileName } = await plugin()
   assert.equal(safeFileName('../../report.txt'), '_.._report.txt')
@@ -57,9 +85,73 @@ test('session experience plugin installation is additive and idempotent', async 
   assert.equal(entries.filter(item => item.id === 'session-experience' && item.name === 'dsh-session-experience').length, 1)
 })
 
-test('client registers archive history and an in-composer paperclip — never a separate file page or header id pill', async () => {
+test('completion notice state seeds once, filters current sessions, deduplicates and rearms', async () => {
+  const client = await clientPlugin()
+  const { createCompletionState, reconcileCompletionState } = client.__completionTest
+  let state = createCompletionState()
+  const pending = reconcileCompletionState(state, { phase: 'pending' }, 100)
+  assert.equal(pending, state)
+
+  state = reconcileCompletionState(state, completionSnapshot('session-1'), 1_000)
+  assert.equal(state.initialized, true)
+  assert.deepEqual(state.notices, [])
+
+  state = reconcileCompletionState(state, completionSnapshot('session-1', ['session-3'], 2), 2_000)
+  assert.deepEqual(state.notices.map(item => [item.id, item.title, item.expiresAt]), [['session-3', '会话 3', 10_000]])
+  const firstNotices = state.notices
+
+  state = reconcileCompletionState(state, completionSnapshot('session-1', ['session-3'], 3), 3_000)
+  assert.equal(state.notices, firstNotices, 'a repeated completed snapshot must not duplicate or extend the notice')
+
+  state = reconcileCompletionState(state, completionSnapshot('session-3', ['session-3'], 4), 4_000)
+  assert.deepEqual(state.notices, [], 'opening the completed session dismisses its notice')
+  state = reconcileCompletionState(state, completionSnapshot('session-1', [], 5), 5_000)
+  state = reconcileCompletionState(state, completionSnapshot('session-1', ['session-3'], 6), 6_000)
+  assert.deepEqual(state.notices.map(item => item.id), ['session-3'], 'a later false-to-true edge rearms the session')
+
+  let currentState = createCompletionState()
+  currentState = reconcileCompletionState(currentState, completionSnapshot('session-1'), 1_000)
+  currentState = reconcileCompletionState(currentState, completionSnapshot('session-1', ['session-1'], 2), 2_000)
+  assert.deepEqual(currentState.notices, [], 'the current session must never raise a cross-session notice')
+
+  let subagentState = createCompletionState()
+  const subagentBaseline = completionSnapshot('session-1')
+  subagentBaseline.byId['session-3'].origin = 'subagent'
+  subagentState = reconcileCompletionState(subagentState, subagentBaseline, 1_000)
+  const subagentCompleted = completionSnapshot('session-1', ['session-3'], 2)
+  subagentCompleted.byId['session-3'].origin = 'subagent'
+  subagentState = reconcileCompletionState(subagentState, subagentCompleted, 2_000)
+  assert.deepEqual(subagentState.notices, [], 'subagent completion must never raise a card')
+
+  let restored = createCompletionState()
+  restored = reconcileCompletionState(restored, completionSnapshot('session-1', ['session-3'], 1), 1_000)
+  assert.deepEqual(restored.notices, [], 'the first ready snapshot is a baseline, not a replay')
+})
+
+test('client registers completion notices, archive history and an in-composer paperclip', async () => {
   const source = await readFile(path.join(root, 'plugins/dsh-session-experience/lib/client.js'), 'utf8')
+  const manifest = JSON.parse(await readFile(path.join(root, 'plugins/dsh-session-experience/package.json'), 'utf8'))
   assert.match(source, /window\.__ModuleLoader__\.load/u)
+  assert.ok(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-layout'))
+  assert.match(source, /ctx\.slots\.inject\("shell\.overlay"/u)
+  assert.match(source, /id: "session-completion-notifications"/u)
+  assert.match(source, /item\.completed === true/u)
+  assert.match(source, /item\.origin !== "subagent"/u)
+  assert.doesNotMatch(source, /subagentRows|openSubagent|subagentComplete/u)
+  assert.match(source, /item\.id !== snapshot\.current/u)
+  assert.match(source, /apply\(\);\s*var unsubscribe = list\.subscribe\(apply\);\s*apply\(\);/u)
+  assert.match(source, /sessions\.open\(id\)/u)
+  assert.match(source, /document\.addEventListener\("pointerdown", onPointerDown, true\)/u)
+  assert.match(source, /window\.addEventListener\("blur", dismissAll\)/u)
+  assert.match(source, /event\.key !== "Escape"/u)
+  assert.match(source, /event\.preventDefault\(\)/u)
+  assert.match(source, /stack\.matches\(":hover"\)/u)
+  assert.match(source, /stack\.contains\(document\.activeElement\)/u)
+  assert.match(source, /COMPLETE_NOTICE_MS = 8000/u)
+  assert.match(source, /top:var\(--dsh-workbench-header-height,76px\)/u)
+  assert.match(source, /"aria-live": "polite"/u)
+  assert.doesNotMatch(source, /if \(!notices\.length\) return null/u)
+  assert.match(source, /prefers-reduced-motion:reduce/u)
   assert.match(source, /ctx\.slots\.inject\("conversation\.view"/u)
   assert.match(source, /id: "session-archive"/u)
   assert.match(source, /label: function \(\) \{ return translate\("archiveView"\);/u)

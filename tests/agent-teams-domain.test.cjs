@@ -60,7 +60,7 @@ test('v1 store migration performs crash reconciliation in the same initializatio
     const store = new mod.AgentTeamsStore(file)
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
-    assert.equal(migrated.version, 2)
+    assert.equal(migrated.version, 3)
     assert.deepEqual(migrated.settings, legacy.settings)
     const migratedTeam = migrated.teams[0]
     assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-lead').state, 'ready')
@@ -70,6 +70,49 @@ test('v1 store migration performs crash reconciliation in the same initializatio
     assert.match(migratedTeam.messages[0].deliveryError, /retry manually/u)
     assert.deepEqual(migratedTeam.tasks, legacy.teams[0].tasks)
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('v2 stores migrate additively to the bootstrap-capable schema', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-v2-migration-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  const mod = await plugin()
+  try {
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, `${JSON.stringify({ version: 2, settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 }, teams: [] })}\n`, 'utf8')
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 3)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('attention, resume planning, and confirmed retirement task release are deterministic', async () => {
+  const mod = await plugin()
+  const timestamp = new Date().toISOString()
+  const team = {
+    id: 'attention-team', rootLeadSessionId: 'lead', name: 'Attention', objective: 'Recover safely', revision: 1, state: 'paused', createdAt: timestamp, updatedAt: timestamp,
+    members: [
+      { id: 'lead-id', sessionId: 'lead', name: 'Lead', role: 'root', kind: 'lead', state: 'ready', createdAt: timestamp, updatedAt: timestamp },
+      { id: 'failed-id', sessionId: 'failed-session', name: 'Failed', role: 'worker', kind: 'worker', state: 'failed', shutdownUnconfirmed: true, createdAt: timestamp, updatedAt: timestamp }
+    ],
+    tasks: [
+      { id: 'stranded', title: 'Stranded', state: 'in_progress', dependsOn: [], files: [], assigneeSessionId: 'failed-session', claimedAt: timestamp, createdAt: timestamp, updatedAt: timestamp },
+      { id: 'dependent', title: 'Dependent', state: 'pending', dependsOn: ['stranded'], files: [], createdAt: timestamp, updatedAt: timestamp },
+      { id: 'done', title: 'Done', state: 'completed', dependsOn: [], files: [], assigneeSessionId: 'failed-session', createdAt: timestamp, updatedAt: timestamp, completedAt: timestamp }
+    ],
+    messages: [{ id: 'failed-message', fromSessionId: 'lead', toSessionId: 'failed-session', body: 'bounded', status: 'failed', createdAt: timestamp }]
+  }
+  const attention = mod.deriveAttention(team)
+  assert.deepEqual(attention.codes, ['failed_member', 'unconfirmed_shutdown', 'stranded_task', 'failed_delivery'])
+  assert.deepEqual(attention.blockedTasks, ['dependent'])
+  const plan = mod.buildResumePlan(team, [team])
+  assert.equal(plan.automaticallyWoken, false)
+  assert.deepEqual(plan.failedMemberIds, ['failed-id'])
+  assert.deepEqual(plan.strandedTaskIds, ['stranded'])
+  const released = mod.releaseRetiredMemberTasks(team, 'failed-session', timestamp)
+  assert.deepEqual(released, ['stranded'])
+  assert.equal(team.tasks[0].state, 'pending')
+  assert.equal(team.tasks[0].assigneeSessionId, undefined)
+  assert.equal(team.tasks[2].assigneeSessionId, 'failed-session', 'completed audit history is preserved')
 })
 
 test('persisted team and task records reject unsupported fields', async () => {

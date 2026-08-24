@@ -401,11 +401,12 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const enabledPrompt = teamsPrompt.text({})
     assert.match(enabledPrompt, /automatic-team mode is ENABLED/u)
     assert.match(enabledPrompt, /Before substantive work on every ordinary direct-human root turn, apply the three-level gate below/u)
-    assert.match(enabledPrompt, /When the Level 3 conditions are met, you must call team_start in that same turn and must not replace the required visible managed members with multiple hidden ordinary subagents/u)
+    assert.match(enabledPrompt, /When the Level 3 conditions are met, choose exactly one creation path in that same turn/u)
+    assert.match(enabledPrompt, /Never call both team_start and team_bootstrap for the same team/u)
     assert.match(enabledPrompt, /Only the outermost top-level root lead\/brain evaluates each ordinary direct-user goal using a strict three-level gate/u)
     assert.match(enabledPrompt, /Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone/u)
     assert.match(enabledPrompt, /Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns/u)
-    assert.match(enabledPrompt, /Level 3 — Agent Team: in automatic mode, proactively call team_start only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members/u)
+    assert.match(enabledPrompt, /Level 3 — Agent Team: in automatic mode, proactively choose one Agent Team creation path only when the goal normally has at least two sustained, genuinely independent workstreams/u)
     assert.match(enabledPrompt, /root\/lead's own work or coordination does not count as the second workstream/u)
     assert.match(enabledPrompt, /explicit user request for a team may still be followed, but automatic mode must not create a one-worker team/u)
     assert.match(enabledPrompt, /Parallelism by itself is not enough for a team/u)
@@ -421,10 +422,14 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(enabledPrompt, /critical-path reduction or independent-review value materially exceeds coordination cost/u)
     assert.match(enabledPrompt, /existing external-resource ownership is not persisted and must be verified by the root/u)
     assert.match(enabledPrompt, /first release\/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn/u)
+    assert.match(enabledPrompt, /call team_bootstrap directly with a stable request_id and do not call team_start first/u)
+    assert.match(enabledPrompt, /persists all tasks before starting members/u)
     assert.match(enabledPrompt, /Never invent a leader→group-leader→hidden-worker hierarchy/u)
     assert.match(enabledPrompt, /Every new member re-reads the latest route for its chosen tier/u)
     assert.match(enabledPrompt, /changing the subagent route never changes main-tier members/u)
     assert.match(tools.get('team_spawn').description, /existing members retain their creation route/u)
+    assert.match(tools.get('team_start').description, /never call team_start before team_bootstrap for the same team/u)
+    assert.match(tools.get('team_bootstrap').description, /Use this directly instead of team_start when the complete plan is ready; never call both for the same team/u)
     assert.match(tools.get('team_start').description, /Call this in the current direct-human root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination/u)
     assert.match(tools.get('team_start').description, /do not substitute multiple ordinary subagents/u)
     assert.match(tools.get('team_start').description, /Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count/u)
@@ -1463,6 +1468,140 @@ test('explicit user stop cancels queued wakeups and leaves paused work dormant',
     )
     assert.equal((await store.read(document => document.teams.find(candidate => candidate.id === team.id).state)), 'paused')
   } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-bootstrap-'))
+  const previousHome = process.env.DSH_HOME
+  const cleanups = []
+  process.env.DSH_HOME = root
+  try {
+    const mod = await import(`${pathToFileURL(pluginFile).href}?bootstrap=${Date.now()}-${Math.random()}`)
+    const tools = new Map(), routes = new Map(), starts = [], followups = [], drains = []
+    let failWork = false
+    const lead = {
+      id: 'bootstrap-lead', status: 'running', options: { provider: 'main-provider', model: 'main-model' },
+      session: { events: [{ type: 'turn/start', data: {} }, { type: 'user/message', data: { source: { kind: 'user' } } }] },
+      inbox: { nextTurn: [], nextStep: [], remove() { return false } }, followup() {}, steer() {}
+    }
+    const ctx = {
+      logger: { info() {}, warn() {}, error() {} },
+      tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
+      systemPrompt: { section() { return () => {} } },
+      webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
+      effect(setup) { const cleanup = setup(); if (typeof cleanup === 'function') cleanups.push(cleanup) },
+      on() { return () => {} },
+      agents: { get(id) { return id === lead.id ? lead : undefined }, roots() { return [lead] }, currentInitiator() { return lead } },
+      subagents: {
+        async startContinuable(spec) {
+          const persisted = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8'))
+          const team = persisted.teams.find(candidate => candidate.bootstrap?.requestId === 'bootstrap-once')
+          assert.equal(team.tasks.length, 3, 'all tasks must be durable before any child starts')
+          starts.push(spec)
+          return { childId: spec.childId, messageId: `start-${starts.length}` }
+        },
+        async followup(parent, childId, content) {
+          const persisted = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8'))
+          if (followups.length < 2 || failWork) assert.ok(persisted.teams.some(team => team.tasks.some(task => task.assigneeSessionId === childId)), 'bootstrap task binding must publish before work followup')
+          followups.push({ parent, childId, content })
+          if (failWork) throw new Error('bootstrap work followup failed')
+          return `followup-${followups.length}`
+        },
+        async drainContinuableChildren(parent, childIds) { drains.push({ parent, childIds: [...childIds] }) }
+      }
+    }
+    mod.apply(ctx)
+    await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', { sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4 }))
+    const conflictingScopes = {
+      request_id: 'bootstrap-overlap', objective: 'Reject unsafe parallel writes',
+      tasks: [
+        { key: 'left-task', title: 'Left', member_key: 'left', files: ['src/shared'] },
+        { key: 'right-task', title: 'Right', member_key: 'right', files: ['src/shared/nested.js'] }
+      ],
+      members: [
+        { key: 'left', name: 'Left', role: 'left writer', prompt: 'Write only the left scope.' },
+        { key: 'right', name: 'Right', role: 'right writer', prompt: 'Write only the right scope.' }
+      ]
+    }
+    await assert.rejects(
+      tools.get('team_bootstrap').execute(conflictingScopes, { agent: lead, signal: new AbortController().signal }),
+      error => error?.code === 'AGENT_TEAMS_BOOTSTRAP_SCOPE_CONFLICT'
+    )
+    assert.equal(starts.length, 0, 'scope conflict must fail before team members start')
+    const args = {
+      request_id: 'bootstrap-once', objective: 'Build and review safely',
+      tasks: [
+        { key: 'build-task', title: 'Build', member_key: 'build', files: ['src/build'] },
+        { key: 'build-detail', title: 'Build detail', member_key: 'build', files: ['src/build/generated.js'] },
+        { key: 'review-task', title: 'Review', member_key: 'review', depends_on: ['build-task'], files: ['tests/build.test.js'] }
+      ],
+      members: [
+        { key: 'build', name: 'Build', role: 'build safely', prompt: 'Claim and complete the build task.' },
+        { key: 'review', name: 'Review', role: 'review safely', prompt: 'Review after the dependency completes.' }
+      ]
+    }
+    const first = await tools.get('team_bootstrap').execute(args, { agent: lead, signal: new AbortController().signal })
+    assert.equal(first.operation.phase, 'complete', JSON.stringify(first.error))
+    assert.equal(first.operation.reused, false)
+    assert.equal(starts.length, 2)
+    assert.equal(first.team.tasks.length, 3)
+    assert.ok(first.team.tasks.every(task => task.assignee !== null))
+    assert.match(followups[0].content[0].text, new RegExp(first.taskRefs[0].taskId))
+    assert.match(followups[0].content[0].text, new RegExp(first.taskRefs[1].taskId))
+    assert.match(followups[1].content[0].text, new RegExp(first.taskRefs[2].taskId))
+    assert.equal(first.team.attention.required, false)
+    assertLosslessJson(first)
+
+    const replay = await tools.get('team_bootstrap').execute(args, { agent: lead, signal: new AbortController().signal })
+    assert.equal(replay.operation.reused, true)
+    assert.equal(starts.length, 2, 'exact replay must not provision duplicate members')
+    await assert.rejects(
+      tools.get('team_bootstrap').execute({ ...args, objective: 'Different input' }, { agent: lead, signal: new AbortController().signal }),
+      error => error?.code === 'AGENT_TEAMS_IDEMPOTENCY_CONFLICT'
+    )
+
+    await assert.rejects(
+      tools.get('team_bootstrap').execute({ ...args, request_id: 'not-a-worker-call' }, { agent: { ...lead, id: 'worker' }, signal: new AbortController().signal }),
+      error => error?.code === 'AGENT_TEAMS_DRIVER_REQUIRED'
+    )
+
+    const pausedFile = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8'))
+    pausedFile.teams[0].state = 'paused'
+    await writeFile(path.join(root, 'storages', 'agent_teams.json'), `${JSON.stringify(pausedFile)}\n`, 'utf8')
+    const startsBeforeResume = starts.length
+    const resumed = await tools.get('team_resume').execute({}, { agent: lead, signal: new AbortController().signal })
+    assert.equal(resumed.resumePlan.automaticallyWoken, false)
+    assert.equal(starts.length, startsBeforeResume)
+    assert.equal(resumed.resumePlan.pendingAssignedTaskIds.length, 3)
+
+    const retired = await tools.get('team_shutdown').execute({ member_session_id: first.memberRefs[0].sessionId, force: true }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(retired.member.state, 'retired')
+    assert.deepEqual(retired.releasedTaskIds, [first.taskRefs[0].taskId, first.taskRefs[1].taskId])
+    const status = await tools.get('team_status').execute({}, { agent: lead, signal: new AbortController().signal })
+    assert.equal(status.team.tasks.find(task => task.id === first.taskRefs[0].taskId).assignee, null)
+    const inferredSpawn = await tools.get('team_spawn').execute({ name: 'Ops', role: 'single-team inference', prompt: 'Work only in the uniquely active team.' }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(inferredSpawn.teamId, first.team.id)
+
+    failWork = true
+    const failed = await tools.get('team_bootstrap').execute({ request_id: 'bootstrap-failure', objective: 'Fail safely', tasks: [{ key: 'one', title: 'One', member_key: 'worker' }], members: [{ key: 'worker', name: 'Test', role: 'test failure', prompt: 'Fail the work followup.' }] }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(failed.operation.phase, 'partial')
+    assert.equal(failed.error.stage, 'work-followup')
+    assert.equal(failed.error.retryable, false)
+    assert.ok(failed.team.attention.codes.includes('failed_member'))
+    const failedStartCount = starts.length
+    const failedReplay = await tools.get('team_bootstrap').execute({ request_id: 'bootstrap-failure', objective: 'Fail safely', tasks: [{ key: 'one', title: 'One', member_key: 'worker' }], members: [{ key: 'worker', name: 'Test', role: 'test failure', prompt: 'Fail the work followup.' }] }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(failedReplay.error.retryable, false)
+    assert.equal(starts.length, failedStartCount, 'uncertain partial replay must fail closed')
+    await assert.rejects(
+      tools.get('team_spawn').execute({ name: 'Ambiguous', role: 'must not start', prompt: 'Do not infer between peer teams.' }, { agent: lead, signal: new AbortController().signal }),
+      error => error?.code === 'AGENT_TEAMS_TEAM_REQUIRED'
+    )
+    assert.ok(drains.length >= 2)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    for (const cleanup of cleanups.reverse()) await cleanup()
     await rm(root, { recursive: true, force: true })
   }
 })

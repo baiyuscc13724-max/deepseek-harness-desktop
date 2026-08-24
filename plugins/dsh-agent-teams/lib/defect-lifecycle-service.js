@@ -17,6 +17,8 @@ export class PersistedDefectLifecycle {
     this.revision = revision;
     this.resolveAttestation = resolveAttestation;
     this.operationTail = Promise.resolve();
+    this.closing = false;
+    this.closePromise = undefined;
   }
 
   static async create({ store, lifecycle, resolveAttestation } = {}) {
@@ -35,9 +37,10 @@ export class PersistedDefectLifecycle {
     return new PersistedDefectLifecycle({ store, lifecycle, revision: loaded.revision, resolveAttestation });
   }
 
-  toJSON() { return { ...this.lifecycle.toJSON(), persistedRevision: this.revision }; }
+  toJSON() { return this.#snapshot(); }
 
   mutate(method, input) {
+    try { this.#assertOpen(); } catch (error) { return Promise.reject(error); }
     const name = nonEmptyString(method, "method", 64);
     if (!MUTATING_METHODS.has(name)) throw new Error(`Defect Lifecycle mutation method ${name} is not allowed`);
     return this.#queue(async () => {
@@ -55,18 +58,29 @@ export class PersistedDefectLifecycle {
       const loaded = await this.store.load();
       if (loaded === undefined) throw new Error("persisted Defect Lifecycle disappeared");
       if (loaded.revision < this.revision) throw new Error("persisted Defect Lifecycle rollback was detected");
-      if (loaded.revision === this.revision) return this.toJSON();
+      if (loaded.revision === this.revision) return this.#snapshot();
       const lifecycle = DefectLifecycle.restore(loaded.state, { resolveAttestation: this.resolveAttestation, now: this.lifecycle.now });
       if (lifecycle.projectRef !== this.lifecycle.projectRef || lifecycle.repositoryRef !== this.lifecycle.repositoryRef) throw new Error("persisted Defect Lifecycle scope changed");
       this.lifecycle = lifecycle;
       this.revision = loaded.revision;
-      return this.toJSON();
+      return this.#snapshot();
     });
   }
 
-  getDefect(defectRef) { return this.lifecycle.getDefect(defectRef); }
+  getDefect(defectRef) { this.#assertOpen(); return this.lifecycle.getDefect(defectRef); }
+
+  close() {
+    if (this.closePromise !== undefined) return this.closePromise;
+    this.closing = true;
+    this.closePromise = this.operationTail.then(() => this.store.close());
+    return this.closePromise;
+  }
+
+  #snapshot() { return { ...this.lifecycle.toJSON(), persistedRevision: this.revision }; }
+  #assertOpen() { if (this.closing) { const error = new Error("Defect Lifecycle service is closed"); error.code = "DEFECT_LIFECYCLE_CLOSED"; throw error; } }
 
   #queue(operation) {
+    try { this.#assertOpen(); } catch (error) { return Promise.reject(error); }
     const result = this.operationTail.then(operation, operation);
     this.operationTail = result.then(() => undefined, () => undefined);
     return result;

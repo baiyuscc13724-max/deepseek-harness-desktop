@@ -38,7 +38,7 @@
   const DEFAULTS = Object.freeze({
     minWidth: 320,
     maxWidth: 1200,
-    defaultWidth: 460,
+    defaultWidth: 640,
     ariaLabel: '右侧工作区',
     mount: true,
     bindShortcut: true,

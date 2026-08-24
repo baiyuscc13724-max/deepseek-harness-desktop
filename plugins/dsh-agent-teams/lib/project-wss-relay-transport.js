@@ -53,7 +53,6 @@ export class ProjectWssRelayTransport {
     this.status = "stopped";
     this.peerByDevice = new Map();
     this.deviceByPeer = new Map();
-    this.deliveryTail = Promise.resolve();
   }
 
   toJSON() {
@@ -105,6 +104,11 @@ export class ProjectWssRelayTransport {
     return this.toJSON();
   }
 
+  canSend(targetDeviceRef) {
+    if (this.status !== "connected" || this.socket === undefined || this.socket.readyState !== this.WebSocketImpl.OPEN || !DEVICE_REF.test(String(targetDeviceRef))) return false;
+    return this.role === "collaborator" || this.peerByDevice.has(targetDeviceRef);
+  }
+
   send(packet) {
     if (this.status !== "connected" || this.socket === undefined || this.socket.readyState !== this.WebSocketImpl.OPEN) throw new Error("project WSS relay is not connected");
     const targetDeviceRef = packetTarget(packet);
@@ -131,10 +135,10 @@ export class ProjectWssRelayTransport {
   }
 
   #handleBinary(frame) {
-    this.deliveryTail = this.deliveryTail.then(() => this.#deliver(frame), () => this.#deliver(frame));
+    this.#deliver(frame);
   }
 
-  async #deliver(frame) {
+  #deliver(frame) {
     if (this.status !== "connected" || frame.length <= 8 || frame.length > 8 + MAX_RELAY_PACKET_BYTES) return;
     let sourcePeer;
     try {
@@ -155,7 +159,10 @@ export class ProjectWssRelayTransport {
         this.deviceByPeer.set(peerHex, opened.senderDeviceRef);
         this.peerByDevice.set(opened.senderDeviceRef, Buffer.from(sourcePeer));
       }
-      await this.onDelivery(opened);
+      try {
+        const result = this.onDelivery(opened);
+        if (result !== null && (typeof result === "object" || typeof result === "function") && typeof result.then === "function") Promise.resolve(result).catch(() => undefined);
+      } catch {}
     } catch {
       // The blind relay receives no decryption or admission oracle.
     }

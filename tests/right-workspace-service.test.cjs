@@ -29,8 +29,9 @@ test('right workspace resource URLs are fixed and session-bound', () => {
   assert.equal(resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: 'uploads/a b.md' }).searchParams.get('path'), 'uploads/a b.md')
   assert.throws(() => resourceUrl('http://127.0.0.1:8906', 'unknown', { sessionId: 'session-1' }), error => error.code === 'RIGHT_WORKSPACE_BAD_RESOURCE')
   assert.throws(() => resourceUrl('http://127.0.0.1:8906', 'files', { sessionId: ' bad ' }), error => error.code === 'RIGHT_WORKSPACE_BAD_SESSION')
-  assert.throws(() => resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: '../secret.txt' }), error => error.code === 'RIGHT_WORKSPACE_BAD_PATH')
-  assert.throws(() => resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: 'C:\\secret.txt' }), error => error.code === 'RIGHT_WORKSPACE_BAD_PATH')
+  assert.equal(resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: '../secret.txt' }).searchParams.get('path'), '../secret.txt')
+  assert.equal(resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: 'C:\\workspace\\file.ts:4' }).searchParams.get('path'), 'C:\\workspace\\file.ts:4')
+  assert.throws(() => resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: 'bad\npath' }), error => error.code === 'RIGHT_WORKSPACE_BAD_PATH')
 })
 
 test('explicit local-document previews are text-only, bounded, and reject network paths', async t => {

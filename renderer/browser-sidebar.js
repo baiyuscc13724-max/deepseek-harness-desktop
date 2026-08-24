@@ -40,8 +40,15 @@
   const resumeModel = document.querySelector('#browserResumeModel')
   const pendingActions = document.querySelector('#browserPendingActions')
   const computerUseToggle = document.querySelector('#computerUseToggle')
+  const computerUseRevokePermanent = document.querySelector('#computerUseRevokePermanent')
   const computerUseSessionState = document.querySelector('#computerUseSessionState')
   const computerUsePending = document.querySelector('#computerUsePending')
+  const computerUseAuthorizationOverlay = document.querySelector('#computerUseAuthorizationOverlay')
+  const computerUseAuthorizationClose = document.querySelector('#computerUseAuthorizationClose')
+  const computerUseAuthorizationSession = document.querySelector('#computerUseAuthorizationSession')
+  const computerUseAuthorizationForever = document.querySelector('#computerUseAuthorizationForever')
+  const computerUseAuthorizationDecline = document.querySelector('#computerUseAuthorizationDecline')
+  const computerUseAuthorizationStatus = document.querySelector('#computerUseAuthorizationStatus')
   const computerUsePolicyControls = document.querySelector('#computerUsePolicyControls')
   const computerUseDefaultAccess = document.querySelector('#computerUseDefaultAccess')
   const computerUseCurrentTarget = document.querySelector('#computerUseCurrentTarget')
@@ -56,7 +63,7 @@
 
   const modalOverlays = [
     '#storageOverlay', '#memoryOverlay', '#mobileSyncOverlay', '#skinPickerOverlay',
-    '#updateReadyOverlay', '#updateNoticeOverlay'
+    '#computerUseAuthorizationOverlay', '#updateReadyOverlay', '#updateNoticeOverlay'
   ].map(selector => document.querySelector(selector)).filter(Boolean)
 
   function anotherOverlayVisible() {
@@ -169,13 +176,60 @@
 
   let computerUsePolicyUnavailable = false
 
+  function setComputerUseAuthorizationBusy(busy) {
+    for (const button of [computerUseAuthorizationClose, computerUseAuthorizationSession, computerUseAuthorizationForever, computerUseAuthorizationDecline]) {
+      if (button) button.disabled = Boolean(busy)
+    }
+  }
+
+  function renderComputerUseAuthorization(session) {
+    const pending = session?.authorization?.pending || null
+    const wasHidden = computerUseAuthorizationOverlay.classList.contains('hidden')
+    const hidden = !pending
+    computerUseAuthorizationOverlay.classList.toggle('hidden', hidden)
+    computerUseAuthorizationOverlay.setAttribute('aria-hidden', String(hidden))
+    computerUseAuthorizationOverlay.dataset.requestId = pending?.id || ''
+    if (hidden) {
+      computerUseAuthorizationStatus.textContent = ''
+      setComputerUseAuthorizationBusy(false)
+    } else if (wasHidden) {
+      computerUseAuthorizationStatus.textContent = ''
+      setTimeout(() => computerUseAuthorizationSession.focus(), 0)
+    }
+    if (wasHidden !== hidden) syncNativeVisibility().catch(() => {})
+  }
+
   function renderComputerUseSession(session) {
     const enabled = session?.enabled === true
+    const ready = session?.ready !== false
+    const unlimited = session?.unlimited === true || session?.authorization?.unlimited === true
+    const scope = String(session?.authorization?.scope || 'none')
+    const authorized = scope === 'session' || scope === 'forever'
     const generation = session?.generation ? ` · 会话 #${session.generation}` : ''
-    computerUseToggle.textContent = enabled ? '停止并由用户接管' : '开启本次控制'
+    computerUseToggle.disabled = !enabled && !ready
+    computerUseToggle.dataset.activation = 'approval-card'
+    computerUseToggle.textContent = enabled
+      ? '停止并由用户接管'
+      : authorized
+        ? '恢复无限制桌面控制'
+        : ready
+          ? '请求无限制桌面控制'
+          : '暂不可开启'
+    computerUseToggle.title = enabled
+      ? '立即停止当前桌面控制会话；授权有效期保持不变'
+      : authorized
+        ? '授权已经生效，点击后无需再次确认即可恢复控制'
+        : '点击后在对话框上方选择本次授权或永久授权'
+    computerUseRevokePermanent.classList.toggle('hidden', scope !== 'forever')
     computerUseSessionState.textContent = enabled
-      ? `会话状态：已开启${generation}；本次控制只作用于已配对应用窗口，受限动作仍需逐次确认。`
-      : '会话状态：未开启；模型当前不能访问其它应用。'
+      ? unlimited
+        ? `会话状态：无限制桌面控制已开启${generation}（${scope === 'forever' ? '永久授权' : '本次授权'}）；不再逐次确认，应用策略和原有硬禁令均不拦截。`
+        : `会话状态：受限控制已开启${generation}。`
+      : ready
+        ? authorized
+          ? `会话状态：已停止但授权仍有效（${scope === 'forever' ? '永久授权' : '本次运行'}）；模型再次请求时可直接恢复。`
+          : '会话状态：等待授权；模型请求控制时将在对话框上方弹出授权卡片。'
+        : '会话状态：暂不可开启；请先解锁桌面后重试。'
   }
 
   function renderComputerUsePending(items = []) {
@@ -203,7 +257,35 @@
 
   function renderComputerUse(value) {
     renderComputerUseSession(value)
+    renderComputerUseAuthorization(value)
     renderComputerUsePending(value?.pending || [])
+  }
+
+  async function resolveComputerUseAuthorization(scope) {
+    setComputerUseAuthorizationBusy(true)
+    computerUseAuthorizationStatus.textContent = scope === 'forever' ? '正在保存永久授权…' : '正在开启本次授权…'
+    try {
+      renderComputerUse(await api.authorizeComputerUse(scope))
+      statusText.textContent = scope === 'forever'
+        ? '永久无限制桌面控制已授权，应用重启后自动生效。'
+        : '本次运行的无限制桌面控制已授权。'
+    } catch (error) {
+      computerUseAuthorizationStatus.textContent = error.message || String(error)
+    } finally {
+      setComputerUseAuthorizationBusy(false)
+    }
+  }
+
+  async function declineComputerUseAuthorization() {
+    setComputerUseAuthorizationBusy(true)
+    try {
+      renderComputerUse(await api.declineComputerUseAuthorization())
+      statusText.textContent = '已拒绝本次 Computer Use 授权请求。'
+    } catch (error) {
+      computerUseAuthorizationStatus.textContent = error.message || String(error)
+    } finally {
+      setComputerUseAuthorizationBusy(false)
+    }
   }
 
   function setComputerUsePolicyControlsDisabled(disabled) {
@@ -249,7 +331,7 @@
       if (app.immutable) {
         const lock = document.createElement('span')
         lock.className = 'computer-use-app-lock'
-        lock.textContent = '永久禁止'
+        lock.textContent = '受限模式禁止'
         row.append(lock, reason)
       } else {
         const decision = document.createElement('select')
@@ -469,9 +551,14 @@
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()
     const delta = event.key === 'ArrowLeft' ? 24 : -24
-    render(await api.setBrowserPanelWidth((Number(state.panelWidth) || 460) + delta))
+    render(await api.setBrowserPanelWidth((Number(state.panelWidth) || 640) + delta))
   })
   document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !computerUseAuthorizationOverlay.classList.contains('hidden')) {
+      event.preventDefault()
+      declineComputerUseAuthorization()
+      return
+    }
     if (!(event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'b')) return
     event.preventDefault()
     const workspace = window.harnessDesktopRightWorkspace
@@ -500,10 +587,34 @@
     profileButton.focus()
   })
   computerUseToggle.addEventListener('click', async () => {
-    const current = await api.getComputerUseState()
-    renderComputerUse(await api.setComputerUseEnabled(!current.enabled))
-    statusText.textContent = current.enabled ? 'Computer Use 已停止，控制权已交还用户。' : 'Computer Use 已开启；受限输入动作仍需逐次确认，访问其它应用按持久策略判定。'
+    try {
+      const current = await api.getComputerUseState()
+      if (current.enabled) {
+        renderComputerUse(await api.setComputerUseEnabled(false))
+        statusText.textContent = 'Computer Use 已停止，控制权已交还用户；授权有效期保持不变。'
+      } else if (current.authorization?.scope && current.authorization.scope !== 'none') {
+        renderComputerUse(await api.setComputerUseEnabled(true))
+        statusText.textContent = '无限制桌面控制已恢复。'
+      } else {
+        renderComputerUse(await api.requestComputerUseAuthorization())
+        statusText.textContent = '已在对话框上方推送 Computer Use 授权卡片。'
+      }
+    } catch (error) {
+      statusText.textContent = error.message || String(error)
+    }
   })
+  computerUseRevokePermanent.addEventListener('click', async () => {
+    try {
+      renderComputerUse(await api.revokeComputerUsePermanentGrant())
+      statusText.textContent = '永久 Computer Use 授权已撤销，控制会话已停止。'
+    } catch (error) {
+      statusText.textContent = error.message || String(error)
+    }
+  })
+  computerUseAuthorizationSession.addEventListener('click', () => resolveComputerUseAuthorization('session'))
+  computerUseAuthorizationForever.addEventListener('click', () => resolveComputerUseAuthorization('forever'))
+  computerUseAuthorizationDecline.addEventListener('click', declineComputerUseAuthorization)
+  computerUseAuthorizationClose.addEventListener('click', declineComputerUseAuthorization)
   computerUseDefaultAccess.addEventListener('change', async () => {
     if (typeof api.setComputerUseDefaultAccess !== 'function') {
       computerUsePolicyMessage.textContent = '能力不可用原因：可选 preload 策略 API 尚未接通'
@@ -563,6 +674,8 @@
   for (const element of modalOverlays) {
     new MutationObserver(syncNativeVisibility).observe(element, { attributes: true, attributeFilter: ['class'] })
   }
+  if (typeof api.onComputerUseAuthorization === 'function') api.onComputerUseAuthorization(renderComputerUse)
+  api.getComputerUseState().then(renderComputerUse).catch(() => {})
   api.onBrowserState(render)
   api.getBrowserState().then(render).catch(() => {})
 

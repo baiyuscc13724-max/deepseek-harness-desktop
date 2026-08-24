@@ -97,3 +97,27 @@ test('Host snapshot authentication and restart lease expiry fail closed', async 
   assert.equal(reopened.jobStatus(lease.jobRef).state, 'queued')
   assert.throws(() => reopened.orchestrator.heartbeat({ jobRef: lease.jobRef, runnerRef: state.runner.runnerRef, leaseToken: lease.leaseToken }), /stale/u)
 }))
+
+test('close drains accepted scheduler mutation and gates status with one close promise', async () => usingFixture(async state => {
+  const competingStore = new state.storeMod.EncryptedAuthorityStateStore(state.filePath, { projectRef: PROJECT, encryptionKey: state.key })
+  const competing = await state.serviceMod.PersistedTestOrchestrator.open({ store: competingStore, now: () => state.now() })
+  const originalSave = state.store.save.bind(state.store), originalClose = state.store.close.bind(state.store)
+  let release, closeCalls = 0
+  const barrier = new Promise(resolve => { release = resolve })
+  state.store.save = async (...args) => { await barrier; return originalSave(...args) }
+  state.store.close = () => { closeCalls += 1; return originalClose() }
+  const accepted = state.service.mutate('pauseProject')
+  const closing = state.service.close()
+  assert.equal(state.service.close(), closing)
+  assert.throws(() => state.service.jobStatus('job_closed'), error => error.code === 'TEST_ORCHESTRATOR_CLOSED')
+  await assert.rejects(state.service.refresh(), error => error.code === 'TEST_ORCHESTRATOR_CLOSED')
+  await assert.rejects(state.service.mutate('not-a-method'), error => error.code === 'TEST_ORCHESTRATOR_CLOSED')
+  release()
+  assert.equal((await accepted).revision, 2)
+  await closing
+  assert.equal(closeCalls, 1)
+  await competing.refresh()
+  assert.equal(competing.toJSON().projectPaused, true, 'closing one instance must not affect a peer instance')
+  await competing.close()
+  await assert.rejects(state.service.mutate('resumeProject'), error => error.code === 'TEST_ORCHESTRATOR_CLOSED')
+}))

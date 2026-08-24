@@ -23,9 +23,8 @@ function sessionId(value) {
 }
 
 function relativeFilePath(value) {
-  const unsafe = typeof value === 'string' && (/^(?:[a-z]:[\\/]|[\\/])/iu.test(value) || /(?:^|[\\/])\.\.(?:[\\/]|$)/u.test(value))
-  if (typeof value !== 'string' || !value || value.length > 4096 || value.trim() !== value || value.includes('\u0000') || unsafe) {
-    throw Object.assign(new TypeError('path must be a workspace-contained relative path'), { code: 'RIGHT_WORKSPACE_BAD_PATH' })
+  if (typeof value !== 'string' || !value || value.length > 4096 || value.trim() !== value || value.includes('\u0000') || /[\r\n]/u.test(value)) {
+    throw Object.assign(new TypeError('path must be a bounded workspace file target'), { code: 'RIGHT_WORKSPACE_BAD_PATH' })
   }
   return value
 }

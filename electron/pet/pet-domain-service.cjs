@@ -1,5 +1,6 @@
 const TOK_PER_UNIT = 512
 const TASK_TOK_CAP = 12
+const { PetCompanionEngine, relationshipFor } = require('./pet-companion-engine.cjs')
 
 function safeUsage(value = {}) {
   return {
@@ -28,17 +29,30 @@ function quantityFor(outputTokens, completed) {
 }
 
 class PetDomainService {
-  constructor({ store, getPreferences = () => ({}), onChange = () => {}, now = () => new Date() }) {
+  constructor({ store, getPreferences = () => ({}), onChange = () => {}, now = () => new Date(), companionEngine = null }) {
     this.store = store
     this.getPreferences = getPreferences
     this.onChange = onChange
     this.now = now
+    this.companionEngine = companionEngine || new PetCompanionEngine({ now: () => this.nowDate() })
     this.sessions = new Map()
     this.groupAwards = new Map()
     this.lastAward = null
     this.lastAutoFeed = null
     this.celebrationTimer = null
     this.lastInteractionAt = new Map()
+    this.companionCue = null
+  }
+
+  nowDate() {
+    const value = this.now()
+    const date = value instanceof Date ? value : new Date(value)
+    return Number.isFinite(date.getTime()) ? date : new Date()
+  }
+
+  emitCue(cue) {
+    if (cue) this.companionCue = cue
+    return cue
   }
 
   rootOf(sessionId) {
@@ -66,7 +80,10 @@ class PetDomainService {
         model: '',
         usage: safeUsage(),
         finishKind: null,
-        updatedAt: Date.now()
+        updatedAt: this.nowDate().getTime(),
+        startedAt: null,
+        settled: true,
+        nudges: new Set()
       })
     }
     return this.sessions.get(sessionId)
@@ -79,7 +96,11 @@ class PetDomainService {
     session.running = Boolean(item.running)
     session.model = item.model || session.model
     session.usage = safeUsage(item.tokenUsage)
-    session.updatedAt = Number(item.updatedAt) || Date.now()
+    session.updatedAt = Number(item.updatedAt) || this.nowDate().getTime()
+    if (session.running) {
+      session.startedAt ||= session.updatedAt
+      session.settled = false
+    }
     const persisted = this.store.get().usageCursors[item.sessionId]
     if (!persisted) this.store.initializeCursor(item.sessionId, session.usage.outputTokens, this.now())
     this.publish()
@@ -89,7 +110,7 @@ class PetDomainService {
     const sessionId = event.sessionId
     if (!sessionId) return
     const session = this.ensureSession(sessionId)
-    session.updatedAt = Date.now()
+    session.updatedAt = this.nowDate().getTime()
     if (event.type === 'session-added') {
       session.parentSessionId = event.parentSessionId || null
     } else if (event.type === 'session-status') {
@@ -100,20 +121,34 @@ class PetDomainService {
         session.ready = false
         session.celebrating = false
         session.finishKind = null
-        this.groupAwards.set(this.rootOf(sessionId), 0)
+        session.startedAt = session.updatedAt
+        session.settled = false
+        session.nudges = new Set()
+        const root = this.rootOf(sessionId)
+        if (sessionId === root || !this.groupAwards.has(root)) this.groupAwards.set(root, 0)
+        const running = [...this.sessions.values()].filter(item => item.running).length
+        this.emitCue(this.companionEngine.taskStarted({ state: this.getState(), preferences: this.getPreferences(), running }))
       } else if (!session.running && wasRunning) {
         this.settleSession(session)
       }
     } else if (event.type === 'token-usage') {
       session.usage = safeUsage(event.value)
     } else if (event.type === 'needs-input') {
+      const wasPending = session.pendingInput
       session.pendingInput = true
+      if (!wasPending) this.emitCue(this.companionEngine.needsInput({ preferences: this.getPreferences() }))
     } else if (event.type === 'input-resolved') {
+      const wasPending = session.pendingInput
       session.pendingInput = false
+      if (wasPending) this.emitCue(this.companionEngine.inputResolved({ preferences: this.getPreferences() }))
     } else if (event.type === 'agent-error') {
+      const alreadySettled = session.settled
+      const wasBlocked = session.blocked
       session.blocked = true
       session.running = false
-      this.settleSession(session, false)
+      if (!alreadySettled) this.settleSession(session, false)
+      else if (this.rootOf(sessionId) !== sessionId) session.blocked = false
+      else if (!wasBlocked) this.emitCue(this.companionEngine.taskBlocked({ preferences: this.getPreferences() }))
     } else if (event.type === 'finish') {
       session.finishKind = event.kind || null
     } else if (event.type === 'model') {
@@ -125,30 +160,42 @@ class PetDomainService {
   }
 
   settleSession(session, successOverride) {
+    if (session.settled) return
+    session.settled = true
+    const settledAt = this.nowDate()
     const state = this.store.get()
     const previous = state.usageCursors[session.sessionId]?.outputTokens ?? session.usage.outputTokens
     const observedTokens = Math.max(0, session.usage.outputTokens - previous)
     const cancelled = ['cancelled', 'abort', 'aborted'].includes(session.finishKind?.kind || session.finishKind)
     const completed = successOverride ?? (!session.blocked && !cancelled && observedTokens > 0)
     const root = this.rootOf(session.sessionId)
+    const countTask = root === session.sessionId
     const alreadyAwarded = this.groupAwards.get(root) || 0
     const requested = quantityFor(observedTokens, completed)
     const quantity = Math.max(0, Math.min(requested, TASK_TOK_CAP - alreadyAwarded))
     const quality = qualityFor({ model: session.model, completed, blocked: session.blocked || cancelled })
     this.groupAwards.set(root, alreadyAwarded + quantity)
-    this.store.settleTask({
+    const persisted = this.store.settleTask({
       sessionId: session.sessionId,
       outputTokens: session.usage.outputTokens,
       observedTokens,
       quality,
       quantity,
-      completed
-    }, this.now())
-    session.ready = completed
-    session.celebrating = completed
-    if (quantity > 0) this.lastAward = { sessionId: session.sessionId, quality, quantity, outputTokens: observedTokens, at: this.now().toISOString() }
-    if (completed) this.scheduleCelebrationEnd(session.sessionId)
+      completed,
+      countTask
+    }, settledAt)
+    session.pendingInput = false
+    session.blocked = countTask ? session.blocked : false
+    session.ready = completed && countTask
+    session.celebrating = completed && countTask
+    if (quantity > 0) this.lastAward = { sessionId: session.sessionId, quality, quantity, outputTokens: observedTokens, at: settledAt.toISOString() }
+    if (completed && countTask) this.scheduleCelebrationEnd(session.sessionId)
     this.maybeAutoFeed()
+    if (completed && countTask) {
+      this.emitCue(this.companionEngine.taskCompleted({ state: persisted, preferences: this.getPreferences(), quantity, quality }))
+    } else if (!completed && countTask) {
+      this.emitCue(this.companionEngine.taskBlocked({ preferences: this.getPreferences(), cancelled }))
+    }
   }
 
   scheduleCelebrationEnd(sessionId) {
@@ -169,34 +216,72 @@ class PetDomainService {
     let lastKind = null
     for (const kind of ['fragments', 'standard', 'refined']) {
       while (state.fullness < 60 && state.inventory[kind] > 0) {
-        state = this.store.feed(kind)
+        state = this.store.feed(kind, this.nowDate())
         consumed += 1
         lastKind = kind
       }
     }
-    if (consumed > 0) this.lastAutoFeed = { kind: lastKind, quantity: consumed, at: this.now().toISOString() }
+    if (consumed > 0) this.lastAutoFeed = { kind: lastKind, quantity: consumed, at: this.nowDate().toISOString() }
   }
 
   feed(kind) {
-    const state = this.store.feed(kind)
+    const state = this.store.feed(kind, this.nowDate())
     this.publish()
     return state
   }
 
   interact(kind = 'tap') {
-    const now = Date.now()
+    const date = this.nowDate()
+    const now = date.getTime()
     const previous = this.lastInteractionAt.get(kind) || 0
     if (now - previous < 1200) return this.getState()
     this.lastInteractionAt.set(kind, now)
-    this.store.interact(kind)
+    const previousLevel = relationshipFor(this.store.get()).level
+    const persisted = this.store.interact(kind, date)
+    this.emitCue(this.companionEngine.interaction({ state: persisted, preferences: this.getPreferences(), kind, previousLevel }))
     this.publish()
     return this.getState()
   }
 
   tickActive(minutes = 1) {
-    this.store.tickActive(minutes)
+    const date = this.nowDate()
+    this.store.tickActive(minutes, date)
     this.maybeAutoFeed()
+    this.maybeLongRunningCue(date)
     this.publish()
+  }
+
+  maybeLongRunningCue(date = this.nowDate()) {
+    const running = [...this.sessions.values()]
+      .filter(session => session.running && Number.isFinite(session.startedAt))
+      .sort((left, right) => right.startedAt - left.startedAt)
+    for (const session of running) {
+      const elapsedMinutes = Math.floor((date.getTime() - session.startedAt) / 60_000)
+      const threshold = [50, 25].find(value => elapsedMinutes >= value && !session.nudges.has(value))
+      if (!threshold) continue
+      const cue = this.companionEngine.longRunning({ preferences: this.getPreferences(), elapsedMinutes })
+      if (cue) {
+        for (const milestone of [25, 50]) {
+          if (milestone <= threshold) session.nudges.add(milestone)
+        }
+        this.emitCue(cue)
+        return cue
+      }
+    }
+    return null
+  }
+
+  awaken({ announce = true, publish = true } = {}) {
+    const result = this.store.awaken(this.nowDate())
+    if (announce) {
+      this.emitCue(this.companionEngine.awakening({
+        state: result.state,
+        preferences: this.getPreferences(),
+        awayMinutes: result.awayMinutes
+      }))
+    }
+    if (publish) this.publish()
+    return this.getState()
   }
 
   markRead(sessionId) {
@@ -245,6 +330,8 @@ class PetDomainService {
       tired: persisted.energy < 25,
       moodBand: persisted.mood >= 75 ? 'happy' : persisted.mood < 35 ? 'sad' : 'content',
       energyBand: persisted.energy >= 70 ? 'lively' : persisted.energy < 25 ? 'tired' : 'steady',
+      relationship: relationshipFor(persisted),
+      companionCue: this.companionCue,
       lastAward: this.lastAward,
       lastAutoFeed: this.lastAutoFeed,
       activity: {

@@ -89,13 +89,16 @@ test('AppStateStore persists validated pet preferences and display positions', (
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-pet-preferences-'))
   const file = path.join(dir, 'app-state.json')
   const store = new AppStateStore(file)
-  store.updatePet({ awake: true, autoFeed: false, motion: 'reduced', positionByDisplay: { '123': { x: 40.4, y: 80.8 }, '../bad': { x: 1, y: 2 } } })
+  store.updatePet({ awake: true, autoFeed: false, proactive: false, companionStyle: 'playful', motion: 'reduced', positionByDisplay: { '123': { x: 40.4, y: 80.8 }, '../bad': { x: 1, y: 2 } } })
   const restored = new AppStateStore(file).get().pet
   assert.equal(restored.awake, true)
   assert.equal(restored.autoFeed, false)
+  assert.equal(restored.proactive, false)
+  assert.equal(restored.companionStyle, 'playful')
   assert.equal(restored.motion, 'reduced')
   assert.deepEqual(restored.positionByDisplay['123'], { x: 40, y: 81 })
   assert.equal(restored.positionByDisplay['../bad'], undefined)
+  assert.equal(normalizeState({ pet: { proactive: 'no', companionStyle: '../../bad' } }).pet.companionStyle, 'warm')
 })
 
 test('new profiles enable bounded automatic local memory and preserve explicit controls', () => {

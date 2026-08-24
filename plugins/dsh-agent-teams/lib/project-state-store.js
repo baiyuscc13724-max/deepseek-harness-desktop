@@ -68,6 +68,9 @@ export class EncryptedProjectStateStore {
     this.encryptionKey = normalizeKey(encryptionKey);
     this.minimumRevision = safeRevision(minimumRevision, "minimumRevision");
     this.lastSeenRevision = this.minimumRevision;
+    this.closing = false;
+    this.closed = false;
+    this.closePromise = undefined;
   }
 
   toJSON() {
@@ -75,6 +78,7 @@ export class EncryptedProjectStateStore {
   }
 
   async load() {
+    this.#assertOpen();
     return queueStore(this.filePath, async () => {
       const envelope = await this.#readEnvelope();
       if (envelope === undefined) return undefined;
@@ -86,6 +90,7 @@ export class EncryptedProjectStateStore {
   }
 
   async save(authorityOrState, { expectedRevision } = {}) {
+    this.#assertOpen();
     const expected = safeRevision(expectedRevision, "expectedRevision");
     const state = typeof authorityOrState?.exportHostState === "function" ? authorityOrState.exportHostState() : authorityOrState;
     if (!isRecord(state) || state.projectRef !== this.projectRef) throw new Error("Host state does not belong to this project store");
@@ -108,6 +113,23 @@ export class EncryptedProjectStateStore {
     });
   }
 
+  close() {
+    if (this.closePromise !== undefined) return this.closePromise;
+    this.closing = true;
+    this.closePromise = queueStore(this.filePath, async () => {
+      this.encryptionKey.fill(0);
+      this.closed = true;
+    });
+    return this.closePromise;
+  }
+
+  #assertOpen() {
+    if (!this.closing && !this.closed) return;
+    const error = new Error("project state store is closed");
+    error.code = "PROJECT_STATE_CLOSED";
+    throw error;
+  }
+
   async #readEnvelope() {
     let text;
     try { text = await readFile(this.filePath, "utf8"); }
@@ -123,21 +145,26 @@ export class EncryptedProjectStateStore {
 
   #encrypt(state, revision) {
     const plaintext = Buffer.from(JSON.stringify(state));
-    if (plaintext.length > MAX_ENCRYPTED_STATE_BYTES) throw new RangeError("project Host state exceeds the storage limit");
-    const nonce = randomBytes(12);
-    const header = { version: ENVELOPE_VERSION, algorithm: ENVELOPE_ALGORITHM, projectRef: this.projectRef, revision };
-    const cipher = createCipheriv("aes-256-gcm", this.encryptionKey, nonce);
-    cipher.setAAD(aad(header));
-    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    return { ...header, nonce: nonce.toString("base64url"), ciphertext: ciphertext.toString("base64url"), tag: cipher.getAuthTag().toString("base64url") };
+    try {
+      if (plaintext.length > MAX_ENCRYPTED_STATE_BYTES) throw new RangeError("project Host state exceeds the storage limit");
+      const nonce = randomBytes(12);
+      const header = { version: ENVELOPE_VERSION, algorithm: ENVELOPE_ALGORITHM, projectRef: this.projectRef, revision };
+      const cipher = createCipheriv("aes-256-gcm", this.encryptionKey, nonce);
+      cipher.setAAD(aad(header));
+      const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+      return { ...header, nonce: nonce.toString("base64url"), ciphertext: ciphertext.toString("base64url"), tag: cipher.getAuthTag().toString("base64url") };
+    } finally {
+      plaintext.fill(0);
+    }
   }
 
   #decrypt(envelope) {
+    let plaintext;
     try {
       const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, envelope.nonce);
       decipher.setAAD(aad(envelope));
       decipher.setAuthTag(envelope.tag);
-      const plaintext = Buffer.concat([decipher.update(envelope.ciphertext), decipher.final()]);
+      plaintext = Buffer.concat([decipher.update(envelope.ciphertext), decipher.final()]);
       if (plaintext.length > MAX_ENCRYPTED_STATE_BYTES) throw new RangeError("project Host state exceeds the storage limit");
       const state = JSON.parse(plaintext.toString("utf8"));
       if (!isRecord(state) || state.projectRef !== this.projectRef) throw new Error("decrypted Host state belongs to another project");
@@ -146,6 +173,8 @@ export class EncryptedProjectStateStore {
       const failure = new Error("project state authentication or decryption failed");
       failure.cause = error;
       throw failure;
+    } finally {
+      plaintext?.fill(0);
     }
   }
 

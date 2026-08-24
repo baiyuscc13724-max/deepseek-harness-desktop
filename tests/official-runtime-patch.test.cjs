@@ -139,9 +139,16 @@ test('cache metrics separate the latest warm request from the cold-start cumulat
   assert.doesNotMatch(conversationPatch.source, /inbox\.filter\(\(row\) => row\.placement === "queued"\), \[inbox\]\)/)
   assert.match(conversationPatch.source, /const runningTurnStart = useSession\(\(s\) => runningTurnStartTime\(s\.chat\.timeline\)\)/)
   assert.doesNotMatch(conversationPatch.source, /const timeline = useSession\(\(s\) => s\.chat\.timeline\)/)
-  assert.match(conversationPatch.source, /const previousRunningRef = \(0, react\.useRef\)\(running\)/)
-  assert.match(conversationPatch.source, /const settledWhileFollowing = previousRunningRef\.current && !running && atBottomRef\.current/)
+  assert.match(conversationPatch.source, /function createChatStopFollowState\(running, following = true\)/)
+  assert.match(conversationPatch.source, /function reduceChatStopFollowState\(state, event\)/)
+  assert.match(conversationPatch.source, /const stopFollowRef = \(0, react\.useRef\)\(createChatStopFollowState\(running, atBottomRef\.current\)\)/)
+  assert.doesNotMatch(conversationPatch.source, /previousRunningRef/)
+  assert.match(conversationPatch.source, /stopFollowRef\.current = reduceChatStopFollowState\(stopFollowRef\.current, \{\s*type: "render",\s*running,\s*following: atBottomRef\.current\s*\}\)/)
+  assert.match(conversationPatch.source, /const settledWhileFollowing = stopFollowRef\.current\.settling/)
   assert.match(conversationPatch.source, /appendedUser \|\| appendedSteering \|\| settledWhileFollowing \|\| tipMoved && atBottomRef\.current/)
+  assert.match(conversationPatch.source, /reduceChatStopFollowState\(stopFollowRef\.current, \{ type: "pin" \}\)/)
+  assert.match(conversationPatch.source, /reduceChatStopFollowState\(stopFollowRef\.current, \{ type: "reader", moved: movedByReader, following: isAtBottom \}\)/)
+  assert.match(conversationPatch.source, /atBottomRef\.current \|\| stopFollowRef\.current\.settling[\s\S]{0,120}toBottom\(scrollerOf\(local\)\)/)
   assert.match(conversationPatch.source, /const sessionHeader = \(0, react\.useMemo\)\(\(\) => renderSlot\("conversation\.session\.header", \{\}\), \[renderSlot\]\)/)
   assert.match(conversationPatch.source, /const sessionView = \(0, react\.useMemo\)\(\(\) => renderSlot\("conversation\.session", \{\}\), \[renderSlot\]\)/)
   assert.match(conversationPatch.source, /children: \[sessionHeader,[\s\S]{0,300}children: \[sessionView, composerSeat\]/)
@@ -166,6 +173,36 @@ test('cache metrics separate the latest warm request from the cold-start cumulat
   assert.doesNotMatch(conversationPatch.source, /label: tooltipLine,\s*side: "top",\s*delayMs: 500/)
   assert.doesNotMatch(conversationPatch.source, /const \[truncated, setTruncated\] = \(0, react\.useState\)\(false\)/)
   assert.equal(patchConversationCacheSource(conversationPatch.source).changed, false)
+})
+
+test('assistant replies keep a full-response copy action reachable while long content scrolls', async () => {
+  const { patchAssistantCopySource } = await import('../scripts/assistant-copy-patch.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js'), 'utf8')
+  const first = patchAssistantCopySource(fixture)
+
+  assert.equal(first.changed, !fixture.includes('@harness-desktop/assistant-copy-dock-v1'))
+  assert.match(first.source, /dataPluginCss = "@harness-desktop\/assistant-copy-dock-v1"/u)
+  assert.match(first.source, /\.hd-assistant-copy-dock\{position:sticky;[^"\n]*top:10px;[^"\n]*pointer-events:none/u)
+  assert.match(first.source, /function AssistantCopyButton\(\{ text, t \}\)/u)
+  assert.match(first.source, /if \(text === ""\) return null;/u)
+  assert.match(first.source, /writeClipboard\)\(text\)/u)
+  assert.match(first.source, /AssistantMarkdown\(\{ blocks, streaming, interrupted, renderMessageImages, mentions, copyText, t \}\)/u)
+  assert.match(first.source, /copyText: owner === void 0 \? "" : assistantText\(tail\.closing\.blocks\)/u)
+  assert.doesNotMatch(first.source, /const copyText = assistantText\(blocks\);/u)
+  assert.match(first.source, /className: "hd-assistant-copy-dock",\s*children: \(0, react_jsx_runtime\.jsx\)\(AssistantCopyButton, \{ text: copyText, t \}\)/u)
+  assert.match(first.source, /"message\.copyResponse": "复制全文"/u)
+  assert.match(first.source, /"message\.copiedResponse": "Full response copied"/u)
+  assert.doesNotMatch(first.source, /window\.getSelection|\.innerText/u)
+  assert.doesNotThrow(() => new Function(first.source))
+  assert.equal(patchAssistantCopySource(first.source).changed, false)
+
+  const incomplete = first.source.replace('function AssistantCopyButton', 'function MissingAssistantCopyButton')
+  assert.throws(() => patchAssistantCopySource(incomplete), /assistant-copy patch is incomplete/u)
+  const drifted = [
+    '\t\tconst tagId$2 = "@deepseek-ai/dsh-client-ui-conversation/AssistantMarkdown.module.css";',
+    '\t\tconst AssistantMarkdown = /* upstream drift */ (0, react.memo)(function AssistantMarkdown({ blocks, streaming, interrupted, renderMessageImages, mentions, t }) {'
+  ].join('\n')
+  assert.throws(() => patchAssistantCopySource(drifted), /Assistant Markdown component anchor changed/u)
 })
 
 test('screenshots and image attachments have no arbitrary side-length or normalization resize cap', async () => {

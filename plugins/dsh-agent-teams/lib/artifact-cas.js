@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 const DIGEST = /^sha256:([a-f0-9]{64})$/u;
@@ -7,216 +7,100 @@ const UPLOAD_REF = /^upload_[A-Za-z0-9_-]{20,96}$/u;
 const DEFAULT_MAX_OBJECT_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 1024 * 1024;
 const MAX_READ_BYTES = 1024 * 1024;
+const HEADER_MAGIC = Buffer.from("DSHCAS01", "ascii"), FRAME_MAGIC = Buffer.from("FRM1", "ascii");
+const HEADER_PREFIX_BYTES = 81, HEADER_BYTES = 109, FRAME_PREFIX_BYTES = 32, TAG_BYTES = 16, NONCE_BYTES = 12, CAS_VERSION = 1;
+const OBJECT_KEY_DOMAIN = "dsh/artifact-cas-object-key/v1";
+const UPLOAD_KEYS = new WeakMap();
 
-function nonEmptyString(value, field, max = 2_000) {
-  if (typeof value !== "string" || value.trim() === "" || value.length > max) throw new TypeError(`${field} must be a non-empty string of at most ${max} characters`);
-  return value.trim();
-}
-function safeInteger(value, field, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) {
-  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new TypeError(`${field} must be a safe integer from ${minimum} through ${maximum}`);
-  return value;
-}
-function digestRef(value, field = "digest") {
-  const digest = nonEmptyString(value, field, 80).toLowerCase();
-  if (!DIGEST.test(digest)) throw new TypeError(`${field} must be a sha256 digest`);
-  return digest;
-}
-function uploadRef(value) {
-  const ref = nonEmptyString(value, "uploadRef", 128);
-  if (!UPLOAD_REF.test(ref)) throw new TypeError("uploadRef must be an opaque upload reference");
-  return ref;
-}
-function isSameOrWithin(root, candidate) {
-  const child = relative(root, candidate);
-  return child === "" || (!child.startsWith(`..${sep}`) && child !== ".." && !isAbsolute(child));
-}
-function ensureDisjoint(left, right) {
-  if (isSameOrWithin(left, right) || isSameOrWithin(right, left)) throw new Error("CAS object and staging roots must be disjoint");
-}
-async function exists(value) {
-  try { return await stat(value); } catch (error) { if (error?.code === "ENOENT") return undefined; throw error; }
-}
-function hashBytes(value) {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-async function hashFile(filePath, expectedSize) {
-  const handle = await open(filePath, "r");
-  const hash = createHash("sha256");
-  let offset = 0;
-  try {
-    for (;;) {
-      const buffer = Buffer.alloc(Math.min(MAX_READ_BYTES, Math.max(1, expectedSize - offset)));
-      const result = await handle.read(buffer, 0, buffer.length, offset);
-      if (result.bytesRead === 0) break;
-      hash.update(buffer.subarray(0, result.bytesRead));
-      offset += result.bytesRead;
-      if (offset > expectedSize) throw new Error("CAS object grew while it was verified");
-    }
-  } finally { await handle.close(); }
-  if (offset !== expectedSize) throw new Error("CAS object size changed while it was verified");
-  return `sha256:${hash.digest("hex")}`;
-}
+function nonEmptyString(value, field, max = 2_000) { if (typeof value !== "string" || value.trim() === "" || value.length > max) throw new TypeError(`${field} must be a non-empty string of at most ${max} characters`); return value.trim(); }
+function safeInteger(value, field, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) { if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new TypeError(`${field} must be a safe integer from ${minimum} through ${maximum}`); return value; }
+function digestRef(value, field = "digest") { const digest = nonEmptyString(value, field, 80).toLowerCase(); if (!DIGEST.test(digest)) throw new TypeError(`${field} must be a sha256 digest`); return digest; }
+function uploadRef(value) { const ref = nonEmptyString(value, "uploadRef", 128); if (!UPLOAD_REF.test(ref)) throw new TypeError("uploadRef must be an opaque upload reference"); return ref; }
+function isSameOrWithin(root, candidate) { const child = relative(root, candidate); return child === "" || (!child.startsWith(`..${sep}`) && child !== ".." && !isAbsolute(child)); }
+function ensureDisjoint(left, right) { if (isSameOrWithin(left, right) || isSameOrWithin(right, left)) throw new Error("CAS object and staging roots must be disjoint"); }
+async function leafExists(value) { try { return await lstat(value); } catch (error) { if (error?.code === "ENOENT") return undefined; throw error; } }
+function hashBytes(value) { return `sha256:${createHash("sha256").update(value).digest("hex")}`; }
+function ciphertextError() { const error = new Error("Artifact CAS ciphertext is invalid"); error.code = "ARTIFACT_CAS_CIPHERTEXT_INVALID"; return error; }
+function safeCasError(error) { if (error?.path === undefined && error?.dest === undefined) return error; const safe = new Error("Artifact CAS storage operation failed"); safe.code = "ARTIFACT_CAS_IO"; return safe; }
+function uint64(value) { const result = Buffer.alloc(8); result.writeBigUInt64BE(BigInt(value)); return result; }
+function readUint64(buffer, offset) { const value = buffer.readBigUInt64BE(offset); if (value > BigInt(Number.MAX_SAFE_INTEGER)) throw ciphertextError(); return Number(value); }
+function projectBinding(projectRef) { return createHash("sha256").update("project\0").update(projectRef).digest(); }
+function digestBytes(digest) { return Buffer.from(DIGEST.exec(digest)[1], "hex"); }
+function deriveObjectKey(masterKey, projectRef, digest) { return createHmac("sha256", masterKey).update(OBJECT_KEY_DOMAIN).update("\0").update(projectRef).update("\0").update(digest).digest(); }
+function frameNonce(uploadNonce, index) { const nonce = Buffer.from(uploadNonce); nonce[0] ^= 0x80; nonce.writeUInt32BE(index, 8); return nonce; }
+function assertEncryptionKey(value) { const shared = typeof SharedArrayBuffer === "function" && value?.buffer instanceof SharedArrayBuffer; if (shared || (!Buffer.isBuffer(value) && !(value instanceof Uint8Array)) || value.byteLength !== 32) throw new TypeError("encryptionKey must be a private 32-byte Buffer or Uint8Array"); return Buffer.from(value); }
+async function readExact(handle, length, position) { const buffer = Buffer.alloc(length); let offset = 0; while (offset < length) { const result = await handle.read(buffer, offset, length - offset, position + offset); if (result.bytesRead < 1) { buffer.fill(0); throw ciphertextError(); } offset += result.bytesRead; } return buffer; }
+async function writeAll(handle, buffer, position) { let offset = 0; while (offset < buffer.length) { const result = await handle.write(buffer, offset, buffer.length - offset, position + offset); if (!Number.isSafeInteger(result?.bytesWritten) || result.bytesWritten < 1) throw new Error("CAS encrypted frame write made no progress"); offset += result.bytesWritten; } }
+function buildHeader(projectRef, digest, size, nonce, objectKey) { const prefix = Buffer.concat([HEADER_MAGIC, Buffer.from([CAS_VERSION]), projectBinding(projectRef), digestBytes(digest), uint64(size)]); let tag; try { const cipher = createCipheriv("aes-256-gcm", objectKey, nonce); cipher.setAAD(prefix); cipher.final(); tag = cipher.getAuthTag(); return Buffer.concat([prefix, nonce, tag]); } finally { tag?.fill(0); prefix.fill(0); } }
+function verifyHeader(header, projectRef, expectedDigest, objectKey, expectedSize) { try { if (header.length !== HEADER_BYTES || !header.subarray(0, 8).equals(HEADER_MAGIC) || header[8] !== CAS_VERSION) throw ciphertextError(); const binding = projectBinding(projectRef); try { if (!header.subarray(9, 41).equals(binding)) throw ciphertextError(); } finally { binding.fill(0); } const expected = digestBytes(expectedDigest); try { if (!header.subarray(41, 73).equals(expected)) throw ciphertextError(); } finally { expected.fill(0); } const size = readUint64(header, 73); if (expectedSize !== undefined && size !== expectedSize) throw ciphertextError(); const decipher = createDecipheriv("aes-256-gcm", objectKey, header.subarray(HEADER_PREFIX_BYTES, HEADER_PREFIX_BYTES + NONCE_BYTES)); decipher.setAAD(header.subarray(0, HEADER_PREFIX_BYTES)); decipher.setAuthTag(header.subarray(HEADER_PREFIX_BYTES + NONCE_BYTES)); decipher.final(); return size; } catch (error) { if (error?.code === "ARTIFACT_CAS_CIPHERTEXT_INVALID") throw error; throw ciphertextError(error); } }
+function framePrefix(index, offset, length, nonce) { const prefix = Buffer.alloc(FRAME_PREFIX_BYTES); FRAME_MAGIC.copy(prefix); prefix.writeUInt32BE(index, 4); prefix.writeBigUInt64BE(BigInt(offset), 8); prefix.writeUInt32BE(length, 16); nonce.copy(prefix, 20); return prefix; }
+function frameAad(header, prefix) { return Buffer.concat([header, prefix]); }
+function encryptFrame(header, objectKey, uploadNonce, index, offset, plaintext) { const nonce = frameNonce(uploadNonce, index), prefix = framePrefix(index, offset, plaintext.length, nonce); let aad, ciphertext, tag; try { aad = frameAad(header, prefix); const cipher = createCipheriv("aes-256-gcm", objectKey, nonce); cipher.setAAD(aad); ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]); tag = cipher.getAuthTag(); return Buffer.concat([prefix, ciphertext, tag]); } finally { nonce.fill(0); prefix.fill(0); aad?.fill(0); ciphertext?.fill(0); tag?.fill(0); } }
+function decryptFrame(header, objectKey, prefix, ciphertext, tag) { let aad, partial, final; try { aad = frameAad(header, prefix); const decipher = createDecipheriv("aes-256-gcm", objectKey, prefix.subarray(20)); decipher.setAAD(aad); decipher.setAuthTag(tag); partial = decipher.update(ciphertext); final = decipher.final(); return Buffer.concat([partial, final]); } catch { throw ciphertextError(); } finally { aad?.fill(0); partial?.fill(0); final?.fill(0); } }
 
 export class ArtifactContentAddressedStore {
-  constructor({ objectRoot, stagingRoot, maxObjectBytes = DEFAULT_MAX_OBJECT_BYTES } = {}) {
-    this.objectRoot = resolve(nonEmptyString(objectRoot, "objectRoot", 4_096));
-    this.stagingRoot = resolve(nonEmptyString(stagingRoot, "stagingRoot", 4_096));
-    ensureDisjoint(this.objectRoot, this.stagingRoot);
-    this.maxObjectBytes = safeInteger(maxObjectBytes, "maxObjectBytes", 1, DEFAULT_MAX_OBJECT_BYTES);
-    this.uploads = new Map();
-    this.ready = false;
+  #masterKey;
+  constructor({ objectRoot, stagingRoot, projectRef, encryptionKey, randomBytesImpl = randomBytes, maxObjectBytes = DEFAULT_MAX_OBJECT_BYTES } = {}) {
+    this.objectRoot = resolve(nonEmptyString(objectRoot, "objectRoot", 4_096)); this.stagingRoot = resolve(nonEmptyString(stagingRoot, "stagingRoot", 4_096)); ensureDisjoint(this.objectRoot, this.stagingRoot); this.projectRef = nonEmptyString(projectRef, "projectRef", 128); this.maxObjectBytes = safeInteger(maxObjectBytes, "maxObjectBytes", 1, DEFAULT_MAX_OBJECT_BYTES); this.#masterKey = assertEncryptionKey(encryptionKey);
+    if (typeof randomBytesImpl !== "function") { this.#masterKey.fill(0); throw new TypeError("randomBytesImpl must be a function"); } this.randomBytesImpl = randomBytesImpl;
+    this.uploads = new Map(); this.usedHeaderNonces = new Map(); this.ready = false; this.closing = false; this.closePromise = undefined; this.active = new Set();
   }
-
-  toJSON() {
-    return { version: 1, ready: this.ready, activeUploadCount: this.uploads.size, maxObjectBytes: this.maxObjectBytes };
+  toJSON() { return this.#snapshot(); }
+  initialize(input) { return this.#run(() => this.#initialize(input)); } beginUpload(input) { return this.#run(() => this.#beginUpload(input)); } appendChunk(input) { return this.#run(() => this.#appendChunk(input)); } finalizeUpload(input) { return this.#run(() => this.#finalizeUpload(input)); } abortUpload(input) { return this.#run(() => this.#abortUpload(input)); } inspect(input) { return this.#run(() => this.#inspect(input)); } readChunk(input) { return this.#run(() => this.#readChunk(input)); }
+  async #initialize() { await mkdir(this.objectRoot, { recursive: true, mode: 0o700 }); await mkdir(this.stagingRoot, { recursive: true, mode: 0o700 }); this.objectRoot = await realpath(this.objectRoot); this.stagingRoot = await realpath(this.stagingRoot); ensureDisjoint(this.objectRoot, this.stagingRoot); this.ready = true; return this.#snapshot(); }
+  async #beginUpload({ uploadRef: inputRef, expectedDigest, expectedSize } = {}) {
+    this.#requireReady(); const ref = uploadRef(inputRef), digest = digestRef(expectedDigest, "expectedDigest"), size = safeInteger(expectedSize, "expectedSize", 0, this.maxObjectBytes);
+    if (this.uploads.has(ref)) { const current = this.uploads.get(ref); if (current.expectedDigest === digest && current.expectedSize === size && !current.failed) return Object.freeze({ uploadRef: ref, offset: current.offset, resumed: true }); throw new Error("uploadRef is already bound to another object"); }
+    const final = this.#objectPath(digest), present = await leafExists(final); if (present !== undefined) { if (!present.isFile()) throw ciphertextError(); const inspected = await this.#inspectPath(final, digest, size); return Object.freeze({ uploadRef: ref, offset: size, complete: true, digest: inspected.digest, size: inspected.size }); }
+    const temporary = resolve(this.stagingRoot, `${ref}.${randomUUID()}.part`); if (!isSameOrWithin(this.stagingRoot, temporary)) throw new Error("upload staging path escapes its root"); const objectKey = deriveObjectKey(this.#masterKey, this.projectRef, digest); let nonce, header, handle;
+    try { const randomNonce = this.randomBytesImpl(NONCE_BYTES), sharedNonce = typeof SharedArrayBuffer === "function" && randomNonce?.buffer instanceof SharedArrayBuffer; if (sharedNonce || (!Buffer.isBuffer(randomNonce) && !(randomNonce instanceof Uint8Array))) throw new TypeError("randomBytesImpl must return private bytes"); nonce = Buffer.from(randomNonce); if (nonce.length !== NONCE_BYTES) throw new TypeError("randomBytesImpl must return exactly 12 bytes"); const nonceHex = nonce.toString("hex"), used = this.usedHeaderNonces.get(digest) ?? new Set(); if (used.has(nonceHex)) { const error = new Error("Artifact CAS nonce was reused"); error.code = "ARTIFACT_CAS_NONCE_REUSE"; throw error; } used.add(nonceHex); this.usedHeaderNonces.set(digest, used); header = buildHeader(this.projectRef, digest, size, nonce, objectKey); handle = await open(temporary, "wx", 0o600); await writeAll(handle, header, 0); const upload = { expectedDigest: digest, expectedSize: size, offset: 0, frameIndex: 0, fileOffset: HEADER_BYTES, hash: createHash("sha256"), handle, temporary, uploadNonce: Buffer.from(nonce), header: Buffer.from(header), failed: false }; UPLOAD_KEYS.set(upload, objectKey); this.uploads.set(ref, upload); return Object.freeze({ uploadRef: ref, offset: 0, resumed: false }); }
+    catch (error) { await handle?.close().catch(() => undefined); await rm(temporary, { force: true }).catch(() => undefined); objectKey.fill(0); throw error; } finally { nonce?.fill(0); header?.fill(0); }
   }
-
-  async initialize() {
-    await mkdir(this.objectRoot, { recursive: true, mode: 0o700 });
-    await mkdir(this.stagingRoot, { recursive: true, mode: 0o700 });
-    this.objectRoot = await realpath(this.objectRoot);
-    this.stagingRoot = await realpath(this.stagingRoot);
-    ensureDisjoint(this.objectRoot, this.stagingRoot);
-    this.ready = true;
-    return this.toJSON();
-  }
-
-  async beginUpload({ uploadRef: inputRef, expectedDigest, expectedSize } = {}) {
-    this.#requireReady();
-    const ref = uploadRef(inputRef);
-    const digest = digestRef(expectedDigest, "expectedDigest");
-    const size = safeInteger(expectedSize, "expectedSize", 0, this.maxObjectBytes);
-    if (this.uploads.has(ref)) {
-      const current = this.uploads.get(ref);
-      if (current.expectedDigest === digest && current.expectedSize === size) return Object.freeze({ uploadRef: ref, offset: current.offset, resumed: true });
-      throw new Error("uploadRef is already bound to another object");
-    }
-    const final = this.#objectPath(digest);
-    const present = await exists(final);
-    if (present !== undefined) {
-      if (!present.isFile() || present.size !== size || await hashFile(final, size) !== digest) throw new Error("existing CAS object metadata is inconsistent");
-      return Object.freeze({ uploadRef: ref, offset: size, complete: true, digest, size });
-    }
-    const temporary = resolve(this.stagingRoot, `${ref}.${randomUUID()}.part`);
-    if (!isSameOrWithin(this.stagingRoot, temporary)) throw new Error("upload staging path escapes its root");
-    const handle = await open(temporary, "wx", 0o600);
-    this.uploads.set(ref, { uploadRef: ref, expectedDigest: digest, expectedSize: size, offset: 0, hash: createHash("sha256"), handle, temporary });
-    return Object.freeze({ uploadRef: ref, offset: 0, resumed: false });
-  }
-
-  async appendChunk({ uploadRef: inputRef, offset, bytes, chunkDigest } = {}) {
-    this.#requireReady();
-    const ref = uploadRef(inputRef);
-    const upload = this.uploads.get(ref);
-    if (upload === undefined) throw new Error("upload is not active");
-    const expectedOffset = safeInteger(offset, "offset", 0, upload.expectedSize);
-    if (expectedOffset !== upload.offset) throw new Error("upload chunk offset is stale or out of order");
-    if (!Buffer.isBuffer(bytes) && !(bytes instanceof Uint8Array)) throw new TypeError("upload chunk bytes must be a Buffer or Uint8Array");
-    const chunk = Buffer.from(bytes);
-    if (chunk.length < 1 || chunk.length > MAX_CHUNK_BYTES || upload.offset + chunk.length > upload.expectedSize) throw new RangeError("upload chunk size exceeds its bound");
-    if (digestRef(chunkDigest, "chunkDigest") !== hashBytes(chunk)) throw new Error("upload chunk digest is invalid");
-    await upload.handle.write(chunk, 0, chunk.length, upload.offset);
-    upload.hash.update(chunk);
-    upload.offset += chunk.length;
-    return Object.freeze({ uploadRef: ref, offset: upload.offset, remaining: upload.expectedSize - upload.offset });
-  }
-
-  async finalizeUpload(inputRef) {
-    this.#requireReady();
-    const ref = uploadRef(inputRef);
-    const upload = this.uploads.get(ref);
-    if (upload === undefined) throw new Error("upload is not active");
-    this.uploads.delete(ref);
+  async #appendChunk({ uploadRef: inputRef, offset, bytes, chunkDigest } = {}) {
+    this.#requireReady(); const ref = uploadRef(inputRef), upload = this.uploads.get(ref); if (upload === undefined || upload.failed) throw new Error("upload is not active"); const expectedOffset = safeInteger(offset, "offset", 0, upload.expectedSize); if (expectedOffset !== upload.offset) throw new Error("upload chunk offset is stale or out of order"); if (!Buffer.isBuffer(bytes) && !(bytes instanceof Uint8Array)) throw new TypeError("upload chunk bytes must be a Buffer or Uint8Array"); const plaintext = Buffer.from(bytes); let frame;
     try {
-      if (upload.offset !== upload.expectedSize) throw new Error("upload is incomplete");
-      const actualDigest = `sha256:${upload.hash.digest("hex")}`;
-      if (actualDigest !== upload.expectedDigest) throw new Error("uploaded object digest does not match its declaration");
-      await upload.handle.sync();
-      await upload.handle.close();
-      upload.handle = undefined;
-      const target = this.#objectPath(actualDigest);
-      const targetDirectory = resolve(target, "..");
-      await mkdir(targetDirectory, { recursive: true, mode: 0o700 });
-      const realTargetDirectory = await realpath(targetDirectory);
-      if (!isSameOrWithin(this.objectRoot, realTargetDirectory)) throw new Error("CAS object directory escapes its root");
-      const current = await exists(target);
-      if (current === undefined) {
-        try { await rename(upload.temporary, target); }
-        catch (error) {
-          if (error?.code !== "EEXIST" && error?.code !== "EPERM") throw error;
-        }
-      }
-      const stored = await exists(target);
-      if (stored === undefined || !stored.isFile() || stored.size !== upload.expectedSize || await hashFile(target, stored.size) !== actualDigest) throw new Error("CAS object publication did not produce the expected immutable file");
-      let directoryHandle;
-      try { directoryHandle = await open(realTargetDirectory, "r"); await directoryHandle.sync(); } catch {} finally { await directoryHandle?.close().catch(() => undefined); }
-      await rm(upload.temporary, { force: true });
-      return Object.freeze({ digest: actualDigest, size: upload.expectedSize, stored: true });
-    } catch (error) {
-      await upload.handle?.close().catch(() => undefined);
-      await rm(upload.temporary, { force: true }).catch(() => undefined);
-      throw error;
-    }
+      if (plaintext.length < 1 || plaintext.length > MAX_CHUNK_BYTES || upload.offset + plaintext.length > upload.expectedSize) throw new RangeError("upload chunk size exceeds its bound");
+      if (digestRef(chunkDigest, "chunkDigest") !== hashBytes(plaintext)) throw new Error("upload chunk digest is invalid");
+      try { frame = encryptFrame(upload.header, UPLOAD_KEYS.get(upload), upload.uploadNonce, upload.frameIndex, upload.offset, plaintext); await writeAll(upload.handle, frame, upload.fileOffset); }
+      catch (error) { upload.failed = true; await this.#destroyUpload(ref, upload, true); throw error; }
+      upload.hash.update(plaintext); upload.offset += plaintext.length; upload.frameIndex += 1; upload.fileOffset += frame.length; return Object.freeze({ uploadRef: ref, offset: upload.offset, remaining: upload.expectedSize - upload.offset });
+    } finally { plaintext.fill(0); frame?.fill(0); }
   }
-
-  async abortUpload(inputRef) {
-    const ref = uploadRef(inputRef);
-    const upload = this.uploads.get(ref);
-    if (upload === undefined) return Object.freeze({ uploadRef: ref, aborted: false });
-    this.uploads.delete(ref);
-    await upload.handle.close().catch(() => undefined);
-    await rm(upload.temporary, { force: true }).catch(() => undefined);
-    return Object.freeze({ uploadRef: ref, aborted: true });
+  async #finalizeUpload(inputRef) {
+    this.#requireReady(); const ref = uploadRef(inputRef), upload = this.uploads.get(ref); if (upload === undefined || upload.failed) throw new Error("upload is not active"); this.uploads.delete(ref);
+    try { if (upload.offset !== upload.expectedSize) throw new Error("upload is incomplete"); const actualDigest = `sha256:${upload.hash.digest("hex")}`; if (actualDigest !== upload.expectedDigest) throw new Error("uploaded object digest does not match its declaration"); await upload.handle.sync(); await upload.handle.close(); upload.handle = undefined; await this.#inspectPath(upload.temporary, actualDigest, upload.expectedSize); const target = this.#objectPath(actualDigest), targetDirectory = resolve(target, ".."); await mkdir(targetDirectory, { recursive: true, mode: 0o700 }); const realTargetDirectory = await realpath(targetDirectory); if (!isSameOrWithin(this.objectRoot, realTargetDirectory)) throw new Error("CAS object directory escapes its root"); const current = await leafExists(target); if (current === undefined) { try { await rename(upload.temporary, target); } catch (error) { if (error?.code !== "EEXIST" && error?.code !== "EPERM") throw error; } } const stored = await leafExists(target); if (!stored?.isFile()) throw ciphertextError(); await this.#inspectPath(target, actualDigest, upload.expectedSize); let directoryHandle; try { directoryHandle = await open(realTargetDirectory, "r"); await directoryHandle.sync(); } catch {} finally { await directoryHandle?.close().catch(() => undefined); } await rm(upload.temporary, { force: true }); return Object.freeze({ digest: actualDigest, size: upload.expectedSize, stored: true }); }
+    catch (error) { await upload.handle?.close().catch(() => undefined); await rm(upload.temporary, { force: true }).catch(() => undefined); throw error; } finally { this.#zeroUpload(upload); }
   }
-
-  async inspect(inputDigest) {
-    this.#requireReady();
-    const digest = digestRef(inputDigest);
-    const objectPath = this.#objectPath(digest);
-    const metadata = await exists(objectPath);
-    if (!metadata?.isFile()) return Object.freeze({ digest, size: 0, present: false });
-    if (await hashFile(objectPath, metadata.size) !== digest) throw new Error("CAS object integrity verification failed");
-    return Object.freeze({ digest, size: metadata.size, present: true });
+  async #abortUpload(inputRef) { const ref = uploadRef(inputRef), upload = this.uploads.get(ref); if (upload === undefined) return Object.freeze({ uploadRef: ref, aborted: false }); await this.#destroyUpload(ref, upload); return Object.freeze({ uploadRef: ref, aborted: true }); }
+  async #inspect(inputDigest) { this.#requireReady(); const digest = digestRef(inputDigest), objectPath = this.#objectPath(digest), metadata = await leafExists(objectPath); if (metadata === undefined) return Object.freeze({ digest, size: 0, present: false }); if (!metadata.isFile() || metadata.isSymbolicLink()) throw ciphertextError(); return Object.freeze({ ...(await this.#inspectPath(objectPath, digest)), present: true }); }
+  async #readChunk({ digest: inputDigest, offset = 0, length = MAX_READ_BYTES } = {}) {
+    this.#requireReady(); const digest = digestRef(inputDigest), objectPath = this.#objectPath(digest), metadata = await leafExists(objectPath); if (metadata === undefined) throw new Error("CAS object is unavailable"); if (!metadata.isFile() || metadata.isSymbolicLink()) throw ciphertextError(); const handle = await this.#openContainedFile(objectPath); let objectKey, header, output;
+    try { header = await readExact(handle, HEADER_BYTES, 0); objectKey = deriveObjectKey(this.#masterKey, this.projectRef, digest); const total = verifyHeader(header, this.projectRef, digest, objectKey); if (total > this.maxObjectBytes) throw ciphertextError(); const start = safeInteger(offset, "offset", 0, total), count = safeInteger(length, "length", 1, MAX_READ_BYTES), wanted = Math.min(count, total - start); output = Buffer.alloc(wanted); let plainOffset = 0, fileOffset = HEADER_BYTES, index = 0, copied = 0; while (plainOffset < total && copied < wanted) { const parsed = await this.#readFrame(handle, header, fileOffset, index, plainOffset, total); let plaintext; try { plaintext = decryptFrame(header, objectKey, parsed.prefix, parsed.ciphertext, parsed.tag); const from = Math.max(start, plainOffset), to = Math.min(start + wanted, plainOffset + plaintext.length); if (to > from) { plaintext.copy(output, copied, from - plainOffset, to - plainOffset); copied += to - from; } } finally { plaintext?.fill(0); parsed.prefix.fill(0); parsed.ciphertext.fill(0); parsed.tag.fill(0); } plainOffset += parsed.length; fileOffset += FRAME_PREFIX_BYTES + parsed.length + TAG_BYTES; index += 1; } if (copied !== wanted) throw ciphertextError(); return Object.freeze({ digest, offset: start, bytes: output, eof: start + copied >= total, size: total }); }
+    catch (error) { output?.fill(0); throw error; } finally { objectKey?.fill(0); header?.fill(0); await handle.close(); }
   }
-
-  async readChunk({ digest: inputDigest, offset = 0, length = MAX_READ_BYTES } = {}) {
-    this.#requireReady();
-    const digest = digestRef(inputDigest);
-    const metadata = await exists(this.#objectPath(digest));
-    if (metadata === undefined || !metadata.isFile()) throw new Error("CAS object is unavailable");
-    const start = safeInteger(offset, "offset", 0, metadata.size);
-    const count = safeInteger(length, "length", 1, MAX_READ_BYTES);
-    const size = Math.min(count, metadata.size - start);
-    const handle = await open(this.#objectPath(digest), "r");
-    try {
-      const buffer = Buffer.alloc(size);
-      const result = await handle.read(buffer, 0, size, start);
-      return Object.freeze({ digest, offset: start, bytes: buffer.subarray(0, result.bytesRead), eof: start + result.bytesRead >= metadata.size, size: metadata.size });
-    } finally { await handle.close(); }
+  async #openContainedFile(filePath) {
+    const allowedRoot = isSameOrWithin(this.objectRoot, filePath) ? this.objectRoot : isSameOrWithin(this.stagingRoot, filePath) ? this.stagingRoot : undefined;
+    if (allowedRoot === undefined) throw ciphertextError();
+    const leaf = await lstat(filePath); if (!leaf.isFile() || leaf.isSymbolicLink()) throw ciphertextError();
+    const resolvedPath = await realpath(filePath); if (!isSameOrWithin(allowedRoot, resolvedPath)) throw ciphertextError();
+    const handle = await open(resolvedPath, "r");
+    try { const opened = await handle.stat(); if (!opened.isFile() || opened.dev !== leaf.dev || opened.ino !== leaf.ino) throw ciphertextError(); return handle; }
+    catch (error) { await handle.close().catch(() => undefined); throw error; }
   }
-
-  async close() {
-    const refs = [...this.uploads.keys()];
-    for (const ref of refs) await this.abortUpload(ref);
-    this.ready = false;
+  async #inspectPath(filePath, digest, expectedSize) {
+    const handle = await this.#openContainedFile(filePath); let objectKey, header;
+    try { const metadata = await handle.stat(); header = await readExact(handle, HEADER_BYTES, 0); objectKey = deriveObjectKey(this.#masterKey, this.projectRef, digest); const total = verifyHeader(header, this.projectRef, digest, objectKey, expectedSize); if (total > this.maxObjectBytes) throw ciphertextError(); const hash = createHash("sha256"); let plainOffset = 0, fileOffset = HEADER_BYTES, index = 0; while (plainOffset < total) { const parsed = await this.#readFrame(handle, header, fileOffset, index, plainOffset, total); let plaintext; try { plaintext = decryptFrame(header, objectKey, parsed.prefix, parsed.ciphertext, parsed.tag); hash.update(plaintext); } finally { plaintext?.fill(0); parsed.prefix.fill(0); parsed.ciphertext.fill(0); parsed.tag.fill(0); } plainOffset += parsed.length; fileOffset += FRAME_PREFIX_BYTES + parsed.length + TAG_BYTES; index += 1; } if (fileOffset !== metadata.size || `sha256:${hash.digest("hex")}` !== digest) throw ciphertextError(); return { digest, size: total }; }
+    catch (error) { if (error?.code === "ARTIFACT_CAS_CIPHERTEXT_INVALID") throw error; throw ciphertextError(error); } finally { objectKey?.fill(0); header?.fill(0); await handle.close(); }
   }
-
-  #objectPath(inputDigest) {
-    const digest = digestRef(inputDigest);
-    const hex = DIGEST.exec(digest)[1];
-    const value = resolve(this.objectRoot, "sha256", hex.slice(0, 2), hex);
-    if (!isSameOrWithin(this.objectRoot, value)) throw new Error("CAS object path escapes its root");
-    return value;
-  }
-
-  #requireReady() {
-    if (!this.ready) throw new Error("Artifact CAS is not initialized");
-  }
+  async #readFrame(handle, header, fileOffset, expectedIndex, expectedOffset, total) { const prefix = await readExact(handle, FRAME_PREFIX_BYTES, fileOffset); let expectedNonce; try { expectedNonce = frameNonce(header.subarray(HEADER_PREFIX_BYTES, HEADER_PREFIX_BYTES + NONCE_BYTES), expectedIndex); if (!prefix.subarray(0, 4).equals(FRAME_MAGIC) || prefix.readUInt32BE(4) !== expectedIndex || readUint64(prefix, 8) !== expectedOffset || !prefix.subarray(20).equals(expectedNonce)) throw ciphertextError(); const length = prefix.readUInt32BE(16); if (length < 1 || length > MAX_CHUNK_BYTES || expectedOffset + length > total) throw ciphertextError(); const ciphertext = await readExact(handle, length, fileOffset + FRAME_PREFIX_BYTES), tag = await readExact(handle, TAG_BYTES, fileOffset + FRAME_PREFIX_BYTES + length); expectedNonce.fill(0); return { prefix, ciphertext, tag, length }; } catch (error) { expectedNonce?.fill(0); prefix.fill(0); if (error?.code === "ARTIFACT_CAS_CIPHERTEXT_INVALID") throw error; throw ciphertextError(error); } }
+  async #destroyUpload(ref, upload, suppressErrors = false) { this.uploads.delete(ref); const errors = []; try { await upload.handle?.close(); } catch (error) { errors.push(safeCasError(error)); } try { await rm(upload.temporary, { force: true }); } catch (error) { errors.push(safeCasError(error)); } finally { this.#zeroUpload(upload); } if (!suppressErrors && errors.length === 1) throw errors[0]; if (!suppressErrors && errors.length > 1) throw new AggregateError(errors, "Artifact CAS upload cleanup failed"); }
+  #zeroUpload(upload) { const objectKey = UPLOAD_KEYS.get(upload); objectKey?.fill(0); UPLOAD_KEYS.delete(upload); upload.uploadNonce?.fill(0); upload.header?.fill(0); upload.uploadNonce = undefined; upload.header = undefined; }
+  close() { if (this.closePromise !== undefined) return this.closePromise; this.closing = true; this.closePromise = (async () => { await Promise.all([...this.active]); const errors = [], uploads = [...this.uploads.values()]; this.uploads.clear(); for (const upload of uploads) { try { await upload.handle?.close(); } catch (error) { errors.push(safeCasError(error)); } try { await rm(upload.temporary, { force: true }); } catch (error) { errors.push(safeCasError(error)); } this.#zeroUpload(upload); } this.ready = false; this.#masterKey.fill(0); this.usedHeaderNonces.clear(); if (errors.length === 1) throw errors[0]; if (errors.length > 1) throw new AggregateError(errors, "Artifact CAS cleanup failed"); })(); return this.closePromise; }
+  #snapshot() { return { version: 1, ready: this.ready, activeUploadCount: this.uploads.size, maxObjectBytes: this.maxObjectBytes }; }
+  #assertOpen() { if (this.closing) { const error = new Error("Artifact CAS is closed"); error.code = "ARTIFACT_CAS_CLOSED"; throw error; } }
+  #run(operation) { try { this.#assertOpen(); } catch (error) { return Promise.reject(error); } let release; const active = new Promise((resolvePromise) => { release = resolvePromise; }); this.active.add(active); return Promise.resolve().then(operation).catch((error) => { throw safeCasError(error); }).finally(() => { this.active.delete(active); release(); }); }
+  #objectPath(inputDigest) { const digest = digestRef(inputDigest), hex = DIGEST.exec(digest)[1], value = resolve(this.objectRoot, "sha256", hex.slice(0, 2), hex); if (!isSameOrWithin(this.objectRoot, value)) throw new Error("CAS object path escapes its root"); return value; }
+  #requireReady() { if (!this.ready) throw new Error("Artifact CAS is not initialized"); }
 }
 
-export {
-  DEFAULT_MAX_OBJECT_BYTES,
-  DIGEST,
-  MAX_CHUNK_BYTES,
-  MAX_READ_BYTES,
-};
+export { CAS_VERSION, DEFAULT_MAX_OBJECT_BYTES, DIGEST, HEADER_BYTES, MAX_CHUNK_BYTES, MAX_READ_BYTES };

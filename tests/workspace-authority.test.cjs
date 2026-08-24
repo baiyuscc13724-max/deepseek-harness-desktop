@@ -95,7 +95,7 @@ test('authority, source working tree, and isolated workspace roots must remain d
   assert.equal(authorityProjection.includes(roots.authorityRoot), false)
   assert.equal(authorityProjection.includes('workspace-secret-with-at-least-twenty-four-characters'), false)
   assert.match(workspace.workspaceRef, /^workspace_/u)
-  assert.equal(workspace.fencingToken, '1:1')
+  assert.equal(workspace.fencingToken, '1:1'); assert.deepEqual(open(authority, roots, 'safe'), workspace); assert.equal(authority.exportHostState().fencingCounter, 1)
 })
 
 test('ResourceClaim distinguishes hard write conflicts from read/write advisories', async () => {
@@ -104,6 +104,7 @@ test('ResourceClaim distinguishes hard write conflicts from read/write advisorie
   const reader = open(authority, roots, 'reader')
   const competitor = open(authority, roots, 'competitor')
   const writeClaim = authority.claimResources({ workspaceRef: writer.workspaceRef, mode: 'write', resources: ['src/shared'] })
+  assert.deepEqual(authority.claimResources({ workspaceRef: writer.workspaceRef, mode: 'write', resources: ['src/shared'], claimMs: 1_000 }), writeClaim); assert.equal(authority.status().activeClaimCount, 1); const sameWorkspaceRead = authority.claimResources({ workspaceRef: writer.workspaceRef, mode: 'read', resources: ['src/shared'] }); assert.notEqual(sameWorkspaceRead.claimRef, writeClaim.claimRef); assert.equal(authority.status().activeClaimCount, 2)
   const readClaim = authority.claimResources({ workspaceRef: reader.workspaceRef, mode: 'read', resources: ['src/shared/file.js'] })
   assert.deepEqual(readClaim.advisoryConflictRefs, [writeClaim.claimRef])
   assert.throws(
@@ -111,6 +112,18 @@ test('ResourceClaim distinguishes hard write conflicts from read/write advisorie
     error => error?.code === 'RESOURCE_CONFLICT' && error.conflictRefs.includes(writeClaim.claimRef)
   )
   assert.throws(() => authority.claimResources({ workspaceRef: competitor.workspaceRef, mode: 'exclusive', resources: ['src'] }), /conflicts with active/u)
+})
+
+test('closeWorkspace is fenced, idempotent, restores closed state, and retains only merge-held claims', async () => {
+  const { mod, authority, roots, getNow } = await fixture()
+  const active = open(authority, roots, 'close-active'), activeClaim = authority.claimResources({ workspaceRef: active.workspaceRef, mode: 'write', resources: ['src/active.js'] })
+  assert.throws(() => authority.closeWorkspace({ workspaceRef: active.workspaceRef, fencingToken: '1:999' }), /fencing token/u)
+  const closed = authority.closeWorkspace({ workspaceRef: active.workspaceRef, fencingToken: active.fencingToken }); assert.equal(closed.state, 'closed'); assert.equal(Object.hasOwn(closed, 'workspacePath'), false); assert.equal(authority.closeWorkspace({ workspaceRef: active.workspaceRef, fencingToken: active.fencingToken }).state, 'closed')
+  let host = authority.exportHostState(); assert.equal(host.claims.find(item => item.claimRef === activeClaim.claimRef).state, 'released')
+  const published = open(authority, roots, 'close-published'), held = authority.claimResources({ workspaceRef: published.workspaceRef, mode: 'write', resources: ['src/close-published.js'] }); publish(authority, published, held, 'close-published'); authority.closeWorkspace({ workspaceRef: published.workspaceRef, fencingToken: published.fencingToken })
+  host = authority.exportHostState(); assert.equal(host.claims.find(item => item.claimRef === held.claimRef).state, 'held_for_merge'); assert.equal(host.workspaces.find(item => item.workspaceRef === published.workspaceRef).state, 'closed')
+  const restored = mod.WorkspaceAuthority.restore(JSON.parse(JSON.stringify(host)), { now: () => getNow() }); assert.equal(restored.closeWorkspace({ workspaceRef: published.workspaceRef, fencingToken: published.fencingToken }).state, 'closed'); assert.equal(restored.status().activeWorkspaceCount, 0)
+  const malformed = JSON.parse(JSON.stringify(host)); malformed.claims.find(item => item.claimRef === activeClaim.claimRef).state = 'active'; assert.throws(() => mod.WorkspaceAuthority.restore(resignHostState(malformed), { now: () => getNow() }), /closed workspace/u)
 })
 
 test('ChangeSet publication is immutable, idempotent, and requires exact active write coverage', async () => {

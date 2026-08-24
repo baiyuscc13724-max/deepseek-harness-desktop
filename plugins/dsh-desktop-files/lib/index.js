@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { lstat, mkdir, open, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const name = 'desktop-files'
 const inject = ['agents', 'webServer']
@@ -10,9 +11,12 @@ const MAX_LIST_ITEMS = 100
 const MAX_PREVIEW_BYTES = 1024 * 1024
 const UPLOAD_DIRECTORY = 'uploads'
 const TEXT_PREVIEW_EXTENSIONS = new Set([
-  '.c', '.cc', '.conf', '.cpp', '.css', '.csv', '.go', '.h', '.hpp', '.html', '.ini', '.java', '.js', '.json', '.jsonl',
-  '.jsx', '.log', '.md', '.markdown', '.mjs', '.mts', '.ps1', '.py', '.rs', '.sh', '.sql', '.toml', '.ts', '.tsx', '.txt', '.xml', '.yaml', '.yml'
+  '.astro', '.c', '.cc', '.cfg', '.conf', '.cpp', '.cs', '.css', '.csv', '.dart', '.diff', '.env', '.go', '.graphql', '.h', '.hpp',
+  '.htm', '.html', '.ini', '.java', '.js', '.json', '.json5', '.jsonl', '.jsx', '.kt', '.kts', '.less', '.log', '.lua', '.md', '.markdown',
+  '.mjs', '.mts', '.php', '.pl', '.properties', '.ps1', '.py', '.r', '.rb', '.rs', '.sass', '.scala', '.scss', '.sh', '.sql', '.svelte',
+  '.swift', '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml', '.zig'
 ])
+const TEXT_PREVIEW_FILENAMES = new Set(['cmakelists.txt', 'dockerfile', 'license', 'makefile', 'readme'])
 
 function json(res, status, value) {
   const body = Buffer.from(JSON.stringify(value))
@@ -160,24 +164,46 @@ async function listUploads(cwd) {
   return files.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt) || left.name.localeCompare(right.name))
 }
 
+function requestedFileLocation(requestedPath) {
+  let authored = typeof requestedPath === 'string' ? requestedPath.trim() : ''
+  if (!authored || authored.length > 4096 || authored.includes('\u0000') || /[\r\n]/u.test(authored)) throw Object.assign(new Error('文件路径无效。'), { status: 400, code: 'FILES_INVALID_PATH' })
+  const pairs = [['`', '`'], ['"', '"'], ["'", "'"], ['<', '>'], ['（', '）'], ['(', ')']]
+  for (const [left, right] of pairs) {
+    if (authored.startsWith(left) && authored.endsWith(right) && authored.length > left.length + right.length) {
+      authored = authored.slice(left.length, -right.length).trim()
+      break
+    }
+  }
+  if (authored.startsWith('@')) authored = authored.slice(1)
+  if (/^file:/i.test(authored)) {
+    try { authored = fileURLToPath(new URL(authored)) } catch { throw Object.assign(new Error('文件 URL 无效。'), { status: 400, code: 'FILES_INVALID_PATH' }) }
+  }
+  const match = authored.match(/^(.*?)(?:#L(\d+)(?:C(\d+))?|:(\d+)(?::(\d+))?)$/i)
+  if (!match || !match[1] || /^[a-z]$/i.test(match[1])) return { path: authored, line: null, column: null }
+  return { path: match[1], line: Number(match[2] || match[4]) || null, column: Number(match[3] || match[5]) || null }
+}
+
 async function resolveDownload(cwd, requestedPath) {
   const root = await workspaceRoot(cwd)
-  if (typeof requestedPath !== 'string' || !requestedPath || path.isAbsolute(requestedPath) || requestedPath.includes('\u0000')) throw Object.assign(new Error('下载路径必须是工作区内的相对路径。'), { status: 400, code: 'FILES_INVALID_PATH' })
-  const candidate = path.resolve(root, requestedPath)
-  if (!inside(root, candidate)) throw Object.assign(new Error('下载路径超出工作区。'), { status: 403, code: 'FILES_PATH_ESCAPE' })
+  const requested = requestedFileLocation(requestedPath)
+  const candidate = path.isAbsolute(requested.path) ? path.normalize(requested.path) : path.resolve(root, requested.path)
+  if (!inside(root, candidate)) throw Object.assign(new Error('文件路径超出工作区。'), { status: 403, code: 'FILES_PATH_ESCAPE' })
   const resolved = await realpath(candidate).catch(() => null)
   if (!resolved || !inside(root, resolved)) throw Object.assign(new Error('文件不存在或超出工作区。'), { status: 404, code: 'FILES_NOT_FOUND' })
   const info = await stat(resolved)
   if (!info.isFile()) throw Object.assign(new Error('只能下载普通文件。'), { status: 400, code: 'FILES_NOT_REGULAR' })
   if (info.size > MAX_DOWNLOAD_BYTES) throw Object.assign(new Error('文件超过 100 MB 下载限制。'), { status: 413, code: 'FILES_DOWNLOAD_TOO_LARGE' })
-  return { resolved, info, name: path.basename(resolved) }
+  return { resolved, info, name: path.basename(resolved), line: requested.line, column: requested.column }
 }
 
 async function previewFile(cwd, requestedPath) {
   const file = await resolveDownload(cwd, requestedPath)
   const extension = path.extname(file.name).toLowerCase()
-  const base = { path: String(requestedPath).split(path.sep).join('/'), name: file.name, size: file.info.size, extension }
-  if (!TEXT_PREVIEW_EXTENSIONS.has(extension)) return { ...base, previewable: false, reason: 'unsupported' }
+  const base = {
+    path: String(requestedPath).split(path.sep).join('/'), name: file.name, size: file.info.size, extension,
+    ...(file.line ? { line: file.line } : {}), ...(file.column ? { column: file.column } : {})
+  }
+  if (!TEXT_PREVIEW_EXTENSIONS.has(extension) && !TEXT_PREVIEW_FILENAMES.has(file.name.toLowerCase())) return { ...base, previewable: false, reason: 'unsupported' }
   if (file.info.size > MAX_PREVIEW_BYTES) return { ...base, previewable: false, reason: 'too-large', maxPreviewBytes: MAX_PREVIEW_BYTES }
   const handle = await open(file.resolved, 'r')
   let bytes

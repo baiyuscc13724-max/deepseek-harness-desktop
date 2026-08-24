@@ -220,8 +220,10 @@
     controller.open()
     host.classList.remove('hidden')
     syncChrome()
-    try { renderDocument(await api.previewRightWorkspaceLocal(target), target) }
-    catch (error) { documentView.replaceChildren(statusPanel(error.message || String(error), true)) }
+    try {
+      const result = await resource('filePreview', { path: target })
+      renderDocument(result.file || {}, target)
+    } catch (error) { documentView.replaceChildren(statusPanel(error.message || String(error), true)) }
   }
 
   function scheduleDraft(mode, prompt, value) {

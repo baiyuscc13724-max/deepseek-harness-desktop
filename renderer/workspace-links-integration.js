@@ -19,12 +19,27 @@
     document.head.appendChild(style)
 
     const localPath = value => {
-      const text = String(value || '').trim().replace(/^`|`$/g, '')
+      let text = String(value || '').trim()
+      const pairs = [['`', '`'], ['"', '"'], ["'", "'"], ['<', '>'], ['（', '）'], ['(', ')']]
+      for (const [left, right] of pairs) {
+        if (text.startsWith(left) && text.endsWith(right) && text.length > left.length + right.length) {
+          text = text.slice(left.length, -right.length).trim()
+          break
+        }
+      }
+      if (text.startsWith('@')) text = text.slice(1)
+      if (!text || text.length > 4096 || /[\u0000\r\n]/u.test(text) || /\s/u.test(text)) return ''
+      if (/^(?:https?|data|javascript|mailto):/i.test(text)) return ''
       if (/^file:\/\//i.test(text)) return text
       if (/^[a-z]:[\\/]/i.test(text)) return text
       if (/^\\\\[^\\]+\\[^\\]+/.test(text)) return text
       if (/^\/(?!\/)/.test(text)) return text
-      return ''
+
+      const withoutLocation = text.replace(/(?:#L\d+(?:C\d+)?|:\d+(?::\d+)?)$/i, '')
+      if (/^(?:\.\.?[\\/])/.test(withoutLocation)) return text
+      if (!/[\\/]/.test(withoutLocation) && !/^(?:Dockerfile|Makefile|CMakeLists\.txt|README|LICENSE)$/i.test(withoutLocation) && !/\.[a-z0-9][a-z0-9._-]{0,15}$/i.test(withoutLocation)) return ''
+      if (/^(?:[a-z][a-z0-9+.-]*:|[?#])/i.test(withoutLocation)) return ''
+      return text
     }
 
     const route = (host, params = {}) => {
@@ -32,24 +47,40 @@
       window.location.href = `harness-desktop://${host}?${query}`
     }
 
+    const mark = (node, target) => {
+      node.dataset.hdLocalTarget = target
+      if (node.tagName !== 'A') {
+        node.tabIndex = 0
+        node.setAttribute('role', 'link')
+      }
+      node.setAttribute('aria-label', `在右侧工作区安全预览 ${target}`)
+      node.title = `${target}\n单击在右侧预览；内容只会从当前工作区读取，HTML 和程序源码不会执行；右键可复制`
+    }
+
     const decorate = root => {
+      const anchors = root?.matches?.('a[href]') ? [root] : root?.querySelectorAll?.('a[href]') || []
+      for (const anchor of anchors) {
+        const target = localPath(anchor.getAttribute('href'))
+        if (target) mark(anchor, target)
+      }
+
       const codes = root?.matches?.('code') ? [root] : root?.querySelectorAll?.('code') || []
       for (const code of codes) {
         if (code.querySelector('a,button')) continue
         const target = localPath(code.textContent)
-        if (!target) {
-          delete code.dataset.hdLocalTarget
-          continue
-        }
-        code.dataset.hdLocalTarget = target
-        code.tabIndex = 0
-        code.setAttribute('role', 'link')
-        code.setAttribute('aria-label', `在右侧工作区预览本机文档 ${target}`)
-        code.title = `${target}\n单击在右侧预览；右键可复制、在文件夹中显示或用系统应用打开`
+        if (target) mark(code, target)
+        else delete code.dataset.hdLocalTarget
       }
     }
 
     document.addEventListener('click', event => {
+      const local = event.target.closest?.('[data-hd-local-target]')
+      if (local) {
+        event.preventDefault()
+        event.stopPropagation()
+        route('preview-local', { path: local.dataset.hdLocalTarget })
+        return
+      }
       const anchor = event.target.closest?.('a[href]')
       if (anchor) {
         const href = anchor.href || anchor.getAttribute('href') || ''
@@ -63,22 +94,16 @@
           event.preventDefault()
           event.stopPropagation()
           window.location.href = href
-          return
         }
       }
-      const code = event.target.closest?.('code[data-hd-local-target]')
-      if (!code) return
-      event.preventDefault()
-      event.stopPropagation()
-      route('preview-local', { path: code.dataset.hdLocalTarget })
     }, true)
 
     document.addEventListener('keydown', event => {
       if (!['Enter', ' '].includes(event.key)) return
-      const code = event.target.closest?.('code[data-hd-local-target]')
-      if (!code) return
+      const local = event.target.closest?.('[data-hd-local-target]')
+      if (!local) return
       event.preventDefault()
-      route('preview-local', { path: code.dataset.hdLocalTarget })
+      route('preview-local', { path: local.dataset.hdLocalTarget })
     }, true)
 
     decorate(document)

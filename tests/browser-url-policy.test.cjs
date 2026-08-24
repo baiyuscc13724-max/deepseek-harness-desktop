@@ -5,6 +5,7 @@ const {
   BLOCKED_SCHEMES,
   MAX_URL_LENGTH,
   canonicalOrigin,
+  checkModelBootstrapNavigation,
   checkModelNavigation,
   checkUserNavigation,
   classifyNavigation,
@@ -145,6 +146,34 @@ test('模型导航档：公网 + origin 已授权双重要求，比用户档更�
   )
   // 用户可访问的内网地址，模型档拒绝 —— 体现「模型访问另有更严策略」
   assert.equal(checkUserNavigation('http://192.168.1.1/router').allowed, true)
+})
+
+test('模型可从空白标签建立安全预览 origin，但不会泛化本机网络访问', () => {
+  const publicPreview = checkModelBootstrapNavigation('https://example.com/preview?q=private#fragment')
+  assert.deepEqual(publicPreview, {
+    normalized: 'https://example.com/preview?q=private#fragment',
+    origin: 'https://example.com',
+    privateNetwork: false,
+    previewOnly: true
+  })
+  const managedHarness = checkModelBootstrapNavigation('http://127.0.0.1:4000/session', {
+    trustedPrivateOrigins: ['http://127.0.0.1:4000']
+  })
+  assert.equal(managedHarness.origin, 'http://127.0.0.1:4000')
+  assert.equal(managedHarness.privateNetwork, true)
+  assert.equal(managedHarness.previewOnly, true)
+  const userApprovedLocal = checkModelBootstrapNavigation('http://localhost:3000/app', {
+    authorizedOrigins: ['http://localhost:3000'],
+    authorizedPrivateOrigins: ['http://localhost:3000']
+  })
+  assert.equal(userApprovedLocal.origin, 'http://localhost:3000')
+  for (const bad of ['/relative', 'about:blank', 'file:///C:/secret.txt', 'data:text/plain,no', 'javascript:alert(1)', 'https://user:pass@example.com']) {
+    assert.throws(() => checkModelBootstrapNavigation(bad))
+  }
+  assert.throws(
+    () => checkModelBootstrapNavigation('http://127.0.0.1:4001/admin', { trustedPrivateOrigins: ['http://127.0.0.1:4000'] }),
+    error => error.code === 'private-network-not-authorized'
+  )
 })
 
 test('MAX_URL_LENGTH 常量导出且为正', () => {

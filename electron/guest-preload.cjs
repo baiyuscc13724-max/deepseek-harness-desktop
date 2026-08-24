@@ -22,6 +22,53 @@ function subscribeRightWorkspaceCommands(listener) {
   return () => ipcRenderer.removeListener('right-workspace:command', wrapped)
 }
 
+// Deterministic ordered wallpaper park/resume subscription. Every broadcast
+// carries a frozen { phase, reason, seq, at } payload; park releases the video
+// decoder and canvas, resume re-creates them from a clean state. Delivery is
+// sequenced by seq: a delivered state is always newer than every previously
+// delivered one (seq <= latestSeq is dropped), so a slower current-state query
+// can never arrive after a newer broadcast and reverse park/resume. The
+// current host state is replayed once on subscribe for pages that attach after
+// a transition, and unsubscribing immediately stops all further callbacks —
+// including any in-flight replay.
+function wallpaperLifecyclePhaseOf(value) {
+  const phase = typeof value?.phase === 'string' && (value.phase === 'parked' || value.phase === 'resumed') ? value.phase : null
+  const seq = Number.isSafeInteger(value?.seq) && value.seq >= 0 ? value.seq : null
+  if (!phase || seq === null) return null
+  return Object.freeze({
+    phase,
+    reason: typeof value?.reason === 'string' && value.reason.length <= 64 ? value.reason : '',
+    seq,
+    at: Number.isFinite(value?.at) ? value.at : 0
+  })
+}
+
+async function currentWallpaperLifecycle() {
+  let value = null
+  try { value = await ipcRenderer.invoke('appearance:wallpaper-lifecycle:get') } catch {}
+  return wallpaperLifecyclePhaseOf(value)
+}
+
+function subscribeWallpaperLifecycle(listener) {
+  if (typeof listener !== 'function') return () => {}
+  let latestSeq = -1
+  let disposed = false
+  const deliverIfNewer = value => {
+    if (disposed) return
+    const state = wallpaperLifecyclePhaseOf(value)
+    if (!state || state.seq <= latestSeq) return
+    latestSeq = state.seq
+    listener(state.phase === 'parked' ? 'park' : 'resume')
+  }
+  const wrapped = (_event, value) => deliverIfNewer(value)
+  ipcRenderer.on('appearance:wallpaper-lifecycle', wrapped)
+  currentWallpaperLifecycle().then(deliverIfNewer).catch(() => {})
+  return () => {
+    disposed = true
+    ipcRenderer.removeListener('appearance:wallpaper-lifecycle', wrapped)
+  }
+}
+
 contextBridge.exposeInMainWorld('harnessDesktopGuest', Object.freeze({
   chooseWorkspaceDirectory: () => ipcRenderer.invoke('workspace:chooseDirectory'),
   publishRightWorkspaceContext: value => {
@@ -29,7 +76,8 @@ contextBridge.exposeInMainWorld('harnessDesktopGuest', Object.freeze({
     if (context) ipcRenderer.sendToHost('right-workspace:context', context)
     return Boolean(context)
   },
-  onRightWorkspaceCommand: subscribeRightWorkspaceCommands
+  onRightWorkspaceCommand: subscribeRightWorkspaceCommands,
+  onWallpaperLifecycle: subscribeWallpaperLifecycle
 }))
 
 const interactiveSelector = [
@@ -69,6 +117,26 @@ window.addEventListener('DOMContentLoaded', () => {
     pendingPoint = null
   }
 
+  // Exactly one window:endDrag per drag session. Every abort path lands here,
+  // so pointerup/pointercancel, lost pointer capture, focus loss, page
+  // visibility change and pagehide all converge on the same deterministic
+  // cleanup and the main process never keeps a stale drag session.
+  let endDragSent = true
+  const cleanupActiveDrag = () => {
+    if (!activeDrag) return false
+    if (pendingFrame) cancelAnimationFrame(pendingFrame)
+    pendingFrame = 0
+    if (pendingPoint) ipcRenderer.send('window:moveDrag', pendingPoint)
+    pendingPoint = null
+    try { activeDrag.target.releasePointerCapture(activeDrag.pointerId) } catch {}
+    activeDrag = null
+    if (!endDragSent) {
+      endDragSent = true
+      ipcRenderer.send('window:endDrag')
+    }
+    return true
+  }
+
   document.addEventListener('pointerdown', event => {
     if (event.button !== 0 || !event.isPrimary || event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return
     const target = event.target instanceof Element ? event.target : null
@@ -82,6 +150,7 @@ window.addEventListener('DOMContentLoaded', () => {
     event.preventDefault()
     event.stopImmediatePropagation()
     activeDrag = { pointerId: event.pointerId, target }
+    endDragSent = false
     try { target.setPointerCapture(event.pointerId) } catch {}
     ipcRenderer.send('window:beginDrag', { x: event.screenX, y: event.screenY })
   }, true)
@@ -96,18 +165,27 @@ window.addEventListener('DOMContentLoaded', () => {
 
   const finishDrag = event => {
     if (!activeDrag || event.pointerId !== activeDrag.pointerId) return
-    if (pendingFrame) cancelAnimationFrame(pendingFrame)
-    pendingFrame = 0
-    if (pendingPoint) ipcRenderer.send('window:moveDrag', pendingPoint)
-    pendingPoint = null
-    try { activeDrag.target.releasePointerCapture(activeDrag.pointerId) } catch {}
-    activeDrag = null
-    ipcRenderer.send('window:endDrag')
+    cleanupActiveDrag()
     event.preventDefault()
     event.stopImmediatePropagation()
   }
   document.addEventListener('pointerup', finishDrag, true)
   document.addEventListener('pointercancel', finishDrag, true)
+  document.addEventListener('lostpointercapture', event => {
+    if (event.pointerId !== activeDrag?.pointerId) return
+    cleanupActiveDrag()
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }, true)
+  window.addEventListener('blur', () => {
+    if (activeDrag) cleanupActiveDrag()
+  }, true)
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && activeDrag) cleanupActiveDrag()
+  }, true)
+  window.addEventListener('pagehide', () => {
+    if (activeDrag) cleanupActiveDrag()
+  }, true)
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return
     const selection = window.getSelection?.()

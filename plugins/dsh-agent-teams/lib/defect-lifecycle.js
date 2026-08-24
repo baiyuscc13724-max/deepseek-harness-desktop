@@ -75,7 +75,7 @@ function severity(value, field = "severity") {
 export class DefectLifecycle {
   constructor({ projectRef, repositoryRef, secret, now = Date.now, resolveAttestation } = {}) {
     this.projectRef = publicRef(projectRef, "projectRef", "project");
-    this.repositoryRef = publicRef(repositoryRef, "repositoryRef", "repo");
+    this.repositoryRef = publicRef(repositoryRef, "repositoryRef", "repository");
     this.secret = secret === undefined ? undefined : nonEmptyString(secret, "secret", 512);
     if (this.secret !== undefined && this.secret.length < 24) throw new TypeError("secret must contain at least 24 characters");
     if (typeof now !== "function") throw new TypeError("now must be a function");
