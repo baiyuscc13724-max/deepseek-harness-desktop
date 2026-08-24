@@ -42,7 +42,9 @@ import com.journeyapps.barcodescanner.ScanContract;
 import com.journeyapps.barcodescanner.ScanIntentResult;
 import com.journeyapps.barcodescanner.ScanOptions;
 
+import java.util.Collections;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 public final class MainActivity extends AppCompatActivity {
     static final String PREFS = "harness_mobile";
@@ -395,7 +397,7 @@ public final class MainActivity extends AppCompatActivity {
             localProxy.updateRoutes(profile.routes.stream()
                 .filter(route -> !"easytier".equals(route.id) && !"wss-relay".equals(route.id))
                 .filter(route -> localNetworkAvailable || !"lan".equals(route.id))
-                .toList());
+                .collect(Collectors.toList()));
             localGatewayPort = localProxy.start(profile.desktopPort());
             easyTierClient.stop();
             wssRelayClient.stop();
@@ -420,7 +422,7 @@ public final class MainActivity extends AppCompatActivity {
         localProxy.updateRoutes(profile.routes.stream()
             .filter(route -> !"easytier".equals(route.id) && !"wss-relay".equals(route.id))
             .filter(route -> localNetworkAvailable || !"lan".equals(route.id))
-            .toList());
+            .collect(Collectors.toList()));
     }
 
     private void registerNetworkMonitoring() {
@@ -529,7 +531,7 @@ public final class MainActivity extends AppCompatActivity {
         pairingProfile = null;
         remoteReconnectProfile = null;
         mainHandler.removeCallbacks(remoteReconnect);
-        if (localProxy != null) localProxy.updateRoutes(java.util.List.of());
+        if (localProxy != null) localProxy.updateRoutes(Collections.emptyList());
         if (easyTierClient != null) easyTierClient.stop();
         if (wssRelayClient != null) wssRelayClient.stop();
         CookieManager.getInstance().removeAllCookies(null);
@@ -593,7 +595,7 @@ public final class MainActivity extends AppCompatActivity {
                 if (!hasLocalNetwork()) {
                     readyRoutes = readyRoutes.stream()
                         .sorted(java.util.Comparator.comparingInt(route -> "wss-relay".equals(route.id) ? 0 : 1))
-                        .toList();
+                        .collect(Collectors.toList());
                 }
                 localProxy.updateRoutes(readyRoutes);
                 remoteReconnectAttempt = 0;
@@ -633,7 +635,7 @@ public final class MainActivity extends AppCompatActivity {
                 if (!hasLocalNetwork()) {
                     readyRoutes = readyRoutes.stream()
                         .sorted(java.util.Comparator.comparingInt(route -> "easytier".equals(route.id) ? 0 : 1))
-                        .toList();
+                        .collect(Collectors.toList());
                 }
                 localProxy.updateRoutes(readyRoutes);
                 remoteReconnectAttempt = 0;

@@ -3,16 +3,23 @@ package io.harnessdesktop.mobile;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Set;
 
 final class ControlCommand {
     static final int PROTOCOL_VERSION = 1;
-    private static final Set<String> ACTIONS = Set.of(
+    private static final Set<String> ACTIONS = immutableSet(
         "observe", "tap", "longPress", "swipe", "back", "home", "recents",
         "textInput", "openApp", "openUri", "openSettings", "screenshot",
         "fileOpen", "fileCreate", "clearCache"
     );
-    private static final Set<String> SENSITIVE = Set.of("textInput", "fileCreate", "clearCache");
+    private static final Set<String> SENSITIVE = immutableSet("textInput", "fileCreate", "clearCache");
+
+    private static Set<String> immutableSet(String... values) {
+        return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(values)));
+    }
 
     final String type;
     final String id;

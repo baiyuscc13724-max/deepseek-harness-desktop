@@ -15,9 +15,11 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -38,7 +40,7 @@ final class HarnessWebProxy implements AutoCloseable {
     private final ConnectivityManager connectivityManager;
     private final Map<String, Long> retryAfter = new ConcurrentHashMap<>();
     private final AtomicReference<RoutePreference> lastGoodRoute = new AtomicReference<>();
-    private volatile List<PairingProfile.Route> routes = List.of();
+    private volatile List<PairingProfile.Route> routes = Collections.emptyList();
     private volatile boolean closed;
     private ServerSocket server;
 
@@ -60,8 +62,10 @@ final class HarnessWebProxy implements AutoCloseable {
     }
 
     void updateRoutes(List<PairingProfile.Route> values) {
-        routes = values == null ? List.of() : List.copyOf(values);
-        List<String> routeKeys = routes.stream().map(PairingProfile.Route::key).toList();
+        routes = values == null
+            ? Collections.emptyList()
+            : Collections.unmodifiableList(new ArrayList<>(values));
+        List<String> routeKeys = routes.stream().map(PairingProfile.Route::key).collect(Collectors.toList());
         retryAfter.keySet().retainAll(routeKeys);
         RoutePreference preferred = lastGoodRoute.get();
         if (preferred != null && !routeKeys.contains(preferred.key())) lastGoodRoute.compareAndSet(preferred, null);
@@ -144,7 +148,7 @@ final class HarnessWebProxy implements AutoCloseable {
         String lastGoodRouteKey,
         long now
     ) {
-        List<PairingProfile.Route> candidates = new ArrayList<>(values == null ? List.of() : values);
+        List<PairingProfile.Route> candidates = new ArrayList<>(values == null ? Collections.emptyList() : values);
         candidates.sort(
             Comparator.<PairingProfile.Route>comparingInt(route -> retryAfter.getOrDefault(route.key(), 0L) <= now ? 0 : 1)
                 .thenComparingInt(route -> route.key().equals(lastGoodRouteKey) ? 0 : 1)

@@ -4,9 +4,10 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.nio.charset.StandardCharsets;
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -248,10 +249,18 @@ final class PairingProfile {
         for (String part : uri.getRawQuery().split("&")) {
             int separator = part.indexOf('=');
             String key = separator < 0 ? part : part.substring(0, separator);
-            if (!name.equals(URLDecoder.decode(key, StandardCharsets.UTF_8))) continue;
-            return URLDecoder.decode(separator < 0 ? "" : part.substring(separator + 1), StandardCharsets.UTF_8);
+            if (!name.equals(decodeQueryComponent(key))) continue;
+            return decodeQueryComponent(separator < 0 ? "" : part.substring(separator + 1));
         }
         return null;
+    }
+
+    private static String decodeQueryComponent(String value) {
+        try {
+            return URLDecoder.decode(value, StandardCharsets.UTF_8.name());
+        } catch (UnsupportedEncodingException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 
     String toJson() {

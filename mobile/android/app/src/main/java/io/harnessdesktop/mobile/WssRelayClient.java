@@ -12,12 +12,17 @@ import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -32,7 +37,10 @@ final class WssRelayClient {
     }
 
     private static final long MAX_WEBSOCKET_QUEUE = 4L * 1024 * 1024;
+    private static final int MAX_SOCKS_WORKERS = 8;
+    private static final int MAX_PENDING_SOCKS = 16;
     private final OkHttpClient httpClient;
+    private final ExecutorService acceptor;
     private final ExecutorService workers;
     private final Map<Long, Socket> streams = new ConcurrentHashMap<>();
     private final AtomicLong streamSequence = new AtomicLong(1);
@@ -43,8 +51,8 @@ final class WssRelayClient {
     private volatile boolean stopping;
 
     WssRelayClient() {
-        ThreadFactory factory = runnable -> { Thread thread = new Thread(runnable, "harness-wss-relay"); thread.setDaemon(true); return thread; };
-        workers = Executors.newCachedThreadPool(factory);
+        acceptor = Executors.newSingleThreadExecutor(daemonThreadFactory("harness-wss-relay-accept"));
+        workers = newSocksWorkerPool();
         httpClient = new OkHttpClient.Builder()
             .retryOnConnectionFailure(true)
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -52,6 +60,26 @@ final class WssRelayClient {
             // interval, turning silent half-open mobile links into a retry.
             .pingInterval(20, TimeUnit.SECONDS)
             .build();
+    }
+
+    static ThreadPoolExecutor newSocksWorkerPool() {
+        return new ThreadPoolExecutor(
+            MAX_SOCKS_WORKERS,
+            MAX_SOCKS_WORKERS,
+            0L,
+            TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(MAX_PENDING_SOCKS),
+            daemonThreadFactory("harness-wss-relay-worker"),
+            new ThreadPoolExecutor.AbortPolicy()
+        );
+    }
+
+    private static ThreadFactory daemonThreadFactory(String name) {
+        return runnable -> {
+            Thread thread = new Thread(runnable, name);
+            thread.setDaemon(true);
+            return thread;
+        };
     }
 
     synchronized void start(PairingProfile.RelayConfig config, Listener listener) {
@@ -86,21 +114,41 @@ final class WssRelayClient {
 
     private synchronized void openSocksServer() throws IOException {
         if (socksServer != null) return;
-        ServerSocket server = new ServerSocket(0, 16, InetAddress.getLoopbackAddress());
+        ServerSocket server = new ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"));
         socksServer = server;
-        workers.execute(() -> {
-            while (!server.isClosed()) {
-                try { workers.execute(() -> handleSocks(accept(server))); }
-                catch (RuntimeException error) { if (!server.isClosed()) fail(error); }
-            }
-        });
+        acceptor.execute(() -> acceptLoop(server, workers, this::handleSocks, this::fail));
         Listener active = listener;
         if (active != null) active.onReady(server.getLocalPort());
     }
 
-    private static Socket accept(ServerSocket server) {
-        try { return server.accept(); }
-        catch (IOException error) { throw new RuntimeException(error); }
+    static void acceptLoop(
+        ServerSocket server,
+        Executor workers,
+        Consumer<Socket> handler,
+        Consumer<Throwable> failure
+    ) {
+        while (!server.isClosed()) {
+            Socket socket = null;
+            try {
+                // Accept on this single loop before dispatching. Moving accept()
+                // inside the worker Runnable creates unbounded blocking tasks.
+                socket = server.accept();
+                Socket accepted = socket;
+                workers.execute(() -> handler.accept(accepted));
+            } catch (RejectedExecutionException overloaded) {
+                closeQuietly(socket);
+            } catch (IOException error) {
+                closeQuietly(socket);
+                if (!server.isClosed()) failure.accept(error);
+            } catch (RuntimeException error) {
+                closeQuietly(socket);
+                if (!server.isClosed()) failure.accept(error);
+            }
+        }
+    }
+
+    private static void closeQuietly(Socket socket) {
+        if (socket != null) try { socket.close(); } catch (IOException ignored) {}
     }
 
     private void handleSocks(Socket socket) {

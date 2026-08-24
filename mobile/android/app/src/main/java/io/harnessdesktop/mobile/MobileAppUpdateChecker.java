@@ -19,6 +19,7 @@ import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -179,7 +180,7 @@ final class MobileAppUpdateChecker {
     private static Set<String> signerDigests(PackageInfo info) throws Exception {
         Signature[] signatures;
         if (Build.VERSION.SDK_INT >= 28) {
-            if (info.signingInfo == null) return Set.of();
+            if (info.signingInfo == null) return Collections.emptySet();
             signatures = info.signingInfo.hasMultipleSigners()
                 ? info.signingInfo.getApkContentsSigners()
                 : info.signingInfo.getSigningCertificateHistory();

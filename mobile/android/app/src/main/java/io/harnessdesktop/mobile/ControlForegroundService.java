@@ -29,6 +29,9 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -41,7 +44,15 @@ public final class ControlForegroundService extends Service {
     private static final String CHANNEL_ID = "harness_mobile_control";
     private static final int NOTIFICATION_ID = 4401;
     private static final long STATUS_INTERVAL_MS = 5000L;
+    private static final Set<String> ALLOWED_URI_SCHEMES = immutableSet("http", "https", "geo", "mailto", "tel");
+    private static final Set<String> NON_RETRYABLE_RESULTS = immutableSet(
+        "USER_DENIED", "ACCESSIBILITY_REQUIRED", "CACHE_GUIDED_MODE", "CAPTURE_DENIED", "FILE_PICKER_CANCELLED"
+    );
     private static volatile ControlForegroundService instance;
+
+    private static Set<String> immutableSet(String... values) {
+        return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(values)));
+    }
 
     private final ScheduledExecutorService network = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -297,7 +308,7 @@ public final class ControlForegroundService extends Service {
     private void openUri(ControlCommand command, int attempt) {
         Uri uri = Uri.parse(command.payload.optString("uri", ""));
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
-        if (!Set.of("http", "https", "geo", "mailto", "tel").contains(scheme)) {
+        if (!ALLOWED_URI_SCHEMES.contains(scheme)) {
             finish(ControlResult.fail(command.id, "URI_NOT_ALLOWED", "该链接协议不在允许列表中。 "), command.retryLimit);
             return;
         }
@@ -394,7 +405,7 @@ public final class ControlForegroundService extends Service {
     private synchronized void finish(ControlResult result, int attempt) {
         ControlCommand command = current;
         if (command == null || !command.id.equals(result.id)) return;
-        if (!result.ok && attempt < command.retryLimit && !Set.of("USER_DENIED", "ACCESSIBILITY_REQUIRED", "CACHE_GUIDED_MODE", "CAPTURE_DENIED", "FILE_PICKER_CANCELLED").contains(result.code)) {
+        if (!result.ok && attempt < command.retryLimit && !NON_RETRYABLE_RESULTS.contains(result.code)) {
             mainHandler.postDelayed(() -> execute(command, attempt + 1), 350L);
             return;
         }
@@ -471,7 +482,7 @@ public final class ControlForegroundService extends Service {
             }
         }
         connection.disconnect();
-        String text = output.toString(StandardCharsets.UTF_8);
+        String text = new String(output.toByteArray(), StandardCharsets.UTF_8);
         if (status < 200 || status >= 300) throw new IllegalStateException("HTTP " + status);
         return text.isBlank() ? new JSONObject() : new JSONObject(text);
     }

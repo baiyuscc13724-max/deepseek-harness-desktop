@@ -1,5 +1,6 @@
 package io.harnessdesktop.mobile;
 
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -43,13 +44,21 @@ final class PairingLinkValidator {
             for (String part : query.split("&")) {
                 int separator = part.indexOf('=');
                 String key = separator < 0 ? part : part.substring(0, separator);
-                if (!"payload".equals(URLDecoder.decode(key, StandardCharsets.UTF_8))) continue;
-                return URLDecoder.decode(separator < 0 ? "" : part.substring(separator + 1), StandardCharsets.UTF_8);
+                if (!"payload".equals(decodeQueryComponent(key))) continue;
+                return decodeQueryComponent(separator < 0 ? "" : part.substring(separator + 1));
             }
         } catch (RuntimeException ignored) {
             // Invalid QR input is handled as an empty payload by the caller.
         }
         return "";
+    }
+
+    private static String decodeQueryComponent(String value) {
+        try {
+            return URLDecoder.decode(value, StandardCharsets.UTF_8.name());
+        } catch (UnsupportedEncodingException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 
     static String extractHttpPairingUrl(String value) {

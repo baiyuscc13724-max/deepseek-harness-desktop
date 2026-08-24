@@ -8,10 +8,18 @@ import static org.junit.Assert.fail;
 import org.junit.Test;
 import org.json.JSONObject;
 
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class MainActivityTest {
     @Test public void acceptsOnlyPrivateLanPairingLinks() {
@@ -46,12 +54,69 @@ public final class MainActivityTest {
         JSONObject object = new JSONObject().put("version", 2).put("pairUrl", pairUrl)
             .put("transports", new org.json.JSONArray().put(transport));
         String payload = Base64.getUrlEncoder().withoutPadding().encodeToString(object.toString().getBytes(StandardCharsets.UTF_8));
-        PairingProfile profile = PairingProfile.parse("harnessmobile://pair?payload=" + payload);
+        // Percent-encoded query keys exercise the API-26-compatible decoder used by real scanner payloads.
+        PairingProfile profile = PairingProfile.parse("harnessmobile://pair?%70ayload=" + payload);
         assertTrue(profile != null && profile.relay != null);
         assertEquals("wss://relay.example.com/tunnel", profile.relay.relayUrl);
         assertEquals(2, profile.routes.size());
         PairingProfile restored = PairingProfile.fromStoredJson(profile.toJson());
         assertTrue(restored != null && restored.relay != null);
+    }
+
+    @Test public void wssRelayAcceptLoopBlocksBeforeSubmittingBoundedWork() throws Exception {
+        InetAddress ipv4Loopback = InetAddress.getByName("127.0.0.1");
+        ServerSocket server = new ServerSocket(0, 1, ipv4Loopback);
+        assertEquals("127.0.0.1", server.getInetAddress().getHostAddress());
+        CountDownLatch submitted = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread acceptThread = new Thread(() -> WssRelayClient.acceptLoop(
+            server,
+            command -> { submitted.countDown(); command.run(); },
+            socket -> { try { socket.close(); } catch (Exception ignored) {} },
+            failure::set
+        ));
+        acceptThread.start();
+        try {
+            assertFalse("accept must block without creating worker tasks", submitted.await(150, TimeUnit.MILLISECONDS));
+            try (Socket ignored = new Socket(ipv4Loopback, server.getLocalPort())) {
+                assertTrue("one accepted socket must submit one worker task", submitted.await(2, TimeUnit.SECONDS));
+            }
+            assertEquals(null, failure.get());
+        } finally {
+            server.close();
+            acceptThread.join(2_000L);
+        }
+        assertFalse("accept loop must stop after server close", acceptThread.isAlive());
+    }
+
+    @Test public void wssRelayWorkerPoolIsBoundedAndReleasesCapacity() throws Exception {
+        ThreadPoolExecutor pool = WssRelayClient.newSocksWorkerPool();
+        CountDownLatch workersStarted = new CountDownLatch(8);
+        CountDownLatch releaseWorkers = new CountDownLatch(1);
+        CountDownLatch queuedCompleted = new CountDownLatch(16);
+        try {
+            for (int index = 0; index < 8; index++) {
+                pool.execute(() -> {
+                    workersStarted.countDown();
+                    try { releaseWorkers.await(); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                });
+            }
+            assertTrue(workersStarted.await(2, TimeUnit.SECONDS));
+            for (int index = 0; index < 16; index++) pool.execute(queuedCompleted::countDown);
+            try {
+                pool.execute(() -> {});
+                fail("worker pool must reject connections beyond its bounded capacity");
+            } catch (RejectedExecutionException expected) {
+                assertEquals(16, pool.getQueue().size());
+            }
+            releaseWorkers.countDown();
+            assertTrue("completed handlers must release worker and queue capacity", queuedCompleted.await(2, TimeUnit.SECONDS));
+            assertEquals(16, pool.getQueue().remainingCapacity());
+        } finally {
+            releaseWorkers.countDown();
+            pool.shutdownNow();
+            assertTrue(pool.awaitTermination(2, TimeUnit.SECONDS));
+        }
     }
 
     @Test public void opensNodeGeneratedRelayVectorAndRejectsReplay() throws Exception {
@@ -102,6 +167,19 @@ public final class MainActivityTest {
         assertEquals(15000, command.timeoutMs);
         assertFalse(command.requiresConfirmation);
 
+        String[] supported = {
+            "observe", "tap", "longPress", "swipe", "back", "home", "recents",
+            "textInput", "openApp", "openUri", "openSettings", "screenshot",
+            "fileOpen", "fileCreate", "clearCache"
+        };
+        for (String action : supported) {
+            assertEquals(action, ControlCommand.parse(new JSONObject()
+                .put("type", "command")
+                .put("protocolVersion", 1)
+                .put("id", "00000000-0000-4000-8000-000000000099")
+                .put("action", action)).action);
+        }
+
         try {
             ControlCommand.parse(new JSONObject()
                 .put("type", "command")
@@ -123,6 +201,10 @@ public final class MainActivityTest {
             .put("payload", new JSONObject().put("packageName", "com.example.app")));
         assertTrue(command.requiresConfirmation);
         assertTrue(ControlCommand.isSensitive("textInput"));
+        assertTrue(ControlCommand.isSensitive("fileCreate"));
+        assertTrue(ControlCommand.isSensitive("clearCache"));
+        assertFalse(ControlCommand.isSensitive("tap"));
+        assertFalse(ControlCommand.isSensitive("shell"));
     }
 
     private static byte[] hex(String value) {

@@ -58,9 +58,16 @@ public final class DocumentPickerActivity extends Activity {
             return;
         }
         Uri uri = data.getData();
-        int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        try { getContentResolver().takePersistableUriPermission(uri, flags); }
-        catch (SecurityException ignored) {}
+        int flags = data.getFlags();
+        try {
+            if ((flags & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0 && (flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0) {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            } else if ((flags & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0) {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } else if ((flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0) {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            }
+        } catch (SecurityException ignored) {}
         if ("create".equals(mode)) writeDocument(uri);
         else readDocument(uri);
     }
