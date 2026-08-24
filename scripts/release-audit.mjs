@@ -117,7 +117,7 @@ for (const removedContract of ['AgentBridge', 'TerminalManager', 'SessionStore',
   if (main.includes(removedContract)) throw new Error(`Obsolete native backend returned to the release: ${removedContract}`)
 }
 
-const workflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8')
+const workflow = (await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8')).replace(/\r\n?/gu, '\n')
 const releasePublisher = await readFile(path.join(root, 'scripts/release-publish.mjs'), 'utf8')
 const releasePublisherSelection = await readFile(path.join(root, 'scripts/release-publish-selection.cjs'), 'utf8')
 const releasePublisherTests = await readFile(path.join(root, 'tests/release-publisher.test.cjs'), 'utf8')
@@ -161,17 +161,31 @@ for (const contract of ['Validate iPhone and iPad simulators', 'Test on iPhone S
 }
 if (!workflow.includes('choco install innosetup --version=6.7.0 --allow-downgrade --force') || !workflow.includes('Run Windows installer smoke test') || !workflow.includes('Verify packaged Windows component health and rollback') || !workflow.includes('npm run test:component-local') || !workflow.includes('/VERYSILENT') || !workflow.includes('Harness Desktop.exe') || !workflow.includes('app.asar') || !workflow.includes('unins*.exe')) throw new Error('Windows cloud release must build, component-test, install, inspect, and uninstall the Inno Setup payload.')
 if (!workflow.includes('3cfb0e5632828e0dd9b49400a185834e8f1ab570/Files/Languages/ChineseSimplified.isl') || !workflow.includes('e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d')) throw new Error('Windows release must install and hash-check the pinned Simplified Chinese language file.')
-for (const contract of ['workflow_dispatch:', 'Existing immutable release tag to build and publish', 'product_revision:', 'HARNESS_RELEASE_PACKAGING_MODE: github-actions-only', 'ref: ${{ env.RELEASE_TAG }}', 'group: release-${{ inputs.tag || github.ref_name }}', 'Ensure target tag matches package version', 'Bind cloud package build to immutable source revision', 'gh api --method POST "repos/$GITHUB_REPOSITORY/releases"', 'HTTP 422', 'uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$encoded_name', '--data-binary "@$file"', 'stage-draft:', 'verify-windows-draft:', 'publish:', 'Bind the signed previous stable Windows installer to an exact public asset', 'validateAndVerifyDesktopReleaseManifest', 'component-feeds/stable/win32-x64.json', 'previous-stable.json', 'Authenticated draft download, checksum, stable upgrade, self-test, and uninstall', 'https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)', 'Authorization = "Bearer $env:GH_TOKEN"', '-OutFile $destination', '$downloaded.Length -ne [int64]$asset.size', 'Snapshot digest mismatch', 'SHA256SUMS.txt', 'Get-FileHash', 'Harness-Desktop-$version-portable-x64.exe', '$portableSelfTest.ExitCode', '--self-test-output=$portableReport', '$portableResult.product.version', '$portableProfile, $portableReport', 'Previous stable installer SHA-256 mismatch', 'Find-DllHoldingProcess', 'd3dcompiler_47.dll', 'stable-upgrade-profile.marker', '/NORESTARTAPPLICATIONS', '/LOGCLOSEAPPLICATIONS', 'RestartApplications=no contract failed', 'Upgraded installed self-test JSON failed or reported the wrong version', "--self-test-output=$reportPath", 'product.version', 'resources/app.asar', "Filter 'unins*.exe'", 'Uninstaller left the temporary installation directory behind', 'Reconfirm exact draft and publish by immutable release id', 'draft-snapshot.json', 'expected-published.json', '--method PATCH "repos/$GITHUB_REPOSITORY/releases/$snapshot_id"']) {
-  if (!workflow.includes(contract)) throw new Error(`Tag builds must atomically stage, id-download, install-test, and publish one verified non-overwriting draft release: ${contract}`)
+for (const contract of ['workflow_dispatch:', 'source_revision:', 'request_id:', 'no Tag is required or created', 'HARNESS_RELEASE_PACKAGING_MODE: github-actions-only', 'ref: ${{ env.SOURCE_REVISION }}', 'group: release-candidate-${{ inputs.tag }}', 'Ensure target tag matches package version', 'Bind cloud package build to exact pre-Tag candidate revision', 'Candidate ${{ inputs.tag }} @ ${{ inputs.source_revision }} · ', 'PUBLISHER_SOURCE_REVISION', 'git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG"', 'remote_tag_status=$?', 'test "$remote_tag_status" -ne 2', 'test -n "$remote_tag_output"', 'name: desktop-${{ matrix.os }}']) {
+  if (!workflow.includes(contract)) throw new Error(`Pre-Tag candidate desktop workflow contract missing: ${contract}`)
 }
+const triggerBlock = workflow.slice(workflow.indexOf('\non:\n'), workflow.indexOf('\nrun-name:'))
+const triggers = [...triggerBlock.matchAll(/^  ([a-z_]+):/gmu)].map(match => match[1])
+if (JSON.stringify(triggers) !== JSON.stringify(['workflow_dispatch'])) throw new Error('Candidate desktop workflow must be workflow_dispatch-only.')
+for (const input of ['source_revision', 'request_id']) {
+  if (!new RegExp(`^      ${input}:\\n(?:        .+\\n)*?        required: true$`, 'mu').test(workflow)) throw new Error(`Pre-Tag candidate desktop workflow input must be required: ${input}`)
+}
+if (workflow.includes('inputs.request_id || github.run_id')) throw new Error('Candidate run identity must not fall back from the publisher request id.')
+for (const forbidden of ['contents: write', 'gh api --method POST "repos/$GITHUB_REPOSITORY/releases"', 'gh release upload', 'draft-snapshot.json', '--method PATCH "repos/$GITHUB_REPOSITORY/releases']) {
+  if (workflow.includes(forbidden)) throw new Error(`Pre-Tag candidate desktop workflow must not contain publication or Release-write paths: ${forbidden}`)
+}
+if (/\n\s+push:\s*\n\s+tags:/u.test(workflow)) throw new Error('Desktop release workflow must never build from a Tag push trigger.')
 if (workflow.includes('release-retry/v')) throw new Error('Desktop release workflow must not accept a mutable retry branch trigger.')
-for (const contract of ['--rawfile body release-notes.md', '--input create-release-request.json', 'Initial private draft identity differs from the exact create request']) {
-  if (!workflow.includes(contract)) throw new Error(`Initial draft identity must remain byte-bound to the exact create request: ${contract}`)
+if (/^\s{2}(?:stage-draft|verify-windows-draft|publish):/mu.test(workflow)) throw new Error('Legacy draft, draft verification, and publish jobs must be physically removed from the candidate desktop workflow.')
+for (const contract of ['Verify Windows candidate upgrade and installation', 'stable-upgrade-profile.marker', '/NORESTARTAPPLICATIONS', 'RestartApplications=no contract failed', 'Upgraded installed self-test JSON failed or reported the wrong version', 'Uninstaller left the temporary installation directory behind']) {
+  if (!workflow.includes(contract)) throw new Error(`Pre-Tag Windows previous-stable upgrade gate missing from the candidate desktop workflow: ${contract}`)
 }
-if (workflow.includes('body=$(cat release-notes.md)')) throw new Error('Release notes must be passed as exact JSON input so trailing newlines remain part of the verified draft identity.')
-const releaseSnapshotProjection = "{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}"
-if (workflow.split(releaseSnapshotProjection).length - 1 !== 3) throw new Error('Stage, Windows verification, and publish must use the identical release snapshot projection exactly once each.')
-if (!workflow.includes('needs: stage-draft') || !workflow.includes('needs: verify-windows-draft')) throw new Error('Draft publication jobs must remain strictly ordered: stage, Windows install gate, final publish.')
+const recoveryWorkflow = await readFile(path.join(root, '.github/workflows/recover-release-from-actions.yml'), 'utf8')
+for (const contract of ['source_run_id:', 'run-id: ${{ inputs.source_run_id }}', 'pattern: desktop-*', 'Exact same-run desktop artifact set is unavailable', 'Publish unchanged recovered draft', 'timeout-minutes: 90', '--method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"']) {
+  if (!recoveryWorkflow.includes(contract)) throw new Error(`Cloud recovery must reuse the exact pre-Tag source run artifacts: ${contract}`)
+}
+if (!recoveryWorkflow.includes('.display_title == "Candidate \\($tag) @ \\($sha) · \\($request)"')) throw new Error('Cloud recovery must bind the source run by exact display title identity and request id.')
+if (recoveryWorkflow.includes('npm run dist')) throw new Error('Cloud recovery must never rebuild desktop packages.')
 if (/^\s*gh release (?:download|upload|edit|view)/mu.test(workflow) || workflow.includes('--clobber') || workflow.includes('overwrite_files: true')) throw new Error('Desktop release workflow must use immutable release and asset ids and never overwrite an asset.')
 const componentPublishWorkflow = await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')
 for (const contract of ['workflow_dispatch:', 'product_revision:', 'ref: ${{ env.RELEASE_TAG }}', 'PUBLISHER_PRODUCT_REVISION', 'git rev-list -n 1 "$RELEASE_TAG"', 'fetch-depth: 0', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'prepare-production-components.mjs', 'verify-production-component-staging.mjs', 'test "${#files[@]}" -eq 7', 'Preserve matching assets and identify missing component assets', 'gh release upload', 'Re-download and verify public component assets', 'Sign exact desktop release manifest in protected CI', 'refresh-release-manifest.mjs', 'branch="release-manifest/$RELEASE_TAG"', 'refs/tags/$RELEASE_TAG', "git rev-parse 'FETCH_HEAD^{}'", 'git diff-tree --no-commit-id --name-only -r', 'cmp "$manifest_file"', 'git reset --hard HEAD', 'git clean -fd', 'git checkout --detach "$tag_revision"', 'git push origin "HEAD:refs/heads/$branch"']) {
@@ -191,8 +205,7 @@ for (const contract of ['seq 1 180', 'android-universal.apk.sha256', 'Preserving
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Android immutable publication contract missing: ${contract}`)
 }
 if (androidReleaseWorkflow.includes('--clobber')) throw new Error('Android publication must never overwrite public release assets.')
-if (!workflow.includes('download-artifact')) throw new Error('Release job must collect audited matrix artifacts before publishing.')
-if (!workflow.includes('find release-artifacts -mindepth 2 -maxdepth 2 -type f') || !workflow.includes('Duplicate release asset name')) throw new Error('Release collection must exclude unpacked executables and reject duplicate public names.')
+if (!recoveryWorkflow.includes('Duplicate release asset name') || !recoveryWorkflow.includes('diff -u')) throw new Error('Cloud recovery must reject duplicate or unexpected public asset names.')
 if (pkg.build?.linux?.artifactName !== 'Harness-Desktop-${version}-linux-${arch}.${ext}') throw new Error('Linux release filenames must remain checksum-safe and space-free.')
 
 console.log('Release audit passed: official single workbench, official icon, Inno Setup plus portable Windows targets, packaged gates, audited artifacts, and GitHub Release publishing are present.')

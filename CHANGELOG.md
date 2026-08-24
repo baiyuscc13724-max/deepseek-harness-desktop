@@ -1,6 +1,14 @@
 # Changelog
 
-## 1.0.43
+## 1.0.44
+
+- 修复 v1.0.43 候选在托管 Runner 暴露的三项跨平台门禁问题：Linux CAS 并发原子发布竞态（POSIX `rename(temp,target)` 覆盖造成 inode 替换、验证者误报 `ARTIFACT_CAS_CIPHERTEXT_INVALID`，改为 no-clobber 原子发布，赢家发布、输家只验证既有不可变对象）；Windows Git refs/worktrees MAX_PATH（win32 每次 Git 调用注入 `core.longpaths=true`、缩短 merge 临时 basename，cherry-pick 非零且无 unmerged paths 时 abort 后明确抛 `GIT_OPERATION_FAILED`，不再伪装空冲突）；macOS 打包运行时可选服务读取（dsh-agent-teams 改用官方 `ctx.get` strict optional lookup 读取 `projectFoundations`，缺失 provider 时安全默认，不加入 required inject）。路径 containment、trusted root、immutable receipt/CAS、密文/nonce/digest fail-closed 语义均不放宽。
+- v1.0.44 起采用 Tag 后置契约：先对锁定 SHA 做全平台 candidate build/test（Windows/macOS/Linux/iOS）与 pre-Tag Windows installer/upgrade 全量验证，全部成功后创建唯一正式 `v1.0.44` Tag；失败保持同一 1.0.44 候选迭代（不自动提升补丁版本），恢复时复用同一 run artifacts、不重复 desktop build；Tag 一旦创建仍不可移动、不可覆盖。
+- 桌面、全部随包插件、Android 与 iOS/iPadOS 源码版本同步到 1.0.44，Android `versionCode` 更新为 10044；发布工作流默认目标更新为 v1.0.44（Tag 按新契约后置创建）。
+
+## 1.0.43（候选 Tag，未发布）
+
+- `v1.0.43` 本地官方门禁 1202 tests/1200 pass/2 skip/0 fail 通过；云端矩阵三项已确认失败、iOS 通过：Ubuntu（run 32741226632）CAS concurrent finalize 的 POSIX rename overwrite/inode identity race；Windows（同 run 的 job 97475914969，Git 2.55.0.windows.4）六个 project-foundations-runtime merge 在 async canonical TEMP 加长后触发 Git refs/worktrees MAX_PATH，cherry-pick 非零且无冲突文件时被伪装成空冲突结果；macOS（job 97475914937）源测试与 x64/arm64 构建完成，但 packaged x64 self-test 启动失败（`runtimeWebBoot=false`，dsh-agent-teams `ctx.projectFoundations?.runner` 在 Cordis plugin fiber 抛 cannot get property without inject）；iOS job 成功。发布器按设计停止，未公开 Release、未提升 stable feed；该不可变 Tag（289ef403）保持原样，三项修复随 v1.0.44 重新接受云端矩阵。
 
 - 修复 v1.0.42 候选在托管 Runner 暴露的两项跨平台门禁问题：Windows 同步/异步 realpath fixture 不一致（同步保留 8.3 短路径、异步展开长路径）与 macOS 并发 Git worktree 元数据锁竞态；仅校正测试 fixture 归一化与仓库变更协调机制，不放宽生产代码的路径 containment、trusted root、immutable receipt/CAS 与 close 语义。
 - 桌面、全部随包插件、Android 与 iOS/iPadOS 源码版本同步到 1.0.43，Android `versionCode` 更新为 10043；发布工作流默认目标提升到不可变 `v1.0.43`。

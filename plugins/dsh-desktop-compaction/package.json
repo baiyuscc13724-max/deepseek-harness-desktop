@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-compaction",
-  "version": "1.0.43",
+  "version": "1.0.44",
   "description": "Harness Desktop-owned context compaction policy with bounded overflow recovery.",
   "type": "module",
   "main": "lib/index.js",

@@ -405,11 +405,30 @@ export class GitWorkspaceAdapter {
       const existing = await this.#readAndVerifyMergeGroupResult(input); if (existing !== undefined) return existing;
       const groupRef = safeRef(input.mergeGroupRef, "mergeGroupRef"), base = commitRef(input.baseHead, "baseHead"), declarations = this.#normalizeMergeChangeSets(input.changeSets);
       for (const declaration of declarations) this.#assertChangeSetMatches(declaration, await this.#inspectBareCommit(declaration.commit, declaration.parentCommit));
-      const mergePath = resolve(this.mergeWorkspaceRoot, `${groupRef}.${randomUUID().replaceAll("-", "")}`);
+      // The merge worktree is transient and its receipt binds groupRef only through
+      // refs/harness/merge-groups/<groupRef>, so a short random basename keeps the
+      // Windows MAX_PATH budget for the shared repository refs and worktree paths.
+      const mergePath = resolve(this.mergeWorkspaceRoot, `m-${randomUUID().replaceAll("-", "").slice(0, 12)}`);
       let primaryError;
       try {
         await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", mergePath, base]);
-        for (const declaration of declarations) { const result = await this.#git(["-C", mergePath, "-c", "user.name=Harness Workspace Authority", "-c", "user.email=noreply@localhost", "cherry-pick", "--no-edit", "--allow-empty", declaration.commit], { allowFailure: true }); if (!result.ok) { const conflicts = parseNulPaths((await this.#git(["-C", mergePath, "diff", "--name-only", "--diff-filter=U", "-z"], { allowFailure: true, maxOutputBytes: 4 * 1024 * 1024 })).stdout); await this.#git(["-C", mergePath, "cherry-pick", "--abort"], { allowFailure: true }); return immutable({ repositoryRef: this.repositoryRef, mergeGroupRef: groupRef, merged: false, conflicts }); } }
+        for (const declaration of declarations) {
+          const result = await this.#git(["-C", mergePath, "-c", "user.name=Harness Workspace Authority", "-c", "user.email=noreply@localhost", "cherry-pick", "--no-edit", "--allow-empty", declaration.commit], { allowFailure: true });
+          if (!result.ok) {
+            const conflicts = parseNulPaths((await this.#git(["-C", mergePath, "diff", "--name-only", "--diff-filter=U", "-z"], { allowFailure: true, maxOutputBytes: 4 * 1024 * 1024 })).stdout);
+            await this.#git(["-C", mergePath, "cherry-pick", "--abort"], { allowFailure: true });
+            // A non-zero cherry-pick with no unmerged paths is an infrastructure
+            // failure (for example Windows MAX_PATH below a ref/worktree), never
+            // an empty conflict result; surface it as a bounded Git operation
+            // failure so the caller cannot mistake it for a clean conflict state.
+            if (conflicts.length === 0) {
+              const error = new Error(`bounded Git operation failed (cherry-pick exit ${result.code} without unmerged paths)`);
+              error.code = "GIT_OPERATION_FAILED";
+              throw error;
+            }
+            return immutable({ repositoryRef: this.repositoryRef, mergeGroupRef: groupRef, merged: false, conflicts });
+          }
+        }
         const resultCommit = commitRef((await this.#git(["-C", mergePath, "rev-parse", "HEAD"])).stdout.toString("utf8").trim(), "merge result"), receiptRef = `refs/harness/merge-groups/${groupRef}`;
         // Validate the entire generated chain before publishing its immutable receipt.
         // A crash after the bind is therefore always recoverable, while an empty or
@@ -589,7 +608,12 @@ export class GitWorkspaceAdapter {
         else stderr = Buffer.concat([stderr, value]);
       };
       try {
-        child = this.spawnImpl(this.gitCommand, args, { cwd, env: this.env, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+        // Windows Git keeps 8.3 and MAX_PATH behavior per invocation; enabling
+        // core.longpaths on every win32 call lets the shared repository refs and
+        // linked worktrees work under long canonical TEMP roots without relying
+        // on a user or global gitconfig that the product cannot control.
+        const invocation = process.platform === "win32" ? ["-c", "core.longpaths=true", ...args] : args;
+        child = this.spawnImpl(this.gitCommand, invocation, { cwd, env: this.env, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
       } catch { finish({ ok: false, code: null, reason: "spawn" }); return; }
       child.stdout?.on("data", (chunk) => append("stdout", chunk));
       child.stderr?.on("data", (chunk) => append("stderr", chunk));

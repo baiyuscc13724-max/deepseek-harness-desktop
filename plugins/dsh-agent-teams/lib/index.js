@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isProxy } from "node:util/types";
 import z from "@deepseek-ai/schemastery";
 import { createUserMessage, HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -3632,6 +3633,74 @@ function resolveConfig(config = {}) {
     maxActiveTurns: safeLimit(config.maxActiveTurns, "maxActiveTurns", DEFAULT_SETTINGS.maxActiveTurns),
   };
 }
+// Cordis resolves an optional service through ctx.get(name) without requiring
+// it in `inject`; direct property access on an unprovided service throws
+// "cannot get property ... without inject" inside an active fiber. The bundled
+// runtime never provides projectFoundations, so the Host options must read the
+// service exactly once through the non-throwing lookup and default to {}.
+//
+// Adversarial-boundary projection: only a plain own-data record (Object.prototype
+// or null prototype) is accepted. Every projected field must be an own enumerable
+// data descriptor; accessors, Proxy traps, class instances, inherited fields, and
+// any descriptor/prototype check that throws fail the whole projection closed to
+// an empty frozen object. Nothing is ever read through a getter or a proxy get.
+//
+// node:util/types isProxy performs the brand check without invoking any Proxy
+// trap (including revoked and getPrototypeOf-throwing Proxies), so a Proxy is
+// rejected before any reflective access can run user code.
+function isPlainRecord(value) {
+  try {
+    // Order matters: typeof/null first never touches a Proxy; then the zero-trap
+    // brand check rejects every Proxy (including revoked and getPrototypeOf-
+    // throwing ones) before Array.isArray/getPrototypeOf can run. Array.isArray
+    // on a revoked Proxy would throw, so it must come after isProxy.
+    if (typeof value !== "object" || value === null) return false;
+    if (isProxy(value)) return false;
+    if (Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+function ownDataDescriptorOrAbsent(value, key) {
+  try {
+    if (typeof value !== "object" || value === null) return null;
+    if (isProxy(value)) return null;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined) return undefined;
+    if (descriptor.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined || typeof descriptor.value === "symbol") return null;
+    return descriptor.value;
+  } catch {
+    return null;
+  }
+}
+function resolveProjectFoundationHostOptions(ctx) {
+  let value;
+  try {
+    value = typeof ctx?.get === "function" ? ctx.get("projectFoundations") : undefined;
+  } catch {
+    return Object.freeze({});
+  }
+  try {
+    if (!isPlainRecord(value)) return Object.freeze({});
+    const runner = ownDataDescriptorOrAbsent(value, "runner");
+    const connectorRecord = ownDataDescriptorOrAbsent(value, "connector");
+    const runnerEvidenceProvider = ownDataDescriptorOrAbsent(value, "runnerEvidence");
+    if (runner === null || connectorRecord === null || runnerEvidenceProvider === null) return Object.freeze({});
+    let connector;
+    if (connectorRecord !== undefined && isPlainRecord(connectorRecord)) {
+      const enabled = ownDataDescriptorOrAbsent(connectorRecord, "enabled");
+      // A clean own data `enabled: true` projects the connector; an accessor,
+      // inherited, non-plain, or non-true own value drops the connector projection.
+      if (enabled === true) connector = connectorRecord;
+    }
+    return Object.freeze({ runner, connector, runnerEvidenceProvider });
+  } catch {
+    return Object.freeze({});
+  }
+}
+
 function apply(ctx, config = {}) {
   const defaults = resolveConfig(config);
   const dshHome = process.env.DSH_HOME;
@@ -3678,11 +3747,7 @@ function apply(ctx, config = {}) {
     taskDelegate: { state: () => projectTasks.state(), action: (input) => projectTasks.action(input) },
     automationDelegate: { state: () => projectAutomations.state(), action: (input) => projectAutomations.action(input) },
   });
-  const projectFoundations = createProjectFoundationManager(ctx, store, projectEntry, desktopGitCapability, {
-    runner: ctx.projectFoundations?.runner,
-    connector: ctx.projectFoundations?.connector?.enabled === true ? ctx.projectFoundations.connector : undefined,
-    runnerEvidenceProvider: ctx.projectFoundations?.runnerEvidence,
-  });
+  const projectFoundations = createProjectFoundationManager(ctx, store, projectEntry, desktopGitCapability, resolveProjectFoundationHostOptions(ctx));
   ready.catch((error) => ctx.logger.error(`agent-teams store initialization failed: ${String(error)}`));
   void ready.then(() => projectBusiness.initialize()).catch((error) => ctx.logger.warn(`agent-teams project sync initialization deferred: ${String(error?.code ?? "unavailable")}`));
   void ready.then((document) => document.teams.length > 0 ? collaboration.syncTeams(document) : undefined)
@@ -3765,6 +3830,7 @@ export {
   registerProjectAutomationApi,
   registerProjectFoundationsApi,
   registerProjectFoundationTools,
+  resolveProjectFoundationHostOptions,
   projectFoundationsBrowserState,
   registerProjectTaskApi,
   releaseRetiredMemberTasks,

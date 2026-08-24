@@ -4,30 +4,28 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing immutable release tag to build and publish
+        description: Candidate version label; no Tag is required or created by this workflow
         required: true
-        default: v1.0.43
-      product_revision:
-        description: Exact 40-character commit bound to the immutable release tag
+        default: v1.0.44
+      source_revision:
+        description: Exact 40-character candidate commit to build and test before Tag creation
         required: true
       request_id:
         description: Unique publisher request identity
-        required: false
-  push:
-    tags:
-      - 'v*'
+        required: true
 
-run-name: Release ${{ inputs.tag || github.ref_name }} · ${{ inputs.request_id || github.run_id }}
+run-name: Candidate ${{ inputs.tag }} @ ${{ inputs.source_revision }} · ${{ inputs.request_id }}
 
 env:
-  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag }}
+  SOURCE_REVISION: ${{ inputs.source_revision }}
   HARNESS_RELEASE_PACKAGING_MODE: github-actions-only
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-candidate-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -44,26 +42,30 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.SOURCE_REVISION }}
           lfs: true
-      - name: Bind cloud package build to immutable source revision
+      - name: Bind cloud package build to exact pre-Tag candidate revision
         shell: bash
         env:
-          PUBLISHER_PRODUCT_REVISION: ${{ inputs.product_revision }}
+          PUBLISHER_SOURCE_REVISION: ${{ inputs.source_revision }}
         run: |
           set -euo pipefail
           test "$HARNESS_RELEASE_PACKAGING_MODE" = 'github-actions-only'
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           head_revision="$(git rev-parse HEAD)"
-          tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
-          test "$head_revision" = "$tag_revision"
-          expected_revision="$PUBLISHER_PRODUCT_REVISION"
-          if [[ -z "$expected_revision" ]]; then expected_revision="$GITHUB_SHA"; fi
-          if [[ -n "$expected_revision" ]]; then
-            [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]]
-            test "$head_revision" = "$expected_revision"
-          fi
+          expected_revision="$PUBLISHER_SOURCE_REVISION"
+          [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]]
+          test "$head_revision" = "$expected_revision"
+          test "$GITHUB_SHA" = "$expected_revision"
           test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
+          set +e
+          remote_tag_output="$(git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" 2>&1)"
+          remote_tag_status=$?
+          set -e
+          if test "$remote_tag_status" -ne 2 || test -n "$remote_tag_output"; then
+            printf 'Exact candidate Tag absence is not proven (status=%s): %s\n' "$remote_tag_status" "$remote_tag_output" >&2
+            exit 1
+          fi
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -240,26 +242,30 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.SOURCE_REVISION }}
           lfs: true
-      - name: Bind cloud package build to immutable source revision
+      - name: Bind cloud package build to exact pre-Tag candidate revision
         shell: bash
         env:
-          PUBLISHER_PRODUCT_REVISION: ${{ inputs.product_revision }}
+          PUBLISHER_SOURCE_REVISION: ${{ inputs.source_revision }}
         run: |
           set -euo pipefail
           test "$HARNESS_RELEASE_PACKAGING_MODE" = 'github-actions-only'
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           head_revision="$(git rev-parse HEAD)"
-          tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
-          test "$head_revision" = "$tag_revision"
-          expected_revision="$PUBLISHER_PRODUCT_REVISION"
-          if [[ -z "$expected_revision" ]]; then expected_revision="$GITHUB_SHA"; fi
-          if [[ -n "$expected_revision" ]]; then
-            [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]]
-            test "$head_revision" = "$expected_revision"
-          fi
+          expected_revision="$PUBLISHER_SOURCE_REVISION"
+          [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]]
+          test "$head_revision" = "$expected_revision"
+          test "$GITHUB_SHA" = "$expected_revision"
           test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
+          set +e
+          remote_tag_output="$(git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" 2>&1)"
+          remote_tag_status=$?
+          set -e
+          if test "$remote_tag_status" -ne 2 || test -n "$remote_tag_output"; then
+            printf 'Exact candidate Tag absence is not proven (status=%s): %s\n' "$remote_tag_status" "$remote_tag_output" >&2
+            exit 1
+          fi
       - name: Select Xcode 16
         shell: bash
         run: |
@@ -312,122 +318,55 @@ jobs:
           -destination 'id=${{ steps.devices.outputs.ipad_udid }}'
           CODE_SIGNING_ALLOWED=NO
 
-  # Supersedes the former "Verify draft assets and publish atomically" single-job gate.
-  # The Windows gate performs the equivalent of `sha256sum -c SHA256SUMS.txt` in PowerShell for every entry.
-  stage-draft:
-    name: Stage private GitHub draft
+  prepare-windows-candidate:
+    name: Bind signed previous stable Windows installer
     needs: [build, ios-simulators]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ env.RELEASE_TAG }}
-      - name: Bind cloud package build to immutable source revision
+          ref: ${{ env.SOURCE_REVISION }}
+      - name: Bind cloud package build to exact pre-Tag candidate revision
         shell: bash
         env:
-          PUBLISHER_PRODUCT_REVISION: ${{ inputs.product_revision }}
+          PUBLISHER_SOURCE_REVISION: ${{ inputs.source_revision }}
         run: |
           set -euo pipefail
           test "$HARNESS_RELEASE_PACKAGING_MODE" = 'github-actions-only'
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           head_revision="$(git rev-parse HEAD)"
-          tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
-          test "$head_revision" = "$tag_revision"
-          expected_revision="$PUBLISHER_PRODUCT_REVISION"
-          if [[ -z "$expected_revision" ]]; then expected_revision="$GITHUB_SHA"; fi
-          if [[ -n "$expected_revision" ]]; then
-            [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]]
-            test "$head_revision" = "$expected_revision"
-          fi
+          expected_revision="$PUBLISHER_SOURCE_REVISION"
+          [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]]
+          test "$head_revision" = "$expected_revision"
+          test "$GITHUB_SHA" = "$expected_revision"
           test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: desktop-*
-          path: release-artifacts
-      - name: Collect audited install files
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-files
-          find release-artifacts -mindepth 2 -maxdepth 2 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \) -print0 |
-            while IFS= read -r -d '' file; do
-              target="release-files/$(basename "$file")"
-              test ! -e "$target" || { echo "Duplicate release asset name: $target" >&2; exit 1; }
-              cp "$file" "$target"
-            done
-          test -n "$(find release-files -maxdepth 1 -type f -print -quit)"
-          (cd release-files && sha256sum * > SHA256SUMS.txt)
-          cat release-files/SHA256SUMS.txt
-      # REST equivalent of the legacy `tag_name: ${{ env.RELEASE_TAG }}`, `draft: true`, and `overwrite_files: false` contract.
-      - name: Refuse an existing release mutation with atomic REST create
-        shell: bash
-        run: |
-          set -euo pipefail
-          prerelease=false
-          [[ "$RELEASE_TAG" == *-* ]] && prerelease=true
-          jq -n \
-            --arg tag_name "$RELEASE_TAG" \
-            --arg target_commitish "$(git rev-parse HEAD)" \
-            --arg name "Harness Desktop $RELEASE_TAG" \
-            --rawfile body release-notes.md \
-            --argjson prerelease "$prerelease" \
-            '{tag_name:$tag_name,target_commitish:$target_commitish,name:$name,body:$body,draft:true,prerelease:$prerelease}' \
-            > create-release-request.json
-          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
-            --input create-release-request.json \
-            > created-release.json 2> create-release-error.txt; then
-            if grep -q 'HTTP 422' create-release-error.txt; then
-              echo "HTTP 422: release $RELEASE_TAG already exists; refusing mutation." >&2
-            else
-              cat create-release-error.txt >&2
-            fi
+          set +e
+          remote_tag_output="$(git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" 2>&1)"
+          remote_tag_status=$?
+          set -e
+          if test "$remote_tag_status" -ne 2 || test -n "$remote_tag_output"; then
+            printf 'Exact candidate Tag absence is not proven (status=%s): %s\n' "$remote_tag_status" "$remote_tag_output" >&2
             exit 1
           fi
-          release_id="$(jq -er '.id' created-release.json)"
-          jq -e --argjson id "$release_id" --slurpfile expected create-release-request.json '
-            .id == $id and .tag_name == $expected[0].tag_name and
-            .target_commitish == $expected[0].target_commitish and .name == $expected[0].name and
-            .body == $expected[0].body and .draft == $expected[0].draft and .prerelease == $expected[0].prerelease
-          ' created-release.json >/dev/null
-          for file in release-files/*; do
-            name="$(basename "$file")"
-            size="$(stat -c %s "$file")"
-            encoded_name="$(jq -rn --arg value "$name" '$value | @uri')"
-            # Never resolve the upload target by tag: GitHub can retain more than
-            # one draft for a tag, so only this atomic create's immutable id is safe.
-            curl --fail-with-body --silent --show-error \
-              --retry 3 --retry-all-errors --retry-delay 2 \
-              --request POST \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header 'Accept: application/vnd.github+json' \
-              --header 'X-GitHub-Api-Version: 2022-11-28' \
-              --header 'Content-Type: application/octet-stream' \
-              --data-binary "@$file" \
-              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$encoded_name" \
-              > uploaded-asset.json
-            jq -e --arg name "$name" --argjson size "$size" '.name == $name and .size == $size' uploaded-asset.json >/dev/null
-          done
-          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-            --jq '{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}' > draft-snapshot.json
-      - name: Verify exact draft assets and immutable snapshot metadata
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-windows-latest
+          path: candidate-files
+      - name: Verify exact current-run Windows candidate files
         shell: bash
         run: |
           set -euo pipefail
-          release_id="$(jq -er '.id' created-release.json)"
-          jq -e --argjson id "$release_id" --slurpfile expected create-release-request.json '
-            .id == $id and .tag_name == $expected[0].tag_name and
-            .target_commitish == $expected[0].target_commitish and .name == $expected[0].name and
-            .body == $expected[0].body and .draft == $expected[0].draft and .prerelease == $expected[0].prerelease
-          ' draft-snapshot.json >/dev/null || { echo 'Initial private draft identity differs from the exact create request.' >&2; exit 1; }
-          expected="$(find release-files -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
-          actual="$(jq -r '.assets[].name' draft-snapshot.json | LC_ALL=C sort)"
+          version="${RELEASE_TAG#v}"
+          expected="$(printf '%s\n' "Harness-Desktop-$version-portable-x64.exe" "Harness-Desktop-$version-win-x64.exe" | LC_ALL=C sort)"
+          actual="$(find candidate-files -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
           diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
-          jq -e 'all(.assets[]; (.id | type == "number") and (.name | type == "string") and (.size | type == "number") and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))' draft-snapshot.json >/dev/null
+          test -s "candidate-files/Harness-Desktop-$version-portable-x64.exe"
+          test -s "candidate-files/Harness-Desktop-$version-win-x64.exe"
       - name: Bind the signed previous stable Windows installer to an exact public asset
         shell: bash
         run: |
@@ -509,36 +448,36 @@ jobs:
           ' previous-stable.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: draft-snapshot
-          path: |
-            draft-snapshot.json
-            previous-stable.json
+          name: previous-stable-windows-binding
+          path: previous-stable.json
           if-no-files-found: error
           retention-days: 14
 
-  verify-windows-draft:
-    name: Install authenticated Windows draft
-    needs: stage-draft
+  verify-windows-candidate:
+    name: Verify Windows candidate upgrade and installation
+    needs: prepare-windows-candidate
     runs-on: windows-latest
-    timeout-minutes: 30
-    # GitHub App tokens need contents:write to read private draft releases by ID
-    # and to download their assets before publication; this job never mutates them.
+    timeout-minutes: 90
     permissions:
-      contents: write
+      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: draft-snapshot
-          path: draft-state
-      - name: Authenticated draft download, checksum, stable upgrade, self-test, and uninstall
+          name: previous-stable-windows-binding
+          path: candidate-state
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-windows-latest
+          path: candidate-files
+      - name: Current-run artifact install, previous-stable upgrade, self-test, and uninstall
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $downloadRoot = Join-Path $env:RUNNER_TEMP 'authenticated-draft-download'
-          $installRoot = Join-Path $env:RUNNER_TEMP 'authenticated-draft-install'
-          $profileRoot = Join-Path $env:RUNNER_TEMP 'authenticated-draft-profile'
+          $downloadRoot = Join-Path $env:RUNNER_TEMP 'pretag-candidate-download'
+          $installRoot = Join-Path $env:RUNNER_TEMP 'pretag-candidate-install'
+          $profileRoot = Join-Path $env:RUNNER_TEMP 'pretag-candidate-profile'
           $reportPath = Join-Path $env:RUNNER_TEMP 'authenticated-installed-selftest.json'
           $previousReportPath = Join-Path $env:RUNNER_TEMP 'authenticated-previous-stable-selftest.json'
           $previousInstallerPath = Join-Path $env:RUNNER_TEMP 'authenticated-previous-stable-installer.exe'
@@ -567,24 +506,23 @@ jobs:
           }
           Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           try {
-            $snapshotText = (Get-Content 'draft-state/draft-snapshot.json' -Raw).Trim()
-            $snapshot = $snapshotText | ConvertFrom-Json
-            $currentSnapshotText = gh api "repos/$env:GITHUB_REPOSITORY/releases/$($snapshot.id)" --jq '{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}'
-            if ($LASTEXITCODE -ne 0) { throw 'Authenticated release lookup by snapshot id failed.' }
-            $currentSnapshotText = ($currentSnapshotText -join "`n").Trim()
-            if ($currentSnapshotText -ne $snapshotText) { throw 'Draft metadata changed before the Windows gate.' }
-            if (-not $snapshot.draft -or $snapshot.tag_name -ne $env:RELEASE_TAG) { throw 'Snapshot is not the expected private draft.' }
-            $expectedAssets = @($snapshot.assets | ForEach-Object name | Sort-Object)
+            $version = $env:RELEASE_TAG -replace '^v', ''
+            $expectedNames = @("Harness-Desktop-$version-portable-x64.exe", "Harness-Desktop-$version-win-x64.exe") | Sort-Object
+            $candidateFiles = @(Get-ChildItem -LiteralPath 'candidate-files' -File)
+            if (Compare-Object $expectedNames @($candidateFiles.Name | Sort-Object)) { throw 'Current-run Windows artifact contains an unexpected file set.' }
             New-Item -ItemType Directory -Path $downloadRoot | Out-Null
+            foreach ($candidate in $candidateFiles) {
+              if ($candidate.Length -le 0) { throw "Current-run Windows candidate is empty: $($candidate.Name)" }
+              Copy-Item -LiteralPath $candidate.FullName -Destination (Join-Path $downloadRoot $candidate.Name)
+            }
             $headers = @{
               Accept = 'application/octet-stream'
               Authorization = "Bearer $env:GH_TOKEN"
               'X-GitHub-Api-Version' = '2022-11-28'
               'User-Agent' = 'harness-desktop-release-gate'
             }
-            $version = $env:RELEASE_TAG -replace '^v', ''
-            $previous = Get-Content 'draft-state/previous-stable.json' -Raw | ConvertFrom-Json
-            if ($previous.version -notmatch '^\d+\.\d+\.\d+$' -or [version]$previous.version -ge [version]$version) { throw 'Bound previous stable version is invalid or not older than the draft.' }
+            $previous = Get-Content 'candidate-state/previous-stable.json' -Raw | ConvertFrom-Json
+            if ($previous.version -notmatch '^\d+\.\d+\.\d+$' -or [version]$previous.version -ge [version]$version) { throw 'Bound previous stable version is invalid or not older than the candidate.' }
             if ($previous.tag -ne "v$($previous.version)" -or $previous.releaseId -notmatch '^\d+$' -or $previous.asset.id -notmatch '^\d+$') { throw 'Bound previous stable release identity is invalid.' }
             if ($previous.asset.name -ne "Harness-Desktop-$($previous.version)-win-x64.exe" -or $previous.asset.digest -ne "sha256:$($previous.asset.sha256)") { throw 'Bound previous stable installer identity is invalid.' }
             $previousRelease = gh api "repos/$env:GITHUB_REPOSITORY/releases/$($previous.releaseId)" --jq '{id,tag_name,draft,prerelease,name,html_url,assets:([.assets[] | {id,name,size,digest,browser_download_url}] | sort_by(.name))}' | ConvertFrom-Json
@@ -598,35 +536,6 @@ jobs:
             Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($previous.asset.id)" -Headers $headers -OutFile $previousInstaller
             if ((Get-Item -LiteralPath $previousInstaller).Length -ne [int64]$previous.asset.size) { throw 'Previous stable installer size mismatch.' }
             if ((Get-FileHash -LiteralPath $previousInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $previous.asset.sha256) { throw 'Previous stable installer SHA-256 mismatch.' }
-            foreach ($asset in $snapshot.assets) {
-              if ($asset.id -notmatch '^\d+$' -or [IO.Path]::GetFileName($asset.name) -ne $asset.name -or $asset.digest -notmatch '^sha256:([0-9a-f]{64})$') { throw "Unsafe or incomplete snapshot asset metadata: $($asset.name)" }
-              $expectedDigest = $asset.digest.Substring(7)
-              $destination = Join-Path $downloadRoot $asset.name
-              Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)" -Headers $headers -OutFile $destination
-              $downloaded = Get-Item -LiteralPath $destination
-              if ($downloaded.Length -ne [int64]$asset.size) { throw "Snapshot size mismatch for $($asset.name)." }
-              $snapshotHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($snapshotHash -ne $expectedDigest) { throw "Snapshot digest mismatch for $($asset.name)." }
-            }
-
-            $checksumPath = Join-Path $downloadRoot 'SHA256SUMS.txt'
-            if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) { throw 'SHA256SUMS.txt is missing.' }
-            $entries = @{}
-            foreach ($line in Get-Content -LiteralPath $checksumPath) {
-              if ($line -notmatch '^([0-9a-fA-F]{64}) [ *](.+)$') { throw "Malformed SHA256SUMS line: $line" }
-              $name = $Matches[2]
-              if ([IO.Path]::GetFileName($name) -ne $name -or $entries.ContainsKey($name)) { throw "Unsafe or duplicate checksum entry: $name" }
-              $entries[$name] = $Matches[1].ToLowerInvariant()
-            }
-            if ($entries.Count -eq 0) { throw 'SHA256SUMS.txt contains no assets.' }
-            $listedAssets = @($entries.Keys | Sort-Object) + 'SHA256SUMS.txt'
-            $downloadedAssets = @(Get-ChildItem -LiteralPath $downloadRoot -File | ForEach-Object Name | Sort-Object)
-            if (Compare-Object @($listedAssets | Sort-Object) $downloadedAssets) { throw 'Downloaded files do not exactly match SHA256SUMS.txt.' }
-            if (Compare-Object $expectedAssets $downloadedAssets) { throw 'Downloaded files do not exactly match the staged draft snapshot.' }
-            foreach ($entry in $entries.GetEnumerator()) {
-              $actualHash = (Get-FileHash -LiteralPath (Join-Path $downloadRoot $entry.Key) -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($actualHash -ne $entry.Value) { throw "SHA-256 mismatch for $($entry.Key)." }
-            }
 
             $portable = Join-Path $downloadRoot "Harness-Desktop-$version-portable-x64.exe"
             if (-not (Test-Path -LiteralPath $portable -PathType Leaf)) { throw "Expected portable executable is missing: $portable" }
@@ -676,15 +585,15 @@ jobs:
             $upgrade = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NORESTARTAPPLICATIONS', '/LOGCLOSEAPPLICATIONS', "/LOG=$upgradeLog", "/DIR=$installRoot") -Wait -PassThru
             if ($upgrade.ExitCode -ne 0) {
               if (Test-Path -LiteralPath $upgradeLog -PathType Leaf) { Get-Content -LiteralPath $upgradeLog }
-              throw "Authenticated draft upgrade installer exited with code $($upgrade.ExitCode)."
+              throw "Current-run candidate upgrade installer exited with code $($upgrade.ExitCode)."
             }
             for ($i = 0; $i -lt 40 -and @(Get-InstalledAppProcesses -Executable $installedExe).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }
             $aliveOldProcesses = @($trackedProcessIds | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
-            if ($aliveOldProcesses.Count -ne 0) { throw 'Authenticated draft installer did not close every previous stable desktop process.' }
+            if ($aliveOldProcesses.Count -ne 0) { throw 'Current-run candidate installer did not close every previous stable desktop process.' }
             Start-Sleep -Seconds 3
             if (@(Get-InstalledAppProcesses -Executable $installedExe).Count -ne 0) { throw 'RestartApplications=no contract failed: the desktop restarted after the silent upgrade.' }
             if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf) -or -not (Test-Path -LiteralPath $installedAsar -PathType Leaf)) { throw 'Upgraded executable or app.asar is missing.' }
-            if ([IO.File]::ReadAllText($markerPath) -cne $markerValue) { throw 'Authenticated draft upgrade did not preserve the same profile marker.' }
+            if ([IO.File]::ReadAllText($markerPath) -cne $markerValue) { throw 'Current-run candidate upgrade did not preserve the same profile marker.' }
             $selfTest = Start-Process -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$reportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -Wait -PassThru
             if ($selfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Upgraded installed --self-test failed or omitted its JSON report.' }
             $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
@@ -706,36 +615,3 @@ jobs:
             } catch {}
             Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           }
-
-  publish:
-    name: Publish unchanged verified draft
-    needs: verify-windows-draft
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: draft-snapshot
-          path: draft-state
-      - name: Reconfirm exact draft and publish by immutable release id
-        shell: bash
-        run: |
-          set -euo pipefail
-          projection='{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}'
-          snapshot_id="$(jq -er '.id' draft-state/draft-snapshot.json)"
-          gh api "repos/$GITHUB_REPOSITORY/releases/$snapshot_id" --jq "$projection" > current-draft.json
-          test "$(jq -r '.draft' current-draft.json)" = true
-          test "$(jq -r '.tag_name' current-draft.json)" = "$RELEASE_TAG"
-          diff -u <(jq -S . draft-state/draft-snapshot.json) <(jq -S . current-draft.json)
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$snapshot_id" -F draft=false --jq "$projection" > published.json
-          jq -e --arg tag "$RELEASE_TAG" --arg id "$snapshot_id" '
-            (.id | tostring) == $id and .tag_name == $tag and .draft == false and .prerelease == false
-          ' published.json >/dev/null
-          jq '.draft = false' draft-state/draft-snapshot.json > expected-published.json
-          diff -u <(jq -S . expected-published.json) <(jq -S . published.json)
-          gh api "repos/$GITHUB_REPOSITORY/releases/$snapshot_id" --jq "$projection" > current-published.json
-          diff -u <(jq -S . expected-published.json) <(jq -S . current-published.json)

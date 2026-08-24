@@ -308,6 +308,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     let activeInitiator = rootAgent
     const ctx = {
       logger: { info() {}, warn() {}, error() {} },
+      get: () => undefined,
       tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
       systemPrompt: { section(section) { promptSections.push(section); return () => {} } },
       webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
@@ -1488,6 +1489,7 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     }
     const ctx = {
       logger: { info() {}, warn() {}, error() {} },
+      get: () => undefined,
       tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
       systemPrompt: { section() { return () => {} } },
       webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
@@ -1604,4 +1606,201 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     for (const cleanup of cleanups.reverse()) await cleanup()
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('resolveProjectFoundationHostOptions reads the optional service through the Cordis lookup only', async () => {
+  const { Context } = await import('@deepseek-ai/cordis')
+  const mod = await import(`${pathToFileURL(pluginFile).href}?foundation-host-options=${Date.now()}-${Math.random()}`)
+  const source = await readFile(pluginFile, 'utf8')
+  assert.doesNotMatch(source, /ctx\.projectFoundations\?\./u, 'apply must never touch the optional service by direct property access')
+  assert.match(source, /, resolveProjectFoundationHostOptions\(ctx\)\)/u, 'apply must call the Host options resolver exactly once')
+  assert.ok(source.match(/, resolveProjectFoundationHostOptions\(ctx\)\)/gu).length === 1, 'apply must call the resolver once')
+  assert.deepEqual(mod.inject.includes('projectFoundations'), false, 'the optional service must never join the required inject list')
+
+  // Missing or non-record provider resolves to an empty object without throwing.
+  const missing = new Context()
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions(missing), {})
+  const withGet = new Context()
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => undefined }), {})
+  const weird = new Context()
+  weird.provide('projectFoundations', 'not-a-record')
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions(weird), {})
+
+  // An active record provider is projected onto exactly the fixed Host fields.
+  const provided = new Context()
+  const record = {
+    runner: { handle: 'desktop-runner' },
+    connector: { enabled: true, name: 'desktop-connector' },
+    runnerEvidence: { evidence: true },
+    extra: 'never projected'
+  }
+  provided.provide('projectFoundations', record)
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions(provided), {
+    runner: record.runner,
+    connector: record.connector,
+    runnerEvidenceProvider: record.runnerEvidence
+  })
+
+  // A disabled connector is dropped while runner and evidence stay projected.
+  const disabled = new Context()
+  disabled.provide('projectFoundations', { runner: record.runner, connector: { enabled: false }, runnerEvidence: record.runnerEvidence })
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions(disabled), {
+    runner: record.runner,
+    connector: undefined,
+    runnerEvidenceProvider: record.runnerEvidence
+  })
+
+  // The old direct property access is the captured regression: it throws inside
+  // a real Cordis fiber while ctx.get stays the non-throwing optional boundary.
+  const runtime = new Context()
+  const attempts = []
+  runtime.plugin({
+    name: 'foundation-host-options-probe',
+    inject: {},
+    apply(fiberCtx) {
+      let directError
+      try { fiberCtx.projectFoundations } catch (error) { directError = error?.message }
+      attempts.push({ directError, viaGet: fiberCtx.get('projectFoundations'), options: mod.resolveProjectFoundationHostOptions(fiberCtx) })
+    }
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(attempts.length, 1)
+  assert.match(attempts[0].directError, /cannot get property "projectFoundations" without inject/u)
+  assert.equal(attempts[0].viaGet, undefined, 'the lookup is the supported non-throwing optional boundary')
+  assert.deepEqual(attempts[0].options, {})
+})
+
+test('resolveProjectFoundationHostOptions never reads accessors, proxies, classes, or inherited fields', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?foundation-boundary=${Date.now()}-${Math.random()}`)
+
+  // Accessor descriptors must fail closed without running the getter.
+  let runnerGetterRuns = 0
+  let connectorGetterRuns = 0
+  let evidenceGetterRuns = 0
+  const engineered = {}
+  Object.defineProperty(engineered, 'runner', { enumerable: true, get() { runnerGetterRuns += 1; return { handle: 'trapped-runner' } } })
+  Object.defineProperty(engineered, 'connector', { enumerable: true, get() { connectorGetterRuns += 1; return { enabled: true } } })
+  Object.defineProperty(engineered, 'runnerEvidence', { enumerable: true, get() { evidenceGetterRuns += 1; return { evidence: true } } })
+  const accessorResult = mod.resolveProjectFoundationHostOptions({ get: () => engineered })
+  assert.deepEqual(accessorResult, {}, 'accessor-erected fields must fail closed to an empty object')
+  assert.equal(runnerGetterRuns, 0)
+  assert.equal(connectorGetterRuns, 0)
+  assert.equal(evidenceGetterRuns, 0)
+
+  // Proxy traps must never be permitted to produce projections. Node's
+  // util/types brand check rejects any Proxy without invoking a trap, so a
+  // normal, getPrototypeOf-throwing, or revoked Proxy all fail closed with
+  // zero trap invocations.
+  let proxyGetRuns = 0
+  let proxyGetPrototypeOfRuns = 0
+  const proxied = new Proxy({ runner: { handle: 'p' }, connector: { enabled: true }, runnerEvidence: { e: 1 } }, {
+    get(target, prop, receiver) { proxyGetRuns += 1; return Reflect.get(target, prop, receiver) },
+    getPrototypeOf() { proxyGetPrototypeOfRuns += 1; return Object.prototype }
+  })
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => proxied }), {}, 'proxy-wrapped providers must fail closed without reading through the trap')
+  assert.equal(proxyGetRuns, 0)
+  assert.equal(proxyGetPrototypeOfRuns, 0)
+
+  // A getPrototypeOf-throwing Proxy must also fail closed with zero trap runs.
+  const throwingProxyRuns = { get: 0, getPrototypeOf: 0, getOwnPropertyDescriptor: 0 }
+  const throwingProxy = new Proxy({ runner: { handle: 't' }, connector: { enabled: true }, runnerEvidence: { e: 1 } }, {
+    get(target, prop, receiver) { throwingProxyRuns.get += 1; return Reflect.get(target, prop, receiver) },
+    getPrototypeOf() { throwingProxyRuns.getPrototypeOf += 1; throw new Error('getPrototypeOf trap must not run') },
+    getOwnPropertyDescriptor() { throwingProxyRuns.getOwnPropertyDescriptor += 1; throw new Error('descriptor trap must not run') }
+  })
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => throwingProxy }), {}, 'getPrototypeOf-throwing proxies must fail closed')
+  assert.deepEqual(throwingProxyRuns, { get: 0, getPrototypeOf: 0, getOwnPropertyDescriptor: 0 })
+
+  // A revoked Proxy must fail closed without any trap or reflective error.
+  const { proxy: revokedProxy, revoke } = Proxy.revocable({ runner: { handle: 'r2' }, connector: { enabled: true }, runnerEvidence: { e: 1 } }, {})
+  revoke()
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => revokedProxy }), {}, 'revoked proxies must fail closed')
+
+  // A Proxy hiding inside the connector must also fail closed without traps.
+  let connectorProxyRuns = 0
+  let connectorProxyPrototypeOfRuns = 0
+  const connectorProxy = new Proxy({ enabled: true }, {
+    get(target, prop, receiver) { connectorProxyRuns += 1; return Reflect.get(target, prop, receiver) },
+    getPrototypeOf() { connectorProxyPrototypeOfRuns += 1; return Object.prototype }
+  })
+  const connectorWrapped = { runner: { handle: 'cw' }, connector: connectorProxy, runnerEvidence: { e: 1 } }
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => connectorWrapped }), {
+    runner: connectorWrapped.runner,
+    connector: undefined,
+    runnerEvidenceProvider: connectorWrapped.runnerEvidence
+  }, 'a Proxy connector must be dropped without triggering its traps')
+  assert.equal(connectorProxyRuns, 0)
+  assert.equal(connectorProxyPrototypeOfRuns, 0)
+
+  // A getPrototypeOf-throwing Proxy inside the connector must fail closed with
+  // zero trap invocations; runner and evidence stay projected.
+  const throwingConnectorRuns = { getPrototypeOf: 0 }
+  const throwingConnector = new Proxy({ enabled: true }, {
+    getPrototypeOf() { throwingConnectorRuns.getPrototypeOf += 1; throw new Error('connector getPrototypeOf trap must not run') }
+  })
+  const throwingConnectorWrapped = { runner: { handle: 'tc' }, connector: throwingConnector, runnerEvidence: { e: 1 } }
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => throwingConnectorWrapped }), {
+    runner: throwingConnectorWrapped.runner,
+    connector: undefined,
+    runnerEvidenceProvider: throwingConnectorWrapped.runnerEvidence
+  }, 'a getPrototypeOf-throwing Proxy connector must be dropped fail-closed')
+  assert.deepEqual(throwingConnectorRuns, { getPrototypeOf: 0 })
+
+  // A revoked Proxy inside the connector must also fail closed without error.
+  const { proxy: revokedConnector, revoke: revokeConnector } = Proxy.revocable({ enabled: true }, {})
+  revokeConnector()
+  const revokedConnectorWrapped = { runner: { handle: 'rc' }, connector: revokedConnector, runnerEvidence: { e: 1 } }
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => revokedConnectorWrapped }), {
+    runner: revokedConnectorWrapped.runner,
+    connector: undefined,
+    runnerEvidenceProvider: revokedConnectorWrapped.runnerEvidence
+  }, 'a revoked Proxy connector must be dropped without reflective error')
+
+  // Class instances (non-plain prototype) must fail closed.
+  class FakeRunner { constructor() { this.handle = 'class-runner' } }
+  const classRecord = Object.create(Object.getPrototypeOf(new FakeRunner()))
+  Object.defineProperty(classRecord, 'runner', { value: { handle: 'class-runner' }, enumerable: true })
+  Object.defineProperty(classRecord, 'connector', { value: { enabled: true }, enumerable: true })
+  Object.defineProperty(classRecord, 'runnerEvidence', { value: { e: 1 }, enumerable: true })
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => classRecord }), {}, 'class-backed providers must fail closed')
+
+  // Inherited own-data fields: a provider with a non-plain prototype (inheriting
+  // from another record) must fail closed entirely; nothing inherited can leak.
+  const parentRecord = { runner: { handle: 'inherited-runner' } }
+  const inherited = Object.create(parentRecord)
+  Object.defineProperty(inherited, 'connector', { value: { enabled: true }, enumerable: true })
+  Object.defineProperty(inherited, 'runnerEvidence', { value: { e: 1 }, enumerable: true })
+  const inheritedResult = mod.resolveProjectFoundationHostOptions({ get: () => inherited })
+  assert.deepEqual(inheritedResult, {}, 'a provider whose prototype is another record must fail closed without projecting inherited fields')
+
+  // Null-prototype plain records are accepted and project fully.
+  const nullProto = Object.create(null)
+  nullProto.runner = { handle: 'null-runner' }
+  nullProto.connector = { enabled: true }
+  nullProto.runnerEvidence = { e: 1 }
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => nullProto }), {
+    runner: nullProto.runner,
+    connector: nullProto.connector,
+    runnerEvidenceProvider: nullProto.runnerEvidence
+  }, 'null-prototype plain records remain a supported provider shape')
+
+  // Connector must itself be a plain own-data record with own enabled === true.
+  const getterConnector = {}
+  let enabledGetterRuns = 0
+  Object.defineProperty(getterConnector, 'enabled', { enumerable: true, get() { enabledGetterRuns += 1; return true } })
+  const getterConnectorRecord = { runner: { handle: 'r' }, connector: getterConnector, runnerEvidence: { e: 1 } }
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => getterConnectorRecord }), {
+    runner: getterConnectorRecord.runner,
+    connector: undefined,
+    runnerEvidenceProvider: getterConnectorRecord.runnerEvidence
+  }, 'connector.enabled must be an own data value, never a triggered accessor')
+  assert.equal(enabledGetterRuns, 0)
+  const inheritedEnabled = Object.create({ enabled: true })
+  const inheritedEnabledRecord = { runner: { handle: 'r' }, connector: inheritedEnabled, runnerEvidence: { e: 1 } }
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => inheritedEnabledRecord }), {
+    runner: inheritedEnabledRecord.runner,
+    connector: undefined,
+    runnerEvidenceProvider: inheritedEnabledRecord.runnerEvidence
+  }, 'connector.enabled must be an own descriptor, never inherited')
 })

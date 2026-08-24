@@ -17,14 +17,14 @@ npm run release:publish -- run --version <package.json 中的版本>
 npm run release:publish -- status --version <package.json 中的版本>
 ```
 
-状态保存在 `.release-state/v<version>-publish.json`，`packagingMode` 固定为 `github-actions-only`。发布器固定执行：本地源码/安全门禁（删除并拒绝 `dist`，不打包）→ 不可变 Tag → GitHub Actions 全平台云构建 → 私有 draft 云端恢复/公开 → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。旧 `local-windows` 状态绝不折算成新门禁成功；恢复时记录的 runId 必须重新匹配精确 workflow 名称/路径、事件、提交和 ref。每次实际进入 stable 提升前都会重新检查两云 18 项资产，第二次 CNB 同步才使用 metadata-only 模式，只校验并同步三个 stable feed，不重复传输 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
+状态保存在 `.release-state/v<version>-publish.json`，`packagingMode` 固定为 `github-actions-only`。从 `v1.0.44` 起发布器固定执行：本地源码/安全门禁（删除并拒绝 `dist`，不打包）→ 候选提交快进到 `main` → GitHub Actions 按精确 `source_revision` 完成 Windows/macOS/Linux 构建、iOS 模拟器测试、三份桌面制品归档及 previous-stable→candidate Windows 安装/升级/自检/卸载 → **全部成功后才创建唯一不可变 Tag** → 恢复工作流直接消费前述同一 run 的 Actions 制品并公开 draft → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。`release.yml` 不再监听产品 Tag，因此 Tag push 不会重复构建桌面包。旧 `local-windows` 状态绝不折算成新门禁成功；恢复时记录的 runId 必须重新匹配精确 workflow ID/名称/路径、事件、持久化 requestId 对应的 `display_title`、提交、ref、结论、成功 jobs 和制品集合；GitHub REST run 对象没有 `inputs`，不得把不存在的字段当身份依据。每次实际进入 stable 提升前都会重新检查两云 18 项资产，第二次 CNB 同步才使用 metadata-only 模式，只校验并同步三个 stable feed，不重复传输 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
 
 后文章节是发布器和工作流的安全契约及故障排查资料，不是让会话绕过发布器逐条手工执行的操作清单。完整信任边界、状态迁移和竞态分析见 `docs/CLOUD-RELEASE-PIPELINE.zh-CN.md`。
 
 ## 1. 默认安全原则
 
 - 所有本地编排默认只验证，不上传：`npm run release:orchestrate -- run --through verify`。
-- 只有干净、已验证的同一提交可以创建 Tag；Tag、GitHub Release、组件资产和 Android 正式 APK一经公开不得原地替换。
+- 只有干净、已验证且同一轮云构建/测试完整成功的精确提交可以创建 Tag；Tag 创建后永不移动或重建，GitHub Release、组件资产和 Android 正式 APK 一经公开也不得原地替换。
 - `release-manifest.json` 在新资产全部存在前继续指向上一健康版本，避免公开空链接。
 - v1.0.29 是生产组件更新的完整 Bootstrap 引导包。v1.0.25 不修改、不补发组件源。
 - Android 只允许长期 release 证书；debug、未签名、包名/版本/指纹漂移时工作流必须失败。
@@ -33,7 +33,7 @@ npm run release:publish -- status --version <package.json 中的版本>
 
 ## 2. 本地源码编排与可选开发者复现
 
-状态保存在被 Git 忽略的 `.release-state/v<version>.json`。每一阶段开始、成功或失败都原子写入；再次运行只会跳过**同一个干净 Git 提交**的已成功阶段。提交哈希变化会自动清空旧阶段，存在已跟踪或未跟踪改动时直接拒绝编排；重置某阶段也会级联重置所有下游阶段。统一发布器只调用到 `--through verify`；下面的 `windows` 阶段只供开发者手工复现，不是正式发布输入，也不得由统一发布器调用。
+状态保存在被 Git 忽略的 `.release-state/v<version>.json`。每一阶段开始、成功或失败都原子写入；再次运行只会跳过**同一个干净 Git 提交**且重新验证远端证据后的已成功阶段。提交哈希变化不会无条件清空状态：只有尚无任何 Tag/Release/CNB/stable 副作用、旧云 run 已终止、版本不变且新提交安全快进时，统一发布器才按第 3 节规则保留审计后重置候选阶段；否则直接拒绝。存在已跟踪或未跟踪改动时也拒绝编排。统一发布器只调用到 `--through verify`；下面的 `windows` 阶段只供开发者手工复现，不是正式发布输入，也不得由统一发布器调用。
 
 ```powershell
 # 从 lock 冷安装；Windows 的 node-gyp 必须能找到真实 Python 3（必要时先设置 $env:PYTHON）
@@ -75,12 +75,12 @@ macOS 桌面包按显式无签名契约构建：`package.json` 的 `build.mac.id
 无签名 macOS 产物仍需通过：双架构（x64/arm64）构建、打包后自检、DMG/ZIP 内应用结构核验（release.yml 的 `Verify unsigned macOS packages` 步骤）。
 
 1. `git diff --check`，确认工作树干净且本地 `npm run verify`、`npm run verify:release` 均成功；统一发布器删除遗留 `dist` 并在源码门禁后断言它仍不存在。
-2. 快进合并验证提交到 `main`，先推送 `main`，再创建并推送唯一 Tag `v<version>`。
-3. `.github/workflows/release.yml` 把 Tag、checkout HEAD 与精确 `productRevision` 绑定，在 Windows、macOS、Linux 分别重新安装锁定依赖、运行全部门禁并生成正式包。
-4. Windows 云端必须完成 unpacked 自检、真实组件健康/回滚测试、Inno 安装/检查/卸载冒烟；macOS 必须分别完成 Intel/Apple Silicon 原生架构、打包后自检和显式未签名 DMG/ZIP 结构验证。
-5. 同一 Release 工作流还必须完成 iPhone Simulator 与 iPad Simulator 测试；发布聚合任务同时等待桌面矩阵和两个模拟器门禁。
-6. 聚合任务先确认 Tag 下不存在任何 Release，再创建 **draft**、生成 `SHA256SUMS.txt` 并上传全部桌面资产；同名资产永不覆盖。
-7. 工作流从 draft 重新下载全部资产，核对精确文件集合和 SHA-256 后才一次性改为公开。任一矩阵/上传/复核失败时只留下非公开 draft，不得手动上传未验证替代品；处理失败 draft 时必须先查明原因。
+2. 快进合并验证提交到 `main`，但此时**不创建 Tag**。发布器从 `main` 调度 `.github/workflows/release.yml`，输入候选版本标签和精确 40 位 `source_revision`；checkout HEAD、`GITHUB_SHA`、输入 SHA 与 `package.json` 版本必须一致，且候选 Tag 必须尚不存在。
+3. Windows、macOS、Linux 分别重新安装锁定依赖、运行全部门禁并生成正式包；Windows 云端必须完成 unpacked 自检、真实组件健康/回滚测试、Inno 安装/检查/卸载冒烟，macOS 必须分别完成 Intel/Apple Silicon 原生架构、打包后自检和显式未签名 DMG/ZIP 结构验证。
+4. 同一候选工作流还必须完成 iPhone Simulator 与 iPad Simulator 测试，并直接下载当前 run 的 Windows artifact，绑定签名 previous stable，完成旧版安装/self-test、保留 profile 的原地升级、新版 self-test 与卸载；这一步不创建或读取 candidate Release/draft。发布器先持久化唯一 requestId 后立即 dispatch，只接受精确 workflow 路径/ID、`workflow_dispatch` 事件、`main` ref、精确 `display_title`、head SHA、成功结论、五个成功 job 以及未过期且归属同一 run、无额外 `desktop-*` 名称的 Windows/macOS/Linux 三份制品。
+5. 只有上述 run 整体成功后，发布器才把唯一 `v<version>` Tag 指向该 `source_revision`。正式 Tag 一旦创建绝不移动、删除或重建。
+6. 发布器随后创建精确私有 draft，并调度 `.github/workflows/recover-release-from-actions.yml`；它只从第 4 步记录的同一 `source_run_id` 下载 Actions 制品，不在本机中转、不重新构建，也不接受其他 run 的制品。
+7. 恢复工作流生成 `SHA256SUMS.txt`、按大小/digest 幂等补齐 draft，并从 draft 重新下载全部资产核对精确集合和 SHA-256 后才一次性公开。同名资产永不覆盖；任一上传/复核失败时只留下非公开 draft，不得手工上传替代品。
 
 GitHub CLI 必须由发布者本人登录；不得在聊天中发送密码、Token 或验证码：
 
@@ -90,7 +90,7 @@ gh run list --workflow release.yml --branch v1.0.29
 gh run watch <run-id> --exit-status
 ```
 
-如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。若失败来自该 Tag 对应产品源码或测试 fixture，而非六文件白名单内可兼容恢复的发布基础设施，则该 Tag 保持失败且不公开发布，修复后必须提升补丁版本并创建新 Tag；例如 `v1.0.41`、`v1.0.42` 两个候选 Tag 先后因托管 Runner 跨平台 fixture/竞态门禁失败而未发布（v1.0.42 本地 1200 项门禁与 Ubuntu/iOS 云端通过，Windows short-path fixture 与 macOS 并发 Git worktree 竞态失败），修复分别进入 `v1.0.42`、`v1.0.43`。统一发布器使用唯一 `request_id` 从既有 Tag 调度，并把来源 run 的 workflow path 与 `head_sha` 强绑定到 Tag 提交；恢复 draft 时逐个保留大小/digest 一致的资产、只补缺失项，因此上传中断后仍可续跑。可变 `release-retry/*` push 入口已移除；需要基础设施恢复时只能由统一发布器调度恢复工作流，云端会再次校验发布器修复提交相对产品 Tag 只改动六个白名单文件。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
+历史 `v1.0.41`、`v1.0.42`、`v1.0.43` Tag 与状态记录保持只读，不移动、不改写，也不把其已完成阶段重新解释为新顺序；它们曾因托管 Runner 跨平台 fixture/竞态门禁失败而未发布（v1.0.42 本地 1200 项门禁与 Ubuntu/iOS 云端通过，Windows short-path fixture 与 macOS 并发 Git worktree 竞态失败；v1.0.43 本地官方门禁 1202 tests/1200 pass/2 skip/0 fail 通过，Ubuntu job 在 CAS concurrent finalize 的 POSIX rename/inode race 失败）。从 `v1.0.44` 起，云端失败发生在 Tag 之前，因此不会留下失败 Tag：在版本号不变、旧 run 已终止、新提交是旧候选的安全快进，并且本地/远端 Tag、GitHub Release（含 draft）、CNB Release/资产、stable 提升均不存在时，发布器可以把同一个版本候选重新绑定到新 SHA；它会保留旧 run、结论和阶段快照作为 `candidateAttempts` 审计记录，并仅重置候选门禁/构建阶段。CNB absence 不读取会对不存在版本也返回 200 的 SPA release 页面，而是对精确 18 项规范 download URL 做 15 秒超时的有界 HEAD：仅 **18 项全部返回 404** 才证明不存在，任一 2xx/3xx 是副作用，410、5xx、网络异常或观测数量不是 18 均为 unknown 并 fail closed。任一条件不能证明或任何公开副作用已发生都 fail closed；启动时已有本地或远端 Tag 即使候选 run 成功也默认视为外部 Tag 并拒绝。唯一例外是 `immutable-tag` 阶段已在 state 中预先 checkpoint 同一 `sourceRevision`、`requestId`、`runId` 和操作类型的窄授权标记，随后发布器执行本地 create 或远端 push、但在完成阶段 checkpoint 前崩溃的窗口；恢复仍须重新验证同 SHA 的本地门禁、完整成功 run、五个 jobs 与制品证据。授权窗口不允许不同 SHA、不同 run、缺少本地 Tag 的远端采用或任何 Tag 移动。Tag 创建后仍维持绝对不可变，只允许恢复同一成功 source run 的制品；恢复 draft 时逐个保留大小/digest 一致的资产、只补缺失项，因此上传中断后仍可续跑。可变 `release-retry/*` push 入口已移除；如 Tag 后必须修复恢复基础设施，只能由统一发布器调度恢复工作流，云端会再次校验发布器修复提交相对产品 Tag 只改动六个白名单文件。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
 
 ## 4. 正式 Android
 

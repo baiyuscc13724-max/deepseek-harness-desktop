@@ -11,12 +11,16 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const { validateAndVerifyDesktopReleaseManifest } = require('../electron/bridge/desktop-release-contract.cjs')
 const {
+  assertCandidateRebindAllowed,
+  assertExistingTagRecoveryAllowed,
   canReattachPreferredDraft,
+  classifyCnbAssetStatuses,
   isExactDetachedDraft,
   matchesWorkflowRunIdentity,
   normalizePublisherPackagingState,
   normalizeReleaseBody,
   selectReleaseForTag,
+  selectUniqueWorkflowRunByDisplayTitle,
   validateCnbMirrorObservations,
   validateCompletedPhaseEvidence,
   validateGithubReleaseAgainstManifest
@@ -37,11 +41,10 @@ const git = String(process.env.HARNESS_RELEASE_GIT || (existsSync(bundledGit) ? 
 const npmCli = String(process.env.npm_execpath || '').trim()
 const PACKAGING_MODE = 'github-actions-only'
 const LOCAL_GATE_PHASE = 'local-source-gates'
-const DESKTOP_DISCOVERY_TIMEOUT_MS = 5 * 60 * 1000
 const PHASES = [
   LOCAL_GATE_PHASE,
-  'immutable-tag',
   'desktop-cloud-builds',
+  'immutable-tag',
   'desktop-publication',
   'signed-android',
   'signed-components',
@@ -55,10 +58,11 @@ const BUILD_JOBS = [
   'Build windows-latest',
   'Build macos-latest',
   'Build ubuntu-latest',
-  'Validate iPhone and iPad simulators'
+  'Validate iPhone and iPad simulators',
+  'Verify Windows candidate upgrade and installation'
 ]
 const WORKFLOWS = Object.freeze({
-  desktop: Object.freeze({ workflowName: 'Cloud Build & Release Desktop', workflowPath: '.github/workflows/release.yml', events: ['push', 'workflow_dispatch'] }),
+  desktop: Object.freeze({ workflowName: 'Cloud Build & Release Desktop', workflowPath: '.github/workflows/release.yml', events: ['workflow_dispatch'] }),
   recovery: Object.freeze({ workflowName: 'Recover Release From Verified Actions Artifacts', workflowPath: '.github/workflows/recover-release-from-actions.yml', events: ['workflow_dispatch'] }),
   android: Object.freeze({ workflowName: 'Publish Signed Android Mobile', workflowPath: '.github/workflows/android-mobile-release.yml', events: ['push', 'workflow_dispatch'] }),
   components: Object.freeze({ workflowName: 'Publish Verified Production Components', workflowPath: '.github/workflows/publish-production-components.yml', events: ['workflow_dispatch'] })
@@ -93,6 +97,14 @@ function repositorySlug(value) {
 
 function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex')
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  try {
+    return await fetch(url, { ...options, signal: AbortSignal.timeout(15_000) })
+  } catch (error) {
+    throw new Error(`Timed bounded fetch failed for ${url}: ${error?.message || error}`)
+  }
 }
 
 function execute(program, args, options = {}) {
@@ -192,13 +204,15 @@ async function readState() {
   catch (error) {
     if (error?.code !== 'ENOENT') throw error
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       packagingMode: PACKAGING_MODE,
+      releaseOrder: 'cloud-build-before-tag',
       version,
       tag,
       repo,
       sourceRevision: '',
       productRevision: '',
+      candidateAttempts: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       phases: {}
@@ -316,10 +330,21 @@ function localTagRevision() {
 }
 
 function remoteTagRevision() {
-  const rows = gitCapture(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`]).split(/\r?\n/u).filter(Boolean)
+  const result = spawnSync(git, ['ls-remote', '--exit-code', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
+    cwd: root,
+    env: gitEnvironment(),
+    encoding: 'utf8',
+    shell: false
+  })
+  if (result.error) throw result.error
+  const stdout = String(result.stdout || '')
+  const stderr = String(result.stderr || '')
+  if (result.status === 2 && stdout.trim() === '' && stderr.trim() === '') return ''
+  if (result.status !== 0) throw new Error(`Unable to determine exact remote Tag state (git ls-remote status ${result.status}).`)
+  const rows = stdout.split(/\r?\n/u).filter(Boolean)
   const peeled = rows.find(row => row.endsWith(`refs/tags/${tag}^{}`))
   const direct = rows.find(row => row.endsWith(`refs/tags/${tag}`))
-  if (!peeled && !direct) return ''
+  if (!peeled && !direct) throw new Error('Remote Tag lookup succeeded without the exact requested ref.')
   if (peeled) return peeled.split(/\s+/u)[0].toLowerCase()
   const object = direct.split(/\s+/u)[0]
   return gitCapture(['rev-list', '-n', '1', object]).toLowerCase()
@@ -449,9 +474,16 @@ function workflowRun(runId) {
   if (!Number.isSafeInteger(Number(api?.workflow_id)) || Number(api.workflow_id) !== Number(workflowMetadata?.id) || !workflowPath || runWorkflowPath !== workflowPath) {
     throw new Error(`GitHub workflow metadata disagreement for run ${runId}.`)
   }
+  const apiDisplayTitle = String(api?.display_title || '')
+  const viewDisplayTitle = String(view?.displayTitle || '')
+  if (!apiDisplayTitle || !viewDisplayTitle || apiDisplayTitle !== viewDisplayTitle) {
+    throw new Error(`GitHub workflow run identity disagreement for ${runId}: displayTitle`)
+  }
+  const displayTitle = apiDisplayTitle
   const run = {
     ...view,
     databaseId: Number(api?.id || view?.databaseId || 0),
+    displayTitle,
     workflowName: String(workflowMetadata?.name || ''),
     workflowPath,
     event: String(api?.event || view?.event || ''),
@@ -471,6 +503,31 @@ function productWorkflowIdentity(workflow) {
   return { ...workflow, headSha: stateProductRevision, headBranch: tag }
 }
 
+function candidateDesktopWorkflowIdentity(sourceRevision, requestId) {
+  if (!requestId) throw new Error('Candidate workflow identity requires its persisted request id.')
+  return {
+    ...WORKFLOWS.desktop,
+    headSha: sourceRevision,
+    headBranch: 'main',
+    displayTitle: `Candidate ${tag} @ ${sourceRevision} · ${requestId}`
+  }
+}
+
+function desktopBuildArtifacts(runId) {
+  const response = ghJson(['api', `repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`])
+  const artifacts = Array.isArray(response?.artifacts) ? response.artifacts : []
+  const expected = ['desktop-macos-latest', 'desktop-ubuntu-latest', 'desktop-windows-latest']
+  const exact = artifacts.filter(artifact => String(artifact?.name || '').startsWith('desktop-'))
+  const names = exact.map(artifact => artifact.name).sort()
+  if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error('Desktop build run lacks the exact three platform artifacts or contains an extra desktop artifact.')
+  for (const artifact of exact) {
+    if (!Number.isSafeInteger(Number(artifact.id)) || Number(artifact.size_in_bytes) <= 0 || artifact.expired === true || Number(artifact.workflow_run?.id || 0) !== Number(runId)) {
+      throw new Error(`Desktop build artifact identity is invalid: ${artifact.name}`)
+    }
+  }
+  return exact
+}
+
 function reusableWorkflowRun(runId, expected) {
   if (!runId || !expected) return null
   try {
@@ -482,11 +539,11 @@ function reusableWorkflowRun(runId, expected) {
   }
 }
 
-function reusableDesktopBuildRun(runId) {
-  if (!runId) return null
+function reusableDesktopBuildRun(runId, requestId = stateDesktopRequestId) {
+  if (!runId || !requestId) return null
   try {
     const run = workflowRun(runId)
-    if (!matchesWorkflowRunIdentity(run, productWorkflowIdentity(WORKFLOWS.desktop))) return null
+    if (!matchesWorkflowRunIdentity(run, candidateDesktopWorkflowIdentity(stateProductRevision, requestId))) return null
     const jobs = new Map((run.jobs || []).map(job => [job.name, job]))
     const required = BUILD_JOBS.map(name => jobs.get(name))
     if (run.status === 'completed') return required.every(job => job?.conclusion === 'success') ? run : null
@@ -497,12 +554,13 @@ function reusableDesktopBuildRun(runId) {
   }
 }
 
-function requireDesktopBuildEvidence(runId) {
-  const run = reusableDesktopBuildRun(Number(runId || 0))
+function requireDesktopBuildEvidence(runId, requestId = stateDesktopRequestId) {
+  const run = reusableDesktopBuildRun(Number(runId || 0), requestId)
   const jobs = new Map((run?.jobs || []).map(job => [job.name, job]))
-  if (!run || !BUILD_JOBS.every(name => jobs.get(name)?.conclusion === 'success')) {
-    throw new Error('Checkpointed desktop phase lacks exact successful immutable build evidence.')
+  if (!run || run.status !== 'completed' || run.conclusion !== 'success' || !BUILD_JOBS.every(name => jobs.get(name)?.conclusion === 'success')) {
+    throw new Error('Checkpointed desktop phase lacks exact successful candidate build evidence.')
   }
+  desktopBuildArtifacts(run.databaseId)
   return run
 }
 
@@ -514,22 +572,51 @@ function requireSuccessfulWorkflowEvidence(runId, expected, label) {
   return run
 }
 
-async function waitForDesktopBuildDiscovery() {
-  const discoveryStarted = Date.now()
-  const discoverable = { workflowName: WORKFLOWS.desktop.workflowName, events: WORKFLOWS.desktop.events, headSha: stateProductRevision, headBranch: tag }
-  while (Date.now() - discoveryStarted < DESKTOP_DISCOVERY_TIMEOUT_MS) {
-    const candidates = workflowRuns('release.yml')
-      .filter(run => matchesWorkflowRunIdentity(run, discoverable))
-      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-    for (const candidate of candidates) {
-      const reusable = reusableDesktopBuildRun(Number(candidate.databaseId))
-      if (reusable) return reusable
-    }
+function workflowRunByExactIdentity(file, expected, label) {
+  const candidate = selectUniqueWorkflowRunByDisplayTitle(workflowRuns(file), expected.displayTitle, label)
+  if (!candidate) return null
+  const exact = workflowRun(Number(candidate.databaseId))
+  if (!matchesWorkflowRunIdentity(exact, expected)) throw new Error(`${label} request id resolved to mismatched workflow metadata.`)
+  return exact
+}
+
+function candidateRunByRequestId(requestId) {
+  return workflowRunByExactIdentity('release.yml', candidateDesktopWorkflowIdentity(stateProductRevision, requestId), 'Candidate')
+}
+
+async function waitForExactWorkflowDiscovery(file, expected, label) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < 60_000) {
+    const run = workflowRunByExactIdentity(file, expected, label)
+    if (run) return run
     await sleep()
   }
-  const runId = await dispatchWorkflow('release.yml', [['tag', tag], ['product_revision', stateProductRevision]])
-  const dispatched = reusableDesktopBuildRun(runId)
-  if (!dispatched) throw new Error('Dispatched desktop workflow identity does not match the immutable release source.')
+  throw new Error(`Previously dispatched ${label.toLowerCase()} ${expected.displayTitle} is not discoverable by its exact display title; refusing duplicate dispatch.`)
+}
+
+async function waitForDesktopBuildDiscovery(state, requestId) {
+  const phaseState = state.phases['desktop-cloud-builds'] || {}
+  if (phaseState.dispatchAttemptedAt) {
+    const discoveryStarted = Date.now()
+    while (Date.now() - discoveryStarted < 5 * 60_000) {
+      const resumed = candidateRunByRequestId(requestId)
+      if (resumed) return resumed
+      await sleep()
+    }
+    await checkpoint(state, 'desktop-cloud-builds', {
+      dispatchAttemptedAt: new Date().toISOString(),
+      redispatchCount: Number(phaseState.redispatchCount || 0) + 1
+    })
+  } else {
+    // The request id is fresh and unique: persist the write-ahead marker and
+    // dispatch immediately rather than delaying the first attempt for discovery.
+    await checkpoint(state, 'desktop-cloud-builds', { dispatchAttemptedAt: new Date().toISOString() })
+  }
+  const runId = await dispatchWorkflow('release.yml', [['tag', tag], ['source_revision', stateProductRevision]], 'main', requestId)
+  const dispatched = workflowRun(runId)
+  if (!matchesWorkflowRunIdentity(dispatched, candidateDesktopWorkflowIdentity(stateProductRevision, requestId))) {
+    throw new Error('Dispatched desktop workflow identity does not match its persisted candidate request id.')
+  }
   return dispatched
 }
 
@@ -638,13 +725,14 @@ async function ensureExactDraft(preferredReleaseId = 0) {
   return release
 }
 
-async function dispatchWorkflow(file, fields = [], ref = tag) {
-  const requestId = `${tag}-${path.basename(file, path.extname(file))}-${randomUUID()}`
+async function dispatchWorkflow(file, fields = [], ref = tag, persistedRequestId = '') {
+  const requestId = persistedRequestId || `${tag}-${path.basename(file, path.extname(file))}-${randomUUID()}`
   const startedAt = Date.now()
   ghRun(['workflow', 'run', file, '--repo', repo, '--ref', ref, ...[...fields, ['request_id', requestId]].flatMap(([key, value]) => ['-f', `${key}=${value}`])])
-  while (Date.now() - startedAt < 3 * 60 * 1000) {
-    const run = workflowRuns(file).find(item => item.event === 'workflow_dispatch' && item.displayTitle?.includes(requestId))
-    if (run) return Number(run.databaseId)
+  while (Date.now() - startedAt < 5 * 60 * 1000) {
+    const matches = workflowRuns(file).filter(item => item.event === 'workflow_dispatch' && item.displayTitle?.includes(requestId))
+    if (matches.length > 1) throw new Error(`Dispatched workflow identity is ambiguous for ${file} (${requestId}).`)
+    if (matches.length === 1) return Number(matches[0].databaseId)
     await sleep()
   }
   throw new Error(`Unable to discover uniquely dispatched workflow ${file} (${requestId}).`)
@@ -807,7 +895,7 @@ async function finalRemoteCheck() {
   for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64']) {
     const github = `https://raw.githubusercontent.com/${repo}/main/component-feeds/stable/${target}.json`
     const cnb = `https://cnb.cool/${repo}/-/git/raw/main/component-feeds/stable/${target}.json`
-    const [githubResponse, cnbResponse] = await Promise.all([fetch(github), fetch(cnb)])
+    const [githubResponse, cnbResponse] = await Promise.all([fetchWithTimeout(github), fetchWithTimeout(cnb)])
     if (!githubResponse.ok || !cnbResponse.ok) throw new Error(`Stable feed HTTP failure: ${target}`)
     const [githubBytes, cnbBytes] = await Promise.all([githubResponse.arrayBuffer(), cnbResponse.arrayBuffer()])
     if (!Buffer.from(githubBytes).equals(Buffer.from(cnbBytes))) throw new Error(`GitHub/CNB stable feed mismatch: ${target}`)
@@ -848,6 +936,101 @@ async function acquirePublicationLock() {
 }
 
 let stateProductRevision = ''
+let stateDesktopRequestId = ''
+
+function revisionHasVersion(revision) {
+  try { return JSON.parse(gitCapture(['show', `${revision}:package.json`])).version === version } catch { return false }
+}
+
+function revisionFastForwards(fromRevision, toRevision) {
+  return spawnSync(git, ['merge-base', '--is-ancestor', fromRevision, toRevision], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false }).status === 0
+}
+
+async function candidateSideEffects() {
+  const githubReleaseExists = releaseList().some(release => release?.tag_name === tag || release?.name === `Harness Desktop ${tag}`)
+  const cnbStatuses = await Promise.all(expectedAllNames().map(async name => {
+    const encoded = encodeURIComponent(name)
+    const response = await fetch(`https://cnb.cool/${repo}/-/releases/download/${tag}/${encoded}`, {
+      method: 'HEAD',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(15_000)
+    })
+    return response.status
+  })).catch(error => { throw new Error(`Unable to prove CNB asset absence before candidate mutation: ${error?.message || error}`) })
+  const cnbReleaseExists = classifyCnbAssetStatuses(cnbStatuses)
+  let stablePromoted = false
+  for (const host of [`https://raw.githubusercontent.com/${repo}/main`, `https://cnb.cool/${repo}/-/git/raw/main`]) {
+    for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64']) {
+      const response = await fetchWithTimeout(`${host}/component-feeds/stable/${target}.json`)
+      if (!response.ok) throw new Error(`Unable to prove stable feed absence before candidate rebind: ${host}/${target}`)
+      const feed = await response.json()
+      if (feed?.releaseVersion === version) stablePromoted = true
+    }
+  }
+  return { githubReleaseExists, cnbReleaseExists, stablePromoted }
+}
+
+async function rebindCandidateRevision(state, currentHead) {
+  const previous = String(state.sourceRevision || '').toLowerCase()
+  if (!previous || previous === currentHead) return false
+  const phaseState = state.phases?.['desktop-cloud-builds'] || {}
+  const oldRequestId = String(phaseState.requestId || '')
+  let oldRunTerminal = false
+  if (phaseState.runId && oldRequestId) {
+    const oldRun = workflowRun(Number(phaseState.runId))
+    oldRunTerminal = matchesWorkflowRunIdentity(oldRun, candidateDesktopWorkflowIdentity(previous, oldRequestId)) && oldRun.status === 'completed'
+  } else {
+    const possibleRuns = workflowRuns('release.yml').filter(run => (
+      run.event === 'workflow_dispatch' && run.headBranch === 'main' && String(run.headSha || '').toLowerCase() === previous
+    ))
+    const expected = oldRequestId ? candidateDesktopWorkflowIdentity(previous, oldRequestId) : null
+    const exactCandidate = expected ? possibleRuns.find(run => run.displayTitle === expected.displayTitle) : null
+    if (exactCandidate) {
+      const exact = workflowRun(Number(exactCandidate.databaseId))
+      oldRunTerminal = matchesWorkflowRunIdentity(exact, expected) && exact.status === 'completed'
+    } else {
+      oldRunTerminal = possibleRuns.length === 0 && !phaseState.dispatchAttemptedAt
+    }
+  }
+  const sideEffects = await candidateSideEffects()
+  assertCandidateRebindAllowed(state, {
+    localTagExists: Boolean(localTagRevision()),
+    remoteTagExists: Boolean(remoteTagRevision()),
+    ...sideEffects,
+    oldRunTerminal,
+    sameVersion: revisionHasVersion(previous) && revisionHasVersion(currentHead),
+    fastForward: revisionFastForwards(previous, currentHead)
+  })
+  state.candidateAttempts ||= []
+  state.candidateAttempts.push({
+    sourceRevision: previous,
+    invalidatedAt: new Date().toISOString(),
+    desktopRunId: Number(phaseState.runId || 0) || null,
+    desktopConclusion: phaseState.sourceRunConclusion || phaseState.conclusion || null,
+    phases: structuredClone(state.phases || {})
+  })
+  state.sourceRevision = currentHead
+  state.productRevision = ''
+  state.phases = {}
+  await saveState(state)
+  console.log(`Safely rebound unpublished ${tag} candidate from ${previous} to ${currentHead}.`)
+  return true
+}
+
+function requireExistingTagCandidateEvidence(state, tagRevision, evidence) {
+  const desktop = state.phases?.['desktop-cloud-builds']
+  if (
+    state.sourceRevision !== tagRevision ||
+    state.phases?.[LOCAL_GATE_PHASE]?.status !== 'completed' ||
+    desktop?.status !== 'completed' ||
+    !desktop.requestId ||
+    !desktop.runId
+  ) throw new Error(`Existing ${tag} lacks completed pre-Tag candidate evidence.`)
+  assertExistingTagRecoveryAllowed(state, { ...evidence, tagRevision })
+  stateProductRevision = tagRevision
+  stateDesktopRequestId = String(desktop.requestId)
+  requireDesktopBuildEvidence(desktop.runId, stateDesktopRequestId)
+}
 
 async function publish() {
   assertVersion()
@@ -857,21 +1040,29 @@ async function publish() {
   await normalizePackagingState(state)
   const currentHead = gitCapture(['rev-parse', 'HEAD']).toLowerCase()
   const publishedTagRevision = remoteTagRevision()
+  const unpublishedLocalTagRevision = localTagRevision()
+  if (publishedTagRevision && unpublishedLocalTagRevision && publishedTagRevision !== unpublishedLocalTagRevision) {
+    throw new Error(`${tag} local and remote refs disagree; refusing recovery.`)
+  }
   if (state.productRevision && publishedTagRevision && state.productRevision !== publishedTagRevision) {
     throw new Error(`${tag} moved after publication state was recorded; refusing to continue.`)
   }
-  if (!state.productRevision && !publishedTagRevision && state.sourceRevision !== currentHead) {
-    if (Object.keys(state.phases || {}).length > 0) console.log(`Source revision changed before tagging; invalidating publication phases.`)
-    state.sourceRevision = currentHead
-    state.phases = {}
+  const observedTagRevision = publishedTagRevision || unpublishedLocalTagRevision
+  if (!state.productRevision && observedTagRevision) {
+    requireExistingTagCandidateEvidence(state, observedTagRevision, {
+      localTagExists: Boolean(unpublishedLocalTagRevision),
+      remoteTagExists: Boolean(publishedTagRevision)
+    })
+    state.productRevision = observedTagRevision
     await saveState(state)
   }
-  if (!state.productRevision && publishedTagRevision) {
-    state.productRevision = publishedTagRevision
-    state.sourceRevision ||= publishedTagRevision
-    await saveState(state)
+  if (!observedTagRevision) {
+    if (!state.sourceRevision) { state.sourceRevision = currentHead; await saveState(state) }
+    await rebindCandidateRevision(state, currentHead)
   }
-  stateProductRevision = state.productRevision || publishedTagRevision
+  stateProductRevision = state.productRevision || observedTagRevision || state.sourceRevision
+  stateDesktopRequestId = String(state.phases?.['desktop-cloud-builds']?.requestId || stateDesktopRequestId)
+  if (!/^[0-9a-f]{40}$/u.test(stateProductRevision)) throw new Error('Unable to resolve exact candidate source revision.')
 
   await phase(state, LOCAL_GATE_PHASE, async () => {
     assertClean()
@@ -880,77 +1071,138 @@ async function publish() {
     ghRun(['auth', 'status'])
     npmRun(['run', 'release:orchestrate', '--', 'run', '--version', version, '--through', 'verify'], { timeout: 30 * 60 * 1000 })
     if (existsSync(localDist)) throw new Error('Cloud-only packaging forbids local release artifacts during publisher source gates.')
-    return { packagingMode: PACKAGING_MODE, completedThrough: 'verify' }
+    return { packagingMode: PACKAGING_MODE, completedThrough: 'verify', sourceRevision: state.sourceRevision }
   })
+
+  const desktopPhase = await phase(state, 'desktop-cloud-builds', async () => {
+    assertClean()
+    if (localTagRevision() || remoteTagRevision()) throw new Error('Candidate cloud build must start before any product Tag exists.')
+    const { head, remoteMain } = assertMainFastForward()
+    if (head !== state.sourceRevision) throw new Error('Candidate source revision changed after local gates.')
+    if (remoteMain !== head) gitRun(['push', 'origin', 'HEAD:main'])
+    let requestId = String(state.phases['desktop-cloud-builds']?.requestId || '')
+    if (!requestId) {
+      requestId = `${tag}-desktop-${randomUUID()}`
+      await checkpoint(state, 'desktop-cloud-builds', { requestId, dispatchAttemptedAt: null, sourceRevision: state.sourceRevision })
+    }
+    stateDesktopRequestId = requestId
+    const stored = reusableDesktopBuildRun(Number(state.phases['desktop-cloud-builds']?.runId || 0), requestId)
+    const run = stored || await waitForDesktopBuildDiscovery(state, requestId)
+    await checkpoint(state, 'desktop-cloud-builds', { requestId, runId: Number(run.databaseId), url: run.url, sourceRevision: state.sourceRevision })
+    await waitForSuccessfulJobs(run.databaseId, BUILD_JOBS)
+    const completed = await waitForRun(run.databaseId)
+    const artifacts = desktopBuildArtifacts(run.databaseId)
+    return { requestId, runId: Number(run.databaseId), url: completed.url || run.url, conclusion: completed.conclusion, artifactIds: artifacts.map(artifact => Number(artifact.id)) }
+  }, {
+    validateCompleted: completed => { stateDesktopRequestId = String(completed.requestId || ''); requireDesktopBuildEvidence(completed.runId, stateDesktopRequestId) }
+  })
+  const desktopRunId = Number(desktopPhase.runId || state.phases['desktop-cloud-builds']?.runId)
 
   await phase(state, 'immutable-tag', async () => {
     assertClean()
-    const { head } = assertMainFastForward()
-    const existing = remoteTagRevision()
-    const local = localTagRevision()
-    if (existing && existing !== head) throw new Error(`${tag} already points to ${existing}; bump the version instead of moving the tag.`)
-    if (local && local !== head) throw new Error(`Local ${tag} points to ${local}; delete only the unpublished local tag or bump the version.`)
-    gitRun(['push', 'origin', 'HEAD:main'])
-    if (!local) gitRun(['tag', '-a', tag, '-m', `Harness Desktop ${version}`, head])
-    if (!existing) gitRun(['push', 'origin', `refs/tags/${tag}`])
-    state.productRevision = head
-    stateProductRevision = head
+    requireDesktopBuildEvidence(desktopRunId)
+    const sideEffects = await candidateSideEffects()
+    if (sideEffects.githubReleaseExists || sideEffects.cnbReleaseExists || sideEffects.stablePromoted) throw new Error('Publication side effect exists before immutable Tag creation.')
+    gitRun(['fetch', 'origin', 'main', '--tags'])
+    const remoteMain = gitCapture(['rev-parse', 'origin/main']).toLowerCase()
+    if (!revisionFastForwards(state.sourceRevision, remoteMain)) throw new Error('Validated candidate is no longer contained in origin/main.')
+    const existing = remoteTagRevision(), local = localTagRevision()
+    if (existing && existing !== state.sourceRevision) throw new Error(`${tag} already points elsewhere; the immutable tag cannot move.`)
+    if (local && local !== state.sourceRevision) throw new Error(`Local ${tag} points elsewhere; refusing to overwrite it.`)
+    if (existing || local) {
+      assertExistingTagRecoveryAllowed(state, {
+        tagRevision: existing || local,
+        localTagExists: Boolean(local),
+        remoteTagExists: Boolean(existing)
+      })
+    }
+    if (!local) {
+      await checkpoint(state, 'immutable-tag', { tagAuthorization: {
+        operation: 'create-local',
+        sourceRevision: state.sourceRevision,
+        requestId: stateDesktopRequestId,
+        runId: desktopRunId,
+        authorizedAt: new Date().toISOString()
+      } })
+      gitRun(['tag', '-a', tag, '-m', `Harness Desktop ${version}`, state.sourceRevision])
+    }
+    if (!existing) {
+      await checkpoint(state, 'immutable-tag', { tagAuthorization: {
+        operation: 'push-remote',
+        sourceRevision: state.sourceRevision,
+        requestId: stateDesktopRequestId,
+        runId: desktopRunId,
+        authorizedAt: new Date().toISOString()
+      } })
+      gitRun(['push', 'origin', `refs/tags/${tag}`])
+    }
+    state.productRevision = state.sourceRevision
+    stateProductRevision = state.sourceRevision
     await saveState(state)
-    return { productRevision: head }
+    return { productRevision: state.sourceRevision, desktopRunId }
+  }, {
+    validateCompleted: completed => {
+      requireDesktopBuildEvidence(completed.desktopRunId || desktopRunId)
+      const remote = remoteTagRevision()
+      if (!remote || remote !== state.productRevision) throw new Error('Immutable Tag evidence no longer matches the validated cloud build revision.')
+    }
   })
 
   stateProductRevision = state.productRevision || remoteTagRevision()
   if (!/^[0-9a-f]{40}$/u.test(stateProductRevision)) throw new Error('Unable to resolve immutable product revision.')
 
-  const desktopPhase = await phase(state, 'desktop-cloud-builds', async () => {
-    const stored = reusableDesktopBuildRun(Number(state.phases['desktop-cloud-builds']?.runId || 0))
-    const run = stored || await waitForDesktopBuildDiscovery()
-    await checkpoint(state, 'desktop-cloud-builds', { runId: Number(run.databaseId), url: run.url })
-    await waitForSuccessfulJobs(run.databaseId, BUILD_JOBS)
-    return { runId: Number(run.databaseId), url: run.url }
-  }, {
-    validateCompleted: completed => { requireDesktopBuildEvidence(completed.runId) }
-  })
-  const desktopRunId = Number(desktopPhase.runId || state.phases['desktop-cloud-builds']?.runId)
-
   await phase(state, 'desktop-publication', async () => {
-    const sourceRun = await waitForRunCompletion(desktopRunId)
+    const sourceRun = requireDesktopBuildEvidence(desktopRunId)
     await checkpoint(state, 'desktop-publication', { sourceRunId: desktopRunId, sourceRunConclusion: sourceRun.conclusion })
-    if (sourceRun.conclusion === 'success') {
-      const release = releaseForTag()
-      assertReleaseAssets(release, expectedDesktopNames(), { draft: false, allowAdditional: true })
-      return { releaseId: release.id, recoveryRunId: null, url: release.html_url }
-    }
     let release = await ensureExactDraft(Number(state.phases['desktop-publication']?.releaseId || 0))
-    if (!release.draft) return { releaseId: release.id, url: release.html_url }
+    if (!release.draft) return { releaseId: release.id, sourceRunId: desktopRunId, sourceRequestId: stateDesktopRequestId, recoveryRunId: null, url: release.html_url }
     const recoveryPhase = state.phases['desktop-publication'] || {}
     const recoverySource = publishPostTagRecoveryFix()
     const expectedRecoveryHeadSha = recoverySource.headSha
     const expectedRecoveryHeadBranch = recoverySource.headBranch
-    const storedRecovery = reusableWorkflowRun(Number(recoveryPhase.recoveryRunId || 0), {
+    let recoveryRequestId = String(recoveryPhase.recoveryRequestId || '')
+    if (!recoveryRequestId) recoveryRequestId = `${tag}-recovery-${randomUUID()}`
+    const expectedRecoveryIdentity = {
       ...WORKFLOWS.recovery,
       headSha: expectedRecoveryHeadSha,
-      headBranch: expectedRecoveryHeadBranch
-    })
+      headBranch: expectedRecoveryHeadBranch,
+      displayTitle: `Recover ${tag} from run ${desktopRunId} release ${release.id} · ${recoveryRequestId}`
+    }
+    const storedRecovery = reusableWorkflowRun(Number(recoveryPhase.recoveryRunId || 0), expectedRecoveryIdentity)
     await checkpoint(state, 'desktop-publication', {
       releaseId: release.id,
+      sourceRunId: desktopRunId,
+      sourceRequestId: stateDesktopRequestId,
+      recoveryRequestId,
       recoveryHeadSha: expectedRecoveryHeadSha,
       recoveryHeadBranch: expectedRecoveryHeadBranch
     })
-    const recoveryRunId = storedRecovery?.databaseId || await dispatchWorkflow('recover-release-from-actions.yml', [
-      ['tag', tag],
-      ['source_run_id', desktopRunId],
-      ['release_id', release.id],
-      ...recoverySource.fields
-    ], recoverySource.ref)
-    const dispatchedRecovery = storedRecovery || reusableWorkflowRun(recoveryRunId, {
-      ...WORKFLOWS.recovery,
-      headSha: expectedRecoveryHeadSha,
-      headBranch: expectedRecoveryHeadBranch
-    })
-    if (!dispatchedRecovery) throw new Error('Recovery workflow identity does not match its checkpointed publisher revision.')
+    let discoveredRecovery = storedRecovery || workflowRunByExactIdentity('recover-release-from-actions.yml', expectedRecoveryIdentity, 'Recovery')
+    if (!discoveredRecovery && recoveryPhase.recoveryDispatchAttemptedAt) {
+      discoveredRecovery = await waitForExactWorkflowDiscovery('recover-release-from-actions.yml', expectedRecoveryIdentity, 'Recovery')
+    }
+    if (discoveredRecovery?.status === 'completed' && discoveredRecovery.conclusion !== 'success') {
+      throw new Error(`Checkpointed recovery request ${recoveryRequestId} already failed; refusing duplicate dispatch.`)
+    }
+    const reusableRecovery = discoveredRecovery && reusableWorkflowRun(discoveredRecovery.databaseId, expectedRecoveryIdentity)
+    let recoveryRunId = Number(reusableRecovery?.databaseId || 0)
+    if (!recoveryRunId) {
+      await checkpoint(state, 'desktop-publication', { recoveryDispatchAttemptedAt: new Date().toISOString() })
+      recoveryRunId = await dispatchWorkflow('recover-release-from-actions.yml', [
+        ['tag', tag],
+        ['source_run_id', desktopRunId],
+        ['source_request_id', stateDesktopRequestId],
+        ['release_id', release.id],
+        ...recoverySource.fields
+      ], recoverySource.ref, recoveryRequestId)
+    }
+    const dispatchedRecovery = reusableRecovery || reusableWorkflowRun(recoveryRunId, expectedRecoveryIdentity)
+    if (!dispatchedRecovery) throw new Error('Recovery workflow identity or same-run artifact binding does not match its checkpoint.')
     await checkpoint(state, 'desktop-publication', {
       releaseId: release.id,
+      sourceRunId: desktopRunId,
+      sourceRequestId: stateDesktopRequestId,
+      recoveryRequestId,
       recoveryRunId,
       recoveryHeadSha: expectedRecoveryHeadSha,
       recoveryHeadBranch: expectedRecoveryHeadBranch
@@ -958,15 +1210,16 @@ async function publish() {
     await waitForRun(recoveryRunId)
     release = releaseForTag()
     assertReleaseAssets(release, expectedDesktopNames(), { draft: false, allowAdditional: true })
-    return { releaseId: release.id, recoveryRunId, recoveryHeadSha: expectedRecoveryHeadSha, recoveryHeadBranch: expectedRecoveryHeadBranch, url: release.html_url }
+    return { releaseId: release.id, sourceRunId: desktopRunId, sourceRequestId: stateDesktopRequestId, recoveryRequestId, recoveryRunId, recoveryHeadSha: expectedRecoveryHeadSha, recoveryHeadBranch: expectedRecoveryHeadBranch, url: release.html_url }
   }, {
     validateCompleted: completed => {
-      const source = requireDesktopBuildEvidence(desktopRunId)
-      if (source.status !== 'completed') throw new Error('Checkpointed desktop publication source workflow is not complete.')
+      stateDesktopRequestId = String(completed.sourceRequestId || state.phases['desktop-cloud-builds']?.requestId || '')
+      requireDesktopBuildEvidence(completed.sourceRunId || desktopRunId, stateDesktopRequestId)
       assertReleaseAssets(releaseForTag(), expectedDesktopNames(), { draft: false, allowAdditional: true })
-      if (source.conclusion !== 'success') {
-        requireSuccessfulWorkflowEvidence(completed.recoveryRunId, recoveryCheckpointWorkflowIdentity(completed), 'desktop recovery')
-      }
+      if (completed.recoveryRunId) requireSuccessfulWorkflowEvidence(completed.recoveryRunId, {
+        ...recoveryCheckpointWorkflowIdentity(completed),
+        displayTitle: `Recover ${tag} from run ${completed.sourceRunId || desktopRunId} release ${completed.releaseId} · ${completed.recoveryRequestId}`
+      }, 'desktop recovery')
     }
   })
 
@@ -1057,9 +1310,9 @@ if (command === 'run' || command === 'resume') {
     guarantees: [
       'clean committed source',
       'local source gates without local release packaging',
-      'all release packages built by GitHub Actions',
-      'immutable tag',
-      'cloud-only release artifact transfer',
+      'all release packages built and tested by GitHub Actions before tagging',
+      'immutable tag only after exact successful cloud evidence',
+      'cloud-only same-run release artifact transfer',
       'signed Android',
       'signed components',
       'exact 18-asset manifest',

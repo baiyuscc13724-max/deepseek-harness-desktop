@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
+import { link, lstat, mkdir, open, realpath, rm } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 const DIGEST = /^sha256:([a-f0-9]{64})$/u;
@@ -40,9 +40,10 @@ function decryptFrame(header, objectKey, prefix, ciphertext, tag) { let aad, par
 
 export class ArtifactContentAddressedStore {
   #masterKey;
-  constructor({ objectRoot, stagingRoot, projectRef, encryptionKey, randomBytesImpl = randomBytes, maxObjectBytes = DEFAULT_MAX_OBJECT_BYTES } = {}) {
+  constructor({ objectRoot, stagingRoot, projectRef, encryptionKey, randomBytesImpl = randomBytes, linkImpl = link, maxObjectBytes = DEFAULT_MAX_OBJECT_BYTES } = {}) {
     this.objectRoot = resolve(nonEmptyString(objectRoot, "objectRoot", 4_096)); this.stagingRoot = resolve(nonEmptyString(stagingRoot, "stagingRoot", 4_096)); ensureDisjoint(this.objectRoot, this.stagingRoot); this.projectRef = nonEmptyString(projectRef, "projectRef", 128); this.maxObjectBytes = safeInteger(maxObjectBytes, "maxObjectBytes", 1, DEFAULT_MAX_OBJECT_BYTES); this.#masterKey = assertEncryptionKey(encryptionKey);
     if (typeof randomBytesImpl !== "function") { this.#masterKey.fill(0); throw new TypeError("randomBytesImpl must be a function"); } this.randomBytesImpl = randomBytesImpl;
+    if (typeof linkImpl !== "function") { this.#masterKey.fill(0); throw new TypeError("linkImpl must be a function"); } this.linkImpl = linkImpl;
     this.uploads = new Map(); this.usedHeaderNonces = new Map(); this.ready = false; this.closing = false; this.closePromise = undefined; this.active = new Set();
   }
   toJSON() { return this.#snapshot(); }
@@ -68,7 +69,29 @@ export class ArtifactContentAddressedStore {
   }
   async #finalizeUpload(inputRef) {
     this.#requireReady(); const ref = uploadRef(inputRef), upload = this.uploads.get(ref); if (upload === undefined || upload.failed) throw new Error("upload is not active"); this.uploads.delete(ref);
-    try { if (upload.offset !== upload.expectedSize) throw new Error("upload is incomplete"); const actualDigest = `sha256:${upload.hash.digest("hex")}`; if (actualDigest !== upload.expectedDigest) throw new Error("uploaded object digest does not match its declaration"); await upload.handle.sync(); await upload.handle.close(); upload.handle = undefined; await this.#inspectPath(upload.temporary, actualDigest, upload.expectedSize); const target = this.#objectPath(actualDigest), targetDirectory = resolve(target, ".."); await mkdir(targetDirectory, { recursive: true, mode: 0o700 }); const realTargetDirectory = await realpath(targetDirectory); if (!isSameOrWithin(this.objectRoot, realTargetDirectory)) throw new Error("CAS object directory escapes its root"); const current = await leafExists(target); if (current === undefined) { try { await rename(upload.temporary, target); } catch (error) { if (error?.code !== "EEXIST" && error?.code !== "EPERM") throw error; } } const stored = await leafExists(target); if (!stored?.isFile()) throw ciphertextError(); await this.#inspectPath(target, actualDigest, upload.expectedSize); let directoryHandle; try { directoryHandle = await open(realTargetDirectory, "r"); await directoryHandle.sync(); } catch {} finally { await directoryHandle?.close().catch(() => undefined); } await rm(upload.temporary, { force: true }); return Object.freeze({ digest: actualDigest, size: upload.expectedSize, stored: true }); }
+    try {
+      if (upload.offset !== upload.expectedSize) throw new Error("upload is incomplete");
+      const actualDigest = `sha256:${upload.hash.digest("hex")}`;
+      if (actualDigest !== upload.expectedDigest) throw new Error("uploaded object digest does not match its declaration");
+      await upload.handle.sync(); await upload.handle.close(); upload.handle = undefined;
+      await this.#inspectPath(upload.temporary, actualDigest, upload.expectedSize);
+      const target = this.#objectPath(actualDigest), targetDirectory = resolve(target, "..");
+      await mkdir(targetDirectory, { recursive: true, mode: 0o700 });
+      const realTargetDirectory = await realpath(targetDirectory);
+      if (!isSameOrWithin(this.objectRoot, realTargetDirectory)) throw new Error("CAS object directory escapes its root");
+      // Staging and object roots retain the same-volume requirement previously
+      // imposed by rename. A hard link publishes this exact, fsynced inode only
+      // when absent; unlike POSIX rename it never replaces an immutable winner.
+      try { await this.linkImpl(upload.temporary, target); }
+      catch (error) { if (error?.code !== "EEXIST") throw error; }
+      const stored = await leafExists(target);
+      if (!stored?.isFile() || stored.isSymbolicLink()) throw ciphertextError();
+      await this.#inspectPath(target, actualDigest, upload.expectedSize);
+      let directoryHandle;
+      try { directoryHandle = await open(realTargetDirectory, "r"); await directoryHandle.sync(); } catch {} finally { await directoryHandle?.close().catch(() => undefined); }
+      await rm(upload.temporary, { force: true });
+      return Object.freeze({ digest: actualDigest, size: upload.expectedSize, stored: true });
+    }
     catch (error) { await upload.handle?.close().catch(() => undefined); await rm(upload.temporary, { force: true }).catch(() => undefined); throw error; } finally { this.#zeroUpload(upload); }
   }
   async #abortUpload(inputRef) { const ref = uploadRef(inputRef), upload = this.uploads.get(ref); if (upload === undefined) return Object.freeze({ uploadRef: ref, aborted: false }); await this.#destroyUpload(ref, upload); return Object.freeze({ uploadRef: ref, aborted: true }); }

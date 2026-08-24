@@ -6,9 +6,12 @@ on:
       tag:
         description: Existing immutable product tag
         required: true
-        default: v1.0.43
+        default: v1.0.44
       source_run_id:
-        description: Failed release run whose platform build jobs all passed
+        description: Exact successful pre-Tag build/test run whose artifacts must be reused
+        required: true
+      source_request_id:
+        description: Persisted publisher request id encoded in the source run title
         required: true
       release_id:
         description: Exact private draft created by the repository owner (empty or verified desktop subset)
@@ -20,7 +23,7 @@ on:
         description: Unique publisher request identity
         required: false
 
-run-name: Recover ${{ inputs.tag }} · ${{ inputs.request_id || github.run_id }}
+run-name: Recover ${{ inputs.tag }} from run ${{ inputs.source_run_id }} release ${{ inputs.release_id }} · ${{ inputs.request_id || github.run_id }}
 
 permissions:
   actions: read
@@ -41,6 +44,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
       SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      SOURCE_REQUEST_ID: ${{ inputs.source_request_id }}
       RELEASE_ID: ${{ inputs.release_id }}
       PUBLISHER_REVISION: ${{ inputs.publisher_revision }}
       WORKFLOW_REVISION: ${{ github.sha }}
@@ -73,15 +77,30 @@ jobs:
             done
           fi
           source_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
-          jq -e --arg sha "$tag_commit" --arg path '.github/workflows/release.yml' '
-            .head_sha == $sha and .path == $path and (.event == "push" or .event == "workflow_dispatch")
-          ' <<<"$source_run" >/dev/null || { echo 'Source workflow identity mismatch.' >&2; exit 1; }
+          workflow_id="$(jq -er '.workflow_id' <<<"$source_run")"
+          source_workflow="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id")"
+          jq -e --argjson id "$workflow_id" --arg path '.github/workflows/release.yml' '
+            .id == $id and .name == "Cloud Build & Release Desktop" and .path == $path
+          ' <<<"$source_workflow" >/dev/null || { echo 'Source workflow id/path metadata mismatch.' >&2; exit 1; }
+          jq -e --arg sha "$tag_commit" --arg tag "$RELEASE_TAG" --arg request "$SOURCE_REQUEST_ID" --arg path '.github/workflows/release.yml' '
+            .head_sha == $sha and .head_branch == "main" and .path == $path and
+            .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and
+            .display_title == "Candidate \($tag) @ \($sha) · \($request)"
+          ' <<<"$source_run" >/dev/null || { echo 'Successful pre-Tag source workflow identity/request mismatch.' >&2; exit 1; }
+          artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100")"
+          jq -e --argjson run "$SOURCE_RUN_ID" '
+            [.artifacts[] | select(.name | startswith("desktop-"))] as $desktop |
+            ($desktop | length) == 3 and
+            ([$desktop[].name] | sort) == ["desktop-macos-latest","desktop-ubuntu-latest","desktop-windows-latest"] and
+            all($desktop[]; .expired == false and .size_in_bytes > 0 and .workflow_run.id == $run)
+          ' <<<"$artifacts" >/dev/null || { echo 'Exact same-run desktop artifact set is unavailable.' >&2; exit 1; }
           jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100")"
           for name in \
             'Build windows-latest' \
             'Build macos-latest' \
             'Build ubuntu-latest' \
-            'Validate iPhone and iPad simulators'; do
+            'Validate iPhone and iPad simulators' \
+            'Verify Windows candidate upgrade and installation'; do
             jq -e --arg name "$name" '[.jobs[] | select(.name == $name and .conclusion == "success")] | length == 1' <<<"$jobs" >/dev/null || {
               printf 'Required successful source job mismatch: %s\n' "$name" >&2
               exit 1

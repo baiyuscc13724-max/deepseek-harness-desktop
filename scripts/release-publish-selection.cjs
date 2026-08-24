@@ -13,10 +13,11 @@ function normalizePublisherPackagingState(state, { packagingMode = 'github-actio
   if (state.packagingMode && state.packagingMode !== packagingMode) {
     throw new Error(`Publication state packaging mode mismatch: ${state.packagingMode}`)
   }
-  let changed = state.schemaVersion !== 2 || state.packagingMode !== packagingMode || !state.phases
-  state.schemaVersion = 2
+  let changed = state.schemaVersion !== 3 || state.packagingMode !== packagingMode || !state.phases || !state.releaseOrder
+  state.schemaVersion = 3
   state.packagingMode = packagingMode
   state.phases ||= {}
+  state.releaseOrder ||= (state.productRevision || state.phases['immutable-tag']) ? 'legacy-tag-first' : 'cloud-build-before-tag'
   const legacyLocal = Object.hasOwn(state.phases, 'local-windows')
   const incorrectlyMigratedLocal = state.phases[localGatePhase]?.migratedFrom === 'local-windows'
   if (legacyLocal || incorrectlyMigratedLocal) {
@@ -38,8 +39,66 @@ function matchesWorkflowRunIdentity(run, expected = {}) {
     (!expected.workflowPath || run.workflowPath === expected.workflowPath) &&
     (events.length === 0 || events.includes(run.event)) &&
     (!expected.headSha || run.headSha === expected.headSha) &&
-    (!expected.headBranch || run.headBranch === expected.headBranch)
+    (!expected.headBranch || run.headBranch === expected.headBranch) &&
+    (!expected.displayTitle || run.displayTitle === expected.displayTitle)
   )
+}
+
+function classifyCnbAssetStatuses(statuses) {
+  if (!Array.isArray(statuses) || statuses.length !== 18 || statuses.some(status => !Number.isInteger(status))) {
+    throw new Error('CNB asset absence requires exactly 18 bounded HTTP status observations.')
+  }
+  if (statuses.some(status => status >= 200 && status < 400)) return true
+  if (statuses.every(status => status === 404)) return false
+  throw new Error('CNB asset absence is unknown unless all exact asset URLs return 404.')
+}
+
+function selectUniqueWorkflowRunByDisplayTitle(runs, displayTitle, label = 'Workflow') {
+  const matches = Array.isArray(runs) ? runs.filter(run => run?.displayTitle === displayTitle) : []
+  if (matches.length === 0) return null
+  if (matches.length !== 1) throw new Error(`${label} exact display title is ambiguous (${matches.length} runs).`)
+  return matches[0]
+}
+
+function assertExistingTagRecoveryAllowed(state, evidence = {}) {
+  const desktop = state?.phases?.['desktop-cloud-builds']
+  const immutable = state?.phases?.['immutable-tag']
+  const authorization = immutable?.tagAuthorization
+  const sourceRevision = String(state?.sourceRevision || '').toLowerCase()
+  const tagRevision = String(evidence.tagRevision || '').toLowerCase()
+  const requestId = String(desktop?.requestId || '')
+  const runId = Number(desktop?.runId || 0)
+  const operation = String(authorization?.operation || '')
+  const statusAllowsCrashRecovery = immutable?.status === 'running' || immutable?.status === 'failed'
+  const operationAllowsObservedRefs = evidence.remoteTagExists
+    ? operation === 'push-remote' && evidence.localTagExists === true
+    : operation === 'create-local' || operation === 'push-remote'
+  if (
+    !statusAllowsCrashRecovery ||
+    !/^[0-9a-f]{40}$/u.test(sourceRevision) ||
+    tagRevision !== sourceRevision ||
+    !requestId || !Number.isSafeInteger(runId) || runId < 1 ||
+    authorization?.sourceRevision !== sourceRevision ||
+    authorization?.requestId !== requestId ||
+    Number(authorization?.runId || 0) !== runId ||
+    !/^\d{4}-\d{2}-\d{2}T/u.test(String(authorization?.authorizedAt || '')) ||
+    !operationAllowsObservedRefs
+  ) {
+    throw new Error('Existing Tag is not authorized by the publisher create/push crash window.')
+  }
+  return true
+}
+
+function assertCandidateRebindAllowed(state, evidence = {}) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('Candidate rebind requires publication state.')
+  if (state.productRevision || evidence.localTagExists || evidence.remoteTagExists) throw new Error('Candidate revision cannot rebind after an immutable tag exists.')
+  if (evidence.githubReleaseExists || evidence.cnbReleaseExists || evidence.stablePromoted) throw new Error('Candidate revision cannot rebind after a publication side effect exists.')
+  if (evidence.oldRunTerminal !== true) throw new Error('Candidate revision cannot rebind while its previous cloud run is active or unknown.')
+  if (evidence.sameVersion !== true) throw new Error('Candidate revision cannot rebind across product versions.')
+  if (evidence.fastForward !== true) throw new Error('Candidate revision must advance by fast-forward.')
+  const allowed = new Set(['local-source-gates', 'desktop-cloud-builds'])
+  if (Object.keys(state.phases || {}).some(id => !allowed.has(id))) throw new Error('Candidate revision cannot rebind after tag-dependent phases begin.')
+  return true
 }
 
 async function validateCompletedPhaseEvidence(phaseState, validator) {
@@ -152,12 +211,16 @@ function selectReleaseForTag(releases, { tag, productRevision, name, body } = {}
 }
 
 module.exports = {
+  assertCandidateRebindAllowed,
+  assertExistingTagRecoveryAllowed,
   canReattachPreferredDraft,
+  classifyCnbAssetStatuses,
   isExactDetachedDraft,
   matchesWorkflowRunIdentity,
   normalizePublisherPackagingState,
   normalizeReleaseBody,
   selectReleaseForTag,
+  selectUniqueWorkflowRunByDisplayTitle,
   validateCnbMirrorObservations,
   validateCompletedPhaseEvidence,
   validateGithubReleaseAgainstManifest

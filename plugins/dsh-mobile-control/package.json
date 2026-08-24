@@ -1,6 +1,6 @@
 {
   "name": "dsh-mobile-control",
-  "version": "1.0.43",
+  "version": "1.0.44",
   "type": "module",
   "description": "Harness Desktop first-party Android control tool adapter",
   "license": "MIT",

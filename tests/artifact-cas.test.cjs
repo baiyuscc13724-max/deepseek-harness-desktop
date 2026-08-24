@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
 const { createHash, randomBytes } = require('node:crypto')
-const { copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } = require('node:fs/promises')
+const { copyFile, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const moduleUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'artifact-cas.js')).href
@@ -34,6 +34,26 @@ async function upload(store, uploadRef, payload) {
 
 function objectPath(objectRoot, digestRef) { const hex = digestRef.slice('sha256:'.length); return path.join(objectRoot, 'sha256', hex.slice(0, 2), hex) }
 async function stagingFile(stagingRoot) { const names = await readdir(stagingRoot); assert.equal(names.length, 1); return path.join(stagingRoot, names[0]) }
+function simultaneousLinkBarrier(expected) {
+  let arrivals = 0
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  const attempts = []
+  const linkImpl = async (source, target) => {
+    const sourceIdentity = await lstat(source)
+    arrivals += 1
+    if (arrivals === expected) release()
+    await gate
+    try {
+      await link(source, target)
+      attempts.push({ outcome: 'published', dev: sourceIdentity.dev, ino: sourceIdentity.ino })
+    } catch (error) {
+      attempts.push({ outcome: error?.code, dev: sourceIdentity.dev, ino: sourceIdentity.ino })
+      throw error
+    }
+  }
+  return { attempts, linkImpl }
+}
 
  test('chunked CAS publication is content addressed, bounded, readable, and path private', async () => usingFixture(async ({ store, objectRoot, stagingRoot }) => {
   const payload = Buffer.from('immutable artifact and Git bundle bytes')
@@ -81,6 +101,44 @@ test('two encrypted CAS instances race the same digest and accept only verified 
     assert.deepEqual((await peer.readChunk({ digest: expectedDigest, offset: 0, length: payload.length })).bytes, payload)
   } finally { await peer.close() }
 }))
+
+test('many finalizers atomically publish one inode without clobbering the winner', { timeout: 30_000 }, async () => {
+  const mod = await import(moduleUrl), root = await mkdtemp(path.join(os.tmpdir(), 'artifact-cas-no-clobber-')), objectRoot = path.join(root, 'objects'), projectRef = `project_${'W'.repeat(26)}`, encryptionKey = randomBytes(32), count = 6, barrier = simultaneousLinkBarrier(count)
+  const stores = Array.from({ length: count }, (_, index) => new mod.ArtifactContentAddressedStore({ objectRoot, stagingRoot: path.join(root, `staging-${index}`), projectRef, encryptionKey, linkImpl: barrier.linkImpl, maxObjectBytes: 8 * 1024 * 1024 }))
+  try {
+    await Promise.all(stores.map(store => store.initialize()))
+    const payload = randomBytes(32 * 1024), expectedDigest = digest(payload), refs = stores.map((_, index) => `upload_${String(index).padStart(24, 'X')}`)
+    await Promise.all(stores.map((store, index) => store.beginUpload({ uploadRef: refs[index], expectedDigest, expectedSize: payload.length })))
+    await Promise.all(stores.map((store, index) => store.appendChunk({ uploadRef: refs[index], offset: 0, bytes: payload, chunkDigest: expectedDigest })))
+    const results = await Promise.all(stores.map((store, index) => store.finalizeUpload(refs[index])))
+    for (const result of results) assert.deepEqual(result, results[0])
+    assert.equal(barrier.attempts.length, count)
+    assert.equal(barrier.attempts.filter(attempt => attempt.outcome === 'published').length, 1)
+    assert.equal(barrier.attempts.filter(attempt => attempt.outcome === 'EEXIST').length, count - 1)
+    const winner = barrier.attempts.find(attempt => attempt.outcome === 'published'), stored = await lstat(objectPath(objectRoot, expectedDigest))
+    assert.equal(stored.dev, winner.dev); assert.equal(stored.ino, winner.ino, 'losing finalizers never replace the published inode')
+    assert.deepEqual((await stores[0].readChunk({ digest: expectedDigest, offset: 0, length: payload.length })).bytes, payload)
+    for (let index = 0; index < count; index += 1) assert.deepEqual(await readdir(path.join(root, `staging-${index}`)), [])
+  } finally { await Promise.allSettled(stores.map(store => store.close())); await rm(root, { recursive: true, force: true }) }
+})
+
+test('finalize treats an existing corrupt digest object as immutable ciphertext failure', async () => usingFixture(async ({ store, objectRoot, stagingRoot }) => {
+  const payload = Buffer.from('never repair an existing corrupt CAS object'), expectedDigest = digest(payload), ref = `upload_${'Z'.repeat(24)}`
+  await store.beginUpload({ uploadRef: ref, expectedDigest, expectedSize: payload.length }); await store.appendChunk({ uploadRef: ref, offset: 0, bytes: payload, chunkDigest: expectedDigest })
+  const target = objectPath(objectRoot, expectedDigest), corrupt = Buffer.from('pre-existing-corrupt-object'); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, corrupt); const before = await lstat(target)
+  await assert.rejects(store.finalizeUpload(ref), error => error?.code === 'ARTIFACT_CAS_CIPHERTEXT_INVALID')
+  const after = await lstat(target); assert.equal(after.dev, before.dev); assert.equal(after.ino, before.ino); assert.deepEqual(await readFile(target), corrupt); assert.deepEqual(await readdir(stagingRoot), [])
+}))
+
+test('publication never treats non-EEXIST link failures as a deduplication loser', async () => {
+  const mod = await import(moduleUrl), root = await mkdtemp(path.join(os.tmpdir(), 'artifact-cas-link-failure-')), objectRoot = path.join(root, 'objects'), stagingRoot = path.join(root, 'staging'), payload = Buffer.from('link errors fail closed'), expectedDigest = digest(payload)
+  const linkImpl = async () => { const error = new Error('injected link permission failure'); error.code = 'EPERM'; throw error }
+  const store = new mod.ArtifactContentAddressedStore({ objectRoot, stagingRoot, projectRef: `project_${'X'.repeat(26)}`, encryptionKey: randomBytes(32), linkImpl })
+  try {
+    await store.initialize(); const ref = `upload_${'X'.repeat(24)}`; await store.beginUpload({ uploadRef: ref, expectedDigest, expectedSize: payload.length }); await store.appendChunk({ uploadRef: ref, offset: 0, bytes: payload, chunkDigest: expectedDigest })
+    await assert.rejects(store.finalizeUpload(ref), error => error?.code === 'EPERM' && /permission/u.test(error.message)); assert.deepEqual(await store.inspect(expectedDigest), { digest: expectedDigest, size: 0, present: false }); assert.deepEqual(await readdir(stagingRoot), [])
+  } finally { await store.close(); await rm(root, { recursive: true, force: true }) }
+})
 
 test('out-of-order, forged, oversized, incomplete, and wrong-total chunks fail closed', async () => usingFixture(async ({ store, mod }) => {
   const payload = Buffer.from('declared payload')
@@ -260,6 +318,7 @@ test('constructor is key-strict and temporary keys/plaintext copies are zeroed w
   const mod = await import(moduleUrl), root = await mkdtemp(path.join(os.tmpdir(), 'artifact-cas-zero-')), options = { objectRoot: path.join(root, 'objects'), stagingRoot: path.join(root, 'staging'), projectRef: `project_${'Y'.repeat(26)}` }
   assert.throws(() => new mod.ArtifactContentAddressedStore({ ...options, encryptionKey: 'secret' }))
   assert.throws(() => new mod.ArtifactContentAddressedStore({ ...options, encryptionKey: Buffer.alloc(31) }))
+  assert.throws(() => new mod.ArtifactContentAddressedStore({ ...options, encryptionKey: Buffer.alloc(32), linkImpl: null }), /linkImpl/u)
   if (typeof SharedArrayBuffer === 'function') assert.throws(() => new mod.ArtifactContentAddressedStore({ ...options, encryptionKey: new Uint8Array(new SharedArrayBuffer(32)) }))
   const callerKey = randomBytes(32), callerPayload = Buffer.from('caller-owned plaintext'), keyBefore = Buffer.from(callerKey), payloadBefore = Buffer.from(callerPayload), store = new mod.ArtifactContentAddressedStore({ ...options, encryptionKey: callerKey })
   const originalFill = Buffer.prototype.fill, cleared = []

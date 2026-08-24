@@ -284,3 +284,61 @@ test('close drains an accepted Git child, rejects new work, and is exactly idemp
   await closing
   assert.equal(state.adapter.toJSON().ready, false)
 }))
+
+test('win32 long path support injects per-invocation core.longpaths and keeps the merge temp basename bounded', async () => usingFixture(async state => {
+  await state.adapter.initialize({ expectedInitialHead: state.initialHead })
+  const calls = []
+  const recorded = (command, args, options) => { calls.push([command, args.slice()]); return spawn(command, args, options) }
+  const adapter = adapterFor(state, recorded)
+  const leftRef = 'workspace_winpathleft', rightRef = 'workspace_winpathright'
+  await createCommittedWorkspace(state, leftRef, 'left win path\n', 'left.txt')
+  await createCommittedWorkspace(state, rightRef, 'right win path\n', 'right.txt')
+  const left = declaration(await state.adapter.inspectChangeSet({ workspaceRef: leftRef, expectedBaseCommit: state.initialHead }), 'winpathleft')
+  const right = declaration(await state.adapter.inspectChangeSet({ workspaceRef: rightRef, expectedBaseCommit: state.initialHead }), 'winpathright')
+  const mergeGroupRef = `mergegroup_${'w'.repeat(88)}`
+  await adapter.initialize({ expectedInitialHead: state.initialHead })
+  const merged = await adapter.mergeChangeSets({ mergeGroupRef, baseHead: state.initialHead, changeSets: [left, right] })
+  assert.equal(merged.merged, true)
+  const adds = calls.filter(([, args]) => args.includes('worktree') && args.includes('add'))
+  assert.ok(adds.length > 0, 'a real merge worktree add must be observed')
+  const mergeTarget = adds.flatMap(([, args]) => args).find((value, index, all) => all[index - 1] === '--detach')
+  assert.ok(mergeTarget !== undefined, 'merge worktree add target must be recorded')
+  assert.ok(path.basename(mergeTarget).length <= 24, `merge worktree basename stays within the Windows path budget: ${path.basename(mergeTarget)}`)
+  assert.equal(mergeTarget.includes(mergeGroupRef), false, 'merge worktree basename must never embed the group ref; the receipt stays the exact binding')
+  if (process.platform === 'win32') {
+    assert.ok(calls.length > 0)
+    for (const [, args] of calls) assert.deepEqual(args.slice(0, 2), ['-c', 'core.longpaths=true'], 'every Git invocation on win32 must carry core.longpaths')
+  } else {
+    for (const [, args] of calls) assert.equal(args[0] === '-c' && args[1] === 'core.longpaths=true', false, 'core.longpaths must not be force-enabled off Windows')
+  }
+  await adapter.close()
+}))
+
+test('cherry-pick infrastructure failure without unmerged paths fails closed and never fakes an empty conflict result', async () => usingFixture(async state => {
+  const failing = (command, args, options) => {
+    if (args.includes('cherry-pick') && !args.includes('--abort')) {
+      const child = new EventEmitter()
+      child.stdout = new PassThrough()
+      child.stderr = new PassThrough()
+      child.kill = () => true
+      setImmediate(() => {
+        child.stderr.end('fatal: cannot create ref file below a long path')
+        child.stdout.end()
+        child.emit('close', 1)
+      })
+      return child
+    }
+    return spawn(command, args, options)
+  }
+  await state.adapter.initialize({ expectedInitialHead: state.initialHead })
+  const adapter = adapterFor(state, failing)
+  const workspaceRef = 'workspace_infrafail1'
+  await createCommittedWorkspace(state, workspaceRef, 'infra change\n')
+  const changeSet = declaration(await state.adapter.inspectChangeSet({ workspaceRef, expectedBaseCommit: state.initialHead }), 'infrafail')
+  await adapter.initialize({ expectedInitialHead: state.initialHead })
+  await assert.rejects(adapter.mergeChangeSets({ mergeGroupRef: 'mergegroup_infrafailure', baseHead: state.initialHead, changeSets: [changeSet] }), error => error?.code === 'GIT_OPERATION_FAILED')
+  assert.deepEqual(await readdir(path.join(state.authorityRoot, 'merge-workspaces')), [], 'failed merge worktree is removed and leaves no bounded path behind')
+  const repositoryPath = path.join(state.authorityRoot, 'repositories', 'repository_primary01.git')
+  await assert.rejects(git(state.root, ['--git-dir', repositoryPath, 'rev-parse', '--verify', 'refs/harness/merge-groups/mergegroup_infrafailure']))
+  await adapter.close()
+}))
