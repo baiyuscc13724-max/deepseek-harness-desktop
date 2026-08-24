@@ -353,6 +353,70 @@ jobs:
           $portableProfile = Join-Path $env:RUNNER_TEMP 'recovered-portable-profile'
           $portableReport = Join-Path $env:RUNNER_TEMP 'recovered-portable-selftest.json'
           $trackedProcessIds = @()
+          function Invoke-BoundedDownload {
+            param(
+              [Parameter(Mandatory)][uri] $Uri,
+              [Parameter(Mandatory)][string] $OutFile,
+              [Parameter(Mandatory)][ValidateRange(1, 900)][int] $TimeoutSeconds
+            )
+            Write-Host "Starting bounded authenticated download (timeout ${TimeoutSeconds}s)"
+            $handler = [Net.Http.HttpClientHandler]::new()
+            $handler.AllowAutoRedirect = $true
+            $client = [Net.Http.HttpClient]::new($handler)
+            $client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+            $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $Uri)
+            $request.Headers.Accept.ParseAdd('application/octet-stream')
+            $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $env:GH_TOKEN)
+            $request.Headers.UserAgent.ParseAdd('harness-desktop-recovery-gate')
+            $null = $request.Headers.TryAddWithoutValidation('X-GitHub-Api-Version', '2022-11-28')
+            $cts = [Threading.CancellationTokenSource]::new()
+            $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSeconds))
+            $response = $source = $target = $null
+            try {
+              $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token).GetAwaiter().GetResult()
+              $null = $response.EnsureSuccessStatusCode()
+              $source = $response.Content.ReadAsStreamAsync($cts.Token).GetAwaiter().GetResult()
+              $target = [IO.File]::Open($OutFile, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+              $source.CopyToAsync($target, 1048576, $cts.Token).GetAwaiter().GetResult()
+              Write-Host 'Completed bounded authenticated download.'
+            }
+            catch [OperationCanceledException] {
+              throw "Authenticated release asset download timed out after $TimeoutSeconds seconds."
+            }
+            finally {
+              if ($target) { $target.Dispose() }
+              if ($source) { $source.Dispose() }
+              if ($response) { $response.Dispose() }
+              $request.Dispose()
+              $client.Dispose()
+              $handler.Dispose()
+              $cts.Dispose()
+            }
+          }
+          function Invoke-BoundedProcess {
+            param(
+              [Parameter(Mandatory)][string] $FilePath,
+              [Parameter(Mandatory)][string[]] $ArgumentList,
+              [Parameter(Mandatory)][ValidateRange(1, 900)][int] $TimeoutSeconds,
+              [Parameter(Mandatory)][string] $Label
+            )
+            Write-Host "Starting bounded process: $Label (timeout ${TimeoutSeconds}s)"
+            $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+            try {
+              if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+                try { & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null } catch {}
+                if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+                $null = $process.WaitForExit(10000)
+                throw "$Label timed out after $TimeoutSeconds seconds."
+              }
+              $process.Refresh()
+              Write-Host "Completed bounded process: $Label (exit $($process.ExitCode))"
+              return [int]$process.ExitCode
+            }
+            finally {
+              $process.Dispose()
+            }
+          }
           function Get-InstalledAppProcesses {
             param([string] $Executable)
             $expectedPath = [IO.Path]::GetFullPath($Executable)
@@ -384,12 +448,6 @@ jobs:
             if (-not $snapshot.draft -or $snapshot.tag_name -ne $env:RELEASE_TAG) { throw 'Snapshot is not the expected private draft.' }
             $expectedAssets = @($snapshot.assets | ForEach-Object name | Sort-Object)
             New-Item -ItemType Directory -Path $downloadRoot | Out-Null
-            $headers = @{
-              Accept = 'application/octet-stream'
-              Authorization = "Bearer $env:GH_TOKEN"
-              'X-GitHub-Api-Version' = '2022-11-28'
-              'User-Agent' = 'harness-desktop-recovery-gate'
-            }
             $version = $env:RELEASE_TAG -replace '^v', ''
             $previous = Get-Content 'draft-state/previous-stable.json' -Raw | ConvertFrom-Json
             if ($previous.version -notmatch '^\d+\.\d+\.\d+$' -or [version]$previous.version -ge [version]$version) { throw 'Bound previous stable version is invalid or not older than the draft.' }
@@ -403,14 +461,14 @@ jobs:
             $previousAsset = $previousAssets[0]
             if ($previousAsset.id.ToString() -ne $previous.asset.id.ToString() -or $previousAsset.size -ne [int64]$previous.asset.size -or $previousAsset.digest -ne $previous.asset.digest -or $previousAsset.browser_download_url -ne $previous.asset.browserDownloadUrl) { throw 'Previous stable installer asset changed after signed-manifest binding.' }
             $previousInstaller = $previousInstallerPath
-            Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($previous.asset.id)" -Headers $headers -OutFile $previousInstaller
+            Invoke-BoundedDownload -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($previous.asset.id)" -OutFile $previousInstaller -TimeoutSeconds 300
             if ((Get-Item -LiteralPath $previousInstaller).Length -ne [int64]$previous.asset.size) { throw 'Previous stable installer size mismatch.' }
             if ((Get-FileHash -LiteralPath $previousInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $previous.asset.sha256) { throw 'Previous stable installer SHA-256 mismatch.' }
             foreach ($asset in $snapshot.assets) {
               if ($asset.id -notmatch '^\d+$' -or [IO.Path]::GetFileName($asset.name) -ne $asset.name -or $asset.digest -notmatch '^sha256:([0-9a-f]{64})$') { throw "Unsafe or incomplete snapshot asset metadata: $($asset.name)" }
               $expectedDigest = $asset.digest.Substring(7)
               $destination = Join-Path $downloadRoot $asset.name
-              Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)" -Headers $headers -OutFile $destination
+              Invoke-BoundedDownload -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)" -OutFile $destination -TimeoutSeconds 300
               $downloaded = Get-Item -LiteralPath $destination
               if ($downloaded.Length -ne [int64]$asset.size) { throw "Snapshot size mismatch for $($asset.name)." }
               $snapshotHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -438,8 +496,8 @@ jobs:
 
             $portable = Join-Path $downloadRoot "Harness-Desktop-$version-portable-x64.exe"
             if (-not (Test-Path -LiteralPath $portable -PathType Leaf)) { throw "Expected portable executable is missing: $portable" }
-            $portableSelfTest = Start-Process -FilePath $portable -ArgumentList @('--self-test', "--self-test-output=$portableReport", "--user-data-dir=$portableProfile", "--harness-user-data-dir=$portableProfile") -Wait -PassThru
-            if ($portableSelfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $portableReport -PathType Leaf)) { throw 'Downloaded portable --self-test failed or omitted its JSON report.' }
+            $portableSelfTestExit = Invoke-BoundedProcess -FilePath $portable -ArgumentList @('--self-test', "--self-test-output=$portableReport", "--user-data-dir=$portableProfile", "--harness-user-data-dir=$portableProfile") -TimeoutSeconds 180 -Label 'Recovered portable self-test'
+            if ($portableSelfTestExit -ne 0 -or -not (Test-Path -LiteralPath $portableReport -PathType Leaf)) { throw 'Downloaded portable --self-test failed or omitted its JSON report.' }
             $portableResult = Get-Content -LiteralPath $portableReport -Raw | ConvertFrom-Json
             $portableResult | ConvertTo-Json -Depth 8
             if (-not $portableResult.ok -or $portableResult.product.version -ne $version) { throw 'Downloaded portable self-test JSON failed or reported the wrong version.' }
@@ -451,14 +509,14 @@ jobs:
             $markerValue = "stable-$($previous.version)-to-$version-$([Guid]::NewGuid().ToString('N'))"
             [IO.File]::WriteAllText($markerPath, $markerValue, [Text.UTF8Encoding]::new($false))
 
-            $previousInstall = Start-Process -FilePath $previousInstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -Wait -PassThru
-            if ($previousInstall.ExitCode -ne 0) { throw "Previous stable installer exited with code $($previousInstall.ExitCode)." }
+            $previousInstallExit = Invoke-BoundedProcess -FilePath $previousInstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -TimeoutSeconds 300 -Label 'Recovered previous stable installer'
+            if ($previousInstallExit -ne 0) { throw "Previous stable installer exited with code $previousInstallExit." }
             $installedExe = Join-Path $installRoot 'Harness Desktop.exe'
             $installedAsar = Join-Path $installRoot 'resources/app.asar'
             $installedD3d = Join-Path $installRoot 'd3dcompiler_47.dll'
             if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf) -or -not (Test-Path -LiteralPath $installedAsar -PathType Leaf) -or -not (Test-Path -LiteralPath $installedD3d -PathType Leaf)) { throw 'Previous stable installation is missing the executable, app.asar, or d3dcompiler_47.dll.' }
-            $previousSelfTest = Start-Process -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$previousReportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -Wait -PassThru
-            if ($previousSelfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $previousReportPath -PathType Leaf)) { throw 'Previous stable installed --self-test failed or omitted its JSON report.' }
+            $previousSelfTestExit = Invoke-BoundedProcess -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$previousReportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -TimeoutSeconds 180 -Label 'Recovered previous stable self-test'
+            if ($previousSelfTestExit -ne 0 -or -not (Test-Path -LiteralPath $previousReportPath -PathType Leaf)) { throw 'Previous stable installed --self-test failed or omitted its JSON report.' }
             $previousReport = Get-Content -LiteralPath $previousReportPath -Raw | ConvertFrom-Json
             $previousReport | ConvertTo-Json -Depth 8
             if (-not $previousReport.ok -or $previousReport.product.version -ne $previous.version) { throw 'Previous stable installed self-test JSON failed or reported the wrong version.' }
@@ -481,10 +539,10 @@ jobs:
             # Never restart the old application after the upgrade.
             # Do not pass /CLOSEAPPLICATIONS: legacy installers translate that
             # old updater flag into an interactive compatibility wizard.
-            $upgrade = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NORESTARTAPPLICATIONS', '/LOGCLOSEAPPLICATIONS', "/LOG=$upgradeLog", "/DIR=$installRoot") -Wait -PassThru
-            if ($upgrade.ExitCode -ne 0) {
+            $upgradeExit = Invoke-BoundedProcess -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NORESTARTAPPLICATIONS', '/LOGCLOSEAPPLICATIONS', "/LOG=$upgradeLog", "/DIR=$installRoot") -TimeoutSeconds 300 -Label 'Recovered draft upgrade installer'
+            if ($upgradeExit -ne 0) {
               if (Test-Path -LiteralPath $upgradeLog -PathType Leaf) { Get-Content -LiteralPath $upgradeLog }
-              throw "Recovered draft upgrade installer exited with code $($upgrade.ExitCode)."
+              throw "Recovered draft upgrade installer exited with code $upgradeExit."
             }
             for ($i = 0; $i -lt 40 -and @(Get-InstalledAppProcesses -Executable $installedExe).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }
             $aliveOldProcesses = @($trackedProcessIds | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
@@ -493,16 +551,16 @@ jobs:
             if (@(Get-InstalledAppProcesses -Executable $installedExe).Count -ne 0) { throw 'RestartApplications=no contract failed: the desktop restarted after the silent upgrade.' }
             if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf) -or -not (Test-Path -LiteralPath $installedAsar -PathType Leaf)) { throw 'Upgraded executable or app.asar is missing.' }
             if ([IO.File]::ReadAllText($markerPath) -cne $markerValue) { throw 'Recovered draft upgrade did not preserve the same profile marker.' }
-            $selfTest = Start-Process -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$reportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -Wait -PassThru
-            if ($selfTest.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Upgraded installed --self-test failed or omitted its JSON report.' }
+            $selfTestExit = Invoke-BoundedProcess -FilePath $installedExe -ArgumentList @('--self-test', "--self-test-output=$reportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -TimeoutSeconds 180 -Label 'Recovered upgraded self-test'
+            if ($selfTestExit -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Upgraded installed --self-test failed or omitted its JSON report.' }
             $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
             $report | ConvertTo-Json -Depth 8
             if (-not $report.ok -or $report.product.version -ne $version) { throw 'Upgraded installed self-test JSON failed or reported the wrong version.' }
             if ([IO.File]::ReadAllText($markerPath) -cne $markerValue) { throw 'Upgraded self-test did not preserve the same profile marker.' }
             $uninstaller = Get-ChildItem -LiteralPath $installRoot -File -Filter 'unins*.exe' | Select-Object -First 1
             if (-not $uninstaller) { throw 'Upgraded installed uninstaller is missing.' }
-            $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
-            if ($uninstall.ExitCode -ne 0) { throw "Windows uninstaller exited with code $($uninstall.ExitCode)." }
+            $uninstallExit = Invoke-BoundedProcess -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 300 -Label 'Recovered Windows uninstaller'
+            if ($uninstallExit -ne 0) { throw "Windows uninstaller exited with code $uninstallExit." }
             for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $installRoot); $i++) { Start-Sleep -Milliseconds 500 }
             if (Test-Path -LiteralPath $installRoot) { throw 'Uninstaller left the temporary installation directory behind.' }
           }
@@ -510,7 +568,7 @@ jobs:
             foreach ($trackedId in @($trackedProcessIds)) { Stop-Process -Id $trackedId -Force -ErrorAction SilentlyContinue }
             try {
               $cleanupUninstaller = Get-ChildItem -LiteralPath $installRoot -File -Filter 'unins*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($cleanupUninstaller) { Start-Process -FilePath $cleanupUninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -ErrorAction SilentlyContinue | Out-Null }
+              if ($cleanupUninstaller) { $null = Invoke-BoundedProcess -FilePath $cleanupUninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 120 -Label 'Recovered cleanup uninstaller' }
             } catch {}
             Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           }
