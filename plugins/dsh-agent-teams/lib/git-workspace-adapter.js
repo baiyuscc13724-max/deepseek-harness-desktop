@@ -13,6 +13,36 @@ const MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_GIT_TIMEOUT_MS = 60_000;
 const SAFE_ENV_KEYS = ["SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA"];
 
+// Git serializes individual ref updates, but linked-worktree registration mutates
+// shared repository metadata through several files. Coordinate those compound
+// mutations across adapter instances in this process while leaving unrelated
+// repositories fully independent. Empty coordinators are removed immediately.
+const REPOSITORY_MUTATION_COORDINATORS = new Map();
+function repositoryCoordinationKey(repositoryPath) {
+  const key = resolve(repositoryPath);
+  return process.platform === "win32" ? key.toLowerCase() : key;
+}
+async function coordinateRepositoryMutation(repositoryPath, operation) {
+  const key = repositoryCoordinationKey(repositoryPath);
+  let coordinator = REPOSITORY_MUTATION_COORDINATORS.get(key);
+  if (coordinator === undefined) {
+    coordinator = { tail: Promise.resolve(), pending: 0 };
+    REPOSITORY_MUTATION_COORDINATORS.set(key, coordinator);
+  }
+  const previous = coordinator.tail;
+  let release;
+  coordinator.tail = new Promise((resolveTurn) => { release = resolveTurn; });
+  coordinator.pending += 1;
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    coordinator.pending -= 1;
+    if (coordinator.pending === 0 && REPOSITORY_MUTATION_COORDINATORS.get(key) === coordinator) REPOSITORY_MUTATION_COORDINATORS.delete(key);
+  }
+}
+
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -219,17 +249,20 @@ export class GitWorkspaceAdapter {
     await mkdir(resolve(this.bundleRoot, "outgoing"), { recursive: true, mode: 0o700 });
     await mkdir(resolve(this.bundleRoot, "incoming"), { recursive: true, mode: 0o700 });
     await mkdir(this.workspaceRoot, { recursive: true, mode: 0o700 });
-    if (!(await pathExists(this.repositoryPath))) {
-      await this.#git(["init", "--bare", `--object-format=${objectFormat}`, this.repositoryPath]);
-      await this.#git(["--git-dir", this.repositoryPath, "fetch", "--no-tags", "--no-write-fetch-head", this.sourceWorkspaceRoot, "HEAD:refs/heads/authority"]);
-    } else {
-      const bare = (await this.#git(["--git-dir", this.repositoryPath, "rev-parse", "--is-bare-repository"])).stdout.toString("utf8").trim();
-      if (bare !== "true") throw new Error("authority repository is not bare");
-      const authorityFormat = (await this.#git(["--git-dir", this.repositoryPath, "rev-parse", "--show-object-format"])).stdout.toString("utf8").trim();
-      if (authorityFormat !== objectFormat) throw new Error("authority repository object format does not match the source");
-    }
-    const head = await this.#head();
-    await this.#git(["--git-dir", this.repositoryPath, "fsck", "--no-dangling", "--no-progress"]);
+    const head = await this.#withRepositoryMutation(async () => {
+      if (!(await pathExists(this.repositoryPath))) {
+        await this.#git(["init", "--bare", `--object-format=${objectFormat}`, this.repositoryPath]);
+        await this.#git(["--git-dir", this.repositoryPath, "fetch", "--no-tags", "--no-write-fetch-head", this.sourceWorkspaceRoot, "HEAD:refs/heads/authority"]);
+      } else {
+        const bare = (await this.#git(["--git-dir", this.repositoryPath, "rev-parse", "--is-bare-repository"])).stdout.toString("utf8").trim();
+        if (bare !== "true") throw new Error("authority repository is not bare");
+        const authorityFormat = (await this.#git(["--git-dir", this.repositoryPath, "rev-parse", "--show-object-format"])).stdout.toString("utf8").trim();
+        if (authorityFormat !== objectFormat) throw new Error("authority repository object format does not match the source");
+      }
+      const initializedHead = await this.#head();
+      await this.#git(["--git-dir", this.repositoryPath, "fsck", "--no-dangling", "--no-progress"]);
+      return initializedHead;
+    });
     this.ready = true;
     return immutable({ repositoryRef: this.repositoryRef, headCommit: head, sourceHead, objectFormat, sourceDirty: probed.sourceDirty });
   }
@@ -240,12 +273,15 @@ export class GitWorkspaceAdapter {
 
   async #ensureTaskWorkspace({ workspaceRef, baseCommit } = {}) {
     const ref = safeRef(workspaceRef, "workspaceRef"), base = commitRef(baseCommit, "baseCommit");
-    this.#requireReady(); await this.#git(["--git-dir", this.repositoryPath, "cat-file", "-e", `${base}^{commit}`]);
-    const workspacePath = this.#workspacePath(ref); await this.#git(["--git-dir", this.repositoryPath, "worktree", "prune", "--expire", "now"], { allowFailure: true });
-    if (await pathExists(workspacePath)) { await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: false }); }
-    const added = await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", workspacePath, base], { allowFailure: true });
-    if (!added.ok) { if (!(await pathExists(workspacePath))) throw new Error("isolated task workspace could not be created"); await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: false }); }
-    await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: true });
+    this.#requireReady();
+    return this.#withRepositoryMutation(async () => {
+      await this.#git(["--git-dir", this.repositoryPath, "cat-file", "-e", `${base}^{commit}`]);
+      const workspacePath = this.#workspacePath(ref); await this.#git(["--git-dir", this.repositoryPath, "worktree", "prune", "--expire", "now"], { allowFailure: true });
+      if (await pathExists(workspacePath)) { await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: false }); }
+      const added = await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", workspacePath, base], { allowFailure: true });
+      if (!added.ok) { if (!(await pathExists(workspacePath))) throw new Error("isolated task workspace could not be created"); await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: false }); }
+      await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: true });
+    });
   }
 
   async #inspectChangeSet({ workspaceRef, expectedBaseCommit } = {}) {
@@ -275,7 +311,7 @@ export class GitWorkspaceAdapter {
     const inspected = await this.#inspectChangeSet({ workspaceRef: ref, expectedBaseCommit: declaration.parentCommit });
     this.#assertChangeSetMatches(declaration, inspected);
     const anchorRef = `refs/harness/change-sets/${declaration.changeSetRef}`;
-    await this.#bindExactRef(anchorRef, declaration.commit, "ChangeSet ref is already bound to another commit");
+    await this.#withRepositoryMutation(() => this.#bindExactRef(anchorRef, declaration.commit, "ChangeSet ref is already bound to another commit"));
     return this.#exportAnchoredBundle(declaration, cas, anchorRef);
   }
 
@@ -318,18 +354,20 @@ export class GitWorkspaceAdapter {
       await this.#git(["--git-dir", this.repositoryPath, "bundle", "verify", temporary]);
       const sourceRef = `refs/harness/change-sets/${declaration.changeSetRef}`;
       const quarantineRef = `refs/harness/quarantine/${declaration.changeSetRef}/${randomUUID().replaceAll("-", "")}`;
-      try {
-        await this.#git(["--git-dir", this.repositoryPath, "fetch", "--force", "--no-tags", "--no-write-fetch-head", temporary, `${sourceRef}:${quarantineRef}`]);
-        const quarantined = commitRef((await this.#git(["--git-dir", this.repositoryPath, "rev-parse", quarantineRef])).stdout.toString("utf8").trim(), "quarantined ChangeSet");
-        if (quarantined !== declaration.commit) throw new Error("Git bundle advertised commit does not match the ChangeSet");
-        await this.#git(["--git-dir", this.repositoryPath, "fsck", "--strict", "--connectivity-only", "--no-progress", declaration.commit]);
-        const inspected = await this.#inspectBareCommit(declaration.commit, declaration.parentCommit);
-        this.#assertChangeSetMatches(declaration, inspected);
-        await this.#bindExactRef(sourceRef, declaration.commit, "ChangeSet ref is already bound to another commit");
-        return immutable({ ...declaration, bundleDigest: expectedBundleDigest, bundleSize: metadata.size, admitted: true });
-      } finally {
-        await this.#git(["--git-dir", this.repositoryPath, "update-ref", "-d", quarantineRef], { allowFailure: true });
-      }
+      return await this.#withRepositoryMutation(async () => {
+        try {
+          await this.#git(["--git-dir", this.repositoryPath, "fetch", "--force", "--no-tags", "--no-write-fetch-head", temporary, `${sourceRef}:${quarantineRef}`]);
+          const quarantined = commitRef((await this.#git(["--git-dir", this.repositoryPath, "rev-parse", quarantineRef])).stdout.toString("utf8").trim(), "quarantined ChangeSet");
+          if (quarantined !== declaration.commit) throw new Error("Git bundle advertised commit does not match the ChangeSet");
+          await this.#git(["--git-dir", this.repositoryPath, "fsck", "--strict", "--connectivity-only", "--no-progress", declaration.commit]);
+          const inspected = await this.#inspectBareCommit(declaration.commit, declaration.parentCommit);
+          this.#assertChangeSetMatches(declaration, inspected);
+          await this.#bindExactRef(sourceRef, declaration.commit, "ChangeSet ref is already bound to another commit");
+          return immutable({ ...declaration, bundleDigest: expectedBundleDigest, bundleSize: metadata.size, admitted: true });
+        } finally {
+          await this.#git(["--git-dir", this.repositoryPath, "update-ref", "-d", quarantineRef], { allowFailure: true });
+        }
+      });
     } finally {
       await handle.close().catch(() => undefined);
       await rm(temporary, { force: true }).catch(() => undefined);
@@ -362,22 +400,32 @@ export class GitWorkspaceAdapter {
   }
 
   async #mergeChangeSets(input = {}) {
-    const existing = await this.#readAndVerifyMergeGroupResult(input); if (existing !== undefined) return existing;
-    const groupRef = safeRef(input.mergeGroupRef, "mergeGroupRef"), base = commitRef(input.baseHead, "baseHead"), declarations = this.#normalizeMergeChangeSets(input.changeSets); this.#requireReady();
-    for (const declaration of declarations) this.#assertChangeSetMatches(declaration, await this.#inspectBareCommit(declaration.commit, declaration.parentCommit));
-    const mergePath = resolve(this.mergeWorkspaceRoot, `${groupRef}.${randomUUID().replaceAll("-", "")}`); await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", mergePath, base]);
-    try {
-      for (const declaration of declarations) { const result = await this.#git(["-C", mergePath, "-c", "user.name=Harness Workspace Authority", "-c", "user.email=noreply@localhost", "cherry-pick", "--no-edit", "--allow-empty", declaration.commit], { allowFailure: true }); if (!result.ok) { const conflicts = parseNulPaths((await this.#git(["-C", mergePath, "diff", "--name-only", "--diff-filter=U", "-z"], { allowFailure: true, maxOutputBytes: 4 * 1024 * 1024 })).stdout); await this.#git(["-C", mergePath, "cherry-pick", "--abort"], { allowFailure: true }); return immutable({ repositoryRef: this.repositoryRef, mergeGroupRef: groupRef, merged: false, conflicts }); } }
-      const resultCommit = commitRef((await this.#git(["-C", mergePath, "rev-parse", "HEAD"])).stdout.toString("utf8").trim(), "merge result"), receiptRef = `refs/harness/merge-groups/${groupRef}`;
-      // Validate the entire generated chain before publishing its immutable receipt.
-      // A crash after the bind is therefore always recoverable, while an empty or
-      // semantically changed cherry-pick can never poison the permanent group ref.
-      await this.#verifyMergeGroupResult({ groupRef, base, declarations, resultCommit });
-      try { await this.#bindExactRef(receiptRef, resultCommit, "merge group receipt is already immutably bound"); } catch (error) { const winner = await this.#readAndVerifyMergeGroupResult(input); if (winner !== undefined) return winner; throw error; }
-      const anchored = await this.#readAndVerifyMergeGroupResult(input);
-      if (anchored === undefined) throw new Error("merge group receipt disappeared after immutable bind");
-      return anchored;
-    } finally { await this.#removeWorktree(mergePath); }
+    this.#requireReady();
+    return this.#withRepositoryMutation(async () => {
+      const existing = await this.#readAndVerifyMergeGroupResult(input); if (existing !== undefined) return existing;
+      const groupRef = safeRef(input.mergeGroupRef, "mergeGroupRef"), base = commitRef(input.baseHead, "baseHead"), declarations = this.#normalizeMergeChangeSets(input.changeSets);
+      for (const declaration of declarations) this.#assertChangeSetMatches(declaration, await this.#inspectBareCommit(declaration.commit, declaration.parentCommit));
+      const mergePath = resolve(this.mergeWorkspaceRoot, `${groupRef}.${randomUUID().replaceAll("-", "")}`);
+      let primaryError;
+      try {
+        await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", mergePath, base]);
+        for (const declaration of declarations) { const result = await this.#git(["-C", mergePath, "-c", "user.name=Harness Workspace Authority", "-c", "user.email=noreply@localhost", "cherry-pick", "--no-edit", "--allow-empty", declaration.commit], { allowFailure: true }); if (!result.ok) { const conflicts = parseNulPaths((await this.#git(["-C", mergePath, "diff", "--name-only", "--diff-filter=U", "-z"], { allowFailure: true, maxOutputBytes: 4 * 1024 * 1024 })).stdout); await this.#git(["-C", mergePath, "cherry-pick", "--abort"], { allowFailure: true }); return immutable({ repositoryRef: this.repositoryRef, mergeGroupRef: groupRef, merged: false, conflicts }); } }
+        const resultCommit = commitRef((await this.#git(["-C", mergePath, "rev-parse", "HEAD"])).stdout.toString("utf8").trim(), "merge result"), receiptRef = `refs/harness/merge-groups/${groupRef}`;
+        // Validate the entire generated chain before publishing its immutable receipt.
+        // A crash after the bind is therefore always recoverable, while an empty or
+        // semantically changed cherry-pick can never poison the permanent group ref.
+        await this.#verifyMergeGroupResult({ groupRef, base, declarations, resultCommit });
+        try { await this.#bindExactRef(receiptRef, resultCommit, "merge group receipt is already immutably bound"); } catch (error) { const winner = await this.#readAndVerifyMergeGroupResult(input); if (winner !== undefined) return winner; throw error; }
+        const anchored = await this.#readAndVerifyMergeGroupResult(input);
+        if (anchored === undefined) throw new Error("merge group receipt disappeared after immutable bind");
+        return anchored;
+      } catch (error) {
+        primaryError = error;
+        throw error;
+      } finally {
+        try { await this.#removeWorktree(mergePath); } catch (cleanupError) { if (primaryError === undefined) throw cleanupError; }
+      }
+    });
   }
 
   async #compareAndSwapHead({ mergeGroupRef, expectedHead, resultCommit } = {}) {
@@ -385,30 +433,34 @@ export class GitWorkspaceAdapter {
     const expected = commitRef(expectedHead, "expectedHead");
     const result = commitRef(resultCommit, "resultCommit");
     this.#requireReady();
-    const anchored = commitRef((await this.#git(["--git-dir", this.repositoryPath, "rev-parse", `refs/harness/merge-groups/${groupRef}`])).stdout.toString("utf8").trim(), "anchored merge result");
-    if (anchored !== result) throw new Error("result commit is not bound to the exact merge group");
-    const current = await this.#head();
-    if (current !== expected) {
-      const error = new Error("authority Git head changed before compare-and-swap");
-      error.code = "AUTHORITY_HEAD_CONFLICT";
-      throw error;
-    }
-    await this.#git(["--git-dir", this.repositoryPath, "cat-file", "-e", `${result}^{commit}`]);
-    const updated = await this.#git(["--git-dir", this.repositoryPath, "update-ref", "refs/heads/authority", result, expected], { allowFailure: true });
-    if (!updated.ok) {
-      const error = new Error("authority Git head compare-and-swap failed");
-      error.code = "AUTHORITY_HEAD_CONFLICT";
-      throw error;
-    }
-    return immutable({ repositoryRef: this.repositoryRef, previousHead: expected, headCommit: result, advanced: true });
+    return this.#withRepositoryMutation(async () => {
+      const anchored = commitRef((await this.#git(["--git-dir", this.repositoryPath, "rev-parse", `refs/harness/merge-groups/${groupRef}`])).stdout.toString("utf8").trim(), "anchored merge result");
+      if (anchored !== result) throw new Error("result commit is not bound to the exact merge group");
+      const current = await this.#head();
+      if (current !== expected) {
+        const error = new Error("authority Git head changed before compare-and-swap");
+        error.code = "AUTHORITY_HEAD_CONFLICT";
+        throw error;
+      }
+      await this.#git(["--git-dir", this.repositoryPath, "cat-file", "-e", `${result}^{commit}`]);
+      const updated = await this.#git(["--git-dir", this.repositoryPath, "update-ref", "refs/heads/authority", result, expected], { allowFailure: true });
+      if (!updated.ok) {
+        const error = new Error("authority Git head compare-and-swap failed");
+        error.code = "AUTHORITY_HEAD_CONFLICT";
+        throw error;
+      }
+      return immutable({ repositoryRef: this.repositoryRef, previousHead: expected, headCommit: result, advanced: true });
+    });
   }
 
   async #closeTaskWorkspace(input) {
     const raw = isRecord(input) ? input.workspaceRef : input, ref = safeRef(raw, "workspaceRef"), workspacePath = this.#workspacePath(ref); this.#requireReady();
-    let removed = false;
-    if (await pathExists(workspacePath)) { await this.#verifyTaskWorkspace(workspacePath, undefined, { requireClean: false }); const result = await this.#git(["--git-dir", this.repositoryPath, "worktree", "remove", "--force", workspacePath], { allowFailure: true }); if (!result.ok && await pathExists(workspacePath)) throw new Error("isolated task workspace could not be removed"); await rm(workspacePath, { recursive: true, force: true }); removed = true; }
-    await this.#git(["--git-dir", this.repositoryPath, "worktree", "prune", "--expire", "now"], { allowFailure: true }); const registrations = await this.#worktreeRegistrations(); if (registrations.some((entry) => samePath(entry.path, workspacePath))) throw new Error("isolated task workspace registration survived close");
-    return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, removed });
+    return this.#withRepositoryMutation(async () => {
+      let removed = false;
+      if (await pathExists(workspacePath)) { await this.#verifyTaskWorkspace(workspacePath, undefined, { requireClean: false }); const result = await this.#git(["--git-dir", this.repositoryPath, "worktree", "remove", "--force", workspacePath], { allowFailure: true }); if (!result.ok && await pathExists(workspacePath)) throw new Error("isolated task workspace could not be removed"); await rm(workspacePath, { recursive: true, force: true }); removed = true; }
+      await this.#git(["--git-dir", this.repositoryPath, "worktree", "prune", "--expire", "now"], { allowFailure: true }); const registrations = await this.#worktreeRegistrations(); if (registrations.some((entry) => samePath(entry.path, workspacePath))) throw new Error("isolated task workspace registration survived close");
+      return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, removed });
+    });
   }
 
   close() {
@@ -431,6 +483,10 @@ export class GitWorkspaceAdapter {
     const active = new Promise((resolvePromise) => { release = resolvePromise; });
     this.active.add(active);
     return Promise.resolve().then(operation).finally(() => { this.active.delete(active); release(); });
+  }
+
+  #withRepositoryMutation(operation) {
+    return coordinateRepositoryMutation(this.repositoryPath, operation);
   }
 
   async #bindExactRef(ref, commit, conflictMessage) {
@@ -492,9 +548,11 @@ export class GitWorkspaceAdapter {
   }
 
   async #removeWorktree(value) {
-    if (!(await pathExists(value))) return;
-    await this.#git(["--git-dir", this.repositoryPath, "worktree", "remove", "--force", value], { allowFailure: true });
-    await rm(value, { recursive: true, force: true });
+    if (await pathExists(value)) {
+      await this.#git(["--git-dir", this.repositoryPath, "worktree", "remove", "--force", value], { allowFailure: true });
+      await rm(value, { recursive: true, force: true });
+    }
+    // A failed worktree add can leave registration metadata without a directory.
     await this.#git(["--git-dir", this.repositoryPath, "worktree", "prune", "--expire", "now"], { allowFailure: true });
   }
 

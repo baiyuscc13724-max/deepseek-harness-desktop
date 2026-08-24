@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.0.42
+## 1.0.43
+
+- 修复 v1.0.42 候选在托管 Runner 暴露的两项跨平台门禁问题：Windows 同步/异步 realpath fixture 不一致（同步保留 8.3 短路径、异步展开长路径）与 macOS 并发 Git worktree 元数据锁竞态；仅校正测试 fixture 归一化与仓库变更协调机制，不放宽生产代码的路径 containment、trusted root、immutable receipt/CAS 与 close 语义。
+- 桌面、全部随包插件、Android 与 iOS/iPadOS 源码版本同步到 1.0.43，Android `versionCode` 更新为 10043；发布工作流默认目标提升到不可变 `v1.0.43`。
+
+## 1.0.42（候选 Tag，未发布）
+
+- `v1.0.42` 本地 1200 项门禁与 Ubuntu/iOS 云端门禁通过，但 Windows 同步/异步 short-path fixture 与 macOS 并发 Git worktree 竞态在托管 Runner 失败，未公开 Release、未提升 stable feed；该 Tag 保持不可变，修复随 v1.0.43 发布。
 
 - 包含原 v1.0.41 候选中的女仆鲸结构化智能陪伴、代理团队项目任务/自动化/业务同步、Host-only 模型准入、壁纸视频生命周期回归与全云端发布链改造；v1.0.41 的不可变 Tag 因托管 Runner 跨平台门禁失败而保持未发布，不移动、不重建。
 - 修复托管 macOS `/var`→`/private/var` realpath 与 Windows 临时目录别名/大小写导致的测试 fixture 误判，并修复 Linux LAN mTLS/E2EE 异步 delivery 竞态；仅校正测试环境归一化与等待方式，不放宽生产代码的路径 containment、mTLS、E2EE、listener isolation 或 ACK 门禁。

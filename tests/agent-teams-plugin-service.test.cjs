@@ -14,7 +14,7 @@ test('Agent Teams plugin installs into the Web profile idempotently', async () =
     const second = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot })
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.version, '1.0.42')
+    assert.equal(first.version, '1.0.43')
 
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-agent-teams/g) || []).length, 1)

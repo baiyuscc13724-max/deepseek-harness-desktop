@@ -1,15 +1,16 @@
-# Harness Desktop 1.0.42
+# Harness Desktop 1.0.43
 
 ## 本次更新
 
-- `v1.0.41` 候选 Tag 因 GitHub 托管 Runner 暴露的跨平台测试 fixture 问题而未发布，Tag 不移动、不重建，stable feed 也未提升。本版将修复后的正式目标提升为 `v1.0.42`。
-- 修复 macOS `/var` 与 `/private/var` realpath、Windows 临时目录别名/大小写导致的 fixture 误判，以及 Linux LAN mTLS/E2EE 测试对异步 delivery 的过短等待竞态；生产代码的 trusted-root/workspace containment、mTLS、E2EE、listener isolation 与 ACK 语义均不放宽。
+- `v1.0.42` 候选 Tag 本地 1200 项门禁与 Ubuntu/iOS 云端门禁通过，但 Windows 同步/异步 realpath fixture 不一致与 macOS 并发 Git worktree 竞态在托管 Runner 失败；该 Tag 不移动、不重建，stable feed 未提升。本版将修复后的正式目标提升为 `v1.0.43`。
+- 修复 Windows GitHub Runner 中 `fs.realpathSync` 保留 8.3 short TEMP、而异步 `realpath` 展开长路径导致的 fixture 不一致（改用与生产相同的异步 realpath，并对真实 source 子目录再做 realpath），并引入同进程、按规范化 repositoryPath 隔离、可清理且不死锁的并发 Git worktree 变更协调；生产代码的路径 containment、trusted root、immutable receipt/CAS 与 close 语义不放宽。
 
 - 女仆鲸进入结构化智能陪伴：她会根据任务开始、多任务、等待决定、受阻、完成和长时间运行给出低频情境提示，而不是每次状态变化都播放固定动作与固定文案。新增本地默契/每日进度/连续完成记录、克制/温柔/元气表达风格和主动陪伴开关；全程不读取对话正文、屏幕或文件。
 - 代理团队工作台新增项目任务、项目自动化与业务同步能力：任务支持创建、领取、依赖、文件边界和加密完整性校验；自动化定义按任务状态变更编排，人工批准后才运行；业务同步以 authority/collaborator 模式在受控成员间交换有界、可审计的消息；桌面 Git 能力只允许在显式授权的项目根目录内执行版本库操作。
 - 新增 Host-only 模型准入插件 dsh-model-admission：模型请求进入有界公平准入与排队（8 个活跃槽、32 个全局等待、每个根至多 8 个、30 秒超时），队列饱和时明确拒绝而非无限堆积；该门禁只覆盖模型请求，不宣称统一调度所有桌面 Provider/API。
 - 壁纸库补齐视频生命周期与 Range 流式播放回归测试：图片/视频预览继续使用受管文件，视频通过有界 Range 响应流式播放，不把整段视频读入内存；敏感动作与上传边界不变。
 - 内嵌浏览器继续沿用并收紧用户/模型来源隔离、导航防护、防重放、停止与取消恢复；文件选择、下载、弹窗及敏感动作仍强制显式授权。
+- 跨平台 fixture 与异步 delivery 等待统一回归：macOS `/var`→`/private/var`、Windows 临时目录别名/大小写、Linux LAN mTLS/E2EE 有界等待均保留既有门禁语义。
 - 桌面会话生成停止后的自动跟随等运行时补丁与小修同步合入；本次仍不把自动团队控制描述为全桌面统一调度池。
 
 ## macOS
@@ -19,8 +20,8 @@
 
 ## 发布与完整性
 
-- 正式发布绑定唯一不可变 `v1.0.42` Tag；本文件准备阶段不会提前修改 stable feed 或已发布资产清单。
-- 统一可恢复发布器现在只在本机执行源码/安全门禁并明确删除、拒绝 `dist`；Windows、macOS、Linux 正式包全部由 GitHub Actions 从同一不可变 Tag/提交生成。
+- 正式发布绑定唯一不可变 `v1.0.43` Tag；本文件准备阶段不会提前修改 stable feed 或已发布资产清单。
+- 统一可恢复发布器只在本机执行源码/安全门禁并明确删除、拒绝 `dist`；Windows、macOS、Linux 正式包全部由 GitHub Actions 从同一不可变 Tag/提交生成。
 - 在普通客户端检测到更新前，云端必须完成 Windows 安装版/便携版、打包后自检、组件健康/回滚，以及真实下载、安装、更新和卸载验证。
 - GitHub 跨平台云构建、签名 Android、签名组件、精确 18 项清单与 GitHub→CNB 云镜像全部成功后，才最后提升 stable feed；中断恢复会重新绑定精确 workflow 身份并在提升前重验两云 18 项资产，不通过本机重复搬运已验证的大文件。
 - 所有公开资产仍需提供并验证 SHA-256，生产组件与稳定源继续强制 Ed25519 签名。

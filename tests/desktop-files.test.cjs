@@ -1,7 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { realpathSync } = require('node:fs')
-const { mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
+const { mkdtemp, readFile, realpath, rm, writeFile } = require('node:fs/promises')
 const { tmpdir } = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -14,11 +13,15 @@ async function plugin() {
   return import(pathToFileURL(path.join(root, 'plugins/dsh-desktop-files/lib/index.js')).href)
 }
 
-// Production containment compares candidates against realpath(%cwd); macOS
-// /var -> /private/var and Windows 8.3/alias temp roots make a raw mkdtemp
-// path non-canonical, so fixtures must hand the plugin canonical roots.
+// Production containment compares candidates against realpath(%cwd) using the
+// async fs/promises.realpath, which fully expands Windows 8.3 short temp names
+// while realpathSync can keep them. macOS /var -> /private/var similarly makes
+// raw mkdtemp paths non-canonical, so fixtures must hand the plugin canonical
+// roots obtained with the same asynchronous API production uses.
 async function canonicalTemp(prefix) {
-  return realpathSync(await mkdtemp(path.join(tmpdir(), prefix)))
+  const canonical = await realpath(await mkdtemp(path.join(tmpdir(), prefix)))
+  assert.equal(canonical, await realpath(canonical), 'canonical fixture root must be its exact async realpath')
+  return canonical
 }
 
 test('file upload names are normalized and cannot create paths', async () => {

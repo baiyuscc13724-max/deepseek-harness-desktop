@@ -64,7 +64,7 @@ test('tampered stored workflow run identities cannot satisfy a release phase', (
     workflowPath: '.github/workflows/android-mobile-release.yml',
     event: 'workflow_dispatch',
     headSha: 'a'.repeat(40),
-    headBranch: 'v1.0.42'
+    headBranch: 'v1.0.43'
   }
   const expected = {
     workflowName: run.workflowName,
@@ -107,8 +107,8 @@ test('GitHub and CNB 18-asset drift is rejected before stable component promotio
       name,
       size: 100 + index,
       sha256: (index + 1).toString(16).padStart(64, '0'),
-      browser_download_url: `https://github.com/org/repo/releases/download/v1.0.42/${encoded}`,
-      mirror_urls: [`https://cnb.cool/org/repo/-/releases/download/v1.0.42/${encoded}`]
+      browser_download_url: `https://github.com/org/repo/releases/download/v1.0.43/${encoded}`,
+      mirror_urls: [`https://cnb.cool/org/repo/-/releases/download/v1.0.43/${encoded}`]
     }
   })
   const liveGithubAssets = assets.map(asset => ({

@@ -6,7 +6,7 @@ const { promisify } = require('node:util')
 const { EventEmitter } = require('node:events')
 const { execFile, execFileSync } = require('node:child_process')
 const { existsSync, realpathSync } = require('node:fs')
-const { mkdir, mkdtemp, rm, writeFile } = require('node:fs/promises')
+const { mkdir, mkdtemp, realpath, rm, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const execFileAsync = promisify(execFile)
@@ -25,10 +25,12 @@ function capability() {
 }
 async function fixture() {
   const [mod, entryMod] = await Promise.all([import(`${pluginUrl}?foundations-tools=${Date.now()}-${Math.random()}`), import(`${entryUrl}?foundations-tools=${Date.now()}-${Math.random()}`)])
-  // Foundation tooling compares agent cwd and project roots against realpath
-  // (macOS /var -> /private/var, Windows 8.3/alias temp roots), so the fixture
-  // root must be canonical before any child workspace is derived from it.
-  const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), 'ft-')))
+  // Foundation tooling compares agent cwd and project roots against the async
+  // fs/promises realpath (macOS /var -> /private/var, Windows 8.3 short temp
+  // names), so the fixture root must be the exact async canonical path before
+  // any child workspace is derived from it.
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ft-')))
+  assert.equal(root, await realpath(root), 'fixture root must be its exact async realpath')
   const source = path.join(root, 's')
   const dshHome = path.join(root, 'd')
   await mkdir(source)
@@ -174,7 +176,7 @@ test('an exact non-Git root returns safe browser attention without creating or c
   try {
     const nonGit = path.join(fx.root, 'plain')
     await mkdir(nonGit)
-    fx.rootAgent.session.header.cwd = realpathSync(nonGit)
+    fx.rootAgent.session.header.cwd = await realpath(nonGit)
     const browser = await fx.manager.browserState()
     assert.equal(browser.mode, 'authority'); assert.equal(browser.ready, false); assert.equal(browser.sourceStatus, 'source_invalid'); assert.deepEqual(browser.attention, ['connector_disabled', 'runner_unavailable', 'source_invalid'])
     const encoded = JSON.stringify(browser); for (const forbidden of [fx.root, fx.source, 'projectRef', 'workspaceRef', 'commit', 'digest', 'actor', 'device', 'evidence']) assert.equal(encoded.includes(forbidden), false, forbidden)

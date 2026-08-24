@@ -3,9 +3,11 @@ const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
 const { promisify } = require('node:util')
-const { execFile, execFileSync } = require('node:child_process')
+const { EventEmitter } = require('node:events')
+const { PassThrough } = require('node:stream')
+const { execFile, execFileSync, spawn } = require('node:child_process')
 const { existsSync, realpathSync } = require('node:fs')
-const { mkdtemp, mkdir, open, readFile, rm, writeFile } = require('node:fs/promises')
+const { mkdtemp, mkdir, open, readFile, readdir, rm, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const execFileAsync = promisify(execFile)
@@ -38,6 +40,53 @@ async function commit(cwd, message) {
   await git(cwd, ['-c', 'user.name=Adapter Test', '-c', 'user.email=test@localhost', 'commit', '-m', message])
   return git(cwd, ['rev-parse', 'HEAD'])
 }
+function worktreeAddTracker({ delayMs = 75, failFirst = false } = {}) {
+  let starts = 0
+  let active = 0
+  let maximumActive = 0
+  let resolveFirstStart
+  const firstStarted = new Promise(resolve => { resolveFirstStart = resolve })
+  const begin = () => {
+    starts += 1
+    active += 1
+    maximumActive = Math.max(maximumActive, active)
+    if (starts === 1) resolveFirstStart()
+  }
+  const spawnImpl = (command, args, options) => {
+    const worktreeIndex = args.indexOf('worktree')
+    if (worktreeIndex < 0 || args[worktreeIndex + 1] !== 'add') return spawn(command, args, options)
+    begin()
+    if (failFirst && starts === 1) {
+      const child = new EventEmitter()
+      child.stdout = new PassThrough()
+      child.stderr = new PassThrough()
+      child.kill = () => true
+      setTimeout(() => {
+        child.stderr.end('injected worktree add failure')
+        child.stdout.end()
+        active -= 1
+        child.emit('close', 1)
+      }, 25)
+      return child
+    }
+    const actual = spawn(command, args, options)
+    const proxy = new EventEmitter()
+    proxy.stdout = actual.stdout
+    proxy.stderr = actual.stderr
+    proxy.kill = (...input) => actual.kill(...input)
+    let finished = false
+    actual.once('error', error => {
+      if (!finished) { finished = true; active -= 1 }
+      proxy.emit('error', error)
+    })
+    actual.once('close', code => setTimeout(() => {
+      if (!finished) { finished = true; active -= 1 }
+      proxy.emit('close', code)
+    }, delayMs))
+    return proxy
+  }
+  return { spawnImpl, firstStarted, stats: () => ({ starts, active, maximumActive }) }
+}
 async function fixture() {
   const mod = await import(moduleUrl)
   const authorityMod = await import(authorityUrl)
@@ -59,6 +108,12 @@ async function fixture() {
 async function usingFixture(run) {
   const state = await fixture()
   try { await run(state) } finally { await rm(state.root, { recursive: true, force: true }) }
+}
+function adapterFor(state, spawnImpl) {
+  return new state.mod.GitWorkspaceAdapter({
+    gitCommand, allowedGitRoot, authorityRoot: state.authorityRoot, sourceWorkspaceRoot: state.source,
+    workspaceRoot: state.workspaceRoot, repositoryRef: 'repository_primary01', spawnImpl
+  })
 }
 
 function declaration(inspected, suffix) { return { changeSetRef: `changeset_${String(suffix).padEnd(8, 'x')}`, repositoryRef: inspected.repositoryRef, commit: inspected.commit, parentCommit: inspected.parentCommit, diffDigest: inspected.diffDigest, treeDigest: inspected.treeDigest, files: inspected.files } }
@@ -153,11 +208,32 @@ test('real Git ChangeSet and MergeGroup bind into Workspace Authority and land b
 test('merge receipt is immutable, receipt-first, ordered, race-safe, and fails closed on tamper', async () => usingFixture(async state => {
   await state.adapter.initialize(); const leftRef = 'workspace_receiptleft', rightRef = 'workspace_receiptright'; await createCommittedWorkspace(state, leftRef, 'left\n', 'left.txt'); await createCommittedWorkspace(state, rightRef, 'right\n', 'right.txt')
   const left = declaration(await state.adapter.inspectChangeSet({ workspaceRef: leftRef, expectedBaseCommit: state.initialHead }), 'receiptleft'), right = declaration(await state.adapter.inspectChangeSet({ workspaceRef: rightRef, expectedBaseCommit: state.initialHead }), 'receiptright'), input = { mergeGroupRef: 'mergegroup_receiptrace', baseHead: state.initialHead, changeSets: [left, right] }, repositoryPath = path.join(state.authorityRoot, 'repositories', 'repository_primary01.git'); await git(state.root, ['--git-dir', repositoryPath, 'config', 'core.logAllRefUpdates', 'always'])
-  const second = new state.mod.GitWorkspaceAdapter({ gitCommand, allowedGitRoot, authorityRoot: state.authorityRoot, sourceWorkspaceRoot: state.source, workspaceRoot: state.workspaceRoot, repositoryRef: 'repository_primary01' }); await second.initialize()
-  const [winnerA, winnerB] = await Promise.all([state.adapter.mergeChangeSets(input), second.mergeChangeSets(input)]); assert.deepEqual(winnerA, winnerB); assert.equal(winnerA.merged, true); assert.deepEqual(await state.adapter.readAndVerifyMergeGroupResult(input), winnerA); assert.deepEqual(await state.adapter.mergeChangeSets(input), winnerA); const receiptRef = `refs/harness/merge-groups/${input.mergeGroupRef}`, receiptLog = await git(state.root, ['--git-dir', repositoryPath, 'reflog', 'show', '--format=%H', receiptRef]); assert.equal(receiptLog.split(/\r?\n/u).filter(Boolean).length, 1)
+  const tracker = worktreeAddTracker(), racerA = adapterFor(state, tracker.spawnImpl), racerB = adapterFor(state, tracker.spawnImpl); await Promise.all([racerA.initialize(), racerB.initialize()])
+  const mergeA = racerA.mergeChangeSets(input); await tracker.firstStarted; const mergeB = racerB.mergeChangeSets(input), closingB = racerB.close(); assert.equal(racerB.close(), closingB); await assert.rejects(racerB.head(), error => error?.code === 'GIT_WORKSPACE_ADAPTER_CLOSED')
+  const [winnerA, winnerB] = await Promise.all([mergeA, mergeB]); await closingB; assert.deepEqual(winnerA, winnerB); assert.equal(winnerA.merged, true); assert.deepEqual(tracker.stats(), { starts: 1, active: 0, maximumActive: 1 }, 'one repository admits exactly one compound worktree mutation and the waiter reuses its receipt'); assert.deepEqual(await state.adapter.readAndVerifyMergeGroupResult(input), winnerA); assert.deepEqual(await state.adapter.mergeChangeSets(input), winnerA); const receiptRef = `refs/harness/merge-groups/${input.mergeGroupRef}`, receiptLog = await git(state.root, ['--git-dir', repositoryPath, 'reflog', 'show', '--format=%H', receiptRef]); assert.equal(receiptLog.split(/\r?\n/u).filter(Boolean).length, 1)
   assert.equal(await state.adapter.readAndVerifyMergeGroupResult({ ...input, mergeGroupRef: 'mergegroup_absent0001' }), undefined); await assert.rejects(state.adapter.readAndVerifyMergeGroupResult({ ...input, changeSets: [right, left] }), /reordered|declared ChangeSet/u); await assert.rejects(state.adapter.readAndVerifyMergeGroupResult({ ...input, changeSets: [{ ...left, files: ['other.txt'] }, right] }), /exact declared ChangeSet/u)
-  await git(state.root, ['--git-dir', repositoryPath, 'update-ref', `refs/harness/merge-groups/${input.mergeGroupRef}`, state.initialHead]); await assert.rejects(state.adapter.readAndVerifyMergeGroupResult(input), /commit count|receipt/u); await second.close()
+  await git(state.root, ['--git-dir', repositoryPath, 'update-ref', `refs/harness/merge-groups/${input.mergeGroupRef}`, state.initialHead]); await assert.rejects(state.adapter.readAndVerifyMergeGroupResult(input), /commit count|receipt/u); await racerA.close()
 }))
+
+test('repository mutation FIFO releases after a Git failure without overlapping the recovery', async () => usingFixture(async state => {
+  await state.adapter.initialize(); const workspaceRef = 'workspace_retryfailure'; await createCommittedWorkspace(state, workspaceRef, 'retry after failure\n', 'retry.txt'); const changeSet = declaration(await state.adapter.inspectChangeSet({ workspaceRef, expectedBaseCommit: state.initialHead }), 'retryfail'), input = { mergeGroupRef: 'mergegroup_retryfailure', baseHead: state.initialHead, changeSets: [changeSet] }
+  const tracker = worktreeAddTracker({ failFirst: true }), failing = adapterFor(state, tracker.spawnImpl), recovery = adapterFor(state, tracker.spawnImpl); await Promise.all([failing.initialize(), recovery.initialize()])
+  const rejected = failing.mergeChangeSets(input); await tracker.firstStarted; const recovered = recovery.mergeChangeSets(input); await assert.rejects(rejected, error => error?.code === 'GIT_OPERATION_FAILED'); const winner = await recovered
+  assert.equal(winner.merged, true); assert.deepEqual(tracker.stats(), { starts: 2, active: 0, maximumActive: 1 }, 'a rejected owner releases the repository FIFO before recovery starts'); assert.deepEqual(await readdir(path.join(state.authorityRoot, 'merge-workspaces')), [], 'failed and recovered merge worktrees are removed'); const registrations = await git(state.root, ['--git-dir', path.join(state.authorityRoot, 'repositories', 'repository_primary01.git'), 'worktree', 'list', '--porcelain']); assert.equal(registrations.includes(input.mergeGroupRef), false, 'failed merge worktree registration is pruned'); assert.deepEqual(await state.adapter.readAndVerifyMergeGroupResult(input), winner); await Promise.all([failing.close(), recovery.close()])
+}))
+
+test('repository mutation coordination does not serialize distinct bare repositories', async () => {
+  const leftState = await fixture(), rightState = await fixture()
+  try {
+    await Promise.all([leftState.adapter.initialize(), rightState.adapter.initialize()])
+    const prepare = async (state, suffix) => { const workspaceRef = `workspace_parallel${suffix}`; await createCommittedWorkspace(state, workspaceRef, `parallel ${suffix}\n`, `${suffix}.txt`); const changeSet = declaration(await state.adapter.inspectChangeSet({ workspaceRef, expectedBaseCommit: state.initialHead }), `parallel${suffix}`); return { mergeGroupRef: `mergegroup_parallel${suffix}`, baseHead: state.initialHead, changeSets: [changeSet] } }
+    const [leftInput, rightInput] = await Promise.all([prepare(leftState, 'left'), prepare(rightState, 'right')]), tracker = worktreeAddTracker({ delayMs: 500 }), left = adapterFor(leftState, tracker.spawnImpl), right = adapterFor(rightState, tracker.spawnImpl)
+    await Promise.all([left.initialize(), right.initialize()]); const [leftResult, rightResult] = await Promise.all([left.mergeChangeSets(leftInput), right.mergeChangeSets(rightInput)])
+    assert.equal(leftResult.merged, true); assert.equal(rightResult.merged, true); assert.deepEqual(tracker.stats(), { starts: 2, active: 0, maximumActive: 2 }, 'different canonical repository paths retain parallel mutation progress'); await Promise.all([left.close(), right.close()])
+  } finally {
+    await Promise.all([rm(leftState.root, { recursive: true, force: true }), rm(rightState.root, { recursive: true, force: true })])
+  }
+})
 
 test('semantic drift in a successful cherry-pick is rejected before the immutable receipt bind', async () => usingFixture(async state => {
   await state.adapter.initialize(); const upperRef = 'workspace_semanticup1', lowerRef = 'workspace_semanticlow1'; await createCommittedWorkspace(state, upperRef, 'upper\ninitial\n'); await createCommittedWorkspace(state, lowerRef, 'initial\nlower\n'); const upper = declaration(await state.adapter.inspectChangeSet({ workspaceRef: upperRef, expectedBaseCommit: state.initialHead }), 'semanticup'), lower = declaration(await state.adapter.inspectChangeSet({ workspaceRef: lowerRef, expectedBaseCommit: state.initialHead }), 'semanticlow'), mergeGroupRef = 'mergegroup_semanticdrift'

@@ -5,7 +5,7 @@ const path = require('node:path')
 const { promisify } = require('node:util')
 const { execFile, execFileSync } = require('node:child_process')
 const { existsSync, realpathSync } = require('node:fs')
-const { mkdtemp, mkdir, readFile, rm, writeFile } = require('node:fs/promises')
+const { mkdtemp, mkdir, readFile, realpath, rm, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const execFileAsync = promisify(execFile)
@@ -39,14 +39,18 @@ async function fixture() {
   const gitMod = await import(gitUrl)
   const casMod = await import(casUrl)
   // Production adapter verifies sourceWorkspaceRoot/workspaceRoot against their
-  // realpath (macOS /var -> /private/var, Windows 8.3/alias temp roots), so the
-  // fixture root must be canonical before children are derived from it.
-  const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), 'git-bundle-transfer-')))
+  // realpath using the async fs/promises API, which fully expands Windows 8.3
+  // short temp names while realpathSync may keep them (macOS /var -> /private/var
+  // too). The fixture root must be canonical with that same API before children
+  // are derived from it.
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'git-bundle-transfer-')))
+  assert.equal(root, await realpath(root), 'fixture root must be its exact async realpath')
   const source = path.join(root, 'computer-a-source')
   await mkdir(source)
   await git(source, ['init'])
   await writeFile(path.join(source, 'README.md'), 'initial source\n', 'utf8')
   const initialHead = await commit(source, 'initial')
+  assert.equal(await realpath(source), source, 'source workspace must be its exact async realpath')
   function adapter(name) {
     return new gitMod.GitWorkspaceAdapter({
       gitCommand, allowedGitRoot,
