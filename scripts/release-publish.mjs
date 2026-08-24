@@ -443,11 +443,16 @@ async function waitForSuccessfulJobs(runId, names) {
 function workflowRun(runId) {
   const view = ghJson(['run', 'view', String(runId), '--repo', repo, '--json', 'databaseId,displayTitle,workflowName,status,conclusion,event,headBranch,headSha,createdAt,url,jobs'])
   const api = ghJson(['api', `repos/${repo}/actions/runs/${runId}`])
-  const workflowPath = String(api?.path || '').split('@')[0]
+  const workflowMetadata = ghJson(['api', `repos/${repo}/actions/workflows/${api?.workflow_id}`])
+  const runWorkflowPath = String(api?.path || '').split('@')[0]
+  const workflowPath = String(workflowMetadata?.path || '').split('@')[0]
+  if (!Number.isSafeInteger(Number(api?.workflow_id)) || Number(api.workflow_id) !== Number(workflowMetadata?.id) || !workflowPath || runWorkflowPath !== workflowPath) {
+    throw new Error(`GitHub workflow metadata disagreement for run ${runId}.`)
+  }
   const run = {
     ...view,
     databaseId: Number(api?.id || view?.databaseId || 0),
-    workflowName: String(api?.name || view?.workflowName || ''),
+    workflowName: String(workflowMetadata?.name || ''),
     workflowPath,
     event: String(api?.event || view?.event || ''),
     headBranch: String(api?.head_branch || view?.headBranch || ''),

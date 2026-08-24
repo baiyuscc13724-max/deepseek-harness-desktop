@@ -169,7 +169,8 @@ test('publisher resumes atomically and never downloads Actions binaries locally'
   assert.doesNotMatch(localGate, /--through', 'windows'|npmRun\(\['run', 'dist'/u)
   assert.match(source, /recover-release-from-actions\.yml/u)
   assert.match(source, /release:cnb-cloud/u)
-  assert.match(source, /workflowRun[\s\S]*actions\/runs\/[\s\S]*workflowPath[\s\S]*matchesWorkflowRunIdentity/u)
+  assert.match(source, /workflowRun[\s\S]*actions\/runs\/[\s\S]*actions\/workflows\/\$\{api\?\.workflow_id\}[\s\S]*workflowMetadata\?\.name[\s\S]*workflowPath[\s\S]*matchesWorkflowRunIdentity/u)
+  assert.doesNotMatch(source, /workflowName: String\(api\?\.name/u)
   assert.match(source, /run\.status === 'completed'[\s\S]*required\.every/u)
   assert.match(source, /signed-android'[\s\S]*productWorkflowIdentity\(WORKFLOWS\.android\)[\s\S]*signed-components'[\s\S]*productWorkflowIdentity\(WORKFLOWS\.components\)/u)
   for (const [phaseName, nextPhase] of [
