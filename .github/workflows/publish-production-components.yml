@@ -157,15 +157,35 @@ jobs:
           HARNESS_COMPONENT_SIGNING_KEY_FILE="$key_file" \
           HARNESS_COMPONENT_KEY_ID='harness-components-02643f81164c594a' \
             node scripts/refresh-release-manifest.mjs --version="${RELEASE_TAG#v}" --repo="$GITHUB_REPOSITORY" --output="$manifest_file"
-          git fetch --force origin "refs/tags/$RELEASE_TAG"
-          tag_revision="$(git rev-parse 'FETCH_HEAD^{}')"
+          git fetch --force origin "refs/tags/$RELEASE_TAG" "refs/heads/main:refs/remotes/origin/main"
+          tag_revision="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
+          publisher_revision="$GITHUB_SHA"
           test "$(git rev-parse HEAD)" = "$tag_revision"
-          echo "Signing manifest for immutable tag revision $tag_revision"
+          [[ "$publisher_revision" =~ ^[0-9a-f]{40}$ ]]
+          assert_bounded_manifest_parent() {
+            local candidate="$1"
+            git cat-file -e "$candidate^{commit}"
+            git merge-base --is-ancestor "$tag_revision" "$candidate"
+            git merge-base --is-ancestor "$candidate" refs/remotes/origin/main
+            mapfile -t publisher_changes < <(git diff --name-only "$tag_revision..$candidate")
+            if test "$candidate" != "$tag_revision"; then
+              test "${#publisher_changes[@]}" -gt 0
+            fi
+            for file in "${publisher_changes[@]}"; do
+              case "$file" in
+                .cnb.yml|.github/workflows/recover-release-from-actions.yml|.github/workflows/publish-production-components.yml|scripts/publish-cnb-cloud-mirror.ps1|scripts/release-audit.mjs|scripts/release-publish.mjs|scripts/release-publish-selection.cjs|tests/release-publisher.test.cjs) ;;
+                *) echo "Manifest parent contains forbidden post-tag file: $file" >&2; exit 1 ;;
+              esac
+            done
+          }
+          assert_bounded_manifest_parent "$publisher_revision"
+          echo "Signing manifest for immutable tag revision $tag_revision from bounded publisher revision $publisher_revision"
           branch="release-manifest/$RELEASE_TAG"
           existing="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
           if test -n "$existing"; then
             git fetch --force origin "refs/heads/$branch:refs/remotes/origin/$branch"
-            test "$(git rev-parse "refs/remotes/origin/$branch^")" = "$tag_revision"
+            existing_parent="$(git rev-parse "refs/remotes/origin/$branch^")"
+            assert_bounded_manifest_parent "$existing_parent"
             test "$(git diff-tree --no-commit-id --name-only -r "refs/remotes/origin/$branch")" = 'release-manifest.json'
             git show "refs/remotes/origin/$branch:release-manifest.json" > "$RUNNER_TEMP/existing-release-manifest.json"
             cmp "$manifest_file" "$RUNNER_TEMP/existing-release-manifest.json"
@@ -175,10 +195,10 @@ jobs:
           fi
           git reset --hard HEAD
           git clean -fd
-          git checkout --detach "$tag_revision"
+          git checkout --detach "$publisher_revision"
           cp "$manifest_file" release-manifest.json
           git add -- release-manifest.json
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "release: sign $RELEASE_TAG asset manifest" -- release-manifest.json
-          test "$(git rev-parse HEAD^)" = "$tag_revision"
+          test "$(git rev-parse HEAD^)" = "$publisher_revision"
           test "$(git diff-tree --no-commit-id --name-only -r HEAD)" = 'release-manifest.json'
           git push origin "HEAD:refs/heads/$branch"

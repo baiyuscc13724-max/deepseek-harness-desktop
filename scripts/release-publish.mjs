@@ -70,7 +70,9 @@ const WORKFLOWS = Object.freeze({
 const POST_TAG_PUBLISHER_FIX_FILES = new Set([
   '.cnb.yml',
   '.github/workflows/recover-release-from-actions.yml',
+  '.github/workflows/publish-production-components.yml',
   'scripts/publish-cnb-cloud-mirror.ps1',
+  'scripts/release-audit.mjs',
   'scripts/release-publish.mjs',
   'scripts/release-publish-selection.cjs',
   'tests/release-publisher.test.cjs'
@@ -322,6 +324,14 @@ function recoveryCheckpointWorkflowIdentity(phaseState) {
     throw new Error('Recovery workflow checkpoint is not a published bounded publisher-fix revision.')
   }
   return { ...WORKFLOWS.recovery, headSha, headBranch }
+}
+
+function componentCheckpointWorkflowIdentity(phaseState) {
+  const bounded = recoveryCheckpointWorkflowIdentity({
+    recoveryHeadSha: phaseState?.workflowHeadSha,
+    recoveryHeadBranch: phaseState?.workflowHeadBranch
+  })
+  return { ...bounded, ...WORKFLOWS.components }
 }
 
 function localTagRevision() {
@@ -792,8 +802,15 @@ async function adoptCloudSignedManifest() {
   gitRun(['fetch', '--force', 'origin', 'refs/heads/main:refs/remotes/origin/main', `refs/heads/${branch}:${remoteRef}`])
   const candidate = gitCapture(['rev-parse', remoteRef]).toLowerCase()
   const parents = gitCapture(['rev-list', '--parents', '-n', '1', candidate]).toLowerCase().split(/\s+/u)
-  if (parents.length !== 2 || parents[1] !== stateProductRevision) {
-    throw new Error('Cloud-signed release manifest commit is not a direct child of the immutable product tag.')
+  if (parents.length !== 2) throw new Error('Cloud-signed release manifest commit must have exactly one parent.')
+  const manifestParent = parents[1]
+  if (manifestParent !== stateProductRevision) {
+    const productAncestor = spawnSync(git, ['merge-base', '--is-ancestor', stateProductRevision, manifestParent], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false })
+    const publishedAncestor = spawnSync(git, ['merge-base', '--is-ancestor', manifestParent, 'origin/main'], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false })
+    const parentChanges = gitCapture(['diff', '--name-only', `${stateProductRevision}..${manifestParent}`]).split(/\r?\n/u).filter(Boolean)
+    if (productAncestor.status !== 0 || publishedAncestor.status !== 0 || parentChanges.length === 0 || parentChanges.some(file => !POST_TAG_PUBLISHER_FIX_FILES.has(file))) {
+      throw new Error('Cloud-signed release manifest parent is not the immutable tag or a published bounded publisher-fix revision.')
+    }
   }
   const changed = gitCapture(['diff-tree', '--no-commit-id', '--name-only', '-r', candidate]).split(/\r?\n/u).filter(Boolean)
   if (changed.length !== 1 || changed[0] !== 'release-manifest.json') {
@@ -1287,19 +1304,20 @@ async function publish() {
   })
 
   await phase(state, 'signed-components', async () => {
-    const expectedIdentity = productWorkflowIdentity(WORKFLOWS.components)
+    const componentSource = publishPostTagRecoveryFix()
+    const expectedIdentity = { ...WORKFLOWS.components, headSha: componentSource.headSha, headBranch: componentSource.headBranch }
     const stored = reusableWorkflowRun(Number(state.phases['signed-components']?.runId || 0), expectedIdentity)
-    const runId = Number(stored?.databaseId || 0) || await dispatchWorkflow('publish-production-components.yml', [['tag', tag], ['product_revision', stateProductRevision]])
+    const runId = Number(stored?.databaseId || 0) || await dispatchWorkflow('publish-production-components.yml', [['tag', tag], ['product_revision', stateProductRevision]], componentSource.ref)
     const run = stored || reusableWorkflowRun(runId, expectedIdentity)
-    if (!run) throw new Error('Signed component workflow identity does not match the immutable product tag.')
-    await checkpoint(state, 'signed-components', { runId, url: run.url })
+    if (!run) throw new Error('Signed component workflow identity does not match its immutable product and bounded publisher revision.')
+    await checkpoint(state, 'signed-components', { runId, url: run.url, workflowHeadSha: componentSource.headSha, workflowHeadBranch: componentSource.headBranch })
     await waitForRun(runId)
     const release = releaseForTag()
     assertReleaseAssets(release, expectedAllNames(), { draft: false })
-    return { runId, url: run.url }
+    return { runId, url: run.url, workflowHeadSha: componentSource.headSha, workflowHeadBranch: componentSource.headBranch }
   }, {
     validateCompleted: completed => {
-      requireSuccessfulWorkflowEvidence(completed.runId, productWorkflowIdentity(WORKFLOWS.components), 'component signing')
+      requireSuccessfulWorkflowEvidence(completed.runId, componentCheckpointWorkflowIdentity(completed), 'component signing')
       assertReleaseAssets(releaseForTag(), expectedAllNames(), { draft: false })
     }
   })
