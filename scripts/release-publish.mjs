@@ -1161,6 +1161,46 @@ async function publish() {
     const expectedRecoveryHeadSha = recoverySource.headSha
     const expectedRecoveryHeadBranch = recoverySource.headBranch
     let recoveryRequestId = String(recoveryPhase.recoveryRequestId || '')
+    let storedRecoveryRunId = Number(recoveryPhase.recoveryRunId || 0)
+    let recoveryDispatchAttemptedAt = recoveryPhase.recoveryDispatchAttemptedAt
+    const checkpointedRecoveryHeadSha = String(recoveryPhase.recoveryHeadSha || '').toLowerCase()
+    const checkpointedRecoveryHeadBranch = String(recoveryPhase.recoveryHeadBranch || '')
+    if (recoveryRequestId && (checkpointedRecoveryHeadSha !== expectedRecoveryHeadSha || checkpointedRecoveryHeadBranch !== expectedRecoveryHeadBranch)) {
+      const previousDisplayTitle = `Recover ${tag} from run ${desktopRunId} release ${release.id} · ${recoveryRequestId}`
+      const previousCandidate = storedRecoveryRunId
+        ? { databaseId: storedRecoveryRunId }
+        : selectUniqueWorkflowRunByDisplayTitle(workflowRuns('recover-release-from-actions.yml'), previousDisplayTitle, 'Previous recovery')
+      const previousRecovery = previousCandidate ? workflowRun(Number(previousCandidate.databaseId)) : null
+      const previousRecoveryIdentity = previousRecovery ? {
+        ...recoveryCheckpointWorkflowIdentity({ recoveryHeadSha: previousRecovery.headSha, recoveryHeadBranch: previousRecovery.headBranch }),
+        displayTitle: previousDisplayTitle
+      } : null
+      if (!previousRecovery || !matchesWorkflowRunIdentity(previousRecovery, previousRecoveryIdentity) || previousRecovery.status !== 'completed' || previousRecovery.conclusion === 'success') {
+        throw new Error('A recovery source revision changed before its exact prior run reached a terminal non-success state; refusing ambiguous redispatch.')
+      }
+      const recoveryAttempts = [
+        ...(Array.isArray(recoveryPhase.recoveryAttempts) ? recoveryPhase.recoveryAttempts.slice(-15) : []),
+        {
+          requestId: recoveryRequestId,
+          runId: Number(previousRecovery.databaseId),
+          headSha: previousRecovery.headSha,
+          headBranch: previousRecovery.headBranch,
+          conclusion: previousRecovery.conclusion,
+          invalidatedAt: new Date().toISOString()
+        }
+      ]
+      await checkpoint(state, 'desktop-publication', {
+        recoveryAttempts,
+        recoveryRequestId: null,
+        recoveryRunId: null,
+        recoveryDispatchAttemptedAt: null,
+        recoveryHeadSha: null,
+        recoveryHeadBranch: null
+      })
+      recoveryRequestId = ''
+      storedRecoveryRunId = 0
+      recoveryDispatchAttemptedAt = null
+    }
     if (!recoveryRequestId) recoveryRequestId = `${tag}-recovery-${randomUUID()}`
     const expectedRecoveryIdentity = {
       ...WORKFLOWS.recovery,
@@ -1168,7 +1208,7 @@ async function publish() {
       headBranch: expectedRecoveryHeadBranch,
       displayTitle: `Recover ${tag} from run ${desktopRunId} release ${release.id} · ${recoveryRequestId}`
     }
-    const storedRecovery = reusableWorkflowRun(Number(recoveryPhase.recoveryRunId || 0), expectedRecoveryIdentity)
+    const storedRecovery = reusableWorkflowRun(storedRecoveryRunId, expectedRecoveryIdentity)
     await checkpoint(state, 'desktop-publication', {
       releaseId: release.id,
       sourceRunId: desktopRunId,
@@ -1178,7 +1218,7 @@ async function publish() {
       recoveryHeadBranch: expectedRecoveryHeadBranch
     })
     let discoveredRecovery = storedRecovery || workflowRunByExactIdentity('recover-release-from-actions.yml', expectedRecoveryIdentity, 'Recovery')
-    if (!discoveredRecovery && recoveryPhase.recoveryDispatchAttemptedAt) {
+    if (!discoveredRecovery && recoveryDispatchAttemptedAt) {
       discoveredRecovery = await waitForExactWorkflowDiscovery('recover-release-from-actions.yml', expectedRecoveryIdentity, 'Recovery')
     }
     if (discoveredRecovery?.status === 'completed' && discoveredRecovery.conclusion !== 'success') {

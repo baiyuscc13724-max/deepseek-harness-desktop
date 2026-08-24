@@ -698,6 +698,20 @@ test('cloud recovery binds artifacts to the tag and safely resumes any verified 
   assert.doesNotMatch(workflowText, /--clobber/u)
 })
 
+test('post-Tag recovery rotates its request only after an exact terminal failed source run', () => {
+  const publisher = read('scripts/release-publish.mjs')
+  const recovery = publisher.slice(publisher.indexOf("phase(state, 'desktop-publication'"), publisher.indexOf("phase(state, 'signed-android'"))
+  assert.match(recovery, /checkpointedRecoveryHeadSha !== expectedRecoveryHeadSha[\s\S]*checkpointedRecoveryHeadBranch !== expectedRecoveryHeadBranch/u)
+  assert.match(recovery, /selectUniqueWorkflowRunByDisplayTitle\(workflowRuns\('recover-release-from-actions\.yml'\), previousDisplayTitle, 'Previous recovery'\)/u)
+  assert.match(recovery, /recoveryCheckpointWorkflowIdentity\(\{ recoveryHeadSha: previousRecovery\.headSha, recoveryHeadBranch: previousRecovery\.headBranch \}\)/u)
+  assert.match(recovery, /previousRecovery\.status !== 'completed' \|\| previousRecovery\.conclusion === 'success'[\s\S]*refusing ambiguous redispatch/u)
+  assert.match(recovery, /recoveryAttempts[\s\S]*requestId: recoveryRequestId[\s\S]*runId: Number\(previousRecovery\.databaseId\)[\s\S]*invalidatedAt/u)
+  assert.match(recovery, /recoveryRequestId: null[\s\S]*recoveryRunId: null[\s\S]*recoveryDispatchAttemptedAt: null[\s\S]*recoveryHeadSha: null/u)
+  const terminalGuard = recovery.indexOf("previousRecovery.status !== 'completed'")
+  const rotatedRequest = recovery.indexOf('recoveryRequestId = `${tag}-recovery-${randomUUID()}`')
+  assert.ok(terminalGuard >= 0 && rotatedRequest > terminalGuard, 'new recovery request id must be created only after the prior exact run is terminal and unsuccessful')
+})
+
 test('manual workflow recovery is uniquely identified and candidate build binds exact SHA before Tag', () => {
   const source = read('scripts/release-publish.mjs')
   const release = read('.github/workflows/release.yml')
