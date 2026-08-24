@@ -331,10 +331,10 @@ const releaseWorkflow = await readFile(path.join(root, '.github/workflows/releas
 for (const contract of ['Build unsigned macOS packages', "CSC_IDENTITY_AUTO_DISCOVERY: 'false'", 'Verify unsigned macOS packages', 'ditto -x -k']) {
   if (!releaseWorkflow.includes(contract)) throw new Error(`macOS unsigned workflow contract is missing: ${contract}`)
 }
-for (const contract of ['name: Cloud Build & Release Desktop', 'HARNESS_RELEASE_PACKAGING_MODE: github-actions-only', 'product_revision:', 'PUBLISHER_PRODUCT_REVISION', 'git rev-parse HEAD', 'git rev-list -n 1 "$RELEASE_TAG"', 'Verify packaged Windows component health and rollback', 'npm run test:component-local']) {
-  if (!releaseWorkflow.includes(contract)) throw new Error(`Cloud-only release workflow contract is missing: ${contract}`)
+for (const contract of ['name: Cloud Build & Release Desktop', 'HARNESS_RELEASE_PACKAGING_MODE: github-actions-only', 'source_revision:', 'request_id:', 'PUBLISHER_SOURCE_REVISION', 'git rev-parse HEAD', 'test "$GITHUB_SHA" = "$expected_revision"', 'git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG"', 'Verify packaged Windows component health and rollback', 'npm run test:component-local', 'Verify Windows candidate upgrade and installation']) {
+  if (!releaseWorkflow.includes(contract)) throw new Error(`Cloud-only pre-Tag release workflow contract is missing: ${contract}`)
 }
-if ((releaseWorkflow.match(/Bind cloud package build to immutable source revision/gu) || []).length !== 3) throw new Error('Every cloud build, iOS gate, and draft staging job must bind the immutable product revision.')
+if ((releaseWorkflow.match(/Bind cloud package build to exact pre-Tag candidate revision/gu) || []).length !== 3) throw new Error('Every cloud build, iOS gate, and Windows candidate binding job must bind the exact pre-Tag source revision.')
 if (releaseWorkflow.includes('release-retry/v')) throw new Error('Desktop release packaging must not be triggered by a mutable retry branch.')
 for (const forbidden of ['macos-signing', 'Prepare Apple notarization API key', 'Build signed and notarized macOS packages', 'xcrun notarytool submit', 'xcrun stapler', 'codesign --verify', 'spctl --assess', 'Remove temporary Apple notarization key']) {
   if (releaseWorkflow.includes(forbidden)) throw new Error(`macOS unsigned workflow contract forbids signing/notarization gates: ${forbidden}`)
