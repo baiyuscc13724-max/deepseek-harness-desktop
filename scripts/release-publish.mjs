@@ -10,7 +10,17 @@ import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
 const { validateAndVerifyDesktopReleaseManifest } = require('../electron/bridge/desktop-release-contract.cjs')
-const { canReattachPreferredDraft, isExactDetachedDraft, normalizeReleaseBody, selectReleaseForTag } = require('./release-publish-selection.cjs')
+const {
+  canReattachPreferredDraft,
+  isExactDetachedDraft,
+  matchesWorkflowRunIdentity,
+  normalizePublisherPackagingState,
+  normalizeReleaseBody,
+  selectReleaseForTag,
+  validateCnbMirrorObservations,
+  validateCompletedPhaseEvidence,
+  validateGithubReleaseAgainstManifest
+} = require('./release-publish-selection.cjs')
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const command = process.argv[2] || 'status'
@@ -25,8 +35,11 @@ const bundledGit = path.join(root, 'third_party', 'mingit', 'cmd', 'git.exe')
 const legacyPortableGit = path.resolve(root, '..', '.tools', 'MinGit', 'cmd', 'git.exe')
 const git = String(process.env.HARNESS_RELEASE_GIT || (existsSync(bundledGit) ? bundledGit : existsSync(legacyPortableGit) ? legacyPortableGit : 'git')).trim()
 const npmCli = String(process.env.npm_execpath || '').trim()
+const PACKAGING_MODE = 'github-actions-only'
+const LOCAL_GATE_PHASE = 'local-source-gates'
+const DESKTOP_DISCOVERY_TIMEOUT_MS = 5 * 60 * 1000
 const PHASES = [
-  'local-windows',
+  LOCAL_GATE_PHASE,
   'immutable-tag',
   'desktop-cloud-builds',
   'desktop-publication',
@@ -44,6 +57,12 @@ const BUILD_JOBS = [
   'Build ubuntu-latest',
   'Validate iPhone and iPad simulators'
 ]
+const WORKFLOWS = Object.freeze({
+  desktop: Object.freeze({ workflowName: 'Cloud Build & Release Desktop', workflowPath: '.github/workflows/release.yml', events: ['push', 'workflow_dispatch'] }),
+  recovery: Object.freeze({ workflowName: 'Recover Release From Verified Actions Artifacts', workflowPath: '.github/workflows/recover-release-from-actions.yml', events: ['workflow_dispatch'] }),
+  android: Object.freeze({ workflowName: 'Publish Signed Android Mobile', workflowPath: '.github/workflows/android-mobile-release.yml', events: ['push', 'workflow_dispatch'] }),
+  components: Object.freeze({ workflowName: 'Publish Verified Production Components', workflowPath: '.github/workflows/publish-production-components.yml', events: ['workflow_dispatch'] })
+})
 const POST_TAG_PUBLISHER_FIX_FILES = new Set([
   '.cnb.yml',
   '.github/workflows/recover-release-from-actions.yml',
@@ -173,7 +192,8 @@ async function readState() {
   catch (error) {
     if (error?.code !== 'ENOENT') throw error
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      packagingMode: PACKAGING_MODE,
       version,
       tag,
       repo,
@@ -184,6 +204,11 @@ async function readState() {
       phases: {}
     }
   }
+}
+
+async function normalizePackagingState(state) {
+  const changed = normalizePublisherPackagingState(state, { packagingMode: PACKAGING_MODE, localGatePhase: LOCAL_GATE_PHASE })
+  if (changed) await saveState(state)
 }
 
 async function saveState(state) {
@@ -199,8 +224,9 @@ async function checkpoint(state, id, data) {
   await saveState(state)
 }
 
-async function phase(state, id, work) {
+async function phase(state, id, work, { validateCompleted } = {}) {
   if (state.phases[id]?.status === 'completed') {
+    if (validateCompleted) await validateCompletedPhaseEvidence(state.phases[id], validateCompleted)
     console.log(`Skipping completed publication phase: ${id}`)
     return state.phases[id]
   }
@@ -245,7 +271,7 @@ function assertMainFastForward() {
 
 function publishPostTagRecoveryFix() {
   const current = gitCapture(['rev-parse', 'HEAD']).toLowerCase()
-  if (current === stateProductRevision) return { ref: tag, fields: [] }
+  if (current === stateProductRevision) return { ref: tag, fields: [], headSha: stateProductRevision, headBranch: tag }
   assertClean()
   gitRun(['fetch', 'origin', 'main'])
   const remoteMain = gitCapture(['rev-parse', 'origin/main']).toLowerCase()
@@ -261,7 +287,27 @@ function publishPostTagRecoveryFix() {
     throw new Error('Post-tag recovery revision contains changes outside the bounded publisher fix.')
   }
   if (remoteMain !== current) gitRun(['push', 'origin', 'HEAD:main'])
-  return { ref: 'main', fields: [['publisher_revision', current]] }
+  return { ref: 'main', fields: [['publisher_revision', current]], headSha: current, headBranch: 'main' }
+}
+
+function recoveryCheckpointWorkflowIdentity(phaseState) {
+  const headSha = String(phaseState?.recoveryHeadSha || '').toLowerCase()
+  const headBranch = String(phaseState?.recoveryHeadBranch || '')
+  if (!/^[0-9a-f]{40}$/u.test(headSha)) throw new Error('Recovery workflow checkpoint lacks an exact source revision.')
+  if (headBranch === tag) {
+    if (headSha !== stateProductRevision) throw new Error('Tag-based recovery checkpoint does not match the immutable product revision.')
+    return { ...WORKFLOWS.recovery, headSha, headBranch }
+  }
+  if (headBranch !== 'main') throw new Error('Recovery workflow checkpoint has an unsupported source ref.')
+  gitRun(['fetch', 'origin', 'main'])
+  const remoteMain = gitCapture(['rev-parse', 'origin/main']).toLowerCase()
+  const productAncestor = spawnSync(git, ['merge-base', '--is-ancestor', stateProductRevision, headSha], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false })
+  const publishedAncestor = spawnSync(git, ['merge-base', '--is-ancestor', headSha, remoteMain], { cwd: root, env: gitEnvironment(), stdio: 'ignore', shell: false })
+  const changes = gitCapture(['diff', '--name-only', `${stateProductRevision}..${headSha}`]).split(/\r?\n/u).filter(Boolean)
+  if (productAncestor.status !== 0 || publishedAncestor.status !== 0 || changes.length === 0 || changes.some(file => !POST_TAG_PUBLISHER_FIX_FILES.has(file))) {
+    throw new Error('Recovery workflow checkpoint is not a published bounded publisher-fix revision.')
+  }
+  return { ...WORKFLOWS.recovery, headSha, headBranch }
 }
 
 function localTagRevision() {
@@ -395,13 +441,36 @@ async function waitForSuccessfulJobs(runId, names) {
 }
 
 function workflowRun(runId) {
-  return ghJson(['run', 'view', String(runId), '--repo', repo, '--json', 'databaseId,displayTitle,workflowName,status,conclusion,event,headBranch,headSha,createdAt,url'])
+  const view = ghJson(['run', 'view', String(runId), '--repo', repo, '--json', 'databaseId,displayTitle,workflowName,status,conclusion,event,headBranch,headSha,createdAt,url,jobs'])
+  const api = ghJson(['api', `repos/${repo}/actions/runs/${runId}`])
+  const workflowPath = String(api?.path || '').split('@')[0]
+  const run = {
+    ...view,
+    databaseId: Number(api?.id || view?.databaseId || 0),
+    workflowName: String(api?.name || view?.workflowName || ''),
+    workflowPath,
+    event: String(api?.event || view?.event || ''),
+    headBranch: String(api?.head_branch || view?.headBranch || ''),
+    headSha: String(api?.head_sha || view?.headSha || '').toLowerCase(),
+    url: String(api?.html_url || view?.url || '')
+  }
+  for (const field of ['workflowName', 'event', 'headBranch', 'headSha']) {
+    if (view?.[field] && String(view[field]).toLowerCase() !== String(run[field]).toLowerCase()) {
+      throw new Error(`GitHub workflow run identity disagreement for ${runId}: ${field}`)
+    }
+  }
+  return run
 }
 
-function reusableWorkflowRun(runId) {
-  if (!runId) return null
+function productWorkflowIdentity(workflow) {
+  return { ...workflow, headSha: stateProductRevision, headBranch: tag }
+}
+
+function reusableWorkflowRun(runId, expected) {
+  if (!runId || !expected) return null
   try {
     const run = workflowRun(runId)
+    if (!matchesWorkflowRunIdentity(run, expected)) return null
     return run.status === 'completed' && run.conclusion !== 'success' ? null : run
   } catch {
     return null
@@ -411,7 +480,8 @@ function reusableWorkflowRun(runId) {
 function reusableDesktopBuildRun(runId) {
   if (!runId) return null
   try {
-    const run = ghJson(['run', 'view', String(runId), '--repo', repo, '--json', 'databaseId,displayTitle,workflowName,status,conclusion,event,headBranch,headSha,createdAt,url,jobs'])
+    const run = workflowRun(runId)
+    if (!matchesWorkflowRunIdentity(run, productWorkflowIdentity(WORKFLOWS.desktop))) return null
     const jobs = new Map((run.jobs || []).map(job => [job.name, job]))
     const required = BUILD_JOBS.map(name => jobs.get(name))
     if (run.status === 'completed') return required.every(job => job?.conclusion === 'success') ? run : null
@@ -422,11 +492,29 @@ function reusableDesktopBuildRun(runId) {
   }
 }
 
+function requireDesktopBuildEvidence(runId) {
+  const run = reusableDesktopBuildRun(Number(runId || 0))
+  const jobs = new Map((run?.jobs || []).map(job => [job.name, job]))
+  if (!run || !BUILD_JOBS.every(name => jobs.get(name)?.conclusion === 'success')) {
+    throw new Error('Checkpointed desktop phase lacks exact successful immutable build evidence.')
+  }
+  return run
+}
+
+function requireSuccessfulWorkflowEvidence(runId, expected, label) {
+  const run = reusableWorkflowRun(Number(runId || 0), expected)
+  if (!run || run.status !== 'completed' || run.conclusion !== 'success') {
+    throw new Error(`Checkpointed ${label} phase lacks exact successful workflow evidence.`)
+  }
+  return run
+}
+
 async function waitForDesktopBuildDiscovery() {
   const discoveryStarted = Date.now()
-  while (Date.now() - discoveryStarted < 60_000) {
+  const discoverable = { workflowName: WORKFLOWS.desktop.workflowName, events: WORKFLOWS.desktop.events, headSha: stateProductRevision, headBranch: tag }
+  while (Date.now() - discoveryStarted < DESKTOP_DISCOVERY_TIMEOUT_MS) {
     const candidates = workflowRuns('release.yml')
-      .filter(run => run.headSha === stateProductRevision && run.headBranch === tag)
+      .filter(run => matchesWorkflowRunIdentity(run, discoverable))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
     for (const candidate of candidates) {
       const reusable = reusableDesktopBuildRun(Number(candidate.databaseId))
@@ -434,8 +522,10 @@ async function waitForDesktopBuildDiscovery() {
     }
     await sleep()
   }
-  const runId = await dispatchWorkflow('release.yml', [['tag', tag]])
-  return workflowRun(runId)
+  const runId = await dispatchWorkflow('release.yml', [['tag', tag], ['product_revision', stateProductRevision]])
+  const dispatched = reusableDesktopBuildRun(runId)
+  if (!dispatched) throw new Error('Dispatched desktop workflow identity does not match the immutable release source.')
+  return dispatched
 }
 
 async function waitForRunCompletion(runId) {
@@ -642,6 +732,32 @@ async function adoptCloudSignedManifest() {
   return { release, commit: candidate, branch }
 }
 
+async function verifyCloudAssetMirrorsBeforeStable() {
+  const release = releaseForTag()
+  assertReleaseAssets(release, expectedAllNames(), { draft: false })
+  const manifest = await readVerifiedDesktopRelease()
+  validateGithubReleaseAgainstManifest(manifest.assets, release.assets)
+  const observations = []
+  for (const asset of manifest.assets) {
+    const mirrorUrl = asset.mirror_urls.find(url => String(url).startsWith('https://cnb.cool/'))
+    if (!mirrorUrl) throw new Error(`CNB mirror URL missing before stable promotion: ${asset.name}`)
+    const response = await fetch(mirrorUrl, { method: 'HEAD', redirect: 'follow' })
+    const rawSize = response.headers.get('content-length')
+    const size = rawSize && /^\d+$/u.test(rawSize) ? Number(rawSize) : Number.NaN
+    observations.push({ name: asset.name, url: mirrorUrl, status: response.status, size })
+  }
+  const checksum = manifest.assets.find(asset => asset.name === 'SHA256SUMS.txt')
+  const checksumObservation = observations.find(observation => observation.name === 'SHA256SUMS.txt')
+  if (!checksum || !checksumObservation) throw new Error('Signed checksum asset missing before stable promotion.')
+  const checksumResponse = await fetch(checksumObservation.url, { redirect: 'follow' })
+  if (!checksumResponse.ok) throw new Error(`CNB checksum mirror HTTP failure before stable promotion: ${checksumResponse.status}`)
+  const checksumBytes = Buffer.from(await checksumResponse.arrayBuffer())
+  checksumObservation.sha256 = sha256(checksumBytes)
+  validateCnbMirrorObservations(manifest.assets, observations)
+  console.log(`Revalidated ${observations.length} exact GitHub/CNB release assets before stable promotion.`)
+  return { assetCount: observations.length, revalidatedAt: new Date().toISOString() }
+}
+
 async function promoteStableFeeds() {
   const manifest = await readVerifiedDesktopRelease()
   const sources = JSON.parse(await readFile(path.join(root, 'component-update-sources.json'), 'utf8'))
@@ -733,6 +849,7 @@ async function publish() {
   await preflightDesktopManifestTrust()
   const state = await readState()
   if (state.version !== version || state.tag !== tag || state.repo !== repo) throw new Error('Publication state identity mismatch.')
+  await normalizePackagingState(state)
   const currentHead = gitCapture(['rev-parse', 'HEAD']).toLowerCase()
   const publishedTagRevision = remoteTagRevision()
   if (state.productRevision && publishedTagRevision && state.productRevision !== publishedTagRevision) {
@@ -751,10 +868,14 @@ async function publish() {
   }
   stateProductRevision = state.productRevision || publishedTagRevision
 
-  await phase(state, 'local-windows', async () => {
+  await phase(state, LOCAL_GATE_PHASE, async () => {
     assertClean()
+    const localDist = path.join(root, 'dist')
+    rmSync(localDist, { recursive: true, force: true })
     ghRun(['auth', 'status'])
-    npmRun(['run', 'release:orchestrate', '--', 'run', '--version', version, '--through', 'windows'], { timeout: 75 * 60 * 1000 })
+    npmRun(['run', 'release:orchestrate', '--', 'run', '--version', version, '--through', 'verify'], { timeout: 30 * 60 * 1000 })
+    if (existsSync(localDist)) throw new Error('Cloud-only packaging forbids local release artifacts during publisher source gates.')
+    return { packagingMode: PACKAGING_MODE, completedThrough: 'verify' }
   })
 
   await phase(state, 'immutable-tag', async () => {
@@ -782,6 +903,8 @@ async function publish() {
     await checkpoint(state, 'desktop-cloud-builds', { runId: Number(run.databaseId), url: run.url })
     await waitForSuccessfulJobs(run.databaseId, BUILD_JOBS)
     return { runId: Number(run.databaseId), url: run.url }
+  }, {
+    validateCompleted: completed => { requireDesktopBuildEvidence(completed.runId) }
   })
   const desktopRunId = Number(desktopPhase.runId || state.phases['desktop-cloud-builds']?.runId)
 
@@ -795,40 +918,92 @@ async function publish() {
     }
     let release = await ensureExactDraft(Number(state.phases['desktop-publication']?.releaseId || 0))
     if (!release.draft) return { releaseId: release.id, url: release.html_url }
-    const storedRecovery = reusableWorkflowRun(Number(state.phases['desktop-publication']?.recoveryRunId || 0))
-    const recoverySource = storedRecovery ? null : publishPostTagRecoveryFix()
+    const recoveryPhase = state.phases['desktop-publication'] || {}
+    const recoverySource = publishPostTagRecoveryFix()
+    const expectedRecoveryHeadSha = recoverySource.headSha
+    const expectedRecoveryHeadBranch = recoverySource.headBranch
+    const storedRecovery = reusableWorkflowRun(Number(recoveryPhase.recoveryRunId || 0), {
+      ...WORKFLOWS.recovery,
+      headSha: expectedRecoveryHeadSha,
+      headBranch: expectedRecoveryHeadBranch
+    })
+    await checkpoint(state, 'desktop-publication', {
+      releaseId: release.id,
+      recoveryHeadSha: expectedRecoveryHeadSha,
+      recoveryHeadBranch: expectedRecoveryHeadBranch
+    })
     const recoveryRunId = storedRecovery?.databaseId || await dispatchWorkflow('recover-release-from-actions.yml', [
       ['tag', tag],
       ['source_run_id', desktopRunId],
       ['release_id', release.id],
       ...recoverySource.fields
     ], recoverySource.ref)
-    await checkpoint(state, 'desktop-publication', { releaseId: release.id, recoveryRunId })
+    const dispatchedRecovery = storedRecovery || reusableWorkflowRun(recoveryRunId, {
+      ...WORKFLOWS.recovery,
+      headSha: expectedRecoveryHeadSha,
+      headBranch: expectedRecoveryHeadBranch
+    })
+    if (!dispatchedRecovery) throw new Error('Recovery workflow identity does not match its checkpointed publisher revision.')
+    await checkpoint(state, 'desktop-publication', {
+      releaseId: release.id,
+      recoveryRunId,
+      recoveryHeadSha: expectedRecoveryHeadSha,
+      recoveryHeadBranch: expectedRecoveryHeadBranch
+    })
     await waitForRun(recoveryRunId)
     release = releaseForTag()
     assertReleaseAssets(release, expectedDesktopNames(), { draft: false, allowAdditional: true })
-    return { releaseId: release.id, recoveryRunId, url: release.html_url }
+    return { releaseId: release.id, recoveryRunId, recoveryHeadSha: expectedRecoveryHeadSha, recoveryHeadBranch: expectedRecoveryHeadBranch, url: release.html_url }
+  }, {
+    validateCompleted: completed => {
+      const source = requireDesktopBuildEvidence(desktopRunId)
+      if (source.status !== 'completed') throw new Error('Checkpointed desktop publication source workflow is not complete.')
+      assertReleaseAssets(releaseForTag(), expectedDesktopNames(), { draft: false, allowAdditional: true })
+      if (source.conclusion !== 'success') {
+        requireSuccessfulWorkflowEvidence(completed.recoveryRunId, recoveryCheckpointWorkflowIdentity(completed), 'desktop recovery')
+      }
+    }
   })
 
   await phase(state, 'signed-android', async () => {
-    const stored = reusableWorkflowRun(Number(state.phases['signed-android']?.runId || 0))
-    const predicate = run => run.headSha === stateProductRevision && run.headBranch === tag && !(run.status === 'completed' && run.conclusion !== 'success')
-    const run = stored || await waitForRunDiscovery('android-mobile-release.yml', predicate, () => dispatchWorkflow('android-mobile-release.yml', [['tag', tag]]))
+    const expectedIdentity = productWorkflowIdentity(WORKFLOWS.android)
+    const stored = reusableWorkflowRun(Number(state.phases['signed-android']?.runId || 0), expectedIdentity)
+    const discoverable = { workflowName: WORKFLOWS.android.workflowName, events: WORKFLOWS.android.events, headSha: stateProductRevision, headBranch: tag }
+    const discovered = stored || await waitForRunDiscovery(
+      'android-mobile-release.yml',
+      run => matchesWorkflowRunIdentity(run, discoverable) && !(run.status === 'completed' && run.conclusion !== 'success'),
+      () => dispatchWorkflow('android-mobile-release.yml', [['tag', tag]])
+    )
+    const run = stored || reusableWorkflowRun(Number(discovered.databaseId), expectedIdentity)
+    if (!run) throw new Error('Signed Android workflow identity does not match the immutable product tag.')
     await checkpoint(state, 'signed-android', { runId: Number(run.databaseId), url: run.url })
     await waitForRun(run.databaseId)
     const release = releaseForTag()
     assertReleaseAssets(release, [...expectedDesktopNames(), ...expectedAndroidNames()], { draft: false, allowAdditional: true })
     return { runId: Number(run.databaseId), url: run.url }
+  }, {
+    validateCompleted: completed => {
+      requireSuccessfulWorkflowEvidence(completed.runId, productWorkflowIdentity(WORKFLOWS.android), 'Android signing')
+      assertReleaseAssets(releaseForTag(), [...expectedDesktopNames(), ...expectedAndroidNames()], { draft: false, allowAdditional: true })
+    }
   })
 
   await phase(state, 'signed-components', async () => {
-    const stored = reusableWorkflowRun(Number(state.phases['signed-components']?.runId || 0))
-    const runId = Number(stored?.databaseId || 0) || await dispatchWorkflow('publish-production-components.yml', [['tag', tag]])
-    await checkpoint(state, 'signed-components', { runId })
+    const expectedIdentity = productWorkflowIdentity(WORKFLOWS.components)
+    const stored = reusableWorkflowRun(Number(state.phases['signed-components']?.runId || 0), expectedIdentity)
+    const runId = Number(stored?.databaseId || 0) || await dispatchWorkflow('publish-production-components.yml', [['tag', tag], ['product_revision', stateProductRevision]])
+    const run = stored || reusableWorkflowRun(runId, expectedIdentity)
+    if (!run) throw new Error('Signed component workflow identity does not match the immutable product tag.')
+    await checkpoint(state, 'signed-components', { runId, url: run.url })
     await waitForRun(runId)
     const release = releaseForTag()
     assertReleaseAssets(release, expectedAllNames(), { draft: false })
-    return { runId }
+    return { runId, url: run.url }
+  }, {
+    validateCompleted: completed => {
+      requireSuccessfulWorkflowEvidence(completed.runId, productWorkflowIdentity(WORKFLOWS.components), 'component signing')
+      assertReleaseAssets(releaseForTag(), expectedAllNames(), { draft: false })
+    }
   })
 
   await phase(state, 'release-manifest', async () => {
@@ -842,9 +1017,10 @@ async function publish() {
   })
 
   await phase(state, 'stable-components', async () => {
+    const mirror = await verifyCloudAssetMirrorsBeforeStable()
     const files = await promoteStableFeeds()
     const commit = commitAndPush(files, `release: promote ${tag} stable components`)
-    return { commit }
+    return { commit, ...mirror }
   })
 
   await phase(state, 'cnb-stable', async () => {
@@ -856,7 +1032,7 @@ async function publish() {
     return { releaseUrl: `https://github.com/${repo}/releases/tag/${tag}`, mirrorUrl: `https://cnb.cool/${repo}/-/releases/tag/${tag}` }
   })
 
-  console.log(JSON.stringify({ ok: true, stateFile, tag, productRevision: stateProductRevision, phases: PHASES, releaseUrl: state.phases.complete.releaseUrl, mirrorUrl: state.phases.complete.mirrorUrl }, null, 2))
+  console.log(JSON.stringify({ ok: true, stateFile, tag, productRevision: stateProductRevision, packagingMode: PACKAGING_MODE, phases: PHASES, releaseUrl: state.phases.complete.releaseUrl, mirrorUrl: state.phases.complete.mirrorUrl }, null, 2))
 }
 
 if (command === 'run' || command === 'resume') {
@@ -865,7 +1041,27 @@ if (command === 'run' || command === 'resume') {
 } else if (command === 'status') {
   console.log(JSON.stringify(await readState(), null, 2))
 } else if (command === 'plan') {
-  console.log(JSON.stringify({ command: `npm run release:publish -- run --version ${version}`, version, tag, repo, stateFile, phases: PHASES, guarantees: ['clean committed source', 'immutable tag', 'cloud-only release artifact transfer', 'signed Android', 'signed components', 'exact 18-asset manifest', 'GitHub-to-CNB cloud mirror', 'stable feeds last'] }, null, 2))
+  console.log(JSON.stringify({
+    command: `npm run release:publish -- run --version ${version}`,
+    version,
+    tag,
+    repo,
+    stateFile,
+    packagingMode: PACKAGING_MODE,
+    phases: PHASES,
+    guarantees: [
+      'clean committed source',
+      'local source gates without local release packaging',
+      'all release packages built by GitHub Actions',
+      'immutable tag',
+      'cloud-only release artifact transfer',
+      'signed Android',
+      'signed components',
+      'exact 18-asset manifest',
+      'GitHub-to-CNB cloud mirror',
+      'stable feeds last'
+    ]
+  }, null, 2))
 } else {
   throw new Error('Usage: node scripts/release-publish.mjs plan|status|run|resume [--version x.y.z] [--repo owner/name] [--poll-seconds 15]')
 }

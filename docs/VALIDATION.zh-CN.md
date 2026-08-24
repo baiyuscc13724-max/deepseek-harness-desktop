@@ -7,8 +7,11 @@
 ```bash
 npm run verify
 npm run verify:release
+# 仅供开发者本地复现；统一发布器不得调用或采用该命令生成的包
 npm run release:orchestrate -- run --version 1.0.29 --through windows
 ```
+
+正式发布包全部由 GitHub Actions 从不可变 Tag 构建；本地 `windows` 阶段不是发布门禁或发布输入。
 
 自动化必须验证单一官方工作台、最小 IPC、WebView 安全边界、更新校验、隐私控制、Agent Teams 独立会话视图与宿主权限、同根多团队/跨根隔离、打包后 Runtime/Renderer/userData、自检、Windows 安装落盘契约和产物 SHA-256。官方 Runtime 补丁还必须验证精确锚点、旧补丁原位迁移、二次执行不再改动，以及删除 `setView` 透传后只降级为手动返回“对话”。普通子代理目录必须默认只留下紧凑计数入口，打开时固定为右侧抽屉而非输入区下方浮层。
 

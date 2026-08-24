@@ -1,4 +1,4 @@
-name: Build & Release Desktop
+name: Cloud Build & Release Desktop
 
 on:
   workflow_dispatch:
@@ -7,25 +7,27 @@ on:
         description: Existing immutable release tag to build and publish
         required: true
         default: v1.0.41
+      product_revision:
+        description: Exact 40-character commit bound to the immutable release tag
+        required: true
       request_id:
         description: Unique publisher request identity
         required: false
   push:
     tags:
       - 'v*'
-    branches:
-      - 'release-retry/v1.0.41'
 
 run-name: Release ${{ inputs.tag || github.ref_name }} · ${{ inputs.request_id || github.run_id }}
 
 env:
-  RELEASE_TAG: ${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.41' && 'v1.0.41') || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  HARNESS_RELEASE_PACKAGING_MODE: github-actions-only
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || (github.ref == 'refs/heads/release-retry/v1.0.41' && 'v1.0.41') || github.ref_name }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -44,6 +46,24 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           lfs: true
+      - name: Bind cloud package build to immutable source revision
+        shell: bash
+        env:
+          PUBLISHER_PRODUCT_REVISION: ${{ inputs.product_revision }}
+        run: |
+          set -euo pipefail
+          test "$HARNESS_RELEASE_PACKAGING_MODE" = 'github-actions-only'
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          head_revision="$(git rev-parse HEAD)"
+          tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$head_revision" = "$tag_revision"
+          expected_revision="$PUBLISHER_PRODUCT_REVISION"
+          if [[ -z "$expected_revision" ]]; then expected_revision="$GITHUB_SHA"; fi
+          if [[ -n "$expected_revision" ]]; then
+            [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]]
+            test "$head_revision" = "$expected_revision"
+          fi
+          test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -147,6 +167,15 @@ jobs:
           $report = Get-Content $output -Raw | ConvertFrom-Json
           $report | ConvertTo-Json -Depth 8
           if (-not $report.ok) { throw 'Packaged Windows self-test reported failure.' }
+      - name: Verify packaged Windows component health and rollback
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path dist -Recurse -Filter '*.exe' | Where-Object { $_.FullName -match 'win-unpacked' } | Select-Object -First 1
+          if (-not $exe) { throw 'Cannot find unpacked Windows executable for component health test.' }
+          $profile = Join-Path $env:RUNNER_TEMP 'harness-desktop-component-test-profile'
+          npm run test:component-local -- --app-exe "$($exe.FullName)" --profile "$profile"
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Windows component health and rollback test exited with code $LASTEXITCODE." }
       - name: Run packaged macOS architecture and runtime self-tests
         if: runner.os == 'macOS'
         shell: bash
@@ -213,6 +242,24 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           lfs: true
+      - name: Bind cloud package build to immutable source revision
+        shell: bash
+        env:
+          PUBLISHER_PRODUCT_REVISION: ${{ inputs.product_revision }}
+        run: |
+          set -euo pipefail
+          test "$HARNESS_RELEASE_PACKAGING_MODE" = 'github-actions-only'
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          head_revision="$(git rev-parse HEAD)"
+          tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$head_revision" = "$tag_revision"
+          expected_revision="$PUBLISHER_PRODUCT_REVISION"
+          if [[ -z "$expected_revision" ]]; then expected_revision="$GITHUB_SHA"; fi
+          if [[ -n "$expected_revision" ]]; then
+            [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]]
+            test "$head_revision" = "$expected_revision"
+          fi
+          test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
       - name: Select Xcode 16
         shell: bash
         run: |
@@ -280,11 +327,24 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.RELEASE_TAG }}
-      - name: Verify immutable tag checkout
+      - name: Bind cloud package build to immutable source revision
         shell: bash
+        env:
+          PUBLISHER_PRODUCT_REVISION: ${{ inputs.product_revision }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$HARNESS_RELEASE_PACKAGING_MODE" = 'github-actions-only'
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          head_revision="$(git rev-parse HEAD)"
+          tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$head_revision" = "$tag_revision"
+          expected_revision="$PUBLISHER_PRODUCT_REVISION"
+          if [[ -z "$expected_revision" ]]; then expected_revision="$GITHUB_SHA"; fi
+          if [[ -n "$expected_revision" ]]; then
+            [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]]
+            test "$head_revision" = "$expected_revision"
+          fi
+          test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: desktop-*

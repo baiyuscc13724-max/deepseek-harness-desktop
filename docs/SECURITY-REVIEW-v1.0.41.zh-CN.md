@@ -1,10 +1,10 @@
 # Harness Desktop v1.0.41 安全、权限与隐私审查
 
-范围：代理团队项目任务/自动化/业务同步与桌面 Git 能力、Host-only 模型准入插件、女仆鲸结构化智能陪伴、壁纸视频生命周期与 Range 流式回归、会话生成停止后的自动跟随等运行时小修，以及既有不可变发布链。
+范围：代理团队项目任务/自动化/业务同步与桌面 Git 能力、Host-only 模型准入插件、女仆鲸结构化智能陪伴、壁纸视频生命周期与 Range 流式回归、会话生成停止后的自动跟随等运行时小修，以及统一发布器的全云端打包与既有不可变发布链。
 
 ## 当前结论
 
-v1.0.41 继续保留官方 Harness 对主对话、模型配置和 Provider 凭据的所有权。本轮新增的项目任务、自动化与业务同步都在代理团队工作台内以显式命令门禁、角色权限和文件边界运行，不新增任意脚本执行、密钥读取或绕过用户确认的写接口；模型准入插件是有界的 Host-only 准入与排队门禁，饱和时拒绝而不是无限堆积；女仆鲸智能陪伴只使用桌面自身持有的结构化任务状态和本地记录，不读取对话正文、屏幕或文件。正式发布仍必须由统一可恢复发布器完成源码、Windows、GitHub 多平台、Android、组件签名、CNB 镜像和 stable feed 门禁；真实结果完成前，本审查不把候选版本描述为已发布。
+v1.0.41 继续保留官方 Harness 对主对话、模型配置和 Provider 凭据的所有权。本轮新增的项目任务、自动化与业务同步都在代理团队工作台内以显式命令门禁、角色权限和文件边界运行，不新增任意脚本执行、密钥读取或绕过用户确认的写接口；模型准入插件是有界的 Host-only 准入与排队门禁，饱和时拒绝而不是无限堆积；女仆鲸智能陪伴只使用桌面自身持有的结构化任务状态和本地记录，不读取对话正文、屏幕或文件。正式发布仍必须由统一可恢复发布器完成本地源码/安全门禁、GitHub Actions 全平台打包、Android、组件签名、CNB 镜像和 stable feed 门禁；发布器在本机删除并拒绝 `dist`，不会生成或采用本地正式包。真实结果完成前，本审查不把候选版本描述为已发布。
 
 ## 代理团队项目能力与权限边界
 
@@ -39,6 +39,8 @@ v1.0.41 继续保留官方 Harness 对主对话、模型配置和 Provider 凭�
 ## 发布与验证
 
 - 桌面、全部随包插件、Android `versionCode 10041`/`versionName 1.0.41`、iOS build/marketing version、移动路由和发布工作流默认目标同步到 1.0.41。
-- `release-manifest.json` 与三个 stable feed 在候选源码中继续指向上一健康版本；只有 GitHub/CNB 资产、签名组件和精确 18 项清单全部通过后，发布器才最后原子提升 stable feed。
+- `release-manifest.json` 与三个 stable feed 在候选源码中继续指向上一健康版本；旧本地打包状态不能替代新源码门禁，断点 runId 必须重新绑定精确 workflow 路径/事件/提交/ref，并且每次真正进入 stable 阶段前都重新检查 GitHub/CNB 精确 18 项资产，全部通过后才原子提升 stable feed。
 - GitHub→CNB 大文件保持云到云，禁止本机上传发布二进制；Android 继续使用 Actions Secret 中的长期 release 证书；macOS 继续执行显式无签名、双架构 DMG/ZIP、`安装.command` 与结构自检契约。
-- `npm run verify`、`npm run verify:release`、Windows 安装版/便携版、打包后自检、真实组件健康与回滚测试必须在同一干净提交上通过；随后发布器再创建不可变 `v1.0.41` Tag 并记录每个可恢复阶段。
+- 本地只在同一干净提交运行 `npm run verify`、`npm run verify:release`；发布器先删除 `dist`，调用编排器到 `verify` 后断言 `dist` 仍不存在，再创建不可变 `v1.0.41` Tag。
+- GitHub `build`、`ios-simulators`、`stage-draft` 分别复核 Tag、checkout HEAD 与发布器 `productRevision` 一致；Windows 云端构建在上传资产前运行打包后自检与真实组件健康/回滚测试。
+- 生产组件工作流只允许从不可变 Tag 的 `workflow_dispatch` 启动，拒绝可变 `component-publish/*` 分支；恢复工作流在云端再次核对 Tag 后发布器修复提交的六文件白名单。任何 Tag 移动、run 身份、Draft 快照、摘要、签名或双云字节不一致都失败关闭。

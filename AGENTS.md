@@ -17,9 +17,9 @@ npm run release:publish -- status --version <package.json version>
 
 The publisher is the single source of truth. It owns this immutable order:
 
-1. clean committed source and local release/Windows gates;
+1. clean committed source and local source/security gates; the publisher deletes/refuses `dist` and never builds a release package locally;
 2. fast-forward `main` and create the one immutable product tag;
-3. GitHub platform builds and cloud-only private-draft recovery when repository Actions cannot publish directly;
+3. GitHub Actions builds every formal Windows/macOS/Linux package from that exact tag, validates iOS simulators, and performs cloud-only private-draft recovery when repository Actions cannot publish directly;
 4. public desktop release, signed Android, then signed production components;
 5. exact 18-asset `release-manifest.json`;
 6. CNB Runner mirrors directly from GitHub—never upload local binaries to CNB;

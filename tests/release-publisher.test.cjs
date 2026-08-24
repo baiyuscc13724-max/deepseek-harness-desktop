@@ -4,13 +4,23 @@ const { readFileSync } = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
 const YAML = require('yaml')
-const { canReattachPreferredDraft, isExactDetachedDraft, normalizeReleaseBody, selectReleaseForTag } = require('../scripts/release-publish-selection.cjs')
+const {
+  canReattachPreferredDraft,
+  isExactDetachedDraft,
+  matchesWorkflowRunIdentity,
+  normalizePublisherPackagingState,
+  normalizeReleaseBody,
+  selectReleaseForTag,
+  validateCnbMirrorObservations,
+  validateCompletedPhaseEvidence,
+  validateGithubReleaseAgainstManifest
+} = require('../scripts/release-publish-selection.cjs')
 
 const root = path.resolve(__dirname, '..')
 const read = file => readFileSync(path.join(root, file), 'utf8')
 
 const expectedPhases = [
-  'local-windows',
+  'local-source-gates',
   'immutable-tag',
   'desktop-cloud-builds',
   'desktop-publication',
@@ -23,6 +33,109 @@ const expectedPhases = [
   'complete'
 ]
 
+test('legacy local packaging state always reruns the cloud-only local source gate', () => {
+  const legacy = { schemaVersion: 1, phases: { 'local-windows': { status: 'completed' } } }
+  assert.equal(normalizePublisherPackagingState(legacy), true)
+  assert.equal(legacy.schemaVersion, 2)
+  assert.equal(legacy.packagingMode, 'github-actions-only')
+  assert.equal(Object.hasOwn(legacy.phases, 'local-windows'), false)
+  assert.equal(Object.hasOwn(legacy.phases, 'local-source-gates'), false)
+
+  const incorrectlyMigrated = {
+    schemaVersion: 2,
+    packagingMode: 'github-actions-only',
+    phases: { 'local-source-gates': { status: 'completed', migratedFrom: 'local-windows' } }
+  }
+  assert.equal(normalizePublisherPackagingState(incorrectlyMigrated), true)
+  assert.equal(Object.hasOwn(incorrectlyMigrated.phases, 'local-source-gates'), false)
+
+  const current = { schemaVersion: 2, packagingMode: 'github-actions-only', phases: { 'local-source-gates': { status: 'completed' } } }
+  assert.equal(normalizePublisherPackagingState(current), false)
+  assert.equal(current.phases['local-source-gates'].status, 'completed')
+  assert.throws(
+    () => normalizePublisherPackagingState({ packagingMode: 'local-windows', phases: {} }),
+    /packaging mode mismatch/u
+  )
+})
+
+test('tampered stored workflow run identities cannot satisfy a release phase', () => {
+  const run = {
+    workflowName: 'Publish Signed Android Mobile',
+    workflowPath: '.github/workflows/android-mobile-release.yml',
+    event: 'workflow_dispatch',
+    headSha: 'a'.repeat(40),
+    headBranch: 'v1.0.41'
+  }
+  const expected = {
+    workflowName: run.workflowName,
+    workflowPath: run.workflowPath,
+    events: ['push', 'workflow_dispatch'],
+    headSha: run.headSha,
+    headBranch: run.headBranch
+  }
+  assert.equal(matchesWorkflowRunIdentity(run, expected), true)
+  for (const [field, value] of [
+    ['workflowName', 'Unrelated Workflow'],
+    ['workflowPath', '.github/workflows/unrelated.yml'],
+    ['event', 'schedule'],
+    ['headSha', 'b'.repeat(40)],
+    ['headBranch', 'main']
+  ]) {
+    assert.equal(matchesWorkflowRunIdentity({ ...run, [field]: value }, expected), false, field)
+  }
+})
+
+test('completed publication phases cannot skip fresh run evidence validation', async () => {
+  let validations = 0
+  const completed = { status: 'completed', runId: 123 }
+  assert.equal(await validateCompletedPhaseEvidence(completed, async phase => {
+    validations += 1
+    assert.equal(phase.runId, 123)
+  }), true)
+  assert.equal(validations, 1)
+  assert.equal(await validateCompletedPhaseEvidence({ status: 'running', runId: 123 }, async () => { validations += 1 }), false)
+  assert.equal(validations, 1)
+  await assert.rejects(() => validateCompletedPhaseEvidence(completed), /requires fresh evidence validation/u)
+  await assert.rejects(() => validateCompletedPhaseEvidence(completed, async () => { throw new Error('forged run') }), /forged run/u)
+})
+
+test('GitHub and CNB 18-asset drift is rejected before stable component promotion', () => {
+  const names = [...Array.from({ length: 17 }, (_, index) => `asset-${String(index + 1).padStart(2, '0')}.bin`), 'SHA256SUMS.txt']
+  const assets = names.map((name, index) => {
+    const encoded = encodeURIComponent(name)
+    return {
+      name,
+      size: 100 + index,
+      sha256: (index + 1).toString(16).padStart(64, '0'),
+      browser_download_url: `https://github.com/org/repo/releases/download/v1.0.41/${encoded}`,
+      mirror_urls: [`https://cnb.cool/org/repo/-/releases/download/v1.0.41/${encoded}`]
+    }
+  })
+  const liveGithubAssets = assets.map(asset => ({
+    name: asset.name,
+    size: asset.size,
+    digest: `sha256:${asset.sha256}`,
+    browser_download_url: asset.browser_download_url
+  }))
+  const observations = assets.map(asset => ({
+    name: asset.name,
+    url: asset.mirror_urls[0],
+    status: 200,
+    size: asset.size,
+    ...(asset.name === 'SHA256SUMS.txt' ? { sha256: asset.sha256 } : {})
+  }))
+  assert.equal(assets.length, 18)
+  assert.equal(validateGithubReleaseAgainstManifest(assets, liveGithubAssets), true)
+  assert.equal(validateCnbMirrorObservations(assets, observations), true)
+  assert.throws(() => validateGithubReleaseAgainstManifest(assets, liveGithubAssets.slice(1)), /exact signed asset set/u)
+  assert.throws(() => validateGithubReleaseAgainstManifest(assets, liveGithubAssets.map(item => item.name === assets[0].name ? { ...item, digest: `sha256:${'f'.repeat(64)}` } : item)), /asset drifted/u)
+  assert.throws(() => validateCnbMirrorObservations(assets, observations.slice(1)), /exact signed asset set/u)
+  assert.throws(() => validateCnbMirrorObservations(assets, observations.map(item => item.name === assets[0].name ? { ...item, url: 'https://cnb.cool/wrong' } : item)), /asset drifted/u)
+  assert.throws(() => validateCnbMirrorObservations(assets, observations.map(item => item.name === assets[1].name ? { ...item, status: 404 } : item)), /asset drifted/u)
+  assert.throws(() => validateCnbMirrorObservations(assets, observations.map(item => item.name === assets[2].name ? { ...item, size: item.size - 1 } : item)), /asset drifted/u)
+  assert.throws(() => validateCnbMirrorObservations(assets, observations.map(item => item.name === 'SHA256SUMS.txt' ? { ...item, sha256: 'f'.repeat(64) } : item)), /digest drifted/u)
+})
+
 test('one publisher command exposes the immutable resumable release order', () => {
   const pkg = JSON.parse(read('package.json'))
   const output = execFileSync(process.execPath, ['scripts/release-publish.mjs', 'plan', '--version', pkg.version, '--poll-seconds', '1'], {
@@ -32,7 +145,10 @@ test('one publisher command exposes the immutable resumable release order', () =
   const plan = JSON.parse(output)
   assert.equal(plan.command, `npm run release:publish -- run --version ${pkg.version}`)
   assert.deepEqual(plan.phases, expectedPhases)
+  assert.equal(plan.packagingMode, 'github-actions-only')
   assert.ok(plan.stateFile.endsWith(`v${pkg.version}-publish.json`))
+  assert.ok(plan.guarantees.includes('local source gates without local release packaging'))
+  assert.ok(plan.guarantees.includes('all release packages built by GitHub Actions'))
   assert.ok(plan.guarantees.includes('cloud-only release artifact transfer'))
   assert.ok(plan.guarantees.includes('stable feeds last'))
   assert.equal(pkg.scripts['release:publish'], 'node scripts/release-publish.mjs')
@@ -45,15 +161,32 @@ test('publisher resumes atomically and never downloads Actions binaries locally'
   assert.match(source, /function gitCaptureRaw[\s\S]*trim: false/u)
   assert.match(source, /function assertClean[\s\S]*gitCaptureRaw\(\['status'/u)
   assert.match(source, /\$\{tag\}-publish\.json/u)
-  assert.match(source, /release:orchestrate[\s\S]*--through', 'windows'/u)
+  assert.match(source, /PACKAGING_MODE = 'github-actions-only'/u)
+  assert.match(source, /normalizePackagingState[\s\S]*normalizePublisherPackagingState/u)
+  const localGate = source.slice(source.indexOf('await phase(state, LOCAL_GATE_PHASE'), source.indexOf("await phase(state, 'immutable-tag'"))
+  assert.match(localGate, /release:orchestrate[\s\S]*--through', 'verify'/u)
+  assert.match(localGate, /rmSync\(localDist[\s\S]*existsSync\(localDist\)/u)
+  assert.doesNotMatch(localGate, /--through', 'windows'|npmRun\(\['run', 'dist'/u)
   assert.match(source, /recover-release-from-actions\.yml/u)
   assert.match(source, /release:cnb-cloud/u)
-  assert.match(source, /reusableDesktopBuildRun/u)
+  assert.match(source, /workflowRun[\s\S]*actions\/runs\/[\s\S]*workflowPath[\s\S]*matchesWorkflowRunIdentity/u)
   assert.match(source, /run\.status === 'completed'[\s\S]*required\.every/u)
+  assert.match(source, /signed-android'[\s\S]*productWorkflowIdentity\(WORKFLOWS\.android\)[\s\S]*signed-components'[\s\S]*productWorkflowIdentity\(WORKFLOWS\.components\)/u)
+  for (const [phaseName, nextPhase] of [
+    ['desktop-cloud-builds', 'desktop-publication'],
+    ['desktop-publication', 'signed-android'],
+    ['signed-android', 'signed-components'],
+    ['signed-components', 'release-manifest']
+  ]) {
+    const completedSegment = source.slice(source.indexOf(`phase(state, '${phaseName}'`), source.indexOf(`phase(state, '${nextPhase}'`))
+    assert.match(completedSegment, /validateCompleted:/u, phaseName)
+  }
   assert.match(source, /waitForDesktopBuildDiscovery/u)
   assert.match(source, /Workflow completed without successful required jobs/u)
   assert.match(source, /failedBuild \? null : run/u)
   assert.match(source, /promoteStableFeeds/u)
+  const stablePhase = source.slice(source.indexOf("phase(state, 'stable-components'"), source.indexOf("phase(state, 'cnb-stable'"))
+  assert.ok(stablePhase.indexOf('verifyCloudAssetMirrorsBeforeStable') < stablePhase.indexOf('promoteStableFeeds'))
   assert.match(source, /publishPostTagRecoveryFix[\s\S]*publisher_revision[\s\S]*recoverySource\.ref/u)
   assert.match(source, /normalizeReleaseBody\(readFileSync[\s\S]*release-notes\.md/u)
   assert.match(source, /release\.body !== expectedBody[\s\S]*--method', 'PATCH'[\s\S]*normalized\.draft !== true/u)
@@ -154,10 +287,10 @@ test('publisher fails closed unless the desktop manifest is signed and verified 
   assert.match(components, /refresh-release-manifest\.mjs[\s\S]*release-manifest\/\$RELEASE_TAG/u)
   assert.match(components, /refs\/tags\/\$RELEASE_TAG/u)
   assert.match(components, /git rev-parse 'FETCH_HEAD\^\{\}'/u)
-  assert.match(components, /main_revision="\$\(git rev-parse HEAD\)"/u)
-  assert.match(components, /GITHUB_EVENT_NAME[\s\S]*refs\/heads\/main[\s\S]*release: refresh \$RELEASE_TAG signed manifest/u)
-  assert.match(components, /git push origin "HEAD:refs\/heads\/main"/u)
-  assert.match(components, /git reset --hard HEAD[\s\S]*git clean -fd[\s\S]*git checkout --detach/u)
+  assert.match(components, /test "\$\(git rev-parse HEAD\)" = "\$tag_revision"/u)
+  assert.match(components, /git reset --hard HEAD[\s\S]*git clean -fd[\s\S]*git checkout --detach "\$tag_revision"/u)
+  assert.match(components, /git push origin "HEAD:refs\/heads\/\$branch"/u)
+  assert.doesNotMatch(components, /git push origin "HEAD:refs\/heads\/main"|release: refresh \$RELEASE_TAG signed manifest/u)
   assert.match(components, /trap 'rm -f "\$key_file" "\$manifest_file"'/u)
   assert.match(publisher, /preflightDesktopManifestTrust/u)
   assert.match(publisher, /await preflightDesktopManifestTrust\(\)/u)
@@ -179,6 +312,37 @@ test('publisher fails closed unless the desktop manifest is signed and verified 
   const result = spawnSync(process.execPath, ['scripts/refresh-release-manifest.mjs', `--version=${pkg.version}`], { cwd: root, encoding: 'utf8', env })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /HARNESS_COMPONENT_SIGNING_KEY_FILE and HARNESS_COMPONENT_KEY_ID are required/u)
+})
+
+test('official publisher delegates every release package to commit-bound GitHub Actions', () => {
+  const publisher = read('scripts/release-publish.mjs')
+  const workflow = YAML.parse(read('.github/workflows/release.yml'))
+  assert.equal(workflow.name, 'Cloud Build & Release Desktop')
+  assert.equal(workflow.env.HARNESS_RELEASE_PACKAGING_MODE, 'github-actions-only')
+  assert.equal(workflow.on.workflow_dispatch.inputs.product_revision.required, true)
+  assert.equal(workflow.on.push.branches, undefined)
+  assert.doesNotMatch(read('.github/workflows/release.yml'), /release-retry\/v/u)
+  assert.deepEqual(workflow.jobs.build.strategy.matrix.os, ['windows-latest', 'macos-latest', 'ubuntu-latest'])
+  assert.match(publisher, /dispatchWorkflow\('release\.yml',[\s\S]*\['product_revision', stateProductRevision\]/u)
+  assert.match(publisher, /DESKTOP_DISCOVERY_TIMEOUT_MS = 5 \* 60 \* 1000/u)
+  assert.doesNotMatch(publisher, /npmRun\(\['run', 'dist'/u)
+  const buildSteps = workflow.jobs.build.steps
+  const componentGate = buildSteps.find(step => step.name === 'Verify packaged Windows component health and rollback')
+  const artifactUpload = buildSteps.find(step => String(step.uses || '').startsWith('actions/upload-artifact@'))
+  assert.equal(componentGate.if, "runner.os == 'Windows'")
+  assert.match(componentGate.run, /npm run test:component-local[\s\S]*--app-exe[\s\S]*--profile/u)
+  assert.ok(buildSteps.indexOf(componentGate) < buildSteps.indexOf(artifactUpload))
+  for (const jobName of ['build', 'ios-simulators', 'stage-draft']) {
+    const steps = workflow.jobs[jobName].steps
+    const bind = steps.find(step => step.name === 'Bind cloud package build to immutable source revision')
+    assert.ok(bind, `${jobName} must bind checkout to the immutable product revision`)
+    assert.match(bind.run, /HARNESS_RELEASE_PACKAGING_MODE[\s\S]*github-actions-only/u)
+    assert.match(bind.run, /git rev-parse HEAD/u)
+    assert.match(bind.run, /git rev-list -n 1 "\$RELEASE_TAG"/u)
+    assert.match(bind.run, /PUBLISHER_PRODUCT_REVISION/u)
+    assert.match(bind.run, /GITHUB_SHA/u)
+    assert.match(bind.run, /\^\[0-9a-f\]\{40\}\$/u)
+  }
 })
 
 test('desktop publication cannot stage a macOS artifact before the unsigned build gate succeeds', () => {
@@ -390,9 +554,17 @@ test('manual workflow recovery is uniquely identified and always builds the immu
   assert.match(source, /requestId[\s\S]*request_id/u)
   assert.match(source, /displayTitle\?\.includes\(requestId\)/u)
   assert.match(source, /async function dispatchWorkflow\(file, fields = \[\], ref = tag\)/u)
+  assert.match(source, /dispatchWorkflow\('release\.yml',[\s\S]*\['product_revision', stateProductRevision\]/u)
+  assert.match(release, /product_revision:[\s\S]*Exact 40-character commit/u)
   assert.match(source, /gitRun\(\['push', 'origin', 'HEAD:main'\]\)[\s\S]*publisher_revision/u)
   assert.match(recovery, /publisher_revision:/u)
   assert.match(recovery, /WORKFLOW_REVISION[\s\S]*Post-tag recovery workflow revision mismatch/u)
+  assert.match(recovery, /git merge-base --is-ancestor "\$tag_commit" "\$PUBLISHER_REVISION"/u)
+  assert.match(recovery, /git diff --name-only "\$tag_commit\.\.\$PUBLISHER_REVISION"/u)
+  for (const file of ['.cnb.yml', '.github/workflows/recover-release-from-actions.yml', 'scripts/publish-cnb-cloud-mirror.ps1', 'scripts/release-publish.mjs', 'scripts/release-publish-selection.cjs', 'tests/release-publisher.test.cjs']) {
+    assert.ok(recovery.includes(file), `recovery workflow must allow only reviewed publisher fix file ${file}`)
+  }
+  assert.match(recovery, /Post-tag recovery revision contains forbidden file/u)
   for (const workflow of [release, android, recovery]) {
     assert.match(workflow, /request_id:/u)
     assert.match(workflow, /run-name:/u)
@@ -407,7 +579,13 @@ test('component and CNB publication retries preserve only byte-identical output'
   const cnb = read('scripts/publish-cnb-cloud-mirror.ps1')
   const publisher = read('scripts/release-publish.mjs')
   assert.match(components, /git show -s --format=%cI "\$RELEASE_TAG\^\{\}"/u)
+  assert.match(components, /product_revision:[\s\S]*required: true/u)
+  assert.match(components, /ref: \$\{\{ env\.RELEASE_TAG \}\}[\s\S]*PUBLISHER_PRODUCT_REVISION[\s\S]*git rev-list -n 1 "\$RELEASE_TAG"/u)
+  assert.doesNotMatch(components, /component-publish\/v1\.0\.41/u)
+  assert.match(publisher, /publish-production-components\.yml'[\s\S]*\['product_revision', stateProductRevision\]/u)
   assert.match(components, /--published-at "\$published_at"/u)
+  assert.match(components, /test "\$\{#files\[@\]\}" -eq 7/u)
+  for (const fallback of ['Harness-Desktop-$version-win-x64.exe', 'Harness-Desktop-$version-mac-x64.dmg', 'Harness-Desktop-$version-mac-arm64.dmg']) assert.ok(components.includes(fallback))
   assert.match(components, /Preserving verified existing component/u)
   assert.match(components, /Upload only missing immutable signed component assets/u)
   assert.match(prepare, /publishedAtInput/u)

@@ -59,6 +59,19 @@ jobs:
           test "$RELEASE_TAG" = "v$version" || { echo 'Release tag does not match package version.' >&2; exit 1; }
           tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
           test "$(git rev-parse HEAD)" = "$tag_commit" || { echo 'Recovery checkout is not the immutable product tag.' >&2; exit 1; }
+          if [ -n "$PUBLISHER_REVISION" ]; then
+            git fetch --no-tags --unshallow origin main || git fetch --no-tags origin main
+            git cat-file -e "$PUBLISHER_REVISION^{commit}"
+            git merge-base --is-ancestor "$tag_commit" "$PUBLISHER_REVISION"
+            mapfile -t changed_files < <(git diff --name-only "$tag_commit..$PUBLISHER_REVISION")
+            test "${#changed_files[@]}" -gt 0 || { echo 'Post-tag recovery revision contains no publisher fix.' >&2; exit 1; }
+            for file in "${changed_files[@]}"; do
+              case "$file" in
+                .cnb.yml|.github/workflows/recover-release-from-actions.yml|scripts/publish-cnb-cloud-mirror.ps1|scripts/release-publish.mjs|scripts/release-publish-selection.cjs|tests/release-publisher.test.cjs) ;;
+                *) echo "Post-tag recovery revision contains forbidden file: $file" >&2; exit 1 ;;
+              esac
+            done
+          fi
           source_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
           jq -e --arg sha "$tag_commit" --arg path '.github/workflows/release.yml' '
             .head_sha == $sha and .path == $path and (.event == "push" or .event == "workflow_dispatch")

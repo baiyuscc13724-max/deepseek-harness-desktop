@@ -1,6 +1,6 @@
 # Harness Desktop 可恢复发布流程
 
-本文是从源码、打包、双平台发布到用户下载验证的唯一正式流程。仓库根目录 `AGENTS.md` 会由 Harness 自动载入，因此换会话后不需要用户重新解释上传步骤。
+本文是从源码门禁、全云端打包、双平台发布到用户下载验证的唯一正式流程。仓库根目录 `AGENTS.md` 会由 Harness 自动载入，因此换会话后不需要用户重新解释上传步骤。
 
 ## 0. 唯一对外发布命令
 
@@ -17,9 +17,9 @@ npm run release:publish -- run --version <package.json 中的版本>
 npm run release:publish -- status --version <package.json 中的版本>
 ```
 
-状态保存在 `.release-state/v<version>-publish.json`。发布器固定执行：本地 Windows 门禁 → 不可变 Tag → GitHub 全平台云构建 → 私有 draft 云端恢复/公开 → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。第二次 CNB 同步固定使用 metadata-only 模式，只校验并同步三个 stable feed，不再重复下载和校验 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
+状态保存在 `.release-state/v<version>-publish.json`，`packagingMode` 固定为 `github-actions-only`。发布器固定执行：本地源码/安全门禁（删除并拒绝 `dist`，不打包）→ 不可变 Tag → GitHub Actions 全平台云构建 → 私有 draft 云端恢复/公开 → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。旧 `local-windows` 状态绝不折算成新门禁成功；恢复时记录的 runId 必须重新匹配精确 workflow 名称/路径、事件、提交和 ref。每次实际进入 stable 提升前都会重新检查两云 18 项资产，第二次 CNB 同步才使用 metadata-only 模式，只校验并同步三个 stable feed，不重复传输 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
 
-后文章节是发布器和工作流的安全契约及故障排查资料，不是让会话绕过发布器逐条手工执行的操作清单。
+后文章节是发布器和工作流的安全契约及故障排查资料，不是让会话绕过发布器逐条手工执行的操作清单。完整信任边界、状态迁移和竞态分析见 `docs/CLOUD-RELEASE-PIPELINE.zh-CN.md`。
 
 ## 1. 默认安全原则
 
@@ -31,9 +31,9 @@ npm run release:publish -- status --version <package.json 中的版本>
 - macOS 桌面包采用显式无签名契约（当前无 Apple Developer 会员）：构建拒绝任何 Developer ID/公证输入，DMG/ZIP 内含"一键安装"助手；这不等于 Developer ID 签名、Apple 公证或 Gatekeeper 验收，macOS 用户仍会看到 Gatekeeper 提示。iPhone/iPad 当前仍只发布 Safari 工作台入口，不构造或发布未签名 IPA。
 - 生产组件私钥、Android keystore、密码、恢复密钥和长期令牌不得进入 Git、聊天、日志或发布资产。
 
-## 2. 本地可恢复编排
+## 2. 本地源码编排与可选开发者复现
 
-状态保存在被 Git 忽略的 `.release-state/v<version>.json`。每一阶段开始、成功或失败都原子写入；再次运行只会跳过**同一个干净 Git 提交**的已成功阶段。提交哈希变化会自动清空旧阶段，存在已跟踪或未跟踪改动时直接拒绝编排；重置某阶段也会级联重置所有下游阶段。
+状态保存在被 Git 忽略的 `.release-state/v<version>.json`。每一阶段开始、成功或失败都原子写入；再次运行只会跳过**同一个干净 Git 提交**的已成功阶段。提交哈希变化会自动清空旧阶段，存在已跟踪或未跟踪改动时直接拒绝编排；重置某阶段也会级联重置所有下游阶段。统一发布器只调用到 `--through verify`；下面的 `windows` 阶段只供开发者手工复现，不是正式发布输入，也不得由统一发布器调用。
 
 ```powershell
 # 从 lock 冷安装；Windows 的 node-gyp 必须能找到真实 Python 3（必要时先设置 $env:PYTHON）
@@ -48,14 +48,14 @@ npm run release:orchestrate -- run --version 1.0.29 --through source
 # 390+ 项源码/安全测试与发布契约审计
 npm run release:orchestrate -- run --version 1.0.29 --through verify
 
-# Windows 安装版/便携版、体积审计、打包后真实自检、真实组件健康与回滚测试
+# 可选：仅供本机故障复现，正式发布器绝不执行或采用这些产物
 npm run release:orchestrate -- run --version 1.0.29 --through windows
 
 # 只有确认代码或环境修复后才重置失败阶段
 npm run release:orchestrate -- reset --version 1.0.29 --phase windows
 ```
 
-Windows 阶段固定生成并验证：
+可选开发者 `windows` 阶段会在本机生成并验证（这些文件不得进入正式发布）：
 
 - `dist/Harness-Desktop-<version>-win-x64.exe`
 - `dist/Harness-Desktop-<version>-portable-x64.exe`
@@ -74,10 +74,10 @@ macOS 桌面包按显式无签名契约构建：`package.json` 的 `build.mac.id
 
 无签名 macOS 产物仍需通过：双架构（x64/arm64）构建、打包后自检、DMG/ZIP 内应用结构核验（release.yml 的 `Verify unsigned macOS packages` 步骤）。
 
-1. `git diff --check`，确认工作树干净且 `npm run verify`、`npm run verify:release`、本地 Windows 阶段均成功。
+1. `git diff --check`，确认工作树干净且本地 `npm run verify`、`npm run verify:release` 均成功；统一发布器删除遗留 `dist` 并在源码门禁后断言它仍不存在。
 2. 快进合并验证提交到 `main`，先推送 `main`，再创建并推送唯一 Tag `v<version>`。
-3. `.github/workflows/release.yml` 在 Windows、macOS、Linux 分别重新安装锁定依赖并运行全部门禁。
-4. Windows 云端必须完成 unpacked 自检、Inno 安装/检查/卸载冒烟；macOS 必须分别完成 Intel/Apple Silicon 原生架构和打包后自检，并对两个 `.app`、DMG 及 ZIP 中应用执行 Developer ID、Hardened Runtime、Apple staple 与 Gatekeeper 验证。
+3. `.github/workflows/release.yml` 把 Tag、checkout HEAD 与精确 `productRevision` 绑定，在 Windows、macOS、Linux 分别重新安装锁定依赖、运行全部门禁并生成正式包。
+4. Windows 云端必须完成 unpacked 自检、真实组件健康/回滚测试、Inno 安装/检查/卸载冒烟；macOS 必须分别完成 Intel/Apple Silicon 原生架构、打包后自检和显式未签名 DMG/ZIP 结构验证。
 5. 同一 Release 工作流还必须完成 iPhone Simulator 与 iPad Simulator 测试；发布聚合任务同时等待桌面矩阵和两个模拟器门禁。
 6. 聚合任务先确认 Tag 下不存在任何 Release，再创建 **draft**、生成 `SHA256SUMS.txt` 并上传全部桌面资产；同名资产永不覆盖。
 7. 工作流从 draft 重新下载全部资产，核对精确文件集合和 SHA-256 后才一次性改为公开。任一矩阵/上传/复核失败时只留下非公开 draft，不得手动上传未验证替代品；处理失败 draft 时必须先查明原因。
@@ -90,7 +90,7 @@ gh run list --workflow release.yml --branch v1.0.29
 gh run watch <run-id> --exit-status
 ```
 
-如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。统一发布器使用唯一 `request_id` 从既有 Tag 调度，并把来源 run 的 workflow path 与 `head_sha` 强绑定到 Tag 提交；恢复 draft 时逐个保留大小/digest 一致的资产、只补缺失项，因此上传中断后仍可续跑。旧的 `release-retry/v1.0.29` 分支只保留为历史兼容入口，不是新会话的操作方式。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
+如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。统一发布器使用唯一 `request_id` 从既有 Tag 调度，并把来源 run 的 workflow path 与 `head_sha` 强绑定到 Tag 提交；恢复 draft 时逐个保留大小/digest 一致的资产、只补缺失项，因此上传中断后仍可续跑。可变 `release-retry/*` push 入口已移除；需要基础设施恢复时只能由统一发布器调度恢复工作流，云端会再次校验发布器修复提交相对产品 Tag 只改动六个白名单文件。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
 
 ## 4. 正式 Android
 
@@ -134,7 +134,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/configure-compon
 
 ## 6. 生成生产组件与桌面签名清单
 
-统一发布器在桌面和 Android 资产公开后调度 `publish-production-components.yml`。GitHub Runner 从 Actions Secret `HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64` 创建一次性临时 PEM，确认它与 Bootstrap 内置公钥一致，再为 `win32-x64`、`darwin-x64`、`darwin-arm64` 生成：
+统一发布器在桌面和 Android 资产公开后，从不可变产品 Tag 调度 `publish-production-components.yml` 并显式传入同一 `productRevision`；工作流不接受可变分支 push。GitHub Runner 从 Actions Secret `HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64` 创建一次性临时 PEM，确认它与 Bootstrap 内置公钥一致，再为 `win32-x64`、`darwin-x64`、`darwin-arm64` 生成：
 
 - 不可变 `desktop-shell-<version>-<target>.zip`
 - 不可变 `components-<version>-<target>.json`
@@ -148,7 +148,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/configure-compon
 ## 7. 组件与稳定指针的强制顺序
 
 1. **先有可信完整 Bootstrap**：GitHub/CNB 的 v1.0.29 完整安装包均已下载验哈希。
-2. 把三个不可变组件 ZIP、三个不可变目标清单和 `COMPONENT-SHA256SUMS.txt` 放入一次性 `component-release-staging/<version>`；只允许公开签名产物进入 `component-publish/v1.0.29` 临时分支，私钥和恢复资料永不进入。
+2. 受保护 GitHub Runner 从不可变产品 Tag 在临时目录生成三个组件 ZIP、三个目标清单和 `COMPONENT-SHA256SUMS.txt`；不使用可变 `component-publish/*` 分支，私钥、临时 staging 和恢复资料永不进入 Git。
 3. `Publish Verified Production Components` 工作流先用内置公钥、精确文件集、SHA-256、ZIP 索引、目标架构、CNB/GitHub URL 顺序和完整包兜底绑定复核。ZIP 时间戳和清单 `publishedAt` 固定到 Tag，使重跑字节确定；已存在资产只有与本次确定性签名产物大小和 digest 完全一致才保留，只补齐缺失项，上传后重新下载复核。
 4. GitHub Runner 使用现有 Actions Secret 为精确 18 项 `release-manifest.json` 添加域分离的 Ed25519 签名；发布器校验签名分支父提交、唯一文件差异和内置公钥后快进 `main`，再运行 CNB 云端镜像并等待所有附件验哈希成功。
 5. 只有 GitHub 与 CNB 两端资产都可用后，才把三个签名清单复制为：

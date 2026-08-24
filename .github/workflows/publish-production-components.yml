@@ -7,12 +7,12 @@ on:
         description: Existing immutable Bootstrap release tag
         required: true
         default: v1.0.41
+      product_revision:
+        description: Exact 40-character commit bound to the immutable release tag
+        required: true
       request_id:
         description: Unique publisher request identity
         required: false
-  push:
-    branches:
-      - 'component-publish/v1.0.41'
 
 run-name: Components ${{ inputs.tag || 'v1.0.41' }} · ${{ inputs.request_id || github.run_id }}
 
@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -43,15 +43,18 @@ jobs:
       - name: Install verification dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Bind component payload inputs to immutable tag
-        if: github.event_name == 'workflow_dispatch'
         shell: bash
+        env:
+          PUBLISHER_PRODUCT_REVISION: ${{ inputs.product_revision }}
         run: |
           set -euo pipefail
-          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          git archive "$RELEASE_TAG" electron renderer plugins package.json build/icon.png | tar -xf -
+          [[ "$PUBLISHER_PRODUCT_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          head_revision="$(git rev-parse HEAD)"
+          tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$head_revision" = "$tag_revision"
+          test "$head_revision" = "$PUBLISHER_PRODUCT_REVISION"
           test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
       - name: Prepare signed staging from protected CI key
-        if: github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           COMPONENT_SIGNING_PRIVATE_KEY_BASE64: ${{ secrets.HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64 }}
@@ -156,21 +159,8 @@ jobs:
             node scripts/refresh-release-manifest.mjs --version="${RELEASE_TAG#v}" --repo="$GITHUB_REPOSITORY" --output="$manifest_file"
           git fetch --force origin "refs/tags/$RELEASE_TAG"
           tag_revision="$(git rev-parse 'FETCH_HEAD^{}')"
-          main_revision="$(git rev-parse HEAD)"
-          echo "Signing manifest for tag revision $tag_revision from main revision $main_revision"
-          git merge-base --is-ancestor "$tag_revision" "$main_revision"
-          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && "$GITHUB_REF" == 'refs/heads/main' ]]; then
-            git reset --hard HEAD
-            git clean -fd
-            git checkout --detach "$main_revision"
-            cp "$manifest_file" release-manifest.json
-            git add -- release-manifest.json
-            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "release: refresh $RELEASE_TAG signed manifest" -- release-manifest.json
-            test "$(git rev-parse HEAD^)" = "$main_revision"
-            test "$(git diff-tree --no-commit-id --name-only -r HEAD)" = 'release-manifest.json'
-            git push origin "HEAD:refs/heads/main"
-            exit 0
-          fi
+          test "$(git rev-parse HEAD)" = "$tag_revision"
+          echo "Signing manifest for immutable tag revision $tag_revision"
           branch="release-manifest/$RELEASE_TAG"
           existing="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
           if test -n "$existing"; then
