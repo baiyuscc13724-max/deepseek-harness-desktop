@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const { realpathSync } = require('node:fs')
 const { mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const { tmpdir } = require('node:os')
 const path = require('node:path')
@@ -13,6 +14,13 @@ async function plugin() {
   return import(pathToFileURL(path.join(root, 'plugins/dsh-desktop-files/lib/index.js')).href)
 }
 
+// Production containment compares candidates against realpath(%cwd); macOS
+// /var -> /private/var and Windows 8.3/alias temp roots make a raw mkdtemp
+// path non-canonical, so fixtures must hand the plugin canonical roots.
+async function canonicalTemp(prefix) {
+  return realpathSync(await mkdtemp(path.join(tmpdir(), prefix)))
+}
+
 test('file upload names are normalized and cannot create paths', async () => {
   const { safeFileName } = await plugin()
   assert.equal(safeFileName('../report.txt'), '_report.txt')
@@ -22,7 +30,7 @@ test('file upload names are normalized and cannot create paths', async () => {
 })
 
 test('uploads stay in the workspace, preserve collisions and are observable', async t => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'dsh-files-'))
+  const directory = await canonicalTemp('dsh-files-')
   t.after(() => rm(directory, { recursive: true, force: true }))
   const { listUploads, saveUpload } = await plugin()
   const first = await saveUpload(directory, 'report.txt', Buffer.from('one'))
@@ -35,8 +43,8 @@ test('uploads stay in the workspace, preserve collisions and are observable', as
 })
 
 test('downloads require a regular workspace-contained path', async t => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'dsh-download-'))
-  const outside = await mkdtemp(path.join(tmpdir(), 'dsh-outside-'))
+  const directory = await canonicalTemp('dsh-download-')
+  const outside = await canonicalTemp('dsh-outside-')
   t.after(() => Promise.all([rm(directory, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]))
   await writeFile(path.join(directory, 'inside.txt'), 'ok')
   await writeFile(path.join(outside, 'outside.txt'), 'no')
@@ -49,8 +57,8 @@ test('downloads require a regular workspace-contained path', async t => {
 })
 
 test('right-workspace previews are bounded text and preserve workspace containment', async t => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'dsh-preview-'))
-  const outside = await mkdtemp(path.join(tmpdir(), 'dsh-preview-outside-'))
+  const directory = await canonicalTemp('dsh-preview-')
+  const outside = await canonicalTemp('dsh-preview-outside-')
   t.after(() => Promise.all([rm(directory, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]))
   await writeFile(path.join(directory, 'notes.md'), '# Notes\n\nHello')
   await writeFile(path.join(directory, 'page.html'), '<script>neverRun()</script>')

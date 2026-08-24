@@ -135,7 +135,7 @@ test('Desktop compaction plugin installation is profile-local and repeatable', a
   t.after(() => rm(dshHome, { recursive: true, force: true }))
   const bundledRoot = path.join(root, 'plugins', 'dsh-desktop-compaction')
   const first = await ensureDesktopCompactionPlugin({ dshHome, bundledRoot })
-  assert.equal(first.version, '1.0.41')
+  assert.equal(first.version, '1.0.42')
   const installed = path.join(first.destination, 'lib', 'index.js')
   assert.match(await readFile(installed, 'utf8'), /class DesktopCompactionEngine extends BasicCompactionEngine/u)
   await writeFile(installed, 'stale')

@@ -35,6 +35,15 @@ async function usingService(run) {
   }
 }
 
+async function waitFor(predicate, { timeoutMs = 10_000, intervalMs = 20, message = 'condition was not satisfied within the wait window' } = {}) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (predicate()) return
+    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeoutMs}ms waiting for: ${message}`)
+    await new Promise(resolve => setTimeout(resolve, intervalMs))
+  }
+}
+
 test('project entry reports honest LAN and remote capability before project creation', async () => usingService(async ({ service }) => {
   const status = await service.status()
   assert.equal(status.project, null)
@@ -787,7 +796,7 @@ test('two desktops complete the invitation handshake and exchange authenticated 
       const unsubscribe = collaborator.subscribeProjectBusinessDelivery(delivery => deliveries.push(delivery))
       const queued = await authority.sendProjectBusinessMessage({ targetDeviceRef: collaborator.device.device.deviceRef, message: { type: 'business.sync', revision: 3 } })
       assert.equal(queued.transport, 'remote_wss', 'Entry falls back to WSS when no authenticated LAN socket exists')
-      for (let attempt = 0; attempt < 100 && deliveries.length === 0; attempt += 1) await new Promise(resolve => setImmediate(resolve))
+      await waitFor(() => deliveries.length > 0, { message: 'remote_wss business.sync delivery (revision 3) did not arrive on the collaborator' })
       assert.equal(deliveries[0].payload.revision, 3)
       unsubscribe()
       return
@@ -846,14 +855,14 @@ test('two paired desktops automatically establish a real LAN mTLS and E2EE conne
   const collaboratorDeviceRef = collaborator.device.device.deviceRef
   const toCollaborator = await authority.sendProjectBusinessMessage({ targetDeviceRef: collaboratorDeviceRef, message: { type: 'business.sync', revision: 1 } })
   assert.deepEqual({ queued: toCollaborator.queued, transport: toCollaborator.transport }, { queued: true, transport: 'lan_mtls' })
-  for (let index = 0; index < 20 && collaboratorDeliveries.length === 0; index += 1) await new Promise(resolve => setImmediate(resolve))
+  await waitFor(() => collaboratorDeliveries.length > 0, { message: 'LAN mTLS/E2EE business.sync delivery (revision 1) did not arrive on the collaborator' })
   assert.equal(collaboratorDeliveries[0].payload.revision, 1)
   assert.equal(Object.isFrozen(collaboratorDeliveries[0]), true)
   assert.equal(Object.isFrozen(collaboratorDeliveries[0].payload), true)
 
   const toAuthority = await collaborator.sendProjectBusinessMessage({ targetDeviceRef: authorityDeviceRef, message: { type: 'business.sync', revision: 2 } })
   assert.equal(toAuthority.transport, 'lan_mtls')
-  for (let index = 0; index < 20 && authorityDeliveries.length === 0; index += 1) await new Promise(resolve => setImmediate(resolve))
+  await waitFor(() => authorityDeliveries.length > 0, { message: 'LAN mTLS/E2EE business.sync delivery (revision 2) did not arrive on the authority' })
   assert.equal(authorityDeliveries[0].payload.revision, 2, 'never-settling listeners do not block delivery or ACK')
   await assert.rejects(authority.sendProjectBusinessMessage({ targetDeviceRef: 'device_unknown_device_unknown', message: { type: 'business.sync' } }), error => error?.code === 'PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN')
   await assert.rejects(authority.sendProjectBusinessMessage({ targetDeviceRef: collaboratorDeviceRef, message: { type: 'business.sync' }, transport: 'remote_wss' }), /only targetDeviceRef and message/)

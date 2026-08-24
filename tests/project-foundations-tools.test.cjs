@@ -25,7 +25,10 @@ function capability() {
 }
 async function fixture() {
   const [mod, entryMod] = await Promise.all([import(`${pluginUrl}?foundations-tools=${Date.now()}-${Math.random()}`), import(`${entryUrl}?foundations-tools=${Date.now()}-${Math.random()}`)])
-  const root = await mkdtemp(path.join(os.tmpdir(), 'ft-'))
+  // Foundation tooling compares agent cwd and project roots against realpath
+  // (macOS /var -> /private/var, Windows 8.3/alias temp roots), so the fixture
+  // root must be canonical before any child workspace is derived from it.
+  const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), 'ft-')))
   const source = path.join(root, 's')
   const dshHome = path.join(root, 'd')
   await mkdir(source)

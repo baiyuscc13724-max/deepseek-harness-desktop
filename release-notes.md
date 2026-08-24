@@ -1,6 +1,9 @@
-# Harness Desktop 1.0.41
+# Harness Desktop 1.0.42
 
 ## 本次更新
+
+- `v1.0.41` 候选 Tag 因 GitHub 托管 Runner 暴露的跨平台测试 fixture 问题而未发布，Tag 不移动、不重建，stable feed 也未提升。本版将修复后的正式目标提升为 `v1.0.42`。
+- 修复 macOS `/var` 与 `/private/var` realpath、Windows 临时目录别名/大小写导致的 fixture 误判，以及 Linux LAN mTLS/E2EE 测试对异步 delivery 的过短等待竞态；生产代码的 trusted-root/workspace containment、mTLS、E2EE、listener isolation 与 ACK 语义均不放宽。
 
 - 女仆鲸进入结构化智能陪伴：她会根据任务开始、多任务、等待决定、受阻、完成和长时间运行给出低频情境提示，而不是每次状态变化都播放固定动作与固定文案。新增本地默契/每日进度/连续完成记录、克制/温柔/元气表达风格和主动陪伴开关；全程不读取对话正文、屏幕或文件。
 - 代理团队工作台新增项目任务、项目自动化与业务同步能力：任务支持创建、领取、依赖、文件边界和加密完整性校验；自动化定义按任务状态变更编排，人工批准后才运行；业务同步以 authority/collaborator 模式在受控成员间交换有界、可审计的消息；桌面 Git 能力只允许在显式授权的项目根目录内执行版本库操作。
@@ -16,7 +19,7 @@
 
 ## 发布与完整性
 
-- 正式发布绑定唯一不可变 `v1.0.41` Tag；本文件准备阶段不会提前修改 stable feed 或已发布资产清单。
+- 正式发布绑定唯一不可变 `v1.0.42` Tag；本文件准备阶段不会提前修改 stable feed 或已发布资产清单。
 - 统一可恢复发布器现在只在本机执行源码/安全门禁并明确删除、拒绝 `dist`；Windows、macOS、Linux 正式包全部由 GitHub Actions 从同一不可变 Tag/提交生成。
 - 在普通客户端检测到更新前，云端必须完成 Windows 安装版/便携版、打包后自检、组件健康/回滚，以及真实下载、安装、更新和卸载验证。
 - GitHub 跨平台云构建、签名 Android、签名组件、精确 18 项清单与 GitHub→CNB 云镜像全部成功后，才最后提升 stable feed；中断恢复会重新绑定精确 workflow 身份并在提升前重验两云 18 项资产，不通过本机重复搬运已验证的大文件。

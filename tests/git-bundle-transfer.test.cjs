@@ -38,7 +38,10 @@ async function commit(cwd, message) {
 async function fixture() {
   const gitMod = await import(gitUrl)
   const casMod = await import(casUrl)
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-bundle-transfer-'))
+  // Production adapter verifies sourceWorkspaceRoot/workspaceRoot against their
+  // realpath (macOS /var -> /private/var, Windows 8.3/alias temp roots), so the
+  // fixture root must be canonical before children are derived from it.
+  const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), 'git-bundle-transfer-')))
   const source = path.join(root, 'computer-a-source')
   await mkdir(source)
   await git(source, ['init'])

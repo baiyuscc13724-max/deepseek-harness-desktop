@@ -90,7 +90,7 @@ gh run list --workflow release.yml --branch v1.0.29
 gh run watch <run-id> --exit-status
 ```
 
-如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。统一发布器使用唯一 `request_id` 从既有 Tag 调度，并把来源 run 的 workflow path 与 `head_sha` 强绑定到 Tag 提交；恢复 draft 时逐个保留大小/digest 一致的资产、只补缺失项，因此上传中断后仍可续跑。可变 `release-retry/*` push 入口已移除；需要基础设施恢复时只能由统一发布器调度恢复工作流，云端会再次校验发布器修复提交相对产品 Tag 只改动六个白名单文件。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
+如果固定 Tag 的首轮工作流因**发布基础设施**失败，绝不移动或重建 Tag。若失败来自该 Tag 对应产品源码或测试 fixture，而非六文件白名单内可兼容恢复的发布基础设施，则该 Tag 保持失败且不公开发布，修复后必须提升补丁版本并创建新 Tag；例如 `v1.0.41` 因托管 Runner 跨平台 fixture 门禁失败而未发布，修复进入 `v1.0.42`。统一发布器使用唯一 `request_id` 从既有 Tag 调度，并把来源 run 的 workflow path 与 `head_sha` 强绑定到 Tag 提交；恢复 draft 时逐个保留大小/digest 一致的资产、只补缺失项，因此上传中断后仍可续跑。可变 `release-retry/*` push 入口已移除；需要基础设施恢复时只能由统一发布器调度恢复工作流，云端会再次校验发布器修复提交相对产品 Tag 只改动六个白名单文件。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
 
 ## 4. 正式 Android
 
