@@ -238,7 +238,8 @@ class MobileSyncService extends EventEmitter {
     getThemeScript = null,
     readThemeAsset = null,
     controlBroker = null,
-    desktopControlStateFile = null
+    desktopControlStateFile = null,
+    relayConfigStore = null
   }) {
     super()
     if (!store) throw new Error('MobileSyncService requires a store.')
@@ -259,12 +260,14 @@ class MobileSyncService extends EventEmitter {
     this.getThemeScript = getThemeScript
     this.readThemeAsset = readThemeAsset
     this.controlBroker = controlBroker || new MobileControlBroker({ now })
+    this.relayConfigStore = relayConfigStore
     this.desktopControlStateFile = desktopControlStateFile || path.join(path.dirname(this.store.file || this.stateDir), DESKTOP_CONTROL_STATE_FILE)
     this.desktopControlAuth = null
     this.server = null
     this.proxy = null
     this.port = null
     this.pairing = null
+    this.relayOutdatedDeviceIds = new Set()
     this.sockets = new Set()
     this.deviceSockets = new Map()
     this.lastTouchByDevice = new Map()
@@ -293,6 +296,7 @@ class MobileSyncService extends EventEmitter {
 
   state() {
     const saved = this.store.get()
+    const relay = this.getRelayConfig()
     return {
       bridgeApiVersion: BRIDGE_API_VERSION,
       protocol: MOBILE_PROTOCOL_DESCRIPTOR,
@@ -303,6 +307,7 @@ class MobileSyncService extends EventEmitter {
       origins: this.origins(),
       devices: saved.devices.map(({ id, name, platform, deviceClass, appVersion, createdAt, lastSeenAt }) => ({ id, name, platform, deviceClass, appVersion, createdAt, lastSeenAt })),
       control: this.controlBroker.state(saved.devices),
+      relay: { ...relay, requiresDeviceUpdate: saved.devices.some(device => this.relayOutdatedDeviceIds.has(device.id)) },
       remote: this.transportManager?.state?.() || {
         enabled: saved.remoteEnabled,
         preference: saved.transportPreference,
@@ -451,6 +456,36 @@ class MobileSyncService extends EventEmitter {
     return this.publish()
   }
 
+  getRelayConfig() {
+    return this.relayConfigStore?.get?.() || { enabled: false, relayUrl: '', source: 'disabled', checkedAt: null }
+  }
+
+  async setRelayConfig(value) {
+    if (!this.relayConfigStore) throw new Error('Personal WSS relay configuration is unavailable.')
+    const previous = this.getRelayConfig()
+    const config = await this.relayConfigStore.set(value)
+    const changed = previous.enabled !== config.enabled || previous.relayUrl !== config.relayUrl
+    if (changed) {
+      this.pairing = null
+      this.relayOutdatedDeviceIds = new Set(this.store.get().devices.map(device => device.id))
+      await this.transportManager?.configureWssRelay(config.enabled ? config.relayUrl : '')
+    }
+    return this.publish()
+  }
+
+  async clearRelayConfig() {
+    if (!this.relayConfigStore) throw new Error('Personal WSS relay configuration is unavailable.')
+    const previous = this.getRelayConfig()
+    const config = this.relayConfigStore.clear()
+    const changed = previous.enabled !== config.enabled || previous.relayUrl !== config.relayUrl
+    if (changed) {
+      this.pairing = null
+      this.relayOutdatedDeviceIds = new Set(this.store.get().devices.map(device => device.id))
+      await this.transportManager?.configureWssRelay(config.enabled ? config.relayUrl : '')
+    }
+    return this.publish()
+  }
+
   async beginPairing() {
     if (!this.server?.listening) await this.start({ persist: true })
     const token = randomBytes(24).toString('base64url')
@@ -484,6 +519,7 @@ class MobileSyncService extends EventEmitter {
     for (const socket of this.deviceSockets.get(id) || []) socket.destroy()
     this.deviceSockets.delete(id)
     this.lastTouchByDevice.delete(id)
+    this.relayOutdatedDeviceIds.delete(id)
     this.publish()
     return this.state()
   }

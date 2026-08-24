@@ -174,6 +174,22 @@
             </div>
             <button id="mobileSyncToggle" class="primary" type="button">开启手机同步</button>
           </section>
+          <section class="mobile-sync-relay-card" aria-labelledby="mobileRelayTitle">
+            <div class="mobile-sync-relay-head">
+              <div>
+                <strong id="mobileRelayTitle">个人中继服务器（可选）</strong>
+                <span id="mobileRelayStatus">未配置</span>
+              </div>
+            </div>
+            <label for="mobileRelayUrl">服务器地址：域名、公网 IP 或 wss:// 地址</label>
+            <div class="mobile-sync-relay-row">
+              <input id="mobileRelayUrl" type="text" spellcheck="false" autocomplete="off" placeholder="例如 relay.example.com 或 203.0.113.10" />
+              <button id="mobileRelaySave" class="primary" type="button">检测并保存</button>
+              <button id="mobileRelayClear" type="button">清除（恢复默认）</button>
+            </div>
+            <p id="mobileRelayMessage" class="mobile-sync-relay-message" role="status"></p>
+            <p class="mobile-sync-relay-note">服务器必须使用可信 TLS 证书并通过 443 端口提供 WSS 服务；配置成功后手机扫码会从二维码自动取得中继配置。留空时不使用个人中继，自动按内置线路连接。</p>
+          </section>
           <div id="mobileSyncEnabledContent" class="mobile-sync-enabled hidden">
             <section class="mobile-sync-remote-card">
               <div>
@@ -220,7 +236,7 @@
               <div class="mobile-sync-section-title"><h3>已配对设备</h3><span id="mobileSyncDeviceCount">0 台</span></div>
               <div id="mobileSyncDeviceList" class="mobile-sync-device-list"></div>
             </section>
-            <p class="mobile-sync-compatibility">连接顺序：局域网直连 → EasyTier / Tailscale 智能接管。两条远程通道均不可用时只暂停远程连接，不影响电脑端和局域网使用。</p>
+            <p class="mobile-sync-compatibility">连接顺序：局域网直连 → WSS/443 通用中继 → EasyTier / Tailscale 智能接管。所有远程通道均不可用时只暂停远程连接，不影响电脑端和局域网使用。</p>
           </div>
           <p id="mobileSyncError" class="mobile-sync-error" role="alert"></p>
         </div>

@@ -63,7 +63,7 @@ const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
 const { BrowserDiagnostics, safeUrl: safeBrowserDiagnosticUrl } = require('./bridge/browser-diagnostics.cjs')
 const { BrowserHistoryStore } = require('./bridge/browser-history-store.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
-const { loadMobileRelayConfig } = require('./bridge/mobile-relay-config.cjs')
+const { MobileRelayConfigStore } = require('./bridge/mobile-relay-config.cjs')
 const { createEasyTierComponentInstaller } = require('./bridge/network-component-service.cjs')
 const { SyncTransportManager } = require('./bridge/sync-transport-manager.cjs')
 const { createEasyTierAdapter } = require('./bridge/sync-transports/easytier-adapter.cjs')
@@ -2220,16 +2220,16 @@ function ensureMobileSyncService() {
   mkdirSync(componentRoot, { recursive: true })
   mkdirSync(stateDir, { recursive: true })
   mobileSyncStore = new MobileSyncStore(path.join(userData, 'mobile-sync.json'), mobileSyncSecretAdapter())
+  const relayConfigStore = new MobileRelayConfigStore({
+    file: path.join(userData, 'mobile-relay.json'),
+    packagedFile: path.join(app.getAppPath(), 'mobile-relay-sources.json'),
+    env: process.env,
+    allowEnvironmentOverride: !app.isPackaged,
+    WebSocketImpl: WebSocket
+  })
   let relayConfig = { enabled: false, relayUrl: '' }
-  try {
-    relayConfig = loadMobileRelayConfig({
-      file: path.join(app.getAppPath(), 'mobile-relay-sources.json'),
-      env: process.env,
-      allowEnvironmentOverride: !app.isPackaged
-    })
-  } catch (error) {
-    console.warn(`Unable to load WSS relay configuration: ${error.message}`)
-  }
+  try { relayConfig = relayConfigStore.get() }
+  catch (error) { console.warn(`Unable to load WSS relay configuration: ${error.message}`) }
   const adapterOptions = {
     resourcesPath: process.resourcesPath,
     componentRoot,
@@ -2250,6 +2250,7 @@ function ensureMobileSyncService() {
     store: mobileSyncStore,
     getRuntimeTarget: () => runtimeState.status === 'ready' ? runtimeState.url : null,
     transportManager: mobileSyncTransportManager,
+    relayConfigStore,
     stateDir,
     getAppearance: mobileAppearancePayload,
     setAppearance: updateMobileAppearance,
@@ -4393,6 +4394,9 @@ ipcMain.handle('mobileSync:getState', desktopShellOnly(() => ensureMobileSyncSer
 ipcMain.handle('mobileSync:setEnabled', desktopShellOnly(enabled => ensureMobileSyncService().setEnabled(Boolean(enabled))))
 ipcMain.handle('mobileSync:setRemoteEnabled', desktopShellOnly(enabled => ensureMobileSyncService().setRemoteEnabled(Boolean(enabled))))
 ipcMain.handle('mobileSync:setTransportPreference', desktopShellOnly(preference => ensureMobileSyncService().setTransportPreference(String(preference || 'auto'))))
+ipcMain.handle('mobileSync:getRelayConfig', desktopShellOnly(() => ensureMobileSyncService().getRelayConfig()))
+ipcMain.handle('mobileSync:setRelayConfig', desktopShellOnly(value => ensureMobileSyncService().setRelayConfig(String(value || ''))))
+ipcMain.handle('mobileSync:clearRelayConfig', desktopShellOnly(() => ensureMobileSyncService().clearRelayConfig()))
 ipcMain.handle('mobileSync:beginPairing', desktopShellOnly(() => ensureMobileSyncService().beginPairing()))
 ipcMain.handle('mobileSync:revokeDevice', desktopShellOnly(id => ensureMobileSyncService().revokeDevice(String(id || ''))))
 ipcMain.handle('mobileControl:send', desktopShellOnly((deviceId, command) => ensureMobileSyncService().sendControlCommand(String(deviceId || ''), command || {})))

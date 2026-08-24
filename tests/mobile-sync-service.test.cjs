@@ -494,6 +494,65 @@ test('paired phones can load and update the desktop appearance bridge', async t 
   assert.equal(await customAsset.text(), 'theme-asset')
 })
 
+test('relay address changes invalidate stale pairing and flag existing devices for an update', async () => {
+  const store = createStore()
+  store.addDevice({
+    id: '0123456789abcdef', secretHash: 'a'.repeat(64), name: 'Existing phone', platform: 'android', deviceClass: 'phone',
+    createdAt: new Date(0).toISOString(), lastSeenAt: new Date(0).toISOString()
+  })
+  let relayConfig = { enabled: false, relayUrl: '', source: 'disabled', checkedAt: null }
+  const relayConfigStore = {
+    get: () => relayConfig,
+    async set() { relayConfig = { enabled: true, relayUrl: 'wss://relay.example.test/', source: 'user', checkedAt: new Date().toISOString() }; return relayConfig },
+    clear() { relayConfig = { enabled: false, relayUrl: '', source: 'disabled', checkedAt: null }; return relayConfig }
+  }
+  const configured = []
+  const transportManager = {
+    state: () => ({ enabled: true, status: 'stopped', active: null, adapters: [] }),
+    on() {},
+    async configureWssRelay(value) { configured.push(value) }
+  }
+  const service = new MobileSyncService({ store, getRuntimeTarget: () => null, relayConfigStore, transportManager })
+  service.pairing = { expiresAt: Date.now() + 60_000, url: 'http://127.0.0.1/old-pairing' }
+
+  const saved = await service.setRelayConfig('relay.example.test')
+  assert.equal(saved.pairing, null)
+  assert.equal(saved.relay.requiresDeviceUpdate, true)
+  assert.equal(saved.relay.relayUrl, 'wss://relay.example.test/')
+  assert.deepEqual(configured, ['wss://relay.example.test/'])
+
+  service.pairing = { expiresAt: Date.now() + 60_000, url: 'http://127.0.0.1/current-pairing' }
+  const unchanged = await service.setRelayConfig('relay.example.test')
+  assert.equal(unchanged.pairing.url, 'http://127.0.0.1/current-pairing')
+  assert.deepEqual(configured, ['wss://relay.example.test/'])
+
+  const cleared = await service.clearRelayConfig()
+  assert.equal(cleared.pairing, null)
+  assert.equal(cleared.relay.requiresDeviceUpdate, true)
+  assert.equal(cleared.relay.relayUrl, '')
+  assert.deepEqual(configured, ['wss://relay.example.test/', ''])
+
+  service.revokeDevice('0123456789abcdef')
+  assert.equal(service.state().relay.requiresDeviceUpdate, false)
+})
+
+test('relay address changes do not request a device update when no device is paired', async () => {
+  const store = createStore()
+  let relayConfig = { enabled: false, relayUrl: '', source: 'disabled', checkedAt: null }
+  const relayConfigStore = {
+    get: () => relayConfig,
+    async set() { relayConfig = { enabled: true, relayUrl: 'wss://relay.example.test/', source: 'user', checkedAt: new Date().toISOString() }; return relayConfig }
+  }
+  const service = new MobileSyncService({ store, getRuntimeTarget: () => null, relayConfigStore })
+  const state = await service.setRelayConfig('relay.example.test')
+  assert.equal(state.relay.requiresDeviceUpdate, false)
+  store.addDevice({
+    id: 'fedcba9876543210', secretHash: 'b'.repeat(64), name: 'New phone', platform: 'android', deviceClass: 'phone',
+    createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString()
+  })
+  assert.equal(service.state().relay.requiresDeviceUpdate, false)
+})
+
 test('desktop mobile state projections never expose mesh or relay secrets', () => {
   const store = createStore()
   const networkSecret = 'n'.repeat(43)

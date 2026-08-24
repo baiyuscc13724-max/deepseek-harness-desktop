@@ -88,6 +88,11 @@ const mobileSyncPairCard = document.querySelector('#mobileSyncPairCard')
 const mobileRemoteToggle = document.querySelector('#mobileRemoteToggle')
 const mobileRemoteStatus = document.querySelector('#mobileRemoteStatus')
 const mobileTransportPreference = document.querySelector('#mobileTransportPreference')
+const mobileRelayUrlInput = document.querySelector('#mobileRelayUrl')
+const mobileRelaySave = document.querySelector('#mobileRelaySave')
+const mobileRelayClear = document.querySelector('#mobileRelayClear')
+const mobileRelayStatus = document.querySelector('#mobileRelayStatus')
+const mobileRelayMessage = document.querySelector('#mobileRelayMessage')
 const mobileSyncQr = document.querySelector('#mobileSyncQr')
 const mobileSyncQrPlaceholder = document.querySelector('#mobileSyncQrPlaceholder')
 const mobileSyncUrl = document.querySelector('#mobileSyncUrl')
@@ -154,6 +159,7 @@ let mobileSyncState = {
   control: { protocolVersion: 1, devices: [] },
   remote: { enabled: true, preference: 'auto', status: 'disabled', active: null, adapters: {} }
 }
+let relayTesting = false
 let themeCatalog = []
 let selectedWallpaperId = null
 let wallpaperEngineLibrary = null
@@ -1053,6 +1059,14 @@ function formatDeviceTime(value) {
   return `最近连接 ${date.toLocaleString('zh-CN', { hour12: false })}`
 }
 
+const mobileRelayApi = {
+  save: url => api.setMobileSyncRelayUrl(String(url || '').trim()),
+  clear: () => api.clearMobileSyncRelayUrl()
+}
+function mobileRelayApiAvailable() {
+  return typeof api.setMobileSyncRelayUrl === 'function' && typeof api.clearMobileSyncRelayUrl === 'function'
+}
+
 function renderMobileSync(next = mobileSyncState) {
   mobileSyncState = { ...mobileSyncState, ...(next || {}) }
   const running = mobileSyncState.enabled && mobileSyncState.running
@@ -1068,6 +1082,7 @@ function renderMobileSync(next = mobileSyncState) {
   mobileRemoteToggle.disabled = !running
   mobileTransportPreference.value = remote.preference || 'auto'
   mobileTransportPreference.disabled = !running || remote.enabled === false
+  renderMobileRelayCard(remote)
   const adapterLabel = remote.active === 'wss-relay' ? 'WSS/443（通用线路）' : remote.active === 'easytier' ? 'EasyTier' : remote.active === 'tailscale' ? 'Tailscale' : ''
   const remoteStatusText = remote.enabled === false
     ? '远程连接已关闭；同一 Wi-Fi 仍可使用'
@@ -1124,6 +1139,31 @@ function renderMobileSync(next = mobileSyncState) {
     } catch (error) { mobileSyncError.textContent = error.message }
     finally { button.disabled = false }
   }))
+}
+
+function mobileRelayAdapterState(remote) {
+  const adapters = Array.isArray(remote?.adapters) ? remote.adapters : []
+  return adapters.find(adapter => adapter && adapter.id === 'wss-relay') || null
+}
+
+function renderMobileRelayCard(remote = mobileSyncState.remote || {}) {
+  const adapter = mobileRelayAdapterState(remote)
+  const relay = mobileSyncState.relay || {}
+  const savedUrl = String(relay.relayUrl || adapter?.relayUrl || remote?.relayUrl || '').trim()
+  if (document.activeElement !== mobileRelayUrlInput) mobileRelayUrlInput.value = savedUrl
+  mobileRelayClear.disabled = !savedUrl && relay.source !== 'invalid'
+  if (relay.source === 'invalid' && !relayTesting && !mobileRelayMessage.textContent) {
+    mobileRelayMessage.textContent = '个人中继配置无法读取，请清除恢复默认或重新保存地址。'
+  } else if (relay.requiresDeviceUpdate && !relayTesting && !mobileRelayMessage.textContent) {
+    mobileRelayMessage.textContent = '中继地址已变更：请重新生成二维码，并在已配对手机重新扫码更新远程线路。'
+  }
+  if (relayTesting) mobileRelayStatus.textContent = '检测中…'
+  else if (relay.source === 'invalid') mobileRelayStatus.textContent = '配置异常 · 可清除或重新保存'
+  else if (!savedUrl) mobileRelayStatus.textContent = '未配置'
+  else if (adapter?.status === 'connected') mobileRelayStatus.textContent = '已保存 · WSS/443 中继已连接'
+  else if (adapter?.status === 'connecting') mobileRelayStatus.textContent = '已保存 · 正在连接中继…'
+  else if (adapter?.status === 'disconnected' || adapter?.error) mobileRelayStatus.textContent = '已保存 · 中继连接异常'
+  else mobileRelayStatus.textContent = '已保存'
 }
 
 async function generateMobilePairing() {
@@ -2010,6 +2050,51 @@ mobileTransportPreference.addEventListener('change', async () => {
     await publishMobileSyncState()
   } catch (error) { mobileSyncError.textContent = error.message }
   finally { mobileTransportPreference.disabled = false }
+})
+mobileRelaySave.addEventListener('click', async () => {
+  const value = mobileRelayUrlInput.value.trim()
+  if (!value) {
+    mobileRelayMessage.textContent = '请先输入中继服务器域名、公网 IP 或 wss:// 地址。'
+    mobileRelayUrlInput.focus()
+    return
+  }
+  if (!mobileRelayApiAvailable()) {
+    mobileRelayMessage.textContent = '当前版本尚未提供个人中继保存接口，请升级后再试。'
+    return
+  }
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `wss://${value}`
+  relayTesting = true
+  mobileRelaySave.disabled = true
+  mobileRelayClear.disabled = true
+  mobileRelayMessage.textContent = ''
+  renderMobileRelayCard()
+  try {
+    const next = await mobileRelayApi.save(url)
+    relayTesting = false
+    renderMobileSync(next)
+    await publishMobileSyncState()
+    mobileRelayMessage.textContent = '已保存。请重新生成二维码，并在已配对手机重新扫码更新远程线路；之后新配对的手机扫码会自动携带该配置。'
+  } catch (error) {
+    relayTesting = false
+    renderMobileRelayCard()
+    mobileRelayMessage.textContent = error?.message || '保存或检测失败：请确认地址、443 端口和可信 TLS 证书。'
+  } finally { mobileRelaySave.disabled = false }
+})
+mobileRelayClear.addEventListener('click', async () => {
+  if (!mobileRelayApiAvailable()) {
+    mobileRelayMessage.textContent = '当前版本尚未提供个人中继清除接口，请升级后再试。'
+    return
+  }
+  mobileRelayClear.disabled = true
+  mobileRelayMessage.textContent = ''
+  try {
+    const next = await mobileRelayApi.clear()
+    renderMobileSync(next)
+    await publishMobileSyncState()
+    mobileRelayMessage.textContent = '已清除并恢复默认。请重新生成二维码，并在已配对手机重新扫码更新远程线路；之后新配对的手机扫码不会再携带个人中继。'
+  } catch (error) {
+    mobileRelayMessage.textContent = error?.message || '清除失败，请稍后重试。'
+  } finally { renderMobileRelayCard() }
 })
 stopMobileControl.addEventListener('click', async () => {
   stopMobileControl.disabled = true

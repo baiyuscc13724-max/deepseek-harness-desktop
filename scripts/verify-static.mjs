@@ -345,7 +345,7 @@ for (const target of ['dmg', 'zip']) {
   if (!value || !['x64', 'arm64'].every(arch => value.arch?.includes(arch))) throw new Error(`macOS ${target} target must cover Intel and Apple Silicon.`)
 }
 const desktopMain = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
-for (const contract of ['createWssRelayAdapter', 'loadMobileRelayConfig', "detached: process.platform !== 'win32'", 'terminateProcessTree(child)', 'runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 180_000 }', 'ensureComputerUseScreenshotStore().save(scaled.toPNG())', 'clearComputerUseScreenshots()']) {
+for (const contract of ['createWssRelayAdapter', 'MobileRelayConfigStore', "detached: process.platform !== 'win32'", 'terminateProcessTree(child)', 'runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 180_000 }', 'ensureComputerUseScreenshotStore().save(scaled.toPNG())', 'clearComputerUseScreenshots()']) {
   if (!desktopMain.includes(contract)) throw new Error(`Cross-platform desktop runtime contract is missing: ${contract}`)
 }
 const iosInfo = await readFile(path.join(root, 'mobile/ios/HarnessMobile/Resources/Info.plist'), 'utf8')

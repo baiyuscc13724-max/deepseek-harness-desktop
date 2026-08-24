@@ -184,6 +184,17 @@ class SyncTransportManager extends EventEmitter {
     return this.publish()
   }
 
+  async configureWssRelay(relayUrl) {
+    const adapter = this.adapters.get('wss-relay')
+    if (!adapter || typeof adapter.configureRelayUrl !== 'function') throw new Error('WSS relay adapter does not support runtime configuration.')
+    if (this.switching) await this.switching
+    const shouldRestart = Boolean(this.context?.port && this.store.get().remoteEnabled)
+    await this.stop({ persist: false })
+    adapter.configureRelayUrl(relayUrl)
+    if (shouldRestart) return this.start()
+    return this.publish()
+  }
+
   pairingTransports() {
     const result = []
     for (const adapter of this.adapters.values()) {
