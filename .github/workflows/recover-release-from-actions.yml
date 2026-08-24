@@ -295,7 +295,7 @@ jobs:
     name: Install authenticated recovered Windows draft
     needs: recover
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     permissions:
       contents: write
     env:

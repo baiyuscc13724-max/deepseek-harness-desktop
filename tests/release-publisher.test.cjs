@@ -324,6 +324,7 @@ test('cloud recovery binds artifacts to the tag and safely resumes any verified 
   assert.equal(workflow.concurrency.group, 'release-${{ inputs.tag }}')
   assert.equal(workflow.concurrency['cancel-in-progress'], false)
   assert.equal(workflow.jobs['verify-windows-draft'].needs, 'recover')
+  assert.equal(workflow.jobs['verify-windows-draft']['timeout-minutes'], 90)
   assert.equal(workflow.jobs.publish.needs, 'verify-windows-draft')
   const recoveryRuns = workflow.jobs.recover.steps.map(step => step.run || '').join('\n')
   const windowsRuns = workflow.jobs['verify-windows-draft'].steps.map(step => step.run || '').join('\n')
