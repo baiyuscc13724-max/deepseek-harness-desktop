@@ -116,7 +116,8 @@ test('custom wallpaper workbench protects conversation chrome, content, composer
   assert.match(guest, /html\[data-hd-theme="custom"\] \[data-hd-surface="conversation"\] \{\s*background:\s*linear-gradient\(to bottom,var\(--hd-theme-readable-scrim-strong\) 0,transparent 92px/u)
   assert.match(guest, /linear-gradient\(var\(--hd-theme-readable-scrim-soft\),var\(--hd-theme-readable-scrim-soft\)\) !important/u)
   assert.doesNotMatch(guest, /linear-gradient\(to right,transparent 0,var\(--hd-theme-readable-scrim-soft\)/u)
-  assert.match(guest, /html\[data-hd-theme="custom"\] \[data-composer-card="true"\] \{\s*background:linear-gradient\(var\(--hd-theme-readable-surface\)/u)
+  const composerSurfaceRule = guest.match(/html\[data-hd-theme="custom"\]\[data-hd-skin-tone\] \[data-composer-card="true"\],[\s\S]*?\{([\s\S]*?)\n      \}/u)?.[1] || ''
+  assert.match(composerSurfaceRule, /background:linear-gradient\(var\(--hd-theme-readable-surface\),var\(--hd-theme-readable-surface\)\),var\(--hd-theme-input\) !important;/u)
   assert.match(guest, /html\[data-hd-theme="custom"\] \[data-hd-surface="conversation"\] :not\(pre\) > code/u)
   assert.match(guest, /background:var\(--hd-theme-readable-chip\) !important/u)
   assert.match(guest, /html\[data-hd-theme="custom"\] \[data-hd-surface="conversation"\] a \{/u)
