@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "repository": "baiyuscc13724-max/deepseek-harness-desktop",
+  "channel": "pr-preview",
+  "prNumber": 16,
+  "title": "feat(browser): keep structured control running in background",
+  "author": "baiyuscc13724-max",
+  "baseRef": "main",
+  "headSha": "fa80368f8144eb75dde8dabc41a4d83a538f9ae9",
+  "sequence": 13000001,
+  "publishedAt": "2026-08-25T19:46:00.000Z",
+  "expiresAt": "2026-09-01T19:46:00.000Z",
+  "keyId": "harness-preview-v1",
+  "kind": "pr-preview-manifest",
+  "componentManifest": {
+    "schemaVersion": 1,
+    "releaseVersion": "1.0.47-pr.13.1",
+    "channel": "prerelease",
+    "publishedAt": "2026-08-25T19:46:00.000Z",
+    "keyId": "harness-preview-v1",
+    "bootstrap": {
+      "minVersion": "1.0.46"
+    },
+    "components": [
+      {
+        "id": "desktop-shell",
+        "version": "1.0.47-pr.13.1",
+        "kind": "zip",
+        "target": "shell",
+        "platform": "win32",
+        "arch": "x64",
+        "size": 37649006,
+        "unpackedSize": 42633218,
+        "sha256": "17cdf76eafeb1348895dfaa18ce63cca7d6cc617bf4a57d4e890bcbfe6fbcbc7",
+        "urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/pr-preview-16-fa80368f8144-run-32891383070-1/desktop-shell-1.0.47-pr.13.1-win32-x64.zip",
+          "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/pr-preview-16-fa80368f8144-run-32891383070-1/desktop-shell-1.0.47-pr.13.1-win32-x64.zip"
+        ],
+        "required": true,
+        "restart": true,
+        "signature": "9YVld8o0++XmJunNUh7NEvhy/yeOMshWFAiNTh4U/z0lqsJa6d9z+k2jGY0ZLUR/nqWhfamLYo90kySHJjpHBQ=="
+      }
+    ],
+    "notes": "Approved same-repository PR #16 at exact head fa80368f8144eb75dde8dabc41a4d83a538f9ae9. Build run 32891383070; no PR code executed by the signing job.",
+    "signature": "yZvDE33YMLPtlBX5lQeT5lhCmYRlHbnM3znJXdBx1u5M5JvCmljAnWJJrWJBmC0uwRIn/tyxXy3O7IuZo0r0Cw=="
+  },
+  "signature": "MVWp9U1lyeuknaa29a9SQu6SO3xEJjQoDoDcJ7u+5G+lJe9UP9jSFzKZWB4dMX7v6CQDPR6dLA4EyxDVQVihBQ=="
+}
