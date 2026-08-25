@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "repository": "baiyuscc13724-max/deepseek-harness-desktop",
+  "channel": "pr-preview",
+  "prNumber": 10,
+  "title": "release: v1.0.46 all-feature protected candidate",
+  "author": "baiyuscc13724-max",
+  "baseRef": "main",
+  "headSha": "ee711ec985b2605a2b0df80aa2804535b8d44ac9",
+  "sequence": 9000001,
+  "publishedAt": "2026-08-25T15:30:10.000Z",
+  "expiresAt": "2026-09-01T15:30:10.000Z",
+  "keyId": "harness-preview-v1",
+  "kind": "pr-preview-index",
+  "manifestUrls": [
+    "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/pr-preview/manifests/ee711ec985b2605a2b0df80aa2804535b8d44ac9.json",
+    "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/pr-preview/manifests/ee711ec985b2605a2b0df80aa2804535b8d44ac9.json"
+  ],
+  "notes": "release: v1.0.46 all-feature protected candidate — @baiyuscc13724-max; exact head ee711ec985b2605a2b0df80aa2804535b8d44ac9.",
+  "signature": "rnV6gFcUJe4Md1a1GcF3QbUIFpZFhYy3+RpEfAvahBN2md3d7sCEhatvnqNj5nh2zhYf4+a0TAnz1PlIsvSXDw=="
+}

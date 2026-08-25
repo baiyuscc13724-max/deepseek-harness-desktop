@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "repository": "baiyuscc13724-max/deepseek-harness-desktop",
+  "channel": "pr-preview",
+  "prNumber": 10,
+  "title": "release: v1.0.46 all-feature protected candidate",
+  "author": "baiyuscc13724-max",
+  "baseRef": "main",
+  "headSha": "ee711ec985b2605a2b0df80aa2804535b8d44ac9",
+  "sequence": 9000001,
+  "publishedAt": "2026-08-25T15:30:10.000Z",
+  "expiresAt": "2026-09-01T15:30:10.000Z",
+  "keyId": "harness-preview-v1",
+  "kind": "pr-preview-manifest",
+  "componentManifest": {
+    "schemaVersion": 1,
+    "releaseVersion": "1.0.45-pr.9.1",
+    "channel": "prerelease",
+    "publishedAt": "2026-08-25T15:30:10.000Z",
+    "keyId": "harness-preview-v1",
+    "bootstrap": {
+      "minVersion": "1.0.44"
+    },
+    "components": [
+      {
+        "id": "desktop-shell",
+        "version": "1.0.45-pr.9.1",
+        "kind": "zip",
+        "target": "shell",
+        "platform": "win32",
+        "arch": "x64",
+        "size": 37646254,
+        "unpackedSize": 42625488,
+        "sha256": "b13636d6b7efd9c483ac369cce21eaaca11ae7254c0569e2fabdb214fc4f7bae",
+        "urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/pr-preview-10-ee711ec985b2-run-32866124694-1/desktop-shell-1.0.45-pr.9.1-win32-x64.zip",
+          "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/pr-preview-10-ee711ec985b2-run-32866124694-1/desktop-shell-1.0.45-pr.9.1-win32-x64.zip"
+        ],
+        "required": true,
+        "restart": true,
+        "signature": "Dl8aWWK+eVg2DQyR3r3eVT/CBCV6HgLNRRaZ5nGBuv2ZaFhGqHWKQUsny9CGk1EjJT1QmciN8nbMyNSHD9JzBg=="
+      }
+    ],
+    "notes": "Approved same-repository PR #10 at exact head ee711ec985b2605a2b0df80aa2804535b8d44ac9. Build run 32866124694; no PR code executed by the signing job.",
+    "signature": "IzjT40gNAnP6pUA0Y/3GR2nFbttSzzHCypNgrLtKqONHVPk3nOE1Qd47yjc++jYH9WZlwdGUJVBPLK4JS+AACA=="
+  },
+  "signature": "AwwCSnaqt6+hkiwDLGx5lNE3TtbbVAydUWX7Jcn6N4l5kRRCNivUOsvgiqbKFV5TCsF1XVkifSlkRidfViFVCg=="
+}
