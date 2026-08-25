@@ -207,19 +207,75 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          function Invoke-BoundedProcess {
+            param(
+              [Parameter(Mandatory)][string] $FilePath,
+              [Parameter(Mandatory)][string[]] $ArgumentList,
+              [Parameter(Mandatory)][ValidateRange(1, 600)][int] $TimeoutSeconds,
+              [Parameter(Mandatory)][string] $Label
+            )
+            Write-Host "Starting $Label (timeout ${TimeoutSeconds}s)"
+            $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+            try {
+              if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+                try { & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null } catch {}
+                if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+                $null = $process.WaitForExit(10000)
+                throw "$Label timed out after $TimeoutSeconds seconds."
+              }
+              $process.Refresh()
+              Write-Host "Completed $Label (exit $($process.ExitCode))"
+              return [int]$process.ExitCode
+            }
+            finally {
+              $process.Dispose()
+            }
+          }
+
           $setup = Get-ChildItem -Path dist -File -Filter '*-win-*.exe' | Select-Object -First 1
           if (-not $setup) { throw 'Cannot find the Windows Inno Setup installer.' }
+          $portable = Get-ChildItem -Path dist -File -Filter '*-portable-x64.exe' | Select-Object -First 1
+          if (-not $portable) { throw 'Cannot find the current-version Windows portable executable.' }
+          $version = $env:RELEASE_TAG.TrimStart('v')
           $installRoot = Join-Path $env:RUNNER_TEMP 'harness-desktop-install-smoke'
-          $process = Start-Process -FilePath $setup.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Windows installer exited with code $($process.ExitCode)." }
-          $installedExe = Get-ChildItem -Path $installRoot -Recurse -File -Filter 'Harness Desktop.exe' | Select-Object -First 1
-          if (-not $installedExe) { throw 'Windows installer did not lay down Harness Desktop.exe.' }
-          $installedAsar = Get-ChildItem -Path $installRoot -Recurse -File -Filter 'app.asar' | Select-Object -First 1
-          if (-not $installedAsar) { throw 'Windows installer did not lay down app.asar.' }
-          $uninstaller = Get-ChildItem -Path $installRoot -Recurse -File -Filter 'unins*.exe' | Select-Object -First 1
-          if ($uninstaller) {
-            $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
-            if ($uninstall.ExitCode -ne 0) { throw "Windows uninstaller exited with code $($uninstall.ExitCode)." }
+          $profileRoot = Join-Path $env:RUNNER_TEMP 'harness-desktop-installed-selftest-profile'
+          $reportPath = Join-Path $env:RUNNER_TEMP 'harness-desktop-installed-selftest.json'
+          $portableProfile = Join-Path $env:RUNNER_TEMP 'harness-desktop-portable-selftest-profile'
+          $portableReport = Join-Path $env:RUNNER_TEMP 'harness-desktop-portable-selftest.json'
+          Remove-Item -LiteralPath $installRoot, $profileRoot, $reportPath, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
+          try {
+            $portableExit = Invoke-BoundedProcess -FilePath $portable.FullName -ArgumentList @('--self-test', "--self-test-output=$portableReport", "--user-data-dir=$portableProfile", "--harness-user-data-dir=$portableProfile") -TimeoutSeconds 180 -Label 'Current-version portable self-test'
+            if ($portableExit -ne 0 -or -not (Test-Path -LiteralPath $portableReport -PathType Leaf)) { throw 'Current-version portable self-test failed or omitted its JSON report.' }
+            $portableResult = Get-Content -LiteralPath $portableReport -Raw | ConvertFrom-Json
+            $portableResult | ConvertTo-Json -Depth 8
+            if (-not $portableResult.ok -or $portableResult.product.version -ne $version) { throw 'Current-version portable self-test failed or reported the wrong version.' }
+
+            $installExit = Invoke-BoundedProcess -FilePath $setup.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installRoot") -TimeoutSeconds 300 -Label 'Current-version Windows installer'
+            if ($installExit -ne 0) { throw "Windows installer exited with code $installExit." }
+            $installedExe = Get-ChildItem -Path $installRoot -Recurse -File -Filter 'Harness Desktop.exe' | Select-Object -First 1
+            $installedAsar = Get-ChildItem -Path $installRoot -Recurse -File -Filter 'app.asar' | Select-Object -First 1
+            if (-not $installedExe -or -not $installedAsar) { throw 'Windows installer did not lay down Harness Desktop.exe and app.asar.' }
+
+            $selfTestExit = Invoke-BoundedProcess -FilePath $installedExe.FullName -ArgumentList @('--self-test', "--self-test-output=$reportPath", "--user-data-dir=$profileRoot", "--harness-user-data-dir=$profileRoot") -TimeoutSeconds 180 -Label 'Current-version installed self-test'
+            if ($selfTestExit -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Current-version installed self-test failed or omitted its JSON report.' }
+            $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+            $report | ConvertTo-Json -Depth 8
+            if (-not $report.ok -or $report.product.version -ne $version) { throw 'Current-version installed self-test failed or reported the wrong version.' }
+
+            $uninstaller = Get-ChildItem -Path $installRoot -Recurse -File -Filter 'unins*.exe' | Select-Object -First 1
+            if (-not $uninstaller) { throw 'Current-version installed uninstaller is missing.' }
+            $uninstallExit = Invoke-BoundedProcess -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 300 -Label 'Current-version Windows uninstaller'
+            if ($uninstallExit -ne 0) { throw "Windows uninstaller exited with code $uninstallExit." }
+            for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $installRoot); $i++) { Start-Sleep -Milliseconds 500 }
+            if (Test-Path -LiteralPath $installRoot) { throw 'Windows uninstaller did not remove the temporary installation.' }
+          }
+          finally {
+            try {
+              $cleanupUninstaller = Get-ChildItem -LiteralPath $installRoot -Recurse -File -Filter 'unins*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($cleanupUninstaller) { $null = Invoke-BoundedProcess -FilePath $cleanupUninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 120 -Label 'Current-version cleanup uninstaller' }
+            } catch {}
+            Remove-Item -LiteralPath $installRoot, $profileRoot, $reportPath, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           }
       - name: Audit release artifacts
         run: npm run verify:artifact
@@ -319,7 +375,10 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
 
   prepare-windows-candidate:
-    name: Bind signed previous stable Windows installer
+    # Disabled by policy: the same-run current-package gates plus the completed
+    # local update/rollback gate replace the opaque previous-stable cloud loop.
+    if: ${{ false }}
+    name: Previous-stable Windows binding (disabled)
     needs: [build, ios-simulators]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -454,7 +513,8 @@ jobs:
           retention-days: 14
 
   verify-windows-candidate:
-    name: Verify Windows candidate upgrade and installation
+    if: ${{ false }}
+    name: Previous-stable Windows upgrade (disabled)
     needs: prepare-windows-candidate
     runs-on: windows-latest
     timeout-minutes: 45

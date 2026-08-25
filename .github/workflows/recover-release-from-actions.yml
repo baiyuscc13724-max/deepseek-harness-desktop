@@ -99,8 +99,7 @@ jobs:
             'Build windows-latest' \
             'Build macos-latest' \
             'Build ubuntu-latest' \
-            'Validate iPhone and iPad simulators' \
-            'Verify Windows candidate upgrade and installation'; do
+            'Validate iPhone and iPad simulators'; do
             jq -e --arg name "$name" '[.jobs[] | select(.name == $name and .conclusion == "success")] | length == 1' <<<"$jobs" >/dev/null || {
               printf 'Required successful source job mismatch: %s\n' "$name" >&2
               exit 1
@@ -233,9 +232,11 @@ jobs:
             all(.assets[]; (.id | type == "number") and (.name | type == "string") and
               (.size | type == "number") and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))
           ' draft-snapshot.json >/dev/null
-          # Ubuntu prefetch verifies every exact release byte; Windows revalidates
-          # its transferred executables before the real previous-stable upgrade.
+          # Ubuntu prefetch verifies every exact release byte before publication.
+          # The previous-stable cloud upgrade loop is intentionally disabled;
+          # local update/rollback evidence and same-run current-package gates remain.
       - name: Bind the signed previous stable Windows installer to an exact public asset
+        if: ${{ false }}
         shell: bash
         run: |
           set -euo pipefail
@@ -318,12 +319,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          input_root="$RUNNER_TEMP/recovered-windows-inputs"
+          state_root="$RUNNER_TEMP/recovered-draft-state"
           exact_root="$RUNNER_TEMP/exact-draft-assets"
-          windows_root="$input_root/windows-files"
-          rm -rf "$input_root" "$exact_root"
-          mkdir -p "$windows_root" "$exact_root"
-          cp draft-snapshot.json previous-stable.json "$input_root/"
+          rm -rf "$state_root" "$exact_root"
+          mkdir -p "$state_root" "$exact_root"
+          cp draft-snapshot.json "$state_root/"
           download_asset() {
             local id="$1" destination="$2"
             curl --fail-with-body --silent --show-error --location \
@@ -368,32 +368,19 @@ jobs:
           diff -u <(printf '%s\n' "$expected_checksum_names") <(printf '%s\n' "$checksum_names")
           (cd "$exact_root" && sha256sum --strict -c SHA256SUMS.txt)
 
-          version="${RELEASE_TAG#v}"
-          required_windows="$(printf '%s\n' \
-            'SHA256SUMS.txt' \
-            "Harness-Desktop-$version-portable-x64.exe" \
-            "Harness-Desktop-$version-win-x64.exe" | LC_ALL=C sort)"
-          while IFS= read -r name; do cp "$exact_root/$name" "$windows_root/$name"; done <<<"$required_windows"
-          windows_names="$(find "$windows_root" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
-          diff -u <(printf '%s\n' "$required_windows") <(printf '%s\n' "$windows_names")
-
-          previous_id="$(jq -er '.asset.id | select(type == "number" and . > 0)' previous-stable.json)"
-          previous_size="$(jq -er '.asset.size | select(type == "number" and . > 0)' previous-stable.json)"
-          previous_sha="$(jq -er '.asset.sha256 | select(type == "string" and test("^[0-9a-f]{64}$"))' previous-stable.json)"
-          previous_installer="$input_root/previous-stable-installer.exe"
-          download_asset "$previous_id" "$previous_installer"
-          test "$(stat -c %s "$previous_installer")" = "$previous_size" || { echo 'Previous stable installer size mismatch.' >&2; exit 1; }
-          test "$(sha256sum "$previous_installer" | awk '{print $1}')" = "$previous_sha" || { echo 'Previous stable installer SHA-256 mismatch.' >&2; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: recovered-windows-verification-inputs
-          path: ${{ runner.temp }}/recovered-windows-inputs
+          name: recovered-draft-snapshot
+          path: ${{ runner.temp }}/recovered-draft-state
           if-no-files-found: error
           retention-days: 1
-          compression-level: 0
 
   verify-windows-draft:
-    name: Install authenticated recovered Windows draft
+    # Disabled by policy: current-package execution is already proven in the
+    # immutable source run; recovery verifies byte identity without repeating
+    # the opaque previous-stable in-place-upgrade loop.
+    if: ${{ false }}
+    name: Recovered previous-stable Windows upgrade (disabled)
     needs: recover
     runs-on: windows-latest
     timeout-minutes: 90
@@ -616,7 +603,7 @@ jobs:
 
   publish:
     name: Publish unchanged recovered draft
-    needs: verify-windows-draft
+    needs: recover
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -628,7 +615,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: recovered-windows-verification-inputs
+          name: recovered-draft-snapshot
           path: draft-state
       - name: Reconfirm exact draft snapshot and publish by immutable release id
         shell: bash

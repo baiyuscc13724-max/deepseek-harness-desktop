@@ -27,5 +27,5 @@
 
 - 桌面、13 个随包插件、Android 与 iOS/iPadOS 源码同步到 `1.0.46`，Android `versionCode=10046`。
 - 已发布 `v1.0.44` 以及现有 `v1.0.45` Tag/草稿全部保持不可变；`v1.0.45` 不移动、不覆盖、不复用，完整功能版本使用新的 `v1.0.46`。
-- 正式 `v1.0.46` Tag 仅在干净候选、本机源码/安全门禁、受保护 PR Preview 更新/重启/回滚、锁定 SHA 的全平台云端候选构建，以及 previous-stable→candidate Windows 安装升级验证全部成功后创建。
+- 正式 `v1.0.46` Tag 仅在干净候选、本机源码/安全门禁、受保护 PR Preview 真实更新/重启健康/回滚，以及锁定 SHA 的 Windows/macOS/Linux/iOS 当前包构建、自检、组件回滚和安装器冒烟全部成功后创建；耗时且不可观察的云端 previous-stable 原位升级不再重复执行。
 - 统一可恢复发布器仍是唯一发布入口：正式二进制仅由 GitHub Actions 构建，CNB 从 GitHub 云到云镜像；精确 18 项资产和三个签名 stable feed 最后提升，同版本不同摘要一律视为冲突。

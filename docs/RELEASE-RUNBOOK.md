@@ -52,34 +52,40 @@ gh release list --repo baiyuscc13724-max/deepseek-harness-desktop --limit 5
    git push origin main
    ```
 
-### 2.2 推送 tag 触发发布
+### 2.2 使用统一可恢复发布器（禁止手工 Tag）
 
 ```powershell
-git tag vX.Y.Z
-git push origin vX.Y.Z
+npm run release:publish -- plan --version X.Y.Z
+npm run release:publish -- run --version X.Y.Z
 ```
 
-> `release.yml` 在推送 `v*` tag 时自动触发（也支持在 Actions 页面手动 `Run workflow` 并填 `tag` 输入）。
+> `release.yml` 只接受发布器提供的精确 `source_revision` 和唯一 requestId，不监听 Tag push。发布器先验证云端候选，全部成功后才创建唯一不可变 Tag；不得手工创建、移动或重建 Tag，也不得逐条手工拼装发布命令。
 
 ### 2.3 监控与验证
 
 ```powershell
-# 查看运行状态（也可在 Actions 页面看）
+# 原子发布状态；网络中断后重复 run 会从未完成阶段续跑
+npm run release:publish -- status --version X.Y.Z
+
+# 查看候选云构建（也可在 Actions 页面看）
 gh run list --repo baiyuscc13724-max/deepseek-harness-desktop --workflow release.yml --limit 3
 
-# 发布成功后确认
+# 发布器完成后确认
 gh release view vX.Y.Z --repo baiyuscc13724-max/deepseek-harness-desktop --json tagName,isDraft,assets --jq '{tag:.tagName,draft:.isDraft,assets:[.assets[].name]}'
 ```
 
 ### 2.4 流程内部结构（供排查用）
 
 ```
-build (windows-latest / macos-latest / ubuntu-latest)  ← 构建+自测+上传 artifact
-ios-simulators (macos-14)                              ← iPhone/iPad 模拟器测试
-stage-draft                                            ← 创建私有草稿 Release，上传 8 个资产 + SHA256SUMS.txt
-verify-windows-draft                                   ← 认证下载、校验 SHA-256、安装自测、卸载
-publish                                                ← 复核草稿未变后置为公开 (draft=false)
+release.yml / build（Windows / macOS / Linux）          ← 当前包构建、自检并上传三份 artifact
+release.yml / ios-simulators                           ← iPhone/iPad 模拟器测试
+publisher / immutable-tag                              ← 四个候选 job 全部成功后创建唯一 Tag
+recover-release-from-actions.yml / recover             ← 复用同一 run，补齐 Draft 并重验九项桌面资产字节
+recover-release-from-actions.yml / publish             ← 复核 Draft 快照未变后置为公开
+publisher / Android、组件、清单、CNB、stable feed       ← 精确 18 项资产，stable 最后提升
 ```
+
+云端 previous-stable Windows 原位升级 job 固定禁用；真实更新、重启健康与回滚由发布前本机 PR Preview 门禁负责。Windows 当前候选仍执行便携包自检、组件健康/回滚、安装器安装、已安装包自检和卸载。
 
 ---
 
