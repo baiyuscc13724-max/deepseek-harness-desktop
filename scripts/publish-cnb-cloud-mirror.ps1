@@ -97,6 +97,15 @@ $presentStableFeeds = @($stableFeedFiles | Where-Object { Test-Path -LiteralPath
 if ($presentStableFeeds.Count -notin @(0, $stableFeedFiles.Count)) { throw 'Stable component feeds must be absent or complete for all three targets.' }
 if ($StableOnly -and $presentStableFeeds.Count -ne $stableFeedFiles.Count) { throw 'Stable-only CNB synchronization requires all three promoted stable feeds.' }
 if ($presentStableFeeds.Count -eq $stableFeedFiles.Count) { $mirrorFiles += $stableFeedFiles }
+$previewIndexFile = 'component-feeds/pr-preview/latest.json'
+if (Test-Path -LiteralPath $previewIndexFile) {
+  $previewIndex = Get-Content -LiteralPath $previewIndexFile -Raw | ConvertFrom-Json
+  $previewHeadSha = [string]$previewIndex.headSha
+  if ($previewHeadSha -notmatch '^[0-9a-f]{40}$') { throw 'PR preview latest feed must bind a full lowercase head SHA.' }
+  $previewManifestFile = "component-feeds/pr-preview/manifests/$previewHeadSha.json"
+  if (-not (Test-Path -LiteralPath $previewManifestFile)) { throw 'PR preview latest feed is missing its immutable manifest wrapper.' }
+  $mirrorFiles += @($previewIndexFile, $previewManifestFile)
+}
 foreach ($file in $mirrorFiles) {
   if (-not (Test-Path -LiteralPath $file)) { throw "Missing CNB mirror source file: $file" }
   & $GitExecutable diff --quiet HEAD -- $file

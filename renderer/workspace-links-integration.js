@@ -6,19 +6,21 @@
     const style = document.createElement('style')
     style.dataset.harnessDesktopWorkspaceLinks = 'true'
     style.textContent = `
-      code[data-hd-local-target] {
+      code[data-hd-local-target],
+      code > button[data-hd-local-target] {
         cursor: pointer;
         text-decoration: underline;
         text-decoration-style: dotted;
         text-underline-offset: 3px;
       }
-      code[data-hd-local-target]:hover {
+      code[data-hd-local-target]:hover,
+      code > button[data-hd-local-target]:hover {
         color: var(--dsw-alias-brand-primary, #315efb);
       }
     `
     document.head.appendChild(style)
 
-    const localPath = value => {
+    const localPath = (value, { allowWhitespace = false } = {}) => {
       let text = String(value || '').trim()
       const pairs = [['`', '`'], ['"', '"'], ["'", "'"], ['<', '>'], ['（', '）'], ['(', ')']]
       for (const [left, right] of pairs) {
@@ -28,12 +30,16 @@
         }
       }
       if (text.startsWith('@')) text = text.slice(1)
-      if (!text || text.length > 4096 || /[\u0000\r\n]/u.test(text) || /\s/u.test(text)) return ''
+      if (!text || text.length > 4096 || /[\u0000\r\n]/u.test(text)) return ''
+      // 普通代码文本仍拒绝含空白的路径，避免把聊天文本误判为本地路径；
+      // 原生产品改动允许原生文件按钮的 token 含空格，故仅对按钮场景放宽。
+      if (!allowWhitespace && /\s/u.test(text)) return ''
       if (/^(?:https?|data|javascript|mailto):/i.test(text)) return ''
       if (/^file:\/\//i.test(text)) return text
       if (/^[a-z]:[\\/]/i.test(text)) return text
       if (/^\\\\[^\\]+\\[^\\]+/.test(text)) return text
       if (/^\/(?!\/)/.test(text)) return text
+      if (!allowWhitespace && /\s/u.test(text)) return ''
 
       const withoutLocation = text.replace(/(?:#L\d+(?:C\d+)?|:\d+(?::\d+)?)$/i, '')
       if (/^(?:\.\.?[\\/])/.test(withoutLocation)) return text
@@ -49,7 +55,7 @@
 
     const mark = (node, target) => {
       node.dataset.hdLocalTarget = target
-      if (node.tagName !== 'A') {
+      if (!['A', 'BUTTON'].includes(node.tagName)) {
         node.tabIndex = 0
         node.setAttribute('role', 'link')
       }
@@ -66,7 +72,15 @@
 
       const codes = root?.matches?.('code') ? [root] : root?.querySelectorAll?.('code') || []
       for (const code of codes) {
-        if (code.querySelector('a,button')) continue
+        const nativeFileButton = code.querySelector(':scope > button')
+        if (nativeFileButton) {
+          delete code.dataset.hdLocalTarget
+          const target = localPath(code.textContent, { allowWhitespace: true })
+          if (target) mark(nativeFileButton, target)
+          else delete nativeFileButton.dataset.hdLocalTarget
+          continue
+        }
+        if (code.querySelector('a')) continue
         const target = localPath(code.textContent)
         if (target) mark(code, target)
         else delete code.dataset.hdLocalTarget
@@ -106,13 +120,22 @@
       route('preview-local', { path: local.dataset.hdLocalTarget })
     }, true)
 
+    const decorateNode = node => {
+      const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement
+      if (!element) return
+      decorate(element)
+      const inlineCode = element.closest?.('code')
+      if (inlineCode && inlineCode !== element) decorate(inlineCode)
+    }
+
     decorate(document)
     const observer = new MutationObserver(records => {
-      for (const record of records) for (const node of record.addedNodes) {
-        if (node.nodeType === Node.ELEMENT_NODE) decorate(node)
+      for (const record of records) {
+        decorateNode(record.target)
+        for (const node of record.addedNodes) decorateNode(node)
       }
     })
-    observer.observe(document.documentElement, { childList: true, subtree: true })
+    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
   }
 
   window.HarnessDesktopWorkspaceLinks = {

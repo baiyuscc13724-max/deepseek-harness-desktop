@@ -4,7 +4,7 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 const MAX_LOCAL_PREVIEW_BYTES = 1024 * 1024
 const LOCAL_TEXT_EXTENSIONS = new Set([
-  '.c', '.cc', '.conf', '.cpp', '.css', '.csv', '.go', '.h', '.hpp', '.html', '.ini', '.java', '.js', '.json', '.jsonl',
+  '.c', '.cc', '.cjs', '.conf', '.cpp', '.css', '.csv', '.go', '.h', '.hpp', '.html', '.ini', '.java', '.js', '.json', '.jsonl',
   '.jsx', '.log', '.md', '.markdown', '.mjs', '.mts', '.ps1', '.py', '.rs', '.sh', '.sql', '.toml', '.ts', '.tsx', '.txt', '.xml', '.yaml', '.yml'
 ])
 const REQUEST_TIMEOUT_MS = 10_000

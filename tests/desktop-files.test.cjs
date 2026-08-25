@@ -66,6 +66,7 @@ test('right-workspace previews are bounded text and preserve workspace containme
   await writeFile(path.join(directory, 'notes.md'), '# Notes\n\nHello')
   await writeFile(path.join(directory, 'page.html'), '<script>neverRun()</script>')
   await writeFile(path.join(directory, 'main.cs'), 'Console.WriteLine("source");')
+  await writeFile(path.join(directory, 'config.cjs'), 'module.exports = { safe: true }')
   await writeFile(path.join(directory, 'binary.bin'), Buffer.from([0, 1, 2, 3]))
   await writeFile(path.join(outside, 'secret.txt'), 'outside')
   const { MAX_PREVIEW_BYTES, previewFile } = await plugin()
@@ -78,6 +79,7 @@ test('right-workspace previews are bounded text and preserve workspace containme
   assert.equal(located.column, 2)
   assert.equal((await previewFile(directory, 'page.html')).text, '<script>neverRun()</script>')
   assert.equal((await previewFile(directory, 'main.cs')).previewable, true)
+  assert.equal((await previewFile(directory, 'config.cjs')).text, 'module.exports = { safe: true }')
   assert.deepEqual(await previewFile(directory, 'binary.bin'), {
     path: 'binary.bin', name: 'binary.bin', size: 4, extension: '.bin', previewable: false, reason: 'unsupported'
   })

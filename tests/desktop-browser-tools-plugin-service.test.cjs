@@ -57,7 +57,7 @@ test('desktop browser tools installs into the DSH Web profile idempotently', asy
   try {
     const first = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
     const second = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
-    assert.equal(first.version, '1.0.45')
+    assert.equal(first.version, '1.0.46')
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
     assert.match(readFileSync(path.join(first.destination, 'lib', 'index.js'), 'utf8'), /browser_control/)
@@ -289,11 +289,13 @@ test('browser_control screenshot emits an image attachment and safely degrades w
   }
 })
 
-test('browser_control normalizes tab-not-visible/stopped gate rejections into blocked non-retryable success results', async () => {
+test('browser_control normalizes visibility, stop, and shared Computer Use gate rejections into blocked results', async () => {
   const { tool } = await loadPluginTool()
   const rejections = [
     { action: 'click', code: 'tab-not-visible', error: '模型只能操作当前可见的右栏浏览器页面。' },
-    { action: 'screenshot', code: 'stopped', error: '浏览器模型控制已停止；需要用户在右栏重新启用。' }
+    { action: 'screenshot', code: 'stopped', error: '浏览器模型控制已停止；需要用户在右栏重新启用。' },
+    { action: 'click', code: 'computer-use-authorization-required', error: '浏览器控制等待共享授权。' },
+    { action: 'screenshot', code: 'computer-use-disabled', error: '共享控制会话已停止。' }
   ]
   for (const rejection of rejections) {
     await withBrowserEndpoint(async action => {
@@ -313,7 +315,7 @@ test('browser_control normalizes tab-not-visible/stopped gate rejections into bl
       assert.equal(result.result.imageUnavailable, undefined)
       assert.equal(JSON.stringify(result).includes('data:image'), false)
       const rendered = tool.output.render(args, result)
-      const guidance = rendered.find(block => block.type === 'text' && /停止本轮|请勿重试|不要重试/u.test(block.text))
+      const guidance = rendered.find(block => block.type === 'text' && /停止本轮|请勿重试|不要重试|不要继续|请等待/u.test(block.text))
       assert.ok(guidance, `blocked ${rejection.code} result must carry stop/do-not-retry guidance`)
       assert.match(guidance.text, /browser_control/u)
       assert.doesNotMatch(guidance.text, /调用 stop/u)
@@ -353,6 +355,27 @@ test('browser_control status invisible stops the turn without issuing another to
   })
 })
 
+test('browser_control status reports the shared Computer Use authorization and stopped session', async () => {
+  const { tool } = await loadPluginTool()
+  const states = [
+    {
+      result: { visible: true, stopped: false, activationRequired: true, control: { source: 'computer-use', granted: false, active: false, activationRequired: true } },
+      guidance: /computer_use.*requestAuthorization/u
+    },
+    {
+      result: { visible: true, stopped: true, activationRequired: false, control: { source: 'computer-use', granted: true, active: false, activationRequired: false } },
+      guidance: /授权仍有效，无需再次授权/u
+    }
+  ]
+  for (const state of states) {
+    await withBrowserEndpoint(async () => httpResponse(200, { ok: true, result: state.result }), async () => {
+      const result = await tool.execute({ action: 'status' }, {})
+      const rendered = tool.output.render({ action: 'status' }, result)
+      assert.ok(rendered.some(block => block.type === 'text' && state.guidance.test(block.text)))
+    })
+  }
+})
+
 test('browser_control status stopped and stop results remind the model not to retry browser actions', async () => {
   const { tool } = await loadPluginTool()
   await withBrowserEndpoint(async action => {
@@ -374,9 +397,12 @@ test('browser_control description stops the turn without adding a redundant stop
   const description = tool.description
   const actionDescription = tool.parameters.properties.action.description
   assert.match(description, /先调用 status 确认可用/u)
+  assert.match(description, /复用同一份“本次授权\/永久授权”/u)
+  assert.match(description, /用户只需授权一次/u)
+  assert.match(description, /computer_use 的 requestAuthorization/u)
   assert.match(description, /立即停止本轮浏览器操作/u)
   assert.match(description, /不要继续调用 browser_control/u)
-  assert.match(actionDescription, /status 显示右栏不可见或已停止时必须停止本轮操作/u)
+  assert.match(actionDescription, /status 显示等待授权、右栏不可见或已停止时必须停止本轮操作/u)
   assert.match(actionDescription, /不再调用 browser_control/u)
   assert.doesNotMatch(description, /调用 stop/u)
   for (const word of FORBIDDEN) {

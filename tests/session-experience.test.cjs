@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
+const { access, mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const { tmpdir } = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -41,6 +41,58 @@ function completionSnapshot(current, completedIds = [], updatedAt = 1) {
   }
 }
 
+async function deletionFixture(t, options = {}) {
+  const directory = await mkdtemp(path.join(tmpdir(), 'dsh-session-delete-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const sessionId = options.sessionId || 'archived-session-1'
+  const storeRoot = path.join(directory, 'sessions')
+  const projectDirectory = path.join(storeRoot, '--project--')
+  const sessionDirectory = path.join(projectDirectory, sessionId)
+  const artifact = path.join(sessionDirectory, 'session.jsonl')
+  await mkdir(storeRoot, { recursive: true })
+  if (options.createArtifact !== false) {
+    await mkdir(sessionDirectory, { recursive: true })
+    await writeFile(artifact, JSON.stringify({ type: 'session', id: sessionId }) + '\n')
+  }
+  const header = { id: sessionId, cwd: directory, createdAt: 1 }
+  let state = { initialized: true, workspaceIds: ['workspace-1'], archivedSessionIds: [sessionId] }
+  const observations = { detached: [], projectionDeleted: [], queryReconciled: 0, rebuilt: 0, stateWrites: 0 }
+  const registry = {
+    get archivedSessionIds() { return state.archivedSessionIds },
+    headers: new Map([[sessionId, header]]),
+    sessionPaths: new Map([[sessionId, directory]]),
+    invalidSessionPaths: new Map([[sessionId, 'stale']]),
+    list() { return [{ async detachSession(id) { observations.detached.push(id) } }] },
+    requireState() { return state },
+    async setState(next) { state = next; observations.stateWrites += 1 },
+    async enqueueOperation(operation) { return operation() },
+    rebuildEntities() { observations.rebuilt += 1 }
+  }
+  const persistence = {
+    root: storeRoot,
+    async list() {
+      try { await access(artifact); return [header] } catch (error) {
+        if (error.code === 'ENOENT') return []
+        throw error
+      }
+    },
+    locate() { return { kind: 'jsonl', path: options.artifactPath || artifact } }
+  }
+  const context = {
+    workspaceRegistry: registry,
+    sessionPersistence: persistence,
+    sessions: { get() { return options.live ? { id: sessionId } : undefined } },
+    agents: { get() { return undefined } },
+    sessionProjectionCache: { requireTable() { return { async delete(id) { observations.projectionDeleted.push(id) } } } },
+    sessionQuery: {
+      _db: {},
+      _serialized(_signal, operation) { return operation() },
+      async _reconcile() { observations.queryReconciled += 1 }
+    }
+  }
+  return { artifact, context, directory, observations, registry, sessionDirectory, sessionId, state: () => state, storeRoot }
+}
+
 test('attachment upload names are normalized and cannot create paths', async () => {
   const { safeFileName } = await plugin()
   assert.equal(safeFileName('../../report.txt'), '_.._report.txt')
@@ -73,6 +125,123 @@ test('attachment download requires a regular workspace-contained relative path',
   assert.equal(inside.info.size, 2)
   await assert.rejects(resolveDownload(directory, '../outside.txt'), error => error.code === 'ATTACH_PATH_ESCAPE')
   await assert.rejects(resolveDownload(directory, path.join(outside, 'outside.txt')), error => error.code === 'ATTACH_INVALID_PATH')
+})
+
+test('permanent archive deletion removes the session directory and registry traces', async t => {
+  const { deleteArchivedSession } = await plugin()
+  const fixture = await deletionFixture(t)
+  const result = await deleteArchivedSession(fixture.context, fixture.sessionId)
+  assert.deepEqual(result, { sessionId: fixture.sessionId, artifactDeleted: true })
+  await assert.rejects(access(fixture.sessionDirectory), error => error.code === 'ENOENT')
+  assert.deepEqual(fixture.state().archivedSessionIds, [])
+  assert.deepEqual(fixture.observations.detached, [fixture.sessionId])
+  assert.deepEqual(fixture.observations.projectionDeleted, [fixture.sessionId])
+  assert.equal(fixture.observations.queryReconciled, 1)
+  assert.equal(fixture.observations.rebuilt, 1)
+  assert.equal(fixture.registry.headers.has(fixture.sessionId), false)
+  assert.equal(fixture.registry.sessionPaths.has(fixture.sessionId), false)
+  assert.equal(fixture.registry.invalidSessionPaths.has(fixture.sessionId), false)
+})
+
+test('permanent archive deletion rejects live sessions without touching their log', async t => {
+  const { deleteArchivedSession } = await plugin()
+  const fixture = await deletionFixture(t, { live: true })
+  await assert.rejects(deleteArchivedSession(fixture.context, fixture.sessionId), error => error.code === 'SESSION_HISTORY_STILL_LIVE')
+  await access(fixture.artifact)
+  assert.deepEqual(fixture.state().archivedSessionIds, [fixture.sessionId])
+  assert.deepEqual(fixture.observations.detached, [])
+})
+
+test('permanent archive deletion rejects non-archived sessions without touching their log', async t => {
+  const { deleteArchivedSession } = await plugin()
+  const fixture = await deletionFixture(t)
+  fixture.state().archivedSessionIds = []
+  await assert.rejects(deleteArchivedSession(fixture.context, fixture.sessionId), error => error.code === 'SESSION_HISTORY_NOT_ARCHIVED')
+  await access(fixture.artifact)
+  assert.deepEqual(fixture.observations.detached, [])
+})
+
+test('permanent archive deletion refuses a persistence path outside its session root', async t => {
+  const { deleteArchivedSession } = await plugin()
+  const fixture = await deletionFixture(t)
+  const unsafeDirectory = path.join(fixture.directory, 'outside')
+  const unsafeArtifact = path.join(unsafeDirectory, 'session.jsonl')
+  await mkdir(unsafeDirectory, { recursive: true })
+  await writeFile(unsafeArtifact, 'outside')
+  fixture.context.sessionPersistence.locate = () => ({ kind: 'jsonl', path: unsafeArtifact })
+  await assert.rejects(deleteArchivedSession(fixture.context, fixture.sessionId), error => error.code === 'SESSION_HISTORY_UNSAFE_PATH')
+  await access(unsafeArtifact)
+  await access(fixture.artifact)
+  assert.deepEqual(fixture.state().archivedSessionIds, [fixture.sessionId])
+})
+
+test('permanent archive deletion repairs an archived row whose artifact is already absent', async t => {
+  const { deleteArchivedSession } = await plugin()
+  const fixture = await deletionFixture(t, { createArtifact: false })
+  const result = await deleteArchivedSession(fixture.context, fixture.sessionId)
+  assert.deepEqual(result, { sessionId: fixture.sessionId, artifactDeleted: false })
+  assert.deepEqual(fixture.state().archivedSessionIds, [])
+  assert.deepEqual(fixture.observations.detached, [fixture.sessionId])
+  assert.deepEqual(fixture.observations.projectionDeleted, [fixture.sessionId])
+})
+
+test('permanent archive deletion removes a partially deleted session directory on retry', async t => {
+  const { deleteArchivedSession } = await plugin()
+  const fixture = await deletionFixture(t, { createArtifact: false })
+  await mkdir(fixture.sessionDirectory, { recursive: true })
+  await writeFile(path.join(fixture.sessionDirectory, 'future-artifact.bin'), 'orphan')
+  const result = await deleteArchivedSession(fixture.context, fixture.sessionId)
+  assert.deepEqual(result, { sessionId: fixture.sessionId, artifactDeleted: false })
+  await assert.rejects(access(fixture.sessionDirectory), error => error.code === 'ENOENT')
+  assert.deepEqual(fixture.state().archivedSessionIds, [])
+})
+
+test('cleanup failures do not skip remaining indexes and remain retryable', async t => {
+  const { deleteArchivedSession } = await plugin()
+  const fixture = await deletionFixture(t)
+  fixture.context.workspaceRegistry.list = () => [
+    { sessionIds: [fixture.sessionId], async detachSession() { throw new Error('workspace unavailable') } },
+    { sessionIds: [fixture.sessionId], async detachSession(id) { fixture.observations.detached.push(id) } }
+  ]
+  await assert.rejects(deleteArchivedSession(fixture.context, fixture.sessionId), error => error.code === 'SESSION_HISTORY_CLEANUP_INCOMPLETE')
+  await assert.rejects(access(fixture.sessionDirectory), error => error.code === 'ENOENT')
+  assert.deepEqual(fixture.observations.detached, [fixture.sessionId])
+  assert.deepEqual(fixture.observations.projectionDeleted, [fixture.sessionId])
+  assert.equal(fixture.observations.queryReconciled, 1)
+  assert.deepEqual(fixture.state().archivedSessionIds, [fixture.sessionId])
+
+  fixture.context.workspaceRegistry.list = () => [{ sessionIds: [fixture.sessionId], async detachSession(id) { fixture.observations.detached.push(id) } }]
+  const repaired = await deleteArchivedSession(fixture.context, fixture.sessionId)
+  assert.deepEqual(repaired, { sessionId: fixture.sessionId, artifactDeleted: false })
+  assert.deepEqual(fixture.state().archivedSessionIds, [])
+})
+
+test('archive deletion route requires an explicit same-origin permanent-delete confirmation', async () => {
+  const { apply } = await plugin()
+  const routes = []
+  apply({
+    effect(register) { register() },
+    webServer: { register(route) { routes.push(route); return () => {} } }
+  })
+  const route = routes.find(item => item.path === '/api/session-experience/archive-history')
+  assert.ok(route)
+  const response = { status: 0, body: '', writeHead(status) { this.status = status }, end(body) { this.body = String(body) } }
+  await route.handler({
+    method: 'DELETE',
+    url: '/api/session-experience/archive-history?sessionId=archived-session-1',
+    headers: { host: '127.0.0.1:4119', origin: 'http://127.0.0.1:4119' }
+  }, response)
+  assert.equal(response.status, 400)
+  assert.equal(JSON.parse(response.body).code, 'SESSION_HISTORY_CONFIRMATION_REQUIRED')
+
+  const forbidden = { status: 0, body: '', writeHead(status) { this.status = status }, end(body) { this.body = String(body) } }
+  await route.handler({
+    method: 'DELETE',
+    url: '/api/session-experience/archive-history?sessionId=archived-session-1',
+    headers: { host: '127.0.0.1:4119', 'x-dsh-delete-confirmation': 'permanent' }
+  }, forbidden)
+  assert.equal(forbidden.status, 403)
+  assert.equal(JSON.parse(forbidden.body).code, 'SESSION_HISTORY_FORBIDDEN')
 })
 
 test('session experience plugin installation is additive and idempotent', async t => {
@@ -162,8 +331,14 @@ test('client registers completion notices, archive history and an in-composer pa
   assert.match(source, /sessions\.fork\(\{ sessionId: id, increaseTitle: true \}\)/u)
   assert.match(source, /restoreSession: "恢复为新会话"/u)
   assert.match(source, /copySessionId/u)
+  assert.match(source, /deleteHistory: "删除历史"/u)
+  assert.match(source, /deleteTitle: "永久删除整个会话？"/u)
+  assert.match(source, /role: "alertdialog"/u)
+  assert.match(source, /"x-dsh-delete-confirmation": "permanent"/u)
+  assert.match(source, /sessions\.refresh\(\)/u)
   assert.match(source, /harness-desktop:\/\/copy-session-id/u)
   assert.match(source, /\/api\/session-experience\/upload/u)
+  assert.match(source, /\/api\/session-experience\/archive-history/u)
   assert.match(source, /inputActions\.setDraft/u)
   assert.match(source, /currentDraft \+ separator \+ quoted \+ " "/u)
   assert.match(source, /type:\s*["']file["']/u)
@@ -175,7 +350,7 @@ test('client registers completion notices, archive history and an in-composer pa
 
 test('client keeps session id copy in archive and sidebar paths without a top-right affordance', async () => {
   const source = await readFile(path.join(root, 'plugins/dsh-session-experience/lib/client.js'), 'utf8')
-  for (const label of ['归档历史', '复制会话 ID', '按会话 ID 定位', '附加文件']) {
+  for (const label of ['归档历史', '复制会话 ID', '删除历史', '永久删除整个会话？', '按会话 ID 定位', '附加文件']) {
     assert.ok(source.includes(label), `missing localized label: ${label}`)
   }
   assert.doesNotMatch(source, /function SessionIdAffordance/u)

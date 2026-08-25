@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing immutable product tag
         required: true
-        default: v1.0.45
+        default: v1.0.46
       source_run_id:
         description: Exact successful pre-Tag build/test run whose artifacts must be reused
         required: true
@@ -470,6 +470,8 @@ jobs:
             $snapshot = Get-Content 'draft-state/draft-snapshot.json' -Raw | ConvertFrom-Json
             if ($snapshot.id.ToString() -ne $env:RELEASE_ID) { throw 'Snapshot release id does not match the exact recovery input.' }
             if (-not $snapshot.draft -or $snapshot.prerelease -or $snapshot.tag_name -ne $env:RELEASE_TAG) { throw 'Snapshot is not the expected private draft.' }
+            $expectedAssets = @($snapshot.assets | ForEach-Object name | Sort-Object)
+            if ($expectedAssets.Count -ne 9 -or @($expectedAssets | Select-Object -Unique).Count -ne 9) { throw 'Snapshot must bind exactly nine uniquely named draft assets.' }
             $version = $env:RELEASE_TAG -replace '^v', ''
             $expectedSnapshotNames = @(
               'SHA256SUMS.txt',
@@ -509,10 +511,13 @@ jobs:
             $previous = Get-Content 'draft-state/previous-stable.json' -Raw | ConvertFrom-Json
             if ($previous.version -notmatch '^\d+\.\d+\.\d+$' -or [version]$previous.version -ge [version]$version) { throw 'Bound previous stable version is invalid or not older than the draft.' }
             if ($previous.tag -ne "v$($previous.version)" -or $previous.releaseId -notmatch '^\d+$' -or $previous.asset.id -notmatch '^\d+$') { throw 'Bound previous stable release identity is invalid.' }
-            if ($previous.asset.name -ne "Harness-Desktop-$($previous.version)-win-x64.exe" -or $previous.asset.digest -ne "sha256:$($previous.asset.sha256)") { throw 'Bound previous stable installer identity is invalid.' }
-            if ((Get-Item -LiteralPath $previousInstallerPath).Length -ne [int64]$previous.asset.size) { throw 'Previous stable installer size mismatch.' }
-            if ((Get-FileHash -LiteralPath $previousInstallerPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $previous.asset.sha256) { throw 'Previous stable installer SHA-256 mismatch.' }
+            $expectedPreviousName = "Harness-Desktop-$($previous.version)-win-x64.exe"
+            $expectedPreviousReleaseUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$($previous.tag)"
+            $expectedPreviousAssetUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$($previous.tag)/$expectedPreviousName"
+            if ($previous.releaseName -ne "Harness Desktop $($previous.tag)" -or $previous.releaseHtmlUrl -ne $expectedPreviousReleaseUrl -or $previous.asset.name -ne $expectedPreviousName -or $previous.asset.digest -ne "sha256:$($previous.asset.sha256)" -or $previous.asset.browserDownloadUrl -ne $expectedPreviousAssetUrl) { throw 'Bound previous stable installer identity is invalid.' }
             $previousInstaller = $previousInstallerPath
+            if ((Get-Item -LiteralPath $previousInstaller).Length -ne [int64]$previous.asset.size) { throw 'Previous stable installer size mismatch.' }
+            if ((Get-FileHash -LiteralPath $previousInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $previous.asset.sha256) { throw 'Previous stable installer SHA-256 mismatch.' }
 
             $checksumPath = Join-Path $downloadRoot 'SHA256SUMS.txt'
             $entries = @{}

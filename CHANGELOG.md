@@ -1,6 +1,15 @@
 # Changelog
 
-## 1.0.45
+## 1.0.46
+
+- 新增受保护的官方同仓库 PR Preview 更新通道：无密钥 PR 构建、默认分支独立 Ed25519 签名、不可变候选、本机真实组件更新/重启/退出恢复/失败回滚证据，以及 Required Reviewer 后置 promotion 完全分离；签名阶段不会提前修改 `latest`。
+- Preview 客户端固定 CNB 优先、GitHub 后备双源，严格绑定官方仓库、同仓非 fork PR、`main`、精确 head SHA、单调 sequence、最长七天有效期、完整 SHA-256 和独立 `harness-preview-v1` 公钥；未知来源、重放、降序或签名错误全部失败关闭。
+- CNB handoff 绑定远端 `pr-preview` 的精确当前 OID 并只使用普通 non-force push；CNB 完整回读不可变资产后才依次提升 CNB 与 GitHub feed，生产凭据只由固定受限密钥仓库 imports 注入。
+- 合入共享 Computer Use 授权/浏览器控制面、右侧工作区原生文件按钮与有界预览、明确浏览器打开意图、模态焦点恢复、主题/背景可读性、会话归档永久删除重试，以及 Agent Teams 项目任务详情与安全 optional-service 合并。
+- 包含 v1.0.45 候选中的 Android API 26–32 兼容、WSS/SOCKS 有界线程池与 loopback 监听、个人 WSS/443 中继配置及盲转发部署；现有 v1.0.45 Tag/草稿保持不可变、不复用。
+- 桌面、13 个随包插件、Android 与 iOS/iPadOS 源码同步到 1.0.46，Android `versionCode` 更新为 10046；正式发布继续由统一可恢复发布器执行全平台云构建、精确 18 项资产、GitHub→CNB 云镜像和 stable-last 门禁。
+
+## 1.0.45（不可变候选，未公开发布）
 
 - 修复 Android API 26–32 兼容问题：移除生产代码中的 `String.isBlank()` 等高版本 API 依赖，补齐配对、文件选择、前台服务、更新检查与错误处理兼容路径，避免旧系统出现 `NoSuchMethodError`。
 - 修复 WSS 中继成功连接后无限创建 SOCKS 转发线程并最终 OOM 闪退：改为单接收线程、固定 8 个工作线程与 16 个有界排队槽，过载时明确拒绝；Android 本地 SOCKS/Web 代理固定绑定 `127.0.0.1`。
@@ -42,6 +51,7 @@
 
 ## 1.0.40
 
+- 女仆鲸加入结构化智能陪伴：根据任务开始、多任务、等待决定、受阻、完成和长时间运行给出低频情境提示；新增本地默契/每日进度/连续完成记录、克制/温柔/元气风格及主动陪伴开关，不读取对话正文、屏幕或文件。
 - 将代理团队升级为原页面内的统一工作台，保留原有 Team Runtime、Broker、Memory、Scheduler 与多人接入能力，并加入所选团队任务板、可缩放自适应画布、流程视图、既有定时任务投影、参与者和协调 Inbox。
 - 高任务量界面采用响应式列数、列内独立滚动与有界投影；画布支持 Fit、10%–200% 缩放、平移、键盘操作、自动换行和关系线限额，自动团队控制收紧为紧凑开关。
 - Team worker 增加进程级公平准入、全局及单根等待上限、超时、取消和精确生命周期释放；压力测试覆盖 12/24 个根、250 项任务、SSE 合并与慢客户端背压，不把这一阶段描述为全桌面 Provider/API 调度池。
@@ -49,6 +59,8 @@
 - 修复主题预览滚动与说明裁切、系统模式标题栏按钮对比度；改进 Wallpaper Engine 当前壁纸识别、图片/视频预览、受管导入和背景可读性。
 - DSH Plugin Marketplace 升级到上游 1.5.5，并保留单一可信注册所有权；`@deepseek-ai/cordis-plugin-group@1.0.1` 继续作为根生产依赖并由打包自检锁定。
 - Linux CI 与 Release 在真实 Electron 浏览器导航安全测试前显式配置并复核 `chrome-sandbox` 的 `root:root`/`4755` 权限；配置失败即阻断，不使用 `--no-sandbox` 绕过。
+- 对标 Codex 与 Claude Code 的小体验优化：壳层模态框约束并恢复键盘焦点，Computer Use 授权卡在小窗口保持操作可达且防止重新聚焦首击误授权；浏览器错误即时播报，文件/计划筛选和刷新保留阅读位置。
+- 明确的“打开右侧浏览器”与 HTTP(S) 网址指令由随包客户端插件在本地消费并自动显示右栏，不调用 Browser Control；只跨 WebView 传递有限枚举或校验后的网址，插件升级漂移可诊断且快捷按钮始终保留。
 - 改进生成停止后的自动跟随与会话菜单图标；桌面、全部随包插件、Android 与 iOS/iPadOS 同步到 1.0.40，Android `versionCode` 更新为 10040。
 
 ## 1.0.38

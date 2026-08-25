@@ -25,7 +25,12 @@ const MAX_TEAM_MESSAGES = 500;
 const MAX_TEAM_TASKS = 1_000;
 const UI_MAX_TASKS_PER_TEAM = 200;
 const UI_MAX_EVENTS_PER_TEAM = 50;
+const UI_MAX_TASK_WORKFLOW_EVENTS = 80;
+const UI_MAX_TASK_RUNTIME_SOURCE_EVENTS = 2_000;
+const UI_MAX_TASK_PLAN_ITEMS = 40;
+const UI_TASK_DETAIL_DESCRIPTION_CHARS = 32_768;
 const SSE_COALESCE_MS = 50;
+const TEAM_SSE_KEEPALIVE_MS = 15_000;
 const PROJECT_TASK_SSE_KEEPALIVE_MS = 15_000;
 const SUBAGENT_RECONCILE_MS = 20;
 const GRACEFUL_LIFECYCLE_TIMEOUT_MS = 120_000;
@@ -46,6 +51,7 @@ const MANAGED_MEMBER_DENIED_TOOLS = Object.freeze(["subagent", "subagent_fork", 
 const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u;
 const MODEL_ID = /^\S{1,256}$/u;
 const TASK_STATES = Object.freeze(["pending", "in_progress", "completed"]);
+const TASK_WORKFLOW_EVENT_TYPES = new Set(["turn/start", "turn/end", "step/start", "step/end", "tool/call", "tool/result", "todo/write", "assistant/message", "llm/retry"]);
 const MEMBER_STATES = Object.freeze([
   "provisioning", "running", "idle", "ready", "failed", "shutting_down", "retired",
 ]);
@@ -783,6 +789,193 @@ function projectUiTasks(team, peerTeams) {
     };
   });
 }
+function taskDetailMember(member) {
+  if (member === undefined) return null;
+  return { name: member.name, displayName: canonicalMemberName(member.name) };
+}
+function taskWorkflowTime(value) {
+  if (!Number.isFinite(value)) return undefined;
+  try { return new Date(value).toISOString(); } catch { return undefined; }
+}
+function taskWorkflowText(value, limit = 500) {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/\s+/gu, " ").slice(0, limit);
+}
+function taskWorkflowStatus(reason) {
+  const kind = typeof reason?.kind === "string" ? reason.kind : "unknown";
+  if (kind === "completed") return { status: "completed", reason: "completed" };
+  if (kind === "error") return { status: "failed", reason: "error" };
+  if (kind === "aborted" || kind === "interrupted") return { status: "stopped", reason: kind };
+  if (kind === "blocked") return { status: "blocked", reason: "blocked" };
+  if (kind === "max-tokens") return { status: "continued", reason: "max-tokens" };
+  return { status: "unknown", reason: "unknown" };
+}
+function redactTaskWorkflowPaths(value) {
+  return value
+    .replace(/(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|]+/gu, "[path hidden]")
+    .replace(/(^|[\s(])\/(?!\/)[^\s"'`<>|]+/gu, "$1[path hidden]")
+    .replace(/(^|[\s(])(?:\.{1,2}[\\/])[^\s"'`<>|]+/gu, "$1[path hidden]")
+    .replace(/(^|[\s(])(?:src|tests?|plugins?|apps?|packages?|lib|docs?|config|electron|scripts?|public|assets?)[\\/][^\s"'`<>|]+/giu, "$1[path hidden]")
+    .replace(/(^|[\s(])(?:[\p{L}\p{N}_.@-]+[\\/]){2,}[\p{L}\p{N}_.@-]+(?=$|[\s),.;:])/giu, "$1[path hidden]")
+    .replace(/(^|[\s(])(?:[\p{L}\p{N}_.@-]+[\\/])*[\p{L}\p{N}_@-]+\.(?:cjs|mjs|js|jsx|ts|tsx|json|css|scss|less|html?|vue|svelte|md|mdx|txt|ya?ml|toml|ini|xml|csv|sql|sh|ps1|py|go|rs|java|kt|swift|png|jpe?g|gif|webp|svg|lock)(?=$|[\s),;:])/giu, "$1[path hidden]")
+    .replace(/(^|[\s(])\.env(?:\.[\p{L}\p{N}_.@-]+)?(?=$|[\s),;:])/giu, "$1[path hidden]");
+}
+function projectTaskPlanItems(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, UI_MAX_TASK_PLAN_ITEMS).map((item) => ({
+    content: redactTaskWorkflowPaths(taskWorkflowText(item?.content, 500)),
+    status: TASK_STATES.includes(item?.status) ? item.status : "pending",
+  })).filter((item) => item.content.length > 0);
+}
+function taskRuntimeProjection(task, member, agent) {
+  const claimedAt = Date.parse(task.claimedAt ?? "");
+  const completedAt = Date.parse(task.completedAt ?? "");
+  const allEvents = Array.isArray(agent?.session?.events) ? agent.session.events : [];
+  let sourceEvents = [];
+  let sourceTruncated = false;
+  if (allEvents.length > 0 && Number.isFinite(claimedAt)) {
+    const startTime = claimedAt - 1_000;
+    const endTime = Number.isFinite(completedAt) ? completedAt + 5_000 : Number.POSITIVE_INFINITY;
+    let low = 0, high = allEvents.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2), time = allEvents[middle]?.time;
+      if (Number.isFinite(time) && time < startTime) low = middle + 1;
+      else high = middle;
+    }
+    const first = low;
+    low = first; high = allEvents.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2), time = allEvents[middle]?.time;
+      if (Number.isFinite(time) && time <= endTime) low = middle + 1;
+      else high = middle;
+    }
+    const after = low;
+    sourceTruncated = after - first > UI_MAX_TASK_RUNTIME_SOURCE_EVENTS;
+    sourceEvents = allEvents.slice(Math.max(first, after - UI_MAX_TASK_RUNTIME_SOURCE_EVENTS), after)
+      .filter((event) => Number.isFinite(event?.time) && event.time >= startTime && event.time <= endTime);
+  }
+  const results = new Map();
+  const stepEnds = new Map();
+  const turnEnds = new Map();
+  for (const event of sourceEvents) {
+    if (event.type === "tool/result") {
+      const callId = event.data?.message?.callId ?? event.data?.callId;
+      if (typeof callId === "string") results.set(callId, event);
+    } else if (event.type === "step/end") stepEnds.set(`${event.data?.turn ?? ""}:${event.data?.step ?? ""}`, event);
+    else if (event.type === "turn/end") turnEnds.set(String(event.data?.turn ?? ""), event);
+  }
+  let plan = [];
+  let observedModel = null;
+  const workflow = [];
+  for (const event of sourceEvents) {
+    const at = taskWorkflowTime(event.time);
+    if (!at) continue;
+    const sequence = Number.isSafeInteger(event.seq) ? event.seq : workflow.length;
+    if (event.type === "turn/start") {
+      const turn = Number.isSafeInteger(event.data?.turn) ? event.data.turn : undefined;
+      const end = turnEnds.get(String(turn ?? ""));
+      const outcome = end ? taskWorkflowStatus(end.data?.reason) : { status: "running", reason: "" };
+      workflow.push({ id: `turn:${sequence}`, kind: "turn", sequence, at, turn, status: outcome.status, reason: outcome.reason, ...(end ? { completedAt: taskWorkflowTime(end.time) } : {}) });
+    } else if (event.type === "step/start") {
+      const turn = Number.isSafeInteger(event.data?.turn) ? event.data.turn : undefined;
+      const step = Number.isSafeInteger(event.data?.step) ? event.data.step : undefined;
+      const end = stepEnds.get(`${turn ?? ""}:${step ?? ""}`);
+      workflow.push({ id: `step:${sequence}`, kind: "step", sequence, at, turn, step, status: end ? "completed" : "running", ...(end ? { completedAt: taskWorkflowTime(end.time) } : {}) });
+    } else if (event.type === "tool/call") {
+      const callId = typeof event.data?.callId === "string" ? event.data.callId : "";
+      const toolName = taskWorkflowText(event.data?.name, 128);
+      if (!toolName || toolName === "todo_write") continue;
+      const result = callId ? results.get(callId) : undefined;
+      const failed = result?.data?.message?.isError === true || result?.data?.isError === true || result?.data?.error !== undefined;
+      workflow.push({ id: `tool:${sequence}`, kind: "tool", sequence, at, toolName, status: result ? failed ? "failed" : "completed" : "running", ...(result ? { completedAt: taskWorkflowTime(result.time) } : {}) });
+    } else if (event.type === "todo/write") {
+      plan = projectTaskPlanItems(event.data?.todos);
+      const completed = plan.filter((item) => item.status === "completed").length;
+      const inProgress = plan.filter((item) => item.status === "in_progress").length;
+      workflow.push({ id: `plan:${sequence}`, kind: "plan", sequence, at, status: "completed", counts: { total: plan.length, completed, inProgress, pending: Math.max(0, plan.length - completed - inProgress) } });
+    } else if (event.type === "assistant/message") {
+      const source = event.data?.message?.source;
+      if (typeof source?.model === "string" || typeof source?.provider === "string") {
+        observedModel = {
+          ...(typeof source.model === "string" ? { model: source.model.slice(0, 256) } : {}),
+          ...(typeof source.provider === "string" ? { provider: source.provider.slice(0, 128) } : {}),
+        };
+      }
+      const content = Array.isArray(event.data?.message?.content) ? event.data.message.content : [];
+      if (!content.some((block) => block?.type === "tool-call")) workflow.push({ id: `model:${sequence}`, kind: "model", sequence, at, status: event.data?.interrupted === true ? "stopped" : "completed" });
+    } else if (event.type === "llm/retry") workflow.push({ id: `retry:${sequence}`, kind: "retry", sequence, at, status: "running" });
+  }
+  const counts = {
+    total: plan.length,
+    completed: plan.filter((item) => item.status === "completed").length,
+    inProgress: plan.filter((item) => item.status === "in_progress").length,
+    pending: plan.filter((item) => item.status === "pending").length,
+  };
+  const percent = task.state === "completed" ? 100 : counts.total > 0 ? Math.round((counts.completed / counts.total) * 100) : task.state === "pending" ? 0 : null;
+  const executionModel = (observedModel || member && (member.model || member.provider)) ? {
+    ...(observedModel ?? {}),
+    ...(!observedModel && member?.model ? { model: member.model } : {}),
+    ...(!observedModel && member?.provider ? { provider: member.provider } : {}),
+    ...(member?.modelTier ? { modelTier: member.modelTier } : {}),
+    ...(member?.inheritsMain !== undefined ? { inheritsMain: member.inheritsMain } : {}),
+    observed: observedModel !== null,
+  } : null;
+  const visibleWorkflow = workflow.slice(-UI_MAX_TASK_WORKFLOW_EVENTS);
+  return {
+    progress: { percent, source: counts.total > 0 ? "plan" : "status", indeterminate: percent === null, ...counts },
+    plan,
+    workflow: {
+      events: visibleWorkflow,
+      truncated: sourceTruncated || visibleWorkflow.length < workflow.length,
+      totalEvents: workflow.length,
+      lastEventAt: visibleWorkflow.at(-1)?.at ?? null,
+    },
+    executionModel,
+  };
+}
+function taskExecutionWindow(task) {
+  const start = Date.parse(task.claimedAt ?? "");
+  if (!Number.isFinite(start)) return null;
+  const completed = Date.parse(task.completedAt ?? "");
+  return { start, end: Number.isFinite(completed) ? completed : Number.POSITIVE_INFINITY };
+}
+function taskExecutionOverlap(left, right) {
+  const leftWindow = taskExecutionWindow(left), rightWindow = taskExecutionWindow(right);
+  return leftWindow !== null && rightWindow !== null && leftWindow.start <= rightWindow.end && rightWindow.start <= leftWindow.end;
+}
+function projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId) {
+  const team = document.teams.find((candidate) => candidate.id === selectedTeamId);
+  if (team === undefined || memberOf(team, sessionId) === undefined) return null;
+  const task = team.tasks.find((candidate) => candidate.id === selectedTaskId);
+  if (task === undefined || sessionId !== team.rootLeadSessionId && task.assigneeSessionId !== sessionId) return null;
+  const assigned = task.assigneeSessionId === undefined ? undefined : team.members.find((member) => member.sessionId === task.assigneeSessionId);
+  const responsible = team.members.find((member) => member.sessionId === team.rootLeadSessionId);
+  const overlapsAnotherTask = assigned !== undefined && team.tasks.some((candidate) => candidate.id !== task.id
+    && candidate.assigneeSessionId === assigned.sessionId && taskExecutionOverlap(task, candidate));
+  const workflowUnavailableReason = assigned?.kind === "lead" ? "shared_lead_session" : overlapsAnotherTask ? "overlapping_tasks" : null;
+  let agent;
+  try { agent = assigned === undefined || workflowUnavailableReason !== null ? undefined : ctx?.agents?.get?.(assigned.sessionId); } catch { agent = undefined; }
+  const runtime = taskRuntimeProjection(task, assigned, agent);
+  runtime.workflow.reliable = workflowUnavailableReason === null;
+  runtime.workflow.unavailableReason = workflowUnavailableReason ?? (task.claimedAt !== undefined && agent === undefined ? "session_unavailable" : null);
+  return {
+    taskId: task.id,
+    summary: task.title,
+    description: typeof task.description === "string" ? task.description.slice(0, UI_TASK_DETAIL_DESCRIPTION_CHARS) : "",
+    status: task.state,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    claimedAt: task.claimedAt ?? null,
+    completedAt: task.completedAt ?? null,
+    claimant: task.state !== "pending" || task.claimedAt !== undefined ? taskDetailMember(assigned) : null,
+    responsible: taskDetailMember(responsible),
+    progress: runtime.progress,
+    plan: runtime.plan,
+    workflow: runtime.workflow,
+    executionModel: runtime.executionModel,
+  };
+}
+
 function projectTeamForUi(team, nameTeams = []) {
   const peerTeams = Array.isArray(nameTeams) ? nameTeams : [];
   const names = new Map([team, ...peerTeams].flatMap((candidate) => candidate.members ?? []).map((member) => [member.sessionId, canonicalMemberName(member.name)]));
@@ -3057,6 +3250,17 @@ async function readJsonBody(req) {
 function encodedSseSnapshot(snapshot) {
   return `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`;
 }
+function blockSseClientUntilDrain(client) {
+  client.blocked = true;
+  if (typeof client.response.once !== "function") return;
+  client.response.once("drain", () => {
+    if (client.closed) return;
+    client.blocked = false;
+    const pending = client.pendingPayload;
+    client.pendingPayload = undefined;
+    if (pending !== undefined) writeSseClient(client, pending);
+  });
+}
 function writeSseClient(client, payload) {
   if (client.closed || payload === client.lastPayload || payload === client.pendingPayload) return;
   if (client.blocked) {
@@ -3070,32 +3274,45 @@ function writeSseClient(client, payload) {
     return;
   }
   client.lastPayload = payload;
-  if (writable !== false) return;
-  client.blocked = true;
-  if (typeof client.response.once !== "function") return;
-  client.response.once("drain", () => {
-    if (client.closed) return;
-    client.blocked = false;
-    const pending = client.pendingPayload;
-    client.pendingPayload = undefined;
-    if (pending !== undefined) writeSseClient(client, pending);
-  });
+  if (writable === false) blockSseClientUntilDrain(client);
 }
-function createSseBroadcaster({ delayMs = SSE_COALESCE_MS } = {}) {
+function writeSseKeepalive(client) {
+  if (client.closed || client.blocked) return;
+  try { if (client.response.write(": keepalive\n\n") === false) blockSseClientUntilDrain(client); }
+  catch { client.closed = true; }
+}
+function createSseBroadcaster({ delayMs = SSE_COALESCE_MS, keepaliveMs = TEAM_SSE_KEEPALIVE_MS, snapshot = teamSnapshot } = {}) {
   const clients = new Map();
   let timer;
+  let keepaliveTimer;
   let pendingDocument;
+  const stopKeepalive = () => {
+    if (keepaliveTimer !== undefined) clearInterval(keepaliveTimer);
+    keepaliveTimer = undefined;
+  };
+  const ensureKeepalive = () => {
+    if (keepaliveTimer !== undefined || !Number.isFinite(keepaliveMs) || keepaliveMs <= 0) return;
+    keepaliveTimer = setInterval(() => {
+      for (const entries of clients.values()) for (const client of [...entries]) {
+        if (client.closed) continue;
+        writeSseKeepalive(client);
+      }
+    }, keepaliveMs);
+    keepaliveTimer.unref?.();
+  };
   const remove = (client) => {
     client.closed = true;
     const entries = clients.get(client.sessionId);
     entries?.delete(client);
     if (entries?.size === 0) clients.delete(client.sessionId);
+    if (clients.size === 0) stopKeepalive();
   };
-  const add = (sessionId, selectedTeamId, response) => {
-    const client = { sessionId, selectedTeamId, response, blocked: false, closed: false, lastPayload: undefined, pendingPayload: undefined };
+  const add = (sessionId, selectedTeamId, response, selectedTaskId) => {
+    const client = { sessionId, selectedTeamId, selectedTaskId, response, blocked: false, closed: false, lastPayload: undefined, pendingPayload: undefined };
     const entries = clients.get(sessionId) ?? new Set();
     entries.add(client);
     clients.set(sessionId, entries);
+    ensureKeepalive();
     return client;
   };
   const send = (client, snapshot) => writeSseClient(client, encodedSseSnapshot(snapshot));
@@ -3109,10 +3326,10 @@ function createSseBroadcaster({ delayMs = SSE_COALESCE_MS } = {}) {
     for (const [sessionId, entries] of clients) {
       for (const client of [...entries]) {
         if (client.closed) { remove(client); continue; }
-        const key = `${sessionId}\u0000${client.selectedTeamId ?? ""}`;
+        const key = `${sessionId}\u0000${client.selectedTeamId ?? ""}\u0000${client.selectedTaskId ?? ""}`;
         let payload = payloads.get(key);
         if (payload === undefined) {
-          payload = encodedSseSnapshot(teamSnapshot(document, sessionId, client.selectedTeamId));
+          payload = encodedSseSnapshot(snapshot(document, sessionId, client.selectedTeamId, client.selectedTaskId));
           payloads.set(key, payload);
         }
         writeSseClient(client, payload);
@@ -3127,6 +3344,7 @@ function createSseBroadcaster({ delayMs = SSE_COALESCE_MS } = {}) {
   };
   const close = () => {
     if (timer !== undefined) clearTimeout(timer);
+    stopKeepalive();
     timer = undefined;
     pendingDocument = undefined;
     for (const entries of clients.values()) for (const client of entries) {
@@ -3140,8 +3358,15 @@ function createSseBroadcaster({ delayMs = SSE_COALESCE_MS } = {}) {
 
 function registerWebApi(ctx, store, ready) {
   const broadcaster = createSseBroadcaster();
-  const unsubscribe = store.subscribe((document) => broadcaster.schedule(document));
-  ctx.effect(() => () => { unsubscribe(); broadcaster.close(); }, "agent-teams store subscription");
+  const detailSnapshot = (document, sessionId, selectedTeamId, selectedTaskId) => projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId)
+    ?? { unavailable: true, taskId: selectedTaskId ?? null };
+  const detailBroadcaster = createSseBroadcaster({ snapshot: detailSnapshot });
+  const unsubscribe = store.subscribe((document) => { broadcaster.schedule(document); detailBroadcaster.schedule(document); });
+  ctx.on("session/event", (_session, event) => {
+    if (detailBroadcaster.clients.size === 0 || !TASK_WORKFLOW_EVENT_TYPES.has(event?.type)) return;
+    detailBroadcaster.schedule(store.snapshot());
+  });
+  ctx.effect(() => () => { unsubscribe(); broadcaster.close(); detailBroadcaster.close(); }, "agent-teams store subscription");
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/state", handler: async (req, res) => {
       if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
@@ -3156,6 +3381,43 @@ function registerWebApi(ctx, store, ready) {
     },
   }), "agent-teams state route");
   ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/task-detail", handler: async (req, res) => {
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
+      if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
+      try {
+        await ready;
+        const requestUrl = new URL(req.url, "http://x");
+        const sessionId = nonEmptyString(requestUrl.searchParams.get("sessionId"), "sessionId", 256);
+        const selectedTeamId = nonEmptyString(requestUrl.searchParams.get("teamId"), "teamId", 256);
+        const selectedTaskId = nonEmptyString(requestUrl.searchParams.get("taskId"), "taskId", 256);
+        const detail = await store.read((document) => projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId));
+        return detail === null
+          ? json(res, 404, { error: "task detail is unavailable", code: "AGENT_TEAMS_NOT_FOUND" })
+          : json(res, 200, detail);
+      } catch (error) { return json(res, error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : 400, errorPayload(error)); }
+    },
+  }), "agent-teams task detail route");
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/task-detail/events", handler: async (req, res) => {
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
+      if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
+      try {
+        await ready;
+        const requestUrl = new URL(req.url, "http://x");
+        const sessionId = nonEmptyString(requestUrl.searchParams.get("sessionId"), "sessionId", 256);
+        const selectedTeamId = nonEmptyString(requestUrl.searchParams.get("teamId"), "teamId", 256);
+        const selectedTaskId = nonEmptyString(requestUrl.searchParams.get("taskId"), "taskId", 256);
+        const detail = await store.read((document) => projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId));
+        if (detail === null) return json(res, 404, { error: "task detail is unavailable", code: "AGENT_TEAMS_NOT_FOUND" });
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no", "x-content-type-options": "nosniff" });
+        res.flushHeaders?.();
+        const client = detailBroadcaster.add(sessionId, selectedTeamId, res, selectedTaskId);
+        detailBroadcaster.send(client, detail);
+        req.once("close", () => detailBroadcaster.remove(client));
+      } catch (error) { if (!res.headersSent) return json(res, error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : 400, errorPayload(error)); }
+    },
+  }), "agent-teams task detail events route");
+  ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/events", handler: async (req, res) => {
       if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
       if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
@@ -3164,7 +3426,8 @@ function registerWebApi(ctx, store, ready) {
         const requestUrl = new URL(req.url, "http://x");
         const sessionId = nonEmptyString(requestUrl.searchParams.get("sessionId"), "sessionId", 256);
         const selectedTeamId = optionalString(requestUrl.searchParams.get("teamId"), "teamId", 256);
-        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-content-type-options": "nosniff" });
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no", "x-content-type-options": "nosniff" });
+        res.flushHeaders?.();
         const client = broadcaster.add(sessionId, selectedTeamId, res);
         broadcaster.send(client, await store.read((document) => teamSnapshot(document, sessionId, selectedTeamId)));
         req.once("close", () => broadcaster.remove(client));
@@ -3803,6 +4066,7 @@ export {
   TEAM_ADMISSION_TIMEOUT_MS,
   UI_MAX_EVENTS_PER_TEAM,
   UI_MAX_TASKS_PER_TEAM,
+  UI_MAX_TASK_WORKFLOW_EVENTS,
   createProjectAutomationSseBridge,
   createProjectFoundationManager,
   createProjectTaskSseBridge,
@@ -3832,6 +4096,7 @@ export {
   registerProjectFoundationTools,
   resolveProjectFoundationHostOptions,
   projectFoundationsBrowserState,
+  projectTaskDetailForUi,
   registerProjectTaskApi,
   releaseRetiredMemberTasks,
   resolveConfig,

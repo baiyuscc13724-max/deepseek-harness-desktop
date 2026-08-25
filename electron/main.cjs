@@ -2,7 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativ
 const { spawn, execFile } = require('node:child_process')
 const { createHash, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { mkdir, open, readFile, readdir, realpath, stat, unlink, writeFile } = require('node:fs/promises')
+const { mkdir, open, readFile, readdir, realpath, rm, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -48,6 +48,10 @@ const { ComponentUpdateService } = require('./bridge/component-update-service.cj
 const { effectiveComponentLastCheck } = require('./bridge/component-update-service.cjs')
 const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { launchComponentUpdateHelper } = require('./bridge/component-update-launcher.cjs')
+const { PrPreviewActivationStore } = require('./bridge/pr-preview-activation-store.cjs')
+const { OFFICIAL_PREVIEW_REPOSITORY } = require('./bridge/pr-preview-update-contract.cjs')
+const { resolvePrPreviewUpdateConfig } = require('./bridge/pr-preview-update-config.cjs')
+const { PrPreviewUpdateService } = require('./bridge/pr-preview-update-service.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
 const { loadRightWorkspaceResource, previewLocalDocument } = require('./bridge/right-workspace-service.cjs')
@@ -117,6 +121,8 @@ let mobileSyncService = null
 let mobileSyncTransportManager = null
 let componentUpdateServicePromise = null
 let lastComponentUpdateCheck = null
+let prPreviewUpdateContextPromise = null
+let lastPrPreviewCandidate = null
 let storageManagementService = null
 let gitRuntimeService = null
 let gitPreparationPromise = null
@@ -313,6 +319,61 @@ function browserPolicyOptions() {
   }
 }
 
+function sharedComputerUseControlState() {
+  const scope = String(computerUseAuthorizedScope || 'none')
+  const granted = scope === 'session' || scope === 'forever'
+  return {
+    source: 'computer-use',
+    granted,
+    active: granted && computerUseEnabled && !computerUseScreenLocked,
+    enabled: computerUseEnabled,
+    activationRequired: !granted,
+    scope,
+    unlimited: computerUseUnlimited === true,
+    pending: computerUseAuthorizationRequest
+      ? { id: computerUseAuthorizationRequest.id, requestedAt: computerUseAuthorizationRequest.requestedAt, requestedBy: computerUseAuthorizationRequest.requestedBy }
+      : null
+  }
+}
+
+function syncBrowserControlWithComputerUse() {
+  if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) return false
+  const control = sharedComputerUseControlState()
+  browserSecurityPolicy.setUnifiedControl(control.active)
+  if (control.active) {
+    browserSecurityPolicy.resumeModelControl()
+    browserControlServer?.resumeScope('browser')
+    const contents = liveBrowserContents()
+    if (contents) updateBrowserActiveTab(contents.getURL())
+  } else {
+    browserOperations.cancelModelActions()
+    abortBrowserTransfers()
+    browserSecurityPolicy.pauseModelControl()
+  }
+  return true
+}
+
+function requireSharedComputerUseForBrowser({ requestAuthorization = true } = {}) {
+  let control = sharedComputerUseControlState()
+  if (!control.granted) {
+    if (requestAuthorization) {
+      requestComputerUseAuthorization('model')
+      control = sharedComputerUseControlState()
+    }
+    throw Object.assign(new Error('浏览器控制与内置 Computer Use 共用同一授权；请在对话框上方选择“本次授权”或“永久授权”。'), {
+      code: 'computer-use-authorization-required',
+      control
+    })
+  }
+  if (!control.active) {
+    throw Object.assign(new Error('浏览器控制与内置 Computer Use 共用的控制会话已停止；请由用户恢复控制。'), {
+      code: 'computer-use-disabled',
+      control
+    })
+  }
+  return control
+}
+
 function browserModelBootstrapTrustedPrivateOrigins() {
   if (runtimeState.status !== 'ready' || !runtimeState.url) return []
   try { return [new URL(runtimeState.url).origin.toLowerCase()] } catch { return [] }
@@ -397,7 +458,8 @@ async function browserStatePayload(patch = {}) {
       partition: browserSecurityPolicy?.partitionName || BrowserSecurityPolicy.partitionName(),
       isolatedFromHarness: true
     },
-    authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [] },
+    authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [], unifiedControl: false },
+    control: sharedComputerUseControlState(),
     audit: { count: audit.count, total: audit.total, dropped: audit.dropped },
     modelControlStopped: browserSecurityPolicy?.isModelStopped === true,
     profileResetting: browserOperations.snapshot().resetting,
@@ -529,6 +591,7 @@ function ensureBrowserSidebar() {
   browserView = null
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('主窗口尚未准备好。')
   if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
+  browserSecurityPolicy.setUnifiedControl(sharedComputerUseControlState().active)
   const browserSession = session.fromPartition(browserSecurityPolicy.partitionName, { cache: true })
   browserSession.setPermissionCheckHandler(() => false)
   browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
@@ -819,8 +882,13 @@ async function clearBrowserSiteData(confirmed) {
 
 async function resumeBrowserModelControl() {
   browserOperations.ticket()
+  if (computerUseAuthorizedScope === 'none') {
+    requestComputerUseAuthorization('user')
+    return publishBrowserState()
+  }
+  if (!computerUseEnabled) await setComputerUseEnabled(true)
   if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
-  else browserSecurityPolicy.resumeModelControl()
+  syncBrowserControlWithComputerUse()
   const contents = liveBrowserContents()
   if (contents) updateBrowserActiveTab(contents.getURL())
   browserControlServer?.resumeScope('browser')
@@ -1219,7 +1287,9 @@ async function modelBrowserAction(input = {}, context = {}) {
     const authorizations = browserSecurityPolicy?.authorizations() || { entries: [] }
     const current = authorizations.entries.find(entry => entry.origin === browserState.origin)
     const bounds = browserView?.getBounds?.() || { width: 0, height: 0 }
-    return { visible: browserSidebarVisible && browserContentVisible, origin: browserState.origin || null, title: safeBrowserText(browserState.title, 500), loading: browserState.loading, stopped: browserSecurityPolicy?.isModelStopped === true, actions: current?.actions || [], activeTabId: activeBrowserTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })), downloads: browserDownloads.map(item => ({ id: item.id, receivedBytes: item.receivedBytes, totalBytes: item.totalBytes, state: item.state, modelInitiated: Boolean(item.modelInitiated) })), dialog: { available: browserTabs.get(activeBrowserTabId)?.dialogControl === true, pending: browserDialogs.has(activeBrowserTabId), type: browserDialogs.get(activeBrowserTabId)?.type || null }, viewport: { width: bounds.width, height: bounds.height }, diagnostics: { console: browserDiagnostics.snapshot('console', { limit: 500 }).console.length, network: browserDiagnostics.snapshot('network', { limit: 500 }).network.length } }
+    const control = sharedComputerUseControlState()
+    const effectiveActions = control.active ? ['read', 'click', 'type', 'upload', 'download', 'submit'] : (current?.actions || [])
+    return { visible: browserSidebarVisible && browserContentVisible, origin: browserState.origin || null, title: safeBrowserText(browserState.title, 500), loading: browserState.loading, stopped: browserSecurityPolicy?.isModelStopped === true, control, activationRequired: control.activationRequired, actions: effectiveActions, activeTabId: activeBrowserTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })), downloads: browserDownloads.map(item => ({ id: item.id, receivedBytes: item.receivedBytes, totalBytes: item.totalBytes, state: item.state, modelInitiated: Boolean(item.modelInitiated) })), dialog: { available: browserTabs.get(activeBrowserTabId)?.dialogControl === true, pending: browserDialogs.has(activeBrowserTabId), type: browserDialogs.get(activeBrowserTabId)?.type || null }, viewport: { width: bounds.width, height: bounds.height }, diagnostics: { console: browserDiagnostics.snapshot('console', { limit: 500 }).console.length, network: browserDiagnostics.snapshot('network', { limit: 500 }).network.length } }
   }
   if (action === 'stop') {
     browserOperations.cancelModelActions()
@@ -1233,9 +1303,11 @@ async function modelBrowserAction(input = {}, context = {}) {
     abortBrowserTransfers()
     if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
     await withBrowserTransferLock(async () => browserSecurityPolicy?.pauseModelControl())
+    await setComputerUseEnabled(false)
     await publishBrowserState()
-    return { stopped: true, message: '模型浏览器控制已停止；网页仍由用户直接控制。' }
+    return { stopped: true, sharedControl: true, message: '浏览器控制与内置 Computer Use 的当前控制会话已停止；网页仍由用户直接控制。' }
   }
+  requireSharedComputerUseForBrowser({ requestAuthorization: true })
   if (action === 'observe') return observeBrowserForModel(context.signal)
   const allowBlankNavigation = action === 'navigate' || action === 'tabOpen'
   const { view, url, origin, tabId, ticket } = requireVisibleBrowserForModel(context.signal, { allowBlankNavigation })
@@ -1955,7 +2027,11 @@ async function restoreComputerUseGrant() {
 async function setComputerUseEnabled(enabled) {
   const next = enabled === true
   if (next && computerUseScreenLocked) throw Object.assign(new Error('计算机锁定或挂起期间不能开启 Computer Use。'), { code: 'computer-use-locked' })
-  if (next === computerUseEnabled) return computerUseState()
+  if (next === computerUseEnabled) {
+    syncBrowserControlWithComputerUse()
+    if (mainWindow && !mainWindow.isDestroyed()) await publishBrowserState().catch(() => {})
+    return computerUseState()
+  }
   computerUseSessionGeneration += 1
   if (next) await clearComputerUseScreenshots()
   computerUseEnabled = next
@@ -1966,8 +2042,10 @@ async function setComputerUseEnabled(enabled) {
     computerUseConfirmations.clear()
     await clearComputerUseScreenshots()
   }
+  syncBrowserControlWithComputerUse()
   const state = computerUseState()
   send('computerUse:authorization', state)
+  if (mainWindow && !mainWindow.isDestroyed()) await publishBrowserState().catch(() => {})
   return state
 }
 
@@ -3566,6 +3644,241 @@ async function ensureComponentUpdateService() {
   return componentUpdateServicePromise
 }
 
+function prPreviewStateAdapter() {
+  return {
+    async load() {
+      const updates = (await ensureStateStore().load()).updates || {}
+      if (!updates.lastPreviewSequence || !updates.lastPreviewHeadSha) return null
+      return { sequence: updates.lastPreviewSequence, headSha: updates.lastPreviewHeadSha }
+    },
+    async save(next) {
+      return ensureStateStore().markPreviewCandidate(next.sequence, next.headSha)
+    }
+  }
+}
+
+async function ensurePrPreviewUpdateContext() {
+  if (prPreviewUpdateContextPromise) return prPreviewUpdateContextPromise
+  prPreviewUpdateContextPromise = (async () => {
+    const bootstrap = componentUpdateBootstrapContext()
+    const appRoot = bootstrap?.layout?.shellRoot || app.getAppPath()
+    const config = await resolvePrPreviewUpdateConfig({ appRoot, resourcesPath: process.resourcesPath })
+    const component = await ensureComponentUpdateService()
+    const enabled = config.enabled && !STORE_BUILD
+    const service = new PrPreviewUpdateService({
+      enabled,
+      channelUrls: config.channelUrls,
+      trustedKeys: config.trustedKeys,
+      fetchImpl: net.fetch,
+      state: prPreviewStateAdapter()
+    })
+    return {
+      enabled,
+      config,
+      component,
+      service,
+      activation: new PrPreviewActivationStore(component.store.root)
+    }
+  })()
+  return prPreviewUpdateContextPromise
+}
+
+function previewClientCandidate(discovery) {
+  if (!discovery?.available) return null
+  const notes = String(discovery.notes || '').trim()
+  const attribution = `作者 @${discovery.author} · 基线 ${discovery.baseRef}`
+  return {
+    pr: {
+      number: discovery.prNumber,
+      title: discovery.title,
+      url: `https://github.com/${discovery.repository}/pull/${discovery.prNumber}`
+    },
+    source: discovery.provider === 'github' ? 'github' : 'cnb',
+    signed: true,
+    commit: { sha: discovery.headSha, subject: discovery.title },
+    description: notes ? `${notes}\n\n${attribution}` : attribution,
+    version: discovery.manifest?.releaseVersion || '',
+    sequence: discovery.sequence,
+    expiresAt: discovery.expiresAt
+  }
+}
+
+function activationClientCandidate(activation) {
+  const candidate = activation?.candidate
+  if (!candidate) return null
+  return {
+    pr: {
+      number: candidate.prNumber,
+      title: candidate.title,
+      url: `https://github.com/${OFFICIAL_PREVIEW_REPOSITORY}/pull/${candidate.prNumber}`
+    },
+    source: candidate.provider,
+    signed: true,
+    commit: { sha: candidate.headSha, subject: candidate.title },
+    description: `作者 @${candidate.author} · 基线 ${candidate.baseRef} · 已校验完成，等待重启应用`,
+    version: candidate.releaseVersion,
+    sequence: candidate.sequence,
+    expiresAt: ''
+  }
+}
+
+function isPendingPreviewReady(componentState, activation) {
+  return Boolean(
+    activation &&
+    componentState?.phase === 'ready' &&
+    componentState.pending?.releaseVersion === activation.candidate.releaseVersion
+  )
+}
+
+async function getPrPreviewUpdateState() {
+  const context = await ensurePrPreviewUpdateContext()
+  const appState = await ensureStateStore().load()
+  const componentState = await context.component.store.get()
+  const activation = await context.activation.get()
+  const ready = isPendingPreviewReady(componentState, activation)
+  return {
+    enabled: appState.updates?.previewEnabled === true || Boolean(activation),
+    configured: context.enabled,
+    configSource: context.config.source || '',
+    componentPhase: componentState.phase,
+    active: Boolean(activation && componentState.active?.releaseVersion === activation.candidate.releaseVersion),
+    ready,
+    rollbackAvailable: Boolean(activation),
+    candidate: lastPrPreviewCandidate?.clientCandidate || (ready ? activationClientCandidate(activation) : null)
+  }
+}
+
+async function checkPrPreviewUpdates() {
+  const context = await ensurePrPreviewUpdateContext()
+  const preferences = (await ensureStateStore().load()).updates || {}
+  const current = await getPrPreviewUpdateState()
+  if (current.ready && current.candidate) return { ...current, available: true, reason: 'ready' }
+  if (!preferences.previewEnabled) {
+    lastPrPreviewCandidate = null
+    return { ...(await getPrPreviewUpdateState()), available: false, reason: 'disabled' }
+  }
+  if (!context.enabled) {
+    lastPrPreviewCandidate = null
+    return { ...(await getPrPreviewUpdateState()), available: false, reason: 'not-configured' }
+  }
+  const discovery = await context.service.discover()
+  if (!discovery.available) {
+    lastPrPreviewCandidate = null
+    return { ...(await getPrPreviewUpdateState()), ...discovery, candidate: null }
+  }
+  const componentService = new ComponentUpdateService({
+    store: context.component.store,
+    manifestUrls: [discovery.manifestSource],
+    trustedKeys: context.config.trustedKeys,
+    bootstrapVersion: app.getVersion(),
+    fetchJson: async () => discovery.manifest,
+    fetchImpl: net.fetch,
+    AdmZipImpl: AdmZip
+  })
+  const checkResult = await componentService.check()
+  if (checkResult.plan.mode !== 'components') {
+    lastPrPreviewCandidate = null
+    return {
+      ...(await getPrPreviewUpdateState()),
+      available: false,
+      reason: checkResult.plan.reason || checkResult.plan.mode,
+      candidate: null
+    }
+  }
+  const clientCandidate = previewClientCandidate(discovery)
+  lastPrPreviewCandidate = { discovery, componentService, checkResult, clientCandidate }
+  return { ...(await getPrPreviewUpdateState()), available: true, candidate: clientCandidate }
+}
+
+async function resetPendingPreview(componentStore, activation) {
+  const state = await componentStore.get()
+  const releaseVersion = activation?.candidate?.releaseVersion
+  if (!releaseVersion || state.pending?.releaseVersion !== releaseVersion) return false
+  if (!['staging', 'ready'].includes(state.phase)) return false
+  await componentStore.writeState({ ...state, phase: 'idle', pending: null, failure: null }, state.revision)
+  await componentStore.discardStaging(releaseVersion).catch(() => {})
+  return true
+}
+
+async function stagePrPreviewUpdate() {
+  const context = await ensurePrPreviewUpdateContext()
+  const preferences = (await ensureStateStore().load()).updates || {}
+  if (!preferences.previewEnabled || !context.enabled) throw new Error('PR 快速预览通道尚未启用。')
+  const pending = lastPrPreviewCandidate
+  if (!pending?.discovery?.available) throw new Error('没有经过验证且等待确认的 PR 预览候选。')
+  const baseline = await context.component.store.pointer()
+  const activation = await context.activation.capture({
+    baseline,
+    prNumber: pending.discovery.prNumber,
+    title: pending.discovery.title,
+    author: pending.discovery.author,
+    baseRef: pending.discovery.baseRef,
+    sequence: pending.discovery.sequence,
+    headSha: pending.discovery.headSha,
+    releaseVersion: pending.checkResult.plan.releaseVersion,
+    provider: pending.discovery.provider
+  })
+  try {
+    await pending.componentService.stage(pending.checkResult, progress => send('prPreviewUpdates:progress', progress))
+    await context.service.accept(pending.discovery)
+    return { ...(await getPrPreviewUpdateState()), ready: true, candidate: pending.clientCandidate }
+  } catch (error) {
+    await resetPendingPreview(context.component.store, activation).catch(() => {})
+    await context.activation.clear().catch(() => {})
+    throw error
+  }
+}
+
+async function applyPrPreviewUpdate() {
+  const context = await ensurePrPreviewUpdateContext()
+  const [componentState, activation] = await Promise.all([
+    context.component.store.get(),
+    context.activation.get()
+  ])
+  if (!isPendingPreviewReady(componentState, activation)) await stagePrPreviewUpdate()
+  else await ensureStateStore().markPreviewCandidate(activation.candidate.sequence, activation.candidate.headSha)
+  const launched = await launchReadyComponentUpdate(context.component)
+  return { ok: true, launched }
+}
+
+async function exitPrPreviewUpdate() {
+  const context = await ensurePrPreviewUpdateContext()
+  await ensureStateStore().updatePreferences({ previewEnabled: false })
+  lastPrPreviewCandidate = null
+  const activation = await context.activation.get()
+  if (!activation) return { ...(await getPrPreviewUpdateState()), restored: false, restarting: false }
+  const componentStore = context.component.store
+  const cancelled = await resetPendingPreview(componentStore, activation)
+  const state = await componentStore.get()
+  const activePreview = state.active?.releaseVersion === activation.candidate.releaseVersion
+  if (!activePreview) {
+    await context.activation.clear()
+    return { ...(await getPrPreviewUpdateState()), restored: false, cancelled, restarting: false }
+  }
+  if (activation.baseline) await componentStore.atomicWrite(componentStore.pointerFile, activation.baseline)
+  else await rm(componentStore.pointerFile, { force: true })
+  await componentStore.writeState({
+    ...state,
+    phase: 'idle',
+    active: activation.baseline,
+    lastKnownGood: activation.baseline,
+    pending: null,
+    failure: null
+  }, state.revision)
+  await context.activation.clear()
+  setTimeout(() => {
+    app.relaunch()
+    app.exit(0)
+  }, 150)
+  return { ...(await getPrPreviewUpdateState()), restored: true, restarting: true }
+}
+
+async function setPrPreviewEnabled(enabled) {
+  if (enabled !== true) return exitPrPreviewUpdate()
+  await ensureStateStore().updatePreferences({ previewEnabled: true })
+  return getPrPreviewUpdateState()
+}
+
 // Reconcile the latest component check plan against the store's active pointer
 // before exposing it to the renderer, so a stale last-check after an applied
 // component update never re-triggers the "update available" notice. The helper
@@ -3599,9 +3912,9 @@ async function stageComponentUpdates() {
   return getComponentUpdateState()
 }
 
-async function launchReadyComponentUpdate() {
-  const context = await ensureComponentUpdateService()
-  if (!context.enabled) throw new Error('组件增量更新尚未启用。')
+async function launchReadyComponentUpdate(contextOverride = null) {
+  const context = contextOverride || await ensureComponentUpdateService()
+  if (!contextOverride && !context.enabled) throw new Error('组件增量更新尚未启用。')
   const bootstrap = componentUpdateBootstrapContext()
   const bundledRoot = bootstrap?.bundledRoot || app.getAppPath()
   const userDataOverride = resolveUserDataOverride(process.argv, app.commandLine.getSwitchValue('user-data-dir'))
@@ -4092,6 +4405,11 @@ ipcMain.handle('componentUpdates:getState', desktopShellOnly(() => getComponentU
 ipcMain.handle('componentUpdates:check', desktopShellOnly(() => checkComponentUpdates()))
 ipcMain.handle('componentUpdates:stage', desktopShellOnly(() => stageComponentUpdates()))
 ipcMain.handle('componentUpdates:apply', desktopShellOnly(() => launchReadyComponentUpdate()))
+ipcMain.handle('prPreviewUpdates:getState', desktopShellOnly(() => getPrPreviewUpdateState()))
+ipcMain.handle('prPreviewUpdates:setEnabled', desktopShellOnly(enabled => setPrPreviewEnabled(enabled === true)))
+ipcMain.handle('prPreviewUpdates:check', desktopShellOnly(() => checkPrPreviewUpdates()))
+ipcMain.handle('prPreviewUpdates:apply', desktopShellOnly(() => applyPrPreviewUpdate()))
+ipcMain.handle('prPreviewUpdates:exit', desktopShellOnly(() => exitPrPreviewUpdate()))
 ipcMain.handle('gitRuntime:status', event => {
   assertDesktopShellSender(event)
   return ensureGitRuntimeService().status()

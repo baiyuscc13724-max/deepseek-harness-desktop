@@ -115,6 +115,40 @@ test('Windows directory selection avoids the crashing Koffi dialog worker', asyn
   assert.equal(patchDirectoryPickerSource(first.source).changed, false)
 })
 
+test('Windows skills, Git commands and process cleanup never flash console windows', async () => {
+  const { patchSubprocessSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-subprocess-local', 'lib', 'index.js'), 'utf8')
+  const unpatched = fixture
+    .replaceAll(', windowsHide: true', '')
+    .replace('\n\t\twindowsHide: true,', '')
+  const first = patchSubprocessSource(unpatched)
+
+  assert.equal(first.changed, true)
+  assert.match(first.source, /function taskkillTree\(pid, force\)[\s\S]{0,260}stdio: "ignore", windowsHide: true/u)
+  assert.match(first.source, /function taskkillProcessTree\(pid\)[\s\S]{0,240}stdio: "ignore", windowsHide: true/u)
+  assert.match(first.source, /const child = spawn\(program, args, \{\s*cwd: spec\.cwd,\s*env,\s*windowsHide: true,/u)
+  assert.equal(patchSubprocessSource(first.source).changed, false)
+
+  const drifted = first.source.replace('windowsHide: true,\n\t\tstdio:', 'windowsHide: true /* upstream drift */,\n\t\tstdio:')
+  assert.notEqual(drifted, first.source)
+  assert.throws(() => patchSubprocessSource(drifted), /Pinned DSH subprocess command spawn implementation changed/u)
+})
+
+test('the on-demand browser launcher does not flash a Node console window', async () => {
+  const { patchWebAppSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'index.js'), 'utf8')
+  const unpatched = fixture.replace('\n\t\twindowsHide: true,\n\t\tstdio:', '\n\t\tstdio:')
+  const first = patchWebAppSource(unpatched)
+
+  assert.equal(first.changed, true)
+  assert.match(first.source, /function spawnBrowserLauncher\(url\)[\s\S]{0,300}env: scrubbedParentEnv\(\),\s*windowsHide: true,\s*stdio:/u)
+  assert.equal(patchWebAppSource(first.source).changed, false)
+
+  const drifted = first.source.replace('windowsHide: true,\n\t\tstdio:', 'windowsHide: true /* upstream drift */,\n\t\tstdio:')
+  assert.notEqual(drifted, first.source)
+  assert.throws(() => patchWebAppSource(drifted), /Pinned DSH browser launcher implementation changed/u)
+})
+
 test('cache metrics separate the latest warm request from the cold-start cumulative value', async () => {
   const { patchConversationCacheSource, patchTokenMeterSource } = await import('../scripts/patch-official-runtime.mjs')
   const tokenMeterFixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-token-meter', 'lib', 'index.js'), 'utf8')

@@ -77,7 +77,7 @@ test('main process clears Computer Use screenshots on startup, disable, stop and
   assert.doesNotMatch(main, /let computerUseEnabled = true/)
   assert.match(main, /activationRequired:\s*computerUseAuthorizedScope === 'none' && !computerUseEnabled/)
   assert.match(main, /activationMode:\s*computerUseAuthorizedScope === 'forever'/)
-  assert.match(main, /if \(next === computerUseEnabled\) return computerUseState\(\)/)
+  assert.match(main, /if \(next === computerUseEnabled\) \{[\s\S]{0,240}syncBrowserControlWithComputerUse\(\)[\s\S]{0,240}return computerUseState\(\)[\s\S]{0,20}\}/)
   assert.match(main, /computerUseSessionGeneration \+= 1/)
   assert.equal((main.match(/sessionGeneration !== computerUseSessionGeneration/g) || []).length, 1)
   assert.match(main, /await clearComputerUseScreenshots\(\)[\s\S]*Computer Use 会话已停止/u)

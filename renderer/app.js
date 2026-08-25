@@ -122,6 +122,8 @@ const updateNoticeInstall = document.querySelector('#updateNoticeInstall')
 
 let pendingUpdateKind = 'installer'
 let pendingComponentUpdate = null
+let prPreviewController = null
+let prPreviewState = { enabled: false, configured: false, checking: false, changing: false, available: false, candidate: null, error: '' }
 let gitRuntimeState = {
   loading: true, authenticating: false, preparing: false, message: '',
   git: { available: false, source: null, version: null },
@@ -135,7 +137,7 @@ let updateState = {
   installError: '',
   app: null,
   harness: null,
-  preferences: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null }
+  preferences: { checkOnStartup: true, channel: 'stable', previewEnabled: false, lastCheckedAt: null }
 }
 let distributionState = {
   channel: 'direct', store: false, appUpdatesManagedByStore: false,
@@ -159,13 +161,6 @@ let mobileSyncState = {
   control: { protocolVersion: 1, devices: [] },
   remote: { enabled: true, preference: 'auto', status: 'disabled', active: null, adapters: {} }
 }
-let computerUsePluginState = {
-  loading: true,
-  notice: '',
-  error: '',
-  session: { available: true, ready: true, enabled: false, unlimited: false, activationRequired: true, authorization: { scope: 'none', unlimited: false, pending: null }, generation: 0, currentTarget: null }
-}
-let computerUsePluginOperation = 0
 let relayTesting = false
 let themeCatalog = []
 let selectedWallpaperId = null
@@ -327,7 +322,6 @@ function applyShellUiMode() {
 function applyShellTheme() {
   const theme = themeCatalog.find(entry => entry.id === appearanceState.themeId)
   const root = document.documentElement
-  root.style.setProperty('--shell-window-background', theme ? themePreview(theme) : '#fff')
   if (!theme || theme.id === 'official') {
     root.removeAttribute('data-shell-theme')
     root.style.removeProperty('color-scheme')
@@ -1066,6 +1060,7 @@ function formatDeviceTime(value) {
   return `最近连接 ${date.toLocaleString('zh-CN', { hour12: false })}`
 }
 
+// 个人中继（可选）的后端调用集中在这里：若后端最终 API 命名不同，只需改这一处并回报主控协调
 const mobileRelayApi = {
   save: url => api.setMobileSyncRelayUrl(String(url || '').trim()),
   clear: () => api.clearMobileSyncRelayUrl()
@@ -1363,6 +1358,20 @@ function officialSettingsBootstrap() {
     if (installButton.disabled !== Boolean(state.installing)) installButton.disabled = Boolean(state.installing)
     setText(installButton, state.installing ? '正在更新…' : progress?.phase === 'ready' ? '安装已下载的更新' : '下载并安装桌面版更新')
     if (autoCheck.checked !== (state.preferences?.checkOnStartup !== false)) autoCheck.checked = state.preferences?.checkOnStartup !== false
+    const previewToggle = row.querySelector('[data-hd-preview]')
+    const previewEnabled = state.preview?.enabled === true
+    const previewConfigured = state.preview?.configured === true
+    if (previewToggle.checked !== previewEnabled) previewToggle.checked = previewEnabled
+    previewToggle.disabled = Boolean(state.preview?.changing || (!previewConfigured && !previewEnabled))
+    setText(row.querySelector('[data-hd-preview-status]'), state.preview?.active
+      ? '正在使用已签名 PR 预览，可随时恢复稳定基线'
+      : state.preview?.ready
+        ? '候选已下载并校验，等待你继续应用'
+        : !previewConfigured
+          ? '当前组件尚未配置独立预览公钥'
+          : previewEnabled
+            ? state.preview?.checking ? '正在从 CNB 优先发现已批准候选…' : '已加入；候选仍需你确认后才会应用'
+            : '未加入（默认）')
     const release = row.querySelector('[data-hd-release]')
     const releaseHidden = !state.app?.updateAvailable || !state.app?.url || canInstall
     if (release.hidden !== releaseHidden) release.hidden = releaseHidden
@@ -1531,6 +1540,7 @@ function officialSettingsBootstrap() {
       <div class="hd-update-lines">
         <div class="hd-update-line"><span>Harness Desktop</span><strong data-hd-app>等待首次检查</strong></div>
         <div class="hd-update-line"><span>DeepSeek Harness 官方核心</span><strong data-hd-harness>等待首次检查</strong></div>
+        <div class="hd-update-line"><span>PR 快速预览（CNB 优先）</span><strong data-hd-preview-status>未加入（默认）</strong></div>
       </div>
       <div class="hd-update-notes" data-hd-notes hidden><strong>新版本更新内容</strong><ul></ul></div>
       <div class="hd-update-actions">
@@ -1538,6 +1548,7 @@ function officialSettingsBootstrap() {
         <button type="button" data-hd-install hidden>下载并安装桌面版更新</button>
         <a href="#" data-hd-release hidden>打开桌面版下载页</a>
         <label><input type="checkbox" data-hd-auto checked /> 启动时自动检查</label>
+        <label><input type="checkbox" data-hd-preview /> 加入 PR 快速预览</label>
       </div>
       <div class="hd-policy-links">
         <a href="#" data-hd-policy="privacy">隐私政策</a>
@@ -1552,6 +1563,10 @@ function officialSettingsBootstrap() {
       request('open-release', { url: event.currentTarget.dataset.url || '' })
     })
     row.querySelector('[data-hd-auto]').addEventListener('change', event => request('auto-check', { enabled: event.currentTarget.checked ? '1' : '0' }))
+    row.querySelector('[data-hd-preview]').addEventListener('change', event => {
+      event.currentTarget.disabled = true
+      request('preview-updates-toggle', { enabled: event.currentTarget.checked ? '1' : '0' })
+    })
     row.querySelectorAll('[data-hd-policy]').forEach(link => link.addEventListener('click', event => {
       event.preventDefault()
       request('open-external', { url: event.currentTarget.dataset.url || '' })
@@ -1738,9 +1753,94 @@ function officialSubagentEnhancementsBootstrap() {
   scan()
 }
 
+function ensurePrPreviewController() {
+  if (prPreviewController || !window.harnessPrPreviewUpdateIntegration) return prPreviewController
+  prPreviewController = window.harnessPrPreviewUpdateIntegration.init({
+    onApply: async () => {
+      prPreviewController?.update({ phase: 'checking', message: '正在下载并校验预览组件…' })
+      try {
+        await api.applyPrPreviewUpdate()
+      } catch (error) {
+        prPreviewState = { ...prPreviewState, error: error.message }
+        prPreviewController?.update({ phase: 'error', message: error.message, candidate: prPreviewState.candidate })
+        await publishUpdateState()
+      }
+    },
+    onLater: () => {},
+    onExit: async () => {
+      prPreviewState = { ...prPreviewState, changing: true, error: '' }
+      await publishUpdateState()
+      try {
+        const result = await api.exitPrPreviewUpdates()
+        prPreviewState = { ...prPreviewState, ...result, enabled: false, changing: false, available: false, candidate: null }
+      } catch (error) {
+        prPreviewState = { ...prPreviewState, changing: false, error: error.message }
+        prPreviewController?.update({ phase: 'error', message: error.message, candidate: null })
+      }
+      await publishUpdateState()
+    }
+  })
+  prPreviewController.hide()
+  return prPreviewController
+}
+
+async function refreshPrPreviewState({ discover = false } = {}) {
+  const controller = ensurePrPreviewController()
+  try {
+    const base = await api.getPrPreviewUpdateState()
+    prPreviewState = { ...prPreviewState, ...base, checking: false, changing: false, error: '' }
+    updateState = {
+      ...updateState,
+      preferences: { ...(updateState.preferences || {}), previewEnabled: base.enabled === true }
+    }
+    if (!base.enabled || (!base.configured && !base.ready)) {
+      controller?.hide()
+      await publishUpdateState()
+      return prPreviewState
+    }
+    if (!discover) {
+      if (base.candidate) controller?.update({ phase: 'available', candidate: base.candidate })
+      else controller?.hide()
+      await publishUpdateState()
+      return prPreviewState
+    }
+    prPreviewState = { ...prPreviewState, checking: true, available: false, candidate: null }
+    controller?.update({ phase: 'checking', candidate: null, message: '' })
+    await publishUpdateState()
+    const result = await api.checkPrPreviewUpdates()
+    prPreviewState = { ...prPreviewState, ...result, checking: false, available: result.available === true, candidate: result.candidate || null, error: '' }
+    if (result.available && result.candidate) controller?.update({ phase: 'available', candidate: result.candidate, message: '' })
+    else controller?.update({ phase: 'none', candidate: null, message: '' })
+  } catch (error) {
+    prPreviewState = { ...prPreviewState, checking: false, available: false, candidate: null, error: error.message }
+    controller?.update({ phase: 'error', candidate: null, message: error.message })
+  }
+  await publishUpdateState()
+  return prPreviewState
+}
+
+async function setPrPreviewChannelEnabled(enabled) {
+  prPreviewState = { ...prPreviewState, changing: true, error: '' }
+  await publishUpdateState()
+  try {
+    const result = await api.setPrPreviewUpdatesEnabled(enabled === true)
+    prPreviewState = { ...prPreviewState, ...result, enabled: enabled === true, changing: false, available: false, candidate: null }
+    updateState = {
+      ...updateState,
+      preferences: { ...(updateState.preferences || {}), previewEnabled: enabled === true }
+    }
+    if (enabled) await refreshPrPreviewState({ discover: true })
+    else ensurePrPreviewController()?.hide()
+  } catch (error) {
+    prPreviewState = { ...prPreviewState, changing: false, error: error.message }
+  }
+  await publishUpdateState()
+  return prPreviewState
+}
+
 async function publishUpdateState() {
   if (!runtimeView.getURL()) return
-  const serialized = JSON.stringify(updateState).replaceAll('<', '\\u003c')
+  const serialized = JSON.stringify({ ...updateState, preview: prPreviewState }).replaceAll('<', '\\u003c')
   await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_UPDATE_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_UPDATES__?.();`, true).catch(() => {})
 }
 
@@ -1768,47 +1868,6 @@ async function publishMobileSyncState() {
   await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_MOBILE_SYNC_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_MOBILE_SYNC__?.();`, true).catch(() => {})
 }
 
-async function publishComputerUsePluginState() {
-  if (!runtimeView.getURL()) return
-  const serialized = JSON.stringify(computerUsePluginState).replaceAll('<', '\\u003c')
-  await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_COMPUTER_USE_STATE__ = ${serialized}; window.dispatchEvent(new CustomEvent('harness-desktop:computer-use-state', { detail: window.__HARNESS_DESKTOP_COMPUTER_USE_STATE__ }));`, true).catch(() => {})
-}
-
-async function updateComputerUsePluginState(operation, notice = 'refreshed') {
-  const revision = ++computerUsePluginOperation
-  computerUsePluginState = { ...computerUsePluginState, loading: true, notice: '', error: '' }
-  await publishComputerUsePluginState()
-  try {
-    const session = operation ? await operation() : await api.getComputerUseState()
-    if (revision !== computerUsePluginOperation) return
-    const resolvedNotice = typeof notice === 'function' ? notice(session) : notice
-    computerUsePluginState = { loading: false, notice: resolvedNotice, error: '', session }
-  } catch (error) {
-    if (revision !== computerUsePluginOperation) return
-    computerUsePluginState = { ...computerUsePluginState, loading: false, notice: '', error: error?.message || String(error) }
-  }
-  await publishComputerUsePluginState()
-}
-
-async function refreshComputerUsePluginStatus() {
-  if (computerUsePluginState.loading) return
-  const revision = computerUsePluginOperation
-  try {
-    const session = await api.getComputerUseState()
-    if (computerUsePluginState.loading || revision !== computerUsePluginOperation) return
-    computerUsePluginState = { ...computerUsePluginState, session }
-    await publishComputerUsePluginState()
-  } catch {}
-}
-
-async function requestOrResumeComputerUse() {
-  const session = await api.getComputerUseState()
-  const scope = String(session?.authorization?.scope || 'none')
-  return scope === 'session' || scope === 'forever'
-    ? api.setComputerUseEnabled(true)
-    : api.requestComputerUseAuthorization()
-}
-
 async function publishAppearanceState() {
   applyShellTheme()
   applyShellUiMode()
@@ -1833,6 +1892,7 @@ async function checkUpdates({ forceNotice = false } = {}) {
     updateState = { ...updateState, checking: false, app: { error: error.message }, harness: updateState.harness }
   }
   await publishUpdateState()
+  if (prPreviewState.enabled && (prPreviewState.configured || prPreviewState.ready)) await refreshPrPreviewState({ discover: true })
 }
 
 async function installUpdate() {
@@ -1871,7 +1931,6 @@ runtimeView.addEventListener('dom-ready', async () => {
   await publishUpdateState()
   await publishGitRuntimeState()
   await publishMobileSyncState()
-  await publishComputerUsePluginState()
   await publishAppearanceState()
   await publishModelRoutingState()
   startupWebviewReady = true
@@ -1893,6 +1952,9 @@ runtimeView.addEventListener('will-navigate', event => {
       updateState = { ...updateState, preferences }
       publishUpdateState()
     })
+  } else if (target.hostname === 'preview-updates-toggle') {
+    const enabled = target.searchParams.get('enabled') !== '0'
+    setPrPreviewChannelEnabled(enabled)
   } else if (target.hostname === 'open-release') {
     const url = target.searchParams.get('url')
     if (url) api.openLink(url).catch(() => {})
@@ -1967,18 +2029,6 @@ runtimeView.addEventListener('will-navigate', event => {
       mobileSyncError.textContent = error.message
       publishMobileSyncState()
     })
-  } else if (target.hostname === 'computer-use-refresh') {
-    updateComputerUsePluginState(null, 'refreshed')
-  } else if (target.hostname === 'computer-use-status') {
-    refreshComputerUsePluginStatus()
-  } else if (target.hostname === 'computer-use-toggle') {
-    const enabled = target.searchParams.get('enabled') === '1'
-    updateComputerUsePluginState(
-      () => enabled ? requestOrResumeComputerUse() : api.setComputerUseEnabled(false),
-      session => enabled ? (session?.enabled && session?.unlimited ? 'resumed' : 'requested') : 'stopped'
-    )
-  } else if (target.hostname === 'computer-use-revoke-permanent') {
-    updateComputerUsePluginState(() => api.revokeComputerUsePermanentGrant(), 'revoked')
   } else if (target.hostname === 'refresh-model-routing') {
     modelRoutingState = { ...modelRoutingState, meters: { ...(modelRoutingState.meters || {}), loading: true, error: '' } }
     publishModelRoutingState()
@@ -2462,17 +2512,6 @@ api.onMobileSyncState(state => {
   renderMobileSync(state)
   publishMobileSyncState()
 })
-if (typeof api.onComputerUseAuthorization === 'function') api.onComputerUseAuthorization(session => {
-  computerUsePluginState = { ...computerUsePluginState, loading: false, error: '', session }
-  publishComputerUsePluginState()
-})
-api.getComputerUseState().then(session => {
-  computerUsePluginState = { ...computerUsePluginState, loading: false, error: '', session }
-  publishComputerUsePluginState()
-}).catch(error => {
-  computerUsePluginState = { ...computerUsePluginState, loading: false, error: error?.message || String(error) }
-  publishComputerUsePluginState()
-})
 api.onPetState(renderPetState)
 api.onUpdateResult(result => {
   updateState = { ...updateState, ...result, checking: false }
@@ -2489,10 +2528,20 @@ api.onComponentUpdateProgress(progress => {
   updateState = { ...updateState, installing: true, installError: '', installProgress: { kind: 'components', ...progress } }
   publishUpdateState()
 })
+api.onPrPreviewUpdateProgress(progress => {
+  prPreviewState = { ...prPreviewState, checking: true, progress, error: '' }
+  publishUpdateState()
+})
 
 async function startOfficialWorkspace() {
   distributionState = await api.getDistribution()
   updateState = { ...updateState, preferences: await api.getUpdatePreferences(), distribution: distributionState }
+  try {
+    prPreviewState = { ...prPreviewState, ...(await api.getPrPreviewUpdateState()), error: '' }
+  } catch (error) {
+    prPreviewState = { ...prPreviewState, configured: false, error: error.message }
+  }
+  ensurePrPreviewController()
   appearanceState = await api.getAppearance()
   petState = await api.getPetState()
   const [routing, meters, gitStatus] = await Promise.all([api.getModelRouting(), api.getProviderMeters(false), api.getGitRuntimeStatus()])
@@ -2512,6 +2561,7 @@ async function startOfficialWorkspace() {
   const initial = await api.getRuntimeState()
   renderRuntimeState(initial)
   if (initial.status !== 'ready') renderRuntimeState(await api.startRuntime({}))
+  if (prPreviewState.enabled && (prPreviewState.configured || prPreviewState.ready)) refreshPrPreviewState({ discover: true }).catch(() => {})
 }
 
 playStartupAnimation()

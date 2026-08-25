@@ -257,6 +257,32 @@ test('暂停模型控制不会停止用户浏览或审计，且只能由用户�
   assert.ok(policy.auditSnapshot().entries.some(entry => entry.action === 'model-control-resume'))
 })
 
+test('Computer Use 共享授权只临时放行当前可见 origin，并保留浏览器硬门禁', () => {
+  const policy = new BrowserSecurityPolicy()
+  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
+
+  assert.equal(policy.isUnifiedControlEnabled, false)
+  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'permission-denied')
+
+  assert.deepEqual(policy.setUnifiedControl(true), { enabled: true, changed: true })
+  assert.equal(policy.authorizations().unifiedControl, true)
+  assert.equal(policy.authorizations().count, 0, 'shared grant must not persist a second site authorization')
+  assert.equal(policy.modelAction({ action: 'read', tabId: 'tab-1', payload: { text: '普通页面内容' } }).allowed, true)
+  assert.equal(policy.modelNavigate(`${ORIGIN}/next`, { tabId: 'tab-1' }).origin, ORIGIN)
+  assert.throws(() => policy.modelNavigate('https://other.example.net/', { tabId: 'tab-1' }), error => error.code === 'origin-not-authorized')
+  assert.throws(() => policy.modelAction({
+    action: 'type',
+    tabId: 'tab-1',
+    field: { tag: 'input', type: 'password', name: 'password' },
+    payload: { text: 'still-forbidden' }
+  }), error => error.code === 'sensitive-field')
+  assert.equal(policy.modelAction({ action: 'submit', tabId: 'tab-1' }).requiresConfirmation, true)
+
+  assert.deepEqual(policy.setUnifiedControl(false), { enabled: false, changed: true })
+  assert.equal(policy.authorizations().count, 0)
+  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'permission-denied')
+})
+
 test('未授权动作与未知动作给出可识别错误码，且审计有 denied 记录', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-deny-'))
   t.after(() => rm(root, { recursive: true, force: true }))

@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.45",
+  "version": "1.0.46",
   "private": false,
   "description": "Open-source Windows and macOS desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, mobile pairing, packaged self-test, and release gates.",
   "author": {
@@ -117,6 +117,7 @@
       "release-update-sources.json",
       "release-update-sources.local.json",
       "component-update-sources.json",
+      "pr-preview-update-sources.json",
       "mobile-relay-sources.json",
       "scripts/component-update-helper.cjs",
       "node_modules/@img/**/*",

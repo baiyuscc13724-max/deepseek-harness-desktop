@@ -357,6 +357,10 @@ test('second CNB synchronization is metadata-only and never repeats the 18-asset
   assert.match(pipeline, /\.releaseVersion[\s\S]*\.channel == "stable"[\s\S]*\.components \| length > 0/u)
   assert.match(pipeline, /Prepare verified GitHub release assets\r?\n\s+if: test ! -f \.cnb-stable-only/u)
   assert.match(pipeline, /Upload verified assets with official plugin\r?\n\s+if: test ! -f \.cnb-stable-only/u)
+  assert.match(publisher, /component-feeds\/pr-preview\/latest\.json/u)
+  assert.match(publisher, /PR preview latest feed is missing its immutable manifest wrapper/u)
+  assert.match(publisher, /\$mirrorFiles \+= @\(\$previewIndexFile, \$previewManifestFile\)/u)
+  assert.match(pipeline, /! -f \.cnb-preview-feed-only/u)
 })
 
 test('publisher deterministically selects the one exact draft when cloud and local creation race', () => {
@@ -697,8 +701,11 @@ test('cloud recovery prefetches every exact byte on Ubuntu and keeps the Windows
   assert.match(prefetch.run, /previous-stable-installer\.exe/u)
   assert.match(prefetch.run, /Previous stable installer size mismatch/u)
   assert.match(prefetch.run, /Previous stable installer SHA-256 mismatch/u)
+  assert.match(recoveryRuns, /releaseName:[\s\S]*releaseHtmlUrl:[\s\S]*browserDownloadUrl:/u)
+  assert.match(recoveryRuns, /Exact public previous stable release differs from the signed tag manifests/u)
 
   assert.match(windowsRuns, /Resolve-Path 'draft-state\/windows-files'/u)
+  assert.match(windowsRuns, /expectedPreviousReleaseUrl[\s\S]*expectedPreviousAssetUrl[\s\S]*Bound previous stable installer identity is invalid/u)
   assert.match(windowsRuns, /Resolve-Path 'draft-state\/previous-stable-installer\.exe'/u)
   assert.match(windowsRuns, /Snapshot must bind exactly nine uniquely named draft assets/u)
   assert.match(windowsRuns, /\$snapshot\.id\.ToString\(\) -ne \$env:RELEASE_ID/u)

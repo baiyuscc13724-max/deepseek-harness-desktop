@@ -39,6 +39,9 @@ class BrowserSecurityPolicy {
     this.idFactory = idFactory
     this.stopped = false
     this.modelStopped = false
+    // 右栏浏览器可复用内置 Computer Use 的一次性/永久授权。该状态仅驻留内存，
+    // 不创建第二份授权文件；细粒度站点存储仍用于旧版本兼容与显式私网授权。
+    this.unifiedControl = false
     this.partition = BROWSER_PARTITION // 固定独立持久化分区，与官方 persist:harness 隔离
     this.authz = new SiteAuthorizationStore({ file: authzFile, rootDir: authzRootDir, now })
     this.gate = new ActionGate({ now, idFactory, confirmationTtlMs, uploadRoots, downloadRoots })
@@ -67,6 +70,60 @@ class BrowserSecurityPolicy {
 
   get isModelStopped() {
     return this.stopped || this.modelStopped
+  }
+
+  get isUnifiedControlEnabled() {
+    return this.unifiedControl === true
+  }
+
+  /**
+   * 复用 Computer Use 的全局授权，但不把当前 origin 写入站点授权文件。
+   * 关闭时立即清空一次性确认；全局控制的启停由桌面主进程统一驱动。
+   */
+  setUnifiedControl(enabled) {
+    if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
+    const next = enabled === true
+    if (next === this.unifiedControl) return { enabled: next, changed: false }
+    this.unifiedControl = next
+    this.gate.clearConfirmations()
+    this.auditLog.record({
+      actor: 'system',
+      action: next ? 'computer-use-control-enable' : 'computer-use-control-disable',
+      origin: null,
+      result: 'info',
+      code: 'ok'
+    })
+    return { enabled: next, changed: true }
+  }
+
+  /**
+   * Computer Use grant 生效时，仅对当前可见活动 origin 临时放行普通浏览器权限。
+   * 这不会持久化，也不会允许跨 origin 跳转；敏感字段、敏感值与关键动作确认仍由
+   * ActionGate 强制执行。旧的显式站点授权继续兼容。
+   */
+  effectiveAuthorizations() {
+    if (!this.unifiedControl) return this.authz
+    const activeOrigin = this.gate.activeTabInfo?.origin || null
+    const stored = this.authz
+    const normalized = value => {
+      try { return canonicalOrigin(value) } catch { return null }
+    }
+    const merged = (values, includeActive = true) => {
+      const entries = Array.isArray(values) ? values : []
+      return [...new Set([...entries, ...(includeActive && activeOrigin ? [activeOrigin] : [])])]
+    }
+    return {
+      authorized(origin, action) {
+        const target = normalized(origin)
+        return Boolean(target && activeOrigin && target === activeOrigin) || stored.authorized(origin, action)
+      },
+      origins() {
+        return merged(stored.origins())
+      },
+      privateOrigins() {
+        return merged(stored.privateOrigins())
+      }
+    }
   }
 
   /** 由集成方上报当前可见的右栏活动标签（DID-NAVIGATE / 标签切换时）。 */
@@ -128,9 +185,10 @@ class BrowserSecurityPolicy {
       if (!tab.visible) throw policyError('tab-not-visible', '模型仅可操作当前可见的右栏活动标签。')
       if (String(tabId) !== tab.id) throw policyError('tab-mismatch', '模型仅可操作当前可见的右栏活动标签，标签不一致。')
       const preview = this.modelPreviewOrigins.get(tab.id)
+      const authorizations = this.effectiveAuthorizations()
       const nav = checkModelNavigation(url, {
-        authorizedOrigins: [...this.authz.origins(), ...(preview ? [preview.origin] : [])],
-        authorizedPrivateOrigins: [...this.authz.privateOrigins(), ...(preview?.privateNetwork ? [preview.origin] : [])],
+        authorizedOrigins: [...authorizations.origins(), ...(preview ? [preview.origin] : [])],
+        authorizedPrivateOrigins: [...authorizations.privateOrigins(), ...(preview?.privateNetwork ? [preview.origin] : [])],
         base
       })
       this.gate.setActiveTab({ id: tab.id, origin: nav.origin, visible: true })
@@ -152,7 +210,7 @@ class BrowserSecurityPolicy {
     if (this.isModelStopped) throw policyError('stopped', '浏览器模型控制已停止。')
     let origin = null
     try {
-      const decision = this.gate.gate({ action, tabId, declaredOrigin, field, payload, confirmationId, authorizations: this.authz })
+      const decision = this.gate.gate({ action, tabId, declaredOrigin, field, payload, confirmationId, authorizations: this.effectiveAuthorizations() })
       if (decision.verdict === 'confirm-required') {
         origin = decision.origin
         this.auditLog.record({ actor: 'model', action, origin, tabId: decision.tabId, result: 'confirm-required', code: 'confirmation-required' })
@@ -211,7 +269,7 @@ class BrowserSecurityPolicy {
 
   /** 当前生效中的授权快照（仅权限元数据）。 */
   authorizations() {
-    return this.authz.snapshot()
+    return { ...this.authz.snapshot(), unifiedControl: this.unifiedControl === true }
   }
 
   /** 待确认请求（只读、无敏感内容）。 */
@@ -268,6 +326,7 @@ class BrowserSecurityPolicy {
     if (this.stopped) return this.auditSnapshot()
     this.stopped = true
     this.modelStopped = true
+    this.unifiedControl = false
     this.modelPreviewOrigins.clear()
     this.gate.clearActiveTab()
     this.gate.clearConfirmations()

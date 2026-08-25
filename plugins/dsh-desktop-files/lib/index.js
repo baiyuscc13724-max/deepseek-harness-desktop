@@ -11,7 +11,7 @@ const MAX_LIST_ITEMS = 100
 const MAX_PREVIEW_BYTES = 1024 * 1024
 const UPLOAD_DIRECTORY = 'uploads'
 const TEXT_PREVIEW_EXTENSIONS = new Set([
-  '.astro', '.c', '.cc', '.cfg', '.conf', '.cpp', '.cs', '.css', '.csv', '.dart', '.diff', '.env', '.go', '.graphql', '.h', '.hpp',
+  '.astro', '.c', '.cc', '.cfg', '.cjs', '.conf', '.cpp', '.cs', '.css', '.csv', '.dart', '.diff', '.env', '.go', '.graphql', '.h', '.hpp',
   '.htm', '.html', '.ini', '.java', '.js', '.json', '.json5', '.jsonl', '.jsx', '.kt', '.kts', '.less', '.log', '.lua', '.md', '.markdown',
   '.mjs', '.mts', '.php', '.pl', '.properties', '.ps1', '.py', '.r', '.rb', '.rs', '.sass', '.scala', '.scss', '.sh', '.sql', '.svelte',
   '.swift', '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml', '.zig'
