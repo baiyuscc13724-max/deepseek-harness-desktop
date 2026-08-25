@@ -4,7 +4,7 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 const MAX_LOCAL_PREVIEW_BYTES = 1024 * 1024
 const LOCAL_TEXT_EXTENSIONS = new Set([
-  '.c', '.cc', '.conf', '.cpp', '.css', '.csv', '.go', '.h', '.hpp', '.html', '.ini', '.java', '.js', '.json', '.jsonl',
+  '.c', '.cc', '.cjs', '.conf', '.cpp', '.css', '.csv', '.go', '.h', '.hpp', '.html', '.ini', '.java', '.js', '.json', '.jsonl',
   '.jsx', '.log', '.md', '.markdown', '.mjs', '.mts', '.ps1', '.py', '.rs', '.sh', '.sql', '.toml', '.ts', '.tsx', '.txt', '.xml', '.yaml', '.yml'
 ])
 const REQUEST_TIMEOUT_MS = 10_000
@@ -23,9 +23,8 @@ function sessionId(value) {
 }
 
 function relativeFilePath(value) {
-  const unsafe = typeof value === 'string' && (/^(?:[a-z]:[\\/]|[\\/])/iu.test(value) || /(?:^|[\\/])\.\.(?:[\\/]|$)/u.test(value))
-  if (typeof value !== 'string' || !value || value.length > 4096 || value.trim() !== value || value.includes('\u0000') || unsafe) {
-    throw Object.assign(new TypeError('path must be a workspace-contained relative path'), { code: 'RIGHT_WORKSPACE_BAD_PATH' })
+  if (typeof value !== 'string' || !value || value.length > 4096 || value.trim() !== value || value.includes('\u0000') || /[\r\n]/u.test(value)) {
+    throw Object.assign(new TypeError('path must be a bounded workspace file target'), { code: 'RIGHT_WORKSPACE_BAD_PATH' })
   }
   return value
 }

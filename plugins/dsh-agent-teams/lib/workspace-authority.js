@@ -185,7 +185,7 @@ function normalizeWorkspaceHostState(input) {
     const fenceMatch = /^(\d+):(\d+)$/u.exec(fencingToken);
     if (!fenceMatch || Number(fenceMatch[1]) !== entryEpoch || Number(fenceMatch[2]) > fencingCounter) throw new Error(`${field}.fencingToken is invalid`);
     const state = nonEmptyString(workspace.state, `${field}.state`, 32);
-    if (!new Set(["active", "published", "expired", "fenced"]).has(state)) throw new TypeError(`${field}.state is unsupported`);
+    if (!new Set(["active", "published", "closed", "expired", "fenced"]).has(state)) throw new TypeError(`${field}.state is unsupported`);
     const normalized = { ...workspace, workspaceRef, collaboratorRef: nonEmptyString(workspace.collaboratorRef, `${field}.collaboratorRef`, 128), taskRef: nonEmptyString(workspace.taskRef, `${field}.taskRef`, 256), workspacePath, baseCommit: commitRef(workspace.baseCommit, `${field}.baseCommit`), authorityEpoch: entryEpoch, fencingToken, state, createdAt: safeTime(workspace.createdAt, `${field}.createdAt`), expiresAt: safeTime(workspace.expiresAt, `${field}.expiresAt`), updatedAt: safeTime(workspace.updatedAt, `${field}.updatedAt`) };
     if (workspace.changeSetRef !== undefined) normalized.changeSetRef = opaqueRecordRef(workspace.changeSetRef, `${field}.changeSetRef`, "changeset");
     workspaces.set(workspaceRef, normalized);
@@ -213,6 +213,7 @@ function normalizeWorkspaceHostState(input) {
     if (claimEpoch !== workspace.authorityEpoch) throw new Error(`${field}.authorityEpoch does not match its workspace`);
     claims.set(claimRef, { ...claim, claimRef, workspaceRef, authorityEpoch: claimEpoch, mode, resources, state, advisoryConflictRefs, createdAt: safeTime(claim.createdAt, `${field}.createdAt`), expiresAt: safeTime(claim.expiresAt, `${field}.expiresAt`), updatedAt: safeTime(claim.updatedAt, `${field}.updatedAt`) });
   }
+  for (const claim of claims.values()) { const workspace = workspaces.get(claim.workspaceRef); if (workspace.state === "closed" && claim.state === "active") throw new Error("closed workspace cannot retain an active claim"); if (workspace.state === "active" && claim.state === "held_for_merge") throw new Error("active workspace cannot hold a merge claim"); }
   const changeSets = new Map();
   const changeSetByDigest = new Map();
   for (const [index, changeSet] of value.changeSets.entries()) {
@@ -386,10 +387,12 @@ export class WorkspaceAuthority {
     this.#expire();
     const collaborator = nonEmptyString(collaboratorRef, "collaboratorRef", 128);
     const task = nonEmptyString(taskRef, "taskRef", 256);
-    const path = normalizedPath(workspacePath, "workspacePath");
+    const path = normalizedPath(workspacePath, "workspacePath"), base = commitRef(baseCommit, "baseCommit");
     if (!isSameOrWithin(this.workspaceRoot, path) || path === this.workspaceRoot) throw new Error("workspacePath must be a dedicated child of workspaceRoot");
     for (const workspace of this.workspaces.values()) {
-      if (workspace.state === "active" && (workspace.workspacePath === path || (workspace.collaboratorRef === collaborator && workspace.taskRef === task))) throw new Error("an active isolated workspace already owns this path or collaborator/task pair");
+      if (workspace.state !== "active" || (workspace.workspacePath !== path && (workspace.collaboratorRef !== collaborator || workspace.taskRef !== task))) continue;
+      if (workspace.workspacePath === path && workspace.collaboratorRef === collaborator && workspace.taskRef === task && workspace.baseCommit === base) return this.#publicWorkspace(workspace);
+      throw new Error("an active isolated workspace already owns this path or collaborator/task pair");
     }
     const duration = safePositiveInteger(leaseMs, "leaseMs");
     if (duration > MAX_LEASE_MS) throw new RangeError(`leaseMs exceeds ${MAX_LEASE_MS}`);
@@ -402,7 +405,7 @@ export class WorkspaceAuthority {
       collaboratorRef: collaborator,
       taskRef: task,
       workspacePath: path,
-      baseCommit: commitRef(baseCommit, "baseCommit"),
+      baseCommit: base,
       authorityEpoch: this.authorityEpoch,
       fencingToken: fence,
       state: "active",
@@ -411,6 +414,21 @@ export class WorkspaceAuthority {
       updatedAt: current,
     };
     this.workspaces.set(workspaceRef, workspace);
+    return this.#publicWorkspace(workspace);
+  }
+
+  closeWorkspace({ workspaceRef, fencingToken } = {}) {
+    this.#expire();
+    const ref = opaqueRecordRef(workspaceRef, "workspaceRef", "workspace");
+    const fence = nonEmptyString(fencingToken, "fencingToken", 64);
+    const workspace = this.workspaces.get(ref);
+    if (workspace === undefined) throw new Error("isolated workspace is unknown");
+    if (workspace.fencingToken !== fence || workspace.authorityEpoch !== this.authorityEpoch) throw new Error("isolated workspace fencing token is stale");
+    if (workspace.state === "closed") return this.#publicWorkspace(workspace);
+    if (!new Set(["active", "published"]).has(workspace.state)) throw new Error("isolated workspace cannot be closed in its current state");
+    const current = this.now();
+    workspace.state = "closed"; workspace.updatedAt = current;
+    for (const claim of this.claims.values()) if (claim.workspaceRef === ref && claim.state === "active") { claim.state = "released"; claim.updatedAt = current; }
     return this.#publicWorkspace(workspace);
   }
 
@@ -423,7 +441,11 @@ export class WorkspaceAuthority {
     const duration = safePositiveInteger(claimMs, "claimMs");
     if (duration > MAX_CLAIM_MS) throw new RangeError(`claimMs exceeds ${MAX_CLAIM_MS}`);
     const current = this.now();
-    const candidate = { mode: normalizedMode, resources: normalizedResources };
+    const candidate = { mode: normalizedMode, resources: normalizedResources }, resourceKey = canonicalJson(normalizedResources);
+    for (const claim of this.claims.values()) {
+      if (claim.workspaceRef !== workspace.workspaceRef || claim.state !== "active" || canonicalJson(claim.resources) !== resourceKey) continue;
+      if (claim.mode === normalizedMode) return immutable(this.#publicClaim(claim));
+    }
     const hardConflicts = [];
     const advisoryConflicts = [];
     for (const claim of this.claims.values()) {

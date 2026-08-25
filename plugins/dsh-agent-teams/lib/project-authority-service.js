@@ -18,6 +18,9 @@ export class PersistedProjectAuthority {
     this.authority = authority;
     this.revision = revision;
     this.operationTail = Promise.resolve();
+    this.closing = false;
+    this.closed = false;
+    this.closePromise = undefined;
   }
 
   static async create({ store, authority } = {}) {
@@ -43,12 +46,14 @@ export class PersistedProjectAuthority {
   }
 
   read(method, input) {
+    this.#assertOpen();
     const name = nonEmptyString(method, "method", 64);
     if (!READ_METHODS.has(name)) throw new Error(`project authority read method ${name} is not allowed`);
     return this.authority[name](input);
   }
 
   mutate(method, input) {
+    this.#assertOpen();
     const name = nonEmptyString(method, "method", 64);
     if (!MUTATING_METHODS.has(name)) throw new Error(`project authority mutation method ${name} is not allowed`);
     return this.#queue(async () => {
@@ -62,6 +67,7 @@ export class PersistedProjectAuthority {
   }
 
   refresh() {
+    this.#assertOpen();
     return this.#queue(async () => {
       const loaded = await this.store.load();
       if (loaded === undefined) throw new Error("persisted project authority disappeared");
@@ -72,6 +78,23 @@ export class PersistedProjectAuthority {
       }
       return this.toJSON();
     });
+  }
+
+  close() {
+    if (this.closePromise !== undefined) return this.closePromise;
+    this.closing = true;
+    this.closePromise = this.operationTail.then(
+      () => this.store.close(),
+      () => this.store.close(),
+    ).then(() => { this.closed = true; });
+    return this.closePromise;
+  }
+
+  #assertOpen() {
+    if (!this.closing && !this.closed) return;
+    const error = new Error("persisted project authority is closed");
+    error.code = "PROJECT_AUTHORITY_CLOSED";
+    throw error;
   }
 
   #queue(operation) {

@@ -2,7 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativ
 const { spawn, execFile } = require('node:child_process')
 const { createHash, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { mkdir, open, readFile, readdir, realpath, stat, unlink, writeFile } = require('node:fs/promises')
+const { mkdir, open, readFile, readdir, realpath, rm, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -26,6 +26,7 @@ const { ensureDesktopFilesPlugin } = require('./bridge/desktop-files-plugin-serv
 const { ensureDesktopProgressPlugin } = require('./bridge/desktop-progress-plugin-service.cjs')
 const { ensureDesktopCompactionPlugin } = require('./bridge/desktop-compaction-plugin-service.cjs')
 const { ensureDesktopComputerUsePlugin } = require('./bridge/desktop-computer-use-plugin-service.cjs')
+const { ensureModelAdmissionPlugin } = require('./bridge/model-admission-plugin-service.cjs')
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
@@ -47,6 +48,10 @@ const { ComponentUpdateService } = require('./bridge/component-update-service.cj
 const { effectiveComponentLastCheck } = require('./bridge/component-update-service.cjs')
 const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { launchComponentUpdateHelper } = require('./bridge/component-update-launcher.cjs')
+const { PrPreviewActivationStore } = require('./bridge/pr-preview-activation-store.cjs')
+const { OFFICIAL_PREVIEW_REPOSITORY } = require('./bridge/pr-preview-update-contract.cjs')
+const { resolvePrPreviewUpdateConfig } = require('./bridge/pr-preview-update-config.cjs')
+const { PrPreviewUpdateService } = require('./bridge/pr-preview-update-service.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
 const { loadRightWorkspaceResource, previewLocalDocument } = require('./bridge/right-workspace-service.cjs')
@@ -62,7 +67,7 @@ const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
 const { BrowserDiagnostics, safeUrl: safeBrowserDiagnosticUrl } = require('./bridge/browser-diagnostics.cjs')
 const { BrowserHistoryStore } = require('./bridge/browser-history-store.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
-const { loadMobileRelayConfig } = require('./bridge/mobile-relay-config.cjs')
+const { MobileRelayConfigStore } = require('./bridge/mobile-relay-config.cjs')
 const { createEasyTierComponentInstaller } = require('./bridge/network-component-service.cjs')
 const { SyncTransportManager } = require('./bridge/sync-transport-manager.cjs')
 const { createEasyTierAdapter } = require('./bridge/sync-transports/easytier-adapter.cjs')
@@ -116,6 +121,8 @@ let mobileSyncService = null
 let mobileSyncTransportManager = null
 let componentUpdateServicePromise = null
 let lastComponentUpdateCheck = null
+let prPreviewUpdateContextPromise = null
+let lastPrPreviewCandidate = null
 let storageManagementService = null
 let gitRuntimeService = null
 let gitPreparationPromise = null
@@ -141,7 +148,12 @@ const browserOperations = new BrowserOperationCoordinator()
 let browserSidebarVisible = false
 let browserContentVisible = true
 let workspacePickerPromise = null
+// 当前控制会话必须由用户显式授权；授权卡片（本次授权/永久授权）由模型请求时在对话框上方弹出。
+// 永久授权持久化到 grant.json，应用重启后自动生效（无限制桌面控制）。
 let computerUseEnabled = false
+let computerUseAuthorizedScope = 'none' // 'none' | 'session' | 'forever'
+let computerUseUnlimited = false
+let computerUseAuthorizationRequest = null // { id, requestedAt, requestedBy }
 let computerUseSessionGeneration = 0
 let computerUseScreenshotStore = null
 let computerUseAppPolicy = null
@@ -290,9 +302,10 @@ async function updateMemoryPreferences(patch = {}) {
 }
 
 const BROWSER_PANEL_MIN_WIDTH = 360
-const BROWSER_PANEL_DEFAULT_WIDTH = 460
+const BROWSER_PANEL_DEFAULT_WIDTH = 640
 const BROWSER_PANEL_MAX_WIDTH = 1_400
-const BROWSER_VIEW_TOP = 118
+const WORKBENCH_HEADER_HEIGHT = 76
+const BROWSER_VIEW_TOP = WORKBENCH_HEADER_HEIGHT + 30 + 24 + 28
 const BROWSER_VIEW_FOOTER = 34
 let browserPanelWidth = BROWSER_PANEL_DEFAULT_WIDTH
 let browserWideMode = false
@@ -304,6 +317,66 @@ function browserPolicyOptions() {
     authzRootDir: root,
     downloadRoots: [app.getPath('downloads')]
   }
+}
+
+function sharedComputerUseControlState() {
+  const scope = String(computerUseAuthorizedScope || 'none')
+  const granted = scope === 'session' || scope === 'forever'
+  return {
+    source: 'computer-use',
+    granted,
+    active: granted && computerUseEnabled && !computerUseScreenLocked,
+    enabled: computerUseEnabled,
+    activationRequired: !granted,
+    scope,
+    unlimited: computerUseUnlimited === true,
+    pending: computerUseAuthorizationRequest
+      ? { id: computerUseAuthorizationRequest.id, requestedAt: computerUseAuthorizationRequest.requestedAt, requestedBy: computerUseAuthorizationRequest.requestedBy }
+      : null
+  }
+}
+
+function syncBrowserControlWithComputerUse() {
+  if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) return false
+  const control = sharedComputerUseControlState()
+  browserSecurityPolicy.setUnifiedControl(control.active)
+  if (control.active) {
+    browserSecurityPolicy.resumeModelControl()
+    browserControlServer?.resumeScope('browser')
+    const contents = liveBrowserContents()
+    if (contents) updateBrowserActiveTab(contents.getURL())
+  } else {
+    browserOperations.cancelModelActions()
+    abortBrowserTransfers()
+    browserSecurityPolicy.pauseModelControl()
+  }
+  return true
+}
+
+function requireSharedComputerUseForBrowser({ requestAuthorization = true } = {}) {
+  let control = sharedComputerUseControlState()
+  if (!control.granted) {
+    if (requestAuthorization) {
+      requestComputerUseAuthorization('model')
+      control = sharedComputerUseControlState()
+    }
+    throw Object.assign(new Error('浏览器控制与内置 Computer Use 共用同一授权；请在对话框上方选择“本次授权”或“永久授权”。'), {
+      code: 'computer-use-authorization-required',
+      control
+    })
+  }
+  if (!control.active) {
+    throw Object.assign(new Error('浏览器控制与内置 Computer Use 共用的控制会话已停止；请由用户恢复控制。'), {
+      code: 'computer-use-disabled',
+      control
+    })
+  }
+  return control
+}
+
+function browserModelBootstrapTrustedPrivateOrigins() {
+  if (runtimeState.status !== 'ready' || !runtimeState.url) return []
+  try { return [new URL(runtimeState.url).origin.toLowerCase()] } catch { return [] }
 }
 
 function ensureBrowserHistoryStore() {
@@ -385,7 +458,8 @@ async function browserStatePayload(patch = {}) {
       partition: browserSecurityPolicy?.partitionName || BrowserSecurityPolicy.partitionName(),
       isolatedFromHarness: true
     },
-    authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [] },
+    authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [], unifiedControl: false },
+    control: sharedComputerUseControlState(),
     audit: { count: audit.count, total: audit.total, dropped: audit.dropped },
     modelControlStopped: browserSecurityPolicy?.isModelStopped === true,
     profileResetting: browserOperations.snapshot().resetting,
@@ -517,6 +591,7 @@ function ensureBrowserSidebar() {
   browserView = null
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('主窗口尚未准备好。')
   if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
+  browserSecurityPolicy.setUnifiedControl(sharedComputerUseControlState().active)
   const browserSession = session.fromPartition(browserSecurityPolicy.partitionName, { cache: true })
   browserSession.setPermissionCheckHandler(() => false)
   browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
@@ -807,8 +882,13 @@ async function clearBrowserSiteData(confirmed) {
 
 async function resumeBrowserModelControl() {
   browserOperations.ticket()
+  if (computerUseAuthorizedScope === 'none') {
+    requestComputerUseAuthorization('user')
+    return publishBrowserState()
+  }
+  if (!computerUseEnabled) await setComputerUseEnabled(true)
   if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
-  else browserSecurityPolicy.resumeModelControl()
+  syncBrowserControlWithComputerUse()
   const contents = liveBrowserContents()
   if (contents) updateBrowserActiveTab(contents.getURL())
   browserControlServer?.resumeScope('browser')
@@ -865,15 +945,16 @@ async function clearAllBrowserData(confirmed) {
   return publishBrowserState()
 }
 
-function requireVisibleBrowserForModel(signal = null) {
+function requireVisibleBrowserForModel(signal = null, { allowBlankNavigation = false } = {}) {
   const ticket = browserOperations.modelTicket(signal)
   const view = ensureBrowserSidebar()
   if (!browserSidebarVisible || !browserContentVisible) throw Object.assign(new Error('模型只能操作当前可见的右栏浏览器页面。'), { code: 'tab-not-visible' })
   if (!browserSecurityPolicy || browserSecurityPolicy.isModelStopped) throw Object.assign(new Error('浏览器模型控制已停止；需要用户在右栏重新启用。'), { code: 'stopped' })
   const url = view.webContents.getURL()
   updateBrowserActiveTab(url)
-  if (!browserState.origin) throw new Error('当前浏览器页面没有可操作的 HTTP(S) 来源。')
-  return { view, url, origin: browserState.origin, tabId: activeBrowserTabId || 'side-browser-main', ticket }
+  const origin = browserState.origin || null
+  if (!origin && !(allowBlankNavigation && url === 'about:blank')) throw new Error('当前浏览器页面没有可操作的 HTTP(S) 来源。')
+  return { view, url, origin, tabId: activeBrowserTabId || 'side-browser-main', ticket }
 }
 
 function safeBrowserText(value, maximum = 12000) {
@@ -1206,7 +1287,9 @@ async function modelBrowserAction(input = {}, context = {}) {
     const authorizations = browserSecurityPolicy?.authorizations() || { entries: [] }
     const current = authorizations.entries.find(entry => entry.origin === browserState.origin)
     const bounds = browserView?.getBounds?.() || { width: 0, height: 0 }
-    return { visible: browserSidebarVisible && browserContentVisible, origin: browserState.origin || null, title: safeBrowserText(browserState.title, 500), loading: browserState.loading, stopped: browserSecurityPolicy?.isModelStopped === true, actions: current?.actions || [], activeTabId: activeBrowserTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })), downloads: browserDownloads.map(item => ({ id: item.id, receivedBytes: item.receivedBytes, totalBytes: item.totalBytes, state: item.state, modelInitiated: Boolean(item.modelInitiated) })), dialog: { available: browserTabs.get(activeBrowserTabId)?.dialogControl === true, pending: browserDialogs.has(activeBrowserTabId), type: browserDialogs.get(activeBrowserTabId)?.type || null }, viewport: { width: bounds.width, height: bounds.height }, diagnostics: { console: browserDiagnostics.snapshot('console', { limit: 500 }).console.length, network: browserDiagnostics.snapshot('network', { limit: 500 }).network.length } }
+    const control = sharedComputerUseControlState()
+    const effectiveActions = control.active ? ['read', 'click', 'type', 'upload', 'download', 'submit'] : (current?.actions || [])
+    return { visible: browserSidebarVisible && browserContentVisible, origin: browserState.origin || null, title: safeBrowserText(browserState.title, 500), loading: browserState.loading, stopped: browserSecurityPolicy?.isModelStopped === true, control, activationRequired: control.activationRequired, actions: effectiveActions, activeTabId: activeBrowserTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })), downloads: browserDownloads.map(item => ({ id: item.id, receivedBytes: item.receivedBytes, totalBytes: item.totalBytes, state: item.state, modelInitiated: Boolean(item.modelInitiated) })), dialog: { available: browserTabs.get(activeBrowserTabId)?.dialogControl === true, pending: browserDialogs.has(activeBrowserTabId), type: browserDialogs.get(activeBrowserTabId)?.type || null }, viewport: { width: bounds.width, height: bounds.height }, diagnostics: { console: browserDiagnostics.snapshot('console', { limit: 500 }).console.length, network: browserDiagnostics.snapshot('network', { limit: 500 }).network.length } }
   }
   if (action === 'stop') {
     browserOperations.cancelModelActions()
@@ -1220,11 +1303,14 @@ async function modelBrowserAction(input = {}, context = {}) {
     abortBrowserTransfers()
     if (!browserSecurityPolicy || browserSecurityPolicy.isStopped) browserSecurityPolicy = new BrowserSecurityPolicy(browserPolicyOptions())
     await withBrowserTransferLock(async () => browserSecurityPolicy?.pauseModelControl())
+    await setComputerUseEnabled(false)
     await publishBrowserState()
-    return { stopped: true, message: '模型浏览器控制已停止；网页仍由用户直接控制。' }
+    return { stopped: true, sharedControl: true, message: '浏览器控制与内置 Computer Use 的当前控制会话已停止；网页仍由用户直接控制。' }
   }
+  requireSharedComputerUseForBrowser({ requestAuthorization: true })
   if (action === 'observe') return observeBrowserForModel(context.signal)
-  const { view, origin, tabId, ticket } = requireVisibleBrowserForModel(context.signal)
+  const allowBlankNavigation = action === 'navigate' || action === 'tabOpen'
+  const { view, url, origin, tabId, ticket } = requireVisibleBrowserForModel(context.signal, { allowBlankNavigation })
   markBrowserModelNavigation(tabId, action || 'unknown-action')
   if (action === 'screenshot') {
     authorizeBrowserRead(origin, tabId)
@@ -1272,8 +1358,20 @@ async function modelBrowserAction(input = {}, context = {}) {
   }
   if (action === 'tabOpen') {
     const target = String(parameters.url || '').trim()
-    if (!target) throw new Error('模型新建标签页必须提供已授权的 HTTP(S) 地址。')
-    const nav = browserSecurityPolicy.modelNavigate(target, { tabId, base: view.webContents.getURL() })
+    if (!target) throw new Error('模型新建标签页必须提供 HTTP(S) 地址。')
+    if (!origin) {
+      const created = await createBrowserTab()
+      browserOperations.assert(ticket)
+      const nextView = browserView
+      const nextTabId = created.activeTabId
+      const currentUrl = nextView.webContents.getURL()
+      const nav = browserSecurityPolicy.modelBootstrapNavigate(target, { tabId: nextTabId, currentUrl, visible: true, trustedPrivateOrigins: browserModelBootstrapTrustedPrivateOrigins() })
+      markBrowserModelNavigation(nextTabId, 'tab-open')
+      await nextView.webContents.loadURL(nav.normalized)
+      browserOperations.assert(ticket)
+      return { created: true, activeTabId: nextTabId, url: nav.normalized }
+    }
+    const nav = browserSecurityPolicy.modelNavigate(target, { tabId, base: url })
     browserOperations.assert(ticket)
     const created = await createBrowserTab('', { modelNavigation: nav })
     browserOperations.assert(ticket)
@@ -1364,7 +1462,11 @@ async function modelBrowserAction(input = {}, context = {}) {
     return { selected: true, ref: String(parameters.ref) }
   }
   if (action === 'navigate') {
-    const nav = browserSecurityPolicy.modelNavigate(String(parameters.url || ''), { tabId, base: view.webContents.getURL() })
+    const target = String(parameters.url || '').trim()
+    if (!target) throw new Error('模型导航必须提供 HTTP(S) 地址。')
+    const nav = origin
+      ? browserSecurityPolicy.modelNavigate(target, { tabId, base: url })
+      : browserSecurityPolicy.modelBootstrapNavigate(target, { tabId, currentUrl: url, visible: true, trustedPrivateOrigins: browserModelBootstrapTrustedPrivateOrigins() })
     browserOperations.assert(ticket)
     markBrowserModelNavigation(tabId, 'navigate')
     await view.webContents.loadURL(nav.normalized)
@@ -1612,8 +1714,35 @@ function ensureWindowsComputerUse() {
     const rootDir = path.join(desktopRuntimePaths().root, 'computer-use')
     computerUseAppPolicy = new ComputerUseAppPolicy({ file: path.join(rootDir, 'app-policy.json'), rootDir })
   }
-  if (!windowsComputerUse) windowsComputerUse = new WindowsComputerUse({ policy: computerUseAppPolicy })
+  if (!windowsComputerUse) windowsComputerUse = new WindowsComputerUse({ policy: computerUseAppPolicy, unlimited: computerUseUnlimited })
+  else windowsComputerUse.setUnlimited?.(computerUseUnlimited)
   return windowsComputerUse
+}
+
+function computerUseGrantFile() {
+  return path.join(desktopRuntimePaths().root, 'computer-use', 'grant.json')
+}
+
+async function readComputerUseGrant() {
+  try {
+    const parsed = JSON.parse(await readFile(computerUseGrantFile(), 'utf8'))
+    if (!parsed || parsed.version !== 1 || parsed.scope !== 'forever') return null
+    return { scope: 'forever', grantedAt: Number(parsed.grantedAt) || Date.now() }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.warn(`Unable to read Computer Use grant: ${error.message}`)
+    return null
+  }
+}
+
+async function writeComputerUseGrant(scope) {
+  await mkdir(path.dirname(computerUseGrantFile()), { recursive: true })
+  await writeFile(computerUseGrantFile(), `${JSON.stringify({ version: 1, scope, grantedAt: Date.now() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+}
+
+async function clearComputerUseGrant() {
+  await unlink(computerUseGrantFile()).catch(error => {
+    if (error?.code !== 'ENOENT') throw error
+  })
 }
 
 function computerUseCrossAppCapability() {
@@ -1659,7 +1788,8 @@ function computerUseTargetId(window, fingerprint) {
 }
 
 function computerUseAuthorizationReason(authorization) {
-  if (authorization?.nonBypassable) return `永久禁止：${authorization.code || authorization.reason}`
+  if (authorization?.reason === 'unlimited-grant') return '无限制用户授权'
+  if (authorization?.nonBypassable) return `受限模式禁止：${authorization.code || authorization.reason}`
   if (authorization?.reason === 'allowlist') return '已持久允许'
   if (authorization?.reason === 'denylist') return '已持久拒绝'
   if (authorization?.reason === 'allowlist-invalidated') return '应用身份已变化，旧授权已失效'
@@ -1814,10 +1944,94 @@ async function clearComputerUseScreenshots() {
   return ensureComputerUseScreenshotStore().clear()
 }
 
+function computerUseAuthorizationSnapshot() {
+  return {
+    scope: computerUseAuthorizedScope,
+    unlimited: computerUseUnlimited,
+    pending: computerUseAuthorizationRequest
+      ? {
+          id: computerUseAuthorizationRequest.id,
+          requestedAt: computerUseAuthorizationRequest.requestedAt,
+          requestedBy: computerUseAuthorizationRequest.requestedBy
+        }
+      : null
+  }
+}
+
+function publishComputerUseAuthorization() {
+  send('computerUse:authorization', computerUseState())
+}
+
+function requestComputerUseAuthorization(requestedBy = 'model') {
+  if (computerUseScreenLocked) {
+    throw Object.assign(new Error('计算机锁定或挂起期间不能请求 Computer Use 授权。'), { code: 'computer-use-locked' })
+  }
+  if (computerUseAuthorizedScope !== 'none') return computerUseState()
+  if (!computerUseAuthorizationRequest) {
+    computerUseAuthorizationRequest = {
+      id: randomUUID(),
+      requestedAt: new Date().toISOString(),
+      requestedBy: requestedBy === 'user' ? 'user' : 'model'
+    }
+  }
+  publishComputerUseAuthorization()
+  return computerUseState()
+}
+
+async function authorizeComputerUse(scope) {
+  const nextScope = String(scope || '')
+  if (!['session', 'forever'].includes(nextScope)) throw new Error('Computer Use 授权只支持本次授权或永久授权。')
+  if (computerUseScreenLocked) throw Object.assign(new Error('计算机锁定或挂起期间不能开启 Computer Use。'), { code: 'computer-use-locked' })
+  if (nextScope === 'forever') await writeComputerUseGrant('forever')
+  computerUseAuthorizedScope = nextScope
+  computerUseUnlimited = true
+  computerUseAuthorizationRequest = null
+  computerUseConfirmations.clear()
+  ensureWindowsComputerUse().setUnlimited?.(true)
+  const wasEnabled = computerUseEnabled
+  await setComputerUseEnabled(true)
+  if (wasEnabled) publishComputerUseAuthorization()
+  return computerUseState()
+}
+
+function declineComputerUseAuthorization() {
+  computerUseAuthorizationRequest = null
+  publishComputerUseAuthorization()
+  return computerUseState()
+}
+
+async function revokeComputerUsePermanentGrant() {
+  await clearComputerUseGrant()
+  computerUseAuthorizedScope = 'none'
+  computerUseUnlimited = false
+  computerUseAuthorizationRequest = null
+  computerUseConfirmations.clear()
+  windowsComputerUse?.setUnlimited?.(false)
+  const wasEnabled = computerUseEnabled
+  await setComputerUseEnabled(false)
+  if (!wasEnabled) publishComputerUseAuthorization()
+  return computerUseState()
+}
+
+async function restoreComputerUseGrant() {
+  const grant = await readComputerUseGrant()
+  if (!grant) return null
+  computerUseAuthorizedScope = 'forever'
+  computerUseUnlimited = true
+  computerUseAuthorizationRequest = null
+  ensureWindowsComputerUse().setUnlimited?.(true)
+  if (!computerUseScreenLocked) await setComputerUseEnabled(true)
+  return grant
+}
+
 async function setComputerUseEnabled(enabled) {
   const next = enabled === true
   if (next && computerUseScreenLocked) throw Object.assign(new Error('计算机锁定或挂起期间不能开启 Computer Use。'), { code: 'computer-use-locked' })
-  if (next === computerUseEnabled) return computerUseState()
+  if (next === computerUseEnabled) {
+    syncBrowserControlWithComputerUse()
+    if (mainWindow && !mainWindow.isDestroyed()) await publishBrowserState().catch(() => {})
+    return computerUseState()
+  }
   computerUseSessionGeneration += 1
   if (next) await clearComputerUseScreenshots()
   computerUseEnabled = next
@@ -1828,18 +2042,27 @@ async function setComputerUseEnabled(enabled) {
     computerUseConfirmations.clear()
     await clearComputerUseScreenshots()
   }
-  return computerUseState()
+  syncBrowserControlWithComputerUse()
+  const state = computerUseState()
+  send('computerUse:authorization', state)
+  if (mainWindow && !mainWindow.isDestroyed()) await publishBrowserState().catch(() => {})
+  return state
 }
 
 function computerUseState() {
   return {
     available: true,
+    ready: !computerUseScreenLocked,
     enabled: computerUseEnabled,
+    unlimited: computerUseUnlimited,
+    activationRequired: computerUseAuthorizedScope === 'none' && !computerUseEnabled,
+    activationMode: computerUseAuthorizedScope === 'forever' ? 'permanent-grant' : 'approval-card',
+    authorization: computerUseAuthorizationSnapshot(),
     generation: computerUseSessionGeneration,
     currentTarget: computerUseCurrentTarget ? { id: computerUseCurrentTarget.id, app: computerUseCurrentTarget.label, kind: computerUseCurrentTarget.kind } : null,
     crossApp: computerUseCrossAppCapability(),
     screenshotPolicy: { sessionOnly: true, maxFiles: COMPUTER_USE_SCREENSHOT_MAX_FILES, maxBytes: COMPUTER_USE_SCREENSHOT_MAX_BYTES, maxAgeMs: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS },
-    pending: computerUseConfirmations.snapshot()
+    pending: computerUseUnlimited ? [] : computerUseConfirmations.snapshot()
   }
 }
 
@@ -1879,7 +2102,7 @@ async function revalidateComputerUseTarget(target) {
     throw Object.assign(new Error('目标窗口已关闭或身份已变化，请重新选择。'), { code: 'target-stale' })
   }
   const bound = await service.bind(window.hwnd, window)
-  if (!bound.fingerprint || bound.fingerprint !== target.fingerprint || bound.authorization.status !== 'allowed') {
+  if (!bound.fingerprint || bound.fingerprint !== target.fingerprint || (!computerUseUnlimited && bound.authorization.status !== 'allowed')) {
     computerUseCurrentTarget = null
     computerUseConfirmations.clear()
     throw Object.assign(new Error('目标应用身份或授权已变化，请重新选择。'), { code: 'target-stale' })
@@ -1931,8 +2154,32 @@ async function modelComputerUseAction(input = {}) {
   const action = String(input.action || '')
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
   if (action === 'status') return computerUseState()
+  if (action === 'requestAuthorization') {
+    const state = requestComputerUseAuthorization('model')
+    return {
+      requiresAuthorization: state.authorization.scope === 'none',
+      authorizationId: state.authorization.pending?.id || null,
+      authorization: state.authorization,
+      message: state.authorization.scope === 'none'
+        ? '已在对话框上方弹出 Computer Use 授权卡片，请用户选择“本次授权”或“永久授权”。'
+        : 'Computer Use 已授权，可直接开始无限制桌面控制。'
+    }
+  }
   if (action === 'stop') return setComputerUseEnabled(false)
-  if (!computerUseEnabled || computerUseScreenLocked) throw Object.assign(new Error('用户尚未开启本次 Computer Use，或计算机已锁定。'), { code: 'computer-use-disabled' })
+  if (computerUseScreenLocked) throw Object.assign(new Error('计算机已锁定或挂起，Computer Use 暂不可用。'), { code: 'computer-use-locked' })
+  if (!computerUseEnabled) {
+    if (computerUseAuthorizedScope !== 'none') {
+      await setComputerUseEnabled(true)
+    } else {
+      const state = requestComputerUseAuthorization('model')
+      return {
+        requiresAuthorization: true,
+        authorizationId: state.authorization.pending?.id || null,
+        authorization: state.authorization,
+        message: '已在对话框上方弹出 Computer Use 授权卡片，请用户选择“本次授权”或“永久授权”。授权后将进入无限制桌面控制。'
+      }
+    }
+  }
   if (action === 'targets') {
     await refreshComputerUseTargets()
     const targets = [...computerUseTargets.values()].filter(target => target.kind === 'harness' || (target.authorization?.status === 'allowed' && target.fingerprint)).map(target => ({ target_id: target.id, app: target.label, kind: target.kind, width: target.window?.width, height: target.window?.height }))
@@ -1964,9 +2211,9 @@ async function modelComputerUseAction(input = {}) {
     return result
   }
   if (!['click', 'type', 'scroll'].includes(action)) throw new Error('不支持的 Computer Use 操作。')
-  if (action === 'type' && redactSensitiveText(String(parameters.text || '')).types.length) throw Object.assign(new Error('Computer Use 永久禁止输入密码、令牌、验证码、银行卡或其他秘密。'), { code: 'sensitive-input-blocked' })
+  if (!computerUseUnlimited && action === 'type' && redactSensitiveText(String(parameters.text || '')).types.length) throw Object.assign(new Error('Computer Use 永久禁止输入密码、令牌、验证码、银行卡或其他秘密。'), { code: 'sensitive-input-blocked' })
   if (target.kind === 'window' && !target.lastCaptureHash) throw Object.assign(new Error('跨应用输入前必须先截取并检查目标窗口。'), { code: 'screenshot-required' })
-  const confirmation = requireComputerConfirmation(action, parameters, target)
+  const confirmation = computerUseUnlimited ? null : requireComputerConfirmation(action, parameters, target)
   if (confirmation) return confirmation
   if (target.kind === 'window') await verifyExternalComputerUseSurface(target)
   const surface = computerUseSurface(target)
@@ -2051,16 +2298,16 @@ function ensureMobileSyncService() {
   mkdirSync(componentRoot, { recursive: true })
   mkdirSync(stateDir, { recursive: true })
   mobileSyncStore = new MobileSyncStore(path.join(userData, 'mobile-sync.json'), mobileSyncSecretAdapter())
+  const relayConfigStore = new MobileRelayConfigStore({
+    file: path.join(userData, 'mobile-relay.json'),
+    packagedFile: path.join(app.getAppPath(), 'mobile-relay-sources.json'),
+    env: process.env,
+    allowEnvironmentOverride: !app.isPackaged,
+    WebSocketImpl: WebSocket
+  })
   let relayConfig = { enabled: false, relayUrl: '' }
-  try {
-    relayConfig = loadMobileRelayConfig({
-      file: path.join(app.getAppPath(), 'mobile-relay-sources.json'),
-      env: process.env,
-      allowEnvironmentOverride: !app.isPackaged
-    })
-  } catch (error) {
-    console.warn(`Unable to load WSS relay configuration: ${error.message}`)
-  }
+  try { relayConfig = relayConfigStore.get() }
+  catch (error) { console.warn(`Unable to load WSS relay configuration: ${error.message}`) }
   const adapterOptions = {
     resourcesPath: process.resourcesPath,
     componentRoot,
@@ -2081,6 +2328,7 @@ function ensureMobileSyncService() {
     store: mobileSyncStore,
     getRuntimeTarget: () => runtimeState.status === 'ready' ? runtimeState.url : null,
     transportManager: mobileSyncTransportManager,
+    relayConfigStore,
     stateDir,
     getAppearance: mobileAppearancePayload,
     setAppearance: updateMobileAppearance,
@@ -2145,7 +2393,7 @@ function petPayload(domainState = petDomain?.getState()) {
       disabled: true,
       fullness: 0,
       inventory: { refined: 0, standard: 0, fragments: 0 },
-      preferences: { enabled: false, awake: false, alwaysOnTop: false, autoFeed: false }
+      preferences: { enabled: false, awake: false, alwaysOnTop: false, autoFeed: false, proactive: false, companionStyle: 'calm' }
     }
   }
   return {
@@ -2162,7 +2410,10 @@ function publishPetState(domainState = petDomain?.getState()) {
 }
 
 function updatePetPreferences(patch = {}) {
+  const previous = ensureStateStore().get().pet
   const preferences = ensureStateStore().updatePet(patch).pet
+  const becameAwake = preferences.awake && !previous.awake
+  if (becameAwake) petDomain?.awaken({ announce: true, publish: false })
   petWindowController?.syncPreferences(preferences)
   publishPetState()
   return petPayload()
@@ -2200,7 +2451,9 @@ function ensurePetSystem() {
       if (sessionId) petDomain.markRead(sessionId)
     }
   })
-  petWindowController.syncPreferences(ensureStateStore().get().pet)
+  const petPreferences = ensureStateStore().get().pet
+  if (petPreferences.awake) petDomain.awaken({ announce: true, publish: false })
+  petWindowController.syncPreferences(petPreferences)
   petTickTimer = setInterval(() => {
     const preferences = ensureStateStore().get().pet
     if (!preferences.enabled || !preferences.awake) return
@@ -2213,6 +2466,69 @@ function ensurePetSystem() {
 const MAX_THEME_BACKGROUND_BYTES = 50 * 1024 * 1024
 const MAX_THEME_VIDEO_BYTES = 2 * 1024 * 1024 * 1024
 const wallpaperMutationQueue = createWallpaperMutationQueue()
+// Opaque, scan-scoped handles keep original Wallpaper Engine paths out of
+// custom-scheme URLs while still allowing the renderer to preview projects
+// before importing them into the managed wallpaper library.
+const wallpaperEnginePreviewFiles = new Map()
+
+// Deterministic wallpaper park/resume broadcast. The desired phase is a pure
+// function of observable host state — the main window is visible and neither
+// the screen is locked nor the OS suspended — so bursts of overlapping signals
+// (hide + lock + suspend) collapse into one deterministic broadcast instead of
+// racing transient counters. Lock and suspend are tracked by independent flags
+// and every event mutates only its own flag, so interleaved orderings (resume
+// before unlock, unlock before resume) always recompute the same phase from the
+// same observable state. A guest that attaches after a transition reconciles
+// with the current state on subscribe, so late subscribers still park/resume
+// correctly. There is deliberately no watchdog, no timer and no automatic
+// reload: parked guests release their decoder/canvas and resume only on an
+// explicit lifecycle broadcast.
+const WALLPAPER_LIFECYCLE_CHANNEL = 'appearance:wallpaper-lifecycle'
+let wallpaperLifecyclePhase = 'parked' // 'parked' | 'resumed'
+let wallpaperLifecycleReason = 'boot'
+let wallpaperLifecycleSeq = 0
+let wallpaperLifecycleCurrent = Object.freeze({ phase: 'parked', reason: 'boot', seq: 0, at: 0 })
+let wallpaperScreenLocked = false
+let wallpaperSystemSuspended = false
+
+function commitWallpaperLifecycle(phase, reason) {
+  wallpaperLifecyclePhase = phase
+  wallpaperLifecycleReason = reason
+  wallpaperLifecycleCurrent = Object.freeze({
+    phase,
+    reason,
+    seq: wallpaperLifecycleSeq + 1,
+    at: Date.now()
+  })
+  wallpaperLifecycleSeq = wallpaperLifecycleCurrent.seq
+  return wallpaperLifecycleCurrent
+}
+
+function sendWallpaperLifecycle(payload) {
+  if (runtimeGuest && !runtimeGuest.isDestroyed()) runtimeGuest.send(WALLPAPER_LIFECYCLE_CHANNEL, payload)
+  send(WALLPAPER_LIFECYCLE_CHANNEL, payload)
+}
+
+function wallpaperDesiredPhase() {
+  const windowVisible = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized?.())
+  return windowVisible && !wallpaperScreenLocked && !wallpaperSystemSuspended ? 'resumed' : 'parked'
+}
+
+function syncWallpaperLifecycle(reason, options = {}) {
+  const phase = wallpaperDesiredPhase()
+  if (!options.force && phase === wallpaperLifecyclePhase) return null
+  const payload = commitWallpaperLifecycle(phase, reason)
+  sendWallpaperLifecycle(payload)
+  return payload
+}
+
+function refitWallpaperLifecycle(reason) {
+  // Display topology or metrics changed while the wallpaper is live: nudge
+  // guests to re-fit their canvas/decoder without a park/resume restart.
+  // A parked wallpaper stays parked — nothing is visible to re-fit.
+  if (wallpaperLifecyclePhase === 'parked') return null
+  return syncWallpaperLifecycle(reason, { force: true })
+}
 
 function themeAssetMime(file) {
   return wallpaperMime(file)
@@ -2278,10 +2594,35 @@ async function wallpaperLibraryPayload(appearance) {
   return { activeId: library.activeId || null, items }
 }
 
+async function wallpaperEngineLibraryWithPreviews(library) {
+  const nextPreviewFiles = new Map()
+  const projects = await Promise.all((library?.projects || []).map(async project => {
+    const info = await stat(project.file).catch(() => null)
+    const maximum = project.kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+    const revision = info?.isFile() && info.size <= maximum && wallpaperKind(project.file) === project.kind
+      ? wallpaperMediaRevision(info)
+      : null
+    if (!revision) return { ...project, previewUrl: null }
+    const previewId = createHash('sha256')
+      .update(`${project.projectFile}\0${project.file}`)
+      .digest('hex')
+      .slice(0, 32)
+    nextPreviewFiles.set(previewId, { file: project.file, kind: project.kind })
+    return {
+      ...project,
+      previewUrl: `${WALLPAPER_SCHEME}://engine-preview/${previewId}/media?v=${revision}`
+    }
+  }))
+  wallpaperEnginePreviewFiles.clear()
+  for (const [previewId, preview] of nextPreviewFiles) wallpaperEnginePreviewFiles.set(previewId, preview)
+  return { ...library, projects }
+}
+
 async function registerWallpaperProtocol() {
   const handler = async request => {
     const target = new URL(request.url)
     let file = null
+    let expectedKind = null
     if (target.hostname === 'current' && target.pathname === '/video') {
       file = currentWallpaperVideoFile()
     } else if (target.hostname === 'current' && target.pathname === '/image') {
@@ -2290,11 +2631,17 @@ async function registerWallpaperProtocol() {
       const match = /^\/([a-z0-9][a-z0-9-]{0,79})\/media$/i.exec(target.pathname)
       const item = match ? wallpaperLibraryItem(match[1]) : null
       file = item ? wallpaperAssetPath(item.cachedFile) : null
+    } else if (target.hostname === 'engine-preview') {
+      const match = /^\/([a-f0-9]{32})\/media$/i.exec(target.pathname)
+      const preview = match ? wallpaperEnginePreviewFiles.get(match[1].toLowerCase()) : null
+      file = preview?.file || null
+      expectedKind = preview?.kind || null
     }
     if (!file || !existsSync(file)) return new Response('Not found', { status: 404 })
     const info = await stat(file).catch(() => null)
-    const maximum = wallpaperKind(file) === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
-    if (!info?.isFile() || info.size > maximum) return new Response('Not found', { status: 404 })
+    const kind = wallpaperKind(file)
+    const maximum = kind === 'video' ? MAX_THEME_VIDEO_BYTES : MAX_THEME_BACKGROUND_BYTES
+    if (!info?.isFile() || !kind || (expectedKind && kind !== expectedKind) || info.size > maximum) return new Response('Not found', { status: 404 })
     // A custom-scheme URL identifies one immutable revision. In particular,
     // an old video decoder must never receive byte ranges from the wallpaper
     // that became current after its request was created.
@@ -2660,13 +3007,14 @@ async function wallpaperEngineSteamRoots() {
 // explicit operation so a scan can never copy dozens of large videos.
 async function wallpaperEngineLibraryScan(knownRoots = null) {
   const steamRoots = knownRoots || await wallpaperEngineSteamRoots()
-  return scanWallpaperEngineLibrary({
+  const library = await scanWallpaperEngineLibrary({
     steamRoots,
     readdir: directory => readdir(directory, { withFileTypes: true }),
     readFile: (file, encoding) => readFile(file, encoding),
     stat: file => stat(file),
     resolveProject: resolveWallpaperEngineProject
   })
+  return wallpaperEngineLibraryWithPreviews(library)
 }
 
 async function chooseCustomThemeBackground(options = {}) {
@@ -3232,6 +3580,9 @@ function desktopCompactionPluginOptions() {
 function desktopComputerUsePluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-computer-use') }
 }
+function modelAdmissionPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-model-admission') }
+}
 function agentTeamsPluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-agent-teams') }
 }
@@ -3293,6 +3644,241 @@ async function ensureComponentUpdateService() {
   return componentUpdateServicePromise
 }
 
+function prPreviewStateAdapter() {
+  return {
+    async load() {
+      const updates = (await ensureStateStore().load()).updates || {}
+      if (!updates.lastPreviewSequence || !updates.lastPreviewHeadSha) return null
+      return { sequence: updates.lastPreviewSequence, headSha: updates.lastPreviewHeadSha }
+    },
+    async save(next) {
+      return ensureStateStore().markPreviewCandidate(next.sequence, next.headSha)
+    }
+  }
+}
+
+async function ensurePrPreviewUpdateContext() {
+  if (prPreviewUpdateContextPromise) return prPreviewUpdateContextPromise
+  prPreviewUpdateContextPromise = (async () => {
+    const bootstrap = componentUpdateBootstrapContext()
+    const appRoot = bootstrap?.layout?.shellRoot || app.getAppPath()
+    const config = await resolvePrPreviewUpdateConfig({ appRoot, resourcesPath: process.resourcesPath })
+    const component = await ensureComponentUpdateService()
+    const enabled = config.enabled && !STORE_BUILD
+    const service = new PrPreviewUpdateService({
+      enabled,
+      channelUrls: config.channelUrls,
+      trustedKeys: config.trustedKeys,
+      fetchImpl: net.fetch,
+      state: prPreviewStateAdapter()
+    })
+    return {
+      enabled,
+      config,
+      component,
+      service,
+      activation: new PrPreviewActivationStore(component.store.root)
+    }
+  })()
+  return prPreviewUpdateContextPromise
+}
+
+function previewClientCandidate(discovery) {
+  if (!discovery?.available) return null
+  const notes = String(discovery.notes || '').trim()
+  const attribution = `作者 @${discovery.author} · 基线 ${discovery.baseRef}`
+  return {
+    pr: {
+      number: discovery.prNumber,
+      title: discovery.title,
+      url: `https://github.com/${discovery.repository}/pull/${discovery.prNumber}`
+    },
+    source: discovery.provider === 'github' ? 'github' : 'cnb',
+    signed: true,
+    commit: { sha: discovery.headSha, subject: discovery.title },
+    description: notes ? `${notes}\n\n${attribution}` : attribution,
+    version: discovery.manifest?.releaseVersion || '',
+    sequence: discovery.sequence,
+    expiresAt: discovery.expiresAt
+  }
+}
+
+function activationClientCandidate(activation) {
+  const candidate = activation?.candidate
+  if (!candidate) return null
+  return {
+    pr: {
+      number: candidate.prNumber,
+      title: candidate.title,
+      url: `https://github.com/${OFFICIAL_PREVIEW_REPOSITORY}/pull/${candidate.prNumber}`
+    },
+    source: candidate.provider,
+    signed: true,
+    commit: { sha: candidate.headSha, subject: candidate.title },
+    description: `作者 @${candidate.author} · 基线 ${candidate.baseRef} · 已校验完成，等待重启应用`,
+    version: candidate.releaseVersion,
+    sequence: candidate.sequence,
+    expiresAt: ''
+  }
+}
+
+function isPendingPreviewReady(componentState, activation) {
+  return Boolean(
+    activation &&
+    componentState?.phase === 'ready' &&
+    componentState.pending?.releaseVersion === activation.candidate.releaseVersion
+  )
+}
+
+async function getPrPreviewUpdateState() {
+  const context = await ensurePrPreviewUpdateContext()
+  const appState = await ensureStateStore().load()
+  const componentState = await context.component.store.get()
+  const activation = await context.activation.get()
+  const ready = isPendingPreviewReady(componentState, activation)
+  return {
+    enabled: appState.updates?.previewEnabled === true || Boolean(activation),
+    configured: context.enabled,
+    configSource: context.config.source || '',
+    componentPhase: componentState.phase,
+    active: Boolean(activation && componentState.active?.releaseVersion === activation.candidate.releaseVersion),
+    ready,
+    rollbackAvailable: Boolean(activation),
+    candidate: lastPrPreviewCandidate?.clientCandidate || (ready ? activationClientCandidate(activation) : null)
+  }
+}
+
+async function checkPrPreviewUpdates() {
+  const context = await ensurePrPreviewUpdateContext()
+  const preferences = (await ensureStateStore().load()).updates || {}
+  const current = await getPrPreviewUpdateState()
+  if (current.ready && current.candidate) return { ...current, available: true, reason: 'ready' }
+  if (!preferences.previewEnabled) {
+    lastPrPreviewCandidate = null
+    return { ...(await getPrPreviewUpdateState()), available: false, reason: 'disabled' }
+  }
+  if (!context.enabled) {
+    lastPrPreviewCandidate = null
+    return { ...(await getPrPreviewUpdateState()), available: false, reason: 'not-configured' }
+  }
+  const discovery = await context.service.discover()
+  if (!discovery.available) {
+    lastPrPreviewCandidate = null
+    return { ...(await getPrPreviewUpdateState()), ...discovery, candidate: null }
+  }
+  const componentService = new ComponentUpdateService({
+    store: context.component.store,
+    manifestUrls: [discovery.manifestSource],
+    trustedKeys: context.config.trustedKeys,
+    bootstrapVersion: app.getVersion(),
+    fetchJson: async () => discovery.manifest,
+    fetchImpl: net.fetch,
+    AdmZipImpl: AdmZip
+  })
+  const checkResult = await componentService.check()
+  if (checkResult.plan.mode !== 'components') {
+    lastPrPreviewCandidate = null
+    return {
+      ...(await getPrPreviewUpdateState()),
+      available: false,
+      reason: checkResult.plan.reason || checkResult.plan.mode,
+      candidate: null
+    }
+  }
+  const clientCandidate = previewClientCandidate(discovery)
+  lastPrPreviewCandidate = { discovery, componentService, checkResult, clientCandidate }
+  return { ...(await getPrPreviewUpdateState()), available: true, candidate: clientCandidate }
+}
+
+async function resetPendingPreview(componentStore, activation) {
+  const state = await componentStore.get()
+  const releaseVersion = activation?.candidate?.releaseVersion
+  if (!releaseVersion || state.pending?.releaseVersion !== releaseVersion) return false
+  if (!['staging', 'ready'].includes(state.phase)) return false
+  await componentStore.writeState({ ...state, phase: 'idle', pending: null, failure: null }, state.revision)
+  await componentStore.discardStaging(releaseVersion).catch(() => {})
+  return true
+}
+
+async function stagePrPreviewUpdate() {
+  const context = await ensurePrPreviewUpdateContext()
+  const preferences = (await ensureStateStore().load()).updates || {}
+  if (!preferences.previewEnabled || !context.enabled) throw new Error('PR 快速预览通道尚未启用。')
+  const pending = lastPrPreviewCandidate
+  if (!pending?.discovery?.available) throw new Error('没有经过验证且等待确认的 PR 预览候选。')
+  const baseline = await context.component.store.pointer()
+  const activation = await context.activation.capture({
+    baseline,
+    prNumber: pending.discovery.prNumber,
+    title: pending.discovery.title,
+    author: pending.discovery.author,
+    baseRef: pending.discovery.baseRef,
+    sequence: pending.discovery.sequence,
+    headSha: pending.discovery.headSha,
+    releaseVersion: pending.checkResult.plan.releaseVersion,
+    provider: pending.discovery.provider
+  })
+  try {
+    await pending.componentService.stage(pending.checkResult, progress => send('prPreviewUpdates:progress', progress))
+    await context.service.accept(pending.discovery)
+    return { ...(await getPrPreviewUpdateState()), ready: true, candidate: pending.clientCandidate }
+  } catch (error) {
+    await resetPendingPreview(context.component.store, activation).catch(() => {})
+    await context.activation.clear().catch(() => {})
+    throw error
+  }
+}
+
+async function applyPrPreviewUpdate() {
+  const context = await ensurePrPreviewUpdateContext()
+  const [componentState, activation] = await Promise.all([
+    context.component.store.get(),
+    context.activation.get()
+  ])
+  if (!isPendingPreviewReady(componentState, activation)) await stagePrPreviewUpdate()
+  else await ensureStateStore().markPreviewCandidate(activation.candidate.sequence, activation.candidate.headSha)
+  const launched = await launchReadyComponentUpdate(context.component)
+  return { ok: true, launched }
+}
+
+async function exitPrPreviewUpdate() {
+  const context = await ensurePrPreviewUpdateContext()
+  await ensureStateStore().updatePreferences({ previewEnabled: false })
+  lastPrPreviewCandidate = null
+  const activation = await context.activation.get()
+  if (!activation) return { ...(await getPrPreviewUpdateState()), restored: false, restarting: false }
+  const componentStore = context.component.store
+  const cancelled = await resetPendingPreview(componentStore, activation)
+  const state = await componentStore.get()
+  const activePreview = state.active?.releaseVersion === activation.candidate.releaseVersion
+  if (!activePreview) {
+    await context.activation.clear()
+    return { ...(await getPrPreviewUpdateState()), restored: false, cancelled, restarting: false }
+  }
+  if (activation.baseline) await componentStore.atomicWrite(componentStore.pointerFile, activation.baseline)
+  else await rm(componentStore.pointerFile, { force: true })
+  await componentStore.writeState({
+    ...state,
+    phase: 'idle',
+    active: activation.baseline,
+    lastKnownGood: activation.baseline,
+    pending: null,
+    failure: null
+  }, state.revision)
+  await context.activation.clear()
+  setTimeout(() => {
+    app.relaunch()
+    app.exit(0)
+  }, 150)
+  return { ...(await getPrPreviewUpdateState()), restored: true, restarting: true }
+}
+
+async function setPrPreviewEnabled(enabled) {
+  if (enabled !== true) return exitPrPreviewUpdate()
+  await ensureStateStore().updatePreferences({ previewEnabled: true })
+  return getPrPreviewUpdateState()
+}
+
 // Reconcile the latest component check plan against the store's active pointer
 // before exposing it to the renderer, so a stale last-check after an applied
 // component update never re-triggers the "update available" notice. The helper
@@ -3326,9 +3912,9 @@ async function stageComponentUpdates() {
   return getComponentUpdateState()
 }
 
-async function launchReadyComponentUpdate() {
-  const context = await ensureComponentUpdateService()
-  if (!context.enabled) throw new Error('组件增量更新尚未启用。')
+async function launchReadyComponentUpdate(contextOverride = null) {
+  const context = contextOverride || await ensureComponentUpdateService()
+  if (!contextOverride && !context.enabled) throw new Error('组件增量更新尚未启用。')
   const bootstrap = componentUpdateBootstrapContext()
   const bundledRoot = bootstrap?.bundledRoot || app.getAppPath()
   const userDataOverride = resolveUserDataOverride(process.argv, app.commandLine.getSwitchValue('user-data-dir'))
@@ -3450,6 +4036,7 @@ async function runSelfTestMode() {
   if (output) await writeFile(path.resolve(output), `${JSON.stringify({ phase: 'preparing-runtime', startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   await ensureBundledRuntime()
   await ensurePluginMarketplace(pluginMarketplaceOptions())
+  await ensureModelAdmissionPlugin(modelAdmissionPluginOptions())
   await ensureAgentTeamsPlugin(agentTeamsPluginOptions())
   if (output) await writeFile(path.resolve(output), `${JSON.stringify({ phase: 'probing-runtime', startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   const report = await runPackagedSelfTest({
@@ -3681,6 +4268,15 @@ function hideMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
 }
 
+// Lifecycle fallback for custom blank-area drags: if the renderer never sends
+// window:endDrag (capture lost without pointerup, crash, focus/navigation
+// abort), every host lifecycle transition that makes the drag meaningless
+// still ends the main-process session so the window never stays "glued" to
+// the pointer.
+function endActiveWindowDrag() {
+  endWindowDrag(mainWindow)
+}
+
 function openDataManager(target) {
   showMainWindow()
   const contents = mainWindow?.webContents
@@ -3772,7 +4368,19 @@ function createWindow() {
     mainWindow.hide()
   })
   mainWindow.on('resize', layoutBrowserView)
+  mainWindow.on('hide', () => {
+    endActiveWindowDrag()
+    syncWallpaperLifecycle('window-hidden')
+  })
+  mainWindow.on('show', () => syncWallpaperLifecycle('window-shown'))
+  mainWindow.on('minimize', () => {
+    endActiveWindowDrag()
+    syncWallpaperLifecycle('window-minimized')
+  })
+  mainWindow.on('restore', () => syncWallpaperLifecycle('window-restored'))
+  mainWindow.on('blur', () => endActiveWindowDrag())
   mainWindow.on('closed', () => {
+    endActiveWindowDrag()
     browserSecurityPolicy?.stop()
     closeBrowserViewContents()
     browserSecurityPolicy = null
@@ -3797,6 +4405,11 @@ ipcMain.handle('componentUpdates:getState', desktopShellOnly(() => getComponentU
 ipcMain.handle('componentUpdates:check', desktopShellOnly(() => checkComponentUpdates()))
 ipcMain.handle('componentUpdates:stage', desktopShellOnly(() => stageComponentUpdates()))
 ipcMain.handle('componentUpdates:apply', desktopShellOnly(() => launchReadyComponentUpdate()))
+ipcMain.handle('prPreviewUpdates:getState', desktopShellOnly(() => getPrPreviewUpdateState()))
+ipcMain.handle('prPreviewUpdates:setEnabled', desktopShellOnly(enabled => setPrPreviewEnabled(enabled === true)))
+ipcMain.handle('prPreviewUpdates:check', desktopShellOnly(() => checkPrPreviewUpdates()))
+ipcMain.handle('prPreviewUpdates:apply', desktopShellOnly(() => applyPrPreviewUpdate()))
+ipcMain.handle('prPreviewUpdates:exit', desktopShellOnly(() => exitPrPreviewUpdate()))
 ipcMain.handle('gitRuntime:status', event => {
   assertDesktopShellSender(event)
   return ensureGitRuntimeService().status()
@@ -4080,7 +4693,15 @@ ipcMain.handle('browser:rejectModelAction', (event, confirmationId) => {
   return { pending: browserSecurityPolicy?.pendingConfirmations() || [] }
 })
 ipcMain.handle('computerUse:state', event => { assertDesktopShellSender(event); return computerUseState() })
-ipcMain.handle('computerUse:setEnabled', async (event, enabled) => { assertDesktopShellSender(event); return setComputerUseEnabled(Boolean(enabled)) })
+ipcMain.handle('computerUse:setEnabled', async (event, enabled) => {
+  assertDesktopShellSender(event)
+  if (Boolean(enabled) && computerUseAuthorizedScope === 'none') return requestComputerUseAuthorization('user')
+  return setComputerUseEnabled(Boolean(enabled))
+})
+ipcMain.handle('computerUse:requestAuthorization', desktopShellOnly(() => requestComputerUseAuthorization('user')))
+ipcMain.handle('computerUse:authorize', desktopShellOnly(scope => authorizeComputerUse(scope)))
+ipcMain.handle('computerUse:decline', desktopShellOnly(() => declineComputerUseAuthorization()))
+ipcMain.handle('computerUse:revokePermanent', desktopShellOnly(() => revokeComputerUsePermanentGrant()))
 ipcMain.handle('computerUse:confirm', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.confirm(id); return computerUseState() })
 ipcMain.handle('computerUse:reject', (event, id) => { assertDesktopShellSender(event); computerUseConfirmations.reject(id); return computerUseState() })
 ipcMain.handle('computerUse:policy', desktopShellOnly(() => getComputerUsePolicy()))
@@ -4091,6 +4712,9 @@ ipcMain.handle('mobileSync:getState', desktopShellOnly(() => ensureMobileSyncSer
 ipcMain.handle('mobileSync:setEnabled', desktopShellOnly(enabled => ensureMobileSyncService().setEnabled(Boolean(enabled))))
 ipcMain.handle('mobileSync:setRemoteEnabled', desktopShellOnly(enabled => ensureMobileSyncService().setRemoteEnabled(Boolean(enabled))))
 ipcMain.handle('mobileSync:setTransportPreference', desktopShellOnly(preference => ensureMobileSyncService().setTransportPreference(String(preference || 'auto'))))
+ipcMain.handle('mobileSync:getRelayConfig', desktopShellOnly(() => ensureMobileSyncService().getRelayConfig()))
+ipcMain.handle('mobileSync:setRelayConfig', desktopShellOnly(value => ensureMobileSyncService().setRelayConfig(String(value || ''))))
+ipcMain.handle('mobileSync:clearRelayConfig', desktopShellOnly(() => ensureMobileSyncService().clearRelayConfig()))
 ipcMain.handle('mobileSync:beginPairing', desktopShellOnly(() => ensureMobileSyncService().beginPairing()))
 ipcMain.handle('mobileSync:revokeDevice', desktopShellOnly(id => ensureMobileSyncService().revokeDevice(String(id || ''))))
 ipcMain.handle('mobileControl:send', desktopShellOnly((deviceId, command) => ensureMobileSyncService().sendControlCommand(String(deviceId || ''), command || {})))
@@ -4119,6 +4743,10 @@ ipcMain.on('window:moveDrag', (event, point) => {
 ipcMain.on('window:endDrag', event => {
   if (event.sender !== mainWindow?.webContents && !isLocalRuntimeUrl(event.sender.getURL())) return
   endWindowDrag(mainWindow)
+})
+ipcMain.handle('appearance:wallpaper-lifecycle:get', event => {
+  if (event.sender !== mainWindow?.webContents && !isLocalRuntimeUrl(event.sender.getURL())) return null
+  return wallpaperLifecycleCurrent
 })
 ipcMain.handle('shell:openLink', (event, value, context = {}) => {
   assertDesktopShellSender(event)
@@ -4180,16 +4808,33 @@ app.whenReady().then(async () => {
   await cleanupOrphanedWallpaperAssets().catch(error => console.warn(`Unable to clean stale managed wallpapers: ${error.message}`))
   await registerWallpaperProtocol().catch(error => console.warn(`Unable to register wallpaper media protocol: ${error.message}`))
   await clearComputerUseScreenshots().catch(error => console.warn(`Unable to clear stale Computer Use screenshots: ${error.message}`))
+  await restoreComputerUseGrant().catch(error => console.warn(`Unable to restore permanent Computer Use grant: ${error.message}`))
   powerMonitor.on('lock-screen', () => {
+    wallpaperScreenLocked = true
+    syncWallpaperLifecycle('screen-locked')
     computerUseScreenLocked = true
     setComputerUseEnabled(false).catch(() => {})
   })
-  powerMonitor.on('unlock-screen', () => { computerUseScreenLocked = false })
+  powerMonitor.on('unlock-screen', () => {
+    computerUseScreenLocked = false
+    wallpaperScreenLocked = false
+    syncWallpaperLifecycle('screen-unlocked')
+  })
   powerMonitor.on('suspend', () => {
+    wallpaperSystemSuspended = true
+    syncWallpaperLifecycle('system-suspend')
+    endActiveWindowDrag()
     computerUseScreenLocked = true
     setComputerUseEnabled(false).catch(() => {})
   })
-  powerMonitor.on('resume', () => { computerUseScreenLocked = false })
+  powerMonitor.on('resume', () => {
+    computerUseScreenLocked = false
+    wallpaperSystemSuspended = false
+    syncWallpaperLifecycle('system-resumed')
+  })
+  screen.on('display-metrics-changed', () => refitWallpaperLifecycle('display-metrics-changed'))
+  screen.on('display-added', () => refitWallpaperLifecycle('display-added'))
+  screen.on('display-removed', () => refitWallpaperLifecycle('display-removed'))
   try { ensureMemoryService() } catch (error) { console.warn(`Unable to initialize local memory: ${error.message}`) }
   runtimeInitializationPromise = (async () => {
     await ensureBundledRuntime()
@@ -4227,6 +4872,9 @@ app.whenReady().then(async () => {
     await ensureDesktopComputerUsePlugin(desktopComputerUsePluginOptions()).catch(error => {
       console.warn(`Unable to prepare desktop Computer Use plugin: ${error.message}`)
     })
+    await ensureModelAdmissionPlugin(modelAdmissionPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare model admission plugin: ${error.message}`)
+    })
     await ensureAgentTeamsPlugin(agentTeamsPluginOptions()).catch(error => {
       console.warn(`Unable to prepare Agent Teams plugin: ${error.message}`)
     })
@@ -4243,6 +4891,10 @@ app.whenReady().then(async () => {
   }
   ensureDesktopTray()
   createWindow()
+  // Seed the deterministic initial wallpaper phase so the current state is
+  // queryable (and guests that attach later reconcile) even before any
+  // lifecycle transition happens.
+  syncWallpaperLifecycle('boot')
   nativeTheme.on('updated', () => syncTitleBarOverlay())
   runtimeInitializationPromise.catch(error => console.warn(`Unable to prepare bundled Harness runtime: ${error.message}`))
   app.on('activate', () => {

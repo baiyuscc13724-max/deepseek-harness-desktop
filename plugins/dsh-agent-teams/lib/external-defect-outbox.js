@@ -69,6 +69,8 @@ export class PersistedExternalDefectOutbox {
     this.#webhookSecretProvider = webhookSecretProvider;
     this.#request = request;
     this.operationTail = Promise.resolve();
+    this.closing = false;
+    this.closePromise = undefined;
   }
 
   static async create({ store, connector, credentialProvider, webhookSecretProvider, request, now = Date.now } = {}) {
@@ -88,9 +90,7 @@ export class PersistedExternalDefectOutbox {
     return new PersistedExternalDefectOutbox({ store, connector, pending: state.pending, completed: state.completed, paused: state.paused, pauseEpoch: state.pauseEpoch, revision: loaded.revision, credentialProvider, webhookSecretProvider, request, now });
   }
 
-  toJSON() {
-    return { version: OUTBOX_VERSION, connector: this.connector.toJSON(), paused: this.paused, pauseEpoch: this.pauseEpoch, pendingCount: this.pending.length, completedCount: this.completed.length, persistedRevision: this.revision };
-  }
+  toJSON() { return this.#snapshot(); }
 
   enqueueDefect(defect) {
     return this.#queue(async () => {
@@ -128,23 +128,23 @@ export class PersistedExternalDefectOutbox {
 
   pause() {
     return this.#queue(async () => {
-      if (this.paused) return this.toJSON();
+      if (this.paused) return this.#snapshot();
       const pauseEpoch = this.pauseEpoch + 1;
       const saved = await this.store.save(persistedState(this.connector, this.pending, this.completed, true, pauseEpoch), { expectedRevision: this.revision });
       this.paused = true;
       this.pauseEpoch = pauseEpoch;
       this.revision = saved.revision;
-      return this.toJSON();
+      return this.#snapshot();
     });
   }
 
   resume() {
     return this.#queue(async () => {
-      if (!this.paused) return this.toJSON();
+      if (!this.paused) return this.#snapshot();
       const saved = await this.store.save(persistedState(this.connector, this.pending, this.completed, false, this.pauseEpoch), { expectedRevision: this.revision });
       this.paused = false;
       this.revision = saved.revision;
-      return this.toJSON();
+      return this.#snapshot();
     });
   }
 
@@ -171,11 +171,22 @@ export class PersistedExternalDefectOutbox {
     });
   }
 
+  close() {
+    if (this.closePromise !== undefined) return this.closePromise;
+    this.closing = true;
+    this.closePromise = this.operationTail.then(() => this.store.close());
+    return this.closePromise;
+  }
+
+  #snapshot() { return { version: OUTBOX_VERSION, connector: this.connector.toJSON(), paused: this.paused, pauseEpoch: this.pauseEpoch, pendingCount: this.pending.length, completedCount: this.completed.length, persistedRevision: this.revision }; }
+  #assertOpen() { if (this.closing) { const error = new Error("External Defect Outbox is closed"); error.code = "EXTERNAL_DEFECT_OUTBOX_CLOSED"; throw error; } }
+
   #cloneConnector() {
     return ExternalDefectConnector.restore(this.connector.exportHostState(), { credentialProvider: this.#credentialProvider, webhookSecretProvider: this.#webhookSecretProvider, request: this.#request });
   }
 
   #queue(operation) {
+    try { this.#assertOpen(); } catch (error) { return Promise.reject(error); }
     const result = this.operationTail.then(operation, operation);
     this.operationTail = result.then(() => undefined, () => undefined);
     return result;

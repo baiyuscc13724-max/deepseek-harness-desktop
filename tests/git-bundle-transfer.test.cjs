@@ -23,6 +23,8 @@ const allowedGitRoot = gitCommand === bundledGitPath
   ? path.resolve(__dirname, '..', 'third_party', 'mingit')
   : path.dirname(path.dirname(gitCommand))
 const REPOSITORY = 'repository_bundle01'
+const CAS_PROJECT = 'project_bundle_transfer01'
+const CAS_KEY = Buffer.alloc(32, 0x5a)
 
 async function git(cwd, args) {
   const result = await execFileAsync(gitCommand, args, { cwd, windowsHide: true, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never' } })
@@ -54,7 +56,7 @@ async function fixture() {
   const receiver = adapter('receiver')
   await sender.initialize()
   await receiver.initialize()
-  const cas = new casMod.ArtifactContentAddressedStore({ objectRoot: path.join(root, 'cas-objects'), stagingRoot: path.join(root, 'cas-staging'), maxObjectBytes: 8 * 1024 * 1024 })
+  const cas = new casMod.ArtifactContentAddressedStore({ objectRoot: path.join(root, 'cas-objects'), stagingRoot: path.join(root, 'cas-staging'), projectRef: CAS_PROJECT, encryptionKey: Buffer.from(CAS_KEY), maxObjectBytes: 8 * 1024 * 1024 })
   await cas.initialize()
   return { gitMod, casMod, root, source, initialHead, sender, receiver, cas, adapter }
 }
@@ -100,6 +102,10 @@ test('remote bundle export enters CAS and imports only the exact declared Change
   assert.deepEqual(admitted.files, ['remote.txt'])
   assert.deepEqual(duplicate, admitted)
 
+  const incompleteAdmission = { ...admitted }; delete incompleteAdmission.bundleDigest
+  for (const [index, invalid] of [incompleteAdmission, { ...admitted, admitted: false }, { ...admitted, bundleSize: 1024 * 1024 * 1024 }].entries()) {
+    await assert.rejects(state.receiver.mergeChangeSets({ mergeGroupRef: `mergegroup_invalidreceipt0${index}`, baseHead: state.initialHead, changeSets: [invalid] }), /admission receipt|bundleSize/u)
+  }
   const merged = await state.receiver.mergeChangeSets({ mergeGroupRef: 'mergegroup_remotebundle01', baseHead: state.initialHead, changeSets: [admitted] })
   assert.equal(merged.merged, true)
   assert.equal(await git(state.source, ['rev-parse', 'HEAD']), state.initialHead)

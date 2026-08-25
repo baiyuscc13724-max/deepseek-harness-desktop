@@ -72,7 +72,7 @@ test('existing blind relay transports authenticated project packets without plai
   const common = { enabled: true, projectRef: PROJECT, roomRef: ROOM, relayUrl: 'wss://relay.example.com/project', WebSocketImpl: LocalRelaySocket }
   const authority = new transportMod.ProjectWssRelayTransport({
     ...common, role: 'authority', resolveChannel: target => target === AUTHORITY ? authorityChannel : undefined,
-    onDelivery: opened => { authorityDeliveries.push(opened) }
+    onDelivery: opened => { authorityDeliveries.push(opened); return new Promise(() => {}) }
   })
   const collaborator = new transportMod.ProjectWssRelayTransport({
     ...common, role: 'collaborator', resolveChannel: target => target === COLLABORATOR ? collaboratorChannel : undefined,
@@ -92,6 +92,17 @@ test('existing blind relay transports authenticated project packets without plai
   await waitFor(() => authorityDeliveries.length === 1)
   assert.equal(authorityDeliveries[0].payload.taskRef, 'remote_secret_task')
   assert.equal(authority.toJSON().connectedPeerCount, 1)
+  assert.equal(authority.canSend(COLLABORATOR), true)
+  assert.equal(authority.canSend(`device_${'U'.repeat(26)}`), false)
+  assert.equal(collaborator.canSend(AUTHORITY), true)
+  const secondRequest = channelMod.sealProjectPacket({
+    projectRef: PROJECT, authorityEpoch: 1, senderDeviceRef: COLLABORATOR, targetDeviceRef: AUTHORITY, transport: 'remote_wss',
+    payload: { type: 'task.upsert', taskRef: 'second_remote_task' }, senderSigningPrivateKey: collaboratorKeys.signing.privateKey,
+    recipientEncryptionPublicKey: authorityKeys.encryption.publicKey, createdAt: 90_000_001, expiresAt: 90_060_001
+  })
+  collaborator.send(secondRequest)
+  await waitFor(() => authorityDeliveries.length === 2)
+  assert.equal(authorityDeliveries[1].payload.taskRef, 'second_remote_task', 'never-settling delivery promises do not block later frames')
 
   const response = channelMod.sealProjectPacket({
     projectRef: PROJECT, authorityEpoch: 1, senderDeviceRef: AUTHORITY, targetDeviceRef: COLLABORATOR, transport: 'remote_wss',
@@ -105,8 +116,8 @@ test('existing blind relay transports authenticated project packets without plai
   collaborator.send(request)
   await new Promise(resolve => setImmediate(resolve))
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(authorityChannel.toJSON().replayCount, 1)
-  assert.equal(authorityDeliveries.length, 1, 'replayed ciphertext must not be delivered twice')
+  assert.equal(authorityChannel.toJSON().replayCount, 2)
+  assert.equal(authorityDeliveries.length, 2, 'replayed ciphertext must not be delivered twice')
   await collaborator.stop()
   await waitFor(() => authority.toJSON().connectedPeerCount === 0)
   assert.throws(() => authority.send(response), /target project device is not present/u)

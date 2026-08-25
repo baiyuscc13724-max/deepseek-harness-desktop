@@ -105,6 +105,44 @@ test('端到端：用户导航 → 授权 → 模型操作 → 关键动作确�
   assert.ok(!JSON.stringify(raw).includes('cookie') && !JSON.stringify(raw).includes('password'))
 })
 
+test('模型可从可见空白标签打开预览，但读取与跨 origin 仍保持默认拒绝', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-bootstrap-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const policy = new BrowserSecurityPolicy({ authzRootDir: root })
+
+  const preview = policy.modelBootstrapNavigate('https://example.com/start?secret-query#fragment', {
+    tabId: 'tab-blank', currentUrl: 'about:blank', visible: true
+  })
+  assert.equal(preview.origin, 'https://example.com')
+  assert.equal(preview.previewOnly, true)
+  assert.equal(policy.modelNavigate('https://example.com/next', { tabId: 'tab-blank' }).origin, 'https://example.com')
+  assert.throws(() => policy.modelNavigate('https://other-site.com', { tabId: 'tab-blank' }), error => error.code === 'origin-not-authorized')
+  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-blank' }), error => error.code === 'permission-denied')
+  assert.throws(() => policy.modelAction({ action: 'click', tabId: 'tab-blank' }), error => error.code === 'permission-denied')
+  assert.throws(() => policy.modelBootstrapNavigate('https://example.com', { tabId: 'tab-blank', currentUrl: 'https://example.com', visible: true }), error => error.code === 'bootstrap-not-blank')
+  assert.throws(() => policy.modelBootstrapNavigate('https://example.com', { tabId: 'tab-hidden', currentUrl: 'about:blank', visible: false }), error => error.code === 'tab-not-visible')
+  assert.throws(() => policy.modelBootstrapNavigate('http://127.0.0.1:4999', { tabId: 'tab-blank', currentUrl: 'about:blank', visible: true }), error => error.code === 'private-network-not-authorized')
+  assert.throws(() => policy.modelNavigate('https://example.com/old-preview', { tabId: 'tab-blank' }), error => error.code === 'origin-not-authorized')
+
+  policy.clearPendingControl()
+  assert.throws(() => policy.modelBootstrapNavigate('http://127.0.0.1:4001/admin', {
+    tabId: 'tab-local', currentUrl: 'about:blank', visible: true, trustedPrivateOrigins: ['http://127.0.0.1:4000']
+  }), error => error.code === 'private-network-not-authorized')
+  const managed = policy.modelBootstrapNavigate('http://127.0.0.1:4000/', {
+    tabId: 'tab-local', currentUrl: 'about:blank', visible: true, trustedPrivateOrigins: ['http://127.0.0.1:4000']
+  })
+  assert.equal(managed.origin, 'http://127.0.0.1:4000')
+  assert.equal(policy.modelNavigate('http://127.0.0.1:4000/chat', { tabId: 'tab-local' }).origin, managed.origin)
+  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-local' }), error => error.code === 'permission-denied')
+
+  const audit = JSON.stringify(policy.auditSnapshot())
+  assert.equal(audit.includes('secret-query'), false)
+  assert.equal(audit.includes('#fragment'), false)
+  assert.match(audit, /navigate-preview/u)
+  policy.pauseModelControl()
+  assert.throws(() => policy.modelNavigate('http://127.0.0.1:4000/', { tabId: 'tab-local' }), error => error.code === 'stopped')
+})
+
 test('登录由用户在真实页面完成：模型结构上接触不到密码/Cookie', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-login-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -217,6 +255,32 @@ test('暂停模型控制不会停止用户浏览或审计，且只能由用户�
   assert.equal(policy.modelAction({ action: 'read', tabId: 'tab-1' }).allowed, true)
   assert.ok(policy.auditSnapshot().entries.some(entry => entry.action === 'model-control-stop'))
   assert.ok(policy.auditSnapshot().entries.some(entry => entry.action === 'model-control-resume'))
+})
+
+test('Computer Use 共享授权只临时放行当前可见 origin，并保留浏览器硬门禁', () => {
+  const policy = new BrowserSecurityPolicy()
+  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
+
+  assert.equal(policy.isUnifiedControlEnabled, false)
+  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'permission-denied')
+
+  assert.deepEqual(policy.setUnifiedControl(true), { enabled: true, changed: true })
+  assert.equal(policy.authorizations().unifiedControl, true)
+  assert.equal(policy.authorizations().count, 0, 'shared grant must not persist a second site authorization')
+  assert.equal(policy.modelAction({ action: 'read', tabId: 'tab-1', payload: { text: '普通页面内容' } }).allowed, true)
+  assert.equal(policy.modelNavigate(`${ORIGIN}/next`, { tabId: 'tab-1' }).origin, ORIGIN)
+  assert.throws(() => policy.modelNavigate('https://other.example.net/', { tabId: 'tab-1' }), error => error.code === 'origin-not-authorized')
+  assert.throws(() => policy.modelAction({
+    action: 'type',
+    tabId: 'tab-1',
+    field: { tag: 'input', type: 'password', name: 'password' },
+    payload: { text: 'still-forbidden' }
+  }), error => error.code === 'sensitive-field')
+  assert.equal(policy.modelAction({ action: 'submit', tabId: 'tab-1' }).requiresConfirmation, true)
+
+  assert.deepEqual(policy.setUnifiedControl(false), { enabled: false, changed: true })
+  assert.equal(policy.authorizations().count, 0)
+  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'permission-denied')
 })
 
 test('未授权动作与未知动作给出可识别错误码，且审计有 denied 记录', async t => {

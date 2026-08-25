@@ -22,6 +22,8 @@ export class PersistedTestOrchestrator {
     this.orchestrator = orchestrator;
     this.revision = revision;
     this.operationTail = Promise.resolve();
+    this.closing = false;
+    this.closePromise = undefined;
   }
 
   static async create({ store, orchestrator } = {}) {
@@ -45,11 +47,10 @@ export class PersistedTestOrchestrator {
     return new PersistedTestOrchestrator({ store, orchestrator, revision });
   }
 
-  toJSON() {
-    return { ...this.orchestrator.toJSON(), persistedRevision: this.revision };
-  }
+  toJSON() { return this.#snapshot(); }
 
   mutate(method, input) {
+    try { this.#assertOpen(); } catch (error) { return Promise.reject(error); }
     const name = nonEmptyString(method, "method", 64);
     if (!MUTATING_METHODS.has(name)) throw new Error(`Test Orchestrator mutation method ${name} is not allowed`);
     return this.#queue(async () => {
@@ -67,24 +68,31 @@ export class PersistedTestOrchestrator {
       const loaded = await this.store.load();
       if (loaded === undefined) throw new Error("persisted Test Orchestrator disappeared");
       if (loaded.revision < this.revision) throw new Error("persisted Test Orchestrator rollback was detected");
-      if (loaded.revision === this.revision) return this.toJSON();
+      if (loaded.revision === this.revision) return this.#snapshot();
       const orchestrator = TestOrchestrator.restore(loaded.state, { now: this.orchestrator.now });
       if (orchestrator.projectRef !== this.orchestrator.projectRef || orchestrator.repositoryRef !== this.orchestrator.repositoryRef) throw new Error("persisted Test Orchestrator scope changed");
       this.orchestrator = orchestrator;
       this.revision = loaded.revision;
-      return this.toJSON();
+      return this.#snapshot();
     });
   }
 
-  campaignStatus(campaignRef) {
-    return this.orchestrator.campaignStatus(campaignRef);
+  campaignStatus(campaignRef) { this.#assertOpen(); return this.orchestrator.campaignStatus(campaignRef); }
+
+  jobStatus(jobRef) { this.#assertOpen(); return this.orchestrator.jobStatus(jobRef); }
+
+  close() {
+    if (this.closePromise !== undefined) return this.closePromise;
+    this.closing = true;
+    this.closePromise = this.operationTail.then(() => this.store.close());
+    return this.closePromise;
   }
 
-  jobStatus(jobRef) {
-    return this.orchestrator.jobStatus(jobRef);
-  }
+  #snapshot() { return { ...this.orchestrator.toJSON(), persistedRevision: this.revision }; }
+  #assertOpen() { if (this.closing) { const error = new Error("Test Orchestrator service is closed"); error.code = "TEST_ORCHESTRATOR_CLOSED"; throw error; } }
 
   #queue(operation) {
+    try { this.#assertOpen(); } catch (error) { return Promise.reject(error); }
     const result = this.operationTail.then(operation, operation);
     this.operationTail = result.then(() => undefined, () => undefined);
     return result;

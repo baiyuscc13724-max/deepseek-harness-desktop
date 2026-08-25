@@ -4,6 +4,8 @@ const path = require('node:path')
 const { EventEmitter } = require('node:events')
 
 const {
+  GIT_AUTHORITY_COMMAND_ENV,
+  GIT_AUTHORITY_ROOT_ENV,
   PUBLIC_ACTIONS,
   buildGitEnvironment,
   buildRuntimeGitEnvironment,
@@ -15,6 +17,7 @@ const {
   parseGitVersion,
   parseSshAgentStatus,
   resolveBundledGit,
+  resolveGitAuthorityCapability,
   resolveSystemGit,
   systemGitCandidates
 } = require('../electron/bridge/git-runtime-service.cjs')
@@ -139,6 +142,57 @@ test('runtime environment exposes Git tools without embedding credential materia
   assert.equal(env.GIT_SSH_VARIANT, 'ssh')
   assert.equal(env.CUSTOM, 'kept')
   assert.doesNotMatch(JSON.stringify(env), /password|token|cookie|private.?key/i)
+})
+
+test('runtime environment overwrites forged Git authority fields with the bundled Host capability', () => {
+  const fakeStat = value => ({ isFile: () => /^git\.exe$/i.test(win.basename(value)), isDirectory: () => !/^git\.exe$/i.test(win.basename(value)) })
+  const service = createGitRuntimeService({
+    resourcesPath: resources,
+    env: { PATH: win.dirname(system), ProgramFiles: 'C:\\Program Files' },
+    platform: 'win32', exists: winExists, realpath: value => win.resolve(value), stat: fakeStat
+  })
+  const output = service.runtimeEnvironment({
+    PATH: 'C:\\Windows\\System32',
+    [GIT_AUTHORITY_COMMAND_ENV]: 'C:\\attacker\\git.exe',
+    [GIT_AUTHORITY_ROOT_ENV]: 'C:\\attacker'
+  })
+  assert.equal(output[GIT_AUTHORITY_COMMAND_ENV], bundled)
+  assert.equal(output[GIT_AUTHORITY_ROOT_ENV], win.dirname(win.dirname(bundled)))
+  const capability = service.authorityCapability()
+  assert.equal(capability.gitCommand, bundled)
+  assert.equal(capability.allowedGitRoot, win.dirname(win.dirname(bundled)))
+  assert.equal(Object.isFrozen(capability), true)
+  assert.deepEqual(JSON.parse(JSON.stringify(capability)), { available: true })
+  assert.doesNotMatch(JSON.stringify(capability), /Harness|git\.exe/i)
+})
+
+test('Git authority selection falls back to system and removes forged fields when no runtime exists', () => {
+  const fakeStat = value => ({ isFile: () => /^git\.exe$/i.test(win.basename(value)), isDirectory: () => !/^git\.exe$/i.test(win.basename(value)) })
+  const systemOnly = createGitRuntimeService({
+    resourcesPath: resources,
+    env: { PATH: win.dirname(system), ProgramFiles: 'C:\\Program Files' },
+    platform: 'win32', exists: value => win.resolve(value).toLowerCase() === win.resolve(system).toLowerCase(), realpath: value => win.resolve(value), stat: fakeStat
+  })
+  const selected = systemOnly.runtimeEnvironment({})
+  assert.equal(selected[GIT_AUTHORITY_COMMAND_ENV], system)
+  assert.equal(selected[GIT_AUTHORITY_ROOT_ENV], 'C:\\Program Files\\Git')
+
+  const missing = createGitRuntimeService({ resourcesPath: resources, env: {}, platform: 'win32', exists: () => false })
+  const cleaned = missing.runtimeEnvironment({ [GIT_AUTHORITY_COMMAND_ENV]: 'C:\\forged\\git.exe', [GIT_AUTHORITY_ROOT_ENV]: 'C:\\forged' })
+  assert.equal(cleaned[GIT_AUTHORITY_COMMAND_ENV], undefined)
+  assert.equal(cleaned[GIT_AUTHORITY_ROOT_ENV], undefined)
+  assert.equal(missing.authorityCapability(), null)
+})
+
+test('authority capability uses case-insensitive Windows containment and rejects invalid Host paths', () => {
+  const fakeStat = value => ({ isFile: () => /^git\.exe$/i.test(win.basename(value)), isDirectory: () => !/^git\.exe$/i.test(win.basename(value)) })
+  const accepted = resolveGitAuthorityCapability({ command: 'C:\\PROGRAM FILES\\Git\\cmd\\git.exe' }, {
+    platform: 'win32', realpath: value => value.toLowerCase().endsWith('git.exe') ? 'c:\\program files\\git\\CMD\\git.exe' : 'C:\\Program Files\\GIT', stat: fakeStat
+  })
+  assert.equal(accepted.gitCommand, 'c:\\program files\\git\\CMD\\git.exe')
+  assert.equal(resolveGitAuthorityCapability({ command: 'relative\\git.exe' }, { platform: 'win32', realpath: value => value, stat: fakeStat }), null)
+  assert.equal(resolveGitAuthorityCapability({ command: 'C:\\Tools\\cmd\\bash.exe' }, { platform: 'win32', realpath: value => value, stat: fakeStat }), null)
+  assert.equal(resolveGitAuthorityCapability({ command: 'C:\\Tools\\cmd\\git.exe' }, { platform: 'win32', realpath: value => /git\.exe$/i.test(value) ? 'C:\\Other\\git.exe' : 'C:\\Tools', stat: fakeStat }), null)
 })
 
 test('version parsers accept version output only and return short non-sensitive values', () => {

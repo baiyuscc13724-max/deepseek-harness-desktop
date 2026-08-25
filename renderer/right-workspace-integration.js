@@ -11,6 +11,7 @@
   const title = document.querySelector('#rightWorkspaceTitle')
   const back = document.querySelector('#rightWorkspaceBack')
   const close = document.querySelector('#closeBrowserSidebar')
+  const quickButton = document.querySelector('#browserQuickButton')
   const modeButtons = [...document.querySelectorAll('[data-right-workspace-mode]')]
   const browserOnly = [...document.querySelectorAll('.right-workspace-browser-only')]
   let context = { sessionId: '' }
@@ -20,6 +21,9 @@
   let schedulesSnapshot = null
   let requestedBrowserContentVisible = null
   let browserRestorePending = true
+  let browserIntentLane = Promise.resolve()
+  let browserIntentReadyTimer = 0
+  const quickButtonDefaultTitle = quickButton?.getAttribute('title') || '切换右侧工作区'
 
   function setBrowserContentVisible(visible) {
     const next = Boolean(visible)
@@ -44,6 +48,52 @@
     return node
   }
 
+  function homeIcon(kind) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.classList.add('right-workspace-home-icon')
+    svg.setAttribute('viewBox', '0 0 16 16')
+    svg.setAttribute('fill', 'none')
+    svg.setAttribute('aria-hidden', 'true')
+    const shape = (tag, attributes) => {
+      const node = document.createElementNS('http://www.w3.org/2000/svg', tag)
+      for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value)
+      svg.append(node)
+    }
+    if (kind === 'files') {
+      shape('path', { d: 'M1.75 4.5c0-.69.56-1.25 1.25-1.25h2.9l1.4 1.5H13c.69 0 1.25.56 1.25 1.25v5.25c0 .69-.56 1.25-1.25 1.25H3c-.69 0-1.25-.56-1.25-1.25V4.5Z', stroke: 'currentColor', 'stroke-width': '1.2', 'stroke-linejoin': 'round' })
+    } else if (kind === 'browser') {
+      shape('circle', { cx: '8', cy: '8', r: '6', stroke: 'currentColor', 'stroke-width': '1.2' })
+      shape('path', { d: 'M2.15 8h11.7M8 2c1.65 1.62 2.48 3.62 2.48 6S9.65 12.38 8 14C6.35 12.38 5.52 10.38 5.52 8S6.35 3.62 8 2Z', stroke: 'currentColor', 'stroke-width': '1.05' })
+    } else {
+      shape('circle', { cx: '8', cy: '8', r: '6', stroke: 'currentColor', 'stroke-width': '1.2' })
+      shape('path', { d: 'M8 4.35v3.9l2.65 1.55', stroke: 'currentColor', 'stroke-width': '1.2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
+    }
+    return svg
+  }
+
+  function createHomeView() {
+    const view = element('section', 'right-workspace-pane right-workspace-home')
+    view.id = 'rightWorkspaceHomePane'
+    view.setAttribute('aria-label', '右侧工作区首页')
+    view.append(element('h2', 'visually-hidden', '打开工作区工具'))
+    const actions = element('div', 'right-workspace-home-actions')
+    const primaryKey = /mac/i.test(navigator.platform || '') ? '⌘' : 'Ctrl'
+    const items = [
+      { id: 'files', label: '文件', icon: 'files', shortcut: `${primaryKey}+P`, ariaShortcut: 'Control+P Meta+P' },
+      { id: 'browser', label: '浏览器', icon: 'browser', shortcut: `${primaryKey}+T`, ariaShortcut: 'Control+T Meta+T' },
+      { id: 'schedules', label: '已安排', icon: 'schedules', shortcut: `${primaryKey}+Shift+A`, ariaShortcut: 'Control+Shift+A Meta+Shift+A' }
+    ]
+    for (const item of items) {
+      const action = button(undefined, 'right-workspace-home-action', () => openMode(item.id, { push: true }))
+      action.dataset.rightWorkspaceHomeAction = item.id
+      action.setAttribute('aria-keyshortcuts', item.ariaShortcut)
+      action.append(homeIcon(item.icon), element('span', 'right-workspace-home-label', item.label), element('kbd', 'right-workspace-home-shortcut', item.shortcut))
+      actions.append(action)
+    }
+    view.append(actions)
+    return view
+  }
+
   function statusPanel(text, error = false) {
     const node = element('div', `right-workspace-status${error ? ' is-error' : ''}`, text)
     node.setAttribute(error ? 'role' : 'aria-live', error ? 'alert' : 'polite')
@@ -66,6 +116,7 @@
     return view
   }
 
+  const homeView = createHomeView()
   const filesView = element('section', 'right-workspace-pane right-workspace-data-pane')
   filesView.id = 'rightWorkspaceFilesPane'
   filesView.setAttribute('aria-labelledby', 'rightWorkspaceFilesHeading')
@@ -88,6 +139,7 @@
     closeOnEscape: true,
     ariaLabel: '右侧工作区'
   })
+  controller.registerMode({ id: 'home', title: '工作区', view: homeView })
   controller.registerMode({ id: 'browser', title: '浏览器', view: browserView })
   controller.registerMode({ id: 'files', title: '文件', view: filesView })
   controller.registerMode({ id: 'schedules', title: '已安排', view: schedulesView })
@@ -108,6 +160,29 @@
 
   function activeSessionId() {
     return typeof context.sessionId === 'string' ? context.sessionId : ''
+  }
+
+  // Preserve the pane's vertical reading position across filter/refresh
+  // re-renders. Capture only while a real, scrollable list is on screen (an
+  // active same-view re-render); never on empty, first render, or mode switch.
+  const pendingDataScroll = { files: null, schedules: null }
+
+  function dataScrollView(kind) {
+    return kind === 'schedules' ? schedulesView : filesView
+  }
+
+  function captureDataScroll(kind) {
+    const view = dataScrollView(kind)
+    pendingDataScroll[kind] = view.scrollHeight > view.clientHeight ? view.scrollTop : null
+  }
+
+  // Apply (and clear) a previously preserved scrollTop only when a list was
+  // actually rendered; empty/loading/error/first-render states fall back to 0.
+  function applyDataScroll(kind, hasList) {
+    const view = dataScrollView(kind)
+    const pending = pendingDataScroll[kind]
+    pendingDataScroll[kind] = null
+    view.scrollTop = hasList && pending !== null ? Math.min(pending, Math.max(0, view.scrollHeight - view.clientHeight)) : 0
   }
 
   async function resource(kind, payload = {}) {
@@ -137,29 +212,34 @@
     return fragment
   }
 
-  function renderFiles() {
+  function renderFiles(opts = {}) {
+    if (opts.preserve) captureDataScroll('files')
     filesView.replaceChildren()
     filesView.append(dataHeader('rightWorkspaceFilesSearch', '文件', '查看当前会话工作区中的上传文件；文本和代码可直接预览。', filesQuery, value => {
       filesQuery = value
-      renderFiles()
-      document.querySelector('#rightWorkspaceFilesSearch')?.focus()
-    }, () => loadFiles()))
+      renderFiles({ preserve: true })
+      document.querySelector('#rightWorkspaceFilesSearch')?.focus({ preventScroll: true })
+    }, () => loadFiles({ preserve: true })))
     if (!activeSessionId()) {
       filesView.append(statusPanel('尚未识别到当前会话。请先打开或继续一个会话。'))
+      applyDataScroll('files', false)
       return
     }
     if (!filesSnapshot) {
       filesView.append(statusPanel('正在读取文件…'))
+      applyDataScroll('files', false)
       return
     }
     if (filesSnapshot.error) {
       filesView.append(statusPanel(filesSnapshot.error, true))
+      applyDataScroll('files', false)
       return
     }
     const needle = filesQuery.trim().toLocaleLowerCase()
     const rows = (filesSnapshot.files || []).filter(file => !needle || String(file.path || '').toLocaleLowerCase().includes(needle))
     if (!rows.length) {
       filesView.append(statusPanel(needle ? '没有匹配的文件。' : '还没有上传文件。可使用对话输入区的回形针添加文件。'))
+      applyDataScroll('files', false)
       return
     }
     const list = element('div', 'right-workspace-list')
@@ -174,14 +254,20 @@
       list.append(row)
     }
     filesView.append(list)
+    applyDataScroll('files', true)
   }
 
-  async function loadFiles() {
-    filesSnapshot = null
-    renderFiles()
+  async function loadFiles(opts = {}) {
+    // On a preserve refresh keep the current list on screen until the request
+    // resolves; only a fresh entry (mode switch / hydration) shows the loading
+    // state so the final data render can capture the still-visible old scrollTop.
+    if (!opts.preserve) {
+      filesSnapshot = null
+      renderFiles()
+    }
     try { filesSnapshot = await resource('files') }
     catch (error) { filesSnapshot = { error: error.message || String(error), files: [] } }
-    renderFiles()
+    renderFiles(opts.preserve ? { preserve: true } : {})
   }
 
   function renderDocument(file, fallbackPath) {
@@ -220,8 +306,10 @@
     controller.open()
     host.classList.remove('hidden')
     syncChrome()
-    try { renderDocument(await api.previewRightWorkspaceLocal(target), target) }
-    catch (error) { documentView.replaceChildren(statusPanel(error.message || String(error), true)) }
+    try {
+      const result = await resource('filePreview', { path: target })
+      renderDocument(result.file || {}, target)
+    } catch (error) { documentView.replaceChildren(statusPanel(error.message || String(error), true)) }
   }
 
   function scheduleDraft(mode, prompt, value) {
@@ -245,13 +333,14 @@
     return true
   }
 
-  function renderSchedules() {
+  function renderSchedules(opts = {}) {
+    if (opts.preserve) captureDataScroll('schedules')
     schedulesView.replaceChildren()
     schedulesView.append(dataHeader('rightWorkspaceSchedulesSearch', '已安排', '会话级提醒只在本会话运行时触发；任何变更都会先进入输入框。', schedulesQuery, value => {
       schedulesQuery = value
-      renderSchedules()
-      document.querySelector('#rightWorkspaceSchedulesSearch')?.focus()
-    }, () => loadSchedules()))
+      renderSchedules({ preserve: true })
+      document.querySelector('#rightWorkspaceSchedulesSearch')?.focus({ preventScroll: true })
+    }, () => loadSchedules({ preserve: true })))
 
     const form = element('form', 'right-workspace-schedule-form')
     const prompt = element('input')
@@ -303,20 +392,25 @@
 
     if (!activeSessionId()) {
       schedulesView.append(statusPanel('尚未识别到当前会话。请先打开或继续一个会话。'))
+      applyDataScroll('schedules', false)
       return
     }
     if (!schedulesSnapshot) {
       schedulesView.append(statusPanel('正在读取已安排任务…'))
+      applyDataScroll('schedules', false)
       return
     }
     if (schedulesSnapshot.error) {
       schedulesView.append(statusPanel(schedulesSnapshot.error, true))
+      applyDataScroll('schedules', false)
       return
     }
     const needle = schedulesQuery.trim().toLocaleLowerCase()
     const rows = (schedulesSnapshot.schedules || []).filter(item => !needle || `${item.prompt} ${item.id} ${item.kind}`.toLocaleLowerCase().includes(needle))
-    if (!rows.length) schedulesView.append(statusPanel(needle ? '没有匹配的任务。' : '当前会话还没有已安排任务。'))
-    else {
+    const hasScheduleList = rows.length > 0
+    if (!hasScheduleList) {
+      schedulesView.append(statusPanel(needle ? '没有匹配的任务。' : '当前会话还没有已安排任务。'))
+    } else {
       const list = element('div', 'right-workspace-list')
       for (const item of rows) {
         const row = element('article', 'right-workspace-row')
@@ -342,21 +436,30 @@
       }
       schedulesView.append(history)
     }
+    // Clamp only after the optional history has joined the DOM; otherwise a
+    // reader positioned in that section would be restored too high.
+    applyDataScroll('schedules', hasScheduleList)
   }
 
-  async function loadSchedules() {
-    schedulesSnapshot = null
-    renderSchedules()
+  async function loadSchedules(opts = {}) {
+    // On a preserve refresh keep the current list on screen until the request
+    // resolves (same semantics as loadFiles).
+    if (!opts.preserve) {
+      schedulesSnapshot = null
+      renderSchedules()
+    }
     try { schedulesSnapshot = await resource('schedules') }
     catch (error) { schedulesSnapshot = { error: error.message || String(error), schedules: [] } }
-    renderSchedules()
+    renderSchedules(opts.preserve ? { preserve: true } : {})
   }
 
   function syncChrome() {
     const active = controller.getActiveModeId()
     const browser = active === 'browser'
+    host.classList.toggle('is-home', active === 'home')
     for (const node of browserOnly) node.classList.toggle('hidden', !browser)
     for (const node of modeButtons) node.setAttribute('aria-pressed', String(node.dataset.rightWorkspaceMode === active))
+    quickButton?.setAttribute('aria-expanded', String(controller.isOpen()))
     document.body.classList.toggle('browser-sidebar-open', controller.isOpen())
     setBrowserContentVisible(controller.isOpen() && browser)
   }
@@ -380,7 +483,88 @@
     syncChrome()
     if (id === 'files') loadFiles()
     if (id === 'schedules') loadSchedules()
+    if (id === 'browser') {
+      const address = document.querySelector('#browserAddress')
+      address?.focus()
+      address?.select()
+    }
     return true
+  }
+
+  function setBrowserIntentBridgeState(state) {
+    runtimeView.dataset.browserIntentBridge = state
+    if (quickButton) {
+      quickButton.dataset.browserIntentBridge = state
+      quickButton.title = state === 'unavailable'
+        ? '自动打开未就绪；仍可点击打开右侧工作区'
+        : quickButtonDefaultTitle
+    }
+  }
+
+  function expectBrowserIntentBridge() {
+    if (browserIntentReadyTimer) clearTimeout(browserIntentReadyTimer)
+    setBrowserIntentBridgeState('pending')
+    browserIntentReadyTimer = setTimeout(() => {
+      browserIntentReadyTimer = 0
+      if (runtimeView.dataset.browserIntentBridge === 'ready') return
+      setBrowserIntentBridgeState('unavailable')
+      console.warn('browser intent bridge unavailable; right workspace button remains available')
+    }, 12_000)
+  }
+
+  function markBrowserIntentBridgeReady() {
+    if (browserIntentReadyTimer) clearTimeout(browserIntentReadyTimer)
+    browserIntentReadyTimer = 0
+    setBrowserIntentBridgeState('ready')
+  }
+
+  function handleBrowserOpenIntent(value) {
+    const intent = factory.normalizeBrowserOpenIntent(value)
+    if (!intent) return false
+    if (intent.action === 'bridge-ready') {
+      markBrowserIntentBridgeReady()
+      return true
+    }
+    browserIntentLane = browserIntentLane.catch(() => {}).then(async () => {
+      if (intent.action === 'show-browser') {
+        await openMode('browser')
+        window.harnessDesktopBrowserSidebar?.setStatus?.('已按明确指令打开右侧浏览器。')
+        return
+      }
+      const result = await api.getBrowserState().catch(() => null)
+      const snapshot = result?.state || result || {}
+      const action = factory.browserIntentTabAction({ currentUrl: snapshot.url, targetUrl: intent.url })
+      if (action === 'navigate-current') await api.navigateBrowser(intent.url)
+      else if (action === 'open-new-tab') await api.newBrowserTab(intent.url)
+      await openMode('browser')
+      window.harnessDesktopBrowserSidebar?.setStatus?.('已在右侧浏览器打开明确网址。')
+    }).catch(error => {
+      console.warn('browser auto-open intent failed', error)
+      window.harnessDesktopBrowserSidebar?.setStatus?.(error?.message || String(error), { error: true })
+    })
+    return true
+  }
+
+  async function openHome() {
+    const opened = await openMode('home')
+    if (opened) homeView.querySelector('[data-right-workspace-home-action]')?.focus()
+    return opened
+  }
+
+  function onHomeShortcut(event) {
+    if (event.defaultPrevented || event.repeat || event.altKey || !(event.ctrlKey || event.metaKey)) return
+    if (!controller.isOpen() || controller.getActiveModeId() !== 'home') return
+    const key = String(event.key || '').toLowerCase()
+    const mode = !event.shiftKey && key === 'p'
+      ? 'files'
+      : !event.shiftKey && key === 't'
+        ? 'browser'
+        : event.shiftKey && key === 'a'
+          ? 'schedules'
+          : ''
+    if (!mode) return
+    event.preventDefault()
+    openMode(mode, { push: true })
   }
 
   async function closeWorkspace(reason = 'api') {
@@ -402,12 +586,16 @@
   }
 
   modeButtons.forEach(node => node.addEventListener('click', () => openMode(node.dataset.rightWorkspaceMode)))
-  controller.on('modechange', syncChrome)
+  window.addEventListener('keydown', onHomeShortcut)
+  controller.on('modechange', () => {
+    syncChrome()
+    if (controller.getActiveModeId() !== 'browser') api.setBrowserVisible(false).catch(() => {})
+  })
   controller.on('push', syncChrome)
   controller.on('replace', syncChrome)
   controller.on('close', () => {
     browserRestorePending = false
-    document.body.classList.remove('browser-sidebar-open')
+    syncChrome()
     setBrowserContentVisible(false)
     api.setBrowserVisible(false).catch(() => {})
     host.classList.add('hidden')
@@ -416,16 +604,20 @@
     document.documentElement.style.setProperty('--browser-panel-width', `${width}px`)
   })
 
+  setBrowserIntentBridgeState('pending')
+  runtimeView.addEventListener('did-start-loading', expectBrowserIntentBridge)
   runtimeView.addEventListener('ipc-message', event => {
-    if (event.channel !== 'right-workspace:context') return
-    setContext(event.args?.[0])
+    if (event.channel === 'right-workspace:context') setContext(event.args?.[0])
+    else if (event.channel === 'right-workspace:intent') handleBrowserOpenIntent(event.args?.[0])
   })
   api.onPreviewRightWorkspaceLocal?.(target => openLocalDocument(target))
 
   window.harnessDesktopRightWorkspace = Object.freeze({
     controller,
+    openHome,
     openMode,
     openLocalDocument,
+    handleBrowserOpenIntent,
     close: closeWorkspace,
     setContext,
     getContext: () => ({ ...context }),

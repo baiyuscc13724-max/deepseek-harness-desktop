@@ -6,6 +6,7 @@ const os = require('node:os')
 const path = require('node:path')
 
 const { SyncTransportManager } = require('../electron/bridge/sync-transport-manager.cjs')
+const { WssRelayAdapter } = require('../electron/bridge/sync-transports/wss-relay-adapter.cjs')
 const { MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
 
 class FakeAdapter extends EventEmitter {
@@ -27,6 +28,11 @@ class FakeAdapter extends EventEmitter {
     this.running = true
   }
   async stop() { this.running = false }
+  configureRelayUrl(value) {
+    this.relayUrl = String(value || '')
+    this.ready = Boolean(this.relayUrl)
+    return this.state()
+  }
   pairingConfig() { return this.running ? { id: this.id, origin: `http://${this.context.mesh.serviceAddress}:${this.context.port}` } : null }
 }
 
@@ -104,6 +110,38 @@ test('a disconnected sole transport is retried with backoff and recovers', async
   assert.equal(manager.state().status, 'connected')
   assert.ok(relay.starts >= 2)
   assert.equal(manager.state().reconnectAt, null)
+})
+
+test('WSS adapter accepts validated runtime configuration only while stopped', () => {
+  const adapter = new WssRelayAdapter({ relayUrl: '', WebSocketImpl: class {} })
+  assert.equal(adapter.configureRelayUrl('wss://relay.example/').available, true)
+  assert.equal(adapter.relayUrl, 'wss://relay.example/')
+  assert.equal(adapter.state().relayUrl, 'wss://relay.example/')
+  assert.throws(() => adapter.configureRelayUrl('ws://relay.example/'), /wss/)
+  adapter.socket = { readyState: 1 }
+  assert.throws(() => adapter.configureRelayUrl('wss://other.example/'), /Stop/)
+})
+
+test('runtime WSS relay changes preserve mesh identity and clear falls back safely', async t => {
+  const store = createStore()
+  const relay = new FakeAdapter('wss-relay')
+  relay.relayUrl = 'wss://first.example/'
+  const easytier = new FakeAdapter('easytier')
+  const manager = new SyncTransportManager({ store, adapters: [relay, easytier] })
+  t.after(() => manager.stop())
+  await manager.start({ port: 3081, stateDir: os.tmpdir() })
+  const mesh = store.get().mesh
+  assert.equal(manager.state().active, 'wss-relay')
+
+  await manager.configureWssRelay('wss://second.example/')
+  assert.equal(manager.state().active, 'wss-relay')
+  assert.equal(relay.relayUrl, 'wss://second.example/')
+  assert.deepEqual(store.get().mesh, mesh)
+
+  await manager.configureWssRelay('')
+  assert.equal(manager.state().active, 'easytier')
+  assert.equal(relay.ready, false)
+  assert.deepEqual(store.get().mesh, mesh)
 })
 
 test('stopping remote sync cancels scheduled reconnects', async () => {

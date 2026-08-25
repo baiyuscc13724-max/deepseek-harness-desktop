@@ -6,9 +6,9 @@
 //     about/blob/ws/ftp/mailto/harness-desktop 等一切其它协议，拒绝内嵌凭据
 //     （user:pass@）、拒绝畸形或过长的地址；本机/内网地址对用户开放（登录
 //     局域网服务是用户的合法需求）。
-//   - 模型访问：在用户档之上更严 —— 目标必须是公网可达的 http/https 地址
-//     （拒绝本机回环、内网、链路本地、CGNAT、文档网段、单标签主机名等），
-//     且目标 origin 必须已经进入按 origin 的站点授权（browser-site-authz）。
+//   - 模型访问：在用户档之上更严 —— 常规导航要求公网可达且目标 origin 已
+//     授权；可见 about:blank 的首跳仅能建立无读取权限的预览 origin，本机/内网
+//     仍只接受用户已授权的精确 origin 或宿主声明的当前受管 Harness Web origin。
 // 本模块为纯 Node 实现，无任何 IO，可独立用 node:test 测试。审计只记录
 // origin（永远不含 query/hash），因此即便页面 URL 携带 token 也不会泄漏。
 
@@ -250,11 +250,31 @@ function checkModelNavigation(value, { authorizedOrigins = [], authorizedPrivate
   return { normalized: nav.normalized, origin: nav.origin, privateNetwork: !hostInfo.public }
 }
 
+/**
+ * 模型从可见空白标签建立首个 HTTP(S) origin 时的窄化导航校验。
+ * 未授权公网仅允许打开预览，不授予任何读取/操作权限；本机或内网仍只接受
+ * 用户已明确授权的精确 origin，或宿主提供的当前受管 Harness Web origin。
+ */
+function checkModelBootstrapNavigation(value, { authorizedOrigins = [], authorizedPrivateOrigins = [], trustedPrivateOrigins = [] } = {}) {
+  const nav = classifyNavigation(value)
+  if (!nav.allowed) throw policyError(nav.reason, nav.message)
+  const hostInfo = hostPublicInfo(new URL(nav.normalized).hostname)
+  if (hostInfo.public) return { normalized: nav.normalized, origin: nav.origin, privateNetwork: false, previewOnly: true }
+  const accepted = authorizedOrigins instanceof Set ? authorizedOrigins : new Set(authorizedOrigins)
+  const privateAccepted = authorizedPrivateOrigins instanceof Set ? authorizedPrivateOrigins : new Set(authorizedPrivateOrigins)
+  const trusted = trustedPrivateOrigins instanceof Set ? trustedPrivateOrigins : new Set(trustedPrivateOrigins)
+  if (!(accepted.has(nav.origin) && privateAccepted.has(nav.origin)) && !trusted.has(nav.origin)) {
+    throw policyError('private-network-not-authorized', '模型从空白页打开本机或内网站点，只允许用户已授权的精确 origin 或当前受管 Harness Web origin。')
+  }
+  return { normalized: nav.normalized, origin: nav.origin, privateNetwork: true, previewOnly: true }
+}
+
 module.exports = {
   BLOCKED_SCHEMES,
   HTTP_SCHEMES,
   MAX_URL_LENGTH,
   canonicalOrigin,
+  checkModelBootstrapNavigation,
   checkModelNavigation,
   checkUserNavigation,
   classifyNavigation,

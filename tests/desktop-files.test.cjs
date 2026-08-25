@@ -34,7 +34,7 @@ test('uploads stay in the workspace, preserve collisions and are observable', as
   assert.equal(files.every(file => file.size === 3), true)
 })
 
-test('downloads require a regular workspace-contained relative path', async t => {
+test('downloads require a regular workspace-contained path', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'dsh-download-'))
   const outside = await mkdtemp(path.join(tmpdir(), 'dsh-outside-'))
   t.after(() => Promise.all([rm(directory, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]))
@@ -43,8 +43,9 @@ test('downloads require a regular workspace-contained relative path', async t =>
   const { resolveDownload } = await plugin()
   const inside = await resolveDownload(directory, 'inside.txt')
   assert.equal(inside.info.size, 2)
+  assert.equal((await resolveDownload(directory, path.join(directory, 'inside.txt'))).info.size, 2)
   await assert.rejects(resolveDownload(directory, '../outside.txt'), error => error.code === 'FILES_PATH_ESCAPE')
-  await assert.rejects(resolveDownload(directory, path.join(outside, 'outside.txt')), error => error.code === 'FILES_INVALID_PATH')
+  await assert.rejects(resolveDownload(directory, path.join(outside, 'outside.txt')), error => error.code === 'FILES_PATH_ESCAPE')
 })
 
 test('right-workspace previews are bounded text and preserve workspace containment', async t => {
@@ -52,6 +53,9 @@ test('right-workspace previews are bounded text and preserve workspace containme
   const outside = await mkdtemp(path.join(tmpdir(), 'dsh-preview-outside-'))
   t.after(() => Promise.all([rm(directory, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]))
   await writeFile(path.join(directory, 'notes.md'), '# Notes\n\nHello')
+  await writeFile(path.join(directory, 'page.html'), '<script>neverRun()</script>')
+  await writeFile(path.join(directory, 'main.cs'), 'Console.WriteLine("source");')
+  await writeFile(path.join(directory, 'config.cjs'), 'module.exports = { safe: true }')
   await writeFile(path.join(directory, 'binary.bin'), Buffer.from([0, 1, 2, 3]))
   await writeFile(path.join(outside, 'secret.txt'), 'outside')
   const { MAX_PREVIEW_BYTES, previewFile } = await plugin()
@@ -59,6 +63,12 @@ test('right-workspace previews are bounded text and preserve workspace containme
   assert.equal(notes.previewable, true)
   assert.equal(notes.text, '# Notes\n\nHello')
   assert.equal(notes.maxPreviewBytes, MAX_PREVIEW_BYTES)
+  const located = await previewFile(directory, `${path.join(directory, 'notes.md')}:9:2`)
+  assert.equal(located.line, 9)
+  assert.equal(located.column, 2)
+  assert.equal((await previewFile(directory, 'page.html')).text, '<script>neverRun()</script>')
+  assert.equal((await previewFile(directory, 'main.cs')).previewable, true)
+  assert.equal((await previewFile(directory, 'config.cjs')).text, 'module.exports = { safe: true }')
   assert.deepEqual(await previewFile(directory, 'binary.bin'), {
     path: 'binary.bin', name: 'binary.bin', size: 4, extension: '.bin', previewable: false, reason: 'unsupported'
   })

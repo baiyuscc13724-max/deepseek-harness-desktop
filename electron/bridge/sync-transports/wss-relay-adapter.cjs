@@ -7,7 +7,7 @@ const MAX_SOCKET_BUFFER_BYTES = 4 * 1024 * 1024
 
 function safeRelayUrl(value) {
   const url = new URL(String(value || '').trim())
-  if (url.protocol !== 'wss:' || (url.port && url.port !== '443') || url.username || url.password || url.hash) throw new Error('WSS relay URL must use credential-free wss:// on port 443.')
+  if (url.protocol !== 'wss:' || (url.port && url.port !== '443') || url.username || url.password || url.search || url.hash) throw new Error('WSS relay URL must use credential-free wss:// on port 443 without query parameters or fragments.')
   return url.toString()
 }
 
@@ -42,10 +42,21 @@ class WssRelayAdapter extends EventEmitter {
     return Boolean(this.relayUrl && typeof this.WebSocketImpl === 'function')
   }
 
+  configureRelayUrl(value) {
+    if (this.socket || this.status === 'connecting' || this.status === 'connected') throw new Error('Stop the WSS relay before changing its URL.')
+    this.relayUrl = value ? safeRelayUrl(value) : ''
+    this.lastError = null
+    this.status = 'stopped'
+    this.detail = this.relayUrl ? 'WSS/443 通道待命' : '未配置 WSS/443 中继'
+    this.emit('state', this.state())
+    return this.state()
+  }
+
   state() {
     return {
       id: this.id,
       available: this.available(),
+      relayUrl: this.relayUrl,
       status: this.status,
       detail: this.detail,
       error: this.lastError

@@ -10,7 +10,7 @@ const lifecycleUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh
 const serviceUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'defect-lifecycle-service.js')).href
 const storeUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-state-store.js')).href
 const PROJECT = `project_${'D'.repeat(26)}`
-const REPOSITORY = 'repo_defectstore'
+const REPOSITORY = 'repository_defectstore'
 const OBSERVED = '1'.repeat(40)
 const FIX = '2'.repeat(40)
 function digest(value) { return `sha256:${createHash('sha256').update(String(value)).digest('hex')}` }
@@ -79,4 +79,22 @@ test('competing lifecycle services preserve the revision winner only', async () 
   assert.equal(competing.getDefect(defect.defectRef).ownerCollaboratorRef, 'collaborator_owner01')
   await competing.refresh()
   assert.equal(competing.getDefect(defect.defectRef).ownerCollaboratorRef, 'collaborator_winner01')
+}))
+
+test('close drains accepted defect mutation, closes the store once, and gates reads', async () => usingFixture(async state => {
+  const originalSave = state.store.save.bind(state.store), originalClose = state.store.close.bind(state.store)
+  let release, closeCalls = 0
+  const barrier = new Promise(resolve => { release = resolve })
+  state.store.save = async (...args) => { await barrier; return originalSave(...args) }
+  state.store.close = () => { closeCalls += 1; return originalClose().then(() => { throw new Error('simulated close cleanup failure') }) }
+  const accepted = state.service.mutate('recordSignal', { sourceType: 'external', sourceRef: 'externalissue_close01', fingerprintDigest: digest('close'), title: 'Accepted before close', evidenceDigest: digest('close-evidence'), observedCommit: OBSERVED, artifactSetRef: 'artifactset_close01' })
+  const closing = state.service.close()
+  assert.equal(state.service.close(), closing)
+  assert.throws(() => state.service.getDefect('defect_closed'), error => error.code === 'DEFECT_LIFECYCLE_CLOSED')
+  await assert.rejects(state.service.refresh(), error => error.code === 'DEFECT_LIFECYCLE_CLOSED')
+  await assert.rejects(state.service.mutate('not-a-method'), error => error.code === 'DEFECT_LIFECYCLE_CLOSED')
+  release()
+  assert.equal((await accepted).revision, 2)
+  await assert.rejects(closing, /simulated close cleanup failure/u)
+  assert.equal(closeCalls, 1)
 }))

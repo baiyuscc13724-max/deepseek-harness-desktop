@@ -1,0 +1,207 @@
+/*
+ * pr-preview-update.css
+ * PR 快速预览更新界面的独立样式（自包含，不依赖现有 styles.css）。
+ * 所有类名以 pr-preview-update- 为前缀，避免与现有界面冲突。
+ */
+
+.pr-preview-update-panel {
+  position: fixed;
+  z-index: 10020;
+  top: 16px;
+  right: 16px;
+  box-sizing: border-box;
+  width: min(420px, calc(100vw - 32px));
+  max-width: 420px;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  margin: 0;
+  padding: 14px 16px 12px;
+  border: 1px solid rgba(127, 127, 127, 0.28);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+.pr-preview-update-panel[hidden] {
+  display: none;
+}
+
+.pr-preview-update-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pr-preview-update-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pr-preview-update-subtitle {
+  opacity: 0.62;
+  font-size: 11px;
+}
+
+.pr-preview-update-body {
+  min-height: 56px;
+}
+
+.pr-preview-update-pane {
+  margin: 4px 0 10px;
+}
+
+.pr-preview-update-checking,
+.pr-preview-update-empty,
+.pr-preview-update-error {
+  opacity: 0.78;
+}
+
+.pr-preview-update-error {
+  color: #ff9d8a;
+}
+
+.pr-preview-update-candidate-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.pr-preview-update-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+}
+
+.pr-preview-update-badge--source-cnb {
+  color: #8fd0ff;
+  border-color: rgba(120, 190, 255, 0.55);
+}
+
+.pr-preview-update-badge--source-github {
+  color: #d8d8e8;
+  border-color: rgba(180, 180, 210, 0.4);
+}
+
+.pr-preview-update-badge--signed {
+  color: #9dffc2;
+  border-color: rgba(110, 240, 165, 0.45);
+}
+
+.pr-preview-update-badge--unsigned {
+  color: #ffd08a;
+  border-color: rgba(255, 200, 110, 0.5);
+}
+
+.pr-preview-update-pr-title {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.pr-preview-update-pr-meta {
+  opacity: 0.6;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.pr-preview-update-version {
+  opacity: 0.8;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.pr-preview-update-label {
+  opacity: 0.6;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 8px 0 2px;
+}
+
+.pr-preview-update-commit,
+.pr-preview-update-description {
+  margin-top: 4px;
+}
+
+.pr-preview-update-commit-subject {
+  font-weight: 500;
+}
+
+.pr-preview-update-commit-sha {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11.5px;
+  opacity: 0.75;
+  word-break: break-all;
+  margin-top: 2px;
+}
+
+.pr-preview-update-description-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  opacity: 0.88;
+}
+
+.pr-preview-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pr-preview-update-button {
+  appearance: none;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.12);
+  color: inherit;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pr-preview-update-button:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.22);
+}
+
+.pr-preview-update-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pr-preview-update-button--apply {
+  background: #2f7fe0;
+  border-color: #2f7fe0;
+  color: #fff;
+}
+
+.pr-preview-update-button--apply:hover:not(:disabled) {
+  background: #3f8df0;
+}
+
+.pr-preview-update-button--exit {
+  border-color: rgba(255, 120, 120, 0.5);
+  color: #ff9d8a;
+}
+
+.pr-preview-update-note {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(127, 127, 127, 0.28);
+  font-size: 11.5px;
+  opacity: 0.68;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pr-preview-update-panel {
+    transition: none;
+  }
+}

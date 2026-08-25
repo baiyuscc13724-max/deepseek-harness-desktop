@@ -22,6 +22,7 @@ let action = 'idle'
 let direction = 1
 let lastAwardAt = null
 let lastAutoFeedAt = null
+let lastCompanionCueId = null
 let speechTimer = null
 let moveInFlight = false
 let queuedMove = null
@@ -59,7 +60,7 @@ const messages = {
   blocked: '任务遇到问题了',
   ready: '任务完成啦！',
   celebrating: '完成！一起庆祝吧',
-  sleeping: '饿得睡着了…',
+  sleeping: '需要休息一下…',
   hungry: '有点饿了',
   wave: '我在呢～',
   feeding: '好吃！谢谢主人',
@@ -283,6 +284,15 @@ function render(next) {
     behavior.perform('feeding', 4200, { force: true, source: 'auto-feed' })
     showSpeech(`我自己吃了 ${next.lastAutoFeed.quantity} 颗 TOK`)
   }
+  const cue = next.companionCue
+  if (cue?.id && cue.id !== lastCompanionCueId) {
+    lastCompanionCueId = cue.id
+    const oneShot = ['wave', 'wink', 'groom', 'look-around', 'tail-flick'].includes(cue.action)
+    if (oneShot && ['idle', 'hungry'].includes(action)) {
+      behavior.perform(cue.action, Math.min(5000, Math.max(1200, Number(cue.duration) || 2600)), { force: true, source: 'companion' })
+    }
+    showSpeech(cue.message, Math.min(8000, Math.max(1200, Number(cue.duration) || 3200)))
+  }
 }
 
 function hideContextMenu() {
@@ -346,7 +356,9 @@ const interaction = new PetInteractionEngine({
   onEvent: event => {
     if (event.type === 'tap') {
       const next = event.hotspot === 'head' ? 'wink' : event.hotspot === 'tail' ? 'tail-flick' : 'wave'
-      api.interact(event.hotspot === 'tail' ? 'play' : 'tap').catch(() => {})
+      const actionable = ['needs-input', 'blocked'].includes(state?.status) && state?.focusSessionId
+      if (actionable) api.focusMain(state.focusSessionId).catch(() => {})
+      else api.interact(event.hotspot === 'tail' ? 'play' : 'tap').catch(() => {})
       behavior.perform(next, next === 'wink' ? 1600 : 1800, { force: true, source: 'interaction' })
     } else if (event.type === 'pet-start') {
       if (dragging) dragging.petting = true

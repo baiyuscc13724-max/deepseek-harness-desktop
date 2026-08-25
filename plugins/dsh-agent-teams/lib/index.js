@@ -1,24 +1,37 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isProxy } from "node:util/types";
 import z from "@deepseek-ai/schemastery";
 import { createUserMessage, HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COLLABORATION_REASONS } from "./collaboration-broker.js";
 import { AgentCollaborationService } from "./collaboration-service.js";
+import { consumeDesktopGitCapability } from "./desktop-git-capability.js";
 import { ProjectEntryService } from "./project-entry-service.js";
+import { ProjectFoundationsRuntime } from "./project-foundations-runtime.js";
+import { ProjectAutomationWebRuntime, projectAutomationWebError } from "./project-automation-web.js";
+import { ProjectBusinessSyncRuntime } from "./project-business-sync-runtime.js";
+import { ProjectTaskWebRuntime, projectTaskWebError } from "./project-task-web.js";
 
 /** Host-only agent-team coordinator. A future client bundle is advertised by package metadata. */
 const name = "agent-teams";
 const inject = ["agents", "subagents", "tools", "systemPrompt", "webServer"];
-const STORE_VERSION = 2;
-const LEGACY_STORE_VERSION = 1;
+const STORE_VERSION = 3;
+const LEGACY_STORE_VERSIONS = new Set([1, 2]);
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_TEAM_MESSAGES = 500;
 const MAX_TEAM_TASKS = 1_000;
 const UI_MAX_TASKS_PER_TEAM = 200;
 const UI_MAX_EVENTS_PER_TEAM = 50;
+const UI_MAX_TASK_WORKFLOW_EVENTS = 80;
+const UI_MAX_TASK_RUNTIME_SOURCE_EVENTS = 2_000;
+const UI_MAX_TASK_PLAN_ITEMS = 40;
+const UI_TASK_DETAIL_DESCRIPTION_CHARS = 32_768;
 const SSE_COALESCE_MS = 50;
+const TEAM_SSE_KEEPALIVE_MS = 15_000;
+const PROJECT_TASK_SSE_KEEPALIVE_MS = 15_000;
 const SUBAGENT_RECONCILE_MS = 20;
 const GRACEFUL_LIFECYCLE_TIMEOUT_MS = 120_000;
 const GLOBAL_TEAM_ACTIVE_ACTIVATIONS = 8;
@@ -30,6 +43,7 @@ const HARD_MAX_TEAMS_PER_ROOT = 8;
 const MAX_EXPANSION_WORKSTREAMS = 4;
 const MAX_EXPANSION_BOUNDARIES = 16;
 const MAX_EXPANSION_REQUEST_CHARS = 24_000;
+const MAX_BOOTSTRAP_ITEMS = 4;
 const DEFAULT_SETTINGS = Object.freeze({ enabled: false, maxMembers: 4, maxActiveTurns: 4 });
 const MODEL_ROUTING_FILE = "harness-desktop-model-routing.json";
 const MODEL_TIERS = Object.freeze(["main", "subagent"]);
@@ -37,6 +51,7 @@ const MANAGED_MEMBER_DENIED_TOOLS = Object.freeze(["subagent", "subagent_fork", 
 const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u;
 const MODEL_ID = /^\S{1,256}$/u;
 const TASK_STATES = Object.freeze(["pending", "in_progress", "completed"]);
+const TASK_WORKFLOW_EVENT_TYPES = new Set(["turn/start", "turn/end", "step/start", "step/end", "tool/call", "tool/result", "todo/write", "assistant/message", "llm/retry"]);
 const MEMBER_STATES = Object.freeze([
   "provisioning", "running", "idle", "ready", "failed", "shutting_down", "retired",
 ]);
@@ -49,7 +64,10 @@ const GRACEFUL_ACTIVE_RUNS = new Map();
 const GRACEFUL_LIFECYCLE_WAITERS = new Map();
 const USER_PAUSED_TEAMS = new Set();
 const STORE_INSTANCES = new Map();
-const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages"]);
+const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap"]);
+const BOOTSTRAP_KEYS = new Set(["requestId", "inputHash", "phase", "taskRefs", "memberRefs", "createdAt", "updatedAt"]);
+const BOOTSTRAP_TASK_REF_KEYS = new Set(["key", "taskId"]);
+const BOOTSTRAP_MEMBER_REF_KEYS = new Set(["key", "name", "status", "memberId", "sessionId", "errorCode", "errorStage"]);
 const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt"]);
 const CROSS_DEPENDENCY_KEYS = new Set(["teamId", "taskId"]);
 const EXPANSION_WORKSTREAM_KEYS = new Set(["title", "deliverable", "acceptance_criteria", "files", "resources"]);
@@ -388,6 +406,38 @@ function validateMessage(message) {
   return message;
 }
 
+function validateBootstrap(bootstrap) {
+  if (!isRecord(bootstrap)) throw new TypeError("team.bootstrap must be an object");
+  assertAllowedKeys(bootstrap, BOOTSTRAP_KEYS, "team.bootstrap");
+  nonEmptyString(bootstrap.requestId, "team.bootstrap.requestId", 256);
+  if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(bootstrap.inputHash, "team.bootstrap.inputHash", 64))) throw new TypeError("team.bootstrap.inputHash is invalid");
+  assertEnum(bootstrap.phase, ["prepared", "running", "partial", "complete"], "team.bootstrap.phase");
+  assertIsoDate(bootstrap.createdAt, "team.bootstrap.createdAt");
+  assertIsoDate(bootstrap.updatedAt, "team.bootstrap.updatedAt");
+  if (!Array.isArray(bootstrap.taskRefs) || bootstrap.taskRefs.length < 1 || bootstrap.taskRefs.length > MAX_BOOTSTRAP_ITEMS) throw new TypeError("team.bootstrap.taskRefs is invalid");
+  if (!Array.isArray(bootstrap.memberRefs) || bootstrap.memberRefs.length < 1 || bootstrap.memberRefs.length > MAX_BOOTSTRAP_ITEMS) throw new TypeError("team.bootstrap.memberRefs is invalid");
+  for (const ref of bootstrap.taskRefs) {
+    if (!isRecord(ref)) throw new TypeError("team.bootstrap task ref must be an object");
+    assertAllowedKeys(ref, BOOTSTRAP_TASK_REF_KEYS, "team.bootstrap task ref");
+    nonEmptyString(ref.key, "team.bootstrap task key", 64);
+    nonEmptyString(ref.taskId, "team.bootstrap task id", 256);
+  }
+  for (const ref of bootstrap.memberRefs) {
+    if (!isRecord(ref)) throw new TypeError("team.bootstrap member ref must be an object");
+    assertAllowedKeys(ref, BOOTSTRAP_MEMBER_REF_KEYS, "team.bootstrap member ref");
+    nonEmptyString(ref.key, "team.bootstrap member key", 64);
+    nonEmptyString(ref.name, "team.bootstrap member name", 120);
+    assertEnum(ref.status, ["pending", "starting", "complete", "failed"], "team.bootstrap member status");
+    optionalString(ref.memberId, "team.bootstrap member id", 256);
+    optionalString(ref.sessionId, "team.bootstrap member session id", 256);
+    optionalString(ref.errorCode, "team.bootstrap member error code", 128);
+    optionalString(ref.errorStage, "team.bootstrap member error stage", 64);
+  }
+  if (new Set(bootstrap.taskRefs.map((ref) => ref.key)).size !== bootstrap.taskRefs.length || new Set(bootstrap.taskRefs.map((ref) => ref.taskId)).size !== bootstrap.taskRefs.length) throw new TypeError("team.bootstrap task refs must be unique");
+  if (new Set(bootstrap.memberRefs.map((ref) => ref.key)).size !== bootstrap.memberRefs.length) throw new TypeError("team.bootstrap member refs must be unique");
+  return bootstrap;
+}
+
 /** Validate one team and all cross-record references. */
 function validateTeam(team) {
   if (!isRecord(team)) throw new TypeError("team must be an object");
@@ -403,6 +453,7 @@ function validateTeam(team) {
   if (!Array.isArray(team.members) || !Array.isArray(team.tasks) || !Array.isArray(team.messages)) {
     throw new TypeError("team members, tasks, and messages must be arrays");
   }
+  if (team.bootstrap !== undefined) validateBootstrap(team.bootstrap);
   team.members.forEach(validateMember);
   team.tasks.forEach(validateTask);
   team.messages.forEach(validateMessage);
@@ -414,6 +465,7 @@ function validateTeam(team) {
   if (team.members.filter(workerConsumesMemberSlot).length > HARD_MAX_MEMBERS) throw new TypeError(`team exceeds the hard limit of ${HARD_MAX_MEMBERS} active teammates`);
   const taskIds = new Set(team.tasks.map((task) => task.id));
   if (taskIds.size !== team.tasks.length) throw new TypeError("team task ids must be unique");
+  if (team.bootstrap !== undefined && team.bootstrap.taskRefs.some((ref) => !taskIds.has(ref.taskId))) throw new TypeError("team.bootstrap references an unknown task");
   const tasksById = new Map(team.tasks.map((task) => [task.id, task]));
   for (const task of team.tasks) {
     if (task.dependsOn.some((id) => !taskIds.has(id))) throw new TypeError(`task ${task.id} references an unknown dependency`);
@@ -460,10 +512,10 @@ function parseCrossTaskReference(reference) {
 
 /** Validate and normalize the complete disk document. Version 1 migrates in place without reshaping records. */
 function validateStoreDocument(document) {
-  if (!isRecord(document) || ![LEGACY_STORE_VERSION, STORE_VERSION].includes(document.version) || !isRecord(document.settings) || !Array.isArray(document.teams)) {
+  if (!isRecord(document) || !(document.version === STORE_VERSION || LEGACY_STORE_VERSIONS.has(document.version)) || !isRecord(document.settings) || !Array.isArray(document.teams)) {
     throw new TypeError("agent teams store has an unsupported shape or version");
   }
-  if (document.version === LEGACY_STORE_VERSION) document.version = STORE_VERSION;
+  if (LEGACY_STORE_VERSIONS.has(document.version)) document.version = STORE_VERSION;
   document.settings.enabled = Boolean(document.settings.enabled);
   document.settings.maxMembers = safeLimit(document.settings.maxMembers, "settings.maxMembers", 4);
   document.settings.maxActiveTurns = safeLimit(document.settings.maxActiveTurns, "settings.maxActiveTurns", 4);
@@ -603,6 +655,22 @@ function projectMessageEvent(message, names, sourceTeamId) {
     ...(message.deliveredAt === undefined ? {} : { deliveredAt: message.deliveredAt }),
   };
 }
+function deriveAttention(team, teams = [team]) {
+  const failedMembers = team.members.filter((member) => member.kind === "worker" && member.state === "failed").map((member) => member.id);
+  const unconfirmedMembers = team.members.filter((member) => member.kind === "worker" && (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true)).map((member) => member.id);
+  const activeSessions = new Set(team.members.filter((member) => !["failed", "retired"].includes(member.state)).map((member) => member.sessionId));
+  const strandedTasks = team.tasks.filter((task) => task.state !== "completed" && task.assigneeSessionId !== undefined && !activeSessions.has(task.assigneeSessionId)).map((task) => task.id);
+  const failedDeliveries = team.messages.filter((message) => message.status === "failed").map((message) => message.id);
+  const bootstrapIncomplete = team.bootstrap !== undefined && team.bootstrap.phase !== "complete";
+  const codes = [];
+  if (failedMembers.length > 0) codes.push("failed_member");
+  if (unconfirmedMembers.length > 0) codes.push("unconfirmed_shutdown");
+  if (strandedTasks.length > 0) codes.push("stranded_task");
+  if (failedDeliveries.length > 0) codes.push("failed_delivery");
+  if (bootstrapIncomplete) codes.push("bootstrap_incomplete");
+  const blockedTasks = team.tasks.filter((task) => deriveTaskAcrossTeams(task, team, teams).blockedBy.length > 0).map((task) => task.id);
+  return { required: codes.length > 0, codes, failedMembers, unconfirmedMembers, strandedTasks, failedDeliveries, blockedTasks, bootstrapIncomplete };
+}
 function projectTeam(team, nameTeams = []) {
   const members = team.members.map((member) => ({
     ...clone(member),
@@ -629,6 +697,7 @@ function projectTeam(team, nameTeams = []) {
     ]) ?? team.updatedAt,
     members,
     tasks,
+    attention: deriveAttention(team, taskTeams),
     // Public projections intentionally expose delivery metadata only. Durable message
     // bodies remain host-private and are used solely for the authenticated relay.
     messages,
@@ -720,6 +789,193 @@ function projectUiTasks(team, peerTeams) {
     };
   });
 }
+function taskDetailMember(member) {
+  if (member === undefined) return null;
+  return { name: member.name, displayName: canonicalMemberName(member.name) };
+}
+function taskWorkflowTime(value) {
+  if (!Number.isFinite(value)) return undefined;
+  try { return new Date(value).toISOString(); } catch { return undefined; }
+}
+function taskWorkflowText(value, limit = 500) {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/\s+/gu, " ").slice(0, limit);
+}
+function taskWorkflowStatus(reason) {
+  const kind = typeof reason?.kind === "string" ? reason.kind : "unknown";
+  if (kind === "completed") return { status: "completed", reason: "completed" };
+  if (kind === "error") return { status: "failed", reason: "error" };
+  if (kind === "aborted" || kind === "interrupted") return { status: "stopped", reason: kind };
+  if (kind === "blocked") return { status: "blocked", reason: "blocked" };
+  if (kind === "max-tokens") return { status: "continued", reason: "max-tokens" };
+  return { status: "unknown", reason: "unknown" };
+}
+function redactTaskWorkflowPaths(value) {
+  return value
+    .replace(/(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|]+/gu, "[path hidden]")
+    .replace(/(^|[\s(])\/(?!\/)[^\s"'`<>|]+/gu, "$1[path hidden]")
+    .replace(/(^|[\s(])(?:\.{1,2}[\\/])[^\s"'`<>|]+/gu, "$1[path hidden]")
+    .replace(/(^|[\s(])(?:src|tests?|plugins?|apps?|packages?|lib|docs?|config|electron|scripts?|public|assets?)[\\/][^\s"'`<>|]+/giu, "$1[path hidden]")
+    .replace(/(^|[\s(])(?:[\p{L}\p{N}_.@-]+[\\/]){2,}[\p{L}\p{N}_.@-]+(?=$|[\s),.;:])/giu, "$1[path hidden]")
+    .replace(/(^|[\s(])(?:[\p{L}\p{N}_.@-]+[\\/])*[\p{L}\p{N}_@-]+\.(?:cjs|mjs|js|jsx|ts|tsx|json|css|scss|less|html?|vue|svelte|md|mdx|txt|ya?ml|toml|ini|xml|csv|sql|sh|ps1|py|go|rs|java|kt|swift|png|jpe?g|gif|webp|svg|lock)(?=$|[\s),;:])/giu, "$1[path hidden]")
+    .replace(/(^|[\s(])\.env(?:\.[\p{L}\p{N}_.@-]+)?(?=$|[\s),;:])/giu, "$1[path hidden]");
+}
+function projectTaskPlanItems(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, UI_MAX_TASK_PLAN_ITEMS).map((item) => ({
+    content: redactTaskWorkflowPaths(taskWorkflowText(item?.content, 500)),
+    status: TASK_STATES.includes(item?.status) ? item.status : "pending",
+  })).filter((item) => item.content.length > 0);
+}
+function taskRuntimeProjection(task, member, agent) {
+  const claimedAt = Date.parse(task.claimedAt ?? "");
+  const completedAt = Date.parse(task.completedAt ?? "");
+  const allEvents = Array.isArray(agent?.session?.events) ? agent.session.events : [];
+  let sourceEvents = [];
+  let sourceTruncated = false;
+  if (allEvents.length > 0 && Number.isFinite(claimedAt)) {
+    const startTime = claimedAt - 1_000;
+    const endTime = Number.isFinite(completedAt) ? completedAt + 5_000 : Number.POSITIVE_INFINITY;
+    let low = 0, high = allEvents.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2), time = allEvents[middle]?.time;
+      if (Number.isFinite(time) && time < startTime) low = middle + 1;
+      else high = middle;
+    }
+    const first = low;
+    low = first; high = allEvents.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2), time = allEvents[middle]?.time;
+      if (Number.isFinite(time) && time <= endTime) low = middle + 1;
+      else high = middle;
+    }
+    const after = low;
+    sourceTruncated = after - first > UI_MAX_TASK_RUNTIME_SOURCE_EVENTS;
+    sourceEvents = allEvents.slice(Math.max(first, after - UI_MAX_TASK_RUNTIME_SOURCE_EVENTS), after)
+      .filter((event) => Number.isFinite(event?.time) && event.time >= startTime && event.time <= endTime);
+  }
+  const results = new Map();
+  const stepEnds = new Map();
+  const turnEnds = new Map();
+  for (const event of sourceEvents) {
+    if (event.type === "tool/result") {
+      const callId = event.data?.message?.callId ?? event.data?.callId;
+      if (typeof callId === "string") results.set(callId, event);
+    } else if (event.type === "step/end") stepEnds.set(`${event.data?.turn ?? ""}:${event.data?.step ?? ""}`, event);
+    else if (event.type === "turn/end") turnEnds.set(String(event.data?.turn ?? ""), event);
+  }
+  let plan = [];
+  let observedModel = null;
+  const workflow = [];
+  for (const event of sourceEvents) {
+    const at = taskWorkflowTime(event.time);
+    if (!at) continue;
+    const sequence = Number.isSafeInteger(event.seq) ? event.seq : workflow.length;
+    if (event.type === "turn/start") {
+      const turn = Number.isSafeInteger(event.data?.turn) ? event.data.turn : undefined;
+      const end = turnEnds.get(String(turn ?? ""));
+      const outcome = end ? taskWorkflowStatus(end.data?.reason) : { status: "running", reason: "" };
+      workflow.push({ id: `turn:${sequence}`, kind: "turn", sequence, at, turn, status: outcome.status, reason: outcome.reason, ...(end ? { completedAt: taskWorkflowTime(end.time) } : {}) });
+    } else if (event.type === "step/start") {
+      const turn = Number.isSafeInteger(event.data?.turn) ? event.data.turn : undefined;
+      const step = Number.isSafeInteger(event.data?.step) ? event.data.step : undefined;
+      const end = stepEnds.get(`${turn ?? ""}:${step ?? ""}`);
+      workflow.push({ id: `step:${sequence}`, kind: "step", sequence, at, turn, step, status: end ? "completed" : "running", ...(end ? { completedAt: taskWorkflowTime(end.time) } : {}) });
+    } else if (event.type === "tool/call") {
+      const callId = typeof event.data?.callId === "string" ? event.data.callId : "";
+      const toolName = taskWorkflowText(event.data?.name, 128);
+      if (!toolName || toolName === "todo_write") continue;
+      const result = callId ? results.get(callId) : undefined;
+      const failed = result?.data?.message?.isError === true || result?.data?.isError === true || result?.data?.error !== undefined;
+      workflow.push({ id: `tool:${sequence}`, kind: "tool", sequence, at, toolName, status: result ? failed ? "failed" : "completed" : "running", ...(result ? { completedAt: taskWorkflowTime(result.time) } : {}) });
+    } else if (event.type === "todo/write") {
+      plan = projectTaskPlanItems(event.data?.todos);
+      const completed = plan.filter((item) => item.status === "completed").length;
+      const inProgress = plan.filter((item) => item.status === "in_progress").length;
+      workflow.push({ id: `plan:${sequence}`, kind: "plan", sequence, at, status: "completed", counts: { total: plan.length, completed, inProgress, pending: Math.max(0, plan.length - completed - inProgress) } });
+    } else if (event.type === "assistant/message") {
+      const source = event.data?.message?.source;
+      if (typeof source?.model === "string" || typeof source?.provider === "string") {
+        observedModel = {
+          ...(typeof source.model === "string" ? { model: source.model.slice(0, 256) } : {}),
+          ...(typeof source.provider === "string" ? { provider: source.provider.slice(0, 128) } : {}),
+        };
+      }
+      const content = Array.isArray(event.data?.message?.content) ? event.data.message.content : [];
+      if (!content.some((block) => block?.type === "tool-call")) workflow.push({ id: `model:${sequence}`, kind: "model", sequence, at, status: event.data?.interrupted === true ? "stopped" : "completed" });
+    } else if (event.type === "llm/retry") workflow.push({ id: `retry:${sequence}`, kind: "retry", sequence, at, status: "running" });
+  }
+  const counts = {
+    total: plan.length,
+    completed: plan.filter((item) => item.status === "completed").length,
+    inProgress: plan.filter((item) => item.status === "in_progress").length,
+    pending: plan.filter((item) => item.status === "pending").length,
+  };
+  const percent = task.state === "completed" ? 100 : counts.total > 0 ? Math.round((counts.completed / counts.total) * 100) : task.state === "pending" ? 0 : null;
+  const executionModel = (observedModel || member && (member.model || member.provider)) ? {
+    ...(observedModel ?? {}),
+    ...(!observedModel && member?.model ? { model: member.model } : {}),
+    ...(!observedModel && member?.provider ? { provider: member.provider } : {}),
+    ...(member?.modelTier ? { modelTier: member.modelTier } : {}),
+    ...(member?.inheritsMain !== undefined ? { inheritsMain: member.inheritsMain } : {}),
+    observed: observedModel !== null,
+  } : null;
+  const visibleWorkflow = workflow.slice(-UI_MAX_TASK_WORKFLOW_EVENTS);
+  return {
+    progress: { percent, source: counts.total > 0 ? "plan" : "status", indeterminate: percent === null, ...counts },
+    plan,
+    workflow: {
+      events: visibleWorkflow,
+      truncated: sourceTruncated || visibleWorkflow.length < workflow.length,
+      totalEvents: workflow.length,
+      lastEventAt: visibleWorkflow.at(-1)?.at ?? null,
+    },
+    executionModel,
+  };
+}
+function taskExecutionWindow(task) {
+  const start = Date.parse(task.claimedAt ?? "");
+  if (!Number.isFinite(start)) return null;
+  const completed = Date.parse(task.completedAt ?? "");
+  return { start, end: Number.isFinite(completed) ? completed : Number.POSITIVE_INFINITY };
+}
+function taskExecutionOverlap(left, right) {
+  const leftWindow = taskExecutionWindow(left), rightWindow = taskExecutionWindow(right);
+  return leftWindow !== null && rightWindow !== null && leftWindow.start <= rightWindow.end && rightWindow.start <= leftWindow.end;
+}
+function projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId) {
+  const team = document.teams.find((candidate) => candidate.id === selectedTeamId);
+  if (team === undefined || memberOf(team, sessionId) === undefined) return null;
+  const task = team.tasks.find((candidate) => candidate.id === selectedTaskId);
+  if (task === undefined || sessionId !== team.rootLeadSessionId && task.assigneeSessionId !== sessionId) return null;
+  const assigned = task.assigneeSessionId === undefined ? undefined : team.members.find((member) => member.sessionId === task.assigneeSessionId);
+  const responsible = team.members.find((member) => member.sessionId === team.rootLeadSessionId);
+  const overlapsAnotherTask = assigned !== undefined && team.tasks.some((candidate) => candidate.id !== task.id
+    && candidate.assigneeSessionId === assigned.sessionId && taskExecutionOverlap(task, candidate));
+  const workflowUnavailableReason = assigned?.kind === "lead" ? "shared_lead_session" : overlapsAnotherTask ? "overlapping_tasks" : null;
+  let agent;
+  try { agent = assigned === undefined || workflowUnavailableReason !== null ? undefined : ctx?.agents?.get?.(assigned.sessionId); } catch { agent = undefined; }
+  const runtime = taskRuntimeProjection(task, assigned, agent);
+  runtime.workflow.reliable = workflowUnavailableReason === null;
+  runtime.workflow.unavailableReason = workflowUnavailableReason ?? (task.claimedAt !== undefined && agent === undefined ? "session_unavailable" : null);
+  return {
+    taskId: task.id,
+    summary: task.title,
+    description: typeof task.description === "string" ? task.description.slice(0, UI_TASK_DETAIL_DESCRIPTION_CHARS) : "",
+    status: task.state,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    claimedAt: task.claimedAt ?? null,
+    completedAt: task.completedAt ?? null,
+    claimant: task.state !== "pending" || task.claimedAt !== undefined ? taskDetailMember(assigned) : null,
+    responsible: taskDetailMember(responsible),
+    progress: runtime.progress,
+    plan: runtime.plan,
+    workflow: runtime.workflow,
+    executionModel: runtime.executionModel,
+  };
+}
+
 function projectTeamForUi(team, nameTeams = []) {
   const peerTeams = Array.isArray(nameTeams) ? nameTeams : [];
   const names = new Map([team, ...peerTeams].flatMap((candidate) => candidate.members ?? []).map((member) => [member.sessionId, canonicalMemberName(member.name)]));
@@ -784,6 +1040,7 @@ function projectTeamForUi(team, nameTeams = []) {
     members,
     tasks,
     messages: visibleMessages,
+    attention: (() => { const value = deriveAttention(team, [team, ...peerTeams]); return { required: value.required, codes: value.codes, failedMemberCount: value.failedMembers.length, strandedTaskCount: value.strandedTasks.length, failedDeliveryCount: value.failedDeliveries.length }; })(),
   };
 }
 function projectTeamSummary(team) {
@@ -1157,7 +1414,7 @@ class AgentTeamsStore {
     let migrated = false;
     try {
       const persisted = JSON.parse(await readFile(this.filePath, "utf8"));
-      migrated = persisted?.version === LEGACY_STORE_VERSION;
+      migrated = LEGACY_STORE_VERSIONS.has(persisted?.version);
       this.document = validateStoreDocument(persisted);
       this.fileStamp = await this.#currentFileStamp();
     } catch (error) {
@@ -1455,6 +1712,19 @@ function resolveTeamForCaller(document, teamId, sessionId) {
   authenticateParticipant(team, sessionId);
   return team;
 }
+function resolveUniqueLeadTeam(document, teamId, leadSessionId, predicate = (team) => team.state !== "closed") {
+  const explicit = optionalString(teamId, "teamId", 256);
+  if (explicit !== undefined) {
+    const team = findTeam(document, explicit);
+    requireLead(team, leadSessionId);
+    if (!predicate(team)) reject("team is not in the required lifecycle state", "AGENT_TEAMS_CONFLICT");
+    return team;
+  }
+  const candidates = document.teams.filter((team) => team.rootLeadSessionId === leadSessionId && predicate(team));
+  if (candidates.length === 0) reject("root lead has no matching team", "AGENT_TEAMS_NOT_FOUND");
+  if (candidates.length > 1) reject("team_id is required when more than one team matches", "AGENT_TEAMS_TEAM_REQUIRED");
+  return candidates[0];
+}
 function requireCommonFixedLead(sourceTeam, targetTeam, sessionId) {
   if (sourceTeam.rootLeadSessionId !== targetTeam.rootLeadSessionId || sourceTeam.rootLeadSessionId !== sessionId) {
     reject("cross-team actions require the same fixed root lead to own both teams", "AGENT_TEAMS_CROSS_TEAM_FORBIDDEN");
@@ -1463,8 +1733,9 @@ function requireCommonFixedLead(sourceTeam, targetTeam, sessionId) {
 function registrationPrompt(teamId, memberName, role) {
   return `You are being provisioned as ${memberName} (${role}) for agent team ${teamId}. Do not begin any task in this turn. Do not infer work from prior context. Reply only that you are waiting for the coordinator registration follow-up; membership must be durably persisted before work starts.`;
 }
-function workPrompt(teamId, memberId, prompt) {
-  return `Coordinator registration complete. Team ${teamId}; member ${memberId}. You may now begin the assigned work. Use agent-team tools for team tasks and coordinator relays. You cannot create or fork agents. If your in-progress task can be split into genuinely independent parallel outcomes, use team_expansion_request with explicit deliverables, acceptance criteria, and non-overlapping file/resource boundaries. This is only a proposal: the root coordinator decides whether to create persistent tasks and visible peer members without bypassing maxMembers or maxActiveTurns. Assignment:\n${prompt}`;
+function workPrompt(teamId, memberId, prompt, taskIds = []) {
+  const taskNotice = taskIds.length === 0 ? "" : ` Durable assigned task IDs: ${taskIds.join(", ")}. Claim only an unblocked task already assigned to your session before doing its work.`;
+  return `Coordinator registration complete. Team ${teamId}; member ${memberId}. You may now begin the assigned work.${taskNotice} Use agent-team tools for team tasks and coordinator relays. You cannot create or fork agents. If your in-progress task can be split into genuinely independent parallel outcomes, use team_expansion_request with explicit deliverables, acceptance criteria, and non-overlapping file/resource boundaries. This is only a proposal: the root coordinator decides whether to create persistent tasks and visible peer members without bypassing maxMembers or maxActiveTurns. Assignment:\n${prompt}`;
 }
 
 function validateExpansionRequestForDelivery(document, team, caller, request, { platform = process.platform } = {}) {
@@ -1596,6 +1867,146 @@ async function createTeam(store, lead, input) {
   });
 }
 
+function normalizeBootstrapInput(input) {
+  const requestId = nonEmptyString(input.requestId, "requestId", 256);
+  if (!Array.isArray(input.tasks) || input.tasks.length < 1 || input.tasks.length > MAX_BOOTSTRAP_ITEMS) reject(`bootstrap tasks must contain 1 through ${MAX_BOOTSTRAP_ITEMS} items`, "AGENT_TEAMS_INVALID_BOOTSTRAP");
+  if (!Array.isArray(input.members) || input.members.length < 1 || input.members.length > MAX_BOOTSTRAP_ITEMS) reject(`bootstrap members must contain 1 through ${MAX_BOOTSTRAP_ITEMS} items`, "AGENT_TEAMS_INVALID_BOOTSTRAP");
+  const members = input.members.map((member, index) => ({
+    key: nonEmptyString(member.key, `members[${index}].key`, 64),
+    name: normalizeWorkerName(member.name),
+    role: nonEmptyString(member.role, `members[${index}].role`, 500),
+    prompt: nonEmptyString(member.prompt, `members[${index}].prompt`, 65_536),
+    modelTier: member.modelTier === undefined ? "subagent" : assertEnum(member.modelTier, MODEL_TIERS, `members[${index}].modelTier`) ?? member.modelTier,
+    ...(optionalString(member.model, `members[${index}].model`, 256) === undefined ? {} : { model: member.model.trim() }),
+  }));
+  if (new Set(members.map((member) => member.key)).size !== members.length) reject("bootstrap member keys must be unique", "AGENT_TEAMS_INVALID_BOOTSTRAP");
+  if (new Set(members.map((member) => memberNameKey(member.name))).size !== members.length) reject("bootstrap member names must be unique", "AGENT_TEAMS_DUPLICATE_MEMBER_NAME");
+  const memberKeys = new Set(members.map((member) => member.key));
+  const tasks = input.tasks.map((task, index) => {
+    const dependsOn = task.dependsOn ?? [];
+    const files = task.files ?? [];
+    assertStringArray(dependsOn, `tasks[${index}].dependsOn`);
+    assertStringArray(files, `tasks[${index}].files`);
+    return {
+      key: nonEmptyString(task.key, `tasks[${index}].key`, 64),
+      title: nonEmptyString(task.title, `tasks[${index}].title`, 500),
+      ...(optionalString(task.description, `tasks[${index}].description`, 32_768) === undefined ? {} : { description: task.description.trim() }),
+      memberKey: nonEmptyString(task.memberKey, `tasks[${index}].memberKey`, 64),
+      dependsOn: [...new Set(dependsOn.map((value) => nonEmptyString(value, `tasks[${index}].dependsOn item`, 64)))],
+      files: [...new Set(files.map((value) => nonEmptyString(value, `tasks[${index}].files item`, 1_024)))],
+    };
+  });
+  const taskKeys = new Set(tasks.map((task) => task.key));
+  if (taskKeys.size !== tasks.length) reject("bootstrap task keys must be unique", "AGENT_TEAMS_INVALID_BOOTSTRAP");
+  for (const task of tasks) {
+    if (!memberKeys.has(task.memberKey)) reject(`bootstrap task ${task.key} references an unknown member key`, "AGENT_TEAMS_INVALID_BOOTSTRAP");
+    if (task.dependsOn.includes(task.key) || task.dependsOn.some((key) => !taskKeys.has(key))) reject(`bootstrap task ${task.key} has an invalid dependency`, "AGENT_TEAMS_INVALID_BOOTSTRAP");
+  }
+  if (members.some((member) => tasks.every((task) => task.memberKey !== member.key))) reject("every bootstrap member must own at least one durable task", "AGENT_TEAMS_INVALID_BOOTSTRAP");
+  for (let index = 0; index < tasks.length; index += 1) for (let candidate = 0; candidate < index; candidate += 1) {
+    const left = tasks[candidate], right = tasks[index];
+    if (left.memberKey === right.memberKey) continue;
+    for (const leftFile of left.files) for (const rightFile of right.files) if (fileBoundaryOverlap(leftFile, rightFile)) {
+      reject(`bootstrap tasks ${left.key} and ${right.key} assign overlapping file boundaries to different members`, "AGENT_TEAMS_BOOTSTRAP_SCOPE_CONFLICT");
+    }
+  }
+  const visiting = new Set(), visited = new Set(), byKey = new Map(tasks.map((task) => [task.key, task]));
+  const visit = (key) => { if (visiting.has(key)) reject("bootstrap task dependency cycle detected", "AGENT_TEAMS_INVALID_BOOTSTRAP"); if (visited.has(key)) return; visiting.add(key); for (const dependency of byKey.get(key).dependsOn) visit(dependency); visiting.delete(key); visited.add(key); };
+  for (const key of taskKeys) visit(key);
+  const normalized = {
+    requestId,
+    objective: nonEmptyString(input.objective, "objective", 16_384),
+    ...(optionalString(input.name, "name", 500) === undefined ? {} : { name: input.name.trim() }),
+    leadName: normalizeMemberName(input.leadName ?? "Lead", "leadName"),
+    tasks,
+    members,
+  };
+  return { ...normalized, inputHash: createHash("sha256").update(JSON.stringify(normalized)).digest("hex") };
+}
+function bootstrapResult(team, reused, error) {
+  return {
+    operation: { requestId: team.bootstrap.requestId, phase: team.bootstrap.phase, reused },
+    team: projectTeam(team),
+    taskRefs: clone(team.bootstrap.taskRefs),
+    memberRefs: clone(team.bootstrap.memberRefs),
+    ...(error === undefined ? {} : { error }),
+  };
+}
+function annotateStage(error, stage) {
+  if (error !== null && typeof error === "object" && error.stage === undefined) error.stage = stage;
+  return error;
+}
+async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
+  const plan = normalizeBootstrapInput(input);
+  const mainSelection = await resolveModelSelection(store, "main", undefined, lead.options);
+  await Promise.all(plan.members.map((member) => resolveModelSelection(store, member.modelTier, member.model, lead.options)));
+  requireExactRootAgent(ctx, lead);
+  const prepared = await store.runOperation(() => store.mutate((document) => {
+    assertEnabled(document);
+    const existing = document.teams.find((team) => team.rootLeadSessionId === lead.id && team.bootstrap?.requestId === plan.requestId);
+    if (existing !== undefined) {
+      requireLiveRootLead(ctx, existing, lead);
+      if (existing.bootstrap.inputHash !== plan.inputHash) reject("bootstrap request_id was already used with different input", "AGENT_TEAMS_IDEMPOTENCY_CONFLICT");
+      return { teamId: existing.id, reused: true };
+    }
+    if (document.teams.filter((team) => team.rootLeadSessionId === lead.id && team.state !== "closed").length >= HARD_MAX_TEAMS_PER_ROOT) reject(`root lead peer-team limit reached (${HARD_MAX_TEAMS_PER_ROOT})`, "AGENT_TEAMS_TEAM_LIMIT");
+    if (plan.members.length > document.settings.maxMembers) reject("bootstrap exceeds the configured teammate limit", "AGENT_TEAMS_MEMBER_LIMIT");
+    if (activeWorkerTurnsForLead(document, lead.id) + plan.members.length > document.settings.maxActiveTurns) reject("bootstrap exceeds the root lead active-turn limit", "AGENT_TEAMS_ACTIVE_TURN_LIMIT");
+    const timestamp = now(), teamId = randomUUID();
+    const taskIds = new Map(plan.tasks.map((task) => [task.key, randomUUID()]));
+    const team = {
+      id: teamId, rootLeadSessionId: lead.id, name: plan.name ?? plan.objective.slice(0, 500), objective: plan.objective, state: "active", createdAt: timestamp, updatedAt: timestamp,
+      members: [{ id: `lead:${lead.id}`, sessionId: lead.id, name: plan.leadName, role: "root lead and coordinator", ...mainSelection, kind: "lead", state: "running", createdAt: timestamp, updatedAt: timestamp }],
+      tasks: plan.tasks.map((task) => ({ id: taskIds.get(task.key), title: task.title, ...(task.description === undefined ? {} : { description: task.description }), state: "pending", dependsOn: task.dependsOn.map((key) => taskIds.get(key)), files: task.files, createdAt: timestamp, updatedAt: timestamp })),
+      messages: [],
+      bootstrap: { requestId: plan.requestId, inputHash: plan.inputHash, phase: "prepared", taskRefs: plan.tasks.map((task) => ({ key: task.key, taskId: taskIds.get(task.key) })), memberRefs: plan.members.map((member) => ({ key: member.key, name: member.name, status: "pending" })), createdAt: timestamp, updatedAt: timestamp },
+    };
+    document.teams.push(team);
+    return { teamId, reused: false };
+  }));
+  for (const memberPlan of plan.members) {
+    const state = await store.runOperation(() => store.mutate((document) => {
+      const team = findTeam(document, prepared.teamId), ref = team.bootstrap.memberRefs.find((candidate) => candidate.key === memberPlan.key);
+      if (ref.status === "complete") return { skip: true };
+      if (ref.status === "starting" && ref.memberId !== undefined) {
+        const member = team.members.find((candidate) => candidate.id === ref.memberId);
+        if (member !== undefined) return { blocked: true, error: { code: "AGENT_TEAMS_BOOTSTRAP_UNCERTAIN", stage: "member-reconcile", retryable: false } };
+      }
+      if (ref.status === "failed" && ref.memberId !== undefined) return { blocked: true, error: { code: ref.errorCode ?? "AGENT_TEAMS_BOOTSTRAP_PARTIAL", stage: ref.errorStage ?? "member-start", retryable: false } };
+      ref.status = "starting"; ref.errorCode = undefined; ref.errorStage = undefined; ref.memberId = undefined; ref.sessionId = undefined;
+      team.bootstrap.phase = "running"; team.bootstrap.updatedAt = now(); team.updatedAt = team.bootstrap.updatedAt;
+      return { skip: false };
+    }));
+    if (state.skip) continue;
+    if (state.blocked) {
+      const team = await store.read((document) => findTeam(document, prepared.teamId));
+      return bootstrapResult(team, true, state.error);
+    }
+    try {
+      const taskIds = plan.tasks.filter((task) => task.memberKey === memberPlan.key).map((task) => task.key);
+      const persistedTaskIds = await store.read((document) => { const team = findTeam(document, prepared.teamId); return taskIds.map((key) => team.bootstrap.taskRefs.find((ref) => ref.key === key).taskId); });
+      const spawned = await spawnMember(ctx, store, admission, lead, { teamId: prepared.teamId, name: memberPlan.name, role: memberPlan.role, prompt: memberPlan.prompt, modelTier: memberPlan.modelTier, model: memberPlan.model, taskIds: persistedTaskIds }, signal);
+      await store.runOperation(() => store.mutate((document) => {
+        const team = findTeam(document, prepared.teamId), ref = team.bootstrap.memberRefs.find((candidate) => candidate.key === memberPlan.key);
+        ref.status = "complete"; ref.memberId = spawned.member.id; ref.sessionId = spawned.member.sessionId; ref.errorCode = undefined; ref.errorStage = undefined;
+        team.bootstrap.updatedAt = now(); team.bootstrap.phase = team.bootstrap.memberRefs.every((candidate) => candidate.status === "complete") ? "complete" : "running"; team.updatedAt = team.bootstrap.updatedAt;
+      }));
+    } catch (cause) {
+      const stage = cause?.stage ?? (String(cause?.code ?? "").startsWith("AGENT_TEAMS_ADMISSION_") ? "admission" : "member-start");
+      await store.runOperation(() => store.mutate((document) => {
+        const team = findTeam(document, prepared.teamId), ref = team.bootstrap.memberRefs.find((candidate) => candidate.key === memberPlan.key);
+        const failed = [...team.members].reverse().find((candidate) => memberNameKey(candidate.name) === memberNameKey(memberPlan.name) && candidate.kind === "worker");
+        ref.status = "failed"; ref.memberId = failed?.id; ref.sessionId = failed?.sessionId; ref.errorCode = cause?.code ?? "AGENT_TEAMS_BOOTSTRAP_FAILED"; ref.errorStage = stage;
+        team.bootstrap.phase = "partial"; team.bootstrap.updatedAt = now(); team.updatedAt = team.bootstrap.updatedAt;
+      }));
+      const team = await store.read((document) => findTeam(document, prepared.teamId));
+      return bootstrapResult(team, prepared.reused, { code: cause?.code ?? "AGENT_TEAMS_BOOTSTRAP_FAILED", stage, retryable: team.bootstrap.memberRefs.find((ref) => ref.key === memberPlan.key).memberId === undefined });
+    }
+  }
+  const team = await store.read((document) => findTeam(document, prepared.teamId));
+  return bootstrapResult(team, prepared.reused);
+}
+
 async function settleSpawnedChildFailure(ctx, store, lead, cleanup) {
   const childIdUsedElsewhere = await store.read((document) => document.teams.some((team) => team.members.some((member) => member.id !== cleanup.memberId && member.sessionId === cleanup.childId)));
   if (childIdUsedElsewhere) {
@@ -1643,7 +2054,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
   const modelSelection = await resolveModelSelection(store, input.modelTier ?? "subagent", input.model, lead.options);
   const reservation = await store.runOperation(() => store.mutate((document) => {
     assertEnabled(document);
-    const team = findTeam(document, nonEmptyString(input.teamId, "teamId", 256));
+    const team = optionalString(input.teamId, "teamId", 256) === undefined ? resolveUniqueLeadTeam(document, undefined, lead.id, (candidate) => candidate.state === "active") : findTeam(document, input.teamId);
     requireLiveRootLead(ctx, team, lead);
     if (team.state !== "active") reject("team is not accepting new members", "AGENT_TEAMS_CLOSING");
     if (team.members.filter(workerConsumesMemberSlot).length >= document.settings.maxMembers) reject("team teammate limit reached", "AGENT_TEAMS_MEMBER_LIMIT");
@@ -1651,9 +2062,16 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
     const memberName = normalizeWorkerName(input.name);
     const memberNameIdentity = memberNameKey(memberName);
     if (team.members.some((member) => memberNameKey(member.name) === memberNameIdentity)) reject("a team member already uses this normalized display name", "AGENT_TEAMS_DUPLICATE_MEMBER_NAME");
+    const taskIds = input.taskIds ?? [];
+    assertStringArray(taskIds, "taskIds");
+    const boundTasks = [...new Set(taskIds)].map((taskId) => {
+      const task = team.tasks.find((candidate) => candidate.id === taskId);
+      if (task === undefined || task.state !== "pending" || task.assigneeSessionId !== undefined) reject("bootstrap member tasks must be pending and unassigned", "AGENT_TEAMS_TASK_CONFLICT");
+      return task.id;
+    });
     const timestamp = now();
     const memberId = randomUUID();
-    const reservation = { teamId: team.id, memberId, childId: randomUUID(), placeholderSessionId: `provisioning:${memberId}`, name: memberName, role: nonEmptyString(input.role, "role", 500), prompt: nonEmptyString(input.prompt, "prompt", 65_536), ...modelSelection };
+    const reservation = { teamId: team.id, memberId, childId: randomUUID(), placeholderSessionId: `provisioning:${memberId}`, name: memberName, role: nonEmptyString(input.role, "role", 500), prompt: nonEmptyString(input.prompt, "prompt", 65_536), taskIds: boundTasks, ...modelSelection };
     team.members.push({ id: memberId, sessionId: reservation.placeholderSessionId, name: reservation.name, role: reservation.role, ...(reservation.model === undefined ? {} : { model: reservation.model }), ...(reservation.provider === undefined ? {} : { provider: reservation.provider }), modelTier: reservation.modelTier, inheritsMain: reservation.inheritsMain, routeSource: reservation.routeSource, kind: "worker", state: "provisioning", createdAt: timestamp, updatedAt: timestamp });
     team.updatedAt = timestamp;
     return reservation;
@@ -1693,8 +2111,8 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
         team.members = team.members.filter((candidate) => candidate.id !== reservation.memberId);
         team.updatedAt = now();
       }));
-      if (typeof error?.code === "string" && error.code.startsWith("AGENT_TEAMS_ADMISSION_")) throw error;
-      throw new HarnessError(`member provisioning failed before publication: ${String(error)}`, "AGENT_TEAMS_SPAWN_FAILED");
+      if (typeof error?.code === "string" && error.code.startsWith("AGENT_TEAMS_ADMISSION_")) throw annotateStage(error, "admission");
+      throw annotateStage(new HarnessError(`member provisioning failed before publication: ${String(error)}`, "AGENT_TEAMS_SPAWN_FAILED"), "provisioning");
     }
     if (started.childId !== reservation.childId) {
       const cause = new HarnessError("subagent provider returned a different child id than the reserved identity", "AGENT_TEAMS_CONFLICT");
@@ -1721,24 +2139,30 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
         if (team.state !== "active" || record === undefined || record.sessionId !== reservation.placeholderSessionId || record.state !== "provisioning") reject("team changed during member provisioning", "AGENT_TEAMS_CONFLICT");
         record.sessionId = started.childId;
         record.updatedAt = now();
+        for (const taskId of reservation.taskIds) {
+          const task = team.tasks.find((candidate) => candidate.id === taskId);
+          if (task === undefined || task.state !== "pending" || task.assigneeSessionId !== undefined) reject("bootstrap task changed during member provisioning", "AGENT_TEAMS_TASK_CONFLICT");
+          task.assigneeSessionId = started.childId;
+          task.updatedAt = record.updatedAt;
+        }
         team.updatedAt = record.updatedAt;
         return { duplicateChildId: false, member: clone(record) };
       }));
     } catch (error) {
       const cleanup = { phase: "publication", teamId: reservation.teamId, memberId: reservation.memberId, childId: started.childId, cause: error };
       await settleSpawnedChildFailure(ctx, store, lead, cleanup);
-      throw new HarnessError(`member publication failed after child creation: ${String(error)}`, "AGENT_TEAMS_SPAWN_FAILED");
+      throw annotateStage(new HarnessError(`member publication failed after child creation: ${String(error)}`, "AGENT_TEAMS_SPAWN_FAILED"), "publication");
     }
     if (publication.duplicateChildId) reject("subagent provider returned a child id already owned by another member", "AGENT_TEAMS_CONFLICT");
     const member = publication.member;
     try {
       await admission.run(lead, started.childId, signal, async () => {
         requireExactRootAgent(ctx, lead);
-        return ctx.subagents.followup(lead, started.childId, textContent(workPrompt(reservation.teamId, reservation.memberId, reservation.prompt)), { source: relaySource(lead.id), signal });
+        return ctx.subagents.followup(lead, started.childId, textContent(workPrompt(reservation.teamId, reservation.memberId, reservation.prompt, reservation.taskIds)), { source: relaySource(lead.id), signal });
       });
     } catch (error) {
       await settleSpawnedChildFailure(ctx, store, lead, { phase: "work-followup", teamId: reservation.teamId, memberId: reservation.memberId, childId: started.childId, cause: error });
-      throw error;
+      throw annotateStage(error, "work-followup");
     }
     return store.runOperation(() => store.mutate((document) => {
       const team = findTeam(document, reservation.teamId);
@@ -2033,6 +2457,19 @@ function confirmMemberRetired(member) {
   member.error = undefined;
   member.updatedAt = now();
 }
+function releaseRetiredMemberTasks(team, sessionId, timestamp = now()) {
+  const releasedTaskIds = [];
+  for (const task of team.tasks) {
+    if (task.assigneeSessionId !== sessionId || task.state === "completed") continue;
+    if (task.state === "in_progress") task.state = "pending";
+    task.assigneeSessionId = undefined;
+    task.claimedAt = undefined;
+    task.completedAt = undefined;
+    task.updatedAt = timestamp;
+    releasedTaskIds.push(task.id);
+  }
+  return releasedTaskIds;
+}
 function resetTaskStoppedAfter(task, stoppedAt) {
   const completedAfterStop = task.state === "completed" && typeof task.completedAt === "string" && task.completedAt >= stoppedAt;
   if (task.state !== "in_progress" && !completedAfterStop) return;
@@ -2076,18 +2513,31 @@ async function pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt) {
     }
   }));
 }
+function buildResumePlan(team, teams) {
+  const attention = deriveAttention(team, teams);
+  return {
+    readyMemberIds: team.members.filter((member) => member.kind === "worker" && member.state === "ready").map((member) => member.id),
+    failedMemberIds: [...attention.failedMembers],
+    pendingAssignedTaskIds: team.tasks.filter((task) => task.state === "pending" && task.assigneeSessionId !== undefined).map((task) => task.id),
+    blockedTaskIds: [...attention.blockedTasks],
+    strandedTaskIds: [...attention.strandedTasks],
+    automaticallyWoken: false,
+  };
+}
 async function resumePausedTeam(ctx, store, lead, input) {
-  const teamId = nonEmptyString(input.teamId, "teamId", 256);
+  let selectedTeamId;
   const result = await store.runOperation(() => store.mutate((document) => {
-    const team = findTeam(document, teamId);
+    const team = optionalString(input.teamId, "teamId", 256) === undefined ? resolveUniqueLeadTeam(document, undefined, lead.id, (candidate) => candidate.state === "paused") : findTeam(document, input.teamId);
+    selectedTeamId = team.id;
     requireLiveRootLead(ctx, team, lead);
     if (team.state !== "paused") reject("team is not paused", "AGENT_TEAMS_CONFLICT");
     if (team.members.some((member) => member.kind === "worker" && member.state === "shutting_down")) reject("team members are still stopping; retry resume after they become ready", "AGENT_TEAMS_CONFLICT");
     team.state = "active";
     team.updatedAt = now();
-    return { teamId: team.id, team: projectTeam(team, document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId)) };
+    const peers = document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId);
+    return { teamId: team.id, team: projectTeam(team, peers), resumePlan: buildResumePlan(team, peers) };
   }));
-  USER_PAUSED_TEAMS.delete(teamId);
+  USER_PAUSED_TEAMS.delete(selectedTeamId);
   return result;
 }
 
@@ -2099,7 +2549,7 @@ async function retireMember(ctx, store, admission, lead, input, signal) {
     requireOpenTeam(team);
     const member = resolveMember(team, input.memberSessionId);
     if (member.kind !== "worker") reject("unknown worker member", "AGENT_TEAMS_NOT_FOUND");
-    if (member.state === "retired") return { teamId: team.id, member: clone(member), noop: true };
+    if (member.state === "retired") return { teamId: team.id, member: clone(member), releasedTaskIds: [], noop: true };
     markMemberShuttingDown(member, force);
     team.updatedAt = member.updatedAt;
     return { teamId: team.id, member: clone(member), noop: false };
@@ -2138,19 +2588,22 @@ async function retireMember(ctx, store, admission, lead, input, signal) {
   return store.runOperation(() => store.mutate((document) => {
     const team = findTeam(document, prepared.teamId);
     const member = memberOf(team, prepared.member.sessionId);
+    let releasedTaskIds = [];
     if (member !== undefined && team.state !== "closed") {
+      const retiredSessionId = member.sessionId;
       confirmMemberRetired(member);
+      releasedTaskIds = releaseRetiredMemberTasks(team, retiredSessionId, member.updatedAt);
       team.updatedAt = member.updatedAt;
     }
     if (member === undefined) reject("unknown worker member", "AGENT_TEAMS_NOT_FOUND");
-    return { teamId: team.id, member: clone(member) };
+    return { teamId: team.id, member: clone(member), releasedTaskIds };
   }));
 }
 
 async function shutdownTeam(ctx, store, admission, lead, input, signal) {
-  const teamId = nonEmptyString(input.teamId, "teamId", 256);
+  const teamId = await store.read((document) => optionalString(input.teamId, "teamId", 256) === undefined ? resolveUniqueLeadTeam(document, undefined, lead.id, (candidate) => candidate.state !== "closed").id : findTeam(document, input.teamId).id);
   if (input.memberSessionId !== undefined && input.memberSessionId !== "") {
-    return queueTeamOperation(store.filePath, teamId, () => retireMember(ctx, store, admission, lead, input, signal));
+    return queueTeamOperation(store.filePath, teamId, () => retireMember(ctx, store, admission, lead, { ...input, teamId }, signal));
   }
   const force = input.force === true;
   const prepared = await queueTeamOperation(store.filePath, teamId, () => store.runOperation(() => store.mutate((document) => {
@@ -2304,8 +2757,9 @@ function teamSystemPrompt(store) {
   }
   return [
     "Agent Teams automatic-team mode is ENABLED.",
-    "Before substantive work on every ordinary direct-human root turn, apply the three-level gate below. When the Level 3 conditions are met, you must call team_start in that same turn and must not replace the required visible managed members with multiple hidden ordinary subagents.",
-    "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively call team_start only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
+    "Before substantive work on every ordinary direct-human root turn, apply the three-level gate below. When the Level 3 conditions are met, choose exactly one creation path in that same turn: use team_bootstrap when the complete bounded task/member plan is already known; otherwise use team_start and then the existing task/spawn tools. Never call both team_start and team_bootstrap for the same team, and never replace the required visible managed members with multiple hidden ordinary subagents.",
+    "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively choose one Agent Team creation path only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
+    "When a new team already has a complete bounded plan of one through four durable tasks and one through four visible peers, call team_bootstrap directly with a stable request_id and do not call team_start first. The Host persists all tasks before starting members and exact replay reuses the plan. If that complete plan is not ready, call team_start instead and continue with team_task_create then team_spawn; do not later bootstrap that same team. Neither path may bypass the Level 3 gate, direct-human authority, capacity checks, file-scope separation, or explicit review of partial/uncertain starts.",
     "For every team_expansion_request, the fixed root lead approves only when the remaining outcomes are genuinely parallel and independent, inputs and acceptance criteria are explicit, file/external-resource ownership does not conflict, the handoff context is small, critical-path reduction or independent-review value materially exceeds coordination cost, and current member/turn/task budget is sufficient. The Host compares proposed file scopes with other in-progress task files and checks proposal-internal resource hierarchy, but existing external-resource ownership is not persisted and must be verified by the root. If a broad source task is split, first release/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn for visible same-level peers. If rejected, explain the reason to the requester. Never invent a leader→group-leader→hidden-worker hierarchy.",
     "The fixed root lead/brain always uses the main model route. The AI autonomously chooses each spawned member's model_tier: default to subagent to reduce cost; use main only for high-complexity reasoning, architecture, security-critical work, or repeated failures. Users do not choose member tiers. Every new member re-reads the latest route for its chosen tier; changing the subagent route never changes main-tier members, and already-created continuable members keep their creation route.",
     "Every spawned member display name must be a plain 2–12 character duty name in the user's language. For Chinese, prefer 2–6 characters such as 界面、安全、测试、文档; for English, use labels such as UI, Test, Security, Docs. Avoid internal or abstract technical terms including 宿主、协调器、执行器、实现者、子代理 and Host, Coordinator, Executor, Implementer, Subagent.",
@@ -2314,6 +2768,221 @@ function teamSystemPrompt(store) {
     "Automatic collaboration follows Observe → Avoid → Require → Resolve → Admit → Deliver. Use collaboration_discover only when another exact owner or dependency is materially necessary; never guess or expose a session ID. Submit one structured collaboration_intent only for Host-verifiable dependency blocking, unique ownership, resource conflict, formal handoff, or mandatory policy review. The Host defaults to a silent no-wake inbox, deduplicates requests, and rejects stale, looping, broad, unsupported, or paused-sender intents.",
     "Read collaboration_inbox only at a natural coordination boundary, never poll it. A paused target is never woken: deferred items are tied to its pause epoch and become stale across explicit resume, so the sender must re-evaluate necessity instead of replaying them.",
   ].join("\n");
+}
+
+const FOUNDATION_TOOL_FORBIDDEN_KEYS = new Set(["project", "projectref", "actor", "actorref", "session", "sessionid", "role", "path", "workspacepath", "device", "deviceid", "team", "teamid", "task", "taskid", "repository", "repositoryref", "grant", "grantref", "approval", "approvalref", "effect", "effectref", "execution"]);
+function assertFoundationToolInput(value, field = "input", depth = 0) {
+  if (depth > 16) throw new TypeError(`${field} is too deeply nested`);
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) { value.forEach((item, index) => assertFoundationToolInput(item, `${field}[${index}]`, depth + 1)); return; }
+  for (const [key, child] of Object.entries(value)) {
+    const normalized = key.replaceAll(/[-_]/gu, "").toLowerCase();
+    if (FOUNDATION_TOOL_FORBIDDEN_KEYS.has(normalized)) { const error = new Error("foundation tool input contains a Host-derived field"); error.code = "PROJECT_FOUNDATIONS_FORBIDDEN"; throw error; }
+    assertFoundationToolInput(child, `${field}.${key}`, depth + 1);
+  }
+}
+function foundationFailure(error) {
+  const code = typeof error?.code === "string" && /^[A-Z0-9_]{3,80}$/u.test(error.code) ? error.code : "PROJECT_FOUNDATION_OPERATION_FAILED";
+  const rules = {
+    PROJECT_FOUNDATION_GIT_UNAVAILABLE: ["enable_desktop_git", false],
+    PROJECT_FOUNDATION_GIT_UNTRUSTED: ["restart_with_host_git_capability", false],
+    PROJECT_FOUNDATIONS_SOURCE_INVALID: ["open_the_exact_git_repository_root", false],
+    PROJECT_FOUNDATIONS_SOURCE_DIRTY: ["commit_or_clean_the_source_repository", false],
+    PROJECT_FOUNDATIONS_FORBIDDEN: ["refresh_team_assignment", false],
+    PROJECT_FOUNDATIONS_TASK_SCOPE_UNSUPPORTED: ["assign_exact_repository_files", false],
+    PROJECT_FOUNDATIONS_NOT_READY: ["retry_initialization", true],
+    PROJECT_FOUNDATIONS_CLOSED: ["restart_the_plugin", true],
+    PROJECT_FOUNDATIONS_INVALID_REQUEST: ["fix_request", false],
+    PROJECT_FOUNDATIONS_METHOD_NOT_ALLOWED: ["use_supported_method", false],
+    PROJECT_FOUNDATION_RUNNER_UNAVAILABLE: ["configure_a_trusted_desktop_runner", false],
+    PROJECT_FOUNDATION_RUNNER_EVIDENCE_INVALID: ["retry_from_the_registered_runner", false],
+    PROJECT_FOUNDATION_CONNECTOR_DISABLED: ["enable_a_host_connector", false],
+  };
+  const [action, retryable] = rules[code] ?? ["retry_or_inspect_host_logs", true];
+  return { ok: false, error: { code, action, retryable } };
+}
+function foundationRefs(value, fields) {
+  const result = {};
+  for (const field of fields) if (value?.[field] !== undefined) result[field] = value[field];
+  return result;
+}
+const FOUNDATION_BROWSER_ATTENTION = new Set(["connector_credentials_unavailable", "connector_disabled", "git_unavailable", "merge_conflict", "merge_queue_empty", "root_unavailable", "runner_unavailable", "source_dirty", "source_invalid", "status_unavailable"]);
+function projectFoundationsBrowserState(mode, state = {}) {
+  const sourceStatus = typeof state.sourceStatus === "string" && new Set(["authority_managed", "git_unavailable", "not_created", "not_initialized", "ready", "root_unavailable", "source_dirty", "source_invalid", "status_unavailable"]).has(state.sourceStatus) ? state.sourceStatus : "status_unavailable";
+  const count = (value) => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 1_000_000) : 0;
+  const attention = [...new Set(Array.isArray(state.attention) ? state.attention.filter((value) => FOUNDATION_BROWSER_ATTENTION.has(value)) : [])].sort();
+  return Object.freeze({
+    ok: true,
+    mode,
+    available: mode !== "unavailable",
+    ready: state.ready === true,
+    sourceStatus,
+    workspaceCount: count(state.workspaceCount),
+    claimCount: count(state.claimCount),
+    queuedChangeSetCount: count(state.queuedChangeSetCount),
+    campaignCount: count(state.campaignCount),
+    queuedJobCount: count(state.queuedJobCount),
+    runningJobCount: count(state.runningJobCount),
+    defectCount: count(state.defectCount),
+    outboxPendingCount: count(state.outboxPendingCount),
+    attention,
+  });
+}
+function createProjectFoundationManager(ctx, store, projectEntry, desktopGitCapabilityPromise, { runner, connector, runnerEvidenceProvider } = {}) {
+  const executionScope = new AsyncLocalStorage(), browserStatusExecution = Object.freeze(Object.create(null));
+  const capabilityResult = Promise.resolve(desktopGitCapabilityPromise).then((value) => ({ value }), (error) => ({ error }));
+  let runtime;
+  let runtimePromise;
+  let closing = false;
+  const resolveTrustedAgent = async () => {
+    const hostExecution = executionScope.getStore();
+    if (hostExecution === undefined) reject("foundation authorization requires Host tool execution", "PROJECT_FOUNDATIONS_FORBIDDEN");
+    if (hostExecution === browserStatusExecution) {
+      const roots = [...new Map(ctx.agents.roots().map((root) => [root.id, root])).values()];
+      const document = await store.read((current) => current);
+      const teamRoots = new Set(document.teams.filter((team) => team.state !== "closed").map((team) => team.rootLeadSessionId));
+      const scoped = roots.filter((root) => teamRoots.has(root.id)), candidates = scoped.length > 0 ? scoped : roots;
+      if (candidates.length !== 1) reject("foundation status requires one live root lead", "PROJECT_FOUNDATIONS_FORBIDDEN");
+      const [root] = candidates;
+      return { projectRef: (await projectEntry.status()).project?.projectRef, kind: "root", sessionId: root.id, rootSessionHeader: { cwd: root.session?.header?.cwd } };
+    }
+    const execution = toolExecution(ctx, hostExecution);
+    const status = await projectEntry.status();
+    const projectRef = status?.project?.projectRef;
+    if (typeof projectRef !== "string" || status.project.role !== "owner") reject("foundation authority requires the local project owner", "PROJECT_FOUNDATIONS_FORBIDDEN");
+    const caller = execution.agent, document = await store.read((current) => current), activeTeams = document.teams.filter((team) => team.state === "active"), rootLeadIds = new Set(activeTeams.map((team) => team.rootLeadSessionId));
+    if (rootLeadIds.size !== 1) reject("foundation authority requires one unambiguous active root lead", "PROJECT_FOUNDATIONS_FORBIDDEN");
+    const [rootLeadSessionId] = rootLeadIds, root = ctx.agents.get(rootLeadSessionId), liveRoots = ctx.agents.roots();
+    if (root === undefined || !liveRoots.includes(root)) reject("foundation root lead is unavailable", "PROJECT_FOUNDATIONS_FORBIDDEN");
+    if (liveRoots.includes(caller)) {
+      if (caller !== root) reject("foundation root caller does not own the active project teams", "PROJECT_FOUNDATIONS_FORBIDDEN");
+      const cwd = root.session?.header?.cwd;
+      return { projectRef, kind: "root", sessionId: root.id, rootSessionHeader: { cwd } };
+    }
+    const candidates = activeTeams.filter((team) => team.rootLeadSessionId === root.id && memberOf(team, caller.id) !== undefined);
+    if (candidates.length !== 1) reject("foundation worker must belong to one active team under the project root", "PROJECT_FOUNDATIONS_FORBIDDEN");
+    const [team] = candidates;
+    const member = memberOf(team, caller.id);
+    if (!new Set(["running", "idle", "active"]).has(member.state)) reject("foundation worker membership is not live", "PROJECT_FOUNDATIONS_FORBIDDEN");
+    const tasks = team.tasks.filter((task) => task.state === "in_progress" && task.assigneeSessionId === caller.id);
+    if (tasks.length !== 1) reject("foundation worker requires one assigned in-progress task", "PROJECT_FOUNDATIONS_FORBIDDEN");
+    return {
+      projectRef,
+      member: { memberId: member.id, sessionId: member.sessionId, state: member.state, kind: member.kind },
+      task: { taskId: tasks[0].id, title: tasks[0].title, state: tasks[0].state, assigneeSessionId: tasks[0].assigneeSessionId, files: tasks[0].files },
+      team: { teamId: team.id, rootLeadSessionId: team.rootLeadSessionId },
+      rootSessionHeader: { cwd: root.session?.header?.cwd },
+    };
+  };
+  const getRuntime = async () => {
+    if (closing) { const error = new Error("foundation tools are closed"); error.code = "PROJECT_FOUNDATIONS_CLOSED"; throw error; }
+    if (runtime !== undefined) return runtime;
+    if (runtimePromise === undefined) runtimePromise = (async () => {
+      const capability = await capabilityResult;
+      if (capability.error !== undefined) throw capability.error;
+      const created = new ProjectFoundationsRuntime({ projectEntry, desktopGitCapability: capability.value, trustedAgentResolver: resolveTrustedAgent, runner, connector });
+      if (closing) { await created.close().catch(() => undefined); const error = new Error("foundation tools are closed"); error.code = "PROJECT_FOUNDATIONS_CLOSED"; throw error; }
+      runtime = created;
+      return created;
+    })().finally(() => { runtimePromise = undefined; });
+    return runtimePromise;
+  };
+  const invoke = (hostExecution, method, input = {}) => executionScope.run(hostExecution, async () => {
+    const selected = await getRuntime();
+    const source = await selected.probe();
+    if (source.status === "source_invalid") return { unavailable: true, attention: source.attention, code: source.code };
+    if (source.status === "source_dirty") { const error = new Error("source is dirty"); error.code = "PROJECT_FOUNDATIONS_SOURCE_DIRTY"; throw error; }
+    if (!selected.safeState().ready) await selected.initialize();
+    return selected[method](hostExecution, input);
+  });
+  const browserState = async () => {
+    const status = await projectEntry.status();
+    if (!isRecord(status?.project)) return projectFoundationsBrowserState("unavailable", { sourceStatus: "not_created" });
+    if (status.project.role !== "owner") return projectFoundationsBrowserState("collaborator", { sourceStatus: "authority_managed" });
+    try {
+      const selected = await getRuntime();
+      const probed = await executionScope.run(browserStatusExecution, () => selected.probe()), current = selected.safeState();
+      const attention = [...(current.attention ?? []), ...(probed.attention ?? [])];
+      if (runner === undefined) attention.push("runner_unavailable");
+      if (connector === undefined) attention.push("connector_disabled");
+      return projectFoundationsBrowserState("authority", { ...current, sourceStatus: probed.status ?? current.sourceStatus, attention });
+    } catch (error) {
+      const unavailable = new Set(["PROJECT_FOUNDATION_GIT_UNAVAILABLE", "PROJECT_FOUNDATION_GIT_UNTRUSTED"]).has(error?.code) ? "git_unavailable" : error?.code === "PROJECT_FOUNDATIONS_FORBIDDEN" ? "root_unavailable" : "status_unavailable";
+      return projectFoundationsBrowserState("authority", { sourceStatus: unavailable, attention: [unavailable, ...(runner === undefined ? ["runner_unavailable"] : []), ...(connector === undefined ? ["connector_disabled"] : [])] });
+    }
+  };
+  return {
+    invoke,
+    browserState,
+    runnerEvidence: (hostExecution) => typeof runnerEvidenceProvider === "function" ? runnerEvidenceProvider(hostExecution) : undefined,
+    safeState: () => runtime?.safeState() ?? { version: 1, ready: false, closing, sourceStatus: "not_initialized", attention: [] },
+    async close() {
+      if (closing) return;
+      closing = true;
+      let selected = runtime;
+      if (selected === undefined && runtimePromise !== undefined) selected = await runtimePromise.catch(() => undefined);
+      await selected?.close();
+      runtime = undefined;
+    },
+  };
+}
+function registerProjectFoundationTools(ctx, manager, ready = Promise.resolve()) {
+  const execute = (method, project) => async (args, exec) => {
+    try { toolExecution(ctx, exec); assertFoundationToolInput(args); await ready; return publicResult(project(await manager.invoke(exec, method, args))); }
+    catch (error) { return foundationFailure(error); }
+  };
+  const empty = {};
+  ctx.tools.register(defineTool({
+    name: "project_workspace_open", description: "Open the isolated workspace for this exact live worker's one assigned in-progress task. The Host derives the project, team, task, identity, fixed root, file scope, and claim.", parameters: empty, output: TOOL_OUTPUT,
+    execute: execute("workspaceOpen", (value) => value.unavailable ? { opened: false, attention: value.attention, code: value.code } : { opened: true, ...foundationRefs(value, ["workspaceRef", "fencingToken", "workspacePath", "claimRef", "created"]) }), presentCall: () => present("Open assigned project workspace"),
+  }));
+  ctx.tools.register(defineTool({
+    name: "project_workspace_close", description: "Close this exact worker's isolated workspace and preserve any already-published ChangeSet for the merge queue.", parameters: empty, output: TOOL_OUTPUT,
+    execute: execute("workspaceClose", (value) => value.unavailable ? { closed: false, attention: value.attention, code: value.code } : foundationRefs(value, ["closed", "state"])), presentCall: () => present("Close assigned project workspace"),
+  }));
+  ctx.tools.register(defineTool({
+    name: "project_resource_claim", description: "Claim this worker's assigned files, optionally narrowed to repository-relative resources. Project, identity, workspace, task, and root are always Host-derived.", parameters: { mode: { type: "string", enum: ["read", "write", "exclusive"] }, resources: { type: "array", items: { type: "string" } } }, output: TOOL_OUTPUT,
+    execute: execute("resourceClaim", (value) => value.unavailable ? { claimed: false, attention: value.attention, code: value.code } : { claimed: true, ...foundationRefs(value, ["claimRef", "mode", "state"]) }), presentCall: () => present("Claim assigned project resources"),
+  }));
+  ctx.tools.register(defineTool({
+    name: "project_changeset_publish", description: "Publish and enqueue the current assigned workspace ChangeSet. Message is optional and defaults to the trusted task title; all refs, claims, revisions, paths, and Git facts are Host-derived.", parameters: { message: { type: "string" } }, output: TOOL_OUTPUT,
+    execute: execute("changeSetPublish", (value) => value.unavailable ? { published: false, attention: value.attention, code: value.code } : { published: true, ...foundationRefs(value, ["changeSetRef"]) }), presentCall: () => present("Publish assigned ChangeSet"),
+  }));
+  ctx.tools.register(defineTool({
+    name: "project_merge_run", description: "Run the next durable merge group as the exact live project root lead or Host system. A missing trusted runner never produces a passing gate or lands code.", parameters: empty, output: TOOL_OUTPUT,
+    execute: execute("mergeNext", (value) => value.unavailable ? { merged: false, attention: value.attention, code: value.code } : { ...foundationRefs(value, ["merged", "mergeGroupRef", "artifactSetRef", "recovered", "attention"]), ...(value.campaign ? { campaign: foundationRefs(value.campaign, ["campaignRef", "state"]) } : {}) }), presentCall: () => present("Run next project merge"),
+  }));
+  ctx.tools.register(defineTool({
+    name: "project_quality_submit", description: "Submit evidence supplied by a registered Host runner. This tool accepts no model-provided evidence, lease, signature, identity, path, or approval references and never fabricates a passing result.", parameters: empty, output: TOOL_OUTPUT,
+    execute: async (_args, exec) => {
+      try {
+        toolExecution(ctx, exec);
+        await ready;
+        const evidence = await manager.runnerEvidence(exec);
+        if (evidence === undefined) { const error = new Error("trusted runner evidence is unavailable"); error.code = "PROJECT_FOUNDATION_RUNNER_UNAVAILABLE"; throw error; }
+        const value = await manager.invoke(exec, "qualitySubmit", evidence);
+        return publicResult({ submitted: true, ...foundationRefs(value, ["jobRef", "state"]), ...(value.campaign ? { campaign: foundationRefs(value.campaign, ["campaignRef", "state"]) } : {}) });
+      } catch (error) { return foundationFailure(error); }
+    }, presentCall: () => present("Submit trusted quality evidence"),
+  }));
+  ctx.tools.register(defineTool({
+    name: "project_defect_action", description: "Apply one local-first defect lifecycle action. External dispatch remains disabled unless the Desktop Host explicitly configured a connector; identity, project, paths, and evidence refs are never browser/model inputs.", parameters: { method: { type: "string", required: true }, payload: { type: "object", additionalProperties: true } }, output: TOOL_OUTPUT,
+    execute: execute("defectAction", (value) => value.unavailable ? { completed: false, attention: value.attention, code: value.code } : { completed: true, ...foundationRefs(value, ["signalRef", "occurrenceRef", "defectRef", "state", "status"]) }), presentCall: (args) => present("Update local project defect", args.method),
+  }));
+}
+
+function registerProjectFoundationsApi(ctx, manager, ready = Promise.resolve()) {
+  const fail = (res, status, code) => { const error = new Error(code); error.code = code; return json(res, status, foundationFailure(error)); };
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/foundations/state", handler: async (req, res) => {
+      if (req.method !== "GET") return fail(res, 405, "PROJECT_FOUNDATIONS_METHOD_NOT_ALLOWED");
+      if (!trustedRequest(req)) return fail(res, 403, "PROJECT_FOUNDATIONS_FORBIDDEN");
+      try { projectTaskQuery(req, new Set()); }
+      catch { return fail(res, 400, "PROJECT_FOUNDATIONS_INVALID_REQUEST"); }
+      try { await ready; return json(res, 200, await manager.browserState()); }
+      catch (error) { return json(res, 503, foundationFailure(error)); }
+    },
+  }), "agent-teams project foundations state route");
 }
 
 function registerTools(ctx, store, ready, collaboration, admission) {
@@ -2331,7 +3000,7 @@ function registerTools(ctx, store, ready, collaboration, admission) {
   };
   ctx.tools.register(defineTool({
     name: "team_start",
-    description: "Start a durable peer team owned by this fixed top-level root lead. Call this in the current direct-human root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination; do not substitute multiple ordinary subagents. Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count, and one continuable helper should use ordinary subagent instead. An explicit user team request may override this automatic threshold. At most 8 teams may remain unclosed, and all peers share maxActiveTurns. Requires direct-human root authority in the current open turn.",
+    description: "Start a durable peer team owned by this fixed top-level root lead. Use this manual creation path only when a complete bounded team_bootstrap plan is not ready; never call team_start before team_bootstrap for the same team. Call this in the current direct-human root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination; do not substitute multiple ordinary subagents. Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count, and one continuable helper should use ordinary subagent instead. An explicit user team request may override this automatic threshold. At most 8 teams may remain unclosed, and all peers share maxActiveTurns. Requires direct-human root authority in the current open turn.",
     parameters: {
       objective: { type: "string", required: true, description: "Concrete objective shared by the team." },
       name: { type: "string", description: "Optional short team display name." },
@@ -2341,10 +3010,21 @@ function registerTools(ctx, store, ready, collaboration, admission) {
     presentCall: (args) => present("Start agent team", args.name ?? args.objective),
   }));
   ctx.tools.register(defineTool({
+    name: "team_bootstrap",
+    description: "Create one bounded team plan, persist all tasks before work starts, and provision up to four visible peers. Use this directly instead of team_start when the complete plan is ready; never call both for the same team. Different members must have non-overlapping file scopes. Requires the exact direct-human root turn. request_id makes exact replays reuse the same durable plan; uncertain partial starts fail closed and never duplicate a visible member automatically.",
+    parameters: {
+      request_id: { type: "string", required: true }, objective: { type: "string", required: true }, name: { type: "string" }, lead_name: { type: "string" },
+      tasks: { type: "array", required: true, items: { type: "object", additionalProperties: false, properties: { key: { type: "string", required: true }, title: { type: "string", required: true }, description: { type: "string" }, member_key: { type: "string", required: true }, depends_on: { type: "array", items: { type: "string" } }, files: { type: "array", items: { type: "string" } } } } },
+      members: { type: "array", required: true, items: { type: "object", additionalProperties: false, properties: { key: { type: "string", required: true }, name: { type: "string", required: true }, role: { type: "string", required: true }, prompt: { type: "string", required: true }, model_tier: { type: "string", enum: MODEL_TIERS }, model: { type: "string" } } } },
+    }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution, signal) => { requireDirectHumanRoot(ctx, execution); return publicResult(await bootstrapTeam(ctx, store, admission, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, tasks: (args.tasks ?? []).map((task) => ({ key: task.key, title: task.title, description: task.description, memberKey: task.member_key, dependsOn: task.depends_on, files: task.files })), members: (args.members ?? []).map((member) => ({ key: member.key, name: member.name, role: member.role, prompt: member.prompt, modelTier: member.model_tier, model: member.model })) }, signal)); }),
+    presentCall: (args) => present("Bootstrap agent team", args.name ?? args.objective),
+  }));
+  ctx.tools.register(defineTool({
     name: "team_spawn",
     description: "Provision a continuable independent-context member. The AI chooses the tier by task: subagent by default for cost, main only for complex reasoning, architecture, security, or repeated failures; this is not a user choice. New members read the latest selected-tier route, while existing members retain their creation route and main-tier members ignore subagent-route changes.",
     parameters: {
-      team_id: { type: "string", required: true }, name: { type: "string", required: true },
+      team_id: { type: "string", description: "Optional only when the root lead owns exactly one active team." }, name: { type: "string", required: true },
       role: { type: "string", required: true }, prompt: { type: "string", required: true },
       model_tier: { type: "string", enum: MODEL_TIERS, description: "AI-selected route tier; defaults to subagent. Choose main only under the documented complexity criteria." },
       model: { type: "string", description: "Optional explicit model override; for backward compatibility its provider is inherited from the exact live lead, not from model_tier." },
@@ -2456,7 +3136,7 @@ function registerTools(ctx, store, ready, collaboration, admission) {
   }));
   ctx.tools.register(defineTool({
     name: "team_resume", description: "Resume one team paused by the direct user's explicit Stop action. Requires the same live root lead in a later direct-human turn and never resumes members automatically.",
-    parameters: { team_id: { type: "string", required: true } }, output: TOOL_OUTPUT,
+    parameters: { team_id: { type: "string", description: "Optional only when the root lead owns exactly one paused team." } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => { requireDirectHumanRoot(ctx, execution); return publicResult(await resumePausedTeam(ctx, store, execution.agent, { teamId: args.team_id })); }),
     presentCall: (args) => present("Resume paused team", args.team_id),
   }));
@@ -2520,7 +3200,7 @@ function registerTools(ctx, store, ready, collaboration, admission) {
   }));
   ctx.tools.register(defineTool({
     name: "team_shutdown", description: "Gracefully retire one member or close the whole team. Force mode drains selected continuable children to quiescence using the exact live parent.",
-    parameters: { team_id: { type: "string", required: true }, member_session_id: { type: "string" }, force: { type: "boolean" } }, output: TOOL_OUTPUT,
+    parameters: { team_id: { type: "string", description: "Optional only when the root lead owns exactly one unclosed team." }, member_session_id: { type: "string" }, force: { type: "boolean" } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution, signal) => publicResult(await shutdownTeam(ctx, store, admission, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force }, signal))),
     presentCall: (args) => present("Shut down team", args.team_id),
   }));
@@ -2570,6 +3250,17 @@ async function readJsonBody(req) {
 function encodedSseSnapshot(snapshot) {
   return `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`;
 }
+function blockSseClientUntilDrain(client) {
+  client.blocked = true;
+  if (typeof client.response.once !== "function") return;
+  client.response.once("drain", () => {
+    if (client.closed) return;
+    client.blocked = false;
+    const pending = client.pendingPayload;
+    client.pendingPayload = undefined;
+    if (pending !== undefined) writeSseClient(client, pending);
+  });
+}
 function writeSseClient(client, payload) {
   if (client.closed || payload === client.lastPayload || payload === client.pendingPayload) return;
   if (client.blocked) {
@@ -2583,32 +3274,45 @@ function writeSseClient(client, payload) {
     return;
   }
   client.lastPayload = payload;
-  if (writable !== false) return;
-  client.blocked = true;
-  if (typeof client.response.once !== "function") return;
-  client.response.once("drain", () => {
-    if (client.closed) return;
-    client.blocked = false;
-    const pending = client.pendingPayload;
-    client.pendingPayload = undefined;
-    if (pending !== undefined) writeSseClient(client, pending);
-  });
+  if (writable === false) blockSseClientUntilDrain(client);
 }
-function createSseBroadcaster({ delayMs = SSE_COALESCE_MS } = {}) {
+function writeSseKeepalive(client) {
+  if (client.closed || client.blocked) return;
+  try { if (client.response.write(": keepalive\n\n") === false) blockSseClientUntilDrain(client); }
+  catch { client.closed = true; }
+}
+function createSseBroadcaster({ delayMs = SSE_COALESCE_MS, keepaliveMs = TEAM_SSE_KEEPALIVE_MS, snapshot = teamSnapshot } = {}) {
   const clients = new Map();
   let timer;
+  let keepaliveTimer;
   let pendingDocument;
+  const stopKeepalive = () => {
+    if (keepaliveTimer !== undefined) clearInterval(keepaliveTimer);
+    keepaliveTimer = undefined;
+  };
+  const ensureKeepalive = () => {
+    if (keepaliveTimer !== undefined || !Number.isFinite(keepaliveMs) || keepaliveMs <= 0) return;
+    keepaliveTimer = setInterval(() => {
+      for (const entries of clients.values()) for (const client of [...entries]) {
+        if (client.closed) continue;
+        writeSseKeepalive(client);
+      }
+    }, keepaliveMs);
+    keepaliveTimer.unref?.();
+  };
   const remove = (client) => {
     client.closed = true;
     const entries = clients.get(client.sessionId);
     entries?.delete(client);
     if (entries?.size === 0) clients.delete(client.sessionId);
+    if (clients.size === 0) stopKeepalive();
   };
-  const add = (sessionId, selectedTeamId, response) => {
-    const client = { sessionId, selectedTeamId, response, blocked: false, closed: false, lastPayload: undefined, pendingPayload: undefined };
+  const add = (sessionId, selectedTeamId, response, selectedTaskId) => {
+    const client = { sessionId, selectedTeamId, selectedTaskId, response, blocked: false, closed: false, lastPayload: undefined, pendingPayload: undefined };
     const entries = clients.get(sessionId) ?? new Set();
     entries.add(client);
     clients.set(sessionId, entries);
+    ensureKeepalive();
     return client;
   };
   const send = (client, snapshot) => writeSseClient(client, encodedSseSnapshot(snapshot));
@@ -2622,10 +3326,10 @@ function createSseBroadcaster({ delayMs = SSE_COALESCE_MS } = {}) {
     for (const [sessionId, entries] of clients) {
       for (const client of [...entries]) {
         if (client.closed) { remove(client); continue; }
-        const key = `${sessionId}\u0000${client.selectedTeamId ?? ""}`;
+        const key = `${sessionId}\u0000${client.selectedTeamId ?? ""}\u0000${client.selectedTaskId ?? ""}`;
         let payload = payloads.get(key);
         if (payload === undefined) {
-          payload = encodedSseSnapshot(teamSnapshot(document, sessionId, client.selectedTeamId));
+          payload = encodedSseSnapshot(snapshot(document, sessionId, client.selectedTeamId, client.selectedTaskId));
           payloads.set(key, payload);
         }
         writeSseClient(client, payload);
@@ -2640,6 +3344,7 @@ function createSseBroadcaster({ delayMs = SSE_COALESCE_MS } = {}) {
   };
   const close = () => {
     if (timer !== undefined) clearTimeout(timer);
+    stopKeepalive();
     timer = undefined;
     pendingDocument = undefined;
     for (const entries of clients.values()) for (const client of entries) {
@@ -2653,8 +3358,15 @@ function createSseBroadcaster({ delayMs = SSE_COALESCE_MS } = {}) {
 
 function registerWebApi(ctx, store, ready) {
   const broadcaster = createSseBroadcaster();
-  const unsubscribe = store.subscribe((document) => broadcaster.schedule(document));
-  ctx.effect(() => () => { unsubscribe(); broadcaster.close(); }, "agent-teams store subscription");
+  const detailSnapshot = (document, sessionId, selectedTeamId, selectedTaskId) => projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId)
+    ?? { unavailable: true, taskId: selectedTaskId ?? null };
+  const detailBroadcaster = createSseBroadcaster({ snapshot: detailSnapshot });
+  const unsubscribe = store.subscribe((document) => { broadcaster.schedule(document); detailBroadcaster.schedule(document); });
+  ctx.on("session/event", (_session, event) => {
+    if (detailBroadcaster.clients.size === 0 || !TASK_WORKFLOW_EVENT_TYPES.has(event?.type)) return;
+    detailBroadcaster.schedule(store.snapshot());
+  });
+  ctx.effect(() => () => { unsubscribe(); broadcaster.close(); detailBroadcaster.close(); }, "agent-teams store subscription");
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/state", handler: async (req, res) => {
       if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
@@ -2669,6 +3381,43 @@ function registerWebApi(ctx, store, ready) {
     },
   }), "agent-teams state route");
   ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/task-detail", handler: async (req, res) => {
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
+      if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
+      try {
+        await ready;
+        const requestUrl = new URL(req.url, "http://x");
+        const sessionId = nonEmptyString(requestUrl.searchParams.get("sessionId"), "sessionId", 256);
+        const selectedTeamId = nonEmptyString(requestUrl.searchParams.get("teamId"), "teamId", 256);
+        const selectedTaskId = nonEmptyString(requestUrl.searchParams.get("taskId"), "taskId", 256);
+        const detail = await store.read((document) => projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId));
+        return detail === null
+          ? json(res, 404, { error: "task detail is unavailable", code: "AGENT_TEAMS_NOT_FOUND" })
+          : json(res, 200, detail);
+      } catch (error) { return json(res, error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : 400, errorPayload(error)); }
+    },
+  }), "agent-teams task detail route");
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/task-detail/events", handler: async (req, res) => {
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
+      if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
+      try {
+        await ready;
+        const requestUrl = new URL(req.url, "http://x");
+        const sessionId = nonEmptyString(requestUrl.searchParams.get("sessionId"), "sessionId", 256);
+        const selectedTeamId = nonEmptyString(requestUrl.searchParams.get("teamId"), "teamId", 256);
+        const selectedTaskId = nonEmptyString(requestUrl.searchParams.get("taskId"), "taskId", 256);
+        const detail = await store.read((document) => projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId));
+        if (detail === null) return json(res, 404, { error: "task detail is unavailable", code: "AGENT_TEAMS_NOT_FOUND" });
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no", "x-content-type-options": "nosniff" });
+        res.flushHeaders?.();
+        const client = detailBroadcaster.add(sessionId, selectedTeamId, res, selectedTaskId);
+        detailBroadcaster.send(client, detail);
+        req.once("close", () => detailBroadcaster.remove(client));
+      } catch (error) { if (!res.headersSent) return json(res, error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : 400, errorPayload(error)); }
+    },
+  }), "agent-teams task detail events route");
+  ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/events", handler: async (req, res) => {
       if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
       if (!trustedRequest(req)) return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
@@ -2677,7 +3426,8 @@ function registerWebApi(ctx, store, ready) {
         const requestUrl = new URL(req.url, "http://x");
         const sessionId = nonEmptyString(requestUrl.searchParams.get("sessionId"), "sessionId", 256);
         const selectedTeamId = optionalString(requestUrl.searchParams.get("teamId"), "teamId", 256);
-        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-content-type-options": "nosniff" });
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no", "x-content-type-options": "nosniff" });
+        res.flushHeaders?.();
         const client = broadcaster.add(sessionId, selectedTeamId, res);
         broadcaster.send(client, await store.read((document) => teamSnapshot(document, sessionId, selectedTeamId)));
         req.once("close", () => broadcaster.remove(client));
@@ -2753,6 +3503,272 @@ function registerProjectEntryApi(ctx, projectEntry) {
   };
   ctx.effect(() => ctx.webServer.register({ kind: "exact", path: "/api/agent-teams/project/status", handler: statusRoute }), "agent-teams project status route");
   ctx.effect(() => ctx.webServer.register({ kind: "exact", path: "/api/agent-teams/project/action", handler: actionRoute }), "agent-teams project action route");
+}
+
+function projectTaskApiFailure(res, status, code, message, nextAction, retryable = false) {
+  return json(res, status, { ok: false, error: { code, message, nextAction, retryable, safeDetails: {} } });
+}
+function mappedProjectTaskFailure(res, error) {
+  const mapped = projectTaskWebError(error);
+  return json(res, mapped.status, mapped.body);
+}
+function projectBusinessApiError(error, resource) {
+  const code = typeof error?.code === "string" && error.code.startsWith("PROJECT_BUSINESS_SYNC_") ? error.code : undefined;
+  if (code === undefined) return undefined;
+  const rules = {
+    PROJECT_BUSINESS_SYNC_RUNTIME_INVALID: [400, "fix_request", false],
+    PROJECT_BUSINESS_SYNC_FORBIDDEN: [403, `refresh_project_${resource}`, false],
+    PROJECT_BUSINESS_SYNC_CONFLICT: [409, "refresh_and_retry", false],
+    PROJECT_BUSINESS_SYNC_REPLAY_CONFLICT: [409, "start_new_action", false],
+    PROJECT_BUSINESS_SYNC_CONTEXT_CHANGED: [409, `refresh_project_${resource}`, true],
+    PROJECT_BUSINESS_SYNC_RUNTIME_UNAVAILABLE: [409, "reconnect_project", true],
+    PROJECT_BUSINESS_SYNC_STORE_CONFLICT: [409, "retry_after_refresh", true],
+    PROJECT_BUSINESS_SYNC_TRANSPORT_UNAVAILABLE: [503, "reconnect_project", true],
+    PROJECT_BUSINESS_SYNC_RUNTIME_CLOSED: [503, "retry_after_runtime_restart", true],
+  };
+  const [status, nextAction, retryable] = rules[code] ?? [500, "retry_or_view_logs", true];
+  return { status, body: { ok: false, error: { code, action: nextAction, retryable } } };
+}
+function mappedProjectBusinessFailure(res, error, resource, fallback) {
+  const mapped = projectBusinessApiError(error, resource) ?? fallback(error);
+  return json(res, mapped.status, mapped.body);
+}
+function projectTaskQuery(req, allowedKeys) {
+  const requestUrl = new URL(req.url, "http://x");
+  for (const key of requestUrl.searchParams.keys()) {
+    if (!allowedKeys.has(key) || requestUrl.searchParams.getAll(key).length !== 1) throw new TypeError("unsupported or repeated project task query field");
+  }
+  return requestUrl.searchParams;
+}
+function projectTaskQueryInteger(parameters, key, fallback, minimum, maximum) {
+  const raw = parameters.get(key);
+  if (raw === null) return fallback;
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(raw)) throw new TypeError(`${key} must be a decimal safe integer`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new TypeError(`${key} is outside the allowed range`);
+  return value;
+}
+function encodedProjectTaskSse(event, data, id) {
+  return `${id === undefined ? "" : `id: ${id}\n`}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+function createProjectTaskSseBridge(runtime, { keepaliveMs = PROJECT_TASK_SSE_KEEPALIVE_MS } = {}) {
+  if (!(runtime instanceof ProjectTaskWebRuntime)) throw new TypeError("runtime must be a ProjectTaskWebRuntime");
+  if (!Number.isSafeInteger(keepaliveMs) || keepaliveMs < 1) throw new TypeError("keepaliveMs must be a positive safe integer");
+  const clients = new Set();
+  let closed = false;
+  const remove = (client, end = false) => {
+    if (client.closed) return;
+    client.closed = true;
+    clients.delete(client);
+    clearInterval(client.keepalive);
+    client.request.off?.("close", client.onClose);
+    client.request.off?.("aborted", client.onClose);
+    client.response.off?.("close", client.onClose);
+    client.response.off?.("error", client.onClose);
+    if (end) {
+      try { client.response.end(); } catch {}
+    }
+  };
+  const write = (client, payload) => {
+    if (client.closed) return false;
+    try {
+      if (client.response.write(payload) !== false) return true;
+    } catch {}
+    remove(client, true);
+    return false;
+  };
+  const broadcast = (update) => {
+    if (closed || update?.type !== "project-task" || !isRecord(update.event)) return;
+    const payload = encodedProjectTaskSse("task", update.event, update.event.projectRevision);
+    for (const client of [...clients]) write(client, payload);
+  };
+  const unsubscribe = runtime.subscribe(broadcast);
+  const add = (request, response) => {
+    if (closed) throw new Error("project task SSE bridge is closed");
+    const client = { request, response, closed: false, keepalive: undefined, onClose: undefined };
+    client.onClose = () => remove(client);
+    request.once?.("close", client.onClose);
+    request.once?.("aborted", client.onClose);
+    response.once?.("close", client.onClose);
+    response.once?.("error", client.onClose);
+    client.keepalive = setInterval(() => write(client, ": keepalive\n\n"), keepaliveMs);
+    client.keepalive.unref?.();
+    clients.add(client);
+    write(client, encodedProjectTaskSse("reset", { nextAction: "refetch_project_tasks" }));
+    return client;
+  };
+  const reset = () => {
+    if (closed) return;
+    const payload = encodedProjectTaskSse("reset", { nextAction: "refetch_project_tasks" });
+    for (const client of [...clients]) write(client, payload);
+  };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    unsubscribe();
+    for (const client of [...clients]) remove(client, true);
+  };
+  return { add, clients, close, remove, reset };
+}
+function registerProjectTaskApi(ctx, runtime, businessRuntime) {
+  const bridge = createProjectTaskSseBridge(runtime);
+  const unsubscribeBusiness = businessRuntime === undefined ? undefined : businessRuntime.subscribe(() => bridge.reset());
+  ctx.effect(() => () => { unsubscribeBusiness?.(); bridge.close(); }, "agent-teams project task SSE subscription");
+  const checkGet = (req, res) => {
+    if (req.method !== "GET") {
+      projectTaskApiFailure(res, 405, "PROJECT_TASK_WEB_METHOD_NOT_ALLOWED", "Method not allowed.", "use_supported_method");
+      return false;
+    }
+    if (!trustedRequest(req)) {
+      projectTaskApiFailure(res, 403, "PROJECT_TASK_WEB_FORBIDDEN", "Request origin is not trusted.", "open_local_task_board");
+      return false;
+    }
+    return true;
+  };
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/tasks/state", handler: async (req, res) => {
+      if (!checkGet(req, res)) return;
+      try {
+        projectTaskQuery(req, new Set());
+        if (businessRuntime === undefined) return json(res, 200, await runtime.state());
+        try { return json(res, 200, await businessRuntime.taskState()); }
+        catch (error) { if (error?.code === "PROJECT_ENTRY_NOT_CREATED") return json(res, 200, await runtime.state()); throw error; }
+      } catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
+    },
+  }), "agent-teams project task state route");
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/tasks/events", handler: async (req, res) => {
+      if (!checkGet(req, res)) return;
+      try {
+        const parameters = projectTaskQuery(req, new Set(["afterRevision", "limit"]));
+        const afterRevision = projectTaskQueryInteger(parameters, "afterRevision", 0, 0, Number.MAX_SAFE_INTEGER);
+        const limit = projectTaskQueryInteger(parameters, "limit", 100, 1, 100);
+        if (businessRuntime !== undefined && (await businessRuntime.initialize()).mode === "collaborator") {
+          return json(res, 200, { ok: true, fromRevision: afterRevision, currentRevision: afterRevision, events: [], hasMore: false, reset: true, nextAfterRevision: afterRevision });
+        }
+        return json(res, 200, await runtime.events({ afterRevision, limit }));
+      } catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
+    },
+  }), "agent-teams project task events route");
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/tasks/stream", handler: async (req, res) => {
+      if (!checkGet(req, res)) return;
+      try { projectTaskQuery(req, new Set()); }
+      catch (error) { return mappedProjectTaskFailure(res, error); }
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+        "x-content-type-options": "nosniff",
+      });
+      res.flushHeaders?.();
+      try { bridge.add(req, res); }
+      catch { try { res.end(); } catch {} }
+    },
+  }), "agent-teams project task stream route");
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/tasks/action", handler: async (req, res) => {
+      if (req.method !== "POST") return projectTaskApiFailure(res, 405, "PROJECT_TASK_WEB_METHOD_NOT_ALLOWED", "Method not allowed.", "use_supported_method");
+      if (!trustedRequest(req) || req.headers["x-harness-agent-teams"] !== "1") return projectTaskApiFailure(res, 403, "PROJECT_TASK_WEB_FORBIDDEN", "Request origin is not trusted.", "open_local_task_board");
+      try { projectTaskQuery(req, new Set()); }
+      catch (error) { return mappedProjectTaskFailure(res, error); }
+      let body;
+      try { body = await readJsonBody(req); }
+      catch (error) {
+        if (error?.status === 413) error.code = "PROJECT_TASK_WEB_BODY_TOO_LARGE";
+        return mappedProjectTaskFailure(res, error);
+      }
+      try { return json(res, 200, await (businessRuntime === undefined ? runtime.action(body) : businessRuntime.taskAction(body))); }
+      catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
+    },
+  }), "agent-teams project task action route");
+  return bridge;
+}
+
+function projectAutomationApiFailure(res, status, code, message, nextAction, retryable = false) {
+  return json(res, status, { ok: false, error: { code, message, nextAction, retryable, safeDetails: {} } });
+}
+function mappedProjectAutomationFailure(res, error) {
+  const mapped = projectAutomationWebError(error);
+  return json(res, mapped.status, mapped.body);
+}
+function createProjectAutomationSseBridge(runtime, { keepaliveMs = PROJECT_TASK_SSE_KEEPALIVE_MS } = {}) {
+  if (!(runtime instanceof ProjectAutomationWebRuntime)) throw new TypeError("runtime must be a ProjectAutomationWebRuntime");
+  if (!Number.isSafeInteger(keepaliveMs) || keepaliveMs < 1) throw new TypeError("keepaliveMs must be a positive safe integer");
+  const clients = new Set();
+  let closed = false;
+  const remove = (client, end = false) => {
+    if (client.closed) return;
+    client.closed = true; clients.delete(client); clearInterval(client.keepalive);
+    client.request.off?.("close", client.onClose); client.request.off?.("aborted", client.onClose);
+    client.response.off?.("close", client.onClose); client.response.off?.("error", client.onClose);
+    if (end) { try { client.response.end(); } catch {} }
+  };
+  const write = (client, payload) => {
+    if (client.closed) return false;
+    try { if (client.response.write(payload) !== false) return true; } catch {}
+    remove(client, true); return false;
+  };
+  const broadcast = (update) => {
+    if (closed || !["automation", "run", "capability"].includes(update?.type)) return;
+    const payload = encodedProjectTaskSse("automation", { nextAction: "refetch_project_automations" });
+    for (const client of [...clients]) write(client, payload);
+  };
+  const unsubscribe = runtime.subscribe(broadcast);
+  const add = (request, response) => {
+    if (closed) throw new Error("project automation SSE bridge is closed");
+    const client = { request, response, closed: false, keepalive: undefined, onClose: undefined };
+    client.onClose = () => remove(client);
+    request.once?.("close", client.onClose); request.once?.("aborted", client.onClose);
+    response.once?.("close", client.onClose); response.once?.("error", client.onClose);
+    client.keepalive = setInterval(() => write(client, ": keepalive\n\n"), keepaliveMs); client.keepalive.unref?.();
+    clients.add(client); write(client, encodedProjectTaskSse("reset", { nextAction: "refetch_project_automations" })); return client;
+  };
+  const reset = () => { if (closed) return; const payload = encodedProjectTaskSse("reset", { nextAction: "refetch_project_automations" }); for (const client of [...clients]) write(client, payload); };
+  const close = () => { if (closed) return; closed = true; unsubscribe(); for (const client of [...clients]) remove(client, true); };
+  return { add, clients, close, remove, reset };
+}
+function registerProjectAutomationApi(ctx, runtime, businessRuntime) {
+  const bridge = createProjectAutomationSseBridge(runtime);
+  const unsubscribeBusiness = businessRuntime === undefined ? undefined : businessRuntime.subscribe(() => bridge.reset());
+  ctx.effect(() => () => { unsubscribeBusiness?.(); bridge.close(); }, "agent-teams project automation SSE subscription");
+  const checkGet = (req, res) => {
+    if (req.method !== "GET") { projectAutomationApiFailure(res, 405, "PROJECT_AUTOMATION_WEB_METHOD_NOT_ALLOWED", "Method not allowed.", "use_supported_method"); return false; }
+    if (!trustedRequest(req)) { projectAutomationApiFailure(res, 403, "PROJECT_AUTOMATION_WEB_FORBIDDEN", "Request origin is not trusted.", "open_local_automation_board"); return false; }
+    return true;
+  };
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/automations/state", handler: async (req, res) => {
+      if (!checkGet(req, res)) return;
+      try {
+        projectTaskQuery(req, new Set());
+        if (businessRuntime === undefined) return json(res, 200, await runtime.state());
+        try { return json(res, 200, await businessRuntime.automationState()); }
+        catch (error) { if (error?.code === "PROJECT_ENTRY_NOT_CREATED") return json(res, 200, await runtime.state()); throw error; }
+      } catch (error) { return mappedProjectBusinessFailure(res, error, "automations", projectAutomationWebError); }
+    },
+  }), "agent-teams project automation state route");
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/automations/stream", handler: async (req, res) => {
+      if (!checkGet(req, res)) return;
+      try { projectTaskQuery(req, new Set()); } catch (error) { return mappedProjectAutomationFailure(res, error); }
+      res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no", "x-content-type-options": "nosniff" });
+      res.flushHeaders?.(); try { bridge.add(req, res); } catch { try { res.end(); } catch {} }
+    },
+  }), "agent-teams project automation stream route");
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/automations/action", handler: async (req, res) => {
+      if (req.method !== "POST") return projectAutomationApiFailure(res, 405, "PROJECT_AUTOMATION_WEB_METHOD_NOT_ALLOWED", "Method not allowed.", "use_supported_method");
+      if (!trustedRequest(req) || req.headers["x-harness-agent-teams"] !== "1") return projectAutomationApiFailure(res, 403, "PROJECT_AUTOMATION_WEB_FORBIDDEN", "Request origin is not trusted.", "open_local_automation_board");
+      try { projectTaskQuery(req, new Set()); } catch (error) { return mappedProjectAutomationFailure(res, error); }
+      let body;
+      try { body = await readJsonBody(req); } catch (error) { if (error?.status === 413) error.code = "PROJECT_AUTOMATION_WEB_BODY_TOO_LARGE"; return mappedProjectAutomationFailure(res, error); }
+      try { return json(res, 200, await (businessRuntime === undefined ? runtime.action(body) : businessRuntime.automationAction(body))); }
+      catch (error) { return mappedProjectBusinessFailure(res, error, "automations", projectAutomationWebError); }
+    },
+  }), "agent-teams project automation action route");
+  return bridge;
 }
 
 function createSubagentEventReconciler(ctx, store, ready, delayMs = SUBAGENT_RECONCILE_MS) {
@@ -2880,10 +3896,53 @@ function resolveConfig(config = {}) {
     maxActiveTurns: safeLimit(config.maxActiveTurns, "maxActiveTurns", DEFAULT_SETTINGS.maxActiveTurns),
   };
 }
+// Optional Cordis services must be projected without reading getters, inherited
+// fields, class instances, or Proxy traps at this Host boundary.
+function isPlainRecord(value) {
+  try {
+    if (typeof value !== "object" || value === null || isProxy(value) || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+function ownDataDescriptorOrAbsent(value, key) {
+  try {
+    if (typeof value !== "object" || value === null || isProxy(value)) return null;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined) return undefined;
+    if (descriptor.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined || typeof descriptor.value === "symbol") return null;
+    return descriptor.value;
+  } catch {
+    return null;
+  }
+}
+function resolveProjectFoundationHostOptions(ctx) {
+  let value;
+  try { value = typeof ctx?.get === "function" ? ctx.get("projectFoundations") : undefined; }
+  catch { return Object.freeze({}); }
+  try {
+    if (!isPlainRecord(value)) return Object.freeze({});
+    const runner = ownDataDescriptorOrAbsent(value, "runner");
+    const connectorRecord = ownDataDescriptorOrAbsent(value, "connector");
+    const runnerEvidenceProvider = ownDataDescriptorOrAbsent(value, "runnerEvidence");
+    if (runner === null || connectorRecord === null || runnerEvidenceProvider === null) return Object.freeze({});
+    let connector;
+    if (connectorRecord !== undefined && isPlainRecord(connectorRecord) && ownDataDescriptorOrAbsent(connectorRecord, "enabled") === true) connector = connectorRecord;
+    return Object.freeze({ runner, connector, runnerEvidenceProvider });
+  } catch {
+    return Object.freeze({});
+  }
+}
 function apply(ctx, config = {}) {
   const defaults = resolveConfig(config);
   const dshHome = process.env.DSH_HOME;
   if (typeof dshHome !== "string" || dshHome.length === 0) throw new Error("dsh-agent-teams requires DSH_HOME");
+  // Consume the one-time Desktop Host Git authority immediately. Missing or invalid
+  // capability stays a lazy tool-level safe error and never falls back to PATH.
+  const desktopGitCapability = consumeDesktopGitCapability().then((value) => value, (error) => Promise.reject(error));
+  desktopGitCapability.catch(() => undefined);
   const store = new AgentTeamsStore(join(dshHome, "storages", "agent_teams.json"), defaults);
   const collaboration = new AgentCollaborationService(join(dshHome, "storages", "agent_collaboration.json"));
   // This process-local gate covers only Agent Teams-managed continuable workers.
@@ -2909,7 +3968,22 @@ function apply(ctx, config = {}) {
     },
   });
   const ready = store.init();
+  const projectTasks = new ProjectTaskWebRuntime({
+    projectEntry,
+    legacySummaryProvider: async () => {
+      await ready;
+      return store.read((document) => ({ detected: document.teams.some((team) => team.tasks.length > 0) }));
+    },
+  });
+  const projectAutomations = new ProjectAutomationWebRuntime({ projectEntry });
+  const projectBusiness = new ProjectBusinessSyncRuntime({
+    projectEntry,
+    taskDelegate: { state: () => projectTasks.state(), action: (input) => projectTasks.action(input) },
+    automationDelegate: { state: () => projectAutomations.state(), action: (input) => projectAutomations.action(input) },
+  });
+  const projectFoundations = createProjectFoundationManager(ctx, store, projectEntry, desktopGitCapability, resolveProjectFoundationHostOptions(ctx));
   ready.catch((error) => ctx.logger.error(`agent-teams store initialization failed: ${String(error)}`));
+  void ready.then(() => projectBusiness.initialize()).catch((error) => ctx.logger.warn(`agent-teams project sync initialization deferred: ${String(error?.code ?? "unavailable")}`));
   void ready.then((document) => document.teams.length > 0 ? collaboration.syncTeams(document) : undefined)
     .catch((error) => ctx.logger.warn(`agent-teams collaboration initialization failed: ${String(error)}`));
   ctx.effect(() => {
@@ -2919,13 +3993,29 @@ function apply(ctx, config = {}) {
     });
     return async () => {
       unsubscribe();
-      await collaboration.close();
-      await projectEntry.close();
+      try { await projectFoundations.close(); }
+      finally {
+        try { await projectBusiness.close(); }
+        finally {
+          try { await projectAutomations.close(); }
+          finally {
+            try { await projectTasks.close(); }
+            finally {
+              try { await collaboration.close(); }
+              finally { await projectEntry.close(); }
+            }
+          }
+        }
+      }
     };
   }, "agent-teams collaboration presence");
   registerTools(ctx, store, ready, collaboration, admission);
+  registerProjectFoundationTools(ctx, projectFoundations, ready);
+  registerProjectFoundationsApi(ctx, projectFoundations, ready);
   registerWebApi(ctx, store, ready);
   registerProjectEntryApi(ctx, projectEntry);
+  registerProjectTaskApi(ctx, projectTasks, projectBusiness);
+  registerProjectAutomationApi(ctx, projectAutomations, projectBusiness);
   observeSubagents(ctx, store, ready, admission);
   observeUserStops(ctx, store, ready, admission);
 }
@@ -2941,11 +4031,16 @@ export {
   GRACEFUL_LIFECYCLE_TIMEOUT_MS,
   MAX_TEAM_ADMISSION_QUEUE,
   MAX_TEAM_ADMISSION_QUEUE_PER_ROOT,
+  PROJECT_TASK_SSE_KEEPALIVE_MS,
   SSE_COALESCE_MS,
   SUBAGENT_RECONCILE_MS,
   TEAM_ADMISSION_TIMEOUT_MS,
   UI_MAX_EVENTS_PER_TEAM,
   UI_MAX_TASKS_PER_TEAM,
+  UI_MAX_TASK_WORKFLOW_EVENTS,
+  createProjectAutomationSseBridge,
+  createProjectFoundationManager,
+  createProjectTaskSseBridge,
   createSseBroadcaster,
   createSubagentEventReconciler,
   createTeamTurnAdmission,
@@ -2958,14 +4053,26 @@ export {
   MEMBER_STATES,
   TASK_STATES,
   apply,
+  bootstrapTeam,
+  buildResumePlan,
   createTask,
   createTeam,
+  deriveAttention,
   deriveTask,
   inject,
   name,
   readModelRouting,
+  registerProjectAutomationApi,
+  registerProjectFoundationsApi,
+  registerProjectFoundationTools,
+  resolveProjectFoundationHostOptions,
+  projectFoundationsBrowserState,
+  projectTaskDetailForUi,
+  registerProjectTaskApi,
+  releaseRetiredMemberTasks,
   resolveConfig,
   resolveModelSelection,
+  resolveUniqueLeadTeam,
   teamSnapshot,
   trustedRequest,
   updateTask,

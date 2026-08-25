@@ -11,7 +11,6 @@ function platformPath(platform) {
 }
 
 const WORKSHOP_CONTENT_ID = '431960'
-const MAX_SCANNED_PROJECTS = 500
 const MAX_TITLE_LENGTH = 160
 
 // Well-known Steam install roots on Windows. The registry value (if any) is a
@@ -179,8 +178,9 @@ function currentWallpaperEngineProjectDirectories(config, searchRoots, platform 
 async function collectWallpaperEngineProjects(searchRoots, deps, resolveProject) {
   const projects = []
   const skipped = { missingProject: 0, unsupported: 0, unreadable: 0, media: 0 }
+  const seenDirectories = new Set()
+  const platform = deps.platform || process.platform
   for (const searchRoot of searchRoots) {
-    if (projects.length >= MAX_SCANNED_PROJECTS) break
     let entries = []
     try {
       entries = await deps.readdir(searchRoot.directory)
@@ -188,9 +188,11 @@ async function collectWallpaperEngineProjects(searchRoots, deps, resolveProject)
       continue
     }
     for (const entry of entries) {
-      if (projects.length >= MAX_SCANNED_PROJECTS) break
       if (!entry || typeof entry.isDirectory !== 'function' || !entry.isDirectory()) continue
       const directory = path.join(searchRoot.directory, entry.name)
+      const directoryKey = platform === 'win32' ? path.resolve(directory).toLowerCase() : path.resolve(directory)
+      if (seenDirectories.has(directoryKey)) continue
+      seenDirectories.add(directoryKey)
       const projectFile = path.join(directory, 'project.json')
       let resolution
       try {
@@ -228,7 +230,6 @@ async function scanWallpaperEngineLibrary(deps) {
 
 module.exports = {
   WORKSHOP_CONTENT_ID,
-  MAX_SCANNED_PROJECTS,
   defaultSteamRootCandidates,
   parseLibraryFolders,
   normalizeSteamRoot,

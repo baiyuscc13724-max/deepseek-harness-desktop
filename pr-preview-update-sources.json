@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "repository": "baiyuscc13724-max/deepseek-harness-desktop",
+  "channelUrls": [
+    "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/pr-preview/latest.json",
+    "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/pr-preview/latest.json"
+  ],
+  "trustedKeys": {}
+}

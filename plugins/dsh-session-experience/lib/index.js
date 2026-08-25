@@ -3,10 +3,13 @@ import { lstat, mkdir, open, readdir, realpath, rename, rm, stat } from 'node:fs
 import path from 'node:path'
 
 const name = 'session-experience'
-const inject = ['agents', 'webServer']
+const inject = ['agents', 'sessions', 'sessionPersistence', 'sessionProjectionCache', 'sessionQuery', 'workspaceRegistry', 'webServer']
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 const MAX_LIST_ITEMS = 100
 const UPLOAD_DIRECTORY = 'uploads'
+const HISTORY_DELETE_CONFIRMATION = 'permanent'
+const SESSION_LOG_NAMES = new Set(['session.jsonl', 'session.jsonl.zstd'])
+const historyDeleteTails = new WeakMap()
 
 function json(res, status, value) {
   const body = Buffer.from(JSON.stringify(value))
@@ -60,6 +63,175 @@ function safeFileName(value) {
 function inside(root, target) {
   const relative = path.relative(root, target)
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+function historyError(message, code, status = 409) {
+  return Object.assign(new Error(message), { code, status })
+}
+
+function encodeSessionSegment(raw) {
+  if (typeof raw !== 'string' || !raw) throw historyError('会话 ID 无效。', 'SESSION_HISTORY_INVALID_ID', 400)
+  if (raw === '.') return '~002E'
+  if (raw === '..') return '~002E~002E'
+  let encoded = ''
+  for (let index = 0; index < raw.length; index += 1) {
+    const code = raw.charCodeAt(index)
+    const character = String.fromCharCode(code)
+    encoded += character !== '~' && /^[A-Za-z0-9._-]$/u.test(character)
+      ? character
+      : `~${code.toString(16).toUpperCase().padStart(4, '0')}`
+  }
+  return encoded
+}
+
+function archivedIds(registry) {
+  const ids = registry?.archivedSessionIds
+  return Array.isArray(ids) ? ids : (ids instanceof Set ? [...ids] : [])
+}
+
+function sessionIsLive(ctx, sessionId) {
+  return Boolean(ctx.sessions?.get?.(sessionId) || ctx.agents?.get?.(sessionId))
+}
+
+function assertSessionDirectory(root, directory, sessionId) {
+  const relative = path.relative(root, directory)
+  const segments = relative.split(path.sep).filter(Boolean)
+  if (!inside(root, directory) || segments.length !== 2 || segments[1] !== encodeSessionSegment(sessionId) || directory === root) {
+    throw historyError('会话日志路径校验失败，未执行删除。', 'SESSION_HISTORY_UNSAFE_PATH', 409)
+  }
+}
+
+async function resolveSessionArtifact(persistence, header) {
+  if (!persistence || typeof persistence.locate !== 'function' || typeof persistence.list !== 'function') {
+    throw historyError('当前会话存储不支持安全删除。', 'SESSION_HISTORY_DELETE_UNSUPPORTED', 501)
+  }
+  const location = await persistence.locate(header)
+  if (!location || location.kind !== 'jsonl' || typeof location.path !== 'string' || typeof persistence.root !== 'string') {
+    throw historyError('当前会话存储不支持安全删除。', 'SESSION_HISTORY_DELETE_UNSUPPORTED', 501)
+  }
+  const configuredRoot = path.resolve(persistence.root)
+  const configuredArtifact = path.resolve(location.path)
+  const configuredDirectory = path.dirname(configuredArtifact)
+  assertSessionDirectory(configuredRoot, configuredDirectory, header.id)
+  if (!SESSION_LOG_NAMES.has(path.basename(configuredArtifact))) {
+    throw historyError('会话日志路径校验失败，未执行删除。', 'SESSION_HISTORY_UNSAFE_PATH', 409)
+  }
+  const root = await realpath(configuredRoot)
+  let artifact
+  try { artifact = await realpath(configuredArtifact) } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+    let directory
+    try { directory = await realpath(configuredDirectory) } catch (directoryError) {
+      if (directoryError?.code === 'ENOENT') return null
+      throw directoryError
+    }
+    assertSessionDirectory(root, directory, header.id)
+    if (!(await lstat(directory)).isDirectory()) {
+      throw historyError('会话目录不是可安全删除的普通目录。', 'SESSION_HISTORY_UNSAFE_ARTIFACT', 409)
+    }
+    return { artifact: null, directory }
+  }
+  const directory = path.dirname(artifact)
+  assertSessionDirectory(root, directory, header.id)
+  if (!SESSION_LOG_NAMES.has(path.basename(artifact))) {
+    throw historyError('会话日志路径校验失败，未执行删除。', 'SESSION_HISTORY_UNSAFE_PATH', 409)
+  }
+  const artifactInfo = await lstat(artifact)
+  const directoryInfo = await lstat(directory)
+  if (!artifactInfo.isFile() || !directoryInfo.isDirectory()) {
+    throw historyError('会话日志不是可安全删除的普通文件。', 'SESSION_HISTORY_UNSAFE_ARTIFACT', 409)
+  }
+  return { artifact, directory }
+}
+
+async function detachSessionMemberships(registry, sessionId) {
+  const errors = []
+  let workspaces
+  try { workspaces = typeof registry.list === 'function' ? registry.list() : [] } catch (error) { return [error] }
+  for (const workspace of workspaces) {
+    if (!workspace || typeof workspace.detachSession !== 'function') continue
+    if (Array.isArray(workspace.sessionIds) && !workspace.sessionIds.includes(sessionId)) continue
+    try { await workspace.detachSession(sessionId) } catch (error) { errors.push(error) }
+  }
+  return errors
+}
+
+async function deleteProjectionCheckpoint(ctx, sessionId) {
+  const cache = ctx.sessionProjectionCache || (typeof ctx.get === 'function' ? ctx.get('sessionProjectionCache') : undefined)
+  if (!cache || typeof cache.requireTable !== 'function') return
+  const table = cache.requireTable()
+  if (table && typeof table.delete === 'function') await table.delete(sessionId)
+}
+
+async function reconcileOpenSessionQuery(ctx) {
+  let sessionQuery = ctx.sessionQuery
+  if (!sessionQuery && typeof ctx.get === 'function') {
+    try { sessionQuery = ctx.get('sessionQuery') } catch (_) {}
+  }
+  if (!sessionQuery?._db || typeof sessionQuery._serialized !== 'function' || typeof sessionQuery._reconcile !== 'function') return
+  await sessionQuery._serialized(undefined, () => sessionQuery._reconcile(undefined))
+}
+
+async function forgetArchivedSession(registry, sessionId) {
+  const commit = async () => {
+    const state = registry.requireState()
+    registry.headers?.delete?.(sessionId)
+    registry.sessionPaths?.delete?.(sessionId)
+    registry.invalidSessionPaths?.delete?.(sessionId)
+    if (typeof registry.rebuildEntities === 'function') registry.rebuildEntities()
+    if (!Array.isArray(state.archivedSessionIds) || !state.archivedSessionIds.includes(sessionId)) return
+    await registry.setState({ ...state, archivedSessionIds: state.archivedSessionIds.filter(id => id !== sessionId) })
+  }
+  return typeof registry.enqueueOperation === 'function' ? registry.enqueueOperation(commit) : commit()
+}
+
+async function deleteArchivedSessionUnlocked(ctx, sessionId) {
+  const registry = ctx.workspaceRegistry
+  const persistence = ctx.sessionPersistence
+  if (!registry || !archivedIds(registry).includes(sessionId)) {
+    throw historyError('只能删除归档历史中的会话。', 'SESSION_HISTORY_NOT_ARCHIVED', 409)
+  }
+  if (sessionIsLive(ctx, sessionId)) {
+    throw historyError('该会话仍处于活动状态，无法删除。', 'SESSION_HISTORY_STILL_LIVE', 409)
+  }
+  if (!persistence || typeof persistence.list !== 'function') {
+    throw historyError('当前会话存储不支持安全删除。', 'SESSION_HISTORY_DELETE_UNSUPPORTED', 501)
+  }
+  const listed = await persistence.list()
+  if (!Array.isArray(listed)) throw historyError('会话存储返回了无效列表。', 'SESSION_HISTORY_DELETE_UNSUPPORTED', 501)
+  const header = listed.find(item => item?.id === sessionId) || registry.headers?.get?.(sessionId)
+  const target = header ? await resolveSessionArtifact(persistence, header) : null
+  if (sessionIsLive(ctx, sessionId) || !archivedIds(registry).includes(sessionId)) {
+    throw historyError('会话状态已变化，未执行删除。', 'SESSION_HISTORY_STATE_CHANGED', 409)
+  }
+  if (target) await rm(target.directory, { recursive: true, force: false, maxRetries: 2, retryDelay: 50 })
+  const afterDelete = await persistence.list()
+  if (!Array.isArray(afterDelete)) throw historyError('删除后无法验证会话存储状态；请重试删除。', 'SESSION_HISTORY_CLEANUP_INCOMPLETE', 500)
+  if (sessionIsLive(ctx, sessionId) || afterDelete.some(item => item?.id === sessionId)) {
+    throw historyError('会话在删除期间重新变为活动状态；未清理索引，请稍后重试。', 'SESSION_HISTORY_DELETE_RACE', 409)
+  }
+  const cleanupErrors = await detachSessionMemberships(registry, sessionId)
+  try { await deleteProjectionCheckpoint(ctx, sessionId) } catch (error) { cleanupErrors.push(error) }
+  try { await reconcileOpenSessionQuery(ctx) } catch (error) { cleanupErrors.push(error) }
+  if (cleanupErrors.length > 0) {
+    ctx.logger?.warn?.(`session history deletion for ${JSON.stringify(sessionId)} needs cleanup retry: ${cleanupErrors.map(String).join('; ')}`)
+    const error = historyError('会话日志已删除，但部分索引尚未清理；请重试删除。', 'SESSION_HISTORY_CLEANUP_INCOMPLETE', 500)
+    error.cause = new AggregateError(cleanupErrors)
+    throw error
+  }
+  try { await forgetArchivedSession(registry, sessionId) } catch (cause) {
+    const error = historyError('会话日志已删除，但归档索引尚未清理；请重试删除。', 'SESSION_HISTORY_CLEANUP_INCOMPLETE', 500)
+    error.cause = cause
+    throw error
+  }
+  return { sessionId, artifactDeleted: Boolean(target?.artifact) }
+}
+
+function deleteArchivedSession(ctx, sessionId) {
+  const prior = historyDeleteTails.get(ctx) || Promise.resolve()
+  const operation = prior.catch(() => {}).then(() => deleteArchivedSessionUnlocked(ctx, sessionId))
+  historyDeleteTails.set(ctx, operation)
+  return operation.finally(() => { if (historyDeleteTails.get(ctx) === operation) historyDeleteTails.delete(ctx) })
 }
 
 async function workspaceRoot(cwd) {
@@ -222,9 +394,26 @@ function apply(ctx) {
       } catch (error) { return json(res, error.status || 400, errorPayload(error)) }
     }
   }), 'session-experience download route')
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: '/api/session-experience/archive-history', handler: async (req, res) => {
+      if (req.method !== 'DELETE') return json(res, 405, { error: 'method not allowed', code: 'SESSION_HISTORY_METHOD_NOT_ALLOWED' })
+      if (!trustedRequest(req) || typeof req.headers.origin !== 'string') return json(res, 403, { error: 'forbidden', code: 'SESSION_HISTORY_FORBIDDEN' })
+      if (req.headers['x-dsh-delete-confirmation'] !== HISTORY_DELETE_CONFIRMATION) {
+        return json(res, 400, { error: '必须明确确认永久删除。', code: 'SESSION_HISTORY_CONFIRMATION_REQUIRED' })
+      }
+      try {
+        const sessionId = requiredQuery(query(req), 'sessionId', 256)
+        const result = await deleteArchivedSession(ctx, sessionId)
+        return json(res, 200, { schemaVersion: 1, ...result })
+      } catch (error) {
+        return json(res, error.status || 500, { error: error?.message || String(error), code: error?.code || 'SESSION_HISTORY_DELETE_FAILED' })
+      }
+    }
+  }), 'session-experience archive history delete route')
 }
 
 export {
-  MAX_UPLOAD_BYTES, UPLOAD_DIRECTORY, apply, collectBody, downloadHeaders, inject,
-  listUploads, name, resolveDownload, safeFileName, saveUpload, trustedRequest
+  HISTORY_DELETE_CONFIRMATION, MAX_UPLOAD_BYTES, UPLOAD_DIRECTORY, apply, collectBody, deleteArchivedSession,
+  downloadHeaders, encodeSessionSegment, inject, listUploads, name, resolveDownload, resolveSessionArtifact,
+  safeFileName, saveUpload, trustedRequest
 }

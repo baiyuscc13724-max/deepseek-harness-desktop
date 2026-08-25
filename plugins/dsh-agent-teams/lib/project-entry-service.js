@@ -1,11 +1,11 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync, randomBytes, sign as cryptoSign, verify as cryptoVerify } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync, randomBytes, sign as cryptoSign, verify as cryptoVerify, X509Certificate } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, normalize } from "node:path";
 import * as nodeTls from "node:tls";
-import { ProjectCollaborationAuthority, verifyMembershipGrant } from "./project-collaboration.js";
+import { ProjectCollaborationAuthority, ROLE_PERMISSIONS, verifyMembershipGrant } from "./project-collaboration.js";
 import { PersistedProjectAuthority } from "./project-authority-service.js";
 import { EncryptedProjectStateStore } from "./project-state-store.js";
-import { assertPrivateBindHost, LAN_PROTOCOL, LanProjectTransport } from "./project-lan-transport.js";
+import { assertPrivateBindHost, LAN_PROTOCOL, LanProjectTransport, PersistentLanProjectClient } from "./project-lan-transport.js";
 import { createProjectLanAuthorityCredentials, createProjectLanClientCredentials, preferredLanHost, privateLanHosts, refreshProjectLanServerCredentials } from "./project-lan-credentials.js";
 import { ProjectWssRelayTransport, safeRelayUrl } from "./project-wss-relay-transport.js";
 import { generateProjectTransportKeys, ProjectSecureChannel, sealProjectPacket } from "./project-secure-channel.js";
@@ -16,6 +16,21 @@ const INVITES_FILE = "agent_project_invites.json";
 const RELAY_FILE = "agent_project_relay.json";
 const PENDING_JOIN_FILE = "agent_project_pending_join.json";
 const LAN_CREDENTIALS_FILE = "agent_project_lan_credentials.json";
+const PROJECT_TASK_DATABASE_FILE = "agent_project_tasks.sqlite";
+const PROJECT_TASK_KEY_DOMAIN = "dsh-agent-teams/project-task-store/v1";
+const PROJECT_AUTOMATION_DATABASE_FILE = "agent_project_automation.enc.json";
+const PROJECT_AUTOMATION_KEY_DOMAIN = "dsh/project-automation-store/v1";
+const PROJECT_BUSINESS_SYNC_DATABASE_FILE = "agent_project_business_sync.enc.json";
+const PROJECT_BUSINESS_SYNC_KEY_DOMAIN = "dsh/project-business-sync/v1";
+const PROJECT_FOUNDATIONS_DIRECTORY = "agent_project_foundations";
+const PROJECT_FOUNDATION_KEY_DOMAINS = Object.freeze({
+  workspace: "dsh/project-workspace/v1",
+  cas: "dsh/project-cas/v1",
+  quality: "dsh/project-quality/v1",
+  defect: "dsh/project-defect/v1",
+  defectOutbox: "dsh/project-defect-outbox/v1",
+});
+const PROJECT_FOUNDATION_DOMAIN_SET = new Set(Object.values(PROJECT_FOUNDATION_KEY_DOMAINS));
 const DEVICE_VERSION = 1;
 const INVITES_VERSION = 1;
 const RELAY_VERSION = 1;
@@ -33,6 +48,9 @@ const ENTRY_ERROR_CODES = Object.freeze([
   "PROJECT_ENTRY_RELAY_NOT_CONFIGURED",
   "PROJECT_ENTRY_RELAY_WEBSOCKET_UNAVAILABLE",
   "PROJECT_ENTRY_RELAY_ROOM_MISSING",
+  "PROJECT_ENTRY_CLOSED",
+  "PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN",
+  "PROJECT_ENTRY_TASK_CONTEXT_INVALID",
 ]);
 
 function isRecord(value) {
@@ -52,6 +70,116 @@ function entryError(code, message) {
   const error = new Error(message);
   error.code = code;
   return error;
+}
+function exactBase64urlKey(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(value)) return undefined;
+  const key = Buffer.from(value, "base64url");
+  if (key.length !== 32 || key.toString("base64url") !== value) {
+    key.fill(0);
+    return undefined;
+  }
+  return key;
+}
+function strictOpenedPeerMetadata(opened) {
+  if (!isRecord(opened)) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer metadata is invalid");
+  const prototype = Object.getPrototypeOf(opened);
+  if (prototype !== Object.prototype && prototype !== null) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer metadata is invalid");
+  const ownKeys = Reflect.ownKeys(opened);
+  if (ownKeys.length !== 2 || !ownKeys.includes("senderDeviceRef") || !ownKeys.includes("authorityEpoch")) {
+    throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer metadata is invalid");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(opened);
+  const sender = descriptors.senderDeviceRef;
+  const epoch = descriptors.authorityEpoch;
+  if (sender?.get !== undefined || sender?.set !== undefined || epoch?.get !== undefined || epoch?.set !== undefined
+    || sender?.enumerable !== true || epoch?.enumerable !== true
+    || typeof sender?.value !== "string" || sender.value.trim() === "" || sender.value !== sender.value.trim() || sender.value.length > 128
+    || !Number.isSafeInteger(epoch?.value) || epoch.value < 1) {
+    throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer metadata is invalid");
+  }
+  return { senderDeviceRef: sender.value, authorityEpoch: epoch.value };
+}
+function trustedSyncPeer({ deviceRef, collaboratorRef, role, permissions }) {
+  return Object.freeze({ deviceRef, collaboratorRef, role, permissions: Object.freeze([...permissions]) });
+}
+function hasCanonicalSignature(value) { try { return typeof value === "string" && value !== "" && /^[A-Za-z0-9_-]+$/u.test(value) && Buffer.from(value, "base64url").toString("base64url") === value; } catch { return false; } }
+function validatedCollaboratorIdentity(device, now) {
+  try {
+    if (!isRecord(device) || device.kind !== "collaborator" || !isRecord(device.authority) || !isRecord(device.device)) return undefined;
+    const authorityPublicKey = importPublicKey(device.authority.authorityPublicKey, "authorityPublicKey", "ed25519");
+    const grant = device.device.grant;
+    const signingKey = importPrivateKey(device.device.signingPrivateKey, "signingPrivateKey");
+    const deviceKeyId = `key_${createHash("sha256").update(createPublicKey(signingKey).export({ type: "spki", format: "der" })).digest("base64url")}`;
+    if (!hasCanonicalSignature(grant?.signature)
+      || !verifyMembershipGrant(grant, authorityPublicKey, now())
+      || grant.projectRef !== device.projectRef
+      || grant.authorityEpoch !== device.authority.authorityEpoch
+      || grant.authorityKeyId !== device.authority.authorityKeyId
+      || grant.deviceRef !== device.device.deviceRef
+      || grant.deviceKeyId !== deviceKeyId
+      || grant.displayName !== device.device.displayName
+      || grant.role !== device.device.role
+      || !Number.isSafeInteger(grant.grantVersion)
+      || typeof grant.collaboratorRef !== "string"
+      || !Array.isArray(grant.permissions)) return undefined;
+    return { authorityPublicKey, grant };
+  } catch {
+    return undefined;
+  }
+}
+function descriptorSafeFrozenCopy(value, seen = new Map()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return value;
+  if (typeof value !== "object") throw new TypeError("business delivery payload must be finite JSON data");
+  if (seen.has(value)) return seen.get(value);
+  if (Array.isArray(value)) {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => key !== "length" && (typeof key !== "string" || !/^(?:0|[1-9]\d*)$/u.test(key)))) throw new TypeError("business delivery array is invalid");
+    const copy = []; seen.set(value, copy);
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = descriptors[String(index)];
+      if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined) throw new TypeError("business delivery accessor is forbidden");
+      copy.push(descriptorSafeFrozenCopy(descriptor.value, seen));
+    }
+    return Object.freeze(copy);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError("business delivery payload prototype is invalid");
+  const copy = {}; seen.set(value, copy);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new TypeError("business delivery symbols are forbidden");
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor?.get !== undefined || descriptor?.set !== undefined || descriptor?.enumerable !== true) throw new TypeError("business delivery accessor is forbidden");
+    copy[key] = descriptorSafeFrozenCopy(descriptor.value, seen);
+  }
+  return Object.freeze(copy);
+}
+function safeOpenedDelivery(opened) {
+  if (!isRecord(opened)) throw new TypeError("opened project delivery must be an object");
+  const descriptors = Object.getOwnPropertyDescriptors(opened);
+  const sender = descriptors.senderDeviceRef;
+  const epoch = descriptors.authorityEpoch;
+  const payload = descriptors.payload;
+  if (sender?.get !== undefined || sender?.set !== undefined || typeof sender?.value !== "string"
+    || epoch?.get !== undefined || epoch?.set !== undefined || !Number.isSafeInteger(epoch?.value)
+    || payload?.get !== undefined || payload?.set !== undefined) throw new TypeError("opened project delivery descriptors are invalid");
+  return Object.freeze({ senderDeviceRef: sender.value, authorityEpoch: epoch.value, payload: descriptorSafeFrozenCopy(payload.value) });
+}
+function assertNoTransportClaims(value) {
+  const forbidden = new Set(["projectRef", "senderDeviceRef", "authorityEpoch", "transport", "key", "path"]);
+  const visit = (candidate, seen = new Set()) => {
+    if (candidate === null || typeof candidate !== "object" || seen.has(candidate)) return;
+    seen.add(candidate);
+    for (const key of Object.keys(candidate)) {
+      if (forbidden.has(key)) throw new TypeError(`message cannot provide ${key}`);
+      visit(candidate[key], seen);
+    }
+  };
+  visit(value);
+}
+function serverCertificateRef(cert) {
+  const certificate = new X509Certificate(cert);
+  return `cert_${createHash("sha256").update(certificate.raw).digest("base64url")}`;
 }
 function canonicalJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -207,7 +335,14 @@ export class ProjectEntryService {
     this.lanTransport = undefined;
     this.relayTransport = undefined;
     this.lastDelivery = undefined;
-    this.lanClient = { connected: false };
+    this.businessDeliveryListeners = new Set();
+    this.lanClient = undefined;
+    this.taskContextEpoch = 0;
+    this.taskContextKeys = new Set();
+    this.taskContextClosed = false;
+    this.entryClosing = false;
+    this.entryClosed = false;
+    this.closePromise = undefined;
   }
 
   /** Serialize the public, non-secret status projection used by the Web API and the client panel. */
@@ -219,6 +354,423 @@ export class ProjectEntryService {
       const pendingJoin = await this.#loadPendingJoin();
       return { project, lan, relay, pairing: { pending: pendingJoin !== undefined, projectRef: pendingJoin?.projectRef } };
     });
+  }
+
+  /**
+   * Return a Host-only capability context for the local project task store.
+   * The opaque execution token and both closures are deliberately non-enumerable:
+   * public status and accidental JSON serialization cannot expose identity or keys.
+   */
+  async localProjectTaskContext() {
+    return this.#queue(async () => {
+      const contextEpoch = this.taskContextEpoch;
+      if (this.taskContextClosed) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project task execution context is closed");
+      let device;
+      try { device = await this.#requireAuthorityDevice(); }
+      catch (error) {
+        if (error?.code === "PROJECT_ENTRY_NOT_CREATED" && (await this.#loadDeviceFile())?.kind === "collaborator") {
+          throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project tasks require the local authority desktop");
+        }
+        throw error;
+      }
+      const persisted = await this.#requirePersisted(device);
+      await persisted.refresh();
+      const projectRef = persisted.authority.projectRef;
+      const localDeviceRef = device.device?.deviceRef;
+      const grant = device.device?.grant;
+      let members;
+      try { members = persisted.read("listMembers", localDeviceRef); }
+      catch {
+        throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "the local project member is no longer active");
+      }
+      const member = members.find((candidate) => candidate.deviceRef === localDeviceRef);
+      const grantMatches = member !== undefined
+        && member.status === "active"
+        && member.role === "owner"
+        && device.projectRef === projectRef
+        && verifyMembershipGrant(grant, persisted.authority.authorityPublicKey, this.now())
+        && grant.projectRef === projectRef
+        && grant.authorityEpoch === persisted.authority.authorityEpoch
+        && grant.authorityKeyId === persisted.authority.authorityKeyId
+        && grant.collaboratorRef === member.collaboratorRef
+        && grant.deviceRef === member.deviceRef
+        && grant.role === member.role
+        && grant.deviceKeyId === member.deviceKeyId
+        && grant.grantVersion === member.grantVersion;
+      if (!grantMatches) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "the local owner membership grant is invalid, stale, or mismatched");
+
+      const rawProjectKey = Buffer.from(device.encryptionKey, "base64url");
+      if (rawProjectKey.length !== 32) {
+        rawProjectKey.fill(0);
+        throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "the local project encryption key is invalid");
+      }
+      let taskStoreKey;
+      try {
+        taskStoreKey = createHmac("sha256", rawProjectKey).update(PROJECT_TASK_KEY_DOMAIN).update("\0").update(projectRef).digest();
+      } finally {
+        rawProjectKey.fill(0);
+      }
+      if (this.taskContextClosed || this.taskContextEpoch !== contextEpoch) {
+        taskStoreKey.fill(0);
+        throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project task execution context is closed");
+      }
+      this.taskContextKeys.add(taskStoreKey);
+      let disposed = false;
+      const execution = Object.freeze(Object.create(null));
+      const actor = Object.freeze({ projectRef, actorRef: member.collaboratorRef, kind: "human", role: "owner" });
+      const authorityRevision = persisted.revision;
+      const assertCurrentProject = (requestedProjectRef) => {
+        if (disposed || this.taskContextClosed || this.taskContextEpoch !== contextEpoch || requestedProjectRef !== projectRef || this.persisted !== persisted || persisted.revision !== authorityRevision) {
+          throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project task execution context is invalid, stale, or belongs to another project");
+        }
+      };
+      const assertExecution = (candidate, requestedProjectRef) => {
+        if (candidate !== execution) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project task execution context is invalid, stale, or belongs to another project");
+        assertCurrentProject(requestedProjectRef);
+      };
+      const dispose = () => {
+        if (disposed) return false;
+        disposed = true;
+        this.taskContextKeys.delete(taskStoreKey);
+        taskStoreKey.fill(0);
+        return true;
+      };
+      const context = { projectRef, databasePath: join(this.storages, PROJECT_TASK_DATABASE_FILE) };
+      Object.defineProperties(context, {
+        execution: { value: execution, enumerable: false },
+        actorResolver: { value: (candidate, requestedProjectRef) => { assertExecution(candidate, requestedProjectRef); return actor; }, enumerable: false },
+        keyProvider: { value: (requestedProjectRef) => { assertCurrentProject(requestedProjectRef); return Buffer.from(taskStoreKey); }, enumerable: false },
+        dispose: { value: dispose, enumerable: false },
+      });
+      return Object.freeze(context);
+    });
+  }
+
+  /**
+   * Derive a Host-only Automation capability from the already-authoritative task
+   * context. This intentionally runs outside #queue: localProjectTaskContext owns
+   * the queued authority check, while the second resolver check closes the race
+   * between reading the internal project key and publishing this capability.
+   */
+  async localProjectAutomationContext() {
+    const taskContext = await this.localProjectTaskContext();
+    let automationKey;
+    try {
+      taskContext.actorResolver(taskContext.execution, taskContext.projectRef);
+      const rawProjectKey = Buffer.from(this.device?.encryptionKey ?? "", "base64url");
+      if (rawProjectKey.length !== 32) {
+        rawProjectKey.fill(0);
+        throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "the local project encryption key is invalid");
+      }
+      try {
+        automationKey = createHmac("sha256", rawProjectKey).update(PROJECT_AUTOMATION_KEY_DOMAIN).update("\0").update(taskContext.projectRef).digest();
+      } finally {
+        rawProjectKey.fill(0);
+      }
+      taskContext.actorResolver(taskContext.execution, taskContext.projectRef);
+      if (this.taskContextClosed || this.entryClosing || this.entryClosed) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project automation execution context is closed");
+      this.taskContextKeys.add(automationKey);
+      let disposed = false;
+      const assertCurrent = (requestedProjectRef) => taskContext.actorResolver(taskContext.execution, requestedProjectRef);
+      const dispose = () => {
+        if (disposed) return false;
+        disposed = true;
+        this.taskContextKeys.delete(automationKey);
+        automationKey.fill(0);
+        taskContext.dispose();
+        return true;
+      };
+      const context = { projectRef: taskContext.projectRef, filePath: join(this.storages, PROJECT_AUTOMATION_DATABASE_FILE) };
+      Object.defineProperties(context, {
+        execution: { value: taskContext.execution, enumerable: false },
+        actorResolver: { value: (candidate, requestedProjectRef) => taskContext.actorResolver(candidate, requestedProjectRef), enumerable: false },
+        keyProvider: { value: (requestedProjectRef) => { assertCurrent(requestedProjectRef); return Buffer.from(automationKey); }, enumerable: false },
+        dispose: { value: dispose, enumerable: false },
+      });
+      return Object.freeze(context);
+    } catch (error) {
+      if (automationKey !== undefined) this.taskContextKeys.delete(automationKey);
+      automationKey?.fill(0);
+      taskContext.dispose();
+      throw error;
+    }
+  }
+
+  /** Return the Host-only authority DB or collaborator-local cache capability for M4 sync. */
+  async localProjectBusinessSyncContext() {
+    const kind = await this.#queue(async () => (await this.#requireDevice()).kind);
+    if (kind !== "collaborator") {
+      let taskContext;
+      try { taskContext = await this.localProjectTaskContext(); }
+      catch (error) {
+        if (error?.code === "PROJECT_ENTRY_CLOSED") throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project business sync context closed before publication");
+        throw error;
+      }
+      let syncKey;
+      try {
+        taskContext.actorResolver(taskContext.execution, taskContext.projectRef);
+        const rawProjectKey = Buffer.from(this.device?.encryptionKey ?? "", "base64url");
+        if (rawProjectKey.length !== 32) {
+          rawProjectKey.fill(0);
+          throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "the local project encryption key is invalid");
+        }
+        try {
+          syncKey = createHmac("sha256", rawProjectKey).update(PROJECT_BUSINESS_SYNC_KEY_DOMAIN).update("\0").update(taskContext.projectRef).digest();
+        } finally {
+          rawProjectKey.fill(0);
+        }
+        taskContext.actorResolver(taskContext.execution, taskContext.projectRef);
+        if (this.taskContextClosed || this.entryClosing || this.entryClosed) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project business sync context is closed");
+        const persisted = this.persisted;
+        const authorityEpoch = persisted.authority.authorityEpoch;
+        const localDeviceRef = this.device.device.deviceRef;
+        const assertCurrent = (requestedProjectRef) => taskContext.actorResolver(taskContext.execution, requestedProjectRef);
+        const peerDeviceRefs = async () => {
+          assertCurrent(taskContext.projectRef);
+          await persisted.refresh();
+          assertCurrent(taskContext.projectRef);
+          let members;
+          try { members = persisted.read("listMembers", localDeviceRef); }
+          catch { throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peers are not currently available"); }
+          return Object.freeze([...new Set(members
+            .filter((member) => member.status === "active" && member.deviceRef !== localDeviceRef)
+            .map((member) => member.deviceRef))]
+            .sort());
+        };
+        const peerResolver = async (opened) => {
+          const metadata = strictOpenedPeerMetadata(opened);
+          assertCurrent(taskContext.projectRef);
+          await persisted.refresh();
+          assertCurrent(taskContext.projectRef);
+          if (metadata.authorityEpoch !== persisted.authority.authorityEpoch) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer is not currently authorized");
+          let members;
+          try { members = persisted.read("listMembers", localDeviceRef); }
+          catch { throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer is not currently authorized"); }
+          const member = members.find((candidate) => candidate.deviceRef === metadata.senderDeviceRef && candidate.status === "active");
+          if (member === undefined) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer is not currently authorized");
+          return trustedSyncPeer(member);
+        };
+        return this.#publishBusinessSyncContext({
+          projectRef: taskContext.projectRef,
+          mode: "authority",
+          authorityEpoch,
+          localDeviceRef,
+          syncKey,
+          execution: taskContext.execution,
+          assertCurrent,
+          peerResolver,
+          peerDeviceRefs,
+          disposeUnderlying: () => taskContext.dispose(),
+        });
+      } catch (error) {
+        if (syncKey !== undefined) this.taskContextKeys.delete(syncKey);
+        syncKey?.fill(0);
+        taskContext.dispose();
+        throw error;
+      }
+    }
+
+    return this.#queue(async () => {
+      const contextEpoch = this.taskContextEpoch;
+      const device = await this.#requireDevice();
+      const identity = validatedCollaboratorIdentity(device, this.now);
+      if (identity === undefined) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "the local collaborator grant is invalid, stale, or mismatched");
+      let syncKey;
+      let generatedKey;
+      let migrated = false;
+      try {
+        if (device.syncCacheKey === undefined) {
+          generatedKey = randomBytes(32);
+          device.syncCacheKey = generatedKey.toString("base64url");
+          try {
+            await atomicWriteJson(this.deviceFile, device);
+            migrated = true;
+          } catch (error) {
+            delete device.syncCacheKey;
+            throw error;
+          } finally {
+            generatedKey.fill(0);
+            generatedKey = undefined;
+          }
+        }
+        syncKey = exactBase64urlKey(device.syncCacheKey);
+        if (syncKey === undefined) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "the local collaborator sync cache key is invalid");
+        const projectRef = device.projectRef;
+        const authorityEpoch = device.authority.authorityEpoch;
+        const localDeviceRef = device.device.deviceRef;
+        const identityStamp = canonicalJson({ authority: device.authority, grant: device.device.grant, deviceRef: localDeviceRef, role: device.device.role, syncCacheKey: device.syncCacheKey, peers: device.peers });
+        const execution = Object.freeze(Object.create(null));
+        const assertCurrent = (requestedProjectRef) => {
+          if (this.taskContextClosed || this.taskContextEpoch !== contextEpoch || this.entryClosing || this.entryClosed || requestedProjectRef !== projectRef || this.device !== device) {
+            throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project business sync context is invalid, stale, or belongs to another project");
+          }
+        };
+        const peerDeviceRefs = async () => {
+          assertCurrent(projectRef);
+          const fresh = await readJson(this.deviceFile, undefined);
+          const freshIdentity = validatedCollaboratorIdentity(fresh, this.now);
+          if (freshIdentity === undefined) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peers are not currently available");
+          const freshStamp = canonicalJson({ authority: fresh.authority, grant: fresh.device.grant, deviceRef: fresh.device.deviceRef, role: fresh.device.role, syncCacheKey: fresh.syncCacheKey, peers: fresh.peers });
+          if (freshStamp !== identityStamp) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project business sync context is invalid or stale");
+          return Object.freeze([...new Set(this.#peerRecords(fresh)
+            .filter((peer) => peer.role === "owner" && peer.deviceRef !== localDeviceRef)
+            .map((peer) => peer.deviceRef))]
+            .sort());
+        };
+        const peerResolver = async (opened) => {
+          const metadata = strictOpenedPeerMetadata(opened);
+          assertCurrent(projectRef);
+          const fresh = await readJson(this.deviceFile, undefined);
+          const freshIdentity = validatedCollaboratorIdentity(fresh, this.now);
+          if (freshIdentity === undefined) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer is not currently authorized");
+          const freshStamp = canonicalJson({ authority: fresh.authority, grant: fresh.device.grant, deviceRef: fresh.device.deviceRef, role: fresh.device.role, syncCacheKey: fresh.syncCacheKey, peers: fresh.peers });
+          if (freshStamp !== identityStamp) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project business sync context is invalid or stale");
+          const authorityPeer = this.#peerRecords(fresh).find((peer) => peer.deviceRef === metadata.senderDeviceRef && peer.role === "owner" && peer.deviceRef !== localDeviceRef);
+          if (metadata.authorityEpoch !== fresh.authority.authorityEpoch || authorityPeer === undefined) {
+            throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer is not currently authorized");
+          }
+          return trustedSyncPeer({
+            deviceRef: authorityPeer.deviceRef,
+            collaboratorRef: typeof authorityPeer.collaboratorRef === "string" ? authorityPeer.collaboratorRef : fresh.authority.authorityKeyId,
+            role: "owner",
+            permissions: ROLE_PERMISSIONS.owner,
+          });
+        };
+        if (this.taskContextClosed || this.taskContextEpoch !== contextEpoch || this.entryClosing || this.entryClosed) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project business sync context is closed");
+        return this.#publishBusinessSyncContext({ projectRef, mode: "collaborator", authorityEpoch, localDeviceRef, syncKey, execution, assertCurrent, peerResolver, peerDeviceRefs });
+      } catch (error) {
+        if (!migrated && generatedKey !== undefined) generatedKey.fill(0);
+        if (syncKey !== undefined) this.taskContextKeys.delete(syncKey);
+        syncKey?.fill(0);
+        throw error;
+      }
+    });
+  }
+
+  #publishBusinessSyncContext({ projectRef, mode, authorityEpoch, localDeviceRef, syncKey, execution, assertCurrent, peerResolver, peerDeviceRefs, disposeUnderlying }) {
+    this.taskContextKeys.add(syncKey);
+    let disposed = false;
+    const requireCurrent = (requestedProjectRef) => {
+      if (disposed) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project business sync context is disposed");
+      assertCurrent(requestedProjectRef);
+    };
+    const dispose = () => {
+      if (disposed) return false;
+      disposed = true;
+      this.taskContextKeys.delete(syncKey);
+      syncKey.fill(0);
+      disposeUnderlying?.();
+      return true;
+    };
+    const context = { projectRef, mode };
+    Object.defineProperties(context, {
+      authorityEpoch: { value: authorityEpoch, enumerable: false },
+      localDeviceRef: { value: localDeviceRef, enumerable: false },
+      filePath: { value: join(this.storages, PROJECT_BUSINESS_SYNC_DATABASE_FILE), enumerable: false },
+      execution: { value: execution, enumerable: false },
+      keyProvider: { value: (requestedProjectRef) => { requireCurrent(requestedProjectRef); return Buffer.from(syncKey); }, enumerable: false },
+      peerResolver: { value: async (opened) => {
+        requireCurrent(projectRef);
+        const peer = await peerResolver(opened);
+        requireCurrent(projectRef);
+        return peer;
+      }, enumerable: false },
+      peerDeviceRefs: { value: async () => {
+        requireCurrent(projectRef);
+        const refs = await peerDeviceRefs();
+        requireCurrent(projectRef);
+        return refs;
+      }, enumerable: false },
+      dispose: { value: dispose, enumerable: false },
+    });
+    return Object.freeze(context);
+  }
+
+  /**
+   * Return the Host-only M5 foundations capability. Every key and path remains
+   * non-enumerable; the only JSON-visible fact is the already-public projectRef.
+   */
+  async localProjectFoundationsContext() {
+    const taskContext = await this.localProjectTaskContext();
+    const keys = new Map();
+    try {
+      taskContext.actorResolver(taskContext.execution, taskContext.projectRef);
+      const rawProjectKey = Buffer.from(this.device?.encryptionKey ?? "", "base64url");
+      if (rawProjectKey.length !== 32) {
+        rawProjectKey.fill(0);
+        throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "the local project encryption key is invalid");
+      }
+      try {
+        for (const domain of PROJECT_FOUNDATION_DOMAIN_SET) {
+          const key = createHmac("sha256", rawProjectKey).update(domain).update("\0").update(taskContext.projectRef).digest();
+          keys.set(domain, key);
+        }
+      } finally {
+        rawProjectKey.fill(0);
+      }
+      taskContext.actorResolver(taskContext.execution, taskContext.projectRef);
+      if (this.taskContextClosed || this.entryClosing || this.entryClosed) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project foundations execution context is closed");
+      for (const key of keys.values()) this.taskContextKeys.add(key);
+
+      let disposed = false;
+      const assertCurrent = (requestedProjectRef) => {
+        taskContext.actorResolver(taskContext.execution, requestedProjectRef);
+        if (disposed || this.taskContextClosed || this.entryClosing || this.entryClosed) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project foundations execution context is invalid or stale");
+      };
+      const keyProvider = (domain, requestedProjectRef) => {
+        assertCurrent(requestedProjectRef);
+        if (!PROJECT_FOUNDATION_DOMAIN_SET.has(domain)) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project foundation key domain is invalid");
+        return Buffer.from(keys.get(domain));
+      };
+      const repositoryRefFor = (realGitRoot) => {
+        assertCurrent(taskContext.projectRef);
+        const root = typeof realGitRoot === "string" ? realGitRoot : "";
+        if (root === "" || root.trim() !== root || !isAbsolute(root) || normalize(root) !== root) throw new TypeError("realGitRoot must be an exact normalized absolute path");
+        const digest = createHmac("sha256", keys.get(PROJECT_FOUNDATION_KEY_DOMAINS.workspace))
+          .update(root).update("\0").update(taskContext.projectRef).digest();
+        try { return `repository_${digest.toString("base64url")}`; }
+        finally { digest.fill(0); }
+      };
+      const dispose = () => {
+        if (disposed) return false;
+        disposed = true;
+        for (const key of keys.values()) {
+          this.taskContextKeys.delete(key);
+          key.fill(0);
+        }
+        keys.clear();
+        taskContext.dispose();
+        return true;
+      };
+
+      const foundationsRoot = join(this.storages, PROJECT_FOUNDATIONS_DIRECTORY);
+      const context = { projectRef: taskContext.projectRef };
+      Object.defineProperties(context, {
+        foundationsRoot: { value: foundationsRoot, enumerable: false },
+        workspaceStatePath: { value: join(foundationsRoot, "workspace-authority.enc.json"), enumerable: false },
+        authorityRoot: { value: join(foundationsRoot, "git-authority"), enumerable: false },
+        worktreeRoot: { value: join(foundationsRoot, "worktrees"), enumerable: false },
+        casObjectRoot: { value: join(foundationsRoot, "cas", "objects"), enumerable: false },
+        casStagingRoot: { value: join(foundationsRoot, "cas", "staging"), enumerable: false },
+        qualityStatePath: { value: join(foundationsRoot, "quality-orchestrator.enc.json"), enumerable: false },
+        defectStatePath: { value: join(foundationsRoot, "defect-lifecycle.enc.json"), enumerable: false },
+        outboxStatePath: { value: join(foundationsRoot, "defect-outbox.enc.json"), enumerable: false },
+        execution: { value: taskContext.execution, enumerable: false },
+        actorResolver: { value: (candidate, requestedProjectRef) => taskContext.actorResolver(candidate, requestedProjectRef), enumerable: false },
+        keyProvider: { value: keyProvider, enumerable: false },
+        repositoryRefFor: { value: repositoryRefFor, enumerable: false },
+        dispose: { value: dispose, enumerable: false },
+      });
+      return Object.freeze(context);
+    } catch (error) {
+      for (const key of keys.values()) {
+        this.taskContextKeys.delete(key);
+        key.fill(0);
+      }
+      keys.clear();
+      taskContext.dispose();
+      throw error;
+    }
   }
 
   /** Create the project authority and register the owner device. Idempotent when a project exists. */
@@ -383,7 +935,10 @@ export class ProjectEntryService {
         : lanAuthority.lastEndpoint;
       const authorityDevice = {
         deviceRef: device.device.deviceRef,
+        collaboratorRef: device.device.grant.collaboratorRef,
         displayName: device.device.displayName,
+        role: device.device.grant.role,
+        permissions: [...device.device.grant.permissions],
         signingPublicKey: exportPublicKey(importPrivateKey(device.device.signingPrivateKey, "signingPrivateKey")),
         encryptionPublicKey: exportPublicKey(importPrivateKey(device.device.encryptionPrivateKey, "encryptionPrivateKey")),
       };
@@ -406,6 +961,7 @@ export class ProjectEntryService {
           relayUrl: relay.enabled ? relay.relayUrl : "",
           lan: {
             ...lanClient,
+            serverCertificateRef: serverCertificateRef(lanAuthority.serverCert),
             endpoints: lanEndpoint && Number.isSafeInteger(lanEndpoint.port) && lanEndpoint.port > 0 ? [lanEndpoint] : [],
           },
         },
@@ -452,10 +1008,15 @@ export class ProjectEntryService {
       } catch {
         throw entryError("PROJECT_ENTRY_INVITE_INVALID", "join response encrypted pairing material is invalid");
       }
+      const syncCacheKeyBuffer = randomBytes(32);
+      let syncCacheKey;
+      try { syncCacheKey = syncCacheKeyBuffer.toString("base64url"); }
+      finally { syncCacheKeyBuffer.fill(0); }
       const device = {
         version: DEVICE_VERSION,
         kind: "collaborator",
         projectRef: pending.projectRef,
+        syncCacheKey,
         authority: {
           authorityEpoch: response.authorityEpoch,
           authorityKeyId: response.authorityKeyId,
@@ -471,7 +1032,10 @@ export class ProjectEntryService {
         },
         peers: [{
           deviceRef: response.authorityDevice.deviceRef,
+          collaboratorRef: typeof response.authorityDevice.collaboratorRef === "string" ? response.authorityDevice.collaboratorRef : response.authorityKeyId,
           displayName: response.authorityDevice.displayName,
+          role: "owner",
+          permissions: [...ROLE_PERMISSIONS.owner],
           signingPublicKey: exportPublicKey(authoritySigningKey),
           encryptionPublicKey: exportPublicKey(authorityEncryptionKey),
         }],
@@ -481,6 +1045,7 @@ export class ProjectEntryService {
               cert: pairing.lan.cert,
               key: pairing.lan.key,
               ca: pairing.lan.ca,
+              serverCertificateRef: pairing.lan.serverCertificateRef,
               expiresAt: pairing.lan.expiresAt,
               endpoints: Array.isArray(pairing.lan.endpoints) ? pairing.lan.endpoints.filter((endpoint) => isRecord(endpoint) && typeof endpoint.host === "string" && Number.isSafeInteger(endpoint.port) && endpoint.port > 0 && endpoint.port <= 65_535) : [],
             }
@@ -499,6 +1064,91 @@ export class ProjectEntryService {
       await rm(this.pendingJoinFile, { force: true });
       this.device = device;
       return { projectRef: device.projectRef, member: response.member, status: await this.#buildStatus() };
+    });
+  }
+
+  /** Register a Host-only synchronous delivery boundary; returned promises are deliberately ignored. */
+  subscribeProjectBusinessDelivery(listener) {
+    if (this.entryClosing || this.entryClosed) throw entryError("PROJECT_ENTRY_CLOSED", "project entry service is closed");
+    if (typeof listener !== "function") throw new TypeError("listener must be a function");
+    this.businessDeliveryListeners.add(listener);
+    let active = true;
+    return () => {
+      if (!active) return false;
+      active = false;
+      this.businessDeliveryListeners.delete(listener);
+      return true;
+    };
+  }
+
+  /** Seal and enqueue one business message over an already-authenticated paired transport. */
+  async sendProjectBusinessMessage(input = {}) {
+    return this.#queue(async () => {
+      if (!isRecord(input) || Reflect.ownKeys(input).length !== 2 || !Object.hasOwn(input, "targetDeviceRef") || !Object.hasOwn(input, "message")) throw new TypeError("business send accepts only targetDeviceRef and message");
+      const descriptors = Object.getOwnPropertyDescriptors(input);
+      if (descriptors.targetDeviceRef?.get !== undefined || descriptors.targetDeviceRef?.set !== undefined || descriptors.message?.get !== undefined || descriptors.message?.set !== undefined) throw new TypeError("business send accessors are forbidden");
+      const targetDeviceRef = nonEmptyString(descriptors.targetDeviceRef.value, "targetDeviceRef", 128);
+      if (!/^device_[A-Za-z0-9_-]{20,64}$/u.test(targetDeviceRef)) throw new TypeError("targetDeviceRef must be opaque");
+      const message = descriptorSafeFrozenCopy(descriptors.message.value);
+      assertNoTransportClaims(message);
+      const currentDevice = await this.#requireDevice();
+      const freshDevice = await readJson(this.deviceFile, undefined);
+      if (!isRecord(freshDevice)
+        || freshDevice.projectRef !== currentDevice.projectRef
+        || freshDevice.kind !== currentDevice.kind
+        || freshDevice.device?.deviceRef !== currentDevice.device?.deviceRef
+        || canonicalJson(freshDevice) !== canonicalJson(currentDevice)) {
+        throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project entry identity changed before send");
+      }
+      let authorityEpoch;
+      if (freshDevice.kind === "collaborator") {
+        const currentIdentity = validatedCollaboratorIdentity(currentDevice, this.now), freshIdentity = validatedCollaboratorIdentity(freshDevice, this.now);
+        if (currentIdentity === undefined || freshIdentity === undefined) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "the local collaborator grant is invalid, stale, or mismatched");
+        const authorities = this.#peerRecords(freshDevice).filter((peer) => peer.role === "owner" && peer.deviceRef !== freshDevice.device.deviceRef);
+        if (authorities.length !== 1 || authorities[0].deviceRef !== targetDeviceRef) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "target project authority is not currently authorized");
+        authorityEpoch = freshIdentity.grant.authorityEpoch;
+      } else {
+        const persisted = await this.#requirePersisted(freshDevice);
+        await persisted.refresh();
+        if (persisted.authority.projectRef !== freshDevice.projectRef) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "project authority changed before send");
+        let members;
+        try { members = persisted.read("listMembers", freshDevice.device.deviceRef); }
+        catch { throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project membership is not currently authorized"); }
+        const localMembers = members.filter((member) => member.deviceRef === freshDevice.device.deviceRef && member.status === "active");
+        const localMember = localMembers[0];
+        const grant = freshDevice.device.grant;
+        const localGrantMatches = localMembers.length === 1
+          && localMember.role === "owner"
+          && hasCanonicalSignature(grant?.signature)
+          && verifyMembershipGrant(grant, persisted.authority.authorityPublicKey, this.now())
+          && grant.projectRef === persisted.authority.projectRef
+          && grant.authorityEpoch === persisted.authority.authorityEpoch
+          && grant.authorityKeyId === persisted.authority.authorityKeyId
+          && grant.collaboratorRef === localMember.collaboratorRef
+          && grant.deviceRef === localMember.deviceRef
+          && grant.role === localMember.role
+          && grant.deviceKeyId === localMember.deviceKeyId
+          && grant.grantVersion === localMember.grantVersion;
+        if (!localGrantMatches) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "the local authority membership is invalid, stale, or revoked");
+        const targets = members.filter((member) => member.deviceRef === targetDeviceRef && member.status === "active");
+        const target = targets[0];
+        const peers = this.#peerRecords(freshDevice).filter((peer) => peer.deviceRef === targetDeviceRef);
+        let peerKeyId;
+        try {
+          if (peers.length === 1) peerKeyId = `key_${createHash("sha256").update(importPublicKey(peers[0].signingPublicKey, "peer signingPublicKey", "ed25519").export({ type: "spki", format: "der" })).digest("base64url")}`;
+        } catch {}
+        if (targets.length !== 1 || peers.length !== 1 || peerKeyId !== target.deviceKeyId) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "target project device is not currently authorized");
+        authorityEpoch = persisted.authority.authorityEpoch;
+      }
+      let transport;
+      let kind;
+      if (freshDevice.kind === "collaborator" && this.lanClient?.canSend(targetDeviceRef)) { transport = this.lanClient; kind = "lan_mtls"; }
+      else if (freshDevice.kind !== "collaborator" && this.lanTransport?.canSend(targetDeviceRef)) { transport = this.lanTransport; kind = "lan_mtls"; }
+      else if (this.relayTransport?.canSend(targetDeviceRef)) { transport = this.relayTransport; kind = "remote_wss"; }
+      else throw entryError("PROJECT_ENTRY_TASK_CONTEXT_INVALID", "no authenticated project transport is available for the target");
+      const packet = this.#sealForPeer(freshDevice, targetDeviceRef, kind, message, authorityEpoch);
+      const queued = transport.send(packet);
+      return Object.freeze({ queued: queued.queued === true, packetRef: queued.packetRef, targetDeviceRef, transport: kind });
     });
   }
 
@@ -540,8 +1190,8 @@ export class ProjectEntryService {
         relayUrl: relay.relayUrl,
         WebSocketImpl,
         resolveChannel: (targetDeviceRef) => targetDeviceRef === device.device.deviceRef ? channel : undefined,
-        onDelivery: async (opened) => {
-          this.lastDelivery = { senderDeviceRef: opened.senderDeviceRef, type: opened.payload?.type, receivedAt: this.now() };
+        onDelivery: (opened) => {
+          this.#handleTransportDelivery(opened);
           if (normalizedRole === "authority" && opened.payload?.type === "presence") {
             const response = this.#sealForPeer(device, opened.senderDeviceRef, "remote_wss", { type: "presence.ack", receivedAt: this.now() });
             transport.send(response);
@@ -602,7 +1252,7 @@ export class ProjectEntryService {
         key: key ?? credentials.serverPrivateKey,
         ca: ca ?? credentials.caCert,
         resolveChannel: (targetDeviceRef) => targetDeviceRef === device.device.deviceRef ? channel : undefined,
-        onDelivery: (opened) => { this.lastDelivery = { senderDeviceRef: opened.senderDeviceRef, type: opened.payload?.type, receivedAt: this.now() }; },
+        onDelivery: (opened) => { this.#handleTransportDelivery(opened); },
         tlsModule: this.tlsModule,
       });
       await transport.start();
@@ -615,12 +1265,11 @@ export class ProjectEntryService {
     });
   }
 
-  /** Verify an invited desktop can reach the authority over the configured LAN mTLS endpoint. */
+  /** Start or reuse the invited desktop's persistent, bidirectional LAN mTLS client. */
   async connectLan({ host, port, cert, key, ca } = {}) {
     return this.#queue(async () => {
       const device = await this.#requireDevice();
       if (device.kind !== "collaborator") throw new TypeError("LAN client connection is available on an invited desktop");
-      if (typeof this.tlsModule.connect !== "function") throw new TypeError("tlsModule must provide connect");
       const storedLan = isRecord(device.lan) ? device.lan : undefined;
       const endpoint = Array.isArray(storedLan?.endpoints) ? storedLan.endpoints[0] : undefined;
       const targetHost = assertPrivateBindHost(host || endpoint?.host);
@@ -628,54 +1277,24 @@ export class ProjectEntryService {
       if (targetPort < 1) throw new TypeError("port must be from 1 through 65535");
       const authorityPeer = this.#peerRecords(device)[0];
       if (authorityPeer === undefined) throw entryError("PROJECT_ENTRY_INVITE_INVALID", "authority device keys are missing from this pairing");
-      const packet = this.#sealForPeer(device, authorityPeer.deviceRef, "lan_mtls", { type: "presence", displayName: device.device.displayName });
-      const socket = this.tlsModule.connect({
+      await this.lanClient?.stop?.();
+      const channel = await this.#createLocalSecureChannel(device);
+      const client = new PersistentLanProjectClient({
         host: targetHost,
         port: targetPort,
         cert: nonEmptyString(cert ?? storedLan?.cert, "cert", 256 * 1024),
         key: nonEmptyString(key ?? storedLan?.key, "key", 256 * 1024),
         ca: nonEmptyString(ca ?? storedLan?.ca, "ca", 256 * 1024),
-        rejectUnauthorized: true,
-        minVersion: "TLSv1.3",
-        ALPNProtocols: [LAN_PROTOCOL],
+        serverCertificateRef: nonEmptyString(storedLan?.serverCertificateRef, "serverCertificateRef", 128),
+        resolveChannel: (targetDeviceRef) => targetDeviceRef === device.device.deviceRef ? channel : undefined,
+        onDelivery: (opened) => { this.#handleTransportDelivery(opened); },
+        tlsModule: this.tlsModule,
       });
-      try {
-        const acknowledgment = await new Promise((resolve, reject) => {
-          let body = "";
-          const timer = setTimeout(() => reject(new Error("LAN project connection timed out")), 15_000);
-          timer.unref?.();
-          const finish = (error, value) => {
-            clearTimeout(timer);
-            socket.off?.("secureConnect", onSecure);
-            socket.off?.("data", onData);
-            socket.off?.("error", onError);
-            if (error) reject(error); else resolve(value);
-          };
-          const onError = (error) => finish(error);
-          const onSecure = () => {
-            if (socket.authorized !== true || socket.alpnProtocol !== LAN_PROTOCOL) return finish(new Error("LAN project mTLS peer or ALPN was rejected"));
-            socket.write(`${JSON.stringify(packet)}\n`);
-          };
-          const onData = (chunk) => {
-            body += Buffer.from(chunk).toString("utf8");
-            if (body.length > 64 * 1024) return finish(new Error("LAN project acknowledgment exceeded the limit"));
-            const newline = body.indexOf("\n");
-            if (newline < 0) return;
-            let parsed;
-            try { parsed = JSON.parse(body.slice(0, newline)); } catch (error) { return finish(error); }
-            if (parsed?.ok !== true || parsed?.packetRef !== packet.packetRef) return finish(new Error("LAN project acknowledgment is invalid"));
-            finish(undefined, parsed);
-          };
-          socket.once?.("secureConnect", onSecure);
-          socket.on?.("data", onData);
-          socket.once?.("error", onError);
-        });
-        this.lanClient = { connected: true, checkedAt: this.now() };
-        return { connected: true, packetRef: acknowledgment.packetRef };
-      } finally {
-        socket.end?.();
-        socket.destroy?.();
-      }
+      await client.start();
+      this.lanClient = client;
+      const packet = this.#sealForPeer(device, authorityPeer.deviceRef, "lan_mtls", { type: "presence", displayName: device.device.displayName });
+      const queued = client.send(packet);
+      return { connected: true, packetRef: queued.packetRef };
     });
   }
 
@@ -686,28 +1305,38 @@ export class ProjectEntryService {
     });
   }
 
-  async close() {
-    await this.#stopRelayTransport();
-    await this.#stopLanTransport();
+  close() {
+    if (this.closePromise !== undefined) return this.closePromise;
+    this.entryClosing = true;
+    this.businessDeliveryListeners.clear();
+    if (!this.taskContextClosed) {
+      this.taskContextClosed = true;
+      this.taskContextEpoch += 1;
+      for (const key of this.taskContextKeys) key.fill(0);
+      this.taskContextKeys.clear();
+    }
+    const accepted = this.operationQueues.get("entry") ?? Promise.resolve();
+    this.closePromise = accepted.then(async () => {
+      let failure;
+      try { await this.#stopRelayTransport(); } catch (error) { failure = error; }
+      try { await this.#stopLanTransport(); } catch (error) { failure ??= error; }
+      const persisted = this.persisted;
+      this.persisted = undefined;
+      this.device = undefined;
+      try { await persisted?.close?.(); } catch (error) { failure ??= error; }
+      this.entryClosed = true;
+      if (failure !== undefined) throw failure;
+    });
+    return this.closePromise;
   }
 
   #lanProjection() {
-    const listening = this.lanTransport?.server !== undefined;
-    const pairedEndpoint = Array.isArray(this.device?.lan?.endpoints) ? this.device.lan.endpoints[0] : undefined;
+    const client = this.lanClient?.toJSON?.() ?? { connected: false, reconnecting: false };
     return {
-      implemented: true,
-      listening,
-      connected: this.lanClient.connected === true,
-      endpoint: listening ? { host: this.lanTransport.host, port: this.lanTransport.boundPort } : pairedEndpoint,
-      requiresExplicitCertificates: false,
-      automaticCredentials: true,
-      autoDiscovery: {
-        implemented: false,
-        reason: "LAN discovery is not broadcast; the one-time pairing response carries the pinned endpoint and mTLS credential.",
-      },
-      reason: listening
-        ? "LAN mTLS listener is active on an explicit private address."
-        : "LAN mTLS transport is ready; start the project entry to generate and use project-scoped credentials automatically.",
+      connected: client.connected === true,
+      reconnecting: client.reconnecting === true,
+      listening: this.lanTransport?.server !== undefined,
+      connectionCount: this.lanTransport?.socketByDevice?.size ?? 0,
     };
   }
 
@@ -779,10 +1408,10 @@ export class ProjectEntryService {
     });
   }
 
-  #sealForPeer(device, targetDeviceRef, transport, payload) {
+  #sealForPeer(device, targetDeviceRef, transport, payload, verifiedAuthorityEpoch) {
     const peer = this.#peerRecords(device).find((candidate) => candidate.deviceRef === targetDeviceRef);
     if (peer === undefined) throw entryError("PROJECT_ENTRY_INVITE_INVALID", "paired device encryption key is unavailable");
-    const authorityEpoch = device.kind === "collaborator" ? device.authority?.authorityEpoch : this.persisted?.authority?.authorityEpoch;
+    const authorityEpoch = verifiedAuthorityEpoch ?? (device.kind === "collaborator" ? device.authority?.authorityEpoch : this.persisted?.authority?.authorityEpoch);
     if (!Number.isSafeInteger(authorityEpoch)) throw entryError("PROJECT_ENTRY_INVITE_INVALID", "project authority epoch is unavailable");
     return sealProjectPacket({
       projectRef: device.projectRef,
@@ -881,8 +1510,10 @@ export class ProjectEntryService {
     if (this.device !== undefined) return this.device;
     const device = await readJson(this.deviceFile, undefined);
     if (device === undefined) return undefined;
-    const authorityShape = device?.kind !== "collaborator" && typeof device?.secret === "string" && device.secret.length >= 24 && typeof device?.encryptionKey === "string";
-    const collaboratorShape = device?.kind === "collaborator" && isRecord(device.authority) && typeof device.authority.authorityPublicKey === "string";
+    const persistedCacheKey = exactBase64urlKey(device?.syncCacheKey);
+    const authorityShape = device?.kind !== "collaborator" && device?.syncCacheKey === undefined && typeof device?.secret === "string" && device.secret.length >= 24 && typeof device?.encryptionKey === "string";
+    const collaboratorShape = device?.kind === "collaborator" && (device.syncCacheKey === undefined || persistedCacheKey !== undefined) && isRecord(device.authority) && typeof device.authority.authorityPublicKey === "string";
+    persistedCacheKey?.fill(0);
     if (!isRecord(device) || device.version !== DEVICE_VERSION || !isRecord(device.device) || (!authorityShape && !collaboratorShape)) {
       throw entryError("PROJECT_ENTRY_NOT_CREATED", "project device credential file is invalid");
     }
@@ -937,13 +1568,29 @@ export class ProjectEntryService {
     if (transport !== undefined) await transport.stop();
   }
 
+  #handleTransportDelivery(opened) {
+    let delivery;
+    try { delivery = safeOpenedDelivery(opened); }
+    catch { return; }
+    this.lastDelivery = { senderDeviceRef: delivery.senderDeviceRef, type: delivery.payload?.type, receivedAt: this.now() };
+    for (const listener of [...this.businessDeliveryListeners]) {
+      try {
+        const result = listener(delivery);
+        if (result !== null && (typeof result === "object" || typeof result === "function") && typeof result.then === "function") Promise.resolve(result).catch(() => undefined);
+      } catch {}
+    }
+  }
+
   async #stopLanTransport() {
     const transport = this.lanTransport;
+    const client = this.lanClient;
     this.lanTransport = undefined;
-    if (transport !== undefined) await transport.stop();
+    this.lanClient = undefined;
+    await Promise.allSettled([transport?.stop?.(), client?.stop?.()]);
   }
 
   #queue(operation) {
+    if (this.entryClosing || this.entryClosed) return Promise.reject(entryError("PROJECT_ENTRY_CLOSED", "project entry service is closed"));
     return queueByKey(this.operationQueues, "entry", operation);
   }
 }
@@ -963,6 +1610,10 @@ export {
   LAN_CREDENTIALS_FILE,
   MAX_PERSISTED_INVITES,
   PENDING_JOIN_FILE,
+  PROJECT_BUSINESS_SYNC_DATABASE_FILE,
+  PROJECT_BUSINESS_SYNC_KEY_DOMAIN,
+  PROJECT_FOUNDATIONS_DIRECTORY,
+  PROJECT_FOUNDATION_KEY_DOMAINS,
   RELAY_FILE,
   RELAY_VERSION,
   ROLES,

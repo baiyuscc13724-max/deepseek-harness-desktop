@@ -12,7 +12,7 @@
 - 不把具名普通子代理隐式转换为队友。
 - 不支持嵌套团队和领导权转移。
 - 运行时保持负责人到可见同级成员的扁平拓扑；任务成果负责人不是可派生下级的“组长”。
-- 本版本不自动创建 Git worktree；任务可记录文件范围并在 UI 提示冲突。
+- 旧团队任务本身仍不创建 Git worktree；M5 Project Foundations 只有在 Host 验证真实 Git 根、固定负责人和资源声明后，才为明确分配的项目工作创建隔离 worktree，并通过持久 change set、合并与质量门禁推进。
 
 ## 组成
 
@@ -32,11 +32,51 @@
 
 团队插件先验证调用者是精确 live agent，且发送者与接收者属于同一活跃团队。队友到队友的消息仍通过固定负责人作为官方 subagent 的直接父级进行投递，从而不绕过官方 lineage 检查。消息使用 `coordinator/relay` 来源并记录真实 `senderSessionId`，永远不获得 `user` 权限。
 
-团队工作台的 HTTP/SSE 面只读展示成员、任务和消息状态，并从 Web 投影中移除消息正文、任务描述和文件路径；唯一可写的 UI 请求是实验设置，并要求同源回环、`x-harness-agent-teams: 1` 头和 256 KiB 正文上限。创建/发信/任务变更/成员生命周期全部只走模型工具的精确 live-agent 鉴权，避免客户端伪造会话身份。用户可从工作台打开官方成员会话，直接发消息或使用官方中断能力。原负责人不可恢复时，只能由新根会话中的直接用户通过 `team_recover` 预览并显式确认关闭无活动成员的孤儿团队。
+旧团队运行时工作台的 HTTP/SSE 面只读展示成员、团队任务和消息状态，并从 Web 投影中移除消息正文、任务描述和文件路径；除实验设置外，创建/发信/团队任务变更/成员生命周期仍只走模型工具的精确 live-agent 鉴权，避免客户端伪造会话身份。Project Tasks 的窄写入口是独立例外，只接受本章后述的 create/allowed transition，并由 Project authority、actor resolver、RBAC 与 OCC 重验，不能写旧团队状态。写请求要求同源回环、`x-harness-agent-teams: 1` 头和有界正文。用户可从工作台打开官方成员会话，直接发消息或使用官方中断能力。原负责人不可恢复时，只能由新根会话中的直接用户通过 `team_recover` 预览并显式确认关闭无活动成员的孤儿团队。
 
-## 任务
+## 团队运行时任务（旧任务板）
 
-任务状态只有 `pending`、`in_progress`、`completed`。`blockedBy` 从未完成依赖派生，不单独持久化。完成前置任务会自然解除后续任务阻塞。认领要求任务未分配、未阻塞且状态为 pending。
+团队运行时任务状态只有 `pending`、`in_progress`、`completed`。`blockedBy` 从未完成依赖派生，不单独持久化。完成前置任务会自然解除后续任务阻塞。认领要求任务未分配、未阻塞且状态为 pending。这套任务继续保存在 `agent_teams.json`，由团队模型工具维护；它不会自动迁移、复制或双写到下面的 Project Tasks。
+
+## Project Tasks（项目级任务域）
+
+Project Tasks 是与团队运行时任务并列的独立域，保存 `backlog`、`todo`、`in_progress`、`in_review`、`blocked`、`done`、`canceled` 七态任务。它面向项目生命周期，不以 Team、根会话或 session Scheduler 作为身份；旧团队关闭、会话切换或提醒触发都不会隐式修改 Project Task。
+
+### Host-only 本机权威上下文
+
+`ProjectEntryService.localProjectTaskContext()` 只向 Host 内部返回能力对象。创建上下文前会刷新加密的持久 authority，并核验本机设备仍是 active owner、membership grant 签名与有效期正确，且 project、authority epoch/key id、member、device、role、device key 与 grant version 全部匹配。未创建项目、协作者设备、过期/篡改/不匹配 grant 或已撤销成员均不能取得写上下文。
+
+上下文提供固定的 `$DSH_HOME/storages/agent_project_tasks.sqlite`、不可伪造的冻结 `execution` 对象、`actorResolver(execution, projectRef)` 和 `keyProvider(projectRef)`：
+
+- `actorResolver` 只接受同一对象身份和同一项目，并返回由当前 authority member 派生的 human owner actor；Web 请求不能提交或覆盖 actor/project/role。
+- `keyProvider` 使用本机项目加密材料、固定用途域和 `projectRef` 经 HMAC-SHA256 派生 Project Task 专用 32-byte key，不直接返回 Project Entry 原始 encryption key；每次调用返回独立 Buffer。
+- 两个闭包都绑定当前 persisted authority identity/revision。authority 变化后旧上下文立即失效。
+- `ProjectEntryService.close()` 在首个异步等待前推进 context epoch、使现有 resolver/provider 立即报错，并 `fill(0)` 清零全部已派生 task key；重复 close 保持幂等，close 后不能再创建 task context。
+- `execution`、resolver 和 provider 是不可枚举属性；`status()`、JSON/Web projection 均不出现 execution、actorRef、private/encryption key。
+
+### 加密 SQLite 与任务一致性
+
+`ProjectTaskStore` 使用独立 SQLite 文件，初始化 `WAL`、`synchronous=FULL`、foreign keys 和 busy timeout，并尽力将文件权限限制为 owner-only。schema v3 包含 project revision、tasks、actors、events、comments、relations、attempts、reviews 与 command receipts：
+
+- title、requirements、file scope、event payload、comment/review body 和 receipt result 等字段使用 AES-256-GCM；AAD 绑定 envelope version、algorithm、`projectRef` 与逻辑字段名，密文不能跨项目或字段搬用。
+- 所有 mutation 使用数据库事务与 expected task revision（OCC）。状态变化、actor/event/record 和 command receipt 在同一提交边界完成。
+- `requirementsRevision` 随要求变化前进；旧 execution attempt 会失效，已有 review 会 supersede，避免用旧要求下的结果完成新要求。
+- schema v3 的 command receipt 绑定 `commandId`、`eventRef`、request digest、actor 和 task。相同意图重放返回既有 receipt；同一 command/event 搭配不同请求拒绝为幂等冲突，不会重复产生副作用。
+- Actor 只能由 `TrustedProjectActorResolver` 从 Host execution 解析。RBAC、任务状态转换、依赖环、认领/分配、attempt 提交与 review guard 均在服务端校验，客户端按钮不是授权来源。
+
+### 安全 Web 投影与固定路由
+
+Project Tasks 使用独立 Web contract：
+
+- `GET /api/agent-teams/project/tasks/state` 返回 canonical capability、最多最近 500 个 safe task 和 `hasMore`；
+- `POST /api/agent-teams/project/tasks/action` authority 接受明确 `create` 与服务器投影的 allowed transition；collaborator 只接受 capability 和条目 `allowedActions` 同时允许的 `claim/transition`；
+- `GET /api/agent-teams/project/tasks/stream` 的 `reset/capability/task` 事件只作为失效通知，Client 合并后重新 GET，不把 SSE payload 当权威结果。
+
+请求不接收 `projectRef`、`eventRef`、session 身份、actor、role 或 authority；这些值和 create 所需引用均由 Host 派生。Authority Web task projection 保持原安全摘要；collaborator 只增加 `hasAssignee/blockedByCount/allowedActions`，且 Client 不把内部 taskRef 渲染成文字，不返回 device/message/digest/reset、actor、文件路径、requirements、comment/review body、key 或原始错误栈。远端状态目标排除 `blocked/in_review/done`。POST 顶层限制为 `commandId/type/taskRef?/expectedRevision/payload`；同一网络意图最多用完全相同 body 重试一次，HTTP/OCC/幂等冲突不重试，也不做 optimistic revision 改写。
+
+非 2xx 采用 `{ ok:false, error:{ code, message, nextAction, retryable, safeDetails } }`。Client 保留 code/nextAction 做有界人类化提示，不直接展示机器 message。capability 明确区分 `authority`、`collaborator`、`no-project` 与 `unavailable`；只有 `canCreate=true` 显示/执行 Create。`hasMore=true` 必须显示 500 项上限，不能静默截断或以空数组冒充不可用。
+
+这里描述的是当前代码和固定 HTTP/SSE 契约及自动化测试边界，不代表所有打包版本已完成安装后实机验证。
 
 ## 结构化扩员
 
@@ -49,6 +89,71 @@
 ## 成本和冲突护栏
 
 每个团队默认最多 4 名队友，硬上限 8；同一固定负责人旗下所有未关闭平级团队默认合计最多 4 个活跃成员。UI 始终显示独立上下文带来的 Token 成本提示。多人共享同一工作目录时，任务可声明文件范围；重叠范围在工作台中显示警告。
+
+## 全局模型请求准入
+
+独立的 Host-only `dsh-model-admission` 插件在公共 `llm/stream` provider-attempt 接点统一准入真正的 Agent Loop 请求。因此根会话、普通 subagent、团队成员、定时唤醒和 provider retry 共享同一并发预算；Agent Teams 自身的 `maxActiveTurns` 仍只负责团队生命周期，不能冒充全局模型限流。
+
+默认最多同时放行 8 个 provider attempt、全局排队 32 个、每个固定根排队 8 个，最长等待 30 秒；配置另有不可突破的硬上限。队列在同一根内保持 FIFO、不同根之间轮转，取消、超时、插件关闭和异步流正常/异常/提前 return 都会精确释放。队列只保留有界根键和调度元数据，不保存 prompt、message 或请求正文；父会话环会归一到同一稳定根键，避免绕开配额。
+
+## 本地引导与恢复投影
+
+首批本地自动化通过新增的 `team_bootstrap` 工具提供；既有 `team_start`、`team_task_create`、`team_spawn` 的显式参数调用和结果语义保持兼容。完整且有界的任务/成员计划已经确定时，负责人直接调用 `team_bootstrap`，不先调用 `team_start`；计划尚未确定时仍走 `team_start → team_task_create → team_spawn`。同一团队只能选择其中一条创建路径，不能先建空团队再 Bootstrap。
+
+`team_bootstrap` 只允许最外层根负责人在当前直接用户回合调用；一次最多声明 4 个任务和 4 个可见同级成员。Host 先完整校验任务键、依赖 DAG、成员名、容量和文件边界；分给不同成员的任务若存在平台感知的路径/目录/glob 重叠会在启动前拒绝，同一成员内部的重叠不构成并行写冲突。校验通过后，Host 在一次原子 mutation 中持久化团队与全部 `pending` 任务，随后才逐个启动官方 continuable member。成员的真实 session id 在工作 followup 前与其任务绑定，因而不会出现成员已开始但任务尚未落盘的正常路径。
+
+调用方必须提供 `request_id`。同一根负责人以相同参数重放时复用原团队、任务和已完成成员，不重复启动；同一 id 配不同参数会以幂等冲突拒绝。若成员启动在可证明尚未发布 child 前失败，计划可从该成员继续；若已经出现成员记录或落入不确定窗口，则计划保持 `partial` 并返回稳定的错误阶段，自动重放 fail closed，避免重复执行。持久 schema v3 仅增加有界 bootstrap 引用和阶段；v1/v2 读取时原地迁移，普通团队仍无需该字段。
+
+当根负责人恰好只有一个符合生命周期状态的团队时，`team_spawn`、`team_resume` 和 `team_shutdown` 可以省略 `team_id`；零个候选报未找到，多个候选仍强制显式选择，绝不按“最近使用”猜测。显式 id 的旧错误语义保持不变。
+
+个别成员在 Host 确认退役后，其未完成任务会自动回到 `pending` 并解除 assignee/claim；已完成任务保留历史归属。整队关闭仍保留任务历史，直接用户 Stop 仍将进行中任务回滚为 pending 但保留原 assignee，以便显式恢复后继续。`team_resume` 只返回 `resumePlan`（ready/failed member、pending assigned、blocked/stranded task），不会启动、唤醒或投递任何成员消息。团队详情同时派生有界 `attention` 代码；Web 只得到代码和计数，不恢复消息正文、任务描述或文件范围。
+
+## Project Automation 与 session Scheduler
+
+Project Automation 是独立于 Project Tasks 和 session Scheduler 的项目级执行域。v1 只有手动触发、一个 `project_task.transition` step，并要求人类 owner/maintainer 明确审批；批准只把 Run 从 `awaiting_approval` 推进到 `queued`，实际 effect 由单独 Runner 随后执行。自动化目标只允许 `backlog/todo/in_progress/blocked/canceled`，不能借自动化绕过 `in_review/done` 所需的 attempt、review 和验收。
+
+### Host authority、加密持久化与命令边界
+
+`ProjectEntryService.localProjectAutomationContext()` 复用本机 owner membership/grant/authority revision 校验，但从原始项目材料用独立 HMAC domain 派生 Automation 专用 32-byte key。它与 Project Task key 不相等；execution、actor resolver、key provider 和 dispose 均不可枚举。context 失效或 Entry 关闭时，旧 resolver 立即拒绝，所有持有的 key buffer 被清零。
+
+`ProjectAutomationStore` 使用独立加密文件，业务明文严格为 `projectRef/definitions/runs/approvals/commandReceipts/ledger/nextLedgerSequence`，outer revision 只存在于加密 envelope/result。Definition、Run、Approval、CommandReceipt 和 Ledger 都有 exact persisted codec、数量/16 MiB 限制与 outer CAS；AES-256-GCM AAD 绑定项目和字段，错误 key、回滚、篡改、跨项目搬用与 Ledger hash-chain 断裂全部 fail closed。Ledger 从 `previousHash=null` 的 genesis 开始，sequence 连续，hash 使用一次 SHA-256 base64url 编码。
+
+浏览器 contract 固定为：
+
+- `GET /api/agent-teams/project/automations/state`：只返回 capability、安全定义、安全任务选择、安全 Run 和最近 Ledger 投影；
+- `POST /api/agent-teams/project/automations/action`：只接受 `definition.create/definition.update/manual_run/approve/reject/retry/cancel` 的 canonical body；
+- `GET /api/agent-teams/project/automations/stream`：只发送 `reset/automation` 失效通知，Client 收到后重新 GET，不解析事件为执行结果。
+
+POST 只允许 `{commandId,type,definitionRef?,runRef?,expectedRevision,payload}`，query 必须为空，并要求可信回环 origin 与 `x-harness-agent-teams: 1`。`projectRef`、event/trigger/approval/ledger ref、actor/session/role/authority、路径、input hash、effect/task command identity 均由 Host 创建或解析，任何层级出现这些调用方字段都在查对象前拒绝。Definition 创建和 manual run 还会从权威 Task SQLite 重新读取真实 task/transition/revision；浏览器不能把任意 taskRef 或旧 revision 伪装成可运行目标。
+
+`ProjectAutomationCommandService` 的顺序固定为：strict normalize → Host actor resolve → owner/maintainer 授权 → actor-bound input hash/receipt preflight → object lookup → mutation。accepted 和 deterministic rejected receipt 都持久化；相同 command 和可信输入重放返回同一结果，id 或 actor/input 漂移报幂等冲突。Web 错误只投影固定 code、nextAction、retryable 和允许的 currentRevision，不返回 receipt、原始 message、stack、路径或私有引用。
+
+### receipt-first Runner 与恢复
+
+Run 固定 Definition snapshot、Task `revision` 和 stable effect identity；后续 requirements 变化会推进 Task revision，从而使旧运行的 OCC 前提失效。Runner 启动 effect 前先查 schema-v3 Task command receipt：
+
+1. 已有匹配 receipt 时直接收敛 Automation Run，不重复 Task effect；
+2. 明确 `not_committed` 才能安全取消；
+3. receipt 未知或查询暂时失败时保持可恢复的非终态，不猜测成功；
+4. 只有确定没有 receipt 才用 Host 私有 system execution 提交稳定 Task command。
+
+Task commit 后、Automation save 前崩溃时，重开会用相同 `taskCommandId` 查询 Task receipt并收敛；receipt 必须含正 `projectRevision`、匹配 taskRef 和目标 status，否则报 `PROJECT_AUTOMATION_TASK_RECEIPT_INVALID`、保持 Run 可恢复且绝不盲目重执行。Runner 串行有界 pump，startup 对 `queued/running/cancel_requested` 执行 recover；approve/retry HTTP 只持久化排队事实并异步调度 pump。context stale 不降级权限，close 先拒绝新工作、drain action/Runner/Store，再清理两个独立 context。
+
+现有“当前会话提醒”继续来自 session-local Scheduler：它依赖原会话存活或恢复，使用自己的提醒日志和生命周期。它不读写 Project Task SQLite 或 Automation Store，不把提醒触发视为任务成功，也不能借 `sessionId` 充当项目自动化身份。Scheduler 历史永远不与 Automation Ledger 合并；当前 v1 也不会从提醒自动触发 Project Automation。
+
+## M4 跨设备安全业务同步
+
+Project Business Sync 使用端到端加密的 durable Store 保存独立 Task/Automation 游标、安全缓存和离线 outbox。只有通过 fresh authority epoch 与 membership grant 校验的 capability 才能更新协作者权限；撤销、伪造或旧 epoch 消息不能改变 capability。浏览器只得到 `available/mode/writable/taskCommands/automationCommands` 与业务安全摘要，不得到 device、actor、message/ref、digest、reset token、路径、需求、评论、评审或原始账本。
+
+协作者提交的 canonical command 会在首次生成时固定 `sentAt/messageRef` 和可信 request digest。网络失败最多 byte-identical 重试一次；离线时同一 wire 保存在加密 outbox。最终 receipt 反向绑定 peer、commandId、replyTo 和 request digest，并在同一事务删除 outbox、保存原 wire 与结果。Client 只显示 capability 与条目 `allowedActions` 交集，不乐观改缓存；SSE 只唤醒 refetch。Automation Runner 仍只在 authority 电脑执行，协作者最多审批当前允许的等待运行。
+
+## M5 Project Foundations 与安全状态卡
+
+M5 将旧团队任务的文件范围提示扩展为 Host-only 项目基础流水线：从真实 Git 根验证开始，按明确资源声明打开隔离 worktree，发布持久 change set，经串行合并、可信质量运行器、本地缺陷与可选外部缺陷 outbox 推进。源不是 Git 根、源脏/冲突、runner 不可信、质量失败或本地缺陷存在时全部 fail closed；浏览器状态不会触发这些操作。
+
+`GET /api/agent-teams/project/foundations/state` 仅接受可信同源本机 GET 且 query 必须为空。固定响应只有 `{ok,mode,available,ready,sourceStatus,workspaceCount,claimCount,queuedChangeSetCount,campaignCount,queuedJobCount,runningJobCount,defectCount,outboxPendingCount,attention}`；计数有界，`attention` 只含固定安全 token。任何 commit/digest/ref/path/task file/actor/runner key/evidence/credential 都不能进入响应或状态卡。
+
+Client 只在既有“团队工作流程”中显示一张摘要卡，不增加导航。Authority 根据安全状态看到“系统已自动做什么/负责人下一步”；collaborator 的 `sourceStatus=authority_managed`，只显示“由主设备负责工作区、合并和质量门禁”，不渲染按钮。`source_invalid` 明确表示当前真实源不是 Git 根；状态不可用时也不猜测路径或证据。
 
 ## 兼容性
 

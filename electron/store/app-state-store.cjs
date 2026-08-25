@@ -58,7 +58,15 @@ function normalizeCustomTheme(value = {}) {
 
 const DEFAULT_STATE = Object.freeze({
   schemaVersion: CURRENT_SCHEMA_VERSION,
-  updates: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null, skippedVersion: null },
+  updates: {
+    checkOnStartup: true,
+    channel: 'stable',
+    lastCheckedAt: null,
+    skippedVersion: null,
+    previewEnabled: false,
+    lastPreviewSequence: 0,
+    lastPreviewHeadSha: null
+  },
   appearance: {
     themeId: DEFAULT_THEME_ID,
     customTheme: normalizeCustomTheme(),
@@ -72,6 +80,8 @@ const DEFAULT_STATE = Object.freeze({
     awake: false,
     alwaysOnTop: true,
     autoFeed: true,
+    proactive: true,
+    companionStyle: 'warm',
     motion: 'system',
     muted: true,
     positionByDisplay: {}
@@ -108,7 +118,14 @@ function normalizeState(input) {
       checkOnStartup: value.updates?.checkOnStartup !== false,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
       lastCheckedAt: value.updates?.lastCheckedAt || null,
-      skippedVersion: value.updates?.skippedVersion || null
+      skippedVersion: value.updates?.skippedVersion || null,
+      previewEnabled: value.updates?.previewEnabled === true,
+      lastPreviewSequence: Number.isSafeInteger(value.updates?.lastPreviewSequence) && value.updates.lastPreviewSequence >= 0
+        ? value.updates.lastPreviewSequence
+        : 0,
+      lastPreviewHeadSha: /^[a-f0-9]{40}$/.test(String(value.updates?.lastPreviewHeadSha || ''))
+        ? String(value.updates.lastPreviewHeadSha)
+        : null
     },
     appearance: {
       themeId,
@@ -123,6 +140,8 @@ function normalizeState(input) {
       awake: value.pet?.awake === true,
       alwaysOnTop: value.pet?.alwaysOnTop !== false,
       autoFeed: value.pet?.autoFeed !== false,
+      proactive: value.pet?.proactive !== false,
+      companionStyle: ['calm', 'warm', 'playful'].includes(value.pet?.companionStyle) ? value.pet.companionStyle : 'warm',
       motion: ['system', 'full', 'reduced', 'still'].includes(value.pet?.motion) ? value.pet.motion : 'system',
       muted: value.pet?.muted !== false,
       positionByDisplay: normalizePetPositions(value.pet?.positionByDisplay)
@@ -254,6 +273,24 @@ class AppStateStore {
     }
     if (patch.channel) this.state.updates.channel = patch.channel === 'prerelease' ? 'prerelease' : 'stable'
     if (Object.prototype.hasOwnProperty.call(patch, 'skippedVersion')) this.state.updates.skippedVersion = patch.skippedVersion || null
+    if (Object.prototype.hasOwnProperty.call(patch, 'previewEnabled')) this.state.updates.previewEnabled = patch.previewEnabled === true
+    this.#persist()
+    return this.get()
+  }
+
+  markPreviewCandidate(sequence, headSha) {
+    if (!Number.isSafeInteger(sequence) || sequence <= 0) throw new Error('PR 预览更新序号无效。')
+    const normalizedSha = String(headSha || '').trim().toLowerCase()
+    if (!/^[a-f0-9]{40}$/.test(normalizedSha)) throw new Error('PR 预览更新 commit 无效。')
+    const currentSequence = this.state.updates.lastPreviewSequence || 0
+    const currentSha = this.state.updates.lastPreviewHeadSha
+    if (sequence < currentSequence) throw new Error('拒绝回退到旧的 PR 预览更新序号。')
+    if (sequence === currentSequence && currentSha && currentSha !== normalizedSha) {
+      throw new Error('同一 PR 预览更新序号指向了不同 commit。')
+    }
+    if (sequence === currentSequence && currentSha === normalizedSha) return this.get()
+    this.state.updates.lastPreviewSequence = sequence
+    this.state.updates.lastPreviewHeadSha = normalizedSha
     this.#persist()
     return this.get()
   }
@@ -288,11 +325,14 @@ class AppStateStore {
   }
 
   updatePet(patch = {}) {
-    for (const key of ['enabled', 'awake', 'alwaysOnTop', 'autoFeed', 'muted']) {
+    for (const key of ['enabled', 'awake', 'alwaysOnTop', 'autoFeed', 'proactive', 'muted']) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) this.state.pet[key] = Boolean(patch[key])
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'motion')) {
       this.state.pet.motion = ['system', 'full', 'reduced', 'still'].includes(patch.motion) ? patch.motion : 'system'
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'companionStyle')) {
+      this.state.pet.companionStyle = ['calm', 'warm', 'playful'].includes(patch.companionStyle) ? patch.companionStyle : 'warm'
     }
     if (patch.positionByDisplay && typeof patch.positionByDisplay === 'object') {
       this.state.pet.positionByDisplay = normalizePetPositions({

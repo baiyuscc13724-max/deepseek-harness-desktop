@@ -1,0 +1,17 @@
+# Replace the placeholder with a domain that resolves to this server.
+# If you only have a public IPv4 address, use the short-lived IP certificate
+# configuration in README.zh-CN.md instead.
+relay.example.com {
+  reverse_proxy 127.0.0.1:8787
+
+  # The relay intentionally logs no request metadata or encrypted frame sizes.
+  log {
+    output discard
+  }
+
+  header {
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options "nosniff"
+    -Server
+  }
+}

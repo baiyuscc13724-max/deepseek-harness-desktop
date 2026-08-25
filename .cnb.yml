@@ -11,8 +11,23 @@ main:
               test -s "$feed"
               jq -e '.schemaVersion == 1 and .releaseVersion and .channel == "stable" and .keyId and (.components | length > 0) and .signature' "$feed" >/dev/null
             done
+        - name: Validate promoted PR preview feed metadata
+          if: test -f .cnb-preview-feed-only
+          image: alpine:3.20
+          script: |
+            set -eu
+            apk add --no-cache jq
+            latest="component-feeds/pr-preview/latest.json"
+            test -s "$latest"
+            head_sha="$(jq -r '.headSha' "$latest")"
+            case "$head_sha" in (*[!0-9a-f]*|'') exit 1;; esac
+            [ "${#head_sha}" -eq 40 ]
+            manifest="component-feeds/pr-preview/manifests/$head_sha.json"
+            test -s "$manifest"
+            jq -e --arg sha "$head_sha" '.schemaVersion == 1 and .kind == "pr-preview-index" and .repository == "baiyuscc13724-max/deepseek-harness-desktop" and .channel == "pr-preview" and .baseRef == "main" and .headSha == $sha and (.sequence | type == "number") and .keyId and (.manifestUrls | length == 2) and .signature' "$latest" >/dev/null
+            jq -e --arg sha "$head_sha" '.schemaVersion == 1 and .kind == "pr-preview-manifest" and .repository == "baiyuscc13724-max/deepseek-harness-desktop" and .channel == "pr-preview" and .baseRef == "main" and .headSha == $sha and .keyId and .componentManifest and .signature' "$manifest" >/dev/null
         - name: Prepare verified GitHub release assets
-          if: test ! -f .cnb-stable-only
+          if: test ! -f .cnb-stable-only && test ! -f .cnb-preview-feed-only
           image: alpine:3.20
           script: |
             set -eu
@@ -69,10 +84,238 @@ main:
             attachments: CNB_RELEASE_ATTACHMENTS
             release_tag: CNB_RELEASE_TAG
         - name: Upload verified assets with official plugin
-          if: test ! -f .cnb-stable-only && test -n "$CNB_RELEASE_ATTACHMENTS"
+          if: test ! -f .cnb-stable-only && test ! -f .cnb-preview-feed-only && test -n "$CNB_RELEASE_ATTACHMENTS"
           image: cnbcool/attachments:latest
           settings:
             type: UPLOAD
             tag: ${CNB_RELEASE_TAG}
             attachments: ${CNB_RELEASE_ATTACHMENTS}
             ttl: 0
+
+pr-preview:
+  push:
+    - stages:
+        - name: Validate signed PR preview mirror request
+          if: test -f .cnb-pr-preview-request
+          image: node:24-alpine
+          script: |
+            set -eu
+            apk add --no-cache ca-certificates curl jq coreutils
+            node scripts/pr-preview-verify-feed.mjs \
+              --config pr-preview-update-sources.json \
+              --index component-feeds/pr-preview/latest.json \
+              --manifest "component-feeds/pr-preview/manifests/$(jq -r '.headSha' component-feeds/pr-preview/latest.json).json" \
+              --request cnb-mirror-request.json
+            request="cnb-mirror-request.json"
+            test -s "$request"
+            test -n "${CNB_TOKEN:-}"
+            test -n "${GITHUB_PR_PREVIEW_FEED_TOKEN:-}"
+            jq -e '
+              .schemaVersion == 1 and
+              .kind == "harness-pr-preview-cnb-cloud-mirror-request" and
+              .repository == "baiyuscc13724-max/deepseek-harness-desktop" and
+              .cnbProject == "baiyuscc13724-max/deepseek-harness-desktop" and
+              .source.provider == "github-release" and .source.cloudToCloudOnly == true and
+              .verification.downloadEveryAssetCompletely == true and
+              .verification.requireExactSize == true and
+              .verification.requireSha256 == true and
+              .verification.rejectPartialOrExtraAssets == true and
+              .verification.readBackFromCnbBeforePromotion == true and
+              .promotion.latestPath == "component-feeds/pr-preview/latest.json" and
+              (.promotion.manifestPath | test("^component-feeds/pr-preview/manifests/[0-9a-f]{40}\\.json$")) and
+              .promotion.allowedOnlyAfterEveryAssetVerified == true and
+              .promotion.atomic == true and
+              .promotion.sourcePriority == ["cnb", "github"] and
+              (.assets | length > 0) and
+              ([.assets[].name] | length == (unique | length))
+            ' "$request" >/dev/null
+            tag="$(jq -r '.immutableTag' "$request")"
+            pr="$(jq -r '.prNumber' "$request")"
+            head_sha="$(jq -r '.headSha' "$request")"
+            case "$head_sha" in (*[!0-9a-f]*|'') exit 1;; esac
+            [ "${#head_sha}" -eq 40 ]
+            short_head="$(printf '%s' "$head_sha" | cut -c1-12)"
+            case "$tag" in (pr-preview-"$pr"-"$short_head"-run-*) ;; (*) echo 'Immutable preview tag is not bound to PR/head.' >&2; exit 1;; esac
+            latest_path="$(jq -r '.promotion.latestPath' "$request")"
+            manifest_path="$(jq -r '.promotion.manifestPath' "$request")"
+            test -s "$latest_path"
+            test -s "$manifest_path"
+            jq -e --arg sha "$head_sha" --argjson pr "$pr" '.kind == "pr-preview-index" and .headSha == $sha and .prNumber == $pr and .baseRef == "main" and .signature' "$latest_path" >/dev/null
+            jq -e --arg sha "$head_sha" --argjson pr "$pr" '.kind == "pr-preview-manifest" and .headSha == $sha and .prNumber == $pr and .baseRef == "main" and .signature' "$manifest_path" >/dev/null
+            index_asset="$(jq -r '.promotion.signedIndexAsset' "$request")"
+            manifest_asset="$(jq -r '.promotion.signedManifestAsset' "$request")"
+            for pair in "$index_asset:$latest_path" "$manifest_asset:$manifest_path"; do
+              name="${pair%%:*}"
+              file="${pair#*:}"
+              expected="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .sha256' "$request")"
+              [ -n "$expected" ] && [ "$expected" != null ]
+              actual="$(sha256sum "$file" | awk '{print $1}')"
+              [ "$actual" = "$expected" ] || { echo "Signed feed bytes do not match mirror request: $name" >&2; exit 1; }
+            done
+        - name: Download and verify every immutable GitHub preview asset
+          if: test -f .cnb-pr-preview-request
+          image: alpine:3.20
+          script: |
+            set -eu
+            apk add --no-cache ca-certificates curl jq coreutils
+            request="cnb-mirror-request.json"
+            tag="$(jq -r '.immutableTag' "$request")"
+            api="$CNB_API_ENDPOINT/$CNB_REPO_SLUG"
+            auth="Authorization: Bearer $CNB_TOKEN"
+            release_file=".cnb-preview-release.json"
+            status="$(curl -sS --retry 5 -o "$release_file" -w '%{http_code}' -H "$auth" -H 'Accept: application/vnd.cnb.api+json' "$api/-/releases/tags/$tag")"
+            if [ "$status" = 404 ]; then
+              payload="$(jq -nc --arg tag "$tag" --arg name "Harness PR preview $tag" '{tag_name:$tag,target_commitish:"main",name:$name,body:"Immutable signed PR preview assets.",draft:false,prerelease:true,make_latest:"false"}')"
+              curl -fsS --retry 5 -X POST -H "$auth" -H 'Accept: application/vnd.cnb.api+json' -H 'Content-Type: application/json' -d "$payload" "$api/-/releases" > "$release_file"
+            elif [ "$status" != 200 ]; then
+              cat "$release_file" >&2
+              exit 1
+            fi
+            mkdir -p .cnb-preview-assets
+            attachments=""
+            jq -c '.assets[]' "$request" | while IFS= read -r asset; do
+              name="$(printf '%s' "$asset" | jq -r '.name')"
+              size="$(printf '%s' "$asset" | jq -r '.size')"
+              hash="$(printf '%s' "$asset" | jq -r '.sha256')"
+              source_url="$(printf '%s' "$asset" | jq -r '.sourceUrl')"
+              target_url="$(printf '%s' "$asset" | jq -r '.targetUrl')"
+              case "$name" in (*[!A-Za-z0-9._-]*|'') echo "Unsafe asset name: $name" >&2; exit 1;; esac
+              case "$source_url" in (https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/"$tag"/"$name") ;; (*) echo "Untrusted GitHub source: $source_url" >&2; exit 1;; esac
+              case "$target_url" in (https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/"$tag"/"$name") ;; (*) echo "Untrusted CNB target: $target_url" >&2; exit 1;; esac
+              file=".cnb-preview-assets/$name"
+              curl -fsSL --proto '=https' --proto-redir '=https' --retry 5 --retry-all-errors --connect-timeout 30 -o "$file" "$source_url"
+              [ "$(stat -c %s "$file")" = "$size" ] || { echo "Size mismatch for $name" >&2; exit 1; }
+              [ "$(sha256sum "$file" | awk '{print $1}')" = "$hash" ] || { echo "SHA-256 mismatch for $name" >&2; exit 1; }
+              if jq -e --arg name "$name" '.assets[]? | select(.name == $name)' "$release_file" >/dev/null; then
+                echo "Already present; read-back verification is still mandatory: $name" >&2
+              else
+                attachments="${attachments}${attachments:+,}${file}"
+                echo "##[set-output attachments=$attachments]"
+              fi
+            done
+            echo "##[set-output release_tag=$tag]"
+          exports:
+            attachments: CNB_PREVIEW_ATTACHMENTS
+            release_tag: CNB_PREVIEW_TAG
+        - name: Upload verified PR preview assets with official plugin
+          if: test -f .cnb-pr-preview-request && test -n "$CNB_PREVIEW_ATTACHMENTS"
+          image: cnbcool/attachments:latest
+          settings:
+            type: UPLOAD
+            tag: ${CNB_PREVIEW_TAG}
+            attachments: ${CNB_PREVIEW_ATTACHMENTS}
+            ttl: 0
+        - name: Read back CNB assets and atomically promote signed feeds
+          if: test -f .cnb-pr-preview-request
+          image: alpine:3.20
+          script: |
+            set -eu
+            apk add --no-cache ca-certificates curl git jq coreutils
+            request="cnb-mirror-request.json"
+            tag="$(jq -r '.immutableTag' "$request")"
+            api="$CNB_API_ENDPOINT/$CNB_REPO_SLUG"
+            auth="Authorization: Bearer $CNB_TOKEN"
+            curl -fsS --retry 5 -H "$auth" -H 'Accept: application/vnd.cnb.api+json' "$api/-/releases/tags/$tag" > .cnb-preview-release-final.json
+            expected_names="$(jq -r '.assets[].name' "$request" | LC_ALL=C sort)"
+            actual_names="$(jq -r '.assets[].name' .cnb-preview-release-final.json | LC_ALL=C sort)"
+            [ "$actual_names" = "$expected_names" ] || { echo 'CNB release contains missing or extra assets.' >&2; exit 1; }
+            jq -c '.assets[]' "$request" | while IFS= read -r asset; do
+              name="$(printf '%s' "$asset" | jq -r '.name')"
+              size="$(printf '%s' "$asset" | jq -r '.size')"
+              hash="$(printf '%s' "$asset" | jq -r '.sha256')"
+              target_url="$(printf '%s' "$asset" | jq -r '.targetUrl')"
+              file=".cnb-preview-readback-$name"
+              curl -fsSL --proto '=https' --proto-redir '=https' --retry 5 --retry-all-errors --connect-timeout 30 -o "$file" "$target_url"
+              [ "$(stat -c %s "$file")" = "$size" ] || { echo "CNB read-back size mismatch for $name" >&2; exit 1; }
+              [ "$(sha256sum "$file" | awk '{print $1}')" = "$hash" ] || { echo "CNB read-back SHA-256 mismatch for $name" >&2; exit 1; }
+            done
+            latest_path="$(jq -r '.promotion.latestPath' "$request")"
+            manifest_path="$(jq -r '.promotion.manifestPath' "$request")"
+            new_sequence="$(jq -r '.sequence' "$latest_path")"
+            new_head="$(jq -r '.headSha' "$latest_path")"
+            for source in \
+              "cnb|https://cnb.cool/$CNB_REPO_SLUG/-/git/raw/main/component-feeds/pr-preview/latest.json" \
+              "github|https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/pr-preview/latest.json"; do
+              provider="${source%%|*}"
+              url="${source#*|}"
+              current=".current-preview-index-$provider.json"
+              status="$(curl -sS --retry 3 -o "$current" -w '%{http_code}' "$url")"
+              if [ "$status" = 200 ]; then
+                old_sequence="$(jq -r '.sequence' "$current")"
+                old_head="$(jq -r '.headSha' "$current")"
+                [ "$new_sequence" -ge "$old_sequence" ] || { echo "PR preview sequence rollback refused against $provider." >&2; exit 1; }
+                if [ "$new_sequence" = "$old_sequence" ] && [ "$new_head" != "$old_head" ]; then
+                  echo "Same PR preview sequence points to a different head on $provider." >&2
+                  exit 1
+                fi
+              elif [ "$status" != 404 ]; then
+                echo "Unable to read current $provider preview index: HTTP $status" >&2
+                exit 1
+              fi
+            done
+            promotion="$(mktemp -d)"
+            cp "$latest_path" "$promotion/latest.json"
+            cp "$manifest_path" "$promotion/manifest.json"
+            cp .cnb.yml "$promotion/.cnb.yml"
+            git fetch origin main
+            git checkout -B pr-preview-promote origin/main
+            cp "$promotion/.cnb.yml" .cnb.yml
+            rm -f .cnb-stable-only
+            printf 'signed PR preview feed only\n' > .cnb-preview-feed-only
+            mkdir -p "$(dirname "$latest_path")" "$(dirname "$manifest_path")"
+            cp "$promotion/latest.json" "$latest_path"
+            cp "$promotion/manifest.json" "$manifest_path"
+            git config user.name 'CNB PR Preview Bot'
+            git config user.email 'pr-preview@users.noreply.cnb.cool'
+            git add -u
+            git add .cnb.yml .cnb-preview-feed-only "$latest_path" "$manifest_path"
+            if ! git diff --cached --quiet; then
+              git commit -m "preview: promote signed head $new_head"
+              git -c http.extraHeader="Authorization: Bearer $CNB_TOKEN" push origin HEAD:main
+            fi
+            for file in "$latest_path" "$manifest_path"; do
+              expected="$(sha256sum "$file" | awk '{print $1}')"
+              relative="${file#component-feeds/pr-preview/}"
+              url="https://cnb.cool/$CNB_REPO_SLUG/-/git/raw/main/component-feeds/pr-preview/$relative"
+              verified=false
+              for wait_seconds in 1 2 4 8 12; do
+                sleep "$wait_seconds"
+                curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 -o .cnb-feed-check "$url" || continue
+                if [ "$(sha256sum .cnb-feed-check | awk '{print $1}')" = "$expected" ]; then verified=true; break; fi
+              done
+              [ "$verified" = true ] || { echo "CNB feed promotion verification failed: $file" >&2; exit 1; }
+            done
+            github_up_to_date=false
+            github_current='.current-preview-index-github.json'
+            if [ -s "$github_current" ] && cmp -s "$github_current" "$latest_path"; then
+              github_manifest_url="https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/$manifest_path"
+              if curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 -o .github-current-manifest "$github_manifest_url" && cmp -s .github-current-manifest "$manifest_path"; then
+                github_up_to_date=true
+              fi
+            fi
+            github_api='https://api.github.com/repos/baiyuscc13724-max/deepseek-harness-desktop'
+            github_auth="Authorization: Bearer $GITHUB_PR_PREVIEW_FEED_TOKEN"
+            if [ "$github_up_to_date" != true ]; then
+              base_sha="$(curl -fsS --retry 5 -H "$github_auth" -H 'Accept: application/vnd.github+json' "$github_api/git/ref/heads/main" | jq -r '.object.sha')"
+            base_tree="$(curl -fsS --retry 5 -H "$github_auth" -H 'Accept: application/vnd.github+json' "$github_api/git/commits/$base_sha" | jq -r '.tree.sha')"
+            index_blob="$(base64 < "$latest_path" | tr -d '\n')"
+            manifest_blob="$(base64 < "$manifest_path" | tr -d '\n')"
+            index_sha="$(jq -nc --arg content "$index_blob" '{content:$content,encoding:"base64"}' | curl -fsS --retry 5 -X POST -H "$github_auth" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' -d @- "$github_api/git/blobs" | jq -r '.sha')"
+            manifest_sha="$(jq -nc --arg content "$manifest_blob" '{content:$content,encoding:"base64"}' | curl -fsS --retry 5 -X POST -H "$github_auth" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' -d @- "$github_api/git/blobs" | jq -r '.sha')"
+            tree_payload="$(jq -nc --arg base "$base_tree" --arg latest "$latest_path" --arg manifest "$manifest_path" --arg indexSha "$index_sha" --arg manifestSha "$manifest_sha" '{base_tree:$base,tree:[{path:$latest,mode:"100644",type:"blob",sha:$indexSha},{path:$manifest,mode:"100644",type:"blob",sha:$manifestSha}]}')"
+            tree_sha="$(printf '%s' "$tree_payload" | curl -fsS --retry 5 -X POST -H "$github_auth" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' -d @- "$github_api/git/trees" | jq -r '.sha')"
+            commit_payload="$(jq -nc --arg message "preview: promote signed head $new_head" --arg tree "$tree_sha" --arg parent "$base_sha" '{message:$message,tree:$tree,parents:[$parent]}')"
+            commit_sha="$(printf '%s' "$commit_payload" | curl -fsS --retry 5 -X POST -H "$github_auth" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' -d @- "$github_api/git/commits" | jq -r '.sha')"
+            jq -nc --arg sha "$commit_sha" '{sha:$sha,force:false}' | curl -fsS --retry 5 -X PATCH -H "$github_auth" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' -d @- "$github_api/git/refs/heads/main" >/dev/null
+            fi
+            for file in "$latest_path" "$manifest_path"; do
+              expected="$(sha256sum "$file" | awk '{print $1}')"
+              url="https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/$file"
+              verified=false
+              for wait_seconds in 1 2 4 8 12; do
+                sleep "$wait_seconds"
+                curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 -o .github-feed-check "$url" || continue
+                if [ "$(sha256sum .github-feed-check | awk '{print $1}')" = "$expected" ]; then verified=true; break; fi
+              done
+              [ "$verified" = true ] || { echo "GitHub feed promotion verification failed: $file" >&2; exit 1; }
+            done

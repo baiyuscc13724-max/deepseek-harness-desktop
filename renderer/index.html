@@ -7,6 +7,7 @@
   <title>Harness Desktop</title>
   <link rel="stylesheet" href="./styles.css" />
   <link rel="stylesheet" href="./right-workspace.css" />
+  <link rel="stylesheet" href="./pr-preview-update.css" />
 </head>
 <body>
   <main class="official-shell">
@@ -35,9 +36,9 @@
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5.1 3.1A2.4 2.4 0 0 1 9.6 2a2.55 2.55 0 0 1 2.1 4 2.8 2.8 0 0 1-.25 5.2A2.7 2.7 0 0 1 6.5 13a2.45 2.45 0 0 1-2.2-3.8A2.6 2.6 0 0 1 5.1 3.1Z" stroke="currentColor" stroke-width="1.25"/><path d="M8 3.2v9.4M5.3 6.1c.9.2 1.6.8 1.8 1.7M10.8 7.1c-.9.2-1.6.8-1.8 1.7" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
       <span class="visually-hidden">本地记忆</span>
     </button>
-    <button id="browserQuickButton" class="browser-quick-button" type="button" aria-controls="browserSidebar" aria-expanded="false" title="打开右侧工作区">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.1" stroke="currentColor" stroke-width="1.25"/><path d="M2.2 8h11.6M8 1.9c1.7 1.65 2.55 3.68 2.55 6.1S9.7 12.45 8 14.1C6.3 12.45 5.45 10.42 5.45 8S6.3 3.55 8 1.9Z" stroke="currentColor" stroke-width="1.1"/></svg>
-      <span class="visually-hidden">右侧工作区</span>
+    <button id="browserQuickButton" class="browser-quick-button" type="button" aria-controls="browserSidebar" aria-expanded="false" title="切换右侧工作区">
+      <svg class="right-workspace-toggle-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="1.75" y="2.25" width="12.5" height="11.5" rx="1.65" stroke="currentColor" stroke-width="1.25"/><path d="M10.15 2.6v10.8" stroke="currentColor" stroke-width="1.25"/></svg>
+      <span class="visually-hidden">切换右侧工作区</span>
     </button>
     <aside id="browserSidebar" class="browser-sidebar dsh-right-workspace hidden" aria-label="右侧工作区" aria-hidden="true">
       <div id="browserResizeHandle" class="browser-resize-handle dsh-right-workspace__handle" role="separator" aria-label="拖动调整右侧工作区宽度" aria-orientation="vertical" tabindex="0"></div>
@@ -83,28 +84,19 @@
         <p>网站登录只保存在 <strong>Harness Browser</strong> 中，与官方 Harness 会话完全隔离。</p>
         <div class="browser-profile-status"><span id="browserProfileOrigin">尚未打开站点</span><strong id="browserLoginState">无本站会话数据</strong></div>
         <p>请直接在下方真实网页中亲自登录。模型无法读取密码、Cookie、验证码或令牌。</p>
-        <section class="browser-model-permissions">
-          <h4>模型站点授权（2 小时）</h4>
-          <label><input type="checkbox" value="read" checked /> 读取页面</label>
-          <label><input type="checkbox" value="click" /> 点击</label>
-          <label><input type="checkbox" value="type" /> 输入普通文本</label>
-          <label><input type="checkbox" value="upload" /> 上传（逐次确认并由用户选文件）</label>
-          <label><input type="checkbox" value="download" /> 下载（逐次确认并限制到下载目录）</label>
-          <label><input type="checkbox" value="submit" /> 提交（仍需逐次确认）</label>
-          <div><button id="browserGrantCurrent" type="button">授权当前站点</button><button id="browserRevokeCurrent" type="button">撤销当前站点</button><button id="browserResumeModel" type="button">恢复模型控制</button></div>
-          <div id="browserPendingActions" class="browser-pending-actions"></div>
-        </section>
-        <section class="browser-model-permissions">
-          <h4>内置 Computer Use</h4>
-          <p>只可操控 Harness Desktop 与持久策略允许的应用窗口；点击、输入、滚动等受限动作仍逐次确认。</p>
-          <button id="computerUseToggle" type="button">开启本次控制</button>
+        <section class="browser-model-permissions browser-shared-control" aria-labelledby="browserControlTitle">
+          <h4 id="browserControlTitle">浏览器控制 · Computer Use</h4>
+          <p>右栏浏览器与内置 Computer Use 共用同一份授权和启停状态。选择一次“本次授权”或“永久授权”后，无需再授权当前站点。</p>
+          <p>浏览器仍禁止模型处理密码、账号、验证码、支付和银行信息；上传、下载与提交继续按事务确认。</p>
+          <div><button id="computerUseToggle" type="button">允许 AI 控制</button><button id="computerUseRevokePermanent" class="hidden" type="button">撤销永久授权</button></div>
           <div id="computerUseSessionState" class="computer-use-session-state" aria-live="polite"></div>
           <div id="computerUsePending" class="browser-pending-actions"></div>
+          <div id="browserPendingActions" class="browser-pending-actions"></div>
         </section>
         <section class="browser-model-permissions" aria-labelledby="computerUsePolicyTitle">
-          <h4 id="computerUsePolicyTitle">跨应用访问策略（持久）</h4>
-          <p>默认应用访问未单独列出的应用；每个应用可单独允许/拒绝并随时撤销持久授权。该策略只决定模型能否访问，不替代受限动作的逐次确认。</p>
-          <p class="computer-use-permanent-notice"><strong>永久禁止：</strong>敏感、系统、UAC 与提权窗口任何策略都不可放行，也不可撤销该限制。</p>
+          <h4 id="computerUsePolicyTitle">跨应用访问策略（受限模式）</h4>
+          <p>未授予无限制控制时，默认应用访问与单个应用允许/拒绝仍可作为受限模式策略；无限制授权生效后这些策略不再拦截。</p>
+          <p class="computer-use-permanent-notice"><strong>无限制授权：</strong>将同时取消 UAC、系统/提权窗口与敏感输入等原有硬禁令，可在上方随时停止或撤销永久授权。</p>
           <div id="computerUsePolicyControls" class="computer-use-policy-controls">
             <label class="computer-use-default-row">默认应用访问
               <select id="computerUseDefaultAccess">
@@ -120,12 +112,12 @@
         </section>
         <label><input id="browserClearSiteConfirm" type="checkbox" /> 确认清除当前站点登录数据</label>
         <button id="browserClearSite" class="danger" type="button" disabled>清除当前站点</button>
-        <p id="browserPrivacySummary">已保存 0 个模型站点授权；本次运行保留 0 条脱敏审计元数据。</p>
+        <p id="browserPrivacySummary">浏览器控制复用 Computer Use 授权；本次运行保留 0 条脱敏审计元数据。</p>
         <label><input id="browserClearAllConfirm" type="checkbox" /> 确认清除登录数据、缓存、浏览历史、站点授权与审计元数据</label>
         <button id="browserClearAll" class="danger" type="button" disabled>重置整个独立 Profile</button>
         <button id="closeBrowserProfile" type="button">返回网页</button>
       </section>
-      <footer class="browser-sidebar-footer"><span id="browserStatusText">独立 Profile · 用户可直接登录</span><button id="browserStop" type="button">停止</button></footer>
+      <footer class="browser-sidebar-footer"><span id="browserStatusText" role="status">独立 Profile · 用户可直接登录</span><button id="browserStop" type="button">停止</button></footer>
       <div id="rightWorkspaceSlot" class="dsh-right-workspace__slot"></div>
     </aside>
     <section id="petPanel" class="pet-panel hidden" role="dialog" aria-label="女仆鲸" aria-hidden="true">
@@ -133,7 +125,15 @@
         <div><strong>女仆鲸</strong><span id="petPanelStatus">正在休息</span></div>
         <button id="closePetPanel" type="button" aria-label="关闭">×</button>
       </header>
-      <div class="pet-fullness-row"><span>饱食度</span><progress id="petFullness" max="100" value="80"></progress><strong id="petFullnessText">80%</strong></div>
+      <section class="pet-bond-card" aria-label="陪伴关系">
+        <div class="pet-bond-heading"><span><strong id="petBondTitle">初见</strong><small id="petBondLevel">Lv.1</small></span><span id="petBondSummary">今天还没有共同任务</span></div>
+        <progress id="petBondProgress" max="100" value="0" aria-label="默契成长进度"></progress>
+      </section>
+      <div class="pet-vitals" aria-label="女仆鲸状态">
+        <label><span>饱食</span><progress id="petFullness" max="100" value="80"></progress><strong id="petFullnessText">80%</strong></label>
+        <label><span>活力</span><progress id="petEnergy" max="100" value="78"></progress><strong id="petEnergyText">78%</strong></label>
+        <label><span>心情</span><progress id="petMood" max="100" value="72"></progress><strong id="petMoodText">愉快</strong></label>
+      </div>
       <div class="pet-inventory" aria-label="TOK 仓库">
         <span title="精炼 TOK">精炼 <strong id="petRefinedCount">0</strong></span>
         <span title="标准 TOK">标准 <strong id="petStandardCount">0</strong></span>
@@ -145,7 +145,9 @@
       </div>
       <label class="pet-panel-check"><input id="petAutoFeed" type="checkbox" checked /> 自动喂食</label>
       <label class="pet-panel-check"><input id="petAlwaysOnTop" type="checkbox" checked /> 宠物保持置顶</label>
-      <p class="pet-panel-note">TOK 只根据本机模型使用量结算，不读取对话内容或文件。</p>
+      <label class="pet-panel-check"><input id="petProactive" type="checkbox" checked /> 根据任务节奏主动陪伴</label>
+      <label class="pet-panel-select"><span>陪伴风格</span><select id="petCompanionStyle"><option value="calm">克制</option><option value="warm" selected>温柔</option><option value="playful">元气</option></select></label>
+      <p class="pet-panel-note">智能陪伴使用任务状态与会话标识、模型/Token 用量、时长和互动记录；不读取对话正文、屏幕或文件。</p>
     </section>
     <section id="mobileSyncOverlay" class="mobile-sync-overlay hidden" aria-hidden="true">
       <div class="mobile-sync-dialog" role="dialog" aria-modal="true" aria-labelledby="mobileSyncTitle">
@@ -163,6 +165,22 @@
               <span id="mobileSyncDetail">开启后自动选择局域网或远程安全通道。</span>
             </div>
             <button id="mobileSyncToggle" class="primary" type="button">开启手机同步</button>
+          </section>
+          <section class="mobile-sync-relay-card" aria-labelledby="mobileRelayTitle">
+            <div class="mobile-sync-relay-head">
+              <div>
+                <strong id="mobileRelayTitle">个人中继服务器（可选）</strong>
+                <span id="mobileRelayStatus">未配置</span>
+              </div>
+            </div>
+            <label for="mobileRelayUrl">服务器地址：域名、公网 IP 或 wss:// 地址</label>
+            <div class="mobile-sync-relay-row">
+              <input id="mobileRelayUrl" type="text" spellcheck="false" autocomplete="off" placeholder="例如 relay.example.com 或 203.0.113.10" />
+              <button id="mobileRelaySave" class="primary" type="button">检测并保存</button>
+              <button id="mobileRelayClear" type="button">清除（恢复默认）</button>
+            </div>
+            <p id="mobileRelayMessage" class="mobile-sync-relay-message" role="status"></p>
+            <p class="mobile-sync-relay-note">服务器必须使用可信 TLS 证书并通过 443 端口提供 WSS 服务；配置成功后手机扫码会从二维码自动取得中继配置。留空时不使用个人中继，自动按内置线路连接。</p>
           </section>
           <div id="mobileSyncEnabledContent" class="mobile-sync-enabled hidden">
             <section class="mobile-sync-remote-card">
@@ -210,7 +228,7 @@
               <div class="mobile-sync-section-title"><h3>已配对设备</h3><span id="mobileSyncDeviceCount">0 台</span></div>
               <div id="mobileSyncDeviceList" class="mobile-sync-device-list"></div>
             </section>
-            <p class="mobile-sync-compatibility">连接顺序：局域网直连 → EasyTier / Tailscale 智能接管。两条远程通道均不可用时只暂停远程连接，不影响电脑端和局域网使用。</p>
+            <p class="mobile-sync-compatibility">连接顺序：局域网直连 → WSS/443 通用中继 → EasyTier / Tailscale 智能接管。所有远程通道均不可用时只暂停远程连接，不影响电脑端和局域网使用。</p>
           </div>
           <p id="mobileSyncError" class="mobile-sync-error" role="alert"></p>
         </div>
@@ -307,6 +325,28 @@
       </div>
     </section>
     <webview id="runtimeView" partition="persist:harness"></webview>
+    <section id="computerUseAuthorizationOverlay" class="computer-use-authorization-overlay hidden" aria-hidden="true">
+      <div class="computer-use-authorization-card" role="alertdialog" aria-modal="true" aria-labelledby="computerUseAuthorizationTitle" aria-describedby="computerUseAuthorizationDescription">
+        <header class="computer-use-authorization-head">
+          <div>
+            <span class="computer-use-authorization-badge">模型请求授权</span>
+            <h2 id="computerUseAuthorizationTitle">Computer Use 与浏览器控制</h2>
+          </div>
+          <button id="computerUseAuthorizationClose" class="computer-use-authorization-close" type="button" aria-label="关闭并拒绝授权">×</button>
+        </header>
+        <div class="computer-use-authorization-body">
+          <p id="computerUseAuthorizationDescription">这一次授权同时开启右栏浏览器控制与内置 Computer Use。桌面控制将进入无限制模式；右栏浏览器仍保留密码、账号、验证码、支付和银行信息等硬限制。</p>
+          <p class="computer-use-authorization-note">本次授权仅在当前应用运行期间有效；永久授权将保存并在重启后自动生效。两处使用同一份授权，可随时在 Profile 面板停止或撤销。</p>
+          <p class="computer-use-authorization-refocus" id="computerUseAuthorizationRefocus" role="status" hidden></p>
+          <p id="computerUseAuthorizationStatus" class="computer-use-authorization-status" role="status"></p>
+        </div>
+        <footer class="computer-use-authorization-actions">
+          <button id="computerUseAuthorizationSession" class="primary" type="button">本次授权</button>
+          <button id="computerUseAuthorizationForever" type="button">永久授权</button>
+          <button id="computerUseAuthorizationDecline" class="danger" type="button">拒绝</button>
+        </footer>
+      </div>
+    </section>
     <section id="runtimeStatus" class="runtime-status" aria-live="polite">
       <img src="./assets/deepseek-icon.svg" alt="" />
       <strong id="runtimeStatusTitle">正在启动 DeepSeek Harness…</strong>
@@ -358,8 +398,14 @@
               <div id="skinWallpaperLibraryItems" class="skin-wallpaper-library-grid" role="list" aria-label="已导入壁纸"></div>
               <div id="skinWallpaperLibraryEmpty" class="skin-wallpaper-library-empty">还没有已导入的壁纸。导入后会立即显示预览卡片；点击“使用”或双击卡片即可切换。</div>
               <section id="skinWallpaperEnginePicker" class="skin-wallpaper-picker hidden" aria-live="polite">
-                <div class="skin-wallpaper-picker-heading"><strong>可导入的 Wallpaper Engine 图片/视频项目</strong><span id="skinWallpaperEngineStatus">正在扫描本机 Steam 库…</span></div>
-                <div id="skinWallpaperEngineItems" class="skin-wallpaper-items"></div>
+                <div class="skin-wallpaper-picker-heading"><strong>可导入的 Wallpaper Engine 图片/视频项目</strong><span id="skinWallpaperEngineStatus" role="status">正在扫描本机 Steam 库…</span></div>
+                <div class="skin-wallpaper-picker-search">
+                  <label for="skinWallpaperEngineSearch" class="visually-hidden">搜索 Wallpaper Engine 壁纸</label>
+                  <input id="skinWallpaperEngineSearch" type="search" maxlength="200" autocomplete="off" placeholder="搜索标题、类型或项目路径" aria-controls="skinWallpaperEngineItems" />
+                  <button id="skinWallpaperEngineSearchClear" type="button" aria-label="清空搜索" disabled>清空</button>
+                </div>
+                <div id="skinWallpaperEngineItems" class="skin-wallpaper-items" role="list" aria-label="Wallpaper Engine 扫描结果"></div>
+                <div id="skinWallpaperEngineEmpty" class="skin-wallpaper-picker-empty hidden" role="status">没有匹配的壁纸。请尝试其他关键词。</div>
                 <div class="skin-wallpaper-picker-actions">
                   <button id="skinWallpaperEngineRescan" type="button">重新扫描</button>
                   <button id="skinWallpaperEngineManual" type="button">手动选择项目目录…</button>
@@ -461,6 +507,7 @@
       </div>
     </section>
   </main>
+  <script src="./modal-focus.js"></script>
   <script src="./theme-catalog.js"></script>
   <script src="./theme-integration.js"></script>
   <script src="./model-routing-integration.js"></script>
@@ -470,6 +517,7 @@
   <script src="./right-workspace.js"></script>
   <script src="./right-workspace-integration.js"></script>
   <script src="./browser-sidebar.js"></script>
+  <script src="./pr-preview-update-integration.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

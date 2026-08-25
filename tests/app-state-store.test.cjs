@@ -9,10 +9,33 @@ test('AppStateStore persists update preferences', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-state-'))
   const file = path.join(dir, 'app-state.json')
   const store = new AppStateStore(file)
-  store.updatePreferences({ checkOnStartup: false, channel: 'prerelease' })
+  store.updatePreferences({ checkOnStartup: false, channel: 'prerelease', previewEnabled: true })
   const restored = new AppStateStore(file).get()
   assert.equal(restored.updates.checkOnStartup, false)
   assert.equal(restored.updates.channel, 'prerelease')
+  assert.equal(restored.updates.previewEnabled, true)
+})
+
+test('AppStateStore records only monotonic signed PR preview candidates', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-preview-state-'))
+  const file = path.join(dir, 'app-state.json')
+  const store = new AppStateStore(file)
+  const firstSha = 'a'.repeat(40)
+  const secondSha = 'b'.repeat(40)
+  store.markPreviewCandidate(4, firstSha)
+  store.markPreviewCandidate(4, firstSha)
+  assert.deepEqual(new AppStateStore(file).get().updates, {
+    checkOnStartup: true,
+    channel: 'stable',
+    lastCheckedAt: null,
+    skippedVersion: null,
+    previewEnabled: false,
+    lastPreviewSequence: 4,
+    lastPreviewHeadSha: firstSha
+  })
+  assert.throws(() => store.markPreviewCandidate(3, firstSha), /拒绝回退/)
+  assert.throws(() => store.markPreviewCandidate(4, secondSha), /不同 commit/)
+  assert.throws(() => store.markPreviewCandidate(5, 'bad'), /commit 无效/)
 })
 
 test('AppStateStore persists only validated appearance fields', () => {
@@ -89,13 +112,16 @@ test('AppStateStore persists validated pet preferences and display positions', (
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-pet-preferences-'))
   const file = path.join(dir, 'app-state.json')
   const store = new AppStateStore(file)
-  store.updatePet({ awake: true, autoFeed: false, motion: 'reduced', positionByDisplay: { '123': { x: 40.4, y: 80.8 }, '../bad': { x: 1, y: 2 } } })
+  store.updatePet({ awake: true, autoFeed: false, proactive: false, companionStyle: 'playful', motion: 'reduced', positionByDisplay: { '123': { x: 40.4, y: 80.8 }, '../bad': { x: 1, y: 2 } } })
   const restored = new AppStateStore(file).get().pet
   assert.equal(restored.awake, true)
   assert.equal(restored.autoFeed, false)
+  assert.equal(restored.proactive, false)
+  assert.equal(restored.companionStyle, 'playful')
   assert.equal(restored.motion, 'reduced')
   assert.deepEqual(restored.positionByDisplay['123'], { x: 40, y: 81 })
   assert.equal(restored.positionByDisplay['../bad'], undefined)
+  assert.equal(normalizeState({ pet: { proactive: 'no', companionStyle: '../../bad' } }).pet.companionStyle, 'warm')
 })
 
 test('new profiles enable bounded automatic local memory and preserve explicit controls', () => {

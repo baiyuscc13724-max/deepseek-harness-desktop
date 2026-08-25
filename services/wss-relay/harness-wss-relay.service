@@ -1,0 +1,35 @@
+[Unit]
+Description=Harness Desktop blind WSS relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=harness-relay
+Group=harness-relay
+WorkingDirectory=/opt/harness-wss-relay
+Environment=NODE_ENV=production
+Environment=HARNESS_RELAY_HOST=127.0.0.1
+Environment=HARNESS_RELAY_PORT=8787
+ExecStart=/usr/bin/node /opt/harness-wss-relay/server.cjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+TasksMax=256
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

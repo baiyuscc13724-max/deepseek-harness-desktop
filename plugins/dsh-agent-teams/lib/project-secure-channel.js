@@ -21,6 +21,8 @@ const MAX_PACKET_BYTES = 256 * 1024;
 const MAX_PACKET_LIFETIME_MS = 10 * 60 * 1_000;
 const DEFAULT_CLOCK_SKEW_MS = 2 * 60 * 1_000;
 const DEFAULT_REPLAY_CAPACITY = 5_000;
+const MAX_PAYLOAD_DEPTH = 32;
+const PACKET_REPLAY_SCOPE = "channel_instance";
 const FORBIDDEN_RAW_KEYS = new Set(["sessionid", "membersessionid", "targetsessionid", "userid", "deviceid", "accountid", "email", "ipaddress"]);
 
 function isRecord(value) {
@@ -48,35 +50,74 @@ function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
 }
-function assertLosslessJson(value, field = "payload", seen = new Set()) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+function assertLosslessJson(value, field = "payload", ancestors = new Set(), depth = 0) {
+  if (depth > MAX_PAYLOAD_DEPTH) throw new RangeError(`${field} exceeds the maximum depth of ${MAX_PAYLOAD_DEPTH}`);
+  const bounded = (bytes) => {
+    if (bytes > MAX_PACKET_BYTES) throw new RangeError(`payload exceeds ${MAX_PACKET_BYTES} bytes`);
+    return bytes;
+  };
+  if (value === null || typeof value === "string" || typeof value === "boolean") return bounded(Buffer.byteLength(JSON.stringify(value), "utf8"));
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError(`${field} contains a non-finite number`);
-    return;
+    if (Object.is(value, -0)) throw new TypeError(`${field} contains negative zero`);
+    return bounded(Buffer.byteLength(JSON.stringify(value), "utf8"));
   }
   if (typeof value !== "object") throw new TypeError(`${field} must be lossless JSON`);
-  if (seen.has(value)) throw new TypeError(`${field} contains a cycle`);
-  seen.add(value);
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index += 1) {
-      if (!Object.prototype.hasOwnProperty.call(value, index)) throw new TypeError(`${field} contains a sparse array`);
-      assertLosslessJson(value[index], `${field}[${index}]`, seen);
+  if (ancestors.has(value)) throw new TypeError(`${field} contains a cycle`);
+  ancestors.add(value);
+  try {
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key === "symbol")) throw new TypeError(`${field} contains a symbol key`);
+    if (Array.isArray(value)) {
+      const expectedKeys = new Set(["length", ...Array.from({ length: value.length }, (_, index) => String(index))]);
+      if (keys.some((key) => !expectedKeys.has(key))) throw new TypeError(`${field} contains custom array properties`);
+      let bytes = 2 + Math.max(0, value.length - 1);
+      for (let index = 0; index < value.length; index += 1) {
+        const key = String(index), descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor === undefined) throw new TypeError(`${field} contains a sparse array`);
+        if (!descriptor.enumerable || !("value" in descriptor)) throw new TypeError(`${field}[${index}] must be an enumerable JSON data property`);
+        bytes = bounded(bytes + assertLosslessJson(descriptor.value, `${field}[${index}]`, ancestors, depth + 1));
+      }
+      return bytes;
     }
-  } else {
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError(`${field} must contain plain objects only`);
-    for (const [key, nested] of Object.entries(value)) {
+    let bytes = 2 + Math.max(0, keys.length - 1);
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) throw new TypeError(`${field}.${key} must be an enumerable JSON data property`);
       if (FORBIDDEN_RAW_KEYS.has(key.replaceAll(/[-_]/gu, "").toLowerCase())) throw new TypeError(`${field} contains forbidden raw identity field ${key}`);
-      assertLosslessJson(nested, `${field}.${key}`, seen);
+      bytes = bounded(bytes + Buffer.byteLength(JSON.stringify(key), "utf8") + 1 + assertLosslessJson(descriptor.value, `${field}.${key}`, ancestors, depth + 1));
     }
+    return bytes;
+  } finally { ancestors.delete(value); }
+}
+function encodeValidatedJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    const items = [];
+    for (let index = 0; index < value.length; index += 1) items.push(encodeValidatedJson(Object.getOwnPropertyDescriptor(value, String(index)).value));
+    return `[${items.join(",")}]`;
   }
-  seen.delete(value);
+  const fields = [];
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    fields.push(`${JSON.stringify(key)}:${encodeValidatedJson(descriptor.value)}`);
+  }
+  return `{${fields.join(",")}}`;
 }
 function clonePayload(value) {
-  assertLosslessJson(value);
-  const encoded = JSON.stringify(value);
-  if (Buffer.byteLength(encoded, "utf8") > MAX_PACKET_BYTES) throw new RangeError(`payload exceeds ${MAX_PACKET_BYTES} bytes`);
-  return { value: JSON.parse(encoded), bytes: Buffer.from(encoded) };
+  const preflightBytes = assertLosslessJson(value);
+  // Encode descriptor values directly instead of calling JSON.stringify on the
+  // container, which would execute a polluted inherited toJSON hook.
+  const encoded = encodeValidatedJson(value);
+  if (typeof encoded !== "string") throw new TypeError("payload must encode as JSON");
+  const byteLength = Buffer.byteLength(encoded, "utf8");
+  if (byteLength > MAX_PACKET_BYTES) throw new RangeError(`payload exceeds ${MAX_PACKET_BYTES} bytes`);
+  if (byteLength !== preflightBytes) throw new TypeError("payload changed while it was being encoded");
+  const bytes = Buffer.from(encoded, "utf8");
+  if (bytes.length !== byteLength || bytes.length > MAX_PACKET_BYTES) { bytes.fill(0); throw new RangeError(`payload exceeds ${MAX_PACKET_BYTES} bytes`); }
+  return { value: JSON.parse(encoded), bytes };
 }
 function immutable(value) {
   if (Array.isArray(value)) for (const item of value) immutable(item);
@@ -166,14 +207,25 @@ function normalizeEnvelope(value) {
   if (ephemeral.length < 32 || ephemeral.length > 256 || nonce.length !== 12 || tag.length !== 16 || ciphertext.length > MAX_PACKET_BYTES) throw new TypeError("secure project packet cryptographic fields are invalid");
   return { ...normalized, ephemeral, nonceBytes: nonce, ciphertextBytes: ciphertext, tagBytes: tag };
 }
-function derivePacketKey(privateKey, publicKey, projectRef, authorityEpoch, senderDeviceRef, targetDeviceRef) {
-  const secret = diffieHellman({
-    privateKey: keyObject(privateKey, "private", "x25519", "encryptionPrivateKey"),
-    publicKey: keyObject(publicKey, "public", "x25519", "encryptionPublicKey"),
-  });
-  const salt = createHash("sha256").update(`${projectRef}\u0000${authorityEpoch}`).digest();
-  const info = Buffer.from(`dsh-project-packet-v1\u0000${senderDeviceRef}\u0000${targetDeviceRef}`);
-  return Buffer.from(hkdfSync("sha256", secret, salt, info, 32));
+function withPacketKey(privateKey, publicKey, projectRef, authorityEpoch, senderDeviceRef, targetDeviceRef, operation) {
+  let secret, salt, info, packetKey;
+  try {
+    // Node KeyObjects keep native key material and do not expose a supported
+    // zeroization API. Every temporary Buffer derived from them is scoped here.
+    secret = diffieHellman({
+      privateKey: keyObject(privateKey, "private", "x25519", "encryptionPrivateKey"),
+      publicKey: keyObject(publicKey, "public", "x25519", "encryptionPublicKey"),
+    });
+    salt = createHash("sha256").update(`${projectRef}\u0000${authorityEpoch}`).digest();
+    info = Buffer.from(`dsh-project-packet-v1\u0000${senderDeviceRef}\u0000${targetDeviceRef}`);
+    packetKey = Buffer.from(hkdfSync("sha256", secret, salt, info, 32));
+    return operation(packetKey);
+  } finally {
+    packetKey?.fill(0);
+    info?.fill(0);
+    salt?.fill(0);
+    secret?.fill(0);
+  }
 }
 
 export function generateProjectTransportKeys() {
@@ -213,17 +265,25 @@ export function sealProjectPacket({ projectRef, authorityEpoch, senderDeviceRef,
     ephemeralPublicKey: publicKeyBytes(ephemeral.publicKey, "x25519", "ephemeralPublicKey").toString("base64url"),
     nonce: nonce.toString("base64url"),
   };
-  const packetKey = derivePacketKey(ephemeral.privateKey, recipientPublicKey, normalizedProjectRef, normalizedEpoch, senderRef, targetRef);
-  const cipher = createCipheriv("aes-256-gcm", packetKey, nonce);
-  cipher.setAAD(Buffer.from(canonicalJson(header)));
   const encoded = clonePayload(payload);
-  const ciphertext = Buffer.concat([cipher.update(encoded.bytes), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  const ciphertextDigest = shaRef("ciphertext", ciphertext);
-  const packetRef = shaRef("packet", Buffer.from(canonicalJson(header)), ciphertext, tag);
-  const body = { ...header, ciphertext: ciphertext.toString("base64url"), tag: tag.toString("base64url"), ciphertextDigest, packetRef };
-  const signature = cryptoSign(null, Buffer.from(canonicalJson(body)), signingPrivateKey).toString("base64url");
-  return immutable({ ...body, signature });
+  let aad;
+  try {
+    aad = Buffer.from(canonicalJson(header));
+    return withPacketKey(ephemeral.privateKey, recipientPublicKey, normalizedProjectRef, normalizedEpoch, senderRef, targetRef, (packetKey) => {
+      const cipher = createCipheriv("aes-256-gcm", packetKey, nonce);
+      cipher.setAAD(aad);
+      const ciphertext = Buffer.concat([cipher.update(encoded.bytes), cipher.final()]);
+      const tag = cipher.getAuthTag();
+      const ciphertextDigest = shaRef("ciphertext", ciphertext);
+      const packetRef = shaRef("packet", Buffer.from(canonicalJson(header)), ciphertext, tag);
+      const body = { ...header, ciphertext: ciphertext.toString("base64url"), tag: tag.toString("base64url"), ciphertextDigest, packetRef };
+      const signature = cryptoSign(null, Buffer.from(canonicalJson(body)), signingPrivateKey).toString("base64url");
+      return immutable({ ...body, signature });
+    });
+  } finally {
+    aad?.fill(0);
+    encoded.bytes.fill(0);
+  }
 }
 
 export class ProjectSecureChannel {
@@ -269,20 +329,28 @@ export class ProjectSecureChannel {
       error.code = "PROJECT_PACKET_REPLAY";
       throw error;
     }
-    let payload;
+    let payload, plaintext, copied, aad;
     try {
       const ephemeralPublicKey = keyObject({ key: envelope.ephemeral, type: "spki", format: "der" }, "public", "x25519", "ephemeralPublicKey");
-      const packetKey = derivePacketKey(this.recipientEncryptionPrivateKey, ephemeralPublicKey, this.projectRef, this.authorityEpoch, envelope.senderDeviceRef, this.targetDeviceRef);
-      const decipher = createDecipheriv("aes-256-gcm", packetKey, envelope.nonceBytes);
-      decipher.setAAD(Buffer.from(canonicalJson(packetHeader(envelope))));
-      decipher.setAuthTag(envelope.tagBytes);
-      const plaintext = Buffer.concat([decipher.update(envelope.ciphertextBytes), decipher.final()]);
-      if (plaintext.length > MAX_PACKET_BYTES) throw new RangeError("secure project packet payload exceeds the limit");
-      payload = clonePayload(JSON.parse(plaintext.toString("utf8"))).value;
+      payload = withPacketKey(this.recipientEncryptionPrivateKey, ephemeralPublicKey, this.projectRef, this.authorityEpoch, envelope.senderDeviceRef, this.targetDeviceRef, (packetKey) => {
+        const decipher = createDecipheriv("aes-256-gcm", packetKey, envelope.nonceBytes);
+        aad = Buffer.from(canonicalJson(packetHeader(envelope)));
+        decipher.setAAD(aad);
+        decipher.setAuthTag(envelope.tagBytes);
+        plaintext = Buffer.concat([decipher.update(envelope.ciphertextBytes), decipher.final()]);
+        if (plaintext.length > MAX_PACKET_BYTES) throw new RangeError("secure project packet payload exceeds the limit");
+        const parsed = JSON.parse(plaintext.toString("utf8"));
+        copied = clonePayload(parsed);
+        return copied.value;
+      });
     } catch (error) {
       const failure = new Error("secure project packet authentication or decryption failed");
       failure.cause = error;
       throw failure;
+    } finally {
+      copied?.bytes.fill(0);
+      plaintext?.fill(0);
+      aad?.fill(0);
     }
     this.seenPackets.set(envelope.packetRef, envelope.expiresAt);
     this.#pruneReplay(current);
@@ -299,7 +367,9 @@ export {
   DEFAULT_REPLAY_CAPACITY,
   MAX_PACKET_BYTES,
   MAX_PACKET_LIFETIME_MS,
+  MAX_PAYLOAD_DEPTH,
   PACKET_ALGORITHM,
+  PACKET_REPLAY_SCOPE,
   SECURE_CHANNEL_VERSION,
   TRANSPORTS,
 };

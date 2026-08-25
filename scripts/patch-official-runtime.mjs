@@ -1,9 +1,13 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { patchAssistantCopySource } from './assistant-copy-patch.mjs'
+import { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 import { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 import { patchWorkspaceSessionMenuSource } from './workspace-session-menu-patch.mjs'
 
+export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
+export { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 export { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -23,11 +27,24 @@ const workspaceUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-
 const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
 const subagentContinuationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js')
 const fsSearchRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-tool-fs-search', 'lib', 'index.js')
+const subprocessRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subprocess-local', 'lib', 'index.js')
+const webAppRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'index.js')
 const attachmentProfileRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-base', 'cordis.patch.yml')
 
 function dedentOne(source) {
   return source.split('\n').map(line => line.slice(1)).join('\n')
 }
+
+function bundleFunctionSource(fn) {
+  return fn.toString().split('\n').map(line => `\t\t${line}`).join('\n')
+}
+
+const CONVERSATION_STOP_FOLLOW_HELPERS_ANCHOR = '\t\t/** Active column host when present; otherwise the view-local scroller. */'
+const CONVERSATION_STOP_FOLLOW_HELPERS_MARKERS = [
+  'function createChatStopFollowState(',
+  'function reduceChatStopFollowState('
+]
+const CONVERSATION_STOP_FOLLOW_HELPERS_PATCH = `${bundleFunctionSource(createChatStopFollowState)}\n${bundleFunctionSource(reduceChatStopFollowState)}\n`
 
 const ORIGINAL = dedentOne(`\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\tconst workspace = this.list.getSnapshot();
@@ -161,6 +178,97 @@ const DIRECTORY_PICKER_PATCHED = `if (platform === "win32") {
 			encoded
 		], signal)).stdout);
 	}`
+
+const SUBPROCESS_TERMINAL_TASKKILL_ORIGINAL = String(`function taskkillTree(pid, force) {
+	if (pid <= 0) return;
+	spawnSync("taskkill", [
+		"/PID",
+		String(pid),
+		"/T",
+		...force ? ["/F"] : []
+	], { stdio: "ignore" });
+}`)
+const SUBPROCESS_TERMINAL_TASKKILL_PATCHED = String(`function taskkillTree(pid, force) {
+	if (pid <= 0) return;
+	spawnSync("taskkill", [
+		"/PID",
+		String(pid),
+		"/T",
+		...force ? ["/F"] : []
+	], { stdio: "ignore", windowsHide: true });
+}`)
+const SUBPROCESS_COMMAND_TASKKILL_ORIGINAL = String(`function taskkillProcessTree(pid) {
+	if (pid <= 0) return;
+	spawnSync("taskkill", [
+		"/PID",
+		String(pid),
+		"/T",
+		"/F"
+	], { stdio: "ignore" });
+}`)
+const SUBPROCESS_COMMAND_TASKKILL_PATCHED = String(`function taskkillProcessTree(pid) {
+	if (pid <= 0) return;
+	spawnSync("taskkill", [
+		"/PID",
+		String(pid),
+		"/T",
+		"/F"
+	], { stdio: "ignore", windowsHide: true });
+}`)
+const SUBPROCESS_COMMAND_SPAWN_ORIGINAL = String(`	const child = spawn(program, args, {
+		cwd: spec.cwd,
+		env,
+		stdio: [
+			stdinMode === "ignore" ? "ignore" : "pipe",
+			outMode === "inherit" ? "inherit" : "pipe",
+			errMode === "inherit" ? "inherit" : "pipe"
+		],
+		detached: platform !== "win32"
+	});`)
+const SUBPROCESS_COMMAND_SPAWN_PATCHED = String(`	const child = spawn(program, args, {
+		cwd: spec.cwd,
+		env,
+		windowsHide: true,
+		stdio: [
+			stdinMode === "ignore" ? "ignore" : "pipe",
+			outMode === "inherit" ? "inherit" : "pipe",
+			errMode === "inherit" ? "inherit" : "pipe"
+		],
+		detached: platform !== "win32"
+	});`)
+const WEB_APP_BROWSER_LAUNCH_ORIGINAL = String(`function spawnBrowserLauncher(url) {
+	return spawn(process.execPath, [
+		"--input-type=module",
+		"--eval",
+		BROWSER_OPENER_PROGRAM,
+		"--",
+		url
+	], {
+		env: scrubbedParentEnv(),
+		stdio: [
+			"ignore",
+			"inherit",
+			"pipe"
+		]
+	});
+}`)
+const WEB_APP_BROWSER_LAUNCH_PATCHED = String(`function spawnBrowserLauncher(url) {
+	return spawn(process.execPath, [
+		"--input-type=module",
+		"--eval",
+		BROWSER_OPENER_PROGRAM,
+		"--",
+		url
+	], {
+		env: scrubbedParentEnv(),
+		windowsHide: true,
+		stdio: [
+			"ignore",
+			"inherit",
+			"pipe"
+		]
+	});
+}`)
 
 const MARKDOWN_SANITIZE_PATCHED = dedentOne(`	function desktopLocalHref(url) {
 		let decoded = String(url ?? "");
@@ -432,16 +540,46 @@ const CONVERSATION_TIMELINE_PATCHED = 'const runningTurnStart = useSession((s) =
 const CONVERSATION_RUNNING_TURN_ORIGINAL = 'const runningTurnStart = (0, react.useMemo)(() => runningTurnStartTime(timeline), [timeline]);'
 const CONVERSATION_RUNNING_TURN_PATCHED = '// runningTurnStart is a scalar selector so timeline identity churn does not re-render ChatView.'
 const CONVERSATION_SETTLE_FOLLOW_REF_ORIGINAL = 'const atBottomRef = (0, react.useRef)(true);\n\t\t\tconst [atBottom, setAtBottom] = (0, react.useState)(true);'
-const CONVERSATION_SETTLE_FOLLOW_REF_PATCHED = `${CONVERSATION_SETTLE_FOLLOW_REF_ORIGINAL}
+const CONVERSATION_SETTLE_FOLLOW_REF_PATCHED_V1 = `${CONVERSATION_SETTLE_FOLLOW_REF_ORIGINAL}
 \t\t\tconst previousRunningRef = (0, react.useRef)(running);`
+const CONVERSATION_SETTLE_FOLLOW_REF_PATCHED = `${CONVERSATION_SETTLE_FOLLOW_REF_ORIGINAL}
+\t\t\tconst stopFollowRef = (0, react.useRef)(createChatStopFollowState(running, atBottomRef.current));`
 const CONVERSATION_SETTLE_FOLLOW_EFFECT_ORIGINAL = 'const el = scrollerOf(local);\n\t\t\t\tif (openState === "open" && !openedRef.current) {'
-const CONVERSATION_SETTLE_FOLLOW_EFFECT_PATCHED = `const el = scrollerOf(local);
+const CONVERSATION_SETTLE_FOLLOW_EFFECT_PATCHED_V1 = `const el = scrollerOf(local);
 \t\t\t\t// Preserve the pre-commit follow intent while stopping removes transient rows.
 \t\t\t\tconst settledWhileFollowing = previousRunningRef.current && !running && atBottomRef.current;
 \t\t\t\tpreviousRunningRef.current = running;
 \t\t\t\tif (openState === "open" && !openedRef.current) {`
+const CONVERSATION_SETTLE_FOLLOW_EFFECT_PATCHED = `const el = scrollerOf(local);
+\t\t\t\t// Keep the pre-stop reader intent across every delayed settlement commit.
+\t\t\t\tstopFollowRef.current = reduceChatStopFollowState(stopFollowRef.current, {
+\t\t\t\t\ttype: "render",
+\t\t\t\t\trunning,
+\t\t\t\t\tfollowing: atBottomRef.current
+\t\t\t\t});
+\t\t\t\tconst settledWhileFollowing = stopFollowRef.current.settling;
+\t\t\t\tif (openState === "open" && !openedRef.current) {`
 const CONVERSATION_SETTLE_FOLLOW_CONDITION_ORIGINAL = 'if (appendedUser || appendedSteering || tipMoved && atBottomRef.current) toBottom(el);'
 const CONVERSATION_SETTLE_FOLLOW_CONDITION_PATCHED = 'if (appendedUser || appendedSteering || settledWhileFollowing || tipMoved && atBottomRef.current) toBottom(el);'
+const CONVERSATION_SETTLE_FOLLOW_TO_BOTTOM_ORIGINAL = `const toBottom = (el) => {
+\t\t\t\tanchorRef.current = null;`
+const CONVERSATION_SETTLE_FOLLOW_TO_BOTTOM_PATCHED = `const toBottom = (el) => {
+\t\t\t\tstopFollowRef.current = reduceChatStopFollowState(stopFollowRef.current, { type: "pin" });
+\t\t\t\tanchorRef.current = null;`
+const CONVERSATION_SETTLE_FOLLOW_SCROLL_ORIGINAL = `const isAtBottom = movedByReader ? floor - el.scrollTop <= 25 : atBottomRef.current;
+\t\t\t\tif (!movedByReader && isAtBottom) {`
+const CONVERSATION_SETTLE_FOLLOW_SCROLL_PATCHED = `const isAtBottom = movedByReader ? floor - el.scrollTop <= 25 : atBottomRef.current;
+\t\t\t\tstopFollowRef.current = reduceChatStopFollowState(stopFollowRef.current, { type: "reader", moved: movedByReader, following: isAtBottom });
+\t\t\t\tif (!movedByReader && isAtBottom) {`
+const CONVERSATION_SETTLE_FOLLOW_RESIZE_ORIGINAL = `if (local !== null && atBottomRef.current) {
+\t\t\t\t\tconst el = scrollerOf(local);
+\t\t\t\t\tel.scrollTop = el.scrollHeight;
+\t\t\t\t\tobservedTopRef.current = el.scrollTop;
+\t\t\t\t\tchatScroll.save(null);
+\t\t\t\t}`
+const CONVERSATION_SETTLE_FOLLOW_RESIZE_PATCHED = `if (local !== null && (atBottomRef.current || stopFollowRef.current.settling)) {
+\t\t\t\t\ttoBottom(scrollerOf(local));
+\t\t\t\t}`
 const CONVERSATION_ROOT_SLOT_MEMO_ORIGINAL = 'const composerBlock = useComposerBlock((block) => block);'
 const CONVERSATION_ROOT_SLOT_MEMO_PATCHED = `${CONVERSATION_ROOT_SLOT_MEMO_ORIGINAL}
 			const sessionHeader = (0, react.useMemo)(() => renderSlot("conversation.session.header", {}), [renderSlot]);
@@ -974,9 +1112,51 @@ export function patchDirectoryPickerSource(source) {
   return { source: source.replace(DIRECTORY_PICKER_ORIGINAL, DIRECTORY_PICKER_PATCHED), changed: true }
 }
 
+export function patchSubprocessSource(source) {
+  let output = source
+  let changed = false
+  for (const [original, patched, label] of [
+    [SUBPROCESS_TERMINAL_TASKKILL_ORIGINAL, SUBPROCESS_TERMINAL_TASKKILL_PATCHED, 'terminal taskkill'],
+    [SUBPROCESS_COMMAND_TASKKILL_ORIGINAL, SUBPROCESS_COMMAND_TASKKILL_PATCHED, 'command taskkill'],
+    [SUBPROCESS_COMMAND_SPAWN_ORIGINAL, SUBPROCESS_COMMAND_SPAWN_PATCHED, 'command spawn']
+  ]) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) throw new Error(`Pinned DSH subprocess ${label} implementation changed; refusing an unsafe console-hide patch.`)
+    output = output.replace(original, patched)
+    changed = true
+  }
+  return { source: output, changed }
+}
+
+export function patchWebAppSource(source) {
+  if (source.includes(WEB_APP_BROWSER_LAUNCH_PATCHED)) return { source, changed: false }
+  if (!source.includes(WEB_APP_BROWSER_LAUNCH_ORIGINAL)) {
+    throw new Error('Pinned DSH browser launcher implementation changed; refusing an unsafe console-hide patch.')
+  }
+  return { source: source.replace(WEB_APP_BROWSER_LAUNCH_ORIGINAL, WEB_APP_BROWSER_LAUNCH_PATCHED), changed: true }
+}
+
 export function patchConversationCacheSource(source) {
   let output = source
   let changed = false
+  const stopFollowHelperCount = CONVERSATION_STOP_FOLLOW_HELPERS_MARKERS.filter(marker => output.includes(marker)).length
+  if (stopFollowHelperCount > 0 && stopFollowHelperCount !== CONVERSATION_STOP_FOLLOW_HELPERS_MARKERS.length) {
+    throw new Error('Pinned DSH chat stop-follow helpers are incomplete; refusing an unsafe desktop runtime patch.')
+  }
+  if (stopFollowHelperCount === 0) {
+    if (!output.includes(CONVERSATION_STOP_FOLLOW_HELPERS_ANCHOR)) throw new Error('Pinned DSH chat scroller helper anchor changed; refusing an unsafe desktop runtime patch.')
+    output = output.replace(CONVERSATION_STOP_FOLLOW_HELPERS_ANCHOR, `${CONVERSATION_STOP_FOLLOW_HELPERS_PATCH}${CONVERSATION_STOP_FOLLOW_HELPERS_ANCHOR}`)
+    changed = true
+  }
+  for (const [previous, current] of [
+    [CONVERSATION_SETTLE_FOLLOW_REF_PATCHED_V1, CONVERSATION_SETTLE_FOLLOW_REF_PATCHED],
+    [CONVERSATION_SETTLE_FOLLOW_EFFECT_PATCHED_V1, CONVERSATION_SETTLE_FOLLOW_EFFECT_PATCHED]
+  ]) {
+    if (output.includes(previous) && !output.includes(current)) {
+      output = output.replace(previous, current)
+      changed = true
+    }
+  }
   if (!output.includes(CONVERSATION_STATS_RENDER_PATCHED) && !output.includes(CONVERSATION_TOOLTIP_PATCHED)) {
     if (!output.includes(CONVERSATION_TOOLTIP_ORIGINAL)) throw new Error('Pinned DSH cache detail tooltip changed; refusing an unsafe desktop runtime patch.')
     output = output.replace(CONVERSATION_TOOLTIP_ORIGINAL, CONVERSATION_TOOLTIP_PATCHED)
@@ -1006,6 +1186,9 @@ export function patchConversationCacheSource(source) {
     [CONVERSATION_SETTLE_FOLLOW_REF_ORIGINAL, CONVERSATION_SETTLE_FOLLOW_REF_PATCHED, 'chat stop follow-state capture'],
     [CONVERSATION_SETTLE_FOLLOW_EFFECT_ORIGINAL, CONVERSATION_SETTLE_FOLLOW_EFFECT_PATCHED, 'chat stop follow-state transition'],
     [CONVERSATION_SETTLE_FOLLOW_CONDITION_ORIGINAL, CONVERSATION_SETTLE_FOLLOW_CONDITION_PATCHED, 'chat stop follow-state restoration'],
+    [CONVERSATION_SETTLE_FOLLOW_TO_BOTTOM_ORIGINAL, CONVERSATION_SETTLE_FOLLOW_TO_BOTTOM_PATCHED, 'chat stop explicit follow intent'],
+    [CONVERSATION_SETTLE_FOLLOW_SCROLL_ORIGINAL, CONVERSATION_SETTLE_FOLLOW_SCROLL_PATCHED, 'chat stop reader override'],
+    [CONVERSATION_SETTLE_FOLLOW_RESIZE_ORIGINAL, CONVERSATION_SETTLE_FOLLOW_RESIZE_PATCHED, 'chat stop delayed resize follow-through'],
     [CONVERSATION_ROOT_SLOT_MEMO_ORIGINAL, CONVERSATION_ROOT_SLOT_MEMO_PATCHED, 'conversation session slot memoization'],
     [CONVERSATION_ROOT_HEADER_ORIGINAL, CONVERSATION_ROOT_HEADER_PATCHED, 'conversation header slot reuse'],
     [CONVERSATION_ROOT_VIEW_ORIGINAL, CONVERSATION_ROOT_VIEW_PATCHED, 'conversation view slot reuse'],
@@ -1020,6 +1203,9 @@ export function patchConversationCacheSource(source) {
     output = output.replace(original, patched)
     changed = true
   }
+  const assistantCopy = patchAssistantCopySource(output)
+  output = assistantCopy.source
+  changed ||= assistantCopy.changed
   return { source: output, changed }
 }
 
@@ -1402,6 +1588,20 @@ export async function patchInstalledFsSearch(file = fsSearchRuntime) {
   return patched.changed
 }
 
+export async function patchInstalledSubprocess(file = subprocessRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchSubprocessSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
+export async function patchInstalledWebApp(file = webAppRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchWebAppSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const sessionChanged = await patchInstalledRuntime()
   const attachmentProfileChanged = await patchInstalledAttachmentProfile()
@@ -1420,10 +1620,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const modelSelectionChanged = await patchInstalledModelSelection()
   const workspaceUiChanged = await patchInstalledWorkspaceUi()
   const fsSearchChanged = await patchInstalledFsSearch()
+  const subprocessChanged = await patchInstalledSubprocess()
+  const webAppChanged = await patchInstalledWebApp()
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
-  process.stdout.write(conversationChanged ? 'Patched conversation telemetry and view navigation.\n' : 'Conversation telemetry and view navigation already patched.\n')
+  process.stdout.write(conversationChanged ? 'Patched conversation telemetry, view navigation, and sticky response copy.\n' : 'Conversation telemetry, view navigation, and sticky response copy already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
   process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
   process.stdout.write(agentLoopChanged ? 'Patched abortable streams and queued-turn recovery.\n' : 'Abortable streams and queued-turn recovery already patched.\n')
@@ -1436,4 +1638,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
   process.stdout.write(workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n')
   process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
+  process.stdout.write(subprocessChanged ? 'Patched hidden Windows command and cleanup processes.\n' : 'Hidden Windows command and cleanup process patch already applied.\n')
+  process.stdout.write(webAppChanged ? 'Patched hidden browser launcher process.\n' : 'Hidden browser launcher process patch already applied.\n')
 }

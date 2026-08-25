@@ -8,14 +8,17 @@
 //   - 登录由用户在真实右栏浏览器页面亲自完成：模型既看不到密码输入框中的值，
 //     也无法读取或写入任何敏感字段，Cookie 只在独立分区内由真实浏览器管理；
 //   - 模型访问（modelNavigate/modelAction）：走更严策略（公网 + origin 已
-//     授权 + 分权 + 敏感拦截 + 关键动作人工确认）；
+//     授权 + 分权 + 敏感拦截 + 关键动作人工确认）；modelBootstrapNavigate
+//     仅允许可见 about:blank 建立预览 origin，绝不因此授予读取或操作权限；
 //   - stop() 停机、revokeAll() 整体撤销授权、auditSnapshot() 查看有界审计。
 // 纯 Node 实现，无 Electron 依赖，可独立用 node:test 测试。
 
 const { randomUUID } = require('node:crypto')
 const { BROWSER_PARTITION, assertIndependentPartition, resolveBrowserPartition } = require('./browser-session-policy.cjs')
-const { canonicalOrigin, checkModelNavigation, checkUserNavigation } = require('./browser-url-policy.cjs')
+const { canonicalOrigin, checkModelBootstrapNavigation, checkModelNavigation, checkUserNavigation } = require('./browser-url-policy.cjs')
 const { BrowserAudit } = require('./browser-audit.cjs')
+
+const MAX_MODEL_PREVIEW_ORIGINS = 64
 const { ActionGate } = require('./browser-action-gate.cjs')
 const { SiteAuthorizationStore } = require('./browser-site-authz.cjs')
 
@@ -36,9 +39,13 @@ class BrowserSecurityPolicy {
     this.idFactory = idFactory
     this.stopped = false
     this.modelStopped = false
+    // 右栏浏览器可复用内置 Computer Use 的一次性/永久授权。该状态仅驻留内存，
+    // 不创建第二份授权文件；细粒度站点存储仍用于旧版本兼容与显式私网授权。
+    this.unifiedControl = false
     this.partition = BROWSER_PARTITION // 固定独立持久化分区，与官方 persist:harness 隔离
     this.authz = new SiteAuthorizationStore({ file: authzFile, rootDir: authzRootDir, now })
     this.gate = new ActionGate({ now, idFactory, confirmationTtlMs, uploadRoots, downloadRoots })
+    this.modelPreviewOrigins = new Map()
     this.auditLog = new BrowserAudit({ maxEntries: auditMaxEntries, now })
   }
 
@@ -65,6 +72,60 @@ class BrowserSecurityPolicy {
     return this.stopped || this.modelStopped
   }
 
+  get isUnifiedControlEnabled() {
+    return this.unifiedControl === true
+  }
+
+  /**
+   * 复用 Computer Use 的全局授权，但不把当前 origin 写入站点授权文件。
+   * 关闭时立即清空一次性确认；全局控制的启停由桌面主进程统一驱动。
+   */
+  setUnifiedControl(enabled) {
+    if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
+    const next = enabled === true
+    if (next === this.unifiedControl) return { enabled: next, changed: false }
+    this.unifiedControl = next
+    this.gate.clearConfirmations()
+    this.auditLog.record({
+      actor: 'system',
+      action: next ? 'computer-use-control-enable' : 'computer-use-control-disable',
+      origin: null,
+      result: 'info',
+      code: 'ok'
+    })
+    return { enabled: next, changed: true }
+  }
+
+  /**
+   * Computer Use grant 生效时，仅对当前可见活动 origin 临时放行普通浏览器权限。
+   * 这不会持久化，也不会允许跨 origin 跳转；敏感字段、敏感值与关键动作确认仍由
+   * ActionGate 强制执行。旧的显式站点授权继续兼容。
+   */
+  effectiveAuthorizations() {
+    if (!this.unifiedControl) return this.authz
+    const activeOrigin = this.gate.activeTabInfo?.origin || null
+    const stored = this.authz
+    const normalized = value => {
+      try { return canonicalOrigin(value) } catch { return null }
+    }
+    const merged = (values, includeActive = true) => {
+      const entries = Array.isArray(values) ? values : []
+      return [...new Set([...entries, ...(includeActive && activeOrigin ? [activeOrigin] : [])])]
+    }
+    return {
+      authorized(origin, action) {
+        const target = normalized(origin)
+        return Boolean(target && activeOrigin && target === activeOrigin) || stored.authorized(origin, action)
+      },
+      origins() {
+        return merged(stored.origins())
+      },
+      privateOrigins() {
+        return merged(stored.privateOrigins())
+      }
+    }
+  }
+
   /** 由集成方上报当前可见的右栏活动标签（DID-NAVIGATE / 标签切换时）。 */
   setActiveTab(tab) {
     if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
@@ -82,6 +143,37 @@ class BrowserSecurityPolicy {
   }
 
   /**
+   * 仅供可见 about:blank 标签建立首个 HTTP(S) origin。公网目标只能作为未授权
+   * 预览打开；本机/内网目标必须是已获用户授权的精确 origin，或当前受管
+   * Harness Web origin。成功只绑定标签 origin，不授予 read/click/type 等权限。
+   */
+  modelBootstrapNavigate(url, { tabId, currentUrl, visible, trustedPrivateOrigins = [] } = {}) {
+    if (this.isModelStopped) throw policyError('stopped', '浏览器模型控制已停止。')
+    let origin = null
+    try {
+      if (currentUrl !== 'about:blank') throw policyError('bootstrap-not-blank', '模型仅可从可见的 about:blank 标签建立首个站点来源。')
+      if (visible !== true) throw policyError('tab-not-visible', '模型仅可操作当前可见的右栏活动标签。')
+      const id = String(tabId || '').trim()
+      if (!id) throw policyError('no-tab-id', '活动标签缺少 id。')
+      this.modelPreviewOrigins.delete(id)
+      const nav = checkModelBootstrapNavigation(url, {
+        authorizedOrigins: this.authz.origins(),
+        authorizedPrivateOrigins: this.authz.privateOrigins(),
+        trustedPrivateOrigins
+      })
+      origin = nav.origin
+      this.gate.setActiveTab({ id, origin, visible: true })
+      this.modelPreviewOrigins.set(id, { origin, privateNetwork: nav.privateNetwork === true })
+      while (this.modelPreviewOrigins.size > MAX_MODEL_PREVIEW_ORIGINS) this.modelPreviewOrigins.delete(this.modelPreviewOrigins.keys().next().value)
+      this.auditLog.record({ actor: 'model', action: 'navigate-preview', origin, tabId: id, result: 'allowed', code: 'ok' })
+      return nav
+    } catch (error) {
+      this.auditLog.record({ actor: 'model', action: 'navigate-preview', origin, tabId: tabId, result: 'denied', code: error.code || 'denied' })
+      throw error
+    }
+  }
+
+  /**
    * 模型访问档导航：公网 + origin 已授权，且必须作用于当前可见活动标签。
    * 成功后活动标签 origin 随之更新（同一标签发生了导航）。
    */
@@ -92,9 +184,11 @@ class BrowserSecurityPolicy {
       if (!tab) throw policyError('no-active-tab', '当前没有可操作的右栏活动标签。')
       if (!tab.visible) throw policyError('tab-not-visible', '模型仅可操作当前可见的右栏活动标签。')
       if (String(tabId) !== tab.id) throw policyError('tab-mismatch', '模型仅可操作当前可见的右栏活动标签，标签不一致。')
+      const preview = this.modelPreviewOrigins.get(tab.id)
+      const authorizations = this.effectiveAuthorizations()
       const nav = checkModelNavigation(url, {
-        authorizedOrigins: this.authz.origins(),
-        authorizedPrivateOrigins: this.authz.privateOrigins(),
+        authorizedOrigins: [...authorizations.origins(), ...(preview ? [preview.origin] : [])],
+        authorizedPrivateOrigins: [...authorizations.privateOrigins(), ...(preview?.privateNetwork ? [preview.origin] : [])],
         base
       })
       this.gate.setActiveTab({ id: tab.id, origin: nav.origin, visible: true })
@@ -116,7 +210,7 @@ class BrowserSecurityPolicy {
     if (this.isModelStopped) throw policyError('stopped', '浏览器模型控制已停止。')
     let origin = null
     try {
-      const decision = this.gate.gate({ action, tabId, declaredOrigin, field, payload, confirmationId, authorizations: this.authz })
+      const decision = this.gate.gate({ action, tabId, declaredOrigin, field, payload, confirmationId, authorizations: this.effectiveAuthorizations() })
       if (decision.verdict === 'confirm-required') {
         origin = decision.origin
         this.auditLog.record({ actor: 'model', action, origin, tabId: decision.tabId, result: 'confirm-required', code: 'confirmation-required' })
@@ -141,18 +235,25 @@ class BrowserSecurityPolicy {
 
   revoke(origin) {
     if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
+    let auditOrigin = null
+    try { auditOrigin = canonicalOrigin(origin) } catch { /* 非合规 origin 不记审计 origin */ }
     const removed = this.authz.revoke(origin)
-    if (removed) {
-      let auditOrigin = null
-      try { auditOrigin = canonicalOrigin(origin) } catch { /* 非合规 origin 不记审计 origin */ }
-      this.auditLog.record({ actor: 'system', action: 'revoke', origin: auditOrigin, result: 'allowed' })
+    let previewRemoved = false
+    if (auditOrigin) {
+      for (const [tabId, preview] of this.modelPreviewOrigins) {
+        if (preview.origin !== auditOrigin) continue
+        this.modelPreviewOrigins.delete(tabId)
+        previewRemoved = true
+      }
     }
-    return removed
+    if (removed || previewRemoved) this.auditLog.record({ actor: 'system', action: 'revoke', origin: auditOrigin, result: 'allowed' })
+    return removed || previewRemoved
   }
 
   /** 整体撤销全部模型站点授权，并清空待确认请求。 */
   revokeAll() {
     const count = this.authz.revokeAll()
+    this.modelPreviewOrigins.clear()
     this.gate.clearConfirmations()
     this.auditLog.record({ actor: 'system', action: 'revoke-all', origin: null, result: 'info', message: `已撤销 ${count} 个站点的模型授权` })
     return count
@@ -160,6 +261,7 @@ class BrowserSecurityPolicy {
 
   /** 用户接管或 Profile 重置：立即清空活动标签与全部一次性确认，不改变授权。 */
   clearPendingControl() {
+    this.modelPreviewOrigins.clear()
     this.gate.clearActiveTab()
     this.gate.clearConfirmations()
     return true
@@ -167,7 +269,7 @@ class BrowserSecurityPolicy {
 
   /** 当前生效中的授权快照（仅权限元数据）。 */
   authorizations() {
-    return this.authz.snapshot()
+    return { ...this.authz.snapshot(), unifiedControl: this.unifiedControl === true }
   }
 
   /** 待确认请求（只读、无敏感内容）。 */
@@ -203,6 +305,7 @@ class BrowserSecurityPolicy {
     if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
     if (this.modelStopped) return { stopped: true, changed: false }
     this.modelStopped = true
+    this.modelPreviewOrigins.clear()
     this.gate.clearActiveTab()
     this.gate.clearConfirmations()
     this.auditLog.record({ actor: 'system', action: 'model-control-stop', origin: null, result: 'info', code: 'ok' })
@@ -223,6 +326,8 @@ class BrowserSecurityPolicy {
     if (this.stopped) return this.auditSnapshot()
     this.stopped = true
     this.modelStopped = true
+    this.unifiedControl = false
+    this.modelPreviewOrigins.clear()
     this.gate.clearActiveTab()
     this.gate.clearConfirmations()
     this.auditLog.record({ actor: 'system', action: 'stop', origin: null, result: 'info', code: 'ok' })

@@ -135,6 +135,21 @@ test('敏感输入永久拦截：即使应用已允许也不执行 type', async 
   assert.equal(adapter.calls.types[0].text, '普通文本没有风险')
 })
 
+test('无限制授权：系统/UAC、应用策略与敏感输入门禁全部放行', async () => {
+  const adapter = fakeAdapter()
+  const computer = new WindowsComputerUse({ adapter, hashFile: async () => A, unlimited: true })
+  const elevated = identity({ exeName: 'consent.exe', integrity: 'system', elevated: true })
+  assert.equal(authorizeWindow(elevated, { unlimited: true }).status, 'allowed')
+  assert.equal((await computer.bind(7)).authorization.status, 'allowed')
+  await computer.click(7, { x: 3, y: 4 }, elevated)
+  await computer.type(7, { text: 'password=p@ssw0rd123 verification code: 123456' }, elevated)
+  assert.equal(adapter.calls.clicks.length, 1)
+  assert.equal(adapter.calls.types.length, 1)
+  assert.match(adapter.calls.types[0].text, /password=/u)
+  computer.setUnlimited(false)
+  await assert.rejects(computer.click(7, { x: 1, y: 1 }, elevated), error => error.code === 'window-denied')
+})
+
 test('能力缺失必须 capability-unavailable，绝不伪造', async () => {
   const noInput = fakeAdapter({ capabilities: { input: false } })
   const computer = new WindowsComputerUse({ adapter: noInput, hashFile: async () => A })

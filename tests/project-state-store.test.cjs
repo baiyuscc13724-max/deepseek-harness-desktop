@@ -102,3 +102,20 @@ test('last-seen and externally anchored minimum revisions detect rollback', asyn
   const anchored = new storeMod.EncryptedProjectStateStore(filePath, { projectRef: authority.projectRef, encryptionKey: key, minimumRevision: 2 })
   await assert.rejects(anchored.load(), /rollback was detected/u)
 }))
+
+test('close drains accepted work, rejects new work, and zeroes only the private key copy', async () => usingFixture(async ({ storeMod, key, authority, filePath }) => {
+  const store = new storeMod.EncryptedProjectStateStore(filePath, { projectRef: authority.projectRef, encryptionKey: key })
+  const pending = store.save(authority, { expectedRevision: 0 })
+  const closing = store.close()
+  assert.equal(store.close(), closing)
+  await assert.rejects(store.load(), error => error?.code === 'PROJECT_STATE_CLOSED')
+  await assert.rejects(store.save(authority, { expectedRevision: 0 }), error => error?.code === 'PROJECT_STATE_CLOSED')
+  assert.equal((await pending).revision, 1)
+  await closing
+  assert.equal(store.encryptionKey.every(byte => byte === 0), true)
+  assert.equal(key.some(byte => byte !== 0), true, 'the caller-owned key is not mutated')
+
+  const reopened = new storeMod.EncryptedProjectStateStore(filePath, { projectRef: authority.projectRef, encryptionKey: key })
+  assert.equal((await reopened.load()).revision, 1)
+  await reopened.close()
+}))

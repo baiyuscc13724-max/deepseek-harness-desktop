@@ -99,11 +99,20 @@ function classifySystemDeny(identity, window = {}) {
 }
 
 /**
- * 组合授权（纯函数）：系统禁令优先（不可绕过），否则用策略 decide。
+ * 组合授权（纯函数）：无限制用户授权优先；否则系统禁令优先并使用策略 decide。
  * @param {object} identity
- * @param {{window?:object, policy:ComputerUseAppPolicy, systemDeny?:Function}} options
+ * @param {{window?:object, policy:ComputerUseAppPolicy, systemDeny?:Function, unlimited?:boolean}} options
  */
-function authorizeWindow(identity, { window = null, policy, systemDeny = classifySystemDeny } = {}) {
+function authorizeWindow(identity, { window = null, policy, systemDeny = classifySystemDeny, unlimited = false } = {}) {
+  if (unlimited === true) {
+    return {
+      status: 'allowed',
+      reason: 'unlimited-grant',
+      matchedBy: 'user-grant',
+      nonBypassable: false,
+      fingerprint: identityFingerprintFor(identity)?.fingerprint || null
+    }
+  }
   if (!policy) throw new Error('缺少应用授权策略。')
   const system = systemDeny(identity, window)
   if (system) return { ...system, status: 'denied' }
@@ -704,11 +713,12 @@ class WindowsComputerUse {
   /**
    * @param {{ adapter?: object|null, policy?: ComputerUseAppPolicy,
    *           hashFile?: (exePath:string)=>Promise<string>,
-   *           hashCacheSize?: number }} options
+   *           hashCacheSize?: number, unlimited?: boolean }} options
    */
-  constructor({ adapter = createKoffiWindowsAdapter(), policy, hashFile = defaultHashFile, hashCacheSize = DEFAULT_HASH_CACHE_SIZE } = {}) {
+  constructor({ adapter = createKoffiWindowsAdapter(), policy, hashFile = defaultHashFile, hashCacheSize = DEFAULT_HASH_CACHE_SIZE, unlimited = false } = {}) {
     this.adapter = adapter || null
     this.policy = policy || new ComputerUseAppPolicy()
+    this.unlimited = unlimited === true
     this.hashFile = hashFile
     this.hashCache = new Map()
     this.hashCacheSize = Math.max(1, Math.min(512, Math.trunc(Number(hashCacheSize) || DEFAULT_HASH_CACHE_SIZE)))
@@ -719,6 +729,7 @@ class WindowsComputerUse {
     const policySnapshot = this.policy.snapshot()
     return {
       native,
+      unlimited: this.unlimited,
       policy: {
         defaultAppAccess: policySnapshot.defaultAppAccess,
         allowlistCount: policySnapshot.allowlist.length,
@@ -766,13 +777,19 @@ class WindowsComputerUse {
     return {
       identity,
       fingerprint: fingerprint ? fingerprint.fingerprint : null,
-      authorization: authorizeWindow(identity, { window, policy: this.policy })
+      authorization: authorizeWindow(identity, { window, policy: this.policy, unlimited: this.unlimited })
     }
+  }
+
+  /** 在用户授权后切换无限制桌面控制；默认关闭以保留旧安全语义。 */
+  setUnlimited(enabled) {
+    this.unlimited = enabled === true
+    return this.unlimited
   }
 
   /** 组合授权裁决（纯逻辑，供上层 UI/确认门禁复用）。 */
   authorize(identity, window = null) {
-    return authorizeWindow(identity, { window, policy: this.policy })
+    return authorizeWindow(identity, { window, policy: this.policy, unlimited: this.unlimited })
   }
 
   #gate(identity, window = null) {
@@ -815,7 +832,7 @@ class WindowsComputerUse {
     this.#assertCapability('input')
     const resolved = identity || (await this.bind(hwnd, window)).identity
     const value = String(text || '')
-    const sensitive = detectHighRisk(value)
+    const sensitive = this.unlimited ? [] : detectHighRisk(value)
     if (sensitive.length) {
       throw Object.assign(new Error('Computer Use 永久禁止输入密码、令牌、验证码、银行卡或其他秘密。'), {
         code: 'sensitive-input-blocked',

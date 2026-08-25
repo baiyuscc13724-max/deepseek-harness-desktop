@@ -1,5 +1,5 @@
 const path = require('node:path')
-const { existsSync } = require('node:fs')
+const { existsSync, realpathSync, statSync } = require('node:fs')
 const { spawn } = require('node:child_process')
 
 // Windows runtime paths must be built with win32 semantics regardless of the
@@ -17,6 +17,8 @@ const SAFE_ENV_KEYS = Object.freeze([
   'PROGRAMDATA', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432'
 ])
 const PUBLIC_ACTIONS = Object.freeze(['git-version', 'gcm-version', 'ssh-agent-status'])
+const GIT_AUTHORITY_COMMAND_ENV = 'HARNESS_DESKTOP_GIT_AUTHORITY_COMMAND'
+const GIT_AUTHORITY_ROOT_ENV = 'HARNESS_DESKTOP_GIT_AUTHORITY_ROOT'
 
 function uniquePaths(values, platform = process.platform) {
   const p = platformPath(platform)
@@ -31,6 +33,56 @@ function uniquePaths(values, platform = process.platform) {
     result.push(resolved)
   }
   return result
+}
+
+function isSameOrWithin(root, candidate, platform = process.platform) {
+  const p = platformPath(platform)
+  const relative = p.relative(root, candidate)
+  if (relative === '') return true
+  if (p.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${p.sep}`)) return false
+  // win32.relative is normally case-insensitive, but keep the trust decision
+  // explicit for injected/test path adapters and mixed-case drive paths.
+  if (platform !== 'win32') return true
+  const normalizedRoot = p.resolve(root).toLowerCase()
+  const normalizedCandidate = p.resolve(candidate).toLowerCase()
+  return normalizedCandidate.startsWith(`${normalizedRoot}${p.sep.toLowerCase()}`)
+}
+
+function authorityRootForCommand(command, platform = process.platform) {
+  const p = platformPath(platform)
+  const directory = p.dirname(p.resolve(command))
+  return ['cmd', 'bin'].includes(p.basename(directory).toLowerCase()) ? p.dirname(directory) : directory
+}
+
+function privateGitAuthorityCapability(command, root) {
+  const capability = {}
+  Object.defineProperties(capability, {
+    gitCommand: { value: command, enumerable: false },
+    allowedGitRoot: { value: root, enumerable: false },
+    toJSON: { value: () => ({ available: true }), enumerable: false }
+  })
+  return Object.freeze(capability)
+}
+
+function resolveGitAuthorityCapability(runtime, {
+  platform = process.platform,
+  realpath = value => (realpathSync.native ?? realpathSync)(value),
+  stat = statSync
+} = {}) {
+  if (!runtime?.command) return null
+  const p = platformPath(platform)
+  try {
+    if (!p.isAbsolute(runtime.command)) return null
+    const command = realpath(runtime.command)
+    const root = realpath(authorityRootForCommand(runtime.command, platform))
+    if (!p.isAbsolute(command) || !p.isAbsolute(root)) return null
+    if (!/^git(?:\.exe)?$/iu.test(p.basename(command))) return null
+    if (!stat(command).isFile() || !stat(root).isDirectory()) return null
+    if (!isSameOrWithin(root, command, platform)) return null
+    return privateGitAuthorityCapability(command, root)
+  } catch {
+    return null
+  }
 }
 
 function bundledGitCandidates(resourcesPath, platform = process.platform) {
@@ -289,6 +341,8 @@ function createGitRuntimeService({
   env = process.env,
   platform = process.platform,
   exists = existsSync,
+  realpath = value => (realpathSync.native ?? realpathSync)(value),
+  stat = statSync,
   spawnImpl = spawn,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES
@@ -453,25 +507,43 @@ function createGitRuntimeService({
     return pending
   }
 
+  const authorityCapability = () => {
+    refresh()
+    return resolveGitAuthorityCapability(runtimes.bundled || runtimes.system, { platform, realpath, stat })
+  }
+
   const runtimeEnvironment = sourceEnv => {
     refresh()
     const runtime = runtimes.bundled || runtimes.system
-    return buildRuntimeGitEnvironment(sourceEnv, {
+    const output = buildRuntimeGitEnvironment(sourceEnv, {
       gitCommand: runtime?.command,
       gcmCommand: bundledGcm?.command,
       sshCommand: windowsOpenSsh,
       platform
     })
+    // The caller cannot smuggle a browser/config supplied authority path through
+    // the inherited environment. Only the selected, Host-verified runtime wins.
+    delete output[GIT_AUTHORITY_COMMAND_ENV]
+    delete output[GIT_AUTHORITY_ROOT_ENV]
+    const capability = resolveGitAuthorityCapability(runtime, { platform, realpath, stat })
+    if (capability !== null) {
+      output[GIT_AUTHORITY_COMMAND_ENV] = capability.gitCommand
+      output[GIT_AUTHORITY_ROOT_ENV] = capability.allowedGitRoot
+    }
+    return output
   }
 
-  return Object.freeze({ authenticate, execute, refresh, runtimeEnvironment, status })
+  return Object.freeze({ authenticate, authorityCapability, execute, refresh, runtimeEnvironment, status })
 }
 
 module.exports = {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_TIMEOUT_MS,
+  GIT_AUTHORITY_COMMAND_ENV,
+  GIT_AUTHORITY_ROOT_ENV,
   PUBLIC_ACTIONS,
   SAFE_ENV_KEYS,
+  authorityRootForCommand,
   buildGitEnvironment,
   buildRuntimeGitEnvironment,
   bundledGcmCandidates,
@@ -483,6 +555,7 @@ module.exports = {
   parseGitVersion,
   parseSshAgentStatus,
   resolveBundledGit,
+  resolveGitAuthorityCapability,
   resolveSystemGit,
   resolveWindowsOpenSsh,
   systemGitCandidates

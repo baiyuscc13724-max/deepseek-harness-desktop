@@ -93,3 +93,44 @@ test('desktop pet card closes when the user clicks outside it', () => {
   assert.match(source, /runtimeView\.addEventListener\('focus', closePetPanel\)/)
   assert.match(source, /closePetPanel\(\)/)
 })
+
+test('guest custom drag always sends window:endDrag once when capture or lifecycle aborts', () => {
+  const guestPreload = readFileSync(path.resolve(__dirname, '..', 'electron', 'guest-preload.cjs'), 'utf8')
+
+  assert.match(guestPreload, /let endDragSent = true/)
+  assert.match(guestPreload, /const cleanupActiveDrag = \(\) => \{/)
+  assert.match(guestPreload, /if \(!endDragSent\) \{/)
+  assert.ok(guestPreload.includes("ipcRenderer.send('window:endDrag')"), 'guest must always send window:endDrag')
+  assert.match(guestPreload, /document\.addEventListener\('lostpointercapture'/)
+  assert.match(guestPreload, /window\.addEventListener\('blur'/)
+  assert.match(guestPreload, /document\.addEventListener\('visibilitychange'/)
+  assert.match(guestPreload, /window\.addEventListener\('pagehide'/)
+})
+
+test('main process host lifecycle ends an active custom drag as a fallback', () => {
+  const main = readFileSync(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+
+  assert.match(main, /function endActiveWindowDrag\(\) \{/)
+  assert.match(main, /mainWindow\.on\('blur', \(\) => endActiveWindowDrag\(\)\)/)
+  assert.match(main, /mainWindow\.on\('minimize'/)
+  assert.match(main, /mainWindow\.on\('hide'/)
+  assert.match(main, /powerMonitor\.on\('suspend'[\s\S]*?endActiveWindowDrag\(\)/)
+  const fallbackSites = (main.match(/endActiveWindowDrag\(\)/g) || []).length
+  assert.ok(fallbackSites >= 4, `expected several endActiveWindowDrag fallback sites, found ${fallbackSites}`)
+})
+
+test('window drag sessions end idempotently so duplicate abort paths are safe', () => {
+  const calls = []
+  const window = {
+    isDestroyed: () => false,
+    isMaximized: () => false,
+    getBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
+    setPosition: () => calls.push(['move'])
+  }
+
+  assert.equal(beginWindowDrag(window, { x: 100, y: 100 }, 'win32'), true)
+  assert.equal(moveWindowDrag(window, { x: 160, y: 120 }), true)
+  assert.equal(endWindowDrag(window), true)
+  assert.equal(endWindowDrag(window), false, 'second abort path must be a harmless no-op')
+  assert.deepEqual(calls, [['move']])
+})

@@ -1,45 +1,76 @@
 # Harness WSS/443 盲中继
 
-该服务是 EasyTier/Tailscale 之外的跨网络后备线路。它只转发端到端加密的二进制帧，不终止 Harness 应用层加密，也不直接暴露电脑的 3081 网关。
+这是 Harness Desktop 手机同步在 EasyTier/Tailscale 之外的跨网络后备线路。服务只转发端到端加密的二进制帧，不持有隧道密钥、不解密 Harness 内容，也不直接暴露电脑的本地网关。
 
-## 网络边界
+## 最简单的个人服务器部署
 
-- 服务默认只监听 `127.0.0.1:8787`。
-- 生产环境必须放在 Caddy、Nginx 或云负载均衡之后，由反向代理提供公开 `wss://relay.example.com/...` 的 TLS 1.2/1.3 与 443 端口。
-- 电脑端和手机端都只建立出站 WSS 连接；不要求路由器端口映射。
-- 房间 ID 为 256 位随机值，只用于不可猜测的路由；负载使用配对二维码中的独立 256 位密钥进行 AES-256-GCM 加密。
-- 中继只能看到连接时间、房间关联、帧长度和流量，无法读取 Cookie、HTTP、WebSocket 或会话内容。
+准备一台有公网 IPv4 的 Linux 服务器、Node.js 20+ 和 Caddy。服务器只需开放入站 TCP 80/443；Desktop 与手机均只建立出站 WSS 连接，不需要路由器端口映射。
 
-## 反向代理示例
+1. 有自己的域名时，让域名解析到服务器，并按 `Caddyfile.example` 替换域名。只有公网 IPv4 时，Caddy 2.10+ 可申请受信任的短期 IP 证书，配置见下文；无需把 IP 写进客户端源码。
+2. 把本目录复制到 `/opt/harness-wss-relay`，执行 `npm ci --omit=dev`，并创建不可登录的系统用户 `harness-relay`。
+3. 将 `harness-wss-relay.service` 安装到 `/etc/systemd/system/` 后启用，安装 Caddy 配置并重载 Caddy。
+4. 浏览器访问 `https://你的域名或公网IP/healthz`，应得到 `{"ok":true,"protocolVersion":1}`。
+5. 在 Harness Desktop 的“手机与远程同步 → 个人中继服务器”中填入域名/IP 或完整 `wss://` 地址，点击“检测并保存”。手机会在下一次扫码配对时自动获得该地址。
+
+只有公网 IPv4 时，可把下列 `203.0.113.10` 替换为自己的地址。`default_sni` 让不发送 IP SNI 的 Android/Node 客户端也能取得正确证书；Caddy 会自动续期短期证书。
 
 ```caddy
-relay.example.com {
+{
+  default_sni 203.0.113.10
+}
+
+https://203.0.113.10 {
+  tls {
+    issuer acme {
+      dir https://acme-v02.api.letsencrypt.org/directory
+      profile shortlived
+    }
+  }
   reverse_proxy 127.0.0.1:8787
+  log {
+    output discard
+  }
 }
 ```
 
-启动内部服务：
+> 更换中继地址不会远程改写手机里已经保存的旧配对资料。改地址后，请重新生成二维码，并在已配对手机上重新扫码以更新远程线路。
 
-```text
-HARNESS_RELAY_HOST=127.0.0.1
-HARNESS_RELAY_PORT=8787
-node services/wss-relay/server.cjs
+## OpenCloudOS / RHEL 系示例
+
+```bash
+dnf install -y nodejs npm caddy
+useradd --system --home-dir /opt/harness-wss-relay --shell /sbin/nologin harness-relay
+mkdir -p /opt/harness-wss-relay
+# 将 server.cjs、package.json、package-lock.json 复制到该目录
+cd /opt/harness-wss-relay && npm ci --omit=dev
+chown -R harness-relay:harness-relay /opt/harness-wss-relay
+install -m 0644 harness-wss-relay.service /etc/systemd/system/harness-wss-relay.service
+systemctl daemon-reload
+systemctl enable --now harness-wss-relay
+# 编辑 /etc/caddy/Caddyfile 后：
+systemctl enable --now caddy
+systemctl reload caddy
 ```
 
-桌面开发环境配置：
+生产环境必须由 Caddy、Nginx 或云负载均衡提供公开的可信 TLS 证书和 443 端口。不要在客户端关闭证书校验，也不要把 SSH 密钥、room ID、tunnel key 或设备 secret 放入 URL、日志或源码。
 
-```text
-HARNESS_MOBILE_RELAY_URL=wss://relay.example.com/
+## 网络与隐私边界
+
+- 内部 Node 服务默认只监听 `127.0.0.1:8787`。
+- 房间 ID 为 256 位随机值，只用于不可猜测的路由；负载使用配对二维码中的另一把 256 位密钥进行 AES-256-GCM 端到端加密。
+- 中继只能看到连接时间、房间关联、帧长度和流量，无法读取 Cookie、HTTP、WebSocket、会话或模型凭据。
+- 服务不保存离线帧、配对资料、设备身份或会话。
+- 服务自身默认限制 512 条总连接、64 条未完成 hello 的连接、256 个活跃房间和每来源 32 条连接；每个房间最多 1 台 Desktop 和 32 台手机/平板。
+- 单帧最大约 64 KiB；每连接 10 秒最多转发 16 MiB。外层代理仍应设置与服务器容量匹配的连接与 DDoS 防护。
+- 手机只能向房间 Desktop 发帧，Desktop 只能向中继分配的当前 peer ID 发帧。
+
+## 启动与健康检查
+
+不使用 systemd 时可以直接启动：
+
+```bash
+HARNESS_RELAY_HOST=127.0.0.1 HARNESS_RELAY_PORT=8787 npm start
+curl --fail http://127.0.0.1:8787/healthz
 ```
 
-正式版本不得依赖环境变量注入密钥；公开中继 URL 可进入经过审核的发行配置，但房间 ID 和隧道密钥始终由每台 Desktop 本地随机生成并通过一次性二维码传递。
-
-## 资源限制
-
-- 每个房间最多 1 台 Desktop 和 32 台手机/平板。
-- 单帧最大约 64 KiB。
-- 每连接 10 秒最多转发 16 MiB。
-- 手机只能向房间 Desktop 发帧，不能直接向另一台手机发帧。
-- Desktop 只能向中继分配的当前 peer ID 发帧。
-
-中继服务不保存配对、设备身份、会话或离线数据。生产部署仍需在外层增加连接数限制、DDoS 防护、指标和无内容日志策略。
+外层反向代理仍应增加连接数/DDoS 限制、可用性监控和无内容日志策略。Node 服务只在直连来源为 loopback 时读取 `X-Forwarded-For`，并使用地址链最后一项；Caddy 默认会安全设置该头，其他代理必须覆盖伪造值或把真实客户端地址追加到末尾。公开客户端配置只包含无凭据的 `wss://` 地址；房间 ID 和隧道密钥始终由每台 Desktop 本地随机生成并通过一次性二维码传递。

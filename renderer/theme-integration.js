@@ -149,6 +149,8 @@
       const primary = vars['--dsw-alias-label-primary'] || (tone === 'dark' ? '#f5f6f7' : '#17191c')
       const secondary = vars['--dsw-alias-label-secondary'] || primary
       const tertiary = vars['--dsw-alias-label-tertiary'] || secondary
+      const codeBlock = vars['--dsw-alias-markdown-code-block'] || layer1
+      const codeBlockBanner = vars['--dsw-alias-markdown-code-block-banner'] || codeBlock
       const hover = vars['--dsw-alias-interactive-bg-hover'] || (tone === 'dark' ? 'rgba(255,255,255,.08)' : 'rgba(23,59,58,.08)')
       const active = vars['--dsw-alias-interactive-bg-active'] || (tone === 'dark' ? 'rgba(255,255,255,.14)' : 'rgba(23,59,58,.12)')
       const border2 = vars['--dsw-alias-border-l2'] || (tone === 'dark' ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.1)')
@@ -183,6 +185,8 @@
         '--dsw-alias-interactive-bg-active': active,
         '--dsw-alias-interactive-bg-hover-accent': active,
         '--dsw-alias-interactive-bg-hover-solid': module,
+        '--dsw-alias-markdown-code-block': codeBlock,
+        '--dsw-alias-markdown-code-block-banner': codeBlockBanner,
         '--dsw-alias-label-caption': tertiary,
         '--dsw-alias-label-dimmed': tertiary,
         '--dsw-alias-label-primary-bluish': primary,
@@ -320,14 +324,17 @@
       html[data-hd-theme="custom"] body::before { content:""; position:fixed; z-index:0; inset:calc(-32px - var(--hd-wallpaper-blur,0px)); background:var(--hd-wallpaper) center/cover no-repeat; filter:brightness(var(--hd-wallpaper-brightness,.82)) blur(calc(var(--hd-wallpaper-blur,2px) + 22px)) saturate(.88); pointer-events:none; }
       html[data-hd-theme="custom"] body::after { content:""; position:fixed; z-index:0; inset:0; background-image:linear-gradient(var(--hd-wallpaper-overlay),var(--hd-wallpaper-overlay)),var(--hd-wallpaper-contain,none); background-position:center,center; background-size:cover,contain; background-repeat:no-repeat,no-repeat; filter:brightness(var(--hd-wallpaper-brightness,.82)); pointer-events:none; }
       html[data-hd-wallpaper-kind="video"] body::before,html[data-hd-wallpaper-kind="video"] body::after { display:none!important; }
-      .hd-wallpaper-video { position:fixed; z-index:0; inset:0; width:100%; height:100%; object-fit:cover; filter:brightness(var(--hd-wallpaper-brightness,.82)); pointer-events:none; }
+      .hd-wallpaper-video { position:fixed; z-index:0; inset:0; width:100%; height:100%; filter:brightness(var(--hd-wallpaper-brightness,.82)); pointer-events:none; }
       .hd-wallpaper-video-overlay { position:fixed; z-index:0; inset:0; background:var(--hd-wallpaper-overlay); pointer-events:none; }
       html[data-hd-theme]:not([data-hd-theme="official"]) #root > [data-slot="root"] > *,
       html[data-hd-theme]:not([data-hd-theme="official"]) [data-slot="conversation"] > * { background:transparent !important; }
       html[data-hd-theme]:not([data-hd-theme="official"]) [data-slot="sidebar"] > * {
         background:var(--hd-theme-sidebar) !important;
       }
-      html[data-hd-theme]:not([data-hd-theme="official"]) [data-composer-card="true"] {
+      html[data-hd-theme]:not([data-hd-theme="official"]) [data-composer-card="true"],
+      html[data-hd-theme]:not([data-hd-theme="official"]) [data-question-key] > section,
+      html[data-hd-theme]:not([data-hd-theme="official"]) [data-plan-review-key] > section {
+        color:var(--dsw-alias-label-primary) !important;
         background:var(--hd-theme-input) !important;
         backdrop-filter:blur(18px) saturate(1.08);
       }
@@ -335,22 +342,44 @@
         background:var(--hd-theme-dialog) !important;
         backdrop-filter:blur(22px) saturate(1.08);
       }
-      html[data-hd-theme="custom"] [data-composer-card="true"],
-      html[data-hd-theme="custom"] [role="dialog"] {
+      html[data-hd-theme="custom"][data-hd-skin-tone] [data-composer-card="true"],
+      html[data-hd-theme="custom"][data-hd-skin-tone] [data-question-key] > section,
+      html[data-hd-theme="custom"][data-hd-skin-tone] [data-plan-review-key] > section {
+        color:var(--dsw-alias-label-primary) !important;
+        border-color:var(--dsw-alias-border-l2) !important;
+        background:linear-gradient(var(--hd-theme-readable-surface),var(--hd-theme-readable-surface)),var(--hd-theme-input) !important;
+        box-shadow:0 12px 38px var(--hd-theme-panel-shadow,rgba(0,0,0,.18));
         backdrop-filter:blur(var(--hd-theme-glass-blur,18px)) saturate(1.08);
       }
-      html[data-hd-theme="custom"] [data-composer-card="true"],
-      html[data-hd-theme="custom"] [role="dialog"] {
+      html[data-hd-theme="custom"][data-hd-skin-tone] [role="dialog"] {
         border-color:var(--dsw-alias-border-l2) !important;
+        background:linear-gradient(var(--hd-theme-readable-surface),var(--hd-theme-readable-surface)),var(--hd-theme-dialog) !important;
         box-shadow:0 12px 38px var(--hd-theme-panel-shadow,rgba(0,0,0,.18));
+        backdrop-filter:blur(var(--hd-theme-glass-blur,18px)) saturate(1.08);
       }
+      html[data-hd-theme="custom"][data-hd-skin-tone] [data-question-key] [role="group"] > div:has(> div[aria-hidden="true"] + textarea),
+      html[data-hd-theme="custom"][data-hd-skin-tone] [data-question-key] [role="radiogroup"] > div:has(> div[aria-hidden="true"] + textarea) {
+        color:var(--dsw-alias-label-primary) !important;
+        border-color:var(--dsw-alias-border-l2) !important;
+        background:linear-gradient(var(--hd-theme-readable-surface),var(--hd-theme-readable-surface)),var(--hd-theme-input) !important;
+      }
+      html[data-hd-theme="custom"][data-hd-wallpaper-kind="video"][data-hd-skin-tone] [data-hd-surface="sidebar"],
+      html[data-hd-theme="custom"][data-hd-wallpaper-kind="video"][data-hd-skin-tone] [data-hd-surface="details"] { background:linear-gradient(var(--hd-theme-readable-surface),var(--hd-theme-readable-surface)),var(--hd-theme-sidebar)!important; }
+      html[data-hd-theme]:not([data-hd-theme="official"])[data-hd-wallpaper-kind="video"] [data-hd-surface="sidebar"],
+      html[data-hd-theme]:not([data-hd-theme="official"])[data-hd-wallpaper-kind="video"] [data-hd-surface="details"],
+      html[data-hd-theme]:not([data-hd-theme="official"])[data-hd-wallpaper-kind="video"] [data-composer-card="true"],
+      html[data-hd-theme]:not([data-hd-theme="official"])[data-hd-wallpaper-kind="video"] [data-question-key] > section,
+      html[data-hd-theme]:not([data-hd-theme="official"])[data-hd-wallpaper-kind="video"] [data-plan-review-key] > section,
+      html[data-hd-theme]:not([data-hd-theme="official"])[data-hd-wallpaper-kind="video"] [role="dialog"] { backdrop-filter:none!important; }
+      html[data-hd-theme][data-hd-low-performance="true"] [data-hd-surface],
+      html[data-hd-theme][data-hd-low-performance="true"] [data-composer-card="true"],
+      html[data-hd-theme][data-hd-low-performance="true"] [data-question-key] > section,
+      html[data-hd-theme][data-hd-low-performance="true"] [data-plan-review-key] > section,
+      html[data-hd-theme][data-hd-low-performance="true"] [role="dialog"] { backdrop-filter:none!important; box-shadow:none!important; }
       html[data-hd-theme="custom"] [data-hd-surface="conversation"] {
         background:
           linear-gradient(to bottom,var(--hd-theme-readable-scrim-strong) 0,transparent 92px,transparent calc(100% - 150px),var(--hd-theme-readable-scrim-strong) 100%),
           linear-gradient(var(--hd-theme-readable-scrim-soft),var(--hd-theme-readable-scrim-soft)) !important;
-      }
-      html[data-hd-theme="custom"] [data-composer-card="true"] {
-        background:linear-gradient(var(--hd-theme-readable-surface),var(--hd-theme-readable-surface)),var(--hd-theme-input) !important;
       }
       html[data-hd-theme="custom"] [data-hd-surface="conversation"] :not(pre) > code {
         color:var(--dsw-alias-label-primary) !important;
@@ -364,8 +393,14 @@
         text-underline-offset:.14em;
       }
       html[data-hd-theme="custom"] #root { text-shadow:var(--hd-theme-text-shadow,none); }
+      html[data-hd-theme]:not([data-hd-theme="official"]) input::placeholder,
+      html[data-hd-theme]:not([data-hd-theme="official"]) textarea::placeholder {
+        color:var(--dsw-alias-label-secondary) !important;
+        -webkit-text-fill-color:var(--dsw-alias-label-secondary) !important;
+        opacity:1;
+      }
       html[data-hd-theme="custom"] input::placeholder,
-      html[data-hd-theme="custom"] textarea::placeholder { color:var(--dsw-alias-label-secondary) !important; opacity:1; text-shadow:var(--hd-theme-text-shadow,none); }
+      html[data-hd-theme="custom"] textarea::placeholder { text-shadow:var(--hd-theme-text-shadow,none); }
       html[data-hd-theme="maid-atelier"] body::before, html[data-hd-theme="maid-atelier"] body::after { content:""; position:fixed; z-index:0; bottom:0; width:min(29vw,430px); height:78vh; background-repeat:no-repeat; background-position:center bottom; background-size:contain; pointer-events:none; filter:drop-shadow(0 12px 28px rgba(0,24,54,.2)); }
       html[data-hd-theme="maid-atelier"] body::before { left:clamp(210px,20vw,300px); background-image:var(--hd-maid-left); }
       html[data-hd-theme="maid-atelier"] body::after { right:2vw; background-image:var(--hd-maid-right); }
@@ -440,56 +475,158 @@
       columns.slice(0, 3).forEach((element, index) => { element.dataset.hdSurface = names[index] })
     }
 
-    const releaseWallpaperVideo = video => {
+    const wallpaperFrameRate = 24
+    const wallpaperMaxPixels = 1920 * 1080
+    let wallpaperVideoDecoder = null
+    let wallpaperVideoCanvas = null
+    let wallpaperVideoFrameRequest = 0
+    let wallpaperAnimationFrameRequest = 0
+    let wallpaperLastFrameAt = null
+    let wallpaperLifecycleParked = false
+
+    const releaseWallpaperCanvas = () => {
+      if (!wallpaperVideoCanvas) return
+      wallpaperVideoCanvas.width = 0
+      wallpaperVideoCanvas.height = 0
+      wallpaperVideoCanvas.remove()
+      wallpaperVideoCanvas = null
+      wallpaperLastFrameAt = null
+    }
+
+    const releaseWallpaperVideo = () => {
+      const video = wallpaperVideoDecoder
+      if (video && wallpaperVideoFrameRequest && typeof video.cancelVideoFrameCallback === 'function') video.cancelVideoFrameCallback(wallpaperVideoFrameRequest)
+      if (wallpaperAnimationFrameRequest) window.cancelAnimationFrame(wallpaperAnimationFrameRequest)
+      wallpaperVideoFrameRequest = 0
+      wallpaperAnimationFrameRequest = 0
       if (!video) return
       video.pause()
       video.removeAttribute('src')
       delete video.dataset.hdWallpaperSource
       video.load()
+      wallpaperVideoDecoder = null
+    }
+
+    const resizeWallpaperCanvas = canvas => {
+      const viewportWidth = Math.max(1, window.innerWidth)
+      const viewportHeight = Math.max(1, window.innerHeight)
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5)
+      const rawWidth = viewportWidth * pixelRatio
+      const rawHeight = viewportHeight * pixelRatio
+      const scale = Math.min(1, Math.sqrt(wallpaperMaxPixels / (rawWidth * rawHeight)))
+      const width = Math.max(1, Math.round(rawWidth * scale))
+      const height = Math.max(1, Math.round(rawHeight * scale))
+      if (canvas.width !== width) canvas.width = width
+      if (canvas.height !== height) canvas.height = height
+    }
+
+    const drawWallpaperFrame = (video, canvas) => {
+      if (video !== wallpaperVideoDecoder || canvas !== wallpaperVideoCanvas || video.readyState < 2) return
+      resizeWallpaperCanvas(canvas)
+      const context = canvas.getContext('2d', { alpha: false, desynchronized: true })
+      if (!context || !video.videoWidth || !video.videoHeight) return
+      const scale = Math.max(canvas.width / video.videoWidth, canvas.height / video.videoHeight)
+      const width = video.videoWidth * scale
+      const height = video.videoHeight * scale
+      context.drawImage(video, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height)
+    }
+
+    const drawWallpaperFrameWhenDue = (now, video, canvas) => {
+      const frameInterval = 1000 / wallpaperFrameRate
+      if (wallpaperLastFrameAt === null) wallpaperLastFrameAt = now - frameInterval
+      const elapsed = now - wallpaperLastFrameAt
+      if (elapsed < frameInterval) return
+      wallpaperLastFrameAt = now - (elapsed % frameInterval)
+      drawWallpaperFrame(video, canvas)
+    }
+
+    const scheduleWallpaperFrame = (video, canvas) => {
+      if (video !== wallpaperVideoDecoder || canvas !== wallpaperVideoCanvas || video.paused) return
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        if (wallpaperVideoFrameRequest) return
+        wallpaperVideoFrameRequest = video.requestVideoFrameCallback(now => {
+          wallpaperVideoFrameRequest = 0
+          drawWallpaperFrameWhenDue(now, video, canvas)
+          scheduleWallpaperFrame(video, canvas)
+        })
+        return
+      }
+      if (wallpaperAnimationFrameRequest) return
+      const drawFromAnimationFrame = now => {
+        wallpaperAnimationFrameRequest = 0
+        if (video !== wallpaperVideoDecoder || canvas !== wallpaperVideoCanvas || video.paused) return
+        drawWallpaperFrameWhenDue(now, video, canvas)
+        wallpaperAnimationFrameRequest = window.requestAnimationFrame(drawFromAnimationFrame)
+      }
+      wallpaperAnimationFrameRequest = window.requestAnimationFrame(drawFromAnimationFrame)
     }
 
     const syncWallpaperVideo = theme => {
       const root = document.documentElement
       const source = theme?.id === 'custom' ? theme.customBackgroundVideoDataUrl : ''
-      let video = document.querySelector('.hd-wallpaper-video')
       let overlay = document.querySelector('.hd-wallpaper-video-overlay')
       if (!source) {
-        if (video) {
-          releaseWallpaperVideo(video)
-          video.remove()
-        }
+        releaseWallpaperVideo()
+        releaseWallpaperCanvas()
         overlay?.remove(); root.removeAttribute('data-hd-wallpaper-kind')
         return
       }
-      if (!video) {
-        video = document.createElement('video')
-        video.className = 'hd-wallpaper-video'
-        video.muted = true; video.loop = true; video.autoplay = true; video.playsInline = true
-        document.body.prepend(video)
+      root.dataset.hdWallpaperKind = 'video'
+      const workbenchRoot = document.querySelector('#root')
+      const workbenchReady = Boolean(workbenchRoot?.childElementCount || workbenchRoot?.textContent?.trim())
+      const shouldPause = wallpaperLifecycleParked || root.dataset.hdLowPerformance === 'true' || root.dataset.hdReducedMotion === 'true' || document.hidden || !workbenchReady
+      if (shouldPause) {
+        releaseWallpaperVideo()
+        releaseWallpaperCanvas()
+        overlay?.remove()
+        return
       }
-      const sourceChanged = video.dataset.hdWallpaperSource !== source
-      if (sourceChanged) {
-        // Fully release the previous decoder and byte-range stream before the
-        // next source is attached. Reassigning src alone can leave Chromium's
-        // old media pipeline alive while a new wallpaper is becoming current.
-        releaseWallpaperVideo(video)
-        video.dataset.hdWallpaperSource = source
-        video.src = source
-        video.load()
+      if (!wallpaperVideoCanvas) {
+        wallpaperVideoCanvas = document.createElement('canvas')
+        wallpaperVideoCanvas.className = 'hd-wallpaper-video'
+        wallpaperVideoCanvas.setAttribute('aria-hidden', 'true')
+        resizeWallpaperCanvas(wallpaperVideoCanvas)
+        document.body.prepend(wallpaperVideoCanvas)
       }
       if (!overlay) {
         overlay = document.createElement('div')
         overlay.className = 'hd-wallpaper-video-overlay'
-        video.after(overlay)
+        wallpaperVideoCanvas.after(overlay)
       }
-      root.dataset.hdWallpaperKind = 'video'
-      const shouldPause = root.dataset.hdLowPerformance === 'true' || root.dataset.hdReducedMotion === 'true' || document.hidden
-      if (shouldPause) {
-        if (!video.paused) video.pause()
-      } else if (video.paused || sourceChanged) video.play().catch(() => {})
+      const sourceChanged = wallpaperVideoDecoder?.dataset.hdWallpaperSource !== source
+      if (sourceChanged) {
+        releaseWallpaperVideo()
+        const decoder = document.createElement('video')
+        decoder.muted = true
+        decoder.loop = true
+        decoder.playsInline = true
+        decoder.preload = 'auto'
+        decoder.dataset.hdWallpaperSource = source
+        decoder.src = source
+        decoder.load()
+        wallpaperVideoDecoder = decoder
+      }
+      const decoder = wallpaperVideoDecoder
+      if (decoder && (decoder.paused || sourceChanged)) decoder.play().then(() => scheduleWallpaperFrame(decoder, wallpaperVideoCanvas)).catch(() => {})
     }
 
     const activeWallpaperTheme = state => state?.themeId === 'custom' ? customThemeFromState(state) : null
+
+    window.harnessDesktopGuest?.onWallpaperLifecycle?.(action => {
+      if (action === 'park') {
+        wallpaperLifecycleParked = true
+        releaseWallpaperVideo()
+        releaseWallpaperCanvas()
+        document.querySelector('.hd-wallpaper-video-overlay')?.remove()
+        return
+      }
+      if (action !== 'resume') return
+      releaseWallpaperVideo()
+      releaseWallpaperCanvas()
+      document.querySelector('.hd-wallpaper-video-overlay')?.remove()
+      wallpaperLifecycleParked = false
+      syncWallpaperVideo(activeWallpaperTheme(window.__HARNESS_DESKTOP_THEME_STATE__ || {}))
+    })
 
     document.addEventListener('visibilitychange', () => {
       syncWallpaperVideo(activeWallpaperTheme(window.__HARNESS_DESKTOP_THEME_STATE__ || {}))
@@ -840,6 +977,7 @@
       if (dialog) ensureNavigation(dialog)
       applyUiMode(false)
       if (refreshTheme) applyTheme()
+      else syncWallpaperVideo(activeWallpaperTheme(window.__HARNESS_DESKTOP_THEME_STATE__ || {}))
       stabilizeWorkbenchViewport()
     }
     window.__HARNESS_DESKTOP_RENDER_THEMES__ = mount

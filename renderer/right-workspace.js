@@ -38,7 +38,7 @@
   const DEFAULTS = Object.freeze({
     minWidth: 320,
     maxWidth: 1200,
-    defaultWidth: 460,
+    defaultWidth: 640,
     ariaLabel: '右侧工作区',
     mount: true,
     bindShortcut: true,
@@ -191,6 +191,33 @@
       && workspaceOpen !== true
       && (activeModeId == null || activeModeId === 'browser')
     return canRestore ? 'restore-browser' : 'sync-only'
+  }
+
+  function normalizeBrowserOpenIntent(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const exactKeys = expected => {
+      const keys = Object.keys(value).sort()
+      const wanted = [...expected].sort()
+      return keys.length === wanted.length && keys.every((key, index) => key === wanted[index])
+    }
+    const action = typeof value.action === 'string' ? value.action : ''
+    if (action === 'bridge-ready') return exactKeys(['action', 'version']) && value.version === 1 ? Object.freeze({ action, version: 1 }) : null
+    if (action === 'show-browser') return exactKeys(['action']) ? Object.freeze({ action }) : null
+    if (action !== 'open-browser-url' || !exactKeys(['action', 'url']) || typeof value.url !== 'string' || !value.url || value.url.length > 2048 || value.url.trim() !== value.url) return null
+    let parsed
+    try { parsed = new URL(value.url) } catch { return null }
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) return null
+    const url = parsed.toString()
+    return url.length <= 2048 ? Object.freeze({ action, url }) : null
+  }
+
+  function browserIntentTabAction({ currentUrl, targetUrl } = {}) {
+    const current = typeof currentUrl === 'string' ? currentUrl.trim() : ''
+    const target = typeof targetUrl === 'string' ? targetUrl.trim() : ''
+    if (!target) return 'show-only'
+    if (current === target) return 'keep-current'
+    if (!current || current === 'about:blank') return 'navigate-current'
+    return 'open-new-tab'
   }
 
   /* ------------------------------------------------------------------ *
@@ -595,6 +622,8 @@
     create: createWorkspace,
     createCore, // 纯逻辑核心，Node 测试可直接使用
     browserStateModeAction,
+    normalizeBrowserOpenIntent,
+    browserIntentTabAction,
     isShortcutPressed: (event) => {
       const key = String(event?.key || '').toLowerCase()
       return Boolean(event && (event.ctrlKey || event.metaKey) && event.shiftKey && (key === ']' || key === '}'))

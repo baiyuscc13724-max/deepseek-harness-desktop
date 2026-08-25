@@ -1,14 +1,22 @@
 const http = require('node:http')
+const net = require('node:net')
 const { randomBytes } = require('node:crypto')
 const WebSocket = require('ws')
-const { DESKTOP_PEER_ID } = require('../../electron/bridge/sync-transports/wss-relay-adapter.cjs')
-const { RELAY_MAX_PACKET_BYTES } = require('../../electron/bridge/relay-tunnel-codec.cjs')
 
+// Keep the blind relay independently deployable: it only needs the public
+// envelope limits, never Desktop code, tunnel keys, or application protocol.
+const DESKTOP_PEER_ID = Buffer.alloc(8)
+const RELAY_MAX_PAYLOAD_BYTES = 64 * 1024
+const RELAY_MAX_PACKET_BYTES = RELAY_MAX_PAYLOAD_BYTES + 64
 const MAX_ENVELOPE_BYTES = 8 + RELAY_MAX_PACKET_BYTES
 const MAX_MOBILE_PEERS_PER_ROOM = 32
 const HELLO_TIMEOUT_MS = 8_000
 const RATE_WINDOW_MS = 10_000
 const RATE_WINDOW_BYTES = 16 * 1024 * 1024
+const MAX_TOTAL_CONNECTIONS = 512
+const MAX_PENDING_HELLOS = 64
+const MAX_ROOMS = 256
+const MAX_CONNECTIONS_PER_SOURCE = 32
 
 function validRoomId(value) {
   return /^[A-Za-z0-9_-]{43}$/.test(String(value || ''))
@@ -31,12 +39,54 @@ function rateAllowed(client, bytes, now = Date.now()) {
   return client.rate.bytes <= RATE_WINDOW_BYTES
 }
 
-function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketServer } = {}) {
+function relayLimit(value, fallback) {
+  if (value === undefined) return fallback
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100_000) throw new Error('WSS relay connection limit is invalid.')
+  return value
+}
+
+function normalizedSourceAddress(value) {
+  let address = String(value || '').trim()
+  if (address.toLowerCase().startsWith('::ffff:') && net.isIP(address.slice(7)) === 4) address = address.slice(7)
+  return net.isIP(address) ? address : 'unknown'
+}
+
+function isLoopbackAddress(value) {
+  const address = normalizedSourceAddress(value)
+  return address === '::1' || address.startsWith('127.')
+}
+
+function relaySourceAddress(request) {
+  const direct = normalizedSourceAddress(request?.socket?.remoteAddress)
+  if (isLoopbackAddress(direct)) {
+    const forwardedChain = String(request?.headers?.['x-forwarded-for'] || '').split(',')
+    const forwarded = normalizedSourceAddress(forwardedChain[forwardedChain.length - 1])
+    if (forwarded !== 'unknown') return forwarded
+  }
+  return direct
+}
+
+function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketServer, limits = {} } = {}) {
   if (!server) throw new Error('WSS relay requires an HTTP server behind a TLS reverse proxy.')
+  const maxTotalConnections = relayLimit(limits.maxTotalConnections, MAX_TOTAL_CONNECTIONS)
+  const maxPendingHellos = relayLimit(limits.maxPendingHellos, MAX_PENDING_HELLOS)
+  const maxRooms = relayLimit(limits.maxRooms, MAX_ROOMS)
+  const maxConnectionsPerSource = relayLimit(limits.maxConnectionsPerSource, MAX_CONNECTIONS_PER_SOURCE)
   const rooms = new Map()
+  const sourceCounts = new Map()
+  let pendingHellos = 0
   const wss = new WebSocketServerImpl({ server, maxPayload: MAX_ENVELOPE_BYTES, perMessageDeflate: false })
 
   function remove(client) {
+    if (client.removed) return
+    client.removed = true
+    if (client.pendingHello) {
+      client.pendingHello = false
+      pendingHellos = Math.max(0, pendingHellos - 1)
+    }
+    const sourceCount = sourceCounts.get(client.source) || 0
+    if (sourceCount <= 1) sourceCounts.delete(client.source)
+    else sourceCounts.set(client.source, sourceCount - 1)
     if (!client.room) return
     const room = client.room
     if (client.role === 'desktop' && room.desktop === client) {
@@ -50,8 +100,20 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
     client.room = null
   }
 
-  wss.on('connection', socket => {
-    const client = { socket, role: '', room: null, peerId: null, rate: null }
+  wss.on('connection', (socket, request) => {
+    if (wss.clients.size > maxTotalConnections) return socket.close(4429, 'connection limit exceeded')
+    const source = relaySourceAddress(request)
+    const sourceCount = sourceCounts.get(source) || 0
+    if (sourceCount >= maxConnectionsPerSource) return socket.close(4429, 'source connection limit exceeded')
+    if (pendingHellos >= maxPendingHellos) return socket.close(4429, 'hello capacity exceeded')
+    sourceCounts.set(source, sourceCount + 1)
+    pendingHellos += 1
+    const client = { socket, source, role: '', room: null, peerId: null, rate: null, pendingHello: true, removed: false }
+    const finishHello = () => {
+      if (!client.pendingHello) return
+      client.pendingHello = false
+      pendingHellos = Math.max(0, pendingHellos - 1)
+    }
     const helloTimer = setTimeout(() => socket.close(4408, 'hello timeout'), HELLO_TIMEOUT_MS)
     helloTimer.unref?.()
 
@@ -65,6 +127,7 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
         }
         let room = rooms.get(hello.roomId)
         if (!room) {
+          if (rooms.size >= maxRooms) return socket.close(4429, 'room capacity exceeded')
           room = { id: hello.roomId, desktop: null, mobiles: new Map() }
           rooms.set(room.id, room)
         }
@@ -76,6 +139,7 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
             return socket.close(4409, 'desktop already connected')
           }
           room.desktop = client
+          finishHello()
           clearTimeout(helloTimer)
           sendJson(socket, { type: 'welcome', version: 1, role: 'desktop' })
           for (const mobile of room.mobiles.values()) sendJson(mobile.socket, { type: 'desktop-online' })
@@ -87,6 +151,7 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
         }
         client.peerId = nextPeerId(room)
         room.mobiles.set(client.peerId.toString('hex'), client)
+        finishHello()
         clearTimeout(helloTimer)
         sendJson(socket, { type: 'welcome', version: 1, role: 'mobile', peerId: client.peerId.toString('hex'), desktopOnline: Boolean(room.desktop) })
         if (room.desktop) sendJson(room.desktop.socket, { type: 'peer-joined', peerId: client.peerId.toString('hex') })
@@ -135,11 +200,16 @@ if (require.main === module) {
 
 module.exports = {
   HELLO_TIMEOUT_MS,
+  MAX_CONNECTIONS_PER_SOURCE,
   MAX_ENVELOPE_BYTES,
   MAX_MOBILE_PEERS_PER_ROOM,
+  MAX_PENDING_HELLOS,
+  MAX_ROOMS,
+  MAX_TOTAL_CONNECTIONS,
   RATE_WINDOW_BYTES,
   createHealthServer,
   createRelayRouter,
   rateAllowed,
+  relaySourceAddress,
   validRoomId
 }

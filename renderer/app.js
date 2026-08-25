@@ -12,6 +12,14 @@ const closePetPanelButton = document.querySelector('#closePetPanel')
 const petPanelStatus = document.querySelector('#petPanelStatus')
 const petFullness = document.querySelector('#petFullness')
 const petFullnessText = document.querySelector('#petFullnessText')
+const petEnergy = document.querySelector('#petEnergy')
+const petEnergyText = document.querySelector('#petEnergyText')
+const petMood = document.querySelector('#petMood')
+const petMoodText = document.querySelector('#petMoodText')
+const petBondTitle = document.querySelector('#petBondTitle')
+const petBondLevel = document.querySelector('#petBondLevel')
+const petBondProgress = document.querySelector('#petBondProgress')
+const petBondSummary = document.querySelector('#petBondSummary')
 const petRefinedCount = document.querySelector('#petRefinedCount')
 const petStandardCount = document.querySelector('#petStandardCount')
 const petFragmentCount = document.querySelector('#petFragmentCount')
@@ -19,6 +27,8 @@ const petAwakeToggle = document.querySelector('#petAwakeToggle')
 const petFeedButton = document.querySelector('#petFeedButton')
 const petAutoFeed = document.querySelector('#petAutoFeed')
 const petAlwaysOnTop = document.querySelector('#petAlwaysOnTop')
+const petProactive = document.querySelector('#petProactive')
+const petCompanionStyle = document.querySelector('#petCompanionStyle')
 const skinQuickButton = document.querySelector('#skinQuickButton')
 const skinPickerOverlay = document.querySelector('#skinPickerOverlay')
 const skinPickerGrid = document.querySelector('#skinPickerGrid')
@@ -44,6 +54,9 @@ const skinWallpaperEngineSync = document.querySelector('#skinWallpaperEngineSync
 const skinWallpaperEnginePicker = document.querySelector('#skinWallpaperEnginePicker')
 const skinWallpaperEngineStatus = document.querySelector('#skinWallpaperEngineStatus')
 const skinWallpaperEngineItems = document.querySelector('#skinWallpaperEngineItems')
+const skinWallpaperEngineSearch = document.querySelector('#skinWallpaperEngineSearch')
+const skinWallpaperEngineSearchClear = document.querySelector('#skinWallpaperEngineSearchClear')
+const skinWallpaperEngineEmpty = document.querySelector('#skinWallpaperEngineEmpty')
 const skinWallpaperEngineRescan = document.querySelector('#skinWallpaperEngineRescan')
 const skinWallpaperEngineManual = document.querySelector('#skinWallpaperEngineManual')
 const skinWallpaperEngineClose = document.querySelector('#skinWallpaperEngineClose')
@@ -75,6 +88,11 @@ const mobileSyncPairCard = document.querySelector('#mobileSyncPairCard')
 const mobileRemoteToggle = document.querySelector('#mobileRemoteToggle')
 const mobileRemoteStatus = document.querySelector('#mobileRemoteStatus')
 const mobileTransportPreference = document.querySelector('#mobileTransportPreference')
+const mobileRelayUrlInput = document.querySelector('#mobileRelayUrl')
+const mobileRelaySave = document.querySelector('#mobileRelaySave')
+const mobileRelayClear = document.querySelector('#mobileRelayClear')
+const mobileRelayStatus = document.querySelector('#mobileRelayStatus')
+const mobileRelayMessage = document.querySelector('#mobileRelayMessage')
 const mobileSyncQr = document.querySelector('#mobileSyncQr')
 const mobileSyncQrPlaceholder = document.querySelector('#mobileSyncQrPlaceholder')
 const mobileSyncUrl = document.querySelector('#mobileSyncUrl')
@@ -104,6 +122,8 @@ const updateNoticeInstall = document.querySelector('#updateNoticeInstall')
 
 let pendingUpdateKind = 'installer'
 let pendingComponentUpdate = null
+let prPreviewController = null
+let prPreviewState = { enabled: false, configured: false, checking: false, changing: false, available: false, candidate: null, error: '' }
 let gitRuntimeState = {
   loading: true, authenticating: false, preparing: false, message: '',
   git: { available: false, source: null, version: null },
@@ -117,7 +137,7 @@ let updateState = {
   installError: '',
   app: null,
   harness: null,
-  preferences: { checkOnStartup: true, channel: 'stable', lastCheckedAt: null }
+  preferences: { checkOnStartup: true, channel: 'stable', previewEnabled: false, lastCheckedAt: null }
 }
 let distributionState = {
   channel: 'direct', store: false, appUpdatesManagedByStore: false,
@@ -125,8 +145,10 @@ let distributionState = {
 }
 let appearanceState = { themeId: 'porcelain-mist', customTheme: {}, wallpaperLibrary: { activeId: null, items: [] }, customBackgroundDataUrl: null, uiMode: 'official', reducedMotion: false, lowPerformance: false }
 let petState = {
-  status: 'idle', fullness: 80, inventory: { refined: 0, standard: 0, fragments: 0 },
-  preferences: { enabled: true, awake: false, alwaysOnTop: true, autoFeed: true }
+  status: 'idle', fullness: 80, energy: 78, mood: 72, inventory: { refined: 0, standard: 0, fragments: 0 },
+  relationship: { level: 1, title: '初见', progress: 0, taskStreak: 0 },
+  companion: { daily: { completed: 0, tasks: 0 } },
+  preferences: { enabled: true, awake: false, alwaysOnTop: true, autoFeed: true, proactive: true, companionStyle: 'warm' }
 }
 let modelRoutingState = { main: {}, subagent: { inheritMain: true }, providers: [], meters: { snapshots: [], loading: false, error: '' }, saving: false, saved: false, error: '' }
 let mobileSyncState = {
@@ -139,8 +161,11 @@ let mobileSyncState = {
   control: { protocolVersion: 1, devices: [] },
   remote: { enabled: true, preference: 'auto', status: 'disabled', active: null, adapters: {} }
 }
+let relayTesting = false
 let themeCatalog = []
 let selectedWallpaperId = null
+let wallpaperEngineLibrary = null
+let wallpaperEngineReason = ''
 let startupRuntimeReady = false
 let startupWebviewReady = false
 let startupFailed = false
@@ -564,8 +589,10 @@ const petStatusLabels = {
   blocked: '任务遇到问题',
   ready: '任务已完成',
   celebrating: '正在庆祝任务完成',
-  sleeping: '饿得睡着了'
+  sleeping: '正在休息恢复'
 }
+
+const petMoodLabels = { happy: '愉快', content: '平稳', sad: '低落' }
 
 function renderPetState(next = petState) {
   petState = next
@@ -575,12 +602,29 @@ function renderPetState(next = petState) {
   petPanelStatus.textContent = petStatusLabels[next.status] || petStatusLabels.idle
   petFullness.value = Math.max(0, Math.min(100, Number(next.fullness) || 0))
   petFullnessText.textContent = `${Math.round(petFullness.value)}%`
+  petEnergy.value = Math.max(0, Math.min(100, Number(next.energy) || 0))
+  petEnergyText.textContent = `${Math.round(petEnergy.value)}%`
+  petMood.value = Math.max(0, Math.min(100, Number(next.mood) || 0))
+  petMoodText.textContent = petMoodLabels[next.moodBand] || `${Math.round(petMood.value)}%`
+  const relationship = next.relationship || {}
+  const daily = next.companion?.daily || {}
+  petBondTitle.textContent = relationship.title || '初见'
+  petBondLevel.textContent = `Lv.${Math.max(1, Number(relationship.level) || 1)}`
+  petBondProgress.value = Math.max(0, Math.min(100, Number(relationship.progress) || 0))
+  const completed = Math.max(0, Number(daily.completed) || 0)
+  const total = Math.max(completed, Number(daily.tasks) || 0)
+  const streak = Math.max(0, Number(relationship.taskStreak) || 0)
+  petBondSummary.textContent = total > 0
+    ? `今日完成 ${completed}/${total}${streak > 1 ? ` · 连续 ${streak}` : ''}`
+    : '今天还没有共同任务'
   petRefinedCount.textContent = inventory.refined || 0
   petStandardCount.textContent = inventory.standard || 0
   petFragmentCount.textContent = inventory.fragments || 0
   petAwakeToggle.classList.toggle('primary', !preferences.awake)
   petAutoFeed.checked = preferences.autoFeed !== false
   petAlwaysOnTop.checked = preferences.alwaysOnTop !== false
+  petProactive.checked = preferences.proactive !== false
+  petCompanionStyle.value = ['calm', 'warm', 'playful'].includes(preferences.companionStyle) ? preferences.companionStyle : 'warm'
   petFeedButton.disabled = Number(next.fullness) >= 100 || ![inventory.fragments, inventory.standard, inventory.refined].some(value => Number(value) > 0)
   petAwakeToggle.textContent = preferences.awake ? '收起女仆鲸' : '唤醒女仆鲸'
 }
@@ -613,26 +657,67 @@ function openSkinPicker({ fromSettings = false } = {}) {
 
 function closeSkinPicker() {
   disposeWallpaperCardPreviews()
+  disposeWallpaperEnginePreviews()
   skinPickerHost.close()
 }
 
+function disposeWallpaperEnginePreviews(except = null) {
+  skinWallpaperEngineItems.querySelectorAll('video[data-wallpaper-engine-preview]').forEach(video => {
+    if (video === except) return
+    video.pause()
+    video.removeAttribute('src')
+    video.load()
+  })
+}
+
+function wallpaperEngineProjectPreviewUrl(project) {
+  const previewUrl = String(project.previewUrl || '').trim()
+  return previewUrl.startsWith('harness-wallpaper:') ? previewUrl : ''
+}
+
+function playWallpaperEnginePreview(card) {
+  if (document.documentElement.dataset.shellLowPerformance === 'true' || matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  const video = card.querySelector('video[data-wallpaper-engine-preview]')
+  if (!video) return
+  disposeWallpaperEnginePreviews(video)
+  if (!video.getAttribute('src') && video.dataset.previewSrc) {
+    video.src = video.dataset.previewSrc
+    video.load()
+  }
+  video.play().catch(() => {})
+}
+
 function openWallpaperEnginePicker() {
+  wallpaperEngineLibrary = null
+  wallpaperEngineReason = ''
+  skinWallpaperEngineSearch.value = ''
+  skinWallpaperEngineSearchClear.disabled = true
   skinWallpaperEnginePicker.classList.remove('hidden')
   skinWallpaperEngineStatus.textContent = '正在扫描本机 Steam 库…'
+  disposeWallpaperEnginePreviews()
   skinWallpaperEngineItems.innerHTML = ''
+  skinWallpaperEngineEmpty.classList.add('hidden')
+  skinWallpaperEngineSearch.disabled = true
   skinBrowseWallpaperEngineButton.disabled = true
   api.listWallpaperEngineProjects().then(library => {
     renderWallpaperEnginePicker(library)
   }).catch(error => {
     skinWallpaperEngineStatus.textContent = `扫描失败：${error.message}`
+    wallpaperEngineLibrary = null
   }).finally(() => {
     skinBrowseWallpaperEngineButton.disabled = false
+    skinWallpaperEngineSearch.disabled = false
   })
 }
 
 function renderWallpaperEnginePicker(library, reason = '') {
-  const projects = (library && library.projects) || []
-  const skipped = (library && library.skipped) || {}
+  wallpaperEngineLibrary = library || wallpaperEngineLibrary
+  wallpaperEngineReason = reason || wallpaperEngineReason
+  const projects = (wallpaperEngineLibrary && wallpaperEngineLibrary.projects) || []
+  const skipped = (wallpaperEngineLibrary && wallpaperEngineLibrary.skipped) || {}
+  const query = skinWallpaperEngineSearch.value.trim().toLocaleLowerCase('zh-CN')
+  const filtered = projects.filter(project => [project.title, project.directory, project.kind === 'video' ? '视频' : '图片', project.source === 'workshop' ? '创意工坊' : '本地项目']
+    .some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(query)))
   const reasonText = {
     'multiple-current': '检测到多个显示器正在使用不同的可导入壁纸，请选择一个。',
     'ambiguous-profile': 'Wallpaper Engine 配置中有多个用户，无法可靠确定当前用户，请选择一个壁纸。',
@@ -640,24 +725,51 @@ function renderWallpaperEnginePicker(library, reason = '') {
     'config-unavailable': '无法读取 Wallpaper Engine 当前选择，请从已安装项目中选择一个。',
     'no-current': 'Wallpaper Engine 当前没有已选择的壁纸，请从已安装项目中选择一个。',
     'current-unavailable': '当前壁纸项目已移动或不可读取，请从可用项目中选择一个。'
-  }[reason] || ''
+  }[wallpaperEngineReason] || ''
+  skinWallpaperEngineSearchClear.disabled = !query
+  skinWallpaperEngineEmpty.classList.toggle('hidden', !query || filtered.length > 0)
   if (!projects.length) {
     skinWallpaperEngineStatus.textContent = `${reasonText ? `${reasonText} ` : ''}未在本机 Steam 库中找到可导入的图片或视频项目；可手动选择项目目录。`
     skinWallpaperEngineItems.innerHTML = ''
     return
   }
   const skippedNote = skipped.unsupported ? `；跳过 ${skipped.unsupported} 个 scene/web 项目` : ''
-  skinWallpaperEngineStatus.textContent = `${reasonText ? `${reasonText} ` : ''}找到 ${projects.length} 个项目${skippedNote}；选择后只复制这一项并立即使用。`
-  skinWallpaperEngineItems.innerHTML = projects.map(project => `
-    <article class="skin-wallpaper-item">
-      <span class="skin-wallpaper-item-title">${escapeHtml(project.title)}</span>
-      <span class="skin-wallpaper-item-meta">${project.kind === 'video' ? '视频' : '图片'} · ${project.source === 'workshop' ? '创意工坊' : '本地项目'}${project.current ? ' · 当前显示器正在使用' : ''} · ${escapeHtml(project.directory)}</span>
-      <button type="button" data-import-project="${escapeHtml(project.directory)}">选择并使用</button>
-    </article>`).join('')
+  const filterNote = query ? `；当前显示 ${filtered.length} 个匹配项` : ''
+  skinWallpaperEngineStatus.textContent = `${reasonText ? `${reasonText} ` : ''}找到 ${projects.length} 个项目${skippedNote}${filterNote}；选择后只复制这一项并立即使用。`
+  disposeWallpaperEnginePreviews()
+  skinWallpaperEngineItems.innerHTML = filtered.map(project => {
+    const kindLabel = project.kind === 'video' ? '视频' : '图片'
+    const sourceLabel = project.source === 'workshop' ? '创意工坊' : '本地项目'
+    const previewUrl = wallpaperEngineProjectPreviewUrl(project)
+    const preview = previewUrl
+      ? project.kind === 'video'
+        ? `<video data-wallpaper-engine-preview data-preview-src="${escapeHtml(previewUrl)}" preload="none" muted loop playsinline aria-hidden="true"></video><span class="skin-wallpaper-preview-kind" aria-hidden="true">悬停预览视频</span>`
+        : `<img data-wallpaper-engine-preview src="${escapeHtml(previewUrl)}" alt="" loading="lazy" decoding="async" />`
+      : `<span class="skin-wallpaper-preview-placeholder">${kindLabel}预览不可用</span>`
+    return `
+      <article class="skin-wallpaper-item" role="listitem" data-kind="${escapeHtml(project.kind)}" aria-label="${escapeHtml(project.title)}，${kindLabel}，${sourceLabel}">
+        <span class="skin-wallpaper-item-preview">${preview}</span>
+        <span class="skin-wallpaper-item-body">
+          <span class="skin-wallpaper-item-title">${escapeHtml(project.title)}</span>
+          <span class="skin-wallpaper-item-meta">${kindLabel} · ${sourceLabel}${project.current ? ' · 当前显示器正在使用' : ''}</span>
+          <span class="skin-wallpaper-item-path" title="${escapeHtml(project.directory)}">${escapeHtml(project.directory)}</span>
+          <button type="button" data-import-project="${escapeHtml(project.directory)}" aria-label="选择并使用 ${escapeHtml(project.title)}">选择并使用</button>
+        </span>
+      </article>`
+  }).join('')
+  skinWallpaperEngineItems.querySelectorAll('.skin-wallpaper-item').forEach(card => {
+    card.addEventListener('pointerenter', () => playWallpaperEnginePreview(card))
+    card.addEventListener('pointerleave', () => disposeWallpaperEnginePreviews())
+    card.addEventListener('focusin', () => playWallpaperEnginePreview(card))
+    card.addEventListener('focusout', event => {
+      if (!card.contains(event.relatedTarget)) disposeWallpaperEnginePreviews()
+    })
+  })
   skinWallpaperEngineItems.querySelectorAll('[data-import-project]').forEach(item => item.addEventListener('click', () => activateWallpaperEngineProject(item.dataset.importProject)))
 }
 
 async function importCurrentWallpaperEngineProject() {
+  disposeWallpaperEnginePreviews()
   skinWallpaperEnginePicker.classList.add('hidden')
   skinChooseWallpaperEngineButton.disabled = true
   skinChooseWallpaperEngineButton.textContent = '正在识别并复制…'
@@ -948,6 +1060,15 @@ function formatDeviceTime(value) {
   return `最近连接 ${date.toLocaleString('zh-CN', { hour12: false })}`
 }
 
+// 个人中继（可选）的后端调用集中在这里：若后端最终 API 命名不同，只需改这一处并回报主控协调
+const mobileRelayApi = {
+  save: url => api.setMobileSyncRelayUrl(String(url || '').trim()),
+  clear: () => api.clearMobileSyncRelayUrl()
+}
+function mobileRelayApiAvailable() {
+  return typeof api.setMobileSyncRelayUrl === 'function' && typeof api.clearMobileSyncRelayUrl === 'function'
+}
+
 function renderMobileSync(next = mobileSyncState) {
   mobileSyncState = { ...mobileSyncState, ...(next || {}) }
   const running = mobileSyncState.enabled && mobileSyncState.running
@@ -963,6 +1084,7 @@ function renderMobileSync(next = mobileSyncState) {
   mobileRemoteToggle.disabled = !running
   mobileTransportPreference.value = remote.preference || 'auto'
   mobileTransportPreference.disabled = !running || remote.enabled === false
+  renderMobileRelayCard(remote)
   const adapterLabel = remote.active === 'wss-relay' ? 'WSS/443（通用线路）' : remote.active === 'easytier' ? 'EasyTier' : remote.active === 'tailscale' ? 'Tailscale' : ''
   const remoteStatusText = remote.enabled === false
     ? '远程连接已关闭；同一 Wi-Fi 仍可使用'
@@ -1019,6 +1141,31 @@ function renderMobileSync(next = mobileSyncState) {
     } catch (error) { mobileSyncError.textContent = error.message }
     finally { button.disabled = false }
   }))
+}
+
+function mobileRelayAdapterState(remote) {
+  const adapters = Array.isArray(remote?.adapters) ? remote.adapters : []
+  return adapters.find(adapter => adapter && adapter.id === 'wss-relay') || null
+}
+
+function renderMobileRelayCard(remote = mobileSyncState.remote || {}) {
+  const adapter = mobileRelayAdapterState(remote)
+  const relay = mobileSyncState.relay || {}
+  const savedUrl = String(relay.relayUrl || adapter?.relayUrl || remote?.relayUrl || '').trim()
+  if (document.activeElement !== mobileRelayUrlInput) mobileRelayUrlInput.value = savedUrl
+  mobileRelayClear.disabled = !savedUrl && relay.source !== 'invalid'
+  if (relay.source === 'invalid' && !relayTesting && !mobileRelayMessage.textContent) {
+    mobileRelayMessage.textContent = '个人中继配置无法读取，请清除恢复默认或重新保存地址。'
+  } else if (relay.requiresDeviceUpdate && !relayTesting && !mobileRelayMessage.textContent) {
+    mobileRelayMessage.textContent = '中继地址已变更：请重新生成二维码，并在已配对手机重新扫码更新远程线路。'
+  }
+  if (relayTesting) mobileRelayStatus.textContent = '检测中…'
+  else if (relay.source === 'invalid') mobileRelayStatus.textContent = '配置异常 · 可清除或重新保存'
+  else if (!savedUrl) mobileRelayStatus.textContent = '未配置'
+  else if (adapter?.status === 'connected') mobileRelayStatus.textContent = '已保存 · WSS/443 中继已连接'
+  else if (adapter?.status === 'connecting') mobileRelayStatus.textContent = '已保存 · 正在连接中继…'
+  else if (adapter?.status === 'disconnected' || adapter?.error) mobileRelayStatus.textContent = '已保存 · 中继连接异常'
+  else mobileRelayStatus.textContent = '已保存'
 }
 
 async function generateMobilePairing() {
@@ -1211,6 +1358,20 @@ function officialSettingsBootstrap() {
     if (installButton.disabled !== Boolean(state.installing)) installButton.disabled = Boolean(state.installing)
     setText(installButton, state.installing ? '正在更新…' : progress?.phase === 'ready' ? '安装已下载的更新' : '下载并安装桌面版更新')
     if (autoCheck.checked !== (state.preferences?.checkOnStartup !== false)) autoCheck.checked = state.preferences?.checkOnStartup !== false
+    const previewToggle = row.querySelector('[data-hd-preview]')
+    const previewEnabled = state.preview?.enabled === true
+    const previewConfigured = state.preview?.configured === true
+    if (previewToggle.checked !== previewEnabled) previewToggle.checked = previewEnabled
+    previewToggle.disabled = Boolean(state.preview?.changing || (!previewConfigured && !previewEnabled))
+    setText(row.querySelector('[data-hd-preview-status]'), state.preview?.active
+      ? '正在使用已签名 PR 预览，可随时恢复稳定基线'
+      : state.preview?.ready
+        ? '候选已下载并校验，等待你继续应用'
+        : !previewConfigured
+          ? '当前组件尚未配置独立预览公钥'
+          : previewEnabled
+            ? state.preview?.checking ? '正在从 CNB 优先发现已批准候选…' : '已加入；候选仍需你确认后才会应用'
+            : '未加入（默认）')
     const release = row.querySelector('[data-hd-release]')
     const releaseHidden = !state.app?.updateAvailable || !state.app?.url || canInstall
     if (release.hidden !== releaseHidden) release.hidden = releaseHidden
@@ -1379,6 +1540,7 @@ function officialSettingsBootstrap() {
       <div class="hd-update-lines">
         <div class="hd-update-line"><span>Harness Desktop</span><strong data-hd-app>等待首次检查</strong></div>
         <div class="hd-update-line"><span>DeepSeek Harness 官方核心</span><strong data-hd-harness>等待首次检查</strong></div>
+        <div class="hd-update-line"><span>PR 快速预览（CNB 优先）</span><strong data-hd-preview-status>未加入（默认）</strong></div>
       </div>
       <div class="hd-update-notes" data-hd-notes hidden><strong>新版本更新内容</strong><ul></ul></div>
       <div class="hd-update-actions">
@@ -1386,6 +1548,7 @@ function officialSettingsBootstrap() {
         <button type="button" data-hd-install hidden>下载并安装桌面版更新</button>
         <a href="#" data-hd-release hidden>打开桌面版下载页</a>
         <label><input type="checkbox" data-hd-auto checked /> 启动时自动检查</label>
+        <label><input type="checkbox" data-hd-preview /> 加入 PR 快速预览</label>
       </div>
       <div class="hd-policy-links">
         <a href="#" data-hd-policy="privacy">隐私政策</a>
@@ -1400,6 +1563,10 @@ function officialSettingsBootstrap() {
       request('open-release', { url: event.currentTarget.dataset.url || '' })
     })
     row.querySelector('[data-hd-auto]').addEventListener('change', event => request('auto-check', { enabled: event.currentTarget.checked ? '1' : '0' }))
+    row.querySelector('[data-hd-preview]').addEventListener('change', event => {
+      event.currentTarget.disabled = true
+      request('preview-updates-toggle', { enabled: event.currentTarget.checked ? '1' : '0' })
+    })
     row.querySelectorAll('[data-hd-policy]').forEach(link => link.addEventListener('click', event => {
       event.preventDefault()
       request('open-external', { url: event.currentTarget.dataset.url || '' })
@@ -1586,9 +1753,94 @@ function officialSubagentEnhancementsBootstrap() {
   scan()
 }
 
+function ensurePrPreviewController() {
+  if (prPreviewController || !window.harnessPrPreviewUpdateIntegration) return prPreviewController
+  prPreviewController = window.harnessPrPreviewUpdateIntegration.init({
+    onApply: async () => {
+      prPreviewController?.update({ phase: 'checking', message: '正在下载并校验预览组件…' })
+      try {
+        await api.applyPrPreviewUpdate()
+      } catch (error) {
+        prPreviewState = { ...prPreviewState, error: error.message }
+        prPreviewController?.update({ phase: 'error', message: error.message, candidate: prPreviewState.candidate })
+        await publishUpdateState()
+      }
+    },
+    onLater: () => {},
+    onExit: async () => {
+      prPreviewState = { ...prPreviewState, changing: true, error: '' }
+      await publishUpdateState()
+      try {
+        const result = await api.exitPrPreviewUpdates()
+        prPreviewState = { ...prPreviewState, ...result, enabled: false, changing: false, available: false, candidate: null }
+      } catch (error) {
+        prPreviewState = { ...prPreviewState, changing: false, error: error.message }
+        prPreviewController?.update({ phase: 'error', message: error.message, candidate: null })
+      }
+      await publishUpdateState()
+    }
+  })
+  prPreviewController.hide()
+  return prPreviewController
+}
+
+async function refreshPrPreviewState({ discover = false } = {}) {
+  const controller = ensurePrPreviewController()
+  try {
+    const base = await api.getPrPreviewUpdateState()
+    prPreviewState = { ...prPreviewState, ...base, checking: false, changing: false, error: '' }
+    updateState = {
+      ...updateState,
+      preferences: { ...(updateState.preferences || {}), previewEnabled: base.enabled === true }
+    }
+    if (!base.enabled || (!base.configured && !base.ready)) {
+      controller?.hide()
+      await publishUpdateState()
+      return prPreviewState
+    }
+    if (!discover) {
+      if (base.candidate) controller?.update({ phase: 'available', candidate: base.candidate })
+      else controller?.hide()
+      await publishUpdateState()
+      return prPreviewState
+    }
+    prPreviewState = { ...prPreviewState, checking: true, available: false, candidate: null }
+    controller?.update({ phase: 'checking', candidate: null, message: '' })
+    await publishUpdateState()
+    const result = await api.checkPrPreviewUpdates()
+    prPreviewState = { ...prPreviewState, ...result, checking: false, available: result.available === true, candidate: result.candidate || null, error: '' }
+    if (result.available && result.candidate) controller?.update({ phase: 'available', candidate: result.candidate, message: '' })
+    else controller?.update({ phase: 'none', candidate: null, message: '' })
+  } catch (error) {
+    prPreviewState = { ...prPreviewState, checking: false, available: false, candidate: null, error: error.message }
+    controller?.update({ phase: 'error', candidate: null, message: error.message })
+  }
+  await publishUpdateState()
+  return prPreviewState
+}
+
+async function setPrPreviewChannelEnabled(enabled) {
+  prPreviewState = { ...prPreviewState, changing: true, error: '' }
+  await publishUpdateState()
+  try {
+    const result = await api.setPrPreviewUpdatesEnabled(enabled === true)
+    prPreviewState = { ...prPreviewState, ...result, enabled: enabled === true, changing: false, available: false, candidate: null }
+    updateState = {
+      ...updateState,
+      preferences: { ...(updateState.preferences || {}), previewEnabled: enabled === true }
+    }
+    if (enabled) await refreshPrPreviewState({ discover: true })
+    else ensurePrPreviewController()?.hide()
+  } catch (error) {
+    prPreviewState = { ...prPreviewState, changing: false, error: error.message }
+  }
+  await publishUpdateState()
+  return prPreviewState
+}
+
 async function publishUpdateState() {
   if (!runtimeView.getURL()) return
-  const serialized = JSON.stringify(updateState).replaceAll('<', '\\u003c')
+  const serialized = JSON.stringify({ ...updateState, preview: prPreviewState }).replaceAll('<', '\\u003c')
   await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_UPDATE_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_UPDATES__?.();`, true).catch(() => {})
 }
 
@@ -1640,6 +1892,7 @@ async function checkUpdates({ forceNotice = false } = {}) {
     updateState = { ...updateState, checking: false, app: { error: error.message }, harness: updateState.harness }
   }
   await publishUpdateState()
+  if (prPreviewState.enabled && (prPreviewState.configured || prPreviewState.ready)) await refreshPrPreviewState({ discover: true })
 }
 
 async function installUpdate() {
@@ -1698,6 +1951,9 @@ runtimeView.addEventListener('will-navigate', event => {
       updateState = { ...updateState, preferences }
       publishUpdateState()
     })
+  } else if (target.hostname === 'preview-updates-toggle') {
+    const enabled = target.searchParams.get('enabled') !== '0'
+    setPrPreviewChannelEnabled(enabled)
   } else if (target.hostname === 'open-release') {
     const url = target.searchParams.get('url')
     if (url) api.openLink(url).catch(() => {})
@@ -1906,6 +2162,51 @@ mobileTransportPreference.addEventListener('change', async () => {
   } catch (error) { mobileSyncError.textContent = error.message }
   finally { mobileTransportPreference.disabled = false }
 })
+mobileRelaySave.addEventListener('click', async () => {
+  const value = mobileRelayUrlInput.value.trim()
+  if (!value) {
+    mobileRelayMessage.textContent = '请先输入中继服务器域名、公网 IP 或 wss:// 地址。'
+    mobileRelayUrlInput.focus()
+    return
+  }
+  if (!mobileRelayApiAvailable()) {
+    mobileRelayMessage.textContent = '当前版本尚未提供个人中继保存接口，请升级后再试。'
+    return
+  }
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `wss://${value}`
+  relayTesting = true
+  mobileRelaySave.disabled = true
+  mobileRelayClear.disabled = true
+  mobileRelayMessage.textContent = ''
+  renderMobileRelayCard()
+  try {
+    const next = await mobileRelayApi.save(url)
+    relayTesting = false
+    renderMobileSync(next)
+    await publishMobileSyncState()
+    mobileRelayMessage.textContent = '已保存。请重新生成二维码，并在已配对手机重新扫码更新远程线路；之后新配对的手机扫码会自动携带该配置。'
+  } catch (error) {
+    relayTesting = false
+    renderMobileRelayCard()
+    mobileRelayMessage.textContent = error?.message || '保存或检测失败：请确认地址、443 端口和可信 TLS 证书。'
+  } finally { mobileRelaySave.disabled = false }
+})
+mobileRelayClear.addEventListener('click', async () => {
+  if (!mobileRelayApiAvailable()) {
+    mobileRelayMessage.textContent = '当前版本尚未提供个人中继清除接口，请升级后再试。'
+    return
+  }
+  mobileRelayClear.disabled = true
+  mobileRelayMessage.textContent = ''
+  try {
+    const next = await mobileRelayApi.clear()
+    renderMobileSync(next)
+    await publishMobileSyncState()
+    mobileRelayMessage.textContent = '已清除并恢复默认。请重新生成二维码，并在已配对手机重新扫码更新远程线路；之后新配对的手机扫码不会再携带个人中继。'
+  } catch (error) {
+    mobileRelayMessage.textContent = error?.message || '清除失败，请稍后重试。'
+  } finally { renderMobileRelayCard() }
+})
 stopMobileControl.addEventListener('click', async () => {
   stopMobileControl.disabled = true
   mobileSyncError.textContent = ''
@@ -1946,6 +2247,12 @@ petAutoFeed.addEventListener('change', async () => {
 })
 petAlwaysOnTop.addEventListener('change', async () => {
   renderPetState(await api.setPetPreferences({ alwaysOnTop: petAlwaysOnTop.checked }))
+})
+petProactive.addEventListener('change', async () => {
+  renderPetState(await api.setPetPreferences({ proactive: petProactive.checked }))
+})
+petCompanionStyle.addEventListener('change', async () => {
+  renderPetState(await api.setPetPreferences({ companionStyle: petCompanionStyle.value }))
 })
 closeSkinPickerButton.addEventListener('click', closeSkinPicker)
 skinPickerOverlay.addEventListener('click', event => {
@@ -2017,7 +2324,14 @@ skinChooseBackgroundButton.addEventListener('click', async () => {
 skinChooseWallpaperEngineButton.addEventListener('click', () => importCurrentWallpaperEngineProject())
 skinBrowseWallpaperEngineButton.addEventListener('click', openWallpaperEnginePicker)
 skinWallpaperEngineRescan.addEventListener('click', openWallpaperEnginePicker)
+skinWallpaperEngineSearch.addEventListener('input', () => renderWallpaperEnginePicker())
+skinWallpaperEngineSearchClear.addEventListener('click', () => {
+  skinWallpaperEngineSearch.value = ''
+  renderWallpaperEnginePicker()
+  skinWallpaperEngineSearch.focus()
+})
 skinWallpaperEngineManual.addEventListener('click', async () => {
+  disposeWallpaperEnginePreviews()
   skinWallpaperEnginePicker.classList.add('hidden')
   try {
     const before = JSON.stringify(appearanceState.wallpaperLibrary || {})
@@ -2034,6 +2348,7 @@ skinWallpaperEngineManual.addEventListener('click', async () => {
   }
 })
 skinWallpaperEngineClose.addEventListener('click', () => {
+  disposeWallpaperEnginePreviews()
   skinWallpaperEnginePicker.classList.add('hidden')
 })
 skinWallpaperEngineSync.addEventListener('click', async () => {
@@ -2212,10 +2527,20 @@ api.onComponentUpdateProgress(progress => {
   updateState = { ...updateState, installing: true, installError: '', installProgress: { kind: 'components', ...progress } }
   publishUpdateState()
 })
+api.onPrPreviewUpdateProgress(progress => {
+  prPreviewState = { ...prPreviewState, checking: true, progress, error: '' }
+  publishUpdateState()
+})
 
 async function startOfficialWorkspace() {
   distributionState = await api.getDistribution()
   updateState = { ...updateState, preferences: await api.getUpdatePreferences(), distribution: distributionState }
+  try {
+    prPreviewState = { ...prPreviewState, ...(await api.getPrPreviewUpdateState()), error: '' }
+  } catch (error) {
+    prPreviewState = { ...prPreviewState, configured: false, error: error.message }
+  }
+  ensurePrPreviewController()
   appearanceState = await api.getAppearance()
   petState = await api.getPetState()
   const [routing, meters, gitStatus] = await Promise.all([api.getModelRouting(), api.getProviderMeters(false), api.getGitRuntimeStatus()])
@@ -2235,6 +2560,7 @@ async function startOfficialWorkspace() {
   const initial = await api.getRuntimeState()
   renderRuntimeState(initial)
   if (initial.status !== 'ready') renderRuntimeState(await api.startRuntime({}))
+  if (prPreviewState.enabled && (prPreviewState.configured || prPreviewState.ready)) refreshPrPreviewState({ discover: true }).catch(() => {})
 }
 
 playStartupAnimation()

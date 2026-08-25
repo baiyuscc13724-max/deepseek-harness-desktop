@@ -140,7 +140,7 @@ test('library scan finds workshop and local image/video projects and skips unsup
   assert.deepEqual(library.skipped, { missingProject: 2, unsupported: 1, unreadable: 0, media: 0 })
 })
 
-test('collection is title-sorted and capped at the scanned project limit', async () => {
+test('collection is title-sorted', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harness-we-limit-'))
   const workshop = path.join(root, 'steamapps', 'workshop', 'content', WORKSHOP_CONTENT_ID)
   const names = []
@@ -159,4 +159,53 @@ test('collection is title-sorted and capped at the scanned project limit', async
   )
   assert.deepEqual(collected.projects.map(project => project.title).sort(), names.map((_, index) => `Item ${index}`))
   assert.equal(collected.projects.length, names.length)
+})
+
+test('a fresh scan discovers projects added after a 500-item library', async () => {
+  const root = path.resolve('large-steam-library')
+  const workshop = path.join(root, 'steamapps', 'workshop', 'content', WORKSHOP_CONTENT_ID)
+  let projectCount = 500
+  const entries = () => Array.from({ length: projectCount }, (_, index) => ({
+    name: String(index).padStart(4, '0'),
+    isDirectory: () => true
+  }))
+  const deps = {
+    steamRoots: [root],
+    readFile: async () => { throw Object.assign(new Error('missing VDF'), { code: 'ENOENT' }) },
+    readdir: async directory => {
+      if (directory !== workshop) throw Object.assign(new Error('missing directory'), { code: 'ENOENT' })
+      return entries()
+    },
+    resolveProject: async projectFile => ({
+      file: path.join(path.dirname(projectFile), 'image.png'),
+      kind: 'image',
+      title: path.basename(path.dirname(projectFile))
+    })
+  }
+
+  const initial = await scanWallpaperEngineLibrary(deps)
+  assert.equal(initial.projects.length, 500)
+
+  projectCount = 501
+  const refreshed = await scanWallpaperEngineLibrary(deps)
+  assert.equal(refreshed.projects.length, 501)
+  assert.ok(refreshed.projects.some(project => project.title === '0500'))
+})
+
+test('collection de-duplicates project directories from overlapping search roots', async () => {
+  const root = path.resolve('duplicate-search-root')
+  const entry = { name: 'project', isDirectory: () => true }
+  let resolutions = 0
+  const collected = await collectWallpaperEngineProjects([
+    { kind: 'projects', directory: root },
+    { kind: 'projects', directory: root }
+  ], {
+    readdir: async () => [entry]
+  }, async projectFile => {
+    resolutions += 1
+    return { file: path.join(path.dirname(projectFile), 'image.png'), kind: 'image', title: 'Once' }
+  })
+
+  assert.equal(resolutions, 1)
+  assert.equal(collected.projects.length, 1)
 })

@@ -61,7 +61,9 @@ await mkdir(path.join(inputRoot, 'build'), { recursive: true, mode: 0o700 })
 for (const directory of ['electron', 'renderer', 'plugins']) {
   await cp(path.join(root, directory), path.join(inputRoot, directory), { recursive: true, force: true })
 }
-for (const file of ['package.json']) await cp(path.join(root, file), path.join(inputRoot, file), { force: true })
+for (const file of ['package.json', 'pr-preview-update-sources.json']) {
+  await cp(path.join(root, file), path.join(inputRoot, file), { force: true })
+}
 await cp(path.join(root, 'build', 'icon.png'), path.join(inputRoot, 'build', 'icon.png'), { force: true })
 await mkdir(assetsRoot, { recursive: true, mode: 0o700 })
 await mkdir(manifestsRoot, { recursive: true, mode: 0o700 })
