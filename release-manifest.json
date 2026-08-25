@@ -3,177 +3,177 @@
     "schemaVersion": 1,
     "kind": "harness-desktop-release-manifest",
     "keyId": "harness-components-02643f81164c594a",
-    "tag_name": "v1.0.44",
-    "name": "Harness Desktop v1.0.44",
-    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.44",
+    "tag_name": "v1.0.46",
+    "name": "Harness Desktop v1.0.46",
+    "html_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.46",
     "prerelease": false,
     "draft": false,
-    "body": "# Harness Desktop 1.0.44\n\n## 本次更新\n\n- `v1.0.43` 候选 Tag 本地官方门禁 1202 tests/1200 pass/2 skip/0 fail 通过；云端矩阵三项已确认失败、iOS 通过：Ubuntu（run 32741226632）CAS concurrent finalize 的 POSIX rename overwrite/inode identity race；Windows（同 run job 97475914969，Git 2.55.0.windows.4）六个 project-foundations-runtime merge 在 async canonical TEMP 加长后触发 Git refs/worktrees MAX_PATH，cherry-pick 非零且无冲突文件时被伪装成空冲突结果；macOS（job 97475914937）源测试与 x64/arm64 构建完成，packaged x64 self-test 启动失败（`runtimeWebBoot=false`，dsh-agent-teams `ctx.projectFoundations?.runner` 在 Cordis plugin fiber 抛 cannot get property without inject）。该 Tag（289ef403）不移动、不重建，未公开 Release、未提升 stable feed；三项修复随 v1.0.44 重新接受云端矩阵。\n- 修复 Linux CAS 并发原子发布竞态：两个同 digest finalize 在 POSIX 上均先见 target 不存在，`rename(temp,target)` 会覆盖既有 target，验证者在 lstat 与 open 之间遇到 inode 替换而误报 `ARTIFACT_CAS_CIPHERTEXT_INVALID`。改为跨平台原子 no-clobber 发布——赢家发布、输家只验证既有不可变对象，绝不覆盖或修复已存在损坏对象；fsync、路径 containment、密文/nonce/digest fail-closed 语义不放宽。\n- 修复 Windows Git 长路径合并失败：win32 每次 Git 调用固定注入 `core.longpaths=true`（不依赖用户/全局 gitconfig），merge 临时 worktree basename 缩短到 14 字符（receipt 仍经 `refs/harness/merge-groups/<groupRef>` 精确绑定）；cherry-pick 非零且无 unmerged paths 时先 abort 再抛明确的 `GIT_OPERATION_FAILED`，不再伪装成空冲突结果。\n- 修复 macOS 打包运行时可选服务读取：dsh-agent-teams 在 Cordis plugin fiber 中用官方 `ctx.get` strict optional lookup 读取 `projectFoundations`，缺失 provider 时安全默认启用，不将可选服务加入 required inject。\n- 在此之前已合入的跨平台修复继续生效：macOS `/var`→`/private/var` 与 Windows 临时目录别名/大小写/8.3 short-path 的异步 realpath fixture 归一化、Linux LAN mTLS/E2EE 异步 delivery 有界等待、macOS 并发 Git worktree 变更协调；生产代码的 trusted-root/workspace containment、mTLS、E2EE、listener isolation、ACK、immutable receipt/CAS 与 close 语义均不放宽。\n\n- 女仆鲸进入结构化智能陪伴：她会根据任务开始、多任务、等待决定、受阻、完成和长时间运行给出低频情境提示，而不是每次状态变化都播放固定动作与固定文案。新增本地默契/每日进度/连续完成记录、克制/温柔/元气表达风格和主动陪伴开关；全程不读取对话正文、屏幕或文件。\n- 代理团队工作台新增项目任务、项目自动化与业务同步能力：任务支持创建、领取、依赖、文件边界和加密完整性校验；自动化定义按任务状态变更编排，人工批准后才运行；业务同步以 authority/collaborator 模式在受控成员间交换有界、可审计的消息；桌面 Git 能力只允许在显式授权的项目根目录内执行版本库操作。\n- 新增 Host-only 模型准入插件 dsh-model-admission：模型请求进入有界公平准入与排队（8 个活跃槽、32 个全局等待、每个根至多 8 个、30 秒超时），队列饱和时明确拒绝而非无限堆积；该门禁只覆盖模型请求，不宣称统一调度所有桌面 Provider/API。\n- 壁纸库补齐视频生命周期与 Range 流式播放回归测试：图片/视频预览继续使用受管文件，视频通过有界 Range 响应流式播放，不把整段视频读入内存；敏感动作与上传边界不变。\n- 内嵌浏览器继续沿用并收紧用户/模型来源隔离、导航防护、防重放、停止与取消恢复；文件选择、下载、弹窗及敏感动作仍强制显式授权。\n- 桌面会话生成停止后的自动跟随等运行时补丁与小修同步合入；本次仍不把自动团队控制描述为全桌面统一调度池。\n\n## macOS\n\n- macOS 无 Apple Developer 会员时的显式无签名契约、Intel/Apple Silicon 双架构 DMG/ZIP、`安装.command` 一键安装助手和云端结构自检流程完全不变。\n- 未签名包不等同于 Developer ID 签名、Apple 公证或 Gatekeeper 验收；推荐打开 DMG 后使用其中的 `安装.command`。\n\n## 发布与完整性（Tag 后置契约）\n\n- 自 v1.0.44 起，正式 `v1.0.44` Tag 在以下全部成功之后才创建：干净已门禁提交快进到 `main`，锁定 SHA 的全平台 candidate build/test（Windows/macOS/Linux/iOS），以及 pre-Tag Windows installer/upgrade 全量验证（安装、覆盖升级、便携版自检、卸载）。\n- 候选失败不回退版本：保持同一 v1.0.44 候选迭代修复；恢复时复用同一 candidate run 的 Actions artifacts 发布桌面，绝不重复 desktop build，也绝不经过本机传输大文件。\n- Tag 一旦真正创建仍不可移动、不可重建、不可覆盖；本文件准备阶段不会提前修改 stable feed 或已发布资产清单。\n- 统一可恢复发布器只在本机执行源码/安全门禁并明确删除、拒绝 `dist`；Windows、macOS、Linux 正式包全部由 GitHub Actions 从同一候选 SHA/正式 Tag 生成。\n- 在普通客户端检测到更新前，云端必须完成 Windows 安装版/便携版、打包后自检、组件健康/回滚，以及真实下载、安装、更新和卸载验证。\n- GitHub 跨平台云构建、签名 Android、签名组件、精确 18 项清单与 GitHub→CNB 云镜像全部成功后，才最后提升 stable feed；中断恢复会重新绑定精确 workflow 身份并在提升前重验两云 18 项资产，不通过本机重复搬运已验证的大文件。\n- 所有公开资产仍需提供并验证 SHA-256，生产组件与稳定源继续强制 Ed25519 签名。",
+    "body": "# Harness Desktop 1.0.46\n\n## 受保护的 PR 快速更新\n\n- 新增官方同仓库 PR Preview 更新通道：PR 代码只在无密钥、只读凭据的构建任务中产出组件；默认分支上的受保护签名任务重新查询 PR、head SHA、构建 run 与官方稳定基线后，才使用独立 Ed25519 Preview 密钥生成不可变候选。\n- 签名阶段不再直接修改 `latest`。候选必须先通过本机精确四资产校验、真实组件 stage/apply、进程重启健康检查、last-known-good 失败回滚和退出 Preview 后的 stable 恢复，随后由独立 Required Reviewer Environment 才能提升。\n- 客户端固定 CNB 优先、GitHub 后备的双源地址，严格验证官方仓库、同仓非 fork PR、`main` 基线、单调 sequence、最长七天有效期、完整 SHA-256 与签名；未知来源、额外字段、重放、降序或签名错误全部失败关闭。\n- Preview 激活复用现有内容寻址组件存储、分离 helper、健康确认和稳定指针恢复；界面只展示已验证候选，并明确提供人工应用、退出 Preview 与恢复状态。\n- CNB 仅从 GitHub 不可变 Release 云到云下载并完整回读大小/SHA 后提升；handoff 绑定远端 `pr-preview` 的精确父 OID，使用普通 non-force push，拒绝并发变化、额外树内容、force/force-with-lease 或未通过本机证据的请求。\n\n## 桌面与工作台体验\n\n- 统一 Computer Use 授权状态、浏览器控制和跨应用策略展示；授权范围仍只能由 Harness Desktop 宿主卡上的“本次授权 / 永久授权 / 拒绝”决定，插件不能自行扩大权限。\n- 右侧工作区支持经过边界校验的原生文件按钮和有界文本/代码预览；普通聊天文本继续拒绝被误判为本机路径。\n- 明确的“打开右侧浏览器”与 HTTP(S) 地址指令由随包客户端能力安全消费；共享浏览器控制仍保留登录、支付、账户和凭据输入边界。\n- 加强模态框焦点约束与恢复、小窗口授权卡可达性、背景可读性、主题层级、会话归档永久删除重试，以及停止生成后的跟随体验。\n- Agent Teams 工作台保留项目任务详情、SSE/runtime 投影、项目自动化、业务同步、受控 Git 能力、加密完整性和安全的 optional-service 边界。\n\n## Android、移动同步与个人中继\n\n- 修复 Android API 26–32 对高版本 Java API 的兼容问题，覆盖配对、文件选择、前台服务、更新检查和错误路径，避免旧系统 `NoSuchMethodError`。\n- 修复 WSS 中继连接后的无限 SOCKS 线程增长：每条连接使用单接收线程、固定工作池和有界队列，过载明确拒绝；本地 SOCKS/Web 代理固定绑定 `127.0.0.1`。\n- 新增用户显式配置的个人 `wss://`/443 中转地址和检测、保存、清除流程；地址变化要求重新扫码，服务只盲转发端到端加密帧，不持有隧道密钥或内容。\n- 提供独立 Node 中继、Caddy 与 systemd 示例，并对连接、握手、房间、来源、帧大小和速率实施有界限制。\n\n## 版本、发布与完整性\n\n- 桌面、13 个随包插件、Android 与 iOS/iPadOS 源码同步到 `1.0.46`，Android `versionCode=10046`。\n- 已发布 `v1.0.44` 以及现有 `v1.0.45` Tag/草稿全部保持不可变；`v1.0.45` 不移动、不覆盖、不复用，完整功能版本使用新的 `v1.0.46`。\n- 正式 `v1.0.46` Tag 仅在干净候选、本机源码/安全门禁、受保护 PR Preview 真实更新/重启健康/回滚，以及锁定 SHA 的 Windows/macOS/Linux/iOS 当前包构建、自检、组件回滚和安装器冒烟全部成功后创建；耗时且不可观察的云端 previous-stable 原位升级不再重复执行。\n- 统一可恢复发布器仍是唯一发布入口：正式二进制仅由 GitHub Actions 构建，CNB 从 GitHub 云到云镜像；精确 18 项资产和三个签名 stable feed 最后提升，同版本不同摘要一律视为冲突。\n",
     "assets": [
       {
         "name": "COMPONENT-SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/COMPONENT-SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/COMPONENT-SHA256SUMS.txt",
         "size": 608,
-        "sha256": "7bcddfd9058a0cdff2622e866964c2c261412618bdddf033986c238d720d2d75",
+        "sha256": "9884aa59a782d5fd29791a667af4803ebf8ebf7f7396dc1e8047d4cd7b818839",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/COMPONENT-SHA256SUMS.txt"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/COMPONENT-SHA256SUMS.txt"
         ]
       },
       {
-        "name": "components-1.0.44-darwin-arm64.json",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/components-1.0.44-darwin-arm64.json",
+        "name": "components-1.0.46-darwin-arm64.json",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/components-1.0.46-darwin-arm64.json",
         "size": 1638,
-        "sha256": "64fb902b2ad790ce5a10f05c25fe8e9ee6a76d9356a14e612e536bc2699d9256",
+        "sha256": "1cba5762b0bd89ca8ec1c713b3a5ff66b1f6c10ba03369fe59b6720e7a00f416",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/components-1.0.44-darwin-arm64.json"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/components-1.0.46-darwin-arm64.json"
         ]
       },
       {
-        "name": "components-1.0.44-darwin-x64.json",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/components-1.0.44-darwin-x64.json",
+        "name": "components-1.0.46-darwin-x64.json",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/components-1.0.46-darwin-x64.json",
         "size": 1626,
-        "sha256": "04a819ae0d88e2e6cd0a8a5027e5123c0686f13766e155da36c95dcd3156d8e0",
+        "sha256": "0f7c929fa6991790bf65bad791e2dc4a930d60525f108d35c5266a08bf2a076a",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/components-1.0.44-darwin-x64.json"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/components-1.0.46-darwin-x64.json"
         ]
       },
       {
-        "name": "components-1.0.44-win32-x64.json",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/components-1.0.44-win32-x64.json",
+        "name": "components-1.0.46-win32-x64.json",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/components-1.0.46-win32-x64.json",
         "size": 1622,
-        "sha256": "e75f5092d53f8ccff52205fd55f6ab29fbe432b38d875d29149cedab14accdf4",
+        "sha256": "90bc1cae11d54036f4e652b0fba5c825a558b8d2fe416c0cad8e7bc2fa2bbdcf",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/components-1.0.44-win32-x64.json"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/components-1.0.46-win32-x64.json"
         ]
       },
       {
-        "name": "desktop-shell-1.0.44-darwin-arm64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/desktop-shell-1.0.44-darwin-arm64.zip",
-        "size": 37590999,
-        "sha256": "fd3c755e35bcd6497a2701c338eebdd4a3473717ef6f95b3483e0be38adef22e",
+        "name": "desktop-shell-1.0.46-darwin-arm64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/desktop-shell-1.0.46-darwin-arm64.zip",
+        "size": 37646248,
+        "sha256": "85266baa4edc5ddf35c449163f019d876066b6eed20ca57c8c98904f7993015c",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/desktop-shell-1.0.44-darwin-arm64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/desktop-shell-1.0.46-darwin-arm64.zip"
         ]
       },
       {
-        "name": "desktop-shell-1.0.44-darwin-x64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/desktop-shell-1.0.44-darwin-x64.zip",
-        "size": 37590999,
-        "sha256": "fd3c755e35bcd6497a2701c338eebdd4a3473717ef6f95b3483e0be38adef22e",
+        "name": "desktop-shell-1.0.46-darwin-x64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/desktop-shell-1.0.46-darwin-x64.zip",
+        "size": 37646248,
+        "sha256": "85266baa4edc5ddf35c449163f019d876066b6eed20ca57c8c98904f7993015c",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/desktop-shell-1.0.44-darwin-x64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/desktop-shell-1.0.46-darwin-x64.zip"
         ]
       },
       {
-        "name": "desktop-shell-1.0.44-win32-x64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/desktop-shell-1.0.44-win32-x64.zip",
-        "size": 37590999,
-        "sha256": "fd3c755e35bcd6497a2701c338eebdd4a3473717ef6f95b3483e0be38adef22e",
+        "name": "desktop-shell-1.0.46-win32-x64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/desktop-shell-1.0.46-win32-x64.zip",
+        "size": 37646248,
+        "sha256": "85266baa4edc5ddf35c449163f019d876066b6eed20ca57c8c98904f7993015c",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/desktop-shell-1.0.44-win32-x64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/desktop-shell-1.0.46-win32-x64.zip"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.44-linux-amd64.deb",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-linux-amd64.deb",
-        "size": 159454312,
-        "sha256": "4930844d9936cf7825c296d8cfeff3274d1188af7aa685b515658168e00d2663",
+        "name": "Harness-Desktop-1.0.46-linux-amd64.deb",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-linux-amd64.deb",
+        "size": 159495676,
+        "sha256": "2a654d03bb9461245c700b7b78e1ab9b2691647f4364d33e6fc4f5c5a7feaced",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Desktop-1.0.44-linux-amd64.deb"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Desktop-1.0.46-linux-amd64.deb"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.44-linux-x86_64.AppImage",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-linux-x86_64.AppImage",
-        "size": 196511371,
-        "sha256": "cb33841b27004d95f422946ffd6a39308af15f2c11165012a8a3c7645c403b3a",
+        "name": "Harness-Desktop-1.0.46-linux-x86_64.AppImage",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-linux-x86_64.AppImage",
+        "size": 196565299,
+        "sha256": "992e7b649ebaa5c40be3c17939561e62842571c44358970be4b09339b34799b9",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Desktop-1.0.44-linux-x86_64.AppImage"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Desktop-1.0.46-linux-x86_64.AppImage"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.44-mac-arm64.dmg",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-arm64.dmg",
-        "size": 179304723,
-        "sha256": "2df1645684b0ed0d5fe57716354dc8071da52be9c2a25d1eacf5da71a3e37925",
+        "name": "Harness-Desktop-1.0.46-mac-arm64.dmg",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-arm64.dmg",
+        "size": 179321405,
+        "sha256": "0337c0217e99bb1ee8b8c523fd2c8cbf340c201477a96093d078572fe08c1f2f",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-arm64.dmg"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-arm64.dmg"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.44-mac-arm64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-arm64.zip",
-        "size": 174495649,
-        "sha256": "253ac535d1704d822c6be51088bc5464403d1ae35c01a798e40706e5ee206218",
+        "name": "Harness-Desktop-1.0.46-mac-arm64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-arm64.zip",
+        "size": 174542776,
+        "sha256": "ef050153449f04714306b251174ed8143d39696cf5aaaef63c95052d6e1226be",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-arm64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-arm64.zip"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.44-mac-x64.dmg",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-x64.dmg",
-        "size": 181927105,
-        "sha256": "3a3862105259b28f68c980ea9158f2e36b45bb9451f97fd2083a462d1c1a3832",
+        "name": "Harness-Desktop-1.0.46-mac-x64.dmg",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-x64.dmg",
+        "size": 181976064,
+        "sha256": "1528cc0539006c09613f4657630ab01c636901cc9cc1f6b13a8e69237f20ecc7",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-x64.dmg"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-x64.dmg"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.44-mac-x64.zip",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-x64.zip",
-        "size": 177164236,
-        "sha256": "faddd664b48c4307370107b704dea33c1bfba9f93f0c52d4c11f989e796e2799",
+        "name": "Harness-Desktop-1.0.46-mac-x64.zip",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-x64.zip",
+        "size": 177211340,
+        "sha256": "138fd8a8daa4485b90ca12850c7879d83195b5c28174605b8563af6af4859e64",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-x64.zip"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-x64.zip"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.44-portable-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-portable-x64.exe",
-        "size": 168140777,
-        "sha256": "121636d52cb7bc57d016bdfbeda0876e2f89df43294b41018d7978eaef9587fb",
+        "name": "Harness-Desktop-1.0.46-portable-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-portable-x64.exe",
+        "size": 168181025,
+        "sha256": "f074772c85b7fb493e4835a8cd228ab4b4d8c24008d54de98e369078a78f2685",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Desktop-1.0.44-portable-x64.exe"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Desktop-1.0.46-portable-x64.exe"
         ]
       },
       {
-        "name": "Harness-Desktop-1.0.44-win-x64.exe",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-win-x64.exe",
-        "size": 177603727,
-        "sha256": "ead13d2f0e609e259a9f8e68668c8927cca462cfb8bd4f328ef4c1ec6cd59cd6",
+        "name": "Harness-Desktop-1.0.46-win-x64.exe",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-win-x64.exe",
+        "size": 177632635,
+        "sha256": "a1bb1f96840c783c30c83b69ae54e995076919721714eebc70d76c10de35a175",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Desktop-1.0.44-win-x64.exe"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Desktop-1.0.46-win-x64.exe"
         ]
       },
       {
-        "name": "Harness-Mobile-1.0.44-android-universal.apk",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Mobile-1.0.44-android-universal.apk",
-        "size": 52098244,
-        "sha256": "0b9d73724d19078045d984b70c5688eacbf69aaaf4cef703e84f98ca45ede280",
+        "name": "Harness-Mobile-1.0.46-android-universal.apk",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Mobile-1.0.46-android-universal.apk",
+        "size": 52098245,
+        "sha256": "12cac98369d7215309194edfebe4d58601ab0d573de0a0e12559f31c63a2d6a9",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Mobile-1.0.44-android-universal.apk"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Mobile-1.0.46-android-universal.apk"
         ]
       },
       {
-        "name": "Harness-Mobile-1.0.44-android-universal.apk.sha256",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Mobile-1.0.44-android-universal.apk.sha256",
+        "name": "Harness-Mobile-1.0.46-android-universal.apk.sha256",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Mobile-1.0.46-android-universal.apk.sha256",
         "size": 110,
-        "sha256": "e4daa8ececcdbb2313eedf250a199c6e67a0509a6f9f9f16335f2231e783dff0",
+        "sha256": "f00bd982b9364933e55dd25a43642962724be368ffc4b9ee0cee3948afb25c05",
         "mirror_urls": [
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/Harness-Mobile-1.0.44-android-universal.apk.sha256"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Mobile-1.0.46-android-universal.apk.sha256"
         ]
       },
       {
         "name": "SHA256SUMS.txt",
-        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/SHA256SUMS.txt",
         "size": 831,
-        "sha256": "c1f90e980c534427937ad732429cff768a55dc330d323146101e063534b2d458",
+        "sha256": "dccad18d4296c83c8e0225bb3babd625026f697de590e5d7c731fb112395c7a7",
         "mirror_urls": [
           "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/SHA256SUMS.txt",
-          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.44/SHA256SUMS.txt"
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/SHA256SUMS.txt"
         ]
       }
     ],
-    "signature": "6eU6wZYOiYGbbM3QeuL30AKX9niSkR9ohCpddFquRQNhLF2FHhGbj6BKmkvhoPlgSHsmVulr7G844ZuGHoSOAQ=="
+    "signature": "eA7w/BTq+1uig+1a3Z4IeAUuOKCNg8WbJDuUjsJ7HaQ4pXhoRR4wC9z4MhxZg+uh6lkPADawKEriqvM6dd48Cw=="
   }
 ]
