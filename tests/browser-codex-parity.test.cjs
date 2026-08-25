@@ -9,12 +9,16 @@ async function source(relative) {
   return readFile(path.join(root, relative), 'utf8')
 }
 
-test('browser tool exposes Codex-class fixed actions without arbitrary script execution', async () => {
+test('browser tool exposes Codex-class background-first structured actions without arbitrary script execution', async () => {
   const plugin = await source('plugins/dsh-desktop-browser-tools/lib/index.js')
   for (const action of ['status', 'observe', 'screenshot', 'navigate', 'back', 'forward', 'reload', 'click', 'type', 'scroll', 'hover', 'keypress', 'select', 'wait', 'tabList', 'tabOpen', 'tabSwitch', 'tabClose', 'console', 'network', 'inspect', 'extract', 'download', 'upload', 'dialog', 'stop']) {
     assert.ok(plugin.includes(`'${action}'`), `browser tool missing ${action}`)
   }
   assert.doesNotMatch(plugin, /['"](?:eval|evaluate|executeScript|shell|script)['"]/)
+  assert.match(plugin, /默认可在后台运行/u)
+  assert.match(plugin, /本机回环 JSON API 与 CDP\/DOM 结构化数据通道/u)
+  assert.match(plugin, /优先使用 observe 获取结构化引用/u)
+  assert.match(plugin, /截图坐标操作/u)
   assert.match(plugin, /不可信/u)
 })
 
@@ -26,13 +30,26 @@ test('browser screenshots become model-visible image attachments instead of JSON
   assert.match(plugin, /attachment:/)
 })
 
-test('browser host provides visual input, tabs, diagnostics and explicit localhost grants', async () => {
+test('browser host provides background CDP/DOM control with visual fallback, tabs, diagnostics and explicit localhost grants', async () => {
   const main = await source('electron/main.cjs')
   for (const contract of ['new BrowserDiagnostics()', 'new BrowserHistoryStore(', 'capturePage()', 'extractBrowserData', 'sensitive-screenshot-blocked', 'sendInputEvent', 'browserTabs', 'activeBrowserTabId', 'recordConsole', 'recordNetwork', 'allowPrivateNetwork: true', 'interactivePicker: true', 'uploadBrowserFileInteractively', 'browserDownloadDestination', 'downloadBrowserResource', 'consumeTrustedDownloadIntent', 'activeBrowserTransfers', 'withBrowserTransferLock', 'AbortController', 'Page.handleJavaScriptDialog']) {
     assert.ok(main.includes(contract), `browser host missing ${contract}`)
   }
   assert.match(main, /key === 'Enter' \|\| key === 'Space'[^\n]*\? 'submit'/)
+  assert.match(main, /backgroundThrottling: false/)
+  assert.match(main, /dataPlane: \{ primary: 'cdp-dom', structuredRefs: true, loopbackApi: true, screenshotRequired: false/)
+  assert.match(main, /session: \{[\s\S]{0,500}dataPlane: \{ primary: 'cdp-dom'/)
+  assert.match(main, /transport: 'authenticated-loopback-json'/)
+  assert.match(main, /render-process-gone/)
+  assert.match(main, /markActiveTabUnavailable\(tabId\)/)
+  assert.match(main, /surfacePendingBrowserConfirmation/)
+  assert.match(main, /setBrowserSidebarVisible\(true\)/)
+  assert.match(main, /口令\|密码[\s\S]{0,200}账号\|帐号\|账户\|用户名\|邮箱/)
+  assert.doesNotMatch(main, /function requireBrowserForModel[\s\S]{0,700}tab-not-visible/)
   assert.match(main, /DOM\.resolveNode/)
+  assert.match(main, /const accessibleName = element/)
+  assert.match(main, /const implicitRole = element/)
+  assert.match(main, /removeAttribute\(referenceAttribute\)/)
   assert.match(main, /allowedModes = new Set\(\['text', 'links', 'tables'\]\)/)
   assert.match(main, /Math\.min\(200, maxItems\)/)
   assert.match(main, /safeBrowserDiagnosticUrl\(item\.url\)/)
@@ -72,6 +89,8 @@ test('dangerous browser actions remain origin-, payload- and confirmation-bound'
   ])
   for (const action of ['upload', 'download', 'submit', 'publish', 'delete']) assert.ok(gate.includes(`'${action}'`))
   assert.match(gate, /operationDigest/)
+  assert.match(gate, /if \(!tab\.available\)/)
+  assert.doesNotMatch(gate, /tab-not-visible/)
   assert.match(urlPolicy, /private-network-not-authorized/)
   assert.match(policy, /authorizedPrivateOrigins|privateOrigins/)
   assert.match(urlPolicy, /authorizedPrivateOrigins/)

@@ -81,19 +81,23 @@ test('敏感值识别：密码、token、Cookie、卡号、Authorization 命中�
   assert.equal(isSensitiveText(''), false)
 })
 
-test('活动标签门禁：无标签/标签隐藏/标签不一致一律拒绝', () => {
+test('活动标签门禁：后台标签可操作，无标签/标签不可用/标签不一致仍拒绝', () => {
   const { gate, grants } = gateWith({ 'https://example.com': ['read'] })
   assert.throws(() => gate.gate({ action: 'read', tabId: 'tab-1' }), error => error.code === 'permission-denied') // 正常，见下方
   gate.clearActiveTab()
   assert.throws(() => gate.gate({ action: 'read', tabId: 'tab-1', authorizations: grants }), error => error.code === 'no-active-tab')
 
-  const g1 = new ActionGate()
-  g1.setActiveTab({ id: 'tab-1', origin: 'https://example.com', visible: false })
-  assert.throws(() => g1.gate({ action: 'read', tabId: 'tab-1', authorizations: authzStub({ 'https://example.com': ['read'] }) }), error => error.code === 'tab-not-visible')
+  const background = new ActionGate()
+  background.setActiveTab({ id: 'tab-1', origin: 'https://example.com', visible: false, available: true })
+  assert.equal(background.gate({ action: 'read', tabId: 'tab-1', authorizations: authzStub({ 'https://example.com': ['read'] }) }).verdict, 'allow')
 
-  const g2 = new ActionGate()
-  g2.setActiveTab({ id: 'tab-1', origin: 'https://example.com', visible: true })
-  assert.throws(() => g2.gate({ action: 'read', tabId: 'tab-2', authorizations: authzStub({ 'https://example.com': ['read'] }) }), error => error.code === 'tab-mismatch')
+  const unavailable = new ActionGate()
+  unavailable.setActiveTab({ id: 'tab-1', origin: 'https://example.com', visible: false, available: false })
+  assert.throws(() => unavailable.gate({ action: 'read', tabId: 'tab-1', authorizations: authzStub({ 'https://example.com': ['read'] }) }), error => error.code === 'tab-unavailable')
+
+  const mismatched = new ActionGate()
+  mismatched.setActiveTab({ id: 'tab-1', origin: 'https://example.com', visible: true })
+  assert.throws(() => mismatched.gate({ action: 'read', tabId: 'tab-2', authorizations: authzStub({ 'https://example.com': ['read'] }) }), error => error.code === 'tab-mismatch')
 })
 
 test('来源校验：declaredOrigin 与字段 baseUrl 必须等于活动标签 origin', () => {

@@ -86,8 +86,8 @@
         <p>请直接在下方真实网页中亲自登录。模型无法读取密码、Cookie、验证码或令牌。</p>
         <section class="browser-model-permissions browser-shared-control" aria-labelledby="browserControlTitle">
           <h4 id="browserControlTitle">浏览器控制 · Computer Use</h4>
-          <p>右栏浏览器与内置 Computer Use 共用同一份授权和启停状态。选择一次“本次授权”或“永久授权”后，无需再授权当前站点。</p>
-          <p>浏览器仍禁止模型处理密码、账号、验证码、支付和银行信息；上传、下载与提交继续按事务确认。</p>
+          <p>内置浏览器可在后台运行，普通结构化动作无需保持右栏打开；上传、下载、提交等关键动作会自动打开右栏请求逐次确认。它与 Computer Use 共用同一份授权和启停状态，选择一次“本次授权”或“永久授权”即可。</p>
+          <p>模型优先通过结构化 CDP/DOM 引用读取和操作页面，截图仅作视觉后备；密码、账号、验证码、支付和银行信息仍禁止，上传、下载与提交继续按事务确认。</p>
           <div><button id="computerUseToggle" type="button">允许 AI 控制</button><button id="computerUseRevokePermanent" class="hidden" type="button">撤销永久授权</button></div>
           <div id="computerUseSessionState" class="computer-use-session-state" aria-live="polite"></div>
           <div id="computerUsePending" class="browser-pending-actions"></div>

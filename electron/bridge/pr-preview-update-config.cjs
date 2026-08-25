@@ -93,24 +93,43 @@ function normalizePrPreviewUpdateConfig(input) {
   }
 }
 
+const PREVIEW_SOURCES_FILENAME = 'pr-preview-update-sources.json'
+
+function previewConfigCandidateFiles({ resourcesPath, shellRoot, appRoot, packagedAppRoot } = {}) {
+  const candidates = [
+    resourcesPath && path.join(resourcesPath, PREVIEW_SOURCES_FILENAME),
+    shellRoot && path.join(shellRoot, PREVIEW_SOURCES_FILENAME),
+    appRoot && path.join(appRoot, PREVIEW_SOURCES_FILENAME),
+    packagedAppRoot && path.join(packagedAppRoot, PREVIEW_SOURCES_FILENAME)
+  ].filter(Boolean)
+  return [...new Set(candidates.map(value => path.resolve(value)))]
+}
+
 async function readPreviewConfigIfPresent(file, readFileImpl = readFile) {
+  let text
   try {
-    const text = await readFileImpl(file, 'utf8')
-    return JSON.parse(text)
+    text = await readFileImpl(file, 'utf8')
   } catch (error) {
     if (error?.code === 'ENOENT') return null
     throw new Error(`无法读取 PR 预览更新配置 ${file}：${error.message}`)
   }
+  let payload
+  try {
+    payload = JSON.parse(text)
+  } catch (error) {
+    throw new Error(`无法读取 PR 预览更新配置 ${file}：${error.message}`)
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error(`PR 预览更新配置 ${file} 不是有效 JSON 对象。`)
+  }
+  return payload
 }
 
-async function resolvePrPreviewUpdateConfig({ appRoot, resourcesPath, readFileImpl = readFile } = {}) {
-  const candidates = [
-    resourcesPath && path.join(resourcesPath, 'pr-preview-update-sources.json'),
-    appRoot && path.join(appRoot, 'pr-preview-update-sources.json')
-  ].filter(Boolean)
-  for (const file of [...new Set(candidates.map(value => path.resolve(value)))]) {
+async function resolvePrPreviewUpdateConfig({ appRoot, packagedAppRoot, resourcesPath, shellRoot, readFileImpl = readFile } = {}) {
+  for (const file of previewConfigCandidateFiles({ resourcesPath, shellRoot, appRoot, packagedAppRoot })) {
     const payload = await readPreviewConfigIfPresent(file, readFileImpl)
-    if (payload) return { ...normalizePrPreviewUpdateConfig(payload), source: file }
+    if (payload === null) continue
+    return { ...normalizePrPreviewUpdateConfig(payload), source: file }
   }
   return { ...normalizePrPreviewUpdateConfig(), source: '' }
 }
@@ -118,10 +137,12 @@ async function resolvePrPreviewUpdateConfig({ appRoot, resourcesPath, readFileIm
 module.exports = {
   OFFICIAL_PREVIEW_HOSTS,
   OFFICIAL_PREVIEW_INDEX_URLS,
+  PREVIEW_SOURCES_FILENAME,
   normalizeOfficialIndexUrls,
   normalizeOfficialManifestUrls,
   normalizePrPreviewUpdateConfig,
   officialPreviewProvider,
+  previewConfigCandidateFiles,
   readPreviewConfigIfPresent,
   resolvePrPreviewUpdateConfig,
   safeOfficialPreviewUrl

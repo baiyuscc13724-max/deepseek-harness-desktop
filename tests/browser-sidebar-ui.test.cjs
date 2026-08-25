@@ -5,7 +5,7 @@ const { readFile } = require('node:fs/promises')
 
 const root = path.join(__dirname, '..')
 
-test('Codex-style right sidebar browser uses an isolated visible login profile', async () => {
+test('Codex-style background browser uses an isolated login profile with an optional right-sidebar preview', async () => {
   const [html, renderer, preload, main] = await Promise.all([
     readFile(path.join(root, 'renderer', 'index.html'), 'utf8'),
     readFile(path.join(root, 'renderer', 'browser-sidebar.js'), 'utf8'),
@@ -21,6 +21,10 @@ test('Codex-style right sidebar browser uses an isolated visible login profile',
   }
   assert.match(html, /请直接在下方真实网页中亲自登录/u)
   assert.match(html, /模型无法读取密码、Cookie、验证码或令牌/u)
+  assert.match(html, /内置浏览器可在后台运行，普通结构化动作无需保持右栏打开/u)
+  assert.match(html, /关键动作会自动打开右栏请求逐次确认/u)
+  assert.match(html, /结构化 CDP\/DOM 引用/u)
+  assert.match(html, /截图仅作视觉后备/u)
   assert.match(html, /browser-sidebar\.js/u)
 
   assert.match(main, /new WebContentsView/u)
@@ -28,6 +32,12 @@ test('Codex-style right sidebar browser uses an isolated visible login profile',
   assert.match(main, /partition: browserSecurityPolicy\.partitionName/u)
   assert.match(main, /nodeIntegration: false/u)
   assert.match(main, /sandbox: true/u)
+  assert.match(main, /backgroundThrottling: false/u)
+  assert.match(main, /backgroundEnabled: true/u)
+  assert.match(main, /dataPlane: \{ primary: 'cdp-dom', structuredRefs: true, loopbackApi: true, screenshotRequired: false/u)
+  assert.match(main, /session: \{[\s\S]{0,500}dataPlane: \{ primary: 'cdp-dom'/u)
+  assert.match(main, /transport: 'authenticated-loopback-json'/u)
+  assert.match(main, /screenshotRequired: false/u)
   assert.match(main, /setPermissionRequestHandler/u)
   assert.match(main, /clearStorageData/u)
   assert.match(main, /clearAuthCache/u)
@@ -91,6 +101,34 @@ test('native browser content visibility never rebroadcasts sidebar visibility', 
   assert.doesNotMatch(body, /publishBrowserState/u)
 })
 
+test('closing the right sidebar changes presentation only and keeps the browser session controllable', async () => {
+  const main = await readFile(path.join(root, 'electron', 'main.cjs'), 'utf8')
+  const body = main.match(/async function setBrowserSidebarVisible\(visible\) \{[\s\S]*?\n\}/u)?.[0] || ''
+  assert.match(body, /ensureBrowserSession\(\)/u)
+  assert.match(body, /browserSidebarVisible = Boolean\(visible\)/u)
+  assert.match(body, /updateBrowserActiveTab\(contents\.getURL\(\)\)/u)
+  assert.match(body, /layoutBrowserView\(\)/u)
+  assert.doesNotMatch(body, /closeBrowserViewContents|webContents\.close|pauseModelControl|cancelModelActions/u)
+  assert.doesNotMatch(main, /function requireBrowserForModel[\s\S]{0,700}tab-not-visible/u)
+})
+
+test('critical background actions surface their user confirmation and crashed tabs become unavailable', async () => {
+  const [main, renderer] = await Promise.all([
+    readFile(path.join(root, 'electron', 'main.cjs'), 'utf8'),
+    readFile(path.join(root, 'renderer', 'browser-sidebar.js'), 'utf8')
+  ])
+  const helper = main.match(/async function surfacePendingBrowserConfirmation\(decision\) \{[\s\S]*?\n\}/u)?.[0] || ''
+  assert.match(helper, /decision\?\.requiresConfirmation/u)
+  assert.match(helper, /setBrowserSidebarVisible\(true\)/u)
+  assert.match(helper, /userAttention/u)
+  assert.match(renderer, /!hadAttention && state\.attentionRequired === true/u)
+  assert.match(renderer, /workspace\.openMode\('browser', \{ nativeAlreadyVisible: true \}\)/u)
+  assert.match(main, /contents\.on\('render-process-gone'/u)
+  assert.match(main, /browserTab\.available = false/u)
+  assert.match(main, /markActiveTabUnavailable\(tabId\)/u)
+  assert.match(main, /tab\.available = false[\s\S]{0,120}markActiveTabUnavailable\(id\)/u)
+})
+
 test('browser control reuses the Computer Use session/permanent authorization card', async () => {
   const [html, renderer, styles] = await Promise.all([
     readFile(path.join(root, 'renderer', 'index.html'), 'utf8'),
@@ -103,7 +141,8 @@ test('browser control reuses the Computer Use session/permanent authorization ca
   }
   assert.match(html, /浏览器控制 · Computer Use/u)
   assert.match(html, /共用同一份授权和启停状态/u)
-  assert.match(html, /无需再授权当前站点/u)
+  assert.match(html, /无需保持右栏打开/u)
+  assert.match(html, /选择一次“本次授权”或“永久授权”即可/u)
   assert.match(html, /允许 AI 控制/u)
   assert.match(html, /本次授权/u)
   assert.match(html, /永久授权/u)

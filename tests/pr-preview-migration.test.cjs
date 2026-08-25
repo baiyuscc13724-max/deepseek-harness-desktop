@@ -17,7 +17,11 @@ test('PR preview updater stays inside the desktop-shell component boundary', asy
 
   for (const directory of ["'electron'", "'renderer'", "'plugins'"]) assert.match(prepare, new RegExp(directory))
   assert.match(prepare, /'pr-preview-update-sources\.json'/)
-  assert.match(main, /bootstrap\?\.layout\?\.shellRoot \|\| app\.getAppPath\(\)/)
+  assert.match(main, /const shellRoot = bootstrap\?\.layout\?\.shellRoot \|\| ''/)
+  assert.match(
+    main,
+    /resolvePrPreviewUpdateConfig\(\{[\s\S]*resourcesPath: process\.resourcesPath[\s\S]*shellRoot[\s\S]*packagedAppRoot: app\.getAppPath\(\)/
+  )
   assert.match(main, /new PrPreviewUpdateService/)
   assert.match(main, /new ComponentUpdateService/)
   assert.match(main, /launchReadyComponentUpdate\(context\.component\)/)
@@ -76,4 +80,34 @@ test('preview IPC is zero-input and acceptance happens only after successful com
   assert.doesNotMatch(preload, /checkPrPreviewUpdates:\s*(?:\([^)]*\w[^)]*\)|\w+)\s*=>/)
   assert.match(renderer, /data-hd-preview/)
   assert.doesNotMatch(renderer, /preview.*(?:prompt|PR\s*编号|Token|仓库).*input/i)
+})
+
+test('preview state adapter uses the synchronous AppStateStore get() API and never calls load()', async () => {
+  const [main, store] = await Promise.all([
+    load('electron/main.cjs'),
+    load('electron/store/app-state-store.cjs')
+  ])
+
+  // The real AppStateStore loads synchronously in its constructor; get() is the
+  // only public reader. The isolated client fails at runtime with
+  // "ensureStateStore(...).load is not a function", so the adapter and the
+  // preview IPC read paths must never reference load().
+  assert.doesNotMatch(main, /ensureStateStore\(\)\.load\(/)
+  assert.match(main, /const appState = ensureStateStore\(\)\.get\(\)/)
+  assert.match(main, /const preferences = ensureStateStore\(\)\.get\(\)\.updates \|\| \{\}/)
+
+  // The adapter keeps the load/save contract PrPreviewUpdateService validates,
+  // backed by the synchronous store: get() for reads and markPreviewCandidate
+  // for writes, preserving the monotonic sequence / same-sequence-SHA semantics.
+  assert.match(
+    main,
+    /function prPreviewStateAdapter\(\)\s*\{\s*return \{\s*async load\(\)[\s\S]*const updates = ensureStateStore\(\)\.get\(\)\.updates \|\| \{\}[\s\S]*if \(!updates\.lastPreviewSequence \|\| !updates\.lastPreviewHeadSha\) return null[\s\S]*return \{ sequence: updates\.lastPreviewSequence, headSha: updates\.lastPreviewHeadSha \}[\s\S]*async save\(next\)[\s\S]*return ensureStateStore\(\)\.markPreviewCandidate\(next\.sequence, next\.headSha\)/
+  )
+  assert.match(store, /markPreviewCandidate\(sequence, headSha\)/)
+  assert.match(store, /sequence < currentSequence\) throw new Error\('拒绝回退到旧的 PR 预览更新序号。'\)/)
+  assert.match(store, /同一 PR 预览更新序号指向了不同 commit。/)
+  assert.match(store, /\bget\(\)\s*\{/)
+  // The public surface has get() only; no public load() reader may reappear
+  // (the constructor-time private #load() is the only loader left).
+  assert.doesNotMatch(store, /^\s{2}load\(\)\s*\{/m)
 })

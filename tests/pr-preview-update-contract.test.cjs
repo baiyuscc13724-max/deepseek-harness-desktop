@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const path = require('node:path')
 const { generateKeyPairSync, sign } = require('node:crypto')
 const { canonicalJson, withoutSignature } = require('../electron/bridge/component-update-contract.cjs')
 const {
@@ -10,8 +11,10 @@ const {
 } = require('../electron/bridge/pr-preview-update-contract.cjs')
 const {
   OFFICIAL_PREVIEW_INDEX_URLS,
+  PREVIEW_SOURCES_FILENAME,
   normalizeOfficialManifestUrls,
   normalizePrPreviewUpdateConfig,
+  previewConfigCandidateFiles,
   resolvePrPreviewUpdateConfig,
   safeOfficialPreviewUrl
 } = require('../electron/bridge/pr-preview-update-config.cjs')
@@ -77,6 +80,33 @@ function verifyIndex(index, trustedKeys) {
   return validateAndVerifyPreviewIndex(index, trustedKeys, { now: NOW, normalizeManifestUrls: normalizeOfficialManifestUrls })
 }
 
+function previewCandidatePath(root) {
+  return path.resolve(path.join(root, PREVIEW_SOURCES_FILENAME))
+}
+
+function previewFixtureRoots() {
+  const base = path.resolve(__dirname, 'fixtures', 'preview-roots')
+  return {
+    resources: path.resolve(base, 'resources'),
+    shell: path.resolve(base, 'shell'),
+    app: path.resolve(base, 'app'),
+    packaged: path.resolve(base, 'packaged')
+  }
+}
+
+function missingFile() {
+  return Object.assign(new Error('missing'), { code: 'ENOENT' })
+}
+
+function previewSourceJson(state) {
+  return JSON.stringify({
+    enabled: true,
+    repository: OFFICIAL_PREVIEW_REPOSITORY,
+    channelUrls: [...OFFICIAL_PREVIEW_INDEX_URLS],
+    trustedKeys: state.trustedKeys
+  })
+}
+
 test('preview config is default-off and accepts the packaged channelUrls/trustedKeys schema without losing order', () => {
   assert.deepEqual(normalizePrPreviewUpdateConfig({
     enabled: false,
@@ -136,6 +166,214 @@ test('packaged preview config resolver prefers resources and reads the fixed fil
   assert.equal(reads.length, 1)
   assert.match(reads[0], /pr-preview-update-sources\.json$/)
   assert.match(resolved.source, /Resources/)
+})
+
+test('preview config candidate list keeps resourcesPath → shellRoot → appRoot → packagedAppRoot priority and dedupes repeated paths', () => {
+  const roots = previewFixtureRoots()
+  const files = previewConfigCandidateFiles({
+    resourcesPath: roots.resources,
+    shellRoot: roots.shell,
+    appRoot: roots.app,
+    packagedAppRoot: roots.packaged
+  })
+  assert.deepEqual(files, [
+    previewCandidatePath(roots.resources),
+    previewCandidatePath(roots.shell),
+    previewCandidatePath(roots.app),
+    previewCandidatePath(roots.packaged)
+  ])
+
+  const shared = previewConfigCandidateFiles({
+    resourcesPath: roots.packaged,
+    shellRoot: roots.packaged,
+    appRoot: roots.packaged,
+    packagedAppRoot: roots.packaged
+  })
+  assert.deepEqual(shared, [previewCandidatePath(roots.packaged)])
+})
+
+test('preview config resolver falls back shellRoot → appRoot → packagedAppRoot and reads each candidate once', async () => {
+  const roots = previewFixtureRoots()
+  const encode = previewSourceJson(fixture())
+  const candidates = {
+    resources: previewCandidatePath(roots.resources),
+    shell: previewCandidatePath(roots.shell),
+    app: previewCandidatePath(roots.app),
+    packaged: previewCandidatePath(roots.packaged)
+  }
+  const missing = missingFile()
+
+  const reads = []
+  const viaShell = await resolvePrPreviewUpdateConfig({
+    resourcesPath: roots.resources,
+    shellRoot: roots.shell,
+    appRoot: roots.app,
+    packagedAppRoot: roots.packaged,
+    readFileImpl: async file => {
+      reads.push(file)
+      if (file === candidates.shell) return encode
+      throw missing
+    }
+  })
+  assert.equal(viaShell.enabled, true)
+  assert.deepEqual(reads, [candidates.resources, candidates.shell])
+  assert.equal(viaShell.source, candidates.shell)
+
+  reads.length = 0
+  const viaApp = await resolvePrPreviewUpdateConfig({
+    resourcesPath: roots.resources,
+    shellRoot: roots.shell,
+    appRoot: roots.app,
+    packagedAppRoot: roots.packaged,
+    readFileImpl: async file => {
+      reads.push(file)
+      if (file === candidates.app) return encode
+      throw missing
+    }
+  })
+  assert.equal(viaApp.enabled, true)
+  assert.deepEqual(reads, [candidates.resources, candidates.shell, candidates.app])
+  assert.equal(viaApp.source, candidates.app)
+
+  reads.length = 0
+  const viaPackaged = await resolvePrPreviewUpdateConfig({
+    resourcesPath: roots.resources,
+    shellRoot: roots.shell,
+    appRoot: roots.app,
+    packagedAppRoot: roots.packaged,
+    readFileImpl: async file => {
+      reads.push(file)
+      if (file === candidates.packaged) return encode
+      throw missing
+    }
+  })
+  assert.equal(viaPackaged.enabled, true)
+  assert.deepEqual(reads, [candidates.resources, candidates.shell, candidates.app, candidates.packaged])
+  assert.equal(viaPackaged.source, candidates.packaged)
+})
+
+test('preview config resolver supports the committed three-parameter contract without appRoot', async () => {
+  const roots = previewFixtureRoots()
+  const encode = previewSourceJson(fixture())
+  const candidates = {
+    resources: previewCandidatePath(roots.resources),
+    shell: previewCandidatePath(roots.shell),
+    packaged: previewCandidatePath(roots.packaged)
+  }
+  const missing = missingFile()
+
+  const reads = []
+  const viaShell = await resolvePrPreviewUpdateConfig({
+    resourcesPath: roots.resources,
+    shellRoot: roots.shell,
+    packagedAppRoot: roots.packaged,
+    readFileImpl: async file => {
+      reads.push(file)
+      if (file === candidates.shell) return encode
+      throw missing
+    }
+  })
+  assert.equal(viaShell.enabled, true)
+  assert.deepEqual(reads, [candidates.resources, candidates.shell])
+  assert.equal(viaShell.source, candidates.shell)
+
+  reads.length = 0
+  const viaPackaged = await resolvePrPreviewUpdateConfig({
+    resourcesPath: roots.resources,
+    shellRoot: roots.shell,
+    packagedAppRoot: roots.packaged,
+    readFileImpl: async file => {
+      reads.push(file)
+      if (file === candidates.packaged) return encode
+      throw missing
+    }
+  })
+  assert.equal(viaPackaged.enabled, true)
+  assert.deepEqual(reads, [candidates.resources, candidates.shell, candidates.packaged])
+  assert.equal(viaPackaged.source, candidates.packaged)
+})
+
+test('preview config resolver returns default-off when every candidate file is absent', async () => {
+  const roots = previewFixtureRoots()
+  const candidates = [
+    previewCandidatePath(roots.resources),
+    previewCandidatePath(roots.shell),
+    previewCandidatePath(roots.app),
+    previewCandidatePath(roots.packaged)
+  ]
+  const reads = []
+  const resolved = await resolvePrPreviewUpdateConfig({
+    resourcesPath: roots.resources,
+    shellRoot: roots.shell,
+    appRoot: roots.app,
+    packagedAppRoot: roots.packaged,
+    readFileImpl: async file => {
+      reads.push(file)
+      throw missingFile()
+    }
+  })
+  assert.equal(resolved.enabled, false)
+  assert.equal(resolved.source, '')
+  assert.deepEqual(resolved.channelUrls, [...OFFICIAL_PREVIEW_INDEX_URLS])
+  assert.deepEqual(reads, candidates)
+})
+
+test('preview config resolver fails on an invalid existing config instead of skipping to the next candidate', async () => {
+  const roots = previewFixtureRoots()
+  const candidates = {
+    resources: previewCandidatePath(roots.resources),
+    shell: previewCandidatePath(roots.shell),
+    app: previewCandidatePath(roots.app),
+    packaged: previewCandidatePath(roots.packaged)
+  }
+  const valid = previewSourceJson(fixture())
+  const invalidContents = [
+    ['malformed json', '{ not json'],
+    ['json null', 'null'],
+    ['json array', '[]'],
+    ['schema violation', JSON.stringify({ enabled: false, token: 'forbidden' })]
+  ]
+  for (const [name, content] of invalidContents) {
+    const reads = []
+    await assert.rejects(
+      resolvePrPreviewUpdateConfig({
+        resourcesPath: roots.resources,
+        shellRoot: roots.shell,
+        appRoot: roots.app,
+        packagedAppRoot: roots.packaged,
+        readFileImpl: async file => {
+          reads.push(file)
+          if (file === candidates.resources) return content
+          return valid
+        }
+      }),
+      /配置/,
+      `${name} must fail loudly`
+    )
+    assert.deepEqual(reads, [candidates.resources], `${name} must not fall through to lower-priority candidates`)
+  }
+
+  const lowerTierReads = []
+  await assert.rejects(
+    resolvePrPreviewUpdateConfig({
+      resourcesPath: roots.resources,
+      shellRoot: roots.shell,
+      appRoot: roots.app,
+      packagedAppRoot: roots.packaged,
+      readFileImpl: async file => {
+        lowerTierReads.push(file)
+        if (file === candidates.packaged) return 'null'
+        throw missingFile()
+      }
+    }),
+    /不是有效 JSON 对象/
+  )
+  assert.deepEqual(lowerTierReads, [
+    candidates.resources,
+    candidates.shell,
+    candidates.app,
+    candidates.packaged
+  ])
 })
 
 test('signed index and preview manifest bind official repository, PR metadata, full SHA, sequence, expiry and component manifest', () => {

@@ -249,7 +249,7 @@ class PrPreviewUpdateService {
       provider: manifestResult.provider,
       indexSource: indexResult.source,
       manifestSource: manifestResult.source,
-      manifest: previewManifest.componentManifest
+      manifest: manifestResult.payload.componentManifest
     }
     this.pendingCandidates.set(previewCandidateKey(result), {
       headSha: result.headSha,
