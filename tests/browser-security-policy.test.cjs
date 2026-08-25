@@ -191,7 +191,7 @@ test('模型动作可作用于后台活动标签，同时保持 tabId/来源/可
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-tab-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const policy = new BrowserSecurityPolicy({ authzRootDir: root })
-  policy.grant(ORIGIN, { actions: ['read'] })
+  policy.grant(ORIGIN, { actions: ['read', 'submit'] })
   policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true, available: true })
 
   // 标签不一致。
@@ -201,9 +201,14 @@ test('模型动作可作用于后台活动标签，同时保持 tabId/来源/可
   // 右栏隐藏后仍通过结构化通道操作同一后台标签。
   policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: false, available: true })
   assert.equal(policy.modelAction({ action: 'read', tabId: 'tab-1' }).allowed, true)
-  // 标签本身关闭或失效时仍拒绝。
-  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: false, available: false })
+  // 宿主可在页面进程崩溃时将生产活动标签置为不可用、清空一次性确认并保留明确拒绝码。
+  assert.equal(policy.modelAction({ action: 'submit', tabId: 'tab-1' }).requiresConfirmation, true)
+  assert.equal(policy.pendingConfirmations().length, 1)
+  assert.equal(policy.markActiveTabUnavailable('tab-2'), false)
+  assert.equal(policy.markActiveTabUnavailable('tab-1'), true)
+  assert.equal(policy.pendingConfirmations().length, 0)
   assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'tab-unavailable')
+  assert.ok(policy.auditSnapshot().entries.some(entry => entry.action === 'tab-unavailable' && entry.code === 'tab-unavailable'))
 })
 
 test('Profile 重置接管会清空活动标签和一次性确认但不越权改写授权', async t => {

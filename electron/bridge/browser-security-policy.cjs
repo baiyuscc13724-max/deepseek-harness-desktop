@@ -134,6 +134,19 @@ class BrowserSecurityPolicy {
     return info
   }
 
+  /** 宿主确认当前活动标签已崩溃或失效；保留身份用于给模型返回 tab-unavailable。 */
+  markActiveTabUnavailable(tabId) {
+    if (this.stopped) return false
+    const id = String(tabId || '').trim()
+    const current = this.gate.activeTabInfo
+    if (!id || !current || current.id !== id) return false
+    this.modelPreviewOrigins.delete(id)
+    this.gate.setActiveTab({ ...current, visible: false, available: false })
+    this.gate.clearConfirmations()
+    this.auditLog.record({ actor: 'system', action: 'tab-unavailable', origin: current.origin, tabId: id, result: 'denied', code: 'tab-unavailable' })
+    return true
+  }
+
   /** 用户浏览档导航：仅 http/https。成功后由集成方跟进 setActiveTab。 */
   userNavigate(url, { base } = {}) {
     if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')

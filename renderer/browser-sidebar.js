@@ -488,12 +488,15 @@
   }
 
   function render(next) {
+    const hadAttention = state.attentionRequired === true
     state = { ...state, ...next }
     const visible = state.visible === true
     const resetting = state.profileResetting === true
     const workspace = window.harnessDesktopRightWorkspace
-    if (workspace) workspace.syncBrowserState(state)
-    else {
+    if (workspace) {
+      workspace.syncBrowserState(state)
+      if (!hadAttention && state.attentionRequired === true) workspace.openMode('browser', { nativeAlreadyVisible: true }).catch(() => {})
+    } else {
       sidebar.classList.toggle('hidden', !visible)
       sidebar.setAttribute('aria-hidden', String(!visible))
       quickButton.setAttribute('aria-expanded', String(visible))
@@ -535,8 +538,11 @@
       ? '浏览器会话正在后台运行（CDP/DOM 结构化通道）'
       : state.session?.surface === 'visible'
         ? '浏览器会话正在右栏预览（CDP/DOM 结构化通道）'
-        : '浏览器会话将在首次模型导航时后台启动'
-    privacySummary.textContent = `${sharedState}；${browserSessionState}；本次运行保留 ${auditCount} 条脱敏审计元数据${authorizationCount ? `；兼容保留 ${authorizationCount} 个旧版站点授权` : ''}。`
+        : state.session?.surface === 'unavailable'
+          ? '浏览器标签已失效，需要用户刷新或新建标签页'
+          : '浏览器会话将在首次模型导航时后台启动'
+    const attention = state.attentionRequired ? '；有关键动作等待本次允许或拒绝' : ''
+    privacySummary.textContent = `${sharedState}；${browserSessionState}；本次运行保留 ${auditCount} 条脱敏审计元数据${authorizationCount ? `；兼容保留 ${authorizationCount} 个旧版站点授权` : ''}${attention}。`
     pendingActions.replaceChildren()
     for (const pending of state.pendingConfirmations || []) {
       const row = document.createElement('div')

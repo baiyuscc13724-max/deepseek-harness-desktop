@@ -451,6 +451,9 @@ async function browserStatePayload(patch = {}) {
     browserState.hasSiteData = cookies.length > 0
   }
   const audit = browserSecurityPolicy?.auditSnapshot() || { count: 0, total: 0, dropped: 0 }
+  const activeTab = browserTabs.get(activeBrowserTabId)
+  const sessionReady = Boolean(contents && activeTab?.available !== false)
+  const pendingConfirmations = browserSecurityPolicy?.pendingConfirmations() || []
   return {
     ...browserState,
     profile: {
@@ -461,23 +464,25 @@ async function browserStatePayload(patch = {}) {
     authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [], unifiedControl: false },
     control: sharedComputerUseControlState(),
     session: {
-      ready: Boolean(contents),
-      surface: browserSidebarVisible && browserContentVisible ? 'visible' : contents ? 'background' : 'not-started',
+      ready: sessionReady,
+      surface: sessionReady
+        ? browserSidebarVisible && browserContentVisible ? 'visible' : 'background'
+        : contents ? 'unavailable' : 'not-started',
       backgroundEnabled: true,
-      dataPlane: 'cdp-dom',
-      transport: 'authenticated-loopback-json',
-      screenshotRequired: false
+      dataPlane: { primary: 'cdp-dom', structuredRefs: true, loopbackApi: true, screenshotRequired: false, screenshotFallback: true, transport: 'authenticated-loopback-json' }
     },
     audit: { count: audit.count, total: audit.total, dropped: audit.dropped },
     modelControlStopped: browserSecurityPolicy?.isModelStopped === true,
     profileResetting: browserOperations.snapshot().resetting,
-    pendingConfirmations: browserSecurityPolicy?.pendingConfirmations() || [],
+    attentionRequired: pendingConfirmations.length > 0,
+    pendingConfirmations,
     activeTabId: activeBrowserTabId,
     tabs: [...browserTabs.entries()].map(([id, tab]) => ({
       id,
       title: safeBrowserText(tab.view.webContents.getTitle() || '新标签页', 160),
       url: tab.view.webContents.getURL() || '',
-      loading: tab.view.webContents.isLoading()
+      loading: tab.view.webContents.isLoading(),
+      available: tab.available !== false && !tab.view.webContents.isDestroyed()
     })),
     downloads: browserDownloads.map(item => ({ ...item })),
     dialog: {
@@ -505,7 +510,8 @@ function updateBrowserActiveTab(url) {
   if (!browserSecurityPolicy || !url) return
   try {
     const nav = browserSecurityPolicy.userNavigate(url)
-    browserSecurityPolicy.setActiveTab({ id: activeBrowserTabId || 'side-browser-main', origin: nav.origin, visible: browserSidebarVisible && browserContentVisible, available: true })
+    const activeTab = browserTabs.get(activeBrowserTabId)
+    browserSecurityPolicy.setActiveTab({ id: activeBrowserTabId || 'side-browser-main', origin: nav.origin, visible: browserSidebarVisible && browserContentVisible, available: activeTab?.available !== false })
     browserState.origin = nav.origin
     browserState.error = ''
   } catch {
@@ -670,7 +676,7 @@ function ensureBrowserSession() {
   const contents = browserView.webContents
   const tabId = `browser-tab-${nextBrowserTabSequence++}`
   activeBrowserTabId = tabId
-  const browserTab = { id: tabId, view: browserView, createdAt: Date.now(), dialogControl: false, fileChooserControl: false, fileChooserGeneration: 0, navigationGeneration: 0, navigationLane: new BrowserNavigationLane() }
+  const browserTab = { id: tabId, view: browserView, createdAt: Date.now(), available: true, dialogControl: false, fileChooserControl: false, fileChooserGeneration: 0, navigationGeneration: 0, navigationLane: new BrowserNavigationLane() }
   browserTabs.set(tabId, browserTab)
   try {
     contents.debugger.attach('1.3')
@@ -717,6 +723,17 @@ function ensureBrowserSession() {
       line: details.lineNumber
     })
   })
+  contents.on('render-process-gone', (_event, details = {}) => {
+    browserTab.available = false
+    browserTab.dialogControl = false
+    browserTab.fileChooserControl = false
+    browserDialogs.delete(tabId)
+    browserSecurityPolicy?.markActiveTabUnavailable(tabId)
+    if (tabId === activeBrowserTabId) {
+      const reason = safeBrowserText(details.reason || 'unknown', 80)
+      publishBrowserState({ loading: false, error: `浏览器页面进程已停止（${reason}），请由用户刷新或新建标签页。` }).catch(() => {})
+    }
+  })
   attachBrowserNavigationGuard({
     contents,
     tabId,
@@ -728,6 +745,7 @@ function ensureBrowserSession() {
   contents.on('did-start-loading', () => { if (tabId === activeBrowserTabId) publishBrowserState({ loading: true }).catch(() => {}) })
   contents.on('did-stop-loading', () => { if (tabId === activeBrowserTabId) publishBrowserState({ loading: false }).catch(() => {}) })
   const navigated = (_event, url) => {
+    browserTab.available = true
     browserTab.navigationGeneration += 1
     ensureBrowserHistoryStore().add(url, contents.getTitle()).catch(() => {})
     if (tabId !== activeBrowserTabId) return
@@ -791,6 +809,8 @@ async function closeBrowserTab(tabId) {
   const id = String(tabId || activeBrowserTabId || '')
   const tab = browserTabs.get(id)
   if (!tab) throw new Error('浏览器标签页不存在。')
+  tab.available = false
+  if (id === activeBrowserTabId) browserSecurityPolicy?.markActiveTabUnavailable(id)
   browserTabs.delete(id)
   browserDialogs.delete(id)
   try { mainWindow?.contentView.removeChildView(tab.view) } catch {}
@@ -992,7 +1012,7 @@ async function observeBrowserForModel(signal = null) {
   markBrowserModelNavigation(tabId, 'observe')
   browserSecurityPolicy.modelAction({ action: 'read', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'document' }, payload: {} })
   const raw = await view.webContents.executeJavaScript(`(() => {
-    const sensitive = /(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc)/i;
+    const sensitive = /(?:password|passwd|pwd|口令|密码|card|卡号|cvv|cvc|security\\s*code|安全码|otp|验证码|动态码|verif|token|api[_-]?key|secret|密钥|私钥|cookie|authorization|bearer|银行|bank|payment|payee|支付|付款|account|acct|user(?:name|[_-]?id)|login|e-?mail|账号|帐号|账户|用户名|邮箱)/i;
     const referenceAttribute='data-hd-model-ref';
     const visible = element => { const r=element.getBoundingClientRect(); const s=getComputedStyle(element); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
     const accessibleName = element => {
@@ -1310,6 +1330,24 @@ async function uploadBrowserFileInteractively(view, binding, ticket) {
   return { uploaded: true, bytes: data.length, userSelected: true }
 }
 
+async function surfacePendingBrowserConfirmation(decision) {
+  if (!decision?.requiresConfirmation) return decision
+  try {
+    await setBrowserSidebarVisible(true)
+  } catch {
+    await publishBrowserState().catch(() => {})
+  }
+  return {
+    ...decision,
+    userAttention: {
+      required: true,
+      surface: 'browser-sidebar',
+      visible: browserSidebarVisible === true && browserContentVisible === true,
+      expiresAt: browserSecurityPolicy?.pendingConfirmations().find(item => item.id === decision.confirmationId)?.expiresAt || null
+    }
+  }
+}
+
 async function modelBrowserAction(input = {}, context = {}) {
   const action = String(input.action || '')
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
@@ -1320,12 +1358,18 @@ async function modelBrowserAction(input = {}, context = {}) {
     const control = sharedComputerUseControlState()
     const effectiveActions = control.active ? ['read', 'click', 'type', 'upload', 'download', 'submit'] : (current?.actions || [])
     const visible = browserSidebarVisible && browserContentVisible
-    const ready = Boolean(liveBrowserContents())
+    const activeTab = browserTabs.get(activeBrowserTabId)
+    const contents = liveBrowserContents()
+    const ready = Boolean(contents && activeTab?.available !== false)
+    const pendingConfirmations = browserSecurityPolicy?.pendingConfirmations() || []
     return {
       available: Boolean(mainWindow && !mainWindow.isDestroyed()),
       ready,
       visible,
-      surface: visible ? 'visible' : ready ? 'background' : 'not-started',
+      surface: ready ? visible ? 'visible' : 'background' : contents ? 'unavailable' : 'not-started',
+      tabAvailable: activeTab?.available !== false && Boolean(contents),
+      attentionRequired: pendingConfirmations.length > 0,
+      pendingConfirmationCount: pendingConfirmations.length,
       dataPlane: { primary: 'cdp-dom', structuredRefs: true, loopbackApi: true, screenshotRequired: false, screenshotFallback: true, transport: 'authenticated-loopback-json' },
       origin: browserState.origin || null,
       title: safeBrowserText(browserState.title, 500),
@@ -1335,7 +1379,7 @@ async function modelBrowserAction(input = {}, context = {}) {
       activationRequired: control.activationRequired,
       actions: effectiveActions,
       activeTabId: activeBrowserTabId,
-      tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })),
+      tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId, available: tab.available !== false && !tab.view.webContents.isDestroyed() })),
       downloads: browserDownloads.map(item => ({ id: item.id, receivedBytes: item.receivedBytes, totalBytes: item.totalBytes, state: item.state, modelInitiated: Boolean(item.modelInitiated) })),
       dialog: { available: browserTabs.get(activeBrowserTabId)?.dialogControl === true, pending: browserDialogs.has(activeBrowserTabId), type: browserDialogs.get(activeBrowserTabId)?.type || null },
       viewport: { width: bounds.width, height: bounds.height },
@@ -1405,7 +1449,7 @@ async function modelBrowserAction(input = {}, context = {}) {
   }
   if (action === 'tabList') {
     authorizeBrowserRead(origin, tabId)
-    return { activeTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId })) }
+    return { activeTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId, available: tab.available !== false && !tab.view.webContents.isDestroyed() })) }
   }
   if (action === 'tabOpen') {
     const target = String(parameters.url || '').trim()
@@ -1442,7 +1486,7 @@ async function modelBrowserAction(input = {}, context = {}) {
   }
   if (action === 'tabClose') {
     const targetId = String(parameters.tab_id || activeBrowserTabId)
-    if (targetId !== activeBrowserTabId) throw new Error('模型只能关闭当前可见标签页。')
+    if (targetId !== activeBrowserTabId) throw new Error('模型只能关闭当前活动标签页。')
     authorizeBrowserRead(origin, tabId)
     await closeBrowserTab(targetId)
     browserOperations.assert(ticket)
@@ -1490,7 +1534,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     if (!allowedKeys.has(key)) throw new Error('不支持的按键；模型不能输入任意快捷键或文本。')
     const effectiveAction = key === 'Enter' || key === 'Space' ? 'submit' : 'read'
     const decision = browserSecurityPolicy.modelAction({ action: effectiveAction, tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'document', submit: key === 'Enter' }, payload: {}, confirmationId: parameters.confirmation_id })
-    if (!decision.allowed) return decision
+    if (!decision.allowed) return surfacePendingBrowserConfirmation(decision)
     await dispatchModelBrowserInput(tabId, 'keypress', view.webContents, [
       { type: 'keyDown', keyCode: key },
       { type: 'keyUp', keyCode: key }
@@ -1505,7 +1549,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     if (field.tag !== 'select') throw new Error('select 仅适用于下拉选择框。')
     const value = String(parameters.value || '').slice(0, 500)
     const decision = browserSecurityPolicy.modelAction({ action: 'type', tabId, declaredOrigin: origin, field, payload: { text: value }, confirmationId: parameters.confirmation_id })
-    if (!decision.allowed) return decision
+    if (!decision.allowed) return surfacePendingBrowserConfirmation(decision)
     markBrowserModelNavigation(tabId, 'select')
     const changed = await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!(element instanceof HTMLSelectElement)) return false; const option=[...element.options].find(item=>item.value===${JSON.stringify(value)}||item.text===${JSON.stringify(value)}); if(!option) return false; element.value=option.value; element.dispatchEvent(new Event('input',{bubbles:true})); element.dispatchEvent(new Event('change',{bubbles:true})); return true; })()`, false)
     browserOperations.assert(ticket)
@@ -1517,7 +1561,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     if (!target) throw new Error('模型导航必须提供 HTTP(S) 地址。')
     const nav = origin
       ? browserSecurityPolicy.modelNavigate(target, { tabId, base: url })
-      : browserSecurityPolicy.modelBootstrapNavigate(target, { tabId, currentUrl: url, visible: browserSidebarVisible && browserContentVisible, available: true, trustedPrivateOrigins: browserModelBootstrapTrustedPrivateOrigins() })
+      : browserSecurityPolicy.modelBootstrapNavigate(target, { tabId, currentUrl: url, visible: browserSidebarVisible && browserContentVisible, available: browserTabs.get(tabId)?.available !== false, trustedPrivateOrigins: browserModelBootstrapTrustedPrivateOrigins() })
     browserOperations.assert(ticket)
     markBrowserModelNavigation(tabId, 'navigate')
     await view.webContents.loadURL(nav.normalized)
@@ -1535,10 +1579,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     const maxBytes = Math.max(1, Math.min(MAX_DOWNLOAD_BYTES, Math.floor(Number(parameters.max_bytes) || Math.min(MAX_DOWNLOAD_BYTES, 50 * 1024 * 1024))))
     const payload = { destinationPath, maxBytes, targetUrl: target.href, accessibleName: safeBrowserText(field.label || field.text, 160) }
     const decision = browserSecurityPolicy.modelAction({ action: 'download', tabId, declaredOrigin: origin, field, payload, confirmationId: parameters.confirmation_id })
-    if (!decision.allowed) {
-      publishBrowserState().catch(() => {})
-      return decision
-    }
+    if (!decision.allowed) return surfacePendingBrowserConfirmation(decision)
     const tab = browserTabs.get(tabId)
     return downloadBrowserResource(view, target.href, destinationPath, maxBytes, {
       tabId,
@@ -1552,10 +1593,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     browserOperations.assert(ticket)
     if (!field || field.tag !== 'input' || field.type !== 'file' || !field.backendNodeId) throw new Error('upload 只能用于可验证身份的可见文件选择控件。')
     const decision = browserSecurityPolicy.modelAction({ action: 'upload', tabId, declaredOrigin: origin, field, payload: { interactivePicker: true }, confirmationId: parameters.confirmation_id })
-    if (!decision.allowed) {
-      publishBrowserState().catch(() => {})
-      return decision
-    }
+    if (!decision.allowed) return surfacePendingBrowserConfirmation(decision)
     const tab = browserTabs.get(tabId)
     markBrowserModelNavigation(tabId, 'upload')
     return uploadBrowserFileInteractively(view, {
@@ -1576,7 +1614,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     if (isSensitiveText(promptText) || /(?:^|\D)\d{4,8}(?:\D|$)/.test(promptText)) throw Object.assign(new Error('对话框输入包含账号、邮箱、验证码或其他敏感内容，模型不能填写。'), { code: 'sensitive-value' })
     const payload = { actionText: accept ? 'accept javascript dialog' : 'dismiss javascript dialog', promptText, dialogId: pending.id, dialogType: pending.type, dialogMessage: pending.message }
     const decision = browserSecurityPolicy.modelAction({ action: 'submit', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'dialog', submit: true }, payload, confirmationId: parameters.confirmation_id })
-    if (!decision.allowed) return { ...decision, dialog: { id: pending.id, type: pending.type, message: pending.message } }
+    if (!decision.allowed) return { ...(await surfacePendingBrowserConfirmation(decision)), dialog: { id: pending.id, type: pending.type, message: pending.message } }
     if (browserDialogs.get(tabId)?.id !== pending.id) throw Object.assign(new Error('对话框已变化，旧确认不能继续使用。'), { code: 'confirmation-mismatch' })
     markBrowserModelNavigation(tabId, 'dialog')
     await view.webContents.debugger.sendCommand('Page.handleJavaScriptDialog', { accept, ...(promptText ? { promptText } : {}) })
@@ -1616,7 +1654,7 @@ async function modelBrowserAction(input = {}, context = {}) {
   const navigatesTo = field.href || field.formAction || ''
   const actionPayload = navigatesTo ? { navigatesTo } : {}
   const decision = browserSecurityPolicy.modelAction({ action: effectiveAction, tabId, declaredOrigin: origin, field, payload: actionPayload, confirmationId: parameters.confirmation_id })
-  if (!decision.allowed) return decision
+  if (!decision.allowed) return surfacePendingBrowserConfirmation(decision)
   browserOperations.assert(ticket)
   markBrowserModelNavigation(tabId, 'click')
   await view.webContents.executeJavaScript(`document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]')?.click()`, false)

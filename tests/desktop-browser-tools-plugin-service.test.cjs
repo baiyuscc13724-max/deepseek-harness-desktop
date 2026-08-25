@@ -375,7 +375,7 @@ test('browser_control status keeps a hidden sidebar usable through the backgroun
   })
 })
 
-test('browser_control status reports the shared Computer Use authorization and stopped session', async () => {
+test('browser_control status reports shared authorization, stopped control and unavailable tabs', async () => {
   const { tool } = await loadPluginTool()
   const states = [
     {
@@ -385,6 +385,10 @@ test('browser_control status reports the shared Computer Use authorization and s
     {
       result: { visible: true, stopped: true, activationRequired: false, control: { source: 'computer-use', granted: true, active: false, activationRequired: false } },
       guidance: /授权仍有效，无需再次授权/u
+    },
+    {
+      result: { visible: false, surface: 'unavailable', tabAvailable: false, stopped: false, activationRequired: false, control: { source: 'computer-use', granted: true, active: true, activationRequired: false } },
+      guidance: /活动标签已关闭或失效/u
     }
   ]
   for (const state of states) {
@@ -412,7 +416,7 @@ test('browser_control status stopped and stop results remind the model not to re
   })
 })
 
-test('browser_control description treats the sidebar as optional and stops only for authorization/control gates', async () => {
+test('browser_control keeps ordinary actions background-capable and surfaces critical confirmations', async () => {
   const { tool } = await loadPluginTool()
   const description = tool.description
   const actionDescription = tool.parameters.properties.action.description
@@ -420,12 +424,14 @@ test('browser_control description treats the sidebar as optional and stops only 
   assert.match(description, /复用同一份“本次授权\/永久授权”/u)
   assert.match(description, /用户只需授权一次/u)
   assert.match(description, /computer_use 的 requestAuthorization/u)
-  assert.match(description, /右栏不可见时仍可继续后台操作/u)
-  assert.match(description, /只有 status 显示等待共享授权或控制已停止时/u)
+  assert.match(description, /右栏不可见时普通动作仍可继续后台操作/u)
+  assert.match(description, /关键动作仍需用户逐次确认/u)
+  assert.match(description, /宿主会自动打开右栏展示确认请求/u)
+  assert.match(description, /等待共享授权、控制已停止或当前标签已失效/u)
   assert.match(description, /结构化通道可用时不得退回 computer_use 的截图坐标操作/u)
-  assert.match(actionDescription, /右栏不可见不影响操作/u)
-  assert.match(actionDescription, /只有等待授权或已停止时才停止本轮/u)
-  assert.doesNotMatch(description, /显示右栏后再|右栏不可见[^。；]*(?:停止本轮|显示右栏)/u)
+  assert.match(actionDescription, /右栏不可见不影响普通动作/u)
+  assert.match(actionDescription, /关键动作会自动打开右栏请求逐次确认/u)
+  assert.doesNotMatch(description, /右栏不可见[^。；]*(?:停止本轮|显示右栏)/u)
   assert.doesNotMatch(description, /调用 stop/u)
   for (const word of FORBIDDEN) {
     assert.ok(!description.includes(word), `strengthened description must not contain ${word}`)
