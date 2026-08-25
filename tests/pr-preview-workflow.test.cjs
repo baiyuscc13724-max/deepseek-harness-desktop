@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { generateKeyPairSync, createHash } = require('node:crypto')
-const { copyFile, mkdtemp, mkdir, readFile, rm, stat, writeFile } = require('node:fs/promises')
+const { copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const YAML = require('yaml')
@@ -72,12 +72,17 @@ test('sign workflow is protected dispatch from default branch and never runs dow
   assert.doesNotMatch(source, /node \$RUNNER_TEMP\/unsigned-preview|bash \$RUNNER_TEMP\/unsigned-preview|chmod .*unsigned-preview/)
 })
 
-test('sign workflow publishes only immutable candidates and cannot access CNB promotion credentials', async () => {
-  const source = await load('.github/workflows/pr-preview-sign.yml')
+test('sign workflow publishes only four immutable candidate files and cannot access CNB promotion credentials', async () => {
+  const [source, signer] = await Promise.all([
+    load('.github/workflows/pr-preview-sign.yml'),
+    load('scripts/pr-preview-sign.mjs')
+  ])
   assert.match(source, /Freeze only the immutable candidate bundle/)
-  assert.match(source, /rm -f "\$signed\/cnb-mirror-request\.json"/)
+  assert.match(source, /test "\$\(wc -l < "\$actual"\)" -eq 4/)
+  assert.match(source, /find "\$signed" -mindepth 1 -type d/)
   assert.match(source, /pr-preview-signed-candidate-/)
   assert.match(source, /Immutable signed candidate only/)
+  assert.doesNotMatch(signer, /createCnbMirrorRequest|cnb-mirror-request\.json/)
   assert.doesNotMatch(source, /CNB_PR_PREVIEW_PUSH_TOKEN|HEAD:refs\/heads\/pr-preview|Push signed metadata-only handoff/)
   assert.doesNotMatch(source, /component-feeds\/pr-preview\/latest\.json[\s\S]*git push/)
 })
@@ -257,23 +262,18 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     'author', 'baseRef', 'channel', 'componentManifest', 'expiresAt', 'headSha', 'keyId', 'kind',
     'prNumber', 'publishedAt', 'repository', 'schemaVersion', 'sequence', 'signature', 'title'
   ].sort())
-  await stat(path.join(output, 'component-feeds', 'pr-preview', 'latest.json'))
-  await stat(path.join(output, 'component-feeds', 'pr-preview', 'manifests', `${headSha}.json`))
-  assert.equal(result.cnbRequest.source.cloudToCloudOnly, true)
-  assert.equal(result.cnbRequest.verification.downloadEveryAssetCompletely, true)
-  assert.equal(result.cnbRequest.verification.requireExactSize, true)
-  assert.equal(result.cnbRequest.verification.requireSha256, true)
-  assert.equal(result.cnbRequest.verification.readBackFromCnbBeforePromotion, true)
-  assert.equal(result.cnbRequest.promotion.manifestPath, `component-feeds/pr-preview/manifests/${headSha}.json`)
-  assert.equal(result.cnbRequest.promotion.latestPath, 'component-feeds/pr-preview/latest.json')
-  assert.equal(result.cnbRequest.promotion.allowedOnlyAfterEveryAssetVerified, true)
-  assert.equal(result.cnbRequest.promotion.atomic, true)
-  assert.deepEqual(result.cnbRequest.promotion.sourcePriority, ['cnb', 'github'])
+  const outputEntries = await readdir(output, { withFileTypes: true })
+  assert.ok(outputEntries.every(entry => entry.isFile()))
+  assert.deepEqual(outputEntries.map(entry => entry.name).sort(), [
+    componentName,
+    path.basename(result.feedIndexFile),
+    path.basename(result.feedManifestFile),
+    'pr-preview-signing-audit.json'
+  ].sort())
 
   const verifierConfig = path.join(temp, 'preview-sources.json')
-  const requestFile = path.join(output, 'cnb-mirror-request.json')
-  const indexFile = path.join(output, 'component-feeds', 'pr-preview', 'latest.json')
-  const manifestFile = path.join(output, 'component-feeds', 'pr-preview', 'manifests', `${headSha}.json`)
+  const indexFile = result.feedIndexFile
+  const manifestFile = result.feedManifestFile
   await writeFile(verifierConfig, JSON.stringify({
     enabled: true,
     repository,
@@ -284,10 +284,9 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     configFile: verifierConfig,
     indexFile,
     manifestFile,
-    requestFile,
     now: Date.parse('2026-08-25T00:01:00.000Z')
   })
-  assert.equal(verifiedFeed.requestAssets, 3)
+  assert.equal(verifiedFeed.requestAssets, 0)
 
   const releaseAssets = path.join(temp, 'immutable-release-assets')
   const candidateArtifact = path.join(temp, 'candidate-artifact')
@@ -368,6 +367,16 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     gateEvidenceSha256: evidenceSha256
   })
   assert.deepEqual(evidenceBoundRequest.localGateEvidence, { ...evidence, sha256: evidenceSha256 })
+  const requestFile = path.join(temp, 'cnb-mirror-request.json')
+  await writeFile(requestFile, JSON.stringify(evidenceBoundRequest))
+  const verifiedRequest = await verifyPrPreviewFeedFiles({
+    configFile: verifierConfig,
+    indexFile,
+    manifestFile,
+    requestFile,
+    now: Date.parse('2026-08-25T00:03:00.000Z')
+  })
+  assert.equal(verifiedRequest.requestAssets, 3)
   await writeFile(evidenceFile, JSON.stringify({ ...evidence, checks: { healthy: 'passed', rollback: 'failed' } }))
   await assert.rejects(() => verifyPromotionCandidate({
     configFile: verifierConfig,

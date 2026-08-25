@@ -133,7 +133,6 @@ jobs:
         run: |
           set -euo pipefail
           signed="$RUNNER_TEMP/signed-preview"
-          rm -f "$signed/cnb-mirror-request.json"
           audit="$signed/pr-preview-signing-audit.json"
           component="$(find "$signed" -maxdepth 1 -type f -name 'desktop-shell-*.zip' -printf '%f\n')"
           manifest="$(jq -r '.manifestReleaseAsset' "$audit")"
@@ -144,6 +143,7 @@ jobs:
           find "$signed" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$actual"
           diff -u "$expected" "$actual"
           test "$(wc -l < "$actual")" -eq 4
+          test -z "$(find "$signed" -mindepth 1 -type d -print -quit)"
       - name: Publish immutable GitHub fallback assets without replacement
         shell: bash
         env:

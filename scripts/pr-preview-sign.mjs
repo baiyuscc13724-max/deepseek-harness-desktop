@@ -4,7 +4,6 @@ import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createHash, createPublicKey } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { createCnbMirrorRequest } from './pr-preview-cnb-request.mjs'
 import {
   normalizeOfficialStableVersion,
   OFFICIAL_REPOSITORY,
@@ -250,15 +249,12 @@ export async function signPreview(options) {
   const verifiedManifest = validateAndVerifyPreviewManifest(previewManifest, trustedKeys, { now })
   assertIndexMatchesManifest(verifiedIndex, verifiedManifest)
 
-  const feedRoot = path.join(outputRoot, 'component-feeds', 'pr-preview')
-  const feedManifestFile = path.join(feedRoot, 'manifests', `${headSha}.json`)
-  const feedIndexFile = path.join(feedRoot, 'latest.json')
-  await writeSignedManifest(feedManifestFile, previewManifest)
-  await writeSignedManifest(feedIndexFile, previewIndex)
   const manifestReleaseAsset = `pr-preview-manifest-${headSha}.json`
   const indexReleaseAsset = `pr-preview-index-${headSha}.json`
-  await copyFile(feedManifestFile, path.join(outputRoot, manifestReleaseAsset))
-  await copyFile(feedIndexFile, path.join(outputRoot, indexReleaseAsset))
+  const feedManifestFile = path.join(outputRoot, manifestReleaseAsset)
+  const feedIndexFile = path.join(outputRoot, indexReleaseAsset)
+  await writeSignedManifest(feedManifestFile, previewManifest)
+  await writeSignedManifest(feedIndexFile, previewIndex)
   const feedReleaseAssets = []
   for (const name of [manifestReleaseAsset, indexReleaseAsset]) {
     const info = await stat(path.join(outputRoot, name))
@@ -281,9 +277,7 @@ export async function signPreview(options) {
     feedReleaseAssets
   }
   await writeFile(path.join(outputRoot, 'pr-preview-signing-audit.json'), `${JSON.stringify(audit, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  const cnbRequest = await createCnbMirrorRequest({ previewIndex, previewManifest, audit, assetsRoot: outputRoot, githubRepository: repository, cnbProject })
-  await writeFile(path.join(outputRoot, 'cnb-mirror-request.json'), `${JSON.stringify(cnbRequest, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  return { immutableTag, previewIndex, previewManifest, componentName: report.component.name, feedIndexFile, feedManifestFile, cnbRequest }
+  return { immutableTag, previewIndex, previewManifest, componentName: report.component.name, feedIndexFile, feedManifestFile }
 }
 
 async function main() {
