@@ -27,7 +27,7 @@ test('端到端：用户导航 → 授权 → 模型操作 → 关键动作确�
   assert.throws(() => policy.userNavigate('file:///C:/secret.txt'), error => error.code === 'scheme-blocked')
   assert.throws(() => policy.userNavigate('javascript:alert(1)'), error => error.code === 'scheme-blocked')
 
-  // 集成方上报当前可见活动标签（用户已在真实页面完成登录）。
+  // 集成方上报当前活动标签（用户已在真实页面完成登录；之后可转入后台）。
   policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
 
   // 未授权时模型寸步难行。
@@ -105,13 +105,13 @@ test('端到端：用户导航 → 授权 → 模型操作 → 关键动作确�
   assert.ok(!JSON.stringify(raw).includes('cookie') && !JSON.stringify(raw).includes('password'))
 })
 
-test('模型可从可见空白标签打开预览，但读取与跨 origin 仍保持默认拒绝', async t => {
+test('模型可从后台空白标签打开预览，但读取与跨 origin 仍保持默认拒绝', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-bootstrap-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const policy = new BrowserSecurityPolicy({ authzRootDir: root })
 
   const preview = policy.modelBootstrapNavigate('https://example.com/start?secret-query#fragment', {
-    tabId: 'tab-blank', currentUrl: 'about:blank', visible: true
+    tabId: 'tab-blank', currentUrl: 'about:blank', visible: false, available: true
   })
   assert.equal(preview.origin, 'https://example.com')
   assert.equal(preview.previewOnly, true)
@@ -120,7 +120,7 @@ test('模型可从可见空白标签打开预览，但读取与跨 origin 仍保
   assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-blank' }), error => error.code === 'permission-denied')
   assert.throws(() => policy.modelAction({ action: 'click', tabId: 'tab-blank' }), error => error.code === 'permission-denied')
   assert.throws(() => policy.modelBootstrapNavigate('https://example.com', { tabId: 'tab-blank', currentUrl: 'https://example.com', visible: true }), error => error.code === 'bootstrap-not-blank')
-  assert.throws(() => policy.modelBootstrapNavigate('https://example.com', { tabId: 'tab-hidden', currentUrl: 'about:blank', visible: false }), error => error.code === 'tab-not-visible')
+  assert.throws(() => policy.modelBootstrapNavigate('https://example.com', { tabId: 'tab-unavailable', currentUrl: 'about:blank', visible: false, available: false }), error => error.code === 'tab-unavailable')
   assert.throws(() => policy.modelBootstrapNavigate('http://127.0.0.1:4999', { tabId: 'tab-blank', currentUrl: 'about:blank', visible: true }), error => error.code === 'private-network-not-authorized')
   assert.throws(() => policy.modelNavigate('https://example.com/old-preview', { tabId: 'tab-blank' }), error => error.code === 'origin-not-authorized')
 
@@ -187,20 +187,23 @@ test('localhost 开发站点必须由用户显式授权，且授权精确绑定 
   assert.throws(() => policy.modelNavigate('http://localhost:3001/other', { tabId: 'tab-local' }), error => error.code === 'private-network-not-authorized')
 })
 
-test('模型动作必须作用于当前可见活动标签（tabId/来源强校验）', async t => {
+test('模型动作可作用于后台活动标签，同时保持 tabId/来源/可用性强校验', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-tab-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const policy = new BrowserSecurityPolicy({ authzRootDir: root })
   policy.grant(ORIGIN, { actions: ['read'] })
-  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
+  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true, available: true })
 
   // 标签不一致。
   assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-2' }), error => error.code === 'tab-mismatch')
   // 声明来源伪造。
   assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1', declaredOrigin: 'https://evil.com' }), error => error.code === 'origin-mismatch')
-  // 无可见标签（如侧栏被隐藏）→ 模型不可操作。
-  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: false })
-  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'tab-not-visible')
+  // 右栏隐藏后仍通过结构化通道操作同一后台标签。
+  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: false, available: true })
+  assert.equal(policy.modelAction({ action: 'read', tabId: 'tab-1' }).allowed, true)
+  // 标签本身关闭或失效时仍拒绝。
+  policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: false, available: false })
+  assert.throws(() => policy.modelAction({ action: 'read', tabId: 'tab-1' }), error => error.code === 'tab-unavailable')
 })
 
 test('Profile 重置接管会清空活动标签和一次性确认但不越权改写授权', async t => {
@@ -257,7 +260,7 @@ test('暂停模型控制不会停止用户浏览或审计，且只能由用户�
   assert.ok(policy.auditSnapshot().entries.some(entry => entry.action === 'model-control-resume'))
 })
 
-test('Computer Use 共享授权只临时放行当前可见 origin，并保留浏览器硬门禁', () => {
+test('Computer Use 共享授权只临时放行当前活动 origin（可见或后台），并保留浏览器硬门禁', () => {
   const policy = new BrowserSecurityPolicy()
   policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
 

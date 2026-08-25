@@ -193,17 +193,19 @@ class ActionGate {
     this.uploadRoots = normalizeRoots(uploadRoots)
     this.downloadRoots = normalizeRoots(downloadRoots)
     this.confirmations = new Map() // id -> 确认请求
-    this.activeTab = null // { id, origin, visible }
+    this.activeTab = null // { id, origin, visible, available }
   }
 
-  /** 上报当前可见的右栏活动标签（由集成方在 DID-NAVIGATE/标签切换时调用）。 */
+  /** 上报当前可控制的活动标签；visible 仅表示是否展示给用户，不再是模型控制前提。 */
   setActiveTab(tab) {
     const id = safeTextPlain(tab?.id, 64)
     if (!id) throw gateError('no-tab-id', '活动标签缺少 id。')
     const origin = tryCanonicalOrigin(tab?.origin)
     if (!origin) throw gateError('tab-origin-invalid', '活动标签必须具有 http/https origin。')
-    this.activeTab = { id, origin, visible: tab.visible !== false }
-    return { id, origin }
+    const visible = tab?.visible !== false
+    const available = tab?.available !== false
+    this.activeTab = { id, origin, visible, available }
+    return { id, origin, visible, available }
   }
 
   clearActiveTab() {
@@ -218,9 +220,9 @@ class ActionGate {
   gate({ action, tabId, declaredOrigin, field, payload, confirmationId, authorizations }) {
     if (!MODEL_ACTIONS.includes(action)) throw gateError('unknown-action', `未知的模型动作：${action}`)
     const tab = this.activeTab
-    if (!tab) throw gateError('no-active-tab', '当前没有可操作的右栏活动标签。')
-    if (!tab.visible) throw gateError('tab-not-visible', '模型仅可操作当前可见的右栏活动标签。')
-    if (String(tabId) !== tab.id) throw gateError('tab-mismatch', '模型仅可操作当前可见的右栏活动标签，标签不一致。')
+    if (!tab) throw gateError('no-active-tab', '当前没有可操作的浏览器活动标签。')
+    if (!tab.available) throw gateError('tab-unavailable', '当前浏览器活动标签已不可用。')
+    if (String(tabId) !== tab.id) throw gateError('tab-mismatch', '模型仅可操作当前浏览器活动标签，标签不一致。')
 
     // 来源校验：以活动标签的真实 origin 为准。
     if (declaredOrigin != null) {

@@ -4,12 +4,12 @@
 // origin 的站点授权、模型动作门禁与有界审计串成一条不可绕过的链路。集成方
 // （右栏浏览器宿主）只与本模块打交道：
 //   - 用户导航（userNavigate）：走用户档策略（仅 http/https），导航成功后
-//     宿主应回调 setActiveTab 上报当前可见活动标签；
+//     宿主应回调 setActiveTab 上报当前活动标签；标签可在后台运行，visible 仅用于 UI 状态；
 //   - 登录由用户在真实右栏浏览器页面亲自完成：模型既看不到密码输入框中的值，
 //     也无法读取或写入任何敏感字段，Cookie 只在独立分区内由真实浏览器管理；
 //   - 模型访问（modelNavigate/modelAction）：走更严策略（公网 + origin 已
 //     授权 + 分权 + 敏感拦截 + 关键动作人工确认）；modelBootstrapNavigate
-//     仅允许可见 about:blank 建立预览 origin，绝不因此授予读取或操作权限；
+//     仅允许当前可用的 about:blank 标签建立预览 origin，绝不因此授予读取或操作权限；
 //   - stop() 停机、revokeAll() 整体撤销授权、auditSnapshot() 查看有界审计。
 // 纯 Node 实现，无 Electron 依赖，可独立用 node:test 测试。
 
@@ -97,7 +97,7 @@ class BrowserSecurityPolicy {
   }
 
   /**
-   * Computer Use grant 生效时，仅对当前可见活动 origin 临时放行普通浏览器权限。
+   * Computer Use grant 生效时，仅对当前活动 origin 临时放行普通浏览器权限。
    * 这不会持久化，也不会允许跨 origin 跳转；敏感字段、敏感值与关键动作确认仍由
    * ActionGate 强制执行。旧的显式站点授权继续兼容。
    */
@@ -126,7 +126,7 @@ class BrowserSecurityPolicy {
     }
   }
 
-  /** 由集成方上报当前可见的右栏活动标签（DID-NAVIGATE / 标签切换时）。 */
+  /** 由集成方上报当前活动标签（可见或后台；DID-NAVIGATE / 标签切换时）。 */
   setActiveTab(tab) {
     if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
     const info = this.gate.setActiveTab(tab)
@@ -143,16 +143,16 @@ class BrowserSecurityPolicy {
   }
 
   /**
-   * 仅供可见 about:blank 标签建立首个 HTTP(S) origin。公网目标只能作为未授权
+   * 仅供当前可用的 about:blank 标签建立首个 HTTP(S) origin。公网目标只能作为未授权
    * 预览打开；本机/内网目标必须是已获用户授权的精确 origin，或当前受管
    * Harness Web origin。成功只绑定标签 origin，不授予 read/click/type 等权限。
    */
-  modelBootstrapNavigate(url, { tabId, currentUrl, visible, trustedPrivateOrigins = [] } = {}) {
+  modelBootstrapNavigate(url, { tabId, currentUrl, visible = false, available = true, trustedPrivateOrigins = [] } = {}) {
     if (this.isModelStopped) throw policyError('stopped', '浏览器模型控制已停止。')
     let origin = null
     try {
-      if (currentUrl !== 'about:blank') throw policyError('bootstrap-not-blank', '模型仅可从可见的 about:blank 标签建立首个站点来源。')
-      if (visible !== true) throw policyError('tab-not-visible', '模型仅可操作当前可见的右栏活动标签。')
+      if (currentUrl !== 'about:blank') throw policyError('bootstrap-not-blank', '模型仅可从当前 about:blank 标签建立首个站点来源。')
+      if (available !== true) throw policyError('tab-unavailable', '当前浏览器活动标签已不可用。')
       const id = String(tabId || '').trim()
       if (!id) throw policyError('no-tab-id', '活动标签缺少 id。')
       this.modelPreviewOrigins.delete(id)
@@ -162,7 +162,7 @@ class BrowserSecurityPolicy {
         trustedPrivateOrigins
       })
       origin = nav.origin
-      this.gate.setActiveTab({ id, origin, visible: true })
+      this.gate.setActiveTab({ id, origin, visible, available: true })
       this.modelPreviewOrigins.set(id, { origin, privateNetwork: nav.privateNetwork === true })
       while (this.modelPreviewOrigins.size > MAX_MODEL_PREVIEW_ORIGINS) this.modelPreviewOrigins.delete(this.modelPreviewOrigins.keys().next().value)
       this.auditLog.record({ actor: 'model', action: 'navigate-preview', origin, tabId: id, result: 'allowed', code: 'ok' })
@@ -174,16 +174,16 @@ class BrowserSecurityPolicy {
   }
 
   /**
-   * 模型访问档导航：公网 + origin 已授权，且必须作用于当前可见活动标签。
-   * 成功后活动标签 origin 随之更新（同一标签发生了导航）。
+   * 模型访问档导航：公网 + origin 已授权，且必须作用于当前可用活动标签。
+   * 标签可在后台运行；成功后活动标签 origin 随之更新（同一标签发生了导航）。
    */
   modelNavigate(url, { tabId, base } = {}) {
     if (this.isModelStopped) throw policyError('stopped', '浏览器模型控制已停止。')
     try {
       const tab = this.gate.activeTabInfo
-      if (!tab) throw policyError('no-active-tab', '当前没有可操作的右栏活动标签。')
-      if (!tab.visible) throw policyError('tab-not-visible', '模型仅可操作当前可见的右栏活动标签。')
-      if (String(tabId) !== tab.id) throw policyError('tab-mismatch', '模型仅可操作当前可见的右栏活动标签，标签不一致。')
+      if (!tab) throw policyError('no-active-tab', '当前没有可操作的浏览器活动标签。')
+      if (!tab.available) throw policyError('tab-unavailable', '当前浏览器活动标签已不可用。')
+      if (String(tabId) !== tab.id) throw policyError('tab-mismatch', '模型仅可操作当前浏览器活动标签，标签不一致。')
       const preview = this.modelPreviewOrigins.get(tab.id)
       const authorizations = this.effectiveAuthorizations()
       const nav = checkModelNavigation(url, {
@@ -191,7 +191,7 @@ class BrowserSecurityPolicy {
         authorizedPrivateOrigins: [...authorizations.privateOrigins(), ...(preview?.privateNetwork ? [preview.origin] : [])],
         base
       })
-      this.gate.setActiveTab({ id: tab.id, origin: nav.origin, visible: true })
+      this.gate.setActiveTab({ id: tab.id, origin: nav.origin, visible: tab.visible, available: true })
       this.auditLog.record({ actor: 'model', action: 'navigate', origin: nav.origin, tabId: tab.id, result: 'allowed', code: 'ok' })
       return { normalized: nav.normalized, origin: nav.origin }
     } catch (error) {
@@ -201,7 +201,7 @@ class BrowserSecurityPolicy {
   }
 
   /**
-   * 模型对当前可见活动标签发起动作，经过完整门禁。
+   * 模型对当前活动标签（可见或后台）发起动作，经过完整门禁。
    * @returns {{ allowed: true, action, origin, tabId } |
    *           { allowed: false, requiresConfirmation: true, confirmationId, action, origin, summary }}
    * @throws 带 code 的拒绝错误（门禁拒绝）。
@@ -312,7 +312,7 @@ class BrowserSecurityPolicy {
     return { stopped: true, changed: true }
   }
 
-  /** 用户显式恢复模型控制；调用方随后重新绑定当前可见标签。 */
+  /** 用户显式恢复模型控制；调用方随后重新绑定当前活动标签（可见或后台）。 */
   resumeModelControl() {
     if (this.stopped) throw policyError('stopped', '浏览器安全策略已停止。')
     if (!this.modelStopped) return { stopped: false, changed: false }

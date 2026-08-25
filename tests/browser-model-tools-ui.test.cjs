@@ -5,26 +5,33 @@ const { readFile } = require('node:fs/promises')
 
 const root = path.join(__dirname, '..')
 
-test('browser model tools remain user-authorized, visible-tab-only and secret-blind', async () => {
+test('browser model tools remain user-authorized, background-capable, structured and secret-blind', async () => {
   const [main, html, renderer, preload] = await Promise.all([
     readFile(path.join(root, 'electron', 'main.cjs'), 'utf8'),
     readFile(path.join(root, 'renderer', 'index.html'), 'utf8'),
     readFile(path.join(root, 'renderer', 'browser-sidebar.js'), 'utf8'),
     readFile(path.join(root, 'electron', 'preload.cjs'), 'utf8')
   ])
-  assert.match(main, /requireVisibleBrowserForModel/u)
+  assert.match(main, /requireBrowserForModel/u)
+  assert.doesNotMatch(main, /function requireBrowserForModel[\s\S]{0,700}tab-not-visible/u)
+  assert.match(main, /backgroundThrottling: false/u)
+  assert.match(main, /dataPlane: \{ primary: 'cdp-dom', structuredRefs: true, loopbackApi: true, screenshotRequired: false/u)
+  assert.match(main, /transport: 'authenticated-loopback-json'/u)
   assert.match(main, /allowBlankNavigation = action === 'navigate' \|\| action === 'tabOpen'/u)
   assert.match(main, /allowBlankNavigation && url === 'about:blank'/u)
   assert.match(main, /browserSecurityPolicy\.modelBootstrapNavigate/u)
   assert.match(main, /trustedPrivateOrigins: browserModelBootstrapTrustedPrivateOrigins\(\)/u)
   assert.match(main, /if \(action === 'observe'\) return observeBrowserForModel\(context\.signal\)/u)
-  assert.match(main, /browserSidebarVisible \|\| !browserContentVisible/u)
+  assert.match(main, /surface: browserSidebarVisible && browserContentVisible \? 'visible' : 'background'/u)
   assert.match(main, /\['click', 'type'\]\.includes\(action\)/u)
   assert.match(main, /redactSensitiveText/u)
   assert.match(main, /browserSecurityPolicy\.modelAction/u)
   assert.match(main, /HARNESS_DESKTOP_BROWSER_STATE_FILE/u)
   assert.match(main, /captureBrowserForModel/u)
   assert.match(main, /browserDomDiagnostics/u)
+  assert.match(main, /const accessibleName = element/u)
+  assert.match(main, /const implicitRole = element/u)
+  assert.match(main, /removeAttribute\(referenceAttribute\)/u)
   assert.match(main, /browserDiagnostics = new BrowserDiagnostics\(\)/u)
   assert.match(main, /createBrowserTab/u)
   assert.match(main, /switchBrowserTab/u)
@@ -52,7 +59,8 @@ test('browser model tools remain user-authorized, visible-tab-only and secret-bl
   assert.match(main, /new BrowserSecurityPolicy\(browserPolicyOptions\(\)\)[\s\S]{0,180}pauseModelControl/u)
   assert.doesNotMatch(main, /Runtime\.evaluate|Page\.addScriptToEvaluateOnNewDocument/u)
   assert.match(html, /浏览器控制 · Computer Use/u)
-  assert.match(html, /无需再授权当前站点/u)
+  assert.match(html, /内置浏览器可在后台运行，右栏只是可选预览/u)
+  assert.match(html, /结构化 CDP\/DOM 引用/u)
   assert.match(html, /上传、下载与提交继续按事务确认/u)
   assert.doesNotMatch(html, /id="browserGrantCurrent"|id="browserRevokeCurrent"|id="browserResumeModel"/u)
   assert.match(renderer, /允许 AI 控制/u)

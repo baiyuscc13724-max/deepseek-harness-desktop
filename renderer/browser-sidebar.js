@@ -531,7 +531,12 @@
       : control.granted
         ? '共享控制已停止，授权仍有效'
         : '等待共享 Computer Use 授权'
-    privacySummary.textContent = `${sharedState}；本次运行保留 ${auditCount} 条脱敏审计元数据${authorizationCount ? `；兼容保留 ${authorizationCount} 个旧版站点授权` : ''}。`
+    const browserSessionState = state.session?.surface === 'background'
+      ? '浏览器会话正在后台运行（CDP/DOM 结构化通道）'
+      : state.session?.surface === 'visible'
+        ? '浏览器会话正在右栏预览（CDP/DOM 结构化通道）'
+        : '浏览器会话将在首次模型导航时后台启动'
+    privacySummary.textContent = `${sharedState}；${browserSessionState}；本次运行保留 ${auditCount} 条脱敏审计元数据${authorizationCount ? `；兼容保留 ${authorizationCount} 个旧版站点授权` : ''}。`
     pendingActions.replaceChildren()
     for (const pending of state.pendingConfirmations || []) {
       const row = document.createElement('div')
