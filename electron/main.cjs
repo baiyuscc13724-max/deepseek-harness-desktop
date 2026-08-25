@@ -3736,7 +3736,7 @@ async function ensureComponentUpdateService() {
 function prPreviewStateAdapter() {
   return {
     async load() {
-      const updates = (await ensureStateStore().load()).updates || {}
+      const updates = ensureStateStore().get().updates || {}
       if (!updates.lastPreviewSequence || !updates.lastPreviewHeadSha) return null
       return { sequence: updates.lastPreviewSequence, headSha: updates.lastPreviewHeadSha }
     },
@@ -3750,8 +3750,12 @@ async function ensurePrPreviewUpdateContext() {
   if (prPreviewUpdateContextPromise) return prPreviewUpdateContextPromise
   prPreviewUpdateContextPromise = (async () => {
     const bootstrap = componentUpdateBootstrapContext()
-    const appRoot = bootstrap?.layout?.shellRoot || app.getAppPath()
-    const config = await resolvePrPreviewUpdateConfig({ appRoot, resourcesPath: process.resourcesPath })
+    const shellRoot = bootstrap?.layout?.shellRoot || ''
+    const config = await resolvePrPreviewUpdateConfig({
+      resourcesPath: process.resourcesPath,
+      shellRoot,
+      packagedAppRoot: app.getAppPath()
+    })
     const component = await ensureComponentUpdateService()
     const enabled = config.enabled && !STORE_BUILD
     const service = new PrPreviewUpdateService({
@@ -3821,7 +3825,7 @@ function isPendingPreviewReady(componentState, activation) {
 
 async function getPrPreviewUpdateState() {
   const context = await ensurePrPreviewUpdateContext()
-  const appState = await ensureStateStore().load()
+  const appState = ensureStateStore().get()
   const componentState = await context.component.store.get()
   const activation = await context.activation.get()
   const ready = isPendingPreviewReady(componentState, activation)
@@ -3839,7 +3843,7 @@ async function getPrPreviewUpdateState() {
 
 async function checkPrPreviewUpdates() {
   const context = await ensurePrPreviewUpdateContext()
-  const preferences = (await ensureStateStore().load()).updates || {}
+  const preferences = ensureStateStore().get().updates || {}
   const current = await getPrPreviewUpdateState()
   if (current.ready && current.candidate) return { ...current, available: true, reason: 'ready' }
   if (!preferences.previewEnabled) {
@@ -3891,7 +3895,7 @@ async function resetPendingPreview(componentStore, activation) {
 
 async function stagePrPreviewUpdate() {
   const context = await ensurePrPreviewUpdateContext()
-  const preferences = (await ensureStateStore().load()).updates || {}
+  const preferences = ensureStateStore().get().updates || {}
   if (!preferences.previewEnabled || !context.enabled) throw new Error('PR 快速预览通道尚未启用。')
   const pending = lastPrPreviewCandidate
   if (!pending?.discovery?.available) throw new Error('没有经过验证且等待确认的 PR 预览候选。')
