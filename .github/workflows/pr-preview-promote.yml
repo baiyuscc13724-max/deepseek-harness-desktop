@@ -141,7 +141,7 @@ jobs:
           umask 077
           printf '%s' "$EVIDENCE_BASE64" | base64 --decode > "$RUNNER_TEMP/local-gate-evidence.json"
           test "$(sha256sum "$RUNNER_TEMP/local-gate-evidence.json" | awk '{print $1}')" = "$EVIDENCE_SHA256"
-          printf '%s' "$BUNDLE_DIGESTS_JSON" | jq -e '.schemaVersion == 1 and (.assets | type == "object")' > "$RUNNER_TEMP/candidate-digests.json"
+          printf '%s' "$BUNDLE_DIGESTS_JSON" | jq -e 'select(.schemaVersion == 1 and (.assets | type == "object"))' > "$RUNNER_TEMP/candidate-digests.json"
       - name: Read current signed indexes without allowing rollback
         shell: bash
         run: |

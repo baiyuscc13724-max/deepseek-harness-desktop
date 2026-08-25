@@ -104,6 +104,8 @@ test('promotion workflow owns the CNB handoff behind independent local evidence 
     assert.equal(workflow.on.workflow_dispatch.inputs[input].required, true)
   }
   assert.match(source, /pr-preview-promote-verify\.mjs/)
+  assert.match(source, /jq -e 'select\(\.schemaVersion == 1 and \(\.assets \| type == "object"\)\)'/)
+  assert.doesNotMatch(source, /jq -e '\.schemaVersion == 1 and \(\.assets \| type == "object"\)'/)
   assert.match(source, /pr-preview-cnb-request\.mjs/)
   assert.match(source, /secrets\.CNB_PR_PREVIEW_PUSH_TOKEN/)
   assert.match(source, /name: pr-preview-promotion/)
