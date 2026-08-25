@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { generateKeyPairSync, sign } = require('node:crypto')
-const { canonicalJson, withoutSignature } = require('../electron/bridge/component-update-contract.cjs')
+const { canonicalJson, validateAndVerifyManifest, withoutSignature } = require('../electron/bridge/component-update-contract.cjs')
 const { OFFICIAL_PREVIEW_REPOSITORY } = require('../electron/bridge/pr-preview-update-contract.cjs')
 const { OFFICIAL_PREVIEW_INDEX_URLS } = require('../electron/bridge/pr-preview-update-config.cjs')
 const {
@@ -121,6 +121,8 @@ test('discovery falls back across both layers, returns display metadata, and per
   assert.equal(result.baseRef, 'main')
   assert.equal(result.headSha, SHA)
   assert.equal(result.sequence, 23)
+  assert.deepEqual(result.manifest, data.previewManifest.componentManifest)
+  assert.doesNotThrow(() => validateAndVerifyManifest(result.manifest, data.trustedKeys, { now: NOW }))
   assert.equal(result.manifest.channel, 'prerelease')
   assert.equal(result.manifest.components[0].id, 'desktop-shell')
   assert.deepEqual(calls, [...OFFICIAL_PREVIEW_INDEX_URLS, ...manifestUrls()])
