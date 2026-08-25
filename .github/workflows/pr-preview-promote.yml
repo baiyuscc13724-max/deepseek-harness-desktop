@@ -1,0 +1,332 @@
+name: Promote Locally Gated PR Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign_run_id:
+        description: Successful immutable PR preview signing run id
+        required: true
+      pull_request:
+        description: Still-open approved pull request number
+        required: true
+      head_sha:
+        description: Exact approved 40-character PR head SHA
+        required: true
+      immutable_tag:
+        description: Exact immutable candidate tag from the signing audit
+        required: true
+      sequence:
+        description: Exact signed preview sequence
+        required: true
+      bundle_digests_json:
+        description: Exact schemaVersion 1 JSON map of all four immutable candidate asset SHA-256 values
+        required: true
+      evidence_base64:
+        description: Base64 UTF-8 local gate evidence JSON
+        required: true
+      evidence_sha256:
+        description: SHA-256 of the exact decoded local gate evidence bytes
+        required: true
+
+run-name: Promote locally gated PR #${{ inputs.pull_request }} · ${{ inputs.head_sha }}
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: pr-preview-promotion-channel
+  cancel-in-progress: false
+
+jobs:
+  verify-evidence-and-promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pr-preview-promotion
+    steps:
+      - name: Prove promotion dispatch originated from the repository default branch
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DISPATCH_REF: ${{ github.ref }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$DISPATCH_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test "$GITHUB_REPOSITORY" = 'baiyuscc13724-max/deepseek-harness-desktop'
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+      - name: Checkout only the trusted promotion workflow commit without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify trusted checkout
+        shell: bash
+        env:
+          TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TRUSTED_WORKFLOW_SHA"
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install trusted verification dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Fetch exact signing run, artifact, PR, and immutable release metadata
+        id: metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGN_RUN_ID: ${{ inputs.sign_run_id }}
+          APPROVED_PR: ${{ inputs.pull_request }}
+          APPROVED_HEAD_SHA: ${{ inputs.head_sha }}
+          IMMUTABLE_TAG: ${{ inputs.immutable_tag }}
+          SEQUENCE: ${{ inputs.sequence }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$SIGN_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APPROVED_PR" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APPROVED_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$SEQUENCE" =~ ^[1-9][0-9]*$ ]]
+          case "$IMMUTABLE_TAG" in
+            (pr-preview-"$APPROVED_PR"-"${APPROVED_HEAD_SHA:0:12}"-run-*) ;;
+            (*) echo 'Immutable tag is not bound to the approved PR/head.' >&2; exit 1 ;;
+          esac
+          artifact_name="pr-preview-signed-candidate-$APPROVED_PR-$APPROVED_HEAD_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SIGN_RUN_ID" > "$RUNNER_TEMP/sign-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SIGN_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/sign-artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$APPROVED_PR" > "$RUNNER_TEMP/pull-request.json"
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg branch "$DEFAULT_BRANCH" '
+            .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and
+            .path == ".github/workflows/pr-preview-sign.yml" and .head_branch == $branch and .repository.full_name == $repo
+          ' "$RUNNER_TEMP/sign-run.json" >/dev/null
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$APPROVED_HEAD_SHA" --argjson pr "$APPROVED_PR" '
+            .number == $pr and .state == "open" and .draft == false and .merged_at == null and
+            .head.sha == $sha and .head.repo.full_name == $repo and .head.repo.fork == false and
+            .base.ref == "main" and .base.repo.full_name == $repo
+          ' "$RUNNER_TEMP/pull-request.json" >/dev/null
+          jq -e --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length == 1' \
+            "$RUNNER_TEMP/sign-artifacts.json" >/dev/null
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$IMMUTABLE_TAG" --jq .sha)" = "$APPROVED_HEAD_SHA"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+      - name: Download exact immutable candidate recovery artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ steps.metadata.outputs.artifact_name }}
+          path: ${{ runner.temp }}/signed-candidate
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.sign_run_id }}
+      - name: Re-download every immutable candidate release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMMUTABLE_TAG: ${{ inputs.immutable_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          gh release download "$IMMUTABLE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release-assets"
+      - name: Decode exact local gate evidence and digest contract
+        shell: bash
+        env:
+          EVIDENCE_BASE64: ${{ inputs.evidence_base64 }}
+          EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
+          BUNDLE_DIGESTS_JSON: ${{ inputs.bundle_digests_json }}
+        run: |
+          set -euo pipefail
+          [[ "$EVIDENCE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          umask 077
+          printf '%s' "$EVIDENCE_BASE64" | base64 --decode > "$RUNNER_TEMP/local-gate-evidence.json"
+          test "$(sha256sum "$RUNNER_TEMP/local-gate-evidence.json" | awk '{print $1}')" = "$EVIDENCE_SHA256"
+          printf '%s' "$BUNDLE_DIGESTS_JSON" | jq -e '.schemaVersion == 1 and (.assets | type == "object")' > "$RUNNER_TEMP/candidate-digests.json"
+      - name: Read current signed indexes without allowing rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          fetch_current() {
+            provider="$1"
+            url="$2"
+            output="$RUNNER_TEMP/current-$provider-index.json"
+            status="$(curl -sS --retry 3 -o "$output" -w '%{http_code}' --proto '=https' --proto-redir '=https' "$url")"
+            if test "$status" = 404; then rm -f "$output"; return; fi
+            test "$status" = 200 || { echo "Unable to read current $provider index: HTTP $status" >&2; exit 1; }
+          }
+          fetch_current cnb 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/pr-preview/latest.json'
+          fetch_current github 'https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/pr-preview/latest.json'
+      - name: Verify signed bundle, live PR, local health evidence, and monotonic sequence
+        shell: bash
+        env:
+          SIGN_RUN_ID: ${{ inputs.sign_run_id }}
+          APPROVED_PR: ${{ inputs.pull_request }}
+          APPROVED_HEAD_SHA: ${{ inputs.head_sha }}
+          IMMUTABLE_TAG: ${{ inputs.immutable_tag }}
+          SEQUENCE: ${{ inputs.sequence }}
+          EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          audit="$RUNNER_TEMP/release-assets/pr-preview-signing-audit.json"
+          index_name="$(jq -r '.indexReleaseAsset' "$audit")"
+          manifest_name="$(jq -r '.manifestReleaseAsset' "$audit")"
+          current_args=()
+          test ! -f "$RUNNER_TEMP/current-cnb-index.json" || current_args+=(--current-cnb-index "$RUNNER_TEMP/current-cnb-index.json")
+          test ! -f "$RUNNER_TEMP/current-github-index.json" || current_args+=(--current-github-index "$RUNNER_TEMP/current-github-index.json")
+          node scripts/pr-preview-promote-verify.mjs \
+            --config pr-preview-update-sources.json \
+            --index "$RUNNER_TEMP/release-assets/$index_name" \
+            --manifest "$RUNNER_TEMP/release-assets/$manifest_name" \
+            --audit "$audit" \
+            --evidence "$RUNNER_TEMP/local-gate-evidence.json" \
+            --evidence-sha256 "$EVIDENCE_SHA256" \
+            --digests "$RUNNER_TEMP/candidate-digests.json" \
+            --release-assets "$RUNNER_TEMP/release-assets" \
+            --candidate-artifact "$RUNNER_TEMP/signed-candidate" \
+            --pull-request "$RUNNER_TEMP/pull-request.json" \
+            --sign-run "$RUNNER_TEMP/sign-run.json" \
+            --sign-run-id "$SIGN_RUN_ID" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --pr-number "$APPROVED_PR" \
+            --head-sha "$APPROVED_HEAD_SHA" \
+            --immutable-tag "$IMMUTABLE_TAG" \
+            --sequence "$SEQUENCE" \
+            "${current_args[@]}" \
+            --out "$RUNNER_TEMP/promotion-verification.json"
+      - name: Generate evidence-bound CNB cloud mirror request after the gate
+        shell: bash
+        env:
+          EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
+        run: |
+          set -euo pipefail
+          audit="$RUNNER_TEMP/release-assets/pr-preview-signing-audit.json"
+          index_name="$(jq -r '.indexReleaseAsset' "$audit")"
+          manifest_name="$(jq -r '.manifestReleaseAsset' "$audit")"
+          node scripts/pr-preview-cnb-request.mjs \
+            --index "$RUNNER_TEMP/release-assets/$index_name" \
+            --manifest "$RUNNER_TEMP/release-assets/$manifest_name" \
+            --audit "$audit" \
+            --assets "$RUNNER_TEMP/release-assets" \
+            --evidence "$RUNNER_TEMP/local-gate-evidence.json" \
+            --evidence-sha256 "$EVIDENCE_SHA256" \
+            --github-repository "$GITHUB_REPOSITORY" \
+            --cnb-project 'baiyuscc13724-max/deepseek-harness-desktop' \
+            --out "$RUNNER_TEMP/cnb-mirror-request.json"
+      - name: Push evidence-gated metadata-only handoff to fixed CNB preview branch
+        shell: bash
+        env:
+          CNB_PR_PREVIEW_PUSH_TOKEN: ${{ secrets.CNB_PR_PREVIEW_PUSH_TOKEN }}
+          APPROVED_HEAD_SHA: ${{ inputs.head_sha }}
+          SIGN_RUN_ID: ${{ inputs.sign_run_id }}
+          EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_TRACE: '0'
+          GIT_CURL_VERBOSE: '0'
+        run: |
+          set -euo pipefail
+          test -n "$CNB_PR_PREVIEW_PUSH_TOKEN" || { echo 'CNB_PR_PREVIEW_PUSH_TOKEN is not configured.' >&2; exit 1; }
+          [[ "$CNB_PR_PREVIEW_PUSH_TOKEN" != *$'\n'* && "$CNB_PR_PREVIEW_PUSH_TOKEN" != *$'\r'* ]]
+          handoff="$RUNNER_TEMP/cnb-pr-preview-handoff"
+          mkdir -p "$handoff/component-feeds/pr-preview/manifests" "$handoff/scripts" "$handoff/electron/bridge"
+          install -m 0644 .cnb.yml "$handoff/.cnb.yml"
+          install -m 0644 scripts/pr-preview-verify-feed.mjs "$handoff/scripts/pr-preview-verify-feed.mjs"
+          install -m 0644 electron/bridge/pr-preview-update-contract.cjs "$handoff/electron/bridge/pr-preview-update-contract.cjs"
+          install -m 0644 electron/bridge/pr-preview-update-config.cjs "$handoff/electron/bridge/pr-preview-update-config.cjs"
+          install -m 0644 electron/bridge/component-update-contract.cjs "$handoff/electron/bridge/component-update-contract.cjs"
+          install -m 0644 pr-preview-update-sources.json "$handoff/pr-preview-update-sources.json"
+          install -m 0644 "$RUNNER_TEMP/cnb-mirror-request.json" "$handoff/cnb-mirror-request.json"
+          audit="$RUNNER_TEMP/release-assets/pr-preview-signing-audit.json"
+          index_name="$(jq -r '.indexReleaseAsset' "$audit")"
+          manifest_name="$(jq -r '.manifestReleaseAsset' "$audit")"
+          install -m 0644 "$RUNNER_TEMP/release-assets/$index_name" "$handoff/component-feeds/pr-preview/latest.json"
+          install -m 0644 "$RUNNER_TEMP/release-assets/$manifest_name" "$handoff/component-feeds/pr-preview/manifests/$APPROVED_HEAD_SHA.json"
+          jq -n --arg headSha "$APPROVED_HEAD_SHA" --arg signRunId "$SIGN_RUN_ID" --arg evidenceSha256 "$EVIDENCE_SHA256" '{
+            schemaVersion: 1,
+            kind: "harness-pr-preview-cnb-handoff",
+            requestFile: "cnb-mirror-request.json",
+            headSha: $headSha,
+            signRunId: ($signRunId | tonumber),
+            evidenceSha256: $evidenceSha256
+          }' > "$handoff/.cnb-pr-preview-request"
+          expected="$RUNNER_TEMP/cnb-pr-preview-expected-files.txt"
+          actual="$RUNNER_TEMP/cnb-pr-preview-actual-files.txt"
+          cat > "$expected" <<EOF
+          .cnb-pr-preview-request
+          .cnb.yml
+          cnb-mirror-request.json
+          component-feeds/pr-preview/latest.json
+          component-feeds/pr-preview/manifests/$APPROVED_HEAD_SHA.json
+          electron/bridge/component-update-contract.cjs
+          electron/bridge/pr-preview-update-config.cjs
+          electron/bridge/pr-preview-update-contract.cjs
+          pr-preview-update-sources.json
+          scripts/pr-preview-verify-feed.mjs
+          EOF
+          (cd "$handoff" && find . -type f -printf '%P\n' | LC_ALL=C sort) > "$actual"
+          diff -u "$expected" "$actual"
+          if find "$handoff" -type f \( -iname '*.zip' -o -iname '*.pem' -o -iname '*.key' -o -iname '*.p12' \) -print -quit | grep -q .; then
+            echo 'Binary component or private-key material entered the CNB metadata handoff.' >&2
+            exit 1
+          fi
+          cd "$handoff"
+          git init --quiet
+          cnb_url='https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop.git'
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0='http.https://cnb.cool/.extraheader'
+          export GIT_CONFIG_VALUE_0="Authorization: Bearer $CNB_PR_PREVIEW_PUSH_TOKEN"
+          remote_oid="$(git ls-remote "$cnb_url" refs/heads/pr-preview | awk 'NR == 1 { print $1 }')"
+          if test -n "$remote_oid"; then
+            [[ "$remote_oid" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags --depth=1 "$cnb_url" refs/heads/pr-preview
+            test "$(git rev-parse FETCH_HEAD)" = "$remote_oid" || { echo 'CNB pr-preview changed while its parent was fetched.' >&2; exit 1; }
+            git symbolic-ref HEAD refs/heads/pr-preview-handoff
+            git update-ref refs/heads/pr-preview-handoff "$remote_oid"
+            git read-tree "$remote_oid"
+            git ls-tree -r --name-only "$remote_oid" | LC_ALL=C sort > "$RUNNER_TEMP/cnb-pr-preview-parent-files.txt"
+            parent_manifest_count="$(grep -Ec '^component-feeds/pr-preview/manifests/[0-9a-f]{40}\.json$' "$RUNNER_TEMP/cnb-pr-preview-parent-files.txt" || true)"
+            test "$parent_manifest_count" -eq 1 || { echo 'Existing CNB handoff parent has an invalid manifest set.' >&2; exit 1; }
+            for fixed in .cnb-pr-preview-request .cnb.yml cnb-mirror-request.json component-feeds/pr-preview/latest.json \
+              electron/bridge/component-update-contract.cjs electron/bridge/pr-preview-update-config.cjs \
+              electron/bridge/pr-preview-update-contract.cjs pr-preview-update-sources.json scripts/pr-preview-verify-feed.mjs; do
+              grep -Fx "$fixed" "$RUNNER_TEMP/cnb-pr-preview-parent-files.txt" >/dev/null
+            done
+            test "$(wc -l < "$RUNNER_TEMP/cnb-pr-preview-parent-files.txt")" -eq 10 || { echo 'Existing CNB handoff parent contains non-allowlisted files.' >&2; exit 1; }
+            comm -23 "$RUNNER_TEMP/cnb-pr-preview-parent-files.txt" "$expected" | while IFS= read -r obsolete; do
+              test -z "$obsolete" || git rm --cached --quiet -- "$obsolete"
+            done
+          else
+            git checkout --orphan pr-preview-handoff
+          fi
+          git add -- .cnb-pr-preview-request .cnb.yml cnb-mirror-request.json component-feeds \
+            electron/bridge/component-update-contract.cjs electron/bridge/pr-preview-update-config.cjs \
+            electron/bridge/pr-preview-update-contract.cjs pr-preview-update-sources.json scripts/pr-preview-verify-feed.mjs
+          git diff --cached --name-only | LC_ALL=C sort > "$RUNNER_TEMP/cnb-pr-preview-staged-files.txt"
+          if test -n "$remote_oid"; then
+            cat "$RUNNER_TEMP/cnb-pr-preview-parent-files.txt" "$expected" | LC_ALL=C sort -u > "$RUNNER_TEMP/cnb-pr-preview-allowed-changes.txt"
+            test -z "$(comm -23 "$RUNNER_TEMP/cnb-pr-preview-staged-files.txt" "$RUNNER_TEMP/cnb-pr-preview-allowed-changes.txt")"
+          else
+            diff -u "$expected" "$RUNNER_TEMP/cnb-pr-preview-staged-files.txt"
+          fi
+          for required_change in .cnb-pr-preview-request cnb-mirror-request.json component-feeds/pr-preview/latest.json "component-feeds/pr-preview/manifests/$APPROVED_HEAD_SHA.json"; do
+            grep -Fx "$required_change" "$RUNNER_TEMP/cnb-pr-preview-staged-files.txt" >/dev/null
+          done
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet -m "preview: request evidence-gated mirror for $APPROVED_HEAD_SHA"
+          git ls-tree -r --name-only HEAD | LC_ALL=C sort > "$RUNNER_TEMP/cnb-pr-preview-result-files.txt"
+          diff -u "$expected" "$RUNNER_TEMP/cnb-pr-preview-result-files.txt"
+          if test -n "$remote_oid"; then test "$(git rev-parse HEAD^)" = "$remote_oid"; else test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 1; fi
+          observed_oid="$(git ls-remote "$cnb_url" refs/heads/pr-preview | awk 'NR == 1 { print $1 }')"
+          test "$observed_oid" = "$remote_oid" || { echo 'CNB pr-preview changed before the non-force push.' >&2; exit 1; }
+          git push "$cnb_url" HEAD:refs/heads/pr-preview
+      - name: Preserve promotion verification without local gate bytes
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-preview-promotion-${{ inputs.pull_request }}-${{ inputs.head_sha }}
+          path: |
+            ${{ runner.temp }}/promotion-verification.json
+            ${{ runner.temp }}/cnb-mirror-request.json
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0

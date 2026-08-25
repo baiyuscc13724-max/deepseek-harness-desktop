@@ -1,0 +1,97 @@
+name: Build Same-Repository PR Preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - 'electron/**'
+      - 'renderer/**'
+      - 'plugins/**'
+      - 'build/icon.png'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/pr-preview-build.mjs'
+      - 'electron/bridge/component-update-builder.cjs'
+
+run-name: Unsigned PR preview #${{ github.event.pull_request.number }} · ${{ github.event.pull_request.head.sha }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-preview-build-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build-unsigned:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve the current published stable baseline before PR code exists
+        id: stable
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/official-stable-release.json"
+          jq -e '.draft == false and .prerelease == false and (.published_at | type == "string")' "$RUNNER_TEMP/official-stable-release.json" >/dev/null
+          tag="$(jq -r '.tag_name' "$RUNNER_TEMP/official-stable-release.json")"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: Checkout the exact same-repository PR head without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify checkout remains bound to the event head
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          test "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install dependencies without executing lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build unsigned component envelope
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          PULL_REQUEST_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/pr-preview-unsigned"
+          node scripts/pr-preview-build.mjs \
+            --source "$GITHUB_WORKSPACE" \
+            --out "$output" \
+            --repository "$GITHUB_REPOSITORY" \
+            --head-repository "$HEAD_REPOSITORY" \
+            --fork false \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --head-sha "$EXPECTED_HEAD_SHA" \
+            --target win32-x64 \
+            --official-stable-version '${{ steps.stable.outputs.version }}' \
+            --sequence "$GITHUB_RUN_NUMBER" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --built-at "$PULL_REQUEST_UPDATED_AT"
+          test "$(find "$output" -maxdepth 1 -type f | wc -l)" -eq 2
+      - name: Upload only the unsigned, content-addressed envelope
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-preview-unsigned-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/pr-preview-unsigned/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
