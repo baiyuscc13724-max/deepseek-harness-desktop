@@ -339,7 +339,7 @@ test('successful pre-Tag run is the sole artifact source for post-Tag publicatio
   assert.match(publication, /requireDesktopBuildEvidence\(desktopRunId\)[\s\S]*source_run_id', desktopRunId/u)
   assert.match(publication, /displayTitle: `Recover \$\{tag\} from run \$\{desktopRunId\} release \$\{release\.id\} · \$\{recoveryRequestId\}`/u)
   assert.match(publication, /\['source_request_id', stateDesktopRequestId\]/u)
-  assert.match(publication, /recoveryDispatchAttemptedAt[\s\S]*waitForExactWorkflowDiscovery[\s\S]*refusing duplicate dispatch/u)
+  assert.match(publication, /recoveryDispatchAttemptedAt[\s\S]*waitForExactWorkflowDiscovery[\s\S]*recoveryAttempts[\s\S]*retriedAt/u)
   assert.doesNotMatch(publication, /inputs:/u)
   assert.doesNotMatch(publication, /sourceRun\.conclusion === 'success'/u)
   assert.doesNotMatch(source, /gh[^\n]*run[^\n]*download/u)
@@ -702,7 +702,7 @@ test('cloud recovery binds artifacts to the tag and safely resumes any verified 
   assert.doesNotMatch(workflowText, /--clobber/u)
 })
 
-test('post-Tag recovery rotates its request only after an exact terminal failed source run', () => {
+test('post-Tag recovery rotates only exact terminal failed requests and preserves their audit trail', () => {
   const publisher = read('scripts/release-publish.mjs')
   const recovery = publisher.slice(publisher.indexOf("phase(state, 'desktop-publication'"), publisher.indexOf("phase(state, 'signed-android'"))
   assert.match(recovery, /checkpointedRecoveryHeadSha !== expectedRecoveryHeadSha[\s\S]*checkpointedRecoveryHeadBranch !== expectedRecoveryHeadBranch/u)
@@ -710,7 +710,8 @@ test('post-Tag recovery rotates its request only after an exact terminal failed 
   assert.match(recovery, /recoveryCheckpointWorkflowIdentity\(\{ recoveryHeadSha: previousRecovery\.headSha, recoveryHeadBranch: previousRecovery\.headBranch \}\)/u)
   assert.match(recovery, /previousRecovery\.status !== 'completed' \|\| previousRecovery\.conclusion === 'success'[\s\S]*refusing ambiguous redispatch/u)
   assert.match(recovery, /recoveryAttempts[\s\S]*requestId: recoveryRequestId[\s\S]*runId: Number\(previousRecovery\.databaseId\)[\s\S]*invalidatedAt/u)
-  assert.match(recovery, /recoveryRequestId: null[\s\S]*recoveryRunId: null[\s\S]*recoveryDispatchAttemptedAt: null[\s\S]*recoveryHeadSha: null/u)
+  assert.match(recovery, /for \(;;\)[\s\S]*workflowRunByExactIdentity\('recover-release-from-actions\.yml', expectedRecoveryIdentity, 'Recovery'\)[\s\S]*discoveredRecovery\?\.status !== 'completed' \|\| discoveredRecovery\.conclusion === 'success'[\s\S]*state\.phases\['desktop-publication'\]\?\.recoveryAttempts[\s\S]*runId: Number\(discoveredRecovery\.databaseId\)[\s\S]*retriedAt/u)
+  assert.match(recovery, /recoveryRequestId: null[\s\S]*recoveryRunId: null[\s\S]*recoveryDispatchAttemptedAt: null[\s\S]*recoveryHeadSha: null[\s\S]*recoveryRequestId = ''[\s\S]*storedRecoveryRunId = 0[\s\S]*recoveryDispatchAttemptedAt = null/u)
   const terminalGuard = recovery.indexOf("previousRecovery.status !== 'completed'")
   const rotatedRequest = recovery.indexOf('recoveryRequestId = `${tag}-recovery-${randomUUID()}`')
   assert.ok(terminalGuard >= 0 && rotatedRequest > terminalGuard, 'new recovery request id must be created only after the prior exact run is terminal and unsuccessful')

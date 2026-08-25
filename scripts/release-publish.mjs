@@ -1218,28 +1218,53 @@ async function publish() {
       storedRecoveryRunId = 0
       recoveryDispatchAttemptedAt = null
     }
-    if (!recoveryRequestId) recoveryRequestId = `${tag}-recovery-${randomUUID()}`
-    const expectedRecoveryIdentity = {
-      ...WORKFLOWS.recovery,
-      headSha: expectedRecoveryHeadSha,
-      headBranch: expectedRecoveryHeadBranch,
-      displayTitle: `Recover ${tag} from run ${desktopRunId} release ${release.id} · ${recoveryRequestId}`
-    }
-    const storedRecovery = reusableWorkflowRun(storedRecoveryRunId, expectedRecoveryIdentity)
-    await checkpoint(state, 'desktop-publication', {
-      releaseId: release.id,
-      sourceRunId: desktopRunId,
-      sourceRequestId: stateDesktopRequestId,
-      recoveryRequestId,
-      recoveryHeadSha: expectedRecoveryHeadSha,
-      recoveryHeadBranch: expectedRecoveryHeadBranch
-    })
-    let discoveredRecovery = storedRecovery || workflowRunByExactIdentity('recover-release-from-actions.yml', expectedRecoveryIdentity, 'Recovery')
-    if (!discoveredRecovery && recoveryDispatchAttemptedAt) {
-      discoveredRecovery = await waitForExactWorkflowDiscovery('recover-release-from-actions.yml', expectedRecoveryIdentity, 'Recovery')
-    }
-    if (discoveredRecovery?.status === 'completed' && discoveredRecovery.conclusion !== 'success') {
-      throw new Error(`Checkpointed recovery request ${recoveryRequestId} already failed; refusing duplicate dispatch.`)
+    let expectedRecoveryIdentity
+    let discoveredRecovery
+    for (;;) {
+      if (!recoveryRequestId) recoveryRequestId = `${tag}-recovery-${randomUUID()}`
+      expectedRecoveryIdentity = {
+        ...WORKFLOWS.recovery,
+        headSha: expectedRecoveryHeadSha,
+        headBranch: expectedRecoveryHeadBranch,
+        displayTitle: `Recover ${tag} from run ${desktopRunId} release ${release.id} · ${recoveryRequestId}`
+      }
+      const storedRecovery = reusableWorkflowRun(storedRecoveryRunId, expectedRecoveryIdentity)
+      await checkpoint(state, 'desktop-publication', {
+        releaseId: release.id,
+        sourceRunId: desktopRunId,
+        sourceRequestId: stateDesktopRequestId,
+        recoveryRequestId,
+        recoveryHeadSha: expectedRecoveryHeadSha,
+        recoveryHeadBranch: expectedRecoveryHeadBranch
+      })
+      discoveredRecovery = storedRecovery || workflowRunByExactIdentity('recover-release-from-actions.yml', expectedRecoveryIdentity, 'Recovery')
+      if (!discoveredRecovery && recoveryDispatchAttemptedAt) {
+        discoveredRecovery = await waitForExactWorkflowDiscovery('recover-release-from-actions.yml', expectedRecoveryIdentity, 'Recovery')
+      }
+      if (discoveredRecovery?.status !== 'completed' || discoveredRecovery.conclusion === 'success') break
+      const recoveryAttempts = [
+        ...(Array.isArray(state.phases['desktop-publication']?.recoveryAttempts) ? state.phases['desktop-publication'].recoveryAttempts.slice(-15) : []),
+        {
+          requestId: recoveryRequestId,
+          runId: Number(discoveredRecovery.databaseId),
+          headSha: discoveredRecovery.headSha,
+          headBranch: discoveredRecovery.headBranch,
+          conclusion: discoveredRecovery.conclusion,
+          retriedAt: new Date().toISOString()
+        }
+      ]
+      await checkpoint(state, 'desktop-publication', {
+        recoveryAttempts,
+        recoveryRequestId: null,
+        recoveryRunId: null,
+        recoveryDispatchAttemptedAt: null,
+        recoveryHeadSha: null,
+        recoveryHeadBranch: null
+      })
+      recoveryRequestId = ''
+      storedRecoveryRunId = 0
+      recoveryDispatchAttemptedAt = null
+      discoveredRecovery = null
     }
     const reusableRecovery = discoveredRecovery && reusableWorkflowRun(discoveredRecovery.databaseId, expectedRecoveryIdentity)
     let recoveryRunId = Number(reusableRecovery?.databaseId || 0)
