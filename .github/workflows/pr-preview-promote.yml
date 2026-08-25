@@ -272,9 +272,15 @@ jobs:
           cd "$handoff"
           git init --quiet
           cnb_url='https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop.git'
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0='http.https://cnb.cool/.extraheader'
-          export GIT_CONFIG_VALUE_0="Authorization: Bearer $CNB_PR_PREVIEW_PUSH_TOKEN"
+          # CNB HTTPS Git authentication uses the fixed username `cnb` and the
+          # access token as its password. Keep the token out of the URL, Git
+          # config files, command arguments, and logs; expand it only inside
+          # Git's ephemeral credential-helper child process.
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0='credential.helper'
+          export GIT_CONFIG_VALUE_0=''
+          export GIT_CONFIG_KEY_1='credential.helper'
+          export GIT_CONFIG_VALUE_1='!f() { if test "$1" = get; then echo username=cnb; echo "password=$CNB_PR_PREVIEW_PUSH_TOKEN"; fi; }; f'
           remote_oid="$(git ls-remote "$cnb_url" refs/heads/pr-preview | awk 'NR == 1 { print $1 }')"
           if test -n "$remote_oid"; then
             [[ "$remote_oid" =~ ^[0-9a-f]{40}$ ]]
