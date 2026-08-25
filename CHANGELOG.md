@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.45
+
+- 修复 Android API 26–32 兼容问题：移除生产代码中的 `String.isBlank()` 等高版本 API 依赖，补齐配对、文件选择、前台服务、更新检查与错误处理兼容路径，避免旧系统出现 `NoSuchMethodError`。
+- 修复 WSS 中继成功连接后无限创建 SOCKS 转发线程并最终 OOM 闪退：改为单接收线程、固定 8 个工作线程与 16 个有界排队槽，过载时明确拒绝；Android 本地 SOCKS/Web 代理固定绑定 `127.0.0.1`。
+- 新增可配置个人 WSS/443 中转服务器与桌面检测/保存/清除界面，附独立 Node 服务、Caddy 和 systemd 部署示例；中继仅盲转发端到端加密帧，不持有密钥或内容，并强制总连接、握手、房间、来源、帧大小与速率上限。
+- Computer Use 状态和控制入口迁移到“设置 → 插件 → 插件配置”；插件只能请求、停止、恢复或撤销，`本次授权 / 永久授权 / 拒绝` 仍由可信宿主卡独占。保留 v1.0.44 的 `unlimited=true` 语义，不引入旧版受限模式或插件自授权旁路。
+- 桌面、13 个随包插件、Android 与 iOS/iPadOS 源码版本同步到 1.0.45，Android `versionCode` 更新为 10045；正式包继续使用 Tag 后置、GitHub Actions cloud-only 构建、精确 18 项资产、GitHub→CNB 云镜像和 stable-last 契约，历史 Tag（含已发布 v1.0.44）保持不变。
+
 ## 1.0.44
 
 - 修复 v1.0.43 候选在托管 Runner 暴露的三项跨平台门禁问题：Linux CAS 并发原子发布竞态（POSIX `rename(temp,target)` 覆盖造成 inode 替换、验证者误报 `ARTIFACT_CAS_CIPHERTEXT_INVALID`，改为 no-clobber 原子发布，赢家发布、输家只验证既有不可变对象）；Windows Git refs/worktrees MAX_PATH（win32 每次 Git 调用注入 `core.longpaths=true`、缩短 merge 临时 basename，cherry-pick 非零且无 unmerged paths 时 abort 后明确抛 `GIT_OPERATION_FAILED`，不再伪装空冲突）；macOS 打包运行时可选服务读取（dsh-agent-teams 改用官方 `ctx.get` strict optional lookup 读取 `projectFoundations`，缺失 provider 时安全默认，不加入 required inject）。路径 containment、trusted root、immutable receipt/CAS、密文/nonce/digest fail-closed 语义均不放宽。

@@ -21,18 +21,18 @@
 
 ## 下载
 
-目标稳定版：**v1.0.44** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.44)
+目标稳定版：**v1.0.45** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.45)
 
-> `v1.0.41`、`v1.0.42`、`v1.0.43` 候选 Tag 因 GitHub 托管 Runner 门禁失败而未公开发布（v1.0.42 本地 1200 项门禁与 Ubuntu/iOS 云端通过，Windows short-path fixture 与 macOS 并发 Git worktree 竞态失败；v1.0.43 本地官方门禁 1202 tests/1200 pass/2 skip/0 fail 通过，云端 Ubuntu/Windows/macOS 三项已确认失败——CAS 并发 finalize 竞态、Git refs/worktrees MAX_PATH 合并、打包运行时可选服务读取——iOS 通过，未公开 Release、未提升 stable feed）；不可变 Tag 保持原样，修复进入 `v1.0.44`。v1.0.44 起改为 Tag 后置契约：锁定 SHA 的全平台候选构建/测试与 pre-Tag Windows 安装/升级验证全部成功后创建正式 Tag，失败保持同一候选、恢复复用同一 run artifacts，Tag 创建后不移动。在 v1.0.44 发布完成前，请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
+> `v1.0.41`、`v1.0.42`、`v1.0.43` 候选 Tag 因 GitHub 托管 Runner 门禁失败而未公开发布；这些不可变 Tag 保持原样。`v1.0.44` 已按 Tag 后置契约完成发布：锁定 SHA 的全平台候选构建/测试与 pre-Tag Windows 安装/升级验证全部成功后才创建正式 Tag。`v1.0.45` 继续沿用同一契约，失败保持同一候选、恢复复用同一 run artifacts，任何历史 Tag 均不移动或重建。在 v1.0.45 发布完成前，请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-win-x64.exe) |
-| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-portable-x64.exe) |
-| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-arm64.dmg) |
-| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Desktop-1.0.44-mac-x64.dmg) |
-| Android 手机端 1.0.44 | 与桌面端扫码配对、同步会话并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/Harness-Mobile-1.0.44-android-universal.apk) |
-| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.44/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.45/Harness-Desktop-1.0.45-win-x64.exe) |
+| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.45/Harness-Desktop-1.0.45-portable-x64.exe) |
+| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.45/Harness-Desktop-1.0.45-mac-arm64.dmg) |
+| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.45/Harness-Desktop-1.0.45-mac-x64.dmg) |
+| Android 手机端 1.0.45 | 与桌面端扫码配对、同步会话并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.45/Harness-Mobile-1.0.45-android-universal.apk) |
+| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.45/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 
@@ -63,6 +63,8 @@ scoop install harness-desktop/harness-desktop
 | 自适应进度 | 按计划、里程碑、失败与阻塞等语义事件显示“当前 / 已完成 / 下一步”，不按固定步数、工具数或时间刷屏 |
 | 自动本地记忆与缓存 | 显式开启后低干扰使用，只保存稳定偏好和项目约束；敏感信息硬过滤，托盘“数据与隐私”保留查看、关闭、预览和全部删除，不宣称模型自训练 |
 | Android / iOS 移动工作台 | 跨 Windows/macOS 扫码配对；局域网优先，异地使用端到端加密 WSS/443；mesh/tunnel 秘密由操作系统加密存储，iOS 不提供跨 App 控制 |
+| 个人 WSS 中转 | 在“手机与远程同步”中检测并保存自己的无凭据 `wss://` 地址；中继只盲转发端到端加密帧，仓库附 Caddy/systemd 部署示例与有界容量默认值 |
+| Computer Use | 在“设置 → 插件 → 插件配置”查看状态并请求、停止或撤销；本次/永久授权只能在可信宿主卡选择，授权后按明确提示进入 unlimited 桌面控制 |
 | 签名组件增量更新 | 生产 Ed25519 验签、CNB 优先/GitHub 后备、按组件暂存、健康检查和自动回滚；完整安装包始终作为后备 |
 
 ## 三步开始
