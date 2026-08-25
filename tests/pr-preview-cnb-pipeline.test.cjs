@@ -37,6 +37,9 @@ test('CNB preview branch mirrors immutable assets before atomically promoting si
   assert.match(stages[3].script, /rm -f \.cnb-stable-only[\s\S]*git add -u[\s\S]*git add \.cnb\.yml \.cnb-preview-feed-only[\s\S]*git commit -m "preview: promote signed head/)
   assert.match(stages[3].script, /git\/trees/)
   assert.match(stages[3].script, /force:false/)
+  const githubRawVerification = stages[3].script.slice(stages[3].script.lastIndexOf('url="https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/$file"'))
+  assert.match(githubRawVerification, /for wait_seconds in 1 2 4 8 16 32 64/)
+  assert.doesNotMatch(githubRawVerification, /for wait_seconds in 1 2 4 8 12;/)
 
   const readBack = stages[3].script.indexOf('CNB read-back SHA-256 mismatch')
   const cnbPromotion = stages[3].script.indexOf('push origin HEAD:main')

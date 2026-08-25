@@ -336,7 +336,10 @@ pr-preview:
               expected="$(sha256sum "$file" | awk '{print $1}')"
               url="https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/$file"
               verified=false
-              for wait_seconds in 1 2 4 8 12; do
+              # raw.githubusercontent.com can retain the pre-commit 404 at the
+              # branch URL after the Git Data API has atomically advanced main.
+              # Keep polling the exact public client URL for a bounded 127s.
+              for wait_seconds in 1 2 4 8 16 32 64; do
                 sleep "$wait_seconds"
                 curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 -o .github-feed-check "$url" || continue
                 if [ "$(sha256sum .github-feed-check | awk '{print $1}')" = "$expected" ]; then verified=true; break; fi
