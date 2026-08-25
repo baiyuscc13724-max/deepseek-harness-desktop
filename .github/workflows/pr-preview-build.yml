@@ -3,15 +3,6 @@ name: Build Same-Repository PR Preview
 on:
   pull_request:
     types: [opened, reopened, synchronize]
-    paths:
-      - 'electron/**'
-      - 'renderer/**'
-      - 'plugins/**'
-      - 'build/icon.png'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'scripts/pr-preview-build.mjs'
-      - 'electron/bridge/component-update-builder.cjs'
 
 run-name: "Unsigned PR preview #${{ github.event.pull_request.number }} · ${{ github.event.pull_request.head.sha }}"
 

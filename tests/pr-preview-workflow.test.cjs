@@ -21,6 +21,7 @@ test('PR build workflow is secretless, same-repository only, and binds the exact
   const source = await load('.github/workflows/pr-preview-build.yml')
   const workflow = YAML.parse(source)
   assert.ok(workflow.on.pull_request)
+  assert.equal(Object.hasOwn(workflow.on.pull_request, 'paths'), false, 'every synchronized PR head must receive an exact-head build')
   assert.equal(workflow['run-name'], 'Unsigned PR preview #${{ github.event.pull_request.number }} · ${{ github.event.pull_request.head.sha }}')
   assert.equal(workflow.permissions.contents, 'read')
   assert.match(source, /head\.repo\.full_name == github\.repository/)

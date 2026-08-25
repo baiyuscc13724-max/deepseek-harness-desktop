@@ -28,6 +28,16 @@ const RUN_ID = 900
 const ATTEMPT = 1
 const TAG = `pr-preview-${PR}-${HEAD.slice(0, 12)}-run-${RUN_ID}-${ATTEMPT}`
 const ASSET = `desktop-shell-${PREVIEW}-${process.platform}-${process.arch}.zip`
+const HEALTHY_SELF_TEST_CHECKS = Object.freeze({
+  rendererEntry: true,
+  bundledHarness: true,
+  runtimeWebBoot: true,
+  nodeRuntime: true,
+  userData: true,
+  desktopMarketplace: true,
+  bundledGit: true,
+  webCompatibility: true
+})
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
@@ -153,7 +163,16 @@ async function healthyActivation({ store }) {
 
 function selfTest(_executable, _profile, _output, phase) {
   assert.ok(['baseline', 'restored'].includes(phase))
-  return Promise.resolve({ ok: true, product: { version: STABLE } })
+  return Promise.resolve({ ok: true, product: { version: STABLE }, checks: HEALTHY_SELF_TEST_CHECKS })
+}
+
+function legacyStableSelfTest(_executable, _profile, _output, phase) {
+  assert.ok(['baseline', 'restored'].includes(phase))
+  return Promise.resolve({
+    ok: false,
+    product: { version: STABLE },
+    checks: { ...HEALTHY_SELF_TEST_CHECKS, desktopMarketplace: false }
+  })
 }
 
 test('CLI accepts only four local path inputs and rejects URL/token/private-key surfaces', async () => {
@@ -206,6 +225,46 @@ test('real signed bundle stages, activates, restores stable, proves rollback, an
   const store = new ComponentUpdateStore(path.join(files.profile, 'component-updates'))
   assert.equal((await store.get()).phase, 'idle')
   assert.equal(await store.pointer(), null)
+})
+
+test('gate permits only the exact published v1.0.44 marketplace probe false-negative', async t => {
+  const files = await fixture(t)
+  const { runPrPreviewLocalGate } = await loadGate()
+  const result = await runPrPreviewLocalGate({
+    candidateBundle: files.bundle,
+    publicConfig: files.configFile,
+    appExe: files.appExe,
+    evidenceFile: files.evidenceFile
+  }, {
+    now: () => NOW,
+    profileRoot: files.profile,
+    runPackagedSelfTestImpl: legacyStableSelfTest,
+    activateCandidateImpl: healthyActivation
+  })
+  assert.equal(result.evidence.baselineRelease, STABLE)
+  assert.equal(result.evidence.restoredRelease, STABLE)
+  assert.deepEqual(result.evidence.checks, { healthy: 'passed', rollback: 'passed' })
+})
+
+test('gate rejects every other stable baseline self-test failure', async t => {
+  const files = await fixture(t)
+  const { runPrPreviewLocalGate } = await loadGate()
+  const failingSelfTest = async () => ({
+    ok: false,
+    product: { version: STABLE },
+    checks: { ...HEALTHY_SELF_TEST_CHECKS, runtimeWebBoot: false }
+  })
+  await assert.rejects(() => runPrPreviewLocalGate({
+    candidateBundle: files.bundle,
+    publicConfig: files.configFile,
+    appExe: files.appExe,
+    evidenceFile: files.evidenceFile
+  }, {
+    now: () => NOW,
+    profileRoot: files.profile,
+    runPackagedSelfTestImpl: failingSelfTest,
+    activateCandidateImpl: healthyActivation
+  }), /runtimeWebBoot/)
 })
 
 test('gate fails closed for disabled production config, byte-mismatched embedded config, tampering, and extra assets', async t => {
