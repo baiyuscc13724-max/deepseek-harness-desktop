@@ -631,13 +631,29 @@ test('cloud recovery binds artifacts to the tag and safely resumes any verified 
   assert.ok(workflow.jobs.recover)
   assert.equal(workflow.concurrency.group, 'release-${{ inputs.tag }}')
   assert.equal(workflow.concurrency['cancel-in-progress'], false)
+  const nonWindows = workflow.jobs['verify-non-windows-draft']
+  assert.equal(nonWindows.needs, 'recover')
+  assert.equal(nonWindows['timeout-minutes'], 20)
+  assert.deepEqual(nonWindows.permissions, { actions: 'read', contents: 'read' })
+  assert.equal(nonWindows.strategy['max-parallel'], 3)
+  assert.deepEqual(nonWindows.strategy.matrix.asset, [
+    'linux-amd64.deb',
+    'linux-x86_64.AppImage',
+    'mac-arm64.dmg',
+    'mac-arm64.zip',
+    'mac-x64.dmg',
+    'mac-x64.zip'
+  ])
   assert.equal(workflow.jobs['verify-windows-draft'].needs, 'recover')
   assert.equal(workflow.jobs['verify-windows-draft']['timeout-minutes'], 90)
-  assert.equal(workflow.jobs.publish.needs, 'verify-windows-draft')
+  assert.deepEqual(workflow.jobs['verify-windows-draft'].permissions, { actions: 'read', contents: 'read' })
+  assert.deepEqual(workflow.jobs.publish.needs, ['verify-non-windows-draft', 'verify-windows-draft'])
   const recoveryRuns = workflow.jobs.recover.steps.map(step => step.run || '').join('\n')
+  const nonWindowsRuns = nonWindows.steps.map(step => step.run || '').join('\n')
   const windowsRuns = workflow.jobs['verify-windows-draft'].steps.map(step => step.run || '').join('\n')
   const publishRuns = workflow.jobs.publish.steps.map(step => step.run || '').join('\n')
   assert.doesNotMatch(recoveryRuns, /--method PATCH/u)
+  assert.doesNotMatch(nonWindowsRuns, /--method PATCH|uploads\.github\.com/u)
   assert.doesNotMatch(windowsRuns, /--method PATCH|uploads\.github\.com/u)
   assert.match(publishRuns, /--method PATCH "repos\/\$GITHUB_REPOSITORY\/releases\/\$RELEASE_ID"/u)
   assert.match(workflowText, /\.head_sha == \$sha/u)
@@ -673,10 +689,17 @@ test('cloud recovery binds artifacts to the tag and safely resumes any verified 
   assert.match(workflowText, /\$previousInstallerPath = Join-Path \$env:RUNNER_TEMP 'recovered-previous-stable-installer\.exe'/u)
   assert.doesNotMatch(workflowText, /\$previousInstaller = Join-Path \$downloadRoot/u)
   assert.match(workflowText, /\$snapshot\.id\.ToString\(\) -ne \$env:RELEASE_ID/u)
+  assert.match(nonWindowsRuns, /--connect-timeout 30 --max-time 900/u)
+  assert.match(nonWindowsRuns, /releases\/assets\/\$id/u)
+  assert.match(nonWindowsRuns, /actual_size[\s\S]*expected_size[\s\S]*Recovered non-Windows asset size mismatch/u)
+  assert.match(nonWindowsRuns, /actual_digest[\s\S]*expected_digest[\s\S]*Recovered non-Windows asset SHA-256 mismatch/u)
   assert.match(workflowText, /releases\/assets\/\$\(\$asset\.id\)/u)
+  assert.match(workflowText, /\$requiredDraftNames = @\([\s\S]*SHA256SUMS\.txt[\s\S]*portable-x64\.exe[\s\S]*win-x64\.exe/u)
   assert.match(workflowText, /\$downloaded\.Length -ne \[int64\]\$asset\.size/u)
   assert.match(workflowText, /Snapshot digest mismatch/u)
-  assert.match(workflowText, /Downloaded files do not exactly match SHA256SUMS\.txt/u)
+  assert.match(workflowText, /SHA256SUMS\.txt does not list the exact recovered binaries/u)
+  assert.match(workflowText, /Snapshot digest and SHA256SUMS disagree/u)
+  assert.match(workflowText, /Windows gate downloaded an unexpected draft asset set/u)
   assert.match(workflowText, /Harness-Desktop-\$version-portable-x64\.exe/u)
   assert.match(workflowText, /\$portableSelfTestExit -ne 0/u)
   assert.match(workflowText, /Harness-Desktop-\$version-win-x64\.exe/u)

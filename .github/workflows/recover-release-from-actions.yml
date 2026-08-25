@@ -153,7 +153,7 @@ jobs:
             "Harness-Desktop-$version-win-x64.exe" | LC_ALL=C sort)"
           actual="$(find release-files -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
           diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
-          (cd release-files && sha256sum * > SHA256SUMS.txt)
+          (cd release-files && sha256sum * > SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt)
           expected_with_checksum="$(printf '%s\n%s\n' 'SHA256SUMS.txt' "$expected" | LC_ALL=C sort -u)"
           tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
           for file in release-files/*; do
@@ -233,8 +233,8 @@ jobs:
             all(.assets[]; (.id | type == "number") and (.name | type == "string") and
               (.size | type == "number") and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))
           ' draft-snapshot.json >/dev/null
-          # The Windows job below owns the former `releases/assets/$id` and
-          # `sha256sum -c SHA256SUMS.txt` byte-verification responsibilities.
+          # The bounded non-Windows matrix and Windows upgrade job below jointly
+          # own exact release-asset byte verification before publication.
       - name: Bind the signed previous stable Windows installer to an exact public asset
         shell: bash
         run: |
@@ -323,13 +323,76 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  verify-non-windows-draft:
+    name: Verify recovered draft asset (${{ matrix.asset }})
+    needs: recover
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        asset:
+          - linux-amd64.deb
+          - linux-x86_64.AppImage
+          - mac-arm64.dmg
+          - mac-arm64.zip
+          - mac-x64.dmg
+          - mac-x64.zip
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_ID: ${{ inputs.release_id }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: recovered-draft-snapshot
+          path: draft-state
+      - name: Download exact non-Windows asset and verify bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          asset_name="Harness-Desktop-$version-${{ matrix.asset }}"
+          snapshot='draft-state/draft-snapshot.json'
+          jq -e --arg id "$RELEASE_ID" --arg tag "$RELEASE_TAG" '
+            (.id | tostring) == $id and .tag_name == $tag and .draft == true and .prerelease == false
+          ' "$snapshot" >/dev/null
+          asset="$(jq -ec --arg name "$asset_name" '
+            [.assets[] | select(.name == $name)] |
+            if length == 1 then .[0] else error("Exact non-Windows draft asset identity is missing or duplicated.") end
+          ' "$snapshot")"
+          id="$(jq -er '.id' <<<"$asset")"
+          expected_size="$(jq -er '.size' <<<"$asset")"
+          expected_digest="$(jq -er '.digest' <<<"$asset")"
+          [[ "$id" =~ ^[0-9]+$ ]]
+          [[ "$expected_size" =~ ^[1-9][0-9]*$ ]]
+          [[ "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          output="$RUNNER_TEMP/$asset_name"
+          curl --fail-with-body --silent --show-error --location \
+            --retry 3 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 30 --max-time 900 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/octet-stream' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$id" \
+            --output "$output"
+          actual_size="$(stat -c %s "$output")"
+          actual_digest="sha256:$(sha256sum "$output" | awk '{print $1}')"
+          test "$actual_size" = "$expected_size" || { echo "Recovered non-Windows asset size mismatch: $asset_name" >&2; exit 1; }
+          test "$actual_digest" = "$expected_digest" || { echo "Recovered non-Windows asset SHA-256 mismatch: $asset_name" >&2; exit 1; }
+
   verify-windows-draft:
     name: Install authenticated recovered Windows draft
     needs: recover
     runs-on: windows-latest
     timeout-minutes: 90
     permissions:
-      contents: write
+      actions: read
+      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
@@ -464,15 +527,27 @@ jobs:
             Invoke-BoundedDownload -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($previous.asset.id)" -OutFile $previousInstaller -TimeoutSeconds 300
             if ((Get-Item -LiteralPath $previousInstaller).Length -ne [int64]$previous.asset.size) { throw 'Previous stable installer size mismatch.' }
             if ((Get-FileHash -LiteralPath $previousInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $previous.asset.sha256) { throw 'Previous stable installer SHA-256 mismatch.' }
+            $assetsByName = @{}
             foreach ($asset in $snapshot.assets) {
               if ($asset.id -notmatch '^\d+$' -or [IO.Path]::GetFileName($asset.name) -ne $asset.name -or $asset.digest -notmatch '^sha256:([0-9a-f]{64})$') { throw "Unsafe or incomplete snapshot asset metadata: $($asset.name)" }
+              if ($assetsByName.ContainsKey($asset.name)) { throw "Duplicate snapshot asset metadata: $($asset.name)" }
+              $assetsByName[$asset.name] = $asset
+            }
+            $requiredDraftNames = @(
+              'SHA256SUMS.txt',
+              "Harness-Desktop-$version-portable-x64.exe",
+              "Harness-Desktop-$version-win-x64.exe"
+            )
+            foreach ($name in $requiredDraftNames) {
+              if (-not $assetsByName.ContainsKey($name)) { throw "Required Windows draft asset is missing: $name" }
+              $asset = $assetsByName[$name]
               $expectedDigest = $asset.digest.Substring(7)
-              $destination = Join-Path $downloadRoot $asset.name
+              $destination = Join-Path $downloadRoot $name
               Invoke-BoundedDownload -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)" -OutFile $destination -TimeoutSeconds 300
               $downloaded = Get-Item -LiteralPath $destination
-              if ($downloaded.Length -ne [int64]$asset.size) { throw "Snapshot size mismatch for $($asset.name)." }
+              if ($downloaded.Length -ne [int64]$asset.size) { throw "Snapshot size mismatch for $name." }
               $snapshotHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($snapshotHash -ne $expectedDigest) { throw "Snapshot digest mismatch for $($asset.name)." }
+              if ($snapshotHash -ne $expectedDigest) { throw "Snapshot digest mismatch for $name." }
             }
 
             $checksumPath = Join-Path $downloadRoot 'SHA256SUMS.txt'
@@ -485,13 +560,15 @@ jobs:
               $entries[$name] = $Matches[1].ToLowerInvariant()
             }
             if ($entries.Count -eq 0) { throw 'SHA256SUMS.txt contains no assets.' }
-            $listedAssets = @($entries.Keys | Sort-Object) + 'SHA256SUMS.txt'
+            $expectedChecksummedAssets = @($expectedAssets | Where-Object { $_ -ne 'SHA256SUMS.txt' } | Sort-Object)
+            $listedChecksummedAssets = @($entries.Keys | Sort-Object)
+            if (Compare-Object $expectedChecksummedAssets $listedChecksummedAssets) { throw 'SHA256SUMS.txt does not list the exact recovered binaries.' }
             $downloadedAssets = @(Get-ChildItem -LiteralPath $downloadRoot -File | ForEach-Object Name | Sort-Object)
-            if (Compare-Object @($listedAssets | Sort-Object) $downloadedAssets) { throw 'Downloaded files do not exactly match SHA256SUMS.txt.' }
-            if (Compare-Object $expectedAssets $downloadedAssets) { throw 'Downloaded files do not exactly match the recovered draft snapshot.' }
+            if (Compare-Object @($requiredDraftNames | Sort-Object) $downloadedAssets) { throw 'Windows gate downloaded an unexpected draft asset set.' }
             foreach ($entry in $entries.GetEnumerator()) {
-              $actualHash = (Get-FileHash -LiteralPath (Join-Path $downloadRoot $entry.Key) -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($actualHash -ne $entry.Value) { throw "SHA-256 mismatch for $($entry.Key)." }
+              if (-not $assetsByName.ContainsKey($entry.Key)) { throw "SHA256SUMS.txt references an unknown snapshot asset: $($entry.Key)." }
+              $snapshotDigest = $assetsByName[$entry.Key].digest.Substring(7)
+              if ($snapshotDigest -ne $entry.Value) { throw "Snapshot digest and SHA256SUMS disagree for $($entry.Key)." }
             }
 
             $portable = Join-Path $downloadRoot "Harness-Desktop-$version-portable-x64.exe"
@@ -575,7 +652,9 @@ jobs:
 
   publish:
     name: Publish unchanged recovered draft
-    needs: verify-windows-draft
+    needs:
+      - verify-non-windows-draft
+      - verify-windows-draft
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
