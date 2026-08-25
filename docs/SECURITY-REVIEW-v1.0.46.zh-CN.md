@@ -11,6 +11,7 @@ v1.0.46 没有给 PR 代码、客户端或 CNB 普通仓库增加任意生产私
 ## PR Preview 信任边界
 
 - 构建 workflow 只响应官方同仓库、非 fork PR，并在检出 PR head 前通过只读 API 取得最新 published、non-prerelease 稳定基线；checkout 不持久化凭据，`npm ci` 禁用 lifecycle scripts。
+- `opened`、`reopened` 与每次 `synchronize` 均无路径过滤地重建，保证任何新 PR head 都有自己的精确 build；三个 workflow 的显示名称也完整绑定 PR 与 40 字符 head，避免 YAML `#` 注释造成身份截断。
 - 构建任务没有 contents write、Environment 或 Secret；输出仅为一个组件 ZIP 和有界无签名报告。PR 自报版本不决定候选版本。
 - 签名 workflow 只从默认分支 dispatch，并由 `pr-preview-signing` Required Reviewer Environment 保护；它重新查询 build run、artifact、PR、head SHA 与稳定 Release，拒绝 draft、fork、已关闭/合并或 head 漂移。
 - 独立 Ed25519 私钥通过 `HARNESS_PR_PREVIEW_SIGNING_PRIVATE_KEY_BASE64` 注入临时 0600 文件并在步骤结束删除。签名脚本同时验证已提交公钥配置与私钥派生公钥完全一致。
@@ -22,6 +23,7 @@ v1.0.46 没有给 PR 代码、客户端或 CNB 普通仓库增加任意生产私
 - 本机 gate 只接受候选 bundle、公开 config、打包应用和证据输出四个本机路径；拒绝 URL、Token、私钥及未知参数，不联网、不发布。
 - gate 要求精确四资产、生产公开 config 已启用、签名有效、ZIP 内 config 与生产 config 字节一致，并在隔离 profile 中复用生产 ComponentUpdateService/Store、activation store、helper 和 health path。
 - 必须完成 stage→apply→restart health→active，再以受控坏健康探针验证 last-known-good 自动回滚，最后退出 Preview 恢复 bundled stable/null pointer 并复检。
+- v1.0.44 干净 profile 的旧版自检已确认只存在 `desktopMarketplace` 单项二次安装探针误报；gate 仅对白名单中的精确 v1.0.44/单项失败形状兼容，其他基线检查仍失败关闭，候选 restart health 必须完整通过。自检诊断流由 gate 持续排空，避免 GUI 进程写入已关闭管道产生 EPIPE。
 - evidence 使用精确字段集，不含路径、URL、日志、环境或敏感值；原始 UTF-8 bytes 的 SHA-256 作为外部输入，由 `pr-preview-promotion` workflow 重新校验。
 - promotion 重新验证签名 run、PR/head/tag/sequence、四项摘要、签名/expiry、当前 CNB/GitHub feed sequence 与本机 evidence；任一不一致均停止。
 
