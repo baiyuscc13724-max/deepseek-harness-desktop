@@ -53,7 +53,7 @@
 
 ## GitHub Actions 到 CNB 的元数据交接
 
-签名 job 与 CNB 完全隔离：`pr-preview-signing` Environment 只提供独立预览签名私钥，不配置、不引用也不继承任何 CNB Token。只有独立的 `pr-preview-promotion` Environment 在 required reviewer 核对本机 gate 证据摘要后，才向 promotion job 暴露专用 Secret `CNB_PR_PREVIEW_PUSH_TOKEN`；缺失、空值或包含换行时立即失败关闭。Token 只作为 GitHub 自动遮罩的单一步骤环境变量，并通过临时 `GIT_CONFIG_*` 环境注入 `http.https://cnb.cool/.extraheader = Authorization: Bearer ...`。固定远端 URL 本身不含凭据；workflow 不把 Token 写入 remote URL、Git config 文件、提交、普通文件或日志，并禁用 Git trace、curl verbose 与交互式凭据提示。
+签名 job 与 CNB 完全隔离：`pr-preview-signing` Environment 只提供独立预览签名私钥，不配置、不引用也不继承任何 CNB Token。只有独立的 `pr-preview-promotion` Environment 在 required reviewer 核对本机 gate 证据摘要后，才向 promotion job 暴露专用 Secret `CNB_PR_PREVIEW_PUSH_TOKEN`；缺失、空值或包含换行时立即失败关闭。CNB 官方 HTTPS Git 认证约定为固定用户名 `cnb`、访问令牌作为密码（参见 [Git 地址与认证说明](https://docs.cnb.cool/zh/guide/git-access.html) 与 [访问令牌](https://docs.cnb.cool/zh/guide/access-token.html)）；workflow 因此通过临时 `GIT_CONFIG_*` 注入内存 credential helper，先清空继承的 helper，再只在 Git 的 `get` 凭据调用中返回 `username=cnb` 和环境中的 Token。固定远端 URL 本身不含凭据；workflow 不把 Token 写入 remote URL、Git config 文件、提交、普通文件或日志，并禁用 Git trace、curl verbose 与交互式凭据提示。
 
 promotion dispatch 必须精确输入 sign run id、PR、40 位 head、immutable Tag、sequence、四项候选 digest JSON、Base64 evidence bytes 及其 SHA-256。受信任默认分支脚本重新下载成功签名 run 的唯一未过期恢复 artifact 和 Tag 下四项公开资产，要求两组字节集合完全相同；同时重新查询 PR 与当前 CNB/GitHub index。PR 已关闭、变为 draft、已合并、head 改变、签名 run 非默认分支成功 run、签名/expiry 无效、sequence 回退或同序列不同候选时均不得交接。
 
