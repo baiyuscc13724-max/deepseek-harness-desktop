@@ -115,14 +115,15 @@ test('promotion workflow owns the CNB handoff behind independent local evidence 
 test('CNB verifier fails closed while production preview public key is unconfigured', async t => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'harness-pr-preview-feed-'))
   t.after(() => rm(temp, { recursive: true, force: true }))
+  const configFile = path.join(temp, 'config.json')
   const indexFile = path.join(temp, 'latest.json')
   const manifestFile = path.join(temp, 'manifest.json')
+  const production = JSON.parse(await load('pr-preview-update-sources.json'))
+  await writeFile(configFile, JSON.stringify({ ...production, enabled: true, trustedKeys: {} }))
   await writeFile(indexFile, '{}')
   await writeFile(manifestFile, '{}')
   const { verifyPrPreviewFeedFiles } = await import('../scripts/pr-preview-verify-feed.mjs')
-  await assert.rejects(() => verifyPrPreviewFeedFiles({
-    configFile: path.join(root, 'pr-preview-update-sources.json'), indexFile, manifestFile
-  }), /生产公钥尚未配置/)
+  await assert.rejects(() => verifyPrPreviewFeedFiles({ configFile, indexFile, manifestFile }), /必须配置独立公钥/)
 })
 
 test('trusted run validator rejects forks and noncanonical workflows', async () => {

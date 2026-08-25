@@ -117,6 +117,15 @@ pr-preview:
               .kind == "harness-pr-preview-cnb-cloud-mirror-request" and
               .repository == "baiyuscc13724-max/deepseek-harness-desktop" and
               .cnbProject == "baiyuscc13724-max/deepseek-harness-desktop" and
+              .localGateEvidence.schemaVersion == 1 and
+              .localGateEvidence.kind == "harness-pr-preview-local-gate-evidence" and
+              .localGateEvidence.result == "passed" and
+              (.localGateEvidence.sha256 | test("^[0-9a-f]{64}$")) and
+              .localGateEvidence.candidate.immutableTag == .immutableTag and
+              .localGateEvidence.candidate.headSha == .headSha and
+              .localGateEvidence.restoredRelease == .localGateEvidence.baselineRelease and
+              .localGateEvidence.checks.healthy == "passed" and
+              .localGateEvidence.checks.rollback == "passed" and
               .source.provider == "github-release" and .source.cloudToCloudOnly == true and
               .verification.downloadEveryAssetCompletely == true and
               .verification.requireExactSize == true and
@@ -144,6 +153,19 @@ pr-preview:
             test -s "$manifest_path"
             jq -e --arg sha "$head_sha" --argjson pr "$pr" '.kind == "pr-preview-index" and .headSha == $sha and .prNumber == $pr and .baseRef == "main" and .signature' "$latest_path" >/dev/null
             jq -e --arg sha "$head_sha" --argjson pr "$pr" '.kind == "pr-preview-manifest" and .headSha == $sha and .prNumber == $pr and .baseRef == "main" and .signature' "$manifest_path" >/dev/null
+            sequence="$(jq -r '.sequence' "$latest_path")"
+            component_sha="$(jq -r '.componentManifest.components[0].sha256' "$manifest_path")"
+            evidence_sha="$(jq -r '.localGateEvidence.sha256' "$request")"
+            jq -e --argjson sequence "$sequence" --arg componentSha "$component_sha" '
+              .localGateEvidence.candidate.sequence == $sequence and
+              .localGateEvidence.candidate.componentSha256 == $componentSha
+            ' "$request" >/dev/null
+            jq -e --arg headSha "$head_sha" --arg evidenceSha "$evidence_sha" '
+              .schemaVersion == 1 and
+              .kind == "harness-pr-preview-cnb-handoff" and
+              .headSha == $headSha and
+              .evidenceSha256 == $evidenceSha
+            ' .cnb-pr-preview-request >/dev/null
             index_asset="$(jq -r '.promotion.signedIndexAsset' "$request")"
             manifest_asset="$(jq -r '.promotion.signedManifestAsset' "$request")"
             for pair in "$index_asset:$latest_path" "$manifest_asset:$manifest_path"; do
