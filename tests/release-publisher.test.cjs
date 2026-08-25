@@ -634,7 +634,7 @@ test('cloud recovery binds artifacts to the tag and safely resumes any verified 
   const nonWindows = workflow.jobs['verify-non-windows-draft']
   assert.equal(nonWindows.needs, 'recover')
   assert.equal(nonWindows['timeout-minutes'], 20)
-  assert.deepEqual(nonWindows.permissions, { actions: 'read', contents: 'read' })
+  assert.deepEqual(nonWindows.permissions, { actions: 'read', contents: 'write' })
   assert.equal(nonWindows.strategy['max-parallel'], 3)
   assert.deepEqual(nonWindows.strategy.matrix.asset, [
     'linux-amd64.deb',
@@ -646,7 +646,7 @@ test('cloud recovery binds artifacts to the tag and safely resumes any verified 
   ])
   assert.equal(workflow.jobs['verify-windows-draft'].needs, 'recover')
   assert.equal(workflow.jobs['verify-windows-draft']['timeout-minutes'], 90)
-  assert.deepEqual(workflow.jobs['verify-windows-draft'].permissions, { actions: 'read', contents: 'read' })
+  assert.deepEqual(workflow.jobs['verify-windows-draft'].permissions, { actions: 'read', contents: 'write' })
   assert.deepEqual(workflow.jobs.publish.needs, ['verify-non-windows-draft', 'verify-windows-draft'])
   const recoveryRuns = workflow.jobs.recover.steps.map(step => step.run || '').join('\n')
   const nonWindowsRuns = nonWindows.steps.map(step => step.run || '').join('\n')

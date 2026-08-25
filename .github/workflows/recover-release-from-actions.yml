@@ -330,7 +330,9 @@ jobs:
     timeout-minutes: 20
     permissions:
       actions: read
-      contents: read
+      # GitHub requires write-scoped contents access to download private draft assets by id.
+      # The job remains read-only by construction and tests forbid release mutations here.
+      contents: write
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -392,7 +394,9 @@ jobs:
     timeout-minutes: 90
     permissions:
       actions: read
-      contents: read
+      # Private draft asset download requires contents: write even though this job
+      # performs no release mutation; only the dependent publish job may PATCH.
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
