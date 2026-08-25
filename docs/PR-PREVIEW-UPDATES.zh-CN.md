@@ -101,7 +101,7 @@ CNB pipeline 的实现必须遵守以下顺序：
 3. 把相同不可变资产写入 CNB release，确认 release 不多不少只有请求列出的资产，再从 CNB 完整回读一次并复核 size/SHA-256。
 4. 验证 `pr-preview-manifest` wrapper 和 `pr-preview-index` 的独立 canonicalJson/Ed25519 签名、最长 7 天且一致的过期时间、官方仓库、PR 元数据、head 绑定和单调 `sequence`；wrapper 发布时间不得早于 index。
 5. 仅当上述所有检查成功，用一个 CNB Git commit 同时写入固定 SHA manifest 与签名 `component-feeds/pr-preview/latest.json`，再回读 CNB raw-main 并逐字节确认；不得先提升再补资产。
-6. CNB 提升并回读成功后，再用 GitHub Git Data API 的一个非 force commit 同时提升同一份 manifest/latest，作为境外后备；任何已有 CNB 或 GitHub sequence 更高、同 sequence 不同 head 的情况都拒绝回退。
+6. CNB 提升并回读成功后，再用 GitHub Git Data API 的一个非 force commit 同时提升同一份 manifest/latest，作为境外后备；提交后对客户端实际使用的固定 GitHub Raw URL 做最长 127 秒的有界退避回读，以容忍分支更新前 404 的短期 CDN 负缓存，但最终字节不一致或仍不可用仍失败关闭。任何已有 CNB 或 GitHub sequence 更高、同 sequence 不同 head 的情况都拒绝回退。
 7. 失败时保持尚未提升的一侧旧 latest 不动；不可变 GitHub assets 可供重试恢复，不允许复用同版本不同哈希或回退到未签名索引。
 
 `.cnb.yml` 已增加完全独立的固定 `pr-preview` 分支 pipeline，现有 `main` 稳定同步与 release asset 路径由 `.cnb-stable-only` / `.cnb-preview-feed-only` 标记隔离。CNB 生产凭据由固定受保护密钥仓库通过 pipeline `imports` 注入，主仓库不得提交密钥值；其中专用 `GITHUB_PR_PREVIEW_FEED_TOKEN` 只授予最小 Contents-write 的固定 GitHub App/机器人身份，GitHub main 分支也只授权该身份，pipeline 本身只构造两个精确 feed 路径的 non-force 原子 commit。该 Secret 与短期 `CNB_TOKEN` 在任何资产下载前缺失即失败。两种 Token 都不会进入客户端、URL、Git 提交或产物。未来稳定 CNB 同步会保留已经提升的两个 PR preview feed 文件，不能把预览指针从 CNB main 清掉。
