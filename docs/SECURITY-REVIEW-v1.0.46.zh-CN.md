@@ -29,6 +29,7 @@ v1.0.46 没有给 PR 代码、客户端或 CNB 普通仓库增加任意生产私
 
 ## CNB 与 GitHub 边界
 
+- CNB HTTPS Git 认证遵循官方固定用户名 `cnb`、访问令牌作为密码的约定；promotion 先清空继承的 credential helper，再以内存 helper 只响应 Git 的 `get` 调用。Token 不进入远端 URL、命令参数、Git config 文件、提交、普通文件或日志；旧的 Bearer header 路径已由真实 CNB `repo-code:rw` 拒绝证明不可用。
 - CNB handoff 不使用 `--force` 或 `--force-with-lease`。远端 `pr-preview` 存在时读取精确 OID、fetch 同一 ref 并验证 `FETCH_HEAD`，只在允许树结构上创建唯一父提交；push 前再次核对 OID并普通 non-force push，并发变化明确失败。
 - 首次分支不存在时只允许创建精确 allowlist 根提交。CNB `main`/`pr-preview` 均禁止删除和强制推送，并要求线性历史。
 - GitHub `main` Ruleset 启用禁止删除、线性历史和禁止非快进；高风险签名与 promotion 另由禁止管理员绕过的 Required Reviewer Environment 保护。
