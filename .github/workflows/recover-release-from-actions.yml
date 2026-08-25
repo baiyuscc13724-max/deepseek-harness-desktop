@@ -233,8 +233,8 @@ jobs:
             all(.assets[]; (.id | type == "number") and (.name | type == "string") and
               (.size | type == "number") and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))
           ' draft-snapshot.json >/dev/null
-          # The bounded non-Windows matrix and Windows upgrade job below jointly
-          # own exact release-asset byte verification before publication.
+          # Ubuntu prefetch verifies every exact release byte; Windows revalidates
+          # its transferred executables before the real previous-stable upgrade.
       - name: Bind the signed previous stable Windows installer to an exact public asset
         shell: bash
         run: |
@@ -314,78 +314,83 @@ jobs:
             (.releaseId | type == "number") and (.asset.id | type == "number") and
             (.asset.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
           ' previous-stable.json >/dev/null
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: recovered-draft-snapshot
-          path: |
-            draft-snapshot.json
-            previous-stable.json
-          if-no-files-found: error
-          retention-days: 14
-
-  verify-non-windows-draft:
-    name: Verify recovered draft asset (${{ matrix.asset }})
-    needs: recover
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      actions: read
-      # GitHub requires write-scoped contents access to download private draft assets by id.
-      # The job remains read-only by construction and tests forbid release mutations here.
-      contents: write
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        asset:
-          - linux-amd64.deb
-          - linux-x86_64.AppImage
-          - mac-arm64.dmg
-          - mac-arm64.zip
-          - mac-x64.dmg
-          - mac-x64.zip
-    env:
-      GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ inputs.tag }}
-      RELEASE_ID: ${{ inputs.release_id }}
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: recovered-draft-snapshot
-          path: draft-state
-      - name: Download exact non-Windows asset and verify bytes
+      - name: Prefetch and verify every exact draft byte on Ubuntu
         shell: bash
         run: |
           set -euo pipefail
+          input_root="$RUNNER_TEMP/recovered-windows-inputs"
+          exact_root="$RUNNER_TEMP/exact-draft-assets"
+          windows_root="$input_root/windows-files"
+          rm -rf "$input_root" "$exact_root"
+          mkdir -p "$windows_root" "$exact_root"
+          cp draft-snapshot.json previous-stable.json "$input_root/"
+          download_asset() {
+            local id="$1" destination="$2"
+            curl --fail-with-body --silent --show-error --location \
+              --retry 3 --retry-all-errors --retry-delay 2 \
+              --connect-timeout 15 --max-time 900 \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/octet-stream' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$id" \
+              --output "$destination"
+          }
+          pids=()
+          while IFS= read -r asset; do
+            asset_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"$asset")"
+            name="$(jq -er '.name | select(type == "string")' <<<"$asset")"
+            size="$(jq -er '.size | select(type == "number" and . > 0)' <<<"$asset")"
+            digest="$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<<"$asset")"
+            test "$(basename "$name")" = "$name" || { echo "Unsafe snapshot asset name: $name" >&2; exit 1; }
+            destination="$exact_root/$name"
+            test ! -e "$destination" || { echo "Duplicate snapshot asset name: $name" >&2; exit 1; }
+            (
+              download_asset "$asset_id" "$destination"
+              test "$(stat -c %s "$destination")" = "$size" || { echo "Snapshot size mismatch for $name." >&2; exit 1; }
+              test "$(sha256sum "$destination" | awk '{print "sha256:" $1}')" = "$digest" || { echo "Snapshot digest mismatch for $name." >&2; exit 1; }
+            ) &
+            pids+=("$!")
+            if ((${#pids[@]} >= 3)); then
+              wait "${pids[0]}"
+              pids=("${pids[@]:1}")
+            fi
+          done < <(jq -c '.assets[]' draft-snapshot.json)
+          for pid in "${pids[@]}"; do wait "$pid"; done
+          snapshot_names="$(jq -r '.assets[].name' draft-snapshot.json | LC_ALL=C sort)"
+          downloaded_names="$(find "$exact_root" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
+          diff -u <(printf '%s\n' "$snapshot_names") <(printf '%s\n' "$downloaded_names")
+
+          checksum_path="$exact_root/SHA256SUMS.txt"
+          test -f "$checksum_path" || { echo 'SHA256SUMS.txt is missing from the exact draft.' >&2; exit 1; }
+          test "$(wc -l < "$checksum_path")" -eq 8 || { echo 'SHA256SUMS.txt must contain exactly eight desktop asset entries.' >&2; exit 1; }
+          checksum_names="$(sed -nE 's/^[0-9a-fA-F]{64} [ *]([^/]+)$/\1/p' "$checksum_path" | LC_ALL=C sort)"
+          expected_checksum_names="$(find "$exact_root" -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%f\n' | LC_ALL=C sort)"
+          diff -u <(printf '%s\n' "$expected_checksum_names") <(printf '%s\n' "$checksum_names")
+          (cd "$exact_root" && sha256sum --strict -c SHA256SUMS.txt)
+
           version="${RELEASE_TAG#v}"
-          asset_name="Harness-Desktop-$version-${{ matrix.asset }}"
-          snapshot='draft-state/draft-snapshot.json'
-          jq -e --arg id "$RELEASE_ID" --arg tag "$RELEASE_TAG" '
-            (.id | tostring) == $id and .tag_name == $tag and .draft == true and .prerelease == false
-          ' "$snapshot" >/dev/null
-          asset="$(jq -ec --arg name "$asset_name" '
-            [.assets[] | select(.name == $name)] |
-            if length == 1 then .[0] else error("Exact non-Windows draft asset identity is missing or duplicated.") end
-          ' "$snapshot")"
-          id="$(jq -er '.id' <<<"$asset")"
-          expected_size="$(jq -er '.size' <<<"$asset")"
-          expected_digest="$(jq -er '.digest' <<<"$asset")"
-          [[ "$id" =~ ^[0-9]+$ ]]
-          [[ "$expected_size" =~ ^[1-9][0-9]*$ ]]
-          [[ "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          output="$RUNNER_TEMP/$asset_name"
-          curl --fail-with-body --silent --show-error --location \
-            --retry 3 --retry-all-errors --retry-delay 2 \
-            --connect-timeout 30 --max-time 900 \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header 'Accept: application/octet-stream' \
-            --header 'X-GitHub-Api-Version: 2022-11-28' \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$id" \
-            --output "$output"
-          actual_size="$(stat -c %s "$output")"
-          actual_digest="sha256:$(sha256sum "$output" | awk '{print $1}')"
-          test "$actual_size" = "$expected_size" || { echo "Recovered non-Windows asset size mismatch: $asset_name" >&2; exit 1; }
-          test "$actual_digest" = "$expected_digest" || { echo "Recovered non-Windows asset SHA-256 mismatch: $asset_name" >&2; exit 1; }
+          required_windows="$(printf '%s\n' \
+            'SHA256SUMS.txt' \
+            "Harness-Desktop-$version-portable-x64.exe" \
+            "Harness-Desktop-$version-win-x64.exe" | LC_ALL=C sort)"
+          while IFS= read -r name; do cp "$exact_root/$name" "$windows_root/$name"; done <<<"$required_windows"
+          windows_names="$(find "$windows_root" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
+          diff -u <(printf '%s\n' "$required_windows") <(printf '%s\n' "$windows_names")
+
+          previous_id="$(jq -er '.asset.id | select(type == "number" and . > 0)' previous-stable.json)"
+          previous_size="$(jq -er '.asset.size | select(type == "number" and . > 0)' previous-stable.json)"
+          previous_sha="$(jq -er '.asset.sha256 | select(type == "string" and test("^[0-9a-f]{64}$"))' previous-stable.json)"
+          previous_installer="$input_root/previous-stable-installer.exe"
+          download_asset "$previous_id" "$previous_installer"
+          test "$(stat -c %s "$previous_installer")" = "$previous_size" || { echo 'Previous stable installer size mismatch.' >&2; exit 1; }
+          test "$(sha256sum "$previous_installer" | awk '{print $1}')" = "$previous_sha" || { echo 'Previous stable installer SHA-256 mismatch.' >&2; exit 1; }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recovered-windows-verification-inputs
+          path: ${{ runner.temp }}/recovered-windows-inputs
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
 
   verify-windows-draft:
     name: Install authenticated recovered Windows draft
@@ -394,72 +399,29 @@ jobs:
     timeout-minutes: 90
     permissions:
       actions: read
-      # Private draft asset download requires contents: write even though this job
-      # performs no release mutation; only the dependent publish job may PATCH.
-      contents: write
+      contents: read
     env:
-      GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_ID: ${{ inputs.release_id }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: recovered-draft-snapshot
+          name: recovered-windows-verification-inputs
           path: draft-state
-      - name: Authenticated exact-id download, checksum, stable upgrade, self-test, and uninstall
+      - name: Revalidate prefetched bytes, stable upgrade, self-test, and uninstall
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $downloadRoot = Join-Path $env:RUNNER_TEMP 'recovered-draft-download'
+          $downloadRoot = (Resolve-Path 'draft-state/windows-files').Path
           $installRoot = Join-Path $env:RUNNER_TEMP 'recovered-draft-install'
           $profileRoot = Join-Path $env:RUNNER_TEMP 'recovered-draft-profile'
           $reportPath = Join-Path $env:RUNNER_TEMP 'recovered-installed-selftest.json'
           $previousReportPath = Join-Path $env:RUNNER_TEMP 'recovered-previous-stable-selftest.json'
-          $previousInstallerPath = Join-Path $env:RUNNER_TEMP 'recovered-previous-stable-installer.exe'
+          $previousInstallerPath = (Resolve-Path 'draft-state/previous-stable-installer.exe').Path
           $upgradeLog = Join-Path $env:RUNNER_TEMP 'recovered-upgrade-installer.log'
           $portableProfile = Join-Path $env:RUNNER_TEMP 'recovered-portable-profile'
           $portableReport = Join-Path $env:RUNNER_TEMP 'recovered-portable-selftest.json'
           $trackedProcessIds = @()
-          function Invoke-BoundedDownload {
-            param(
-              [Parameter(Mandatory)][uri] $Uri,
-              [Parameter(Mandatory)][string] $OutFile,
-              [Parameter(Mandatory)][ValidateRange(1, 900)][int] $TimeoutSeconds
-            )
-            Write-Host "Starting bounded authenticated download (timeout ${TimeoutSeconds}s)"
-            $handler = [Net.Http.HttpClientHandler]::new()
-            $handler.AllowAutoRedirect = $true
-            $client = [Net.Http.HttpClient]::new($handler)
-            $client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
-            $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $Uri)
-            $request.Headers.Accept.ParseAdd('application/octet-stream')
-            $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $env:GH_TOKEN)
-            $request.Headers.UserAgent.ParseAdd('harness-desktop-recovery-gate')
-            $null = $request.Headers.TryAddWithoutValidation('X-GitHub-Api-Version', '2022-11-28')
-            $cts = [Threading.CancellationTokenSource]::new()
-            $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSeconds))
-            $response = $source = $target = $null
-            try {
-              $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token).GetAwaiter().GetResult()
-              $null = $response.EnsureSuccessStatusCode()
-              $source = $response.Content.ReadAsStreamAsync($cts.Token).GetAwaiter().GetResult()
-              $target = [IO.File]::Open($OutFile, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
-              $source.CopyToAsync($target, 1048576, $cts.Token).GetAwaiter().GetResult()
-              Write-Host 'Completed bounded authenticated download.'
-            }
-            catch [OperationCanceledException] {
-              throw "Authenticated release asset download timed out after $TimeoutSeconds seconds."
-            }
-            finally {
-              if ($target) { $target.Dispose() }
-              if ($source) { $source.Dispose() }
-              if ($response) { $response.Dispose() }
-              $request.Dispose()
-              $client.Dispose()
-              $handler.Dispose()
-              $cts.Dispose()
-            }
-          }
           function Invoke-BoundedProcess {
             param(
               [Parameter(Mandatory)][string] $FilePath,
@@ -503,59 +465,56 @@ jobs:
             }
             return $null
           }
-          Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $installRoot, $profileRoot, $reportPath, $previousReportPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           try {
-            $snapshotText = (Get-Content 'draft-state/draft-snapshot.json' -Raw).Trim()
-            $snapshot = $snapshotText | ConvertFrom-Json
+            $snapshot = Get-Content 'draft-state/draft-snapshot.json' -Raw | ConvertFrom-Json
             if ($snapshot.id.ToString() -ne $env:RELEASE_ID) { throw 'Snapshot release id does not match the exact recovery input.' }
-            $currentSnapshotText = gh api "repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID" --jq '{id,tag_name,target_commitish,draft,name,body,prerelease,assets:([.assets[] | {id,name,size,digest}] | sort_by(.name))}'
-            if ($LASTEXITCODE -ne 0) { throw 'Authenticated exact-id draft lookup failed.' }
-            $currentSnapshotText = ($currentSnapshotText -join "`n").Trim()
-            if ($currentSnapshotText -ne $snapshotText) { throw 'Draft metadata changed before the recovered Windows gate.' }
-            if (-not $snapshot.draft -or $snapshot.tag_name -ne $env:RELEASE_TAG) { throw 'Snapshot is not the expected private draft.' }
-            $expectedAssets = @($snapshot.assets | ForEach-Object name | Sort-Object)
-            New-Item -ItemType Directory -Path $downloadRoot | Out-Null
+            if (-not $snapshot.draft -or $snapshot.prerelease -or $snapshot.tag_name -ne $env:RELEASE_TAG) { throw 'Snapshot is not the expected private draft.' }
             $version = $env:RELEASE_TAG -replace '^v', ''
-            $previous = Get-Content 'draft-state/previous-stable.json' -Raw | ConvertFrom-Json
-            if ($previous.version -notmatch '^\d+\.\d+\.\d+$' -or [version]$previous.version -ge [version]$version) { throw 'Bound previous stable version is invalid or not older than the draft.' }
-            if ($previous.tag -ne "v$($previous.version)" -or $previous.releaseId -notmatch '^\d+$' -or $previous.asset.id -notmatch '^\d+$') { throw 'Bound previous stable release identity is invalid.' }
-            if ($previous.asset.name -ne "Harness-Desktop-$($previous.version)-win-x64.exe" -or $previous.asset.digest -ne "sha256:$($previous.asset.sha256)") { throw 'Bound previous stable installer identity is invalid.' }
-            $previousRelease = gh api "repos/$env:GITHUB_REPOSITORY/releases/$($previous.releaseId)" --jq '{id,tag_name,draft,prerelease,name,html_url,assets:([.assets[] | {id,name,size,digest,browser_download_url}] | sort_by(.name))}' | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0) { throw 'Authenticated exact-id lookup for the previous public stable release failed.' }
-            $previousAssets = @($previousRelease.assets | Where-Object { $_.name -eq $previous.asset.name })
-            if ($previousRelease.id.ToString() -ne $previous.releaseId.ToString() -or $previousRelease.tag_name -ne $previous.tag -or $previousRelease.draft -or $previousRelease.prerelease) { throw 'Previous stable release is no longer the exact public release bound by the signed manifests.' }
-            if ($previousRelease.name -ne $previous.releaseName -or $previousRelease.html_url -ne $previous.releaseHtmlUrl -or $previousAssets.Count -ne 1) { throw 'Previous stable release metadata changed after signed-manifest binding.' }
-            $previousAsset = $previousAssets[0]
-            if ($previousAsset.id.ToString() -ne $previous.asset.id.ToString() -or $previousAsset.size -ne [int64]$previous.asset.size -or $previousAsset.digest -ne $previous.asset.digest -or $previousAsset.browser_download_url -ne $previous.asset.browserDownloadUrl) { throw 'Previous stable installer asset changed after signed-manifest binding.' }
-            $previousInstaller = $previousInstallerPath
-            Invoke-BoundedDownload -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($previous.asset.id)" -OutFile $previousInstaller -TimeoutSeconds 300
-            if ((Get-Item -LiteralPath $previousInstaller).Length -ne [int64]$previous.asset.size) { throw 'Previous stable installer size mismatch.' }
-            if ((Get-FileHash -LiteralPath $previousInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $previous.asset.sha256) { throw 'Previous stable installer SHA-256 mismatch.' }
+            $expectedSnapshotNames = @(
+              'SHA256SUMS.txt',
+              "Harness-Desktop-$version-linux-amd64.deb",
+              "Harness-Desktop-$version-linux-x86_64.AppImage",
+              "Harness-Desktop-$version-mac-arm64.dmg",
+              "Harness-Desktop-$version-mac-arm64.zip",
+              "Harness-Desktop-$version-mac-x64.dmg",
+              "Harness-Desktop-$version-mac-x64.zip",
+              "Harness-Desktop-$version-portable-x64.exe",
+              "Harness-Desktop-$version-win-x64.exe"
+            ) | Sort-Object
             $assetsByName = @{}
             foreach ($asset in $snapshot.assets) {
-              if ($asset.id -notmatch '^\d+$' -or [IO.Path]::GetFileName($asset.name) -ne $asset.name -or $asset.digest -notmatch '^sha256:([0-9a-f]{64})$') { throw "Unsafe or incomplete snapshot asset metadata: $($asset.name)" }
+              if ($asset.id -notmatch '^\d+$' -or [IO.Path]::GetFileName($asset.name) -ne $asset.name -or $asset.size -le 0 -or $asset.digest -notmatch '^sha256:([0-9a-f]{64})$') { throw "Unsafe or incomplete snapshot asset metadata: $($asset.name)" }
               if ($assetsByName.ContainsKey($asset.name)) { throw "Duplicate snapshot asset metadata: $($asset.name)" }
               $assetsByName[$asset.name] = $asset
             }
+            if (Compare-Object $expectedSnapshotNames @($assetsByName.Keys | Sort-Object)) { throw 'Snapshot must bind exactly nine uniquely named draft assets.' }
+
             $requiredDraftNames = @(
               'SHA256SUMS.txt',
               "Harness-Desktop-$version-portable-x64.exe",
               "Harness-Desktop-$version-win-x64.exe"
             )
+            $downloadedAssets = @(Get-ChildItem -LiteralPath $downloadRoot -File | ForEach-Object Name | Sort-Object)
+            if (Compare-Object @($requiredDraftNames | Sort-Object) $downloadedAssets) { throw 'Prefetched Windows gate artifact contains an unexpected file set.' }
             foreach ($name in $requiredDraftNames) {
               if (-not $assetsByName.ContainsKey($name)) { throw "Required Windows draft asset is missing: $name" }
               $asset = $assetsByName[$name]
-              $expectedDigest = $asset.digest.Substring(7)
-              $destination = Join-Path $downloadRoot $name
-              Invoke-BoundedDownload -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)" -OutFile $destination -TimeoutSeconds 300
-              $downloaded = Get-Item -LiteralPath $destination
+              $downloaded = Get-Item -LiteralPath (Join-Path $downloadRoot $name)
               if ($downloaded.Length -ne [int64]$asset.size) { throw "Snapshot size mismatch for $name." }
-              $snapshotHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($snapshotHash -ne $expectedDigest) { throw "Snapshot digest mismatch for $name." }
+              $snapshotHash = (Get-FileHash -LiteralPath $downloaded.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($snapshotHash -ne $asset.digest.Substring(7)) { throw "Snapshot digest mismatch for $name." }
             }
 
+            $previous = Get-Content 'draft-state/previous-stable.json' -Raw | ConvertFrom-Json
+            if ($previous.version -notmatch '^\d+\.\d+\.\d+$' -or [version]$previous.version -ge [version]$version) { throw 'Bound previous stable version is invalid or not older than the draft.' }
+            if ($previous.tag -ne "v$($previous.version)" -or $previous.releaseId -notmatch '^\d+$' -or $previous.asset.id -notmatch '^\d+$') { throw 'Bound previous stable release identity is invalid.' }
+            if ($previous.asset.name -ne "Harness-Desktop-$($previous.version)-win-x64.exe" -or $previous.asset.digest -ne "sha256:$($previous.asset.sha256)") { throw 'Bound previous stable installer identity is invalid.' }
+            if ((Get-Item -LiteralPath $previousInstallerPath).Length -ne [int64]$previous.asset.size) { throw 'Previous stable installer size mismatch.' }
+            if ((Get-FileHash -LiteralPath $previousInstallerPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $previous.asset.sha256) { throw 'Previous stable installer SHA-256 mismatch.' }
+            $previousInstaller = $previousInstallerPath
+
             $checksumPath = Join-Path $downloadRoot 'SHA256SUMS.txt'
-            if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) { throw 'SHA256SUMS.txt is missing.' }
             $entries = @{}
             foreach ($line in Get-Content -LiteralPath $checksumPath) {
               if ($line -notmatch '^([0-9a-fA-F]{64}) [ *](.+)$') { throw "Malformed SHA256SUMS line: $line" }
@@ -563,16 +522,12 @@ jobs:
               if ([IO.Path]::GetFileName($name) -ne $name -or $entries.ContainsKey($name)) { throw "Unsafe or duplicate checksum entry: $name" }
               $entries[$name] = $Matches[1].ToLowerInvariant()
             }
-            if ($entries.Count -eq 0) { throw 'SHA256SUMS.txt contains no assets.' }
-            $expectedChecksummedAssets = @($expectedAssets | Where-Object { $_ -ne 'SHA256SUMS.txt' } | Sort-Object)
-            $listedChecksummedAssets = @($entries.Keys | Sort-Object)
-            if (Compare-Object $expectedChecksummedAssets $listedChecksummedAssets) { throw 'SHA256SUMS.txt does not list the exact recovered binaries.' }
-            $downloadedAssets = @(Get-ChildItem -LiteralPath $downloadRoot -File | ForEach-Object Name | Sort-Object)
-            if (Compare-Object @($requiredDraftNames | Sort-Object) $downloadedAssets) { throw 'Windows gate downloaded an unexpected draft asset set.' }
+            if ($entries.Count -ne 8) { throw 'SHA256SUMS.txt must contain exactly eight desktop asset entries.' }
+            $expectedChecksummedAssets = @($expectedSnapshotNames | Where-Object { $_ -ne 'SHA256SUMS.txt' } | Sort-Object)
+            if (Compare-Object $expectedChecksummedAssets @($entries.Keys | Sort-Object)) { throw 'SHA256SUMS.txt does not list the exact recovered binaries.' }
             foreach ($entry in $entries.GetEnumerator()) {
               if (-not $assetsByName.ContainsKey($entry.Key)) { throw "SHA256SUMS.txt references an unknown snapshot asset: $($entry.Key)." }
-              $snapshotDigest = $assetsByName[$entry.Key].digest.Substring(7)
-              if ($snapshotDigest -ne $entry.Value) { throw "Snapshot digest and SHA256SUMS disagree for $($entry.Key)." }
+              if ($assetsByName[$entry.Key].digest.Substring(7) -ne $entry.Value) { throw "Snapshot digest and SHA256SUMS disagree for $($entry.Key)." }
             }
 
             $portable = Join-Path $downloadRoot "Harness-Desktop-$version-portable-x64.exe"
@@ -651,14 +606,12 @@ jobs:
               $cleanupUninstaller = Get-ChildItem -LiteralPath $installRoot -File -Filter 'unins*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
               if ($cleanupUninstaller) { $null = Invoke-BoundedProcess -FilePath $cleanupUninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 120 -Label 'Recovered cleanup uninstaller' }
             } catch {}
-            Remove-Item -LiteralPath $downloadRoot, $installRoot, $profileRoot, $reportPath, $previousReportPath, $previousInstallerPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $installRoot, $profileRoot, $reportPath, $previousReportPath, $upgradeLog, $portableProfile, $portableReport -Recurse -Force -ErrorAction SilentlyContinue
           }
 
   publish:
     name: Publish unchanged recovered draft
-    needs:
-      - verify-non-windows-draft
-      - verify-windows-draft
+    needs: verify-windows-draft
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -670,7 +623,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: recovered-draft-snapshot
+          name: recovered-windows-verification-inputs
           path: draft-state
       - name: Reconfirm exact draft snapshot and publish by immutable release id
         shell: bash
