@@ -17,7 +17,7 @@ npm run release:publish -- run --version <package.json 中的版本>
 npm run release:publish -- status --version <package.json 中的版本>
 ```
 
-状态保存在 `.release-state/v<version>-publish.json`，`packagingMode` 固定为 `github-actions-only`。从 `v1.0.44` 起发布器固定执行：本地源码/安全门禁（删除并拒绝 `dist`，不打包）→ 候选提交快进到 `main` → GitHub Actions 按精确 `source_revision` 完成 Windows/macOS/Linux 构建、iOS 模拟器测试、三份桌面制品归档及 previous-stable→candidate Windows 安装/升级/自检/卸载 → **全部成功后才创建唯一不可变 Tag** → 恢复工作流直接消费前述同一 run 的 Actions 制品并公开 draft → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。`release.yml` 不再监听产品 Tag，因此 Tag push 不会重复构建桌面包。旧 `local-windows` 状态绝不折算成新门禁成功；恢复时记录的 runId 必须重新匹配精确 workflow ID/名称/路径、事件、持久化 requestId 对应的 `display_title`、提交、ref、结论、成功 jobs 和制品集合；GitHub REST run 对象没有 `inputs`，不得把不存在的字段当身份依据。每次实际进入 stable 提升前都会重新检查两云 18 项资产，第二次 CNB 同步才使用 metadata-only 模式，只校验并同步三个 stable feed，不重复传输 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
+状态保存在 `.release-state/v<version>-publish.json`，`packagingMode` 固定为 `github-actions-only`。从 `v1.0.44` 起发布器固定执行：本地源码/安全门禁（删除并拒绝 `dist`，不打包）→ 候选提交快进到 `main` → GitHub Actions 按精确 `source_revision` 完成 Windows/macOS/Linux 构建、iOS 模拟器测试、三份桌面制品归档、当前 Windows 便携/安装包自检、组件健康与回滚以及安装器安装/卸载 → **全部成功后才创建唯一不可变 Tag** → 恢复工作流直接消费前述同一 run 的 Actions 制品并公开 draft → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。`release.yml` 不再监听产品 Tag，因此 Tag push 不会重复构建桌面包。旧 `local-windows` 状态绝不折算成新门禁成功；恢复时记录的 runId 必须重新匹配精确 workflow ID/名称/路径、事件、持久化 requestId 对应的 `display_title`、提交、ref、结论、成功 jobs 和制品集合；GitHub REST run 对象没有 `inputs`，不得把不存在的字段当身份依据。每次实际进入 stable 提升前都会重新检查两云 18 项资产，第二次 CNB 同步才使用 metadata-only 模式，只校验并同步三个 stable feed，不重复传输 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
 
 后文章节是发布器和工作流的安全契约及故障排查资料，不是让会话绕过发布器逐条手工执行的操作清单。完整信任边界、状态迁移和竞态分析见 `docs/CLOUD-RELEASE-PIPELINE.zh-CN.md`。
 
@@ -76,8 +76,8 @@ macOS 桌面包按显式无签名契约构建：`package.json` 的 `build.mac.id
 
 1. `git diff --check`，确认工作树干净且本地 `npm run verify`、`npm run verify:release` 均成功；统一发布器删除遗留 `dist` 并在源码门禁后断言它仍不存在。
 2. 快进合并验证提交到 `main`，但此时**不创建 Tag**。发布器从 `main` 调度 `.github/workflows/release.yml`，输入候选版本标签和精确 40 位 `source_revision`；checkout HEAD、`GITHUB_SHA`、输入 SHA 与 `package.json` 版本必须一致，且候选 Tag 必须尚不存在。
-3. Windows、macOS、Linux 分别重新安装锁定依赖、运行全部门禁并生成正式包；Windows 云端必须完成 unpacked 自检、真实组件健康/回滚测试、Inno 安装/检查/卸载冒烟，macOS 必须分别完成 Intel/Apple Silicon 原生架构、打包后自检和显式未签名 DMG/ZIP 结构验证。
-4. 同一候选工作流还必须完成 iPhone Simulator 与 iPad Simulator 测试，并直接下载当前 run 的 Windows artifact，绑定签名 previous stable，完成旧版安装/self-test、保留 profile 的原地升级、新版 self-test 与卸载；这一步不创建或读取 candidate Release/draft。发布器先持久化唯一 requestId 后立即 dispatch，只接受精确 workflow 路径/ID、`workflow_dispatch` 事件、`main` ref、精确 `display_title`、head SHA、成功结论、五个成功 job 以及未过期且归属同一 run、无额外 `desktop-*` 名称的 Windows/macOS/Linux 三份制品。
+3. Windows、macOS、Linux 分别重新安装锁定依赖、运行全部门禁并生成正式包；Windows 云端必须完成 unpacked 自检、真实组件健康/回滚测试、Inno 当前版本安装/已安装包自检/卸载冒烟，macOS 必须分别完成 Intel/Apple Silicon 原生架构、打包后自检和显式未签名 DMG/ZIP 结构验证。
+4. 同一候选工作流还必须完成 iPhone Simulator 与 iPad Simulator 测试。真实上一稳定版更新、重启健康检查和强制回滚由发布前 PR Preview 本机门禁完成；耗时且结束前不可观察的云端 previous-stable 原地升级循环固定禁用，不在正式发布中重复。发布器先持久化唯一 requestId 后立即 dispatch，只接受精确 workflow 路径/ID、`workflow_dispatch` 事件、`main` ref、精确 `display_title`、head SHA、成功结论、四个成功 job 以及未过期且归属同一 run、无额外 `desktop-*` 名称的 Windows/macOS/Linux 三份制品。
 5. 只有上述 run 整体成功后，发布器才把唯一 `v<version>` Tag 指向该 `source_revision`。正式 Tag 一旦创建绝不移动、删除或重建。
 6. 发布器随后创建精确私有 draft，并调度 `.github/workflows/recover-release-from-actions.yml`；它只从第 4 步记录的同一 `source_run_id` 下载 Actions 制品，不在本机中转、不重新构建，也不接受其他 run 的制品。
 7. 恢复工作流生成 `SHA256SUMS.txt`、按大小/digest 幂等补齐 draft，并从 draft 重新下载全部资产核对精确集合和 SHA-256 后才一次性公开。同名资产永不覆盖；任一上传/复核失败时只留下非公开 draft，不得手工上传替代品。

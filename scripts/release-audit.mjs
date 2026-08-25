@@ -160,6 +160,9 @@ for (const contract of ['Validate iPhone and iPad simulators', 'Test on iPhone S
   if (!workflow.includes(contract)) throw new Error(`GitHub Release must wait for iPhone/iPad simulator validation: ${contract}`)
 }
 if (!workflow.includes('choco install innosetup --version=6.7.0 --allow-downgrade --force') || !workflow.includes('Run Windows installer smoke test') || !workflow.includes('Verify packaged Windows component health and rollback') || !workflow.includes('npm run test:component-local') || !workflow.includes('/VERYSILENT') || !workflow.includes('Harness Desktop.exe') || !workflow.includes('app.asar') || !workflow.includes('unins*.exe')) throw new Error('Windows cloud release must build, component-test, install, inspect, and uninstall the Inno Setup payload.')
+for (const contract of ['Current-version portable self-test', 'Current-version Windows installer', 'Current-version installed self-test', 'Current-version Windows uninstaller', 'WaitForExit($TimeoutSeconds * 1000)', 'Current-version portable self-test failed or reported the wrong version.', 'Current-version installed self-test failed or reported the wrong version.', 'Windows uninstaller did not remove the temporary installation.']) {
+  if (!workflow.includes(contract)) throw new Error(`Fast current-version Windows install/self-test/uninstall gate missing: ${contract}`)
+}
 if (!workflow.includes('3cfb0e5632828e0dd9b49400a185834e8f1ab570/Files/Languages/ChineseSimplified.isl') || !workflow.includes('e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d')) throw new Error('Windows release must install and hash-check the pinned Simplified Chinese language file.')
 for (const contract of ['workflow_dispatch:', 'source_revision:', 'request_id:', 'no Tag is required or created', 'HARNESS_RELEASE_PACKAGING_MODE: github-actions-only', 'ref: ${{ env.SOURCE_REVISION }}', 'group: release-candidate-${{ inputs.tag }}', 'Ensure target tag matches package version', 'Bind cloud package build to exact pre-Tag candidate revision', 'Candidate ${{ inputs.tag }} @ ${{ inputs.source_revision }} · ', 'PUBLISHER_SOURCE_REVISION', 'git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG"', 'remote_tag_status=$?', 'test "$remote_tag_status" -ne 2', 'test -n "$remote_tag_output"', 'name: desktop-${{ matrix.os }}']) {
   if (!workflow.includes(contract)) throw new Error(`Pre-Tag candidate desktop workflow contract missing: ${contract}`)
@@ -177,13 +180,18 @@ for (const forbidden of ['contents: write', 'gh api --method POST "repos/$GITHUB
 if (/\n\s+push:\s*\n\s+tags:/u.test(workflow)) throw new Error('Desktop release workflow must never build from a Tag push trigger.')
 if (workflow.includes('release-retry/v')) throw new Error('Desktop release workflow must not accept a mutable retry branch trigger.')
 if (/^\s{2}(?:stage-draft|verify-windows-draft|publish):/mu.test(workflow)) throw new Error('Legacy draft, draft verification, and publish jobs must be physically removed from the candidate desktop workflow.')
-for (const contract of ['Verify Windows candidate upgrade and installation', 'stable-upgrade-profile.marker', '/NORESTARTAPPLICATIONS', 'RestartApplications=no contract failed', 'Upgraded installed self-test JSON failed or reported the wrong version', 'Uninstaller left the temporary installation directory behind']) {
-  if (!workflow.includes(contract)) throw new Error(`Pre-Tag Windows previous-stable upgrade gate missing from the candidate desktop workflow: ${contract}`)
+for (const job of ['prepare-windows-candidate', 'verify-windows-candidate']) {
+  if (!new RegExp(`^  ${job}:\\n(?:    #[^\\n]*\\n)*    if: \\$\\{\\{ false \\}\\}$`, 'mu').test(workflow)) {
+    throw new Error(`Previous-stable cloud upgrade job must remain disabled: ${job}`)
+  }
 }
-const recoveryWorkflow = await readFile(path.join(root, '.github/workflows/recover-release-from-actions.yml'), 'utf8')
-for (const contract of ['source_run_id:', 'run-id: ${{ inputs.source_run_id }}', 'pattern: desktop-*', 'Exact same-run desktop artifact set is unavailable', 'Publish unchanged recovered draft', 'timeout-minutes: 90', '--method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"']) {
+const recoveryWorkflow = (await readFile(path.join(root, '.github/workflows/recover-release-from-actions.yml'), 'utf8')).replace(/\r\n?/gu, '\n')
+for (const contract of ['source_run_id:', 'run-id: ${{ inputs.source_run_id }}', 'pattern: desktop-*', 'Exact same-run desktop artifact set is unavailable', 'recovered-draft-snapshot', 'Publish unchanged recovered draft', '--method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"']) {
   if (!recoveryWorkflow.includes(contract)) throw new Error(`Cloud recovery must reuse the exact pre-Tag source run artifacts: ${contract}`)
 }
+if (!/^  verify-windows-draft:\n(?:    #[^\n]*\n)*    if: \$\{\{ false \}\}$/mu.test(recoveryWorkflow)) throw new Error('Recovered previous-stable Windows upgrade job must remain disabled.')
+if (!/name: Bind the signed previous stable Windows installer to an exact public asset\n        if: \$\{\{ false \}\}/u.test(recoveryWorkflow)) throw new Error('Previous-stable recovery binding must remain disabled.')
+if (!/^  publish:\n    name: Publish unchanged recovered draft\n    needs: recover$/mu.test(recoveryWorkflow)) throw new Error('Cloud publication must depend directly on byte-verified recovery, not the disabled Windows upgrade job.')
 if (!recoveryWorkflow.includes('.display_title == "Candidate \\($tag) @ \\($sha) · \\($request)"')) throw new Error('Cloud recovery must bind the source run by exact display title identity and request id.')
 if (recoveryWorkflow.includes('npm run dist')) throw new Error('Cloud recovery must never rebuild desktop packages.')
 if (/^\s*gh release (?:download|upload|edit|view)/mu.test(workflow) || workflow.includes('--clobber') || workflow.includes('overwrite_files: true')) throw new Error('Desktop release workflow must use immutable release and asset ids and never overwrite an asset.')

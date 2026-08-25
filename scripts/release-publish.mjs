@@ -58,8 +58,7 @@ const BUILD_JOBS = [
   'Build windows-latest',
   'Build macos-latest',
   'Build ubuntu-latest',
-  'Validate iPhone and iPad simulators',
-  'Verify Windows candidate upgrade and installation'
+  'Validate iPhone and iPad simulators'
 ]
 const WORKFLOWS = Object.freeze({
   desktop: Object.freeze({ workflowName: 'Cloud Build & Release Desktop', workflowPath: '.github/workflows/release.yml', events: ['workflow_dispatch'] }),
@@ -993,9 +992,11 @@ async function rebindCandidateRevision(state, currentHead) {
   const phaseState = state.phases?.['desktop-cloud-builds'] || {}
   const oldRequestId = String(phaseState.requestId || '')
   let oldRunTerminal = false
+  let oldRunConclusion = null
   if (phaseState.runId && oldRequestId) {
     const oldRun = workflowRun(Number(phaseState.runId))
     oldRunTerminal = matchesWorkflowRunIdentity(oldRun, candidateDesktopWorkflowIdentity(previous, oldRequestId)) && oldRun.status === 'completed'
+    if (oldRunTerminal) oldRunConclusion = String(oldRun.conclusion || '') || null
   } else {
     const possibleRuns = workflowRuns('release.yml').filter(run => (
       run.event === 'workflow_dispatch' && run.headBranch === 'main' && String(run.headSha || '').toLowerCase() === previous
@@ -1005,6 +1006,7 @@ async function rebindCandidateRevision(state, currentHead) {
     if (exactCandidate) {
       const exact = workflowRun(Number(exactCandidate.databaseId))
       oldRunTerminal = matchesWorkflowRunIdentity(exact, expected) && exact.status === 'completed'
+      if (oldRunTerminal) oldRunConclusion = String(exact.conclusion || '') || null
     } else {
       oldRunTerminal = possibleRuns.length === 0 && !phaseState.dispatchAttemptedAt
     }
@@ -1023,7 +1025,7 @@ async function rebindCandidateRevision(state, currentHead) {
     sourceRevision: previous,
     invalidatedAt: new Date().toISOString(),
     desktopRunId: Number(phaseState.runId || 0) || null,
-    desktopConclusion: phaseState.sourceRunConclusion || phaseState.conclusion || null,
+    desktopConclusion: oldRunConclusion || phaseState.sourceRunConclusion || phaseState.conclusion || null,
     phases: structuredClone(state.phases || {})
   })
   state.sourceRevision = currentHead

@@ -46,6 +46,6 @@ v1.0.46 没有给 PR 代码、客户端或 CNB 普通仓库增加任意生产私
 ## 版本与正式发布门禁
 
 - 根 package/lock、13 个随包插件、Android、iOS/iPadOS、桌面移动路由和移动更新示例全部绑定 1.0.46/10046。
-- 正式 Tag 只在干净候选快进 `main`、本机源码/安全/PR Preview 更新与回滚门禁、锁定 SHA 的 Windows/macOS/Linux/iOS candidate workflow 和 previous-stable→candidate Windows 安装升级自检全部成功后创建。
+- 正式 Tag 只在干净候选快进 `main`、本机源码/安全/PR Preview 真实更新、重启健康与回滚门禁，以及锁定 SHA 的 Windows/macOS/Linux/iOS 当前包构建、自检、组件回滚和安装器冒烟全部成功后创建；耗时且不可观察的云端 previous-stable 原位升级不再重复执行。
 - 本地发布器删除并拒绝 `dist`，不上传正式二进制；GitHub Actions 生成桌面、签名 Android 与签名 stable 组件，CNB Runner 只从 GitHub 云端镜像。
 - 两云必须各自拥有精确 18 项不可变资产；三个 Ed25519 stable feed 始终最后提升。同版本不同摘要、Tag 漂移、资产替换或历史覆盖全部失败关闭。

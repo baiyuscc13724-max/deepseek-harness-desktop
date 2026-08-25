@@ -74,12 +74,12 @@ npm run release:publish -- status --version <version>
 
 `release.yml` 的矩阵是唯一桌面正式包来源：
 
-- `windows-latest`：安装器、便携包、解包自检、组件测试；
+- `windows-latest`：安装器、便携包、解包自检、组件测试，以及当前版本安装/已安装包自检/卸载；
 - `macos-latest`：Intel/Apple Silicon 的 DMG/ZIP 及未签名策略验证；
 - `ubuntu-latest`：AppImage/DEB 与 Electron sandbox/浏览器安全验证；
 - `ios-simulators`：iPhone 与 iPad 模拟器测试（不生成公开 iOS 安装包）。
 
-云端聚合资产后生成 `SHA256SUMS.txt`，原子创建私有 Draft；Windows 独立作业重新下载 Draft，校验精确快照、摘要、便携包、全新安装、从上一稳定版原位升级、配置保留和卸载，再把同一个未变 Draft 公开。
+云端聚合资产后生成 `SHA256SUMS.txt`，原子创建私有 Draft；恢复工作流在 Ubuntu 上重新下载九项桌面资产，逐项校验精确快照、大小、摘要和校验和，只把小型不可变 Draft 快照交给公开阶段。公开前再次确认 Draft 元数据和资产集合逐字节未变。耗时且不可观察的 Windows previous-stable 原位升级作业固定禁用，真实更新/重启健康/回滚由发布前本机 PR Preview 门禁负责。
 
 Android 与生产组件由独立受保护环境/签名密钥工作流生成。最终 Release 必须恰好包含 18 项受信任资产，签名 `release-manifest.json` 的内容、密钥根与 GitHub 资产元数据必须一致。
 
