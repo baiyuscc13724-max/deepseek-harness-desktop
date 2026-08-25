@@ -66,8 +66,9 @@
       #harness-desktop-model-tabs { position:sticky; z-index:4; top:0; display:flex; width:min(100%,980px); gap:4px; margin:0 0 16px; border-bottom:1px solid var(--dsw-alias-border-l2); background:var(--dsw-alias-bg-base); }
       #harness-desktop-model-tabs button { min-height:38px; border:0; border-bottom:2px solid transparent; padding:0 14px; color:var(--dsw-alias-label-secondary); background:transparent; font:inherit; cursor:pointer; }
       #harness-desktop-model-tabs button[aria-selected="true"] { border-bottom-color:var(--dsw-alias-brand-primary); color:var(--dsw-alias-label-primary); font-weight:600; }
-      [data-hd-model-native-hidden="true"],#harness-desktop-model-routing [data-hd-route-hidden="true"] { display:none!important; }
-      #harness-desktop-model-routing { box-sizing:border-box; width:min(100%,980px); margin:0 0 20px; border:1px solid var(--dsw-alias-border-l2); border-radius:14px; padding:16px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-1); }
+      [data-hd-model-native-hidden="true"] { display:none!important; }
+      #harness-desktop-model-routing { box-sizing:border-box; width:min(100%,980px); margin:0 0 20px; color:var(--dsw-alias-label-primary); }
+      #harness-desktop-model-routing .hd-route-shell, #harness-desktop-model-routing .hd-meter-section { box-sizing:border-box; border:1px solid var(--dsw-alias-border-l2); border-radius:14px; padding:16px; background:var(--dsw-alias-bg-layer-1); }
       #harness-desktop-model-routing .hd-route-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
       #harness-desktop-model-routing h2 { margin:0; font-size:16px; line-height:24px; font-weight:500; }
       #harness-desktop-model-routing .hd-route-intro { margin:3px 0 0; color:var(--dsw-alias-label-tertiary); font-size:12px; line-height:18px; }
@@ -87,7 +88,7 @@
       #harness-desktop-model-routing .hd-route-status[data-error="true"] { color:var(--dsw-alias-state-error-primary); }
       #harness-desktop-model-routing button { min-height:34px; border:0; border-radius:17px; padding:6px 15px; color:var(--dsw-alias-label-primary-foreground); background:var(--dsw-alias-button-primary-fill); font:inherit; font-size:13px; cursor:pointer; }
       #harness-desktop-model-routing button:disabled { cursor:default; opacity:.55; }
-      #harness-desktop-model-routing .hd-meter-section { margin-top:16px; border-top:1px solid var(--dsw-alias-border-l2); padding-top:14px; }
+      #harness-desktop-model-routing .hd-meter-section { margin-top:16px; }
       #harness-desktop-model-routing .hd-meter-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
       #harness-desktop-model-routing .hd-meter-head h3 { margin:0; font-size:14px; font-weight:500; }
       #harness-desktop-model-routing .hd-meter-head button, #harness-desktop-model-routing .hd-meter-action { min-height:28px; border-radius:14px; padding:4px 11px; font-size:12px; }
@@ -224,28 +225,30 @@
       const panel = document.createElement('section')
       panel.id = 'harness-desktop-model-routing'
       panel.innerHTML = `
-        <div class="hd-route-head" data-hd-route-section><div><h2>主模型与子代理</h2><p class="hd-route-intro">自动识别每个服务商提供的全部模型，也保留手动添加的自定义模型。</p></div></div>
-        <div class="hd-route-grid" data-hd-route-section>
-          <div class="hd-route-card">
-            <div class="hd-route-title">主模型</div>
-            <label class="hd-route-field">服务商<select data-hd-main-provider></select></label>
-            <label class="hd-route-field">模型<select data-hd-main-model></select></label>
-          </div>
-          <div class="hd-route-card">
-            <div class="hd-route-title">子代理</div>
-            <div class="hd-route-mode"><button type="button" data-hd-sub-mode="inherit">跟随主模型</button><button type="button" data-hd-sub-mode="independent">单独指定</button></div>
-            <div class="hd-route-summary" data-hd-sub-summary role="status" aria-live="polite"></div>
-            <div class="hd-route-fields" data-hd-sub-fields>
-              <label class="hd-route-field">服务商<select data-hd-sub-provider></select></label>
-              <label class="hd-route-field">模型<select data-hd-sub-model></select></label>
+        <div class="hd-route-shell">
+          <div class="hd-route-head"><div><h2>主模型与子代理</h2><p class="hd-route-intro">自动识别每个服务商提供的全部模型，也保留手动添加的自定义模型。</p></div></div>
+          <div class="hd-route-grid">
+            <div class="hd-route-card">
+              <div class="hd-route-title">主模型</div>
+              <label class="hd-route-field">服务商<select data-hd-main-provider></select></label>
+              <label class="hd-route-field">模型<select data-hd-main-model></select></label>
+            </div>
+            <div class="hd-route-card">
+              <div class="hd-route-title">子代理</div>
+              <div class="hd-route-mode"><button type="button" data-hd-sub-mode="inherit">跟随主模型</button><button type="button" data-hd-sub-mode="independent">单独指定</button></div>
+              <div class="hd-route-summary" data-hd-sub-summary role="status" aria-live="polite"></div>
+              <div class="hd-route-fields" data-hd-sub-fields>
+                <label class="hd-route-field">服务商<select data-hd-sub-provider></select></label>
+                <label class="hd-route-field">模型<select data-hd-sub-model></select></label>
+              </div>
             </div>
           </div>
+          <div class="hd-route-footer"><span class="hd-route-status" data-hd-route-status></span><button type="button" data-hd-route-save>保存模型路由</button></div>
         </div>
         <section class="hd-meter-section">
           <div class="hd-meter-head"><div><h3>账户额度</h3><p class="hd-route-intro">不同服务商会按余额、套餐用量或消费限额显示。</p></div><button type="button" data-hd-meter-refresh>刷新额度</button></div>
           <div class="hd-meter-grid" data-hd-meter-grid></div>
         </section>
-        <div class="hd-route-footer" data-hd-route-section><span class="hd-route-status" data-hd-route-status></span><button type="button" data-hd-route-save>保存模型路由</button></div>
       `
       panel.querySelectorAll('select').forEach(select => select.addEventListener('change', () => {
         panel.dataset.dirty = 'true'
@@ -278,14 +281,12 @@
     }
 
     const applyModelView = (content, panel, tabs, view) => {
-      tabs.dataset.view = view
-      tabs.querySelectorAll('button').forEach(button => button.setAttribute('aria-selected', String(button.dataset.hdModelView === view)))
+      const activeView = view === 'credentials' ? 'credentials' : 'routing'
+      tabs.dataset.view = activeView
+      tabs.querySelectorAll('button').forEach(button => button.setAttribute('aria-selected', String(button.dataset.hdModelView === activeView)))
       const nativeSections = [...content.children].filter(element => element !== tabs && element !== panel)
-      nativeSections.forEach(element => { element.dataset.hdModelNativeHidden = String(view !== 'credentials') })
-      panel.hidden = view === 'credentials'
-      panel.querySelectorAll('[data-hd-route-section]').forEach(element => { element.dataset.hdRouteHidden = String(view !== 'routing') })
-      const meters = panel.querySelector('.hd-meter-section')
-      if (meters) meters.dataset.hdRouteHidden = String(view !== 'meters')
+      nativeSections.forEach(element => { element.dataset.hdModelNativeHidden = String(activeView !== 'credentials') })
+      panel.hidden = activeView !== 'routing'
     }
 
     const ensureModelTabs = (content, panel) => {
@@ -294,7 +295,7 @@
         tabs = document.createElement('nav')
         tabs.id = 'harness-desktop-model-tabs'
         tabs.setAttribute('aria-label', '模型设置分区')
-        tabs.innerHTML = '<button type="button" data-hd-model-view="routing">模型路由</button><button type="button" data-hd-model-view="credentials">服务商与 API 密钥</button><button type="button" data-hd-model-view="meters">账户额度</button>'
+        tabs.innerHTML = '<button type="button" data-hd-model-view="routing">模型路由</button><button type="button" data-hd-model-view="credentials">服务商与 API 密钥</button>'
         tabs.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
           applyModelView(content, panel, tabs, button.dataset.hdModelView)
           content.scrollTop = 0

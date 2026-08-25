@@ -164,6 +164,15 @@
 .right-workspace-modes button[aria-pressed="true"] { border-bottom-color:var(--shell-accent); color:var(--shell-text); }
 .dsh-right-workspace__slot { position:relative; overflow:hidden; }
 .right-workspace-pane { box-sizing:border-box; width:100%; height:100%; min-height:0; }
+.dsh-right-workspace.is-home .dsh-right-workspace__header { display:none; }
+.right-workspace-home { display:grid; place-items:center; overflow:auto; padding:48px; color:var(--shell-text); background:var(--shell-surface); }
+.right-workspace-home-actions { display:grid; width:min(520px,100%); gap:6px; }
+.right-workspace-home-action { display:flex; min-width:0; min-height:38px; align-items:center; gap:10px; border:0; border-radius:8px; padding:0 10px; color:var(--shell-text); background:transparent; font:inherit; text-align:left; cursor:pointer; }
+.right-workspace-home-action:hover { background:var(--shell-hover,rgba(31,41,55,.07)); }
+.right-workspace-home-action:focus-visible { outline:2px solid var(--shell-accent); outline-offset:1px; }
+.right-workspace-home-icon { flex:none; width:16px; height:16px; color:var(--shell-text-secondary); }
+.right-workspace-home-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.right-workspace-home-shortcut { flex:none; margin-left:auto; border:0; border-radius:999px; padding:2px 7px; color:var(--shell-text-secondary); background:var(--shell-hover,rgba(31,41,55,.07)); font:11px/1.25 "Segoe UI","Microsoft YaHei UI",sans-serif; }
 .right-workspace-browser-pane { position:relative; overflow:hidden; }
 .right-workspace-browser-pane .browser-profile-panel,.right-workspace-browser-pane .browser-utility-panel { top:52px; }
 .right-workspace-data-pane,.right-workspace-document-pane { overflow:auto; padding:18px; color:var(--shell-text); background:var(--shell-surface); }
@@ -203,6 +212,7 @@ body.dsh-right-workspace-open .runtime-status { right:min(var(--browser-panel-wi
 @media (max-width:620px) {
   .right-workspace-modes button { font-size:11px; }
   .right-workspace-browser-only { display:none!important; }
+  .right-workspace-home { padding:28px 18px; }
   .right-workspace-data-pane,.right-workspace-document-pane { padding:14px; }
   .right-workspace-schedule-form { grid-template-columns:1fr; }
   .right-workspace-row { align-items:flex-start; }

@@ -7,6 +7,8 @@ const root = path.join(__dirname, '..')
 const guest = readFileSync(path.join(root, 'renderer', 'theme-integration.js'), 'utf8')
 const readableBackdropSource = guest.slice(guest.indexOf('const readableBackdrop'), guest.indexOf('const customThemeValues'))
 const readableBackdrop = Function(`${readableBackdropSource}\nreturn readableBackdrop`)()
+const completeThemeVarsSource = guest.slice(guest.indexOf('const completeThemeVars'), guest.indexOf('const style = document.createElement'))
+const completeThemeVars = Function(`${completeThemeVarsSource}\nreturn completeThemeVars`)()
 
 const parseColor = color => {
   const hex = /^#([0-9a-f]{6})$/i.exec(color)
@@ -42,6 +44,19 @@ test('custom wallpapers derive a lightweight contrast surface from the semantic 
   assert.match(guest, /'--hd-theme-readable-scrim-soft': readableBackdrop\(text, custom\.readabilityStrength, \.24, \.50, custom\.wallpaperBrightness\)/)
   assert.match(guest, /'--dsw-alias-label-secondary': hexWithOpacity\(text, \.78 \+ readability \* \.16\)/)
   assert.match(guest, /'--dsw-alias-label-tertiary': hexWithOpacity\(text, \.57 \+ readability \* \.28\)/)
+})
+
+test('non-official themes keep the code language banner on their own code surface', () => {
+  const themedCodeSurface = 'rgba(17,27,42,.82)'
+  const completed = completeThemeVars({ '--dsw-alias-markdown-code-block': themedCodeSurface }, 'dark')
+  assert.equal(completed['--dsw-alias-markdown-code-block'], themedCodeSurface)
+  assert.equal(completed['--dsw-alias-markdown-code-block-banner'], themedCodeSurface)
+
+  const explicitBanner = completeThemeVars({
+    '--dsw-alias-markdown-code-block': themedCodeSurface,
+    '--dsw-alias-markdown-code-block-banner': 'rgba(31,45,62,.94)'
+  }, 'dark')
+  assert.equal(explicitBanner['--dsw-alias-markdown-code-block-banner'], 'rgba(31,45,62,.94)')
 })
 
 test('zero text protection removes the automatic wallpaper scrim and shadow floor', () => {
@@ -118,6 +133,7 @@ test('custom wallpaper workbench protects conversation chrome, content, composer
   assert.doesNotMatch(guest, /linear-gradient\(to right,transparent 0,var\(--hd-theme-readable-scrim-soft\)/u)
   const composerSurfaceRule = guest.match(/html\[data-hd-theme="custom"\]\[data-hd-skin-tone\] \[data-composer-card="true"\],[\s\S]*?\{([\s\S]*?)\n      \}/u)?.[1] || ''
   assert.match(composerSurfaceRule, /background:linear-gradient\(var\(--hd-theme-readable-surface\),var\(--hd-theme-readable-surface\)\),var\(--hd-theme-input\) !important;/u)
+  assert.match(guest, /document\.documentElement\.dataset\.hdSkinTone = tone/u, 'custom readability rule must always be activated with the resolved skin tone')
   assert.match(guest, /html\[data-hd-theme="custom"\] \[data-hd-surface="conversation"\] :not\(pre\) > code/u)
   assert.match(guest, /background:var\(--hd-theme-readable-chip\) !important/u)
   assert.match(guest, /html\[data-hd-theme="custom"\] \[data-hd-surface="conversation"\] a \{/u)

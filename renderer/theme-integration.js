@@ -149,6 +149,8 @@
       const primary = vars['--dsw-alias-label-primary'] || (tone === 'dark' ? '#f5f6f7' : '#17191c')
       const secondary = vars['--dsw-alias-label-secondary'] || primary
       const tertiary = vars['--dsw-alias-label-tertiary'] || secondary
+      const codeBlock = vars['--dsw-alias-markdown-code-block'] || layer1
+      const codeBlockBanner = vars['--dsw-alias-markdown-code-block-banner'] || codeBlock
       const hover = vars['--dsw-alias-interactive-bg-hover'] || (tone === 'dark' ? 'rgba(255,255,255,.08)' : 'rgba(23,59,58,.08)')
       const active = vars['--dsw-alias-interactive-bg-active'] || (tone === 'dark' ? 'rgba(255,255,255,.14)' : 'rgba(23,59,58,.12)')
       const border2 = vars['--dsw-alias-border-l2'] || (tone === 'dark' ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.1)')
@@ -183,6 +185,8 @@
         '--dsw-alias-interactive-bg-active': active,
         '--dsw-alias-interactive-bg-hover-accent': active,
         '--dsw-alias-interactive-bg-hover-solid': module,
+        '--dsw-alias-markdown-code-block': codeBlock,
+        '--dsw-alias-markdown-code-block-banner': codeBlockBanner,
         '--dsw-alias-label-caption': tertiary,
         '--dsw-alias-label-dimmed': tertiary,
         '--dsw-alias-label-primary-bluish': primary,

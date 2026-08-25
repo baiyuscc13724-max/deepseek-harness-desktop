@@ -11,7 +11,7 @@ const required = [
   'electron/bridge/component-update-contract.cjs', 'electron/bridge/component-update-archive.cjs', 'electron/bridge/component-update-builder.cjs', 'electron/bridge/component-update-config.cjs', 'electron/bridge/component-update-store.cjs', 'electron/bridge/component-update-service.cjs', 'electron/bridge/component-update-helper.cjs', 'electron/bridge/component-update-launcher.cjs', 'electron/bridge/component-update-health.cjs', 'electron/bridge/component-runtime-resolver.cjs',
   'electron/bridge/relay-tunnel-codec.cjs', 'electron/bridge/mobile-relay-config.cjs', 'electron/bridge/sync-transport-manager.cjs', 'electron/bridge/sync-transports/wss-relay-adapter.cjs', 'services/wss-relay/server.cjs', 'services/wss-relay/README.zh-CN.md',
   'electron/bridge/capability-broker.cjs', 'electron/bridge/computer-use-screenshot-store.cjs', 'electron/bridge/storage-scan-service.cjs', 'electron/bridge/storage-cleanup-service.cjs', 'electron/bridge/storage-management-service.cjs', 'electron/bridge/memory-censor.cjs', 'electron/bridge/memory-service.cjs', 'electron/bridge/browser-link-router.cjs', 'electron/bridge/browser-url-policy.cjs', 'electron/bridge/browser-session-policy.cjs', 'electron/bridge/browser-site-authz.cjs', 'electron/bridge/browser-action-gate.cjs', 'electron/bridge/browser-audit.cjs', 'electron/bridge/browser-diagnostics.cjs', 'electron/bridge/browser-history-store.cjs', 'electron/bridge/browser-security-policy.cjs', 'electron/bridge/browser-navigation-guard.cjs', 'electron/bridge/browser-operation-coordinator.cjs', 'electron/bridge/browser-control-server.cjs', 'electron/bridge/computer-use-confirmation-store.cjs',
-  'electron/bridge/desktop-directory-picker-plugin-service.cjs', 'plugins/dsh-desktop-directory-picker/package.json', 'plugins/dsh-desktop-directory-picker/lib/index.js', 'plugins/dsh-desktop-directory-picker/lib/client.js', 'electron/bridge/desktop-browser-tools-plugin-service.cjs', 'plugins/dsh-desktop-browser-tools/package.json', 'plugins/dsh-desktop-browser-tools/lib/index.js', 'electron/bridge/desktop-memory-tools-plugin-service.cjs', 'plugins/dsh-desktop-memory-tools/package.json', 'plugins/dsh-desktop-memory-tools/lib/index.js', 'electron/bridge/desktop-mcp-manager-plugin-service.cjs', 'plugins/dsh-desktop-mcp-manager/package.json', 'plugins/dsh-desktop-mcp-manager/lib/index.js', 'plugins/dsh-desktop-mcp-manager/lib/client.js', 'electron/bridge/desktop-schedules-plugin-service.cjs', 'plugins/dsh-desktop-schedules/package.json', 'plugins/dsh-desktop-schedules/lib/index.js', 'plugins/dsh-desktop-schedules/lib/client.js', 'electron/bridge/desktop-files-plugin-service.cjs', 'electron/bridge/right-workspace-service.cjs', 'plugins/dsh-desktop-files/package.json', 'plugins/dsh-desktop-files/lib/index.js', 'plugins/dsh-desktop-files/lib/client.js', 'electron/bridge/desktop-progress-plugin-service.cjs', 'plugins/dsh-desktop-progress/package.json', 'plugins/dsh-desktop-progress/lib/index.js', 'electron/bridge/desktop-compaction-plugin-service.cjs', 'plugins/dsh-desktop-compaction/package.json', 'plugins/dsh-desktop-compaction/lib/index.js', 'electron/bridge/desktop-computer-use-plugin-service.cjs', 'plugins/dsh-desktop-computer-use/package.json', 'plugins/dsh-desktop-computer-use/lib/index.js', 'plugins/dsh-desktop-computer-use/lib/client.js', 'electron/bridge/agent-teams-plugin-service.cjs', 'plugins/dsh-agent-teams/package.json', 'plugins/dsh-agent-teams/lib/index.js', 'plugins/dsh-agent-teams/lib/client.js', 'electron/bridge/model-admission-plugin-service.cjs', 'plugins/dsh-model-admission/package.json', 'plugins/dsh-model-admission/lib/index.js', 'electron/bridge/session-experience-plugin-service.cjs', 'plugins/dsh-session-experience/package.json', 'plugins/dsh-session-experience/lib/index.js', 'plugins/dsh-session-experience/lib/client.js',
+  'electron/bridge/desktop-directory-picker-plugin-service.cjs', 'plugins/dsh-desktop-directory-picker/package.json', 'plugins/dsh-desktop-directory-picker/lib/index.js', 'plugins/dsh-desktop-directory-picker/lib/client.js', 'electron/bridge/desktop-browser-tools-plugin-service.cjs', 'plugins/dsh-desktop-browser-tools/package.json', 'plugins/dsh-desktop-browser-tools/lib/index.js', 'electron/bridge/desktop-memory-tools-plugin-service.cjs', 'plugins/dsh-desktop-memory-tools/package.json', 'plugins/dsh-desktop-memory-tools/lib/index.js', 'electron/bridge/desktop-mcp-manager-plugin-service.cjs', 'plugins/dsh-desktop-mcp-manager/package.json', 'plugins/dsh-desktop-mcp-manager/lib/index.js', 'plugins/dsh-desktop-mcp-manager/lib/client.js', 'electron/bridge/desktop-schedules-plugin-service.cjs', 'plugins/dsh-desktop-schedules/package.json', 'plugins/dsh-desktop-schedules/lib/index.js', 'plugins/dsh-desktop-schedules/lib/client.js', 'electron/bridge/desktop-files-plugin-service.cjs', 'electron/bridge/right-workspace-service.cjs', 'plugins/dsh-desktop-files/package.json', 'plugins/dsh-desktop-files/lib/index.js', 'plugins/dsh-desktop-files/lib/client.js', 'electron/bridge/desktop-progress-plugin-service.cjs', 'plugins/dsh-desktop-progress/package.json', 'plugins/dsh-desktop-progress/lib/index.js', 'electron/bridge/desktop-compaction-plugin-service.cjs', 'plugins/dsh-desktop-compaction/package.json', 'plugins/dsh-desktop-compaction/lib/index.js', 'electron/bridge/desktop-computer-use-plugin-service.cjs', 'plugins/dsh-desktop-computer-use/package.json', 'plugins/dsh-desktop-computer-use/lib/index.js', 'electron/bridge/agent-teams-plugin-service.cjs', 'plugins/dsh-agent-teams/package.json', 'plugins/dsh-agent-teams/lib/index.js', 'plugins/dsh-agent-teams/lib/client.js', 'electron/bridge/model-admission-plugin-service.cjs', 'plugins/dsh-model-admission/package.json', 'plugins/dsh-model-admission/lib/index.js', 'electron/bridge/session-experience-plugin-service.cjs', 'plugins/dsh-session-experience/package.json', 'plugins/dsh-session-experience/lib/index.js', 'plugins/dsh-session-experience/lib/client.js',
   'electron/store/app-state-store.cjs', 'electron/store/mobile-sync-store.cjs',
   'renderer/index.html', 'renderer/styles.css', 'renderer/app.js', 'renderer/theme-catalog.js', 'renderer/theme-integration.js', 'renderer/model-routing-integration.js', 'renderer/workspace-links-integration.js', 'renderer/storage-manager.js', 'renderer/memory-manager.js', 'renderer/right-workspace.js', 'renderer/right-workspace-integration.js', 'renderer/right-workspace.css', 'renderer/browser-sidebar.js', 'renderer/pet/pet-sprite-rig.js', 'renderer/pets/maid-whale/atlas/maid-whale.atlas.json',
   'renderer/themes/maid-atelier/maid-atelier-maid-left-v5.webp',
@@ -28,6 +28,30 @@ const required = [
   'mobile/android/RELEASE-SIGNING.zh-CN.md', 'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json', 'release-mirrors.example.json', 'release-update-sources.json', 'release-update-sources.example.json', 'component-update-sources.json', 'mobile-relay-sources.json', 'component-release.example.json', 'component-release.macos-arm64.example.json'
 ]
+
+required.push(
+  'electron/bridge/pr-preview-activation-store.cjs',
+  'electron/bridge/pr-preview-update-contract.cjs',
+  'electron/bridge/pr-preview-update-config.cjs',
+  'electron/bridge/pr-preview-update-service.cjs',
+  'renderer/pr-preview-update-integration.js',
+  'renderer/pr-preview-update.css',
+  'tests/pr-preview-activation-store.test.cjs',
+  'tests/pr-preview-update-contract.test.cjs',
+  'tests/pr-preview-update-service.test.cjs',
+  'tests/pr-preview-update-ui.test.cjs',
+  'tests/pr-preview-workflow.test.cjs',
+  'tests/pr-preview-cnb-pipeline.test.cjs',
+  'tests/pr-preview-migration.test.cjs',
+  '.github/workflows/pr-preview-build.yml',
+  '.github/workflows/pr-preview-sign.yml',
+  'scripts/pr-preview-build.mjs',
+  'scripts/pr-preview-sign.mjs',
+  'scripts/pr-preview-cnb-request.mjs',
+  'scripts/pr-preview-verify-feed.mjs',
+  'docs/PR-PREVIEW-UPDATES.zh-CN.md',
+  'pr-preview-update-sources.json'
+)
 
 // Agent Teams M2-M5 are executable product surfaces, not optional design files.
 // Keep every security boundary and its regression suite inside the static release gate.
@@ -125,7 +149,7 @@ for (const relative of removed) {
 }
 
 const html = await readFile(path.join(root, 'renderer/index.html'), 'utf8')
-for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './workspace-links-integration.js', './storage-manager.js', './memory-manager.js', './right-workspace.css', './right-workspace.js', './right-workspace-integration.js', './browser-sidebar.js', './app.js', './assets/deepseek-icon.svg']) {
+for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './workspace-links-integration.js', './storage-manager.js', './memory-manager.js', './right-workspace.css', './right-workspace.js', './right-workspace-integration.js', './browser-sidebar.js', './pr-preview-update.css', './pr-preview-update-integration.js', './app.js', './assets/deepseek-icon.svg']) {
   if (!html.includes(relative)) throw new Error(`renderer/index.html is missing expected reference: ${relative}`)
 }
 for (const id of ['runtimeView', 'runtimeStatus', 'runtimeStatusTitle', 'runtimeStatusDetail', 'retryRuntime']) {
@@ -322,7 +346,7 @@ const modelAdmissionManifest = JSON.parse(await readFile(path.join(root, 'plugin
 if (modelAdmissionManifest.name !== 'dsh-model-admission' || modelAdmissionManifest.version !== pkg.version || modelAdmissionManifest.type !== 'module' || modelAdmissionManifest.main !== 'lib/index.js' || modelAdmissionManifest.exports?.['.'] !== './lib/index.js' || modelAdmissionManifest.dsh?.client !== undefined) {
   throw new Error('The bundled model admission manifest must match the desktop version and remain Host-only.')
 }
-for (const bundled of ['component-update-sources.json', 'mobile-relay-sources.json', 'scripts/component-update-helper.cjs']) {
+for (const bundled of ['component-update-sources.json', 'pr-preview-update-sources.json', 'mobile-relay-sources.json', 'scripts/component-update-helper.cjs']) {
   if (!pkg.build?.files?.includes(bundled)) throw new Error(`Packaged component updater support file is missing: ${bundled}`)
 }
 if (pkg.scripts?.['dist:mac'] !== 'node scripts/build-release.mjs') throw new Error('macOS release packaging must use the audited fail-closed release builder.')
@@ -347,6 +371,17 @@ for (const target of ['dmg', 'zip']) {
 const desktopMain = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
 for (const contract of ['createWssRelayAdapter', 'MobileRelayConfigStore', "detached: process.platform !== 'win32'", 'terminateProcessTree(child)', 'runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 180_000 }', 'ensureComputerUseScreenshotStore().save(scaled.toPNG())', 'clearComputerUseScreenshots()']) {
   if (!desktopMain.includes(contract)) throw new Error(`Cross-platform desktop runtime contract is missing: ${contract}`)
+}
+for (const contract of ['ensurePrPreviewUpdateContext', 'checkPrPreviewUpdates', 'stagePrPreviewUpdate', 'context.service.accept(pending.discovery)', 'exitPrPreviewUpdate', "ipcMain.handle('prPreviewUpdates:apply'"]) {
+  if (!desktopMain.includes(contract)) throw new Error(`PR preview desktop integration contract is missing: ${contract}`)
+}
+const desktopPreload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
+for (const contract of ['getPrPreviewUpdateState', 'setPrPreviewUpdatesEnabled', 'checkPrPreviewUpdates', 'applyPrPreviewUpdate', 'exitPrPreviewUpdates']) {
+  if (!desktopPreload.includes(contract)) throw new Error(`PR preview preload contract is missing: ${contract}`)
+}
+const desktopRenderer = await readFile(path.join(root, 'renderer/app.js'), 'utf8')
+for (const contract of ['setPrPreviewChannelEnabled', 'refreshPrPreviewState', 'preview-updates-toggle', 'data-hd-preview']) {
+  if (!desktopRenderer.includes(contract)) throw new Error(`PR preview renderer integration contract is missing: ${contract}`)
 }
 const iosInfo = await readFile(path.join(root, 'mobile/ios/HarnessMobile/Resources/Info.plist'), 'utf8')
 for (const contract of ['NSCameraUsageDescription', 'NSLocalNetworkUsageDescription', 'NSAllowsLocalNetworking', 'harnessmobile']) {
@@ -699,6 +734,20 @@ for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.s
 }
 for (const contract of ['patchInstalledFsSearch', 'patchFsSearchSource', 'Do NOT repeat this same search call', 'First use glob to discover which paths actually exist under the workspace', 'narrow the grep path to that existing subtree', 'refusing an unsafe search-recovery patch', 'fails closed as a search error (ripgrep exit 2)']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Guarded search exit-2 recovery runtime patch is missing: ${contract}`)
+}
+for (const contract of ['patchInstalledSubprocess', 'patchSubprocessSource', 'SUBPROCESS_TERMINAL_TASKKILL_PATCHED', 'SUBPROCESS_COMMAND_TASKKILL_PATCHED', 'SUBPROCESS_COMMAND_SPAWN_PATCHED', 'windowsHide: true', 'refusing an unsafe console-hide patch']) {
+  if (!runtimePatch.includes(contract)) throw new Error(`Hidden Windows subprocess runtime patch is missing: ${contract}`)
+}
+const installedSubprocessRuntime = await readFile(path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subprocess-local', 'lib', 'index.js'), 'utf8')
+if ((installedSubprocessRuntime.match(/stdio: "ignore", windowsHide: true/g) || []).length !== 2 || !installedSubprocessRuntime.includes('env,\n\t\twindowsHide: true,\n\t\tstdio:')) {
+  throw new Error('The installed DSH subprocess runtime can still create visible Windows console windows.')
+}
+for (const contract of ['patchInstalledWebApp', 'patchWebAppSource', 'WEB_APP_BROWSER_LAUNCH_PATCHED', 'Pinned DSH browser launcher implementation changed']) {
+  if (!runtimePatch.includes(contract)) throw new Error(`Hidden DSH browser-launcher patch is missing: ${contract}`)
+}
+const installedWebAppRuntime = await readFile(path.join(root, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'index.js'), 'utf8')
+if (!/function spawnBrowserLauncher\(url\)[\s\S]{0,300}windowsHide: true/u.test(installedWebAppRuntime)) {
+  throw new Error('The installed DSH browser launcher can still create a visible Node console window.')
 }
 for (const officialHarnessContract of ['patchInstalledMarkdownRenderer', 'patchInstalledModelImageCompatibility', 'desktopMessagesForInputModalities', 'does not accept the image waiting in the prompt', 'patchConversationAttachmentCopySource']) {
   if (runtimePatch.includes(officialHarnessContract)) throw new Error(`Desktop must defer file references and multimodal handling to official Harness rc.2: ${officialHarnessContract}`)

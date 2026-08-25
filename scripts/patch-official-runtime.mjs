@@ -27,6 +27,8 @@ const workspaceUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-
 const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
 const subagentContinuationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js')
 const fsSearchRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-tool-fs-search', 'lib', 'index.js')
+const subprocessRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subprocess-local', 'lib', 'index.js')
+const webAppRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'index.js')
 const attachmentProfileRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-base', 'cordis.patch.yml')
 
 function dedentOne(source) {
@@ -176,6 +178,97 @@ const DIRECTORY_PICKER_PATCHED = `if (platform === "win32") {
 			encoded
 		], signal)).stdout);
 	}`
+
+const SUBPROCESS_TERMINAL_TASKKILL_ORIGINAL = String(`function taskkillTree(pid, force) {
+	if (pid <= 0) return;
+	spawnSync("taskkill", [
+		"/PID",
+		String(pid),
+		"/T",
+		...force ? ["/F"] : []
+	], { stdio: "ignore" });
+}`)
+const SUBPROCESS_TERMINAL_TASKKILL_PATCHED = String(`function taskkillTree(pid, force) {
+	if (pid <= 0) return;
+	spawnSync("taskkill", [
+		"/PID",
+		String(pid),
+		"/T",
+		...force ? ["/F"] : []
+	], { stdio: "ignore", windowsHide: true });
+}`)
+const SUBPROCESS_COMMAND_TASKKILL_ORIGINAL = String(`function taskkillProcessTree(pid) {
+	if (pid <= 0) return;
+	spawnSync("taskkill", [
+		"/PID",
+		String(pid),
+		"/T",
+		"/F"
+	], { stdio: "ignore" });
+}`)
+const SUBPROCESS_COMMAND_TASKKILL_PATCHED = String(`function taskkillProcessTree(pid) {
+	if (pid <= 0) return;
+	spawnSync("taskkill", [
+		"/PID",
+		String(pid),
+		"/T",
+		"/F"
+	], { stdio: "ignore", windowsHide: true });
+}`)
+const SUBPROCESS_COMMAND_SPAWN_ORIGINAL = String(`	const child = spawn(program, args, {
+		cwd: spec.cwd,
+		env,
+		stdio: [
+			stdinMode === "ignore" ? "ignore" : "pipe",
+			outMode === "inherit" ? "inherit" : "pipe",
+			errMode === "inherit" ? "inherit" : "pipe"
+		],
+		detached: platform !== "win32"
+	});`)
+const SUBPROCESS_COMMAND_SPAWN_PATCHED = String(`	const child = spawn(program, args, {
+		cwd: spec.cwd,
+		env,
+		windowsHide: true,
+		stdio: [
+			stdinMode === "ignore" ? "ignore" : "pipe",
+			outMode === "inherit" ? "inherit" : "pipe",
+			errMode === "inherit" ? "inherit" : "pipe"
+		],
+		detached: platform !== "win32"
+	});`)
+const WEB_APP_BROWSER_LAUNCH_ORIGINAL = String(`function spawnBrowserLauncher(url) {
+	return spawn(process.execPath, [
+		"--input-type=module",
+		"--eval",
+		BROWSER_OPENER_PROGRAM,
+		"--",
+		url
+	], {
+		env: scrubbedParentEnv(),
+		stdio: [
+			"ignore",
+			"inherit",
+			"pipe"
+		]
+	});
+}`)
+const WEB_APP_BROWSER_LAUNCH_PATCHED = String(`function spawnBrowserLauncher(url) {
+	return spawn(process.execPath, [
+		"--input-type=module",
+		"--eval",
+		BROWSER_OPENER_PROGRAM,
+		"--",
+		url
+	], {
+		env: scrubbedParentEnv(),
+		windowsHide: true,
+		stdio: [
+			"ignore",
+			"inherit",
+			"pipe"
+		]
+	});
+}`)
 
 const MARKDOWN_SANITIZE_PATCHED = dedentOne(`	function desktopLocalHref(url) {
 		let decoded = String(url ?? "");
@@ -1019,6 +1112,30 @@ export function patchDirectoryPickerSource(source) {
   return { source: source.replace(DIRECTORY_PICKER_ORIGINAL, DIRECTORY_PICKER_PATCHED), changed: true }
 }
 
+export function patchSubprocessSource(source) {
+  let output = source
+  let changed = false
+  for (const [original, patched, label] of [
+    [SUBPROCESS_TERMINAL_TASKKILL_ORIGINAL, SUBPROCESS_TERMINAL_TASKKILL_PATCHED, 'terminal taskkill'],
+    [SUBPROCESS_COMMAND_TASKKILL_ORIGINAL, SUBPROCESS_COMMAND_TASKKILL_PATCHED, 'command taskkill'],
+    [SUBPROCESS_COMMAND_SPAWN_ORIGINAL, SUBPROCESS_COMMAND_SPAWN_PATCHED, 'command spawn']
+  ]) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) throw new Error(`Pinned DSH subprocess ${label} implementation changed; refusing an unsafe console-hide patch.`)
+    output = output.replace(original, patched)
+    changed = true
+  }
+  return { source: output, changed }
+}
+
+export function patchWebAppSource(source) {
+  if (source.includes(WEB_APP_BROWSER_LAUNCH_PATCHED)) return { source, changed: false }
+  if (!source.includes(WEB_APP_BROWSER_LAUNCH_ORIGINAL)) {
+    throw new Error('Pinned DSH browser launcher implementation changed; refusing an unsafe console-hide patch.')
+  }
+  return { source: source.replace(WEB_APP_BROWSER_LAUNCH_ORIGINAL, WEB_APP_BROWSER_LAUNCH_PATCHED), changed: true }
+}
+
 export function patchConversationCacheSource(source) {
   let output = source
   let changed = false
@@ -1471,6 +1588,20 @@ export async function patchInstalledFsSearch(file = fsSearchRuntime) {
   return patched.changed
 }
 
+export async function patchInstalledSubprocess(file = subprocessRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchSubprocessSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
+export async function patchInstalledWebApp(file = webAppRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchWebAppSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const sessionChanged = await patchInstalledRuntime()
   const attachmentProfileChanged = await patchInstalledAttachmentProfile()
@@ -1489,6 +1620,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const modelSelectionChanged = await patchInstalledModelSelection()
   const workspaceUiChanged = await patchInstalledWorkspaceUi()
   const fsSearchChanged = await patchInstalledFsSearch()
+  const subprocessChanged = await patchInstalledSubprocess()
+  const webAppChanged = await patchInstalledWebApp()
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
@@ -1505,4 +1638,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
   process.stdout.write(workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n')
   process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
+  process.stdout.write(subprocessChanged ? 'Patched hidden Windows command and cleanup processes.\n' : 'Hidden Windows command and cleanup process patch already applied.\n')
+  process.stdout.write(webAppChanged ? 'Patched hidden browser launcher process.\n' : 'Hidden browser launcher process patch already applied.\n')
 }

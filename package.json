@@ -117,6 +117,7 @@
       "release-update-sources.json",
       "release-update-sources.local.json",
       "component-update-sources.json",
+      "pr-preview-update-sources.json",
       "mobile-relay-sources.json",
       "scripts/component-update-helper.cjs",
       "node_modules/@img/**/*",

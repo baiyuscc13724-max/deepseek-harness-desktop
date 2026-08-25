@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron')
+const { normalizeBrowserOpenIntent } = require('./bridge/browser-open-intent.cjs')
 let activeDrag = null
 let pendingPoint = null
 let pendingFrame = 0
@@ -75,6 +76,11 @@ contextBridge.exposeInMainWorld('harnessDesktopGuest', Object.freeze({
     const context = safeSessionContext(value)
     if (context) ipcRenderer.sendToHost('right-workspace:context', context)
     return Boolean(context)
+  },
+  publishRightWorkspaceIntent: value => {
+    const intent = normalizeBrowserOpenIntent(value)
+    if (intent) ipcRenderer.sendToHost('right-workspace:intent', intent)
+    return Boolean(intent)
   },
   onRightWorkspaceCommand: subscribeRightWorkspaceCommands,
   onWallpaperLifecycle: subscribeWallpaperLifecycle

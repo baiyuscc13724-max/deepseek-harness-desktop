@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   checkComponentUpdates: () => ipcRenderer.invoke('componentUpdates:check'),
   stageComponentUpdates: () => ipcRenderer.invoke('componentUpdates:stage'),
   applyComponentUpdates: () => ipcRenderer.invoke('componentUpdates:apply'),
+  getPrPreviewUpdateState: () => ipcRenderer.invoke('prPreviewUpdates:getState'),
+  setPrPreviewUpdatesEnabled: enabled => ipcRenderer.invoke('prPreviewUpdates:setEnabled', enabled === true),
+  checkPrPreviewUpdates: () => ipcRenderer.invoke('prPreviewUpdates:check'),
+  applyPrPreviewUpdate: () => ipcRenderer.invoke('prPreviewUpdates:apply'),
+  exitPrPreviewUpdates: () => ipcRenderer.invoke('prPreviewUpdates:exit'),
   getGitRuntimeStatus: () => ipcRenderer.invoke('gitRuntime:status'),
   refreshGitRuntimeStatus: () => ipcRenderer.invoke('gitRuntime:refresh'),
   prepareGitRuntime: () => ipcRenderer.invoke('gitRuntime:prepare'),
@@ -126,5 +131,6 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   onPetState: listener => subscribe('pet:state', listener),
   onUpdateResult: listener => subscribe('updates:result', listener),
   onUpdateInstallProgress: listener => subscribe('updates:install-progress', listener),
-  onComponentUpdateProgress: listener => subscribe('componentUpdates:progress', listener)
+  onComponentUpdateProgress: listener => subscribe('componentUpdates:progress', listener),
+  onPrPreviewUpdateProgress: listener => subscribe('prPreviewUpdates:progress', listener)
 })

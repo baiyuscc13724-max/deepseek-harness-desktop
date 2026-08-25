@@ -643,3 +643,73 @@ test('v1.0.27 persisted names remain readable across ZWJ and normalized collisio
     assert.equal(projected.status, 'active')
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+test('exact task detail projects useful live workflow without exposing raw session payloads', async () => {
+  const mod = await plugin()
+  const claimedAt = '2026-08-25T00:33:18.000Z'
+  const start = Date.parse(claimedAt)
+  const document = {
+    version: 3,
+    settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 },
+    teams: [{
+      id: 'team-detail', rootLeadSessionId: 'lead-session', name: 'Detail team', objective: 'Ship safely', revision: 3,
+      state: 'active', createdAt: '2026-08-24T23:43:24.000Z', updatedAt: '2026-08-25T00:34:27.000Z',
+      members: [
+        { id: 'lead-member', sessionId: 'lead-session', name: '负责人', role: 'owns the result', kind: 'lead', state: 'running', model: 'lead-model', provider: 'lead-provider', modelTier: 'main', createdAt: claimedAt, updatedAt: claimedAt },
+        { id: 'worker-member', sessionId: 'worker-session', name: '发布审查', role: 'review release', kind: 'worker', state: 'running', model: 'configured-model', provider: 'configured-provider', modelTier: 'subagent', createdAt: claimedAt, updatedAt: claimedAt }
+      ],
+      tasks: [{ id: 'task-detail', title: '修正 Tag 后置审查阻断', description: '核对发布状态，修复阻断并完成回归。\n不得跳过安全检查。', state: 'in_progress', dependsOn: [], files: ['private/release-plan.md'], assigneeSessionId: 'worker-session', createdAt: '2026-08-24T23:43:24.000Z', updatedAt: '2026-08-25T00:34:27.000Z', claimedAt }],
+      messages: []
+    }]
+  }
+  const sessionEvents = [
+    { type: 'turn/start', seq: 1, time: start + 5, data: { turn: 2 } },
+    { type: 'step/start', seq: 2, time: start + 10, data: { turn: 2, step: 1 } },
+    { type: 'tool/call', seq: 3, time: start + 20, data: { turn: 2, step: 1, callId: 'call-private', name: 'read', arguments: '{"file_path":"C:/private/release-plan.md"}' } },
+    { type: 'tool/result', seq: 4, time: start + 30, data: { turn: 2, step: 1, message: { callId: 'call-private', isError: false, content: [{ type: 'text', text: 'SECRET RESULT BODY' }] } } },
+    { type: 'todo/write', seq: 5, time: start + 40, data: { todos: [{ content: '核对 release-plan.md 的发布审查状态', status: 'completed' }, { content: '验证 UI/UX 与 A/B 测试', status: 'in_progress' }] } },
+    { type: 'assistant/message', seq: 6, time: start + 50, data: { turn: 2, step: 1, message: { source: { provider: 'actual-provider', model: 'actual-model' }, content: [{ type: 'text', text: 'PRIVATE ASSISTANT RESPONSE' }] } } },
+    { type: 'step/end', seq: 7, time: start + 60, data: { turn: 2, step: 1 } },
+    { type: 'turn/end', seq: 8, time: start + 70, data: { turn: 2, reason: { kind: 'future-kind' } } }
+  ]
+  const ctx = { agents: { get(id) { return id === 'worker-session' ? { id, session: { events: sessionEvents } } : undefined } } }
+  const detail = mod.projectTaskDetailForUi(ctx, document, 'lead-session', 'team-detail', 'task-detail')
+  assert.equal(detail.summary, '修正 Tag 后置审查阻断')
+  assert.match(detail.description, /不得跳过安全检查/u)
+  assert.equal(detail.claimant.displayName, '发布审查')
+  assert.equal(detail.responsible.displayName, '负责人')
+  assert.deepEqual(detail.progress, { percent: 50, source: 'plan', indeterminate: false, total: 2, completed: 1, inProgress: 1, pending: 0 })
+  assert.equal(detail.plan[0].content, '核对 [path hidden] 的发布审查状态')
+  assert.equal(detail.plan[1].content, '验证 UI/UX 与 A/B 测试')
+  assert.equal(detail.plan[1].status, 'in_progress')
+  assert.deepEqual(detail.executionModel, { model: 'actual-model', provider: 'actual-provider', modelTier: 'subagent', observed: true })
+  const toolEvent = detail.workflow.events.find(event => event.kind === 'tool')
+  assert.equal(toolEvent.toolName, 'read')
+  assert.equal(toolEvent.status, 'completed')
+  assert.equal(typeof toolEvent.completedAt, 'string')
+  assert.equal(detail.workflow.events.find(event => event.kind === 'turn').status, 'unknown')
+  const encoded = JSON.stringify(detail)
+  assert.doesNotMatch(encoded, /private\/release-plan|SECRET RESULT BODY|PRIVATE ASSISTANT RESPONSE|call-private|arguments/u)
+  document.teams[0].tasks.push({ id: 'overlap', title: 'Concurrent task', state: 'in_progress', dependsOn: [], files: [], assigneeSessionId: 'worker-session', createdAt: claimedAt, updatedAt: claimedAt, claimedAt })
+  const ambiguous = mod.projectTaskDetailForUi(ctx, document, 'lead-session', 'team-detail', 'task-detail')
+  assert.equal(ambiguous.workflow.reliable, false)
+  assert.equal(ambiguous.workflow.unavailableReason, 'overlapping_tasks')
+  assert.deepEqual(ambiguous.workflow.events, [])
+  assert.equal(mod.projectTaskDetailForUi(ctx, document, 'unrelated-session', 'team-detail', 'task-detail'), null)
+  const listTask = mod.teamSnapshot(document, 'lead-session', 'team-detail').team.tasks[0]
+  assert.equal('description' in listTask, false)
+  assert.equal('files' in listTask, false)
+})
+
+test('optional project foundation Host options remain fail-closed while projecting plain data', async () => {
+  const mod = await plugin()
+  const runner = () => undefined, runnerEvidence = () => undefined, connector = { enabled: true }
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => ({ runner, runnerEvidence, connector }) }), { runner, runnerEvidenceProvider: runnerEvidence, connector })
+  let reads = 0
+  const accessor = {}
+  Object.defineProperty(accessor, 'runner', { enumerable: true, get() { reads += 1; return runner } })
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => accessor }), {})
+  assert.equal(reads, 0)
+  const revoked = Proxy.revocable({}, {}); revoked.revoke()
+  assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => revoked.proxy }), {})
+})

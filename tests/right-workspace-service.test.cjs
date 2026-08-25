@@ -38,13 +38,16 @@ test('explicit local-document previews are text-only, bounded, and reject networ
   const directory = await mkdtemp(path.join(os.tmpdir(), 'right-workspace-local-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const markdown = path.join(directory, 'notes.md')
+  const commonJs = path.join(directory, 'config.cjs')
   const binary = path.join(directory, 'image.bin')
   await writeFile(markdown, '# Notes')
+  await writeFile(commonJs, 'module.exports = true')
   await writeFile(binary, Buffer.from([0, 1, 2]))
   const adapters = { realpathImpl: realpath, statImpl: stat, openImpl: open }
   const preview = await previewLocalDocument(markdown, adapters)
   assert.equal(preview.previewable, true)
   assert.equal(preview.text, '# Notes')
+  assert.equal((await previewLocalDocument(commonJs, adapters)).text, 'module.exports = true')
   assert.equal((await previewLocalDocument(binary, adapters)).reason, 'unsupported')
   const growing = await previewLocalDocument(markdown, {
     realpathImpl: async value => value,
