@@ -1,1 +1,29 @@
-{"name":"dsh-desktop-computer-use","version":"1.0.44","type":"module","description":"Harness Desktop session or permanent unlimited computer use tool","license":"MIT","exports":"./lib/index.js"}
+{
+  "name": "dsh-desktop-computer-use",
+  "version": "1.0.44",
+  "type": "module",
+  "description": "Harness Desktop session or permanent unlimited computer use tool",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ],
+      "immediately": true
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.8",
+    "@deepseek-ai/schemastery": "^3.17.1"
+  }
+}

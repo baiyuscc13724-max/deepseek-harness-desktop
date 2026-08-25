@@ -39,21 +39,12 @@
   const revokeCurrent = document.querySelector('#browserRevokeCurrent')
   const resumeModel = document.querySelector('#browserResumeModel')
   const pendingActions = document.querySelector('#browserPendingActions')
-  const computerUseToggle = document.querySelector('#computerUseToggle')
-  const computerUseRevokePermanent = document.querySelector('#computerUseRevokePermanent')
-  const computerUseSessionState = document.querySelector('#computerUseSessionState')
-  const computerUsePending = document.querySelector('#computerUsePending')
   const computerUseAuthorizationOverlay = document.querySelector('#computerUseAuthorizationOverlay')
   const computerUseAuthorizationClose = document.querySelector('#computerUseAuthorizationClose')
   const computerUseAuthorizationSession = document.querySelector('#computerUseAuthorizationSession')
   const computerUseAuthorizationForever = document.querySelector('#computerUseAuthorizationForever')
   const computerUseAuthorizationDecline = document.querySelector('#computerUseAuthorizationDecline')
   const computerUseAuthorizationStatus = document.querySelector('#computerUseAuthorizationStatus')
-  const computerUsePolicyControls = document.querySelector('#computerUsePolicyControls')
-  const computerUseDefaultAccess = document.querySelector('#computerUseDefaultAccess')
-  const computerUseCurrentTarget = document.querySelector('#computerUseCurrentTarget')
-  const computerUseAppList = document.querySelector('#computerUseAppList')
-  const computerUsePolicyMessage = document.querySelector('#computerUsePolicyMessage')
   const clearSiteConfirm = document.querySelector('#browserClearSiteConfirm')
   const clearSite = document.querySelector('#browserClearSite')
   const clearAllConfirm = document.querySelector('#browserClearAllConfirm')
@@ -174,8 +165,6 @@
     }
   }
 
-  let computerUsePolicyUnavailable = false
-
   function setComputerUseAuthorizationBusy(busy) {
     for (const button of [computerUseAuthorizationClose, computerUseAuthorizationSession, computerUseAuthorizationForever, computerUseAuthorizationDecline]) {
       if (button) button.disabled = Boolean(busy)
@@ -199,66 +188,8 @@
     if (wasHidden !== hidden) syncNativeVisibility().catch(() => {})
   }
 
-  function renderComputerUseSession(session) {
-    const enabled = session?.enabled === true
-    const ready = session?.ready !== false
-    const unlimited = session?.unlimited === true || session?.authorization?.unlimited === true
-    const scope = String(session?.authorization?.scope || 'none')
-    const authorized = scope === 'session' || scope === 'forever'
-    const generation = session?.generation ? ` · 会话 #${session.generation}` : ''
-    computerUseToggle.disabled = !enabled && !ready
-    computerUseToggle.dataset.activation = 'approval-card'
-    computerUseToggle.textContent = enabled
-      ? '停止并由用户接管'
-      : authorized
-        ? '恢复无限制桌面控制'
-        : ready
-          ? '请求无限制桌面控制'
-          : '暂不可开启'
-    computerUseToggle.title = enabled
-      ? '立即停止当前桌面控制会话；授权有效期保持不变'
-      : authorized
-        ? '授权已经生效，点击后无需再次确认即可恢复控制'
-        : '点击后在对话框上方选择本次授权或永久授权'
-    computerUseRevokePermanent.classList.toggle('hidden', scope !== 'forever')
-    computerUseSessionState.textContent = enabled
-      ? unlimited
-        ? `会话状态：无限制桌面控制已开启${generation}（${scope === 'forever' ? '永久授权' : '本次授权'}）；不再逐次确认，应用策略和原有硬禁令均不拦截。`
-        : `会话状态：受限控制已开启${generation}。`
-      : ready
-        ? authorized
-          ? `会话状态：已停止但授权仍有效（${scope === 'forever' ? '永久授权' : '本次运行'}）；模型再次请求时可直接恢复。`
-          : '会话状态：等待授权；模型请求控制时将在对话框上方弹出授权卡片。'
-        : '会话状态：暂不可开启；请先解锁桌面后重试。'
-  }
-
-  function renderComputerUsePending(items = []) {
-    computerUsePending.replaceChildren()
-    for (const item of items) {
-      const row = document.createElement('div')
-      const text = document.createElement('span')
-      text.textContent = item.summary
-      if (item.confirmed) {
-        const mark = document.createElement('strong')
-        mark.textContent = '已允许'
-        row.append(text, mark)
-      } else {
-        const allow = document.createElement('button')
-        allow.textContent = '本次允许'
-        allow.addEventListener('click', async () => renderComputerUse(await api.confirmComputerUseAction(item.id)))
-        const reject = document.createElement('button')
-        reject.textContent = '拒绝'
-        reject.addEventListener('click', async () => renderComputerUse(await api.rejectComputerUseAction(item.id)))
-        row.append(text, allow, reject)
-      }
-      computerUsePending.append(row)
-    }
-  }
-
   function renderComputerUse(value) {
-    renderComputerUseSession(value)
     renderComputerUseAuthorization(value)
-    renderComputerUsePending(value?.pending || [])
   }
 
   async function resolveComputerUseAuthorization(scope) {
@@ -285,115 +216,6 @@
       computerUseAuthorizationStatus.textContent = error.message || String(error)
     } finally {
       setComputerUseAuthorizationBusy(false)
-    }
-  }
-
-  function setComputerUsePolicyControlsDisabled(disabled) {
-    const effective = disabled || computerUsePolicyUnavailable
-    computerUseDefaultAccess.disabled = effective
-    for (const control of computerUsePolicyControls.querySelectorAll('select, button')) control.disabled = effective
-  }
-
-  function renderComputerUsePolicyUnavailable(reason) {
-    computerUsePolicyUnavailable = true
-    setComputerUsePolicyControlsDisabled(true)
-    computerUseDefaultAccess.value = 'ask'
-    computerUseCurrentTarget.textContent = '当前目标：不可用'
-    computerUseAppList.replaceChildren()
-    const notice = document.createElement('p')
-    notice.className = 'computer-use-app-empty'
-    notice.textContent = '策略后端未接通：仅显示会话状态，跨应用访问策略编辑暂不可用。'
-    computerUseAppList.append(notice)
-    computerUsePolicyMessage.textContent = `能力不可用原因：${reason}`
-    computerUsePolicyMessage.classList.add('is-error')
-  }
-
-  function renderComputerUsePolicy(policy) {
-    const state = stateFromResult(policy)
-    computerUsePolicyUnavailable = false
-    const defaultAccess = ['ask', 'allow', 'deny'].includes(state.defaultAccess) ? state.defaultAccess : 'ask'
-    computerUseDefaultAccess.value = defaultAccess
-    const target = state.currentTarget
-    computerUseCurrentTarget.textContent = target
-      ? `当前目标：${target.app || '未知应用'}${target.window ? ` · ${target.window}` : ''}${target.reason ? `（${target.reason}）` : ''}`
-      : '当前目标：无（没有应用正在被模型访问）'
-    computerUseAppList.replaceChildren()
-    for (const app of state.apps || []) {
-      const row = document.createElement('article')
-      row.className = 'computer-use-app-row'
-      const name = document.createElement('strong')
-      name.textContent = app.name || app.id || '未知应用'
-      const meta = document.createElement('span')
-      meta.textContent = app.executable || ''
-      const reason = document.createElement('small')
-      reason.textContent = app.reason || (app.decision ? '' : '跟随默认应用访问')
-      row.append(name, meta)
-      if (app.immutable) {
-        const lock = document.createElement('span')
-        lock.className = 'computer-use-app-lock'
-        lock.textContent = '受限模式禁止'
-        row.append(lock, reason)
-      } else {
-        const decision = document.createElement('select')
-        for (const [value, label] of [['default', '跟随默认'], ['allow', '始终允许'], ['deny', '始终拒绝']]) {
-          const option = document.createElement('option')
-          option.value = value
-          option.textContent = label
-          if (String(app.decision || 'default') === value) option.selected = true
-          decision.append(option)
-        }
-        decision.addEventListener('change', async () => {
-          try {
-            renderComputerUsePolicy(await api.setComputerUseAppOverride(app.id, decision.value))
-            computerUsePolicyMessage.textContent = `已保存 ${name.textContent} 的访问策略。`
-            computerUsePolicyMessage.classList.remove('is-error')
-          } catch (error) {
-            computerUsePolicyMessage.textContent = `保存失败：${error.message || String(error)}`
-            computerUsePolicyMessage.classList.add('is-error')
-          }
-        })
-        const revoke = document.createElement('button')
-        revoke.type = 'button'
-        revoke.textContent = '撤销持久授权'
-        revoke.disabled = !app.decision
-        revoke.addEventListener('click', async () => {
-          try {
-            renderComputerUsePolicy(await api.revokeComputerUseAppOverride(app.id))
-            computerUsePolicyMessage.textContent = `已撤销 ${name.textContent} 的持久授权，恢复跟随默认。`
-            computerUsePolicyMessage.classList.remove('is-error')
-          } catch (error) {
-            computerUsePolicyMessage.textContent = `撤销失败：${error.message || String(error)}`
-            computerUsePolicyMessage.classList.add('is-error')
-          }
-        })
-        row.append(decision, revoke, reason)
-      }
-      computerUseAppList.append(row)
-    }
-    if (!(state.apps || []).length) {
-      const empty = document.createElement('p')
-      empty.className = 'computer-use-app-empty'
-      empty.textContent = '还没有任何应用的持久授权记录。'
-      computerUseAppList.append(empty)
-    }
-    const capability = state.capability
-    if (capability && capability.available === false) {
-      computerUsePolicyMessage.textContent = `能力不可用原因：${capability.reason || '原生跨应用后端不可用'}`
-      computerUsePolicyMessage.classList.add('is-error')
-    } else {
-      computerUsePolicyMessage.classList.remove('is-error')
-    }
-  }
-
-  async function refreshComputerUsePolicy() {
-    if (typeof api.getComputerUsePolicy !== 'function') {
-      renderComputerUsePolicyUnavailable('可选 preload 策略 API 尚未接通')
-      return
-    }
-    try {
-      renderComputerUsePolicy(await api.getComputerUsePolicy())
-    } catch (error) {
-      renderComputerUsePolicyUnavailable(error.message || String(error))
     }
   }
 
@@ -431,7 +253,6 @@
     clearSite.disabled = resetting || !clearSiteConfirm.checked
     clearAll.disabled = resetting || !clearAllConfirm.checked
     for (const checkbox of document.querySelectorAll('.browser-model-permissions input[type="checkbox"]')) checkbox.disabled = resetting
-    setComputerUsePolicyControlsDisabled(resetting)
     reloadButton.textContent = state.loading ? '×' : '↻'
     reloadButton.setAttribute('aria-label', state.loading ? '停止加载' : '刷新')
     if (document.activeElement !== address && state.url) address.value = state.url
@@ -578,59 +399,16 @@
     clearAllConfirm.checked = false
     clearSite.disabled = true
     clearAll.disabled = true
-    renderComputerUse(await api.getComputerUseState())
-    await refreshComputerUsePolicy()
     closeProfile.focus()
   })
   closeProfile.addEventListener('click', async () => {
     await showPanel(profilePanel)
     profileButton.focus()
   })
-  computerUseToggle.addEventListener('click', async () => {
-    try {
-      const current = await api.getComputerUseState()
-      if (current.enabled) {
-        renderComputerUse(await api.setComputerUseEnabled(false))
-        statusText.textContent = 'Computer Use 已停止，控制权已交还用户；授权有效期保持不变。'
-      } else if (current.authorization?.scope && current.authorization.scope !== 'none') {
-        renderComputerUse(await api.setComputerUseEnabled(true))
-        statusText.textContent = '无限制桌面控制已恢复。'
-      } else {
-        renderComputerUse(await api.requestComputerUseAuthorization())
-        statusText.textContent = '已在对话框上方推送 Computer Use 授权卡片。'
-      }
-    } catch (error) {
-      statusText.textContent = error.message || String(error)
-    }
-  })
-  computerUseRevokePermanent.addEventListener('click', async () => {
-    try {
-      renderComputerUse(await api.revokeComputerUsePermanentGrant())
-      statusText.textContent = '永久 Computer Use 授权已撤销，控制会话已停止。'
-    } catch (error) {
-      statusText.textContent = error.message || String(error)
-    }
-  })
   computerUseAuthorizationSession.addEventListener('click', () => resolveComputerUseAuthorization('session'))
   computerUseAuthorizationForever.addEventListener('click', () => resolveComputerUseAuthorization('forever'))
   computerUseAuthorizationDecline.addEventListener('click', declineComputerUseAuthorization)
   computerUseAuthorizationClose.addEventListener('click', declineComputerUseAuthorization)
-  computerUseDefaultAccess.addEventListener('change', async () => {
-    if (typeof api.setComputerUseDefaultAccess !== 'function') {
-      computerUsePolicyMessage.textContent = '能力不可用原因：可选 preload 策略 API 尚未接通'
-      computerUsePolicyMessage.classList.add('is-error')
-      refreshComputerUsePolicy()
-      return
-    }
-    try {
-      renderComputerUsePolicy(await api.setComputerUseDefaultAccess(computerUseDefaultAccess.value))
-      computerUsePolicyMessage.textContent = '默认应用访问策略已保存。'
-      computerUsePolicyMessage.classList.remove('is-error')
-    } catch (error) {
-      computerUsePolicyMessage.textContent = `保存失败：${error.message || String(error)}`
-      computerUsePolicyMessage.classList.add('is-error')
-    }
-  })
   grantCurrent.addEventListener('click', async () => {
     const actions = [...document.querySelectorAll('.browser-model-permissions input[type="checkbox"]:checked')].map(input => input.value)
     try { render(await api.grantCurrentBrowserOrigin(actions)); statusText.textContent = '当前站点模型权限已授权 2 小时。' }

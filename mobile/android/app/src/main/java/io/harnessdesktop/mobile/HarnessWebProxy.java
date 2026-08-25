@@ -376,7 +376,7 @@ final class HarnessWebProxy implements AutoCloseable {
 
     private static long contentLength(byte[] header) {
         String value = headerValue(header, "content-length");
-        if (value == null || value.isBlank()) return -1;
+        if (value == null || value.trim().isEmpty()) return -1;
         try { return Long.parseLong(value.trim()); }
         catch (NumberFormatException ignored) { return -1; }
     }

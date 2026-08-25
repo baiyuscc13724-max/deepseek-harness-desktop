@@ -91,43 +91,57 @@ test('native browser content visibility never rebroadcasts sidebar visibility', 
   assert.doesNotMatch(body, /publishBrowserState/u)
 })
 
-test('Computer Use pushes session/permanent unlimited authorization above the dialog', async () => {
-  const [html, renderer, styles] = await Promise.all([
+test('Computer Use stays discoverable in plugin settings while Host owns unlimited authorization', async () => {
+  const [html, sidebar, styles, app, client, manifestText] = await Promise.all([
     readFile(path.join(root, 'renderer', 'index.html'), 'utf8'),
     readFile(path.join(root, 'renderer', 'browser-sidebar.js'), 'utf8'),
-    readFile(path.join(root, 'renderer', 'styles.css'), 'utf8')
+    readFile(path.join(root, 'renderer', 'styles.css'), 'utf8'),
+    readFile(path.join(root, 'renderer', 'app.js'), 'utf8'),
+    readFile(path.join(root, 'plugins', 'dsh-desktop-computer-use', 'lib', 'client.js'), 'utf8'),
+    readFile(path.join(root, 'plugins', 'dsh-desktop-computer-use', 'package.json'), 'utf8')
   ])
+  const manifest = JSON.parse(manifestText)
 
-  for (const id of ['computerUseToggle', 'computerUseRevokePermanent', 'computerUseSessionState', 'computerUsePending', 'computerUseAuthorizationOverlay', 'computerUseAuthorizationSession', 'computerUseAuthorizationForever', 'computerUseAuthorizationDecline', 'computerUsePolicyTitle', 'computerUsePolicyControls', 'computerUseDefaultAccess', 'computerUseCurrentTarget', 'computerUseAppList', 'computerUsePolicyMessage']) {
-    assert.match(html, new RegExp(`id="${id}"`), `missing computer use control ${id}`)
+  for (const id of ['computerUseAuthorizationOverlay', 'computerUseAuthorizationSession', 'computerUseAuthorizationForever', 'computerUseAuthorizationDecline']) {
+    assert.match(html, new RegExp(`id="${id}"`), `missing trusted Host authorization control ${id}`)
   }
-  assert.match(html, /内置 Computer Use/u)
-  assert.match(html, /对话框上方推送授权卡片/u)
-  assert.match(html, /请求无限制桌面控制/u)
+  for (const id of ['computerUseToggle', 'computerUseRevokePermanent', 'computerUseSessionState', 'computerUsePending', 'computerUsePolicyTitle', 'computerUsePolicyControls', 'computerUseDefaultAccess', 'computerUseCurrentTarget', 'computerUseAppList', 'computerUsePolicyMessage']) {
+    assert.doesNotMatch(html, new RegExp(`id="${id}"`), `obsolete Profile control remains: ${id}`)
+  }
   assert.match(html, /本次授权/u)
   assert.match(html, /永久授权/u)
   assert.match(html, /取消 UAC、系统\/提权窗口、敏感窗口和敏感输入/u)
-  assert.match(html, /跨应用访问策略（受限模式）/u)
-  for (const value of ['ask', 'allow', 'deny']) {
-    assert.match(html, new RegExp(`<option value="${value}">`), `missing default access option ${value}`)
+  assert.match(html, /设置 → 插件 → Computer Use/u)
+  assert.doesNotMatch(html, /跨应用访问策略（受限模式）|请求无限制桌面控制/u)
+
+  assert.match(sidebar, /authorizeComputerUse\(scope\)/u)
+  assert.match(sidebar, /declineComputerUseAuthorization/u)
+  assert.match(sidebar, /api\.onComputerUseAuthorization/u)
+  assert.doesNotMatch(sidebar, /setComputerUseDefaultAccess|setComputerUseAppOverride|revokeComputerUseAppOverride|computerUseToggle/u)
+
+  assert.match(client, /settings\.plugin\.item/u)
+  assert.match(client, /computer-use-toggle/u)
+  assert.match(client, /computer-use-revoke-permanent/u)
+  assert.match(client, /trusted Host authorization card/u)
+  assert.match(client, /cannot choose its scope/u)
+  assert.match(client, /unlimited mode bypasses application policy, per-action confirmation/u)
+  assert.doesNotMatch(client, /authorize-session|authorize-forever/u)
+  assert.equal(manifest.exports['./client'], './lib/client.js')
+  assert.ok(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-settings-plugins'))
+
+  assert.match(app, /event\.isMainFrame === false/u)
+  assert.match(app, /computer-use-refresh/u)
+  assert.match(app, /computer-use-status/u)
+  assert.match(app, /computer-use-toggle/u)
+  assert.match(app, /computer-use-revoke-permanent/u)
+  assert.match(app, /api\.requestComputerUseAuthorization\(\)/u)
+  assert.match(app, /api\.setComputerUseEnabled\(false\)/u)
+  assert.doesNotMatch(app, /pluginMutation|computer-use-authorize-session|computer-use-authorize-forever/u)
+
+  for (const selector of ['.computer-use-authorization-overlay', '.computer-use-authorization-card', '.computer-use-authorization-actions']) {
+    assert.match(styles, new RegExp(selector.replace('.', '\\.')), `missing Host authorization style ${selector}`)
   }
-  assert.doesNotMatch(html, /技能卡/u)
-  assert.doesNotMatch(html, /computerUseInstall/u)
-
-  assert.match(renderer, /getComputerUseState/u)
-  assert.match(renderer, /requestComputerUseAuthorization/u)
-  assert.match(renderer, /authorizeComputerUse\(scope\)/u)
-  assert.match(renderer, /declineComputerUseAuthorization/u)
-  assert.match(renderer, /revokeComputerUsePermanentGrant/u)
-  assert.match(renderer, /computerUseToggle\.dataset\.activation = 'approval-card'/u)
-  assert.match(renderer, /api\.onComputerUseAuthorization/u)
-  assert.match(renderer, /无限制桌面控制已开启/u)
-  assert.match(renderer, /api\.setComputerUseDefaultAccess\(/u)
-  assert.match(renderer, /api\.setComputerUseAppOverride\(/u)
-  assert.match(renderer, /api\.revokeComputerUseAppOverride\(/u)
-  assert.match(renderer, /受限模式禁止/u)
-
-  for (const selector of ['.computer-use-session-state', '.computer-use-permanent-notice', '.computer-use-authorization-overlay', '.computer-use-authorization-card', '.computer-use-authorization-actions', '.computer-use-policy-controls', '.computer-use-app-row', '.computer-use-policy-message']) {
-    assert.match(styles, new RegExp(selector.replace('.', '\\.')), `missing style ${selector}`)
+  for (const selector of ['.computer-use-session-state', '.computer-use-permanent-notice', '.computer-use-policy-controls', '.computer-use-app-row', '.computer-use-policy-message', '.computer-use-host-overlay']) {
+    assert.doesNotMatch(styles, new RegExp(selector.replace('.', '\\.')), `obsolete Computer Use style remains: ${selector}`)
   }
 })

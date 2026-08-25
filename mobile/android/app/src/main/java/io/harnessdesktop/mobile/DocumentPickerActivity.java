@@ -27,13 +27,13 @@ public final class DocumentPickerActivity extends Activity {
         mode = getIntent().getStringExtra("mode");
         maxBytes = getIntent().getIntExtra("maxBytes", 2 * 1024 * 1024);
         String mimeType = getIntent().getStringExtra("mimeType");
-        if (mimeType == null || mimeType.isBlank()) mimeType = "*/*";
+        if (mimeType == null || mimeType.trim().isEmpty()) mimeType = "*/*";
         Intent picker;
         if ("create".equals(mode)) {
             picker = new Intent(Intent.ACTION_CREATE_DOCUMENT).setType(mimeType);
             picker.putExtra(Intent.EXTRA_TITLE, getIntent().getStringExtra("suggestedName"));
             String encoded = getIntent().getStringExtra("contentBase64");
-            try { content = encoded == null || encoded.isBlank() ? new byte[0] : Base64.decode(encoded, Base64.DEFAULT); }
+            try { content = encoded == null || encoded.trim().isEmpty() ? new byte[0] : Base64.decode(encoded, Base64.DEFAULT); }
             catch (IllegalArgumentException error) {
                 fail("INVALID_FILE_CONTENT", "待保存文件内容无效。 ");
                 return;

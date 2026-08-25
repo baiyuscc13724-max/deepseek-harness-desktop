@@ -159,6 +159,13 @@ let mobileSyncState = {
   control: { protocolVersion: 1, devices: [] },
   remote: { enabled: true, preference: 'auto', status: 'disabled', active: null, adapters: {} }
 }
+let computerUsePluginState = {
+  loading: true,
+  notice: '',
+  error: '',
+  session: { available: true, ready: true, enabled: false, unlimited: false, activationRequired: true, authorization: { scope: 'none', unlimited: false, pending: null }, generation: 0, currentTarget: null }
+}
+let computerUsePluginOperation = 0
 let relayTesting = false
 let themeCatalog = []
 let selectedWallpaperId = null
@@ -1761,6 +1768,47 @@ async function publishMobileSyncState() {
   await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_MOBILE_SYNC_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_MOBILE_SYNC__?.();`, true).catch(() => {})
 }
 
+async function publishComputerUsePluginState() {
+  if (!runtimeView.getURL()) return
+  const serialized = JSON.stringify(computerUsePluginState).replaceAll('<', '\\u003c')
+  await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_COMPUTER_USE_STATE__ = ${serialized}; window.dispatchEvent(new CustomEvent('harness-desktop:computer-use-state', { detail: window.__HARNESS_DESKTOP_COMPUTER_USE_STATE__ }));`, true).catch(() => {})
+}
+
+async function updateComputerUsePluginState(operation, notice = 'refreshed') {
+  const revision = ++computerUsePluginOperation
+  computerUsePluginState = { ...computerUsePluginState, loading: true, notice: '', error: '' }
+  await publishComputerUsePluginState()
+  try {
+    const session = operation ? await operation() : await api.getComputerUseState()
+    if (revision !== computerUsePluginOperation) return
+    const resolvedNotice = typeof notice === 'function' ? notice(session) : notice
+    computerUsePluginState = { loading: false, notice: resolvedNotice, error: '', session }
+  } catch (error) {
+    if (revision !== computerUsePluginOperation) return
+    computerUsePluginState = { ...computerUsePluginState, loading: false, notice: '', error: error?.message || String(error) }
+  }
+  await publishComputerUsePluginState()
+}
+
+async function refreshComputerUsePluginStatus() {
+  if (computerUsePluginState.loading) return
+  const revision = computerUsePluginOperation
+  try {
+    const session = await api.getComputerUseState()
+    if (computerUsePluginState.loading || revision !== computerUsePluginOperation) return
+    computerUsePluginState = { ...computerUsePluginState, session }
+    await publishComputerUsePluginState()
+  } catch {}
+}
+
+async function requestOrResumeComputerUse() {
+  const session = await api.getComputerUseState()
+  const scope = String(session?.authorization?.scope || 'none')
+  return scope === 'session' || scope === 'forever'
+    ? api.setComputerUseEnabled(true)
+    : api.requestComputerUseAuthorization()
+}
+
 async function publishAppearanceState() {
   applyShellTheme()
   applyShellUiMode()
@@ -1823,12 +1871,14 @@ runtimeView.addEventListener('dom-ready', async () => {
   await publishUpdateState()
   await publishGitRuntimeState()
   await publishMobileSyncState()
+  await publishComputerUsePluginState()
   await publishAppearanceState()
   await publishModelRoutingState()
   startupWebviewReady = true
 })
 
 runtimeView.addEventListener('will-navigate', event => {
+  if (event.isMainFrame === false) return
   let target
   try { target = new URL(event.url) } catch { return }
   if (target.protocol !== 'harness-desktop:') return
@@ -1917,6 +1967,18 @@ runtimeView.addEventListener('will-navigate', event => {
       mobileSyncError.textContent = error.message
       publishMobileSyncState()
     })
+  } else if (target.hostname === 'computer-use-refresh') {
+    updateComputerUsePluginState(null, 'refreshed')
+  } else if (target.hostname === 'computer-use-status') {
+    refreshComputerUsePluginStatus()
+  } else if (target.hostname === 'computer-use-toggle') {
+    const enabled = target.searchParams.get('enabled') === '1'
+    updateComputerUsePluginState(
+      () => enabled ? requestOrResumeComputerUse() : api.setComputerUseEnabled(false),
+      session => enabled ? (session?.enabled && session?.unlimited ? 'resumed' : 'requested') : 'stopped'
+    )
+  } else if (target.hostname === 'computer-use-revoke-permanent') {
+    updateComputerUsePluginState(() => api.revokeComputerUsePermanentGrant(), 'revoked')
   } else if (target.hostname === 'refresh-model-routing') {
     modelRoutingState = { ...modelRoutingState, meters: { ...(modelRoutingState.meters || {}), loading: true, error: '' } }
     publishModelRoutingState()
@@ -2399,6 +2461,17 @@ api.onRuntimeState(renderRuntimeState)
 api.onMobileSyncState(state => {
   renderMobileSync(state)
   publishMobileSyncState()
+})
+if (typeof api.onComputerUseAuthorization === 'function') api.onComputerUseAuthorization(session => {
+  computerUsePluginState = { ...computerUsePluginState, loading: false, error: '', session }
+  publishComputerUsePluginState()
+})
+api.getComputerUseState().then(session => {
+  computerUsePluginState = { ...computerUsePluginState, loading: false, error: '', session }
+  publishComputerUsePluginState()
+}).catch(error => {
+  computerUsePluginState = { ...computerUsePluginState, loading: false, error: error?.message || String(error) }
+  publishComputerUsePluginState()
 })
 api.onPetState(renderPetState)
 api.onUpdateResult(result => {

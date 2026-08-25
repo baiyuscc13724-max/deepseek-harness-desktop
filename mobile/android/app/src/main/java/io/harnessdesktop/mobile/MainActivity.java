@@ -681,7 +681,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void setConnectionStatus(String message) {
-        if (connectionStatus != null && message != null && !message.isBlank()) connectionStatus.setText(message);
+        if (connectionStatus != null && message != null && !message.trim().isEmpty()) connectionStatus.setText(message);
     }
 
     private void beginWorkbenchReadyCheck() {

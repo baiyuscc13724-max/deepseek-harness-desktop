@@ -94,30 +94,6 @@
           <div><button id="browserGrantCurrent" type="button">授权当前站点</button><button id="browserRevokeCurrent" type="button">撤销当前站点</button><button id="browserResumeModel" type="button">恢复模型控制</button></div>
           <div id="browserPendingActions" class="browser-pending-actions"></div>
         </section>
-        <section class="browser-model-permissions">
-          <h4>内置 Computer Use</h4>
-          <p>模型需要桌面控制时会在对话框上方推送授权卡片；你可选择本次授权或永久授权。授权后进入无限制桌面控制，不再逐次确认。</p>
-          <div><button id="computerUseToggle" type="button">请求无限制桌面控制</button><button id="computerUseRevokePermanent" class="hidden" type="button">撤销永久授权</button></div>
-          <div id="computerUseSessionState" class="computer-use-session-state" aria-live="polite"></div>
-          <div id="computerUsePending" class="browser-pending-actions"></div>
-        </section>
-        <section class="browser-model-permissions" aria-labelledby="computerUsePolicyTitle">
-          <h4 id="computerUsePolicyTitle">跨应用访问策略（受限模式）</h4>
-          <p>未授予无限制控制时，默认应用访问与单个应用允许/拒绝仍可作为受限模式策略；无限制授权生效后这些策略不再拦截。</p>
-          <p class="computer-use-permanent-notice"><strong>无限制授权：</strong>将同时取消 UAC、系统/提权窗口与敏感输入等原有硬禁令，可在上方随时停止或撤销永久授权。</p>
-          <div id="computerUsePolicyControls" class="computer-use-policy-controls">
-            <label class="computer-use-default-row">默认应用访问
-              <select id="computerUseDefaultAccess">
-                <option value="ask">每次询问（推荐）</option>
-                <option value="allow">始终允许</option>
-                <option value="deny">始终拒绝</option>
-              </select>
-            </label>
-            <div id="computerUseCurrentTarget" class="computer-use-current-target" aria-live="polite"></div>
-            <div id="computerUseAppList" class="computer-use-app-list" aria-live="polite"></div>
-            <div id="computerUsePolicyMessage" class="computer-use-policy-message" role="status"></div>
-          </div>
-        </section>
         <label><input id="browserClearSiteConfirm" type="checkbox" /> 确认清除当前站点登录数据</label>
         <button id="browserClearSite" class="danger" type="button" disabled>清除当前站点</button>
         <p id="browserPrivacySummary">已保存 0 个模型站点授权；本次运行保留 0 条脱敏审计元数据。</p>
@@ -348,7 +324,7 @@
           <button id="computerUseAuthorizationForever" type="button">永久授权</button>
           <button id="computerUseAuthorizationDecline" class="danger" type="button">拒绝</button>
         </div>
-        <p class="computer-use-authorization-note">本次授权仅在当前应用运行期间有效；永久授权将保存并在重启后自动生效，可随时在 Profile 面板撤销。</p>
+        <p class="computer-use-authorization-note">本次授权仅在当前应用运行期间有效；永久授权将保存并在重启后自动生效，可随时在“设置 → 插件 → Computer Use”中撤销。</p>
         <p id="computerUseAuthorizationStatus" class="computer-use-authorization-status" role="status"></p>
       </div>
     </section>

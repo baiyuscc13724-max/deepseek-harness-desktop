@@ -73,7 +73,7 @@ final class MobileAssetCache {
         File temporary = new File(root, target.getName() + ".tmp");
         try {
             String path = request.getUrl().getEncodedPath();
-            if (path == null || path.isBlank()) path = "/";
+            if (path == null || path.trim().isEmpty()) path = "/";
             String query = request.getUrl().getEncodedQuery();
             URL loopbackUrl = new URL("http", "127.0.0.1", request.getUrl().getPort(), path + (query == null ? "" : "?" + query));
             connection = (HttpURLConnection) loopbackUrl.openConnection();
@@ -92,7 +92,7 @@ final class MobileAssetCache {
             connection.setRequestProperty("Connection", "close");
             connection.setRequestProperty("Host", PairingProfile.STABLE_HOST + ":" + request.getUrl().getPort());
             String cookie = CookieManager.getInstance().getCookie(request.getUrl().toString());
-            if (cookie != null && !cookie.isBlank()) connection.setRequestProperty("Cookie", cookie);
+            if (cookie != null && !cookie.trim().isEmpty()) connection.setRequestProperty("Cookie", cookie);
 
             int status = connection.getResponseCode();
             if (status != HttpURLConnection.HTTP_OK) {

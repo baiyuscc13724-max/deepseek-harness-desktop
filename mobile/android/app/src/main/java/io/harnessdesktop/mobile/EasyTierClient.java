@@ -154,7 +154,7 @@ final class EasyTierClient implements AutoCloseable {
 
     static boolean hasRemoteServiceRoute(String infos, String serviceAddress) {
         try {
-            if (infos == null || infos.isBlank() || serviceAddress == null || serviceAddress.isBlank()) return false;
+            if (infos == null || infos.trim().isEmpty() || serviceAddress == null || serviceAddress.trim().isEmpty()) return false;
             JSONObject instances = new JSONObject(infos).optJSONObject("map");
             if (instances == null) return false;
             String expectedCidr = serviceAddress + "/32";
@@ -182,7 +182,7 @@ final class EasyTierClient implements AutoCloseable {
     private static String lastError(String fallback) {
         try {
             String value = EasyTierJNI.getLastError();
-            return value == null || value.isBlank() ? fallback : value;
+            return value == null || value.trim().isEmpty() ? fallback : value;
         } catch (Throwable ignored) {
             return fallback;
         }
@@ -190,7 +190,7 @@ final class EasyTierClient implements AutoCloseable {
 
     private static String cleanMessage(Throwable error) {
         String message = error.getMessage();
-        if (message == null || message.isBlank()) message = error.getClass().getSimpleName();
+        if (message == null || message.trim().isEmpty()) message = error.getClass().getSimpleName();
         return message.length() > 240 ? message.substring(0, 240) : message;
     }
 

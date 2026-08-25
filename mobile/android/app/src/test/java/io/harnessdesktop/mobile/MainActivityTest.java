@@ -207,6 +207,23 @@ public final class MainActivityTest {
         assertFalse(ControlCommand.isSensitive("shell"));
     }
 
+    @Test public void easyTierRouteBlankAndWhitespaceInputsAreTreatedAsAbsent() throws Exception {
+        // Regression: production code must not call String.isBlank() (Java 11, Android API 33+)
+        // because the app targets minSdk 26 without core library desugaring. Whitespace-only
+        // inputs must be treated as absent and must not reach JSON parsing.
+        assertFalse(EasyTierClient.hasRemoteServiceRoute(null, "10.253.77.254"));
+        assertFalse(EasyTierClient.hasRemoteServiceRoute("   ", "10.253.77.254"));
+        assertFalse(EasyTierClient.hasRemoteServiceRoute("\t\r\n", "10.253.77.254"));
+        assertFalse(EasyTierClient.hasRemoteServiceRoute("{}", null));
+        assertFalse(EasyTierClient.hasRemoteServiceRoute("{}", "   "));
+        // A real, reachable route must still be detected after the blank-guard rewrite.
+        String infos = "{"
+            + "\"map\":{\"node\":{\"running\":true,\"routes\":[{\"proxy_cidrs\":[\"10.253.77.254/32\"]}]}}"
+            + "}";
+        assertTrue(EasyTierClient.hasRemoteServiceRoute(infos, "10.253.77.254"));
+        assertFalse(EasyTierClient.hasRemoteServiceRoute(infos, "10.253.77.9"));
+    }
+
     private static byte[] hex(String value) {
         byte[] result = new byte[value.length() / 2];
         for (int index = 0; index < result.length; index++) {

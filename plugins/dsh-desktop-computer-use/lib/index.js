@@ -1,8 +1,13 @@
+import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import z from '@deepseek-ai/schemastery'
 import { readFile } from 'node:fs/promises'
 
 const name = 'desktop-computer-use'
 const inject = ['systemPrompt', 'tools']
+const computerUseSettingsNamespace = settingsNamespace(name)
+// Presence-only namespace: authorization, policy, and session state remain owned by the trusted Electron Host.
+const computerUseSettingsSchema = z.object({})
 
 async function execute(action, payload) {
   const file = process.env.HARNESS_DESKTOP_CAPABILITIES_STATE_FILE
@@ -21,10 +26,14 @@ async function execute(action, payload) {
 }
 
 function apply(ctx) {
+  installSettingsSection(ctx, computerUseSettingsNamespace, computerUseSettingsSchema, {}, {
+    setSource: () => {},
+    onChange: () => {}
+  })
   ctx.systemPrompt.section({
     name: 'tool:desktop-computer-use',
     order: 116,
-    text: 'Computer Use is a built-in desktop skill; never ask the user to install it or add a skill card. Call status first. When activationRequired is true, call requestAuthorization so Harness Desktop pushes an authorization card above the dialog with “本次授权” and “永久授权” buttons; do not send the user to the Profile panel. After authorization, unlimited is true: click, type, and scroll execute without per-action confirmation, persistent application policy no longer gates targets, and UAC/system/elevated/sensitive-window and sensitive-input restrictions are bypassed. Use targets to discover visible Windows applications and select to bind one exact window. Screenshot reads the selected surface; for external applications, take a new screenshot before input because each input invalidates the prior surface. A session grant lasts until the app exits; a permanent grant survives restart. Stop ends the live control session and clears the target; no Shell or scripts are exposed.'
+    text: 'Computer Use is a built-in desktop skill bundled with Harness Desktop; its user controls live in Settings > Plugins > Plugin configuration. Call status first, never ask the user to install it or add a skill card, and never use the browser Profile panel for Computer Use. When activationRequired is true, call requestAuthorization so Harness Desktop pushes an authorization card above the dialog with “本次授权” and “永久授权” buttons; only that trusted Host card may grant access. The plugin card may request that card or stop/revoke access, but cannot grant itself authorization. After authorization, unlimited is true: click, type, and scroll execute without per-action confirmation, persistent application policy no longer gates targets, and UAC/system/elevated/sensitive-window and sensitive-input restrictions are bypassed. Use targets to discover visible Windows applications and select to bind one exact window. Screenshot reads the selected surface; for external applications, take a new screenshot before input because each input invalidates the prior surface. A session grant lasts until the app exits; a permanent grant survives restart. Stop ends the live control session and clears the target; no Shell or scripts are exposed.'
   })
   ctx.tools.register(defineTool({
     name: 'computer_use',
@@ -54,4 +63,4 @@ function apply(ctx) {
   }))
 }
 
-export { apply, inject, name }
+export { apply, computerUseSettingsNamespace, inject, name }

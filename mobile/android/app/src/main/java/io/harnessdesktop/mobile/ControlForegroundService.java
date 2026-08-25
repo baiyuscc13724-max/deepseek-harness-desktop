@@ -460,7 +460,7 @@ public final class ControlForegroundService extends Service {
         connection.setUseCaches(false);
         connection.setRequestProperty("Accept", "application/json");
         String cookie = CookieManager.getInstance().getCookie(origin);
-        if (cookie != null && !cookie.isBlank()) connection.setRequestProperty("Cookie", cookie);
+        if (cookie != null && !cookie.trim().isEmpty()) connection.setRequestProperty("Cookie", cookie);
         if (body != null) {
             byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
             connection.setDoOutput(true);
@@ -484,7 +484,7 @@ public final class ControlForegroundService extends Service {
         connection.disconnect();
         String text = new String(output.toByteArray(), StandardCharsets.UTF_8);
         if (status < 200 || status >= 300) throw new IllegalStateException("HTTP " + status);
-        return text.isBlank() ? new JSONObject() : new JSONObject(text);
+        return text.trim().isEmpty() ? new JSONObject() : new JSONObject(text);
     }
 
     private void createNotificationChannel() {
