@@ -6,16 +6,16 @@
   "title": "feat(browser): keep structured control running in background",
   "author": "baiyuscc13724-max",
   "baseRef": "main",
-  "headSha": "fa80368f8144eb75dde8dabc41a4d83a538f9ae9",
-  "sequence": 13000001,
-  "publishedAt": "2026-08-25T19:46:00.000Z",
-  "expiresAt": "2026-09-01T19:46:00.000Z",
+  "headSha": "8c160cd1d80dfa22ee19d8a580037cd13be2916f",
+  "sequence": 14000001,
+  "publishedAt": "2026-08-25T21:47:03.000Z",
+  "expiresAt": "2026-09-01T21:47:03.000Z",
   "keyId": "harness-preview-v1",
   "kind": "pr-preview-index",
   "manifestUrls": [
-    "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/pr-preview/manifests/fa80368f8144eb75dde8dabc41a4d83a538f9ae9.json",
-    "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/pr-preview/manifests/fa80368f8144eb75dde8dabc41a4d83a538f9ae9.json"
+    "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/pr-preview/manifests/8c160cd1d80dfa22ee19d8a580037cd13be2916f.json",
+    "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/pr-preview/manifests/8c160cd1d80dfa22ee19d8a580037cd13be2916f.json"
   ],
-  "notes": "feat(browser): keep structured control running in background — @baiyuscc13724-max; exact head fa80368f8144eb75dde8dabc41a4d83a538f9ae9.",
-  "signature": "/2QboLV8JD6ifjX/HxGSyOfkw09dd9Mme08GHIhgvk3PmJaP1Jd0AWA3s3051wXGb/3xw8TtDlpVtzQ3vfmkAg=="
+  "notes": "feat(browser): keep structured control running in background — @baiyuscc13724-max; exact head 8c160cd1d80dfa22ee19d8a580037cd13be2916f.",
+  "signature": "P1/Xk7X4PfQ89Sy+NXGqyvRhc5FJHShNeK/DJLtkBfsN+94+ZiZE3UTrUHmAxAGnvxTpeiiYloIaI7cghHl9DA=="
 }
