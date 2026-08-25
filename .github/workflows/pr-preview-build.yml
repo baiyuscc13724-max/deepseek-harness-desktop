@@ -13,7 +13,7 @@ on:
       - 'scripts/pr-preview-build.mjs'
       - 'electron/bridge/component-update-builder.cjs'
 
-run-name: Unsigned PR preview #${{ github.event.pull_request.number }} · ${{ github.event.pull_request.head.sha }}
+run-name: "Unsigned PR preview #${{ github.event.pull_request.number }} · ${{ github.event.pull_request.head.sha }}"
 
 permissions:
   contents: read

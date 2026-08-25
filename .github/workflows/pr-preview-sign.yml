@@ -13,7 +13,7 @@ on:
         description: Approved exact 40-character PR head SHA
         required: true
 
-run-name: Sign immutable candidate for PR #${{ inputs.pull_request }} · ${{ inputs.head_sha }}
+run-name: "Sign immutable candidate for PR #${{ inputs.pull_request }} · ${{ inputs.head_sha }}"
 
 permissions:
   actions: read
