@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "repository": "baiyuscc13724-max/deepseek-harness-desktop",
+  "channel": "pr-preview",
+  "prNumber": 16,
+  "title": "feat(browser): keep structured control running in background",
+  "author": "baiyuscc13724-max",
+  "baseRef": "main",
+  "headSha": "5fe2a2ff4a8392c1dbd1b65e0ddbdbd033e09e08",
+  "sequence": 15000001,
+  "publishedAt": "2026-08-25T22:21:01.000Z",
+  "expiresAt": "2026-09-01T22:21:01.000Z",
+  "keyId": "harness-preview-v1",
+  "kind": "pr-preview-manifest",
+  "componentManifest": {
+    "schemaVersion": 1,
+    "releaseVersion": "1.0.47-pr.15.1",
+    "channel": "prerelease",
+    "publishedAt": "2026-08-25T22:21:01.000Z",
+    "keyId": "harness-preview-v1",
+    "bootstrap": {
+      "minVersion": "1.0.46"
+    },
+    "components": [
+      {
+        "id": "desktop-shell",
+        "version": "1.0.47-pr.15.1",
+        "kind": "zip",
+        "target": "shell",
+        "platform": "win32",
+        "arch": "x64",
+        "size": 37649206,
+        "unpackedSize": 42634052,
+        "sha256": "0eb45804dfffd8cdb533ff30f89f44b790edbf34dd852cc80db6a01f4943ff72",
+        "urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/pr-preview-16-5fe2a2ff4a83-run-32905669227-1/desktop-shell-1.0.47-pr.15.1-win32-x64.zip",
+          "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/pr-preview-16-5fe2a2ff4a83-run-32905669227-1/desktop-shell-1.0.47-pr.15.1-win32-x64.zip"
+        ],
+        "required": true,
+        "restart": true,
+        "signature": "ApS/VoGfuOaTEk19R7bI1CCyDlibH1o6H/kqmWdtJup/iF2uvVYO2soQOA6jyq6Pe6Ksnuhvl/+5dXnzE5E1BQ=="
+      }
+    ],
+    "notes": "Approved same-repository PR #16 at exact head 5fe2a2ff4a8392c1dbd1b65e0ddbdbd033e09e08. Build run 32905669227; no PR code executed by the signing job.",
+    "signature": "VjSGy6/cFoe520EEpYG52GbIH724R68QqNJ7GvaSLj6SA7rIEigZ51aNIF6jyv66ZjAE1MOHNSdDA5qnO+FeAQ=="
+  },
+  "signature": "0dJcPD0eRltHXktBHOfCiIcJ0E8hgVrjrYlN+4hag9ePUFMjNf98hD4HKfu43I0EDMvq7ssiLuA098gtRq0UBg=="
+}
