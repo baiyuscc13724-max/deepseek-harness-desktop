@@ -1,41 +1,41 @@
 {
   "schemaVersion": 1,
-  "releaseVersion": "1.0.46",
+  "releaseVersion": "1.0.47",
   "channel": "stable",
-  "publishedAt": "2026-08-25T18:25:40.000Z",
+  "publishedAt": "2026-08-26T12:29:37.000Z",
   "keyId": "harness-components-02643f81164c594a",
   "bootstrap": {
-    "minVersion": "1.0.46"
+    "minVersion": "1.0.47"
   },
   "components": [
     {
       "id": "desktop-shell",
-      "version": "1.0.46",
+      "version": "1.0.47",
       "kind": "zip",
       "target": "shell",
       "platform": "darwin",
       "arch": "arm64",
-      "size": 37646248,
-      "unpackedSize": 42625488,
-      "sha256": "85266baa4edc5ddf35c449163f019d876066b6eed20ca57c8c98904f7993015c",
+      "size": 37734553,
+      "unpackedSize": 42828316,
+      "sha256": "0f414af943e43de884b1e143fe5322d4c3a39c3cfc4cf2c1d44e4f02771ed59c",
       "urls": [
-        "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/desktop-shell-1.0.46-darwin-arm64.zip",
-        "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/desktop-shell-1.0.46-darwin-arm64.zip"
+        "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.47/desktop-shell-1.0.47-darwin-arm64.zip",
+        "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.47/desktop-shell-1.0.47-darwin-arm64.zip"
       ],
       "required": true,
       "restart": true,
-      "signature": "2YUstI097leLDW4DPfMYXybywhL7l7c34YVUJeZAyNWGgaR4VFOzLX2E3fRSBDK/EV39vFbtA6OHInrflkzCCA=="
+      "signature": "9HwoDb4ZbTAhm2BTSTERYTlfYviWXIOPnPc6Y9IyUj7SV7hmOi4Px+b+U1DQ9xE0WFo7hz0SBLGEeNbdMAnxDQ=="
     }
   ],
   "fallback": {
-    "version": "1.0.46",
-    "size": 179321405,
-    "sha256": "0337c0217e99bb1ee8b8c523fd2c8cbf340c201477a96093d078572fe08c1f2f",
+    "version": "1.0.47",
+    "size": 179612006,
+    "sha256": "5b6c16c769426695775ea1451c7c1d84c423cc3a1b96b8a450d7294341b2b00a",
     "urls": [
-      "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-arm64.dmg",
-      "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-arm64.dmg"
+      "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.47/Harness-Desktop-1.0.47-mac-arm64.dmg",
+      "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.47/Harness-Desktop-1.0.47-mac-arm64.dmg"
     ]
   },
-  "notes": "Harness Desktop 1.0.46 signed production shell baseline for darwin-arm64.",
-  "signature": "mTFj+mgffQBUcKRRLzNv7p4/icyf8yfK6Iah8HqMSYbkE+Sv5ciyEs+VfyxChRbFmQ5vt0jRIfjm6T3jq2dmAA=="
+  "notes": "Harness Desktop 1.0.47 signed production shell baseline for darwin-arm64.",
+  "signature": "0wWfjv36Nd1VG/jRIzTTJsJWDC3VWnU1Ngvz4esJz/Ws4pEi8TvTnwVLqqUyAy3+yzVdH7p6F+q1GoyEI0ChDA=="
 }
