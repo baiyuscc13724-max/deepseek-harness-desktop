@@ -114,6 +114,9 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'onShowFileChooser',
     'ValueCallback<Uri[]>',
     'FileChooserParams',
+    'SOFT_INPUT_ADJUST_RESIZE',
+    'WindowInsetsCompat.Type.ime()',
+    'Math.max(systemBars.bottom, ime.bottom)',
     'ActivityResultLauncher<Intent>',
     'mainFrameLoadFailed',
     'if (!mainFrameLoadFailed) revealWorkbench()',
@@ -130,13 +133,52 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'button.disabled!==unavailable',
     "button.getAttribute('aria-disabled')!==ariaDisabled"
   ], 'Android mobile attachment bridge')
-  assertContainsAll(compat, [':focus-visible', 'prefers-reduced-motion'], 'Android embedded workbench accessibility')
+  assertContainsAll(compat, [
+    ':focus-visible',
+    'prefers-reduced-motion',
+    'data-harness-mobile-appbar',
+    'data-harness-mobile-drawer',
+    'data-harness-mobile-conversation',
+    'conversation.session.header',
+    'data-chat-flow-kind="context"',
+    'data-chat-flow-kind="command"',
+    'data-chat-flow-kind="turn-tail"',
+    'conversation.composer.dock',
+    'data-harness-mobile-composer="qianwen"',
+    'min-height: 96px',
+    'position: sticky',
+    'data-harness-mobile-sheet',
+    'data-harness-mobile-settings-dialog',
+    'data-harness-mobile-settings-view="list"',
+    'data-harness-mobile-settings-toolbar="true"',
+    'data-harness-mobile-settings-category="true"'
+  ], 'Android native-feeling mobile shell and accessibility')
   assertContainsAll(runtime, [
     'containComposerContext',
     "document.querySelector('[data-composer-card]')",
-    'cardRect.right - target.rect.left',
-    "item.style.setProperty('overflow', 'hidden', 'important')"
-  ], 'Android large-text preset containment')
+    'composerStyleRestorations',
+    "card.querySelector('button[aria-haspopup=\"listbox\"]')",
+    'setTemporary(button.parentElement',
+    'installSidebarAutoClose',
+    'installTimeZoneCompatibility',
+    "timeZone: 'UTC'",
+    'setSidebarExpanded(false)',
+    'installMobileAppShell',
+    'decorateDialogs',
+    'decorateConversation',
+    'mobileSettingsCategories',
+    'setSettingsView',
+    "dialog.dataset.harnessMobileSettingsView = list ? 'list' : 'detail'",
+    'nav.inert = !list',
+    'content.inert = list',
+    '返回设置分类',
+    'data-harness-mobile-settings-close',
+    "composer.dataset.harnessMobileComposer = 'qianwen'",
+    "const language = typeof navigator === 'object'",
+    "input.placeholder = /^zh\\b/i.test(language) ? '发消息…' : 'Message…'"
+  ], 'Android mobile shell behavior and large-text containment')
+  assert.doesNotMatch(runtime, /data-harness-mobile-action="more"/, 'mobile app bar must not expose an empty overflow action')
+  assert.match(compat, /\[data-harness-mobile-conversation="true"\]\s*\{[^}]*height:\s*100%\s*!important/s, 'conversation follows the resized WebView instead of the layout viewport')
 })
 
 test('mobile product specification includes real interaction and privacy release gates', async () => {

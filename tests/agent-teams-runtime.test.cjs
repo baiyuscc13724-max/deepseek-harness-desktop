@@ -1485,6 +1485,82 @@ test('explicit user stop cancels queued wakeups and leaves paused work dormant',
   }
 })
 
+test('tool lifecycle stays consistently paused from explicit Stop through status, claim, and resume', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-tool-stop-'))
+  const previousHome = process.env.DSH_HOME
+  const cleanups = []
+  process.env.DSH_HOME = root
+  try {
+    const mod = await import(`${pathToFileURL(pluginFile).href}?tool-stop=${Date.now()}-${Math.random()}`)
+    const tools = new Map(), routes = new Map(), handlers = new Map()
+    const session = {
+      id: 'tool-stop-lead',
+      events: [
+        { type: 'turn/start', data: {} },
+        { type: 'user/message', data: { source: { kind: 'user' } } }
+      ]
+    }
+    const lead = {
+      id: session.id, session, status: 'running', options: { provider: 'test-provider', model: 'test-model' },
+      inbox: { nextTurn: [], nextStep: [], remove() { return false } },
+      cancel() {}, followup() {}, steer() {}
+    }
+    const ctx = {
+      logger: { info() {}, warn() {}, error() {} },
+      get: () => undefined,
+      tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
+      systemPrompt: { section() { return () => {} } },
+      webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
+      effect(setup) { const cleanup = setup(); if (typeof cleanup === 'function') cleanups.push(cleanup) },
+      on(name, handler) { handlers.set(name, handler); return () => handlers.delete(name) },
+      agents: { get(id) { return id === lead.id ? lead : undefined }, roots() { return [lead] }, currentInitiator() { return lead } },
+      subagents: { interrupt() {}, async drainContinuableChildren(_parent, ids) { assert.deepEqual(ids, []) } }
+    }
+    mod.apply(ctx)
+    const enabled = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
+      sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4
+    }))
+    assert.equal(enabled.status, 200)
+    const started = await tools.get('team_start').execute({ objective: 'Keep Stop lifecycle consistent' }, { agent: lead, signal: new AbortController().signal })
+    const task = (await tools.get('team_task_create').execute({ team_id: started.team.id, title: 'Resume only after explicit confirmation' }, { agent: lead, signal: new AbortController().signal })).task
+
+    const stopEvent = { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } }
+    session.events.push(stopEvent)
+    handlers.get('session/event')(session, stopEvent)
+    session.events.push(
+      { type: 'turn/start', data: {} },
+      { type: 'user/message', data: { source: { kind: 'user' } } }
+    )
+
+    const stoppedStatus = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(stoppedStatus.team.status, 'paused')
+    assert.equal(stoppedStatus.teams[0].status, 'paused')
+    await assert.rejects(
+      tools.get('team_task_update').execute({ team_id: started.team.id, task_id: task.id, action: 'claim' }, { agent: lead, signal: new AbortController().signal }),
+      error => error?.code === 'AGENT_TEAMS_PAUSED'
+    )
+
+    const resumed = await tools.get('team_resume').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(resumed.team.status, 'active')
+    assert.equal(resumed.resumePlan.automaticallyWoken, false)
+    const activeStatus = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(activeStatus.team.status, 'active')
+    const claimed = await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: task.id, action: 'claim' }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(claimed.task.state, 'in_progress')
+    await assert.rejects(
+      tools.get('team_resume').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal }),
+      error => error?.code === 'AGENT_TEAMS_CONFLICT' && /not paused/u.test(error.message)
+    )
+    const statusAfterDuplicateResume = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(statusAfterDuplicateResume.team.status, 'active')
+  } finally {
+    for (const cleanup of cleanups.reverse()) await cleanup()
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-bootstrap-'))
   const previousHome = process.env.DSH_HOME

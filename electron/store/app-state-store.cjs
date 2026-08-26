@@ -6,8 +6,9 @@ const VALID_THEME_IDS = new Set(THEME_CATALOG.map(theme => theme.id))
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 const DEFAULT_THEME_ID = 'porcelain-mist'
 const VALID_UI_MODES = new Set(['official', 'aurora', 'spatial', 'tactile'])
-const CURRENT_SCHEMA_VERSION = 9
+const CURRENT_SCHEMA_VERSION = 10
 const MAX_WALLPAPER_LIBRARY_ITEMS = 48
+const VALID_TERMINAL_SHELL_IDS = new Set(['powershell', 'cmd', 'git-bash', 'wsl', 'default'])
 const WALLPAPER_ID = /^[a-z0-9][a-z0-9-]{0,79}$/
 const WALLPAPER_FILE = /^(?:custom-background|wallpaper-[a-z0-9-]{1,80})\.(?:png|jpe?g|webp|gif|apng|mp4|webm)$/i
 
@@ -91,6 +92,9 @@ const DEFAULT_STATE = Object.freeze({
     sensitivityMode: 'reject',
     autoRecall: true,
     autoCapture: true
+  },
+  terminal: {
+    shellId: null
   }
 })
 
@@ -151,6 +155,9 @@ function normalizeState(input) {
       sensitivityMode: memory?.sensitivityMode === 'redact' ? 'redact' : 'reject',
       autoRecall: memoryEnabled && memoryAutoRecall,
       autoCapture: memoryEnabled && memoryAutoCapture
+    },
+    terminal: {
+      shellId: VALID_TERMINAL_SHELL_IDS.has(value.terminal?.shellId) ? value.terminal.shellId : null
     }
   }
 }
@@ -358,6 +365,16 @@ class AppStateStore {
     this.#persist()
     return this.get()
   }
+
+  updateTerminalPreferences(patch = {}) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'shellId')) {
+      const shellId = patch.shellId == null || patch.shellId === '' ? null : String(patch.shellId)
+      if (shellId && !VALID_TERMINAL_SHELL_IDS.has(shellId)) throw new Error('终端 Shell 标识无效。')
+      this.state.terminal.shellId = shellId
+    }
+    this.#persist()
+    return this.get()
+  }
 }
 
 module.exports = {
@@ -365,6 +382,7 @@ module.exports = {
   DEFAULT_STATE,
   DEFAULT_THEME_ID,
   MAX_WALLPAPER_LIBRARY_ITEMS,
+  VALID_TERMINAL_SHELL_IDS,
   VALID_THEME_IDS,
   normalizeState,
   normalizePetPositions,

@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-schedules",
-  "version": "1.0.46",
+  "version": "1.0.47",
   "description": "Observable session-local schedules for DeepSeek Harness Desktop",
   "type": "module",
   "main": "lib/index.js",

@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing immutable Bootstrap release tag
         required: true
-        default: v1.0.46
+        default: v1.0.47
       product_revision:
         description: Exact 40-character commit bound to the immutable release tag
         required: true
@@ -14,13 +14,13 @@ on:
         description: Unique publisher request identity
         required: false
 
-run-name: Components ${{ inputs.tag || 'v1.0.46' }} · ${{ inputs.request_id || github.run_id }}
+run-name: Components ${{ inputs.tag || 'v1.0.47' }} · ${{ inputs.request_id || github.run_id }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: production-components-${{ inputs.tag || 'v1.0.46' }}
+  group: production-components-${{ inputs.tag || 'v1.0.47' }}
   cancel-in-progress: false
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ inputs.tag || 'v1.0.46' }}
+      RELEASE_TAG: ${{ inputs.tag || 'v1.0.47' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

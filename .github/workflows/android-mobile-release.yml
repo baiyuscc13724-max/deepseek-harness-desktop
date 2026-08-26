@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing desktop tag, or immutable android-v<version> standalone tag
         required: true
-        default: v1.0.46
+        default: v1.0.47
       request_id:
         description: Unique publisher request identity
         required: false
@@ -55,7 +55,7 @@ jobs:
             version_code="$(node -p "require('./scripts/mobile-release-version.cjs').readAndroidMobileVersion(process.cwd()).versionCode")"
           else
             version="$(node -p "require('./package.json').version")"
-            version_code="$(node -e "const [major,minor,patch]=require('./package.json').version.split('.').map(Number);process.stdout.write(String(major*10000+minor*100+patch))")"
+            version_code="$(node -p "require('./scripts/mobile-release-version.cjs').encodeAndroidVersionCode(require('./package.json').version)")"
           fi
           echo "MOBILE_VERSION_NAME=$version" >> "$GITHUB_ENV"
           echo "MOBILE_VERSION_CODE=$version_code" >> "$GITHUB_ENV"

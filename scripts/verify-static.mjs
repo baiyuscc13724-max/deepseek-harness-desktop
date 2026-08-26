@@ -25,7 +25,7 @@ const required = [
   'tests/app-state-store.test.cjs', 'tests/artifact-size-budget.test.cjs', 'tests/capability-broker.test.cjs', 'tests/computer-use-screenshot-store.test.cjs', 'tests/storage-scan-service.test.cjs', 'tests/storage-cleanup-service.test.cjs', 'tests/storage-management-service.test.cjs', 'tests/storage-ui.test.cjs', 'tests/memory-censor.test.cjs', 'tests/memory-service.test.cjs', 'tests/memory-ui.test.cjs', 'tests/browser-link-router.test.cjs', 'tests/browser-link-integration.test.cjs', 'tests/browser-url-policy.test.cjs', 'tests/browser-session-policy.test.cjs', 'tests/browser-site-authz.test.cjs', 'tests/browser-action-gate.test.cjs', 'tests/browser-audit.test.cjs', 'tests/browser-codex-parity.test.cjs', 'tests/browser-diagnostics.test.cjs', 'tests/browser-history-store.test.cjs', 'tests/browser-security-policy.test.cjs', 'tests/browser-navigation-guard.test.cjs', 'tests/fixtures/browser-navigation-guard-electron.cjs', 'tests/browser-operation-coordinator.test.cjs', 'tests/browser-sidebar-ui.test.cjs', 'tests/browser-control-server.test.cjs', 'tests/browser-model-tools-ui.test.cjs', 'tests/desktop-directory-picker-plugin-service.test.cjs', 'tests/desktop-browser-tools-plugin-service.test.cjs', 'tests/desktop-memory-tools-plugin-service.test.cjs', 'tests/desktop-mcp-manager-plugin-service.test.cjs', 'tests/mcp-manager-domain.test.cjs', 'tests/mcp-manager-runtime.test.cjs', 'tests/mcp-manager-ui.test.cjs', 'tests/desktop-schedules.test.cjs', 'tests/desktop-files.test.cjs', 'tests/right-workspace-service.test.cjs', 'tests/right-workspace-ui.test.cjs', 'tests/desktop-progress.test.cjs', 'tests/desktop-compaction.test.cjs', 'tests/desktop-computer-use.test.cjs', 'tests/computer-use-confirmation-store.test.cjs', 'tests/agent-teams-plugin-service.test.cjs', 'tests/agent-teams-domain.test.cjs', 'tests/agent-teams-runtime.test.cjs', 'tests/agent-teams-ui.test.cjs', 'tests/model-admission-plugin-service.test.cjs', 'tests/model-admission-runtime.test.cjs', 'tests/session-experience.test.cjs', 'tests/text-selection-ui.test.cjs', 'tests/ui-mode-integration.test.cjs', 'tests/pet-atlas-lossless.test.cjs',
   'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/desktop-release-contract.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/release-automation.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-version-sync.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
-  'docs/ARCHITECTURE.zh-CN.md', 'docs/COMPETITOR-FEATURE-BENCHMARK.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/CLOUD-RELEASE-PIPELINE.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.46.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
+  'docs/ARCHITECTURE.zh-CN.md', 'docs/COMPETITOR-FEATURE-BENCHMARK.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/CLOUD-RELEASE-PIPELINE.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.46.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.47.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
   '.github/workflows/apple-virtual-tests.yml', '.github/workflows/android-mobile-release.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/prepare-bundled-git.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/component-update-helper.cjs', 'scripts/create-component-signing-key.mjs', 'scripts/create-android-release-keystore.ps1', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs',
   'mobile/mobile-app-update.example.json', 'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
   'mobile/android/RELEASE-SIGNING.zh-CN.md', 'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
@@ -144,6 +144,11 @@ required.push(
   'tests/workspace-authority.test.cjs',
   'tests/workspace-authority-service.test.cjs',
 )
+required.push(
+  'electron/bridge/terminal-service.cjs',
+  'tests/terminal-service.test.cjs',
+  'tests/terminal-ui.test.cjs'
+)
 for (const relative of required) await access(path.join(root, relative))
 
 const removed = [
@@ -151,7 +156,7 @@ const removed = [
   'electron/bridge/git-service.cjs', 'electron/bridge/mcp-service.cjs',
   'electron/bridge/plugin-service.cjs', 'electron/bridge/provider-service.cjs',
   'electron/bridge/secure-storage.cjs', 'electron/bridge/skill-service.cjs',
-  'electron/bridge/terminal-service.cjs', 'electron/bridge/workspace-service.cjs',
+  'electron/bridge/workspace-service.cjs',
   'electron/store/session-store.cjs', 'scripts/provider-real-smoke.cjs'
 ]
 for (const relative of removed) {
@@ -164,12 +169,13 @@ for (const relative of removed) {
 }
 
 const html = await readFile(path.join(root, 'renderer/index.html'), 'utf8')
-for (const relative of ['./styles.css', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './workspace-links-integration.js', './storage-manager.js', './memory-manager.js', './right-workspace.css', './right-workspace.js', './right-workspace-integration.js', './browser-sidebar.js', './pr-preview-update.css', './pr-preview-update-integration.js', './app.js', './assets/deepseek-icon.svg']) {
+for (const relative of ['./styles.css', '../node_modules/@xterm/xterm/css/xterm.css', '../node_modules/@xterm/xterm/lib/xterm.js', '../node_modules/@xterm/addon-fit/lib/addon-fit.js', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './workspace-links-integration.js', './storage-manager.js', './memory-manager.js', './right-workspace.css', './right-workspace.js', './right-workspace-integration.js', './browser-sidebar.js', './pr-preview-update.css', './pr-preview-update-integration.js', './app.js', './assets/deepseek-icon.svg']) {
   if (!html.includes(relative)) throw new Error(`renderer/index.html is missing expected reference: ${relative}`)
 }
-for (const id of ['runtimeView', 'runtimeStatus', 'runtimeStatusTitle', 'runtimeStatusDetail', 'retryRuntime']) {
+for (const id of ['runtimeView', 'runtimeStatus', 'runtimeStatusTitle', 'runtimeStatusDetail', 'retryRuntime', 'terminalPanel', 'terminalHost', 'terminalStart', 'terminalInterrupt', 'terminalStop']) {
   if (!html.includes(`id="${id}"`)) throw new Error(`renderer/index.html is missing desktop shell surface: ${id}`)
 }
+if (html.includes('terminalQuickButton')) throw new Error('Integrated terminal selection must not add a permanent main-interface button.')
 for (const removedSurface of ['nativeChatSurface', 'webCompatibilitySurface', 'session-sidebar', 'class="rail"', 'desktopSettingsButton', 'settingsOverlay', 'desktop-titlebar']) {
   if (html.includes(removedSurface)) throw new Error(`renderer/index.html must not retain duplicate native workspace surface: ${removedSurface}`)
 }
@@ -347,6 +353,12 @@ if (themeIntegration.includes('applySessionLogDock') || themeIntegration.include
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 if (!/^\d+\.\d+\.\d+$/u.test(pkg.version)) throw new Error(`Expected a stable semantic package version, received ${pkg.version}`)
 if (pkg.dependencies?.['dsh-progress-reporter']) throw new Error('dsh-progress-reporter must remain an opt-in community plugin instead of a bundled desktop dependency.')
+if (pkg.dependencies?.['@xterm/xterm'] !== '6.0.0' || pkg.dependencies?.['@xterm/addon-fit'] !== '0.11.0') {
+  throw new Error('The integrated terminal must pin the audited xterm browser runtime exactly.')
+}
+for (const relative of ['node_modules/@xterm/xterm/lib/xterm.js', 'node_modules/@xterm/xterm/css/xterm.css', 'node_modules/@xterm/addon-fit/lib/addon-fit.js']) {
+  await access(path.join(root, relative))
+}
 if (pkg.main !== 'electron/bootstrap.cjs' || pkg.build?.extraMetadata?.main !== 'electron/bootstrap.cjs') throw new Error('Component updates require the stable Electron bootstrap entrypoint.')
 if (pkg.scripts?.['release:components'] !== 'node scripts/build-component-update.mjs') throw new Error('Component release builder command is missing.')
 if (pkg.scripts?.['test:component-local'] !== 'node scripts/local-component-update-test.mjs') throw new Error('Local component restart/rollback test command is missing.')
@@ -435,24 +447,25 @@ for (const contract of ['HARNESS_ANDROID_KEYSTORE_PATH', 'HARNESS_ANDROID_KEY_AL
   if (!androidBuild.includes(contract)) throw new Error(`Android release signing configuration is incomplete: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
-for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'android-v', 'make_latest:"false"', 'MOBILE_VERSION_NAME=$version', 'MOBILE_VERSION_CODE=$version_code', 'major*10000+minor*100+patch', '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'Harness-Mobile-${version}-android-universal.apk', 'RELEASE_TAG: ${{ inputs.tag || github.ref_name }}', 'Waiting for verified desktop release', 'seq 1 180', 'gh release upload', 'android-universal.apk.sha256', 'Preserving the existing immutable APK', 'Unexpected standalone Android release assets', 'repos/$GITHUB_REPOSITORY/releases/latest', 'Verify public signed APK bytes and identity']) {
+for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'android-v', 'make_latest:"false"', 'MOBILE_VERSION_NAME=$version', 'MOBILE_VERSION_CODE=$version_code', "encodeAndroidVersionCode(require('./package.json').version)", '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'Harness-Mobile-${version}-android-universal.apk', 'RELEASE_TAG: ${{ inputs.tag || github.ref_name }}', 'Waiting for verified desktop release', 'seq 1 180', 'gh release upload', 'android-universal.apk.sha256', 'Preserving the existing immutable APK', 'Unexpected standalone Android release assets', 'repos/$GITHUB_REPOSITORY/releases/latest', 'Verify public signed APK bytes and identity']) {
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Signed Android publication workflow contract missing: ${contract}`)
 }
 for (const forbidden of ['app-debug.apk', 'assembleDebug', '--clobber']) {
   if (androidReleaseWorkflow.includes(forbidden)) throw new Error(`Android publication workflow must never publish debug output: ${forbidden}`)
 }
 const mobileSyncService = await readFile(path.join(root, 'electron/bridge/mobile-sync-service.cjs'), 'utf8')
-for (const contract of [`CURRENT_MOBILE_VERSION = '${androidMobileVersion.versionName}'`, 'CURRENT_MOBILE_RELEASE_TAG = `android-v${CURRENT_MOBILE_VERSION}`', 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/', 'android-universal.apk', '直接在 Safari 使用', '添加到主屏幕', '无需 Apple Developer 会员', '不会提供无法公开安装的未签名 IPA', 'current.url']) {
+for (const contract of [`CURRENT_MOBILE_VERSION = '${androidMobileVersion.versionName}'`, "CURRENT_MOBILE_RELEASE_TAG = CURRENT_MOBILE_VERSION.split('.').length === 4", '`android-v${CURRENT_MOBILE_VERSION}`', '`v${CURRENT_MOBILE_VERSION}`', 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/', 'android-universal.apk', '直接在 Safari 使用', '添加到主屏幕', '无需 Apple Developer 会员', '不会提供无法公开安装的未签名 IPA', 'current.url']) {
   if (!mobileSyncService.includes(contract)) throw new Error(`iPhone/iPad no-membership QR fallback contract missing: ${contract}`)
 }
 if (!iosProject.includes(`CURRENT_PROJECT_VERSION: ${mobileBuildNumber}`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
 const publishedMobileVersion = androidMobileVersion.versionName
+const publishedMobileTag = publishedMobileVersion === pkg.version ? `v${publishedMobileVersion}` : `android-v${publishedMobileVersion}`
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
   `v${pkg.version}`,
   `Harness-Desktop-${pkg.version}-win-x64.exe`,
   `Harness-Desktop-${pkg.version}-portable-x64.exe`,
-  `android-v${publishedMobileVersion}`,
+  publishedMobileTag,
   `Harness-Mobile-${publishedMobileVersion}-android-universal.apk`,
   'docs/assets/harness-desktop-hero.jpg',
   'releases/latest'
@@ -732,10 +745,10 @@ if (!main.includes("ipcMain.handle('componentUpdates:apply'")) throw new Error('
 for (const trayContract of ['createDesktopTray', 'ensureDesktopTray', "mainWindow.on('close'", 'event.preventDefault()', 'mainWindow.hide()', 'isQuitting = true']) {
   if (!main.includes(trayContract)) throw new Error(`Desktop tray lifecycle contract missing: ${trayContract}`)
 }
-for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'componentUpdates:getState', 'componentUpdates:check', 'componentUpdates:stage', 'componentUpdates:apply', 'componentUpdates:progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'models:meters:get', 'storage:scan', 'storage:cleanupPreview', 'storage:cleanupApply', 'storage:status', 'memory:status', 'memory:setEnabled', 'memory:setPreferences', 'memory:list', 'memory:search', 'memory:add', 'memory:update', 'memory:delete', 'memory:deleteAll', 'memory:export', 'browser:state', 'browser:setVisible', 'browser:setContentVisible', 'browser:setPanelWidth', 'browser:setWideMode', 'browser:historySearch', 'browser:historyOpen', 'browser:historyRemove', 'browser:historyClear', 'browser:navigate', 'browser:newTab', 'browser:switchTab', 'browser:closeTab', 'browser:back', 'browser:forward', 'browser:reload', 'browser:stop', 'browser:clearSiteData', 'browser:clearAllData', 'browser:grantCurrent', 'browser:revokeCurrent', 'browser:resumeModelControl', 'browser:confirmModelAction', 'browser:rejectModelAction', 'computerUse:state', 'computerUse:setEnabled', 'computerUse:confirm', 'computerUse:reject', 'computerUse:policy', 'computerUse:setDefaultAccess', 'computerUse:setAppOverride', 'computerUse:revokeAppOverride', 'shell:openExternal', 'shell:openLocal']) {
+for (const channel of ['runtime:start', 'runtime:state', 'updates:preferences', 'updates:setPreferences', 'updates:check', 'updates:install', 'updates:launchReady', 'updates:install-progress', 'componentUpdates:getState', 'componentUpdates:check', 'componentUpdates:stage', 'componentUpdates:apply', 'componentUpdates:progress', 'appearance:get', 'appearance:assets', 'appearance:setTheme', 'appearance:saveCustom', 'appearance:chooseBackground', 'settings:openDocument', 'models:routing:get', 'models:routing:save', 'models:meters:get', 'storage:scan', 'storage:cleanupPreview', 'storage:cleanupApply', 'storage:status', 'memory:status', 'memory:setEnabled', 'memory:setPreferences', 'memory:list', 'memory:search', 'memory:add', 'memory:update', 'memory:delete', 'memory:deleteAll', 'memory:export', 'browser:state', 'browser:setVisible', 'browser:setContentVisible', 'browser:setPanelWidth', 'browser:setWideMode', 'browser:historySearch', 'browser:historyOpen', 'browser:historyRemove', 'browser:historyClear', 'browser:navigate', 'browser:newTab', 'browser:switchTab', 'browser:closeTab', 'browser:back', 'browser:forward', 'browser:reload', 'browser:stop', 'browser:clearSiteData', 'browser:clearAllData', 'browser:grantCurrent', 'browser:revokeCurrent', 'browser:resumeModelControl', 'browser:confirmModelAction', 'browser:rejectModelAction', 'computerUse:state', 'computerUse:setEnabled', 'computerUse:confirm', 'computerUse:reject', 'computerUse:policy', 'computerUse:setDefaultAccess', 'computerUse:setAppOverride', 'computerUse:revokeAppOverride', 'terminal:preferences', 'terminal:setPreferences', 'terminal:start', 'terminal:write', 'terminal:resize', 'terminal:stop', 'terminal:list', 'terminal:capabilities', 'shell:openExternal', 'shell:openLocal']) {
   if (!main.includes(`'${channel}'`)) throw new Error(`electron/main.cjs is missing IPC channel: ${channel}`)
 }
-for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'terminal:start', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {
+for (const removedChannel of ['agent:run', 'session:create', 'git:status', 'workspace:list', 'mcp:list', 'skill:list', 'plugin:list', 'provider:get', 'diagnostics:run']) {
   if (main.includes(removedChannel)) throw new Error(`Duplicate native workbench IPC must not return: ${removedChannel}`)
 }
 for (const contract of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true', 'setWindowOpenHandler', 'will-navigate', 'will-attach-webview', 'did-attach-webview', "guest.on('context-menu'", 'showGuestContextMenu', 'normalizeLocalTarget']) {
@@ -802,10 +815,10 @@ if (pkg.scripts?.postinstall !== 'node scripts/patch-official-runtime.mjs && ele
 }
 
 const preload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
-for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'launchReadyUpdate', 'getComponentUpdateState', 'checkComponentUpdates', 'stageComponentUpdates', 'onComponentUpdateProgress', 'getGitRuntimeStatus', 'refreshGitRuntimeStatus', 'prepareGitRuntime', 'openGitAuthentication', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'chooseWallpaperEngine', 'importCurrentWallpaperEngine', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openLink', 'openExternal', 'openLocal', 'onUpdateResult', 'onUpdateInstallProgress']) {
+for (const api of ['startRuntime', 'getRuntimeState', 'onRuntimeState', 'getUpdatePreferences', 'setUpdatePreferences', 'checkUpdates', 'installUpdate', 'launchReadyUpdate', 'getComponentUpdateState', 'checkComponentUpdates', 'stageComponentUpdates', 'onComponentUpdateProgress', 'getGitRuntimeStatus', 'refreshGitRuntimeStatus', 'prepareGitRuntime', 'openGitAuthentication', 'getAppearance', 'setTheme', 'getThemeAssets', 'saveCustomTheme', 'chooseThemeBackground', 'chooseWallpaperEngine', 'importCurrentWallpaperEngine', 'openHarnessSettings', 'getModelRouting', 'saveModelRouting', 'openLink', 'openExternal', 'openLocal', 'getTerminalPreferences', 'setTerminalPreferences', 'startTerminal', 'writeTerminal', 'resizeTerminal', 'stopTerminal', 'listTerminals', 'getTerminalCapabilities', 'onTerminalEvent', 'onTerminalToggle', 'onUpdateResult', 'onUpdateInstallProgress']) {
   if (!preload.includes(api)) throw new Error(`preload API missing: ${api}`)
 }
-for (const removedApi of ['getProviderSettings', 'runDiagnostics', 'listSessions', 'listWorkspaceDirectory', 'startTerminal']) {
+for (const removedApi of ['getProviderSettings', 'runDiagnostics', 'listSessions', 'listWorkspaceDirectory']) {
   if (preload.includes(removedApi)) throw new Error(`preload must not expose duplicate native workbench API: ${removedApi}`)
 }
 

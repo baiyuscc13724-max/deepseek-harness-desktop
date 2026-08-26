@@ -308,6 +308,10 @@ test('the collaboration workbench remains inside the original Agent Teams conver
   assert.match(source, /useState\("board"\)/u)
   assert.match(source, /className: "dat-workspace-nav"/u)
   assert.match(source, /aria-current/u)
+  const viewRender = source.indexOf('return h("main", { className: "dat-view"')
+  const navRender = source.indexOf('h(WorkspaceNav, {', viewRender)
+  const headingRender = source.indexOf('h("div", { className: "dat-head" }', viewRender)
+  assert.ok(viewRender >= 0 && navRender > viewRender && headingRender > navRender, 'the horizontal team panel must render above the workbench heading')
 })
 
 test('participants owns project collaboration while the proven Team runtime views stay available', async () => {
@@ -441,6 +445,23 @@ test('selected board task becomes the visual focus with a truthful live workflow
   assert.match(source, /\.dat-task-workflow-runtime\{display:grid/u)
   assert.match(source, /\.dat-task-runtime-list\{[^}]*overflow:auto/u)
   for (const copy of ['任务简介', '详细任务', '领取人', '完成进度', '责任人', '领取时间', '完成时间', '使用的模型', '实时执行记录', 'Task brief', 'Detailed task', 'Claimed by', 'Completion progress', 'Responsible lead', 'Live execution log']) assert.ok(source.includes(copy), `missing focused-detail copy: ${copy}`)
+})
+
+test('indeterminate task progress uses a fresh random seven-color pulse stream on every pass', async () => {
+  const source = await clientSource()
+  const workflow = componentSource(source, ['TaskWorkflow'])
+
+  assert.match(source, /function randomTaskProgressPulse\(\)/u)
+  assert.match(source, /index < 7/u)
+  assert.match(source, /Math\.random\(\) \* 360/u)
+  assert.match(source, /--dat-pulse-c/u)
+  assert.match(source, /linear-gradient\(90deg,transparent 0%,var\(--dat-pulse-c1\)/u)
+  assert.match(source, /@keyframes dat-task-progress-flow/u)
+  assert.match(source, /@keyframes dat-task-progress-aura/u)
+  assert.match(source, /prefers-reduced-motion:reduce/u)
+  assert.match(workflow, /useState\(randomTaskProgressPulse\)/u)
+  assert.match(workflow, /onAnimationIteration:[\s\S]{0,160}setPulseColors\(randomTaskProgressPulse\(\)\)/u)
+  assert.doesNotMatch(source, /\.dat-task-progress-fill\.is-indeterminate\{width:34%/u)
 })
 
 test('task columns queue without stretching the page before entering task focus', async () => {
@@ -617,14 +638,15 @@ test('flow and coordination pages explain capabilities without internal runtime 
   assert.doesNotMatch(source, /inboxIntro: "[^"]*(?:安全投影|safe projection|元数据|metadata)/iu)
 })
 
-test('workbench navigation adapts to its conversation container instead of only the window', async () => {
+test('workbench navigation stays as a sticky horizontal bar at every width', async () => {
   const source = await clientSource()
 
   assert.match(source, /\.dat-workspace\{[^}]*container-type:inline-size/u)
   assert.match(source, /@container(?:\s+[\w-]+)?\s*\(max-width:/u)
-  assert.match(source, /@container(?:\s+[\w-]+)?\s*\(max-width:[^)]+\)\{[^}]*\.dat-workspace-nav/u)
-  assert.match(source, /\.dat-workspace-nav\{[^}]*overflow-x:auto/u)
+  assert.match(source, /\.dat-workspace-nav\{[^}]*position:sticky;top:0;[^}]*display:flex;[^}]*width:100%;[^}]*overflow-x:auto/u)
+  assert.match(source, /\.dat-workspace-nav button\{[^}]*flex:1 0 auto;[^}]*white-space:nowrap/u)
   assert.match(source, /@media\(max-width:[^)]+\)\{[^}]*\.dat-workspace-nav/u)
+  assert.doesNotMatch(source, /\.dat-workbench\{[^}]*grid-template-columns:172px/u)
 })
 
 test('adapted task-board UI keeps its upstream provenance visible in source', async () => {

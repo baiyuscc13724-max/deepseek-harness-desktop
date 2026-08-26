@@ -63,6 +63,9 @@ const TEAM_OPERATION_CHAINS = new Map();
 const GRACEFUL_ACTIVE_RUNS = new Map();
 const GRACEFUL_LIFECYCLE_WAITERS = new Map();
 const USER_PAUSED_TEAMS = new Set();
+const USER_PAUSE_RECONCILIATIONS = new Map();
+const USER_PAUSE_EPOCHS = new Map();
+const STOPPABLE_MEMBER_STATES = new Set(["provisioning", "running", "idle", "ready", "shutting_down"]);
 const STORE_INSTANCES = new Map();
 const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap"]);
 const BOOTSTRAP_KEYS = new Set(["requestId", "inputHash", "phase", "taskRefs", "memberRefs", "createdAt", "updatedAt"]);
@@ -79,6 +82,16 @@ const Config = z.object({
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function effectiveTeamState(team) {
+  return team.state === "active" && USER_PAUSED_TEAMS.has(team.id) ? "paused" : team.state;
+}
+function effectiveMemberState(team, member) {
+  const stopPending = team.state === "active" && effectiveTeamState(team) === "paused";
+  return stopPending && member.kind === "worker" && STOPPABLE_MEMBER_STATES.has(member.state) ? "shutting_down" : member.state;
+}
+function withEffectiveTeamStates(document) {
+  return { ...document, teams: document.teams.map((team) => ({ ...team, state: effectiveTeamState(team) })) };
 }
 function assertAllowedKeys(value, allowed, field) {
   const unknown = Object.keys(value).filter((key) => !allowed.has(key));
@@ -672,22 +685,28 @@ function deriveAttention(team, teams = [team]) {
   return { required: codes.length > 0, codes, failedMembers, unconfirmedMembers, strandedTasks, failedDeliveries, blockedTasks, bootstrapIncomplete };
 }
 function projectTeam(team, nameTeams = []) {
-  const members = team.members.map((member) => ({
-    ...clone(member),
-    displayName: canonicalMemberName(member.name),
-    status: member.state,
-    lastActivityAt: memberLastActivityAt(member, team),
-  }));
+  const members = team.members.map((member) => {
+    const lifecycleState = effectiveMemberState(team, member);
+    return {
+      ...clone(member),
+      state: lifecycleState,
+      displayName: canonicalMemberName(member.name),
+      status: lifecycleState,
+      lastActivityAt: memberLastActivityAt(member, team),
+    };
+  });
   const relatedMembers = Array.isArray(nameTeams) ? nameTeams.flatMap((candidate) => candidate.members ?? []) : [];
   const names = new Map([...relatedMembers, ...members].map((member) => [member.sessionId, canonicalMemberName(member.displayName ?? member.name)]));
   const taskTeams = Array.isArray(nameTeams) ? [...new Map([team, ...nameTeams].map((candidate) => [candidate.id, candidate])).values()] : [team];
   const tasks = team.tasks.map((task) => deriveTaskAcrossTeams(task, team, taskTeams));
   const messages = team.messages.map((message) => projectMessageEvent(message, names, team.id));
+  const lifecycleState = effectiveTeamState(team);
   return {
     ...clone(team),
+    state: lifecycleState,
     leadSessionId: team.rootLeadSessionId,
     objective: team.objective ?? team.name,
-    status: team.state,
+    status: lifecycleState,
     revision: team.revision ?? 1,
     lastActivityAt: latestTimestamp([
       team.updatedAt,
@@ -993,38 +1012,42 @@ function projectTeamForUi(team, nameTeams = []) {
   const rawInbound = projectInboundEvents(team, peerTeams);
   const inboundEvents = selectUiEvents(rawInbound);
   const tasks = projectUiTasks(team, peerTeams);
-  const members = team.members.map((member) => ({
-    id: member.id,
-    sessionId: member.sessionId,
-    name: member.name,
-    displayName: canonicalMemberName(member.name),
-    role: member.role,
-    model: member.model,
-    provider: member.provider,
-    modelTier: member.modelTier,
-    inheritsMain: member.inheritsMain,
-    routeSource: member.routeSource,
-    kind: member.kind,
-    state: member.state,
-    status: member.state,
-    createdAt: member.createdAt,
-    updatedAt: member.updatedAt,
-    lastActivityAt: memberActivity.get(member.sessionId) ?? member.updatedAt,
-  }));
+  const members = team.members.map((member) => {
+    const lifecycleState = effectiveMemberState(team, member);
+    return {
+      id: member.id,
+      sessionId: member.sessionId,
+      name: member.name,
+      displayName: canonicalMemberName(member.name),
+      role: member.role,
+      model: member.model,
+      provider: member.provider,
+      modelTier: member.modelTier,
+      inheritsMain: member.inheritsMain,
+      routeSource: member.routeSource,
+      kind: member.kind,
+      state: lifecycleState,
+      status: lifecycleState,
+      createdAt: member.createdAt,
+      updatedAt: member.updatedAt,
+      lastActivityAt: memberActivity.get(member.sessionId) ?? member.updatedAt,
+    };
+  });
   const lastActivityAt = latestTimestamp([
     team.updatedAt,
     ...memberActivity.values(),
     ...team.tasks.map((task) => task.updatedAt),
     ...team.messages.flatMap((message) => [message.createdAt, message.deliveredAt]),
   ]) ?? team.updatedAt;
+  const lifecycleState = effectiveTeamState(team);
   return {
     id: team.id,
     rootLeadSessionId: team.rootLeadSessionId,
     name: team.name,
     objective: team.objective,
     revision: team.revision ?? 1,
-    state: team.state,
-    status: team.state,
+    state: lifecycleState,
+    status: lifecycleState,
     createdAt: team.createdAt,
     updatedAt: team.updatedAt,
     leadSessionId: team.rootLeadSessionId,
@@ -1047,7 +1070,7 @@ function projectTeamSummary(team) {
   return {
     id: team.id,
     name: team.name,
-    status: team.state,
+    status: effectiveTeamState(team),
     revision: team.revision ?? 1,
     memberCount: team.members.filter((member) => member.state !== "retired").length,
     activeTaskCount: team.tasks.filter((task) => task.state === "in_progress").length,
@@ -1424,7 +1447,14 @@ class AgentTeamsStore {
     }
     let changed = false;
     for (const team of this.document.teams) {
-      if (team.state === "closed") continue;
+      if (team.state === "closed") {
+        if (team.tasks.some((task) => task.state === "in_progress" || task.state !== "completed" && task.assigneeSessionId !== undefined)) {
+          team.updatedAt = now();
+          terminalizeTeamTasks(team, team.updatedAt);
+          changed = true;
+        }
+        continue;
+      }
       let teamChanged = false;
       for (const member of team.members) {
         if (!TRANSIENT_MEMBER_STATES.has(member.state)) continue;
@@ -1464,10 +1494,15 @@ class AgentTeamsStore {
   hasManagedMember(sessionId) {
     return this.document.teams.some((team) => team.state !== "closed" && memberOf(team, sessionId) !== undefined);
   }
+  memberLifecycleToken(sessionId) {
+    const team = this.document.teams.find((candidate) => candidate.state !== "closed" && memberOf(candidate, sessionId) !== undefined);
+    if (team === undefined) return undefined;
+    return { teamId: team.id, teamState: effectiveTeamState(team), pauseEpoch: USER_PAUSE_EPOCHS.get(team.id) ?? 0 };
+  }
   activeTeamsForRoot(rootSessionId) {
-    return this.document.teams.filter((team) => team.rootLeadSessionId === rootSessionId && team.state === "active").map((team) => ({
+    return this.document.teams.filter((team) => team.rootLeadSessionId === rootSessionId && effectiveTeamState(team) === "active").map((team) => ({
       teamId: team.id,
-      childIds: team.members.filter((member) => member.kind === "worker" && member.state !== "retired").map((member) => member.sessionId),
+      childIds: team.members.filter((member) => member.kind === "worker" && STOPPABLE_MEMBER_STATES.has(member.state)).map((member) => member.sessionId),
     }));
   }
   async read(reader = (document) => document) {
@@ -1505,6 +1540,9 @@ class AgentTeamsStore {
   }
   runOperation(operation) {
     return queueStoreOperation(this.filePath, operation);
+  }
+  notify() {
+    publishStoreDocument(this.filePath, this.document, this.fileStamp);
   }
   subscribe(listener) {
     this.listeners.add(listener);
@@ -1652,7 +1690,11 @@ function resolveMember(team, reference) {
 }
 function authenticateParticipant(team, sessionId) {
   const member = memberOf(team, sessionId);
-  if (member === undefined || ["shutting_down", "retired"].includes(member.state)) reject("caller is not an active member of this team", "AGENT_TEAMS_UNAUTHORIZED");
+  if (member === undefined) reject("caller is not an active member of this team", "AGENT_TEAMS_UNAUTHORIZED");
+  if (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true) {
+    reject("member shutdown is unconfirmed; only the live root lead may recover or retire it", "AGENT_TEAMS_SHUTDOWN_UNCONFIRMED");
+  }
+  if (!["running", "idle", "ready"].includes(member.state)) reject("caller is not an active member of this team", "AGENT_TEAMS_UNAUTHORIZED");
   return member;
 }
 function requireLead(team, sessionId) {
@@ -1671,14 +1713,32 @@ function requireActiveTeam(team) {
 function requireOpenTeam(team) {
   if (team.state === "closed") reject("team is closed", "AGENT_TEAMS_CLOSING");
 }
+function terminalizeTeamTasks(team, timestamp = now()) {
+  const releasedTaskIds = [];
+  for (const task of team.tasks) {
+    if (task.state === "completed") continue;
+    if (task.state === "in_progress") task.state = "pending";
+    task.assigneeSessionId = undefined;
+    task.claimedAt = undefined;
+    task.completedAt = undefined;
+    task.updatedAt = timestamp;
+    releasedTaskIds.push(task.id);
+  }
+  return releasedTaskIds;
+}
 function closeTeamRecord(team, reason = "team closed before delivery acknowledgement") {
+  const timestamp = now();
   for (const message of team.messages) {
     if (message.status !== "pending") continue;
     message.status = "failed";
     message.deliveryError = reason;
   }
+  terminalizeTeamTasks(team, timestamp);
   team.state = "closed";
-  team.updatedAt = now();
+  team.updatedAt = timestamp;
+  USER_PAUSED_TEAMS.delete(team.id);
+  USER_PAUSE_RECONCILIATIONS.delete(team.id);
+  USER_PAUSE_EPOCHS.delete(team.id);
 }
 function exactLiveLead(ctx, team) {
   const lead = ctx.agents.get(team.rootLeadSessionId);
@@ -1947,6 +2007,7 @@ async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
     if (existing !== undefined) {
       requireLiveRootLead(ctx, existing, lead);
       if (existing.bootstrap.inputHash !== plan.inputHash) reject("bootstrap request_id was already used with different input", "AGENT_TEAMS_IDEMPOTENCY_CONFLICT");
+      requireActiveTeam(existing);
       return { teamId: existing.id, reused: true };
     }
     if (document.teams.filter((team) => team.rootLeadSessionId === lead.id && team.state !== "closed").length >= HARD_MAX_TEAMS_PER_ROOT) reject(`root lead peer-team limit reached (${HARD_MAX_TEAMS_PER_ROOT})`, "AGENT_TEAMS_TEAM_LIMIT");
@@ -1967,6 +2028,7 @@ async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
   for (const memberPlan of plan.members) {
     const state = await store.runOperation(() => store.mutate((document) => {
       const team = findTeam(document, prepared.teamId), ref = team.bootstrap.memberRefs.find((candidate) => candidate.key === memberPlan.key);
+      requireActiveTeam(team);
       if (ref.status === "complete") return { skip: true };
       if (ref.status === "starting" && ref.memberId !== undefined) {
         const member = team.members.find((candidate) => candidate.id === ref.memberId);
@@ -2056,7 +2118,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
     assertEnabled(document);
     const team = optionalString(input.teamId, "teamId", 256) === undefined ? resolveUniqueLeadTeam(document, undefined, lead.id, (candidate) => candidate.state === "active") : findTeam(document, input.teamId);
     requireLiveRootLead(ctx, team, lead);
-    if (team.state !== "active") reject("team is not accepting new members", "AGENT_TEAMS_CLOSING");
+    requireActiveTeam(team);
     if (team.members.filter(workerConsumesMemberSlot).length >= document.settings.maxMembers) reject("team teammate limit reached", "AGENT_TEAMS_MEMBER_LIMIT");
     if (activeWorkerTurnsForLead(document, team.rootLeadSessionId) >= document.settings.maxActiveTurns) reject("root lead active-turn limit reached across its teams", "AGENT_TEAMS_ACTIVE_TURN_LIMIT");
     const memberName = normalizeWorkerName(input.name);
@@ -2080,7 +2142,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
     const admitted = await store.runOperation(() => store.mutate((document) => {
       const team = findTeam(document, reservation.teamId);
       const record = team.members.find((candidate) => candidate.id === reservation.memberId);
-      if (team.state === "active" && record?.sessionId === reservation.placeholderSessionId && record.state === "provisioning") return true;
+      if (effectiveTeamState(team) === "active" && record?.sessionId === reservation.placeholderSessionId && record.state === "provisioning") return true;
       if (record !== undefined) {
         confirmMemberRetired(record);
         team.updatedAt = record.updatedAt;
@@ -2136,8 +2198,9 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
           team.updatedAt = record.updatedAt;
           return { duplicateChildId: true };
         }
-        if (team.state !== "active" || record === undefined || record.sessionId !== reservation.placeholderSessionId || record.state !== "provisioning") reject("team changed during member provisioning", "AGENT_TEAMS_CONFLICT");
+        if (effectiveTeamState(team) !== "active" || record === undefined || record.sessionId !== reservation.placeholderSessionId || record.state !== "provisioning") reject("team changed during member provisioning", "AGENT_TEAMS_CONFLICT");
         record.sessionId = started.childId;
+        record.state = "running";
         record.updatedAt = now();
         for (const taskId of reservation.taskIds) {
           const task = team.tasks.find((candidate) => candidate.id === taskId);
@@ -2479,15 +2542,17 @@ function resetTaskStoppedAfter(task, stoppedAt) {
   task.updatedAt = stoppedAt;
 }
 async function pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt) {
-  const teamIds = new Set(selections.map((entry) => entry.teamId));
+  const selectedChildren = new Map(selections.map((entry) => [entry.teamId, new Set(entry.childIds)]));
+  const teamIds = new Set(selectedChildren.keys());
   const childIds = [...new Set(selections.flatMap((entry) => entry.childIds))];
   await store.runOperation(() => store.mutate((document) => {
     for (const team of document.teams) {
-      if (!teamIds.has(team.id) || team.rootLeadSessionId !== lead.id || team.state === "closed") continue;
+      if (!teamIds.has(team.id) || team.rootLeadSessionId !== lead.id || !["active", "paused"].includes(team.state)) continue;
       team.state = "paused";
       for (const task of team.tasks) resetTaskStoppedAfter(task, stoppedAt);
+      const childSessions = selectedChildren.get(team.id);
       for (const member of team.members) {
-        if (member.kind !== "worker" || member.state === "retired") continue;
+        if (member.kind !== "worker" || !childSessions.has(member.sessionId) || !STOPPABLE_MEMBER_STATES.has(member.state)) continue;
         member.state = "shutting_down";
         member.updatedAt = stoppedAt;
       }
@@ -2500,8 +2565,9 @@ async function pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt) {
   await store.runOperation(() => store.mutate((document) => {
     for (const team of document.teams) {
       if (!teamIds.has(team.id) || team.state !== "paused") continue;
+      const childSessions = selectedChildren.get(team.id);
       for (const member of team.members) {
-        if (member.kind !== "worker" || member.state === "retired") continue;
+        if (member.kind !== "worker" || !childSessions.has(member.sessionId) || member.state !== "shutting_down") continue;
         member.state = drainError === undefined ? "ready" : "failed";
         member.runId = undefined;
         member.shutdownUnconfirmed = drainError === undefined ? undefined : true;
@@ -2525,20 +2591,48 @@ function buildResumePlan(team, teams) {
   };
 }
 async function resumePausedTeam(ctx, store, lead, input) {
-  let selectedTeamId;
-  const result = await store.runOperation(() => store.mutate((document) => {
-    const team = optionalString(input.teamId, "teamId", 256) === undefined ? resolveUniqueLeadTeam(document, undefined, lead.id, (candidate) => candidate.state === "paused") : findTeam(document, input.teamId);
-    selectedTeamId = team.id;
+  const requestedTeamId = optionalString(input.teamId, "teamId", 256);
+  const selectedTeamId = await store.runOperation(() => store.mutate((document) => {
+    const team = requestedTeamId === undefined
+      ? resolveUniqueLeadTeam(document, undefined, lead.id, (candidate) => effectiveTeamState(candidate) === "paused")
+      : findTeam(document, requestedTeamId);
     requireLiveRootLead(ctx, team, lead);
-    if (team.state !== "paused") reject("team is not paused", "AGENT_TEAMS_CONFLICT");
+    if (effectiveTeamState(team) !== "paused") reject("team is not paused", "AGENT_TEAMS_CONFLICT");
+    return team.id;
+  }));
+  const pendingReconciliation = USER_PAUSE_RECONCILIATIONS.get(selectedTeamId);
+  if (pendingReconciliation !== undefined) await pendingReconciliation.catch(() => undefined);
+  const repairSelection = await store.read((document) => {
+    const team = findTeam(document, selectedTeamId);
+    requireLiveRootLead(ctx, team, lead);
+    if (!USER_PAUSED_TEAMS.has(team.id)) return undefined;
+    const childIds = team.members.filter((member) => member.kind === "worker" && STOPPABLE_MEMBER_STATES.has(member.state)).map((member) => member.sessionId);
+    if (team.state === "paused" && !team.members.some((member) => member.kind === "worker" && member.state === "shutting_down")) return undefined;
+    return { teamId: team.id, childIds };
+  });
+  if (repairSelection !== undefined) {
+    try { await pauseTeamsForUserStop(ctx, store, lead, [repairSelection], now()); }
+    catch (error) { reject(`team pause reconciliation failed: ${String(error)}`, "AGENT_TEAMS_PAUSE_RECONCILIATION_FAILED"); }
+  }
+  const committed = await store.runOperation(() => store.mutate((document) => {
+    const team = findTeam(document, selectedTeamId);
+    requireLiveRootLead(ctx, team, lead);
+    if (team.state !== "paused") reject("team pause reconciliation did not reach durable paused state", "AGENT_TEAMS_PAUSE_RECONCILIATION_FAILED");
     if (team.members.some((member) => member.kind === "worker" && member.state === "shutting_down")) reject("team members are still stopping; retry resume after they become ready", "AGENT_TEAMS_CONFLICT");
     team.state = "active";
     team.updatedAt = now();
     const peers = document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId);
-    return { teamId: team.id, team: projectTeam(team, peers), resumePlan: buildResumePlan(team, peers) };
+    return { teamId: team.id, resumePlan: buildResumePlan(team, peers) };
   }));
   USER_PAUSED_TEAMS.delete(selectedTeamId);
-  return result;
+  USER_PAUSE_RECONCILIATIONS.delete(selectedTeamId);
+  USER_PAUSE_EPOCHS.set(selectedTeamId, (USER_PAUSE_EPOCHS.get(selectedTeamId) ?? 0) + 1);
+  store.notify?.();
+  const team = await store.read((document) => {
+    const current = findTeam(document, selectedTeamId);
+    return projectTeam(current, document.teams.filter((candidate) => candidate.rootLeadSessionId === current.rootLeadSessionId));
+  });
+  return { ...committed, team };
 }
 
 async function retireMember(ctx, store, admission, lead, input, signal) {
@@ -2609,7 +2703,7 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
   const prepared = await queueTeamOperation(store.filePath, teamId, () => store.runOperation(() => store.mutate((document) => {
     const team = findTeam(document, teamId);
     requireLiveRootLead(ctx, team, lead);
-    requireActiveTeam(team);
+    if (team.state !== "closing") requireActiveTeam(team);
     team.state = "closing";
     const workers = team.members.filter((member) => member.kind === "worker" && member.state !== "retired");
     for (const member of workers) markMemberShuttingDown(member, force);
@@ -2711,7 +2805,7 @@ async function recoverOrphanTeams(ctx, store, caller, input) {
         if (requestedId !== undefined) reject(shutdownUnconfirmed ? "orphan recovery is blocked by an unconfirmed shutdown" : "orphan recovery requires all workers to be inactive", shutdownUnconfirmed ? "AGENT_TEAMS_SHUTDOWN_UNCONFIRMED" : "AGENT_TEAMS_CONFLICT");
         continue;
       }
-      for (const member of team.members) if (member.kind === "worker") member.state = "retired";
+      for (const member of team.members) if (member.kind === "worker") confirmMemberRetired(member);
       closeTeamRecord(team, "orphaned team closed by an explicit direct-human recovery");
       recovered.push(projectTeam(team));
     }
@@ -2737,7 +2831,7 @@ function teamSnapshot(document, sessionId, selectedTeamId) {
     config.maxMembers,
     config.maxActiveTurns,
     selected?.id ?? null,
-    ...ordered.map((candidate) => [candidate.id, candidate.revision ?? 1]),
+    ...ordered.map((candidate) => [candidate.id, candidate.revision ?? 1, effectiveTeamState(candidate)]),
   ]);
   return {
     enabled: config.enabled,
@@ -2850,7 +2944,7 @@ function createProjectFoundationManager(ctx, store, projectEntry, desktopGitCapa
     const status = await projectEntry.status();
     const projectRef = status?.project?.projectRef;
     if (typeof projectRef !== "string" || status.project.role !== "owner") reject("foundation authority requires the local project owner", "PROJECT_FOUNDATIONS_FORBIDDEN");
-    const caller = execution.agent, document = await store.read((current) => current), activeTeams = document.teams.filter((team) => team.state === "active"), rootLeadIds = new Set(activeTeams.map((team) => team.rootLeadSessionId));
+    const caller = execution.agent, document = await store.read((current) => current), activeTeams = document.teams.filter((team) => effectiveTeamState(team) === "active"), rootLeadIds = new Set(activeTeams.map((team) => team.rootLeadSessionId));
     if (rootLeadIds.size !== 1) reject("foundation authority requires one unambiguous active root lead", "PROJECT_FOUNDATIONS_FORBIDDEN");
     const [rootLeadSessionId] = rootLeadIds, root = ctx.agents.get(rootLeadSessionId), liveRoots = ctx.agents.roots();
     if (root === undefined || !liveRoots.includes(root)) reject("foundation root lead is unavailable", "PROJECT_FOUNDATIONS_FORBIDDEN");
@@ -2863,7 +2957,7 @@ function createProjectFoundationManager(ctx, store, projectEntry, desktopGitCapa
     if (candidates.length !== 1) reject("foundation worker must belong to one active team under the project root", "PROJECT_FOUNDATIONS_FORBIDDEN");
     const [team] = candidates;
     const member = memberOf(team, caller.id);
-    if (!new Set(["running", "idle", "active"]).has(member.state)) reject("foundation worker membership is not live", "PROJECT_FOUNDATIONS_FORBIDDEN");
+    if (!["running", "idle", "ready"].includes(member.state) || member.shutdownUnconfirmed === true || member.stopUnconfirmed === true) reject("foundation worker membership is not live", "PROJECT_FOUNDATIONS_FORBIDDEN");
     const tasks = team.tasks.filter((task) => task.state === "in_progress" && task.assigneeSessionId === caller.id);
     if (tasks.length !== 1) reject("foundation worker requires one assigned in-progress task", "PROJECT_FOUNDATIONS_FORBIDDEN");
     return {
@@ -3792,13 +3886,14 @@ function createSubagentEventReconciler(ctx, store, ready, delayMs = SUBAGENT_REC
       if (managedIds.size > 0) await store.mutate((document) => {
         const bySession = new Map();
         for (const team of document.teams) {
-          if (team.state === "closed") continue;
+          if (["closed", "paused"].includes(effectiveTeamState(team))) continue;
           for (const member of team.members) if (managedIds.has(member.sessionId) && !bySession.has(member.sessionId)) bySession.set(member.sessionId, { member, team });
         }
-        for (const { type, info } of batch) {
+        for (const { type, info, lifecycleToken } of batch) {
           const target = bySession.get(info.id);
           if (target === undefined) continue;
           const { member, team } = target;
+          if (lifecycleToken !== undefined && (lifecycleToken.teamId !== team.id || lifecycleToken.pauseEpoch !== (USER_PAUSE_EPOCHS.get(team.id) ?? 0))) continue;
           const updatedAt = now();
           if (type === "start") {
             if (member.state === "retired") continue;
@@ -3837,11 +3932,16 @@ function createSubagentEventReconciler(ctx, store, ready, delayMs = SUBAGENT_REC
       if (pending.length > 0) schedule();
     }
   };
-  const enqueue = (type, info) => new Promise((resolve) => {
-    if (closed) return resolve();
-    pending.push({ type, info, resolve });
-    schedule();
-  });
+  const enqueue = (type, info) => {
+    const lifecycleTokensSupported = typeof store.memberLifecycleToken === "function";
+    const lifecycleToken = lifecycleTokensSupported ? store.memberLifecycleToken(info.id) : undefined;
+    if (lifecycleTokensSupported && (lifecycleToken === undefined || lifecycleToken.teamState === "paused")) return Promise.resolve();
+    return new Promise((resolve) => {
+      if (closed) return resolve();
+      pending.push({ type, info, lifecycleToken, resolve });
+      schedule();
+    });
+  };
   const close = () => {
     closed = true;
     if (timer !== undefined) clearTimeout(timer);
@@ -3875,7 +3975,13 @@ function observeUserStops(ctx, store, ready, admission) {
     const selections = store.activeTeamsForRoot(lead.id);
     if (selections.length === 0) return;
     const stoppedAt = now();
-    for (const selection of selections) USER_PAUSED_TEAMS.add(selection.teamId);
+    for (const selection of selections) {
+      USER_PAUSE_EPOCHS.set(selection.teamId, (USER_PAUSE_EPOCHS.get(selection.teamId) ?? 0) + 1);
+      USER_PAUSED_TEAMS.add(selection.teamId);
+    }
+    const reconciliation = ready.then(() => pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt));
+    for (const selection of selections) USER_PAUSE_RECONCILIATIONS.set(selection.teamId, reconciliation);
+    store.notify?.();
     admission?.cancelRoot?.(lead, admissionCancellation());
     // The stock UI cancellation preserves queued inbox work. For a team-owning root,
     // clear it at the durable turn-end boundary so member reports cannot auto-restart.
@@ -3884,8 +3990,12 @@ function observeUserStops(ctx, store, ready, admission) {
       try { ctx.subagents.interrupt(childId, { kind: "ancestor", agent: lead }); }
       catch (error) { ctx.logger.warn(`agent-teams could not interrupt member "${childId}" after user stop: ${String(error)}`); }
     }
-    void ready.then(() => pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt))
-      .catch((error) => ctx.logger.warn(`agent-teams user-stop reconciliation failed: ${String(error)}`));
+    void reconciliation.catch((error) => ctx.logger.warn(`agent-teams user-stop reconciliation failed: ${String(error)}`))
+      .finally(() => {
+        for (const selection of selections) {
+          if (USER_PAUSE_RECONCILIATIONS.get(selection.teamId) === reconciliation) USER_PAUSE_RECONCILIATIONS.delete(selection.teamId);
+        }
+      });
   });
 }
 
@@ -4013,12 +4123,12 @@ function apply(ctx, config = {}) {
   const projectFoundations = createProjectFoundationManager(ctx, store, projectEntry, desktopGitCapability, resolveProjectFoundationHostOptions(ctx));
   ready.catch((error) => ctx.logger.error(`agent-teams store initialization failed: ${String(error)}`));
   void ready.then(() => projectBusiness.initialize()).catch((error) => ctx.logger.warn(`agent-teams project sync initialization deferred: ${String(error?.code ?? "unavailable")}`));
-  void ready.then((document) => document.teams.length > 0 ? collaboration.syncTeams(document) : undefined)
+  void ready.then((document) => document.teams.length > 0 ? collaboration.syncTeams(withEffectiveTeamStates(document)) : undefined)
     .catch((error) => ctx.logger.warn(`agent-teams collaboration initialization failed: ${String(error)}`));
   ctx.effect(() => {
     const unsubscribe = store.subscribe((document) => {
       if (document.teams.length === 0) return;
-      void collaboration.syncTeams(document).catch((error) => ctx.logger.warn(`agent-teams collaboration sync failed: ${String(error)}`));
+      void collaboration.syncTeams(withEffectiveTeamStates(document)).catch((error) => ctx.logger.warn(`agent-teams collaboration sync failed: ${String(error)}`));
     });
     return async () => {
       unsubscribe();
@@ -4102,7 +4212,9 @@ export {
   resolveConfig,
   resolveModelSelection,
   resolveUniqueLeadTeam,
+  shutdownTeam,
   teamSnapshot,
+  terminalizeTeamTasks,
   trustedRequest,
   updateTask,
   waitForGracefulLifecycle,

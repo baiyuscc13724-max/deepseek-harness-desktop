@@ -6,7 +6,7 @@ const { readAndroidMobileVersion } = require('../scripts/mobile-release-version.
 
 const root = path.resolve(__dirname, '..')
 
-test('Android revision release stays bound to the desktop integration while iOS keeps an Apple-compatible version', async () => {
+test('Android and iOS stay unified with the desktop release while keeping platform-compatible build codes', async () => {
   const [pkg, manifest, androidBuild, iosProject] = await Promise.all([
     readFile(path.join(root, 'package.json'), 'utf8').then(JSON.parse),
     readFile(path.join(root, 'mobile', 'mobile-app-update.example.json'), 'utf8').then(JSON.parse),
@@ -18,7 +18,9 @@ test('Android revision release stays bound to the desktop integration while iOS 
   const iosBuild = major * 10000 + minor * 100 + patch
 
   assert.equal(androidVersion.integrationVersion, pkg.version)
-  assert.equal(manifest.platforms.android.version, androidVersion.versionName)
+  assert.equal(androidVersion.versionName, pkg.version)
+  assert.equal(manifest.platforms.android.version, pkg.version)
+  assert.equal(manifest.platforms.android.url, `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v${pkg.version}/Harness-Mobile-${pkg.version}-android-universal.apk`)
   assert.equal(manifest.platforms.ios.version, pkg.version)
   assert.match(androidBuild, /file\("version\.properties"\)/u)
   assert.match(androidBuild, /versionCode = mobileVersionCode/u)

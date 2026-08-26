@@ -6,6 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: harness-wallpaper:; media-src 'self' harness-wallpaper:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src http://127.0.0.1:* http://localhost:*;" />
   <title>Harness Desktop</title>
   <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="./right-workspace.css" />
   <link rel="stylesheet" href="./pr-preview-update.css" />
 </head>
@@ -84,32 +85,7 @@
         <p>网站登录只保存在 <strong>Harness Browser</strong> 中，与官方 Harness 会话完全隔离。</p>
         <div class="browser-profile-status"><span id="browserProfileOrigin">尚未打开站点</span><strong id="browserLoginState">无本站会话数据</strong></div>
         <p>请直接在下方真实网页中亲自登录。模型无法读取密码、Cookie、验证码或令牌。</p>
-        <section class="browser-model-permissions browser-shared-control" aria-labelledby="browserControlTitle">
-          <h4 id="browserControlTitle">浏览器控制 · Computer Use</h4>
-          <p>内置浏览器可在后台运行，普通结构化动作无需保持右栏打开；上传、下载、提交等关键动作会自动打开右栏请求逐次确认。它与 Computer Use 共用同一份授权和启停状态，选择一次“本次授权”或“永久授权”即可。</p>
-          <p>模型优先通过结构化 CDP/DOM 引用读取和操作页面，截图仅作视觉后备；密码、账号、验证码、支付和银行信息仍禁止，上传、下载与提交继续按事务确认。</p>
-          <div><button id="computerUseToggle" type="button">允许 AI 控制</button><button id="computerUseRevokePermanent" class="hidden" type="button">撤销永久授权</button></div>
-          <div id="computerUseSessionState" class="computer-use-session-state" aria-live="polite"></div>
-          <div id="computerUsePending" class="browser-pending-actions"></div>
-          <div id="browserPendingActions" class="browser-pending-actions"></div>
-        </section>
-        <section class="browser-model-permissions" aria-labelledby="computerUsePolicyTitle">
-          <h4 id="computerUsePolicyTitle">跨应用访问策略（受限模式）</h4>
-          <p>未授予无限制控制时，默认应用访问与单个应用允许/拒绝仍可作为受限模式策略；无限制授权生效后这些策略不再拦截。</p>
-          <p class="computer-use-permanent-notice"><strong>无限制授权：</strong>将同时取消 UAC、系统/提权窗口与敏感输入等原有硬禁令，可在上方随时停止或撤销永久授权。</p>
-          <div id="computerUsePolicyControls" class="computer-use-policy-controls">
-            <label class="computer-use-default-row">默认应用访问
-              <select id="computerUseDefaultAccess">
-                <option value="ask">每次询问（推荐）</option>
-                <option value="allow">始终允许</option>
-                <option value="deny">始终拒绝</option>
-              </select>
-            </label>
-            <div id="computerUseCurrentTarget" class="computer-use-current-target" aria-live="polite"></div>
-            <div id="computerUseAppList" class="computer-use-app-list" aria-live="polite"></div>
-            <div id="computerUsePolicyMessage" class="computer-use-policy-message" role="status"></div>
-          </div>
-        </section>
+        <div id="browserPendingActions" class="browser-pending-actions"></div>
         <label><input id="browserClearSiteConfirm" type="checkbox" /> 确认清除当前站点登录数据</label>
         <button id="browserClearSite" class="danger" type="button" disabled>清除当前站点</button>
         <p id="browserPrivacySummary">浏览器控制复用 Computer Use 授权；本次运行保留 0 条脱敏审计元数据。</p>
@@ -325,6 +301,31 @@
       </div>
     </section>
     <webview id="runtimeView" partition="persist:harness"></webview>
+    <section id="terminalPanel" class="terminal-panel" aria-label="集成终端" aria-hidden="true">
+      <div id="terminalResizeHandle" class="terminal-resize-handle" role="separator" aria-label="拖动调整终端高度" aria-orientation="horizontal" tabindex="0"></div>
+      <header class="terminal-header">
+        <div class="terminal-title-group">
+          <strong>终端</strong>
+          <span id="terminalShellBadge" class="terminal-shell-badge">未启动</span>
+          <span id="terminalWorkspace" class="terminal-workspace" title="当前工作区"></span>
+        </div>
+        <div class="terminal-actions">
+          <button id="terminalStart" type="button" title="新建终端">＋ 新建</button>
+          <button id="terminalInterrupt" type="button" title="向当前终端发送 Ctrl+C" disabled>中断</button>
+          <button id="terminalStop" type="button" title="停止当前终端" disabled>停止</button>
+          <button id="terminalClear" type="button" title="清空显示">清空</button>
+          <button id="terminalClose" type="button" aria-label="收起集成终端" title="收起集成终端">×</button>
+        </div>
+      </header>
+      <div id="terminalViewport" class="terminal-viewport">
+        <div id="terminalHost" class="terminal-host" aria-label="终端输出和输入"></div>
+        <div id="terminalEmpty" class="terminal-empty">点击“新建”在当前 Harness 工作区打开终端。</div>
+      </div>
+      <footer class="terminal-footer">
+        <span id="terminalStatus" role="status">正在检查终端能力…</span>
+        <span>Ctrl+` 切换面板</span>
+      </footer>
+    </section>
     <section id="computerUseAuthorizationOverlay" class="computer-use-authorization-overlay hidden" aria-hidden="true">
       <div class="computer-use-authorization-card" role="alertdialog" aria-modal="true" aria-labelledby="computerUseAuthorizationTitle" aria-describedby="computerUseAuthorizationDescription">
         <header class="computer-use-authorization-head">
@@ -336,7 +337,7 @@
         </header>
         <div class="computer-use-authorization-body">
           <p id="computerUseAuthorizationDescription">这一次授权同时开启右栏浏览器控制与内置 Computer Use。桌面控制将进入无限制模式；右栏浏览器仍保留密码、账号、验证码、支付和银行信息等硬限制。</p>
-          <p class="computer-use-authorization-note">本次授权仅在当前应用运行期间有效；永久授权将保存并在重启后自动生效。两处使用同一份授权，可随时在 Profile 面板停止或撤销。</p>
+          <p class="computer-use-authorization-note">本次授权仅在当前应用运行期间有效；永久授权将保存并在重启后自动生效。之后统一在“设置 → 插件 → Computer Use”中停止或撤销。</p>
           <p class="computer-use-authorization-refocus" id="computerUseAuthorizationRefocus" role="status" hidden></p>
           <p id="computerUseAuthorizationStatus" class="computer-use-authorization-status" role="status"></p>
         </div>
@@ -518,6 +519,8 @@
   <script src="./right-workspace-integration.js"></script>
   <script src="./browser-sidebar.js"></script>
   <script src="./pr-preview-update-integration.js"></script>
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

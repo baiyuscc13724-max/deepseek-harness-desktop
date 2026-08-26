@@ -6,7 +6,11 @@ const vm = require('node:vm')
 
 const SOURCE = fs.readFileSync(path.join(__dirname, '..', 'mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-runtime.js'), 'utf8')
 
-function installRuntime(fetchImpl) {
+function installRuntime(fetchImpl, timeZone = 'UTC') {
+  function DateTimeFormat() {
+    if (!new.target) return new DateTimeFormat()
+  }
+  DateTimeFormat.prototype.resolvedOptions = () => ({ locale: 'en-US', timeZone })
   const documentElement = {
     dataset: {},
     firstElementChild: null,
@@ -25,6 +29,7 @@ function installRuntime(fetchImpl) {
     AbortSignal,
     Error,
     HTMLInputElement,
+    Intl: { DateTimeFormat },
     MutationObserver,
     Promise,
     Request,
@@ -51,6 +56,25 @@ function jsonResponse(payload, status = 200) {
     headers: { 'content-type': 'application/json' }
   })
 }
+
+test('mobile runtime normalizes Android offset-only prompt time zones without changing IANA zones', async () => {
+  const bodies = []
+  const runtime = installRuntime(async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url
+    if (url.includes('/api/session.prompt')) bodies.push(JSON.parse(init.body))
+    return jsonResponse({ result: { ok: true } })
+  }, '+00:00')
+  assert.equal(runtime.Intl.DateTimeFormat().resolvedOptions().timeZone, 'UTC')
+  const prompt = clientTimeZone => JSON.stringify({
+    type: 'client-request',
+    method: 'session.prompt',
+    payload: { sessionId: 'one', content: [], clientTimeZone }
+  })
+  await runtime.window.fetch('https://mobile.test/api/session.prompt', { method: 'POST', body: prompt('+00:00') })
+  await runtime.window.fetch('https://mobile.test/api/session.prompt', { method: 'POST', body: prompt('Asia/Shanghai') })
+  assert.equal(bodies[0].payload.clientTimeZone, 'UTC')
+  assert.equal(bodies[1].payload.clientTimeZone, 'Asia/Shanghai')
+})
 
 test('mobile runtime bounds the first history attempt even without a caller signal', async () => {
   let observedSignal = null
@@ -104,22 +128,22 @@ test('mobile runtime retries subagent history but leaves unrelated requests alon
   assert.equal(otherCalls, 2) // initial theme bridge load plus the explicit request
 })
 
-test('mobile runtime reuses a bounded in-memory history response during quick page switches', async () => {
+test('mobile runtime never replays a successful history snapshot during quick page switches', async () => {
   let historyCalls = 0
   const runtime = installRuntime(async input => {
     const url = typeof input === 'string' ? input : input.url
     if (url.includes('/api/session.history')) {
       historyCalls++
-      return jsonResponse({ result: { ok: true, value: { events: [{ id: 'cached' }] } } })
+      return jsonResponse({ result: { ok: true, value: { events: [{ id: `live-${historyCalls}` }] } } })
     }
     return new Response('', { status: 404 })
   })
   const options = { method: 'POST', body: JSON.stringify({ sessionId: 'one' }) }
   const first = await runtime.window.fetch('https://mobile.test/api/session.history', options)
   const second = await runtime.window.fetch('https://mobile.test/api/session.history', options)
-  assert.equal(historyCalls, 1)
-  assert.equal((await first.json()).result.ok, true)
-  assert.equal((await second.json()).result.value.events[0].id, 'cached')
+  assert.equal(historyCalls, 2)
+  assert.equal((await first.json()).result.value.events[0].id, 'live-1')
+  assert.equal((await second.json()).result.value.events[0].id, 'live-2')
 })
 
 test('mobile runtime coalesces identical history loads in flight', async () => {

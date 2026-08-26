@@ -14,17 +14,37 @@ window.__ModuleLoader__.load({
         request() {
           const id = crypto.randomUUID()
           const api = window.harnessDesktopGuest
-          if (!api || typeof api.chooseWorkspaceDirectory !== 'function') {
-            return Promise.reject(new Error('Harness Desktop 工作区选择窗口不可用。'))
-          }
+          const mobile = document.documentElement?.dataset?.harnessMobile === 'true'
+          const choose = api && typeof api.chooseWorkspaceDirectory === 'function'
+            ? () => api.chooseWorkspaceDirectory()
+            : mobile && typeof window.fetch === 'function'
+              ? async () => {
+                  const response = await window.fetch('/__harness_mobile__/workspace/choose', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'X-Harness-Mobile-Request': 'workspace-picker'
+                    },
+                    body: '{}'
+                  })
+                  let payload = null
+                  try { payload = await response.json() } catch {}
+                  if (!response.ok || payload?.ok !== true) {
+                    throw new Error(payload?.error || '请在电脑端选择工作区目录，然后回到手机继续。')
+                  }
+                  return payload.path == null ? null : String(payload.path)
+                }
+              : null
+          if (!choose) return Promise.reject(new Error('请在 Harness Desktop 上选择工作区目录。'))
           const promise = new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
               pending.delete(id)
-              reject(new Error('工作区选择窗口等待超时，请重试。'))
+              reject(new Error('工作区选择等待超时，请确认电脑端窗口后重试。'))
             }, 180000)
             pending.set(id, { resolve, reject, timer })
           })
-          api.chooseWorkspaceDirectory().then(
+          choose().then(
             value => bridge.settle(id, value, ''),
             error => bridge.settle(id, null, error?.message || String(error))
           )

@@ -5,6 +5,7 @@ import { patchAssistantCopySource } from './assistant-copy-patch.mjs'
 import { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 import { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 import { patchWorkspaceSessionMenuSource } from './workspace-session-menu-patch.mjs'
+import { patchCodexParityRuntime } from './codex-parity-runtime-patch.mjs'
 
 export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
 export { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
@@ -1622,6 +1623,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const fsSearchChanged = await patchInstalledFsSearch()
   const subprocessChanged = await patchInstalledSubprocess()
   const webAppChanged = await patchInstalledWebApp()
+  const codexParityChanged = await patchCodexParityRuntime(path.join(root, 'node_modules'))
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
@@ -1640,4 +1642,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
   process.stdout.write(subprocessChanged ? 'Patched hidden Windows command and cleanup processes.\n' : 'Hidden Windows command and cleanup process patch already applied.\n')
   process.stdout.write(webAppChanged ? 'Patched hidden browser launcher process.\n' : 'Hidden browser launcher process patch already applied.\n')
+  process.stdout.write(codexParityChanged.changed ? 'Patched Codex-style $ skill discovery and invocation.\n' : 'Codex-style $ skill discovery and invocation already applied.\n')
 }

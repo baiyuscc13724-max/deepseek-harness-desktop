@@ -16,6 +16,18 @@ test('AppStateStore persists update preferences', () => {
   assert.equal(restored.updates.previewEnabled, true)
 })
 
+test('AppStateStore persists only validated integrated-terminal shell preferences', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-terminal-preferences-'))
+  const file = path.join(dir, 'app-state.json')
+  const store = new AppStateStore(file)
+  assert.deepEqual(store.get().terminal, { shellId: null })
+  store.updateTerminalPreferences({ shellId: 'wsl' })
+  assert.deepEqual(new AppStateStore(file).get().terminal, { shellId: 'wsl' })
+  assert.throws(() => store.updateTerminalPreferences({ shellId: '../../escape' }), /终端 Shell 标识无效/)
+  assert.deepEqual(store.updateTerminalPreferences({ shellId: null }).terminal, { shellId: null })
+  assert.deepEqual(normalizeState({ schemaVersion: 9, terminal: { shellId: 'git-bash', command: 'malicious.exe' } }).terminal, { shellId: 'git-bash' })
+})
+
 test('AppStateStore records only monotonic signed PR preview candidates', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-preview-state-'))
   const file = path.join(dir, 'app-state.json')
@@ -102,7 +114,7 @@ test('new installs use Porcelain Mist while preserving an explicitly selected no
 
 test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
   const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
-  assert.equal(migrated.schemaVersion, 9)
+  assert.equal(migrated.schemaVersion, 10)
   assert.equal(migrated.appearance.themeId, 'porcelain-mist')
   const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
   assert.equal(explicitOfficial.appearance.themeId, 'official')
@@ -140,7 +152,7 @@ test('new profiles enable bounded automatic local memory and preserve explicit c
 
 test('memory migration defaults missing preferences on without overriding an explicit saved false', () => {
   const missing = normalizeState({ schemaVersion: 8 })
-  assert.equal(missing.schemaVersion, 9)
+  assert.equal(missing.schemaVersion, 10)
   assert.deepEqual(missing.memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
 
   const disabled = normalizeState({ schemaVersion: 8, memory: { enabled: false, autoRecall: true, autoCapture: true } })
@@ -163,7 +175,7 @@ test('explicit memory disable survives migration and later unrelated persistence
   store.updatePreferences({ checkOnStartup: false })
 
   const persisted = JSON.parse(readFileSync(file, 'utf8'))
-  assert.equal(persisted.schemaVersion, 9)
+  assert.equal(persisted.schemaVersion, 10)
   assert.deepEqual(persisted.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
   assert.equal(new AppStateStore(file).get().memory.enabled, false)
 })

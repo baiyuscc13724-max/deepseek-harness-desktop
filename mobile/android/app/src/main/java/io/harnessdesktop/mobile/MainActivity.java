@@ -13,6 +13,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
+import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -153,6 +154,7 @@ public final class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         setTheme(R.style.Theme_HarnessMobile);
         super.onCreate(savedInstanceState);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         setContentView(R.layout.activity_main);
         applySystemBarInsets();
         bindViews();
@@ -225,11 +227,12 @@ public final class MainActivity extends AppCompatActivity {
             Insets systemBars = windowInsets.getInsets(
                 WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout()
             );
+            Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
             view.setPadding(
                 left + systemBars.left,
                 top + systemBars.top,
                 right + systemBars.right,
-                bottom + systemBars.bottom
+                bottom + Math.max(systemBars.bottom, ime.bottom)
             );
             return windowInsets;
         });

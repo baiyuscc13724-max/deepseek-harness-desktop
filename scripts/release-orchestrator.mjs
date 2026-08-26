@@ -1,11 +1,14 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const require = createRequire(import.meta.url)
+const { readAndroidMobileVersion } = require('./mobile-release-version.cjs')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const version = String(argument('version', pkg.version)).replace(/^v/, '')
 const stateDir = path.join(root, '.release-state')
@@ -88,15 +91,15 @@ async function requireFile(file) {
 
 async function sourceContracts() {
   if (version !== pkg.version) throw new Error(`Requested version ${version} does not equal package ${pkg.version}.`)
-  const [android, ios, mobile, sources] = await Promise.all([
-    readFile(path.join(root, 'mobile/android/app/build.gradle.kts'), 'utf8'),
+  const [ios, mobile, sources] = await Promise.all([
     readFile(path.join(root, 'mobile/ios/project.yml'), 'utf8'),
     readFile(path.join(root, 'electron/bridge/mobile-sync-service.cjs'), 'utf8'),
     readFile(path.join(root, 'component-update-sources.json'), 'utf8').then(JSON.parse)
   ])
+  const android = readAndroidMobileVersion(root)
   const [major, minor, patch] = version.split('.').map(Number)
   const mobileCode = major * 10000 + minor * 100 + patch
-  if (!android.includes(`versionCode = ${mobileCode}`) || !android.includes(`versionName = "${version}"`)) throw new Error('Android version is not synchronized.')
+  if (android.integrationVersion !== version || android.versionName !== version) throw new Error('Android version is not synchronized.')
   if (!ios.includes(`CURRENT_PROJECT_VERSION: ${mobileCode}`) || !ios.includes(`MARKETING_VERSION: ${version}`)) throw new Error('iOS version is not synchronized.')
   if (!mobile.includes(`CURRENT_MOBILE_VERSION = '${version}'`)) throw new Error('Desktop mobile routing version is not synchronized.')
   if (sources.enabled !== true || Object.keys(sources.trustedKeys || {}).length !== 1) throw new Error('Production component source or trust root is not enabled exactly once.')

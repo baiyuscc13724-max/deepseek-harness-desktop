@@ -113,8 +113,17 @@ if (!updateLauncher.includes('openPath(resolved)')) throw new Error('The updater
 for (const contract of ['currentInstallDir', '.install-dir', 'writeInstallHint']) {
   if (!updateLauncher.includes(contract)) throw new Error(`The updater must preserve the current install location: ${contract}`)
 }
-for (const removedContract of ['AgentBridge', 'TerminalManager', 'SessionStore', 'ProviderStore']) {
+for (const removedContract of ['AgentBridge', 'SessionStore', 'ProviderStore']) {
   if (main.includes(removedContract)) throw new Error(`Obsolete native backend returned to the release: ${removedContract}`)
+}
+if (pkg.dependencies?.['@xterm/xterm'] !== '6.0.0' || pkg.dependencies?.['@xterm/addon-fit'] !== '0.11.0' || pkg.optionalDependencies?.['node-pty'] !== '1.2.0-beta.15') {
+  throw new Error('The packaged integrated terminal must pin its xterm and node-pty runtimes exactly.')
+}
+for (const contract of ['TerminalManager', "ipcMain.handle('terminal:start'", "ipcMain.handle('terminal:write'", "ipcMain.handle('terminal:resize'", "ipcMain.handle('terminal:stop'"]) {
+  if (!main.includes(contract)) throw new Error(`Integrated terminal release contract missing: ${contract}`)
+}
+for (const relative of ['electron/bridge/terminal-service.cjs', 'node_modules/@xterm/xterm/lib/xterm.js', 'node_modules/@xterm/xterm/css/xterm.css', 'node_modules/@xterm/addon-fit/lib/addon-fit.js']) {
+  await access(path.join(root, relative))
 }
 
 const workflow = (await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8')).replace(/\r\n?/gu, '\n')
@@ -209,7 +218,7 @@ for (const contract of ['assets: manifestAssets.length', 'asset.digest', 'Unexpe
   if (!manifestRefresher.includes(contract)) throw new Error(`Final release manifest must bind the exact public asset set to GitHub digests and CNB mirrors: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
-for (const contract of ['seq 1 180', 'android-universal.apk.sha256', 'Preserving the existing immutable APK and deriving its missing checksum when necessary.', 'Verify public signed APK bytes and identity', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'Create immutable standalone Android release when requested', 'make_latest:"false"', 'Unexpected standalone Android release assets', 'major*10000+minor*100+patch', 'MOBILE_VERSION_NAME=$version', "existing=''", 'release_error="$(mktemp)"', 'release_status=$?', "grep -F 'HTTP 404'", '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'releases/latest']) {
+for (const contract of ['seq 1 180', 'android-universal.apk.sha256', 'Preserving the existing immutable APK and deriving its missing checksum when necessary.', 'Verify public signed APK bytes and identity', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'Create immutable standalone Android release when requested', 'make_latest:"false"', 'Unexpected standalone Android release assets', "encodeAndroidVersionCode(require('./package.json').version)", 'MOBILE_VERSION_NAME=$version', "existing=''", 'release_error="$(mktemp)"', 'release_status=$?', "grep -F 'HTTP 404'", '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'releases/latest']) {
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Android immutable publication contract missing: ${contract}`)
 }
 if (androidReleaseWorkflow.includes('--clobber')) throw new Error('Android publication must never overwrite public release assets.')
