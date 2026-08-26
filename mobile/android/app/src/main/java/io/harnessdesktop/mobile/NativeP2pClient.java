@@ -26,6 +26,7 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -366,7 +367,7 @@ final class NativeP2pClient implements AutoCloseable {
             @Override public void onIceConnectionChange(PeerConnection.IceConnectionState state) {
                 if (state == PeerConnection.IceConnectionState.FAILED || state == PeerConnection.IceConnectionState.CLOSED
                     || state == PeerConnection.IceConnectionState.DISCONNECTED) {
-                    disableDirect(activeGeneration, "P2P ICE " + state.name().toLowerCase());
+                    disableDirect(activeGeneration, "P2P ICE " + state.name().toLowerCase(Locale.ROOT));
                 }
             }
             @Override public void onIceConnectionReceivingChange(boolean receiving) {}

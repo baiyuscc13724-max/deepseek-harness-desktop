@@ -136,6 +136,7 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'InputMethodManager',
     'moveTaskToBack(true)',
     'Activity.ScreenCaptureCallback',
+    'Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && screenCaptureObserver != null',
     'registerScreenCaptureCallback',
     'unregisterScreenCaptureCallback',
     "window.dispatchEvent(new Event('harness-mobile-screen-captured'))",

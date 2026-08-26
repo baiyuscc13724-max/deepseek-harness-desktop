@@ -13,6 +13,7 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 final class PairingProfile {
@@ -232,7 +233,7 @@ final class PairingProfile {
             if (!("tcp".equalsIgnoreCase(peerUri.getScheme()) || "udp".equalsIgnoreCase(peerUri.getScheme()))) return null;
             if (peerUri.getHost() == null || peerUri.getHost().isEmpty() || peerUri.getPort() < 1 || peerUri.getPort() > 65535) return null;
             if (peerUri.getUserInfo() != null || peerUri.getRawQuery() != null || peerUri.getRawFragment() != null) return null;
-            peer = peerUri.getScheme().toLowerCase() + "://" + peerUri.getHost() + ":" + peerUri.getPort();
+            peer = peerUri.getScheme().toLowerCase(Locale.ROOT) + "://" + peerUri.getHost() + ":" + peerUri.getPort();
         } catch (RuntimeException error) {
             return null;
         }

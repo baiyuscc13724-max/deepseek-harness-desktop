@@ -212,12 +212,16 @@ public final class MainActivity extends AppCompatActivity {
     @Override
     protected void onStart() {
         super.onStart();
-        if (screenCaptureObserver != null) screenCaptureObserver.register();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && screenCaptureObserver != null) {
+            screenCaptureObserver.register();
+        }
     }
 
     @Override
     protected void onStop() {
-        if (screenCaptureObserver != null) screenCaptureObserver.unregister();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && screenCaptureObserver != null) {
+            screenCaptureObserver.unregister();
+        }
         super.onStop();
     }
 

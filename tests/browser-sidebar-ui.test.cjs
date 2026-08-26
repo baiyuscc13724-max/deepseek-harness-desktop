@@ -78,7 +78,7 @@ test('Codex-style browser pane owns a responsive full-height column while preser
 
   assert.match(workspaceStyles, /--dsh-workbench-header-height:\s*76px/u)
   assert.match(workspaceStyles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*0;[\s\S]{0,260}padding-top:\s*var\(--dsh-workbench-header-height\)/u)
-  assert.doesNotMatch(workspaceStyles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*var\(--dsh-workbench-header-height\)/u)
+  assert.doesNotMatch(workspaceStyles, /\.dsh-right-workspace \{[\s\S]{0,180}[\r\n]\s*top:\s*var\(--dsh-workbench-header-height\)/u)
   assert.match(workspaceStyles, /\.dsh-right-workspace::before \{[\s\S]{0,260}height:\s*var\(--dsh-workbench-header-height\)[\s\S]{0,160}background:\s*inherit/u)
   assert.match(workspaceStyles, /\.dsh-right-workspace:not\(\.is-home\)::before \{[\s\S]{0,160}var\(--shell-layer/u)
   assert.match(workspaceStyles, /body\.dsh-right-workspace-open \.browser-quick-button \{\s*z-index:\s*9/u)
