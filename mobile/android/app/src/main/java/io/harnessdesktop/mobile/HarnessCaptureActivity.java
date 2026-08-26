@@ -75,7 +75,8 @@ public final class HarnessCaptureActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
-        cancelAndFinish();
+        setResult(Activity.RESULT_CANCELED);
+        super.onBackPressed();
     }
 
     private boolean hasCameraPermission() {

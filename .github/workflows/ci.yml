@@ -64,4 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x gradlew
-          ./gradlew --no-daemon clean test lintDebug assembleDebug assembleRelease
+          if ! ./gradlew --no-daemon clean test lintDebug assembleDebug assembleRelease; then
+            find app/build -type f -name 'lint-results-*.txt' -print -exec cat {} \;
+            exit 1
+          fi

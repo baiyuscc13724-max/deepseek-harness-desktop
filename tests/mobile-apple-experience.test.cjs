@@ -95,7 +95,8 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'ActivityResultContracts.RequestPermission',
     'showPermissionRecovery()',
     'Settings.ACTION_APPLICATION_DETAILS_SETTINGS',
-    'decodeSingle'
+    'decodeSingle',
+    'super.onBackPressed()'
   ], 'Android scanner permission ownership')
   assert.doesNotMatch(scannerActivity, /extends CaptureActivity/, 'ZXing must not own the camera permission denial dialog')
   assertContainsAll(dimensions, ['48dp', '16dp'], 'Android touch and spacing tokens')
