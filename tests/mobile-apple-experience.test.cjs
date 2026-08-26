@@ -77,8 +77,11 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     '@+id/scan_button',
     '@+id/pairing_error',
     'android:accessibilityLiveRegion="polite"',
+    'xmlns:app="http://schemas.android.com/apk/res-auto"',
+    'app:tint="@color/harness_primary_dark"',
     '@string/'
   ], 'Android pairing shell')
+  assert.doesNotMatch(mainLayout, /android:tint=/u, 'AppCompat image widgets must use app:tint')
   assertContainsAll(controlLayout, [
     '@+id/control_master_switch',
     '@+id/control_stop_now',
