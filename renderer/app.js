@@ -6,6 +6,18 @@ const runtimeStatus = document.querySelector('#runtimeStatus')
 const runtimeStatusTitle = document.querySelector('#runtimeStatusTitle')
 const runtimeStatusDetail = document.querySelector('#runtimeStatusDetail')
 const retryRuntime = document.querySelector('#retryRuntime')
+const terminalPanel = document.querySelector('#terminalPanel')
+const terminalResizeHandle = document.querySelector('#terminalResizeHandle')
+const terminalHost = document.querySelector('#terminalHost')
+const terminalEmpty = document.querySelector('#terminalEmpty')
+const terminalShellBadge = document.querySelector('#terminalShellBadge')
+const terminalWorkspace = document.querySelector('#terminalWorkspace')
+const terminalStatus = document.querySelector('#terminalStatus')
+const terminalStartButton = document.querySelector('#terminalStart')
+const terminalInterruptButton = document.querySelector('#terminalInterrupt')
+const terminalStopButton = document.querySelector('#terminalStop')
+const terminalClearButton = document.querySelector('#terminalClear')
+const terminalCloseButton = document.querySelector('#terminalClose')
 const petQuickButton = document.querySelector('#petQuickButton')
 const petPanel = document.querySelector('#petPanel')
 const closePetPanelButton = document.querySelector('#closePetPanel')
@@ -139,6 +151,15 @@ let updateState = {
   harness: null,
   preferences: { checkOnStartup: true, channel: 'stable', previewEnabled: false, lastCheckedAt: null }
 }
+let terminalPreferences = { shellId: null, workspace: '' }
+let terminalCapabilities = { pty: false, backend: 'loading', defaultShellId: null, shells: [] }
+let terminalSession = null
+let terminalEmulator = null
+let terminalFitAddon = null
+let terminalStarting = false
+let terminalResizeFrame = 0
+let terminalWriteErrorShown = false
+const terminalEventBacklog = []
 let distributionState = {
   channel: 'direct', store: false, appUpdatesManagedByStore: false,
   nonCommercialContentAvailable: true, desktopPetAvailable: true, links: {}
@@ -325,6 +346,7 @@ function applyShellTheme() {
   if (!theme || theme.id === 'official') {
     root.removeAttribute('data-shell-theme')
     root.style.removeProperty('color-scheme')
+    root.style.removeProperty('--shell-workbench-background')
     for (const name of ['--shell-surface', '--shell-layer', '--shell-layer-2', '--shell-text', '--shell-text-secondary', '--shell-text-tertiary', '--shell-border', '--shell-hover', '--shell-accent', '--shell-overlay', '--shell-text-shadow']) root.style.removeProperty(name)
     return
   }
@@ -345,6 +367,7 @@ function applyShellTheme() {
     : { ...theme.vars, ...(theme.mode === 'adaptive' && mode === 'dark' ? theme.darkVars : {}) }
   root.dataset.shellTheme = theme.id
   root.style.colorScheme = mode === 'light' ? 'light' : 'dark'
+  root.style.setProperty('--shell-workbench-background', themePreview(theme))
   root.style.setProperty('--shell-surface', vars['--dsw-alias-bg-base'] || vars['--dsw-alias-bg-layer-1'] || '#181a1f')
   root.style.setProperty('--shell-layer', vars['--dsw-alias-bg-layer-1'] || vars['--dsw-alias-bg-base'] || '#202228')
   root.style.setProperty('--shell-layer-2', vars['--dsw-alias-bg-layer-2'] || vars['--dsw-alias-bg-layer-1'] || '#2a2d34')
@@ -1197,6 +1220,221 @@ function closeMobileSync() {
   runtimeView.focus()
 }
 
+function terminalSelectedShell() {
+  const shells = Array.isArray(terminalCapabilities.shells) ? terminalCapabilities.shells : []
+  const id = terminalPreferences.shellId || terminalCapabilities.defaultShellId
+  return shells.find(shell => shell.id === id) || shells.find(shell => shell.available) || null
+}
+
+function updateTerminalControls() {
+  const running = terminalSession?.running === true
+  terminalStartButton.disabled = terminalStarting || terminalCapabilities.pty !== true
+  terminalInterruptButton.disabled = !running
+  terminalStopButton.disabled = !running
+  const selected = terminalSession || terminalSelectedShell()
+  terminalShellBadge.textContent = selected?.shellLabel || selected?.label || (terminalCapabilities.pty ? '未启动' : 'PTY 不可用')
+  terminalWorkspace.textContent = terminalSession?.cwd || terminalPreferences.workspace || ''
+  terminalWorkspace.title = terminalSession?.cwd || terminalPreferences.workspace || '当前 Harness 工作区'
+}
+
+function showTerminalStatus(message, isError = false) {
+  terminalStatus.textContent = String(message || '')
+  terminalStatus.style.color = isError ? '#e56b6f' : ''
+}
+
+function ensureTerminalEmulator() {
+  if (terminalEmulator) return true
+  const TerminalCtor = window.Terminal
+  const FitAddonCtor = window.FitAddon?.FitAddon
+  if (typeof TerminalCtor !== 'function' || typeof FitAddonCtor !== 'function') {
+    terminalEmpty.classList.remove('hidden')
+    terminalEmpty.textContent = '终端显示组件未加载，请重启 Harness Desktop。'
+    showTerminalStatus('xterm.js 组件未加载', true)
+    terminalStartButton.disabled = true
+    return false
+  }
+  terminalEmulator = new TerminalCtor({
+    cursorBlink: true,
+    cursorStyle: 'bar',
+    fontFamily: 'Cascadia Mono, Consolas, ui-monospace, monospace',
+    fontSize: 12,
+    lineHeight: 1.22,
+    scrollback: 8000,
+    convertEol: false,
+    theme: {
+      background: '#111318', foreground: '#e5e7eb', cursor: '#9bb3ff', cursorAccent: '#111318',
+      selectionBackground: '#315efb66', black: '#17191f', red: '#e56b6f', green: '#7ccf91', yellow: '#e8c878',
+      blue: '#83a8ff', magenta: '#c391f3', cyan: '#78c7d2', white: '#e5e7eb', brightBlack: '#717784'
+    }
+  })
+  terminalFitAddon = new FitAddonCtor()
+  terminalEmulator.loadAddon(terminalFitAddon)
+  terminalEmulator.open(terminalHost)
+  terminalEmulator.onData(data => {
+    if (!terminalSession?.running) return
+    api.writeTerminal(terminalSession.id, data).catch(error => {
+      if (terminalWriteErrorShown) return
+      terminalWriteErrorShown = true
+      showTerminalStatus(`终端输入失败：${error.message}`, true)
+    })
+  })
+  terminalEmulator.onResize(({ cols, rows }) => {
+    if (!terminalSession?.running) return
+    api.resizeTerminal(terminalSession.id, cols, rows).catch(() => {})
+  })
+  return true
+}
+
+function fitIntegratedTerminal() {
+  if (!terminalEmulator || !document.body.classList.contains('terminal-panel-open')) return
+  cancelAnimationFrame(terminalResizeFrame)
+  terminalResizeFrame = requestAnimationFrame(() => {
+    try { terminalFitAddon?.fit() } catch {}
+  })
+}
+
+function openIntegratedTerminal({ focus = true } = {}) {
+  document.body.classList.add('terminal-panel-open')
+  terminalPanel.setAttribute('aria-hidden', 'false')
+  ensureTerminalEmulator()
+  fitIntegratedTerminal()
+  if (focus) requestAnimationFrame(() => terminalEmulator?.focus())
+}
+
+function closeIntegratedTerminal() {
+  document.body.classList.remove('terminal-panel-open')
+  terminalPanel.setAttribute('aria-hidden', 'true')
+  runtimeView.focus()
+}
+
+function toggleIntegratedTerminal() {
+  if (document.body.classList.contains('terminal-panel-open')) closeIntegratedTerminal()
+  else openIntegratedTerminal()
+}
+
+function applyTerminalEvent(event, allowBuffer = true) {
+  if (!event?.terminalId) return
+  if (!terminalSession || event.terminalId !== terminalSession.id) {
+    if (allowBuffer && terminalStarting) terminalEventBacklog.push(event)
+    return
+  }
+  if (event.stream === 'stdout' || event.stream === 'stderr' || event.stream === 'error') {
+    terminalEmulator?.write(String(event.text ?? ''))
+    if (event.stream === 'error') showTerminalStatus(String(event.text || '终端进程错误'), true)
+    return
+  }
+  if (event.stream === 'exit') {
+    terminalEmulator?.write(String(event.text ?? ''))
+    terminalSession = { ...terminalSession, running: false }
+    showTerminalStatus(`终端已退出（code=${event.code ?? '-'}）`)
+    updateTerminalControls()
+  }
+}
+
+async function startIntegratedTerminal() {
+  openIntegratedTerminal({ focus: false })
+  if (!ensureTerminalEmulator() || terminalStarting || terminalCapabilities.pty !== true) return
+  terminalStarting = true
+  terminalWriteErrorShown = false
+  terminalEventBacklog.length = 0
+  updateTerminalControls()
+  try {
+    if (terminalSession?.running) await api.stopTerminal(terminalSession.id).catch(() => {})
+    terminalSession = null
+    terminalEmulator.reset()
+    terminalEmpty.classList.add('hidden')
+    fitIntegratedTerminal()
+    showTerminalStatus('正在启动终端…')
+    const result = await api.startTerminal({
+      shellId: terminalPreferences.shellId || undefined,
+      cols: terminalEmulator.cols,
+      rows: terminalEmulator.rows
+    })
+    terminalSession = { ...result, running: true }
+    showTerminalStatus(`${result.shellLabel} 已在当前工作区启动`)
+    updateTerminalControls()
+    for (const event of terminalEventBacklog.splice(0)) applyTerminalEvent(event, false)
+    requestAnimationFrame(() => terminalEmulator.focus())
+  } catch (error) {
+    terminalEmpty.classList.remove('hidden')
+    terminalEmpty.textContent = `终端启动失败：${error.message}`
+    showTerminalStatus(`终端启动失败：${error.message}`, true)
+  } finally {
+    terminalStarting = false
+    updateTerminalControls()
+  }
+}
+
+async function stopIntegratedTerminal() {
+  if (!terminalSession?.running) return
+  const current = terminalSession
+  try {
+    await api.stopTerminal(current.id)
+    if (terminalSession?.id === current.id) terminalSession = { ...current, running: false }
+    terminalEmulator?.writeln('\r\n[terminal stopped]')
+    showTerminalStatus('终端已停止')
+  } catch (error) {
+    showTerminalStatus(`停止失败：${error.message}`, true)
+  }
+  updateTerminalControls()
+}
+
+function interruptIntegratedTerminal() {
+  if (!terminalSession?.running) return
+  api.writeTerminal(terminalSession.id, '\x03').catch(error => showTerminalStatus(`中断失败：${error.message}`, true))
+  terminalEmulator?.focus()
+}
+
+async function hydrateIntegratedTerminal() {
+  try {
+    const [preferences, capabilities, terminals] = await Promise.all([
+      api.getTerminalPreferences(),
+      api.getTerminalCapabilities(),
+      api.listTerminals()
+    ])
+    terminalPreferences = { shellId: preferences?.shellId || null, workspace: preferences?.workspace || '' }
+    terminalCapabilities = capabilities || terminalCapabilities
+    const active = Array.isArray(terminals) ? terminals.find(item => item.running) : null
+    if (active) terminalSession = active
+    const selected = terminalSelectedShell()
+    showTerminalStatus(terminalCapabilities.pty
+      ? `${selected?.label || '默认 Shell'} 已就绪`
+      : 'PTY 后端不可用，请修复桌面组件', terminalCapabilities.pty !== true)
+    updateTerminalControls()
+    await publishTerminalSettingsState()
+  } catch (error) {
+    showTerminalStatus(`终端能力检查失败：${error.message}`, true)
+    terminalStartButton.disabled = true
+  }
+}
+
+function beginTerminalResize(event) {
+  if (event.button !== 0 && event.type !== 'keydown') return
+  if (event.type === 'keydown') {
+    if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return
+    event.preventDefault()
+    const current = terminalPanel.getBoundingClientRect().height
+    const next = Math.max(160, Math.min(window.innerHeight * .72, current + (event.key === 'ArrowUp' ? 24 : -24)))
+    document.documentElement.style.setProperty('--terminal-panel-height', `${Math.round(next)}px`)
+    fitIntegratedTerminal()
+    return
+  }
+  event.preventDefault()
+  const startY = event.clientY
+  const startHeight = terminalPanel.getBoundingClientRect().height
+  const onMove = moveEvent => {
+    const next = Math.max(160, Math.min(window.innerHeight * .72, startHeight - (moveEvent.clientY - startY)))
+    document.documentElement.style.setProperty('--terminal-panel-height', `${Math.round(next)}px`)
+    fitIntegratedTerminal()
+  }
+  const onUp = () => {
+    document.removeEventListener('pointermove', onMove)
+    document.removeEventListener('pointerup', onUp)
+  }
+  document.addEventListener('pointermove', onMove)
+  document.addEventListener('pointerup', onUp, { once: true })
+}
+
 function officialSettingsBootstrap() {
   if (window.__HARNESS_DESKTOP_UPDATE_INSTALLED__) return
   window.__HARNESS_DESKTOP_UPDATE_INSTALLED__ = true
@@ -1251,16 +1489,30 @@ function officialSettingsBootstrap() {
     #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"]::after { background:#fff; transform:translateX(18px); }
     #harness-desktop-mobile-sync-row .hd-mobile-switch:disabled { cursor:wait; opacity:.6; }
     #harness-desktop-git-row { box-sizing:border-box; margin-top:10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; color:var(--dsw-alias-label-primary); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
-    #harness-desktop-git-row .hd-git-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+    #harness-desktop-git-row .hd-git-compact { display:flex; align-items:center; justify-content:space-between; gap:18px; }
+    #harness-desktop-git-row .hd-git-copy { min-width:0; }
     #harness-desktop-git-row .hd-git-title { font-size:14px; line-height:22px; }
-    #harness-desktop-git-row .hd-git-summary, #harness-desktop-git-row .hd-git-note { margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
-    #harness-desktop-git-row .hd-git-actions { display:flex; flex:none; gap:8px; }
-    #harness-desktop-git-row button { box-sizing:border-box; min-height:34px; border:0; border-radius:8px; padding:6px 12px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); font:inherit; font-size:13px; cursor:pointer; }
+    #harness-desktop-git-row .hd-git-summary { overflow:hidden; margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
+    #harness-desktop-git-row button { box-sizing:border-box; min-height:34px; border:0; border-radius:17px; padding:6px 14px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); font:inherit; font-size:13px; cursor:pointer; }
     #harness-desktop-git-row button:hover { background:var(--dsw-alias-interactive-bg-hover); }
     #harness-desktop-git-row button:disabled { cursor:wait; opacity:.55; }
-    #harness-desktop-git-row .hd-git-lines { display:grid; gap:6px; margin-top:12px; }
+    #harness-desktop-git-row .hd-git-switch { position:relative; flex:none; width:42px; min-width:42px; height:24px; min-height:24px; border-radius:12px; padding:0; }
+    #harness-desktop-git-row .hd-git-switch::after { content:''; position:absolute; left:3px; top:3px; width:18px; height:18px; border-radius:50%; background:var(--dsw-alias-label-tertiary); transition:transform .16s ease,background .16s ease; }
+    #harness-desktop-git-row .hd-git-switch[aria-pressed="true"] { background:var(--dsw-alias-brand-primary,#315efb); }
+    #harness-desktop-git-row .hd-git-switch[aria-pressed="true"]::after { background:#fff; transform:translateX(18px); }
+    #harness-desktop-git-row .hd-git-details { margin-top:14px; border-top:1px solid var(--dsw-alias-border-l2); padding-top:14px; }
+    #harness-desktop-git-row .hd-git-details[hidden] { display:none; }
+    #harness-desktop-git-row .hd-git-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+    #harness-desktop-git-row .hd-git-lines { display:grid; gap:6px; }
     #harness-desktop-git-row .hd-git-line { display:flex; justify-content:space-between; gap:12px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
     #harness-desktop-git-row .hd-git-line strong { color:var(--dsw-alias-label-primary); font-weight:400; text-align:right; }
+    #harness-desktop-git-row .hd-git-note { margin-top:12px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
+    #harness-desktop-terminal-row { box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:24px; margin-top:24px; padding:8px 0; color:var(--dsw-alias-label-primary); }
+    #harness-desktop-terminal-row .hd-terminal-copy { min-width:0; }
+    #harness-desktop-terminal-row .hd-terminal-title { font-size:14px; line-height:22px; }
+    #harness-desktop-terminal-row .hd-terminal-status { overflow:hidden; margin-top:3px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
+    #harness-desktop-terminal-row select { box-sizing:border-box; flex:none; min-width:184px; min-height:34px; border:1px solid var(--dsw-alias-border-l2); border-radius:7px; padding:0 32px 0 10px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-layer-2); font:inherit; font-size:13px; cursor:pointer; }
+    #harness-desktop-terminal-row select:disabled { cursor:not-allowed; opacity:.55; }
   `
   document.head.appendChild(style)
 
@@ -1418,17 +1670,28 @@ function officialSettingsBootstrap() {
     const row = document.createElement('div')
     row.id = 'harness-desktop-git-row'
     row.innerHTML = `
-      <div class="hd-git-head">
-        <div><div class="hd-git-title">Git 与仓库连接</div><div class="hd-git-summary" data-hd-git-summary>正在检查 Git 组件…</div></div>
+      <div class="hd-git-compact">
+        <div class="hd-git-copy"><div class="hd-git-title">Git 与仓库连接</div><div class="hd-git-summary" data-hd-git-summary>正在检查 Git 组件…</div></div>
+        <button class="hd-git-switch" type="button" role="switch" aria-pressed="false" aria-expanded="false" aria-controls="harness-desktop-git-details" aria-label="显示 Git 详情" title="显示 Git 详情" data-hd-git-toggle><span hidden>显示详情</span></button>
+      </div>
+      <div id="harness-desktop-git-details" class="hd-git-details" data-hd-git-details hidden>
+        <div class="hd-git-lines">
+          <div class="hd-git-line"><span>Git</span><strong data-hd-git-version>正在检查…</strong></div>
+          <div class="hd-git-line"><span>HTTPS 凭据</span><strong data-hd-gcm-status>正在检查…</strong></div>
+          <div class="hd-git-line"><span>GitHub / CNB SSH</span><strong data-hd-ssh-status>正在检查…</strong></div>
+        </div>
+        <div class="hd-git-note">首次 GitHub 授权会由 GCM 拉起默认浏览器，并通过短期本机回调完成登录；之后由 Windows Credential Manager 复用。授权页与凭据均由 GitHub 和 GCM 处理，Harness 不读取或显示密码、Token、Cookie、验证码或 SSH 私钥。CNB 可使用 Windows ssh-agent。</div>
         <div class="hd-git-actions"><button type="button" data-hd-git-refresh>刷新状态</button><button type="button" data-hd-git-auth>连接 GitHub</button></div>
       </div>
-      <div class="hd-git-lines">
-        <div class="hd-git-line"><span>Git</span><strong data-hd-git-version>正在检查…</strong></div>
-        <div class="hd-git-line"><span>HTTPS 凭据</span><strong data-hd-gcm-status>正在检查…</strong></div>
-        <div class="hd-git-line"><span>GitHub / CNB SSH</span><strong data-hd-ssh-status>正在检查…</strong></div>
-      </div>
-      <div class="hd-git-note">首次 GitHub 授权会由 GCM 拉起默认浏览器，并通过短期本机回调完成登录；之后由 Windows Credential Manager 复用。授权页与凭据均由 GitHub 和 GCM 处理，Harness 不读取或显示密码、Token、Cookie、验证码或 SSH 私钥。CNB 可使用 Windows ssh-agent。</div>
     `
+    row.querySelector('[data-hd-git-toggle]').addEventListener('click', event => {
+      const expanded = event.currentTarget.getAttribute('aria-pressed') !== 'true'
+      event.currentTarget.setAttribute('aria-pressed', String(expanded))
+      event.currentTarget.setAttribute('aria-expanded', String(expanded))
+      event.currentTarget.setAttribute('aria-label', expanded ? '收起 Git 详情' : '显示 Git 详情')
+      event.currentTarget.title = expanded ? '收起 Git 详情' : '显示 Git 详情'
+      row.querySelector('[data-hd-git-details]').hidden = !expanded
+    })
     row.querySelector('[data-hd-git-refresh]').addEventListener('click', () => request('refresh-git-runtime'))
     row.querySelector('[data-hd-git-auth]').addEventListener('click', () => {
       const state = window.__HARNESS_DESKTOP_GIT_STATE__ || {}
@@ -1436,6 +1699,56 @@ function officialSettingsBootstrap() {
     })
     section.appendChild(row)
     paintGit()
+  }
+
+  const paintTerminal = () => {
+    const state = window.__HARNESS_DESKTOP_TERMINAL_STATE__ || {}
+    const row = document.querySelector('#harness-desktop-terminal-row')
+    if (!row) return
+    const preferences = state.preferences || {}
+    const capabilities = state.capabilities || {}
+    const shells = Array.isArray(capabilities.shells) ? capabilities.shells : []
+    const select = row.querySelector('[data-hd-terminal-shell]')
+    const signature = shells.map(shell => `${shell.id}:${shell.label}:${shell.available ? 1 : 0}`).join('|')
+    if (select.dataset.signature !== signature) {
+      select.dataset.signature = signature
+      select.replaceChildren(...shells.map(shell => {
+        const option = document.createElement('option')
+        option.value = shell.id
+        option.textContent = `${shell.label}${shell.available ? '' : '（不可用）'}`
+        option.disabled = !shell.available
+        return option
+      }))
+    }
+    const selectedId = preferences.shellId || capabilities.defaultShellId || shells.find(shell => shell.available)?.id || ''
+    if (select.value !== selectedId) select.value = selectedId
+    select.disabled = capabilities.pty !== true || !shells.some(shell => shell.available)
+    const status = capabilities.pty !== true
+      ? '集成终端不可用，请重启 Harness Desktop 后重试。'
+      : '选择要在集成终端中打开的 Shell。'
+    setText(row.querySelector('[data-hd-terminal-status]'), status)
+  }
+
+  const mountTerminal = section => {
+    if (!section || section.querySelector('#harness-desktop-terminal-row')) {
+      paintTerminal()
+      return
+    }
+    const row = document.createElement('div')
+    row.id = 'harness-desktop-terminal-row'
+    row.innerHTML = `
+      <div class="hd-terminal-copy">
+        <div class="hd-terminal-title">集成终端 Shell</div>
+        <div class="hd-terminal-status" data-hd-terminal-status>正在检查本机 Shell…</div>
+      </div>
+      <select data-hd-terminal-shell aria-label="集成终端 Shell" disabled></select>
+    `
+    row.querySelector('[data-hd-terminal-shell]').addEventListener('change', event => {
+      event.currentTarget.disabled = true
+      request('terminal-shell', { shellId: event.currentTarget.value })
+    })
+    section.appendChild(row)
+    paintTerminal()
   }
 
   const paintMobile = () => {
@@ -1521,6 +1834,7 @@ function officialSettingsBootstrap() {
     if (general.getAttribute('aria-current') !== 'true') return
     const slot = dialog.querySelector('[data-slot="settings.general.item"]')
     const section = slot?.parentElement || options?.firstElementChild || options
+    mountTerminal(section)
     mountGit(section)
     mountMobile(section)
     if (!section || section.querySelector('#harness-desktop-update-row')) {
@@ -1578,8 +1892,13 @@ function officialSettingsBootstrap() {
   window.__HARNESS_DESKTOP_RENDER_UPDATES__ = () => {
     mount()
     paint()
+    paintTerminal()
     paintGit()
     paintMobile()
+  }
+  window.__HARNESS_DESKTOP_RENDER_TERMINAL__ = () => {
+    mount()
+    paintTerminal()
   }
   window.__HARNESS_DESKTOP_RENDER_GIT__ = () => {
     mount()
@@ -1850,6 +2169,12 @@ async function publishGitRuntimeState() {
   await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_GIT_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_GIT__?.();`, true).catch(() => {})
 }
 
+async function publishTerminalSettingsState() {
+  if (!runtimeView.getURL()) return
+  const serialized = JSON.stringify({ preferences: terminalPreferences, capabilities: terminalCapabilities }).replaceAll('<', '\\u003c')
+  await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_TERMINAL_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_TERMINAL__?.();`, true).catch(() => {})
+}
+
 async function refreshGitRuntimeStatus() {
   gitRuntimeState = { ...gitRuntimeState, loading: true, message: '' }
   await publishGitRuntimeState()
@@ -1929,6 +2254,7 @@ runtimeView.addEventListener('dom-ready', async () => {
   await modelRoutingIntegration.install(runtimeView).catch(() => {})
   await workspaceLinksIntegration.install(runtimeView).catch(() => {})
   await publishUpdateState()
+  await publishTerminalSettingsState()
   await publishGitRuntimeState()
   await publishMobileSyncState()
   await publishAppearanceState()
@@ -1951,6 +2277,16 @@ runtimeView.addEventListener('will-navigate', event => {
     api.setUpdatePreferences({ checkOnStartup: enabled }).then(preferences => {
       updateState = { ...updateState, preferences }
       publishUpdateState()
+    })
+  } else if (target.hostname === 'terminal-shell') {
+    const shellId = target.searchParams.get('shellId') || ''
+    api.setTerminalPreferences({ shellId }).then(preferences => {
+      terminalPreferences = { ...terminalPreferences, ...preferences }
+      updateTerminalControls()
+      publishTerminalSettingsState()
+    }).catch(error => {
+      showTerminalStatus(`Shell 设置失败：${error.message}`, true)
+      publishTerminalSettingsState()
     })
   } else if (target.hostname === 'preview-updates-toggle') {
     const enabled = target.searchParams.get('enabled') !== '0'
@@ -2507,6 +2843,26 @@ modelRoutingSave.addEventListener('click', async () => {
   renderModelRoutingPage()
 })
 
+terminalCloseButton.addEventListener('click', closeIntegratedTerminal)
+terminalStartButton.addEventListener('click', () => startIntegratedTerminal())
+terminalInterruptButton.addEventListener('click', interruptIntegratedTerminal)
+terminalStopButton.addEventListener('click', () => stopIntegratedTerminal())
+terminalClearButton.addEventListener('click', () => {
+  terminalEmulator?.clear()
+  terminalEmulator?.focus()
+})
+terminalResizeHandle.addEventListener('pointerdown', beginTerminalResize)
+terminalResizeHandle.addEventListener('keydown', beginTerminalResize)
+window.addEventListener('resize', fitIntegratedTerminal)
+document.addEventListener('keydown', event => {
+  if (event.ctrlKey && !event.altKey && !event.metaKey && event.key === '`') {
+    event.preventDefault()
+    toggleIntegratedTerminal()
+  }
+})
+api.onTerminalEvent(event => applyTerminalEvent(event))
+api.onTerminalToggle(() => toggleIntegratedTerminal())
+
 api.onRuntimeState(renderRuntimeState)
 api.onMobileSyncState(state => {
   renderMobileSync(state)
@@ -2548,6 +2904,7 @@ async function startOfficialWorkspace() {
   modelRoutingState = { ...routing, meters: { ...meters, loading: false, error: '' }, saving: false, saved: false, error: '' }
   gitRuntimeState = { ...gitRuntimeState, ...gitStatus, loading: false }
   mobileSyncState = await api.getMobileSyncState()
+  await hydrateIntegratedTerminal()
   const themeAssets = await api.getThemeAssets()
   themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)
     .filter(theme => distributionState.nonCommercialContentAvailable || !theme.nonCommercial)

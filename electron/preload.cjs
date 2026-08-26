@@ -50,6 +50,14 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   getModelRouting: () => ipcRenderer.invoke('models:routing:get'),
   saveModelRouting: routing => ipcRenderer.invoke('models:routing:save', routing),
   getProviderMeters: force => ipcRenderer.invoke('models:meters:get', Boolean(force)),
+  getTerminalPreferences: () => ipcRenderer.invoke('terminal:preferences'),
+  setTerminalPreferences: patch => ipcRenderer.invoke('terminal:setPreferences', patch || {}),
+  startTerminal: options => ipcRenderer.invoke('terminal:start', options || {}),
+  writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
+  resizeTerminal: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
+  stopTerminal: id => ipcRenderer.invoke('terminal:stop', id),
+  listTerminals: () => ipcRenderer.invoke('terminal:list'),
+  getTerminalCapabilities: () => ipcRenderer.invoke('terminal:capabilities'),
   scanStorage: () => ipcRenderer.invoke('storage:scan'),
   previewStorageCleanup: options => ipcRenderer.invoke('storage:cleanupPreview', options || {}),
   applyStorageCleanup: request => ipcRenderer.invoke('storage:cleanupApply', request || {}),
@@ -132,5 +140,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   onUpdateResult: listener => subscribe('updates:result', listener),
   onUpdateInstallProgress: listener => subscribe('updates:install-progress', listener),
   onComponentUpdateProgress: listener => subscribe('componentUpdates:progress', listener),
-  onPrPreviewUpdateProgress: listener => subscribe('prPreviewUpdates:progress', listener)
+  onPrPreviewUpdateProgress: listener => subscribe('prPreviewUpdates:progress', listener),
+  onTerminalEvent: listener => subscribe('terminal:event', listener),
+  onTerminalToggle: listener => subscribe('terminal:toggle', listener)
 })

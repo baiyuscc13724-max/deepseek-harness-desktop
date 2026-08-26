@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
+const { mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const { readFileSync } = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -16,6 +16,10 @@ const ACTIONS = [
   'console', 'network', 'inspect', 'extract', 'download', 'upload', 'dialog', 'stop'
 ]
 const FORBIDDEN = ['Cookie', 'password', 'token', 'OTP', 'banking', 'payment']
+const EXPECTED_SKILLS = [
+  'deep-research', 'default-templates', 'documents', 'imagegen', 'openai-docs', 'pdf',
+  'plugin-management', 'presentations', 'sites', 'spreadsheets', 'template-creator', 'visualize'
+]
 
 async function loadPluginTool(services = {}) {
   const mod = await import(pathToFileURL(path.join(bundledRoot, 'lib', 'index.js')).href)
@@ -57,14 +61,46 @@ test('desktop browser tools installs into the DSH Web profile idempotently', asy
   try {
     const first = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
     const second = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
-    assert.equal(first.version, '1.0.46')
+    assert.equal(first.version, '1.0.47')
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
+    assert.equal(first.imageBridge.version, '1.0.47')
+    assert.equal(first.imageBridge.patchChanged, true)
+    assert.equal(second.imageBridge.patchChanged, false)
     assert.match(readFileSync(path.join(first.destination, 'lib', 'index.js'), 'utf8'), /browser_control/)
+    assert.match(readFileSync(path.join(first.imageBridge.destination, 'src', 'index.js'), 'utf8'), /image_gen/)
+    assert.deepEqual(first.skills.installed.map(item => item.name), EXPECTED_SKILLS)
+    assert.deepEqual(second.skills.installed.map(item => item.name), EXPECTED_SKILLS)
+    assert.deepEqual(first.skills.skipped, [])
+    const marker = JSON.parse(await readFile(path.join(root, 'skills', 'imagegen', '.harness-desktop-managed.json'), 'utf8'))
+    assert.equal(marker.owner, 'dsh-desktop-browser-tools')
+    assert.equal(marker.skill, 'imagegen')
+    assert.equal(marker.version, '1.0.47')
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-desktop-browser-tools/g) || []).length, 1)
     assert.match(patch, /id: desktop-browser-tools/u)
     assert.match(patch, /name: dsh-desktop-browser-tools/u)
+    assert.equal((patch.match(/dsh-codex-image-bridge/g) || []).length, 1)
+    assert.match(patch, /id: codex-image-bridge/u)
+    assert.match(patch, /enabled: false/u)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('desktop browser tools preserves unmarked user-owned skill collisions', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'desktop-browser-tools-skill-owner-'))
+  const userSkill = path.join(root, 'skills', 'sites')
+  try {
+    await mkdir(userSkill, { recursive: true })
+    await writeFile(path.join(userSkill, 'SKILL.md'), '---\nname: sites\ndescription: User-owned Sites skill.\n---\n\nKeep me.\n')
+    const result = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
+    assert.equal(result.skills.skipped.length, 1)
+    assert.equal(result.skills.skipped[0].name, 'sites')
+    assert.equal(result.skills.skipped[0].reason, 'user-owned-skill-preserved')
+    assert.match(await readFile(path.join(userSkill, 'SKILL.md'), 'utf8'), /Keep me/u)
+    await assert.rejects(readFile(path.join(userSkill, '.harness-desktop-managed.json'), 'utf8'), { code: 'ENOENT' })
+    assert.deepEqual(result.skills.installed.map(item => item.name), EXPECTED_SKILLS.filter(name => name !== 'sites'))
   } finally {
     await rm(root, { recursive: true, force: true })
   }

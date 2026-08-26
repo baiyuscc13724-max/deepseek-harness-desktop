@@ -81,7 +81,8 @@ test('Windows guest header reserves the native controls and desktop quick tools'
 
   assert.match(guestPreload, /function installWindowsTitlebarSafeArea\(\)/)
   assert.match(guestPreload, /process\.platform !== 'win32'/)
-  assert.match(guestPreload, /header:has\(\.nL4_yW_sessionLogButton\)\{padding-right:260px!important\}/)
+  assert.match(guestPreload, /header:has\(button\[class\*="_sessionLogButton"\]\)\{padding-right:260px!important\}/)
+  assert.doesNotMatch(guestPreload, /\.[\w-]+_sessionLogButton/u, 'safe-area selector must not pin any official Web build hash')
   assert.match(guestPreload, /installWindowsTitlebarSafeArea\(\)/)
 })
 

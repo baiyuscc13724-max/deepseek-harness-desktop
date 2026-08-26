@@ -6,7 +6,6 @@ const vm = require('node:vm')
 
 const main = readFileSync(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 const guestPreload = readFileSync(path.resolve(__dirname, '..', 'electron', 'guest-preload.cjs'), 'utf8')
-const browserOpenIntent = require('../electron/bridge/browser-open-intent.cjs')
 
 function sourceBlock(source, start, end) {
   const from = source.indexOf(start)
@@ -35,9 +34,8 @@ function loadGuestLifecycleApi(currentStatePromise) {
   }
   vm.runInNewContext(guestPreload, {
     require: id => {
-      if (id === 'electron') return { contextBridge, ipcRenderer }
-      if (id === './bridge/browser-open-intent.cjs') return browserOpenIntent
-      assert.fail(`unexpected guest preload dependency: ${id}`)
+      assert.equal(id, 'electron', 'sandboxed guest preload must not require local modules')
+      return { contextBridge, ipcRenderer }
     },
     window: { addEventListener: () => {} },
     process: { platform: 'win32' },

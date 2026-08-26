@@ -54,9 +54,19 @@ Copyright (c) 2026 bradeGithub
 
 The marketplace lists and can execute installation code from independent third-party repositories. Those repositories retain their own licenses and are not endorsed by Harness Desktop, DeepSeek, or the marketplace author. Users must review and trust a plugin before installing it.
 
-## node-pty
+## OpenAI agent skills
 
-`node-pty` is licensed under the MIT License. Harness Desktop does not implement a separate native terminal, but the bundled official DeepSeek Harness dependency graph uses `node-pty` for its own local subprocess support. Its native binary is rebuilt for Electron and unpacked from ASAR.
+Harness Desktop adapts the `imagegen` and `openai-docs` agent skills from `openai/skills` commit `49f948faa9258a0c61caceaf225e179651397431` under the Apache License 2.0.
+
+Source: https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.system
+
+The Harness versions are modified to use native Harness tools and security boundaries instead of Codex-specific services. Each redistributed skill retains its complete `LICENSE.txt` and a prominent modification notice. Browser, Computer Use, Visualize, templates, research, plugin-management, office-artifact, and Sites compatibility skills are independent clean-room Harness implementations and do not incorporate OpenAI proprietary plugin payloads or service connectors.
+
+## Integrated terminal dependencies
+
+- `node-pty` is licensed under the MIT License. Harness Desktop uses it to provide the local integrated terminal PTY backend. Its native binary is rebuilt for Electron and unpacked from ASAR.
+- `@xterm/xterm` is licensed under the MIT License and renders the integrated terminal in the desktop shell.
+- `@xterm/addon-fit` is licensed under the MIT License and keeps the terminal grid synchronized with the desktop panel size.
 
 ## dashi-taskboard
 

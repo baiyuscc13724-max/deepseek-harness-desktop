@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.47
+
+- 新增桌面集成终端：只允许人工桌面壳使用固定 PowerShell、CMD、Git Bash、WSL 或系统默认 shell，限制终端数与输入大小，不向模型工具暴露任意 Shell/脚本入口。
+- 补齐 Codex 风格的 `@` 文件引用与 `$` Skill 触发语法，随包提供受管 Skills；新增默认关闭、固定可执行文件/参数/输出目录且强校验图片魔数、尺寸和附件落盘的 Codex image bridge。
+- Computer Use 与右栏浏览器共用可信宿主授权，增加持续可见的蓝色控制指示与全局 Esc 停止；浏览器仍禁止密码、账户、验证码、支付和银行敏感输入。
+- 加固 Agent Teams 的 Stop/Resume 生命周期、暂停 epoch、失败成员、Bootstrap、任务认领、SSE/UI 投影和 closing 恢复，显式 Stop 后不会由排队旧事件或后台协作隐式复活团队。
+- 完成 Android 移动工作台重构、照片与输入体验、扫码配对后的受控工作区选择，以及移动端与桌面端二维码路由统一；iPhone/iPad 继续使用已验证的 Safari/添加到主屏幕路径。
+- 修复 Electron sandbox 中 guest preload 依赖相对模块导致原生工作区选择器不可用的问题；preload 仅加载 Electron，并由回归测试和真实 sandbox 启动探针验证。
+- 修复 PR Preview 配置初始化误用状态存储 API 导致入口错误禁用的问题，并整合受保护 Preview 更新、浏览器 PR 改动、终端、Skills、移动端与代理团队改进。
+- 桌面、14 个随包插件、Android 与 iOS/iPadOS 源码统一到 1.0.47；Android `versionCode` 使用单调编码 1004700，完整发布 APK 与桌面资产共用不可变 `v1.0.47` Release。现有 `v1.0.46`、其 18 项资产/稳定 feed/组件以及 `android-v1.0.46.1` 全部保持不可变。
+
 ## 1.0.46
 
 - 新增受保护的官方同仓库 PR Preview 更新通道：无密钥 PR 构建、默认分支独立 Ed25519 签名、不可变候选、本机真实组件更新/重启/退出恢复/失败回滚证据，以及 Required Reviewer 后置 promotion 完全分离；签名阶段不会提前修改 `latest`。

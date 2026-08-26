@@ -4,9 +4,9 @@ Android and iOS/iPadOS releases are checked independently from Harness Desktop a
 
 ## Independent mobile release gate
 
-- `mobile/android/app/version.properties` binds every Android build to the current three-part Desktop integration version. Android may add one numeric revision component (for example `1.0.46.1`) for a standalone signed hotfix; its monotonic `versionCode` is derived and validated independently.
-- iOS/iPadOS keeps the Apple-compatible three-part integration version and remains simulator-validated. The update manifest carries explicit per-platform versions, so an Android-only revision never claims an installable iOS build.
-- A standalone Android release uses its own immutable `android-v<version>` tag and exactly one signed APK plus its checksum, with `make_latest=false` so the Desktop `releases/latest` identity remains unchanged. The dedicated workflow must verify the long-lived release certificate fingerprint; a debug or unsigned APK never qualifies. The user has chosen not to join Apple Developer Program, so no IPA is claimed.
+- `mobile/android/app/version.properties` binds every Android build to the current three-part Desktop integration version. Android may add one numeric revision component (for example `1.0.46.1`) for a standalone signed hotfix; the shared monotonic encoder keeps both full and standalone `versionCode` values upgrade-safe.
+- A three-part full product release keeps Android, Desktop and iOS/iPadOS on one visible version and publishes the APK/checksum inside the immutable `v<version>` release. iOS/iPadOS keeps an Apple-compatible build code and remains simulator-validated.
+- Only a four-part standalone Android revision uses its own immutable `android-v<version>` tag and exactly one signed APK plus its checksum, with `make_latest=false` so the Desktop `releases/latest` identity remains unchanged. The dedicated workflow must verify the long-lived release certificate fingerprint; a debug or unsigned APK never qualifies. The user has chosen not to join Apple Developer Program, so no IPA is claimed.
 
 ## Desktop QR routing without an Apple membership
 

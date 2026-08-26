@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>幻灯片 · <!-- 主题 --></title>
+<style>
+  html, body { margin:0; height:100%; font-family:system-ui, "Microsoft YaHei", sans-serif; background:#0f172a; }
+  .deck { width:100vw; height:100vh; overflow:hidden; position:relative; }
+  .slide { display:none; width:100%; height:100%; padding:4rem; box-sizing:border-box; background:#fff; flex-direction:column; justify-content:center; }
+  .slide.active { display:flex; }
+  .slide h1 { font-size:2.6rem; margin:.2em 0; }
+  .slide li { font-size:1.3rem; margin:.4em 0; }
+  .controls { position:fixed; right:1rem; bottom:1rem; color:#94a3b8; font-size:.9rem; }
+</style>
+</head>
+<body>
+<div class="deck">
+  <!-- 按需增删 .slide 块 -->
+  <section class="slide active"><h1>标题页</h1><p>副标题 / 作者 / 日期</p></section>
+  <section class="slide"><h1>要点页</h1><ul><li>要点一</li><li>要点二</li></ul></section>
+  <section class="slide"><h1>数据页</h1><table><!-- 数据表 --></table></section>
+  <section class="slide"><h1>结语页</h1><p>行动号召</p></section>
+</div>
+<div class="controls" id="ctrl">← → 翻页</div>
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  let i = 0;
+  function show(n) {
+    i = (n + slides.length) % slides.length;
+    slides.forEach((s, k) => s.classList.toggle('active', k === i));
+  }
+  addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ') show(i + 1);
+    if (e.key === 'ArrowLeft') show(i - 1);
+  });
+</script>
+</body>
+</html>

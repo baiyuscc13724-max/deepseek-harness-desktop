@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, safeStorage, screen, session, shell, Tray, WebContentsView } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, safeStorage, screen, session, shell, Tray, WebContentsView } = require('electron')
 const { spawn, execFile } = require('node:child_process')
 const { createHash, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
@@ -32,6 +32,7 @@ const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-p
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
 const { ComputerUseConfirmationStore } = require('./bridge/computer-use-confirmation-store.cjs')
 const { ComputerUseAppPolicy } = require('./bridge/computer-use-app-policy.cjs')
+const { ComputerUseIndicatorController } = require('./bridge/computer-use-indicator.cjs')
 const { WindowsComputerUse } = require('./bridge/windows-computer-use.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { createGitRuntimeService } = require('./bridge/git-runtime-service.cjs')
@@ -54,6 +55,7 @@ const { resolvePrPreviewUpdateConfig } = require('./bridge/pr-preview-update-con
 const { PrPreviewUpdateService } = require('./bridge/pr-preview-update-service.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
+const { TerminalManager } = require('./bridge/terminal-service.cjs')
 const { loadRightWorkspaceResource, previewLocalDocument } = require('./bridge/right-workspace-service.cjs')
 const { MemoryService, createMemoryPack } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
@@ -124,6 +126,7 @@ let lastComponentUpdateCheck = null
 let prPreviewUpdateContextPromise = null
 let lastPrPreviewCandidate = null
 let storageManagementService = null
+let terminalManager = null
 let gitRuntimeService = null
 let gitPreparationPromise = null
 const CACHE_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -157,6 +160,7 @@ let computerUseAuthorizationRequest = null // { id, requestedAt, requestedBy }
 let computerUseSessionGeneration = 0
 let computerUseScreenshotStore = null
 let computerUseAppPolicy = null
+let computerUseIndicator = null
 let windowsComputerUse = null
 let computerUseCurrentTarget = null
 let computerUseHarnessSurface = null
@@ -195,6 +199,17 @@ function setRuntimeState(next) {
 function ensureStateStore() {
   if (!appStateStore) appStateStore = new AppStateStore(path.join(app.getPath('userData'), 'app-state.json'))
   return appStateStore
+}
+
+function ensureTerminalManager() {
+  if (!terminalManager) {
+    terminalManager = new TerminalManager({
+      resourcesPath: process.resourcesPath,
+      appRoot: path.resolve(__dirname, '..'),
+      onEvent: payload => send('terminal:event', payload)
+    })
+  }
+  return terminalManager
 }
 
 function ensureGitRuntimeService() {
@@ -334,6 +349,16 @@ function sharedComputerUseControlState() {
       ? { id: computerUseAuthorizationRequest.id, requestedAt: computerUseAuthorizationRequest.requestedAt, requestedBy: computerUseAuthorizationRequest.requestedBy }
       : null
   }
+}
+
+function ensureComputerUseIndicator() {
+  if (!computerUseIndicator) {
+    computerUseIndicator = new ComputerUseIndicatorController({
+      globalShortcut,
+      onStop: () => setComputerUseEnabled(false)
+    })
+  }
+  return computerUseIndicator
 }
 
 function syncBrowserControlWithComputerUse() {
@@ -678,6 +703,7 @@ function ensureBrowserSession() {
   activeBrowserTabId = tabId
   const browserTab = { id: tabId, view: browserView, createdAt: Date.now(), available: true, dialogControl: false, fileChooserControl: false, fileChooserGeneration: 0, navigationGeneration: 0, navigationLane: new BrowserNavigationLane() }
   browserTabs.set(tabId, browserTab)
+  ensureComputerUseIndicator().track(contents, { mode: 'surface' })
   try {
     contents.debugger.attach('1.3')
     contents.debugger.sendCommand('Page.enable')
@@ -2118,6 +2144,7 @@ async function setComputerUseEnabled(enabled) {
   if (next && computerUseScreenLocked) throw Object.assign(new Error('计算机锁定或挂起期间不能开启 Computer Use。'), { code: 'computer-use-locked' })
   if (next === computerUseEnabled) {
     syncBrowserControlWithComputerUse()
+    await ensureComputerUseIndicator().setActive(sharedComputerUseControlState().active)
     if (mainWindow && !mainWindow.isDestroyed()) await publishBrowserState().catch(() => {})
     return computerUseState()
   }
@@ -2132,6 +2159,7 @@ async function setComputerUseEnabled(enabled) {
     await clearComputerUseScreenshots()
   }
   syncBrowserControlWithComputerUse()
+  await ensureComputerUseIndicator().setActive(sharedComputerUseControlState().active)
   const state = computerUseState()
   send('computerUse:authorization', state)
   if (mainWindow && !mainWindow.isDestroyed()) await publishBrowserState().catch(() => {})
@@ -2202,8 +2230,9 @@ async function revalidateComputerUseTarget(target) {
 }
 
 async function captureHarnessComputerUseScreenshot() {
-  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) throw new Error('Harness Desktop 主窗口当前不可见。')
-  const image = await mainWindow.capturePage()
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) throw Object.assign(new Error('Harness Desktop 主窗口已关闭。'), { code: 'target-unavailable' })
+  const image = await mainWindow.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })
+  if (image.isEmpty()) throw Object.assign(new Error('Harness Desktop 后台画面暂不可用。'), { code: 'screenshot-unavailable' })
   const size = image.getSize()
   const scaled = size.width > 1280 ? image.resize({ width: 1280, quality: 'good' }) : image
   const displayed = scaled.getSize()
@@ -2327,7 +2356,7 @@ async function modelComputerUseAction(input = {}) {
       target.lastCaptureHash = null
     }
   } else {
-    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) throw new Error('Harness Desktop 主窗口当前不可见。')
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) throw Object.assign(new Error('Harness Desktop 主窗口已关闭。'), { code: 'target-unavailable' })
     if (action === 'click') {
       mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: sourceX, y: sourceY, button: 'left', clickCount: 1 })
       mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: sourceX, y: sourceY, button: 'left', clickCount: 1 })
@@ -2422,7 +2451,8 @@ function ensureMobileSyncService() {
     getAppearance: mobileAppearancePayload,
     setAppearance: updateMobileAppearance,
     getThemeScript: () => `${mobileBootstrapSource};(() => { fetch('/__harness_mobile__/appearance', { credentials: 'same-origin' }).then(response => { if (!response.ok) throw new Error('appearance ' + response.status); return response.json(); }).then(payload => { window.__HARNESS_DESKTOP_THEME_STATE__ = payload.state; window.__HARNESS_DESKTOP_THEMES__ = payload.catalog; window.__HARNESS_DESKTOP_RENDER_THEMES__?.(); window.__harnessMobileThemeBridgeLoading = false; }).catch(error => { window.__harnessMobileThemeBridgeLoading = false; console.warn('Unable to load mobile appearance:', error); }); })();`,
-    readThemeAsset: readMobileThemeAsset
+    readThemeAsset: readMobileThemeAsset,
+    chooseWorkspaceDirectory
   })
   mobileSyncService.on('state', state => send('mobileSync:state', state))
   return mobileSyncService
@@ -4280,6 +4310,15 @@ async function chooseWorkspaceDirectory() {
   }
 }
 
+function bindIntegratedTerminalShortcut(contents) {
+  contents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.isAutoRepeat || input.control !== true || input.alt || input.meta) return
+    if (input.code !== 'Backquote' && input.key !== '`') return
+    event.preventDefault()
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('terminal:toggle')
+  })
+}
+
 function secureGuest(guest) {
   guest.setWindowOpenHandler(details => {
     if (/^harness-desktop:\/\/open-local(?:[/?#]|$)/i.test(details.url || '')) openDesktopLocalTarget(details.url).catch(() => {})
@@ -4319,6 +4358,7 @@ function openDetachedSessionWindow(sessionId) {
     }
   })
   detachedSessionWindows.add(detached)
+  ensureComputerUseIndicator().track(detached.webContents)
   detached.webContents.setWindowOpenHandler(details => {
     openRoutedBrowserLink(details.url, { source: 'app', intent: browserIntentForLink(details.url), userChoice: 'default' }).catch(() => {})
     return { action: 'deny' }
@@ -4419,9 +4459,12 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      webviewTag: true
+      webviewTag: true,
+      backgroundThrottling: false
     }
   })
+  ensureComputerUseIndicator().track(mainWindow.webContents)
+  bindIntegratedTerminalShortcut(mainWindow.webContents)
   syncTitleBarOverlay()
 
   mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
@@ -4433,6 +4476,8 @@ function createWindow() {
   })
   mainWindow.webContents.on('did-attach-webview', (_event, guest) => {
     runtimeGuest = guest
+    ensureComputerUseIndicator().track(guest, { mode: 'surface' })
+    bindIntegratedTerminalShortcut(guest)
     guest.once('destroyed', () => { if (runtimeGuest === guest) runtimeGuest = null })
     secureGuest(guest)
   })
@@ -4565,6 +4610,27 @@ ipcMain.handle('settings:openDocument', desktopShellOnly(() => openHarnessSettin
 ipcMain.handle('models:routing:get', desktopShellOnly(() => getModelRouting(modelRoutingOptions())))
 ipcMain.handle('models:routing:save', desktopShellOnly(routing => saveModelRouting(modelRoutingOptions(), routing || {})))
 ipcMain.handle('models:meters:get', desktopShellOnly(force => getProviderMeters(Boolean(force))))
+ipcMain.handle('terminal:preferences', desktopShellOnly(() => ({
+  ...ensureStateStore().get().terminal,
+  workspace: desktopRuntimePaths().workspace
+})))
+ipcMain.handle('terminal:setPreferences', desktopShellOnly(patch => ({
+  ...ensureStateStore().updateTerminalPreferences(patch || {}).terminal,
+  workspace: desktopRuntimePaths().workspace
+})))
+ipcMain.handle('terminal:start', desktopShellOnly(options => {
+  const request = options && typeof options === 'object' ? { ...options } : {}
+  if (!Object.prototype.hasOwnProperty.call(request, 'shellId') || !request.shellId) {
+    request.shellId = ensureStateStore().get().terminal.shellId
+  }
+  if (!Object.prototype.hasOwnProperty.call(request, 'cwd') || !request.cwd) request.cwd = desktopRuntimePaths().workspace
+  return ensureTerminalManager().start(request)
+}))
+ipcMain.handle('terminal:write', desktopShellOnly((id, data) => ensureTerminalManager().write(id, data)))
+ipcMain.handle('terminal:resize', desktopShellOnly((id, cols, rows) => ensureTerminalManager().resize(id, cols, rows)))
+ipcMain.handle('terminal:stop', desktopShellOnly(id => ensureTerminalManager().stop(id)))
+ipcMain.handle('terminal:list', desktopShellOnly(() => ensureTerminalManager().list()))
+ipcMain.handle('terminal:capabilities', desktopShellOnly(() => ensureTerminalManager().capabilities()))
 ipcMain.handle('storage:scan', event => {
   assertDesktopShellSender(event)
   return ensureStorageManagementService().scan()
@@ -5006,10 +5072,13 @@ app.on('before-quit', event => {
   desktopTray?.destroy()
   desktopTray = null
   mobileSyncService?.stop({ persist: false }).catch(() => {})
+  terminalManager?.closeAll()
   storageManagementService?.stop()
   memoryService?.close()
   browserSecurityPolicy?.stop()
   browserControlServer?.stop().catch(() => {})
+  computerUseIndicator?.dispose()
+  computerUseIndicator = null
   computerUseEnabled = false
   computerUseCurrentTarget = null
   computerUseHarnessSurface = null

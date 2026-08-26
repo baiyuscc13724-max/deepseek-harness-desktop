@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.46",
+  "version": "1.0.47",
   "private": false,
   "description": "Open-source Windows and macOS desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, mobile pairing, packaged self-test, and release gates.",
   "author": {
@@ -61,6 +61,8 @@
     "@deepseek-ai/dsh-workflow": "0.1.1-rc.2",
     "@earendil-works/pi-ai": "0.82.1",
     "@peculiar/x509": "2.0.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "adm-zip": "^0.6.0",
     "cross-spawn": "7.0.6",
     "dsh-plugin-marketplace": "https://codeload.github.com/bradeGithub/DSH-Plugins-Marketplace/tar.gz/dfe32cb8620658b55441787725f7f03e0491d15e",
@@ -89,6 +91,7 @@
       "plugins/dsh-mobile-control/**/*",
       "plugins/dsh-desktop-directory-picker/**/*",
       "plugins/dsh-desktop-browser-tools/**/*",
+      "plugins/dsh-codex-image-bridge/**/*",
       "plugins/dsh-desktop-memory-tools/**/*",
       "plugins/dsh-desktop-mcp-manager/**/*",
       "plugins/dsh-desktop-schedules/**/*",
@@ -201,6 +204,7 @@
       "plugins/dsh-mobile-control/**/*",
       "plugins/dsh-desktop-directory-picker/**/*",
       "plugins/dsh-desktop-browser-tools/**/*",
+      "plugins/dsh-codex-image-bridge/**/*",
       "plugins/dsh-desktop-memory-tools/**/*",
       "plugins/dsh-desktop-mcp-manager/**/*",
       "plugins/dsh-desktop-schedules/**/*",

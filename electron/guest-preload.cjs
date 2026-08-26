@@ -1,5 +1,43 @@
 const { contextBridge, ipcRenderer } = require('electron')
-const { normalizeBrowserOpenIntent } = require('./bridge/browser-open-intent.cjs')
+
+// Sandboxed Electron preload scripts can only require Electron's supported
+// built-ins. Keep this validator self-contained: a relative require aborts the
+// entire preload before harnessDesktopGuest (including the workspace picker)
+// can be exposed.
+const MAX_BROWSER_INTENT_URL_LENGTH = 2048
+function hasExactBrowserIntentKeys(value, expected) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const keys = Object.keys(value).sort()
+  const wanted = [...expected].sort()
+  return keys.length === wanted.length && keys.every((key, index) => key === wanted[index])
+}
+function safeBrowserIntentUrl(value) {
+  if (typeof value !== 'string' || !value || value.length > MAX_BROWSER_INTENT_URL_LENGTH || value.trim() !== value) return ''
+  let parsed
+  try { parsed = new URL(value) } catch { return '' }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+  if (parsed.username || parsed.password) return ''
+  const normalized = parsed.toString()
+  return normalized.length <= MAX_BROWSER_INTENT_URL_LENGTH ? normalized : ''
+}
+function normalizeBrowserOpenIntent(value) {
+  const action = typeof value?.action === 'string' ? value.action : ''
+  if (action === 'bridge-ready') {
+    if (!hasExactBrowserIntentKeys(value, ['action', 'version']) || value.version !== 1) return null
+    return Object.freeze({ action, version: 1 })
+  }
+  if (action === 'show-browser') {
+    if (!hasExactBrowserIntentKeys(value, ['action'])) return null
+    return Object.freeze({ action })
+  }
+  if (action === 'open-browser-url') {
+    if (!hasExactBrowserIntentKeys(value, ['action', 'url'])) return null
+    const url = safeBrowserIntentUrl(value.url)
+    return url ? Object.freeze({ action, url }) : null
+  }
+  return null
+}
+
 let activeDrag = null
 let pendingPoint = null
 let pendingFrame = 0
@@ -100,7 +138,10 @@ function installWindowsTitlebarSafeArea() {
   if (process.platform !== 'win32' || document.querySelector('style[data-hd-titlebar-safe-area]')) return
   const style = document.createElement('style')
   style.dataset.hdTitlebarSafeArea = 'true'
-  style.textContent = '@media (min-width:980px){header:has(.nL4_yW_sessionLogButton){padding-right:260px!important}}'
+  // CSS Modules keeps the local class suffix but changes the build hash between
+  // official Web releases. Match that stable suffix so the conversation header
+  // continues to clear the Windows caption buttons and Desktop quick tools.
+  style.textContent = '@media (min-width:980px){header:has(button[class*="_sessionLogButton"]){padding-right:260px!important}}'
   document.head.appendChild(style)
 }
 

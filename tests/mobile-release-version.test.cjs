@@ -17,15 +17,15 @@ test('Android revision versions remain monotonic across the next integration pat
   assert.equal(encodeAndroidVersionCode('1.0.47'), 1_004_700)
 })
 
-test('checked-in Android mobile version has an immutable standalone release identity', () => {
+test('checked-in Android mobile version has the unified 1.0.47 release identity', () => {
   const version = readAndroidMobileVersion(root)
   assert.deepEqual(version, {
-    integrationVersion: '1.0.46',
-    versionName: '1.0.46.1',
-    versionCode: 1_004_601,
-    tag: 'android-v1.0.46.1',
-    assetName: 'Harness-Mobile-1.0.46.1-android-universal.apk',
-    checksumName: 'Harness-Mobile-1.0.46.1-android-universal.apk.sha256'
+    integrationVersion: '1.0.47',
+    versionName: '1.0.47',
+    versionCode: 1_004_700,
+    tag: 'android-v1.0.47',
+    assetName: 'Harness-Mobile-1.0.47-android-universal.apk',
+    checksumName: 'Harness-Mobile-1.0.47-android-universal.apk.sha256'
   })
 })
 
@@ -35,7 +35,7 @@ test('Android mobile version properties reject drift and ambiguous input', () =>
   assert.throws(() => parseProperties('versionName=1.0.46\nversionName=1.0.47\n'), /duplicate/u)
 })
 
-test('Gradle keeps the standalone revision default while allowing the legacy desktop tag to pin its historical identity', () => {
+test('Gradle consumes the reviewed default while allowing the publisher to pin an immutable tag identity', () => {
   const build = fs.readFileSync(path.join(root, 'mobile/android/app/build.gradle.kts'), 'utf8')
   assert.match(build, /providers\.gradleProperty\("HARNESS_MOBILE_VERSION_NAME"\)/u)
   assert.match(build, /providers\.gradleProperty\("HARNESS_MOBILE_VERSION_CODE"\)/u)

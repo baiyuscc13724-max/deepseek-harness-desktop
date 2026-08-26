@@ -41,10 +41,12 @@ final class MobileUiAdapter {
           "if(button.getAttribute('aria-disabled')!==ariaDisabled)button.setAttribute('aria-disabled',ariaDisabled);" +
         "};" +
         "var mount=function(){" +
-          "if(typeof DataTransfer!=='function'||typeof ClipboardEvent!=='function')return;" +
+          "if(typeof DataTransfer!=='function')return;" +
           "var card=document.querySelector('[data-composer-card]');" +
           "if(!card)return;" +
           "if(document.getElementById('harness-mobile-photo-button'))return;" +
+          "var staleInput=document.getElementById('harness-mobile-photo-input');" +
+          "if(staleInput&&staleInput.parentElement)staleInput.parentElement.removeChild(staleInput);" +
           "var input=document.createElement('input');" +
           "input.type='file';" +
           "input.accept='image/*';" +
@@ -59,20 +61,26 @@ final class MobileUiAdapter {
           "button.setAttribute('data-harness-mobile-add-photo','true');" +
           "button.setAttribute('aria-label','添加照片或截图');" +
           "button.title='添加照片或截图';" +
-          "button.textContent='照片';" +
+          "button.innerHTML='<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M4 8.5h3l1.4-2h7.2l1.4 2h3v10H4z\"/><circle cx=\"12\" cy=\"13.5\" r=\"3.2\"/></svg>';" +
           "var intake=function(){" +
             "var files=Array.prototype.slice.call(input.files||[]);" +
             "input.value='';" +
             "if(!files.length)return;" +
-            "var card2=document.querySelector('[data-composer-card]');" +
-            "var textarea=card2?card2.querySelector('textarea[data-phase]'):null;" +
-            "var transfer=new DataTransfer();" +
-            "for(var i=0;i<files.length;i++)transfer.items.add(files[i]);" +
-            "if(textarea&&!textarea.disabled&&!textarea.readOnly){" +
-              "var paste=new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true});" +
-              "if(paste.clipboardData&&paste.clipboardData.items.length>0){textarea.dispatchEvent(paste);return;}" +
-            "}" +
-            "document.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));" +
+            "try{" +
+              "var card2=document.querySelector('[data-composer-card]');" +
+              "var textarea=card2?card2.querySelector('textarea[data-phase]'):null;" +
+              "var transfer=new DataTransfer();" +
+              "for(var i=0;i<files.length;i++)transfer.items.add(files[i]);" +
+              "if(textarea&&!textarea.disabled&&!textarea.readOnly&&typeof ClipboardEvent==='function'){" +
+                "try{" +
+                  "var paste=new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true});" +
+                  "if(paste.clipboardData&&paste.clipboardData.items.length>0){textarea.dispatchEvent(paste);return;}" +
+                "}catch(pasteError){}" +
+              "}" +
+              "if(typeof DragEvent==='function'){" +
+                "document.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));" +
+              "}" +
+            "}catch(error){console.warn('Harness Mobile image intake failed',error);}" +
           "};" +
           "button.addEventListener('click',function(){if(!button.disabled)input.click();});" +
           "input.addEventListener('change',intake);" +

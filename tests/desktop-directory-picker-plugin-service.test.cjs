@@ -11,7 +11,7 @@ test('desktop directory picker installs through the supported DSH Web profile pa
   const root = await mkdtemp(path.join(os.tmpdir(), 'desktop-directory-picker-'))
   try {
     const result = await ensureDesktopDirectoryPickerPlugin({ dshHome: root, bundledRoot })
-    assert.equal(result.version, '1.0.46')
+    assert.equal(result.version, '1.0.47')
     assert.equal(result.patchChanged, true)
     const profile = path.join(root, 'profiles', 'web')
     const patch = await readFile(path.join(profile, 'cordis.patch.yml'), 'utf8')
@@ -20,6 +20,8 @@ test('desktop directory picker installs through the supported DSH Web profile pa
     assert.match(patch, /name: dsh-desktop-directory-picker/u)
     assert.match(client, /conversation\.hero\.workspace\.directoryFlow/u)
     assert.match(client, /chooseWorkspaceDirectory/u)
+    assert.match(client, /__harness_mobile__\/workspace\/choose/u)
+    assert.match(client, /X-Harness-Mobile-Request/u)
     assert.match(client, /__HARNESS_DESKTOP_DIRECTORY_PICKER__/u)
     assert.match(client, /priority: -100/u)
     const repeated = await ensureDesktopDirectoryPickerPlugin({ dshHome: root, bundledRoot })
@@ -39,4 +41,10 @@ test('desktop directory picker host integration uses an owned native directory d
   const guestPreload = await readFile(path.resolve(__dirname, '..', 'electron', 'guest-preload.cjs'), 'utf8')
   assert.match(guestPreload, /contextBridge\.exposeInMainWorld\('harnessDesktopGuest'/u)
   assert.match(guestPreload, /ipcRenderer\.invoke\('workspace:chooseDirectory'\)/u)
+})
+
+test('sandboxed guest preload keeps the workspace picker bridge self-contained', async () => {
+  const guestPreload = await readFile(path.resolve(__dirname, '..', 'electron', 'guest-preload.cjs'), 'utf8')
+  assert.deepEqual([...guestPreload.matchAll(/require\((['"])(.*?)\1\)/gu)].map(match => match[2]), ['electron'])
+  assert.match(guestPreload, /including the workspace picker/u)
 })

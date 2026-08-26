@@ -18,8 +18,10 @@ const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.46.1'
-const CURRENT_MOBILE_RELEASE_TAG = `android-v${CURRENT_MOBILE_VERSION}`
+const CURRENT_MOBILE_VERSION = '1.0.47'
+const CURRENT_MOBILE_RELEASE_TAG = CURRENT_MOBILE_VERSION.split('.').length === 4
+  ? `android-v${CURRENT_MOBILE_VERSION}`
+  : `v${CURRENT_MOBILE_VERSION}`
 const DEFAULT_MOBILE_DOWNLOAD_URL = `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/${CURRENT_MOBILE_RELEASE_TAG}/Harness-Mobile-${CURRENT_MOBILE_VERSION}-android-universal.apk`
 const DEFAULT_IOS_DOWNLOAD_URL = ''
 const DESKTOP_CONTROL_STATE_FILE = 'mobile-sync.desktop-control.json'
@@ -238,6 +240,7 @@ class MobileSyncService extends EventEmitter {
     setAppearance = null,
     getThemeScript = null,
     readThemeAsset = null,
+    chooseWorkspaceDirectory = null,
     controlBroker = null,
     desktopControlStateFile = null,
     relayConfigStore = null
@@ -260,6 +263,8 @@ class MobileSyncService extends EventEmitter {
     this.setAppearance = setAppearance
     this.getThemeScript = getThemeScript
     this.readThemeAsset = readThemeAsset
+    this.chooseWorkspaceDirectory = chooseWorkspaceDirectory
+    this.workspacePickerRequest = null
     this.controlBroker = controlBroker || new MobileControlBroker({ now })
     this.relayConfigStore = relayConfigStore
     this.desktopControlStateFile = desktopControlStateFile || path.join(path.dirname(this.store.file || this.stateDir), DESKTOP_CONTROL_STATE_FILE)
@@ -672,6 +677,32 @@ class MobileSyncService extends EventEmitter {
     const device = this.#deviceFromRequest(request)
     if (!device) {
       writeResponse(response, 401, pairingErrorPage('请在电脑端打开“手机同步”，扫描新的配对二维码。'))
+      return
+    }
+    if (requestUrl.pathname === '/__harness_mobile__/workspace/choose' && request.method === 'POST') {
+      if (request.headers['x-harness-mobile-request'] !== 'workspace-picker') {
+        writeResponse(response, 403, JSON.stringify({ ok: false, error: 'Workspace picker request intent is missing.' }), { 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      if (typeof this.chooseWorkspaceDirectory !== 'function') {
+        writeResponse(response, 501, JSON.stringify({ ok: false, error: '桌面工作区选择功能当前不可用。' }), { 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      if (this.workspacePickerRequest) {
+        writeResponse(response, 409, JSON.stringify({ ok: false, error: '另一台设备正在请求选择工作区，请稍后重试。' }), { 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      const pending = Promise.resolve().then(() => this.chooseWorkspaceDirectory({ deviceId: device.id }))
+      this.workspacePickerRequest = pending
+      try {
+        const selectedPath = await pending
+        response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify({ ok: true, path: selectedPath == null ? null : String(selectedPath) }))
+      } catch (error) {
+        writeResponse(response, 500, JSON.stringify({ ok: false, error: error?.message || '无法打开桌面工作区选择窗口。' }), { 'Content-Type': 'application/json; charset=utf-8' })
+      } finally {
+        if (this.workspacePickerRequest === pending) this.workspacePickerRequest = null
+      }
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/control/status' && request.method === 'POST') {

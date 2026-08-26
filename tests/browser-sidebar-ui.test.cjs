@@ -21,10 +21,6 @@ test('Codex-style background browser uses an isolated login profile with an opti
   }
   assert.match(html, /请直接在下方真实网页中亲自登录/u)
   assert.match(html, /模型无法读取密码、Cookie、验证码或令牌/u)
-  assert.match(html, /内置浏览器可在后台运行，普通结构化动作无需保持右栏打开/u)
-  assert.match(html, /关键动作会自动打开右栏请求逐次确认/u)
-  assert.match(html, /结构化 CDP\/DOM 引用/u)
-  assert.match(html, /截图仅作视觉后备/u)
   assert.match(html, /browser-sidebar\.js/u)
 
   assert.match(main, /new WebContentsView/u)
@@ -84,7 +80,11 @@ test('Codex-style browser pane starts below and matches the global workbench hea
   assert.match(workspaceStyles, /top:\s*var\(--dsh-workbench-header-height\)/u)
   assert.match(workspaceStyles, /--dsh-right-workspace-width:\s*640px/u)
   assert.match(shellStyles, /--browser-panel-width:640px/u)
-  assert.match(shellStyles, /:root\[data-shell-theme\] \.official-shell \{ background:var\(--shell-layer,#fff\); background:rgb\(from var\(--shell-layer\) r g b \/ 1\); \}/u)
+  assert.match(shellStyles, /\.official-shell \{[^\n]*background:var\(--shell-workbench-background,var\(--shell-layer,#fff\)\)/u)
+  assert.match(workspaceStyles, /\.dsh-right-workspace \{[\s\S]{0,520}background: var\(--shell-workbench-background, var\(--shell-surface, #f7f8fa\)\)/u)
+  assert.match(workspaceStyles, /\.right-workspace-home \{[^\n]*background:transparent;/u)
+  assert.match(app, /root\.style\.setProperty\('--shell-workbench-background', themePreview\(theme\)\)/u)
+  assert.match(app, /root\.style\.removeProperty\('--shell-workbench-background'\)/u)
   assert.match(controller, /defaultWidth:\s*640/u)
   assert.match(renderer, /Number\(state\.panelWidth\) \|\| 640/u)
   assert.match(main, /BROWSER_PANEL_DEFAULT_WIDTH = 640/u)
@@ -129,50 +129,38 @@ test('critical background actions surface their user confirmation and crashed ta
   assert.match(main, /tab\.available = false[\s\S]{0,120}markActiveTabUnavailable\(id\)/u)
 })
 
-test('browser control reuses the Computer Use session/permanent authorization card', async () => {
-  const [html, renderer, styles] = await Promise.all([
+test('Computer Use has one Codex-style plugin entry while the browser keeps only the trusted Host authorization card', async () => {
+  const [html, renderer, styles, pluginClient] = await Promise.all([
     readFile(path.join(root, 'renderer', 'index.html'), 'utf8'),
     readFile(path.join(root, 'renderer', 'browser-sidebar.js'), 'utf8'),
-    readFile(path.join(root, 'renderer', 'styles.css'), 'utf8')
+    readFile(path.join(root, 'renderer', 'styles.css'), 'utf8'),
+    readFile(path.join(root, 'plugins', 'dsh-desktop-computer-use', 'lib', 'client.js'), 'utf8')
   ])
 
-  for (const id of ['browserControlTitle', 'computerUseToggle', 'computerUseRevokePermanent', 'computerUseSessionState', 'computerUsePending', 'browserPendingActions', 'computerUseAuthorizationOverlay', 'computerUseAuthorizationSession', 'computerUseAuthorizationForever', 'computerUseAuthorizationDecline', 'computerUsePolicyTitle', 'computerUsePolicyControls', 'computerUseDefaultAccess', 'computerUseCurrentTarget', 'computerUseAppList', 'computerUsePolicyMessage']) {
-    assert.match(html, new RegExp(`id="${id}"`), `missing shared browser/computer use control ${id}`)
+  for (const id of ['browserPendingActions', 'computerUseAuthorizationOverlay', 'computerUseAuthorizationSession', 'computerUseAuthorizationForever', 'computerUseAuthorizationDecline']) {
+    assert.match(html, new RegExp(`id="${id}"`), `missing trusted Computer Use authorization control ${id}`)
   }
-  assert.match(html, /浏览器控制 · Computer Use/u)
-  assert.match(html, /共用同一份授权和启停状态/u)
-  assert.match(html, /无需保持右栏打开/u)
-  assert.match(html, /选择一次“本次授权”或“永久授权”即可/u)
-  assert.match(html, /允许 AI 控制/u)
-  assert.match(html, /本次授权/u)
-  assert.match(html, /永久授权/u)
+  for (const id of ['browserControlTitle', 'computerUseToggle', 'computerUseRevokePermanent', 'computerUseSessionState', 'computerUsePending', 'computerUsePolicyTitle', 'computerUsePolicyControls', 'computerUseDefaultAccess', 'computerUseCurrentTarget', 'computerUseAppList', 'computerUsePolicyMessage']) {
+    assert.doesNotMatch(html, new RegExp(`id="${id}"`), `duplicate Computer Use entry must be removed: ${id}`)
+  }
+  assert.doesNotMatch(html, /浏览器控制 · Computer Use|跨应用访问策略（受限模式）|每次询问（推荐）/u)
+  assert.match(html, /设置 → 插件 → Computer Use/u)
   assert.match(html, /右栏浏览器仍保留密码、账号、验证码、支付和银行信息等硬限制/u)
-  assert.doesNotMatch(html, /id="browserGrantCurrent"|id="browserRevokeCurrent"|id="browserResumeModel"/u)
-  assert.match(html, /跨应用访问策略（受限模式）/u)
-  for (const value of ['ask', 'allow', 'deny']) {
-    assert.match(html, new RegExp(`<option value="${value}">`), `missing default access option ${value}`)
-  }
-  assert.doesNotMatch(html, /技能卡/u)
-  assert.doesNotMatch(html, /computerUseInstall/u)
 
   assert.match(renderer, /getComputerUseState/u)
-  assert.match(renderer, /requestComputerUseAuthorization/u)
   assert.match(renderer, /authorizeComputerUse\(scope\)/u)
   assert.match(renderer, /declineComputerUseAuthorization/u)
-  assert.match(renderer, /revokeComputerUsePermanentGrant/u)
-  assert.match(renderer, /computerUseToggle\.dataset\.activation = 'approval-card'/u)
   assert.match(renderer, /api\.onComputerUseAuthorization/u)
-  assert.match(renderer, /浏览器控制与无限制 Computer Use 已开启/u)
-  assert.match(renderer, /浏览器控制与 Computer Use 已同时停止/u)
-  assert.doesNotMatch(renderer, /grantCurrentBrowserOrigin|revokeCurrentBrowserOrigin|resumeBrowserModelControl/u)
-  assert.match(renderer, /api\.setComputerUseDefaultAccess\(/u)
-  assert.match(renderer, /api\.setComputerUseAppOverride\(/u)
-  assert.match(renderer, /api\.revokeComputerUseAppOverride\(/u)
-  assert.match(renderer, /受限模式禁止/u)
+  assert.doesNotMatch(renderer, /requestComputerUseAuthorization|revokeComputerUsePermanentGrant|setComputerUseDefaultAccess|setComputerUseAppOverride|revokeComputerUseAppOverride|受限模式禁止/u)
 
-  for (const selector of ['.computer-use-session-state', '.computer-use-permanent-notice', '.computer-use-authorization-overlay', '.computer-use-authorization-card', '.computer-use-authorization-actions', '.computer-use-policy-controls', '.computer-use-app-row', '.computer-use-policy-message']) {
+  assert.match(pluginClient, /settings\.plugin\.item/u)
+  assert.match(pluginClient, /computer-use-toggle/u)
+  assert.match(pluginClient, /computer-use-revoke-permanent/u)
+  assert.match(pluginClient, /computer-use-refresh/u)
+  for (const selector of ['.computer-use-authorization-overlay', '.computer-use-authorization-card', '.computer-use-authorization-actions']) {
     assert.match(styles, new RegExp(selector.replace('.', '\\.')), `missing style ${selector}`)
   }
+  assert.doesNotMatch(styles, /\.computer-use-session-state|\.computer-use-permanent-notice|\.computer-use-policy-controls|\.computer-use-app-row|\.computer-use-policy-message/u)
 })
 
 test('browser error states announce via role=alert while normal states keep status', async () => {

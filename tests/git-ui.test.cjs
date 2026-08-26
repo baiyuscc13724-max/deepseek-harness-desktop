@@ -10,7 +10,7 @@ test('desktop Git status UI is wired through fixed IPC methods', async () => {
   const [renderer, preload, main] = await Promise.all([
     source('renderer/app.js'), source('electron/preload.cjs'), source('electron/main.cjs')
   ])
-  for (const marker of ['Git 与仓库连接', '内置 MinGit', 'Git Credential Manager', 'Windows ssh-agent', '安装内置 Git', '连接 GitHub', 'Harness 不读取或显示密码、Token、Cookie、验证码或 SSH 私钥']) {
+  for (const marker of ['Git 与仓库连接', '显示 Git 详情', '内置 MinGit', 'Git Credential Manager', 'Windows ssh-agent', '安装内置 Git', '连接 GitHub', 'Harness 不读取或显示密码、Token、Cookie、验证码或 SSH 私钥']) {
     assert.ok(renderer.includes(marker), `missing Git status UI marker: ${marker}`)
   }
   for (const api of ['getGitRuntimeStatus', 'refreshGitRuntimeStatus', 'prepareGitRuntime', 'openGitAuthentication']) assert.ok(preload.includes(api), `preload missing ${api}`)
@@ -28,6 +28,10 @@ test('desktop Git status UI is wired through fixed IPC methods', async () => {
   assert.doesNotMatch(renderer, /不使用临时 127\.0\.0\.1 回调/u)
   assert.match(renderer, /GitHub 授权完成，连接状态已自动刷新/u)
   assert.match(renderer, /const status = await api\.refreshGitRuntimeStatus\(\)/u)
+  assert.match(renderer, /class="hd-git-switch"[^>]+role="switch"[^>]+aria-pressed="false"[^>]+data-hd-git-toggle/u)
+  assert.match(renderer, /class="hd-git-details" data-hd-git-details hidden/u)
+  assert.match(renderer, /getAttribute\('aria-pressed'\) !== 'true'/u)
+  assert.match(renderer, /querySelector\('\[data-hd-git-details\]'\)\.hidden = !expanded/u)
 })
 
 test('Git renderer boundary publishes only normalized status and never requests secrets', async () => {

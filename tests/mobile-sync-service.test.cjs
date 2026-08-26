@@ -97,6 +97,57 @@ test('mobile bridge requires one-time pairing and proxies HTTP without protocol 
   assert.equal(service.state().devices.length, 1)
 })
 
+test('paired mobile devices can request the desktop-owned workspace picker without supplying a path', async t => {
+  const runtime = await createRuntime('official-workspace')
+  const requests = []
+  let releasePicker
+  const pickerPending = new Promise(resolve => { releasePicker = resolve })
+  const service = new MobileSyncService({
+    store: createStore(),
+    getRuntimeTarget: () => runtime.url,
+    host: '127.0.0.1',
+    port: 0,
+    qrFactory: async value => `qr:${value}`,
+    chooseWorkspaceDirectory: async request => {
+      requests.push(request)
+      return pickerPending
+    }
+  })
+  t.after(async () => {
+    releasePicker?.(null)
+    await service.stop()
+    await runtime.close()
+  })
+  await service.start()
+  const origin = service.state().origins[0]
+  const paired = await pair(service)
+  const endpoint = `${origin}/__harness_mobile__/workspace/choose`
+
+  assert.equal((await fetch(endpoint, { method: 'POST' })).status, 401)
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { Cookie: paired.cookie } })).status, 403)
+  const pending = fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Cookie: paired.cookie,
+      'Content-Type': 'application/json',
+      'X-Harness-Mobile-Request': 'workspace-picker'
+    },
+    body: '{}'
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  const duplicate = await fetch(endpoint, {
+    method: 'POST',
+    headers: { Cookie: paired.cookie, 'X-Harness-Mobile-Request': 'workspace-picker' }
+  })
+  assert.equal(duplicate.status, 409)
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].deviceId, service.state().devices[0].id)
+  releasePicker('D:\\Projects\\Harness')
+  const response = await pending
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), { ok: true, path: 'D:\\Projects\\Harness' })
+})
+
 test('one QR downloads the Android app in browsers without consuming app pairing', async t => {
   const runtime = await createRuntime('official')
   let encodedQrValue = ''
