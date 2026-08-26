@@ -2,18 +2,18 @@
 
 Android and iOS/iPadOS releases are checked independently from Harness Desktop and from Desktop component updates. The clients accept one small HTTPS JSON manifest using the contract in `mobile/mobile-app-update.example.json`, but the production endpoint is intentionally empty until a separately approved mobile release exists.
 
-## Synchronized mobile release gate
+## Independent mobile release gate
 
-- Android and iOS/iPadOS source versions are prepared together and must equal the current integration version; `tests/mobile-version-sync.test.cjs` rejects one-platform-only version drift.
-- The mobile update manifest must carry both `platforms.android` and `platforms.ios` at the same version before either production endpoint is enabled.
-- The 1.0.29 Android release is published only after the dedicated workflow verifies the long-lived release certificate fingerprint; a debug or unsigned APK never qualifies. The user has chosen not to join Apple Developer Program, so iOS/iPadOS source remains simulator-validated without claiming an installable IPA.
+- `mobile/android/app/version.properties` binds every Android build to the current three-part Desktop integration version. Android may add one numeric revision component (for example `1.0.46.1`) for a standalone signed hotfix; its monotonic `versionCode` is derived and validated independently.
+- iOS/iPadOS keeps the Apple-compatible three-part integration version and remains simulator-validated. The update manifest carries explicit per-platform versions, so an Android-only revision never claims an installable iOS build.
+- A standalone Android release uses its own immutable `android-v<version>` tag and exactly one signed APK plus its checksum, with `make_latest=false` so the Desktop `releases/latest` identity remains unchanged. The dedicated workflow must verify the long-lived release certificate fingerprint; a debug or unsigned APK never qualifies. The user has chosen not to join Apple Developer Program, so no IPA is claimed.
 
 ## Desktop QR routing without an Apple membership
 
 - The same Desktop QR remains OS-neutral. Android system cameras are redirected to the verified signed APK, while the installed Android app consumes the pairing payload directly.
 - iPhone/iPad system cameras receive a local setup page that never redirects to an APK. With no App Store/TestFlight release, the primary action pairs and opens the official workbench in Safari and explains “Add to Home Screen”; an already installed native client can still consume the same payload.
 - The Safari workbench provides live WebSocket synchronization while the page is foregrounded on the same LAN. iOS may suspend it in the background, and it does not claim the native app's encrypted WSS/443 remote fallback.
-- A future reviewed App Store/TestFlight URL can be enabled without ever distributing an unsigned IPA.
+- A future reviewed App Store/TestFlight URL can be enabled without ever distributing an unsigned IPA. A desktop-style helper cannot replace Apple code signing or the App Store/TestFlight installation rules, so the current no-membership path remains Safari + “Add to Home Screen” rather than a misleading sideload installer.
 
 ## Platform routing and installation
 

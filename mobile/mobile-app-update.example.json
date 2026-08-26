@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "publishedAt": "2026-01-01T00:00:00.000Z",
+  "publishedAt": "2026-08-26T00:00:00.000Z",
   "platforms": {
     "android": {
-      "version": "1.0.46",
-      "url": "https://downloads.example.invalid/Harness-Mobile-1.0.46.apk",
+      "version": "1.0.46.1",
+      "url": "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/android-v1.0.46.1/Harness-Mobile-1.0.46.1-android-universal.apk",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "required": false
     },

@@ -1,12 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 基础品牌色（与桌面端/iOS 保持一致） -->
     <color name="harness_background">#F7F8FA</color>
     <color name="harness_splash_background">#F4F8FF</color>
     <color name="harness_surface">#FFFFFF</color>
     <color name="harness_primary">#4D6BFE</color>
     <color name="harness_primary_dark">#315EFB</color>
+    <color name="harness_icon_background">#EDF3FF</color>
+
+    <!-- 文本层级：主文本 / 次要文本 / 占位 -->
     <color name="harness_text">#17313B</color>
     <color name="harness_secondary">#66727D</color>
+
+    <!-- 分隔与描边 -->
     <color name="harness_border">#DCE3EC</color>
-    <color name="harness_icon_background">#EDF3FF</color>
+
+    <!-- 语义色：错误 / 成功 / 强调背景 -->
+    <color name="harness_error">#C62828</color>
+    <color name="harness_error_ripple">#52C62828</color>
+    <color name="harness_success">#1E7F4F</color>
+    <color name="harness_ripple">#EDF3FF</color>
 </resources>

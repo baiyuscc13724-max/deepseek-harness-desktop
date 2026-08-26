@@ -81,6 +81,30 @@
     }
   }
 
+  const containComposerContext = () => {
+    if (typeof document.querySelector !== 'function' || typeof document.querySelectorAll !== 'function') return
+    const card = document.querySelector('[data-composer-card]')
+    if (!card) return
+    const cardRect = card.getBoundingClientRect()
+    const candidates = [...document.querySelectorAll('button')]
+      .filter(visible)
+      .map(button => ({ button, rect: button.getBoundingClientRect() }))
+      .filter(item => item.rect.bottom <= cardRect.top + 8 && cardRect.top - item.rect.bottom < 120)
+      .sort((left, right) => right.rect.left - left.rect.left)
+    const target = candidates[0]
+    if (!target || target.rect.left <= cardRect.left + 40 || !target.button.parentElement) return
+    const available = Math.max(120, Math.floor(cardRect.right - target.rect.left))
+    const item = target.button.parentElement
+    item.style.setProperty('box-sizing', 'border-box', 'important')
+    item.style.setProperty('width', `${available}px`, 'important')
+    item.style.setProperty('max-width', `${available}px`, 'important')
+    item.style.setProperty('min-width', '0', 'important')
+    item.style.setProperty('overflow', 'hidden', 'important')
+    target.button.style.setProperty('max-width', '100%', 'important')
+    target.button.style.setProperty('min-width', '0', 'important')
+    target.button.style.setProperty('overflow', 'hidden', 'important')
+  }
+
   const installHistoryRecovery = () => {
     if (window.__harnessMobileFetchInstalled || typeof window.fetch !== 'function') return
     const nativeFetch = window.fetch.bind(window)
@@ -228,6 +252,7 @@
     decorateHeader()
     decorateSessions()
     translateStableLabels()
+    containComposerContext()
     installHistoryRecovery()
     installThemeBridge()
     installControlSettingsEntry()

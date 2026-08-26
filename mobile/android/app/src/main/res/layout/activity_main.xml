@@ -1,134 +1,173 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/harness_background">
 
+    <!-- 配对页：小屏与大字体时可滚动，内容充足时底部说明固定在屏幕底部 -->
     <LinearLayout
         android:id="@+id/pairing_panel"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:gravity="center_horizontal"
         android:orientation="vertical"
-        android:paddingLeft="28dp"
+        android:paddingStart="@dimen/harness_screen_padding"
         android:paddingTop="54dp"
-        android:paddingRight="28dp"
+        android:paddingEnd="@dimen/harness_screen_padding"
         android:paddingBottom="24dp">
 
-        <ImageView
-            android:layout_width="72dp"
-            android:layout_height="72dp"
-            android:contentDescription="@null"
-            android:src="@drawable/deepseek_app_icon" />
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-medium"
-                android:text="deepseek"
-                android:textColor="@color/harness_text"
-                android:textSize="20sp" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginLeft="7dp"
-                android:background="@drawable/harness_wordmark_badge"
-                android:fontFamily="sans-serif-medium"
-                android:paddingLeft="6dp"
-                android:paddingTop="2dp"
-                android:paddingRight="6dp"
-                android:paddingBottom="2dp"
-                android:text="HARNESS"
-                android:textColor="#FFFFFF"
-                android:textSize="9sp" />
-        </LinearLayout>
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="30dp"
-            android:fontFamily="sans-serif-medium"
-            android:text="连接桌面工作台"
-            android:textColor="@color/harness_text"
-            android:textSize="25sp" />
-
-        <TextView
+        <ScrollView
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center"
-            android:lineSpacingExtra="3dp"
-            android:text="在桌面端设置中打开“手机同步”，扫描一次，之后会自动重连。"
-            android:textColor="@color/harness_secondary"
-            android:textSize="14sp" />
-
-        <Button
-            android:id="@+id/scan_button"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginTop="30dp"
-            android:backgroundTint="@color/harness_primary"
-            android:text="扫码连接电脑"
-            android:textAllCaps="false"
-            android:textColor="#FFFFFF"
-            android:textSize="16sp" />
-
-        <EditText
-            android:id="@+id/pairing_url"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:autofillHints=""
-            android:hint="或粘贴桌面端配对地址"
-            android:inputType="textUri"
-            android:maxLines="3"
-            android:minHeight="52dp"
-            android:padding="12dp"
-            android:textColor="@color/harness_text"
-            android:textColorHint="@color/harness_secondary"
-            android:textSize="13sp" />
-
-        <Button
-            android:id="@+id/connect_button"
-            android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:layout_marginTop="10dp"
-            android:backgroundTint="@color/harness_surface"
-            android:text="使用配对地址连接"
-            android:textAllCaps="false"
-            android:textColor="@color/harness_primary_dark" />
-
-        <TextView
-            android:id="@+id/pairing_error"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center"
-            android:textColor="#C62828"
-            android:textSize="13sp" />
-
-        <View
-            android:layout_width="1dp"
             android:layout_height="0dp"
-            android:layout_weight="1" />
+            android:layout_weight="1"
+            android:fillViewport="true"
+            android:scrollbars="none">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:gravity="center"
-            android:text="优先使用局域网；不在同一网络时自动切换加密备用线路。不会替换手机已有 VPN。"
-            android:textColor="@color/harness_secondary"
-            android:textSize="12sp" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <ImageView
+                    android:layout_width="@dimen/harness_icon_brand"
+                    android:layout_height="@dimen/harness_icon_brand"
+                    android:contentDescription="@null"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/deepseek_app_icon" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="sans-serif-medium"
+                        android:text="@string/branding_deepseek"
+                        android:textColor="@color/harness_text"
+                        android:textSize="20sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="7dp"
+                        android:background="@drawable/harness_wordmark_badge"
+                        android:fontFamily="sans-serif-medium"
+                        android:paddingStart="6dp"
+                        android:paddingTop="2dp"
+                        android:paddingEnd="6dp"
+                        android:paddingBottom="2dp"
+                        android:text="@string/branding_harness"
+                        android:textColor="#FFFFFF"
+                        android:textSize="9sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="30dp"
+                    style="@style/TextAppearance.Harness.LargeTitle"
+                    android:text="@string/pairing_title" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    style="@style/TextAppearance.Harness.Callout"
+                    android:gravity="center"
+                    android:text="@string/pairing_subtitle" />
+
+                <Button
+                    android:id="@+id/scan_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/harness_button_height"
+                    android:layout_marginTop="30dp"
+                    style="@style/Widget.Harness.Button.Primary"
+                    android:text="@string/scan_button" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/harness_space_xl"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <View
+                        android:layout_width="0dp"
+                        android:layout_height="1dp"
+                        android:layout_weight="1"
+                        android:background="@color/harness_border" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:layout_marginEnd="12dp"
+                        style="@style/TextAppearance.Harness.Caption"
+                        android:text="@string/pairing_or" />
+
+                    <View
+                        android:layout_width="0dp"
+                        android:layout_height="1dp"
+                        android:layout_weight="1"
+                        android:background="@color/harness_border" />
+                </LinearLayout>
+
+                <EditText
+                    android:id="@+id/pairing_url"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/harness_field_height"
+                    android:layout_marginTop="@dimen/harness_space_xl"
+                    android:autofillHints=""
+                    android:background="@drawable/harness_field_background"
+                    android:hint="@string/pairing_url_hint"
+                    android:imeOptions="actionGo"
+                    android:inputType="textUri"
+                    android:maxLines="1"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:textColor="@color/harness_text"
+                    android:textColorHint="@color/harness_secondary"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/connect_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/harness_button_height_compact"
+                    android:layout_marginTop="10dp"
+                    style="@style/Widget.Harness.Button.Secondary"
+                    android:text="@string/connect_button" />
+
+                <TextView
+                    android:id="@+id/pairing_error"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    style="@style/TextAppearance.Harness.Error"
+                    android:accessibilityLiveRegion="polite"
+                    android:gravity="center"
+                    android:visibility="gone" />
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    style="@style/TextAppearance.Harness.Caption"
+                    android:gravity="center"
+                    android:text="@string/pairing_footer" />
+            </LinearLayout>
+        </ScrollView>
     </LinearLayout>
 
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
@@ -143,6 +182,7 @@
             android:layout_height="match_parent" />
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
+    <!-- 连接状态层：覆盖在工作台上方，拦截触摸 -->
     <LinearLayout
         android:id="@+id/connection_overlay"
         android:layout_width="match_parent"
@@ -152,41 +192,39 @@
         android:focusable="true"
         android:gravity="center"
         android:orientation="vertical"
-        android:paddingLeft="32dp"
-        android:paddingRight="32dp"
+        android:paddingStart="@dimen/harness_screen_padding"
+        android:paddingEnd="@dimen/harness_screen_padding"
         android:visibility="gone">
 
         <ImageView
-            android:layout_width="72dp"
-            android:layout_height="72dp"
+            android:layout_width="@dimen/harness_icon_brand"
+            android:layout_height="@dimen/harness_icon_brand"
             android:contentDescription="@null"
+            android:importantForAccessibility="no"
             android:src="@drawable/deepseek_app_icon" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="22dp"
-            android:fontFamily="sans-serif-medium"
-            android:text="正在连接电脑"
-            android:textColor="@color/harness_text"
-            android:textSize="22sp" />
+            style="@style/TextAppearance.Harness.Title"
+            android:text="@string/connecting_title" />
 
         <ProgressBar
             android:layout_width="32dp"
             android:layout_height="32dp"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="@dimen/harness_space_xl"
             android:indeterminateTint="@color/harness_primary" />
 
         <TextView
             android:id="@+id/connection_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="@dimen/harness_space_lg"
+            style="@style/TextAppearance.Harness.Callout"
+            android:accessibilityLiveRegion="polite"
             android:gravity="center"
-            android:lineSpacingExtra="3dp"
-            android:text="正在尝试局域网，必要时会自动切换远程线路…"
-            android:textColor="@color/harness_secondary"
-            android:textSize="14sp" />
+            android:text="@string/connecting_default_status" />
     </LinearLayout>
 
     <ProgressBar
@@ -200,13 +238,15 @@
 
     <ImageButton
         android:id="@+id/reconnect_button"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
+        android:layout_width="@dimen/harness_touch_min"
+        android:layout_height="@dimen/harness_touch_min"
         android:layout_gravity="top|end"
-        android:layout_margin="8dp"
-        android:backgroundTint="@color/harness_surface"
-        android:contentDescription="重新配对"
+        android:layout_margin="@dimen/harness_space_xs"
+        android:background="@drawable/harness_button_secondary"
+        android:contentDescription="@string/reconnect_description"
+        android:elevation="2dp"
         android:padding="11dp"
-        android:src="@android:drawable/ic_menu_revert"
+        android:src="@drawable/ic_refresh"
+        app:tint="@color/harness_primary_dark"
         android:visibility="gone" />
 </FrameLayout>

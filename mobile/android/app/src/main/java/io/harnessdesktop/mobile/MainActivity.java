@@ -2,6 +2,7 @@ package io.harnessdesktop.mobile;
 
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
@@ -14,6 +15,7 @@ import android.os.Looper;
 import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceResponse;
@@ -30,6 +32,7 @@ import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
@@ -74,6 +77,7 @@ public final class MainActivity extends AppCompatActivity {
     private int localGatewayPort;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private String retryableMainFrameUrl;
+    private boolean mainFrameLoadFailed;
     private boolean workbenchRetryScheduled;
     private int workbenchRetryAttempt;
     private int workbenchReadyGeneration;
@@ -117,6 +121,34 @@ public final class MainActivity extends AppCompatActivity {
         this::onScanResult
     );
 
+    // 工作台 HTML 文件上传：仅在被页面主动触发（按钮点击）时启动系统选择器，
+    // 按次授权、可多选、可取消；不申请任何存储权限，也不持久化 URI 授权。
+    private ValueCallback<Uri[]> fileChooserCallback;
+    private final ActivityResultLauncher<Intent> systemFilePicker = registerForActivityResult(
+        new ActivityResultContracts.StartActivityForResult(),
+        result -> {
+            ValueCallback<Uri[]> callback = fileChooserCallback;
+            fileChooserCallback = null;
+            if (callback == null) return;
+            callback.onReceiveValue(toChosenUris(result.getResultCode(), result.getData()));
+        }
+    );
+
+    private static Uri[] toChosenUris(int resultCode, Intent data) {
+        if (resultCode != RESULT_OK || data == null) return null;
+        java.util.List<Uri> uris = new java.util.ArrayList<>();
+        ClipData clips = data.getClipData();
+        if (clips != null) {
+            for (int index = 0; index < clips.getItemCount(); index++) {
+                Uri uri = clips.getItemAt(index).getUri();
+                if (uri != null) uris.add(uri);
+            }
+        }
+        Uri single = data.getData();
+        if (single != null && !uris.contains(single)) uris.add(single);
+        return uris.isEmpty() ? null : uris.toArray(new Uri[0]);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         setTheme(R.style.Theme_HarnessMobile);
@@ -152,11 +184,11 @@ public final class MainActivity extends AppCompatActivity {
             if (isFinishing() || isDestroyed() || update == null || mobileUpdatePrompted) return;
             mobileUpdatePrompted = true;
             AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(update.required ? "需要更新手机 App" : "手机 App 有新版本")
-                .setMessage("Android 版 " + update.version + " 已可用。下载后仍由 Android 系统核验应用签名并要求您确认安装。")
-                .setPositiveButton("下载并校验 Android APK", (ignored, which) -> downloadMobileAppUpdate(update))
+                .setTitle(update.required ? getString(R.string.update_title_required) : getString(R.string.update_title_optional))
+                .setMessage(getString(R.string.update_message, update.version))
+                .setPositiveButton(getString(R.string.update_download), (ignored, which) -> downloadMobileAppUpdate(update))
                 .create();
-            if (!update.required) dialog.setButton(AlertDialog.BUTTON_NEGATIVE, "稍后", (ignored, which) -> {});
+            if (!update.required) dialog.setButton(AlertDialog.BUTTON_NEGATIVE, getString(R.string.update_later), (ignored, which) -> {});
             dialog.setCanceledOnTouchOutside(!update.required);
             dialog.setCancelable(!update.required);
             dialog.show();
@@ -164,11 +196,11 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void downloadMobileAppUpdate(MobileAppUpdateChecker.Update update) {
-        Toast.makeText(this, "正在下载并校验 APK…", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, getString(R.string.update_downloading), Toast.LENGTH_SHORT).show();
         mobileAppUpdateChecker.downloadAndVerify(this, update, (apk, error) -> {
             if (isFinishing() || isDestroyed()) return;
             if (error != null || apk == null) {
-                Toast.makeText(this, error == null ? "APK 校验失败" : error.getMessage(), Toast.LENGTH_LONG).show();
+                Toast.makeText(this, error == null ? getString(R.string.update_verify_failed) : error.getMessage(), Toast.LENGTH_LONG).show();
                 return;
             }
             try {
@@ -178,7 +210,7 @@ public final class MainActivity extends AppCompatActivity {
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 startActivity(install);
             } catch (ActivityNotFoundException failure) {
-                Toast.makeText(this, "系统中没有可用的 APK 安装器", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, getString(R.string.update_no_installer), Toast.LENGTH_LONG).show();
             }
         });
     }
@@ -258,6 +290,42 @@ public final class MainActivity extends AppCompatActivity {
                 loading.setVisibility(newProgress >= 100 ? View.GONE : View.VISIBLE);
             }
 
+            // HTML <input type="file">/file input 的系统选择器桥：
+            // 用户主动点击页面里的上传控件才会触发；选择结果（含多选）原样回传
+            // 给页面，取消则回传 null。只走系统 picker 的按次授权，不要求存储权限。
+            @Override public boolean onShowFileChooser(
+                    WebView view,
+                    ValueCallback<Uri[]> filePath,
+                    FileChooserParams fileChooserParams) {
+                if (fileChooserCallback != null) {
+                    fileChooserCallback.onReceiveValue(null);
+                    fileChooserCallback = null;
+                }
+                fileChooserCallback = filePath;
+                try {
+                    systemFilePicker.launch(buildSystemFilePickerIntent(fileChooserParams));
+                    return true;
+                } catch (ActivityNotFoundException | SecurityException failure) {
+                    fileChooserCallback = null;
+                    filePath.onReceiveValue(null);
+                    return true;
+                }
+            }
+
+            private Intent buildSystemFilePickerIntent(FileChooserParams params) {
+                String[] acceptTypes = params.getAcceptTypes();
+                String primary = (acceptTypes == null || acceptTypes.length == 0
+                    || acceptTypes[0] == null || acceptTypes[0].trim().isEmpty()) ? "*/*" : acceptTypes[0];
+                boolean multiple = params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE;
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType(primary)
+                    .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
+                if (acceptTypes != null && acceptTypes.length > 1) {
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, acceptTypes);
+                }
+                return intent;
+            }
         });
         webView.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -266,6 +334,7 @@ public final class MainActivity extends AppCompatActivity {
             }
 
             @Override public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                mainFrameLoadFailed = false;
                 workbenchReadyGeneration++;
                 mobileUiAdapter.inject(view);
                 loading.setVisibility(View.VISIBLE);
@@ -273,7 +342,8 @@ public final class MainActivity extends AppCompatActivity {
 
             @Override public void onPageCommitVisible(WebView view, String url) {
                 mobileUiAdapter.inject(view);
-                beginWorkbenchReadyCheck();
+                if (!mainFrameLoadFailed) revealWorkbench();
+                else beginWorkbenchReadyCheck();
             }
 
             @Override public void onPageFinished(WebView view, String url) {
@@ -285,11 +355,13 @@ public final class MainActivity extends AppCompatActivity {
                     cancelWorkbenchRetry(true);
                     rememberOrigin(url);
                     mobileUiAdapter.inject(view);
-                    beginWorkbenchReadyCheck();
+                    if (!mainFrameLoadFailed) revealWorkbench();
+                    else beginWorkbenchReadyCheck();
                 }
             }
 
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) mainFrameLoadFailed = true;
                 if (request.isForMainFrame() && isRetryableWebError(error.getErrorCode())) {
                     retryableMainFrameUrl = request.getUrl().toString();
                     scheduleWorkbenchRetry();
@@ -298,12 +370,13 @@ public final class MainActivity extends AppCompatActivity {
             }
 
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+                if (request.isForMainFrame()) mainFrameLoadFailed = true;
                 if (request.isForMainFrame() && isRetryableHttpStatus(errorResponse.getStatusCode())) {
                     retryableMainFrameUrl = request.getUrl().toString();
-                    setConnectionStatus("电脑端正在准备工作台，连接成功后会自动打开…");
+                    setConnectionStatus(getString(R.string.waiting_desktop_status));
                     scheduleWorkbenchRetry();
                 } else if (request.isForMainFrame() && (errorResponse.getStatusCode() == 401 || errorResponse.getStatusCode() == 403)) {
-                    setConnectionStatus("配对信息已失效。请点右上角连接按钮，忘记此电脑后重新扫码。");
+                    setConnectionStatus(getString(R.string.pairing_expired_status));
                 }
                 super.onReceivedHttpError(view, request, errorResponse);
             }
@@ -315,7 +388,7 @@ public final class MainActivity extends AppCompatActivity {
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, target));
                 } catch (ActivityNotFoundException error) {
-                    Toast.makeText(MainActivity.this, "没有可打开此链接的应用", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, getString(R.string.no_app_to_open), Toast.LENGTH_SHORT).show();
                 }
                 return true;
             }
@@ -332,7 +405,7 @@ public final class MainActivity extends AppCompatActivity {
     private void startScanner() {
         ScanOptions options = new ScanOptions()
             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            .setPrompt("扫描电脑端 Harness Desktop 的配对二维码")
+            .setPrompt(getString(R.string.scan_prompt))
             .setBeepEnabled(false)
             .setCaptureActivity(HarnessCaptureActivity.class)
             .setOrientationLocked(false);
@@ -346,21 +419,27 @@ public final class MainActivity extends AppCompatActivity {
     private void connect(String value) {
         PairingProfile nextProfile = PairingProfile.parse(value);
         if (nextProfile == null) {
-            pairingError.setText("配对地址无效。请扫描电脑端新生成的二维码，并确认手机与电脑在同一 Wi-Fi。 ");
+            showPairingError(getString(R.string.pairing_error_invalid));
+            return;
+        }
+        try { pairingProfileStore.save(nextProfile); }
+        catch (Exception error) {
+            showPairingError(getString(R.string.pairing_error_save_failed));
             return;
         }
         pairingError.setText("");
-        try { pairingProfileStore.save(nextProfile); }
-        catch (Exception error) {
-            pairingError.setText("无法安全保存配对信息，请检查系统密钥存储后重试。");
-            return;
-        }
+        pairingError.setVisibility(View.GONE);
         pairingProfile = nextProfile;
         if (hasActiveSystemVpn()) {
-            Toast.makeText(this, "已检测到系统 VPN。Harness 仅代理本应用流量，不会关闭或替换现有 VPN。", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, getString(R.string.vpn_notice), Toast.LENGTH_LONG).show();
         }
         String stablePairUrl = activateProfile(nextProfile, true);
         openWorkbench(stablePairUrl == null ? nextProfile.pairUrl : stablePairUrl);
+    }
+
+    private void showPairingError(String message) {
+        pairingError.setText(message);
+        pairingError.setVisibility(View.VISIBLE);
     }
 
     @Override
@@ -376,8 +455,8 @@ public final class MainActivity extends AppCompatActivity {
         swipeRefresh.setVisibility(View.VISIBLE);
         boolean hasRemoteRoute = pairingProfile != null && (pairingProfile.relay != null || pairingProfile.easyTier != null);
         showConnectionOverlay(hasRemoteRoute
-            ? "正在尝试局域网，必要时会自动切换 WSS/443 加密线路…"
-            : "正在连接桌面工作台…");
+            ? getString(R.string.connecting_lan_status)
+            : getString(R.string.connecting_workbench_status));
         if (hasRemoteRoute && !hasLocalNetwork()) {
             pendingWorkbenchUrl = url;
         } else {
@@ -411,7 +490,7 @@ public final class MainActivity extends AppCompatActivity {
             }
             return pairing ? profile.stablePairUrl(localGatewayPort) : profile.stableOrigin(localGatewayPort);
         } catch (Exception error) {
-            Toast.makeText(this, "应用内连接通道启动失败，将尝试局域网直连", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, getString(R.string.connecting_failed_toast), Toast.LENGTH_LONG).show();
             return null;
         }
     }
@@ -462,13 +541,13 @@ public final class MainActivity extends AppCompatActivity {
             mainHandler.removeCallbacks(remoteReconnect);
             if (easyTierClient != null) easyTierClient.stop();
             if (wssRelayClient != null) wssRelayClient.stop();
-            showConnectionOverlay("网络已断开，恢复后会自动重新连接…");
+            showConnectionOverlay(getString(R.string.network_lost_status));
             return;
         }
         boolean hasRemoteRoute = profile.relay != null || profile.easyTier != null;
         showConnectionOverlay(hasRemoteRoute
-            ? "网络已切换，正在重建加密远程线路…"
-            : "网络已切换，正在重新连接桌面工作台…");
+            ? getString(R.string.network_switched_remote_status)
+            : getString(R.string.network_switched_local_status));
         retryableMainFrameUrl = null;
         webView.stopLoading();
         if (hasRemoteRoute) {
@@ -502,26 +581,27 @@ public final class MainActivity extends AppCompatActivity {
         reconnectButton.setVisibility(View.GONE);
         pairingPanel.setVisibility(View.VISIBLE);
         pairingError.setText("");
+        pairingError.setVisibility(View.GONE);
     }
 
     private void confirmDisconnect() {
         new AlertDialog.Builder(this)
-            .setTitle("连接设置")
+            .setTitle(getString(R.string.connection_settings_title))
             .setMessage(hasActiveSystemVpn()
-                ? "检测到系统 VPN。Harness 当前使用应用内线路，不会抢占系统 VPN。配对信息会保留，重新连接无需扫码。"
-                : "配对信息会保留，网络恢复后自动重连；只有“忘记此电脑”才需要重新扫码。")
-            .setNegativeButton("取消", null)
-            .setNeutralButton("忘记此电脑", (dialog, which) -> confirmForget())
-            .setPositiveButton("立即重连", (dialog, which) -> webView.reload())
+                ? getString(R.string.connection_settings_message_vpn)
+                : getString(R.string.connection_settings_message))
+            .setNegativeButton(getString(R.string.action_cancel), null)
+            .setNeutralButton(getString(R.string.action_forget_computer), (dialog, which) -> confirmForget())
+            .setPositiveButton(getString(R.string.action_reconnect_now), (dialog, which) -> webView.reload())
             .show();
     }
 
     private void confirmForget() {
         new AlertDialog.Builder(this)
-            .setTitle("忘记这台电脑？")
-            .setMessage("下次连接需要重新扫描电脑端二维码。")
-            .setNegativeButton("取消", null)
-            .setPositiveButton("忘记", (dialog, which) -> disconnect())
+            .setTitle(getString(R.string.forget_title))
+            .setMessage(getString(R.string.forget_message))
+            .setNegativeButton(getString(R.string.action_cancel), null)
+            .setPositiveButton(getString(R.string.action_forget), (dialog, which) -> disconnect())
             .show();
     }
 
@@ -574,7 +654,7 @@ public final class MainActivity extends AppCompatActivity {
         int delayIndex = Math.min(workbenchRetryAttempt, WORKBENCH_RETRY_DELAYS_MS.length - 1);
         workbenchRetryAttempt = Math.min(workbenchRetryAttempt + 1, WORKBENCH_RETRY_DELAYS_MS.length - 1);
         workbenchRetryScheduled = true;
-        setConnectionStatus("正在等待电脑响应，线路恢复后会自动打开…");
+        setConnectionStatus(getString(R.string.retry_waiting_status));
         mainHandler.postDelayed(workbenchRetry, WORKBENCH_RETRY_DELAYS_MS[delayIndex]);
     }
 
@@ -587,7 +667,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void startWssRelay(PairingProfile profile) {
         mainHandler.removeCallbacks(remoteReconnect);
-        setConnectionStatus("正在建立端到端加密的 WSS/443 远程线路…");
+        setConnectionStatus(getString(R.string.wss_connecting_status));
         wssRelayClient.start(profile.relay, new WssRelayClient.Listener() {
             @Override public void onReady(int socksPort) {
                 if (pairingProfile != profile || localProxy == null) return;
@@ -600,7 +680,7 @@ public final class MainActivity extends AppCompatActivity {
                 localProxy.updateRoutes(readyRoutes);
                 remoteReconnectAttempt = 0;
                 runOnUiThread(() -> {
-                    setConnectionStatus("WSS/443 远程线路已连接，正在打开工作台…");
+                    setConnectionStatus(getString(R.string.wss_ready_status));
                     if (webView == null) return;
                     if (pendingWorkbenchUrl != null) {
                         String url = pendingWorkbenchUrl;
@@ -615,7 +695,7 @@ public final class MainActivity extends AppCompatActivity {
             @Override public void onFailure(String message) {
                 if (pairingProfile != profile) return;
                 runOnUiThread(() -> {
-                    setConnectionStatus("WSS/443 线路暂未接通，正在自动重试；局域网连接仍然可用…");
+                    setConnectionStatus(getString(R.string.wss_failed_status));
                     long delay = Math.min(15_000L, 3_000L + remoteReconnectAttempt * 2_000L);
                     remoteReconnectAttempt = Math.min(remoteReconnectAttempt + 1, 6);
                     mainHandler.removeCallbacks(remoteReconnect);
@@ -627,7 +707,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void startEasyTier(PairingProfile profile) {
         mainHandler.removeCallbacks(remoteReconnect);
-        setConnectionStatus("正在建立加密远程线路，首次连接可能需要一些时间…");
+        setConnectionStatus(getString(R.string.easytier_connecting_status));
         easyTierClient.start(profile, new EasyTierClient.Listener() {
             @Override public void onReady(int socksPort) {
                 if (pairingProfile != profile || localProxy == null) return;
@@ -640,7 +720,7 @@ public final class MainActivity extends AppCompatActivity {
                 localProxy.updateRoutes(readyRoutes);
                 remoteReconnectAttempt = 0;
                 runOnUiThread(() -> {
-                    setConnectionStatus("远程线路已连接，正在打开工作台…");
+                    setConnectionStatus(getString(R.string.easytier_ready_status));
                     if (webView == null) return;
                     if (pendingWorkbenchUrl != null) {
                         String url = pendingWorkbenchUrl;
@@ -655,7 +735,7 @@ public final class MainActivity extends AppCompatActivity {
             @Override public void onError(String message) {
                 if (pairingProfile != profile) return;
                 runOnUiThread(() -> {
-                    setConnectionStatus("远程线路暂未接通，正在自动重试；局域网连接仍然可用…");
+                    setConnectionStatus(getString(R.string.easytier_failed_status));
                     long delay = Math.min(15_000L, 3_000L + remoteReconnectAttempt * 2_000L);
                     remoteReconnectAttempt = Math.min(remoteReconnectAttempt + 1, 6);
                     mainHandler.removeCallbacks(remoteReconnect);
@@ -672,6 +752,12 @@ public final class MainActivity extends AppCompatActivity {
         connectionOverlay.bringToFront();
         loading.bringToFront();
         reconnectButton.bringToFront();
+    }
+
+    private void revealWorkbench() {
+        workbenchReadyGeneration++;
+        connectionOverlay.setVisibility(View.GONE);
+        reconnectButton.setVisibility(View.GONE);
     }
 
     private void retryWorkbenchNow() {
@@ -692,18 +778,17 @@ public final class MainActivity extends AppCompatActivity {
 
     private void checkWorkbenchReady(int generation, int attempt) {
         if (generation != workbenchReadyGeneration || webView == null || isDestroyed()) return;
-        String script = "(() => Boolean(document.querySelector('[data-slot=\"conversation\"]') && document.querySelector('[data-slot=\"sidebar\"]')))()";
+        String script = "(() => Boolean(document.querySelector('[data-slot=\"conversation\"]') || document.querySelector('[data-slot=\"sidebar\"]') || document.querySelector('[data-composer-card]') || document.querySelector('textarea[data-phase]')))()";
         webView.evaluateJavascript(script, value -> {
             if (generation != workbenchReadyGeneration || isDestroyed()) return;
             if ("true".equals(value)) {
                 mobileUiAdapter.inject(webView);
                 cancelWorkbenchRetry(true);
-                connectionOverlay.setVisibility(View.GONE);
-                reconnectButton.setVisibility(View.GONE);
+                revealWorkbench();
                 return;
             }
-            if (attempt == 20) setConnectionStatus("已连接电脑，工作台功能仍在加载…");
-            if (attempt == 80) setConnectionStatus("工作台加载时间较长。可以点右上角连接按钮立即重试。");
+            if (attempt == 20) setConnectionStatus(getString(R.string.workbench_loading_status));
+            if (attempt == 80) setConnectionStatus(getString(R.string.workbench_slow_status));
             if (attempt < 120) mainHandler.postDelayed(() -> checkWorkbenchReady(generation, attempt + 1), attempt < 12 ? 250L : 750L);
         });
     }
@@ -788,6 +873,10 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (fileChooserCallback != null) {
+            fileChooserCallback.onReceiveValue(null);
+            fileChooserCallback = null;
+        }
         ControlPreferences.setEnabled(this, false);
         ControlForegroundService.stop(this);
         cancelWorkbenchRetry(true);

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing desktop release tag that receives the signed APK
+        description: Existing desktop tag, or immutable android-v<version> standalone tag
         required: true
         default: v1.0.46
       request_id:
@@ -31,6 +31,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      MOBILE_ONLY: ${{ startsWith(inputs.tag || github.ref_name, 'android-v') && 'true' || 'false' }}
       HARNESS_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
       HARNESS_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
       HARNESS_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
@@ -48,13 +49,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node -e "const p=require('./package.json'); if(process.argv[1] !== 'v'+p.version) throw new Error('Requested tag must equal v'+p.version)" "$RELEASE_TAG"
+          node -e "const p=require('./package.json');const tag=process.argv[1];if(tag.startsWith('android-v')){const m=require('./scripts/mobile-release-version.cjs').readAndroidMobileVersion(process.cwd());if(m.integrationVersion!==p.version)throw new Error('Mobile integration version drift');if(tag!==m.tag)throw new Error('Requested standalone tag must equal '+m.tag)}else if(tag!=='v'+p.version)throw new Error('Requested desktop tag must equal v'+p.version)" "$RELEASE_TAG"
+          if test "$MOBILE_ONLY" = true; then
+            version="$(node -p "require('./scripts/mobile-release-version.cjs').readAndroidMobileVersion(process.cwd()).versionName")"
+            version_code="$(node -p "require('./scripts/mobile-release-version.cjs').readAndroidMobileVersion(process.cwd()).versionCode")"
+          else
+            version="$(node -p "require('./package.json').version")"
+            version_code="$(node -e "const [major,minor,patch]=require('./package.json').version.split('.').map(Number);process.stdout.write(String(major*10000+minor*100+patch))")"
+          fi
+          echo "MOBILE_VERSION_NAME=$version" >> "$GITHUB_ENV"
+          echo "MOBILE_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
           test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
+          if test "$MOBILE_ONLY" = true; then test "$(git rev-parse HEAD)" = "$GITHUB_SHA"; fi
           test -n '${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}'
           test -n "$HARNESS_ANDROID_KEY_ALIAS"
           test -n "$HARNESS_ANDROID_STORE_PASSWORD"
           test -n "$HARNESS_ANDROID_KEY_PASSWORD"
           test -n "$EXPECTED_ANDROID_CERT_SHA256"
+          if test "$MOBILE_ONLY" = true; then
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null || true)"
+            if test -n "$existing"; then
+              commit="$(git rev-parse HEAD)"
+              jq -e --arg tag "$RELEASE_TAG" --arg commit "$commit" '.tag_name == $tag and .target_commitish == $commit and .draft == false and .prerelease == false' <<< "$existing" >/dev/null
+              jq -e --arg version "$version" '[.assets[].name] | all(. == "Harness-Mobile-"+$version+"-android-universal.apk" or . == "Harness-Mobile-"+$version+"-android-universal.apk.sha256")' <<< "$existing" >/dev/null
+            fi
+            exit 0
+          fi
           for attempt in $(seq 1 180); do
             if test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || true)" = false; then exit 0; fi
             echo "Waiting for verified desktop release $RELEASE_TAG ($attempt/180)..."
@@ -79,12 +99,14 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x gradlew
-          ./gradlew --no-daemon clean test assembleRelease
+          ./gradlew --no-daemon clean test assembleRelease \
+            "-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME" \
+            "-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE"
       - name: Verify package, version and signing identity
         shell: bash
         run: |
           set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
+          version="$MOBILE_VERSION_NAME"
           source='mobile/android/app/build/outputs/apk/release/app-release.apk'
           asset="Harness-Mobile-${version}-android-universal.apk"
           test -s "$source"
@@ -110,7 +132,7 @@ jobs:
           echo "Verified certificate SHA-256: $actual"
           badging="$($aapt dump badging "$asset" | head -n 1)"
           echo "$badging"
-          expected_version_code="$(node -e "const [major,minor,patch]=require('./package.json').version.split('.').map(Number); process.stdout.write(String(major*10000+minor*100+patch))")"
+          expected_version_code="$MOBILE_VERSION_CODE"
           printf '%s\n' "$badging" | grep -F "name='io.harnessdesktop.mobile'"
           printf '%s\n' "$badging" | grep -F "versionCode='$expected_version_code'"
           printf '%s\n' "$badging" | grep -F "versionName='$version'"
@@ -118,11 +140,25 @@ jobs:
           sha256sum "$asset" > "$checksum"
           echo "ANDROID_ASSET=$asset" >> "$GITHUB_ENV"
           echo "ANDROID_CHECKSUM=$checksum" >> "$GITHUB_ENV"
+      - name: Create immutable standalone Android release when requested
+        if: env.MOBILE_ONLY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >/dev/null 2>&1; then exit 0; fi
+          commit="$(git rev-parse HEAD)"
+          version="$MOBILE_VERSION_NAME"
+          jq -nc --arg tag "$RELEASE_TAG" --arg commit "$commit" --arg name "Harness Mobile $version" --arg body "Standalone signed Android mobile release $version. Desktop packages, components, stable feeds, and prior immutable assets are unchanged." '{tag_name:$tag,target_commitish:$commit,name:$name,body:$body,draft:false,prerelease:false,make_latest:"false"}' |
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases" --input - >/dev/null
       - name: Add immutable signed APK to the existing release
         shell: bash
         run: |
           set -euo pipefail
           existing="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          if test "$MOBILE_ONLY" = true; then
+            unexpected="$(grep -Fvx -e "$ANDROID_ASSET" -e "$ANDROID_CHECKSUM" <<< "$existing" || true)"
+            test -z "$unexpected" || { echo "Unexpected standalone Android release assets: $unexpected" >&2; exit 1; }
+          fi
           mkdir public-existing
           if grep -Fx "$ANDROID_ASSET" <<< "$existing" >/dev/null; then
             gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ANDROID_ASSET" --dir public-existing
@@ -168,8 +204,8 @@ jobs:
           cert_report="$("$apksigner" verify --print-certs "$public/$ANDROID_ASSET" 2>&1)"
           actual="$(printf '%s\n' "$cert_report" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
           test "$actual" = '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21'
-          version="$(node -p "require('./package.json').version")"
-          expected_version_code="$(node -e "const [major,minor,patch]=require('./package.json').version.split('.').map(Number); process.stdout.write(String(major*10000+minor*100+patch))")"
+          version="$MOBILE_VERSION_NAME"
+          expected_version_code="$MOBILE_VERSION_CODE"
           badging="$($aapt dump badging "$public/$ANDROID_ASSET" | head -n 1)"
           printf '%s\n' "$badging" | grep -F "name='io.harnessdesktop.mobile'"
           printf '%s\n' "$badging" | grep -F "versionCode='$expected_version_code'"
@@ -177,3 +213,8 @@ jobs:
           assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
           grep -Fx "$ANDROID_ASSET" <<< "$assets"
           grep -Fx "$ANDROID_CHECKSUM" <<< "$assets"
+          if test "$MOBILE_ONLY" = true; then
+            test "$(grep -c . <<< "$assets")" -eq 2
+            integration="$(node -p "require('./scripts/mobile-release-version.cjs').readAndroidMobileVersion(process.cwd()).integrationVersion")"
+            test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')" = "v$integration"
+          fi

@@ -16,17 +16,18 @@
     <Button
         android:id="@+id/scanner_back_button"
         android:layout_width="wrap_content"
-        android:layout_height="48dp"
+        android:layout_height="@dimen/harness_touch_min"
         android:layout_gravity="top|start"
         android:layout_marginStart="16dp"
         android:layout_marginTop="16dp"
         android:backgroundTint="@color/harness_surface"
-        android:contentDescription="返回配对页面"
+        android:contentDescription="@string/scanner_back_description"
         android:elevation="6dp"
+        android:fontFamily="sans-serif-medium"
         android:minWidth="88dp"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
-        android:text="‹  返回"
+        android:text="@string/scanner_back"
         android:textAllCaps="false"
         android:textColor="@color/harness_text"
         android:textSize="16sp" />
@@ -43,8 +44,51 @@
         android:paddingTop="10dp"
         android:paddingEnd="18dp"
         android:paddingBottom="10dp"
-        android:text="竖直握住手机，对准电脑端配对二维码"
+        android:text="@string/scanner_hint"
         android:textColor="#FFFFFF"
         android:textSize="15sp" />
 
+    <LinearLayout
+        android:id="@+id/scanner_permission_panel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginStart="28dp"
+        android:layout_marginEnd="28dp"
+        android:background="@drawable/harness_control_card"
+        android:elevation="12dp"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:visibility="gone">
+
+        <TextView
+            style="@style/TextAppearance.Harness.Title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/scanner_permission_title" />
+
+        <TextView
+            style="@style/TextAppearance.Harness.Body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:lineSpacingExtra="3dp"
+            android:text="@string/scanner_permission_message" />
+
+        <Button
+            android:id="@+id/scanner_permission_retry"
+            style="@style/Widget.Harness.Button.Primary"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/harness_button_height"
+            android:layout_marginTop="24dp"
+            android:text="@string/scanner_permission_retry" />
+
+        <Button
+            android:id="@+id/scanner_permission_settings"
+            style="@style/Widget.Harness.Button.Secondary"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/harness_button_height_compact"
+            android:layout_marginTop="8dp"
+            android:text="@string/scanner_permission_settings" />
+    </LinearLayout>
 </FrameLayout>

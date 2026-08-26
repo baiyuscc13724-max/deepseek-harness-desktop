@@ -29,6 +29,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const command = process.argv[2] || 'status'
 const version = String(argument('version', pkg.version)).replace(/^v/u, '')
+const scope = String(argument('scope', 'full')).trim().toLowerCase()
 const tag = `v${version}`
 const repo = argument('repo', repositorySlug(pkg.repository?.url) || 'baiyuscc13724-max/deepseek-harness-desktop')
 const pollSeconds = positiveInteger(argument('poll-seconds', '15'), 'poll-seconds')
@@ -1378,7 +1379,12 @@ async function publish() {
   console.log(JSON.stringify({ ok: true, stateFile, tag, productRevision: stateProductRevision, packagingMode: PACKAGING_MODE, phases: PHASES, releaseUrl: state.phases.complete.releaseUrl, mirrorUrl: state.phases.complete.mirrorUrl }, null, 2))
 }
 
-if (command === 'run' || command === 'resume') {
+if (scope === 'android') {
+  const { runAndroidPublisher } = await import('./release-publish-android.mjs')
+  await runAndroidPublisher({ command, integrationVersion: version, repo, pollSeconds })
+} else if (scope !== 'full') {
+  throw new Error('Release scope must be full or android.')
+} else if (command === 'run' || command === 'resume') {
   const releaseLock = await acquirePublicationLock()
   try { await publish() } finally { await releaseLock() }
 } else if (command === 'status') {
@@ -1406,5 +1412,5 @@ if (command === 'run' || command === 'resume') {
     ]
   }, null, 2))
 } else {
-  throw new Error('Usage: node scripts/release-publish.mjs plan|status|run|resume [--version x.y.z] [--repo owner/name] [--poll-seconds 15]')
+  throw new Error('Usage: node scripts/release-publish.mjs plan|status|run|resume [--version x.y.z] [--scope full|android] [--repo owner/name] [--poll-seconds 15]')
 }

@@ -32,6 +32,7 @@
     "release:publish": "node scripts/release-publish.mjs",
     "test:component-local": "node scripts/local-component-update-test.mjs",
     "release:cnb-cloud": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/publish-cnb-cloud-mirror.ps1",
+    "release:cnb-mobile-cloud": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/publish-cnb-mobile-cloud-mirror.ps1",
     "store:assets": "npx --yes --package @microsoft/winappcli@0.5.0 winapp manifest update-assets store/branding/harness-desktop-store.svg --manifest store/Package.appxmanifest.template",
     "store:check": "node scripts/store-readiness.mjs",
     "store:msix": "node scripts/build-store-msix.mjs"

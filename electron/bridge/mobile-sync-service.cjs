@@ -18,8 +18,9 @@ const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.46'
-const DEFAULT_MOBILE_DOWNLOAD_URL = `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v${CURRENT_MOBILE_VERSION}/Harness-Mobile-${CURRENT_MOBILE_VERSION}-android-universal.apk`
+const CURRENT_MOBILE_VERSION = '1.0.46.1'
+const CURRENT_MOBILE_RELEASE_TAG = `android-v${CURRENT_MOBILE_VERSION}`
+const DEFAULT_MOBILE_DOWNLOAD_URL = `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/${CURRENT_MOBILE_RELEASE_TAG}/Harness-Mobile-${CURRENT_MOBILE_VERSION}-android-universal.apk`
 const DEFAULT_IOS_DOWNLOAD_URL = ''
 const DESKTOP_CONTROL_STATE_FILE = 'mobile-sync.desktop-control.json'
 

@@ -209,10 +209,29 @@ for (const contract of ['assets: manifestAssets.length', 'asset.digest', 'Unexpe
   if (!manifestRefresher.includes(contract)) throw new Error(`Final release manifest must bind the exact public asset set to GitHub digests and CNB mirrors: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
-for (const contract of ['seq 1 180', 'android-universal.apk.sha256', 'Preserving the existing immutable APK and deriving its missing checksum when necessary.', 'Verify public signed APK bytes and identity']) {
+for (const contract of ['seq 1 180', 'android-universal.apk.sha256', 'Preserving the existing immutable APK and deriving its missing checksum when necessary.', 'Verify public signed APK bytes and identity', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'Create immutable standalone Android release when requested', 'make_latest:"false"', 'Unexpected standalone Android release assets', 'major*10000+minor*100+patch', 'MOBILE_VERSION_NAME=$version', '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'releases/latest']) {
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Android immutable publication contract missing: ${contract}`)
 }
 if (androidReleaseWorkflow.includes('--clobber')) throw new Error('Android publication must never overwrite public release assets.')
+const androidPublisher = await readFile(path.join(root, 'scripts/release-publish-android.mjs'), 'utf8')
+for (const contract of ['local-mobile-gates', 'immutable-mobile-tag', 'github-signed-android', 'const workflowRef = mobile.tag', "'--ref', workflowRef", 'cnb-mobile-assets', 'maybeRebindPreTagCandidate', 'safe-pre-tag-main-fast-forward', 'Cannot prove CNB Android side-effect absence', 'waitForAndroidCiEvidence', 'Android mobile compile/test', "'--workflow', 'ci.yml'", 'ensureAppleMobileEvidence', "'mobile_only=true'", 'iPhone and iPad simulators', 'macOS Desktop package contracts', 'verifyProtectedState', 'assertProtectedMetadataMatchesLocal', 'Protected GitHub/CNB metadata differs from the committed source', 'assertProtectedReleaseMatchesManifest', 'GitHub asset evidence changed', 'GitHub release metadata differs from the reviewed manifest', 'release target differs from its immutable tag', 'tagRevision: remoteTagRevision', 'latestTag: readLatestGithubReleaseTag', 'Protected desktop latest release must remain', 'verifyProtectedCnbAssetBytes', 'Protected CNB asset bytes changed', 'verifyCnbBytes: true', 'release:cnb-mobile-cloud', '--scope android']) {
+  if (!androidPublisher.includes(contract)) throw new Error(`Standalone Android publisher contract missing: ${contract}`)
+}
+for (const forbidden of ["workflow', 'run', 'release.yml", 'publish-production-components.yml', 'release:orchestrate']) {
+  if (androidPublisher.includes(forbidden)) throw new Error(`Standalone Android publisher must not dispatch full-product publication: ${forbidden}`)
+}
+const ciWorkflow = await readFile(path.join(root, '.github/workflows/ci.yml'), 'utf8')
+for (const contract of ['android-mobile:', 'name: Android mobile compile/test', 'actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3', 'Create ephemeral CI-only Android signing key', 'keytool -genkeypair -noprompt', 'harness-mobile-ci-only.jks', 'chmod +x gradlew', './gradlew --no-daemon clean test lintDebug assembleDebug assembleRelease']) {
+  if (!ciWorkflow.includes(contract)) throw new Error(`Pre-Tag Android CI contract missing: ${contract}`)
+}
+const appleMobileWorkflow = await readFile(path.join(root, '.github/workflows/apple-virtual-tests.yml'), 'utf8')
+for (const contract of ['Apple mobile @', 'source_revision:', 'request_id:', 'mobile_only:', 'ref: ${{ inputs.source_revision || github.sha }}', 'if: ${{ inputs.mobile_only != true }}', 'iPhone and iPad simulators']) {
+  if (!appleMobileWorkflow.includes(contract)) throw new Error(`Apple mobile-only simulator evidence contract missing: ${contract}`)
+}
+const cnbMobilePublisher = await readFile(path.join(root, 'scripts/publish-cnb-mobile-cloud-mirror.ps1'), 'utf8')
+for (const contract of ['.cnb-mobile-only', 'read-tree $baseCommit', 'CNB main changed while preparing the mobile mirror', 'commit-tree $tree -p $baseCommit', 'hash-object -w $manifestPath', 'credential.helper=!npx.cmd --yes @cnbcool/cnb-cli git-credential', '-Method Head']) {
+  if (!cnbMobilePublisher.includes(contract)) throw new Error(`Standalone Android CNB cloud mirror contract missing: ${contract}`)
+}
 if (!recoveryWorkflow.includes('Duplicate release asset name') || !recoveryWorkflow.includes('diff -u')) throw new Error('Cloud recovery must reject duplicate or unexpected public asset names.')
 if (pkg.build?.linux?.artifactName !== 'Harness-Desktop-${version}-linux-${arch}.${ext}') throw new Error('Linux release filenames must remain checksum-safe and space-free.')
 
