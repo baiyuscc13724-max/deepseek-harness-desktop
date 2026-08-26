@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
@@ -7,6 +9,20 @@ val releaseKeyAlias = providers.environmentVariable("HARNESS_ANDROID_KEY_ALIAS")
 val releaseStorePassword = providers.environmentVariable("HARNESS_ANDROID_STORE_PASSWORD").orNull
 val releaseKeyPassword = providers.environmentVariable("HARNESS_ANDROID_KEY_PASSWORD").orNull
 val releaseSigningConfigured = listOf(releaseKeystorePath, releaseKeyAlias, releaseStorePassword, releaseKeyPassword).all { !it.isNullOrBlank() }
+val mobileVersionProperties = Properties().apply {
+    file("version.properties").inputStream().use { load(it) }
+}
+val mobileVersionNameOverride = providers.gradleProperty("HARNESS_MOBILE_VERSION_NAME").orNull?.trim()?.takeIf { it.isNotEmpty() }
+val mobileVersionCodeOverride = providers.gradleProperty("HARNESS_MOBILE_VERSION_CODE").orNull?.trim()?.takeIf { it.isNotEmpty() }
+require((mobileVersionNameOverride == null) == (mobileVersionCodeOverride == null)) {
+    "HARNESS_MOBILE_VERSION_NAME and HARNESS_MOBILE_VERSION_CODE must be supplied together"
+}
+val mobileVersionName = mobileVersionNameOverride
+    ?: requireNotNull(mobileVersionProperties.getProperty("versionName")) { "version.properties must define versionName" }
+val mobileVersionCode = (mobileVersionCodeOverride
+    ?: requireNotNull(mobileVersionProperties.getProperty("versionCode")) { "version.properties must define versionCode" }).toInt()
+require(Regex("^\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?$").matches(mobileVersionName)) { "Android versionName is invalid: '$mobileVersionName'" }
+require(mobileVersionCode in 1..2_147_483_647) { "Android versionCode is invalid" }
 
 android {
     namespace = "io.harnessdesktop.mobile"
@@ -16,8 +32,8 @@ android {
         applicationId = "io.harnessdesktop.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10046
-        versionName = "1.0.46"
+        versionCode = mobileVersionCode
+        versionName = mobileVersionName
         val updateManifestUrl = providers.gradleProperty("HARNESS_MOBILE_UPDATE_MANIFEST_URL").orElse("").get()
         buildConfigField("String", "MOBILE_UPDATE_MANIFEST_URL", "\"${updateManifestUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }

@@ -10,152 +10,144 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingLeft="22dp"
-        android:paddingTop="16dp"
-        android:paddingRight="22dp"
+        android:paddingStart="@dimen/harness_screen_padding"
+        android:paddingTop="14dp"
+        android:paddingEnd="@dimen/harness_screen_padding"
         android:paddingBottom="32dp">
 
         <Button
             android:id="@+id/control_back"
             android:layout_width="wrap_content"
             android:layout_height="42dp"
-            android:backgroundTint="@color/harness_surface"
-            android:text="‹ 返回设置"
-            android:textAllCaps="false"
-            android:textColor="@color/harness_primary_dark" />
+            style="@style/Widget.Harness.Button.Link"
+            android:paddingStart="0dp"
+            android:paddingEnd="8dp"
+            android:text="@string/back_settings"
+            android:textSize="15sp" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:fontFamily="sans-serif-medium"
-            android:text="手机控制"
-            android:textColor="@color/harness_text"
-            android:textSize="26sp" />
+            android:layout_marginTop="12dp"
+            style="@style/TextAppearance.Harness.LargeTitle"
+            android:text="@string/control_title" />
 
         <TextView
             android:id="@+id/control_ready_summary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="7dp"
-            android:lineSpacingExtra="3dp"
-            android:text="完成下面的授权后，当前已配对的 Harness 会话才能操作本机。"
-            android:textColor="@color/harness_secondary"
-            android:textSize="14sp" />
+            style="@style/TextAppearance.Harness.Callout"
+            android:accessibilityLiveRegion="polite"
+            android:text="@string/control_summary" />
 
+        <!-- 步骤 1：无障碍服务 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="@dimen/harness_space_xl"
             android:background="@drawable/harness_control_card"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="@dimen/harness_card_padding">
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-medium"
-                android:text="1. 开启无障碍服务"
-                android:textColor="@color/harness_text"
-                android:textSize="16sp" />
+                style="@style/TextAppearance.Harness.Headline"
+                android:text="@string/step1_title" />
 
             <TextView
                 android:id="@+id/accessibility_status"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
-                android:text="用于读取当前页面的可访问节点，并执行点击、滑动、输入和系统导航。"
-                android:textColor="@color/harness_secondary"
-                android:textSize="13sp" />
+                style="@style/TextAppearance.Harness.Footnote"
+                android:accessibilityLiveRegion="polite"
+                android:text="@string/step1_status" />
 
             <Button
                 android:id="@+id/open_accessibility"
                 android:layout_width="match_parent"
-                android:layout_height="46dp"
+                android:layout_height="@dimen/harness_button_height_compact"
                 android:layout_marginTop="11dp"
-                android:backgroundTint="@color/harness_primary"
-                android:text="打开无障碍设置"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF" />
+                style="@style/Widget.Harness.Button.Secondary"
+                android:text="@string/accessibility_open" />
         </LinearLayout>
 
+        <!-- 步骤 2：屏幕捕获 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="@dimen/harness_space_md"
             android:background="@drawable/harness_control_card"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="@dimen/harness_card_padding">
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-medium"
-                android:text="2. 屏幕捕获"
-                android:textColor="@color/harness_text"
-                android:textSize="16sp" />
+                style="@style/TextAppearance.Harness.Headline"
+                android:text="@string/step2_title" />
 
             <TextView
                 android:id="@+id/capture_status"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
-                android:lineSpacingExtra="2dp"
-                android:text="不会预先申请。只有 Agent 确实需要看屏幕时，系统才会显示一次捕获授权；每次只截取当前画面并立即停止。"
-                android:textColor="@color/harness_secondary"
-                android:textSize="13sp" />
+                style="@style/TextAppearance.Harness.Footnote"
+                android:accessibilityLiveRegion="polite"
+                android:text="@string/step2_status" />
         </LinearLayout>
 
+        <!-- 步骤 3：通知与文件 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="@dimen/harness_space_md"
             android:background="@drawable/harness_control_card"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="@dimen/harness_card_padding">
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-medium"
-                android:text="3. 通知与文件"
-                android:textColor="@color/harness_text"
-                android:textSize="16sp" />
+                style="@style/TextAppearance.Harness.Headline"
+                android:text="@string/step3_title" />
 
             <TextView
                 android:id="@+id/notification_status"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
-                android:text="前台通知始终提供“立即停止”。文件只通过系统选择器按次授权，不申请整个存储空间。"
-                android:textColor="@color/harness_secondary"
-                android:textSize="13sp" />
+                style="@style/TextAppearance.Harness.Footnote"
+                android:accessibilityLiveRegion="polite"
+                android:text="@string/step3_status" />
 
             <Button
                 android:id="@+id/request_notifications"
                 android:layout_width="match_parent"
-                android:layout_height="46dp"
+                android:layout_height="@dimen/harness_button_height_compact"
                 android:layout_marginTop="11dp"
-                android:backgroundTint="@color/harness_surface"
-                android:text="允许控制状态通知"
-                android:textAllCaps="false"
-                android:textColor="@color/harness_primary_dark" />
+                style="@style/Widget.Harness.Button.Secondary"
+                android:text="@string/notification_request" />
         </LinearLayout>
 
+        <!-- 总开关与立即停止 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
+            android:layout_marginTop="@dimen/harness_space_lg"
             android:background="@drawable/harness_control_card"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="@dimen/harness_card_padding">
 
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/control_master_switch"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:fontFamily="sans-serif-medium"
-                android:text="允许当前已配对会话操作手机"
+                android:minHeight="48dp"
+                android:text="@string/master_switch_text"
                 android:textColor="@color/harness_text"
                 android:textSize="15sp" />
 
@@ -164,30 +156,24 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
-                android:lineSpacingExtra="2dp"
-                android:text="当前已关闭。关闭开关会清空命令并撤销正在进行的屏幕捕获。"
-                android:textColor="@color/harness_secondary"
-                android:textSize="13sp" />
+                style="@style/TextAppearance.Harness.Footnote"
+                android:accessibilityLiveRegion="polite"
+                android:text="@string/live_disabled" />
 
             <Button
                 android:id="@+id/control_stop_now"
                 android:layout_width="match_parent"
-                android:layout_height="50dp"
+                android:layout_height="@dimen/harness_button_height"
                 android:layout_marginTop="13dp"
-                android:backgroundTint="#C62828"
-                android:text="立即停止"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF"
-                android:textSize="15sp" />
+                style="@style/Widget.Harness.Button.Destructive"
+                android:text="@string/stop_now_button" />
         </LinearLayout>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:lineSpacingExtra="2dp"
-            android:text="安全边界：密码、支付、银行、验证码、账户安全、清除数据、静默安装/卸载和权限绕过不会自动执行。输入文字、保存文件和清理缓存必须在手机端再次确认。"
-            android:textColor="@color/harness_secondary"
-            android:textSize="12sp" />
+            android:layout_marginTop="@dimen/harness_space_lg"
+            style="@style/TextAppearance.Harness.Caption"
+            android:text="@string/safety_note" />
     </LinearLayout>
 </ScrollView>

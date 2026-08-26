@@ -15,6 +15,16 @@ A later session resumes the same state with the identical `run` command (or `res
 npm run release:publish -- status --version <package.json version>
 ```
 
+When the user explicitly requests a mobile-app-only upload, use the same public publisher with `--scope android` and keep `--version` equal to `package.json`; the Android version comes from `mobile/android/app/version.properties`:
+
+```powershell
+npm run release:publish -- plan --version <package.json version> --scope android
+npm run release:publish -- run --version <package.json version> --scope android
+npm run release:publish -- status --version <package.json version> --scope android
+```
+
+Android scope must bind exact successful main-branch `CI / Android mobile compile/test` evidence and exact iPhone/iPad simulator evidence with macOS desktop packaging skipped before creating a new immutable `android-v<mobileVersion>` release with exactly the cloud-signed APK and checksum, mirror GitHub to CNB without local binary upload, and freshly prove that the existing desktop/component/stable assets did not change. It must never dispatch desktop builds, component publication, or stable-feed promotion. iPhone/iPad remains simulator-validated and uses the existing Safari/Add to Home Screen route while no Apple Developer membership exists; never publish an unsigned IPA.
+
 The publisher is the single source of truth. It owns this immutable order:
 
 1. clean committed source and local source/security gates; the publisher deletes/refuses `dist` and never builds a release package locally;

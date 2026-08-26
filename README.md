@@ -31,7 +31,7 @@
 | Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-portable-x64.exe) |
 | macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-arm64.dmg) |
 | macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Desktop-1.0.46-mac-x64.dmg) |
-| Android 手机端 1.0.46 | 与桌面端扫码配对、同步会话并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/Harness-Mobile-1.0.46-android-universal.apk) |
+| Android 手机端 1.0.46.1 | 与桌面端扫码配对、同步会话、发送照片并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/android-v1.0.46.1/Harness-Mobile-1.0.46.1-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/android-v1.0.46.1/Harness-Mobile-1.0.46.1-android-universal.apk.sha256) |
 | SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.46/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64

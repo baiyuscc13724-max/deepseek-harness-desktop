@@ -1,7 +1,23 @@
 name: Apple Virtual Device Tests
+run-name: Apple mobile @ ${{ inputs.source_revision || github.sha }} · ${{ inputs.request_id || 'manual' }}
 
 on:
   workflow_dispatch:
+    inputs:
+      source_revision:
+        description: Exact committed source revision to validate
+        required: false
+        type: string
+      request_id:
+        description: Stable publisher request identity
+        required: false
+        default: manual
+        type: string
+      mobile_only:
+        description: Validate only iPhone/iPad simulators and skip desktop packaging
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -19,6 +35,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           lfs: true
+          ref: ${{ inputs.source_revision || github.sha }}
+      - name: Bind exact mobile source revision
+        if: inputs.source_revision != ''
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = '${{ inputs.source_revision }}'
       - name: Select Xcode 16
         shell: bash
         run: |
@@ -80,6 +101,7 @@ jobs:
 
   macos-desktop:
     name: macOS Desktop package contracts
+    if: ${{ inputs.mobile_only != true }}
     runs-on: macos-14
     timeout-minutes: 50
     env:
@@ -88,6 +110,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           lfs: true
+          ref: ${{ inputs.source_revision || github.sha }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24

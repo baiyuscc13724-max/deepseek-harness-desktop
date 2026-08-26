@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Apple-style semantic dark palette: preserve hierarchy without pure-white glare. -->
+    <color name="harness_background">#000000</color>
+    <color name="harness_splash_background">#0B0B0D</color>
+    <color name="harness_surface">#1C1C1E</color>
+    <color name="harness_primary">#6C86FF</color>
+    <color name="harness_primary_dark">#A8B7FF</color>
+    <color name="harness_icon_background">#1C2748</color>
+    <color name="harness_text">#F2F2F7</color>
+    <color name="harness_secondary">#AEAEB2</color>
+    <color name="harness_border">#3A3A3C</color>
+    <color name="harness_error">#FF6961</color>
+    <color name="harness_error_ripple">#52FF6961</color>
+    <color name="harness_success">#30D158</color>
+    <color name="harness_ripple">#26365E</color>
+</resources>

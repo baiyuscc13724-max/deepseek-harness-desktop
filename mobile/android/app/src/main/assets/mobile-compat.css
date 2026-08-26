@@ -469,4 +469,57 @@
     align-items: stretch !important;
     flex-direction: column !important;
   }
+
+  /* Mobile attachment entry injected by MobileUiAdapter: a 48px touch target
+     sitting in the composer toolbar next to the official "+" command button. */
+  [data-harness-mobile-add-photo="true"] {
+    box-sizing: border-box !important;
+    flex: 0 0 auto !important;
+    width: 48px !important;
+    min-width: 48px !important;
+    height: 48px !important;
+    min-height: 48px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 12px !important;
+    background: transparent !important;
+    color: var(--dsw-alias-label-secondary) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    line-height: 1 !important;
+    cursor: pointer !important;
+    -webkit-tap-highlight-color: transparent !important;
+  }
+
+  [data-harness-mobile-add-photo="true"]:active {
+    background: var(--dsw-alias-interactive-bg-hover, rgba(21, 45, 58, 0.06)) !important;
+  }
+
+  [data-harness-mobile-add-photo="true"]:disabled {
+    cursor: default !important;
+    opacity: 0.4 !important;
+  }
+
+  /* Accessibility: keep a visible focus ring for keyboard/TalkBack
+     navigation without changing the resting look of any control. */
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--dsw-alias-brand-primary, #4d6bfe) 80%, transparent) !important;
+    outline-offset: 2px !important;
+    border-radius: 6px !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

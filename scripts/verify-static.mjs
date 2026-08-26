@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto'
 import { access, readFile, readdir } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const require = createRequire(import.meta.url)
+const { readAndroidMobileVersion } = require('./mobile-release-version.cjs')
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const required = [
   'electron/bootstrap.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/guest-preload.cjs', 'electron/browser-provenance-preload.cjs', 'electron/desktop-tray.cjs',
@@ -51,6 +54,18 @@ required.push(
   'scripts/pr-preview-verify-feed.mjs',
   'docs/PR-PREVIEW-UPDATES.zh-CN.md',
   'pr-preview-update-sources.json'
+)
+
+required.push(
+  'docs/MOBILE_APPLE_EXPERIENCE.zh-CN.md',
+  'mobile/android/app/version.properties',
+  'mobile/ios/HarnessMobile/App/PairingView.swift',
+  'mobile/ios/HarnessMobile/App/StatusBannerView.swift',
+  'scripts/mobile-release-version.cjs',
+  'scripts/release-publish-android.mjs',
+  'scripts/publish-cnb-mobile-cloud-mirror.ps1',
+  'tests/mobile-apple-experience.test.cjs',
+  'tests/mobile-release-version.test.cjs'
 )
 
 // Agent Teams M2-M5 are executable product surfaces, not optional design files.
@@ -401,7 +416,7 @@ const androidMobileUpdater = await readFile(path.join(root, 'mobile/android/app/
 for (const contract of ['schemaVersion', 'sha256', 'endsWith(".apk")', 'https', 'downloadAndVerify', 'verifyInstalledSigningIdentity']) if (!androidMobileUpdater.includes(contract)) throw new Error(`Android mobile updater contract is missing: ${contract}`)
 const iosMobileUpdater = await readFile(path.join(root, 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift'), 'utf8')
 for (const contract of ['apps.apple.com', 'testflight.apple.com', 'schemaVersion', 'https']) if (!iosMobileUpdater.includes(contract)) throw new Error(`iOS mobile updater contract is missing: ${contract}`)
-for (const contract of ['workflow_dispatch:', 'runs-on: macos-14', 'Select Xcode 16', 'XcodeGen/releases/download/2.46.0/xcodegen.zip', '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806', 'xcodegen generate', 'iPhone Simulator', 'iPad Simulator', 'xcodebuild test', 'Build unsigned Intel app bundle', 'Build unsigned Apple Silicon app bundle', '--cpu=x64', '--cpu=arm64', 'CODE_SIGNING_ALLOWED=NO']) {
+for (const contract of ['workflow_dispatch:', 'source_revision:', 'request_id:', 'mobile_only:', 'Apple mobile @', "if: ${{ inputs.mobile_only != true }}", 'ref: ${{ inputs.source_revision || github.sha }}', 'runs-on: macos-14', 'Select Xcode 16', 'XcodeGen/releases/download/2.46.0/xcodegen.zip', '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806', 'xcodegen generate', 'iPhone Simulator', 'iPad Simulator', 'xcodebuild test', 'Build unsigned Intel app bundle', 'Build unsigned Apple Silicon app bundle', '--cpu=x64', '--cpu=arm64', 'CODE_SIGNING_ALLOWED=NO']) {
   if (!appleWorkflow.includes(contract)) throw new Error(`Apple virtual-device test contract is missing: ${contract}`)
 }
 for (const forbidden of ['upload-artifact', 'softprops/action-gh-release', 'contents: write']) {
@@ -410,29 +425,34 @@ for (const forbidden of ['upload-artifact', 'softprops/action-gh-release', 'cont
 const mobileSourceVersion = pkg.version
 const mobileVersionParts = mobileSourceVersion.split('.').map(Number)
 const mobileBuildNumber = mobileVersionParts[0] * 10000 + mobileVersionParts[1] * 100 + mobileVersionParts[2]
+const androidMobileVersion = readAndroidMobileVersion(root)
+if (androidMobileVersion.integrationVersion !== mobileSourceVersion) throw new Error('Android mobile revision must stay bound to the desktop integration version.')
 const androidBuild = await readFile(path.join(root, 'mobile/android/app/build.gradle.kts'), 'utf8')
-if (!androidBuild.includes(`versionCode = ${mobileBuildNumber}`) || !androidBuild.includes(`versionName = "${mobileSourceVersion}"`)) throw new Error('Android mobile source version must stay synchronized with the desktop integration version.')
+for (const contract of ['file("version.properties")', 'HARNESS_MOBILE_VERSION_NAME', 'HARNESS_MOBILE_VERSION_CODE', 'must be supplied together', 'versionCode = mobileVersionCode', 'versionName = mobileVersionName']) {
+  if (!androidBuild.includes(contract)) throw new Error(`Android mobile build must consume the reviewed version properties: ${contract}`)
+}
 for (const contract of ['HARNESS_ANDROID_KEYSTORE_PATH', 'HARNESS_ANDROID_KEY_ALIAS', 'HARNESS_ANDROID_STORE_PASSWORD', 'HARNESS_ANDROID_KEY_PASSWORD', 'verifyReleaseSigningConfiguration', 'enableV3Signing = true']) {
   if (!androidBuild.includes(contract)) throw new Error(`Android release signing configuration is incomplete: ${contract}`)
 }
 const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
-for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', "expected_version_code=\"$(node -e", 'Harness-Mobile-${version}-android-universal.apk', 'RELEASE_TAG: ${{ inputs.tag || github.ref_name }}', 'Waiting for verified desktop release', 'seq 1 180', 'gh release upload', 'android-universal.apk.sha256', 'Preserving the existing immutable APK', 'Verify public signed APK bytes and identity']) {
+for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'android-v', 'make_latest:"false"', 'MOBILE_VERSION_NAME=$version', 'MOBILE_VERSION_CODE=$version_code', 'major*10000+minor*100+patch', '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'Harness-Mobile-${version}-android-universal.apk', 'RELEASE_TAG: ${{ inputs.tag || github.ref_name }}', 'Waiting for verified desktop release', 'seq 1 180', 'gh release upload', 'android-universal.apk.sha256', 'Preserving the existing immutable APK', 'Unexpected standalone Android release assets', 'repos/$GITHUB_REPOSITORY/releases/latest', 'Verify public signed APK bytes and identity']) {
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Signed Android publication workflow contract missing: ${contract}`)
 }
 for (const forbidden of ['app-debug.apk', 'assembleDebug', '--clobber']) {
   if (androidReleaseWorkflow.includes(forbidden)) throw new Error(`Android publication workflow must never publish debug output: ${forbidden}`)
 }
 const mobileSyncService = await readFile(path.join(root, 'electron/bridge/mobile-sync-service.cjs'), 'utf8')
-for (const contract of [`CURRENT_MOBILE_VERSION = '${mobileSourceVersion}'`, 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/', 'android-universal.apk', '直接在 Safari 使用', '添加到主屏幕', '无需 Apple Developer 会员', '不会提供无法公开安装的未签名 IPA', 'current.url']) {
+for (const contract of [`CURRENT_MOBILE_VERSION = '${androidMobileVersion.versionName}'`, 'CURRENT_MOBILE_RELEASE_TAG = `android-v${CURRENT_MOBILE_VERSION}`', 'https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/', 'android-universal.apk', '直接在 Safari 使用', '添加到主屏幕', '无需 Apple Developer 会员', '不会提供无法公开安装的未签名 IPA', 'current.url']) {
   if (!mobileSyncService.includes(contract)) throw new Error(`iPhone/iPad no-membership QR fallback contract missing: ${contract}`)
 }
 if (!iosProject.includes(`CURRENT_PROJECT_VERSION: ${mobileBuildNumber}`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
-const publishedMobileVersion = pkg.version
+const publishedMobileVersion = androidMobileVersion.versionName
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
   `v${pkg.version}`,
   `Harness-Desktop-${pkg.version}-win-x64.exe`,
   `Harness-Desktop-${pkg.version}-portable-x64.exe`,
+  `android-v${publishedMobileVersion}`,
   `Harness-Mobile-${publishedMobileVersion}-android-universal.apk`,
   'docs/assets/harness-desktop-hero.jpg',
   'releases/latest'

@@ -27,7 +27,7 @@ main:
             jq -e --arg sha "$head_sha" '.schemaVersion == 1 and .kind == "pr-preview-index" and .repository == "baiyuscc13724-max/deepseek-harness-desktop" and .channel == "pr-preview" and .baseRef == "main" and .headSha == $sha and (.sequence | type == "number") and .keyId and (.manifestUrls | length == 2) and .signature' "$latest" >/dev/null
             jq -e --arg sha "$head_sha" '.schemaVersion == 1 and .kind == "pr-preview-manifest" and .repository == "baiyuscc13724-max/deepseek-harness-desktop" and .channel == "pr-preview" and .baseRef == "main" and .headSha == $sha and .keyId and .componentManifest and .signature' "$manifest" >/dev/null
         - name: Prepare verified GitHub release assets
-          if: test ! -f .cnb-stable-only && test ! -f .cnb-preview-feed-only
+          if: test ! -f .cnb-stable-only && test ! -f .cnb-preview-feed-only && test ! -f .cnb-mobile-only
           image: alpine:3.20
           script: |
             set -eu
@@ -84,13 +84,110 @@ main:
             attachments: CNB_RELEASE_ATTACHMENTS
             release_tag: CNB_RELEASE_TAG
         - name: Upload verified assets with official plugin
-          if: test ! -f .cnb-stable-only && test ! -f .cnb-preview-feed-only && test -n "$CNB_RELEASE_ATTACHMENTS"
+          if: test ! -f .cnb-stable-only && test ! -f .cnb-preview-feed-only && test ! -f .cnb-mobile-only && test -n "$CNB_RELEASE_ATTACHMENTS"
           image: cnbcool/attachments:latest
           settings:
             type: UPLOAD
             tag: ${CNB_RELEASE_TAG}
             attachments: ${CNB_RELEASE_ATTACHMENTS}
             ttl: 0
+        - name: Prepare standalone Android cloud mirror
+          if: test -f .cnb-mobile-only
+          image: alpine:3.20
+          script: |
+            set -eu
+            apk add --no-cache ca-certificates curl jq coreutils
+            manifest="mobile-release-manifest.json"
+            test -s "$manifest"
+            test -n "${CNB_TOKEN:-}"
+            tag="$(jq -r '.[0].tag_name' "$manifest")"
+            version="$(jq -r '.[0].mobileVersion' "$manifest")"
+            apk_name="Harness-Mobile-${version}-android-universal.apk"
+            checksum_name="${apk_name}.sha256"
+            test "$tag" = "android-v$version"
+            jq -e --arg apk "$apk_name" --arg checksum "$checksum_name" '
+              length == 1 and
+              .[0].schemaVersion == 1 and
+              .[0].kind == "harness-android-standalone-release" and
+              (.[0].target_commitish | test("^[0-9a-f]{40}$")) and
+              (.[0].assets | length == 2) and
+              (([.[0].assets[].name] | sort) == ([$apk, $checksum] | sort)) and
+              all(.[0].assets[]; (.size | type == "number") and .size > 0 and (.sha256 | test("^[0-9a-f]{64}$")))
+            ' "$manifest" >/dev/null
+            for name in "$apk_name" "$checksum_name"; do
+              source_url="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .browser_download_url' "$manifest")"
+              mirror_url="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .mirror_urls[0]' "$manifest")"
+              test "$source_url" = "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/$tag/$name"
+              test "$mirror_url" = "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/$tag/$name"
+            done
+            api="$CNB_API_ENDPOINT/$CNB_REPO_SLUG"
+            auth="Authorization: Bearer $CNB_TOKEN"
+            release_file=".cnb-mobile-release.json"
+            status="$(curl -sS --retry 5 -o "$release_file" -w '%{http_code}' -H "$auth" -H 'Accept: application/vnd.cnb.api+json' "$api/-/releases/tags/$tag")"
+            if [ "$status" = "404" ]; then
+              payload="$(jq -nc --arg tag "$tag" --arg name "Harness Mobile $version" '{tag_name:$tag,target_commitish:"main",name:$name,body:("Standalone signed Android mobile release " + $name),draft:false,prerelease:false,make_latest:"false"}')"
+              curl -fsS --retry 5 -X POST -H "$auth" -H 'Accept: application/vnd.cnb.api+json' -H 'Content-Type: application/json' -d "$payload" "$api/-/releases" > "$release_file"
+            elif [ "$status" != "200" ]; then
+              cat "$release_file" >&2
+              exit 1
+            fi
+            jq -e --arg tag "$tag" '.tag_name == $tag and .draft == false and .prerelease == false' "$release_file" >/dev/null
+            jq -r '.assets[]?.name' "$release_file" | while IFS= read -r existing_name; do
+              [ "$existing_name" = "$apk_name" ] || [ "$existing_name" = "$checksum_name" ] || { echo "Unexpected standalone Android CNB asset: $existing_name" >&2; exit 1; }
+            done
+            mkdir -p .cnb-mobile-assets
+            attachments=""
+            for name in "$apk_name" "$checksum_name"; do
+              source_url="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .browser_download_url' "$manifest")"
+              expected_size="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .size' "$manifest")"
+              expected_hash="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .sha256' "$manifest")"
+              present=false
+              if jq -e --arg name "$name" '.assets[]? | select(.name == $name)' "$release_file" >/dev/null; then
+                present=true
+                source_url="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .browser_download_url' "$release_file")"
+              fi
+              file=".cnb-mobile-assets/$name"
+              curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 -o "$file" "$source_url"
+              [ "$(stat -c %s "$file")" = "$expected_size" ] || { echo "Size mismatch for $name" >&2; exit 1; }
+              [ "$(sha256sum "$file" | awk '{print $1}')" = "$expected_hash" ] || { echo "SHA-256 mismatch for $name" >&2; exit 1; }
+              if [ "$present" = false ]; then attachments="${attachments}${attachments:+,}${file}"; fi
+            done
+            echo "##[set-output attachments=$attachments]"
+            echo "##[set-output release_tag=$tag]"
+          exports:
+            attachments: CNB_MOBILE_ATTACHMENTS
+            release_tag: CNB_MOBILE_RELEASE_TAG
+        - name: Upload standalone Android assets with official plugin
+          if: test -f .cnb-mobile-only && test -n "$CNB_MOBILE_ATTACHMENTS"
+          image: cnbcool/attachments:latest
+          settings:
+            type: UPLOAD
+            tag: ${CNB_MOBILE_RELEASE_TAG}
+            attachments: ${CNB_MOBILE_ATTACHMENTS}
+            ttl: 0
+        - name: Read back standalone Android assets
+          if: test -f .cnb-mobile-only
+          image: alpine:3.20
+          script: |
+            set -eu
+            apk add --no-cache ca-certificates curl jq coreutils diffutils
+            manifest="mobile-release-manifest.json"
+            tag="$(jq -r '.[0].tag_name' "$manifest")"
+            api="$CNB_API_ENDPOINT/$CNB_REPO_SLUG"
+            auth="Authorization: Bearer $CNB_TOKEN"
+            curl -fsS --retry 5 -H "$auth" -H 'Accept: application/vnd.cnb.api+json' "$api/-/releases/tags/$tag" > .cnb-mobile-readback.json
+            jq -r '.[0].assets[].name' "$manifest" | sort > .cnb-mobile-expected.txt
+            jq -r '.assets[].name' .cnb-mobile-readback.json | sort > .cnb-mobile-actual.txt
+            diff -u .cnb-mobile-expected.txt .cnb-mobile-actual.txt
+            for name in $(cat .cnb-mobile-expected.txt); do
+              expected_size="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .size' "$manifest")"
+              expected_hash="$(jq -r --arg name "$name" '.[0].assets[] | select(.name == $name) | .sha256' "$manifest")"
+              url="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .browser_download_url' .cnb-mobile-readback.json)"
+              file=".cnb-mobile-readback-$name"
+              curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 -o "$file" "$url"
+              [ "$(stat -c %s "$file")" = "$expected_size" ]
+              [ "$(sha256sum "$file" | awk '{print $1}')" = "$expected_hash" ]
+            done
 
 pr-preview:
   push:

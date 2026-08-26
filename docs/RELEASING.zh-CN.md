@@ -17,6 +17,16 @@ npm run release:publish -- run --version <package.json 中的版本>
 npm run release:publish -- status --version <package.json 中的版本>
 ```
 
+用户明确要求“只发布手机 APP”时，仍只能使用同一发布器，但加固定 Android scope；`--version` 仍传 `package.json` 的三段集成版本，独立 Android 四段版本由 `mobile/android/app/version.properties` 提供：
+
+```powershell
+npm run release:publish -- plan --version <package.json 中的版本> --scope android
+npm run release:publish -- run --version <package.json 中的版本> --scope android
+npm run release:publish -- status --version <package.json 中的版本> --scope android
+```
+
+Android scope 只允许干净且等于 `origin/main` 的源码，并先绑定该提交在 `main` 上唯一成功的 `CI / Android mobile compile/test` 云端编译测试证据，同时以 `mobile_only=true` 验证 iPhone/iPad 模拟器并明确跳过 macOS 桌面打包，之后才创建新的不可变 `android-v<mobileVersion>` Tag，由 GitHub Actions 使用长期证书生成/验证正式 APK，再由 CNB Runner 从 GitHub 云到云镜像；Release 只能有 APK 与 `.sha256` 两项，并重新证明既有 `v<integrationVersion>` 的 18 项桌面/组件资产、stable feed 与双云镜像没有变化。它不得调度桌面构建、组件发布或 stable 提升，也不得把本地 debug/release APK作为上传输入。iPhone/iPad 继续采用 Safari 工作台与“添加到主屏幕”，并保留模拟器门禁；没有 Apple Developer 会员时不发布不可安装的未签名 IPA。
+
 状态保存在 `.release-state/v<version>-publish.json`，`packagingMode` 固定为 `github-actions-only`。从 `v1.0.44` 起发布器固定执行：本地源码/安全门禁（删除并拒绝 `dist`，不打包）→ 候选提交快进到 `main` → GitHub Actions 按精确 `source_revision` 完成 Windows/macOS/Linux 构建、iOS 模拟器测试、三份桌面制品归档、当前 Windows 便携/安装包自检、组件健康与回滚以及安装器安装/卸载 → **全部成功后才创建唯一不可变 Tag** → 恢复工作流直接消费前述同一 run 的 Actions 制品并公开 draft → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。`release.yml` 不再监听产品 Tag，因此 Tag push 不会重复构建桌面包。旧 `local-windows` 状态绝不折算成新门禁成功；恢复时记录的 runId 必须重新匹配精确 workflow ID/名称/路径、事件、持久化 requestId 对应的 `display_title`、提交、ref、结论、成功 jobs 和制品集合；GitHub REST run 对象没有 `inputs`，不得把不存在的字段当身份依据。每次实际进入 stable 提升前都会重新检查两云 18 项资产，第二次 CNB 同步才使用 metadata-only 模式，只校验并同步三个 stable feed，不重复传输 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
 
 后文章节是发布器和工作流的安全契约及故障排查资料，不是让会话绕过发布器逐条手工执行的操作清单。完整信任边界、状态迁移和竞态分析见 `docs/CLOUD-RELEASE-PIPELINE.zh-CN.md`。
@@ -28,7 +38,7 @@ npm run release:publish -- status --version <package.json 中的版本>
 - `release-manifest.json` 在新资产全部存在前继续指向上一健康版本，避免公开空链接。
 - v1.0.29 是生产组件更新的完整 Bootstrap 引导包。v1.0.25 不修改、不补发组件源。
 - Android 只允许长期 release 证书；debug、未签名、包名/版本/指纹漂移时工作流必须失败。
-- macOS 桌面包采用显式无签名契约（当前无 Apple Developer 会员）：构建拒绝任何 Developer ID/公证输入，DMG/ZIP 内含"一键安装"助手；这不等于 Developer ID 签名、Apple 公证或 Gatekeeper 验收，macOS 用户仍会看到 Gatekeeper 提示。iPhone/iPad 当前仍只发布 Safari 工作台入口，不构造或发布未签名 IPA。
+- macOS 桌面包采用显式无签名契约（当前无 Apple Developer 会员）：构建拒绝任何 Developer ID/公证输入，DMG/ZIP 内含"一键安装"助手；这不等于 Developer ID 签名、Apple 公证或 Gatekeeper 验收，macOS 用户仍会看到 Gatekeeper 提示。iPhone/iPad 当前仍只发布 Safari 工作台入口，不构造或发布未签名 IPA；桌面端的 `安装.command` 类助手不能替代 iOS 代码签名和 App Store/TestFlight 安装规则。
 - 生产组件私钥、Android keystore、密码、恢复密钥和长期令牌不得进入 Git、聊天、日志或发布资产。
 
 ## 2. 本地源码编排与可选开发者复现

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 间距体系：8pt 栅格的子集，保证层级一致 -->
+    <dimen name="harness_space_xs">4dp</dimen>
+    <dimen name="harness_space_sm">8dp</dimen>
+    <dimen name="harness_space_md">12dp</dimen>
+    <dimen name="harness_space_lg">16dp</dimen>
+    <dimen name="harness_space_xl">20dp</dimen>
+    <dimen name="harness_space_xxl">24dp</dimen>
+    <dimen name="harness_space_xxxl">32dp</dimen>
+
+    <!-- 触摸目标：Android 平台保持至少 48dp；iOS 对应为 44pt。 -->
+    <dimen name="harness_touch_min">48dp</dimen>
+
+    <!-- 控件高度 -->
+    <dimen name="harness_button_height">52dp</dimen>
+    <dimen name="harness_button_height_compact">48dp</dimen>
+    <dimen name="harness_field_height">52dp</dimen>
+    <dimen name="harness_row_height">56dp</dimen>
+
+    <!-- 圆角 -->
+    <dimen name="harness_radius_card">14dp</dimen>
+    <dimen name="harness_radius_field">12dp</dimen>
+    <dimen name="harness_radius_badge">4dp</dimen>
+
+    <!-- 图标 -->
+    <dimen name="harness_icon_brand">72dp</dimen>
+    <dimen name="harness_icon_control">22dp</dimen>
+
+    <!-- 布局 -->
+    <dimen name="harness_screen_padding">28dp</dimen>
+    <dimen name="harness_card_padding">16dp</dimen>
+</resources>

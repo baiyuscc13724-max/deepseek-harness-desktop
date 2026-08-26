@@ -1,36 +1,55 @@
 import SwiftUI
 
+/// 根视图。导航层级：工作台（已配对）↔ 配对页（未配对）；
+/// 连接状态作为“状态层级”以横幅形式浮在工作台上，连接中断时保留页面便于重试。
 struct ContentView: View {
     @EnvironmentObject private var model: MobileSessionViewModel
     @Environment(\.openURL) private var openURL
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     @State private var manualCode = ""
     @State private var confirmForget = false
+    @State private var workbenchLoading = false
 
     var body: some View {
         NavigationStack {
             Group {
-                if let url = model.workbenchURL, model.state == .connected {
-                    WorkbenchView(url: url) { message in model.retry() }
+                if let url = model.workbenchURL {
+                    workbench(url)
                 } else {
-                    setup
+                    PairingView(manualCode: $manualCode, confirmForget: $confirmForget)
                 }
             }
             .navigationTitle("DeepSeek Harness")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if model.workbenchURL != nil {
-                    ToolbarItem(placement: .topBarTrailing) { Button("忘记电脑") { confirmForget = true } }
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    if model.isPaired {
+                        Button {
+                            model.retry()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(model.state == .connected)
+                        .accessibilityLabel("重新连接")
+                        .accessibilityHint("使用已保存的电脑重新建立连接")
+                        Button("忘记电脑") { confirmForget = true }
+                            .accessibilityHint("清除本机保存的配对信息和登录数据")
+                    }
                 }
             }
         }
-        .sheet(isPresented: $model.scannerPresented) {
-            QRScannerView(onCode: model.connect, onCancel: { model.scannerPresented = false }).ignoresSafeArea()
+        .fullScreenCover(isPresented: $model.scannerPresented) {
+            QRScannerView(
+                onCode: { model.connect($0) },
+                onCancel: { model.scannerPresented = false }
+            )
+            .ignoresSafeArea()
         }
         .confirmationDialog("忘记已配对的 Desktop？", isPresented: $confirmForget, titleVisibility: .visible) {
             Button("忘记并清除本机登录数据", role: .destructive) { model.forgetDesktop() }
             Button("取消", role: .cancel) {}
         }
-        .onChange(of: model.networkMonitor.generation) { _ in model.networkChanged() }
         .alert("手机 App 有新版本", isPresented: Binding(
             get: { model.availableAppUpdate != nil },
             set: { if !$0 { model.dismissOptionalAppUpdate() } }
@@ -44,38 +63,44 @@ struct ContentView: View {
                 Text("iOS/iPadOS 版 \(update.version) 已可用。按照 Apple 平台规则，更新只由 App Store 或 TestFlight 完成，App 不会自行安装 IPA。")
             }
         }
+        .onChange(of: model.networkMonitor.generation) { _ in model.networkChanged() }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: model.state)
     }
 
-    private var setup: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                Image(systemName: "laptopcomputer.and.iphone")
-                    .font(.system(size: 58, weight: .medium)).foregroundStyle(.teal)
-                Text("连接 Harness Desktop").font(.title2.bold())
-                Text(statusText).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button { model.scannerPresented = true } label: {
-                    Label("扫描电脑上的配对二维码", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity)
-                }.buttonStyle(.borderedProminent).controlSize(.large)
-                TextField("或粘贴 harnessmobile:// 配对地址", text: $manualCode, axis: .vertical)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder)
-                Button("连接") { model.connect(manualCode) }.buttonStyle(.bordered).disabled(manualCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                if case .failed = model.state { Button("重试已保存的电脑") { model.retry() } }
-                Divider().padding(.vertical, 4)
-                Label("优先使用局域网；不可达时自动使用端到端加密的 WSS/443 后备线路。", systemImage: "lock.shield")
-                    .font(.footnote).foregroundStyle(.secondary)
-                Text("iOS/iPadOS 版可安全访问 Harness 工作台，但不会也不能像 Android 无障碍服务一样控制其他 App。")
-                    .font(.footnote).foregroundStyle(.secondary)
+    // MARK: - 工作台（保留页面，状态作为横幅叠加）
+
+    private func workbench(_ url: URL) -> some View {
+        ZStack(alignment: .top) {
+            WorkbenchView(
+                url: url,
+                onLoadingChange: { workbenchLoading = $0 },
+                onFailure: { model.workbenchFailed($0) }
+            )
+            .ignoresSafeArea()
+
+            if workbenchLoading {
+                ProgressView("正在加载工作台…")
+                    .padding(16)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .frame(maxHeight: .infinity, alignment: .center)
             }
-            .padding(28).frame(maxWidth: 540)
+
+            bannerOverlay
         }
     }
 
-    private var statusText: String {
+    @ViewBuilder private var bannerOverlay: some View {
         switch model.state {
-        case .unpaired: return "在电脑端打开“手机同步”，然后扫描一次性二维码。"
-        case .connecting(let detail): return detail
-        case .connected: return "已连接"
-        case .failed(let message): return message
+        case .connecting(let detail):
+            StatusBannerView(style: .connecting, text: detail)
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+        case .failed(let message):
+            StatusBannerView(style: .error, text: message, actionTitle: "重试") { model.retry() }
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+        default:
+            EmptyView()
         }
     }
 }

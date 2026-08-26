@@ -2,4 +2,110 @@
 <resources>
     <string name="app_name">DeepSeek Harness</string>
     <string name="control_accessibility_description">仅在你打开手机控制总开关后，读取当前页面的可访问节点，并执行明确的点击、滑动、输入和系统导航命令。密码、支付、验证码和账户安全操作不会自动执行。</string>
+
+    <!-- 品牌 -->
+    <string name="branding_deepseek">deepseek</string>
+    <string name="branding_harness">HARNESS</string>
+
+    <!-- 配对页 -->
+    <string name="pairing_title">连接桌面工作台</string>
+    <string name="pairing_subtitle">在桌面端设置中打开“手机同步”，扫描一次，之后会自动重连。</string>
+    <string name="scan_button">扫码连接电脑</string>
+    <string name="pairing_url_hint">或粘贴桌面端配对地址</string>
+    <string name="connect_button">使用配对地址连接</string>
+    <string name="pairing_error_invalid">配对地址无效。请扫描电脑端新生成的二维码，并确认手机与电脑在同一 Wi-Fi。</string>
+    <string name="pairing_error_save_failed">无法安全保存配对信息，请检查系统密钥存储后重试。</string>
+    <string name="pairing_footer">优先使用局域网；不在同一网络时自动切换加密备用线路。不会替换手机已有 VPN。</string>
+    <string name="pairing_or">或</string>
+    <string name="scan_prompt">扫描电脑端 Harness Desktop 的配对二维码</string>
+
+    <!-- 连接状态 -->
+    <string name="connecting_title">正在连接电脑</string>
+    <string name="connecting_default_status">正在尝试局域网，必要时会自动切换远程线路…</string>
+    <string name="connecting_lan_status">正在尝试局域网，必要时会自动切换 WSS/443 加密线路…</string>
+    <string name="connecting_workbench_status">正在连接桌面工作台…</string>
+    <string name="connecting_failed_toast">应用内连接通道启动失败，将尝试局域网直连</string>
+    <string name="network_lost_status">网络已断开，恢复后会自动重新连接…</string>
+    <string name="network_switched_remote_status">网络已切换，正在重建加密远程线路…</string>
+    <string name="network_switched_local_status">网络已切换，正在重新连接桌面工作台…</string>
+    <string name="waiting_desktop_status">电脑端正在准备工作台，连接成功后会自动打开…</string>
+    <string name="pairing_expired_status">配对信息已失效。请点右上角连接按钮，忘记此电脑后重新扫码。</string>
+    <string name="retry_waiting_status">正在等待电脑响应，线路恢复后会自动打开…</string>
+    <string name="wss_connecting_status">正在建立端到端加密的 WSS/443 远程线路…</string>
+    <string name="wss_ready_status">WSS/443 远程线路已连接，正在打开工作台…</string>
+    <string name="wss_failed_status">WSS/443 线路暂未接通，正在自动重试；局域网连接仍然可用…</string>
+    <string name="easytier_connecting_status">正在建立加密远程线路，首次连接可能需要一些时间…</string>
+    <string name="easytier_ready_status">远程线路已连接，正在打开工作台…</string>
+    <string name="easytier_failed_status">远程线路暂未接通，正在自动重试；局域网连接仍然可用…</string>
+    <string name="workbench_loading_status">已连接电脑，工作台功能仍在加载…</string>
+    <string name="workbench_slow_status">工作台加载时间较长。可以点右上角连接按钮立即重试。</string>
+    <string name="vpn_notice">已检测到系统 VPN。Harness 仅代理本应用流量，不会关闭或替换现有 VPN。</string>
+    <string name="no_app_to_open">没有可打开此链接的应用</string>
+    <string name="reconnect_description">连接设置</string>
+
+    <!-- 连接设置对话框 -->
+    <string name="connection_settings_title">连接设置</string>
+    <string name="connection_settings_message_vpn">检测到系统 VPN。Harness 当前使用应用内线路，不会抢占系统 VPN。配对信息会保留，重新连接无需扫码。</string>
+    <string name="connection_settings_message">配对信息会保留，网络恢复后自动重连；只有“忘记此电脑”才需要重新扫码。</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_reconnect_now">立即重连</string>
+    <string name="action_forget_computer">忘记此电脑</string>
+    <string name="forget_title">忘记这台电脑？</string>
+    <string name="forget_message">下次连接需要重新扫描电脑端二维码。</string>
+    <string name="action_forget">忘记</string>
+
+    <!-- 更新对话框 -->
+    <string name="update_title_required">需要更新手机 App</string>
+    <string name="update_title_optional">手机 App 有新版本</string>
+    <string name="update_message">Android 版 %1$s 已可用。下载后仍由 Android 系统核验应用签名并要求您确认安装。</string>
+    <string name="update_download">下载并校验 Android APK</string>
+    <string name="update_later">稍后</string>
+    <string name="update_downloading">正在下载并校验 APK…</string>
+    <string name="update_verify_failed">APK 校验失败</string>
+    <string name="update_no_installer">系统中没有可用的 APK 安装器</string>
+
+    <!-- 手机控制设置页 -->
+    <string name="back_settings">‹ 返回设置</string>
+    <string name="control_title">手机控制</string>
+    <string name="control_summary">完成下面的授权后，当前已配对的 Harness 会话才能操作本机。</string>
+    <string name="step1_title">1. 开启无障碍服务</string>
+    <string name="step1_status">用于读取当前页面的可访问节点，并执行点击、滑动、输入和系统导航。</string>
+    <string name="step2_title">2. 屏幕捕获</string>
+    <string name="step2_status">不会预先申请。只有 Agent 确实需要看屏幕时，系统才会显示一次捕获授权；每次只截取当前画面并立即停止。</string>
+    <string name="step3_title">3. 通知与文件</string>
+    <string name="step3_status">前台通知始终提供“立即停止”。文件只通过系统选择器按次授权，不申请整个存储空间。</string>
+    <string name="master_switch_text">允许当前已配对会话操作手机</string>
+    <string name="stop_now_button">立即停止</string>
+    <string name="safety_note">安全边界：密码、支付、银行、验证码、账户安全、清除数据、静默安装/卸载和权限绕过不会自动执行。输入文字、保存文件和清理缓存必须在手机端再次确认。</string>
+
+    <string name="accessibility_on_status">已开启：可以读取当前页面的可访问节点并执行固定手势。</string>
+    <string name="accessibility_off_status">未开启：点击下一步，在系统列表中选择“DeepSeek Harness 手机控制”。</string>
+    <string name="accessibility_open">打开无障碍设置</string>
+    <string name="accessibility_view">查看无障碍设置</string>
+    <string name="capture_approved_status">最近一次屏幕捕获由你允许。下一次需要看屏幕时，系统仍会再次询问；图像只在返回任务结果时短暂保留。</string>
+    <string name="capture_not_requested_status">尚未申请。只有 Agent 确实需要看屏幕时，系统才会显示捕获授权；每次截取后立即停止。</string>
+    <string name="notification_on_status">已允许通知。前台通知会显示当前动作和“立即停止”。文件仍只通过系统选择器按次授权。</string>
+    <string name="notification_off_status">通知尚未允许。建议开启，以便在任何页面看到控制状态和“立即停止”。文件不需要整个存储权限。</string>
+    <string name="notification_granted">通知已允许</string>
+    <string name="notification_request">允许控制状态通知</string>
+    <string name="notification_supported">系统已支持前台通知</string>
+    <string name="ready_enabled">手机控制已就绪</string>
+    <string name="live_enabled">当前允许已配对会话下发固定动作。通知栏和本页都可立即停止。</string>
+    <string name="ready_accessibility_only">权限已完成，打开总开关即可使用</string>
+    <string name="live_disabled">当前已关闭。待执行命令不会运行。</string>
+    <string name="ready_setup_required">先完成无障碍授权，再打开总开关</string>
+    <string name="live_safety">当前已关闭。密码、支付、验证码和账户安全操作始终拒绝。</string>
+    <string name="notification_granted_toast">已允许控制状态通知</string>
+    <string name="notification_denied_toast">未允许通知；仍可在此页面立即停止</string>
+    <string name="accessibility_needed_toast">请先在系统页面开启 Harness 手机控制无障碍服务</string>
+    <string name="stop_now_toast">手机控制已立即停止，待执行命令已清空。</string>
+
+    <!-- 扫码页 -->
+    <string name="scanner_back">‹ 返回</string>
+    <string name="scanner_back_description">返回配对页面</string>
+    <string name="scanner_hint">竖直握住手机，对准电脑端配对二维码</string>
+    <string name="scanner_permission_title">需要相机权限</string>
+    <string name="scanner_permission_message">仅在扫码页面使用相机读取电脑上的配对二维码。不会保存照片或视频；你也可以返回后粘贴配对地址。</string>
+    <string name="scanner_permission_retry">允许相机并重试</string>
+    <string name="scanner_permission_settings">打开系统设置</string>
 </resources>

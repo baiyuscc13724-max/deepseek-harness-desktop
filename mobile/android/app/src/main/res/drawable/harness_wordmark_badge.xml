@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#17313B" />
-    <corners android:radius="4dp" />
+    <solid android:color="@color/harness_text" />
+    <corners android:radius="@dimen/harness_radius_badge" />
 </shape>

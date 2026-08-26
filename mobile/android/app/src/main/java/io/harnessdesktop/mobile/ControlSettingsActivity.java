@@ -33,7 +33,7 @@ public final class ControlSettingsActivity extends AppCompatActivity {
     private final ActivityResultLauncher<String> notificationPermission = registerForActivityResult(
         new ActivityResultContracts.RequestPermission(),
         granted -> {
-            Toast.makeText(this, granted ? "已允许控制状态通知" : "未允许通知；仍可在此页面立即停止", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, granted ? getString(R.string.notification_granted_toast) : getString(R.string.notification_denied_toast), Toast.LENGTH_LONG).show();
             refresh();
         }
     );
@@ -54,14 +54,14 @@ public final class ControlSettingsActivity extends AppCompatActivity {
         findViewById(R.id.control_back).setOnClickListener(view -> finish());
         accessibilityButton.setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         notificationButton.setOnClickListener(view -> requestNotificationPermission());
-        findViewById(R.id.control_stop_now).setOnClickListener(view -> stopNow("手机控制已立即停止，待执行命令已清空。"));
+        findViewById(R.id.control_stop_now).setOnClickListener(view -> stopNow(getString(R.string.stop_now_toast)));
         masterSwitch.setOnCheckedChangeListener((button, checked) -> {
             if (painting) return;
             if (checked && !HarnessControlAccessibilityService.isConnected()) {
                 painting = true;
                 masterSwitch.setChecked(false);
                 painting = false;
-                Toast.makeText(this, "请先在系统页面开启 Harness 手机控制无障碍服务", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, getString(R.string.accessibility_needed_toast), Toast.LENGTH_LONG).show();
                 startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                 return;
             }
@@ -97,27 +97,29 @@ public final class ControlSettingsActivity extends AppCompatActivity {
         painting = false;
 
         accessibilityStatus.setText(accessibility
-            ? "已开启：可以读取当前页面的可访问节点并执行固定手势。"
-            : "未开启：点击下一步，在系统列表中选择“DeepSeek Harness 手机控制”。");
-        accessibilityButton.setText(accessibility ? "查看无障碍设置" : "打开无障碍设置");
+            ? getString(R.string.accessibility_on_status)
+            : getString(R.string.accessibility_off_status));
+        accessibilityButton.setText(accessibility ? getString(R.string.accessibility_view) : getString(R.string.accessibility_open));
         captureStatus.setText(ControlPreferences.captureWasApproved(this)
-            ? "最近一次屏幕捕获由你允许。下一次需要看屏幕时，系统仍会再次询问；图像只在返回任务结果时短暂保留。"
-            : "尚未申请。只有 Agent 确实需要看屏幕时，系统才会显示捕获授权；每次截取后立即停止。 ");
+            ? getString(R.string.capture_approved_status)
+            : getString(R.string.capture_not_requested_status));
         notificationStatus.setText(notifications
-            ? "已允许通知。前台通知会显示当前动作和“立即停止”。文件仍只通过系统选择器按次授权。"
-            : "通知尚未允许。建议开启，以便在任何页面看到控制状态和“立即停止”。文件不需要整个存储权限。 ");
+            ? getString(R.string.notification_on_status)
+            : getString(R.string.notification_off_status));
         notificationButton.setEnabled(!notifications && Build.VERSION.SDK_INT >= 33);
-        notificationButton.setText(notifications ? "通知已允许" : Build.VERSION.SDK_INT >= 33 ? "允许控制状态通知" : "系统已支持前台通知");
+        notificationButton.setText(notifications
+            ? getString(R.string.notification_granted)
+            : Build.VERSION.SDK_INT >= 33 ? getString(R.string.notification_request) : getString(R.string.notification_supported));
 
         if (enabled && accessibility) {
-            readySummary.setText("手机控制已就绪");
-            liveStatus.setText("当前允许已配对会话下发固定动作。通知栏和本页都可立即停止。 ");
+            readySummary.setText(getString(R.string.ready_enabled));
+            liveStatus.setText(getString(R.string.live_enabled));
         } else if (accessibility) {
-            readySummary.setText("权限已完成，打开总开关即可使用");
-            liveStatus.setText("当前已关闭。待执行命令不会运行。 ");
+            readySummary.setText(getString(R.string.ready_accessibility_only));
+            liveStatus.setText(getString(R.string.live_disabled));
         } else {
-            readySummary.setText("先完成无障碍授权，再打开总开关");
-            liveStatus.setText("当前已关闭。密码、支付、验证码和账户安全操作始终拒绝。 ");
+            readySummary.setText(getString(R.string.ready_setup_required));
+            liveStatus.setText(getString(R.string.live_safety));
         }
     }
 
