@@ -112,10 +112,14 @@ test('attention, resume planning, and confirmed retirement task release are dete
   assert.deepEqual(released, ['stranded'])
   assert.equal(team.tasks[0].state, 'pending')
   assert.equal(team.tasks[0].assigneeSessionId, undefined)
+  assert.equal(team.tasks[0].releasedAt, timestamp)
+  assert.match(team.tasks[0].releaseReason, /force-retired/u)
+  assert.deepEqual(mod.deriveAttention(team).releasedTasks, ['stranded'])
+  assert.ok(mod.deriveAttention(team).codes.includes('released_task'))
   assert.equal(team.tasks[2].assigneeSessionId, 'failed-session', 'completed audit history is preserved')
 })
 
-test('closing a team releases every unfinished task without rewriting completed audit history', async () => {
+test('closing a team cancels every unfinished task without rewriting completed audit history', async () => {
   const mod = await plugin()
   const timestamp = new Date().toISOString()
   const closedAt = new Date(Date.parse(timestamp) + 1000).toISOString()
@@ -133,13 +137,15 @@ test('closing a team releases every unfinished task without rewriting completed 
     ],
     messages: []
   }
-  const released = mod.terminalizeTeamTasks(team, closedAt)
-  assert.deepEqual(released, ['assigned-pending', 'active'])
+  const cancelled = mod.terminalizeTeamTasks(team, closedAt, 'forced closure')
+  assert.deepEqual(cancelled, ['assigned-pending', 'active'])
   for (const task of team.tasks.slice(0, 2)) {
-    assert.equal(task.state, 'pending')
+    assert.equal(task.state, 'cancelled')
     assert.equal(task.assigneeSessionId, undefined)
     assert.equal(task.claimedAt, undefined)
     assert.equal(task.completedAt, undefined)
+    assert.equal(task.cancelledAt, closedAt)
+    assert.equal(task.cancellationReason, 'forced closure')
     assert.equal(task.updatedAt, closedAt)
   }
   assert.equal(team.tasks[2].state, 'completed')
@@ -204,10 +210,12 @@ test('force shutdown retries a crash-persisted closing team to one normalized cl
     assert.equal(durable.members.find(member => member.sessionId === 'closing-worker').state, 'retired')
     for (const taskId of ['closing-pending', 'closing-active']) {
       const task = durable.tasks.find(candidate => candidate.id === taskId)
-      assert.equal(task.state, 'pending')
+      assert.equal(task.state, 'cancelled')
       assert.equal(task.assigneeSessionId, undefined)
       assert.equal(task.claimedAt, undefined)
       assert.equal(task.completedAt, undefined)
+      assert.ok(task.cancelledAt)
+      assert.match(task.cancellationReason, /force-closed/u)
     }
     const completed = durable.tasks.find(task => task.id === 'closing-done')
     assert.equal(completed.state, 'completed')
@@ -218,6 +226,76 @@ test('force shutdown retries a crash-persisted closing team to one normalized cl
     assert.equal(projected.teams.find(candidate => candidate.id === team.id).activeTaskCount, 0)
     assert.deepEqual(fx.mod.deriveAttention(durable).strandedTasks, [])
   } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('graceful member retirement and team shutdown reject unfinished durable work', async () => {
+  const fx = await fixture()
+  const lead = { id: 'graceful-guard-lead' }
+  const ctx = { agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] } }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Require explicit task reconciliation' })
+    const assigned = worker('guard-worker', 'Guard')
+    await fx.store.mutate(document => { document.teams.find(candidate => candidate.id === team.id).members.push(assigned) })
+    await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Still assigned', assigneeSessionId: assigned.sessionId })
+    await assert.rejects(
+      fx.mod.shutdownTeam(ctx, fx.store, undefined, lead, { teamId: team.id, memberSessionId: assigned.sessionId }, new AbortController().signal),
+      error => error?.code === 'AGENT_TEAMS_UNFINISHED_TASKS'
+    )
+    await assert.rejects(
+      fx.mod.shutdownTeam(ctx, fx.store, undefined, lead, { teamId: team.id }, new AbortController().signal),
+      error => error?.code === 'AGENT_TEAMS_UNFINISHED_TASKS'
+    )
+    const durable = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
+    assert.equal(durable.state, 'active')
+    assert.equal(durable.members.find(member => member.sessionId === assigned.sessionId).state, 'ready')
+    assert.equal(durable.tasks[0].state, 'pending')
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('cancelled prerequisites remain explicit terminal failures instead of silent pending work', async () => {
+  const mod = await plugin()
+  const timestamp = new Date().toISOString()
+  const team = {
+    id: 'cancelled-dependency-team', rootLeadSessionId: 'lead', name: 'Cancelled dependency', objective: 'Expose failed prerequisites', revision: 1, state: 'active', createdAt: timestamp, updatedAt: timestamp,
+    members: [{ id: 'lead-id', sessionId: 'lead', name: 'Lead', role: 'root', kind: 'lead', state: 'ready', createdAt: timestamp, updatedAt: timestamp }],
+    tasks: [
+      { id: 'source', title: 'Source', state: 'cancelled', dependsOn: [], files: [], createdAt: timestamp, updatedAt: timestamp, cancelledAt: timestamp, cancellationReason: 'forced closure' },
+      { id: 'dependent', title: 'Dependent', state: 'pending', dependsOn: ['source'], files: [], createdAt: timestamp, updatedAt: timestamp }
+    ],
+    messages: []
+  }
+  const attention = mod.deriveAttention(team)
+  assert.ok(attention.codes.includes('failed_dependency'))
+  assert.deepEqual(attention.failedDependencyTasks, ['dependent'])
+  assert.deepEqual(attention.blockedTasks, ['dependent'])
+})
+
+test('initialization migrates legacy unfinished tasks on closed teams to cancelled', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-closed-task-migration-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  const mod = await plugin()
+  const timestamp = new Date().toISOString()
+  const document = {
+    version: 3,
+    settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 },
+    teams: [{
+      id: 'legacy-closed', rootLeadSessionId: 'lead', name: 'Legacy closed', objective: 'Repair stale pending work', revision: 1, state: 'closed', createdAt: timestamp, updatedAt: timestamp,
+      members: [{ id: 'lead-id', sessionId: 'lead', name: 'Lead', role: 'root', kind: 'lead', state: 'ready', createdAt: timestamp, updatedAt: timestamp }],
+      tasks: [{ id: 'stale', title: 'Stale pending', state: 'pending', dependsOn: [], files: [], createdAt: timestamp, updatedAt: timestamp }],
+      messages: []
+    }]
+  }
+  try {
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, `${JSON.stringify(document, null, 2)}\n`, 'utf8')
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    const stale = store.snapshot().teams[0].tasks[0]
+    assert.equal(stale.state, 'cancelled')
+    assert.ok(stale.cancelledAt)
+    assert.match(stale.cancellationReason, /legacy closed team/u)
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
 
 test('failed or shutdown-unconfirmed members cannot claim new work', async () => {
@@ -342,6 +420,46 @@ test('reopen and complete preserve dependency consistency', async () => {
       fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: dependent.id, action: 'complete' }),
       error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
     )
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('explicit cancellation is terminal, blocks dependents visibly, and can be reopened', async () => {
+  const fx = await fixture()
+  const lead = { id: 'cancel-lead' }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Exercise cancellation transitions' })
+    const prerequisite = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Cancelled prerequisite' })).task
+    const dependent = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Blocked dependent', dependsOn: [prerequisite.id] })).task
+    const cancelled = (await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'cancel' })).task
+    assert.equal(cancelled.state, 'cancelled')
+    assert.ok(cancelled.cancelledAt)
+    const projected = fx.mod.teamSnapshot(fx.store.snapshot(), lead.id, team.id).team.tasks.find(task => task.id === dependent.id)
+    assert.deepEqual(projected.failedBy, [prerequisite.id])
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: dependent.id, action: 'claim' }),
+      error => error?.code === 'AGENT_TEAMS_TASK_BLOCKED'
+    )
+    const reopened = (await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'reopen' })).task
+    assert.equal(reopened.state, 'pending')
+    assert.equal(reopened.cancelledAt, undefined)
+    assert.equal(reopened.cancellationReason, undefined)
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('cancelled dependents do not falsely prevent reopening their completed prerequisite', async () => {
+  const fx = await fixture()
+  const lead = { id: 'cancelled-dependent-lead' }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Ignore cancelled dependents in progress guards' })
+    const prerequisite = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Completed prerequisite' })).task
+    const dependent = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Cancelled dependent', dependsOn: [prerequisite.id] })).task
+    await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'claim' })
+    await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'complete' })
+    await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: dependent.id, action: 'cancel' })
+    const reopened = (await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'reopen' })).task
+    assert.equal(reopened.state, 'pending')
   } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 

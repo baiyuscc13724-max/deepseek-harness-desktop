@@ -90,6 +90,9 @@ dependencies {
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // BSD-3-Clause WebRTC SDK. The AAR ships arm64-v8a, armeabi-v7a, x86 and
+    // x86_64 native libraries; no camera/microphone APIs or permissions are used.
+    implementation("io.github.webrtc-sdk:android:144.7559.14")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

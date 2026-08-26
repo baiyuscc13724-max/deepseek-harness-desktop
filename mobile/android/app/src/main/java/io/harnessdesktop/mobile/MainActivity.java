@@ -1,6 +1,7 @@
 package io.harnessdesktop.mobile;
 
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Context;
@@ -10,6 +11,7 @@ import android.net.Uri;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -73,7 +75,9 @@ public final class MainActivity extends AppCompatActivity {
     private HarnessWebProxy localProxy;
     private EasyTierClient easyTierClient;
     private WssRelayClient wssRelayClient;
+    private NativeP2pClient nativeP2pClient;
     private MobileUiAdapter mobileUiAdapter;
+    private ScreenCaptureObserver screenCaptureObserver;
     private MobileAssetCache mobileAssetCache;
     private PairingProfileStore pairingProfileStore;
     private PairingProfile pairingProfile;
@@ -87,6 +91,11 @@ public final class MainActivity extends AppCompatActivity {
     private int workbenchRetryAttempt;
     private int workbenchReadyGeneration;
     private int remoteReconnectAttempt;
+    private int nativeReconnectAttempt;
+    private int easyTierSocksPort;
+    private int wssRelaySocksPort;
+    private int nativeP2pSocksPort;
+    private String routeStatus = "尚未验证可用线路";
     private boolean backDispatchPending;
     private ConnectivityManager connectivityManager;
     private boolean networkCallbackRegistered;
@@ -117,9 +126,14 @@ public final class MainActivity extends AppCompatActivity {
     private final Runnable remoteReconnect = () -> {
         PairingProfile profile = remoteReconnectProfile;
         if (profile != null && profile == pairingProfile) {
-            if (profile.relay != null && wssRelayClient != null) startWssRelay(profile);
+            if (profile.nativeP2p != null && nativeP2pClient != null) startNativeP2p(profile);
+            else if (profile.relay != null && wssRelayClient != null) startWssRelay(profile);
             else if (profile.easyTier != null && easyTierClient != null) startEasyTier(profile);
         }
+    };
+    private final Runnable nativeReconnect = () -> {
+        PairingProfile profile = remoteReconnectProfile;
+        if (profile != null && profile == pairingProfile && profile.nativeP2p != null && nativeP2pClient != null) startNativeP2p(profile);
     };
 
     private final ActivityResultLauncher<ScanOptions> scanner = registerForActivityResult(
@@ -171,6 +185,9 @@ public final class MainActivity extends AppCompatActivity {
         bindViews();
         configureWebView();
         configureActions();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            screenCaptureObserver = new ScreenCaptureObserver(this, this::notifyScreenCaptured);
+        }
         if (ControlPreferences.isEnabled(this)) ControlForegroundService.start(this);
 
         String incomingPairing = getIntent().getDataString();
@@ -190,6 +207,30 @@ public final class MainActivity extends AppCompatActivity {
         });
         registerNetworkMonitoring();
         checkMobileAppUpdate();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && screenCaptureObserver != null) {
+            screenCaptureObserver.register();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && screenCaptureObserver != null) {
+            screenCaptureObserver.unregister();
+        }
+        super.onStop();
+    }
+
+    private void notifyScreenCaptured() {
+        if (webView == null || swipeRefresh == null || swipeRefresh.getVisibility() != View.VISIBLE || isFinishing() || isDestroyed()) return;
+        // Android 14+ reports only that a screenshot occurred. It intentionally
+        // supplies no Bitmap or URI; the page therefore offers an explicit Photo
+        // Picker action instead of reading MediaStore or guessing the newest file.
+        webView.evaluateJavascript("window.dispatchEvent(new Event('harness-mobile-screen-captured')); true;", null);
     }
 
     @Override
@@ -256,15 +297,30 @@ public final class MainActivity extends AppCompatActivity {
                 WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout()
             );
             Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
+            boolean imeVisible = windowInsets.isVisible(WindowInsetsCompat.Type.ime());
             view.setPadding(
                 left + systemBars.left,
                 top + systemBars.top,
                 right + systemBars.right,
-                bottom + Math.max(systemBars.bottom, ime.bottom)
+                bottom + systemBars.bottom
             );
+            publishImeInsets(imeVisible, Math.max(0, ime.bottom - systemBars.bottom));
             return windowInsets;
         });
         ViewCompat.requestApplyInsets(root);
+    }
+
+    private void publishImeInsets(boolean visible, int height) {
+        if (webView == null || webView.getHandler() == null) return;
+        int safeHeight = Math.max(0, height);
+        String state = visible ? "open" : "closed";
+        String script = "(() => {" +
+            "const root=document.documentElement;if(!root)return false;" +
+            "root.dataset.harnessMobileIme='" + state + "';" +
+            "root.style.setProperty('--harness-mobile-ime-height','" + safeHeight + "px');" +
+            "window.dispatchEvent(new CustomEvent('harness-mobile-ime-change',{detail:{visible:" + visible + ",height:" + safeHeight + "}}));" +
+            "return true;})()";
+        webView.evaluateJavascript(script, null);
     }
 
     private void bindViews() {
@@ -297,6 +353,7 @@ public final class MainActivity extends AppCompatActivity {
         localProxy = new HarnessWebProxy(this);
         easyTierClient = new EasyTierClient();
         wssRelayClient = new WssRelayClient();
+        nativeP2pClient = new NativeP2pClient(this);
         mobileUiAdapter = new MobileUiAdapter(this);
         mobileAssetCache = new MobileAssetCache(this);
         pairingProfileStore = new PairingProfileStore(this);
@@ -506,7 +563,7 @@ public final class MainActivity extends AppCompatActivity {
         cancelWorkbenchRetry(true);
         pairingPanel.setVisibility(View.GONE);
         swipeRefresh.setVisibility(View.VISIBLE);
-        boolean hasRemoteRoute = pairingProfile != null && (pairingProfile.relay != null || pairingProfile.easyTier != null);
+        boolean hasRemoteRoute = pairingProfile != null && (pairingProfile.nativeP2p != null || pairingProfile.relay != null || pairingProfile.easyTier != null);
         showConnectionOverlay(hasRemoteRoute
             ? getString(R.string.connecting_lan_status)
             : getString(R.string.connecting_workbench_status));
@@ -527,19 +584,27 @@ public final class MainActivity extends AppCompatActivity {
             // path, then add the overlay route in onReady.
             boolean localNetworkAvailable = hasLocalNetwork();
             localProxy.updateRoutes(profile.routes.stream()
-                .filter(route -> !"easytier".equals(route.id) && !"wss-relay".equals(route.id))
+                .filter(route -> !"easytier".equals(route.id) && !"wss-relay".equals(route.id) && !"native-p2p".equals(route.id))
                 .filter(route -> localNetworkAvailable || !"lan".equals(route.id))
                 .collect(Collectors.toList()));
             localGatewayPort = localProxy.start(profile.desktopPort());
+            easyTierSocksPort = 0;
+            wssRelaySocksPort = 0;
+            nativeP2pSocksPort = 0;
+            nativeReconnectAttempt = 0;
+            routeStatus = localNetworkAvailable ? "局域网候选线路正在验证" : "尚无已验证线路";
             easyTierClient.stop();
             wssRelayClient.stop();
-            if (profile.relay == null && profile.easyTier == null) {
+            nativeP2pClient.stop();
+            mainHandler.removeCallbacks(nativeReconnect);
+            if (profile.nativeP2p == null && profile.relay == null && profile.easyTier == null) {
                 remoteReconnectProfile = null;
                 mainHandler.removeCallbacks(remoteReconnect);
             } else {
                 remoteReconnectProfile = profile;
-                if (profile.relay != null) startWssRelay(profile);
-                else startEasyTier(profile);
+                if (profile.nativeP2p != null) startNativeP2p(profile);
+                else if (profile.relay != null) startWssRelay(profile);
+                else if (profile.easyTier != null) startEasyTier(profile);
             }
             return pairing ? profile.stablePairUrl(localGatewayPort) : profile.stableOrigin(localGatewayPort);
         } catch (Exception error) {
@@ -552,7 +617,7 @@ public final class MainActivity extends AppCompatActivity {
         if (localProxy == null || profile == null) return;
         boolean localNetworkAvailable = hasLocalNetwork();
         localProxy.updateRoutes(profile.routes.stream()
-            .filter(route -> !"easytier".equals(route.id) && !"wss-relay".equals(route.id))
+            .filter(route -> !"easytier".equals(route.id) && !"wss-relay".equals(route.id) && !"native-p2p".equals(route.id))
             .filter(route -> localNetworkAvailable || !"lan".equals(route.id))
             .collect(Collectors.toList()));
     }
@@ -592,12 +657,18 @@ public final class MainActivity extends AppCompatActivity {
         updateRoutesBeforeRemoteReady(profile);
         if (!networkReconnectPolicy.hasUsableNetwork()) {
             mainHandler.removeCallbacks(remoteReconnect);
+            mainHandler.removeCallbacks(nativeReconnect);
             if (easyTierClient != null) easyTierClient.stop();
             if (wssRelayClient != null) wssRelayClient.stop();
+            if (nativeP2pClient != null) nativeP2pClient.stop();
+            easyTierSocksPort = 0;
+            wssRelaySocksPort = 0;
+            nativeP2pSocksPort = 0;
+            routeStatus = "网络已断开";
             showConnectionOverlay(getString(R.string.network_lost_status));
             return;
         }
-        boolean hasRemoteRoute = profile.relay != null || profile.easyTier != null;
+        boolean hasRemoteRoute = profile.nativeP2p != null || profile.relay != null || profile.easyTier != null;
         showConnectionOverlay(hasRemoteRoute
             ? getString(R.string.network_switched_remote_status)
             : getString(R.string.network_switched_local_status));
@@ -606,8 +677,10 @@ public final class MainActivity extends AppCompatActivity {
         if (hasRemoteRoute) {
             remoteReconnectProfile = profile;
             remoteReconnectAttempt = 0;
-            if (profile.relay != null) startWssRelay(profile);
-            else startEasyTier(profile);
+            nativeReconnectAttempt = 0;
+            if (profile.nativeP2p != null) startNativeP2p(profile);
+            else if (profile.relay != null) startWssRelay(profile);
+            else if (profile.easyTier != null) startEasyTier(profile);
         } else {
             retryWorkbenchNow();
         }
@@ -638,11 +711,12 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void confirmDisconnect() {
+        String details = hasActiveSystemVpn()
+            ? getString(R.string.connection_settings_message_vpn)
+            : getString(R.string.connection_settings_message);
         new AlertDialog.Builder(this)
             .setTitle(getString(R.string.connection_settings_title))
-            .setMessage(hasActiveSystemVpn()
-                ? getString(R.string.connection_settings_message_vpn)
-                : getString(R.string.connection_settings_message))
+            .setMessage(details + "\n\n真实线路状态：" + routeStatus)
             .setNegativeButton(getString(R.string.action_cancel), null)
             .setNeutralButton(getString(R.string.action_forget_computer), (dialog, which) -> confirmForget())
             .setPositiveButton(getString(R.string.action_reconnect_now), (dialog, which) -> webView.reload())
@@ -664,9 +738,12 @@ public final class MainActivity extends AppCompatActivity {
         pairingProfile = null;
         remoteReconnectProfile = null;
         mainHandler.removeCallbacks(remoteReconnect);
+        mainHandler.removeCallbacks(nativeReconnect);
         if (localProxy != null) localProxy.updateRoutes(Collections.emptyList());
         if (easyTierClient != null) easyTierClient.stop();
         if (wssRelayClient != null) wssRelayClient.stop();
+        if (nativeP2pClient != null) nativeP2pClient.stop();
+        routeStatus = "已断开";
         CookieManager.getInstance().removeAllCookies(null);
         CookieManager.getInstance().flush();
         webView.clearHistory();
@@ -718,36 +795,140 @@ public final class MainActivity extends AppCompatActivity {
         if (resetAttempts) workbenchRetryAttempt = 0;
     }
 
+    private java.util.List<PairingProfile.Route> readyRoutes(PairingProfile profile) {
+        if (profile == null) return Collections.emptyList();
+        boolean localNetworkAvailable = hasLocalNetwork();
+        java.util.List<PairingProfile.Route> ready = new java.util.ArrayList<>();
+        for (PairingProfile.Route route : profile.routes) {
+            if ("native-p2p".equals(route.id)) {
+                if (profile.nativeP2p != null && nativeP2pSocksPort > 0) ready.add(route.throughSocks5("127.0.0.1", nativeP2pSocksPort));
+            } else if ("wss-relay".equals(route.id)) {
+                if (profile.relay != null && wssRelaySocksPort > 0) ready.add(route.throughSocks5("127.0.0.1", wssRelaySocksPort));
+            } else if ("easytier".equals(route.id)) {
+                if (profile.easyTier != null && easyTierSocksPort > 0) ready.add(route.throughSocks5("127.0.0.1", easyTierSocksPort));
+            } else if (localNetworkAvailable || !"lan".equals(route.id)) {
+                ready.add(route);
+            }
+        }
+        ready.sort(java.util.Comparator.comparingInt(route -> routeRank(route.id, localNetworkAvailable)));
+        return ready;
+    }
+
+    private static int routeRank(String id, boolean localNetworkAvailable) {
+        if (localNetworkAvailable && "lan".equals(id)) return 0;
+        if ("native-p2p".equals(id)) return 1;
+        if ("wss-relay".equals(id)) return 2;
+        if ("easytier".equals(id)) return 3;
+        return 4;
+    }
+
+    private void applyReadyRoutes(PairingProfile profile) {
+        if (localProxy != null && pairingProfile == profile) localProxy.updateRoutes(readyRoutes(profile));
+    }
+
+    private void openPendingWorkbenchOrRetry() {
+        if (webView == null) return;
+        if (pendingWorkbenchUrl != null) {
+            String url = pendingWorkbenchUrl;
+            pendingWorkbenchUrl = null;
+            webView.loadUrl(url);
+        } else if (PairingProfile.STABLE_HOST.equalsIgnoreCase(Uri.parse(webView.getUrl() == null ? "" : webView.getUrl()).getHost())) {
+            retryWorkbenchNow();
+        }
+    }
+
+    private void startNativeP2p(PairingProfile profile) {
+        mainHandler.removeCallbacks(nativeReconnect);
+        if (profile.nativeP2p == null) return;
+        setConnectionStatus("正在协商应用内 P2P 直连；WSS 备用线路同时保留…");
+        nativeP2pClient.start(profile.nativeP2p, new NativeP2pClient.Listener() {
+            @Override public void onRelayReady(int socksPort) {
+                if (pairingProfile != profile || localProxy == null) return;
+                wssRelaySocksPort = socksPort;
+                nativeReconnectAttempt = 0;
+                applyReadyRoutes(profile);
+                runOnUiThread(() -> {
+                    routeStatus = "WSS/443 备用线路已实际连接；P2P 仍在协商";
+                    setConnectionStatus("WSS/443 备用线路已连接，正在继续尝试 P2P 直连…");
+                    openPendingWorkbenchOrRetry();
+                });
+            }
+
+            @Override public void onDirectReady(int socksPort) {
+                if (pairingProfile != profile || localProxy == null) return;
+                nativeP2pSocksPort = socksPort;
+                nativeReconnectAttempt = 0;
+                // Drop an old fallback preference before restoring all ready routes.
+                localProxy.updateRoutes(readyRoutes(profile).stream()
+                    .filter(route -> !"wss-relay".equals(route.id) && !"easytier".equals(route.id))
+                    .collect(Collectors.toList()));
+                applyReadyRoutes(profile);
+                runOnUiThread(() -> {
+                    routeStatus = "P2P DataChannel 已实际打开（WSS 备用线路已就绪）";
+                    setConnectionStatus("P2P 直连 DataChannel 已打开，正在打开工作台…");
+                    openPendingWorkbenchOrRetry();
+                });
+            }
+
+            @Override public void onDirectFailure(String message) {
+                if (pairingProfile != profile) return;
+                nativeP2pSocksPort = 0;
+                applyReadyRoutes(profile);
+                runOnUiThread(() -> {
+                    routeStatus = wssRelaySocksPort > 0
+                        ? "P2P 未接通；当前实际可用线路为 WSS/443"
+                        : "P2P 未接通；尚无已验证远程线路";
+                    setConnectionStatus(wssRelaySocksPort > 0
+                        ? "P2P 直连未接通，已无感保留 WSS/443 加密备用线路。"
+                        : "P2P 直连暂未接通；局域网仍可用…");
+                });
+            }
+
+            @Override public void onFailure(String message) {
+                if (pairingProfile != profile) return;
+                nativeP2pSocksPort = 0;
+                wssRelaySocksPort = 0;
+                applyReadyRoutes(profile);
+                runOnUiThread(() -> {
+                    routeStatus = "P2P/WSS 均尚未验证接通";
+                    setConnectionStatus("P2P/WSS 线路暂未接通，正在自动重试；局域网仍可用…");
+                    long delay = Math.min(30_000L, 5_000L + nativeReconnectAttempt * 5_000L);
+                    nativeReconnectAttempt = Math.min(nativeReconnectAttempt + 1, 6);
+                    mainHandler.removeCallbacks(nativeReconnect);
+                    mainHandler.postDelayed(nativeReconnect, delay);
+                });
+            }
+        });
+    }
+
     private void startWssRelay(PairingProfile profile) {
         mainHandler.removeCallbacks(remoteReconnect);
         setConnectionStatus(getString(R.string.wss_connecting_status));
         wssRelayClient.start(profile.relay, new WssRelayClient.Listener() {
             @Override public void onReady(int socksPort) {
                 if (pairingProfile != profile || localProxy == null) return;
-                java.util.List<PairingProfile.Route> readyRoutes = profile.routesWithRelayProxy(socksPort);
-                if (!hasLocalNetwork()) {
-                    readyRoutes = readyRoutes.stream()
-                        .sorted(java.util.Comparator.comparingInt(route -> "wss-relay".equals(route.id) ? 0 : 1))
-                        .collect(Collectors.toList());
-                }
-                localProxy.updateRoutes(readyRoutes);
+                wssRelaySocksPort = socksPort;
+                applyReadyRoutes(profile);
                 remoteReconnectAttempt = 0;
                 runOnUiThread(() -> {
-                    setConnectionStatus(getString(R.string.wss_ready_status));
-                    if (webView == null) return;
-                    if (pendingWorkbenchUrl != null) {
-                        String url = pendingWorkbenchUrl;
-                        pendingWorkbenchUrl = null;
-                        webView.loadUrl(url);
-                    } else if (PairingProfile.STABLE_HOST.equalsIgnoreCase(Uri.parse(webView.getUrl() == null ? "" : webView.getUrl()).getHost())) {
-                        retryWorkbenchNow();
-                    }
+                    routeStatus = nativeP2pSocksPort > 0
+                        ? "P2P DataChannel 已实际打开（WSS 备用线路已就绪）"
+                        : "WSS/443 备用线路已实际连接；P2P 仍在协商";
+                    setConnectionStatus(profile.nativeP2p == null
+                        ? getString(R.string.wss_ready_status)
+                        : "WSS/443 备用线路已连接，正在继续尝试 P2P 直连…");
+                    openPendingWorkbenchOrRetry();
                 });
             }
 
             @Override public void onFailure(String message) {
                 if (pairingProfile != profile) return;
+                wssRelaySocksPort = 0;
+                applyReadyRoutes(profile);
                 runOnUiThread(() -> {
+                    routeStatus = nativeP2pSocksPort > 0
+                        ? "P2P DataChannel 已实际打开；WSS 备用线路暂不可用"
+                        : "WSS 与 P2P 均尚未验证接通";
                     setConnectionStatus(getString(R.string.wss_failed_status));
                     long delay = Math.min(15_000L, 3_000L + remoteReconnectAttempt * 2_000L);
                     remoteReconnectAttempt = Math.min(remoteReconnectAttempt + 1, 6);
@@ -764,30 +945,22 @@ public final class MainActivity extends AppCompatActivity {
         easyTierClient.start(profile, new EasyTierClient.Listener() {
             @Override public void onReady(int socksPort) {
                 if (pairingProfile != profile || localProxy == null) return;
-                java.util.List<PairingProfile.Route> readyRoutes = profile.routesWithEasyTierProxy(socksPort);
-                if (!hasLocalNetwork()) {
-                    readyRoutes = readyRoutes.stream()
-                        .sorted(java.util.Comparator.comparingInt(route -> "easytier".equals(route.id) ? 0 : 1))
-                        .collect(Collectors.toList());
-                }
-                localProxy.updateRoutes(readyRoutes);
+                easyTierSocksPort = socksPort;
+                applyReadyRoutes(profile);
                 remoteReconnectAttempt = 0;
                 runOnUiThread(() -> {
+                    routeStatus = "EasyTier 远程线路已实际连接";
                     setConnectionStatus(getString(R.string.easytier_ready_status));
-                    if (webView == null) return;
-                    if (pendingWorkbenchUrl != null) {
-                        String url = pendingWorkbenchUrl;
-                        pendingWorkbenchUrl = null;
-                        webView.loadUrl(url);
-                    } else if (PairingProfile.STABLE_HOST.equalsIgnoreCase(Uri.parse(webView.getUrl() == null ? "" : webView.getUrl()).getHost())) {
-                        retryWorkbenchNow();
-                    }
+                    openPendingWorkbenchOrRetry();
                 });
             }
 
             @Override public void onError(String message) {
                 if (pairingProfile != profile) return;
+                easyTierSocksPort = 0;
+                applyReadyRoutes(profile);
                 runOnUiThread(() -> {
+                    routeStatus = "EasyTier 远程线路尚未接通";
                     setConnectionStatus(getString(R.string.easytier_failed_status));
                     long delay = Math.min(15_000L, 3_000L + remoteReconnectAttempt * 2_000L);
                     remoteReconnectAttempt = Math.min(remoteReconnectAttempt + 1, 6);
@@ -926,6 +1099,34 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    /**
+     * Isolates API 34 symbols from MainActivity class verification on API 26–33.
+     * Registration follows the Activity visibility lifecycle required by Android.
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private static final class ScreenCaptureObserver {
+        private final Activity activity;
+        private final Activity.ScreenCaptureCallback callback;
+        private boolean registered;
+
+        ScreenCaptureObserver(Activity activity, Runnable listener) {
+            this.activity = activity;
+            this.callback = listener::run;
+        }
+
+        void register() {
+            if (registered) return;
+            activity.registerScreenCaptureCallback(activity.getMainExecutor(), callback);
+            registered = true;
+        }
+
+        void unregister() {
+            if (!registered) return;
+            activity.unregisterScreenCaptureCallback(callback);
+            registered = false;
+        }
+    }
+
     private final class MobileControlBridge {
         @JavascriptInterface public void openSettings() {
             runOnUiThread(() -> startActivity(new Intent(MainActivity.this, ControlSettingsActivity.class)));
@@ -948,6 +1149,7 @@ public final class MainActivity extends AppCompatActivity {
         workbenchReadyGeneration++;
         remoteReconnectProfile = null;
         mainHandler.removeCallbacks(remoteReconnect);
+        mainHandler.removeCallbacks(nativeReconnect);
         unregisterNetworkMonitoring();
         webView.stopLoading();
         webView.setWebChromeClient(null);
@@ -956,6 +1158,7 @@ public final class MainActivity extends AppCompatActivity {
         if (localProxy != null) localProxy.close();
         if (easyTierClient != null) easyTierClient.close();
         if (wssRelayClient != null) wssRelayClient.stop();
+        if (nativeP2pClient != null) nativeP2pClient.close();
         if (mobileUiAdapter != null) mobileUiAdapter.close();
         mobileAppUpdateChecker.close();
         super.onDestroy();

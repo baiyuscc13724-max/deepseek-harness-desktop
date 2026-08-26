@@ -58,14 +58,23 @@ required.push(
 
 required.push(
   'docs/MOBILE_APPLE_EXPERIENCE.zh-CN.md',
+  'docs/SECURITY-REVIEW-v1.0.48.zh-CN.md',
+  'electron/bridge/native-p2p-host.cjs',
+  'electron/bridge/sync-transports/native-p2p-adapter.cjs',
+  'renderer/native-p2p.html',
+  'renderer/native-p2p.js',
   'mobile/android/app/version.properties',
+  'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NativeP2pClient.java',
+  'mobile/android/app/src/main/assets/licenses/webrtc-BSD-3-Clause-LICENSE.txt',
   'mobile/ios/HarnessMobile/App/PairingView.swift',
   'mobile/ios/HarnessMobile/App/StatusBannerView.swift',
   'scripts/mobile-release-version.cjs',
   'scripts/release-publish-android.mjs',
   'scripts/publish-cnb-mobile-cloud-mirror.ps1',
   'tests/mobile-apple-experience.test.cjs',
-  'tests/mobile-release-version.test.cjs'
+  'tests/mobile-release-version.test.cjs',
+  'tests/mobile-appearance-ui.test.cjs',
+  'tests/native-p2p-desktop.test.cjs'
 )
 
 // Agent Teams M2-M5 are executable product surfaces, not optional design files.
@@ -169,7 +178,7 @@ for (const relative of removed) {
 }
 
 const html = await readFile(path.join(root, 'renderer/index.html'), 'utf8')
-for (const relative of ['./styles.css', '../node_modules/@xterm/xterm/css/xterm.css', '../node_modules/@xterm/xterm/lib/xterm.js', '../node_modules/@xterm/addon-fit/lib/addon-fit.js', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './workspace-links-integration.js', './storage-manager.js', './memory-manager.js', './right-workspace.css', './right-workspace.js', './right-workspace-integration.js', './browser-sidebar.js', './pr-preview-update.css', './pr-preview-update-integration.js', './app.js', './assets/deepseek-icon.svg']) {
+for (const relative of ['./styles.css', '../node_modules/@xterm/xterm/css/xterm.css', '../node_modules/@xterm/xterm/lib/xterm.js', '../node_modules/@xterm/addon-fit/lib/addon-fit.js', './theme-catalog.js', './theme-integration.js', './model-routing-integration.js', './workspace-links-integration.js', './storage-manager.js', './memory-manager.js', './right-workspace.css', './right-workspace.js', './right-workspace-integration.js', './browser-sidebar.js', './app.js', './assets/deepseek-icon.svg']) {
   if (!html.includes(relative)) throw new Error(`renderer/index.html is missing expected reference: ${relative}`)
 }
 for (const id of ['runtimeView', 'runtimeStatus', 'runtimeStatusTitle', 'runtimeStatusDetail', 'retryRuntime', 'terminalPanel', 'terminalHost', 'terminalStart', 'terminalInterrupt', 'terminalStop']) {

@@ -301,6 +301,155 @@
     }, 40)
   }
 
+  const modelSettingsButton = button => /^(?:Models?|模型)$/i.test(settingsButtonRawLabel(button))
+
+  const modelRouteCard = (title, route, note = '') => {
+    const card = document.createElement('section')
+    card.className = 'harness-mobile-model-route'
+    const heading = document.createElement('h3')
+    heading.textContent = title
+    const value = document.createElement('strong')
+    value.textContent = route?.provider && route?.model ? `${route.provider} / ${route.model}` : '尚未配置'
+    card.append(heading, value)
+    if (note) {
+      const caption = document.createElement('p')
+      caption.textContent = note
+      card.appendChild(caption)
+    }
+    return card
+  }
+
+  const renderMobileModelRouting = (panel, routing) => {
+    panel.replaceChildren()
+    panel.setAttribute('aria-busy', 'false')
+
+    const intro = document.createElement('section')
+    intro.className = 'harness-mobile-model-intro'
+    const title = document.createElement('h2')
+    title.textContent = '当前模型路由'
+    const description = document.createElement('p')
+    description.textContent = '只读显示，来源：已配对电脑。模型凭据和提供方设置仍只在电脑端管理。'
+    const badge = document.createElement('span')
+    badge.textContent = routing.configured ? '已配置' : '尚未配置'
+    intro.append(title, description, badge)
+    panel.appendChild(intro)
+
+    const routes = document.createElement('div')
+    routes.className = 'harness-mobile-model-routes'
+    routes.appendChild(modelRouteCard('主模型', routing.main))
+    const subagentNote = routing.subagent?.inheritMain ? '跟随主模型' : '独立子代理路由'
+    routes.appendChild(modelRouteCard('子代理', routing.subagent, subagentNote))
+    panel.appendChild(routes)
+
+    const catalog = document.createElement('section')
+    catalog.className = 'harness-mobile-model-catalog'
+    const catalogTitle = document.createElement('h2')
+    catalogTitle.textContent = '提供方目录'
+    const catalogNote = document.createElement('p')
+    catalogNote.textContent = '这里只显示电脑端可选目录，不代表凭据或连接状态。'
+    catalog.append(catalogTitle, catalogNote)
+    if (!routing.providers.length) {
+      const empty = document.createElement('div')
+      empty.className = 'harness-mobile-model-empty'
+      empty.textContent = '已配对电脑暂未返回可显示的提供方。'
+      catalog.appendChild(empty)
+    }
+    for (const provider of routing.providers) {
+      const details = document.createElement('details')
+      const summary = document.createElement('summary')
+      const providerName = document.createElement('span')
+      providerName.textContent = provider.name || provider.id
+      const count = document.createElement('small')
+      count.textContent = `${provider.models.length} 个模型`
+      summary.append(providerName, count)
+      details.appendChild(summary)
+      const identity = document.createElement('p')
+      identity.textContent = `Provider ID：${provider.id}`
+      details.appendChild(identity)
+      const list = document.createElement('ul')
+      for (const model of provider.models.slice(0, 24)) {
+        const item = document.createElement('li')
+        item.textContent = model
+        list.appendChild(item)
+      }
+      if (provider.models.length > 24) {
+        const item = document.createElement('li')
+        item.textContent = `另有 ${provider.models.length - 24} 个模型，请在电脑端查看完整目录`
+        list.appendChild(item)
+      }
+      if (!provider.models.length) {
+        const item = document.createElement('li')
+        item.textContent = '没有可显示的模型条目'
+        list.appendChild(item)
+      }
+      details.appendChild(list)
+      catalog.appendChild(details)
+    }
+    panel.appendChild(catalog)
+
+    const footer = document.createElement('p')
+    footer.className = 'harness-mobile-model-footnote'
+    footer.textContent = '选择当前对话模型请返回输入框；新增提供方、保存 API Key 或探测端点请使用已配对电脑。'
+    panel.appendChild(footer)
+  }
+
+  const loadMobileModelRouting = async (panel, content) => {
+    panel.setAttribute('aria-busy', 'true')
+    panel.replaceChildren()
+    const loading = document.createElement('div')
+    loading.className = 'harness-mobile-model-loading'
+    loading.setAttribute('role', 'status')
+    loading.textContent = '正在从已配对电脑读取模型配置…'
+    panel.appendChild(loading)
+    try {
+      const response = await fetch('/__harness_mobile__/model-routing', {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      })
+      if (!response.ok) throw new Error(`model routing ${response.status}`)
+      const payload = await response.json()
+      const routing = payload?.ok === true ? payload.routing : null
+      if (!routing || !Array.isArray(routing.providers)) throw new Error('invalid model routing response')
+      if (!panel.isConnected || content.dataset.harnessMobileModelRouting !== 'true') return
+      renderMobileModelRouting(panel, routing)
+    } catch {
+      if (!panel.isConnected || content.dataset.harnessMobileModelRouting !== 'true') return
+      panel.replaceChildren()
+      panel.setAttribute('aria-busy', 'false')
+      const error = document.createElement('section')
+      error.className = 'harness-mobile-model-error'
+      error.setAttribute('role', 'alert')
+      const title = document.createElement('h2')
+      title.textContent = '无法读取模型配置'
+      const copy = document.createElement('p')
+      copy.textContent = '无法从已配对电脑读取。请确认电脑端 Harness 正在运行，然后重试；模型设置没有被猜测或缓存。'
+      const retry = document.createElement('button')
+      retry.type = 'button'
+      retry.textContent = '重试'
+      retry.addEventListener('click', () => loadMobileModelRouting(panel, content))
+      error.append(title, copy, retry)
+      panel.appendChild(error)
+    }
+  }
+
+  const decorateMobileModelSettings = (nav, content) => {
+    const active = nav?.querySelector?.('button[aria-current="true"]')
+    const existing = content?.querySelector?.(':scope > #harness-mobile-model-routing')
+    if (!modelSettingsButton(active)) {
+      if (content) delete content.dataset.harnessMobileModelRouting
+      existing?.remove()
+      return
+    }
+    content.dataset.harnessMobileModelRouting = 'true'
+    if (existing) return
+    const panel = document.createElement('div')
+    panel.id = 'harness-mobile-model-routing'
+    panel.setAttribute('aria-label', '手机模型配置只读视图')
+    content.appendChild(panel)
+    loadMobileModelRouting(panel, content)
+  }
+
   const decorateSettingsDialog = (dialog, nav, content) => {
     dialog.dataset.harnessMobileSettingsDialog = 'true'
     delete dialog.dataset.harnessMobileSheet
@@ -355,6 +504,7 @@
 
     if (!dialog.dataset.harnessMobileSettingsView) dialog.dataset.harnessMobileSettingsView = 'list'
     setSettingsView(dialog, dialog.dataset.harnessMobileSettingsView)
+    decorateMobileModelSettings(nav, content)
   }
 
   const decorateDialogs = () => {
@@ -488,6 +638,53 @@
         if (pendingStop === button) activateOfficialSend(textarea)
       }, 0)
     }, true)
+  }
+
+  const installComposerLift = () => {
+    if (window.__harnessMobileComposerLift || typeof document.addEventListener !== 'function') return
+    window.__harnessMobileComposerLift = true
+    let largestViewportHeight = Number(window.visualViewport?.height || window.innerHeight || 0)
+    let scheduled = false
+    const composerTextarea = () => document.querySelector('[data-composer-card] textarea[data-phase]')
+    const update = () => {
+      scheduled = false
+      const viewport = window.visualViewport
+      const viewportHeight = Number(viewport?.height || window.innerHeight || 0)
+      if (document.activeElement !== composerTextarea()) largestViewportHeight = Math.max(largestViewportHeight, viewportHeight)
+      const textarea = composerTextarea()
+      const focused = Boolean(textarea && document.activeElement === textarea)
+      const viewportCovered = largestViewportHeight > 0 && largestViewportHeight - viewportHeight >= Math.max(120, largestViewportHeight * .18)
+      const nativeImeOpen = root.dataset.harnessMobileIme === 'open'
+      const lifted = focused && (nativeImeOpen || viewportCovered)
+      root.dataset.harnessMobileComposerLifted = String(lifted)
+      const layoutHeight = Number(window.innerHeight || viewportHeight)
+      const visualOverlay = viewport ? Math.max(0, Math.round(layoutHeight - viewport.height - viewport.offsetTop)) : 0
+      const nativeImeHeight = Math.max(0, Number.parseFloat(root.style.getPropertyValue('--harness-mobile-ime-height')) || 0)
+      const overlay = lifted ? (viewportCovered ? visualOverlay : nativeImeHeight) : 0
+      root.style.setProperty('--harness-mobile-ime-overlay', `${overlay}px`)
+      if (!lifted) return
+      const reveal = () => {
+        const seat = textarea.closest('[data-composer-seat]') || textarea.closest('[data-harness-mobile-composer-frame="true"]')
+        seat?.scrollIntoView?.({ block: 'end', inline: 'nearest', behavior: 'smooth' })
+        const scroll = textarea.closest('[data-conversation-scroll]')
+        if (scroll) scroll.scrollTop = scroll.scrollHeight
+      }
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(reveal)
+      else setTimeout(reveal, 16)
+    }
+    const schedule = () => {
+      if (scheduled) return
+      scheduled = true
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(update)
+      else setTimeout(update, 16)
+    }
+    document.addEventListener('focusin', schedule, true)
+    document.addEventListener('focusout', () => setTimeout(schedule, 80), true)
+    window.visualViewport?.addEventListener?.('resize', schedule)
+    window.visualViewport?.addEventListener?.('scroll', schedule)
+    window.addEventListener?.('resize', schedule)
+    window.addEventListener?.('harness-mobile-ime-change', schedule)
+    schedule()
   }
 
   const installHistoryRecovery = () => {
@@ -643,6 +840,67 @@
       .catch(() => { window.__harnessMobileThemeBridgeLoading = false })
   }
 
+  const installScreenshotSuggestion = () => {
+    if (window.__harnessMobileScreenshotSuggestion || typeof window.addEventListener !== 'function') return
+    window.__harnessMobileScreenshotSuggestion = true
+    let dismissTimer = 0
+    const dismiss = () => {
+      clearTimeout(dismissTimer)
+      dismissTimer = 0
+      const chip = document.getElementById('harness-mobile-screenshot-suggestion')
+      if (!chip) return
+      chip.dataset.visible = 'false'
+      setTimeout(() => {
+        if (chip.dataset.visible === 'false') chip.remove()
+      }, 220)
+    }
+    const show = () => {
+      let chip = document.getElementById('harness-mobile-screenshot-suggestion')
+      if (!chip) {
+        chip = document.createElement('aside')
+        chip.id = 'harness-mobile-screenshot-suggestion'
+        chip.setAttribute('role', 'status')
+        chip.setAttribute('aria-live', 'polite')
+        chip.setAttribute('aria-label', '刚刚截了图。应用没有自动读取图片。')
+        const copy = document.createElement('div')
+        const title = document.createElement('strong')
+        title.textContent = '刚刚截了图'
+        const note = document.createElement('span')
+        note.textContent = '应用没有读取图片'
+        copy.append(title, note)
+        const add = document.createElement('button')
+        add.type = 'button'
+        add.dataset.action = 'add'
+        add.textContent = '添加'
+        add.setAttribute('aria-label', '从系统照片选择器添加刚刚的截图')
+        add.addEventListener('click', () => {
+          const photo = document.getElementById('harness-mobile-photo-button')
+          if (!photo || photo.disabled) return
+          dismiss()
+          photo.click()
+        })
+        const close = document.createElement('button')
+        close.type = 'button'
+        close.dataset.action = 'close'
+        close.textContent = '×'
+        close.setAttribute('aria-label', '关闭截图提示')
+        close.addEventListener('click', dismiss)
+        chip.append(copy, add, close)
+        document.body.appendChild(chip)
+      }
+      const photo = document.getElementById('harness-mobile-photo-button')
+      const add = chip.querySelector('button[data-action="add"]')
+      if (add) {
+        add.disabled = !photo || photo.disabled
+        add.setAttribute('aria-disabled', add.disabled ? 'true' : 'false')
+      }
+      chip.dataset.visible = 'true'
+      clearTimeout(dismissTimer)
+      dismissTimer = setTimeout(dismiss, 12_000)
+    }
+    window.addEventListener('harness-mobile-screen-captured', show)
+  }
+
   const installControlSettingsEntry = () => {
     if (typeof document.querySelector !== 'function') return
     const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
@@ -672,10 +930,12 @@
     decorateConversation()
     containComposerContext()
     installImeSendBridge()
+    installComposerLift()
     installSidebarAutoClose()
     syncMobileAppShell()
     installHistoryRecovery()
     installThemeBridge()
+    installScreenshotSuggestion()
     installControlSettingsEntry()
   }
 

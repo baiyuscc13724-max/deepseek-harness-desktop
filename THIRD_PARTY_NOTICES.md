@@ -42,7 +42,8 @@ Git Credential Manager stores authorized credentials through the operating syste
 - `qrcode` is licensed under the MIT License and is used to render one-time local pairing QR codes.
 - ZXing and ZXing Android Embedded are licensed under the Apache License 2.0 and are used by the Android companion application to scan pairing QR codes.
 - AndroidX libraries are licensed under the Apache License 2.0 and provide the Android application compatibility and refresh UI layers.
-- EasyTier is licensed under the Apache License 2.0. Harness Desktop downloads its pinned Windows core on demand, and Harness Mobile bundles the matching Android JNI libraries to provide the optional serverless remote-sync path.
+- `io.github.webrtc-sdk:android:144.7559.14` packages the WebRTC native SDK under the BSD 3-Clause License. Harness Mobile uses only its peer-connection/DataChannel APIs for application-internal P2P transport and adds no media-capture permission for WebRTC. The app's existing CAMERA permission is limited to QR scanning, and RECORD_AUDIO is not declared. The complete notice is packaged at `assets/licenses/webrtc-BSD-3-Clause-LICENSE.txt`.
+- EasyTier is licensed under the Apache License 2.0. Harness Desktop downloads its pinned Windows core on demand, and Harness Mobile bundles the matching Android JNI libraries to preserve the optional legacy remote-sync path.
 
 ## DSH Plugin Marketplace
 

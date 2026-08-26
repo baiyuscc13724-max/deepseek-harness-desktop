@@ -183,3 +183,16 @@ test('mobile runtime does not replay a history request cancelled by page navigat
   )
   assert.equal(historyCalls, 1)
 })
+
+test('Android WebRTC DataChannel dependency retains its license without adding audio permission', () => {
+  const root = path.join(__dirname, '..', 'mobile', 'android', 'app')
+  const gradle = fs.readFileSync(path.join(root, 'build.gradle.kts'), 'utf8')
+  const manifest = fs.readFileSync(path.join(root, 'src', 'main', 'AndroidManifest.xml'), 'utf8')
+  const license = fs.readFileSync(path.join(root, 'src', 'main', 'assets', 'licenses', 'webrtc-BSD-3-Clause-LICENSE.txt'), 'utf8')
+  assert.match(gradle, /io\.github\.webrtc-sdk:android:144\.7559\.14/u)
+  assert.match(license, /Redistribution and use in source and binary forms/u)
+  assert.match(license, /Neither the name of Google Inc\./u)
+  assert.match(manifest, /android\.permission\.CAMERA/u)
+  assert.match(manifest, /HarnessCaptureActivity/u)
+  assert.doesNotMatch(manifest, /android\.permission\.RECORD_AUDIO/u)
+})

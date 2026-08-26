@@ -18,13 +18,57 @@ const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.47'
+const CURRENT_MOBILE_VERSION = '1.0.48'
 const CURRENT_MOBILE_RELEASE_TAG = CURRENT_MOBILE_VERSION.split('.').length === 4
   ? `android-v${CURRENT_MOBILE_VERSION}`
   : `v${CURRENT_MOBILE_VERSION}`
 const DEFAULT_MOBILE_DOWNLOAD_URL = `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/${CURRENT_MOBILE_RELEASE_TAG}/Harness-Mobile-${CURRENT_MOBILE_VERSION}-android-universal.apk`
 const DEFAULT_IOS_DOWNLOAD_URL = ''
 const DESKTOP_CONTROL_STATE_FILE = 'mobile-sync.desktop-control.json'
+const MOBILE_MODEL_PROVIDER_LIMIT = 64
+const MOBILE_MODEL_LIMIT = 256
+
+function safeMobileModelText(value, limit) {
+  return String(value || '')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, limit)
+}
+
+function mobileModelRoutingDto(value) {
+  const main = {
+    provider: safeMobileModelText(value?.main?.provider, 128),
+    model: safeMobileModelText(value?.main?.model, 256)
+  }
+  const subagent = {
+    inheritMain: value?.subagent?.inheritMain !== false,
+    provider: safeMobileModelText(value?.subagent?.provider, 128),
+    model: safeMobileModelText(value?.subagent?.model, 256)
+  }
+  const providers = []
+  for (const row of Array.isArray(value?.providers) ? value.providers.slice(0, MOBILE_MODEL_PROVIDER_LIMIT) : []) {
+    const id = safeMobileModelText(row?.id, 128)
+    if (!id) continue
+    const models = []
+    for (const candidate of Array.isArray(row?.models) ? row.models : []) {
+      const model = safeMobileModelText(candidate, 256)
+      if (!model || models.includes(model)) continue
+      models.push(model)
+      if (models.length >= MOBILE_MODEL_LIMIT) break
+    }
+    providers.push({
+      id,
+      name: safeMobileModelText(row?.name, 160) || id,
+      models
+    })
+  }
+  return {
+    configured: Boolean(value?.configured),
+    main,
+    subagent,
+    providers
+  }
+}
 
 function sha256(value) {
   return createHash('sha256').update(String(value)).digest('hex')
@@ -240,6 +284,7 @@ class MobileSyncService extends EventEmitter {
     setAppearance = null,
     getThemeScript = null,
     readThemeAsset = null,
+    getModelRouting = null,
     chooseWorkspaceDirectory = null,
     controlBroker = null,
     desktopControlStateFile = null,
@@ -263,6 +308,7 @@ class MobileSyncService extends EventEmitter {
     this.setAppearance = setAppearance
     this.getThemeScript = getThemeScript
     this.readThemeAsset = readThemeAsset
+    this.getModelRouting = getModelRouting
     this.chooseWorkspaceDirectory = chooseWorkspaceDirectory
     this.workspacePickerRequest = null
     this.controlBroker = controlBroker || new MobileControlBroker({ now })
@@ -679,6 +725,24 @@ class MobileSyncService extends EventEmitter {
       writeResponse(response, 401, pairingErrorPage('请在电脑端打开“手机同步”，扫描新的配对二维码。'))
       return
     }
+    if (requestUrl.pathname === '/__harness_mobile__/model-routing') {
+      if (request.method !== 'GET') {
+        writeResponse(response, 405, JSON.stringify({ ok: false, error: 'Model routing is read-only.' }), { 'Allow': 'GET', 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      if (typeof this.getModelRouting !== 'function') {
+        writeResponse(response, 503, JSON.stringify({ ok: false, error: '无法从已配对电脑读取模型配置。' }), { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      try {
+        const routing = mobileModelRoutingDto(await this.getModelRouting())
+        response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff' })
+        response.end(JSON.stringify({ ok: true, routing }))
+      } catch {
+        writeResponse(response, 503, JSON.stringify({ ok: false, error: '无法从已配对电脑读取模型配置。' }), { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+      }
+      return
+    }
     if (requestUrl.pathname === '/__harness_mobile__/workspace/choose' && request.method === 'POST') {
       if (request.headers['x-harness-mobile-request'] !== 'workspace-picker') {
         writeResponse(response, 403, JSON.stringify({ ok: false, error: 'Workspace picker request intent is missing.' }), { 'Content-Type': 'application/json; charset=utf-8' })
@@ -851,6 +915,7 @@ module.exports = {
   isIosUserAgent,
   iosSetupPage,
   lanAddresses,
+  mobileModelRoutingDto,
   parseCookies,
   safeDeviceName,
   safeIosDownloadUrl,

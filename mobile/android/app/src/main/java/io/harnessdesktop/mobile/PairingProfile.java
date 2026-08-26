@@ -13,12 +13,14 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 final class PairingProfile {
     // *.localhost is guaranteed to resolve to loopback in Chromium, while avoiding
     // the official UI's exact "localhost/127.0.0.1" native-desktop feature branch.
     static final String STABLE_HOST = "harness.localhost";
+    private static final String DEFAULT_STUN_URL = "stun:stun.cloudflare.com:3478";
 
     static final class Route {
         final String id;
@@ -82,18 +84,48 @@ final class PairingProfile {
         }
     }
 
+    static final class IceServerConfig {
+        final List<String> urls;
+        final String username;
+        final String credential;
+
+        IceServerConfig(List<String> urls, String username, String credential) {
+            this.urls = Collections.unmodifiableList(new ArrayList<>(urls));
+            this.username = username;
+            this.credential = credential;
+        }
+    }
+
+    static final class NativeP2pConfig {
+        final String signalingUrl;
+        final String roomId;
+        final String tunnelKey;
+        final int protocolVersion;
+        final List<IceServerConfig> iceServers;
+
+        NativeP2pConfig(String signalingUrl, String roomId, String tunnelKey, int protocolVersion, List<IceServerConfig> iceServers) {
+            this.signalingUrl = signalingUrl;
+            this.roomId = roomId;
+            this.tunnelKey = tunnelKey;
+            this.protocolVersion = protocolVersion;
+            this.iceServers = Collections.unmodifiableList(new ArrayList<>(iceServers));
+        }
+    }
+
     final int version;
     final String pairUrl;
     final List<Route> routes;
     final EasyTierConfig easyTier;
     final RelayConfig relay;
+    final NativeP2pConfig nativeP2p;
 
-    private PairingProfile(int version, String pairUrl, List<Route> routes, EasyTierConfig easyTier, RelayConfig relay) {
+    private PairingProfile(int version, String pairUrl, List<Route> routes, EasyTierConfig easyTier, RelayConfig relay, NativeP2pConfig nativeP2p) {
         this.version = version;
         this.pairUrl = pairUrl;
         this.routes = Collections.unmodifiableList(routes);
         this.easyTier = easyTier;
         this.relay = relay;
+        this.nativeP2p = nativeP2p;
     }
 
     static PairingProfile parse(String value) {
@@ -139,6 +171,7 @@ final class PairingProfile {
         addRoute(routes, "lan", pairUrl);
         EasyTierConfig easyTier = null;
         RelayConfig relay = null;
+        NativeP2pConfig nativeP2p = null;
         JSONArray transports = object.optJSONArray("transports");
         if (transports != null) {
             for (int index = 0; index < transports.length(); index++) {
@@ -148,16 +181,41 @@ final class PairingProfile {
                 addRoute(routes, id, transport.optString("origin", ""));
                 if ("easytier".equals(id)) easyTier = parseEasyTier(transport);
                 if ("wss-relay".equals(id)) relay = parseRelay(transport);
+                if ("native-p2p".equals(id)) nativeP2p = parseNativeP2p(transport);
             }
         }
-        return routes.isEmpty() ? null : new PairingProfile(version, pairUrl, deduplicate(routes), easyTier, relay);
+        // Saved profiles from earlier app versions contain only the legacy
+        // wss-relay descriptor. Reuse that already-authenticated room/key as the
+        // optional P2P rendezvous without requiring users to scan a new QR code.
+        // NativeP2pClient still waits for welcome.signalingVersion=1, so an old
+        // relay deployment remains a pure encrypted WSS tunnel.
+        if (nativeP2p == null && relay != null) {
+            Route relayRoute = null;
+            for (Route route : routes) {
+                if ("wss-relay".equals(route.id)) {
+                    relayRoute = route;
+                    break;
+                }
+            }
+            if (relayRoute != null) {
+                nativeP2p = new NativeP2pConfig(
+                    relay.relayUrl,
+                    relay.roomId,
+                    relay.tunnelKey,
+                    relay.protocolVersion,
+                    Collections.singletonList(new IceServerConfig(Collections.singletonList(DEFAULT_STUN_URL), "", ""))
+                );
+                routes.add(new Route("native-p2p", relayRoute.host, relayRoute.port));
+            }
+        }
+        return routes.isEmpty() ? null : new PairingProfile(version, pairUrl, deduplicate(routes), easyTier, relay, nativeP2p);
     }
 
     private static PairingProfile fromLegacy(String value) {
         if (!PairingLinkValidator.isSafeHarnessUrl(value, true)) return null;
         List<Route> routes = new ArrayList<>();
         addRoute(routes, "lan", value);
-        return new PairingProfile(1, value, routes, null, null);
+        return new PairingProfile(1, value, routes, null, null, null);
     }
 
     private static EasyTierConfig parseEasyTier(JSONObject object) {
@@ -175,7 +233,7 @@ final class PairingProfile {
             if (!("tcp".equalsIgnoreCase(peerUri.getScheme()) || "udp".equalsIgnoreCase(peerUri.getScheme()))) return null;
             if (peerUri.getHost() == null || peerUri.getHost().isEmpty() || peerUri.getPort() < 1 || peerUri.getPort() > 65535) return null;
             if (peerUri.getUserInfo() != null || peerUri.getRawQuery() != null || peerUri.getRawFragment() != null) return null;
-            peer = peerUri.getScheme().toLowerCase() + "://" + peerUri.getHost() + ":" + peerUri.getPort();
+            peer = peerUri.getScheme().toLowerCase(Locale.ROOT) + "://" + peerUri.getHost() + ":" + peerUri.getPort();
         } catch (RuntimeException error) {
             return null;
         }
@@ -196,6 +254,63 @@ final class PairingProfile {
             return new RelayConfig(uri.toString(), roomId, tunnelKey, protocolVersion);
         } catch (RuntimeException error) {
             return null;
+        }
+    }
+
+    private static NativeP2pConfig parseNativeP2p(JSONObject object) {
+        String signalingUrl = object.optString("signalingUrl", object.optString("relayUrl", ""));
+        String roomId = object.optString("roomId", "");
+        String tunnelKey = object.optString("tunnelKey", "");
+        int protocolVersion = object.optInt("protocolVersion", 0);
+        try {
+            URI uri = URI.create(signalingUrl);
+            if (!"wss".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null || uri.getHost().isEmpty()) return null;
+            if ((uri.getPort() != -1 && uri.getPort() != 443) || uri.getUserInfo() != null || uri.getRawFragment() != null) return null;
+            if (!roomId.matches("[A-Za-z0-9_-]{43}") || !tunnelKey.matches("[A-Za-z0-9_-]{43}") || protocolVersion != 1) return null;
+            if (Base64.getUrlDecoder().decode(tunnelKey).length != 32) return null;
+            JSONArray input = object.optJSONArray("iceServers");
+            List<IceServerConfig> iceServers = new ArrayList<>();
+            if (input != null) {
+                if (input.length() > 8) return null;
+                for (int index = 0; index < input.length(); index++) {
+                    JSONObject item = input.optJSONObject(index);
+                    if (item == null) return null;
+                    JSONArray urlsJson = item.optJSONArray("urls");
+                    List<String> urls = new ArrayList<>();
+                    if (urlsJson != null) {
+                        if (urlsJson.length() == 0 || urlsJson.length() > 8) return null;
+                        for (int urlIndex = 0; urlIndex < urlsJson.length(); urlIndex++) {
+                            String url = urlsJson.optString(urlIndex, "");
+                            if (!isSafeIceUrl(url)) return null;
+                            urls.add(url);
+                        }
+                    } else {
+                        String url = item.optString("url", "");
+                        if (!isSafeIceUrl(url)) return null;
+                        urls.add(url);
+                    }
+                    String username = item.optString("username", "");
+                    String credential = item.optString("credential", "");
+                    if (!username.isEmpty() || !credential.isEmpty()) return null;
+                    iceServers.add(new IceServerConfig(urls, "", ""));
+                }
+            }
+            return new NativeP2pConfig(uri.toString(), roomId, tunnelKey, protocolVersion, iceServers);
+        } catch (RuntimeException error) {
+            return null;
+        }
+    }
+
+    private static boolean isSafeIceUrl(String value) {
+        if (value == null || value.length() < 8 || value.length() > 512 || value.matches(".*\\s+.*")) return false;
+        try {
+            URI uri = URI.create(value);
+            String scheme = uri.getScheme();
+            if (!"stun".equalsIgnoreCase(scheme)) return false;
+            String address = uri.getRawSchemeSpecificPart();
+            return address != null && !address.isEmpty() && !address.startsWith("//") && !address.contains("@");
+        } catch (RuntimeException error) {
+            return false;
         }
     }
 
@@ -222,6 +337,10 @@ final class PairingProfile {
 
     List<Route> routesWithRelayProxy(int socksPort) {
         return routesWithProxy("wss-relay", relay != null, socksPort);
+    }
+
+    List<Route> routesWithNativeP2pProxy(int socksPort) {
+        return routesWithProxy("native-p2p", nativeP2p != null, socksPort);
     }
 
     private List<Route> routesWithProxy(String transportId, boolean configured, int socksPort) {
@@ -285,6 +404,21 @@ final class PairingProfile {
                     item.put("roomId", relay.roomId);
                     item.put("tunnelKey", relay.tunnelKey);
                     item.put("protocolVersion", relay.protocolVersion);
+                }
+                if ("native-p2p".equals(route.id) && nativeP2p != null) {
+                    item.put("signalingUrl", nativeP2p.signalingUrl);
+                    item.put("roomId", nativeP2p.roomId);
+                    item.put("tunnelKey", nativeP2p.tunnelKey);
+                    item.put("protocolVersion", nativeP2p.protocolVersion);
+                    JSONArray servers = new JSONArray();
+                    for (IceServerConfig server : nativeP2p.iceServers) {
+                        JSONObject serverJson = new JSONObject();
+                        serverJson.put("urls", new JSONArray(server.urls));
+                        if (!server.username.isEmpty()) serverJson.put("username", server.username);
+                        if (!server.credential.isEmpty()) serverJson.put("credential", server.credential);
+                        servers.put(serverJson);
+                    }
+                    item.put("iceServers", servers);
                 }
                 values.put(item);
             }

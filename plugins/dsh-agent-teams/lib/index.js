@@ -50,7 +50,9 @@ const MODEL_TIERS = Object.freeze(["main", "subagent"]);
 const MANAGED_MEMBER_DENIED_TOOLS = Object.freeze(["subagent", "subagent_fork", "workflow", "ralph"]);
 const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u;
 const MODEL_ID = /^\S{1,256}$/u;
-const TASK_STATES = Object.freeze(["pending", "in_progress", "completed"]);
+const TASK_STATES = Object.freeze(["pending", "in_progress", "completed", "cancelled"]);
+const MUTABLE_TASK_STATES = Object.freeze(["pending", "in_progress", "completed"]);
+const TERMINAL_TASK_STATES = new Set(["completed", "cancelled"]);
 const TASK_WORKFLOW_EVENT_TYPES = new Set(["turn/start", "turn/end", "step/start", "step/end", "tool/call", "tool/result", "todo/write", "assistant/message", "llm/retry"]);
 const MEMBER_STATES = Object.freeze([
   "provisioning", "running", "idle", "ready", "failed", "shutting_down", "retired",
@@ -71,7 +73,7 @@ const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revi
 const BOOTSTRAP_KEYS = new Set(["requestId", "inputHash", "phase", "taskRefs", "memberRefs", "createdAt", "updatedAt"]);
 const BOOTSTRAP_TASK_REF_KEYS = new Set(["key", "taskId"]);
 const BOOTSTRAP_MEMBER_REF_KEYS = new Set(["key", "name", "status", "memberId", "sessionId", "errorCode", "errorStage"]);
-const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt"]);
+const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason"]);
 const CROSS_DEPENDENCY_KEYS = new Set(["teamId", "taskId"]);
 const EXPANSION_WORKSTREAM_KEYS = new Set(["title", "deliverable", "acceptance_criteria", "files", "resources"]);
 const Config = z.object({
@@ -401,6 +403,10 @@ function validateTask(task) {
   assertIsoDate(task.updatedAt, "task.updatedAt");
   if (task.claimedAt !== undefined) assertIsoDate(task.claimedAt, "task.claimedAt");
   if (task.completedAt !== undefined) assertIsoDate(task.completedAt, "task.completedAt");
+  if (task.cancelledAt !== undefined) assertIsoDate(task.cancelledAt, "task.cancelledAt");
+  optionalString(task.cancellationReason, "task.cancellationReason", 4_096);
+  if (task.releasedAt !== undefined) assertIsoDate(task.releasedAt, "task.releasedAt");
+  optionalString(task.releaseReason, "task.releaseReason", 4_096);
   return task;
 }
 
@@ -589,6 +595,18 @@ function validateStoreDocument(document) {
   return document;
 }
 
+function taskIsTerminal(task) {
+  return TERMINAL_TASK_STATES.has(task?.state);
+}
+function clearTaskTerminalMetadata(task) {
+  task.completedAt = undefined;
+  task.cancelledAt = undefined;
+  task.cancellationReason = undefined;
+}
+function clearTaskReleaseMetadata(task) {
+  task.releasedAt = undefined;
+  task.releaseReason = undefined;
+}
 /** Return the public task projection with blockedBy derived from dependencies. */
 function deriveTask(task, tasks) {
   const byId = new Map(tasks.map((candidate) => [candidate.id, candidate]));
@@ -604,6 +622,7 @@ function deriveTask(task, tasks) {
     dependencies: [...task.dependsOn],
     assignee: task.assigneeSessionId ?? null,
     blockedBy: task.dependsOn.filter((id) => byId.get(id)?.state !== "completed"),
+    failedBy: task.dependsOn.filter((id) => byId.get(id)?.state === "cancelled"),
     conflictsWith,
   };
 }
@@ -615,6 +634,10 @@ function deriveTaskAcrossTeams(task, team, teams) {
   const crossBlockedBy = crossTeamDependencies.filter((dependency) => {
     const target = teamsById.get(dependency.teamId)?.tasks.find((candidate) => candidate.id === dependency.taskId);
     return target?.state !== "completed";
+  }).map(crossTaskReference);
+  const crossFailedBy = crossTeamDependencies.filter((dependency) => {
+    const target = teamsById.get(dependency.teamId)?.tasks.find((candidate) => candidate.id === dependency.taskId);
+    return target?.state === "cancelled";
   }).map(crossTaskReference);
   const dependencySources = [...new Map(crossTeamDependencies.map((dependency) => {
     const source = teamsById.get(dependency.teamId);
@@ -630,12 +653,13 @@ function deriveTaskAcrossTeams(task, team, teams) {
     dependencySources,
     dependencies: [...base.dependencies, ...crossReferences],
     blockedBy: [...base.blockedBy, ...crossBlockedBy],
+    failedBy: [...base.failedBy, ...crossFailedBy],
   };
 }
 function progressedDependents(document, teamId, taskId) {
   const reference = taskNodeKey(teamId, taskId);
   return document.teams.flatMap((team) => team.tasks
-    .filter((task) => task.state !== "pending" && (
+    .filter((task) => ["in_progress", "completed"].includes(task.state) && (
       team.id === teamId && task.dependsOn.includes(taskId)
       || (task.crossTeamDependsOn ?? []).some((dependency) => taskNodeKey(dependency.teamId, dependency.taskId) === reference)
     ))
@@ -672,17 +696,22 @@ function deriveAttention(team, teams = [team]) {
   const failedMembers = team.members.filter((member) => member.kind === "worker" && member.state === "failed").map((member) => member.id);
   const unconfirmedMembers = team.members.filter((member) => member.kind === "worker" && (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true)).map((member) => member.id);
   const activeSessions = new Set(team.members.filter((member) => !["failed", "retired"].includes(member.state)).map((member) => member.sessionId));
-  const strandedTasks = team.tasks.filter((task) => task.state !== "completed" && task.assigneeSessionId !== undefined && !activeSessions.has(task.assigneeSessionId)).map((task) => task.id);
+  const strandedTasks = team.tasks.filter((task) => !taskIsTerminal(task) && task.assigneeSessionId !== undefined && !activeSessions.has(task.assigneeSessionId)).map((task) => task.id);
+  const releasedTasks = team.tasks.filter((task) => task.state === "pending" && task.releaseReason !== undefined).map((task) => task.id);
   const failedDeliveries = team.messages.filter((message) => message.status === "failed").map((message) => message.id);
   const bootstrapIncomplete = team.bootstrap !== undefined && team.bootstrap.phase !== "complete";
   const codes = [];
   if (failedMembers.length > 0) codes.push("failed_member");
   if (unconfirmedMembers.length > 0) codes.push("unconfirmed_shutdown");
   if (strandedTasks.length > 0) codes.push("stranded_task");
+  if (releasedTasks.length > 0) codes.push("released_task");
   if (failedDeliveries.length > 0) codes.push("failed_delivery");
   if (bootstrapIncomplete) codes.push("bootstrap_incomplete");
-  const blockedTasks = team.tasks.filter((task) => deriveTaskAcrossTeams(task, team, teams).blockedBy.length > 0).map((task) => task.id);
-  return { required: codes.length > 0, codes, failedMembers, unconfirmedMembers, strandedTasks, failedDeliveries, blockedTasks, bootstrapIncomplete };
+  const derivedTasks = team.tasks.map((task) => deriveTaskAcrossTeams(task, team, teams));
+  const blockedTasks = derivedTasks.filter((task) => task.blockedBy.length > 0).map((task) => task.id);
+  const failedDependencyTasks = derivedTasks.filter((task) => task.failedBy.length > 0).map((task) => task.id);
+  if (failedDependencyTasks.length > 0) codes.push("failed_dependency");
+  return { required: codes.length > 0, codes, failedMembers, unconfirmedMembers, strandedTasks, releasedTasks, failedDeliveries, blockedTasks, failedDependencyTasks, bootstrapIncomplete };
 }
 function projectTeam(team, nameTeams = []) {
   const members = team.members.map((member) => {
@@ -749,9 +778,9 @@ function newestFirst(left, right) {
 }
 function selectUiTasks(tasks) {
   if (tasks.length <= UI_MAX_TASKS_PER_TEAM) return tasks;
-  const active = tasks.filter((task) => task.state !== "completed").sort(newestFirst);
-  const completed = tasks.filter((task) => task.state === "completed").sort(newestFirst);
-  return [...active, ...completed].slice(0, UI_MAX_TASKS_PER_TEAM);
+  const active = tasks.filter((task) => !taskIsTerminal(task)).sort(newestFirst);
+  const terminal = tasks.filter(taskIsTerminal).sort(newestFirst);
+  return [...active, ...terminal].slice(0, UI_MAX_TASKS_PER_TEAM);
 }
 function selectUiEvents(events) {
   if (events.length <= UI_MAX_EVENTS_PER_TEAM) return events;
@@ -782,6 +811,7 @@ function projectUiTasks(team, peerTeams) {
     const crossTeamDependencies = clone(task.crossTeamDependsOn ?? []);
     const crossReferences = crossTeamDependencies.map(crossTaskReference);
     const crossBlockedBy = crossTeamDependencies.filter((dependency) => taskMapsByTeam.get(dependency.teamId)?.get(dependency.taskId)?.state !== "completed").map(crossTaskReference);
+    const crossFailedBy = crossTeamDependencies.filter((dependency) => taskMapsByTeam.get(dependency.teamId)?.get(dependency.taskId)?.state === "cancelled").map(crossTaskReference);
     const dependencySources = [...new Map(crossTeamDependencies.map((dependency) => {
       const source = teamsById.get(dependency.teamId);
       return [dependency.teamId, { teamId: dependency.teamId, teamName: source?.name ?? dependency.teamId, teamStatus: source?.state ?? "unavailable" }];
@@ -795,6 +825,10 @@ function projectUiTasks(team, peerTeams) {
       blockedBy: [
         ...task.dependsOn.filter((id) => localById.get(id)?.state !== "completed"),
         ...crossBlockedBy,
+      ],
+      failedBy: [
+        ...task.dependsOn.filter((id) => localById.get(id)?.state === "cancelled"),
+        ...crossFailedBy,
       ],
       conflictsWith: [...conflicts],
       crossTeamDependencies,
@@ -930,7 +964,7 @@ function taskRuntimeProjection(task, member, agent) {
     inProgress: plan.filter((item) => item.status === "in_progress").length,
     pending: plan.filter((item) => item.status === "pending").length,
   };
-  const percent = task.state === "completed" ? 100 : counts.total > 0 ? Math.round((counts.completed / counts.total) * 100) : task.state === "pending" ? 0 : null;
+  const percent = task.state === "completed" ? 100 : task.state === "cancelled" ? null : counts.total > 0 ? Math.round((counts.completed / counts.total) * 100) : task.state === "pending" ? 0 : null;
   const executionModel = (observedModel || member && (member.model || member.provider)) ? {
     ...(observedModel ?? {}),
     ...(!observedModel && member?.model ? { model: member.model } : {}),
@@ -1076,6 +1110,7 @@ function projectTeamSummary(team) {
     activeTaskCount: team.tasks.filter((task) => task.state === "in_progress").length,
     pendingTaskCount: team.tasks.filter((task) => task.state === "pending").length,
     completedTaskCount: team.tasks.filter((task) => task.state === "completed").length,
+    cancelledTaskCount: team.tasks.filter((task) => task.state === "cancelled").length,
     updatedAt: team.updatedAt,
   };
 }
@@ -1448,9 +1483,9 @@ class AgentTeamsStore {
     let changed = false;
     for (const team of this.document.teams) {
       if (team.state === "closed") {
-        if (team.tasks.some((task) => task.state === "in_progress" || task.state !== "completed" && task.assigneeSessionId !== undefined)) {
+        if (team.tasks.some((task) => !taskIsTerminal(task))) {
           team.updatedAt = now();
-          terminalizeTeamTasks(team, team.updatedAt);
+          terminalizeTeamTasks(team, team.updatedAt, "legacy closed team contained unfinished work");
           changed = true;
         }
         continue;
@@ -1713,18 +1748,21 @@ function requireActiveTeam(team) {
 function requireOpenTeam(team) {
   if (team.state === "closed") reject("team is closed", "AGENT_TEAMS_CLOSING");
 }
-function terminalizeTeamTasks(team, timestamp = now()) {
-  const releasedTaskIds = [];
+function terminalizeTeamTasks(team, timestamp = now(), reason = "team closed before unfinished work was completed") {
+  const cancelledTaskIds = [];
   for (const task of team.tasks) {
-    if (task.state === "completed") continue;
-    if (task.state === "in_progress") task.state = "pending";
+    if (taskIsTerminal(task)) continue;
+    task.state = "cancelled";
     task.assigneeSessionId = undefined;
     task.claimedAt = undefined;
     task.completedAt = undefined;
+    task.cancelledAt = timestamp;
+    task.cancellationReason = reason;
+    clearTaskReleaseMetadata(task);
     task.updatedAt = timestamp;
-    releasedTaskIds.push(task.id);
+    cancelledTaskIds.push(task.id);
   }
-  return releasedTaskIds;
+  return cancelledTaskIds;
 }
 function closeTeamRecord(team, reason = "team closed before delivery acknowledgement") {
   const timestamp = now();
@@ -1733,7 +1771,7 @@ function closeTeamRecord(team, reason = "team closed before delivery acknowledge
     message.status = "failed";
     message.deliveryError = reason;
   }
-  terminalizeTeamTasks(team, timestamp);
+  terminalizeTeamTasks(team, timestamp, reason);
   team.state = "closed";
   team.updatedAt = timestamp;
   USER_PAUSED_TEAMS.delete(team.id);
@@ -1795,7 +1833,7 @@ function registrationPrompt(teamId, memberName, role) {
 }
 function workPrompt(teamId, memberId, prompt, taskIds = []) {
   const taskNotice = taskIds.length === 0 ? "" : ` Durable assigned task IDs: ${taskIds.join(", ")}. Claim only an unblocked task already assigned to your session before doing its work.`;
-  return `Coordinator registration complete. Team ${teamId}; member ${memberId}. You may now begin the assigned work.${taskNotice} Use agent-team tools for team tasks and coordinator relays. You cannot create or fork agents. If your in-progress task can be split into genuinely independent parallel outcomes, use team_expansion_request with explicit deliverables, acceptance criteria, and non-overlapping file/resource boundaries. This is only a proposal: the root coordinator decides whether to create persistent tasks and visible peer members without bypassing maxMembers or maxActiveTurns. Assignment:\n${prompt}`;
+  return `Coordinator registration complete. Team ${teamId}; member ${memberId}. You may now begin the assigned work.${taskNotice} A report, message, or successful turn end does not complete a durable team task: immediately call team_task_update with action=complete after its deliverable is actually finished and before sending the final report; otherwise explicitly release it. Use agent-team tools for team tasks and coordinator relays. You cannot create or fork agents. If your in-progress task can be split into genuinely independent parallel outcomes, use team_expansion_request with explicit deliverables, acceptance criteria, and non-overlapping file/resource boundaries. This is only a proposal: the root coordinator decides whether to create persistent tasks and visible peer members without bypassing maxMembers or maxActiveTurns. Assignment:\n${prompt}`;
 }
 
 function validateExpansionRequestForDelivery(document, team, caller, request, { platform = process.platform } = {}) {
@@ -2442,10 +2480,10 @@ async function updateTask(store, caller, input) {
     const task = team.tasks.find((candidate) => candidate.id === nonEmptyString(input.taskId, "taskId", 256));
     if (task === undefined) reject("unknown team task", "AGENT_TEAMS_NOT_FOUND");
     const requestedState = optionalString(input.state, "state", 32);
-    if (requestedState !== undefined) assertEnum(requestedState, TASK_STATES, "state");
+    if (requestedState !== undefined) assertEnum(requestedState, MUTABLE_TASK_STATES, "state");
     if (input.action === undefined && requestedState === undefined) reject("task update requires action or state", "AGENT_TEAMS_INVALID_TASK");
-    const action = input.action ?? (requestedState === "in_progress" ? "claim" : requestedState === "completed" ? "complete" : task.state === "completed" ? "reopen" : "release");
-    assertEnum(action, ["claim", "release", "complete", "reopen", "assign", "unassign"], "action");
+    const action = input.action ?? (requestedState === "in_progress" ? "claim" : requestedState === "completed" ? "complete" : taskIsTerminal(task) ? "reopen" : "release");
+    assertEnum(action, ["claim", "release", "complete", "cancel", "reopen", "assign", "unassign"], "action");
     const blockedBy = deriveTaskAcrossTeams(task, team, document.teams).blockedBy;
     const isLead = caller.id === team.rootLeadSessionId;
     if (action === "claim") {
@@ -2460,28 +2498,45 @@ async function updateTask(store, caller, input) {
       task.state = "in_progress";
       task.assigneeSessionId = caller.id;
       task.claimedAt = now();
-      task.completedAt = undefined;
+      clearTaskTerminalMetadata(task);
+      clearTaskReleaseMetadata(task);
     } else if (action === "complete") {
       if (task.state !== "in_progress") reject(`only an in-progress task can be completed (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       if (!isLead && task.assigneeSessionId !== caller.id) reject("only the task claimant or team lead can complete it", "AGENT_TEAMS_UNAUTHORIZED");
       if (blockedBy.length > 0) reject(`task is blocked by: ${blockedBy.join(", ")}`, "AGENT_TEAMS_TASK_BLOCKED");
       task.state = "completed";
       task.completedAt = now();
+      task.cancelledAt = undefined;
+      task.cancellationReason = undefined;
+      clearTaskReleaseMetadata(task);
     } else if (action === "release") {
       if (task.state !== "in_progress") reject(`only an in-progress task can be released (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       if (!isLead && task.assigneeSessionId !== caller.id) reject("only the task claimant or team lead can release it", "AGENT_TEAMS_UNAUTHORIZED");
       task.state = "pending";
       task.assigneeSessionId = undefined;
       task.claimedAt = undefined;
+      clearTaskTerminalMetadata(task);
+      clearTaskReleaseMetadata(task);
+    } else if (action === "cancel") {
+      if (!isLead) reject("only the team lead can cancel a task", "AGENT_TEAMS_UNAUTHORIZED");
+      if (taskIsTerminal(task)) reject(`only a pending or in-progress task can be cancelled (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
+      task.state = "cancelled";
+      task.assigneeSessionId = undefined;
+      task.claimedAt = undefined;
       task.completedAt = undefined;
+      task.cancelledAt = now();
+      task.cancellationReason = "cancelled explicitly by the team lead";
+      clearTaskReleaseMetadata(task);
     } else if (action === "reopen") {
       if (!isLead) reject("only the team lead can reopen a task", "AGENT_TEAMS_UNAUTHORIZED");
-      if (task.state !== "completed") reject(`only a completed task can be reopened (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
+      if (!taskIsTerminal(task)) reject(`only a completed or cancelled task can be reopened (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       const progressed = progressedDependents(document, team.id, task.id);
       if (progressed.length > 0) reject(`cannot reopen a prerequisite used by progressed tasks: ${progressed.join(", ")}`, "AGENT_TEAMS_TASK_CONFLICT");
       task.state = "pending";
-      task.completedAt = undefined;
+      task.assigneeSessionId = undefined;
       task.claimedAt = undefined;
+      clearTaskTerminalMetadata(task);
+      clearTaskReleaseMetadata(task);
     } else if (action === "assign") {
       if (!isLead) reject("only the team lead can assign a task", "AGENT_TEAMS_UNAUTHORIZED");
       const assignee = resolveMember(team, input.assigneeSessionId).sessionId;
@@ -2493,6 +2548,7 @@ async function updateTask(store, caller, input) {
       }
       if (task.state !== "pending") reject(`only a pending task can be assigned (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       task.assigneeSessionId = assignee;
+      clearTaskReleaseMetadata(task);
     } else {
       if (!isLead) reject("only the team lead can unassign a task", "AGENT_TEAMS_UNAUTHORIZED");
       if (task.state !== "pending") reject(`only a pending task can be unassigned (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
@@ -2520,14 +2576,16 @@ function confirmMemberRetired(member) {
   member.error = undefined;
   member.updatedAt = now();
 }
-function releaseRetiredMemberTasks(team, sessionId, timestamp = now()) {
+function releaseRetiredMemberTasks(team, sessionId, timestamp = now(), reason = "task released because its member was force-retired") {
   const releasedTaskIds = [];
   for (const task of team.tasks) {
-    if (task.assigneeSessionId !== sessionId || task.state === "completed") continue;
-    if (task.state === "in_progress") task.state = "pending";
+    if (task.assigneeSessionId !== sessionId || taskIsTerminal(task)) continue;
+    task.state = "pending";
     task.assigneeSessionId = undefined;
     task.claimedAt = undefined;
-    task.completedAt = undefined;
+    clearTaskTerminalMetadata(task);
+    task.releasedAt = timestamp;
+    task.releaseReason = reason;
     task.updatedAt = timestamp;
     releasedTaskIds.push(task.id);
   }
@@ -2643,6 +2701,8 @@ async function retireMember(ctx, store, admission, lead, input, signal) {
     requireOpenTeam(team);
     const member = resolveMember(team, input.memberSessionId);
     if (member.kind !== "worker") reject("unknown worker member", "AGENT_TEAMS_NOT_FOUND");
+    const unfinishedTaskIds = team.tasks.filter((task) => task.assigneeSessionId === member.sessionId && !taskIsTerminal(task)).map((task) => task.id);
+    if (!force && unfinishedTaskIds.length > 0) reject(`member owns unfinished tasks; complete or release them before graceful retirement: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
     if (member.state === "retired") return { teamId: team.id, member: clone(member), releasedTaskIds: [], noop: true };
     markMemberShuttingDown(member, force);
     team.updatedAt = member.updatedAt;
@@ -2686,7 +2746,7 @@ async function retireMember(ctx, store, admission, lead, input, signal) {
     if (member !== undefined && team.state !== "closed") {
       const retiredSessionId = member.sessionId;
       confirmMemberRetired(member);
-      releasedTaskIds = releaseRetiredMemberTasks(team, retiredSessionId, member.updatedAt);
+      releasedTaskIds = releaseRetiredMemberTasks(team, retiredSessionId, member.updatedAt, "task released because its assigned member was force-retired");
       team.updatedAt = member.updatedAt;
     }
     if (member === undefined) reject("unknown worker member", "AGENT_TEAMS_NOT_FOUND");
@@ -2704,6 +2764,8 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
     const team = findTeam(document, teamId);
     requireLiveRootLead(ctx, team, lead);
     if (team.state !== "closing") requireActiveTeam(team);
+    const unfinishedTaskIds = team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => task.id);
+    if (!force && unfinishedTaskIds.length > 0) reject(`team has unfinished tasks; complete or cancel them before graceful shutdown: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
     team.state = "closing";
     const workers = team.members.filter((member) => member.kind === "worker" && member.state !== "retired");
     for (const member of workers) markMemberShuttingDown(member, force);
@@ -2775,7 +2837,7 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
       });
     }
     const shouldClose = failures.length === 0 && team.members.filter((member) => member.kind === "worker").every((member) => member.state === "retired");
-    if (shouldClose) closeTeamRecord(team);
+    if (shouldClose) closeTeamRecord(team, force ? "team was force-closed before unfinished work completed" : "team closed after all tracked work reached a terminal state");
     else {
       team.state = failures.length === 0 ? "closing" : "active";
       team.updatedAt = now();
@@ -2852,6 +2914,7 @@ function teamSystemPrompt(store) {
   return [
     "Agent Teams automatic-team mode is ENABLED.",
     "Before substantive work on every ordinary direct-human root turn, apply the three-level gate below. When the Level 3 conditions are met, choose exactly one creation path in that same turn: use team_bootstrap when the complete bounded task/member plan is already known; otherwise use team_start and then the existing task/spawn tools. Never call both team_start and team_bootstrap for the same team, and never replace the required visible managed members with multiple hidden ordinary subagents.",
+    "Keep durable team task state synchronized at every handoff: members must explicitly complete finished tasks before their final report, and the root lead must reconcile every task before retiring members or closing the team. A report or successful subagent turn is not completion evidence. Graceful retirement and shutdown require no unfinished owned work; force shutdown records unfinished work as cancelled rather than leaving permanent pending tasks.",
     "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively choose one Agent Team creation path only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
     "When a new team already has a complete bounded plan of one through four durable tasks and one through four visible peers, call team_bootstrap directly with a stable request_id and do not call team_start first. The Host persists all tasks before starting members and exact replay reuses the plan. If that complete plan is not ready, call team_start instead and continue with team_task_create then team_spawn; do not later bootstrap that same team. Neither path may bypass the Level 3 gate, direct-human authority, capacity checks, file-scope separation, or explicit review of partial/uncertain starts.",
     "For every team_expansion_request, the fixed root lead approves only when the remaining outcomes are genuinely parallel and independent, inputs and acceptance criteria are explicit, file/external-resource ownership does not conflict, the handoff context is small, critical-path reduction or independent-review value materially exceeds coordination cost, and current member/turn/task budget is sufficient. The Host compares proposed file scopes with other in-progress task files and checks proposal-internal resource hierarchy, but existing external-resource ownership is not persisted and must be verified by the root. If a broad source task is split, first release/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn for visible same-level peers. If rejected, explain the reason to the requester. Never invent a leader→group-leader→hidden-worker hierarchy.",
@@ -3217,8 +3280,8 @@ function registerTools(ctx, store, ready, collaboration, admission) {
     })), presentCall: () => present("List team tasks"),
   }));
   ctx.tools.register(defineTool({
-    name: "team_task_update", description: "Atomically claim, release, complete, reopen, assign, or unassign a team task. Claim rejects unmet dependencies; competing claims and reassignments to a different member while a task is in progress stay rejected. Repeating a claim by the same claimant, or the lead re-assigning the current assignee, is a safe idempotent no-op.",
-    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", enum: ["claim", "release", "complete", "reopen", "assign", "unassign"], description: "requested transition; repeated claim by the same claimant and lead assign of the current assignee are safe no-ops" }, state: { type: "string", enum: TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" } }, output: TOOL_OUTPUT,
+    name: "team_task_update", description: "Atomically claim, release, complete, cancel, reopen, assign, or unassign a team task. A report or successful member turn never completes the durable task; call complete immediately when its deliverable is actually finished. Claim rejects unmet dependencies; competing claims and reassignments to a different member while a task is in progress stay rejected. Repeating a claim by the same claimant, or the lead re-assigning the current assignee, is a safe idempotent no-op.",
+    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", enum: ["claim", "release", "complete", "cancel", "reopen", "assign", "unassign"], description: "requested transition; repeated claim by the same claimant and lead assign of the current assignee are safe no-ops" }, state: { type: "string", enum: MUTABLE_TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => publicResult(await updateTask(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, action: args.action, state: args.state, assigneeSessionId: args.assignee_session_id }))),
     presentCall: (args) => present("Update team task", `${args.action}: ${args.task_id}`),
   }));
@@ -3293,7 +3356,7 @@ function registerTools(ctx, store, ready, collaboration, admission) {
     presentCall: (args) => present(args.action === "acknowledge" ? "Acknowledge collaboration item" : "Read collaboration inbox", args.item_ref),
   }));
   ctx.tools.register(defineTool({
-    name: "team_shutdown", description: "Gracefully retire one member or close the whole team. Force mode drains selected continuable children to quiescence using the exact live parent.",
+    name: "team_shutdown", description: "Gracefully retire one member or close the whole team only after its durable tasks are reconciled. Graceful member retirement rejects unfinished owned tasks; graceful team shutdown rejects any unfinished task. Force member retirement releases owned tasks with an attention marker, while force team shutdown records unfinished tasks as cancelled before closing.",
     parameters: { team_id: { type: "string", description: "Optional only when the root lead owns exactly one unclosed team." }, member_session_id: { type: "string" }, force: { type: "boolean" } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution, signal) => publicResult(await shutdownTeam(ctx, store, admission, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force }, signal))),
     presentCall: (args) => present("Shut down team", args.team_id),

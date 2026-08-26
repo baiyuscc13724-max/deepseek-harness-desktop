@@ -8,7 +8,6 @@
   <link rel="stylesheet" href="./styles.css" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="./right-workspace.css" />
-  <link rel="stylesheet" href="./pr-preview-update.css" />
 </head>
 <body>
   <main class="official-shell">
@@ -156,7 +155,7 @@
               <button id="mobileRelayClear" type="button">清除（恢复默认）</button>
             </div>
             <p id="mobileRelayMessage" class="mobile-sync-relay-message" role="status"></p>
-            <p class="mobile-sync-relay-note">服务器必须使用可信 TLS 证书并通过 443 端口提供 WSS 服务；配置成功后手机扫码会从二维码自动取得中继配置。留空时不使用个人中继，自动按内置线路连接。</p>
+            <p class="mobile-sync-relay-note">服务器必须使用可信 TLS 证书并通过 443 端口提供 WSS 服务；它只协调原生 P2P 打洞，并在直连失败时继续承担端到端加密中继。配置成功后手机扫码会从二维码自动取得配置；留空时不使用个人中继，仍可按已有兼容线路连接。</p>
           </section>
           <div id="mobileSyncEnabledContent" class="mobile-sync-enabled hidden">
             <section class="mobile-sync-remote-card">
@@ -167,7 +166,7 @@
               <label class="mobile-sync-switch"><input id="mobileRemoteToggle" type="checkbox" checked /><span aria-hidden="true"></span><b>远程连接</b></label>
               <label class="mobile-sync-provider">连接策略
                 <select id="mobileTransportPreference">
-                  <option value="auto">智能选择（WSS/443 优先）</option>
+                  <option value="auto">智能选择（原生 P2P 优先）</option>
                   <option value="wss-relay">通用 WSS/443</option>
                   <option value="easytier">EasyTier 优先</option>
                   <option value="tailscale">Tailscale 优先</option>
@@ -204,7 +203,7 @@
               <div class="mobile-sync-section-title"><h3>已配对设备</h3><span id="mobileSyncDeviceCount">0 台</span></div>
               <div id="mobileSyncDeviceList" class="mobile-sync-device-list"></div>
             </section>
-            <p class="mobile-sync-compatibility">连接顺序：局域网直连 → WSS/443 通用中继 → EasyTier / Tailscale 智能接管。所有远程通道均不可用时只暂停远程连接，不影响电脑端和局域网使用。</p>
+            <p class="mobile-sync-compatibility">连接顺序：局域网直连 → 内置原生 P2P（个人 WSS/443 协调）→ 同一 WSS/443 端到端加密中继 → 已有 EasyTier / Tailscale 兼容线路。所有远程通道均不可用时只暂停远程连接，不影响电脑端和局域网使用。</p>
           </div>
           <p id="mobileSyncError" class="mobile-sync-error" role="alert"></p>
         </div>
@@ -337,7 +336,7 @@
         </header>
         <div class="computer-use-authorization-body">
           <p id="computerUseAuthorizationDescription">这一次授权同时开启右栏浏览器控制与内置 Computer Use。桌面控制将进入无限制模式；右栏浏览器仍保留密码、账号、验证码、支付和银行信息等硬限制。</p>
-          <p class="computer-use-authorization-note">本次授权仅在当前应用运行期间有效；永久授权将保存并在重启后自动生效。之后统一在“设置 → 插件 → Computer Use”中停止或撤销。</p>
+          <p class="computer-use-authorization-note">本次授权仅在当前应用运行期间有效；永久授权会跨重启保留、后续开启无需重复确认，但软件启动时不会自动控制。之后统一在“设置 → 插件 → Computer Use”中停止或撤销。</p>
           <p class="computer-use-authorization-refocus" id="computerUseAuthorizationRefocus" role="status" hidden></p>
           <p id="computerUseAuthorizationStatus" class="computer-use-authorization-status" role="status"></p>
         </div>
@@ -518,7 +517,6 @@
   <script src="./right-workspace.js"></script>
   <script src="./right-workspace-integration.js"></script>
   <script src="./browser-sidebar.js"></script>
-  <script src="./pr-preview-update-integration.js"></script>
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="./app.js"></script>

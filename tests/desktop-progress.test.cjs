@@ -19,6 +19,9 @@ test('adaptive progress policy is semantic rather than step-count driven', async
   assert.match(PROGRESS_POLICY, /Say what finished, what is happening now, and what comes next/)
   assert.match(PROGRESS_POLICY, /Never use a fixed number of steps, tool calls, or elapsed intervals/)
   assert.match(PROGRESS_POLICY, /Stay quiet for trivial tasks/)
+  assert.match(PROGRESS_POLICY, /synchronize it at the same semantic boundary before reporting progress or starting the next task/i)
+  assert.match(PROGRESS_POLICY, /mark each finished item completed immediately/i)
+  assert.match(PROGRESS_POLICY, /never leave a completed step shown as pending or in_progress/i)
 })
 
 test('progress plugin only adds model guidance without a polling UI or state API', async () => {

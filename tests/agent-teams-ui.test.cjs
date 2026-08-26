@@ -358,10 +358,10 @@ test('switching conversation views only stops UI subscriptions, never the runnin
 
 test('Agent Teams workspace exposes tasks, events, and one unified agent catalog', async () => {
   const source = await clientSource()
-  for (const marker of ['members', 'tasks', 'events', 'blockedBy', 'dependencySources', 'conflictsWith', 'fileScopeProjection', 'lastActivityAt', 'agentCount', 'setSubagentCatalogOpen', 'SUBAGENT_CATALOG_EVENT']) {
+  for (const marker of ['members', 'tasks', 'events', 'blockedBy', 'failedBy', 'dependencySources', 'conflictsWith', 'fileScopeProjection', 'lastActivityAt', 'agentCount', 'setSubagentCatalogOpen', 'SUBAGENT_CATALOG_EVENT']) {
     assert.ok(source.includes(marker), `missing Agent Teams workspace marker: ${marker}`)
   }
-  for (const label of ['正在启动', '正在停止', '正在关闭', '代理目录', '为保护工作区信息，此页面不显示文件路径', '协作事件']) {
+  for (const label of ['正在启动', '正在停止', '正在关闭', '代理目录', '为保护工作区信息，此页面不显示文件路径', '协作事件', '已取消']) {
     assert.ok(source.includes(label), `missing localized UX label: ${label}`)
   }
   assert.match(source, /props\.sessions\.setSubagentCatalogOpen\(team\.leadSessionId, true\)/u)
@@ -373,6 +373,14 @@ test('Agent Teams workspace exposes tasks, events, and one unified agent catalog
   assert.match(source, /h\("h2", \{ className: "dat-title" \}/u)
   assert.match(source, /@media\(max-width:900px\)/u)
   assert.match(source, /@media\(max-width:620px\)/u)
+})
+
+test('task board renders cancelled tasks as their own terminal column before derived blockers', async () => {
+  const source = await clientSource()
+  assert.match(source, /boardCancelled: "已取消"/u)
+  assert.match(source, /\{ id: "cancelled", label: t\("boardCancelled"\), limit: 200 \}/u)
+  assert.match(source, /if \(status === "cancelled"\) return "cancelled";\s*if \(relationIds\(task\.blockedBy\)\.length\) return "blocked"/u)
+  assert.match(source, /min-width:1200px.*repeat\(5,minmax\(0,1fr\)\)/u)
 })
 
 test('canvas exposes canonical member and task state kinds for complete status presentation', async () => {
@@ -497,6 +505,7 @@ test('blocked task detail tolerates real dependency data and stale selections wi
     stateKind: 'blocked',
     filesText: '',
     blockedBy: ['daa0a1b3-d9ac-4481-b5a1-a335c10ed469', 'd0df54d7-1fb7-4879-be9b-00447f4cb54d'],
+    failedBy: [],
     conflicts: [],
     dependencies: ['daa0a1b3-d9ac-4481-b5a1-a335c10ed469'],
     reason: ''

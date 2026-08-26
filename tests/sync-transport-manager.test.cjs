@@ -57,6 +57,23 @@ async function waitFor(predicate, timeout = 1000) {
   }
 }
 
+test('auto mode prefers native P2P and flattens its legacy WSS pairing fallback', async t => {
+  const store = createStore()
+  const native = new FakeAdapter('native-p2p')
+  native.pairingConfig = () => native.running ? [
+    { id: 'native-p2p', protocolVersion: 1 },
+    { id: 'wss-relay', protocolVersion: 1 }
+  ] : null
+  const relay = new FakeAdapter('wss-relay')
+  const easytier = new FakeAdapter('easytier')
+  const manager = new SyncTransportManager({ store, adapters: [easytier, relay, native] })
+  t.after(() => manager.stop())
+  await manager.start({ port: 3081, stateDir: os.tmpdir() })
+  assert.equal(manager.state().active, 'native-p2p')
+  assert.equal(easytier.starts, 1)
+  assert.deepEqual(manager.pairingTransports().map(config => config.id), ['native-p2p', 'wss-relay', 'easytier'])
+})
+
 test('remote transport falls back without changing the saved pairing identity', async () => {
   const store = createStore()
   const easytier = new FakeAdapter('easytier')
@@ -110,6 +127,34 @@ test('a disconnected sole transport is retried with backoff and recovers', async
   assert.equal(manager.state().status, 'connected')
   assert.ok(relay.starts >= 2)
   assert.equal(manager.state().reconnectAt, null)
+})
+
+test('disabling during disconnect cleanup cannot restart a fallback transport', async () => {
+  const store = createStore()
+  const primary = new FakeAdapter('wss-relay')
+  const fallback = new FakeAdapter('easytier')
+  const manager = new SyncTransportManager({ store, adapters: [primary, fallback] })
+  await manager.start({ port: 3081, stateDir: os.tmpdir() })
+  assert.equal(manager.state().active, 'wss-relay')
+
+  let stopCalls = 0
+  let releaseDisconnectStop
+  primary.stop = async () => {
+    primary.running = false
+    stopCalls += 1
+    if (stopCalls === 1) await new Promise(resolve => { releaseDisconnectStop = resolve })
+  }
+  primary.emit('disconnect', new Error('network changed'))
+  await waitFor(() => typeof releaseDisconnectStop === 'function')
+  const stopping = manager.stop({ persist: true })
+  releaseDisconnectStop()
+  await stopping
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(manager.state().status, 'disabled')
+  assert.equal(manager.state().active, null)
+  assert.equal(fallback.starts, 0)
+  assert.equal(fallback.running, false)
 })
 
 test('WSS adapter accepts validated runtime configuration only while stopped', () => {

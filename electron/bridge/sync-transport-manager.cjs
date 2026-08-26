@@ -2,7 +2,7 @@ const { EventEmitter } = require('node:events')
 const { randomBytes } = require('node:crypto')
 const { DEFAULT_SERVICE_ADDRESS } = require('../store/mobile-sync-store.cjs')
 
-const REMOTE_TRANSPORT_ORDER = Object.freeze(['wss-relay', 'easytier', 'tailscale'])
+const REMOTE_TRANSPORT_ORDER = Object.freeze(['native-p2p', 'wss-relay', 'easytier', 'tailscale'])
 
 function createMeshIdentity() {
   return {
@@ -41,6 +41,7 @@ class SyncTransportManager extends EventEmitter {
     this.startedAt = null
     this.context = null
     this.switching = null
+    this.lifecycleRevision = 0
     for (const adapter of adapters) {
       adapter.on?.('disconnect', error => this.#handleDisconnect(adapter.id, error))
       adapter.on?.('state', () => this.publish())
@@ -111,11 +112,31 @@ class SyncTransportManager extends EventEmitter {
     if (!this.context?.port) throw new Error('Remote sync requires a running mobile gateway.')
     if (this.switching) return this.switching
     this.#clearReconnect()
-    this.switching = this.#startAvailable().finally(() => { this.switching = null })
+    const revision = ++this.lifecycleRevision
+    this.switching = this.#startAvailable(new Set(), revision).finally(() => { this.switching = null })
     return this.switching
   }
 
-  async #startAvailable(exclude = new Set()) {
+  #isCurrent(revision) {
+    return revision === this.lifecycleRevision && this.store.get().remoteEnabled && Boolean(this.context?.port)
+  }
+
+  async #startLegacyCompatibility(context, revision) {
+    for (const id of ['easytier', 'tailscale']) {
+      if (!this.#isCurrent(revision)) return
+      const adapter = this.adapters.get(id)
+      // Compatibility never installs a new external component. It only keeps an
+      // already-present legacy route alive for devices paired before native P2P.
+      if (!adapter?.available?.()) continue
+      try {
+        await adapter.start({ ...context, mesh: this.store.ensureMesh(createMeshIdentity) })
+        if (!this.#isCurrent(revision)) await adapter.stop?.().catch(() => {})
+      } catch { await adapter.stop?.().catch(() => {}) }
+    }
+  }
+
+  async #startAvailable(exclude = new Set(), revision = this.lifecycleRevision) {
+    if (!this.#isCurrent(revision)) return this.state()
     this.status = 'connecting'
     this.error = null
     this.publish()
@@ -126,28 +147,39 @@ class SyncTransportManager extends EventEmitter {
       if (!adapter?.available?.() && typeof adapter?.prepare === 'function') {
         try {
           await adapter.prepare()
+          if (!this.#isCurrent(revision)) return this.state()
         } catch (error) {
+          if (!this.#isCurrent(revision)) return this.state()
           failures.push(`${id}: ${error.message}`)
           continue
         }
       }
+      if (!this.#isCurrent(revision)) return this.state()
       if (!adapter?.available?.()) {
         failures.push(`${id}: 组件尚未准备`)
         continue
       }
       try {
         await adapter.start({ ...this.context, mesh: this.store.ensureMesh(createMeshIdentity) })
+        if (!this.#isCurrent(revision)) {
+          await adapter.stop?.().catch(() => {})
+          return this.state()
+        }
         this.active = id
         this.status = 'connected'
         this.startedAt = this.now()
         this.error = null
         this.#clearReconnect({ resetAttempt: true })
+        if (id === 'native-p2p') await this.#startLegacyCompatibility(this.context, revision)
+        if (!this.#isCurrent(revision)) return this.state()
         return this.publish()
       } catch (error) {
-        failures.push(`${id}: ${error.message}`)
         await adapter.stop?.().catch(() => {})
+        if (!this.#isCurrent(revision)) return this.state()
+        failures.push(`${id}: ${error.message}`)
       }
     }
+    if (!this.#isCurrent(revision)) return this.state()
     this.active = null
     this.status = 'unavailable'
     this.startedAt = null
@@ -159,9 +191,14 @@ class SyncTransportManager extends EventEmitter {
 
   async stop({ persist = false } = {}) {
     if (persist) this.store.setRemoteEnabled(false)
+    const switching = this.switching
+    this.lifecycleRevision += 1
+    this.active = null
+    this.status = 'stopping'
     this.#clearReconnect({ resetAttempt: true })
     const stops = [...this.adapters.values()].map(adapter => adapter.stop?.().catch(() => {}))
     await Promise.all(stops)
+    await switching?.catch(() => {})
     this.active = null
     this.status = 'stopped'
     this.startedAt = null
@@ -185,34 +222,44 @@ class SyncTransportManager extends EventEmitter {
   }
 
   async configureWssRelay(relayUrl) {
-    const adapter = this.adapters.get('wss-relay')
-    if (!adapter || typeof adapter.configureRelayUrl !== 'function') throw new Error('WSS relay adapter does not support runtime configuration.')
+    const configurable = ['native-p2p', 'wss-relay']
+      .map(id => this.adapters.get(id))
+      .filter(adapter => typeof adapter?.configureRelayUrl === 'function')
+    if (!configurable.length) throw new Error('WSS relay adapters do not support runtime configuration.')
     if (this.switching) await this.switching
     const shouldRestart = Boolean(this.context?.port && this.store.get().remoteEnabled)
     await this.stop({ persist: false })
-    adapter.configureRelayUrl(relayUrl)
+    for (const adapter of configurable) adapter.configureRelayUrl(relayUrl)
     if (shouldRestart) return this.start()
     return this.publish()
   }
 
   pairingTransports() {
     const result = []
-    for (const adapter of this.adapters.values()) {
-      const config = adapter.pairingConfig?.()
-      if (config) result.push(config)
+    const seen = new Set()
+    for (const id of this.orderedAdapterIds()) {
+      const adapter = this.adapters.get(id)
+      const configs = adapter?.pairingConfig?.()
+      for (const config of (Array.isArray(configs) ? configs : [configs])) {
+        if (!config?.id || seen.has(config.id)) continue
+        seen.add(config.id)
+        result.push(config)
+      }
     }
     return result
   }
 
   async #handleDisconnect(id, error) {
     if (id !== this.active || !this.store.get().remoteEnabled || this.switching) return
+    const revision = this.lifecycleRevision
     this.active = null
     this.status = 'reconnecting'
     this.error = error?.message || '当前远程通道已断开，正在自动接管。'
     this.publish()
     const failed = this.adapters.get(id)
     await failed?.stop?.().catch(() => {})
-    this.switching = this.#startAvailable(new Set([id])).finally(() => { this.switching = null })
+    if (!this.#isCurrent(revision)) return
+    this.switching = this.#startAvailable(new Set([id]), revision).finally(() => { this.switching = null })
     await this.switching
   }
 }

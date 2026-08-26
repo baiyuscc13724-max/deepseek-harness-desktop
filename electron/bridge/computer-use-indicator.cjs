@@ -61,6 +61,10 @@ const COMPUTER_USE_INDICATOR_CSS = String.raw`
 const COMPUTER_USE_SURFACE_INDICATOR_CSS = `${COMPUTER_USE_INDICATOR_CSS}\n:root::after { display: none !important; }`
 const COMPUTER_USE_CURSOR_ONLY_CSS = `${COMPUTER_USE_INDICATOR_CSS}\n:root::before, :root::after { display: none !important; }`
 
+function shouldShowComputerUseIndicator(control, target) {
+  return control?.active === true && target?.kind === 'window'
+}
+
 class ComputerUseIndicatorController {
   constructor({
     globalShortcut,
@@ -178,5 +182,6 @@ module.exports = {
   COMPUTER_USE_INDICATOR_CSS,
   COMPUTER_USE_SURFACE_INDICATOR_CSS,
   ComputerUseIndicatorController,
-  DEFAULT_ACCELERATOR
+  DEFAULT_ACCELERATOR,
+  shouldShowComputerUseIndicator
 }

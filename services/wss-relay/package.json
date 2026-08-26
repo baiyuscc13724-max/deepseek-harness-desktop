@@ -2,7 +2,7 @@
   "name": "@harness-desktop/wss-relay",
   "version": "1.0.0",
   "private": true,
-  "description": "Standalone blind WSS relay for Harness Desktop mobile sync",
+  "description": "Standalone P2P signaling and blind fallback relay for Harness Desktop mobile sync",
   "license": "MIT",
   "type": "commonjs",
   "main": "server.cjs",

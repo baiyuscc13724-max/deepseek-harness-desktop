@@ -32,7 +32,7 @@ const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-p
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
 const { ComputerUseConfirmationStore } = require('./bridge/computer-use-confirmation-store.cjs')
 const { ComputerUseAppPolicy } = require('./bridge/computer-use-app-policy.cjs')
-const { ComputerUseIndicatorController } = require('./bridge/computer-use-indicator.cjs')
+const { ComputerUseIndicatorController, shouldShowComputerUseIndicator } = require('./bridge/computer-use-indicator.cjs')
 const { WindowsComputerUse } = require('./bridge/windows-computer-use.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { createGitRuntimeService } = require('./bridge/git-runtime-service.cjs')
@@ -72,6 +72,8 @@ const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
 const { MobileRelayConfigStore } = require('./bridge/mobile-relay-config.cjs')
 const { createEasyTierComponentInstaller } = require('./bridge/network-component-service.cjs')
 const { SyncTransportManager } = require('./bridge/sync-transport-manager.cjs')
+const { NativeP2pHost } = require('./bridge/native-p2p-host.cjs')
+const { createNativeP2pAdapter } = require('./bridge/sync-transports/native-p2p-adapter.cjs')
 const { createEasyTierAdapter } = require('./bridge/sync-transports/easytier-adapter.cjs')
 const { createWssRelayAdapter } = require('./bridge/sync-transports/wss-relay-adapter.cjs')
 const { createTailscaleAdapter } = require('./bridge/sync-transports/tailscale-adapter.cjs')
@@ -152,7 +154,7 @@ let browserSidebarVisible = false
 let browserContentVisible = true
 let workspacePickerPromise = null
 // 当前控制会话必须由用户显式授权；授权卡片（本次授权/永久授权）由模型请求时在对话框上方弹出。
-// 永久授权持久化到 grant.json，应用重启后自动生效（无限制桌面控制）。
+// 永久授权持久化到 grant.json；重启只恢复授权，不自动开启控制，下一次显式调用时再恢复会话。
 let computerUseEnabled = false
 let computerUseAuthorizedScope = 'none' // 'none' | 'session' | 'forever'
 let computerUseUnlimited = false
@@ -359,6 +361,11 @@ function ensureComputerUseIndicator() {
     })
   }
   return computerUseIndicator
+}
+
+function syncComputerUseIndicator(target = null) {
+  const externalControl = shouldShowComputerUseIndicator(sharedComputerUseControlState(), target)
+  return ensureComputerUseIndicator().setActive(externalControl)
 }
 
 function syncBrowserControlWithComputerUse() {
@@ -2135,7 +2142,7 @@ async function restoreComputerUseGrant() {
   computerUseUnlimited = true
   computerUseAuthorizationRequest = null
   ensureWindowsComputerUse().setUnlimited?.(true)
-  if (!computerUseScreenLocked) await setComputerUseEnabled(true)
+  await setComputerUseEnabled(false)
   return grant
 }
 
@@ -2144,7 +2151,7 @@ async function setComputerUseEnabled(enabled) {
   if (next && computerUseScreenLocked) throw Object.assign(new Error('计算机锁定或挂起期间不能开启 Computer Use。'), { code: 'computer-use-locked' })
   if (next === computerUseEnabled) {
     syncBrowserControlWithComputerUse()
-    await ensureComputerUseIndicator().setActive(sharedComputerUseControlState().active)
+    await syncComputerUseIndicator()
     if (mainWindow && !mainWindow.isDestroyed()) await publishBrowserState().catch(() => {})
     return computerUseState()
   }
@@ -2159,7 +2166,7 @@ async function setComputerUseEnabled(enabled) {
     await clearComputerUseScreenshots()
   }
   syncBrowserControlWithComputerUse()
-  await ensureComputerUseIndicator().setActive(sharedComputerUseControlState().active)
+  await syncComputerUseIndicator()
   const state = computerUseState()
   send('computerUse:authorization', state)
   if (mainWindow && !mainWindow.isDestroyed()) await publishBrowserState().catch(() => {})
@@ -2271,8 +2278,12 @@ async function verifyExternalComputerUseSurface(target) {
 async function modelComputerUseAction(input = {}) {
   const action = String(input.action || '')
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
-  if (action === 'status') return computerUseState()
+  if (action === 'status') {
+    await syncComputerUseIndicator()
+    return computerUseState()
+  }
   if (action === 'requestAuthorization') {
+    await syncComputerUseIndicator()
     const state = requestComputerUseAuthorization('model')
     return {
       requiresAuthorization: state.authorization.scope === 'none',
@@ -2299,6 +2310,7 @@ async function modelComputerUseAction(input = {}) {
     }
   }
   if (action === 'targets') {
+    await syncComputerUseIndicator()
     await refreshComputerUseTargets()
     const targets = [...computerUseTargets.values()].filter(target => target.kind === 'harness' || (target.authorization?.status === 'allowed' && target.fingerprint)).map(target => ({ target_id: target.id, app: target.label, kind: target.kind, width: target.window?.width, height: target.window?.height }))
     return { targets, crossApp: computerUseCrossAppCapability() }
@@ -2315,11 +2327,14 @@ async function modelComputerUseAction(input = {}) {
     }
     computerUseCurrentTarget = target
     computerUseConfirmations.clear()
+    await syncComputerUseIndicator()
     return { selected: true, target: { target_id: target.id, app: target.label, kind: target.kind } }
   }
   const target = computerUseCurrentTarget || computerUseTargets.get('harness') || { id: 'harness', kind: 'harness', label: 'Harness Desktop' }
   if (target.kind === 'window') await revalidateComputerUseTarget(target)
-  if (action === 'screenshot') {
+  await syncComputerUseIndicator(target)
+  try {
+    if (action === 'screenshot') {
     const sessionGeneration = computerUseSessionGeneration
     const result = target.kind === 'window' ? await captureExternalComputerUseScreenshot(target) : await captureHarnessComputerUseScreenshot()
     if (!computerUseEnabled || sessionGeneration !== computerUseSessionGeneration) {
@@ -2368,12 +2383,16 @@ async function modelComputerUseAction(input = {}) {
       for (const character of String(parameters.text || '').slice(0, 2000)) mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: character })
     }
   }
-  return { completed: true, action, x, y, target_id: target.id, app: target.label }
+    return { completed: true, action, x, y, target_id: target.id, app: target.label }
+  } finally {
+    await syncComputerUseIndicator()
+  }
 }
 
 async function desktopModelToolAction(input = {}, context = {}) {
-  if (input.scope === 'memory') return modelMemoryAction(input)
   if (input.scope === 'computer') return modelComputerUseAction(input)
+  await syncComputerUseIndicator()
+  if (input.scope === 'memory') return modelMemoryAction(input)
   return modelBrowserAction(input, context)
 }
 
@@ -2438,9 +2457,15 @@ function ensureMobileSyncService() {
     relayUrl: relayConfig.enabled ? relayConfig.relayUrl : '',
     WebSocketImpl: WebSocket
   }
+  const nativeP2pHost = new NativeP2pHost({ BrowserWindow, ipcMain })
   mobileSyncTransportManager = new SyncTransportManager({
     store: mobileSyncStore,
-    adapters: [createEasyTierAdapter(adapterOptions), createWssRelayAdapter(adapterOptions), createTailscaleAdapter(adapterOptions)]
+    adapters: [
+      createNativeP2pAdapter({ ...adapterOptions, host: nativeP2pHost }),
+      createWssRelayAdapter(adapterOptions),
+      createEasyTierAdapter(adapterOptions),
+      createTailscaleAdapter(adapterOptions)
+    ]
   })
   mobileSyncService = new MobileSyncService({
     store: mobileSyncStore,
@@ -2452,6 +2477,7 @@ function ensureMobileSyncService() {
     setAppearance: updateMobileAppearance,
     getThemeScript: () => `${mobileBootstrapSource};(() => { fetch('/__harness_mobile__/appearance', { credentials: 'same-origin' }).then(response => { if (!response.ok) throw new Error('appearance ' + response.status); return response.json(); }).then(payload => { window.__HARNESS_DESKTOP_THEME_STATE__ = payload.state; window.__HARNESS_DESKTOP_THEMES__ = payload.catalog; window.__HARNESS_DESKTOP_RENDER_THEMES__?.(); window.__harnessMobileThemeBridgeLoading = false; }).catch(error => { window.__harnessMobileThemeBridgeLoading = false; console.warn('Unable to load mobile appearance:', error); }); })();`,
     readThemeAsset: readMobileThemeAsset,
+    getModelRouting: () => getModelRouting(modelRoutingOptions()),
     chooseWorkspaceDirectory
   })
   mobileSyncService.on('state', state => send('mobileSync:state', state))
@@ -2917,12 +2943,10 @@ function mobileThemeAssetUrl(relative) {
 }
 
 async function mobileAppearancePayload() {
-  let state = ensureStateStore().get().appearance
+  let state = ensureStateStore().get().mobileAppearance
   if (STORE_BUILD && state.themeId === 'maid-atelier') {
-    state = ensureStateStore().updateAppearance({ themeId: 'porcelain-mist' }).appearance
+    state = ensureStateStore().updateMobileAppearance({ themeId: 'porcelain-mist' }).mobileAppearance
   }
-  const backgroundFile = state.customTheme?.backgroundFile
-  const customBackgroundFile = backgroundFile && wallpaperAssetPath(backgroundFile)
   const catalog = THEME_CATALOG
     .filter(theme => !STORE_BUILD || !theme.nonCommercial)
     .map(theme => ({
@@ -2932,11 +2956,12 @@ async function mobileAppearancePayload() {
   return {
     state: {
       ...state,
-      customBackgroundDataUrl: customBackgroundFile && wallpaperKind(customBackgroundFile) === 'image' && existsSync(customBackgroundFile)
-        ? mobileThemeAssetUrl('custom-background')
-        : null,
+      uiMode: 'official',
+      reducedMotion: false,
+      lowPerformance: false,
+      customBackgroundDataUrl: null,
       customBackgroundVideoDataUrl: null,
-      customBackgroundKind: customBackgroundFile && wallpaperKind(customBackgroundFile) === 'image' ? 'image' : null
+      customBackgroundKind: null
     },
     catalog
   }
@@ -2948,28 +2973,18 @@ async function updateMobileAppearance(payload = {}) {
   if (action === 'set-theme') {
     const themeId = String(values.id || '')
     if (STORE_BUILD && themeId === 'maid-atelier') throw new Error('Microsoft Store 版本不包含非商业授权主题。')
-    ensureStateStore().updateAppearance({ themeId })
+    ensureStateStore().updateMobileAppearance({ themeId })
   } else if (action === 'save-custom-theme') {
-    ensureStateStore().updateAppearance({ themeId: 'custom', customTheme: values })
-  } else if (action === 'clear-theme-background') {
-    await removeCustomThemeBackground()
-  } else {
-    throw new Error('Unsupported appearance action.')
+    ensureStateStore().updateMobileAppearance({ themeId: 'custom', customTheme: values })
+  } else if (action !== 'clear-theme-background') {
+    throw new Error('Unsupported mobile appearance action.')
   }
-  syncTitleBarOverlay()
   return mobileAppearancePayload()
 }
 
 async function readMobileThemeAsset(relative) {
-  if (relative === 'custom-background') {
-    const backgroundFile = ensureStateStore().get().appearance.customTheme?.backgroundFile
-    if (!backgroundFile) return null
-    const file = wallpaperAssetPath(backgroundFile)
-    if (!file || !existsSync(file)) return null
-    const info = await stat(file)
-    if (!info.isFile() || info.size > MAX_THEME_BACKGROUND_BYTES) return null
-    return { data: await readFile(file), mime: themeAssetMime(file) }
-  }
+  // Phone appearance is intentionally independent from desktop wallpaper files.
+  // Only the fixed bundled-theme allowlist is reachable through this route.
   const normalized = String(relative || '').replaceAll('\\', '/')
   if (STORE_BUILD || !BUNDLED_THEME_ASSETS.includes(normalized)) return null
   const root = path.join(__dirname, '..', 'renderer', 'themes')

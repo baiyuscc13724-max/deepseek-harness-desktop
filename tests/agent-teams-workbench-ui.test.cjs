@@ -379,8 +379,8 @@ test('the task board is a read-only projection of only the selected team', async
   assert.match(column, /relationIds\(task\.blockedBy\)\.length/u)
   assert.match(column, /return "blocked"/u)
   assert.ok(
-    column.indexOf('relationIds(task.blockedBy).length') < column.indexOf('task.status'),
-    'blocked must be derived from dependency metadata before persisted task status is mapped'
+    column.indexOf('status === "cancelled"') < column.indexOf('relationIds(task.blockedBy).length'),
+    'terminal cancellation must remain visible instead of being remapped to a derived blocked column'
   )
 
   assert.doesNotMatch(board, /postAction\(|method: "POST"|\/api\/agent-teams\/action/u)
@@ -483,7 +483,7 @@ test('task columns queue without stretching the page before entering task focus'
   assert.match(sort, /pendingQueue \? leftTime - rightTime : rightTime - leftTime/u)
   assert.match(sort, /localeCompare\(String\(taskId\(right\)\)\)/u)
   assert.ok(board.indexOf('sortBoardColumnTasks(') < board.indexOf('.slice(0, column.limit)'), 'stable queue order must be applied before any projection cap')
-  assert.equal((board.match(/limit: 200/gu) || []).length, 4)
+  assert.equal((board.match(/limit: 200/gu) || []).length, 5)
 
   const helperStart = source.indexOf('function taskBoardTime(task, fields)')
   const helperEnd = source.indexOf('function eventRelatesToTask(event, task)', helperStart)

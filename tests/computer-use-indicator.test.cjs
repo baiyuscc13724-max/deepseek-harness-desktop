@@ -27,7 +27,7 @@ class FakeContents extends EventEmitter {
 }
 
 test('Computer Use indicator owns the blue veil, control cursor and global Esc lifecycle', async () => {
-  const { COMPUTER_USE_INDICATOR_CSS, ComputerUseIndicatorController } = require('../electron/bridge/computer-use-indicator.cjs')
+  const { COMPUTER_USE_INDICATOR_CSS, ComputerUseIndicatorController, shouldShowComputerUseIndicator } = require('../electron/bridge/computer-use-indicator.cjs')
   const registered = new Map()
   const unregistered = []
   let stopped = 0
@@ -53,6 +53,11 @@ test('Computer Use indicator owns the blue veil, control cursor and global Esc l
   assert.match(COMPUTER_USE_INDICATOR_CSS, /Esc 退出/u)
   assert.match(COMPUTER_USE_INDICATOR_CSS, /pointer-events:\s*none/u)
   assert.match(COMPUTER_USE_INDICATOR_CSS, /prefers-reduced-motion:\s*reduce/u)
+  assert.equal(shouldShowComputerUseIndicator({ active: true }, { kind: 'window' }), true)
+  assert.equal(shouldShowComputerUseIndicator({ active: true }, { kind: 'harness' }), false)
+  assert.equal(shouldShowComputerUseIndicator({ active: true }, { kind: 'browser' }), false)
+  assert.equal(shouldShowComputerUseIndicator({ active: true }, null), false)
+  assert.equal(shouldShowComputerUseIndicator({ active: false }, { kind: 'window' }), false)
   assert.equal(contents.inserted.length, 0)
 
   const active = await controller.setActive(true)
@@ -81,12 +86,15 @@ test('Computer Use indicator owns the blue veil, control cursor and global Esc l
   await controller.dispose()
 })
 
-test('Desktop Host tracks every Harness surface and drives the indicator from shared control state', async () => {
+test('Desktop Host shows the indicator only while an external application action is executing', async () => {
   const main = await readFile(path.join(root, 'electron', 'main.cjs'), 'utf8')
   assert.match(main, /ComputerUseIndicatorController/u)
   assert.match(main, /globalShortcut/u)
   assert.match(main, /onStop:\s*\(\) => setComputerUseEnabled\(false\)/u)
-  assert.match(main, /ensureComputerUseIndicator\(\)\.setActive\(sharedComputerUseControlState\(\)\.active\)/u)
+  assert.match(main, /shouldShowComputerUseIndicator\(sharedComputerUseControlState\(\), target\)/u)
+  assert.match(main, /await syncComputerUseIndicator\(target\)[\s\S]*finally \{\s*await syncComputerUseIndicator\(\)/u)
+  assert.match(main, /if \(input\.scope === 'computer'\) return modelComputerUseAction\(input\)\s*await syncComputerUseIndicator\(\)/u)
+  assert.doesNotMatch(main, /setActive\(sharedComputerUseControlState\(\)\.active\)/u)
   assert.match(main, /ensureComputerUseIndicator\(\)\.track\(mainWindow\.webContents\)/u)
   assert.match(main, /ensureComputerUseIndicator\(\)\.track\(guest, \{ mode: 'surface' \}\)/u)
   assert.match(main, /ensureComputerUseIndicator\(\)\.track\(contents, \{ mode: 'surface' \}\)/u)

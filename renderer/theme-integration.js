@@ -870,6 +870,18 @@
           </div>
           <p class="hd-ui-note">旧用户默认保持“官方经典”；切换不会重载或中断当前会话。</p>
         </section>`
+      if (document.documentElement.dataset.harnessMobile === 'true') {
+        panel.dataset.hdMobileAppearance = 'true'
+        panel.querySelector('.hd-theme-heading h2').textContent = '手机外观'
+        panel.querySelector('.hd-theme-heading p').textContent = '皮肤仅保存在手机版，不会改变电脑端外观；所有面板保持清晰、不透明。'
+        panel.querySelector('[data-hd-restore]').textContent = '恢复手机默认皮肤'
+        panel.querySelector('[data-hd-appearance-tab="modes"]').hidden = true
+        panel.querySelector('[data-hd-appearance-pane="modes"]').hidden = true
+        panel.querySelector('[data-hd-choose-background]').hidden = true
+        panel.querySelector('[data-hd-choose-wallpaper-engine]').hidden = true
+        panel.querySelector('[data-hd-clear-background]').hidden = true
+        panel.querySelector('.hd-custom-heading p').textContent = '调整手机版配色；手机端不继承电脑壁纸，透明度会自动限制在可读范围。'
+      }
       const showAppearancePane = name => {
         panel.querySelectorAll('[data-hd-appearance-tab]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.hdAppearanceTab === name)))
         panel.querySelectorAll('[data-hd-appearance-pane]').forEach(pane => { pane.hidden = pane.dataset.hdAppearancePane !== name })
@@ -929,7 +941,7 @@
       skinButton.className = inactive?.className || general.className
       skinButton.removeAttribute('aria-current')
       const label = skinButton.querySelector('span:last-child')
-      if (label) label.textContent = '外观与界面模式'
+      if (label) label.textContent = mobile ? '手机外观' : '外观与界面模式'
       const icon = skinButton.querySelector('svg')
       if (icon) icon.outerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.1a6.9 6.9 0 1 0 0 13.8h1.1a1.35 1.35 0 0 0 .55-2.58.72.72 0 0 1 .3-1.38h1.15A3.8 3.8 0 0 0 14.9 7.1 6 6 0 0 0 8 1.1Zm-3.05 7A1.05 1.05 0 1 1 4.95 6a1.05 1.05 0 0 1 0 2.1Zm1.7-3A1.05 1.05 0 1 1 6.65 3a1.05 1.05 0 0 1 0 2.1Zm3.1-.15a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Zm2 2.2a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Z" fill="currentColor"/></svg>'
       general.parentElement.appendChild(skinButton)
