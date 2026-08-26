@@ -67,7 +67,19 @@ jobs:
           test -n "$HARNESS_ANDROID_KEY_PASSWORD"
           test -n "$EXPECTED_ANDROID_CERT_SHA256"
           if test "$MOBILE_ONLY" = true; then
-            existing="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null || true)"
+            existing=''
+            release_error="$(mktemp)"
+            set +e
+            response="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>"$release_error")"
+            release_status=$?
+            set -e
+            if test "$release_status" -eq 0; then
+              existing="$response"
+            elif ! grep -F 'HTTP 404' "$release_error" >/dev/null; then
+              cat "$release_error" >&2
+              exit "$release_status"
+            fi
+            rm -f "$release_error"
             if test -n "$existing"; then
               commit="$(git rev-parse HEAD)"
               jq -e --arg tag "$RELEASE_TAG" --arg commit "$commit" '.tag_name == $tag and .target_commitish == $commit and .draft == false and .prerelease == false' <<< "$existing" >/dev/null
