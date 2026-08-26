@@ -92,11 +92,38 @@ test('same-version candidate rebind is allowed only before every publication sid
     ['stablePromoted', true, /publication side effect/u]
   ]) assert.throws(() => assertCandidateRebindAllowed(state, { ...safe, [field]: value }), message, field)
   assert.throws(() => assertCandidateRebindAllowed({ ...state, productRevision: 'a'.repeat(40) }, safe), /immutable tag/u)
-  assert.throws(() => assertCandidateRebindAllowed({ ...state, phases: { ...state.phases, 'immutable-tag': { status: 'running' } } }, safe), /tag-dependent/u)
+
+  const failedBeforeTagAuthorization = {
+    status: 'failed',
+    startedAt: '2026-08-26T11:00:31.214Z',
+    failedAt: '2026-08-26T11:00:31.682Z',
+    error: 'Publication requires a clean tree.'
+  }
+  assert.equal(assertCandidateRebindAllowed({
+    ...state,
+    phases: { ...state.phases, 'immutable-tag': failedBeforeTagAuthorization }
+  }, safe), true, 'a failed immutable-tag preflight with no authorization checkpoint has no tag side effect')
+  for (const immutable of [
+    { status: 'running' },
+    { ...failedBeforeTagAuthorization, status: 'completed' },
+    { ...failedBeforeTagAuthorization, tagAuthorization: { operation: 'create-local' } },
+    { ...failedBeforeTagAuthorization, productRevision: 'a'.repeat(40) }
+  ]) assert.throws(
+    () => assertCandidateRebindAllowed({ ...state, phases: { ...state.phases, 'immutable-tag': immutable } }, safe),
+    /tag-dependent/u
+  )
+
   const publisher = read('scripts/release-publish.mjs')
   assert.match(publisher, /candidateAttempts\.push\([\s\S]*sourceRevision: previous[\s\S]*desktopRunId[\s\S]*desktopConclusion: oldRunConclusion[\s\S]*phases: structuredClone/u)
   assert.match(publisher, /oldRunTerminal = matchesWorkflowRunIdentity[\s\S]*oldRun\.status === 'completed'[\s\S]*oldRunConclusion = String\(oldRun\.conclusion/u)
   assert.match(publisher, /state\.sourceRevision = currentHead[\s\S]*state\.phases = \{\}/u)
+  const immutableTagPhase = publisher.slice(publisher.indexOf("phase(state, 'immutable-tag'"), publisher.indexOf("phase(state, 'desktop-publication'"))
+  const tagAuthorizationCheckpoint = immutableTagPhase.indexOf("await checkpoint(state, 'immutable-tag'")
+  const tagCreation = immutableTagPhase.indexOf("gitRun(['tag'")
+  assert.ok(
+    tagAuthorizationCheckpoint >= 0 && tagCreation > tagAuthorizationCheckpoint,
+    'the first irreversible tag mutation must remain behind its durable authorization checkpoint'
+  )
 })
 
 test('pre-existing Tag is adopted only inside the publisher create/push crash window', () => {

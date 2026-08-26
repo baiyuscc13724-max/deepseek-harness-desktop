@@ -89,6 +89,19 @@ function assertExistingTagRecoveryAllowed(state, evidence = {}) {
   return true
 }
 
+function isUncheckpointedImmutableTagFailure(phase) {
+  if (!phase || typeof phase !== 'object' || Array.isArray(phase) || phase.status !== 'failed') return false
+  // phase() writes only these fields before the first durable tag-authorization checkpoint.
+  // Any additional field must fail closed as a possible tag-mutation crash window.
+  const allowedKeys = new Set(['status', 'startedAt', 'failedAt', 'error'])
+  return (
+    Object.keys(phase).every(key => allowedKeys.has(key)) &&
+    /^\d{4}-\d{2}-\d{2}T/u.test(String(phase.startedAt || '')) &&
+    /^\d{4}-\d{2}-\d{2}T/u.test(String(phase.failedAt || '')) &&
+    typeof phase.error === 'string' && phase.error.length > 0
+  )
+}
+
 function assertCandidateRebindAllowed(state, evidence = {}) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('Candidate rebind requires publication state.')
   if (state.productRevision || evidence.localTagExists || evidence.remoteTagExists) throw new Error('Candidate revision cannot rebind after an immutable tag exists.')
@@ -97,7 +110,11 @@ function assertCandidateRebindAllowed(state, evidence = {}) {
   if (evidence.sameVersion !== true) throw new Error('Candidate revision cannot rebind across product versions.')
   if (evidence.fastForward !== true) throw new Error('Candidate revision must advance by fast-forward.')
   const allowed = new Set(['local-source-gates', 'desktop-cloud-builds'])
-  if (Object.keys(state.phases || {}).some(id => !allowed.has(id))) throw new Error('Candidate revision cannot rebind after tag-dependent phases begin.')
+  for (const [id, phase] of Object.entries(state.phases || {})) {
+    if (allowed.has(id)) continue
+    if (id === 'immutable-tag' && isUncheckpointedImmutableTagFailure(phase)) continue
+    throw new Error('Candidate revision cannot rebind after tag-dependent phases begin.')
+  }
   return true
 }
 
