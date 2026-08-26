@@ -14,6 +14,9 @@ test('AppStateStore persists update preferences', () => {
   assert.equal(restored.updates.checkOnStartup, false)
   assert.equal(restored.updates.channel, 'prerelease')
   assert.equal(restored.updates.previewEnabled, true)
+  assert.equal(normalizeState({ updates: {} }).updates.previewEnabled, true)
+  assert.equal(normalizeState({ schemaVersion: 10, updates: { previewEnabled: false } }).updates.previewEnabled, true)
+  assert.equal(normalizeState({ schemaVersion: 11, updates: { previewEnabled: false } }).updates.previewEnabled, false)
 })
 
 test('AppStateStore persists only validated integrated-terminal shell preferences', () => {
@@ -41,7 +44,7 @@ test('AppStateStore records only monotonic signed PR preview candidates', () => 
     channel: 'stable',
     lastCheckedAt: null,
     skippedVersion: null,
-    previewEnabled: false,
+    previewEnabled: true,
     lastPreviewSequence: 4,
     lastPreviewHeadSha: firstSha
   })
@@ -70,6 +73,26 @@ test('AppStateStore persists only validated appearance fields', () => {
     readabilityStrength: 88, backgroundFile: 'custom-background.gif',
     wallpaperEngineProject: null, wallpaperEngineSignature: null
   })
+})
+
+test('mobile appearance is independent, opaque by default, and cannot inherit desktop wallpaper files', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-mobile-theme-state-'))
+  const file = path.join(dir, 'app-state.json')
+  const store = new AppStateStore(file)
+  assert.equal(store.get().mobileAppearance.themeId, 'porcelain-mist')
+  assert.equal(store.get().mobileAppearance.customTheme.glassTransparency, 0)
+  store.updateAppearance({ themeId: 'deep-ocean', customTheme: { backgroundFile: 'custom-background.webp' } })
+  store.updateMobileAppearance({
+    themeId: 'tokyo-night',
+    customTheme: { accent: '#AABBCC', glassTransparency: 99, backgroundFile: 'wallpaper-test.webp' }
+  })
+  const restored = new AppStateStore(file).get()
+  assert.equal(restored.appearance.themeId, 'deep-ocean')
+  assert.equal(restored.appearance.customTheme.backgroundFile, 'custom-background.webp')
+  assert.equal(restored.mobileAppearance.themeId, 'tokyo-night')
+  assert.equal(restored.mobileAppearance.customTheme.accent, '#aabbcc')
+  assert.equal(restored.mobileAppearance.customTheme.backgroundFile, null)
+  assert.equal(restored.mobileAppearance.customTheme.wallpaperEngineProject, null)
 })
 
 test('AppStateStore persists only validated interface mode preferences', () => {
@@ -114,7 +137,7 @@ test('new installs use Porcelain Mist while preserving an explicitly selected no
 
 test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
   const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
-  assert.equal(migrated.schemaVersion, 10)
+  assert.equal(migrated.schemaVersion, 12)
   assert.equal(migrated.appearance.themeId, 'porcelain-mist')
   const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
   assert.equal(explicitOfficial.appearance.themeId, 'official')
@@ -152,7 +175,7 @@ test('new profiles enable bounded automatic local memory and preserve explicit c
 
 test('memory migration defaults missing preferences on without overriding an explicit saved false', () => {
   const missing = normalizeState({ schemaVersion: 8 })
-  assert.equal(missing.schemaVersion, 10)
+  assert.equal(missing.schemaVersion, 12)
   assert.deepEqual(missing.memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
 
   const disabled = normalizeState({ schemaVersion: 8, memory: { enabled: false, autoRecall: true, autoCapture: true } })
@@ -175,7 +198,7 @@ test('explicit memory disable survives migration and later unrelated persistence
   store.updatePreferences({ checkOnStartup: false })
 
   const persisted = JSON.parse(readFileSync(file, 'utf8'))
-  assert.equal(persisted.schemaVersion, 10)
+  assert.equal(persisted.schemaVersion, 12)
   assert.deepEqual(persisted.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
   assert.equal(new AppStateStore(file).get().memory.enabled, false)
 })

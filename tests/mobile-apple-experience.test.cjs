@@ -119,7 +119,9 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'FileChooserParams',
     'SOFT_INPUT_ADJUST_RESIZE',
     'WindowInsetsCompat.Type.ime()',
-    'Math.max(systemBars.bottom, ime.bottom)',
+    'bottom + systemBars.bottom',
+    'publishImeInsets(imeVisible, Math.max(0, ime.bottom - systemBars.bottom))',
+    "window.dispatchEvent(new CustomEvent('harness-mobile-ime-change'",
     'ActivityResultLauncher<Intent>',
     'ActivityResultLauncher<PickVisualMediaRequest>',
     'new ActivityResultContracts.PickVisualMedia()',
@@ -133,6 +135,12 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'hideSoftKeyboard()',
     'InputMethodManager',
     'moveTaskToBack(true)',
+    'Activity.ScreenCaptureCallback',
+    'registerScreenCaptureCallback',
+    'unregisterScreenCaptureCallback',
+    "window.dispatchEvent(new Event('harness-mobile-screen-captured'))",
+    'protected void onStart()',
+    'protected void onStop()',
     'mainFrameLoadFailed',
     'if (!mainFrameLoadFailed) revealWorkbench()',
     "document.querySelector('[data-slot=\\\"conversation\\\"]') ||",
@@ -141,7 +149,9 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
   assert.doesNotMatch(mainActivity, /\.isBlank\(|List\.of\(|(?<!Collectors)\.toList\(/u, 'minSdk 26 production code must not use newer un-desugared Java collection/string APIs')
   assert.doesNotMatch(mainActivity, /PickMultipleVisualMedia|setMaxItems/u, 'the recent-photo path must return after one thumbnail tap')
   assert.match(manifest, /android:windowSoftInputMode="stateAlwaysHidden\|adjustResize"/u, 'pairing and reconnect surfaces must not summon the IME')
-  assert.doesNotMatch(manifest, /READ_MEDIA_IMAGES|READ_EXTERNAL_STORAGE/u, 'system picker must not expand media or storage permissions')
+  assert.match(manifest, /android\.permission\.DETECT_SCREEN_CAPTURE/u, 'Android 14+ screenshot hints use the official normal permission')
+  assert.doesNotMatch(manifest, /READ_MEDIA_IMAGES|READ_MEDIA_VISUAL_USER_SELECTED|READ_EXTERNAL_STORAGE/u, 'system picker must not expand media or storage permissions')
+  assert.doesNotMatch(mainActivity, /android\.provider\.MediaStore|new\s+ContentObserver|registerContentObserver/u, 'screenshot hints must never infer or read the newest media item')
   assert.match(androidBuild, /defaultUpdateManifestUrl = "https:\/\/raw\.githubusercontent\.com\/baiyuscc13724-max\/deepseek-harness-desktop\/main\/mobile\/mobile-app-update\.json"/u, 'Android must have an independent mobile update channel')
   const parsedUpdateFeed = JSON.parse(updateFeed)
   assert.equal(parsedUpdateFeed.schemaVersion, 1)
@@ -151,6 +161,9 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     "input.type='file'",
     "input.accept='image/*'",
     'ClipboardEvent',
+    'new FileReader()',
+    'reader.readAsArrayBuffer(file)',
+    'new File([reader.result]',
     'textarea[data-phase]',
     'button.disabled!==unavailable',
     "button.getAttribute('aria-disabled')!==ariaDisabled",
@@ -176,11 +189,17 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'data-harness-mobile-settings-view="list"',
     'data-harness-mobile-settings-toolbar="true"',
     'data-harness-mobile-settings-category="true"',
+    'data-harness-mobile-model-routing="true"',
+    '#harness-mobile-model-routing',
+    '#harness-mobile-screenshot-suggestion',
     'data-harness-mobile-composer-frame="true"',
     'width: calc(100vw - 24px) !important',
     'position: fixed !important',
     'width: 100vw !important',
-    'height: 100dvh !important'
+    'height: 100dvh !important',
+    'data-harness-mobile-composer-lifted="true"',
+    'var(--harness-mobile-ime-overlay, 0px)',
+    'html[data-harness-mobile="true"][data-hd-theme]:root [data-slot="sidebar"] > *'
   ], 'Android native-feeling mobile shell and accessibility')
   assertContainsAll(runtime, [
     'containComposerContext',
@@ -189,6 +208,9 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     "card?.querySelector('button[aria-haspopup=\"listbox\"]')",
     'setTemporary(button.parentElement',
     'installImeSendBridge',
+    'installComposerLift',
+    'harnessMobileComposerLifted',
+    'harness-mobile-ime-change',
     'releaseComposerFocus',
     'pendingStop',
     'activateOfficialSend',
@@ -203,6 +225,14 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'decorateConversation',
     'mobileSettingsCategories',
     'setSettingsView',
+    'decorateMobileModelSettings',
+    "fetch('/__harness_mobile__/model-routing'",
+    '只读显示，来源：已配对电脑',
+    '不代表凭据或连接状态',
+    'installScreenshotSuggestion',
+    "window.addEventListener('harness-mobile-screen-captured'",
+    "document.getElementById('harness-mobile-photo-button')",
+    '应用没有读取图片',
     "dialog.dataset.harnessMobileSettingsView = list ? 'list' : 'detail'",
     'nav.inert = !list',
     'content.inert = list',
@@ -214,6 +244,7 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     "const language = typeof navigator === 'object'",
     "input.placeholder = /^zh\\b/i.test(language) ? '发消息…' : 'Message…'"
   ], 'Android mobile shell behavior and large-text containment')
+  assert.doesNotMatch(runtime, /settings\.describe|credentials\.(?:describe|set|unset)/u, 'mobile UI must not bypass the official protected settings and credentials plane')
   assert.doesNotMatch(runtime, /data-harness-mobile-action="more"/, 'mobile app bar must not expose an empty overflow action')
   assert.match(compat, /\[data-harness-mobile-conversation="true"\]\s*\{[^}]*height:\s*100%\s*!important/s, 'conversation follows the resized WebView instead of the layout viewport')
 })

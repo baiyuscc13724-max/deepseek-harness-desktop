@@ -6,7 +6,7 @@ const VALID_THEME_IDS = new Set(THEME_CATALOG.map(theme => theme.id))
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 const DEFAULT_THEME_ID = 'porcelain-mist'
 const VALID_UI_MODES = new Set(['official', 'aurora', 'spatial', 'tactile'])
-const CURRENT_SCHEMA_VERSION = 10
+const CURRENT_SCHEMA_VERSION = 12
 const MAX_WALLPAPER_LIBRARY_ITEMS = 48
 const VALID_TERMINAL_SHELL_IDS = new Set(['powershell', 'cmd', 'git-bash', 'wsl', 'default'])
 const WALLPAPER_ID = /^[a-z0-9][a-z0-9-]{0,79}$/
@@ -64,7 +64,7 @@ const DEFAULT_STATE = Object.freeze({
     channel: 'stable',
     lastCheckedAt: null,
     skippedVersion: null,
-    previewEnabled: false,
+    previewEnabled: true,
     lastPreviewSequence: 0,
     lastPreviewHeadSha: null
   },
@@ -75,6 +75,10 @@ const DEFAULT_STATE = Object.freeze({
     uiMode: 'official',
     reducedMotion: false,
     lowPerformance: false
+  },
+  mobileAppearance: {
+    themeId: DEFAULT_THEME_ID,
+    customTheme: normalizeCustomTheme({ glassTransparency: 0, readabilityStrength: 100 })
   },
   pet: {
     enabled: true,
@@ -106,6 +110,13 @@ function normalizeState(input) {
   const base = cloneDefaultState()
   const value = input && typeof input === 'object' ? input : {}
   const memory = value.memory && typeof value.memory === 'object' ? value.memory : null
+  const savedSchemaVersion = Number(value.schemaVersion || 0)
+  const previewEnabled = savedSchemaVersion < 11
+    ? true
+    : hasOwn(value.updates, 'previewEnabled') ? value.updates.previewEnabled === true : base.updates.previewEnabled
+  // Schema 11 makes PR preview discovery a default startup service. Profiles
+  // created under the former opt-in default migrate on once; an explicit
+  // disable saved after that migration remains respected.
   // New profiles use bounded automatic local memory. A saved boolean is an
   // explicit user preference, so migrations must never turn a stored `false`
   // back on. Missing fields inherit the new defaults independently, allowing
@@ -116,6 +127,14 @@ function normalizeState(input) {
   const savedTheme = VALID_THEME_IDS.has(value.appearance?.themeId) ? value.appearance.themeId : DEFAULT_THEME_ID
   const themeId = Number(value.schemaVersion || 0) < 3 && savedTheme === 'official' ? DEFAULT_THEME_ID : savedTheme
   const customTheme = normalizeCustomTheme(value.appearance?.customTheme)
+  const mobileThemeId = VALID_THEME_IDS.has(value.mobileAppearance?.themeId) ? value.mobileAppearance.themeId : DEFAULT_THEME_ID
+  const mobileCustomTheme = normalizeCustomTheme({
+    ...base.mobileAppearance.customTheme,
+    ...(value.mobileAppearance?.customTheme && typeof value.mobileAppearance.customTheme === 'object' ? value.mobileAppearance.customTheme : {}),
+    backgroundFile: null,
+    wallpaperEngineProject: null,
+    wallpaperEngineSignature: null
+  })
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     updates: {
@@ -123,7 +142,7 @@ function normalizeState(input) {
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
       lastCheckedAt: value.updates?.lastCheckedAt || null,
       skippedVersion: value.updates?.skippedVersion || null,
-      previewEnabled: value.updates?.previewEnabled === true,
+      previewEnabled,
       lastPreviewSequence: Number.isSafeInteger(value.updates?.lastPreviewSequence) && value.updates.lastPreviewSequence >= 0
         ? value.updates.lastPreviewSequence
         : 0,
@@ -138,6 +157,10 @@ function normalizeState(input) {
       uiMode: VALID_UI_MODES.has(value.appearance?.uiMode) ? value.appearance.uiMode : 'official',
       reducedMotion: value.appearance?.reducedMotion === true,
       lowPerformance: value.appearance?.lowPerformance === true
+    },
+    mobileAppearance: {
+      themeId: mobileThemeId,
+      customTheme: mobileCustomTheme
     },
     pet: {
       enabled: value.pet?.enabled !== false,
@@ -326,6 +349,23 @@ class AppStateStore {
     }
     for (const key of ['reducedMotion', 'lowPerformance']) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) this.state.appearance[key] = patch[key] === true
+    }
+    this.#persist()
+    return this.get()
+  }
+
+  updateMobileAppearance(patch = {}) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'themeId')) {
+      this.state.mobileAppearance.themeId = VALID_THEME_IDS.has(patch.themeId) ? patch.themeId : DEFAULT_THEME_ID
+    }
+    if (patch.customTheme && typeof patch.customTheme === 'object') {
+      this.state.mobileAppearance.customTheme = normalizeCustomTheme({
+        ...this.state.mobileAppearance.customTheme,
+        ...patch.customTheme,
+        backgroundFile: null,
+        wallpaperEngineProject: null,
+        wallpaperEngineSignature: null
+      })
     }
     this.#persist()
     return this.get()

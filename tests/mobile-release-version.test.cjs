@@ -11,28 +11,28 @@ const {
 } = require('../scripts/mobile-release-version.cjs')
 
 test('Android revision versions remain monotonic across the next integration patch', () => {
-  assert.equal(encodeAndroidVersionCode('1.0.46'), 1_004_600)
-  assert.equal(encodeAndroidVersionCode('1.0.46.1'), 1_004_601)
-  assert.equal(encodeAndroidVersionCode('1.0.46.99'), 1_004_699)
   assert.equal(encodeAndroidVersionCode('1.0.47'), 1_004_700)
+  assert.equal(encodeAndroidVersionCode('1.0.47.1'), 1_004_701)
+  assert.equal(encodeAndroidVersionCode('1.0.47.99'), 1_004_799)
+  assert.equal(encodeAndroidVersionCode('1.0.48'), 1_004_800)
 })
 
-test('checked-in Android mobile version has the unified 1.0.47 release identity', () => {
+test('checked-in Android mobile version has the unified 1.0.48 release identity', () => {
   const version = readAndroidMobileVersion(root)
   assert.deepEqual(version, {
-    integrationVersion: '1.0.47',
-    versionName: '1.0.47',
-    versionCode: 1_004_700,
-    tag: 'android-v1.0.47',
-    assetName: 'Harness-Mobile-1.0.47-android-universal.apk',
-    checksumName: 'Harness-Mobile-1.0.47-android-universal.apk.sha256'
+    integrationVersion: '1.0.48',
+    versionName: '1.0.48',
+    versionCode: 1_004_800,
+    tag: 'android-v1.0.48',
+    assetName: 'Harness-Mobile-1.0.48-android-universal.apk',
+    checksumName: 'Harness-Mobile-1.0.48-android-universal.apk.sha256'
   })
 })
 
 test('Android mobile version properties reject drift and ambiguous input', () => {
   assert.throws(() => encodeAndroidVersionCode('1.0.46.100'), /between 0 and 99/u)
   assert.throws(() => encodeAndroidVersionCode('1.0.46-beta'), /x\.y\.z/u)
-  assert.throws(() => parseProperties('versionName=1.0.46\nversionName=1.0.47\n'), /duplicate/u)
+  assert.throws(() => parseProperties('versionName=1.0.47\nversionName=1.0.48\n'), /duplicate/u)
 })
 
 test('Gradle consumes the reviewed default while allowing the publisher to pin an immutable tag identity', () => {

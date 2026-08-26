@@ -134,8 +134,7 @@ const updateNoticeInstall = document.querySelector('#updateNoticeInstall')
 
 let pendingUpdateKind = 'installer'
 let pendingComponentUpdate = null
-let prPreviewController = null
-let prPreviewState = { enabled: false, configured: false, checking: false, changing: false, available: false, candidate: null, error: '' }
+let prPreviewState = { enabled: true, configured: false, checking: false, changing: false, available: false, candidate: null, error: '' }
 let gitRuntimeState = {
   loading: true, authenticating: false, preparing: false, message: '',
   git: { available: false, source: null, version: null },
@@ -149,7 +148,7 @@ let updateState = {
   installError: '',
   app: null,
   harness: null,
-  preferences: { checkOnStartup: true, channel: 'stable', previewEnabled: false, lastCheckedAt: null }
+  preferences: { checkOnStartup: true, channel: 'stable', previewEnabled: true, lastCheckedAt: null }
 }
 let terminalPreferences = { shellId: null, workspace: '' }
 let terminalCapabilities = { pty: false, backend: 'loading', defaultShellId: null, shells: [] }
@@ -1045,6 +1044,7 @@ function showComponentUpdateNotice(componentState, { force = false } = {}) {
     return installed && installed.version === component.version
   })
   if (allAlreadyActive && !midFlight) return false
+  pendingUpdateKind = 'components'
   pendingComponentUpdate = componentState
   const components = planned
   showUpdateNotice({
@@ -1108,11 +1108,26 @@ function renderMobileSync(next = mobileSyncState) {
   mobileTransportPreference.value = remote.preference || 'auto'
   mobileTransportPreference.disabled = !running || remote.enabled === false
   renderMobileRelayCard(remote)
-  const adapterLabel = remote.active === 'wss-relay' ? 'WSS/443（通用线路）' : remote.active === 'easytier' ? 'EasyTier' : remote.active === 'tailscale' ? 'Tailscale' : ''
+  const nativeAdapter = (Array.isArray(remote.adapters) ? remote.adapters : []).find(adapter => adapter?.id === 'native-p2p')
+  const connectedRemoteText = remote.active === 'native-p2p'
+    ? nativeAdapter?.path === 'direct'
+      ? '原生 P2P 直连已连接'
+      : nativeAdapter?.path === 'negotiating'
+        ? '个人 WSS/443 备用线路已连接，正在协商原生 P2P'
+        : nativeAdapter?.path === 'relay'
+          ? '个人 WSS/443 加密中继已连接（P2P 等待或回退）'
+          : '原生 P2P / WSS 安全通道已连接'
+    : remote.active === 'wss-relay'
+      ? '个人 WSS/443 加密中继已连接'
+      : remote.active === 'easytier'
+        ? 'EasyTier 已连接'
+        : remote.active === 'tailscale'
+          ? 'Tailscale 已连接'
+          : '远程通道已连接'
   const remoteStatusText = remote.enabled === false
     ? '远程连接已关闭；同一 Wi-Fi 仍可使用'
     : remote.status === 'connected'
-      ? `${adapterLabel || '远程通道'}已连接`
+      ? connectedRemoteText
       : remote.status === 'connecting'
         ? '正在选择可用的远程通道…'
         : remote.status === 'reconnecting'
@@ -1168,7 +1183,12 @@ function renderMobileSync(next = mobileSyncState) {
 
 function mobileRelayAdapterState(remote) {
   const adapters = Array.isArray(remote?.adapters) ? remote.adapters : []
-  return adapters.find(adapter => adapter && adapter.id === 'wss-relay') || null
+  const active = adapters.find(adapter => adapter && adapter.id === remote?.active && ['native-p2p', 'wss-relay'].includes(adapter.id))
+  return active
+    || adapters.find(adapter => adapter && adapter.id === 'wss-relay' && adapter.status === 'connected')
+    || adapters.find(adapter => adapter && adapter.id === 'native-p2p')
+    || adapters.find(adapter => adapter && adapter.id === 'wss-relay')
+    || null
 }
 
 function renderMobileRelayCard(remote = mobileSyncState.remote || {}) {
@@ -1622,8 +1642,8 @@ function officialSettingsBootstrap() {
         : !previewConfigured
           ? '当前组件尚未配置独立预览公钥'
           : previewEnabled
-            ? state.preview?.checking ? '正在从 CNB 优先发现已批准候选…' : '已加入；候选仍需你确认后才会应用'
-            : '未加入（默认）')
+            ? state.preview?.checking ? '正在从 CNB 优先发现已批准候选…' : '默认开启；候选仍需你确认后才会应用'
+            : '已关闭')
     const release = row.querySelector('[data-hd-release]')
     const releaseHidden = !state.app?.updateAvailable || !state.app?.url || canInstall
     if (release.hidden !== releaseHidden) release.hidden = releaseHidden
@@ -1761,7 +1781,14 @@ function officialSettingsBootstrap() {
     const controlDevices = Array.isArray(state.control?.devices) ? state.control.devices : []
     const controlReady = controlDevices.filter(device => device.ready).length
     const controlActive = controlDevices.some(device => device.enabled || device.queued > 0)
-    const remoteLabel = remote.active === 'wss-relay' ? 'WSS/443' : remote.active === 'easytier' ? 'EasyTier' : remote.active === 'tailscale' ? 'Tailscale' : ''
+    const nativeAdapter = (Array.isArray(remote.adapters) ? remote.adapters : []).find(adapter => adapter?.id === 'native-p2p')
+    const remoteLabel = remote.active === 'native-p2p'
+      ? nativeAdapter?.path === 'direct'
+        ? '原生 P2P 直连'
+        : nativeAdapter?.path === 'negotiating'
+          ? 'WSS/443（P2P 协商中）'
+          : 'WSS/443 加密中继'
+      : remote.active === 'wss-relay' ? 'WSS/443' : remote.active === 'easytier' ? 'EasyTier' : remote.active === 'tailscale' ? 'Tailscale' : ''
     const detail = enabled
       ? remote.status === 'connected'
         ? `${devices} 台设备 · ${remoteLabel || '远程通道'}已连接${controlReady ? ` · ${controlReady} 台控制就绪` : ''}`
@@ -1854,7 +1881,7 @@ function officialSettingsBootstrap() {
       <div class="hd-update-lines">
         <div class="hd-update-line"><span>Harness Desktop</span><strong data-hd-app>等待首次检查</strong></div>
         <div class="hd-update-line"><span>DeepSeek Harness 官方核心</span><strong data-hd-harness>等待首次检查</strong></div>
-        <div class="hd-update-line"><span>PR 快速预览（CNB 优先）</span><strong data-hd-preview-status>未加入（默认）</strong></div>
+        <div class="hd-update-line"><span>PR 快速预览（CNB 优先）</span><strong data-hd-preview-status>默认开启</strong></div>
       </div>
       <div class="hd-update-notes" data-hd-notes hidden><strong>新版本更新内容</strong><ul></ul></div>
       <div class="hd-update-actions">
@@ -1862,7 +1889,7 @@ function officialSettingsBootstrap() {
         <button type="button" data-hd-install hidden>下载并安装桌面版更新</button>
         <a href="#" data-hd-release hidden>打开桌面版下载页</a>
         <label><input type="checkbox" data-hd-auto checked /> 启动时自动检查</label>
-        <label><input type="checkbox" data-hd-preview /> 加入 PR 快速预览</label>
+        <label><input type="checkbox" data-hd-preview checked /> 启用 PR 快速预览</label>
       </div>
       <div class="hd-policy-links">
         <a href="#" data-hd-policy="privacy">隐私政策</a>
@@ -2072,39 +2099,22 @@ function officialSubagentEnhancementsBootstrap() {
   scan()
 }
 
-function ensurePrPreviewController() {
-  if (prPreviewController || !window.harnessPrPreviewUpdateIntegration) return prPreviewController
-  prPreviewController = window.harnessPrPreviewUpdateIntegration.init({
-    onApply: async () => {
-      prPreviewController?.update({ phase: 'checking', message: '正在下载并校验预览组件…' })
-      try {
-        await api.applyPrPreviewUpdate()
-      } catch (error) {
-        prPreviewState = { ...prPreviewState, error: error.message }
-        prPreviewController?.update({ phase: 'error', message: error.message, candidate: prPreviewState.candidate })
-        await publishUpdateState()
-      }
-    },
-    onLater: () => {},
-    onExit: async () => {
-      prPreviewState = { ...prPreviewState, changing: true, error: '' }
-      await publishUpdateState()
-      try {
-        const result = await api.exitPrPreviewUpdates()
-        prPreviewState = { ...prPreviewState, ...result, enabled: false, changing: false, available: false, candidate: null }
-      } catch (error) {
-        prPreviewState = { ...prPreviewState, changing: false, error: error.message }
-        prPreviewController?.update({ phase: 'error', message: error.message, candidate: null })
-      }
-      await publishUpdateState()
-    }
-  })
-  prPreviewController.hide()
-  return prPreviewController
+function showPrPreviewNotice(candidate, { force = false } = {}) {
+  if (!candidate) return false
+  pendingUpdateKind = 'preview'
+  pendingComponentUpdate = null
+  const notes = [candidate.commit?.subject, candidate.description, candidate.pr?.title].filter(Boolean).join('\n')
+  showUpdateNotice({
+    updateAvailable: true,
+    latestVersion: candidate.version || `PR #${candidate.pr?.number || '候选'}`,
+    currentVersion: updateState.app?.currentVersion || '当前版本',
+    notes: notes || '已发现经过签名校验的 PR 快速预览更新。',
+    url: candidate.pr?.url || ''
+  }, { force })
+  return true
 }
 
 async function refreshPrPreviewState({ discover = false } = {}) {
-  const controller = ensurePrPreviewController()
   try {
     const base = await api.getPrPreviewUpdateState()
     prPreviewState = { ...prPreviewState, ...base, checking: false, changing: false, error: '' }
@@ -2113,26 +2123,21 @@ async function refreshPrPreviewState({ discover = false } = {}) {
       preferences: { ...(updateState.preferences || {}), previewEnabled: base.enabled === true }
     }
     if (!base.enabled || (!base.configured && !base.ready)) {
-      controller?.hide()
       await publishUpdateState()
       return prPreviewState
     }
     if (!discover) {
-      if (base.candidate) controller?.update({ phase: 'available', candidate: base.candidate })
-      else controller?.hide()
+      if (base.candidate) showPrPreviewNotice(base.candidate)
       await publishUpdateState()
       return prPreviewState
     }
     prPreviewState = { ...prPreviewState, checking: true, available: false, candidate: null }
-    controller?.update({ phase: 'checking', candidate: null, message: '' })
     await publishUpdateState()
     const result = await api.checkPrPreviewUpdates()
     prPreviewState = { ...prPreviewState, ...result, checking: false, available: result.available === true, candidate: result.candidate || null, error: '' }
-    if (result.available && result.candidate) controller?.update({ phase: 'available', candidate: result.candidate, message: '' })
-    else controller?.update({ phase: 'none', candidate: null, message: '' })
+    if (result.available && result.candidate) showPrPreviewNotice(result.candidate)
   } catch (error) {
     prPreviewState = { ...prPreviewState, checking: false, available: false, candidate: null, error: error.message }
-    controller?.update({ phase: 'error', candidate: null, message: error.message })
   }
   await publishUpdateState()
   return prPreviewState
@@ -2149,7 +2154,10 @@ async function setPrPreviewChannelEnabled(enabled) {
       preferences: { ...(updateState.preferences || {}), previewEnabled: enabled === true }
     }
     if (enabled) await refreshPrPreviewState({ discover: true })
-    else ensurePrPreviewController()?.hide()
+    else if (pendingUpdateKind === 'preview') {
+      closeUpdateNotice()
+      pendingUpdateKind = 'installer'
+    }
   } catch (error) {
     prPreviewState = { ...prPreviewState, changing: false, error: error.message }
   }
@@ -2604,10 +2612,26 @@ updateNoticeRelease.addEventListener('click', () => {
   const url = updateNoticeRelease.dataset.url
   if (url) api.openLink(url).catch(() => {})
 })
-updateNoticeInstall.addEventListener('click', () => {
+updateNoticeInstall.addEventListener('click', async () => {
   updateNoticeOverlay.classList.add('hidden')
   updateNoticeOverlay.setAttribute('aria-hidden', 'true')
-  installUpdate()
+  if (pendingUpdateKind !== 'preview') {
+    installUpdate()
+    return
+  }
+  updateNoticeInstall.disabled = true
+  updateNoticeInstall.textContent = '正在更新…'
+  try {
+    await api.applyPrPreviewUpdate()
+  } catch (error) {
+    prPreviewState = { ...prPreviewState, error: error.message }
+    updateNoticeSummary.textContent = `PR 快速预览更新失败：${error.message}`
+    updateNoticeInstall.disabled = false
+    updateNoticeInstall.textContent = '重试更新'
+    updateNoticeOverlay.classList.remove('hidden')
+    updateNoticeOverlay.setAttribute('aria-hidden', 'false')
+    await publishUpdateState()
+  }
 })
 updateNoticeOverlay.addEventListener('click', event => {
   if (event.target === updateNoticeOverlay) closeUpdateNotice()
@@ -2897,7 +2921,6 @@ async function startOfficialWorkspace() {
   } catch (error) {
     prPreviewState = { ...prPreviewState, configured: false, error: error.message }
   }
-  ensurePrPreviewController()
   appearanceState = await api.getAppearance()
   petState = await api.getPetState()
   const [routing, meters, gitStatus] = await Promise.all([api.getModelRouting(), api.getProviderMeters(false), api.getGitRuntimeStatus()])

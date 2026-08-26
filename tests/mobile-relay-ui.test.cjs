@@ -48,7 +48,18 @@ test('mobile sync dialog has an always-visible personal relay server card', asyn
   }
   assert.match(renderer, /function renderMobileRelayCard/u)
   assert.match(renderer, /function mobileRelayAdapterState/u)
-  assert.match(renderer, /adapters\.find\(adapter => adapter && adapter\.id === 'wss-relay'\)/u)
+  assert.match(renderer, /\['native-p2p', 'wss-relay'\]\.includes\(adapter\.id\)/u)
+  assert.match(renderer, /adapter\.id === 'native-p2p'/u)
+})
+
+test('mobile remote status distinguishes negotiating, direct, and relay paths truthfully', async () => {
+  const { renderer } = await readRelayFiles()
+  assert.match(renderer, /nativeAdapter\?\.path === 'direct'/u)
+  assert.match(renderer, /nativeAdapter\?\.path === 'negotiating'/u)
+  assert.match(renderer, /nativeAdapter\?\.path === 'relay'/u)
+  assert.ok(renderer.includes('原生 P2P 直连已连接'))
+  assert.ok(renderer.includes('正在协商原生 P2P'))
+  assert.ok(renderer.includes('个人 WSS/443 加密中继已连接（P2P 等待或回退）'))
 })
 
 test('relay save/clear calls are centralized behind the expected preload API names', async () => {
@@ -82,7 +93,7 @@ test('relay save/clear calls are centralized behind the expected preload API nam
   assert.ok(renderer.includes('之后新配对的手机扫码会自动携带该配置'), 'fresh pairs after first save should carry the relay automatically')
 })
 
-test('relay card has dedicated styles and connection order copy includes WSS before EasyTier/Tailscale', async () => {
+test('relay card has dedicated styles and connection order copy is LAN then native P2P then personal relay', async () => {
   const { html, styles } = await readRelayFiles()
 
   // 样式覆盖卡片、行布局、输入框与禁用态
@@ -91,8 +102,9 @@ test('relay card has dedicated styles and connection order copy includes WSS bef
   }
   assert.match(styles, /@media \(max-width:720px\) \{[\s\S]*?\.mobile-sync-relay-row \{ flex-wrap:wrap; \}[\s\S]*?\.mobile-sync-relay-row input \{ flex-basis:100%; \}[\s\S]*?\}/u)
 
-  // 连接顺序：局域网 → WSS/443 → EasyTier / Tailscale
-  assert.match(html, /连接顺序：局域网直连 → WSS\/443 通用中继 → EasyTier \/ Tailscale 智能接管/u)
+  // 连接顺序：局域网 → 原生 P2P → 同一 WSS fallback → 旧覆盖网兼容
+  assert.match(html, /连接顺序：局域网直连 → 内置原生 P2P（个人 WSS\/443 协调）→ 同一 WSS\/443 端到端加密中继 → 已有 EasyTier \/ Tailscale 兼容线路/u)
+  assert.match(html, /智能选择（原生 P2P 优先）/u)
   assert.doesNotMatch(html, /两条远程通道均不可用/u)
   assert.match(html, /所有远程通道均不可用时只暂停远程连接/u)
 })

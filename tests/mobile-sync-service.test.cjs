@@ -6,7 +6,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { WebSocket, WebSocketServer } = require('ws')
 
-const { BROWSER_FORBIDDEN_PORTS, MobileSyncService, browserSafePort, lanAddresses, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
+const { BROWSER_FORBIDDEN_PORTS, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
 const { MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
 
 async function createRuntime(label) {
@@ -95,6 +95,81 @@ test('mobile bridge requires one-time pairing and proxies HTTP without protocol 
   assert.equal(upstreamHeaders.referer, `${runtime.url}/conversation/abc`)
   assert.equal(upstreamHeaders.cookie, 'official_session=yes')
   assert.equal(service.state().devices.length, 1)
+})
+
+test('mobile model routing projection bounds provider and model catalogs', () => {
+  const dto = mobileModelRoutingDto({
+    providers: Array.from({ length: 70 }, (_, provider) => ({
+      id: `provider-${provider}`,
+      name: `Provider ${provider}`,
+      models: Array.from({ length: 300 }, (_, model) => `model-${model}`)
+    }))
+  })
+  assert.equal(dto.providers.length, 64)
+  assert.equal(dto.providers.every(provider => provider.models.length === 256), true)
+})
+
+test('paired phones receive only a bounded read-only model routing projection', async t => {
+  let fail = false
+  const secret = 'SECRET_PROVIDER_API_KEY'
+  const routing = {
+    configured: true,
+    main: { provider: 'deepseek', model: 'deepseek-chat', apiKey: secret },
+    subagent: { inheritMain: false, provider: 'openai-codex', model: 'gpt-5.6-sol', endpoint: 'https://private.example' },
+    basePreset: 'sensitive-preset',
+    schema: { hidden: true },
+    user: { key: secret },
+    providers: [{
+      id: 'deepseek',
+      name: 'DeepSeek',
+      endpoint: 'https://private.example',
+      credential: { configured: true },
+      models: ['deepseek-chat', 'deepseek-reasoner', 'opaque-model-3']
+    }]
+  }
+  const service = new MobileSyncService({
+    store: createStore(),
+    getRuntimeTarget: () => null,
+    getModelRouting: async () => {
+      if (fail) throw new Error('settings unavailable')
+      return routing
+    },
+    host: '127.0.0.1',
+    port: 0,
+    qrFactory: async () => 'qr'
+  })
+  t.after(() => service.stop())
+  await service.start()
+  const origin = service.state().origins[0]
+  const endpoint = `${origin}/__harness_mobile__/model-routing`
+  assert.equal((await fetch(endpoint)).status, 401)
+
+  const paired = await pair(service)
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { Cookie: paired.cookie } })).status, 405)
+  const response = await fetch(endpoint, { headers: { Cookie: paired.cookie } })
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  const payload = await response.json()
+  assert.equal(payload.ok, true)
+  assert.deepEqual(Object.keys(payload.routing).sort(), ['configured', 'main', 'providers', 'subagent'])
+  assert.deepEqual(Object.keys(payload.routing.main).sort(), ['model', 'provider'])
+  assert.deepEqual(Object.keys(payload.routing.subagent).sort(), ['inheritMain', 'model', 'provider'])
+  assert.deepEqual(Object.keys(payload.routing.providers[0]).sort(), ['id', 'models', 'name'])
+  assert.equal(payload.routing.main.provider, 'deepseek')
+  assert.equal(payload.routing.providers[0].models.includes('opaque-model-3'), true, 'model IDs remain opaque catalog data')
+  const projected = JSON.stringify(payload)
+  assert.equal(projected.includes(secret), false, 'credential values must never enter the mobile DTO')
+  for (const forbidden of ['apiKey', 'credential', 'endpoint', 'schema', 'user', 'basePreset', 'private.example']) {
+    assert.equal(projected.includes(forbidden), false, `projection must omit ${forbidden}`)
+  }
+
+  fail = true
+  const failed = await fetch(endpoint, { headers: { Cookie: paired.cookie } })
+  assert.equal(failed.status, 503)
+  assert.equal(failed.headers.get('cache-control'), 'no-store')
+  assert.equal((await failed.text()).includes('deepseek-chat'), false, 'failures never replay a previous ready projection')
+  service.revokeDevice(service.state().devices[0].id)
+  assert.equal((await fetch(endpoint, { headers: { Cookie: paired.cookie } })).status, 401)
 })
 
 test('paired mobile devices can request the desktop-owned workspace picker without supplying a path', async t => {

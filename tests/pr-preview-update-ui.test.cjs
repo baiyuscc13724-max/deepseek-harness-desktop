@@ -8,11 +8,26 @@ const integrationPath = path.join(root, 'renderer/pr-preview-update-integration.
 const cssPath = path.join(root, 'renderer/pr-preview-update.css')
 const integration = readFileSync(integrationPath, 'utf8')
 const css = readFileSync(cssPath, 'utf8')
+const index = readFileSync(path.join(root, 'renderer/index.html'), 'utf8')
+const app = readFileSync(path.join(root, 'renderer/app.js'), 'utf8')
+const appStateStore = readFileSync(path.join(root, 'electron/store/app-state-store.cjs'), 'utf8')
 
 // 在 node 中加载模块（IIFE 挂到 globalThis），用于纯函数契约校验；
 // DOM 部分保持静态断言，不引入浏览器依赖。
 require(integrationPath)
 const uiModule = globalThis.harnessPrPreviewUpdateIntegration
+
+test('PR 快速预览默认启用并复用正常更新通知，不再加载独立悬浮卡片', () => {
+  assert.doesNotMatch(index, /pr-preview-update-(?:integration\.js|css)/)
+  assert.doesNotMatch(app, /ensurePrPreviewController|harnessPrPreviewUpdateIntegration/)
+  assert.match(appStateStore, /previewEnabled: true/)
+  assert.match(app, /function showPrPreviewNotice\(candidate/)
+  assert.match(app, /pendingUpdateKind = 'preview'/)
+  assert.match(app, /function showComponentUpdateNotice[\s\S]{0,2000}pendingUpdateKind = 'components'/, 'the shared update notice must preserve the component staging path')
+  assert.match(app, /showUpdateNotice\(\{/)
+  assert.match(app, /pendingUpdateKind !== 'preview'/)
+  assert.match(app, /await api\.applyPrPreviewUpdate\(\)/)
+})
 
 test('零输入预览界面导出显式 init 入口，供根协调者接入', () => {
   assert.ok(uiModule, 'window.harnessPrPreviewUpdateIntegration 必须被导出')

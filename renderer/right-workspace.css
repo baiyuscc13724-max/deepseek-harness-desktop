@@ -18,7 +18,9 @@
  * 但提供了与 browser-sidebar 一致的辅助规则示例（见文末注释）。
  */
 :root {
-  /* The official workbench owns both rows above this boundary. */
+  /* Keep the official two-row baseline as an internal safe area. The right
+     workspace itself owns the whole column so its top surface can react to
+     width, mode, theme, and wallpaper changes together with the content. */
   --dsh-workbench-header-height: 76px;
   --dsh-right-workspace-width: 640px;
 }
@@ -27,12 +29,13 @@
 .dsh-right-workspace {
   position: fixed;
   z-index: 8;
-  top: var(--dsh-workbench-header-height); /* 全局标题与会话导航保留在右栏上方 */
+  top: 0;
   right: 0;
   bottom: 0;
   display: flex;
   flex-direction: column;
   width: min(var(--dsh-right-workspace-width), 100vw);
+  padding-top: var(--dsh-workbench-header-height);
   color: var(--shell-text, #1f2937);
   background: var(--shell-workbench-background, var(--shell-surface, #f7f8fa));
   background-attachment: fixed;
@@ -41,6 +44,31 @@
   transition: transform .22s ease, visibility 0s linear .22s;
   app-region: no-drag;
   -webkit-app-region: no-drag;
+}
+/* The safe-area surface is part of the workspace state tree instead of an
+   exposed piece of the outer shell. Home follows the workbench wallpaper;
+   concrete tools follow the current panel layer. */
+.dsh-right-workspace::before {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: var(--dsh-workbench-header-height);
+  background: inherit;
+  background-attachment: fixed;
+  content: "";
+  pointer-events: none;
+}
+.dsh-right-workspace:not(.is-home)::before {
+  background: color-mix(in srgb, var(--shell-layer, #fff) 94%, transparent);
+}
+body.dsh-right-workspace-open .pet-quick-button,
+body.dsh-right-workspace-open .skin-quick-button,
+body.dsh-right-workspace-open .storage-quick-button,
+body.dsh-right-workspace-open .memory-quick-button,
+body.dsh-right-workspace-open .browser-quick-button {
+  z-index: 9;
 }
 /* 关闭态：移出视口且不可交互（保留在 DOM 中，便于复用 host/slot） */
 .dsh-right-workspace:not(.is-open) {

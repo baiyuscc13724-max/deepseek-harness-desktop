@@ -104,7 +104,7 @@ function normalizeState(input) {
     schemaVersion: STATE_SCHEMA_VERSION,
     enabled: value.enabled === true,
     remoteEnabled: value.remoteEnabled !== false,
-    transportPreference: ['auto', 'easytier', 'wss-relay', 'tailscale'].includes(value.transportPreference)
+    transportPreference: ['auto', 'native-p2p', 'easytier', 'wss-relay', 'tailscale'].includes(value.transportPreference)
       ? value.transportPreference
       : DEFAULT_STATE.transportPreference,
     preferredPort: Number.isInteger(preferredPort) && preferredPort >= 1024 && preferredPort <= 65535
@@ -262,7 +262,7 @@ class MobileSyncStore {
 
   setTransportPreference(preference) {
     return this.#update(state => {
-      state.transportPreference = ['auto', 'easytier', 'wss-relay', 'tailscale'].includes(preference) ? preference : 'auto'
+      state.transportPreference = ['auto', 'native-p2p', 'easytier', 'wss-relay', 'tailscale'].includes(preference) ? preference : 'auto'
     })
   }
 

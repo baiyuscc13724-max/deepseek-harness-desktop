@@ -20,10 +20,11 @@ final class MobileUiAdapter {
      * 移动端附件入口。官方会话 UI 只提供拖拽/剪贴板两条 intakeImages 管线
      * （dsh-client-ui-conversation 的 textarea onPaste，含限额与预览），页面本身
      * 没有 input[type=file]；因此这里注入一个可访问的“添加照片”按钮 + 隐藏的
-     * image/* 多选 file input。用户点击 → WebView onShowFileChooser → 系统选择器
-     * （按次授权、可多选/取消，URI 原样回传）→ input change 事件把所选 File
-     * 放入 DataTransfer，再派发 ClipboardEvent('paste') 给当前 composer textarea，
-     * 由官方 onPaste 进入 intakeImages 预览与限额管线；若引擎不支持构造
+     * image/* file input。用户点击 → WebView onShowFileChooser → 系统选择器
+     * （按次授权、单张快速返回/取消，可重复添加）→ input change 事件先把临时 URI
+     * 内容复制为页面持有的 File，再放入 DataTransfer 并派发 ClipboardEvent('paste')
+     * 给当前 composer textarea，由官方 onPaste 进入 intakeImages 预览与限额管线；
+     * 若引擎不支持构造
      * clipboardData，则回退到官方 ComposerAttachments 的 document drop 管线
      * （其 onAddImages 同样指向 intakeImages）。按钮随 SPA 重渲染恢复，并与
      * textarea 的 disabled/readOnly(忙碌) 状态联动禁用。文本输入/粘贴保持原生。
@@ -62,10 +63,15 @@ final class MobileUiAdapter {
           "button.setAttribute('aria-label','添加照片或截图');" +
           "button.title='添加照片或截图';" +
           "button.innerHTML='<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M4 8.5h3l1.4-2h7.2l1.4 2h3v10H4z\"/><circle cx=\"12\" cy=\"13.5\" r=\"3.2\"/></svg>';" +
-          "var intake=function(){" +
-            "var files=Array.prototype.slice.call(input.files||[]);" +
-            "input.value='';" +
-            "if(!files.length)return;" +
+          "var copyFile=function(file){return new Promise(function(resolve,reject){" +
+            "try{" +
+              "var reader=new FileReader();" +
+              "reader.onload=function(){try{resolve(new File([reader.result],file.name,{type:file.type,lastModified:file.lastModified}));}catch(error){reject(error);}};" +
+              "reader.onerror=function(){reject(reader.error||new Error('Unable to read selected image'));};" +
+              "reader.readAsArrayBuffer(file);" +
+            "}catch(error){reject(error);}" +
+          "});};" +
+          "var dispatchFiles=function(files){" +
             "try{" +
               "var card2=document.querySelector('[data-composer-card]');" +
               "var textarea=card2?card2.querySelector('textarea[data-phase]'):null;" +
@@ -81,6 +87,11 @@ final class MobileUiAdapter {
                 "document.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));" +
               "}" +
             "}catch(error){console.warn('Harness Mobile image intake failed',error);}" +
+          "};" +
+          "var intake=function(){" +
+            "var selected=Array.prototype.slice.call(input.files||[]);" +
+            "if(!selected.length)return;" +
+            "Promise.all(selected.map(copyFile)).then(function(files){input.value='';dispatchFiles(files);}).catch(function(error){console.warn('Harness Mobile image copy failed',error);dispatchFiles(selected);});" +
           "};" +
           "button.addEventListener('click',function(){if(!button.disabled)input.click();});" +
           "input.addEventListener('change',intake);" +

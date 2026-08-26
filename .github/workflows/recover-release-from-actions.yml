@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing immutable product tag
         required: true
-        default: v1.0.47
+        default: v1.0.48
       source_run_id:
         description: Exact successful pre-Tag build/test run whose artifacts must be reused
         required: true

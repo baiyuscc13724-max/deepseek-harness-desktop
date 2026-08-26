@@ -88,9 +88,12 @@ test('Computer Use is built in with pushed session/permanent unlimited authoriza
     assert.match(main, /computerUse:setDefaultAccess/u)
     assert.match(main, /computerUse:setAppOverride/u)
     assert.match(main, /async function authorizeComputerUse[\s\S]{0,900}computerUseUnlimited = true[\s\S]{0,400}setComputerUseEnabled\(true\)/u)
-    assert.match(main, /async function restoreComputerUseGrant[\s\S]{0,600}computerUseAuthorizedScope = 'forever'[\s\S]{0,400}setComputerUseEnabled\(true\)/u)
+    const restoreGrant = main.slice(main.indexOf('async function restoreComputerUseGrant()'), main.indexOf('async function setComputerUseEnabled(enabled)'))
+    assert.match(restoreGrant, /computerUseAuthorizedScope = 'forever'[\s\S]*setComputerUseEnabled\(false\)/u)
+    assert.doesNotMatch(restoreGrant, /setComputerUseEnabled\(true\)/u)
     assert.match(client, /一键开启窗口读取、点击、输入和滚动/u)
     assert.match(client, /按 Esc 可随时停止/u)
+    assert.match(client, /软件启动时不会自动控制/u)
     assert.doesNotMatch(main, /desktopCapturer/u)
 
     for (const channel of ['computerUse:requestAuthorization', 'computerUse:authorize', 'computerUse:decline', 'computerUse:revokePermanent', 'computerUse:policy', 'computerUse:setDefaultAccess', 'computerUse:setAppOverride', 'computerUse:revokeAppOverride']) {
