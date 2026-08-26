@@ -100,6 +100,12 @@
     ? document.querySelector('[data-slot="sidebar"]')
     : null
 
+  const releaseComposerFocus = () => {
+    const active = document.activeElement
+    if (active?.matches?.('input,textarea,[contenteditable="true"]')) active.blur()
+    document.querySelector('[data-composer-card] textarea')?.blur()
+  }
+
   const sidebarToggle = mode => {
     const sidebar = sidebarNode()
     if (!sidebar) return null
@@ -128,11 +134,6 @@
     if (window.__harnessMobileSidebarAutoClose || typeof document.addEventListener !== 'function') return
     window.__harnessMobileSidebarAutoClose = true
     let lastClose = 0
-    const releaseComposerFocus = () => {
-      const active = document.activeElement
-      if (active?.matches?.('input,textarea,[contenteditable="true"]')) active.blur()
-      document.querySelector('[data-composer-card] textarea')?.blur()
-    }
     const scheduleClose = target => {
       const row = target?.closest?.('[data-harness-mobile-session-row="true"], [role="treeitem"][class*="_sessionRow"]')
       if (!row || !row.closest('[data-slot="sidebar"]')) return
@@ -202,13 +203,20 @@
     shell = document.createElement('div')
     shell.id = 'harness-mobile-app-shell'
     shell.innerHTML = `<header data-harness-mobile-appbar="true"><button type="button" data-harness-mobile-action="menu" aria-label="打开会话历史">${appIcon('menu')}</button><div data-harness-mobile-heading><strong>新对话</strong><span>Harness Mobile</span></div><button type="button" data-harness-mobile-action="new" aria-label="新建会话">${appIcon('new')}</button></header><button type="button" data-harness-mobile-drawer-scrim aria-label="关闭会话历史"></button>`
-    shell.querySelector('[data-harness-mobile-action="menu"]').addEventListener('click', () => setSidebarExpanded(!sidebarExpanded()))
+    shell.querySelector('[data-harness-mobile-action="menu"]').addEventListener('click', () => {
+      releaseComposerFocus()
+      setSidebarExpanded(!sidebarExpanded())
+    })
     shell.querySelector('[data-harness-mobile-action="new"]').addEventListener('click', () => {
+      releaseComposerFocus()
       const button = sidebarNode()?.querySelector('button[aria-label="新建会话"],button[aria-label="New session"]')
       button?.click()
       if (sidebarExpanded()) setSidebarExpanded(false)
     })
-    shell.querySelector('[data-harness-mobile-drawer-scrim]').addEventListener('click', () => setSidebarExpanded(false))
+    shell.querySelector('[data-harness-mobile-drawer-scrim]').addEventListener('click', () => {
+      releaseComposerFocus()
+      setSidebarExpanded(false)
+    })
     document.body.appendChild(shell)
     return shell
   }
@@ -350,6 +358,7 @@
   }
 
   const decorateDialogs = () => {
+    let settingsOpen = false
     for (const dialog of document.querySelectorAll('[role="dialog"][aria-modal="true"], dialog')) {
       const nav = dialog.querySelector(':scope > nav')
       const content = nav?.nextElementSibling
@@ -357,12 +366,16 @@
       const settings = dialog.dataset.harnessMobileSettingsDialog === 'true' || Boolean(
         content && buttons.length >= 3 && buttons.some(button => button.getAttribute('aria-current') === 'true')
       )
-      if (settings) decorateSettingsDialog(dialog, nav, content)
-      else {
+      if (settings) {
+        settingsOpen = true
+        decorateSettingsDialog(dialog, nav, content)
+      } else {
         dialog.dataset.harnessMobileSheet = 'true'
         delete dialog.dataset.harnessMobileSettingsDialog
       }
     }
+    if (settingsOpen) root.dataset.harnessMobileSettingsOpen = 'true'
+    else delete root.dataset.harnessMobileSettingsOpen
   }
 
   const decorateConversation = () => {
@@ -377,7 +390,10 @@
     const composer = conversation.querySelector('[data-composer-card]')
     const input = composer?.querySelector('textarea[data-phase]')
     const inputScroll = composer?.querySelector('[data-input-scroll]')
-    if (composer) composer.dataset.harnessMobileComposer = 'qianwen'
+    if (composer) {
+      composer.dataset.harnessMobileComposer = 'qianwen'
+      if (composer.parentElement) composer.parentElement.dataset.harnessMobileComposerFrame = 'true'
+    }
     if (inputScroll) inputScroll.dataset.harnessMobileComposerInput = 'true'
     if (input) {
       input.dataset.harnessMobileComposerTextarea = 'true'
@@ -387,11 +403,17 @@
   }
 
   let composerStyleRestorations = []
+  let containedComposerCard = null
+  let containedComposerButton = null
   const containComposerContext = () => {
-    for (const restore of composerStyleRestorations.splice(0)) restore()
     if (typeof document.querySelector !== 'function') return
     const card = document.querySelector('[data-composer-card]')
-    if (!card) return
+    const button = card?.querySelector('button[aria-haspopup="listbox"]') || null
+    if (card === containedComposerCard && button === containedComposerButton) return
+    for (const restore of composerStyleRestorations.splice(0)) restore()
+    containedComposerCard = card
+    containedComposerButton = button
+    if (!card || !button || !button.parentElement) return
     const setTemporary = (element, property, value) => {
       const previous = element.style.getPropertyValue(property)
       const priority = element.style.getPropertyPriority(property)
@@ -404,13 +426,68 @@
     }
     // Only constrain the model/preset listbox that lives inside the composer.
     // Never mutate conversation rows, to-bottom controls or dialog content.
-    const button = card.querySelector('button[aria-haspopup="listbox"]')
-    if (!button || !button.parentElement || button.closest('[data-conversation-scroll]') && !button.closest('[data-composer-card]')) return
+    if (button.closest('[data-conversation-scroll]') && !button.closest('[data-composer-card]')) return
     setTemporary(button.parentElement, 'min-width', '0px')
     setTemporary(button.parentElement, 'max-width', '100%')
     setTemporary(button.parentElement, 'overflow', 'hidden')
     setTemporary(button, 'min-width', '0px')
     setTemporary(button, 'max-width', '100%')
+  }
+
+  const installImeSendBridge = () => {
+    if (window.__harnessMobileImeSendBridge || typeof document.addEventListener !== 'function') return
+    window.__harnessMobileImeSendBridge = true
+    let composing = false
+    let pendingStop = null
+    const composerTextarea = target => target?.matches?.('[data-composer-card] textarea') ? target : null
+    const actionLabel = button => `${button?.getAttribute?.('aria-label') || ''} ${button?.title || ''}`.trim()
+    const isStop = button => /stop generating|停止生成|停止运行/i.test(actionLabel(button))
+    const isSend = button => /send message|发送消息|发送/i.test(actionLabel(button))
+    const activateOfficialSend = textarea => {
+      let attempts = 0
+      const activate = () => {
+        const card = textarea?.closest?.('[data-composer-card]') || document.querySelector('[data-composer-card]')
+        const send = [...(card?.querySelectorAll?.('button') || [])].find(button => isSend(button) && !button.disabled && visible(button))
+        if (send) {
+          pendingStop = null
+          send.click()
+          textarea?.focus?.({ preventScroll: true })
+          return
+        }
+        if (++attempts < 6) setTimeout(activate, 24)
+        else pendingStop = null
+      }
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(activate)
+      else setTimeout(activate, 16)
+    }
+    document.addEventListener('compositionstart', event => {
+      if (composerTextarea(event.target)) composing = true
+    }, true)
+    document.addEventListener('compositionend', event => {
+      const textarea = composerTextarea(event.target)
+      composing = false
+      if (textarea && pendingStop) activateOfficialSend(textarea)
+    }, true)
+    document.addEventListener('pointerdown', event => {
+      const button = event.target?.closest?.('[data-composer-card] button')
+      const textarea = button?.closest?.('[data-composer-card]')?.querySelector?.('textarea')
+      if (!button || !textarea || !isStop(button)) return
+      if (!composing && !(textarea.value || '').trim()) return
+      pendingStop = button
+      // Keep the first tap from stopping the active generation while Android
+      // commits the IME candidate and React swaps Stop for the real Send button.
+      const cancelStopClick = clickEvent => {
+        if (pendingStop !== button || clickEvent.target !== button && !button.contains(clickEvent.target)) return
+        clickEvent.preventDefault()
+        clickEvent.stopImmediatePropagation()
+        document.removeEventListener('click', cancelStopClick, true)
+      }
+      document.addEventListener('click', cancelStopClick, true)
+      setTimeout(() => {
+        document.removeEventListener('click', cancelStopClick, true)
+        if (pendingStop === button) activateOfficialSend(textarea)
+      }, 0)
+    }, true)
   }
 
   const installHistoryRecovery = () => {
@@ -594,6 +671,7 @@
     decorateDialogs()
     decorateConversation()
     containComposerContext()
+    installImeSendBridge()
     installSidebarAutoClose()
     syncMobileAppShell()
     installHistoryRecovery()
@@ -607,14 +685,29 @@
     const scheduleMount = () => {
       if (scheduled || document.visibilityState === 'hidden') return
       scheduled = true
-      setTimeout(() => {
+      const run = () => {
         scheduled = false
         mount()
-      }, 160)
+      }
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run)
+      else setTimeout(run, 16)
     }
-    // Throttle instead of restarting a debounce for every streamed token. This
-    // keeps page switches responsive and caps expensive full-DOM decoration.
-    window.__harnessMobileUiObserver = new MutationObserver(scheduleMount)
+    const structuralSelector = '[data-composer-card],[data-slot="sidebar"],[role="dialog"],dialog,[role="menu"],[role="listbox"],header'
+    const needsMount = record => {
+      const target = record.target?.nodeType === Node.ELEMENT_NODE ? record.target : record.target?.parentElement
+      if (target?.closest?.(structuralSelector)) return true
+      for (const node of [...record.addedNodes, ...record.removedNodes]) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue
+        if (node.matches?.(structuralSelector) || node.querySelector?.(structuralSelector)) return true
+      }
+      // Streaming tokens and newly appended message text live entirely inside
+      // the conversation view. They already inherit CSS and must never trigger
+      // a whole-document scan/layout pass for every chunk.
+      return !target?.closest?.('[data-conversation-view]')
+    }
+    window.__harnessMobileUiObserver = new MutationObserver(records => {
+      if (records.some(needsMount)) scheduleMount()
+    })
     window.__harnessMobileUiObserver.observe(root, { childList: true, subtree: true })
     document.addEventListener?.('visibilitychange', () => {
       if (document.visibilityState === 'visible') scheduleMount()

@@ -34,7 +34,8 @@ android {
         targetSdk = 35
         versionCode = mobileVersionCode
         versionName = mobileVersionName
-        val updateManifestUrl = providers.gradleProperty("HARNESS_MOBILE_UPDATE_MANIFEST_URL").orElse("").get()
+        val defaultUpdateManifestUrl = "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/mobile/mobile-app-update.json"
+        val updateManifestUrl = providers.gradleProperty("HARNESS_MOBILE_UPDATE_MANIFEST_URL").orElse(defaultUpdateManifestUrl).get()
         buildConfigField("String", "MOBILE_UPDATE_MANIFEST_URL", "\"${updateManifestUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 

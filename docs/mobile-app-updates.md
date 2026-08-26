@@ -1,6 +1,6 @@
 # Independent mobile app updates
 
-Android and iOS/iPadOS releases are checked independently from Harness Desktop and from Desktop component updates. The clients accept one small HTTPS JSON manifest using the contract in `mobile/mobile-app-update.example.json`, but the production endpoint is intentionally empty until a separately approved mobile release exists.
+Android and iOS/iPadOS releases are checked independently from Harness Desktop and from Desktop component updates. The clients accept one small HTTPS JSON manifest using the contract in `mobile/mobile-app-update.example.json`. Android uses the repository-owned `mobile/mobile-app-update.json` channel by default; it starts at version `0.0.0` (no update) and is advanced only after a separately approved, signed mobile release exists.
 
 ## Independent mobile release gate
 
