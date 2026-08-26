@@ -84,6 +84,10 @@ function gitCapture(args) {
   return execute(git, args, { env: gitEnvironment() })
 }
 
+function gitCaptureRaw(args) {
+  return execute(git, args, { env: gitEnvironment(), trim: false })
+}
+
 function gitRun(args) {
   execute(git, args, { env: gitEnvironment() })
 }
@@ -251,7 +255,7 @@ async function protectedMetadataHashes(repo) {
 
 function assertProtectedMetadataMatchesLocal(metadataHashes) {
   for (const file of PROTECTED_METADATA_PATHS) {
-    const expected = sha256(readFileSync(path.join(root, file)))
+    const expected = sha256(gitCaptureRaw(['cat-file', 'blob', `HEAD:${file}`]))
     if (metadataHashes.github?.[file] !== expected || metadataHashes.cnb?.[file] !== expected) {
       throw new Error(`Protected GitHub/CNB metadata differs from the committed source: ${file}.`)
     }

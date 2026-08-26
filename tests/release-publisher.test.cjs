@@ -767,6 +767,8 @@ test('Android-only publication stays inside the unified publisher and excludes d
   assert.match(publisher, /macOS Desktop package contracts/u)
   assert.match(publisher, /verifyProtectedState/u)
   assert.match(publisher, /assertProtectedMetadataMatchesLocal/u)
+  assert.match(publisher, /gitCaptureRaw\(\['cat-file', 'blob', `HEAD:\$\{file\}`\]\)/u)
+  assert.doesNotMatch(publisher, /const expected = sha256\(readFileSync\(path\.join\(root, file\)\)\)/u)
   assert.match(publisher, /Protected GitHub\/CNB metadata differs from the committed source/u)
   assert.match(publisher, /assertProtectedReleaseMatchesManifest/u)
   assert.match(publisher, /Protected \$\{protectedTag\} GitHub asset evidence changed/u)
