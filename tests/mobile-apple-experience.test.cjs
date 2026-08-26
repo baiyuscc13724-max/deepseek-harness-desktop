@@ -57,7 +57,7 @@ test('iOS mobile experience keeps Apple-native state and accessibility contracts
 })
 
 test('Android native shell keeps touch, state, dark-mode, and attachment contracts', async () => {
-  const [mainLayout, controlLayout, scannerLayout, dimensions, colors, nightColors, nightStyles, mainActivity, scannerActivity, adapter, compat, runtime] = await Promise.all([
+  const [mainLayout, controlLayout, scannerLayout, dimensions, colors, nightColors, nightStyles, mainActivity, scannerActivity, adapter, compat, runtime, androidBuild, updateFeed, manifest] = await Promise.all([
     read('mobile', 'android', 'app', 'src', 'main', 'res', 'layout', 'activity_main.xml'),
     read('mobile', 'android', 'app', 'src', 'main', 'res', 'layout', 'activity_control_settings.xml'),
     read('mobile', 'android', 'app', 'src', 'main', 'res', 'layout', 'activity_scanner.xml'),
@@ -69,7 +69,10 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     read('mobile', 'android', 'app', 'src', 'main', 'java', 'io', 'harnessdesktop', 'mobile', 'HarnessCaptureActivity.java'),
     read('mobile', 'android', 'app', 'src', 'main', 'java', 'io', 'harnessdesktop', 'mobile', 'MobileUiAdapter.java'),
     read('mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-compat.css'),
-    read('mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-runtime.js')
+    read('mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-runtime.js'),
+    read('mobile', 'android', 'app', 'build.gradle.kts'),
+    read('mobile', 'mobile-app-update.json'),
+    read('mobile', 'android', 'app', 'src', 'main', 'AndroidManifest.xml')
   ])
 
   assertContainsAll(mainLayout, [
@@ -118,12 +121,31 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'WindowInsetsCompat.Type.ime()',
     'Math.max(systemBars.bottom, ime.bottom)',
     'ActivityResultLauncher<Intent>',
+    'ActivityResultLauncher<PickVisualMediaRequest>',
+    'new ActivityResultContracts.PickVisualMedia()',
+    'PickVisualMedia.ImageOnly.INSTANCE',
+    'completeFileChooser',
+    'protected void onResume()',
+    'mobileUiAdapter.inject(webView)',
+    "window.dispatchEvent(new Event('online'))",
+    'MOBILE_UPDATE_CHECK_INTERVAL_MS',
+    'lastMobileUpdateCheckAt',
+    'hideSoftKeyboard()',
+    'InputMethodManager',
+    'moveTaskToBack(true)',
     'mainFrameLoadFailed',
     'if (!mainFrameLoadFailed) revealWorkbench()',
     "document.querySelector('[data-slot=\\\"conversation\\\"]') ||",
     "document.querySelector('[data-slot=\\\"sidebar\\\"]') ||"
   ], 'Android native file chooser and shell readiness')
   assert.doesNotMatch(mainActivity, /\.isBlank\(|List\.of\(|(?<!Collectors)\.toList\(/u, 'minSdk 26 production code must not use newer un-desugared Java collection/string APIs')
+  assert.doesNotMatch(mainActivity, /PickMultipleVisualMedia|setMaxItems/u, 'the recent-photo path must return after one thumbnail tap')
+  assert.match(manifest, /android:windowSoftInputMode="stateAlwaysHidden\|adjustResize"/u, 'pairing and reconnect surfaces must not summon the IME')
+  assert.doesNotMatch(manifest, /READ_MEDIA_IMAGES|READ_EXTERNAL_STORAGE/u, 'system picker must not expand media or storage permissions')
+  assert.match(androidBuild, /defaultUpdateManifestUrl = "https:\/\/raw\.githubusercontent\.com\/baiyuscc13724-max\/deepseek-harness-desktop\/main\/mobile\/mobile-app-update\.json"/u, 'Android must have an independent mobile update channel')
+  const parsedUpdateFeed = JSON.parse(updateFeed)
+  assert.equal(parsedUpdateFeed.schemaVersion, 1)
+  assert.equal(parsedUpdateFeed.platforms.android.version, '0.0.0', 'the mutable channel must stay dormant until a signed mobile release is approved')
   assertContainsAll(adapter, [
     'data-harness-mobile-add-photo',
     "input.type='file'",
@@ -131,7 +153,9 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'ClipboardEvent',
     'textarea[data-phase]',
     'button.disabled!==unavailable',
-    "button.getAttribute('aria-disabled')!==ariaDisabled"
+    "button.getAttribute('aria-disabled')!==ariaDisabled",
+    'affectsFileEntry',
+    'if(affectsFileEntry(records))syncOrMount()'
   ], 'Android mobile attachment bridge')
   assertContainsAll(compat, [
     ':focus-visible',
@@ -151,14 +175,25 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'data-harness-mobile-settings-dialog',
     'data-harness-mobile-settings-view="list"',
     'data-harness-mobile-settings-toolbar="true"',
-    'data-harness-mobile-settings-category="true"'
+    'data-harness-mobile-settings-category="true"',
+    'data-harness-mobile-composer-frame="true"',
+    'width: calc(100vw - 24px) !important',
+    'position: fixed !important',
+    'width: 100vw !important',
+    'height: 100dvh !important'
   ], 'Android native-feeling mobile shell and accessibility')
   assertContainsAll(runtime, [
     'containComposerContext',
     "document.querySelector('[data-composer-card]')",
     'composerStyleRestorations',
-    "card.querySelector('button[aria-haspopup=\"listbox\"]')",
+    "card?.querySelector('button[aria-haspopup=\"listbox\"]')",
     'setTemporary(button.parentElement',
+    'installImeSendBridge',
+    'releaseComposerFocus',
+    'pendingStop',
+    'activateOfficialSend',
+    'structuralSelector',
+    'records.some(needsMount)',
     'installSidebarAutoClose',
     'installTimeZoneCompatibility',
     "timeZone: 'UTC'",
@@ -173,6 +208,8 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'content.inert = list',
     '返回设置分类',
     'data-harness-mobile-settings-close',
+    "root.dataset.harnessMobileSettingsOpen = 'true'",
+    "composer.parentElement.dataset.harnessMobileComposerFrame = 'true'",
     "composer.dataset.harnessMobileComposer = 'qianwen'",
     "const language = typeof navigator === 'object'",
     "input.placeholder = /^zh\\b/i.test(language) ? '发消息…' : 'Message…'"

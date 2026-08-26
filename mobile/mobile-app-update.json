@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "publishedAt": "2026-08-26T00:00:00.000Z",
+  "platforms": {
+    "android": {
+      "version": "0.0.0",
+      "url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v0.0.0/Harness-Mobile-0.0.0-android-universal.apk",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "required": false
+    }
+  }
+}

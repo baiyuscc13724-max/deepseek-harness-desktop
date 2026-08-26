@@ -3,6 +3,7 @@ package io.harnessdesktop.mobile;
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
@@ -14,6 +15,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -33,6 +35,7 @@ import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.PickVisualMediaRequest;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
@@ -56,6 +59,7 @@ public final class MainActivity extends AppCompatActivity {
     static final String SAVED_PROFILE = "saved_profile";
     private static final long[] WORKBENCH_RETRY_DELAYS_MS = { 800L, 1500L, 2500L, 4000L, 5000L };
     private static final long NETWORK_RECONNECT_DEBOUNCE_MS = 1_500L;
+    private static final long MOBILE_UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1_000L;
 
     private LinearLayout pairingPanel;
     private EditText pairingUrl;
@@ -89,6 +93,7 @@ public final class MainActivity extends AppCompatActivity {
     private final NetworkReconnectPolicy networkReconnectPolicy = new NetworkReconnectPolicy();
     private final MobileAppUpdateChecker mobileAppUpdateChecker = new MobileAppUpdateChecker();
     private boolean mobileUpdatePrompted;
+    private long lastMobileUpdateCheckAt;
     private final Runnable networkChangedReconnect = this::reconnectAfterNetworkChange;
     private final ConnectivityManager.NetworkCallback networkCallback = new ConnectivityManager.NetworkCallback() {
         @Override public void onAvailable(Network network) { observeAvailableNetwork(network, null); }
@@ -122,18 +127,24 @@ public final class MainActivity extends AppCompatActivity {
         this::onScanResult
     );
 
-    // 工作台 HTML 文件上传：仅在被页面主动触发（按钮点击）时启动系统选择器，
-    // 按次授权、可多选、可取消；不申请任何存储权限，也不持久化 URI 授权。
+    // 工作台 HTML 图片上传：用户点击照片按钮后优先打开系统 Photo Picker，
+    // 直接展示最近照片/截图缩略图；旧系统自动降级到系统文档选择器。
+    // 两条链路都是按次 URI 授权，不申请媒体/存储权限，也不持久读取相册。
     private ValueCallback<Uri[]> fileChooserCallback;
+    private final ActivityResultLauncher<PickVisualMediaRequest> recentImagePicker = registerForActivityResult(
+        new ActivityResultContracts.PickVisualMedia(),
+        uri -> completeFileChooser(uri == null ? null : new Uri[] { uri })
+    );
     private final ActivityResultLauncher<Intent> systemFilePicker = registerForActivityResult(
         new ActivityResultContracts.StartActivityForResult(),
-        result -> {
-            ValueCallback<Uri[]> callback = fileChooserCallback;
-            fileChooserCallback = null;
-            if (callback == null) return;
-            callback.onReceiveValue(toChosenUris(result.getResultCode(), result.getData()));
-        }
+        result -> completeFileChooser(toChosenUris(result.getResultCode(), result.getData()))
     );
+
+    private void completeFileChooser(Uri[] uris) {
+        ValueCallback<Uri[]> callback = fileChooserCallback;
+        fileChooserCallback = null;
+        if (callback != null) callback.onReceiveValue(uris);
+    }
 
     private static Uri[] toChosenUris(int resultCode, Intent data) {
         if (resultCode != RESULT_OK || data == null) return null;
@@ -181,7 +192,24 @@ public final class MainActivity extends AppCompatActivity {
         checkMobileAppUpdate();
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        checkMobileAppUpdate();
+        if (webView == null || swipeRefresh == null || swipeRefresh.getVisibility() != View.VISIBLE) return;
+        // Home/Recents、系统照片选择器和 Android Back 后恢复时保留当前
+        // WebView 文档、草稿、附件与流式会话。只唤醒页面并重新注入幂等的
+        // 移动适配，不 reload；真正的断网仍由 NetworkCallback 的重试链处理。
+        webView.onResume();
+        webView.resumeTimers();
+        if (mobileUiAdapter != null) mobileUiAdapter.inject(webView);
+        webView.evaluateJavascript("(() => { window.dispatchEvent(new Event('online')); window.dispatchEvent(new Event('focus')); return true; })()", null);
+    }
+
     private void checkMobileAppUpdate() {
+        long now = System.currentTimeMillis();
+        if (mobileUpdatePrompted || now - lastMobileUpdateCheckAt < MOBILE_UPDATE_CHECK_INTERVAL_MS) return;
+        lastMobileUpdateCheckAt = now;
         mobileAppUpdateChecker.check(BuildConfig.MOBILE_UPDATE_MANIFEST_URL, BuildConfig.VERSION_NAME, (update, error) -> {
             if (isFinishing() || isDestroyed() || update == null || mobileUpdatePrompted) return;
             mobileUpdatePrompted = true;
@@ -294,8 +322,8 @@ public final class MainActivity extends AppCompatActivity {
             }
 
             // HTML <input type="file">/file input 的系统选择器桥：
-            // 用户主动点击页面里的上传控件才会触发；选择结果（含多选）原样回传
-            // 给页面，取消则回传 null。只走系统 picker 的按次授权，不要求存储权限。
+            // 用户主动点击页面里的上传控件才会触发；图片使用系统 Photo Picker 单选快返，
+            // 点一张即回到输入框。文件仍原样回传，取消则回传 null；不要求存储权限。
             @Override public boolean onShowFileChooser(
                     WebView view,
                     ValueCallback<Uri[]> filePath,
@@ -306,13 +334,35 @@ public final class MainActivity extends AppCompatActivity {
                 }
                 fileChooserCallback = filePath;
                 try {
-                    systemFilePicker.launch(buildSystemFilePickerIntent(fileChooserParams));
+                    if (isImageChooser(fileChooserParams)) {
+                        PickVisualMediaRequest request = new PickVisualMediaRequest.Builder()
+                            .setMediaType(ActivityResultContracts.PickVisualMedia.ImageOnly.INSTANCE)
+                            .build();
+                        recentImagePicker.launch(request);
+                    } else {
+                        systemFilePicker.launch(buildSystemFilePickerIntent(fileChooserParams));
+                    }
                     return true;
                 } catch (ActivityNotFoundException | SecurityException failure) {
-                    fileChooserCallback = null;
-                    filePath.onReceiveValue(null);
+                    try {
+                        systemFilePicker.launch(buildSystemFilePickerIntent(fileChooserParams));
+                    } catch (ActivityNotFoundException | SecurityException fallbackFailure) {
+                        completeFileChooser(null);
+                    }
                     return true;
                 }
+            }
+
+            private boolean isImageChooser(FileChooserParams params) {
+                String[] acceptTypes = params.getAcceptTypes();
+                if (acceptTypes == null || acceptTypes.length == 0) return false;
+                boolean found = false;
+                for (String acceptType : acceptTypes) {
+                    if (acceptType == null || acceptType.trim().isEmpty()) continue;
+                    found = true;
+                    if (!acceptType.trim().toLowerCase(Locale.ROOT).startsWith("image/")) return false;
+                }
+                return found;
             }
 
             private Intent buildSystemFilePickerIntent(FileChooserParams params) {
@@ -748,7 +798,18 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void hideSoftKeyboard() {
+        View focused = getCurrentFocus();
+        if (focused != null) {
+            InputMethodManager keyboard = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (keyboard != null) keyboard.hideSoftInputFromWindow(focused.getWindowToken(), 0);
+            focused.clearFocus();
+        }
+        if (webView != null) webView.evaluateJavascript("document.activeElement?.blur?.()", null);
+    }
+
     private void showConnectionOverlay(String message) {
+        hideSoftKeyboard();
         setConnectionStatus(message);
         connectionOverlay.setVisibility(View.VISIBLE);
         reconnectButton.setVisibility(View.VISIBLE);
@@ -858,9 +919,10 @@ public final class MainActivity extends AppCompatActivity {
             backDispatchPending = false;
             if ("true".equals(value)) return;
             // Browser history contains pairing/home redirects and is not a
-            // mobile navigation stack. Once no in-page layer is open, keep the
-            // workbench in place and offer connection controls instead.
-            confirmDisconnect();
+            // mobile navigation stack. Once no in-page layer is open, Android
+            // Back should behave like a normal phone app: move this task to the
+            // background while the proxy/tunnel and desktop generation continue.
+            if (!moveTaskToBack(true)) finishAfterTransition();
         });
     }
 

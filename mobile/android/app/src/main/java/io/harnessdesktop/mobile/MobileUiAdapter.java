@@ -96,8 +96,15 @@ final class MobileUiAdapter {
           "if(button){syncState(button);return;}" +
           "mount();" +
         "};" +
+        "var affectsFileEntry=function(records){return records.some(function(record){" +
+          "if(record.type==='attributes')return !!record.target.matches&&record.target.matches('textarea[data-phase]');" +
+          "var target=record.target&&record.target.nodeType===1?record.target:record.target&&record.target.parentElement;" +
+          "if(target&&target.closest&&target.closest('[data-composer-card]'))return true;" +
+          "var nodes=[].slice.call(record.addedNodes||[]).concat([].slice.call(record.removedNodes||[]));" +
+          "return nodes.some(function(node){return node.nodeType===1&&(node.matches&&node.matches('[data-composer-card]')||node.querySelector&&node.querySelector('[data-composer-card]'));});" +
+        "});};" +
         "if(!window.__harnessMobileFileEntryObserver){" +
-          "window.__harnessMobileFileEntryObserver=new MutationObserver(function(){syncOrMount();});" +
+          "window.__harnessMobileFileEntryObserver=new MutationObserver(function(records){if(affectsFileEntry(records))syncOrMount();});" +
           "window.__harnessMobileFileEntryObserver.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','readonly','data-phase']});" +
         "}" +
         "}())";
