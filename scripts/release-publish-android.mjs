@@ -29,6 +29,13 @@ const PROTECTED_METADATA_PATHS = Object.freeze([
   'component-feeds/stable/darwin-x64.json',
   'component-feeds/stable/darwin-arm64.json'
 ])
+const POST_TAG_CONTROLLER_PATHS = Object.freeze([
+  '.github/workflows/android-mobile-release.yml',
+  'scripts/release-publish-android.mjs',
+  'scripts/release-audit.mjs',
+  'tests/release-publisher.test.cjs'
+])
+const STANDALONE_RELEASE_BODY = version => `Standalone signed Android mobile release ${version}. Desktop packages, components, stable feeds, and prior immutable assets are unchanged.`
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
@@ -148,6 +155,22 @@ function assertExactRemoteMain() {
   return head
 }
 
+function assertPostTagControllerAdvance(state, currentHead, mobile) {
+  if (state.phases['immutable-mobile-tag']?.status !== 'completed') throw new Error('Android controller cannot advance before the immutable Tag phase completes.')
+  if (localTagRevision(mobile.tag) !== state.sourceRevision || remoteTagRevision(mobile.tag) !== state.sourceRevision) {
+    throw new Error('Android controller advance requires the local and remote immutable Tag to remain exact.')
+  }
+  const ancestor = captureResult(git, ['merge-base', '--is-ancestor', state.sourceRevision, currentHead], { env: gitEnvironment() })
+  if (ancestor.error) throw ancestor.error
+  if (ancestor.status !== 0) throw new Error('Android controller revision must descend from the immutable source revision.')
+  const changed = gitCapture(['diff', '--name-only', '--diff-filter=ACDMRTUXB', `${state.sourceRevision}..${currentHead}`]).split(/\r?\n/u).filter(Boolean)
+  const unexpected = changed.filter(file => !POST_TAG_CONTROLLER_PATHS.includes(file))
+  if (changed.length === 0 || unexpected.length > 0) {
+    throw new Error(`Post-Tag Android recovery may change only controller files: ${unexpected.join(', ') || 'no reviewed controller change'}.`)
+  }
+  return changed
+}
+
 function readGithubRelease(repo, tag) {
   const program = process.platform === 'win32' ? 'gh.exe' : 'gh'
   const result = captureResult(program, ['api', `repos/${repo}/releases/tags/${tag}`], { timeout: 2 * 60 * 1000 })
@@ -163,6 +186,50 @@ function readGithubRelease(repo, tag) {
 function readLatestGithubReleaseTag(repo) {
   const release = JSON.parse(ghCapture(['api', `repos/${repo}/releases/latest`]))
   return String(release.tag_name || '')
+}
+
+function assertStandaloneReleaseShell(repo, sourceRevision, mobile, { requireEmpty = false } = {}) {
+  const release = readGithubRelease(repo, mobile.tag)
+  if (!release) throw new Error(`Standalone GitHub release ${mobile.tag} is unavailable.`)
+  const expectedNames = new Set([mobile.assetName, mobile.checksumName])
+  const names = (release.assets || []).map(asset => String(asset.name || ''))
+  const unexpected = names.filter(name => !expectedNames.has(name))
+  if (release.tag_name !== mobile.tag || String(release.target_commitish || '').toLowerCase() !== sourceRevision || String(release.name || '') !== `Harness Mobile ${mobile.versionName}` || String(release.body || '') !== STANDALONE_RELEASE_BODY(mobile.versionName) || Boolean(release.draft) || Boolean(release.prerelease)) {
+    throw new Error('Standalone Android recovery release metadata is not exact.')
+  }
+  if (unexpected.length > 0 || new Set(names).size !== names.length || (requireEmpty && names.length !== 0)) {
+    throw new Error(`Standalone Android recovery release asset set is unsafe: ${names.join(', ') || '(empty)'}.`)
+  }
+  if (readLatestGithubReleaseTag(repo) !== `v${mobile.integrationVersion}`) throw new Error('Standalone Android recovery must not replace the desktop latest release.')
+  return release
+}
+
+async function assertStandaloneCnbAssetsAbsent(repo, mobile) {
+  for (const name of [mobile.assetName, mobile.checksumName]) {
+    const url = `https://cnb.cool/${repo}/-/releases/download/${mobile.tag}/${name}`
+    const response = await fetch(url, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+    if (response.status !== 404) throw new Error(`Standalone Android recovery requires absent CNB asset ${name} (HTTP ${response.status}).`)
+  }
+}
+
+function createEmptyStandaloneRelease(repo, sourceRevision, mobile) {
+  const existing = readGithubRelease(repo, mobile.tag)
+  if (existing) return assertStandaloneReleaseShell(repo, sourceRevision, mobile, { requireEmpty: true })
+  try {
+    ghRun([
+      'api', '--method', 'POST', `repos/${repo}/releases`,
+      '-f', `tag_name=${mobile.tag}`,
+      '-f', `target_commitish=${sourceRevision}`,
+      '-f', `name=Harness Mobile ${mobile.versionName}`,
+      '-f', `body=${STANDALONE_RELEASE_BODY(mobile.versionName)}`,
+      '-F', 'draft=false',
+      '-F', 'prerelease=false',
+      '-f', 'make_latest=false'
+    ])
+  } catch (error) {
+    if (!readGithubRelease(repo, mobile.tag)) throw error
+  }
+  return assertStandaloneReleaseShell(repo, sourceRevision, mobile, { requireEmpty: true })
 }
 
 function normalizeRelease(release) {
@@ -403,6 +470,24 @@ async function validateAndroidCiRun(repo, runId, sourceRevision, workflowIdentit
     throw new Error('Exact Android mobile compile/test CI job is not successful.')
   }
   return { runId: Number(run.databaseId), url: run.url, workflowId: workflowIdentity.id, jobId: Number(androidJobs[0].databaseId) }
+}
+
+function assertRecoverableAndroidPreflightFailure(repo, runId, title, sourceRevision, headBranch) {
+  const run = JSON.parse(ghCapture([
+    'run', 'view', String(runId), '--repo', repo,
+    '--json', 'databaseId,displayTitle,event,headBranch,headSha,status,conclusion,url,workflowName,jobs'
+  ]))
+  if (Number(run.databaseId) !== Number(runId) || run.workflowName !== 'Publish Signed Android Mobile' || run.displayTitle !== title || run.event !== 'workflow_dispatch' || run.headBranch !== headBranch || String(run.headSha).toLowerCase() !== sourceRevision || run.status !== 'completed' || run.conclusion !== 'failure') {
+    throw new Error('Android recovery requires one exact terminal failed signed workflow run.')
+  }
+  const jobs = (run.jobs || []).filter(job => job.name === 'Build, verify and publish signed APK')
+  if (jobs.length !== 1 || jobs[0].conclusion !== 'failure') throw new Error('Android recovery signed workflow job evidence is not exact.')
+  const steps = new Map((jobs[0].steps || []).map(step => [step.name, step.conclusion]))
+  if (steps.get('Verify release tag and signing inputs') !== 'failure') throw new Error('Android recovery is allowed only for the known preflight failure.')
+  for (const name of ['Restore private release keystore', 'Build signed Android APK', 'Verify package, version and signing identity', 'Create immutable standalone Android release when requested', 'Add immutable signed APK to the existing release', 'Verify public signed APK bytes and identity']) {
+    if (steps.get(name) !== 'skipped') throw new Error(`Android recovery requires skipped side-effect step: ${name}.`)
+  }
+  return run
 }
 
 async function waitForAndroidCiEvidence(repo, sourceRevision, pollSeconds) {
@@ -672,12 +757,22 @@ async function publishAndroid({ integrationVersion, repo, pollSeconds, mobile, s
   for (const [key, value] of Object.entries(identity)) if (state[key] !== value) throw new Error(`Android publication state identity mismatch: ${key}`)
   assertClean()
   const currentHead = assertExactRemoteMain()
-  await maybeRebindPreTagCandidate(stateFile, state, currentHead, repo, mobile)
+  if (state.sourceRevision && state.sourceRevision !== currentHead && state.phases['immutable-mobile-tag']) {
+    const controllerPaths = assertPostTagControllerAdvance(state, currentHead, mobile)
+    const controllerCi = await waitForAndroidCiEvidence(repo, currentHead, pollSeconds)
+    state.controllerRevision = currentHead
+    state.controllerPaths = controllerPaths
+    state.controllerCiRunId = controllerCi.runId
+    state.controllerCiUrl = controllerCi.url
+    await saveState(stateFile, state)
+  } else {
+    await maybeRebindPreTagCandidate(stateFile, state, currentHead, repo, mobile)
+  }
   if (!state.sourceRevision) {
     state.sourceRevision = currentHead
     await saveState(stateFile, state)
   }
-  if (state.sourceRevision !== currentHead) throw new Error('Android publication source revision changed after an immutable phase started.')
+  if (state.sourceRevision !== currentHead && state.controllerRevision !== currentHead) throw new Error('Android publication source revision changed after an immutable phase started.')
 
   await phase(stateFile, state, 'local-mobile-gates', async () => {
     assertClean()
@@ -709,7 +804,8 @@ async function publishAndroid({ integrationVersion, repo, pollSeconds, mobile, s
     }
   }, async completed => {
     assertClean()
-    if (assertExactRemoteMain() !== state.sourceRevision) throw new Error('Completed Android local gate no longer matches origin/main.')
+    const exactHead = assertExactRemoteMain()
+    if (exactHead !== state.sourceRevision) assertPostTagControllerAdvance(state, exactHead, mobile)
     const workflowIdentity = readCiWorkflowIdentity(repo)
     if (Number(completed.ciWorkflowId) !== workflowIdentity.id) throw new Error('Stored Android CI workflow identity changed.')
     await validateAndroidCiRun(repo, Number(completed.ciRunId), state.sourceRevision, workflowIdentity)
@@ -754,9 +850,46 @@ async function publishAndroid({ integrationVersion, repo, pollSeconds, mobile, s
       requestId = `${mobile.tag}-signed-${randomUUID()}`
       await checkpoint(stateFile, state, 'github-signed-android', { requestId, dispatchAttemptedAt: null })
     }
-    const title = `Android ${mobile.tag} · ${requestId}`
     const workflowRef = mobile.tag
+    let title = `Android ${mobile.tag} · ${requestId}`
     let run = await discoverWorkflowRun(repo, title, state.sourceRevision, workflowRef, pollSeconds, 5_000)
+    if (run?.status === 'completed' && run.conclusion !== 'success') {
+      const failedRequests = [...(Array.isArray(state.phases['github-signed-android']?.failedRequests) ? state.phases['github-signed-android'].failedRequests : [])]
+      if (failedRequests.length >= 5) throw new Error('Android signed workflow recovery exceeded its bounded request limit.')
+      await verifyProtectedState(repo, state.phases['local-mobile-gates'].protectedState)
+      await assertStandaloneCnbAssetsAbsent(repo, mobile)
+      const existingRelease = readGithubRelease(repo, mobile.tag)
+      if (!existingRelease) {
+        assertRecoverableAndroidPreflightFailure(repo, Number(run.databaseId), title, state.sourceRevision, workflowRef)
+        const taggedWorkflow = gitCaptureRaw(['show', `${state.sourceRevision}:.github/workflows/android-mobile-release.yml`])
+        if (!taggedWorkflow.includes('existing="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null || true)"')) {
+          throw new Error('Android preflight recovery does not match the reviewed Tag workflow defect.')
+        }
+        await checkpoint(stateFile, state, 'github-signed-android', {
+          releaseRecoveryAuthorization: {
+            sourceRevision: state.sourceRevision,
+            failedRunId: Number(run.databaseId),
+            authorizedAt: new Date().toISOString()
+          }
+        })
+        createEmptyStandaloneRelease(repo, state.sourceRevision, mobile)
+      } else {
+        const authorization = state.phases['github-signed-android']?.releaseRecoveryAuthorization
+        if (authorization?.sourceRevision !== state.sourceRevision) throw new Error('Existing Android recovery release lacks exact publisher authorization.')
+        assertStandaloneReleaseShell(repo, state.sourceRevision, mobile)
+      }
+      failedRequests.push({ requestId, runId: Number(run.databaseId), url: run.url, conclusion: run.conclusion, archivedAt: new Date().toISOString() })
+      requestId = `${mobile.tag}-signed-${randomUUID()}`
+      await checkpoint(stateFile, state, 'github-signed-android', {
+        requestId,
+        dispatchAttemptedAt: null,
+        runId: null,
+        url: null,
+        failedRequests
+      })
+      title = `Android ${mobile.tag} · ${requestId}`
+      run = null
+    }
     if (!run && !state.phases['github-signed-android']?.dispatchAttemptedAt) {
       await checkpoint(stateFile, state, 'github-signed-android', { dispatchAttemptedAt: new Date().toISOString() })
       ghRun(['workflow', 'run', 'android-mobile-release.yml', '--repo', repo, '--ref', workflowRef, '-f', `tag=${mobile.tag}`, '-f', `request_id=${requestId}`])
