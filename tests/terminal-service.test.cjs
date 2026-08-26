@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtempSync, rmSync } = require('node:fs')
+const { mkdtempSync, realpathSync, rmSync } = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
@@ -72,7 +72,7 @@ test('TerminalManager owns a bounded PTY lifecycle without exposing launch argv 
     assert.equal('shell' in started, false)
     assert.equal(started.cols, 400)
     assert.equal(started.rows, 5)
-    assert.equal(calls.spawn.options.cwd, cwd)
+    assert.equal(calls.spawn.options.cwd, realpathSync(cwd))
     assert.deepEqual(calls.spawn.args, ['/Q'])
 
     dataHandler('ready>')
