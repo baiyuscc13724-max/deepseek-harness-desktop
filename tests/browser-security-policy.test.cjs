@@ -4,7 +4,7 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
-const { BrowserSecurityPolicy } = require('../electron/bridge/browser-security-policy.cjs')
+const { BrowserSecurityPolicy, isModelBootstrapSourceUrl } = require('../electron/bridge/browser-security-policy.cjs')
 const { BROWSER_PARTITION, OFFICIAL_HARNESS_PARTITION } = require('../electron/bridge/browser-session-policy.cjs')
 const { SCHEMA_VERSION } = require('../electron/bridge/browser-site-authz.cjs')
 
@@ -109,6 +109,18 @@ test('模型可从后台空白标签打开预览，但读取与跨 origin 仍保
   const root = await mkdtemp(path.join(os.tmpdir(), 'hd-browser-bootstrap-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const policy = new BrowserSecurityPolicy({ authzRootDir: root })
+
+  assert.equal(isModelBootstrapSourceUrl(''), true)
+  assert.equal(isModelBootstrapSourceUrl('about:blank'), true)
+  assert.equal(isModelBootstrapSourceUrl('about:blank#fragment'), false)
+  assert.equal(isModelBootstrapSourceUrl('chrome-error://chromewebdata/'), false)
+  assert.equal(isModelBootstrapSourceUrl(undefined), false)
+
+  const freshPreview = policy.modelBootstrapNavigate('https://fresh.example.com/start', {
+    tabId: 'tab-new-web-contents', currentUrl: '', visible: false, available: true
+  })
+  assert.equal(freshPreview.origin, 'https://fresh.example.com')
+  assert.equal(freshPreview.previewOnly, true)
 
   const preview = policy.modelBootstrapNavigate('https://example.com/start?secret-query#fragment', {
     tabId: 'tab-blank', currentUrl: 'about:blank', visible: false, available: true

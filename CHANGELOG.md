@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 修复内置浏览器首次由模型调用 `navigate` 或 `tabOpen` 时，新建 `WebContents` 尚未生成 `about:blank` URL 而被误判为“没有可操作的 HTTP(S) 来源”的问题；只把严格的空 URL 与 `about:blank` 视为安全启动页，其他内部或错误页面仍不可借此建立来源。
+
 ## 1.0.49
 
 - 修复 Android 原生 P2P 协商期间外网工作台可能等待最长约 20 秒才获得可用通道的问题：已有端到端加密 WSS/SOCKS 后备立即开放，WebRTC 协商继续在后台进行，切换到 v2/直连前仍关闭旧流并保持既有降级防护。

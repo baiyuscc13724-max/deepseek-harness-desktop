@@ -59,7 +59,7 @@ const { TerminalManager } = require('./bridge/terminal-service.cjs')
 const { loadRightWorkspaceResource, previewLocalDocument } = require('./bridge/right-workspace-service.cjs')
 const { MemoryService, createMemoryPack } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
-const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
+const { BrowserSecurityPolicy, isModelBootstrapSourceUrl } = require('./bridge/browser-security-policy.cjs')
 const { DECISIONS: BROWSER_LINK_DECISIONS, routeBrowserLink } = require('./bridge/browser-link-router.cjs')
 const { MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, isSensitiveText } = require('./bridge/browser-action-gate.cjs')
 const { hostPublicInfo } = require('./bridge/browser-url-policy.cjs')
@@ -1014,7 +1014,7 @@ function requireBrowserForModel(signal = null, { allowBlankNavigation = false } 
   const url = view.webContents.getURL()
   updateBrowserActiveTab(url)
   const origin = browserState.origin || null
-  if (!origin && !(allowBlankNavigation && url === 'about:blank')) throw new Error('当前浏览器页面没有可操作的 HTTP(S) 来源。')
+  if (!origin && !(allowBlankNavigation && isModelBootstrapSourceUrl(url))) throw new Error('当前浏览器页面没有可操作的 HTTP(S) 来源。')
   return { view, url, origin, tabId: activeBrowserTabId || 'side-browser-main', ticket }
 }
 
