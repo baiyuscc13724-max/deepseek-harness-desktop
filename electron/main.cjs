@@ -2271,7 +2271,7 @@ async function verifyExternalComputerUseSurface(target) {
   if (currentHash !== target.lastCaptureHash) {
     target.lastCaptureHash = null
     computerUseConfirmations.clear()
-    throw Object.assign(new Error('目标窗口在确认期间已变化，请重新截图并确认。'), { code: 'target-surface-changed' })
+    throw Object.assign(new Error('目标窗口在上次截图后已变化。若任务有结构化工具或 API，请改用结构化通道；仅在确需视觉操作时重新截图。'), { code: 'target-surface-changed' })
   }
 }
 

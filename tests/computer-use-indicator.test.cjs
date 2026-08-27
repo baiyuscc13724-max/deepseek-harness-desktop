@@ -12,17 +12,21 @@ class FakeContents extends EventEmitter {
     this.destroyed = false
     this.inserted = []
     this.removed = []
+    this.events = []
   }
 
   isDestroyed() { return this.destroyed }
 
   async insertCSS(css) {
     this.inserted.push(css)
-    return `css-${this.inserted.length}`
+    const key = `css-${this.inserted.length}`
+    this.events.push(`insert:${key}`)
+    return key
   }
 
   async removeInsertedCSS(key) {
     this.removed.push(key)
+    this.events.push(`remove:${key}`)
   }
 }
 
@@ -52,7 +56,7 @@ test('Computer Use indicator owns the blue veil, control cursor and global Esc l
   assert.match(COMPUTER_USE_INDICATOR_CSS, /data:image\/svg\+xml/u)
   assert.match(COMPUTER_USE_INDICATOR_CSS, /Esc 退出/u)
   assert.match(COMPUTER_USE_INDICATOR_CSS, /pointer-events:\s*none/u)
-  assert.match(COMPUTER_USE_INDICATOR_CSS, /prefers-reduced-motion:\s*reduce/u)
+  assert.doesNotMatch(COMPUTER_USE_INDICATOR_CSS, /animation:|backdrop-filter/u)
   assert.equal(shouldShowComputerUseIndicator({ active: true }, { kind: 'window' }), true)
   assert.equal(shouldShowComputerUseIndicator({ active: true }, { kind: 'harness' }), false)
   assert.equal(shouldShowComputerUseIndicator({ active: true }, { kind: 'browser' }), false)
@@ -64,6 +68,11 @@ test('Computer Use indicator owns the blue veil, control cursor and global Esc l
   assert.deepEqual(active, { active: true, accelerator: 'Esc', shortcutRegistered: true })
   assert.equal(contents.inserted.length, 1)
   assert.equal(registered.has('Esc'), true)
+
+  const unchanged = await controller.setActive(true)
+  assert.deepEqual(unchanged, active)
+  assert.equal(contents.inserted.length, 1)
+  assert.deepEqual(contents.removed, [])
 
   await registered.get('Esc')()
   assert.equal(stopped, 1)
@@ -77,6 +86,7 @@ test('Computer Use indicator owns the blue veil, control cursor and global Esc l
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(contents.inserted.length, 2)
   assert.deepEqual(contents.removed, ['css-1'])
+  assert.deepEqual(contents.events.slice(-2), ['insert:css-2', 'remove:css-1'])
 
   const inactive = await controller.setActive(false)
   assert.deepEqual(inactive, { active: false, accelerator: 'Esc', shortcutRegistered: false })
