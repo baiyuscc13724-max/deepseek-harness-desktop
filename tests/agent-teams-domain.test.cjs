@@ -60,7 +60,7 @@ test('v1 store migration performs crash reconciliation in the same initializatio
     const store = new mod.AgentTeamsStore(file)
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
-    assert.equal(migrated.version, 3)
+    assert.equal(migrated.version, 4)
     assert.deepEqual(migrated.settings, legacy.settings)
     const migratedTeam = migrated.teams[0]
     assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-lead').state, 'ready')
@@ -81,7 +81,7 @@ test('v2 stores migrate additively to the bootstrap-capable schema', async () =>
     await writeFile(file, `${JSON.stringify({ version: 2, settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 }, teams: [] })}\n`, 'utf8')
     const store = new mod.AgentTeamsStore(file)
     await store.init()
-    assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 3)
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 4)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -810,6 +810,66 @@ test('subagent lifecycle bursts reconcile in one bounded store mutation', async 
   assert.equal(warnings.length, 0)
   assert.ok(members.every(member => member.state === 'ready' && member.runId === undefined))
   reconciler.close()
+})
+
+test('completed member results persist on tasks and project to the user without raw non-text blocks', async () => {
+  const fx = await fixture()
+  const lead = { id: 'result-lead' }
+  const ctx = { logger: { warn() {} }, agents: { get: () => undefined } }
+  let reconciler
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Make member results visible' })
+    await fx.store.mutate(document => {
+      document.teams.find(candidate => candidate.id === team.id).members.push(worker('result-worker', 'Results'))
+    })
+    const task = (await fx.mod.createTask(fx.store, lead, {
+      teamId: team.id,
+      title: 'Deliver a visible result',
+      assigneeSessionId: 'result-worker'
+    })).task
+    reconciler = fx.mod.createSubagentEventReconciler(ctx, fx.store, Promise.resolve(), 60_000)
+    const started = reconciler.enqueue('start', { id: 'result-worker', runId: 'result-run' })
+    await reconciler.flush()
+    await started
+    await fx.mod.updateTask(fx.store, { id: 'result-worker' }, { teamId: team.id, taskId: task.id, action: 'claim' })
+    await fx.mod.updateTask(fx.store, { id: 'result-worker' }, { teamId: team.id, taskId: task.id, action: 'complete' })
+    const ended = reconciler.enqueue('end', {
+      id: 'result-worker',
+      runId: 'result-run',
+      stopReason: 'completed',
+      lastAssistantMessage: [
+        { type: 'text', text: 'Implemented the fix.\u0000\n\nValidation passed.' },
+        { type: 'image', data: 'host-private-image-payload' }
+      ]
+    })
+    await reconciler.flush()
+    await ended
+
+    const durable = fx.store.snapshot()
+    const persistedTask = durable.teams.find(candidate => candidate.id === team.id).tasks.find(candidate => candidate.id === task.id)
+    assert.deepEqual(persistedTask.result, {
+      text: 'Implemented the fix.\n\nValidation passed.',
+      reportedAt: persistedTask.result.reportedAt,
+      truncated: false
+    })
+    assert.equal(Number.isFinite(Date.parse(persistedTask.result.reportedAt)), true)
+    assert.equal(JSON.stringify(persistedTask.result).includes('host-private-image-payload'), false)
+
+    const projectedTask = fx.mod.teamSnapshot(durable, lead.id, team.id).team.tasks.find(candidate => candidate.id === task.id)
+    assert.equal(projectedTask.result.text, persistedTask.result.text)
+    const detail = fx.mod.projectTaskDetailForUi(ctx, durable, lead.id, team.id, task.id)
+    assert.equal(detail.result.text, persistedTask.result.text)
+    assert.equal('lastAssistantMessage' in detail, false)
+
+    await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: task.id, action: 'reopen' })
+    const reopened = fx.store.snapshot().teams.find(candidate => candidate.id === team.id).tasks.find(candidate => candidate.id === task.id)
+    assert.equal(reopened.state, 'pending')
+    assert.equal(reopened.result, undefined)
+  } finally {
+    reconciler?.close()
+    await rm(fx.root, { recursive: true, force: true })
+  }
 })
 
 test('user-aborted root turns synchronously clear queued wakeups and interrupt only owned team members', async () => {

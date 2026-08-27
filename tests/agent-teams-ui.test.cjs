@@ -483,6 +483,22 @@ test('task-board cards open a focused live detail while canvas nodes retain thei
   assert.equal(memberModelText({}, identity), '')
 })
 
+test('completed task cards and detail surfaces show the member result to the user', async () => {
+  const source = await clientSource()
+  for (const marker of ['function visibleTaskResult(task)', 'function taskResultPreviewText(result, limit)', 'dat-task-result-preview', 'dat-board-card-result', 'dat-task-result-text', 't("taskResult")', 't("taskResultPreview")', 'taskResult: "成员成果"', 'taskResultPreview: "已提交成果"', 'taskResult: "Member result"']) {
+    assert.ok(source.includes(marker), `missing member result marker: ${marker}`)
+  }
+  assert.match(source, /visibleTaskResult\(runtimeDetail\) \|\| visibleTaskResult\(task\)/u)
+  assert.match(source, /taskResult \? h\("section", \{ className: "dat-task-focus-surface dat-task-result"/u)
+  assert.match(source, /visibleTaskResult\(task\) \? h\("div", \{ className: "dat-board-card-result"/u)
+  const helperStart = source.indexOf('    function visibleTaskResult(task)')
+  const helperEnd = source.indexOf('    function TaskCard(props)', helperStart)
+  const helpers = Function(`${source.slice(helperStart, helperEnd)}\nreturn { visibleTaskResult, taskResultPreviewText }`)()
+  assert.equal(helpers.visibleTaskResult({ result: { text: 'Visible result', truncated: false } }).text, 'Visible result')
+  assert.equal(helpers.visibleTaskResult({ result: { text: '   ' } }), null)
+  assert.equal(helpers.taskResultPreviewText({ text: '123456' }, 4), '1234…')
+})
+
 test('blocked task detail tolerates real dependency data and stale selections without blanking the workspace', async () => {
   const source = await clientSource()
   const helperStart = source.indexOf('    function arrayText(value)')

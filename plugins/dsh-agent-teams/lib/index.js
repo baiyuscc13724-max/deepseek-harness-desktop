@@ -18,8 +18,8 @@ import { ProjectTaskWebRuntime, projectTaskWebError } from "./project-task-web.j
 /** Host-only agent-team coordinator. A future client bundle is advertised by package metadata. */
 const name = "agent-teams";
 const inject = ["agents", "subagents", "tools", "systemPrompt", "webServer"];
-const STORE_VERSION = 3;
-const LEGACY_STORE_VERSIONS = new Set([1, 2]);
+const STORE_VERSION = 4;
+const LEGACY_STORE_VERSIONS = new Set([1, 2, 3]);
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_TEAM_MESSAGES = 500;
 const MAX_TEAM_TASKS = 1_000;
@@ -29,6 +29,7 @@ const UI_MAX_TASK_WORKFLOW_EVENTS = 80;
 const UI_MAX_TASK_RUNTIME_SOURCE_EVENTS = 2_000;
 const UI_MAX_TASK_PLAN_ITEMS = 40;
 const UI_TASK_DETAIL_DESCRIPTION_CHARS = 32_768;
+const UI_TASK_RESULT_CHARS = 12_000;
 const SSE_COALESCE_MS = 50;
 const TEAM_SSE_KEEPALIVE_MS = 15_000;
 const PROJECT_TASK_SSE_KEEPALIVE_MS = 15_000;
@@ -73,7 +74,8 @@ const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revi
 const BOOTSTRAP_KEYS = new Set(["requestId", "inputHash", "phase", "taskRefs", "memberRefs", "createdAt", "updatedAt"]);
 const BOOTSTRAP_TASK_REF_KEYS = new Set(["key", "taskId"]);
 const BOOTSTRAP_MEMBER_REF_KEYS = new Set(["key", "name", "status", "memberId", "sessionId", "errorCode", "errorStage"]);
-const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason"]);
+const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason", "result"]);
+const TASK_RESULT_KEYS = new Set(["text", "reportedAt", "truncated"]);
 const CROSS_DEPENDENCY_KEYS = new Set(["teamId", "taskId"]);
 const EXPANSION_WORKSTREAM_KEYS = new Set(["title", "deliverable", "acceptance_criteria", "files", "resources"]);
 const Config = z.object({
@@ -374,6 +376,24 @@ function validateMember(member) {
   return member;
 }
 
+function taskResultFromAssistantMessage(content, reportedAt = now()) {
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((block) => isRecord(block) && block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n\n")
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, "")
+    .trim();
+  if (text.length === 0) return undefined;
+  const truncated = text.length > UI_TASK_RESULT_CHARS;
+  return {
+    text: truncated ? `${text.slice(0, UI_TASK_RESULT_CHARS - 2).trimEnd()}\n…` : text,
+    reportedAt,
+    truncated,
+  };
+}
+
 /** Validate one persisted task and its dependency shape. */
 function validateTask(task) {
   if (!isRecord(task)) throw new TypeError("task must be an object");
@@ -407,6 +427,14 @@ function validateTask(task) {
   optionalString(task.cancellationReason, "task.cancellationReason", 4_096);
   if (task.releasedAt !== undefined) assertIsoDate(task.releasedAt, "task.releasedAt");
   optionalString(task.releaseReason, "task.releaseReason", 4_096);
+  if (task.result !== undefined) {
+    if (!isRecord(task.result)) throw new TypeError("task.result must be an object");
+    assertAllowedKeys(task.result, TASK_RESULT_KEYS, "task.result");
+    nonEmptyString(task.result.text, "task.result.text", UI_TASK_RESULT_CHARS);
+    assertIsoDate(task.result.reportedAt, "task.result.reportedAt");
+    if (typeof task.result.truncated !== "boolean") throw new TypeError("task.result.truncated must be boolean");
+    if (task.state !== "completed") throw new TypeError("task.result requires a completed task");
+  }
   return task;
 }
 
@@ -602,6 +630,7 @@ function clearTaskTerminalMetadata(task) {
   task.completedAt = undefined;
   task.cancelledAt = undefined;
   task.cancellationReason = undefined;
+  task.result = undefined;
 }
 function clearTaskReleaseMetadata(task) {
   task.releasedAt = undefined;
@@ -1026,6 +1055,7 @@ function projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, select
     plan: runtime.plan,
     workflow: runtime.workflow,
     executionModel: runtime.executionModel,
+    result: task.result ?? null,
   };
 }
 
@@ -2597,6 +2627,7 @@ function resetTaskStoppedAfter(task, stoppedAt) {
   task.state = "pending";
   task.claimedAt = undefined;
   task.completedAt = undefined;
+  task.result = undefined;
   task.updatedAt = stoppedAt;
 }
 async function pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt) {
@@ -3928,6 +3959,24 @@ function registerProjectAutomationApi(ctx, runtime, businessRuntime) {
   return bridge;
 }
 
+function attachCompletedTaskResults(team, member, info, reportedAt) {
+  if (member.runId === undefined || info?.runId === undefined || member.runId !== String(info.runId)) return 0;
+  const result = taskResultFromAssistantMessage(info.lastAssistantMessage, reportedAt);
+  if (result === undefined) return 0;
+  const runStartedAt = Date.parse(member.updatedAt ?? "");
+  if (!Number.isFinite(runStartedAt)) return 0;
+  let attached = 0;
+  for (const task of team.tasks) {
+    if (task.assigneeSessionId !== member.sessionId || task.state !== "completed" || task.result !== undefined) continue;
+    const completedAt = Date.parse(task.completedAt ?? "");
+    if (!Number.isFinite(completedAt) || completedAt < runStartedAt) continue;
+    task.result = clone(result);
+    task.updatedAt = reportedAt;
+    attached += 1;
+  }
+  return attached;
+}
+
 function createSubagentEventReconciler(ctx, store, ready, delayMs = SUBAGENT_RECONCILE_MS) {
   let pending = [];
   let timer;
@@ -3969,6 +4018,7 @@ function createSubagentEventReconciler(ctx, store, ready, delayMs = SUBAGENT_REC
             team.updatedAt = updatedAt;
             continue;
           }
+          attachCompletedTaskResults(team, member, info, updatedAt);
           if (member.state === "shutting_down") {
             if (member.runId !== undefined && info.runId !== undefined && member.runId === String(info.runId)) member.runId = undefined;
             member.updatedAt = updatedAt;
