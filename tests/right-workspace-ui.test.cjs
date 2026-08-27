@@ -5,7 +5,7 @@ const path = require('node:path')
 
 const root = path.resolve(__dirname, '..')
 const source = file => readFile(path.join(root, file), 'utf8')
-const { createCore, isShortcutPressed, browserStateModeAction } = require('../renderer/right-workspace.js')
+const { createCore, isExplicitLocalTarget, isShortcutPressed, loadDocumentPreview, browserStateModeAction } = require('../renderer/right-workspace.js')
 
 test('right workspace core provides bounded width and deterministic pane history', () => {
   const core = createCore({ width: 460 })
@@ -23,6 +23,38 @@ test('right workspace core provides bounded width and deterministic pane history
   assert.equal(restored.restore(saved), true)
   assert.equal(restored.activeId, 'files')
   assert.equal(isShortcutPressed({ key: ']', ctrlKey: true, shiftKey: true }), true)
+})
+
+test('only explicit absolute targets may fall back to local read-only preview', () => {
+  for (const target of ['D:\\outside\\chapter.txt', 'D:/outside/image.png', 'file:///D:/outside/report.pdf', 'file://localhost/D:/outside/report.pdf', '/tmp/outside/video.mp4']) {
+    assert.equal(isExplicitLocalTarget(target), true, `${target} must be eligible for explicit local preview`)
+  }
+  for (const target of ['chapter.txt', 'drafts/chapter.txt', '../outside.txt', 'D:relative.txt', '\\\\server\\share\\audio.mp3', '//server/share/file.txt', 'file://server/share/file.txt', 'https://example.com/file.txt']) {
+    assert.equal(isExplicitLocalTarget(target), false, `${target} must remain workspace-bound`)
+  }
+})
+
+test('document preview falls back locally only after an absolute target escapes the workspace', async () => {
+  const escaped = Object.assign(new Error('文件不存在或超出工作区。'), { code: 'FILES_PATH_ESCAPE' })
+  const localFile = { path: 'D:\\outside\\chapter.txt', previewKind: 'text', previewable: true, text: 'outside' }
+  let localCalls = 0
+  const absolute = await loadDocumentPreview(localFile.path, {
+    workspacePreview: async () => { throw escaped },
+    localPreview: async target => { localCalls += 1; assert.equal(target, localFile.path); return localFile }
+  })
+  assert.deepEqual(absolute, { file: localFile })
+  assert.equal(localCalls, 1)
+
+  const workspace = { file: { path: 'drafts/chapter.txt', previewable: true, text: 'inside' } }
+  assert.equal(await loadDocumentPreview('drafts/chapter.txt', {
+    workspacePreview: async () => workspace,
+    localPreview: async () => { throw new Error('must not read locally') }
+  }), workspace)
+  await assert.rejects(loadDocumentPreview('../outside.txt', {
+    workspacePreview: async () => { throw escaped },
+    localPreview: async () => { localCalls += 1 }
+  }), error => error === escaped)
+  assert.equal(localCalls, 1)
 })
 
 test('background browser state cannot replace an explicitly selected workspace mode', () => {
@@ -74,8 +106,9 @@ test('Desktop shell exposes one unified right workspace with browser, files and 
   assert.match(integration, /openMode\(item\.id, \{ push: true \}\)/u)
   assert.match(integration, /quickButton\?\.setAttribute\('aria-expanded'/u)
   assert.match(integration, /getRightWorkspaceResource/u)
-  assert.match(integration, /resource\('filePreview', \{ path: target \}\)/u)
-  assert.doesNotMatch(integration, /api\.previewRightWorkspaceLocal/u)
+  assert.match(integration, /factory\.loadDocumentPreview\(target/u)
+  assert.match(integration, /workspacePreview: path => resource\('filePreview', \{ path \}\)/u)
+  assert.match(integration, /localPreview: path => api\.previewRightWorkspaceLocal\(path\)/u)
   assert.match(integration, /runtimeView\.addEventListener\('ipc-message'/u)
   assert.match(integration, /runtimeView\.send\('right-workspace:command'/u)
   assert.match(integration, /schedulesSnapshot\.history/u)
@@ -120,8 +153,9 @@ test('Desktop shell exposes one unified right workspace with browser, files and 
   assert.match(links, /decorateNode\(record\.target\)/u)
   assert.match(links, /characterData: true/u)
   assert.doesNotMatch(links, /code\.querySelector\('a,button'\)/u)
+  assert.match(links, /相对路径只从当前工作区读取/u)
+  assert.match(links, /明确绝对路径可只读预览本机文件/u)
   assert.match(links, /HTML 和程序源码不会执行/u)
-  assert.match(links, /单击在右侧预览/u)
 })
 
 test('guest bridge publishes bounded session/browser intents and accepts bounded draft commands', async () => {
