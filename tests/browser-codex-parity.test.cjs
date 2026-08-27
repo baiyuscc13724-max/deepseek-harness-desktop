@@ -41,9 +41,9 @@ test('browser screenshots become model-visible image attachments instead of JSON
   assert.match(plugin, /attachment:/)
 })
 
-test('browser host provides background CDP/DOM control with visual fallback, tabs, diagnostics and explicit localhost grants', async () => {
+test('browser host provides background CDP/DOM control with visual fallback, tabs, diagnostics and bounded private origins', async () => {
   const main = await source('electron/main.cjs')
-  for (const contract of ['new BrowserDiagnostics()', 'new BrowserHistoryStore(', 'capturePage()', 'extractBrowserData', 'sensitive-screenshot-blocked', 'sendInputEvent', 'browserTabs', 'activeBrowserTabId', 'recordConsole', 'recordNetwork', 'allowPrivateNetwork: true', 'interactivePicker: true', 'uploadBrowserFileInteractively', 'browserDownloadDestination', 'downloadBrowserResource', 'consumeTrustedDownloadIntent', 'activeBrowserTransfers', 'withBrowserTransferLock', 'AbortController', 'Page.handleJavaScriptDialog']) {
+  for (const contract of ['new BrowserDiagnostics()', 'new BrowserHistoryStore(', 'capturePage()', 'extractBrowserData', 'sensitive-screenshot-blocked', 'sendInputEvent', 'browserTabs', 'activeBrowserTabId', 'recordConsole', 'recordNetwork', 'browserModelBootstrapTrustedPrivateOrigins', 'interactivePicker: true', 'uploadBrowserFileInteractively', 'browserDownloadDestination', 'downloadBrowserResource', 'consumeTrustedDownloadIntent', 'activeBrowserTransfers', 'withBrowserTransferLock', 'AbortController', 'Page.handleJavaScriptDialog']) {
     assert.ok(main.includes(contract), `browser host missing ${contract}`)
   }
   assert.match(main, /key === 'Enter' \|\| key === 'Space'[^\n]*\? 'submit'/)

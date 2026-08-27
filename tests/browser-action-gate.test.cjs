@@ -144,28 +144,31 @@ test('read 动作：敏感字段与含敏感值的读取结果拒绝', () => {
   assert.equal(ok.verdict, 'allow')
 })
 
-test('click 动作：跨 origin 跳转目标必须公网且已授权', () => {
+test('click 动作：公网跨 origin 无需逐域授权，非法协议和私网仍被拒绝', () => {
   const { gate, grants } = gateWith({ 'https://example.com': ['click'] }, { origin: 'https://example.com' })
-  const common = { action: 'click', tabId: 'tab-1', authorizations: grants }
+  const common = { action: 'click', tabId: 'tab-1', authorizations: { ...grants, allowPublicOrigins: true } }
 
   const same = gate.gate({ ...common, payload: { navigatesTo: 'https://example.com/other' } })
-  assert.equal(same.verdict, 'allow') // 同 origin ✓
+  assert.equal(same.verdict, 'allow')
+  const cross = gate.gate({ ...common, payload: { navigatesTo: 'https://other.example.net/guide' } })
+  assert.equal(cross.verdict, 'allow')
+  assert.throws(
+    () => gate.gate({ ...common, authorizations: grants, payload: { navigatesTo: 'https://other.example.net/guide' } }),
+    error => error.code === 'navigate-denied'
+  )
 
-  assert.throws(() => gate.gate({ ...common, payload: { navigatesTo: 'https://evil.com/x' } }), error => error.code === 'navigate-denied') // 未授权
-  assert.throws(() => gate.gate({ ...common, payload: { navigatesTo: 'file:///etc/passwd' } }), error => error.code === 'navigate-denied') // 非法协议
-  assert.throws(() => gate.gate({ ...common, payload: { navigatesTo: 'http://192.168.1.1/admin' } }), error => error.code === 'navigate-denied') // 内网
-
-  const g2 = gateWith({ 'https://example.com': ['click'], 'https://docs.example.com': ['read'] }, { origin: 'https://example.com' })
-  const cross = g2.gate.gate({ ...common, authorizations: g2.grants, payload: { navigatesTo: 'https://docs.example.com/guide' } })
-  assert.equal(cross.verdict, 'allow') // 已授权公网目标 ✓
+  assert.throws(() => gate.gate({ ...common, payload: { navigatesTo: 'file:///etc/passwd' } }), error => error.code === 'navigate-denied')
+  assert.throws(() => gate.gate({ ...common, payload: { navigatesTo: 'http://192.168.1.1/admin' } }), error => error.code === 'navigate-denied')
 })
 
-test('submit 表单目标与 click 一样必须经过跨 origin 导航授权', () => {
+test('submit 表单可跨公网 origin，但仍需逐次确认且不能进入未授权私网', () => {
   const { gate, grants } = gateWith({ 'https://example.com': ['submit'] }, { origin: 'https://example.com' })
-  const common = { action: 'submit', tabId: 'tab-1', authorizations: grants }
+  const common = { action: 'submit', tabId: 'tab-1', authorizations: { ...grants, allowPublicOrigins: true } }
 
+  const crossOrigin = gate.gate({ ...common, payload: { navigatesTo: 'https://other.example.net/collect' } })
+  assert.equal(crossOrigin.verdict, 'confirm-required')
   assert.throws(
-    () => gate.gate({ ...common, payload: { navigatesTo: 'https://evil.example/collect' } }),
+    () => gate.gate({ ...common, payload: { navigatesTo: 'http://192.168.1.1/collect' } }),
     error => error.code === 'navigate-denied'
   )
   const request = gate.gate({ ...common, payload: { navigatesTo: 'https://example.com/feedback' } })

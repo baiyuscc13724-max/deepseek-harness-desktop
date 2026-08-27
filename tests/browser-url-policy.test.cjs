@@ -108,11 +108,16 @@ test('模型导航档：公网 + origin 已授权双重要求，比用户档更�
   assert.equal(ok.normalized, 'https://example.com/page')
   assert.equal(ok.origin, 'https://example.com')
 
-  // 公网但未授权 → 拒绝 origin-not-authorized
+  // 通用策略默认仍可要求 origin；Browser Control 显式免除公网逐域授权。
   assert.throws(
     () => checkModelNavigation('https://other-site.com', { authorizedOrigins: authorized }),
     error => error.code === 'origin-not-authorized'
   )
+  const publicWithoutSiteGrant = checkModelNavigation('https://other-site.com/path', {
+    authorizedOrigins: authorized,
+    allowPublicOrigins: true
+  })
+  assert.equal(publicWithoutSiteGrant.origin, 'https://other-site.com')
   // 已授权但内网 → 拒绝 non-public-network
   assert.throws(
     () => checkModelNavigation('https://127.0.0.1/login', { authorizedOrigins: authorized }),

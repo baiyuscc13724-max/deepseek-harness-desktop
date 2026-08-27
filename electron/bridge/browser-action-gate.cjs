@@ -345,9 +345,13 @@ class ActionGate {
     const grantedOrigins = authorizations && typeof authorizations.origins === 'function' ? authorizations.origins() : []
     const grantedPrivateOrigins = authorizations && typeof authorizations.privateOrigins === 'function' ? authorizations.privateOrigins() : []
     try {
-      checkModelNavigation(destination, { authorizedOrigins: grantedOrigins, authorizedPrivateOrigins: grantedPrivateOrigins })
+      checkModelNavigation(destination, {
+        authorizedOrigins: grantedOrigins,
+        authorizedPrivateOrigins: grantedPrivateOrigins,
+        allowPublicOrigins: authorizations?.allowPublicOrigins === true
+      })
     } catch {
-      throw gateError('navigate-denied', '点击跳转目标未获得授权或不在公网。')
+      throw gateError('navigate-denied', '点击跳转目标不合法，或私网站点不在受信任范围内。')
     }
   }
 

@@ -536,8 +536,7 @@
       const action = factory.browserIntentTabAction({ currentUrl: snapshot.url, targetUrl: intent.url })
       if (action === 'navigate-current') await api.navigateBrowser(intent.url)
       else if (action === 'open-new-tab') await api.newBrowserTab(intent.url)
-      await openMode('browser')
-      window.harnessDesktopBrowserSidebar?.setStatus?.('已在右侧浏览器打开明确网址。')
+      window.harnessDesktopBrowserSidebar?.setStatus?.('已在后台浏览器打开明确网址；需要预览时可手动打开右侧工作区。')
     }).catch(error => {
       console.warn('browser auto-open intent failed', error)
       window.harnessDesktopBrowserSidebar?.setStatus?.(error?.message || String(error), { error: true })

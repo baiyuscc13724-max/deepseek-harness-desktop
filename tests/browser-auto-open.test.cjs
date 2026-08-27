@@ -163,7 +163,7 @@ test('shell intent normalization and tab choice are deterministic and do not rep
   assert.equal(browserIntentTabAction({ currentUrl: 'https://logged-in.example/', targetUrl: 'https://example.com/' }), 'open-new-tab')
 })
 
-test('auto-open stays in owned plugin/preload layers and reports update drift instead of patching official bundles', async () => {
+test('explicit URL intents stay background-first while explicit show commands can open the workspace', async () => {
   const [guest, integration, sidebar, client, patcher, main, pkg] = await Promise.all([
     source('electron/guest-preload.cjs'), source('renderer/right-workspace-integration.js'),
     source('renderer/browser-sidebar.js'), source('plugins/dsh-session-experience/lib/client.js'),
@@ -179,6 +179,8 @@ test('auto-open stays in owned plugin/preload layers and reports update drift in
   assert.match(integration, /factory\.browserIntentTabAction/u)
   assert.match(integration, /api\.navigateBrowser\(intent\.url\)/u)
   assert.match(integration, /api\.newBrowserTab\(intent\.url\)/u)
+  assert.match(integration, /已在后台浏览器打开明确网址/u)
+  assert.doesNotMatch(integration, /api\.newBrowserTab\(intent\.url\)[\s\S]{0,120}openMode\('browser'\)/u)
   assert.match(integration, /browser intent bridge unavailable/u)
   assert.match(sidebar, /setStatus: setBrowserStatus/u)
   assert.match(main, /markBrowserUserNavigation\(activeBrowserTabId, 'address-bar'\)/u)

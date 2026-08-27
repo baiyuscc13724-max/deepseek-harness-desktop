@@ -94,8 +94,6 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   stopBrowser: () => ipcRenderer.invoke('browser:stop'),
   clearBrowserSiteData: request => ipcRenderer.invoke('browser:clearSiteData', request || {}),
   clearAllBrowserData: request => ipcRenderer.invoke('browser:clearAllData', request || {}),
-  grantCurrentBrowserOrigin: actions => ipcRenderer.invoke('browser:grantCurrent', actions || []),
-  revokeCurrentBrowserOrigin: () => ipcRenderer.invoke('browser:revokeCurrent'),
   resumeBrowserModelControl: () => ipcRenderer.invoke('browser:resumeModelControl'),
   confirmBrowserModelAction: id => ipcRenderer.invoke('browser:confirmModelAction', id),
   rejectBrowserModelAction: id => ipcRenderer.invoke('browser:rejectModelAction', id),

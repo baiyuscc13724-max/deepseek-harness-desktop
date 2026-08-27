@@ -97,9 +97,9 @@ class BrowserSecurityPolicy {
   }
 
   /**
-   * Computer Use grant 生效时，仅对当前活动 origin 临时放行普通浏览器权限。
-   * 这不会持久化，也不会允许跨 origin 跳转；敏感字段、敏感值与关键动作确认仍由
-   * ActionGate 强制执行。旧的显式站点授权继续兼容。
+   * Computer Use grant 生效时，对当前活动 origin 临时放行普通浏览器权限。
+   * 公网站点之间的导航不再要求额外的按域名授权；敏感字段、敏感值、私网边界与
+   * 关键动作确认仍由 URL 策略和 ActionGate 强制执行。旧授权仅兼容私网允许列表。
    */
   effectiveAuthorizations() {
     if (!this.unifiedControl) return this.authz
@@ -113,6 +113,7 @@ class BrowserSecurityPolicy {
       return [...new Set([...entries, ...(includeActive && activeOrigin ? [activeOrigin] : [])])]
     }
     return {
+      allowPublicOrigins: true,
       authorized(origin, action) {
         const target = normalized(origin)
         return Boolean(target && activeOrigin && target === activeOrigin) || stored.authorized(origin, action)
@@ -187,8 +188,8 @@ class BrowserSecurityPolicy {
   }
 
   /**
-   * 模型访问档导航：公网 + origin 已授权，且必须作用于当前可用活动标签。
-   * 标签可在后台运行；成功后活动标签 origin 随之更新（同一标签发生了导航）。
+   * 模型访问档导航：共享控制生效时，公网 HTTP(S) 可直接跨 origin；否则兼容旧授权。
+   * 私网仍要求精确受信任 origin；标签可在后台运行，成功后活动标签 origin 随之更新。
    */
   modelNavigate(url, { tabId, base } = {}) {
     if (this.isModelStopped) throw policyError('stopped', '浏览器模型控制已停止。')
@@ -202,6 +203,7 @@ class BrowserSecurityPolicy {
       const nav = checkModelNavigation(url, {
         authorizedOrigins: [...authorizations.origins(), ...(preview ? [preview.origin] : [])],
         authorizedPrivateOrigins: [...authorizations.privateOrigins(), ...(preview?.privateNetwork ? [preview.origin] : [])],
+        allowPublicOrigins: this.unifiedControl,
         base
       })
       this.gate.setActiveTab({ id: tab.id, origin: nav.origin, visible: tab.visible, available: true })

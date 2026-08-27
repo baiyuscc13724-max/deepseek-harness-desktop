@@ -226,13 +226,15 @@ function checkUserNavigation(value, { base } = {}) {
 }
 
 /**
- * 模型访问档导航校验：http/https + 公网可达 + origin 已授权，三重叠加。
+ * 模型访问档导航校验：http/https + 网络边界 + 可选的 origin 授权。
+ * Browser Control 对公网导航设置 allowPublicOrigins=true，避免重复的按站点授权；
+ * 本机和内网站点仍必须命中精确的私网允许列表。
  * @param {string} value 候选地址。
- * @param {{ authorizedOrigins?: string[]|Set<string>, base?: string }} options
+ * @param {{ authorizedOrigins?: string[]|Set<string>, authorizedPrivateOrigins?: string[]|Set<string>, allowPublicOrigins?: boolean, base?: string }} options
  * @returns {{ normalized: string, origin: string }} 通过后返回规范化结果。
  * @throws 带 code 的策略错误。
  */
-function checkModelNavigation(value, { authorizedOrigins = [], authorizedPrivateOrigins = [], base } = {}) {
+function checkModelNavigation(value, { authorizedOrigins = [], authorizedPrivateOrigins = [], allowPublicOrigins = false, base } = {}) {
   const nav = classifyNavigation(value, { base })
   if (!nav.allowed) throw policyError(nav.reason, nav.message)
   const accepted = authorizedOrigins instanceof Set ? authorizedOrigins : new Set(authorizedOrigins)
@@ -242,9 +244,9 @@ function checkModelNavigation(value, { authorizedOrigins = [], authorizedPrivate
       ? authorizedPrivateOrigins
       : new Set(authorizedPrivateOrigins)
     if (!privateAccepted.has(nav.origin) || !accepted.has(nav.origin)) {
-      throw policyError('private-network-not-authorized', '模型访问本机或内网站点需要真实用户针对该 origin 明确授权。')
+      throw policyError('private-network-not-authorized', '模型访问本机或内网站点需要精确的受信任 origin。')
     }
-  } else if (!accepted.has(nav.origin)) {
+  } else if (!allowPublicOrigins && !accepted.has(nav.origin)) {
     throw policyError('origin-not-authorized', '模型访问的目标站点未获得授权。')
   }
   return { normalized: nav.normalized, origin: nav.origin, privateNetwork: !hostInfo.public }
