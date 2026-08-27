@@ -30,6 +30,7 @@ const { ensureModelAdmissionPlugin } = require('./bridge/model-admission-plugin-
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
+const { SCREENSHOT_COORDINATE_SPACE, mapComputerUseScreenshotPoint } = require('./bridge/computer-use-coordinate-space.cjs')
 const { ComputerUseAppPolicy } = require('./bridge/computer-use-app-policy.cjs')
 const { ComputerUseDesktopOverlayController, ComputerUseIndicatorController, shouldShowComputerUseIndicator } = require('./bridge/computer-use-indicator.cjs')
 const { WindowsComputerUse } = require('./bridge/windows-computer-use.cjs')
@@ -2235,10 +2236,9 @@ async function captureDesktopComputerUseScreenshot() {
     file,
     width: displayed.width,
     height: displayed.height,
-    sourceWidth: shot.width,
-    sourceHeight: shot.height,
-    originX: shot.x,
-    originY: shot.y,
+    coordinateSpace: SCREENSHOT_COORDINATE_SPACE,
+    inputBounds: { xMin: 0, yMin: 0, xMaxExclusive: displayed.width, yMaxExclusive: displayed.height },
+    inputHint: 'click/scroll 的 x/y 直接使用本截图 width/height 的像素坐标；宿主会自动映射到完整桌面，禁止预先缩放。',
     scope: COMPUTER_USE_DESKTOP_TARGET.label,
     target_id: COMPUTER_USE_DESKTOP_TARGET.id
   }
@@ -2300,18 +2300,17 @@ async function modelComputerUseAction(input = {}) {
     }
     const surface = computerUseSurface()
     if (!surface || !computerUseDesktopSurface) throw Object.assign(new Error('全桌面坐标操作前必须先截取当前桌面。'), { code: 'screenshot-required' })
-    let x = Math.round(Number(parameters.x))
-    let y = Math.round(Number(parameters.y))
+    const point = { x: parameters.x, y: parameters.y }
     if (action === 'scroll') {
-      if (!Number.isFinite(x)) x = Math.floor(surface.width / 2)
-      if (!Number.isFinite(y)) y = Math.floor(surface.height / 2)
+      if (!Number.isFinite(Number(point.x))) point.x = Math.floor(surface.width / 2)
+      if (!Number.isFinite(Number(point.y))) point.y = Math.floor(surface.height / 2)
     }
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= surface.width || y >= surface.height) throw new Error('操作坐标超出当前全桌面截图。')
-    const sourceX = surface.originX + Math.max(0, Math.min(surface.sourceWidth - 1, Math.round(x * surface.sourceWidth / surface.width)))
-    const sourceY = surface.originY + Math.max(0, Math.min(surface.sourceHeight - 1, Math.round(y * surface.sourceHeight / surface.height)))
+    const mapped = mapComputerUseScreenshotPoint(point, surface, { sourceWidth: surface.sourceWidth, sourceHeight: surface.sourceHeight })
+    const sourceX = surface.originX + mapped.sourceX
+    const sourceY = surface.originY + mapped.sourceY
     if (action === 'click') await service.globalClick({ x: sourceX, y: sourceY })
     else await service.globalScroll({ x: sourceX, y: sourceY, deltaY: Math.max(-800, Math.min(800, Number(parameters.delta_y) || 0)) })
-    return { completed: true, action, x, y, sourceX, sourceY, target_id: COMPUTER_USE_DESKTOP_TARGET.id, app: COMPUTER_USE_DESKTOP_TARGET.label }
+    return { completed: true, action, x: mapped.x, y: mapped.y, coordinateSpace: mapped.coordinateSpace, target_id: COMPUTER_USE_DESKTOP_TARGET.id, app: COMPUTER_USE_DESKTOP_TARGET.label }
   } finally {
     await syncComputerUseIndicator()
   }
