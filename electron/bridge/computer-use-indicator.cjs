@@ -14,9 +14,7 @@ const COMPUTER_USE_INDICATOR_CSS = String.raw`
     inset 0 0 42px rgba(62, 166, 255, .22),
     inset 0 0 132px rgba(38, 137, 255, .2),
     0 0 30px rgba(47, 145, 255, .38) !important;
-  backdrop-filter: saturate(1.08) contrast(1.015) !important;
   pointer-events: none !important;
-  animation: dsh-computer-use-glow 1.8s ease-in-out infinite alternate !important;
 }
 
 :root::after {
@@ -48,14 +46,6 @@ const COMPUTER_USE_INDICATOR_CSS = String.raw`
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Ccircle cx='14' cy='14' r='8' fill='none' stroke='%23ffffff' stroke-width='4' opacity='.95'/%3E%3Ccircle cx='14' cy='14' r='8' fill='none' stroke='%230a84ff' stroke-width='2'/%3E%3Cpath d='M14 2v5M14 21v5M2 14h5M21 14h5' stroke='%230a84ff' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='14' cy='14' r='2.5' fill='%230a84ff'/%3E%3C/svg%3E") 14 14, crosshair !important;
 }
 
-@keyframes dsh-computer-use-glow {
-  from { opacity: .86; }
-  to { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  :root::before { animation: none !important; }
-}
 `
 
 const COMPUTER_USE_SURFACE_INDICATOR_CSS = `${COMPUTER_USE_INDICATOR_CSS}\n:root::after { display: none !important; }`
@@ -95,7 +85,7 @@ class ComputerUseIndicatorController {
     if (this.entries.has(contents)) return () => this.untrack(contents)
     const css = mode === 'cursor' ? this.cursorCss : mode === 'surface' ? this.surfaceCss : this.css
     const entry = { contents, css, cssKey: null, generation: 0, onDomReady: null, onDestroyed: null, onBeforeInput: null }
-    entry.onDomReady = () => { this.syncEntry(entry).catch(() => {}) }
+    entry.onDomReady = () => { this.syncEntry(entry, { force: true }).catch(() => {}) }
     entry.onDestroyed = () => { this.untrack(contents, { destroyed: true }).catch(() => {}) }
     entry.onBeforeInput = (event, input = {}) => {
       if (!this.active || input.type !== 'keyDown' || !['Esc', 'Escape'].includes(input.key)) return
@@ -126,13 +116,16 @@ class ComputerUseIndicatorController {
     return true
   }
 
-  async syncEntry(entry) {
+  async syncEntry(entry, { force = false } = {}) {
     if (this.disposed || !this.entries.has(entry.contents) || entry.contents.isDestroyed?.()) return
     const generation = ++entry.generation
     const previousKey = entry.cssKey
-    entry.cssKey = null
-    if (previousKey) await entry.contents.removeInsertedCSS?.(previousKey).catch(() => {})
-    if (generation !== entry.generation || this.disposed || !this.active || entry.contents.isDestroyed?.()) return
+    if (!this.active) {
+      entry.cssKey = null
+      if (previousKey) await entry.contents.removeInsertedCSS?.(previousKey).catch(() => {})
+      return
+    }
+    if (previousKey && !force) return
     let nextKey = null
     try {
       nextKey = await entry.contents.insertCSS(entry.css)
@@ -143,7 +136,9 @@ class ComputerUseIndicatorController {
       if (nextKey) await entry.contents.removeInsertedCSS?.(nextKey).catch(() => {})
       return
     }
-    entry.cssKey = nextKey || null
+    if (!nextKey) return
+    entry.cssKey = nextKey
+    if (previousKey && previousKey !== nextKey) await entry.contents.removeInsertedCSS?.(previousKey).catch(() => {})
   }
 
   requestStop() {
@@ -161,7 +156,12 @@ class ComputerUseIndicatorController {
 
   async setActive(active) {
     if (this.disposed) return { active: false, accelerator: this.accelerator, shortcutRegistered: false }
-    this.active = active === true
+    const next = active === true
+    if (next === this.active) {
+      this.syncShortcut()
+      return { active: this.active, accelerator: this.accelerator, shortcutRegistered: this.shortcutRegistered }
+    }
+    this.active = next
     this.syncShortcut()
     await Promise.allSettled([...this.entries.values()].map(entry => this.syncEntry(entry)))
     return { active: this.active, accelerator: this.accelerator, shortcutRegistered: this.shortcutRegistered }
