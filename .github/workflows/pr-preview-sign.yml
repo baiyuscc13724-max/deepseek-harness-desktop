@@ -1,36 +1,129 @@
-name: Verify and Sign PR Preview Candidate
+name: Verify and Sign PR Preview Batch
 
 on:
   workflow_dispatch:
     inputs:
-      build_run_id:
-        description: Successful Build Same-Repository PR Preview run id
-        required: true
-      pull_request:
-        description: Approved pull request number
-        required: true
-      head_sha:
-        description: Approved exact 40-character PR head SHA
+      build_run_ids:
+        description: Comma, space, or newline separated successful same-repository PR Preview build run ids (1-5)
         required: true
 
-run-name: "Sign immutable candidate for PR #${{ inputs.pull_request }} · ${{ inputs.head_sha }}"
+run-name: "Plan and sign immutable PR preview batch · workflow run #${{ github.run_number }}"
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 concurrency:
   group: pr-preview-sign-channel
   cancel-in-progress: false
 
 jobs:
-  verify-sign-publish:
+  plan-batch:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Prove dispatch originated from the repository default branch
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DISPATCH_REF: ${{ github.ref }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$DISPATCH_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test "$GITHUB_REPOSITORY" = 'baiyuscc13724-max/deepseek-harness-desktop'
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+      - name: Resolve and validate the exact batch before protected approval
+        id: plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_IDS: ${{ inputs.build_run_ids }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ids="$RUNNER_TEMP/build-run-ids.txt"
+          printf '%s' "$BUILD_RUN_IDS" | tr ',[:space:]' '\n' | sed '/^$/d' > "$ids"
+          count="$(wc -l < "$ids" | tr -d ' ')"
+          test "$count" -ge 1 && test "$count" -le 5 || { echo 'Batch must contain 1-5 build run ids.' >&2; exit 1; }
+          test "$(LC_ALL=C sort -u "$ids" | wc -l | tr -d ' ')" = "$count" || { echo 'Duplicate build run ids are not allowed.' >&2; exit 1; }
+          while IFS= read -r run_id; do [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid build run id: $run_id" >&2; exit 1; }; done < "$ids"
+
+          items="$RUNNER_TEMP/batch-items.ndjson"
+          : > "$items"
+          {
+            echo '## PR preview signing batch awaiting protected approval'
+            echo
+            echo '| # | Build run | PR | Exact head |'
+            echo '|---:|---:|---:|---|'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          ordinal=0
+          while IFS= read -r run_id; do
+            ordinal=$((ordinal + 1))
+            run_file="$RUNNER_TEMP/plan-run-$ordinal.json"
+            artifacts_file="$RUNNER_TEMP/plan-artifacts-$ordinal.json"
+            pr_file="$RUNNER_TEMP/plan-pr-$ordinal.json"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$run_file"
+            jq -e --arg repo "$GITHUB_REPOSITORY" --argjson run "$run_id" '
+              .id == $run and .repository.full_name == $repo and .head_repository.full_name == $repo and
+              .event == "pull_request" and .status == "completed" and .conclusion == "success" and
+              ((.path | ltrimstr("/")) == ".github/workflows/pr-preview-build.yml") and
+              (.head_sha | test("^[a-f0-9]{40}$")) and (.pull_requests | length == 1)
+            ' "$run_file" >/dev/null
+            pr="$(jq -r '.pull_requests[0].number' "$run_file")"
+            head_sha="$(jq -r '.head_sha' "$run_file")"
+            [[ "$pr" =~ ^[1-9][0-9]*$ ]]
+            [[ "$head_sha" =~ ^[a-f0-9]{40}$ ]]
+            artifact_name="pr-preview-unsigned-$pr-$head_sha"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > "$artifacts_file"
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" > "$pr_file"
+            jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$head_sha" --argjson pr "$pr" '
+              .number == $pr and .state == "open" and .draft == false and .merged_at == null and
+              .head.sha == $sha and .head.repo.full_name == $repo and .head.repo.fork == false and
+              .base.ref == "main" and .base.repo.full_name == $repo
+            ' "$pr_file" >/dev/null
+            jq -e --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length == 1' \
+              "$artifacts_file" >/dev/null
+            jq -cn \
+              --argjson ordinal "$ordinal" \
+              --argjson buildRunId "$run_id" \
+              --argjson pullRequest "$pr" \
+              --arg headSha "$head_sha" \
+              --arg artifactName "$artifact_name" \
+              '{ordinal:$ordinal,buildRunId:$buildRunId,pullRequest:$pullRequest,headSha:$headSha,artifactName:$artifactName}' >> "$items"
+            printf '| %s | %s | #%s | `%s` |\n' "$ordinal" "$run_id" "$pr" "$head_sha" >> "$GITHUB_STEP_SUMMARY"
+          done < "$ids"
+
+          jq -s \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg trustedWorkflowSha "$TRUSTED_WORKFLOW_SHA" \
+            '{schemaVersion:1,kind:"harness-pr-preview-signing-batch-plan",repository:$repository,trustedWorkflowSha:$trustedWorkflowSha,candidates:.}' \
+            "$items" > "$RUNNER_TEMP/pr-preview-signing-batch-plan.json"
+          jq -e --argjson count "$count" '.candidates | length == $count' "$RUNNER_TEMP/pr-preview-signing-batch-plan.json" >/dev/null
+      - name: Preserve the exact reviewable batch plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-preview-signing-batch-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pr-preview-signing-batch-plan.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  verify-sign-publish:
+    needs: plan-batch
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: write
     environment:
       name: pr-preview-signing
     steps:
-      - name: Prove dispatch originated from the repository default branch
+      - name: Prove protected signing still runs from the trusted default branch
         shell: bash
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -54,56 +147,43 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TRUSTED_WORKFLOW_SHA"
+      - name: Download the exact pre-approval batch plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pr-preview-signing-batch-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signing-batch-plan
+      - name: Revalidate the immutable batch plan
+        shell: bash
+        env:
+          TRUSTED_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/signing-batch-plan/pr-preview-signing-batch-plan.json"
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$TRUSTED_WORKFLOW_SHA" '
+            . as $root |
+            .schemaVersion == 1 and .kind == "harness-pr-preview-signing-batch-plan" and
+            .repository == $repo and .trustedWorkflowSha == $sha and
+            (.candidates | type == "array" and length >= 1 and length <= 5) and
+            ([.candidates[].ordinal] == [range(1; ($root.candidates | length) + 1)]) and
+            (all(.candidates[];
+              (.buildRunId | type == "number") and (.buildRunId > 0) and
+              (.pullRequest | type == "number") and (.pullRequest > 0) and
+              (.headSha | test("^[a-f0-9]{40}$")) and
+              (.artifactName == ("pr-preview-unsigned-" + (.pullRequest | tostring) + "-" + .headSha))))
+          ' "$plan" >/dev/null
+          test "$(jq '[.candidates[].buildRunId] | unique | length' "$plan")" = "$(jq '.candidates | length' "$plan")"
       - name: Set up pinned Node runtime
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       - name: Install trusted verification dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Fetch and validate run and artifact metadata before download
-        id: metadata
+      - name: Revalidate, sign, freeze, and publish every immutable candidate sequentially
+        id: sign
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-          APPROVED_PR: ${{ inputs.pull_request }}
-          APPROVED_HEAD_SHA: ${{ inputs.head_sha }}
-        run: |
-          set -euo pipefail
-          [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$APPROVED_PR" =~ ^[1-9][0-9]*$ ]]
-          [[ "$APPROVED_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-          artifact_name="pr-preview-unsigned-$APPROVED_PR-$APPROVED_HEAD_SHA"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > "$RUNNER_TEMP/build-run.json"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/build-artifacts.json"
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$APPROVED_PR" > "$RUNNER_TEMP/pull-request.json"
-          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/official-stable-release.json"
-          jq -e '.draft == false and .prerelease == false and (.published_at | type == "string") and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' \
-            "$RUNNER_TEMP/official-stable-release.json" >/dev/null
-          jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$APPROVED_HEAD_SHA" --argjson pr "$APPROVED_PR" '
-            .number == $pr and .state == "open" and .draft == false and .merged_at == null and
-            .head.sha == $sha and .head.repo.full_name == $repo and .head.repo.fork == false and
-            .base.ref == "main" and .base.repo.full_name == $repo
-          ' "$RUNNER_TEMP/pull-request.json" >/dev/null
-          jq -e --arg name "$artifact_name" '
-            [.artifacts[] | select(.name == $name and .expired == false)] | length == 1
-          ' "$RUNNER_TEMP/build-artifacts.json" >/dev/null
-          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
-      - name: Download the exact named artifact from the approved run
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: ${{ steps.metadata.outputs.artifact_name }}
-          path: ${{ runner.temp }}/unsigned-preview
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.build_run_id }}
-      - name: Validate every byte and sign with the independent preview key
-        shell: bash
-        env:
           PREVIEW_SIGNING_PRIVATE_KEY_BASE64: ${{ secrets.HARNESS_PR_PREVIEW_SIGNING_PRIVATE_KEY_BASE64 }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-          APPROVED_PR: ${{ inputs.pull_request }}
-          APPROVED_HEAD_SHA: ${{ inputs.head_sha }}
-          ARTIFACT_NAME: ${{ steps.metadata.outputs.artifact_name }}
         run: |
           set -euo pipefail
           test -n "$PREVIEW_SIGNING_PRIVATE_KEY_BASE64" || { echo 'Dedicated preview signing key is not configured.' >&2; exit 1; }
@@ -111,84 +191,163 @@ jobs:
           trap 'rm -f "$key_file"' EXIT
           umask 077
           printf '%s' "$PREVIEW_SIGNING_PRIVATE_KEY_BASE64" | base64 --decode > "$key_file"
-          published_at="$(jq -r '.updated_at' "$RUNNER_TEMP/build-run.json")"
-          node scripts/pr-preview-sign.mjs \
-            --run-metadata "$RUNNER_TEMP/build-run.json" \
-            --pull-request-metadata "$RUNNER_TEMP/pull-request.json" \
-            --stable-release-metadata "$RUNNER_TEMP/official-stable-release.json" \
-            --trusted-preview-config "$GITHUB_WORKSPACE/pr-preview-update-sources.json" \
-            --input "$RUNNER_TEMP/unsigned-preview" \
-            --out "$RUNNER_TEMP/signed-preview" \
-            --repository "$GITHUB_REPOSITORY" \
-            --pr-number "$APPROVED_PR" \
-            --head-sha "$APPROVED_HEAD_SHA" \
-            --build-run-id "$BUILD_RUN_ID" \
-            --artifact-name "$ARTIFACT_NAME" \
-            --key-file "$key_file" \
-            --key-id 'harness-preview-v1' \
-            --cnb-project 'baiyuscc13724-max/deepseek-harness-desktop' \
-            --published-at "$published_at"
-      - name: Freeze only the immutable candidate bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          signed="$RUNNER_TEMP/signed-preview"
-          audit="$signed/pr-preview-signing-audit.json"
-          component="$(find "$signed" -maxdepth 1 -type f -name 'desktop-shell-*.zip' -printf '%f\n')"
-          manifest="$(jq -r '.manifestReleaseAsset' "$audit")"
-          index="$(jq -r '.indexReleaseAsset' "$audit")"
-          expected="$RUNNER_TEMP/immutable-candidate-files.txt"
-          actual="$RUNNER_TEMP/immutable-candidate-actual.txt"
-          printf '%s\n' "$component" "$manifest" "$index" 'pr-preview-signing-audit.json' | LC_ALL=C sort > "$expected"
-          find "$signed" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$actual"
-          diff -u "$expected" "$actual"
-          test "$(wc -l < "$actual")" -eq 4
-          test -z "$(find "$signed" -mindepth 1 -type d -print -quit)"
-      - name: Publish immutable GitHub fallback assets without replacement
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          APPROVED_PR: ${{ inputs.pull_request }}
-          APPROVED_HEAD_SHA: ${{ inputs.head_sha }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: |
-          set -euo pipefail
-          run_attempt="$(jq -r '.run_attempt // 1' "$RUNNER_TEMP/build-run.json")"
-          tag="pr-preview-$APPROVED_PR-${APPROVED_HEAD_SHA:0:12}-run-$BUILD_RUN_ID-$run_attempt"
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$APPROVED_HEAD_SHA" --prerelease \
-              --title "PR #$APPROVED_PR preview ${APPROVED_HEAD_SHA:0:12}" \
-              --notes "Immutable signed candidate only. Promotion requires separate protected local-gate evidence approval."
-          fi
-          resolved_tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)"
-          test "$resolved_tag_sha" = "$APPROVED_HEAD_SHA"
-          current="$RUNNER_TEMP/current-preview-assets.json"
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets > "$current"
-          while IFS= read -r file; do
-            name="$(basename "$file")"
-            size="$(stat -c %s "$file")"
-            digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
-            existing="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' "$current")"
-            if test -n "$existing"; then
-              jq -e --argjson size "$size" --arg digest "$digest" '.size == $size and .digest == $digest' <<<"$existing" >/dev/null
-              continue
+          plan="$RUNNER_TEMP/signing-batch-plan/pr-preview-signing-batch-plan.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/official-stable-release.json"
+          jq -e '.draft == false and .prerelease == false and (.published_at | type == "string") and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' \
+            "$RUNNER_TEMP/official-stable-release.json" >/dev/null
+
+          while IFS= read -r candidate; do
+            ordinal="$(jq -r '.ordinal' <<<"$candidate")"
+            build_run_id="$(jq -r '.buildRunId' <<<"$candidate")"
+            approved_pr="$(jq -r '.pullRequest' <<<"$candidate")"
+            approved_head_sha="$(jq -r '.headSha' <<<"$candidate")"
+            artifact_name="$(jq -r '.artifactName' <<<"$candidate")"
+            candidate_root="$RUNNER_TEMP/signing-candidate-$ordinal"
+            input_root="$candidate_root/unsigned"
+            output_root="$RUNNER_TEMP/signed-batch/candidate-$ordinal"
+            mkdir -p "$input_root" "$output_root"
+            run_file="$candidate_root/build-run.json"
+            artifacts_file="$candidate_root/build-artifacts.json"
+            pr_file="$candidate_root/pull-request.json"
+
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run_id" > "$run_file"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run_id/artifacts?per_page=100" > "$artifacts_file"
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$approved_pr" > "$pr_file"
+            jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$approved_head_sha" --argjson run "$build_run_id" --argjson pr "$approved_pr" '
+              .id == $run and .repository.full_name == $repo and .head_repository.full_name == $repo and
+              .event == "pull_request" and .status == "completed" and .conclusion == "success" and
+              ((.path | ltrimstr("/")) == ".github/workflows/pr-preview-build.yml") and
+              .head_sha == $sha and (.pull_requests | length == 1) and .pull_requests[0].number == $pr
+            ' "$run_file" >/dev/null
+            jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$approved_head_sha" --argjson pr "$approved_pr" '
+              .number == $pr and .state == "open" and .draft == false and .merged_at == null and
+              .head.sha == $sha and .head.repo.full_name == $repo and .head.repo.fork == false and
+              .base.ref == "main" and .base.repo.full_name == $repo
+            ' "$pr_file" >/dev/null
+            jq -e --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length == 1' \
+              "$artifacts_file" >/dev/null
+
+            gh run download "$build_run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$input_root"
+            published_at="$(jq -r '.updated_at' "$run_file")"
+            node scripts/pr-preview-sign.mjs \
+              --run-metadata "$run_file" \
+              --pull-request-metadata "$pr_file" \
+              --stable-release-metadata "$RUNNER_TEMP/official-stable-release.json" \
+              --trusted-preview-config "$GITHUB_WORKSPACE/pr-preview-update-sources.json" \
+              --input "$input_root" \
+              --out "$output_root" \
+              --repository "$GITHUB_REPOSITORY" \
+              --pr-number "$approved_pr" \
+              --head-sha "$approved_head_sha" \
+              --build-run-id "$build_run_id" \
+              --artifact-name "$artifact_name" \
+              --key-file "$key_file" \
+              --key-id 'harness-preview-v1' \
+              --cnb-project 'baiyuscc13724-max/deepseek-harness-desktop' \
+              --published-at "$published_at"
+
+            audit="$output_root/pr-preview-signing-audit.json"
+            mapfile -t components < <(find "$output_root" -maxdepth 1 -type f -name 'desktop-shell-*.zip' -printf '%f\n')
+            test "${#components[@]}" -eq 1
+            component="${components[0]}"
+            manifest="$(jq -r '.manifestReleaseAsset' "$audit")"
+            index="$(jq -r '.indexReleaseAsset' "$audit")"
+            expected="$candidate_root/immutable-candidate-files.txt"
+            actual="$candidate_root/immutable-candidate-actual.txt"
+            printf '%s\n' "$component" "$manifest" "$index" 'pr-preview-signing-audit.json' | LC_ALL=C sort > "$expected"
+            find "$output_root" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$actual"
+            diff -u "$expected" "$actual"
+            test "$(wc -l < "$actual")" -eq 4
+            test -z "$(find "$output_root" -mindepth 1 -type d -print -quit)"
+
+            run_attempt="$(jq -r '.run_attempt // 1' "$run_file")"
+            tag="pr-preview-$approved_pr-${approved_head_sha:0:12}-run-$build_run_id-$run_attempt"
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$approved_head_sha" --prerelease \
+                --title "PR #$approved_pr preview ${approved_head_sha:0:12}" \
+                --notes "Immutable signed candidate only. Promotion requires separate protected local-gate evidence approval."
             fi
-            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" "$file"
-          done < <(find "$RUNNER_TEMP/signed-preview" -maxdepth 1 -type f -print | LC_ALL=C sort)
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets > "$current"
-          jq -e --argjson count 4 '.assets | length == $count' "$current" >/dev/null
-          while IFS= read -r file; do
-            name="$(basename "$file")"
-            size="$(stat -c %s "$file")"
-            digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
-            jq -e --arg name "$name" --argjson size "$size" --arg digest "$digest" \
-              '.assets[] | select(.name == $name and .size == $size and .digest == $digest)' "$current" >/dev/null
-          done < <(find "$RUNNER_TEMP/signed-preview" -maxdepth 1 -type f -print | LC_ALL=C sort)
-      - name: Preserve immutable candidate for local gate and protected promotion
+            resolved_tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)"
+            test "$resolved_tag_sha" = "$approved_head_sha"
+            current="$candidate_root/current-preview-assets.json"
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets > "$current"
+            while IFS= read -r file; do
+              name="$(basename "$file")"
+              size="$(stat -c %s "$file")"
+              digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
+              existing="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' "$current")"
+              if test -n "$existing"; then
+                jq -e --argjson size "$size" --arg digest "$digest" '.size == $size and .digest == $digest' <<<"$existing" >/dev/null
+                continue
+              fi
+              gh release upload "$tag" --repo "$GITHUB_REPOSITORY" "$file"
+            done < <(find "$output_root" -maxdepth 1 -type f -print | LC_ALL=C sort)
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets > "$current"
+            jq -e --argjson count 4 '.assets | length == $count' "$current" >/dev/null
+            while IFS= read -r file; do
+              name="$(basename "$file")"
+              size="$(stat -c %s "$file")"
+              digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
+              jq -e --arg name "$name" --argjson size "$size" --arg digest "$digest" \
+                '.assets[] | select(.name == $name and .size == $size and .digest == $digest)' "$current" >/dev/null
+            done < <(find "$output_root" -maxdepth 1 -type f -print | LC_ALL=C sort)
+
+            echo "candidate_${ordinal}_present=true" >> "$GITHUB_OUTPUT"
+            echo "candidate_${ordinal}_artifact=pr-preview-signed-candidate-$approved_pr-$approved_head_sha" >> "$GITHUB_OUTPUT"
+            printf '| %s | #%s | `%s` | `%s` |\n' "$ordinal" "$approved_pr" "$approved_head_sha" "$tag" >> "$RUNNER_TEMP/signed-batch-summary-rows.md"
+          done < <(jq -c '.candidates[]' "$plan")
+
+          {
+            echo '## Immutable PR preview candidates signed'
+            echo
+            echo 'This run created immutable candidates only. It did not write `latest`, push to CNB, or promote anything to users.'
+            echo
+            echo '| # | PR | Exact head | Immutable tag |'
+            echo '|---:|---:|---|---|'
+            cat "$RUNNER_TEMP/signed-batch-summary-rows.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve immutable candidate 1 for local gate and protected promotion
+        if: steps.sign.outputs.candidate_1_present == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pr-preview-signed-candidate-${{ inputs.pull_request }}-${{ inputs.head_sha }}
-          path: ${{ runner.temp }}/signed-preview/**
+          name: ${{ steps.sign.outputs.candidate_1_artifact }}
+          path: ${{ runner.temp }}/signed-batch/candidate-1/**
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Preserve immutable candidate 2 for local gate and protected promotion
+        if: steps.sign.outputs.candidate_2_present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.sign.outputs.candidate_2_artifact }}
+          path: ${{ runner.temp }}/signed-batch/candidate-2/**
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Preserve immutable candidate 3 for local gate and protected promotion
+        if: steps.sign.outputs.candidate_3_present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.sign.outputs.candidate_3_artifact }}
+          path: ${{ runner.temp }}/signed-batch/candidate-3/**
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Preserve immutable candidate 4 for local gate and protected promotion
+        if: steps.sign.outputs.candidate_4_present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.sign.outputs.candidate_4_artifact }}
+          path: ${{ runner.temp }}/signed-batch/candidate-4/**
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Preserve immutable candidate 5 for local gate and protected promotion
+        if: steps.sign.outputs.candidate_5_present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.sign.outputs.candidate_5_artifact }}
+          path: ${{ runner.temp }}/signed-batch/candidate-5/**
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
