@@ -13,13 +13,14 @@ test('Computer Use is built in with pushed session/permanent unlimited authoriza
     assert.equal((await ensureDesktopComputerUsePlugin({ dshHome: root, bundledRoot })).patchChanged, true)
     assert.equal((await ensureDesktopComputerUsePlugin({ dshHome: root, bundledRoot })).patchChanged, false)
 
-    const [plugin, manifestText, client, main, preload, renderer] = await Promise.all([
+    const [plugin, manifestText, client, main, preload, renderer, authorizationUi] = await Promise.all([
       readFile(path.join(bundledRoot, 'lib', 'index.js'), 'utf8'),
       readFile(path.join(bundledRoot, 'package.json'), 'utf8'),
       readFile(path.join(bundledRoot, 'lib', 'client.js'), 'utf8'),
       readFile(path.join(repositoryRoot, 'electron', 'main.cjs'), 'utf8'),
       readFile(path.join(repositoryRoot, 'electron', 'preload.cjs'), 'utf8'),
-      readFile(path.join(repositoryRoot, 'renderer', 'app.js'), 'utf8')
+      readFile(path.join(repositoryRoot, 'renderer', 'app.js'), 'utf8'),
+      readFile(path.join(repositoryRoot, 'renderer', 'index.html'), 'utf8')
     ])
     const manifest = JSON.parse(manifestText)
 
@@ -121,6 +122,9 @@ test('Computer Use is built in with pushed session/permanent unlimited authoriza
     assert.match(client, /按 Esc 可随时停止/u)
     assert.match(client, /永久授权会在启动时自动恢复/u)
     assert.match(client, /Always on \(restored after restart\)/u)
+    assert.match(authorizationUi, /完整 Windows 虚拟桌面/u)
+    assert.match(authorizationUi, /永久授权会跨重启保留，并在应用启动时自动恢复共享控制会话/u)
+    assert.doesNotMatch(authorizationUi, /软件启动时不会自动控制/u)
     assert.doesNotMatch(main, /desktopCapturer/u)
 
     for (const channel of ['computerUse:requestAuthorization', 'computerUse:authorize', 'computerUse:decline', 'computerUse:revokePermanent', 'computerUse:policy', 'computerUse:setDefaultAccess', 'computerUse:setAppOverride', 'computerUse:revokeAppOverride']) {

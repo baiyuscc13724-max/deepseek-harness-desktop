@@ -11,7 +11,7 @@ test('bundled mobile control plugin installs into the DSH web profile idempotent
   const bundledRoot = path.join(__dirname, '..', 'plugins', 'dsh-mobile-control')
   const first = await ensureMobileControlPlugin({ dshHome: home, bundledRoot })
   const second = await ensureMobileControlPlugin({ dshHome: home, bundledRoot })
-    assert.equal(first.version, '1.0.49')
+    assert.equal(first.version, '1.0.50')
   assert.equal(first.patchChanged, true)
   assert.equal(second.patchChanged, false)
   assert.match(readFileSync(path.join(first.destination, 'lib', 'index.js'), 'utf8'), /android_control/)

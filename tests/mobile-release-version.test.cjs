@@ -11,21 +11,21 @@ const {
 } = require('../scripts/mobile-release-version.cjs')
 
 test('Android revision versions remain monotonic across the next integration patch', () => {
-  assert.equal(encodeAndroidVersionCode('1.0.48'), 1_004_800)
-  assert.equal(encodeAndroidVersionCode('1.0.48.1'), 1_004_801)
-  assert.equal(encodeAndroidVersionCode('1.0.48.99'), 1_004_899)
   assert.equal(encodeAndroidVersionCode('1.0.49'), 1_004_900)
+  assert.equal(encodeAndroidVersionCode('1.0.49.1'), 1_004_901)
+  assert.equal(encodeAndroidVersionCode('1.0.49.99'), 1_004_999)
+  assert.equal(encodeAndroidVersionCode('1.0.50'), 1_005_000)
 })
 
-test('checked-in Android mobile version has the unified 1.0.49 release identity', () => {
+test('checked-in Android mobile version has the unified 1.0.50 release identity', () => {
   const version = readAndroidMobileVersion(root)
   assert.deepEqual(version, {
-    integrationVersion: '1.0.49',
-    versionName: '1.0.49',
-    versionCode: 1_004_900,
-    tag: 'android-v1.0.49',
-    assetName: 'Harness-Mobile-1.0.49-android-universal.apk',
-    checksumName: 'Harness-Mobile-1.0.49-android-universal.apk.sha256'
+    integrationVersion: '1.0.50',
+    versionName: '1.0.50',
+    versionCode: 1_005_000,
+    tag: 'android-v1.0.50',
+    assetName: 'Harness-Mobile-1.0.50-android-universal.apk',
+    checksumName: 'Harness-Mobile-1.0.50-android-universal.apk.sha256'
   })
 })
 
