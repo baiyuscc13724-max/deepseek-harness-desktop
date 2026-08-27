@@ -248,6 +248,10 @@ final class NativeP2pClient implements AutoCloseable {
         if (relaySupportsSignaling && hasNativeP2pV2Capability(message)) {
             if (!validPeerId(peerId)) throw new IOException("Invalid native P2P peer id");
             signalingV2 = true;
+            // Keep the existing external-network route usable immediately while
+            // WebRTC negotiates in the background. A later v2 session closes
+            // these v1 streams before new SOCKS connections select v2/direct.
+            openSocksServer(activeGeneration);
             timer.schedule(() -> directTimedOut(activeGeneration), NEGOTIATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             return;
         }
