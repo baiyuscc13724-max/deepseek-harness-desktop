@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           ids="$RUNNER_TEMP/build-run-ids.txt"
-          printf '%s' "$BUILD_RUN_IDS" | tr ',[:space:]' '\n' | sed '/^$/d' > "$ids"
+          printf '%s\n' "$BUILD_RUN_IDS" | tr ',[:space:]' '\n' | sed '/^$/d' > "$ids"
           count="$(wc -l < "$ids" | tr -d ' ')"
           test "$count" -ge 1 && test "$count" -le 5 || { echo 'Batch must contain 1-5 build run ids.' >&2; exit 1; }
           test "$(LC_ALL=C sort -u "$ids" | wc -l | tr -d ' ')" = "$count" || { echo 'Duplicate build run ids are not allowed.' >&2; exit 1; }
