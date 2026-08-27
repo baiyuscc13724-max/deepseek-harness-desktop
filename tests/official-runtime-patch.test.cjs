@@ -375,6 +375,45 @@ test('search exit-2 path/permission failures get do-not-repeat and glob-first gu
   assert.throws(() => patchFsSearchSource(drifted), /Pinned DSH search exit-2 failure classifier changed/)
 })
 
+test('literal edit not-found failures require a fresh read and one rebuilt retry, fail-closed', async () => {
+  const { patchFsEditSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-tool-fs', 'lib', 'index.js'), 'utf8')
+  const first = patchFsEditSource(fixture)
+
+  assert.equal(first.changed, !fixture.includes('do not repeat the same edit call'))
+  assert.match(first.source, /FS_EDIT_NOT_FOUND: "do not repeat the same edit call; re-read the file, copy a short exact unique old_string from the current content, then retry once"/u)
+  assert.match(first.source, /Build old_string only from the latest read result or the exact after text of an edit that just succeeded, and keep it short but unique\./u)
+  assert.match(first.source, /On FS_EDIT_NOT_FOUND, never repeat the same call: re-read the file, rebuild old_string from the current content, then retry once\./u)
+  assert.match(first.source, /A missing old_string fails closed: re-read and rebuild the edit instead of repeating it\./u)
+  assert.match(first.source, /Literal text copied from the current file content\. Must match exactly; keep it short but unique\./u)
+  assert.equal(patchFsEditSource(first.source).changed, false)
+
+  const remediationStart = first.source.indexOf('const REMEDIES = {')
+  const remediationEnd = first.source.indexOf('\n//#endregion', remediationStart)
+  assert.ok(remediationStart >= 0 && remediationEnd > remediationStart)
+  const remediationChunk = first.source.slice(remediationStart, remediationEnd)
+  class StubFsError extends Error {
+    constructor(message, code, options) { super(message, options); this.code = code }
+  }
+  const remediateFsError = Function('FsError', `${remediationChunk}; return remediateFsError`)(StubFsError)
+  const original = new StubFsError('old_string was not found in "target.js"', 'FS_EDIT_NOT_FOUND')
+  const remediated = remediateFsError(original)
+  assert.equal(remediated.code, 'FS_EDIT_NOT_FOUND')
+  assert.equal(remediated.cause, original)
+  assert.match(remediated.message, /do not repeat the same edit call/u)
+  assert.match(remediated.message, /re-read the file/u)
+  assert.match(remediated.message, /retry once/u)
+  const unrelated = new StubFsError('unrelated', 'FS_OTHER')
+  assert.equal(remediateFsError(unrelated), unrelated)
+
+  const drifted = fixture.replace(
+    'FS_NOT_OBSERVED: "read the file, then retry"',
+    'FS_NOT_OBSERVED: "read the file, then retry" /* upstream drift */'
+  )
+  assert.notEqual(drifted, fixture)
+  assert.throws(() => patchFsEditSource(drifted), /Pinned DSH edit not-found remediation changed/u)
+})
+
 test('subagent catalog separates current work from retained history without deleting transcripts', async () => {
   const { patchSubagentSource } = await import('../scripts/patch-official-runtime.mjs')
   const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js'), 'utf8')

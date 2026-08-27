@@ -28,6 +28,7 @@ const workspaceUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-
 const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
 const subagentContinuationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js')
 const fsSearchRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-tool-fs-search', 'lib', 'index.js')
+const toolFsRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-tool-fs', 'lib', 'index.js')
 const subprocessRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subprocess-local', 'lib', 'index.js')
 const webAppRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'index.js')
 const attachmentProfileRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-base', 'cordis.patch.yml')
@@ -994,6 +995,22 @@ const SEARCH_GREP_PROMPT_PATCHED = '\t\ttext: "Use the grep tool — not shell g
 const SEARCH_GREP_DESCRIPTION_ORIGINAL = '\t\tdescription: `Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. Returns the first ${caps.maxMatches} matches inline; a capped result reports where the complete match list was saved. Use read on a matched file for surrounding context.`,'
 const SEARCH_GREP_DESCRIPTION_PATCHED = '\t\tdescription: `Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. Returns the first ${caps.maxMatches} matches inline; a capped result reports where the complete match list was saved. A missing or unreadable target path fails closed as a search error (ripgrep exit 2): partial results are never returned and the same call is never auto-retried — glob first to discover existing paths, then narrow the path to the existing subtree before retrying. Use read on a matched file for surrounding context.`,'
 
+const FS_EDIT_REMEDIES_ORIGINAL = String(`const REMEDIES = {
+\tFS_STALE_VERSION: "re-read the file, then retry",
+\tFS_NOT_OBSERVED: "read the file, then retry"
+};`)
+const FS_EDIT_REMEDIES_PATCHED = String(`const REMEDIES = {
+\tFS_STALE_VERSION: "re-read the file, then retry",
+\tFS_NOT_OBSERVED: "read the file, then retry",
+\tFS_EDIT_NOT_FOUND: "do not repeat the same edit call; re-read the file, copy a short exact unique old_string from the current content, then retry once"
+};`)
+const FS_EDIT_PROMPT_ORIGINAL = '\t\ttext: "Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session."'
+const FS_EDIT_PROMPT_PATCHED = '\t\ttext: "Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. Build old_string only from the latest read result or the exact after text of an edit that just succeeded, and keep it short but unique. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. On FS_EDIT_NOT_FOUND, never repeat the same call: re-read the file, rebuild old_string from the current content, then retry once. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session."'
+const FS_EDIT_DESCRIPTION_ORIGINAL = '\t\tdescription: "Edit an existing UTF-8 text file by replacing literal text.",'
+const FS_EDIT_DESCRIPTION_PATCHED = '\t\tdescription: "Edit an existing UTF-8 text file by replacing one current literal match. A missing old_string fails closed: re-read and rebuild the edit instead of repeating it.",'
+const FS_EDIT_OLD_STRING_DESCRIPTION_ORIGINAL = '\t\t\t\tdescription: "Literal text to replace. Must match exactly."'
+const FS_EDIT_OLD_STRING_DESCRIPTION_PATCHED = '\t\t\t\tdescription: "Literal text copied from the current file content. Must match exactly; keep it short but unique."'
+
 const SANDBOX_APPROVAL_REQUEST_ORIGINAL = `\tconst outcome = await approval.approver.request({`
 const SANDBOX_APPROVAL_REQUEST_PATCHED = `\tif (typeof approval.approver.effectivePolicy === "function" && approval.approver.effectivePolicy(approval.agent.session) === "never") throw new Error("sandbox escalation is unavailable because approval prompts are disabled in this session");
 \tconst outcome = await approval.approver.request({`
@@ -1469,6 +1486,23 @@ export function patchFsSearchSource(source) {
   return { source: output, changed }
 }
 
+export function patchFsEditSource(source) {
+  let output = source
+  let changed = false
+  for (const [original, patched, label] of [
+    [FS_EDIT_REMEDIES_ORIGINAL, FS_EDIT_REMEDIES_PATCHED, 'edit not-found remediation'],
+    [FS_EDIT_PROMPT_ORIGINAL, FS_EDIT_PROMPT_PATCHED, 'edit system-prompt recovery guidance'],
+    [FS_EDIT_DESCRIPTION_ORIGINAL, FS_EDIT_DESCRIPTION_PATCHED, 'edit tool description'],
+    [FS_EDIT_OLD_STRING_DESCRIPTION_ORIGINAL, FS_EDIT_OLD_STRING_DESCRIPTION_PATCHED, 'edit old_string description']
+  ]) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) throw new Error(`Pinned DSH ${label} changed; refusing an unsafe edit-recovery patch.`)
+    output = output.replace(original, patched)
+    changed = true
+  }
+  return { source: output, changed }
+}
+
 export async function patchInstalledRuntime(file = runtimeClient) {
   const source = await readFile(file, 'utf8')
   const patched = patchRuntimeSource(source)
@@ -1589,6 +1623,13 @@ export async function patchInstalledFsSearch(file = fsSearchRuntime) {
   return patched.changed
 }
 
+export async function patchInstalledToolFs(file = toolFsRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchFsEditSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 export async function patchInstalledSubprocess(file = subprocessRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchSubprocessSource(source)
@@ -1621,6 +1662,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const modelSelectionChanged = await patchInstalledModelSelection()
   const workspaceUiChanged = await patchInstalledWorkspaceUi()
   const fsSearchChanged = await patchInstalledFsSearch()
+  const toolFsChanged = await patchInstalledToolFs()
   const subprocessChanged = await patchInstalledSubprocess()
   const webAppChanged = await patchInstalledWebApp()
   const codexParityChanged = await patchCodexParityRuntime(path.join(root, 'node_modules'))
@@ -1640,6 +1682,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
   process.stdout.write(workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n')
   process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
+  process.stdout.write(toolFsChanged ? 'Patched literal edit not-found recovery guidance.\n' : 'Literal edit not-found recovery guidance already applied.\n')
   process.stdout.write(subprocessChanged ? 'Patched hidden Windows command and cleanup processes.\n' : 'Hidden Windows command and cleanup process patch already applied.\n')
   process.stdout.write(webAppChanged ? 'Patched hidden browser launcher process.\n' : 'Hidden browser launcher process patch already applied.\n')
   process.stdout.write(codexParityChanged.changed ? 'Patched Codex-style $ skill discovery and invocation.\n' : 'Codex-style $ skill discovery and invocation already applied.\n')
