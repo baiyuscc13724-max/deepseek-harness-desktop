@@ -17,8 +17,9 @@
 //   - 本层不做「允许一次」或逐动作确认——click/type/scroll 的逐次人工确认
 //     是 Harness 不可覆盖的安全约定，由上层确认门禁负责；本层只裁决
 //     「该应用是否已被持久允许/拒绝」；
-//   - 敏感输入（密码/令牌/验证码/卡号等）在本层就被永久拦截（复用
-//     memory-censor 的 detectHighRisk，纯正则+Luhn，无 IO）；
+//   - 授权后的全桌面路径直接使用 Windows 虚拟桌面截图和全局 SendInput，
+//     不选择单个窗口，也不按输入文本内容设置敏感操作过滤；旧窗口方法仅供
+//     兼容内部调用，仍可复用应用策略；
 //   - 不添加任何网络服务；测试只使用注入的假适配器，绝不运行或控制用户应用。
 //
 // 纯领域函数可独立用 node:test 测试；koffi 适配器按能力逐个 try/catch，
@@ -27,7 +28,6 @@
 const path = require('node:path')
 const { createHash } = require('node:crypto')
 const { stat, readFile } = require('node:fs/promises')
-const { detectHighRisk } = require('./memory-censor.cjs')
 const { ComputerUseAppPolicy, identityFingerprintFor } = require('./computer-use-app-policy.cjs')
 
 // ---------------------------------------------------------------------------
@@ -167,6 +167,13 @@ const MOUSEEVENTF_RIGHTUP = 0x0010
 const MOUSEEVENTF_WHEEL = 0x0800
 const KEYEVENTF_UNICODE = 0x0004
 const KEYEVENTF_KEYUP = 0x0002
+const SM_XVIRTUALSCREEN = 76
+const SM_YVIRTUALSCREEN = 77
+const SM_CXVIRTUALSCREEN = 78
+const SM_CYVIRTUALSCREEN = 79
+const SRCCOPY = 0x00cc0020
+const CAPTUREBLT = 0x40000000
+const MAX_DESKTOP_PIXELS = 64 * 1024 * 1024
 const GWL_EXSTYLE = -20
 const WS_EX_TOOLWINDOW = 0x80
 const DWMWA_CLOAKED = 14
@@ -280,12 +287,14 @@ function createKoffiWindowsAdapter({ requireKoffi = null } = {}) {
     api.GetDC = user32.func('void * __stdcall GetDC(intptr_t hwnd)')
     api.ReleaseDC = user32.func('int __stdcall ReleaseDC(intptr_t hwnd, void *hdc)')
     api.GetClientRect = user32.func('bool __stdcall GetClientRect(intptr_t hwnd, void *rect)')
+    api.GetSystemMetrics = user32.func('int __stdcall GetSystemMetrics(int index)')
     api.CreateCompatibleDC = gdi32.func('void * __stdcall CreateCompatibleDC(void *hdc)')
     api.CreateCompatibleBitmap = gdi32.func('void * __stdcall CreateCompatibleBitmap(void *hdc, int width, int height)')
     api.SelectObject = gdi32.func('void * __stdcall SelectObject(void *hdc, void *object)')
     api.DeleteObject = gdi32.func('bool __stdcall DeleteObject(void *object)')
     api.DeleteDC = gdi32.func('bool __stdcall DeleteDC(void *hdc)')
     api.GetDIBits = gdi32.func('int __stdcall GetDIBits(void *hdc, void *bitmap, uint32 start, uint32 lines, void *bits, void *info, uint32 usage)')
+    api.BitBlt = gdi32.func('bool __stdcall BitBlt(void *dest, int x, int y, int width, int height, void *source, int sourceX, int sourceY, uint32 rop)')
   })
 
   declare('input', () => {
@@ -518,6 +527,54 @@ function createKoffiWindowsAdapter({ requireKoffi = null } = {}) {
     }
   }
 
+  function desktopBounds() {
+    if (!caps.screenshot) throw capabilityError('desktopScreenshot')
+    const x = api.GetSystemMetrics(SM_XVIRTUALSCREEN)
+    const y = api.GetSystemMetrics(SM_YVIRTUALSCREEN)
+    const width = api.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+    const height = api.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+    if (width <= 0 || height <= 0 || width * height > MAX_DESKTOP_PIXELS) {
+      throw Object.assign(new Error('Windows 虚拟桌面区域无效或过大。'), { code: 'screenshot-failed' })
+    }
+    return { x, y, width, height }
+  }
+
+  function captureDesktop() {
+    const bounds = desktopBounds()
+    const desktopDC = api.GetDC(0)
+    if (!desktopDC) throw Object.assign(new Error('无法取得 Windows 虚拟桌面 DC。'), { code: 'screenshot-failed' })
+    const memDC = api.CreateCompatibleDC(desktopDC)
+    const bitmap = api.CreateCompatibleBitmap(desktopDC, bounds.width, bounds.height)
+    if (!memDC || !bitmap) {
+      if (bitmap) api.DeleteObject(bitmap)
+      if (memDC) api.DeleteDC(memDC)
+      api.ReleaseDC(0, desktopDC)
+      throw Object.assign(new Error('无法创建全桌面截图缓冲区。'), { code: 'screenshot-failed' })
+    }
+    const previous = api.SelectObject(memDC, bitmap)
+    const bits = Buffer.alloc(bounds.width * bounds.height * 4)
+    let ok = false
+    try {
+      const rendered = api.BitBlt(memDC, 0, 0, bounds.width, bounds.height, desktopDC, bounds.x, bounds.y, SRCCOPY | CAPTUREBLT)
+      if (rendered) {
+        const bmi = Buffer.alloc(40)
+        bmi.writeUInt32LE(40, 0)
+        bmi.writeInt32LE(bounds.width, 4)
+        bmi.writeInt32LE(-bounds.height, 8)
+        bmi.writeUInt16LE(1, 12)
+        bmi.writeUInt16LE(32, 14)
+        ok = api.GetDIBits(memDC, bitmap, 0, bounds.height, bits, bmi, 0) !== 0
+      }
+    } finally {
+      if (previous) api.SelectObject(memDC, previous)
+      api.DeleteObject(bitmap)
+      api.DeleteDC(memDC)
+      api.ReleaseDC(0, desktopDC)
+    }
+    if (!ok) throw Object.assign(new Error('Windows 全桌面截图失败。'), { code: 'screenshot-failed' })
+    return { ...bounds, format: 'bgra', bgra: bits, blank: blankDetection(bits, bounds.width, bounds.height) }
+  }
+
   function captureWindow(hwnd) {
     if (!caps.screenshot) throw capabilityError('screenshot')
     const target = hwndNumber(hwnd)
@@ -582,15 +639,12 @@ function createKoffiWindowsAdapter({ requireKoffi = null } = {}) {
     return sent
   }
 
-  function sendMouseClick(hwnd, { x, y, button = 'left' } = {}) {
-    if (!caps.input) throw capabilityError('input')
-    const target = hwndNumber(hwnd)
-    requireTargetForeground(target)
-    const point = Buffer.alloc(8)
-    point.writeInt32LE(Math.round(Number(x) || 0), 0)
-    point.writeInt32LE(Math.round(Number(y) || 0), 4)
-    if (!api.ClientToScreen(target, point) || !api.SetCursorPos(point.readInt32LE(0), point.readInt32LE(4))) {
-      throw Object.assign(new Error('无法安全定位目标窗口坐标，已取消点击。'), { code: 'target-coordinate-unavailable' })
+  function clickAtScreenPoint({ x, y, button = 'left' } = {}) {
+    if (!caps.input) throw capabilityError('globalInput')
+    const screenX = Math.round(Number(x))
+    const screenY = Math.round(Number(y))
+    if (!Number.isFinite(screenX) || !Number.isFinite(screenY) || !api.SetCursorPos(screenX, screenY)) {
+      throw Object.assign(new Error('无法定位全桌面坐标，已取消点击。'), { code: 'desktop-coordinate-unavailable' })
     }
     const downFlag = button === 'right' ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN
     const upFlag = button === 'right' ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP
@@ -598,12 +652,43 @@ function createKoffiWindowsAdapter({ requireKoffi = null } = {}) {
     return { delivered: true }
   }
 
+  function sendGlobalMouseClick(parameters = {}) {
+    return clickAtScreenPoint(parameters)
+  }
+
+  function sendMouseClick(hwnd, { x, y, button = 'left' } = {}) {
+    if (!caps.input) throw capabilityError('input')
+    const target = hwndNumber(hwnd)
+    requireTargetForeground(target)
+    const point = Buffer.alloc(8)
+    point.writeInt32LE(Math.round(Number(x) || 0), 0)
+    point.writeInt32LE(Math.round(Number(y) || 0), 4)
+    if (!api.ClientToScreen(target, point)) throw Object.assign(new Error('无法解析目标窗口坐标，已取消点击。'), { code: 'target-coordinate-unavailable' })
+    return clickAtScreenPoint({ x: point.readInt32LE(0), y: point.readInt32LE(4), button })
+  }
+
+  function scrollAtScreenPoint({ x, y, deltaY = 0 } = {}) {
+    if (!caps.input) throw capabilityError('globalInput')
+    const screenX = Math.round(Number(x))
+    const screenY = Math.round(Number(y))
+    if (!Number.isFinite(screenX) || !Number.isFinite(screenY) || !api.SetCursorPos(screenX, screenY)) {
+      throw Object.assign(new Error('无法定位全桌面坐标，已取消滚动。'), { code: 'desktop-coordinate-unavailable' })
+    }
+    const delta = Math.max(-32767, Math.min(32767, Math.round(Number(deltaY) || 0)))
+    if (delta === 0) return { delivered: true, sent: 0 }
+    const wheel = { type: INPUT_MOUSE, u: { mi: { dx: 0, dy: 0, mouseData: delta, dwFlags: MOUSEEVENTF_WHEEL, time: 0, dwExtraInfo: 0 } } }
+    sendInputBatch([wheel])
+    return { delivered: true, sent: 1 }
+  }
+
+  function sendGlobalScroll(parameters = {}) {
+    return scrollAtScreenPoint(parameters)
+  }
+
   function sendScroll(hwnd, { x = null, y = null, deltaY = 0 } = {}) {
     if (!caps.input) throw capabilityError('input')
     const target = hwndNumber(hwnd)
     requireTargetForeground(target)
-    const delta = Math.max(-32767, Math.min(32767, Math.round(Number(deltaY) || 0)))
-    if (delta === 0) return { delivered: true, sent: 0 }
     const rect = Buffer.alloc(16)
     if (!api.GetClientRect(target, rect)) throw Object.assign(new Error('无法读取目标窗口区域，已取消滚动。'), { code: 'target-coordinate-unavailable' })
     const point = Buffer.alloc(8)
@@ -611,18 +696,12 @@ function createKoffiWindowsAdapter({ requireKoffi = null } = {}) {
     const height = Math.max(1, rect.readInt32LE(12) - rect.readInt32LE(4))
     point.writeInt32LE(Number.isFinite(Number(x)) ? Math.max(0, Math.min(width - 1, Math.round(Number(x)))) : Math.round(width / 2), 0)
     point.writeInt32LE(Number.isFinite(Number(y)) ? Math.max(0, Math.min(height - 1, Math.round(Number(y)))) : Math.round(height / 2), 4)
-    if (!api.ClientToScreen(target, point) || !api.SetCursorPos(point.readInt32LE(0), point.readInt32LE(4))) {
-      throw Object.assign(new Error('无法安全定位目标窗口，已取消滚动。'), { code: 'target-coordinate-unavailable' })
-    }
-    const wheel = { type: INPUT_MOUSE, u: { mi: { dx: 0, dy: 0, mouseData: delta, dwFlags: MOUSEEVENTF_WHEEL, time: 0, dwExtraInfo: 0 } } }
-    sendInputBatch([wheel])
-    return { delivered: true, sent: 1 }
+    if (!api.ClientToScreen(target, point)) throw Object.assign(new Error('无法解析目标窗口坐标，已取消滚动。'), { code: 'target-coordinate-unavailable' })
+    return scrollAtScreenPoint({ x: point.readInt32LE(0), y: point.readInt32LE(4), deltaY })
   }
 
-  function sendText(hwnd, text) {
-    if (!caps.input) throw capabilityError('input')
-    const target = hwndNumber(hwnd)
-    requireTargetForeground(target)
+  function sendUnicodeText(text) {
+    if (!caps.input) throw capabilityError('globalInput')
     const characters = Array.from(String(text || ''))
     const events = []
     for (const character of characters.slice(0, MAX_TYPE_CHARS)) {
@@ -633,6 +712,16 @@ function createKoffiWindowsAdapter({ requireKoffi = null } = {}) {
     }
     const sent = sendInputBatch(events)
     return { delivered: true, sent: Math.floor(sent / 2) }
+  }
+
+  function sendGlobalText(text) {
+    return sendUnicodeText(text)
+  }
+
+  function sendText(hwnd, text) {
+    if (!caps.input) throw capabilityError('input')
+    requireTargetForeground(hwndNumber(hwnd))
+    return sendUnicodeText(text)
   }
 
   function identityFor(hwnd) {
@@ -682,7 +771,9 @@ function createKoffiWindowsAdapter({ requireKoffi = null } = {}) {
       signatureVerification: caps.signature,
       signatureThumbprint: false, // koffi 3.1.6 无法安全读取证书指纹
       screenshot: caps.screenshot,
-      input: caps.input
+      desktopScreenshot: caps.screenshot,
+      input: caps.input,
+      globalInput: caps.input
     }
   }
 
@@ -690,7 +781,12 @@ function createKoffiWindowsAdapter({ requireKoffi = null } = {}) {
     capabilities,
     listWindows,
     identityFor,
+    desktopBounds,
+    captureDesktop,
     captureWindow,
+    sendGlobalMouseClick,
+    sendGlobalScroll,
+    sendGlobalText,
     sendMouseClick,
     sendScroll,
     sendText,
@@ -742,6 +838,10 @@ class WindowsComputerUse {
     if (!this.adapter) throw capabilityError(name)
     const caps = this.adapter.capabilities()
     if (caps[name] !== true) throw capabilityError(name)
+  }
+
+  #assertDesktopGrant() {
+    if (!this.unlimited) throw Object.assign(new Error('全桌面 Computer Use 尚未获得用户授权。'), { code: 'computer-use-disabled' })
   }
 
   async #hashCached(exePath) {
@@ -806,6 +906,35 @@ class WindowsComputerUse {
     return authorization
   }
 
+  desktopBounds() {
+    this.#assertCapability('desktopScreenshot')
+    return this.adapter.desktopBounds()
+  }
+
+  async desktopScreenshot() {
+    this.#assertDesktopGrant()
+    this.#assertCapability('desktopScreenshot')
+    return this.adapter.captureDesktop()
+  }
+
+  async globalClick(parameters = {}) {
+    this.#assertDesktopGrant()
+    this.#assertCapability('globalInput')
+    return this.adapter.sendGlobalMouseClick(parameters)
+  }
+
+  async globalScroll(parameters = {}) {
+    this.#assertDesktopGrant()
+    this.#assertCapability('globalInput')
+    return this.adapter.sendGlobalScroll(parameters)
+  }
+
+  async globalType({ text = '' } = {}) {
+    this.#assertDesktopGrant()
+    this.#assertCapability('globalInput')
+    return this.adapter.sendGlobalText(String(text || ''))
+  }
+
   async screenshot(hwnd, identity = null, window = null) {
     this.#assertCapability('screenshot')
     const resolved = identity || (await this.bind(hwnd, window)).identity
@@ -831,16 +960,8 @@ class WindowsComputerUse {
   async type(hwnd, { text = '' } = {}, identity = null, window = null) {
     this.#assertCapability('input')
     const resolved = identity || (await this.bind(hwnd, window)).identity
-    const value = String(text || '')
-    const sensitive = this.unlimited ? [] : detectHighRisk(value)
-    if (sensitive.length) {
-      throw Object.assign(new Error('Computer Use 永久禁止输入密码、令牌、验证码、银行卡或其他秘密。'), {
-        code: 'sensitive-input-blocked',
-        types: sensitive
-      })
-    }
     this.#gate(resolved, window)
-    return this.adapter.sendText(hwnd, value)
+    return this.adapter.sendText(hwnd, String(text || ''))
   }
 
   // ---- 策略代理（持久允许/拒绝/默认档位/快照） ----

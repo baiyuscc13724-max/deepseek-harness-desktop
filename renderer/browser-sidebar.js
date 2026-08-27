@@ -288,7 +288,7 @@
     try {
       renderComputerUse(await api.authorizeComputerUse(scope))
       setBrowserStatus(scope === 'forever'
-        ? '浏览器控制与 Computer Use 已永久授权；重启后保留授权，但不会自动开启控制。'
+        ? '浏览器控制与 Computer Use 已永久开启；重启后会自动恢复共享控制。'
         : '浏览器控制与 Computer Use 已完成本次共享授权。')
     } catch (error) {
       computerUseAuthorizationStatus.textContent = error.message || String(error)

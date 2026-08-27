@@ -1,5 +1,12 @@
 const DEFAULT_ACCELERATOR = 'Esc'
 
+const COMPUTER_USE_DESKTOP_OVERLAY_HTML = String.raw`<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;pointer-events:none}
+  body::before{content:"";position:fixed;inset:0;box-sizing:border-box;border:3px solid rgba(72,166,255,.82);background:rgba(24,132,255,.10);box-shadow:inset 0 0 52px rgba(62,166,255,.24),inset 0 0 150px rgba(38,137,255,.17)}
+  body::after{content:"Computer Use 控制整个桌面  ·  Esc 退出";position:fixed;top:12px;left:50%;max-width:calc(100vw - 120px);overflow:hidden;border:1px solid rgba(126,202,255,.82);border-radius:999px;padding:7px 14px;color:#f7fbff;background:rgba(18,89,188,.90);box-shadow:0 8px 28px rgba(8,69,160,.3),inset 0 1px rgba(255,255,255,.22);font:600 12px/1.25 "Segoe UI","Microsoft YaHei UI",sans-serif;letter-spacing:.02em;text-overflow:ellipsis;white-space:nowrap;transform:translateX(-50%)}
+</style></head><body></body></html>`
+
 const COMPUTER_USE_INDICATOR_CSS = String.raw`
 :root::before {
   content: "" !important;
@@ -52,7 +59,116 @@ const COMPUTER_USE_SURFACE_INDICATOR_CSS = `${COMPUTER_USE_INDICATOR_CSS}\n:root
 const COMPUTER_USE_CURSOR_ONLY_CSS = `${COMPUTER_USE_INDICATOR_CSS}\n:root::before, :root::after { display: none !important; }`
 
 function shouldShowComputerUseIndicator(control, target) {
-  return control?.active === true && target?.kind === 'window'
+  return control?.active === true && target?.kind === 'desktop'
+}
+
+class ComputerUseDesktopOverlayController {
+  constructor({ BrowserWindow, screen, html = COMPUTER_USE_DESKTOP_OVERLAY_HTML } = {}) {
+    if (typeof BrowserWindow !== 'function') throw new TypeError('ComputerUseDesktopOverlayController requires Electron BrowserWindow')
+    if (!screen || typeof screen.getAllDisplays !== 'function') throw new TypeError('ComputerUseDesktopOverlayController requires Electron screen')
+    this.BrowserWindow = BrowserWindow
+    this.screen = screen
+    this.url = `data:text/html;charset=utf-8,${encodeURIComponent(String(html || COMPUTER_USE_DESKTOP_OVERLAY_HTML))}`
+    this.active = false
+    this.disposed = false
+    this.entries = new Map()
+    this.transition = Promise.resolve()
+  }
+
+  displayKey(display) {
+    return String(display?.id ?? `${display?.bounds?.x || 0}:${display?.bounds?.y || 0}`)
+  }
+
+  boundsFor(display) {
+    const bounds = display?.bounds || {}
+    return {
+      x: Math.round(Number(bounds.x) || 0),
+      y: Math.round(Number(bounds.y) || 0),
+      width: Math.max(1, Math.round(Number(bounds.width) || 1)),
+      height: Math.max(1, Math.round(Number(bounds.height) || 1))
+    }
+  }
+
+  createEntry(display) {
+    const overlay = new this.BrowserWindow({
+      ...this.boundsFor(display),
+      transparent: true,
+      frame: false,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      closable: false,
+      focusable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      show: false,
+      hasShadow: false,
+      enableLargerThanScreen: true,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: false }
+    })
+    overlay.setIgnoreMouseEvents?.(true, { forward: true })
+    overlay.setAlwaysOnTop?.(true, 'screen-saver')
+    overlay.setContentProtection?.(true)
+    overlay.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true })
+    const entry = { overlay, ready: false }
+    overlay.once?.('closed', () => {
+      const key = this.displayKey(display)
+      if (this.entries.get(key) === entry) this.entries.delete(key)
+    })
+    entry.loading = Promise.resolve(overlay.loadURL(this.url)).then(() => {
+      entry.ready = true
+      if (this.active && !this.disposed && !overlay.isDestroyed?.()) overlay.showInactive?.()
+    }).catch(() => {})
+    return entry
+  }
+
+  async sync() {
+    if (this.disposed || (!this.active && this.entries.size === 0)) return
+    const displays = this.screen.getAllDisplays()
+    const current = new Set()
+    for (const display of displays) {
+      const key = this.displayKey(display)
+      current.add(key)
+      let entry = this.entries.get(key)
+      if (!entry || entry.overlay.isDestroyed?.()) {
+        entry = this.createEntry(display)
+        this.entries.set(key, entry)
+      } else {
+        entry.overlay.setBounds?.(this.boundsFor(display), false)
+      }
+      await entry.loading
+      if (entry.overlay.isDestroyed?.()) continue
+      if (this.active) entry.overlay.showInactive?.()
+      else entry.overlay.hide?.()
+    }
+    for (const [key, entry] of [...this.entries]) {
+      if (current.has(key)) continue
+      this.entries.delete(key)
+      if (!entry.overlay.isDestroyed?.()) entry.overlay.destroy?.()
+    }
+  }
+
+  setActive(active) {
+    this.active = active === true
+    this.transition = this.transition.then(() => this.sync(), () => this.sync())
+    return this.transition.then(() => ({ active: this.active, displays: this.entries.size }))
+  }
+
+  refresh() {
+    return this.setActive(this.active)
+  }
+
+  async dispose() {
+    if (this.disposed) return
+    this.active = false
+    await this.transition.catch(() => {})
+    for (const entry of this.entries.values()) {
+      if (!entry.overlay.isDestroyed?.()) entry.overlay.destroy?.()
+    }
+    this.entries.clear()
+    this.disposed = true
+  }
 }
 
 class ComputerUseIndicatorController {
@@ -62,7 +178,8 @@ class ComputerUseIndicatorController {
     css = COMPUTER_USE_INDICATOR_CSS,
     surfaceCss = COMPUTER_USE_SURFACE_INDICATOR_CSS,
     cursorCss = COMPUTER_USE_CURSOR_ONLY_CSS,
-    accelerator = DEFAULT_ACCELERATOR
+    accelerator = DEFAULT_ACCELERATOR,
+    desktopOverlay = null
   } = {}) {
     if (!globalShortcut || typeof globalShortcut.register !== 'function' || typeof globalShortcut.unregister !== 'function') {
       throw new TypeError('ComputerUseIndicatorController requires Electron globalShortcut')
@@ -74,6 +191,7 @@ class ComputerUseIndicatorController {
     this.surfaceCss = String(surfaceCss || COMPUTER_USE_SURFACE_INDICATOR_CSS)
     this.cursorCss = String(cursorCss || COMPUTER_USE_CURSOR_ONLY_CSS)
     this.accelerator = String(accelerator || DEFAULT_ACCELERATOR)
+    this.desktopOverlay = desktopOverlay && typeof desktopOverlay.setActive === 'function' ? desktopOverlay : null
     this.active = false
     this.shortcutRegistered = false
     this.entries = new Map()
@@ -159,11 +277,15 @@ class ComputerUseIndicatorController {
     const next = active === true
     if (next === this.active) {
       this.syncShortcut()
+      if (this.desktopOverlay) await this.desktopOverlay.setActive(next).catch(() => {})
       return { active: this.active, accelerator: this.accelerator, shortcutRegistered: this.shortcutRegistered }
     }
     this.active = next
     this.syncShortcut()
-    await Promise.allSettled([...this.entries.values()].map(entry => this.syncEntry(entry)))
+    await Promise.allSettled([
+      ...[...this.entries.values()].map(entry => this.syncEntry(entry)),
+      this.desktopOverlay?.setActive(next)
+    ].filter(Boolean))
     return { active: this.active, accelerator: this.accelerator, shortcutRegistered: this.shortcutRegistered }
   }
 
@@ -172,15 +294,20 @@ class ComputerUseIndicatorController {
     this.active = false
     this.syncShortcut()
     const entries = [...this.entries.keys()]
-    await Promise.allSettled(entries.map(contents => this.untrack(contents)))
+    await Promise.allSettled([
+      ...entries.map(contents => this.untrack(contents)),
+      this.desktopOverlay?.dispose?.()
+    ].filter(Boolean))
     this.disposed = true
   }
 }
 
 module.exports = {
   COMPUTER_USE_CURSOR_ONLY_CSS,
+  COMPUTER_USE_DESKTOP_OVERLAY_HTML,
   COMPUTER_USE_INDICATOR_CSS,
   COMPUTER_USE_SURFACE_INDICATOR_CSS,
+  ComputerUseDesktopOverlayController,
   ComputerUseIndicatorController,
   DEFAULT_ACCELERATOR,
   shouldShowComputerUseIndicator
