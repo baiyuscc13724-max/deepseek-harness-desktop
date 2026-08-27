@@ -22,6 +22,7 @@ final class MobileSessionViewModel: ObservableObject {
     private let store = PairingStore()
     private var profile: PairingProfile?
     private var proxy: LoopbackProxy?
+    private var foregroundRecoveryTask: Task<Void, Never>?
     private var lastNetworkGeneration: UInt64 = 0
 
     init() {
@@ -110,6 +111,24 @@ final class MobileSessionViewModel: ObservableObject {
         Task { await activate(profile, pairing: false) }
     }
 
+    /// App 回到前台时只恢复原有代理/线路，不重建或 reload 工作台。
+    func sceneBecameActive() {
+        guard let profile else { return }
+        guard foregroundRecoveryTask == nil else { return }
+        if case .connecting = state { return }
+        guard networkMonitor.available else {
+            if workbenchURL != nil {
+                state = .connecting("网络已断开，恢复后会自动连接…")
+            }
+            return
+        }
+        foregroundRecoveryTask = Task { [weak self] in
+            guard let self else { return }
+            defer { foregroundRecoveryTask = nil }
+            await recoverFromForeground(profile)
+        }
+    }
+
     /// 工作台页加载失败时上报（保持工作台页面，便于用户重试）。
     func workbenchFailed(_ detail: String) {
         guard workbenchURL != nil else { return }
@@ -138,6 +157,32 @@ final class MobileSessionViewModel: ObservableObject {
     }
 
     // MARK: - 内部
+
+    private func recoverFromForeground(_ profile: PairingProfile) async {
+        guard self.profile == profile else { return }
+        do {
+            let activeProxy: LoopbackProxy
+            if let proxy {
+                activeProxy = proxy
+                proxy.update(profile: profile)
+                proxy.networkChanged()
+            } else {
+                activeProxy = LoopbackProxy(profile: profile)
+                proxy = activeProxy
+            }
+            let port = try await activeProxy.start()
+            guard self.profile == profile else { return }
+            if workbenchURL == nil {
+                workbenchURL = profile.stableOrigin(localPort: port)
+            }
+            state = .connected
+        } catch {
+            guard self.profile == profile else { return }
+            state = networkMonitor.available
+                ? .failed(error.localizedDescription)
+                : .connecting("网络已断开，恢复后会自动连接…")
+        }
+    }
 
     private func activate(_ profile: PairingProfile, pairing: Bool) async {
         state = .connecting(profile.relay == nil ? "正在连接 Desktop…" : "正在尝试局域网，必要时切换 WSS/443 加密线路…")

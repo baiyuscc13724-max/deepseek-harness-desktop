@@ -420,11 +420,13 @@ test('a persisted forbidden mobile port is replaced with a safe ephemeral listen
 
 test('LAN address selection prefers physical private IPv4 interfaces', () => {
   const result = lanAddresses({
+    singbox_tun: [{ family: 'IPv4', internal: false, address: '172.18.0.1' }],
+    'TAP-Windows Adapter V9': [{ family: 'IPv4', internal: false, address: '10.8.0.1' }],
     'vEthernet (WSL)': [{ family: 'IPv4', internal: false, address: '172.20.0.1' }],
     WiFi: [{ family: 'IPv4', internal: false, address: '192.168.1.20' }],
     Public: [{ family: 'IPv4', internal: false, address: '8.8.8.8' }]
   })
-  assert.deepEqual(result, ['192.168.1.20', '172.20.0.1'])
+  assert.deepEqual(result, ['192.168.1.20', '172.18.0.1', '10.8.0.1', '172.20.0.1'])
 })
 
 test('versioned mobile control endpoints require pairing and desktop commands are loopback-only', async t => {

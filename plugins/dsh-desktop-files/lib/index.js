@@ -17,6 +17,30 @@ const TEXT_PREVIEW_EXTENSIONS = new Set([
   '.swift', '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml', '.zig'
 ])
 const TEXT_PREVIEW_FILENAMES = new Set(['cmakelists.txt', 'dockerfile', 'license', 'makefile', 'readme'])
+const INLINE_PREVIEW_TYPES = new Map([
+  ['.avif', { previewKind: 'image', mimeType: 'image/avif' }],
+  ['.bmp', { previewKind: 'image', mimeType: 'image/bmp' }],
+  ['.gif', { previewKind: 'image', mimeType: 'image/gif' }],
+  ['.ico', { previewKind: 'image', mimeType: 'image/x-icon' }],
+  ['.jpeg', { previewKind: 'image', mimeType: 'image/jpeg' }],
+  ['.jpg', { previewKind: 'image', mimeType: 'image/jpeg' }],
+  ['.png', { previewKind: 'image', mimeType: 'image/png' }],
+  ['.webp', { previewKind: 'image', mimeType: 'image/webp' }],
+  ['.aac', { previewKind: 'audio', mimeType: 'audio/aac' }],
+  ['.flac', { previewKind: 'audio', mimeType: 'audio/flac' }],
+  ['.m4a', { previewKind: 'audio', mimeType: 'audio/mp4' }],
+  ['.mp3', { previewKind: 'audio', mimeType: 'audio/mpeg' }],
+  ['.oga', { previewKind: 'audio', mimeType: 'audio/ogg' }],
+  ['.ogg', { previewKind: 'audio', mimeType: 'audio/ogg' }],
+  ['.opus', { previewKind: 'audio', mimeType: 'audio/ogg' }],
+  ['.wav', { previewKind: 'audio', mimeType: 'audio/wav' }],
+  ['.m4v', { previewKind: 'video', mimeType: 'video/mp4' }],
+  ['.mov', { previewKind: 'video', mimeType: 'video/quicktime' }],
+  ['.mp4', { previewKind: 'video', mimeType: 'video/mp4' }],
+  ['.ogv', { previewKind: 'video', mimeType: 'video/ogg' }],
+  ['.webm', { previewKind: 'video', mimeType: 'video/webm' }],
+  ['.pdf', { previewKind: 'pdf', mimeType: 'application/pdf' }]
+])
 
 function json(res, status, value) {
   const body = Buffer.from(JSON.stringify(value))
@@ -200,10 +224,12 @@ async function previewFile(cwd, requestedPath) {
   const file = await resolveDownload(cwd, requestedPath)
   const extension = path.extname(file.name).toLowerCase()
   const base = {
-    path: String(requestedPath).split(path.sep).join('/'), name: file.name, size: file.info.size, extension,
+    path: String(requestedPath).split(path.sep).join('/'), name: file.name, size: file.info.size, extension, openable: true,
     ...(file.line ? { line: file.line } : {}), ...(file.column ? { column: file.column } : {})
   }
-  if (!TEXT_PREVIEW_EXTENSIONS.has(extension) && !TEXT_PREVIEW_FILENAMES.has(file.name.toLowerCase())) return { ...base, previewable: false, reason: 'unsupported' }
+  const inline = INLINE_PREVIEW_TYPES.get(extension)
+  if (inline) return { ...base, ...inline, previewable: true }
+  if (!TEXT_PREVIEW_EXTENSIONS.has(extension) && !TEXT_PREVIEW_FILENAMES.has(file.name.toLowerCase())) return { ...base, previewable: false, reason: 'external' }
   if (file.info.size > MAX_PREVIEW_BYTES) return { ...base, previewable: false, reason: 'too-large', maxPreviewBytes: MAX_PREVIEW_BYTES }
   const handle = await open(file.resolved, 'r')
   let bytes
@@ -214,7 +240,19 @@ async function previewFile(cwd, requestedPath) {
     bytes = buffer.subarray(0, read.bytesRead)
   } finally { await handle.close() }
   if (bytes.includes(0)) return { ...base, previewable: false, reason: 'binary' }
-  return { ...base, previewable: true, text: bytes.toString('utf8'), truncated: false, maxPreviewBytes: MAX_PREVIEW_BYTES }
+  return { ...base, previewable: true, previewKind: 'text', mimeType: 'text/plain; charset=utf-8', text: bytes.toString('utf8'), truncated: false, maxPreviewBytes: MAX_PREVIEW_BYTES }
+}
+
+function contentHeaders(name, size, presentation = null) {
+  const ascii = name.replace(/[^\x20-\x7e]/gu, '_').replace(/["\\]/gu, '_') || 'file'
+  const inline = Boolean(presentation)
+  return {
+    'content-type': presentation?.mimeType || 'application/octet-stream',
+    'content-length': size,
+    'content-disposition': `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff'
+  }
 }
 
 function downloadHeaders(name, size) {
@@ -272,6 +310,22 @@ function apply(ctx) {
     }
   }), 'desktop-files preview route')
   ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: '/api/desktop-files/content', handler: async (req, res) => {
+      if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed', code: 'FILES_METHOD_NOT_ALLOWED' })
+      if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden', code: 'FILES_FORBIDDEN' })
+      try {
+        const params = query(req)
+        const sessionId = requiredQuery(params, 'sessionId', 256)
+        const requestedPath = requiredQuery(params, 'path', 4096)
+        const { cwd } = rootAgent(ctx, sessionId)
+        const file = await resolveDownload(cwd, requestedPath)
+        const presentation = INLINE_PREVIEW_TYPES.get(path.extname(file.name).toLowerCase()) || null
+        res.writeHead(200, contentHeaders(file.name, file.info.size, presentation))
+        createReadStream(file.resolved).on('error', () => { if (!res.destroyed) res.destroy() }).pipe(res)
+      } catch (error) { return json(res, error.status || 400, errorPayload(error)) }
+    }
+  }), 'desktop-files content route')
+  ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/api/desktop-files/download', handler: async (req, res) => {
       if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed', code: 'FILES_METHOD_NOT_ALLOWED' })
       if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden', code: 'FILES_FORBIDDEN' })
@@ -289,7 +343,7 @@ function apply(ctx) {
 }
 
 export {
-  MAX_DOWNLOAD_BYTES, MAX_PREVIEW_BYTES, MAX_UPLOAD_BYTES, TEXT_PREVIEW_EXTENSIONS, UPLOAD_DIRECTORY,
-  apply, collectBody, downloadHeaders, inject, listUploads, name, previewFile, resolveDownload,
+  INLINE_PREVIEW_TYPES, MAX_DOWNLOAD_BYTES, MAX_PREVIEW_BYTES, MAX_UPLOAD_BYTES, TEXT_PREVIEW_EXTENSIONS, UPLOAD_DIRECTORY,
+  apply, collectBody, contentHeaders, downloadHeaders, inject, listUploads, name, previewFile, resolveDownload,
   safeFileName, saveUpload, trustedRequest
 }

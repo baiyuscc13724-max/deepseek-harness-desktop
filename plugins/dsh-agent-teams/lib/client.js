@@ -1116,8 +1116,8 @@ window.__ModuleLoader__.load({
         arrayText(task.files || task.fileScope) ? h("div", { className: "dat-meta" }, t("files", { value: arrayText(task.files || task.fileScope) })) : task.fileScopeProjection && task.fileScopeProjection.projected === false ? h("div", { className: "dat-meta" }, t("filesHidden")) : null,
         h("div", { className: "dat-task-status" }, h("span", { className: "dat-badge" }, statusLabel(t, task.status || "pending")))
       ];
-      if (props.onOpen) return h("button", { type: "button", className: className, onClick: function (event) { props.onOpen(event, task); }, "aria-label": label }, body);
-      return h("article", { className: className }, body);
+      if (props.onOpen) return h("button", { type: "button", className: className, "data-mobile-slot": "agent-teams.task-detail.trigger", "data-harness-mobile-task-id": String(id), onClick: function (event) { props.onOpen(event, task); }, "aria-label": label }, body);
+      return h("article", { className: className, "data-harness-mobile-task-id": String(id) }, body);
     }
     function memberActivityValue(member) { return Date.parse(member.lastActivityAt || member.updatedAt || member.createdAt || 0) || 0; }
     function sortMembersByActivity(members) {
@@ -1401,7 +1401,7 @@ window.__ModuleLoader__.load({
         else if (event.key === "0") { event.preventDefault(); resetCanvasZoom(); }
         else if (String(event.key).toLowerCase() === "f") { event.preventDefault(); fitCanvas(); }
       }
-      return h("section", { className: "dat-panel dat-canvas-panel", "aria-labelledby": "dat-team-canvas" },
+      return h("section", { className: "dat-panel dat-canvas-panel", "data-mobile-slot": "agent-teams.canvas", "aria-labelledby": "dat-team-canvas" },
         h("div", { className: "dat-column-head" },
           h("div", null, h("h2", { id: "dat-team-canvas" }, t("canvasLabel")), h("p", { className: "dat-note dat-canvas-hint", style: { margin: "4px 0 0" } }, t("canvasHint"), " ", t("canvasPanHint"))),
           h("div", { className: "dat-canvas-header-actions" }, h("span", { className: "dat-badge" }, activeTasks.length), h("div", { className: "dat-canvas-toolbar", role: "group", "aria-label": t("canvasControls") },
@@ -1453,10 +1453,10 @@ window.__ModuleLoader__.load({
       function choice(team, archived) {
         var tasks = team.tasks || [], active = Number.isFinite(team.activeTaskCount) ? team.activeTaskCount : tasks.filter(function (task) { return (task.status || task.state) === "in_progress"; }).length;
         var name = teamName(team, t), selected = teamId(team) === props.selectedId;
-        return h("button", { key: teamId(team), type: "button", className: "dat-team-choice", "aria-current": selected ? "true" : undefined, "aria-label": t("switchTeam", { name: name }), onClick: function () { props.select(teamId(team)); } }, name, archived ? " · " + t("archive") : active ? " · " + active : "");
+        return h("button", { key: teamId(team), type: "button", className: "dat-team-choice", "data-mobile-slot": "agent-teams.team.trigger", "data-harness-mobile-team-id": String(teamId(team)), "aria-current": selected ? "true" : undefined, "aria-label": t("switchTeam", { name: name }), onClick: function () { props.select(teamId(team)); } }, name + " · #" + String(teamId(team)).slice(-6), archived ? " · " + t("archive") : active ? " · " + active : "");
       }
       if (teams.length <= 1) return null;
-      return h("nav", { className: "dat-overview dat-panel", "aria-labelledby": "dat-overview-title" },
+      return h("nav", { className: "dat-overview dat-panel", "data-mobile-slot": "agent-teams.context-switcher", "aria-labelledby": "dat-overview-title" },
         h("div", { className: "dat-column-head" }, h("h2", { id: "dat-overview-title" }, t("activeTeamList")), h("span", { className: "dat-badge" }, activeTeams.length)),
         h("div", { className: "dat-team-strip" }, activeTeams.map(function (team) { return choice(team, false); })),
         archivedTeams.length ? h("details", { className: "dat-disclosure" }, h("summary", null, t("archivedTeams") + " · " + archivedTeams.length), h("div", { className: "dat-team-strip" }, archivedTeams.map(function (team) { return choice(team, true); }))) : null,
@@ -1564,7 +1564,7 @@ window.__ModuleLoader__.load({
       var claimedAt = runtimeDetail && runtimeDetail.claimedAt || task && (task.claimedAt || task.startedAt || task.inProgressAt), completedAt = runtimeDetail && runtimeDetail.completedAt || task && task.completedAt;
       var progressText = task ? taskDetailProgressText(t, progress, task) : "", modelText = executionModel ? memberModelText(executionModel, t) : "";
       if (modelText && runtimeDetail && runtimeDetail.executionModel && runtimeDetail.executionModel.observed === false) modelText = t("taskModelConfigured", { value: modelText });
-      return h("article", { className: "dat-panel dat-task-focus", role: "region", tabIndex: -1, ref: props.detailRef, "aria-labelledby": "dat-task-focus-title" },
+      return h("article", { className: "dat-panel dat-task-focus", role: "region", tabIndex: -1, ref: props.detailRef, "data-mobile-slot": "agent-teams.task-detail", "data-harness-mobile-task-id": String(taskId(task)), "aria-labelledby": "dat-task-focus-title" },
         h("div", { className: "dat-task-focus-head" },
           h("div", { className: "dat-task-focus-head-copy" }, h(Button, { small: true, onClick: props.onClose }, "← " + t("taskBackToBoard")), h("h2", { id: "dat-task-focus-title" }, t("taskDetail"))),
           h("div", { className: "dat-row" }, h("span", { className: "dat-badge", title: t("taskLiveConnected") }, h("span", { className: "dat-dot", style: connection === "live" ? null : { background: "var(--dsw-alias-state-warn-primary)" } }), t(connection)), h(Button, { small: true, onClick: props.onClose, ariaLabel: t("taskBackToBoard") }, "×"))
@@ -1623,8 +1623,8 @@ window.__ModuleLoader__.load({
         { id: "participants", label: t("workspaceParticipants"), count: counts.members },
         { id: "inbox", label: t("workspaceInbox"), count: counts.events }
       ];
-      return h("nav", { className: "dat-workspace-nav", "aria-label": t("workspaceNavigation") }, items.map(function (item) {
-        return h("button", { key: item.id, type: "button", "aria-current": props.value === item.id ? "page" : undefined, onClick: function () { props.onChange(item.id); } }, h("span", null, item.label), Number.isFinite(item.count) ? h("small", null, item.count) : null);
+      return h("nav", { className: "dat-workspace-nav", "data-mobile-slot": "agent-teams.navigation", "aria-label": t("workspaceNavigation") }, items.map(function (item) {
+        return h("button", { key: item.id, type: "button", "data-mobile-slot": item.id === "projectTasks" ? "navigation.tasks" : item.id === "board" ? "navigation.agents" : "agent-teams.view." + item.id, "data-harness-mobile-workspace-view": item.id, "aria-current": props.value === item.id ? "page" : undefined, onClick: function () { props.onChange(item.id); } }, h("span", null, item.label), Number.isFinite(item.count) ? h("small", null, item.count) : null);
       }));
     }
 
@@ -1862,7 +1862,7 @@ window.__ModuleLoader__.load({
         if (collaborator && (!canWrite || capability.taskCommands.indexOf("transition") < 0 || safeTask.allowedActions.indexOf("transition") < 0 || collaboratorTaskTargets(safeTask.status).indexOf(nextStatus) < 0)) return Promise.resolve();
         return perform(actionKey, { commandId: newProjectTaskCommandId(), type: "transition", taskRef: safeTask.taskRef, expectedRevision: safeTask.revision, payload: { to: nextStatus } });
       }
-      var head = h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-project-tasks-title" }, t("projectTasksTitle")), h("p", null, t("projectTasksIntro"))), h(Button, { small: true, disabled: tasks.loading, onClick: tasks.reload }, t("projectTasksRefresh")));
+      var head = h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-project-tasks-title" }, t("projectTasksTitle")), h("p", null, t("projectTasksIntro")), h("p", { className: "dat-note", "data-mobile-slot": "tasks.context", "data-harness-mobile-project-bound": "true" }, t("workspaceProjectTasks") + " · " + capabilityKind)), h(Button, { small: true, disabled: tasks.loading, onClick: tasks.reload }, t("projectTasksRefresh")));
       if (tasks.loading && !tasks.state) return h("section", { className: "dat-workspace-view", "aria-labelledby": "dat-project-tasks-title" }, head, h("div", { className: "dat-panel dat-empty", role: "status" }, h("p", null, t("projectTasksLoading"))));
       if (tasks.error && !tasks.state) return h("section", { className: "dat-workspace-view", "aria-labelledby": "dat-project-tasks-title" }, head, h("div", { className: "dat-error", role: "alert" }, projectTaskErrorSummary(tasks.error, t), " ", projectTaskNextAction(tasks.error, t)));
       if (capabilityKind === "no-project") return h("section", { className: "dat-workspace-view", "aria-labelledby": "dat-project-tasks-title" }, head, h("div", { className: "dat-panel dat-empty" }, h("p", null, t("projectTasksNoProject")), h(Button, { primary: true, onClick: function () { props.setWorkspaceView("participants"); } }, t("projectTasksOpenSettings"))));
@@ -1873,7 +1873,7 @@ window.__ModuleLoader__.load({
         { id: "blocked", label: t("projectTaskColumnBlocked") },
         { id: "finished", label: t("projectTaskColumnFinished") }
       ];
-      return h("section", { className: "dat-workspace-view", "aria-labelledby": "dat-project-tasks-title" }, head,
+      return h("section", { className: "dat-workspace-view", "data-mobile-slot": "tasks.workspace", "data-harness-mobile-project-bound": "true", "aria-labelledby": "dat-project-tasks-title" }, head,
         tasks.error ? h("div", { className: "dat-error", role: "alert" }, projectTaskErrorSummary(tasks.error, t), " ", projectTaskNextAction(tasks.error, t)) : null,
         actionError ? h("div", { className: "dat-error", role: "alert" }, projectTaskErrorSummary(actionError, t), " ", projectTaskNextAction(actionError, t)) : null,
         collaborator ? h("div", { className: "dat-board-note", role: "status" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, t("projectTasksCollaboratorUnavailable"), " ", t(capability.available && canWrite ? "projectTasksWritable" : "projectTasksReadOnly"))) : null,
@@ -1888,7 +1888,7 @@ window.__ModuleLoader__.load({
             h("div", { className: "dat-project-task-list" }, columnTasks.length ? columnTasks.map(function (safeTask) {
               var allowed = collaborator && canWrite && capability.taskCommands.indexOf("transition") >= 0 && safeTask.allowedActions.indexOf("transition") >= 0 ? collaboratorTaskTargets(safeTask.status) : Array.isArray(safeTask.allowedTransitions) ? safeTask.allowedTransitions : [];
               var canClaim = collaborator && canWrite && capability.taskCommands.indexOf("claim") >= 0 && safeTask.allowedActions.indexOf("claim") >= 0 && safeTask.status === "todo" && !safeTask.hasAssignee;
-              return h("article", { key: safeTask.taskRef, className: "dat-card dat-project-task-card" },
+              return h("article", { key: safeTask.taskRef, className: "dat-card dat-project-task-card", "data-mobile-slot": "tasks.item", "data-harness-mobile-task-id": String(safeTask.taskRef) },
                 h("h4", null, safeTask.title || t("unknown")),
                 h("div", { className: "dat-row" }, h("span", { className: "dat-badge" }, projectTaskStatusLabel(t, safeTask.status)), h("span", { className: "dat-badge" }, t("projectTasksRevision", { value: safeTask.revision }))),
                 canClaim || allowed.length ? h("div", { className: "dat-actions" }, canClaim ? h(Button, { small: true, disabled: busyKeys["claim:" + safeTask.taskRef] === true || pendingReceipts["claim:" + safeTask.taskRef] === true, onClick: function () { claimTask(safeTask); } }, busyKeys["claim:" + safeTask.taskRef] === true ? t("projectTasksActionRunning") : t("projectTasksClaim")) : null, allowed.map(function (nextStatus) {
@@ -2307,9 +2307,9 @@ window.__ModuleLoader__.load({
           h("details", { className: "dat-disclosure dat-settings-disclosure" }, h("summary", null, t("workspaceSettings")), h(DisableAutomaticTeams, { t: t, labelId: "dat-disable-teams", disable: disable, busy: busy, hasActive: hasActiveTeams }))
         );
       }
-      return h("main", { className: "dat-view", "aria-labelledby": "dat-view-title" }, h("div", { className: "dat-shell" },
+      return h("main", { className: "dat-view", "data-mobile-slot": "agent-teams.workspace", "data-harness-mobile-session-id": String(props.sessionId || ""), "data-harness-mobile-team-id": team ? String(teamId(team)) : undefined, "aria-labelledby": "dat-view-title" }, h("div", { className: "dat-shell" },
         h(WorkspaceNav, { t: t, value: workspaceView, onChange: setWorkspaceView, counts: { tasks: taskCount, members: memberCount, events: eventCount } }),
-        h("div", { className: "dat-head" }, h("div", null, h("h1", { id: "dat-view-title", className: "dat-title" }, t("title")), h("p", { className: "dat-subtitle" }, t("workspaceIntro"))), h("span", { className: "dat-badge", title: t("connection") + " · " + props.sessionId }, h("span", { className: "dat-dot", style: live.connection === "live" ? null : { background: "var(--dsw-alias-state-warn-primary)" } }), t(connectionKey))),
+        h("div", { className: "dat-head" }, h("div", null, h("h1", { id: "dat-view-title", className: "dat-title" }, t("title")), h("p", { className: "dat-subtitle" }, t("workspaceIntro"))), h("span", { className: "dat-badge", "data-mobile-slot": "agent-teams.context", "data-harness-mobile-session-id": String(props.sessionId || ""), title: t("connection") + " · " + props.sessionId }, h("span", { className: "dat-dot", style: live.connection === "live" ? null : { background: "var(--dsw-alias-state-warn-primary)" } }), t(connectionKey) + " · " + String(props.sessionId || "").slice(-8))),
         live.error ? h("div", { className: "dat-error", role: "alert" }, t("loadError", { error: live.error }), " ", h(Button, { small: true, onClick: live.reload }, t("retry"))) : null,
         actionError ? h("div", { className: "dat-error", role: "alert" }, t("actionError", { error: actionError })) : null,
         notice ? h("div", { className: "dat-board-note", role: "status", "aria-live": "polite" }, notice) : null,

@@ -32,6 +32,12 @@ struct WorkbenchView: UIViewRepresentable {
           Object.defineProperty(window, 'HarnessMobilePlatform', { value: 'ios', configurable: false });
           Object.defineProperty(window, 'HarnessMobileControl', { value: Object.freeze({ status: () => 'unsupported-ios' }), configurable: false });
         """, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        if let styleScript = Self.mobileStyleScript() {
+            controller.addUserScript(styleScript)
+        }
+        if let runtimeScript = Self.mobileRuntimeScript() {
+            controller.addUserScript(runtimeScript)
+        }
         controller.addUserScript(WKUserScript(
             source: Self.mobileAttachmentScript,
             injectionTime: .atDocumentEnd,
@@ -58,6 +64,46 @@ struct WorkbenchView: UIViewRepresentable {
         if webView.url != url {
             webView.load(URLRequest(url: url, cachePolicy: .reloadRevalidatingCacheData, timeoutInterval: 30))
         }
+    }
+
+    /// 把经过 Android 验证的 Orbit 移动样式作为只读 bundle 资源注入。
+    /// 使用固定 style id 保证 SPA 重载和重复 makeUIView 时仍然幂等。
+    private static func mobileStyleScript() -> WKUserScript? {
+        guard let resource = Bundle.main.url(forResource: "mobile-compat", withExtension: "css"),
+              let css = try? String(contentsOf: resource, encoding: .utf8),
+              let data = try? JSONSerialization.data(withJSONObject: [css]),
+              let arrayLiteral = String(data: data, encoding: .utf8),
+              arrayLiteral.count >= 2 else {
+            return nil
+        }
+        let cssLiteral = String(arrayLiteral.dropFirst().dropLast())
+        let source = """
+        (() => {
+          const id = 'harness-mobile-compat';
+          let style = document.getElementById(id);
+          if (!style) {
+            style = document.createElement('style');
+            style.id = id;
+            (document.head || document.documentElement).appendChild(style);
+          }
+          const css = \(cssLiteral);
+          if (style.textContent !== css) style.textContent = css;
+          document.documentElement.dataset.harnessMobile = 'true';
+          document.documentElement.dataset.harnessMobilePlatform = 'ios';
+          return true;
+        })();
+        """
+        return WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+    }
+
+    /// 注入共享移动 runtime。平台标识已在 document start 固定为 iOS，
+    /// runtime 的显式 capability gate 会跳过 Android 原生 IME、截图和控制入口。
+    private static func mobileRuntimeScript() -> WKUserScript? {
+        guard let resource = Bundle.main.url(forResource: "mobile-runtime", withExtension: "js"),
+              let source = try? String(contentsOf: resource, encoding: .utf8) else {
+            return nil
+        }
+        return WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
     }
 
     /// 为官方移动工作台补上触屏设备需要的显式附件入口。

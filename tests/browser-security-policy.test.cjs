@@ -265,7 +265,7 @@ test('暂停模型控制不会停止用户浏览或审计，且只能由用户�
   assert.ok(policy.auditSnapshot().entries.some(entry => entry.action === 'model-control-resume'))
 })
 
-test('Computer Use 共享授权只临时放行当前活动 origin（可见或后台），并保留浏览器硬门禁', () => {
+test('Computer Use 共享授权放行后台公网浏览且无需逐域授权，并保留浏览器硬门禁', () => {
   const policy = new BrowserSecurityPolicy()
   policy.setActiveTab({ id: 'tab-1', origin: ORIGIN, visible: true })
 
@@ -277,7 +277,7 @@ test('Computer Use 共享授权只临时放行当前活动 origin（可见或后
   assert.equal(policy.authorizations().count, 0, 'shared grant must not persist a second site authorization')
   assert.equal(policy.modelAction({ action: 'read', tabId: 'tab-1', payload: { text: '普通页面内容' } }).allowed, true)
   assert.equal(policy.modelNavigate(`${ORIGIN}/next`, { tabId: 'tab-1' }).origin, ORIGIN)
-  assert.throws(() => policy.modelNavigate('https://other.example.net/', { tabId: 'tab-1' }), error => error.code === 'origin-not-authorized')
+  assert.equal(policy.modelNavigate('https://other.example.net/', { tabId: 'tab-1' }).origin, 'https://other.example.net')
   assert.throws(() => policy.modelAction({
     action: 'type',
     tabId: 'tab-1',

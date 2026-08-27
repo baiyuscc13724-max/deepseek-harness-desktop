@@ -15,6 +15,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
+import android.speech.RecognizerIntent;
+import android.util.Base64;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
@@ -51,6 +54,11 @@ import com.journeyapps.barcodescanner.ScanContract;
 import com.journeyapps.barcodescanner.ScanIntentResult;
 import com.journeyapps.barcodescanner.ScanOptions;
 
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.stream.Collectors;
@@ -62,6 +70,8 @@ public final class MainActivity extends AppCompatActivity {
     private static final long[] WORKBENCH_RETRY_DELAYS_MS = { 800L, 1500L, 2500L, 4000L, 5000L };
     private static final long NETWORK_RECONNECT_DEBOUNCE_MS = 1_500L;
     private static final long MOBILE_UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1_000L;
+    private static final long MAX_CAPTURE_BYTES = 12L * 1024L * 1024L;
+    static final int MAX_PICKED_IMAGES = 20;
 
     private LinearLayout pairingPanel;
     private EditText pairingUrl;
@@ -141,23 +151,112 @@ public final class MainActivity extends AppCompatActivity {
         this::onScanResult
     );
 
-    // 工作台 HTML 图片上传：用户点击照片按钮后优先打开系统 Photo Picker，
-    // 直接展示最近照片/截图缩略图；旧系统自动降级到系统文档选择器。
+    // 工作台 HTML 附件上传：相册使用系统 Photo Picker 多选，文件继续使用系统文档选择器。
     // 两条链路都是按次 URI 授权，不申请媒体/存储权限，也不持久读取相册。
     private ValueCallback<Uri[]> fileChooserCallback;
+    private File pendingCameraFile;
     private final ActivityResultLauncher<PickVisualMediaRequest> recentImagePicker = registerForActivityResult(
-        new ActivityResultContracts.PickVisualMedia(),
-        uri -> completeFileChooser(uri == null ? null : new Uri[] { uri })
+        new ActivityResultContracts.PickMultipleVisualMedia(MAX_PICKED_IMAGES),
+        uris -> completeFileChooser(uris == null || uris.isEmpty() ? null : uris.toArray(new Uri[0]))
     );
     private final ActivityResultLauncher<Intent> systemFilePicker = registerForActivityResult(
         new ActivityResultContracts.StartActivityForResult(),
         result -> completeFileChooser(toChosenUris(result.getResultCode(), result.getData()))
+    );
+    private final ActivityResultLauncher<Intent> systemCamera = registerForActivityResult(
+        new ActivityResultContracts.StartActivityForResult(),
+        result -> completeCameraCapture(result.getResultCode())
+    );
+    private final ActivityResultLauncher<Intent> systemSpeechRecognizer = registerForActivityResult(
+        new ActivityResultContracts.StartActivityForResult(),
+        result -> completeSpeechRecognition(result.getResultCode(), result.getData())
     );
 
     private void completeFileChooser(Uri[] uris) {
         ValueCallback<Uri[]> callback = fileChooserCallback;
         fileChooserCallback = null;
         if (callback != null) callback.onReceiveValue(uris);
+    }
+
+    private void launchSystemCamera() {
+        cleanupPendingCameraFile();
+        try {
+            File directory = new File(getCacheDir(), "mobile-input");
+            if (!directory.exists() && !directory.mkdirs()) throw new IOException("capture directory unavailable");
+            pendingCameraFile = File.createTempFile("capture-", ".jpg", directory);
+            Uri output = FileProvider.getUriForFile(this, getPackageName() + ".mobile-inputs", pendingCameraFile);
+            Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                .putExtra(MediaStore.EXTRA_OUTPUT, output)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            intent.setClipData(ClipData.newRawUri("Harness camera output", output));
+            systemCamera.launch(intent);
+        } catch (ActivityNotFoundException | SecurityException | IOException failure) {
+            cleanupPendingCameraFile();
+            Toast.makeText(this, "没有可用的系统相机", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void completeCameraCapture(int resultCode) {
+        File captured = pendingCameraFile;
+        pendingCameraFile = null;
+        try {
+            if (resultCode != RESULT_OK || captured == null || !captured.isFile()) return;
+            long length = captured.length();
+            if (length <= 0L || length > MAX_CAPTURE_BYTES) {
+                Toast.makeText(this, "拍摄内容为空或超过 12 MB", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            byte[] bytes = new byte[(int) length];
+            int offset = 0;
+            try (FileInputStream input = new FileInputStream(captured)) {
+                while (offset < bytes.length) {
+                    int count = input.read(bytes, offset, bytes.length - offset);
+                    if (count < 0) break;
+                    offset += count;
+                }
+            }
+            if (offset != bytes.length) return;
+            String dataUrl = "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP);
+            evaluateMobileCallback("__harnessMobileReceiveCapture", dataUrl);
+        } catch (IOException failure) {
+            Toast.makeText(this, "无法读取拍摄内容", Toast.LENGTH_SHORT).show();
+        } finally {
+            if (captured != null) captured.delete();
+        }
+    }
+
+    private void launchSystemSpeechRecognizer() {
+        try {
+            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                .putExtra(RecognizerIntent.EXTRA_PROMPT, "语音输入");
+            // Deliberately omit EXTRA_LANGUAGE: the system recognizer retains the user's
+            // configured language and multilingual recognition behavior.
+            systemSpeechRecognizer.launch(intent);
+        } catch (ActivityNotFoundException | SecurityException failure) {
+            Toast.makeText(this, "没有可用的系统语音识别服务", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void completeSpeechRecognition(int resultCode, Intent data) {
+        if (resultCode != RESULT_OK || data == null) return;
+        java.util.ArrayList<String> results = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+        if (results == null || results.isEmpty()) return;
+        String text = results.get(0);
+        if (text != null && !text.trim().isEmpty()) evaluateMobileCallback("__harnessMobileReceiveSpeech", text);
+    }
+
+    private void evaluateMobileCallback(String fixedCallback, String value) {
+        if (webView == null || value == null) return;
+        if (!"__harnessMobileReceiveCapture".equals(fixedCallback) && !"__harnessMobileReceiveSpeech".equals(fixedCallback)) return;
+        String script = "window." + fixedCallback + "&&window." + fixedCallback + "(" + JSONObject.quote(value) + ");true;";
+        webView.evaluateJavascript(script, null);
+    }
+
+    private void cleanupPendingCameraFile() {
+        File file = pendingCameraFile;
+        pendingCameraFile = null;
+        if (file != null) file.delete();
     }
 
     private static Uri[] toChosenUris(int resultCode, Intent data) {
@@ -379,8 +478,8 @@ public final class MainActivity extends AppCompatActivity {
             }
 
             // HTML <input type="file">/file input 的系统选择器桥：
-            // 用户主动点击页面里的上传控件才会触发；图片使用系统 Photo Picker 单选快返，
-            // 点一张即回到输入框。文件仍原样回传，取消则回传 null；不要求存储权限。
+            // 用户主动点击页面里的上传控件才会触发；图片使用系统 Photo Picker 批量选择，
+            // 按系统顺序回到输入框。文件仍原样回传，取消则回传 null；不要求存储权限。
             @Override public boolean onShowFileChooser(
                     WebView view,
                     ValueCallback<Uri[]> filePath,
@@ -390,19 +489,20 @@ public final class MainActivity extends AppCompatActivity {
                     fileChooserCallback = null;
                 }
                 fileChooserCallback = filePath;
+                boolean imageChooser = isImageChooser(fileChooserParams);
                 try {
-                    if (isImageChooser(fileChooserParams)) {
+                    if (imageChooser) {
                         PickVisualMediaRequest request = new PickVisualMediaRequest.Builder()
                             .setMediaType(ActivityResultContracts.PickVisualMedia.ImageOnly.INSTANCE)
                             .build();
                         recentImagePicker.launch(request);
                     } else {
-                        systemFilePicker.launch(buildSystemFilePickerIntent(fileChooserParams));
+                        systemFilePicker.launch(buildSystemFilePickerIntent(fileChooserParams, false));
                     }
                     return true;
                 } catch (ActivityNotFoundException | SecurityException failure) {
                     try {
-                        systemFilePicker.launch(buildSystemFilePickerIntent(fileChooserParams));
+                        systemFilePicker.launch(buildSystemFilePickerIntent(fileChooserParams, imageChooser));
                     } catch (ActivityNotFoundException | SecurityException fallbackFailure) {
                         completeFileChooser(null);
                     }
@@ -422,11 +522,11 @@ public final class MainActivity extends AppCompatActivity {
                 return found;
             }
 
-            private Intent buildSystemFilePickerIntent(FileChooserParams params) {
+            private Intent buildSystemFilePickerIntent(FileChooserParams params, boolean forceMultiple) {
                 String[] acceptTypes = params.getAcceptTypes();
                 String primary = (acceptTypes == null || acceptTypes.length == 0
                     || acceptTypes[0] == null || acceptTypes[0].trim().isEmpty()) ? "*/*" : acceptTypes[0];
-                boolean multiple = params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE;
+                boolean multiple = forceMultiple || params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE;
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
                     .addCategory(Intent.CATEGORY_OPENABLE)
                     .setType(primary)
@@ -485,8 +585,12 @@ public final class MainActivity extends AppCompatActivity {
                     retryableMainFrameUrl = request.getUrl().toString();
                     setConnectionStatus(getString(R.string.waiting_desktop_status));
                     scheduleWorkbenchRetry();
-                } else if (request.isForMainFrame() && (errorResponse.getStatusCode() == 401 || errorResponse.getStatusCode() == 403)) {
+                } else if (request.isForMainFrame() && isPairingRejectedHttpStatus(errorResponse.getStatusCode())) {
                     setConnectionStatus(getString(R.string.pairing_expired_status));
+                    mainHandler.post(() -> {
+                        disconnect();
+                        showPairingError(getString(R.string.pairing_expired_status));
+                    });
                 }
                 super.onReceivedHttpError(view, request, errorResponse);
             }
@@ -1034,6 +1138,10 @@ public final class MainActivity extends AppCompatActivity {
         return statusCode == 502 || statusCode == 503 || statusCode == 504;
     }
 
+    static boolean isPairingRejectedHttpStatus(int statusCode) {
+        return statusCode == 401 || statusCode == 403 || statusCode == 410;
+    }
+
     private static boolean isRetryableWebError(int errorCode) {
         return errorCode == WebViewClient.ERROR_CONNECT
             || errorCode == WebViewClient.ERROR_HOST_LOOKUP
@@ -1132,6 +1240,14 @@ public final class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> startActivity(new Intent(MainActivity.this, ControlSettingsActivity.class)));
         }
 
+        @JavascriptInterface public void inputAction(String action) {
+            if (!"capture".equals(action) && !"speech".equals(action)) return;
+            runOnUiThread(() -> {
+                if ("capture".equals(action)) launchSystemCamera();
+                else launchSystemSpeechRecognizer();
+            });
+        }
+
         @JavascriptInterface public String status() {
             return ControlPreferences.isEnabled(MainActivity.this) && HarnessControlAccessibilityService.isConnected() ? "ready" : "disabled";
         }
@@ -1143,6 +1259,7 @@ public final class MainActivity extends AppCompatActivity {
             fileChooserCallback.onReceiveValue(null);
             fileChooserCallback = null;
         }
+        cleanupPendingCameraFile();
         ControlPreferences.setEnabled(this, false);
         ControlForegroundService.stop(this);
         cancelWorkbenchRetry(true);

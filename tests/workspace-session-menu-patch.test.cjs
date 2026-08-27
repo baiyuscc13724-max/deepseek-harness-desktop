@@ -69,3 +69,32 @@ test('collapsed session groups order every row before limiting while expanded gr
   assert.equal(second.changed, false)
   assert.equal(second.source, first.source)
 })
+
+test('session click keeps unread until an exact authoritative mobile history receipt arrives', async () => {
+  const { patchWorkspaceSessionMenuSource } = await sessionMenuPatch()
+  const patched = patchWorkspaceSessionMenuSource(installedPatchFixture()).source
+
+  assert.match(patched, /onClick:\s*\(\) => \{\s*onOpen\(node\.id\);\s*\}/u)
+  assert.doesNotMatch(patched, /onClick:\s*\(\) => \{\s*if \(unread\) setSessionMenuFlag/u)
+  assert.match(patched, /loadedSessionId !== sessionId \|\| !sessionMenuFlag\(sessionId, "unread"\)/u)
+  assert.match(patched, /setSessionMenuFlag\(sessionId, "unread", false\)/u)
+
+  const validatorStart = patched.indexOf('\t\tfunction sessionHistoryReceiptSessionId')
+  const validatorEnd = patched.indexOf('\t\tfunction useSessionMenuRevision', validatorStart)
+  assert.ok(validatorStart >= 0 && validatorEnd > validatorStart)
+  const validatorSource = patched.slice(validatorStart, validatorEnd)
+  const validate = new Function(
+    `const HD_SESSION_HISTORY_RECEIPT_EVENT = "harness-mobile-session-history-receipt";\n${validatorSource}\nreturn sessionHistoryReceiptSessionId;`
+  )()
+  const receipt = (detail, type = 'harness-mobile-session-history-receipt') => ({ type, detail })
+
+  assert.equal(validate(receipt({ sessionId: 'one', authoritative: true, latestLoaded: true })), 'one')
+  assert.equal(validate(receipt({ sessionId: 'one', authoritative: false, latestLoaded: true })), null)
+  assert.equal(validate(receipt({ sessionId: 'one', authoritative: true, latestLoaded: false })), null)
+  assert.equal(validate(receipt({ sessionId: 'one', authoritative: true, latestLoaded: true, forged: true })), null)
+  assert.equal(validate(receipt({ sessionId: '', authoritative: true, latestLoaded: true })), null)
+  assert.equal(validate(receipt({ sessionId: 'one', authoritative: true, latestLoaded: true }, 'page-forged-event')), null)
+  const getterDetail = { sessionId: 'one', latestLoaded: true }
+  Object.defineProperty(getterDetail, 'authoritative', { enumerable: true, get: () => true })
+  assert.equal(validate(receipt(getterDetail)), null)
+})

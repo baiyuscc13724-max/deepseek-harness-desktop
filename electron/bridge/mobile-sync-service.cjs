@@ -107,7 +107,11 @@ function lanAddresses(networkInterfaces = os.networkInterfaces()) {
   for (const [name, values] of Object.entries(networkInterfaces || {})) {
     for (const value of values || []) {
       if (value.family !== 'IPv4' || value.internal || !isPrivateIpv4(value.address)) continue
-      const virtual = /vEthernet|VirtualBox|VMware|WSL|Docker|Hyper-V|Loopback/i.test(name)
+      // Keep real Wi-Fi/Ethernet addresses ahead of overlay, tunnel and
+      // container adapters. Pairing advertises the first origin, so treating a
+      // TUN/TAP adapter as physical can produce a QR address that phones can
+      // route only through a VPN which the Android LAN fast path bypasses.
+      const virtual = /vEthernet|VirtualBox|VMware|WSL|Docker|Hyper-V|Loopback|Tailscale|ZeroTier|WireGuard|Wintun|EasyTier|Hamachi|singbox|LetsTAP|(?:^|[_\s-])(?:tun|tap)(?:$|[_\s-])/i.test(name)
       entries.push({ address: value.address, name, virtual })
     }
   }

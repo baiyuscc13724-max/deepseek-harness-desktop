@@ -13,11 +13,16 @@ function assertContainsAll(source, contracts, label) {
 }
 
 test('iOS mobile experience keeps Apple-native state and accessibility contracts', async () => {
-  const [content, pairing, banner, workbench] = await Promise.all([
+  const [content, pairing, banner, workbench, project, iosCompat, androidCompat, iosRuntime, androidRuntime] = await Promise.all([
     read('mobile', 'ios', 'HarnessMobile', 'App', 'ContentView.swift'),
     read('mobile', 'ios', 'HarnessMobile', 'App', 'PairingView.swift'),
     read('mobile', 'ios', 'HarnessMobile', 'App', 'StatusBannerView.swift'),
-    read('mobile', 'ios', 'HarnessMobile', 'App', 'WorkbenchView.swift')
+    read('mobile', 'ios', 'HarnessMobile', 'App', 'WorkbenchView.swift'),
+    read('mobile', 'ios', 'project.yml'),
+    read('mobile', 'ios', 'HarnessMobile', 'Resources', 'mobile-compat.css'),
+    read('mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-compat.css'),
+    read('mobile', 'ios', 'HarnessMobile', 'Resources', 'mobile-runtime.js'),
+    read('mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-runtime.js')
   ])
 
   assertContainsAll(content, [
@@ -52,6 +57,26 @@ test('iOS mobile experience keeps Apple-native state and accessibility contracts
     'webView.uiDelegate = context.coordinator',
     'keyboardDismissMode = .interactive'
   ], 'iOS mobile attachment bridge')
+  assertContainsAll(workbench, [
+    'mobileStyleScript()',
+    'mobileRuntimeScript()',
+    'Bundle.main.url(forResource: "mobile-compat", withExtension: "css")',
+    'Bundle.main.url(forResource: "mobile-runtime", withExtension: "js")',
+    "const id = 'harness-mobile-compat'",
+    "document.documentElement.dataset.harnessMobilePlatform = 'ios'",
+    'injectionTime: .atDocumentEnd, forMainFrameOnly: true'
+  ], 'iOS Orbit web asset injection')
+  assertContainsAll(project, [
+    'resources:',
+    '- path: HarnessMobile/Resources/mobile-compat.css',
+    '- path: HarnessMobile/Resources/mobile-runtime.js',
+    'excludes:',
+    '- Resources/mobile-compat.css',
+    '- Resources/mobile-runtime.js'
+  ], 'iOS explicit Orbit resource packaging')
+  assert.equal(iosCompat, androidCompat, 'iOS must bundle the exact Android-validated Orbit CSS')
+  assert.equal(iosRuntime, androidRuntime, 'iOS must bundle the exact capability-gated Android runtime')
+  assert.doesNotMatch(workbench, /installControlSettingsEntry|harness-mobile-screen-captured/, 'iOS loader must not duplicate Android-only runtime behavior')
   assert.doesNotMatch(workbench, /WKOpenPanelParameters|runOpenPanelWith parameters/, 'iOS 18.4-only open-panel API must not be referenced by the iOS 16 target')
   assert.doesNotMatch(workbench, /PhotosUI|PHPicker|UIDocumentPicker/, 'the iOS 16 path must rely on the permission-minimal WebKit system picker')
 })
@@ -124,8 +149,12 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     "window.dispatchEvent(new CustomEvent('harness-mobile-ime-change'",
     'ActivityResultLauncher<Intent>',
     'ActivityResultLauncher<PickVisualMediaRequest>',
-    'new ActivityResultContracts.PickVisualMedia()',
+    'MAX_PICKED_IMAGES = 20',
+    'new ActivityResultContracts.PickMultipleVisualMedia(MAX_PICKED_IMAGES)',
+    'uris.toArray(new Uri[0])',
     'PickVisualMedia.ImageOnly.INSTANCE',
+    'forceMultiple || params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE',
+    'Intent.EXTRA_ALLOW_MULTIPLE, multiple',
     'completeFileChooser',
     'protected void onResume()',
     'mobileUiAdapter.inject(webView)',
@@ -148,11 +177,12 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     "document.querySelector('[data-slot=\\\"sidebar\\\"]') ||"
   ], 'Android native file chooser and shell readiness')
   assert.doesNotMatch(mainActivity, /\.isBlank\(|List\.of\(|(?<!Collectors)\.toList\(/u, 'minSdk 26 production code must not use newer un-desugared Java collection/string APIs')
-  assert.doesNotMatch(mainActivity, /PickMultipleVisualMedia|setMaxItems/u, 'the recent-photo path must return after one thumbnail tap')
+  assert.doesNotMatch(mainActivity, /new ActivityResultContracts\.PickVisualMedia\(\)/u, 'the gallery path must not regress to a single-photo picker')
   assert.match(manifest, /android:windowSoftInputMode="stateAlwaysHidden\|adjustResize"/u, 'pairing and reconnect surfaces must not summon the IME')
   assert.match(manifest, /android\.permission\.DETECT_SCREEN_CAPTURE/u, 'Android 14+ screenshot hints use the official normal permission')
   assert.doesNotMatch(manifest, /READ_MEDIA_IMAGES|READ_MEDIA_VISUAL_USER_SELECTED|READ_EXTERNAL_STORAGE/u, 'system picker must not expand media or storage permissions')
-  assert.doesNotMatch(mainActivity, /android\.provider\.MediaStore|new\s+ContentObserver|registerContentObserver/u, 'screenshot hints must never infer or read the newest media item')
+  const screenshotHintSource = mainActivity.slice(mainActivity.indexOf('private void notifyScreenCaptured()'), mainActivity.indexOf('protected void onResume()'))
+  assert.doesNotMatch(screenshotHintSource, /MediaStore\.|new\s+ContentObserver|registerContentObserver|getContentResolver/u, 'screenshot hints must never infer or read the newest media item')
   assert.match(androidBuild, /defaultUpdateManifestUrl = "https:\/\/raw\.githubusercontent\.com\/baiyuscc13724-max\/deepseek-harness-desktop\/main\/mobile\/mobile-app-update\.json"/u, 'Android must have an independent mobile update channel')
   const parsedUpdateFeed = JSON.parse(updateFeed)
   assert.equal(parsedUpdateFeed.schemaVersion, 1)
@@ -160,16 +190,18 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
   assertContainsAll(adapter, [
     'data-harness-mobile-add-photo',
     "input.type='file'",
-    "input.accept='image/*'",
+    'input.accept=accept',
+    "makeInput('harness-mobile-photo-input','image/*')",
     'ClipboardEvent',
     'new FileReader()',
     'reader.readAsArrayBuffer(file)',
     'new File([reader.result]',
     'textarea[data-phase]',
-    'button.disabled!==unavailable',
-    "button.getAttribute('aria-disabled')!==ariaDisabled",
-    'affectsFileEntry',
-    'if(affectsFileEntry(records))syncOrMount()'
+    'var syncState=function(button)',
+    'button.disabled=disabled',
+    "button.setAttribute('aria-disabled',disabled?'true':'false')",
+    'var affectsEntry=function(records)',
+    'if(affectsEntry(records))syncOrMount()'
   ], 'Android mobile attachment bridge')
   assertContainsAll(compat, [
     ':focus-visible',
@@ -182,19 +214,24 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'data-chat-flow-kind="command"',
     'data-chat-flow-kind="turn-tail"',
     'conversation.composer.dock',
-    'data-harness-mobile-composer="qianwen"',
-    'min-height: 96px',
+    'data-harness-mobile-composer="orbit"',
+    'data-harness-mobile-chat-detail="open"',
+    'min-height: 42px',
+    '#harness-mobile-input-menu:not([hidden])',
+    'grid-template-columns: repeat(2, minmax(0, 1fr))',
     'position: sticky',
     'data-harness-mobile-sheet',
     'data-harness-mobile-settings-dialog',
     'data-harness-mobile-settings-view="list"',
     'data-harness-mobile-settings-toolbar="true"',
     'data-harness-mobile-settings-category="true"',
+    'data-harness-mobile-conversation-search-proxy',
+    'data-harness-mobile-conversation-list-title',
     'data-harness-mobile-model-routing="true"',
     '#harness-mobile-model-routing',
     '#harness-mobile-screenshot-suggestion',
     'data-harness-mobile-composer-frame="true"',
-    'width: calc(100vw - 24px) !important',
+    'width: calc(100vw - 32px) !important',
     'position: fixed !important',
     'width: 100vw !important',
     'height: 100dvh !important',
@@ -208,6 +245,13 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'composerStyleRestorations',
     "card?.querySelector('button[aria-haspopup=\"listbox\"]')",
     'setTemporary(button.parentElement',
+    "const mobilePlatform = String(window.HarnessMobilePlatform || 'android')",
+    'const mobileCapabilities = Object.freeze({',
+    "root.dataset.harnessMobilePlatform = mobilePlatform",
+    "Object.defineProperty(window, '__harnessMobileCapabilities'",
+    'if (mobileCapabilities.imeSendBridge) installImeSendBridge()',
+    'if (mobileCapabilities.screenshotSuggestion) installScreenshotSuggestion()',
+    'if (mobileCapabilities.controlSettings) installControlSettingsEntry()',
     'installImeSendBridge',
     'installComposerLift',
     'harnessMobileComposerLifted',
@@ -226,6 +270,10 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'decorateConversation',
     'mobileSettingsCategories',
     'setSettingsView',
+    'findNativeSettingsClose(dialog)?.click()',
+    'harnessMobileConversationSearchSection',
+    'shell.dataset.harnessMobileConversationHomeOpened',
+    "['Settings', '设置']",
     'decorateMobileModelSettings',
     "fetch('/__harness_mobile__/model-routing'",
     '只读显示，来源：已配对电脑',
@@ -241,12 +289,40 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'data-harness-mobile-settings-close',
     "root.dataset.harnessMobileSettingsOpen = 'true'",
     "composer.parentElement.dataset.harnessMobileComposerFrame = 'true'",
-    "composer.dataset.harnessMobileComposer = 'qianwen'",
-    "const language = typeof navigator === 'object'",
-    "input.placeholder = /^zh\\b/i.test(language) ? '发消息…' : 'Message…'"
+    "composer.dataset.harnessMobileComposer = 'orbit'",
+    "input.placeholder = '发消息…'",
+    'decorateConversationWorkflow',
+    'data-harness-mobile-workflow-summary',
+    'decorateAgentTeamsWorkbench',
+    'data-harness-mobile-agent-detail-toggle',
+    'data-harness-mobile-project-task-toggle',
+    'data-harness-mobile-profile-card="true"',
+    'officialAgentSessionId',
+    'openOfficialAgentCanvas',
+    'openOfficialScheduledTasks',
+    '代理团队跟随当前来源会话；切换其他项目会话后，这里自动显示其团队与协作画布。',
+    'data-harness-mobile-switch-context',
+    "['Open in new window', '在新窗口中打开']",
+    "['Delete workspace', '删除项目']",
+    'Workspace actions for\\s+(.+)',
+    'data-harness-mobile-context-scope',
+    '搜索项目和对话',
+    'actionButton.hidden = !conversationsDomain',
+    '上下文已压缩',
+    'Update to-do list',
+    '更新待办 ·',
+    '团队画布已就绪',
+    '返回对话并说明目标',
+    "document.addEventListener('pointerdown'",
+    'mobileMenu.contains(event.target)',
+    '[data-harness-mobile-session-row="true"][aria-selected="true"]',
+    "root.dataset.harnessMobileDomain = activeDomain?.id || 'conversations'"
   ], 'Android mobile shell behavior and large-text containment')
+  assert.doesNotMatch(runtime, /搜索对话和任务/u, 'conversation search must not imply that Scheduled Tasks are mixed into conversation search')
   assert.doesNotMatch(runtime, /settings\.describe|credentials\.(?:describe|set|unset)/u, 'mobile UI must not bypass the official protected settings and credentials plane')
   assert.doesNotMatch(runtime, /data-harness-mobile-action="more"/, 'mobile app bar must not expose an empty overflow action')
+  assert.doesNotMatch(`${compat}\n${runtime}`, /qianwen/i, 'mobile presentation must use the original Orbit design language instead of a competitor-named imitation')
+  assert.match(compat, /--hm-color-primary:\s*#4968e8/u, 'Orbit brand tokens must remain explicit and testable')
   assert.match(compat, /\[data-harness-mobile-conversation="true"\]\s*\{[^}]*height:\s*100%\s*!important/s, 'conversation follows the resized WebView instead of the layout viewport')
 })
 

@@ -288,7 +288,7 @@
     try {
       renderComputerUse(await api.authorizeComputerUse(scope))
       setBrowserStatus(scope === 'forever'
-        ? '浏览器控制与 Computer Use 已永久授权；重启后保留授权，但不会自动开启控制。'
+        ? '浏览器控制与 Computer Use 已永久开启；重启后会自动恢复共享控制。'
         : '浏览器控制与 Computer Use 已完成本次共享授权。')
     } catch (error) {
       computerUseAuthorizationStatus.textContent = error.message || String(error)
@@ -347,7 +347,6 @@
     if (document.activeElement !== address && state.url) address.value = state.url
     profileOrigin.textContent = state.origin || '尚未打开站点'
     loginState.textContent = state.hasSiteData ? '本站会话数据已保存在独立 Profile' : '未检测到本站 Cookie'
-    const authorizationCount = Number(state.authorizations?.count) || 0
     const auditCount = Number(state.audit?.count) || 0
     const control = state.control || {}
     const sharedState = control.active
@@ -363,7 +362,7 @@
           ? '浏览器标签已失效，需要用户刷新或新建标签页'
           : '浏览器会话将在首次模型导航时后台启动'
     const attention = state.attentionRequired ? '；有关键动作等待本次允许或拒绝' : ''
-    privacySummary.textContent = `${sharedState}；${browserSessionState}；本次运行保留 ${auditCount} 条脱敏审计元数据${authorizationCount ? `；兼容保留 ${authorizationCount} 个旧版站点授权` : ''}${attention}。`
+    privacySummary.textContent = `${sharedState}；公网普通浏览动作无需按域名授权；${browserSessionState}；本次运行保留 ${auditCount} 条脱敏审计元数据${attention}。`
     pendingActions.replaceChildren()
     for (const pending of state.pendingConfirmations || []) {
       const row = document.createElement('div')

@@ -24,6 +24,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class MainActivityTest {
+    @Test public void galleryBatchSelectionHasABoundedNativeLimit() {
+        assertEquals(20, MainActivity.MAX_PICKED_IMAGES);
+    }
+
     @Test public void acceptsOnlyPrivateLanPairingLinks() {
         assertTrue(PairingLinkValidator.isSafeHarnessUrl("http://192.168.1.8:3081/__harness_mobile__/pair/abc", true));
         assertTrue(PairingLinkValidator.isSafeHarnessUrl("http://10.0.0.3:4000/", false));
@@ -31,6 +35,13 @@ public final class MainActivityTest {
         assertFalse(PairingLinkValidator.isSafeHarnessUrl("http://8.8.8.8:3081/__harness_mobile__/pair/abc", true));
         assertFalse(PairingLinkValidator.isSafeHarnessUrl("http://192.168.1.8:3081/", true));
         assertTrue(PairingLinkValidator.extractHttpPairingUrl("harnessmobile://pair?url=http%3A%2F%2F192.168.1.8%3A3081%2F__harness_mobile__%2Fpair%2Fabc").endsWith("/pair/abc"));
+    }
+
+    @Test public void rejectedOrExpiredPairingReturnsToNativePairing() {
+        assertTrue(MainActivity.isPairingRejectedHttpStatus(401));
+        assertTrue(MainActivity.isPairingRejectedHttpStatus(403));
+        assertTrue(MainActivity.isPairingRejectedHttpStatus(410));
+        assertFalse(MainActivity.isPairingRejectedHttpStatus(502));
     }
 
     @Test public void acceptsTheSameSetupQrForInAppPairing() {
@@ -242,6 +253,19 @@ public final class MainActivityTest {
         assertEquals(relay.key(), prioritized.get(0).key());
         assertEquals(remote.key(), prioritized.get(1).key());
         assertEquals(lan.key(), prioritized.get(2).key());
+    }
+
+    @Test public void webProxyRewritesStableHostToTheDesktopRoute() {
+        byte[] input = ("GET http://harness.localhost:3081/__harness_mobile__/health HTTP/1.1\r\n" +
+            "Host: harness.localhost:3081\r\nConnection: keep-alive\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1);
+        String rewritten = new String(
+            HarnessWebProxy.rewriteRequest(input, false, "192.168.1.20:3081"),
+            StandardCharsets.ISO_8859_1
+        );
+        assertTrue(rewritten.startsWith("GET /__harness_mobile__/health HTTP/1.1\r\n"));
+        assertTrue(rewritten.contains("Host: 192.168.1.20:3081\r\n"));
+        assertFalse(rewritten.contains("Host: harness.localhost:3081"));
+        assertTrue(rewritten.contains("Connection: close\r\n"));
     }
 
     @Test public void parsesOnlyVersionedFixedControlActions() throws Exception {

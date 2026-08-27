@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: harness-wallpaper:; media-src 'self' harness-wallpaper:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src http://127.0.0.1:* http://localhost:*;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: harness-wallpaper: http://127.0.0.1:* http://localhost:* http://[::1]:*; media-src 'self' harness-wallpaper: http://127.0.0.1:* http://localhost:* http://[::1]:*; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src http://127.0.0.1:* http://localhost:* http://[::1]:*;" />
   <title>Harness Desktop</title>
   <link rel="stylesheet" href="./styles.css" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
@@ -88,7 +88,7 @@
         <label><input id="browserClearSiteConfirm" type="checkbox" /> 确认清除当前站点登录数据</label>
         <button id="browserClearSite" class="danger" type="button" disabled>清除当前站点</button>
         <p id="browserPrivacySummary">浏览器控制复用 Computer Use 授权；本次运行保留 0 条脱敏审计元数据。</p>
-        <label><input id="browserClearAllConfirm" type="checkbox" /> 确认清除登录数据、缓存、浏览历史、站点授权与审计元数据</label>
+        <label><input id="browserClearAllConfirm" type="checkbox" /> 确认清除登录数据、缓存、浏览历史与审计元数据</label>
         <button id="browserClearAll" class="danger" type="button" disabled>重置整个独立 Profile</button>
         <button id="closeBrowserProfile" type="button">返回网页</button>
       </section>

@@ -2,7 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, na
 const { spawn, execFile } = require('node:child_process')
 const { createHash, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { mkdir, open, readFile, readdir, realpath, rm, stat, unlink, writeFile } = require('node:fs/promises')
+const { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -57,13 +57,12 @@ const { previewChangeDetails, previewChangeSummary } = require('./bridge/update-
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
 const { TerminalManager } = require('./bridge/terminal-service.cjs')
-const { loadRightWorkspaceResource, previewLocalDocument } = require('./bridge/right-workspace-service.cjs')
+const { loadRightWorkspaceResource, materializeRightWorkspaceFile, previewLocalDocument } = require('./bridge/right-workspace-service.cjs')
 const { MemoryService, createMemoryPack } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
 const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
 const { DECISIONS: BROWSER_LINK_DECISIONS, routeBrowserLink } = require('./bridge/browser-link-router.cjs')
 const { MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, isSensitiveText } = require('./bridge/browser-action-gate.cjs')
-const { hostPublicInfo } = require('./bridge/browser-url-policy.cjs')
 const { BrowserOperationCoordinator } = require('./bridge/browser-operation-coordinator.cjs')
 const { BrowserNavigationLane, attachBrowserNavigationGuard } = require('./bridge/browser-navigation-guard.cjs')
 const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
@@ -94,6 +93,7 @@ const { mobileBootstrapSource } = require('../renderer/theme-integration.js')
 const desktopPackage = require('../package.json')
 
 const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3080'
+const RIGHT_WORKSPACE_OPEN_CLEANUP_MS = 60 * 60 * 1000
 const WALLPAPER_SCHEME = 'harness-wallpaper'
 const LOCAL_RUNTIME_HOSTS = new Set(['127.0.0.1', 'localhost'])
 const SELF_TEST_MODE = process.argv.includes('--self-test')
@@ -154,11 +154,13 @@ const browserOperations = new BrowserOperationCoordinator()
 let browserSidebarVisible = false
 let browserContentVisible = true
 let workspacePickerPromise = null
-// 当前控制会话必须由用户显式授权；授权卡片（本次授权/永久授权）由模型请求时在对话框上方弹出。
-// 永久授权持久化到 grant.json；重启只恢复授权，不自动开启控制，下一次显式调用时再恢复会话。
+// 首次控制必须由用户显式授权；授权卡片（本次授权/永久授权）由模型请求时在对话框上方弹出。
+// 永久授权持久化到 grant.json；重启后自动恢复共享控制，系统锁定/挂起期间仍会安全暂停。
 let computerUseEnabled = false
 let computerUseAuthorizedScope = 'none' // 'none' | 'session' | 'forever'
 let computerUseUnlimited = false
+let computerUseResumeAfterSystemInterruption = false
+let computerUseSystemTransition = Promise.resolve()
 let computerUseAuthorizationRequest = null // { id, requestedAt, requestedBy }
 let computerUseSessionGeneration = 0
 let computerUseScreenshotStore = null
@@ -494,7 +496,6 @@ async function browserStatePayload(patch = {}) {
       partition: browserSecurityPolicy?.partitionName || BrowserSecurityPolicy.partitionName(),
       isolatedFromHarness: true
     },
-    authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [], unifiedControl: false },
     control: sharedComputerUseControlState(),
     session: {
       ready: sessionReady,
@@ -958,21 +959,6 @@ async function resumeBrowserModelControl() {
   return publishBrowserState()
 }
 
-async function grantCurrentBrowserOrigin(actions) {
-  const ticket = browserOperations.ticket()
-  if (!browserState.origin) throw new Error('请先打开需要授权的站点。')
-  await resumeBrowserModelControl()
-  browserOperations.assert(ticket)
-  const origin = browserState.origin
-  const privateNetwork = !hostPublicInfo(new URL(origin).hostname).public
-  browserSecurityPolicy.grant(origin, {
-    actions: Array.isArray(actions) ? actions : [],
-    ttlMs: 2 * 60 * 60 * 1000,
-    ...(privateNetwork ? { by: 'user', allowPrivateNetwork: true } : {})
-  })
-  return publishBrowserState()
-}
-
 async function clearAllBrowserData(confirmed) {
   if (confirmed !== true) throw new Error('重置独立浏览器 Profile 需要用户明确确认。')
   const view = ensureBrowserSession()
@@ -1386,11 +1372,9 @@ async function modelBrowserAction(input = {}, context = {}) {
   const action = String(input.action || '')
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
   if (action === 'status') {
-    const authorizations = browserSecurityPolicy?.authorizations() || { entries: [] }
-    const current = authorizations.entries.find(entry => entry.origin === browserState.origin)
     const bounds = browserView?.getBounds?.() || { width: 0, height: 0 }
     const control = sharedComputerUseControlState()
-    const effectiveActions = control.active ? ['read', 'click', 'type', 'upload', 'download', 'submit'] : (current?.actions || [])
+    const effectiveActions = control.active ? ['read', 'click', 'type', 'upload', 'download', 'submit'] : []
     const visible = browserSidebarVisible && browserContentVisible
     const activeTab = browserTabs.get(activeBrowserTabId)
     const contents = liveBrowserContents()
@@ -2128,6 +2112,7 @@ async function revokeComputerUsePermanentGrant() {
   computerUseAuthorizedScope = 'none'
   computerUseUnlimited = false
   computerUseAuthorizationRequest = null
+  computerUseResumeAfterSystemInterruption = false
   computerUseConfirmations.clear()
   windowsComputerUse?.setUnlimited?.(false)
   const wasEnabled = computerUseEnabled
@@ -2143,8 +2128,26 @@ async function restoreComputerUseGrant() {
   computerUseUnlimited = true
   computerUseAuthorizationRequest = null
   ensureWindowsComputerUse().setUnlimited?.(true)
-  await setComputerUseEnabled(false)
+  await setComputerUseEnabled(true)
   return grant
+}
+
+function queueComputerUseSystemTransition(action) {
+  computerUseSystemTransition = computerUseSystemTransition.then(action, action).catch(error => {
+    console.warn(`Unable to synchronize Computer Use with the system lifecycle: ${error.message}`)
+  })
+  return computerUseSystemTransition
+}
+
+function pauseComputerUseForSystemInterruption() {
+  computerUseResumeAfterSystemInterruption ||= computerUseEnabled && computerUseAuthorizedScope === 'forever'
+  return setComputerUseEnabled(false)
+}
+
+async function resumeComputerUseAfterSystemInterruption() {
+  if (!computerUseResumeAfterSystemInterruption || computerUseAuthorizedScope !== 'forever') return computerUseState()
+  computerUseResumeAfterSystemInterruption = false
+  return setComputerUseEnabled(true)
 }
 
 async function setComputerUseEnabled(enabled) {
@@ -4868,6 +4871,37 @@ ipcMain.handle('rightWorkspace:resource', (event, kind, payload) => {
     fetchImpl: (url, options) => net.fetch(url.toString(), options)
   })
 })
+ipcMain.handle('rightWorkspace:openFile', async (event, payload) => {
+  assertDesktopShellSender(event)
+  const runtimeUrl = runtimeState.status === 'ready' ? runtimeState.url : null
+  const file = await materializeRightWorkspaceFile({
+    runtimeUrl,
+    sessionId: payload?.sessionId,
+    path: payload?.path,
+    name: payload?.name,
+    tempBase: app.getPath('temp'),
+    fetchImpl: (url, options) => net.fetch(url.toString(), options),
+    mkdirImpl: mkdir,
+    mkdtempImpl: mkdtemp,
+    openImpl: open,
+    realpathImpl: realpath,
+    lstatImpl: lstat,
+    rmImpl: rm
+  })
+  try {
+    const result = await openLocalTarget(file.destination, {
+      statImpl: stat,
+      openPath: target => shell.openPath(target),
+      showItemInFolder: target => shell.showItemInFolder(target)
+    })
+    const cleanup = setTimeout(() => rm(file.directory, { recursive: true, force: true }).catch(() => {}), RIGHT_WORKSPACE_OPEN_CLEANUP_MS)
+    cleanup.unref?.()
+    return { opened: result.ok && String(result.action || '').startsWith('open-'), revealed: String(result.action || '').startsWith('reveal'), action: result.action, name: file.name }
+  } catch (error) {
+    await rm(file.directory, { recursive: true, force: true }).catch(() => {})
+    throw error
+  }
+})
 ipcMain.handle('rightWorkspace:previewLocal', (event, value) => {
   assertDesktopShellSender(event)
   const target = normalizeLocalTarget(value)
@@ -4986,20 +5020,6 @@ ipcMain.handle('browser:clearSiteData', (event, request) => {
 ipcMain.handle('browser:clearAllData', (event, request) => {
   assertDesktopShellSender(event)
   return clearAllBrowserData(request?.confirmed === true)
-})
-ipcMain.handle('browser:grantCurrent', (event, actions) => {
-  assertDesktopShellSender(event)
-  return grantCurrentBrowserOrigin(actions)
-})
-ipcMain.handle('browser:revokeCurrent', async event => {
-  assertDesktopShellSender(event)
-  browserOperations.ticket()
-  const origin = browserState.origin
-  if (origin) abortBrowserTransfers(origin)
-  await withBrowserTransferLock(async () => {
-    if (origin && browserSecurityPolicy && !browserSecurityPolicy.isStopped) browserSecurityPolicy.revoke(origin)
-  })
-  return publishBrowserState()
 })
 ipcMain.handle('browser:resumeModelControl', event => {
   assertDesktopShellSender(event)
@@ -5138,24 +5158,26 @@ app.whenReady().then(async () => {
     wallpaperScreenLocked = true
     syncWallpaperLifecycle('screen-locked')
     computerUseScreenLocked = true
-    setComputerUseEnabled(false).catch(() => {})
+    queueComputerUseSystemTransition(() => pauseComputerUseForSystemInterruption())
   })
   powerMonitor.on('unlock-screen', () => {
     computerUseScreenLocked = false
     wallpaperScreenLocked = false
     syncWallpaperLifecycle('screen-unlocked')
+    queueComputerUseSystemTransition(() => resumeComputerUseAfterSystemInterruption())
   })
   powerMonitor.on('suspend', () => {
     wallpaperSystemSuspended = true
     syncWallpaperLifecycle('system-suspend')
     endActiveWindowDrag()
     computerUseScreenLocked = true
-    setComputerUseEnabled(false).catch(() => {})
+    queueComputerUseSystemTransition(() => pauseComputerUseForSystemInterruption())
   })
   powerMonitor.on('resume', () => {
     computerUseScreenLocked = false
     wallpaperSystemSuspended = false
     syncWallpaperLifecycle('system-resumed')
+    queueComputerUseSystemTransition(() => resumeComputerUseAfterSystemInterruption())
   })
   screen.on('display-metrics-changed', () => refitWallpaperLifecycle('display-metrics-changed'))
   screen.on('display-added', () => refitWallpaperLifecycle('display-added'))

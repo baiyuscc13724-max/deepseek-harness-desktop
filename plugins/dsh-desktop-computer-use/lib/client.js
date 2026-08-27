@@ -27,9 +27,9 @@ window.__ModuleLoader__.load({
       expand: '展开', collapse: '收起', loading: '正在读取 Computer Use 状态…', pluginStatus: '插件状态', session: 'Computer Use',
       sessionOn: '已开启', sessionOff: '未开启', sessionOnHint: '正在直接控制桌面；按 Esc 可随时停止。', sessionOffHint: '开启后即可使用，无需设置应用策略或逐次确认。',
       request: '开启 Computer Use', resume: '开启 Computer Use', stop: '停止 Computer Use', revoke: '撤销永久授权', generation: '会话 #{value}',
-      scope: '授权范围', none: '首次开启时选择', current: '仅本次应用运行', forever: '永久授权（跨重启保留）', pending: '授权卡已推送，请选择本次授权、永久授权或拒绝。',
+      scope: '授权范围', none: '首次开启时选择', current: '仅本次应用运行', forever: '永久开启（重启自动恢复）', pending: '授权卡已推送，请选择本次授权、永久授权或拒绝。',
       securityTitle: '首次开启由 Harness Desktop 确认',
-      security: '选择本次授权或永久授权后即可直接使用；永久授权后续开启无需重复确认，但软件启动时不会自动控制。浏览器中的密码、验证码、支付和银行信息仍保留硬限制。',
+      security: '选择永久授权后，共享控制会在软件启动时自动恢复；仍可按 Esc 或点击停止来结束本次控制，撤销永久授权会关闭后续自动恢复。浏览器中的密码、验证码、支付和银行信息仍保留硬限制。',
       currentTarget: '当前目标', noTarget: '无', refreshed: '状态已刷新。', requested: '已请求授权，请在宿主授权卡中选择。', resumed: 'Computer Use 已恢复。', stopped: 'Computer Use 已停止；已有授权范围保持不变。', revoked: '永久授权已撤销，控制会话已停止。', unavailable: '能力不可用：{value}'
     }
     const en = {
@@ -37,9 +37,9 @@ window.__ModuleLoader__.load({
       expand: 'Expand', collapse: 'Collapse', loading: 'Loading Computer Use status…', pluginStatus: 'Plugin status', session: 'Current control session',
       sessionOn: 'Enabled', sessionOff: 'Disabled', sessionOnHint: 'The current grant lets the model click, type, and scroll without per-action confirmation.', sessionOffHint: 'The model cannot currently operate desktop windows.',
       request: 'Request authorization', resume: 'Resume control', stop: 'Stop and return control', revoke: 'Revoke permanent grant', generation: 'Session #{value}',
-      scope: 'Authorization scope', none: 'Not authorized', current: 'This app session only', forever: 'Permanent grant (remembered across restarts)', pending: 'The trusted Host authorization card is open. Choose session, permanent, or decline there.',
+      scope: 'Authorization scope', none: 'Not authorized', current: 'This app session only', forever: 'Always on (restored after restart)', pending: 'The trusted Host authorization card is open. Choose session, permanent, or decline there.',
       securityTitle: 'Only the trusted Harness Desktop Host card can grant access',
-      security: 'This plugin card can request authorization but cannot choose its scope. Once granted, unlimited mode bypasses application policy, per-action confirmation, and the previous UAC, system/elevated-window, sensitive-window, and sensitive-input blocks. A permanent grant removes repeat confirmation but never starts control merely because the app launched. Grant only when you fully trust the current model and task.',
+      security: 'This plugin card can request authorization but cannot choose its scope. Once granted, unlimited mode bypasses application policy, per-action confirmation, and the previous UAC, system/elevated-window, sensitive-window, and sensitive-input blocks. A permanent grant restores shared control when the app starts. Esc or Stop still ends the current session, and revoking the grant disables future automatic restore. Grant only when you fully trust the current model and task.',
       currentTarget: 'Current target', noTarget: 'None', refreshed: 'Status refreshed.', requested: 'Authorization requested; choose on the trusted Host card.', resumed: 'Computer Use resumed.', stopped: 'Computer Use stopped; the existing grant scope is retained.', revoked: 'The permanent grant was revoked and control stopped.', unavailable: 'Capability unavailable: {value}'
     }
     const copy = ((navigator.language || 'en').toLowerCase().startsWith('zh')) ? zh : en

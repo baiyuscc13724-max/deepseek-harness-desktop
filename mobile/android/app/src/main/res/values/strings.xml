@@ -29,7 +29,7 @@
     <string name="network_switched_remote_status">网络已切换，正在重建加密远程线路…</string>
     <string name="network_switched_local_status">网络已切换，正在重新连接桌面工作台…</string>
     <string name="waiting_desktop_status">电脑端正在准备工作台，连接成功后会自动打开…</string>
-    <string name="pairing_expired_status">配对信息已失效。请点右上角连接按钮，忘记此电脑后重新扫码。</string>
+    <string name="pairing_expired_status">配对信息已失效，请在桌面端重新生成二维码后扫码。</string>
     <string name="retry_waiting_status">正在等待电脑响应，线路恢复后会自动打开…</string>
     <string name="wss_connecting_status">正在建立端到端加密的 WSS/443 远程线路…</string>
     <string name="wss_ready_status">WSS/443 远程线路已连接，正在打开工作台…</string>

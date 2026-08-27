@@ -17,107 +17,46 @@ final class MobileUiAdapter {
     private static final long[] INJECTION_DELAYS_MS = { 0L, 250L, 900L };
 
     /**
-     * 移动端附件入口。官方会话 UI 只提供拖拽/剪贴板两条 intakeImages 管线
-     * （dsh-client-ui-conversation 的 textarea onPaste，含限额与预览），页面本身
-     * 没有 input[type=file]；因此这里注入一个可访问的“添加照片”按钮 + 隐藏的
-     * image/* file input。用户点击 → WebView onShowFileChooser → 系统选择器
-     * （按次授权、单张快速返回/取消，可重复添加）→ input change 事件先把临时 URI
-     * 内容复制为页面持有的 File，再放入 DataTransfer 并派发 ClipboardEvent('paste')
-     * 给当前 composer textarea，由官方 onPaste 进入 intakeImages 预览与限额管线；
-     * 若引擎不支持构造
-     * clipboardData，则回退到官方 ComposerAttachments 的 document drop 管线
-     * （其 onAddImages 同样指向 intakeImages）。按钮随 SPA 重渲染恢复，并与
-     * textarea 的 disabled/readOnly(忙碌) 状态联动禁用。文本输入/粘贴保持原生。
+     * Adds one accessible attachment menu to the current composer. Gallery and files
+     * retain the HTML file chooser -> Android system picker flow. Camera and speech
+     * are explicit, fixed native bridge actions; their results are returned to the
+     * current composer without reading media storage, the clipboard, or microphone
+     * input inside this application.
      */
     private static final String FILE_ENTRY_JS = "(" +
         "function(){" +
-        "if(window.__harnessMobileFileEntryInstalled)return;" +
-        "window.__harnessMobileFileEntryInstalled=true;" +
-        "var syncState=function(button){" +
-          "var card=document.querySelector('[data-composer-card]');" +
-          "var textarea=card?card.querySelector('textarea[data-phase]'):null;" +
-          "var unavailable=!textarea||textarea.disabled||textarea.readOnly||textarea.getAttribute('data-phase')==='inert';" +
-          "if(button.disabled!==unavailable)button.disabled=unavailable;" +
-          "var ariaDisabled=unavailable?'true':'false';" +
-          "if(button.getAttribute('aria-disabled')!==ariaDisabled)button.setAttribute('aria-disabled',ariaDisabled);" +
+        "if(window.__harnessMobileInputEntryInstalled)return;" +
+        "window.__harnessMobileInputEntryInstalled=true;" +
+        "var currentTextarea=function(){var card=document.querySelector('[data-composer-card]');return card?card.querySelector('textarea[data-phase]'):null;};" +
+        "var unavailable=function(){var textarea=currentTextarea();return !textarea||textarea.disabled||textarea.readOnly||textarea.getAttribute('data-phase')==='inert';};" +
+        "var copyFile=function(file){return new Promise(function(resolve,reject){try{var reader=new FileReader();reader.onload=function(){try{resolve(new File([reader.result],file.name,{type:file.type,lastModified:file.lastModified}));}catch(error){reject(error);}};reader.onerror=function(){reject(reader.error||new Error('Unable to read selected attachment'));};reader.readAsArrayBuffer(file);}catch(error){reject(error);}});};" +
+        "var dispatchFiles=function(files){try{var textarea=currentTextarea();var transfer=new DataTransfer();for(var i=0;i<files.length;i++)transfer.items.add(files[i]);if(textarea&&!unavailable()&&typeof ClipboardEvent==='function'){try{var paste=new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true});if(paste.clipboardData&&paste.clipboardData.items.length>0){textarea.dispatchEvent(paste);return;}}catch(pasteError){}}if(typeof DragEvent==='function')document.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));}catch(error){console.warn('Harness Mobile attachment intake failed',error);}};" +
+        "var intake=function(input){var selected=Array.prototype.slice.call(input.files||[]);if(!selected.length)return;Promise.all(selected.map(copyFile)).then(function(files){input.value='';dispatchFiles(files);}).catch(function(error){console.warn('Harness Mobile attachment copy failed',error);input.value='';dispatchFiles(selected);});};" +
+        "window.__harnessMobileReceiveCapture=function(dataUrl){if(typeof dataUrl!=='string'||dataUrl.indexOf('data:image/jpeg;base64,')!==0)return;fetch(dataUrl).then(function(response){return response.blob();}).then(function(blob){dispatchFiles([new File([blob],'camera-'+Date.now()+'.jpg',{type:'image/jpeg',lastModified:Date.now()})]);}).catch(function(error){console.warn('Harness Mobile camera intake failed',error);});};" +
+        "window.__harnessMobileReceiveSpeech=function(text){if(typeof text!=='string'||!text)return;var textarea=currentTextarea();if(!textarea||unavailable())return;var start=typeof textarea.selectionStart==='number'?textarea.selectionStart:textarea.value.length;var end=typeof textarea.selectionEnd==='number'?textarea.selectionEnd:start;var next=textarea.value.slice(0,start)+text+textarea.value.slice(end);var setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;setter.call(textarea,next);var caret=start+text.length;textarea.setSelectionRange(caret,caret);textarea.dispatchEvent(new Event('input',{bubbles:true}));textarea.focus();};" +
+        "var syncState=function(button){var disabled=unavailable();button.disabled=disabled;button.setAttribute('aria-disabled',disabled?'true':'false');if(disabled){button.setAttribute('aria-expanded','false');var menu=document.getElementById('harness-mobile-input-menu');if(menu)menu.hidden=true;}};" +
+        "var makeInput=function(id,accept){var stale=document.getElementById(id);if(stale&&stale.parentElement)stale.parentElement.removeChild(stale);var input=document.createElement('input');input.type='file';input.accept=accept;input.multiple=true;input.id=id;if(id==='harness-mobile-photo-input')input.setAttribute('data-harness-mobile-add-photo','true');input.setAttribute('aria-hidden','true');input.tabIndex=-1;input.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;';input.addEventListener('change',function(){intake(input);});document.body.appendChild(input);return input;};" +
+        "var mount=function(){if(typeof DataTransfer!=='function')return;var card=document.querySelector('[data-composer-card]');if(!card||document.getElementById('harness-mobile-input-button'))return;" +
+          "var photoInput=makeInput('harness-mobile-photo-input','image/*');var fileInput=makeInput('harness-mobile-file-input','*/*');" +
+          "var wrapper=document.createElement('span');wrapper.id='harness-mobile-input-entry';wrapper.style.cssText='position:relative;display:inline-flex;align-items:center;';" +
+          "var button=document.createElement('button');button.type='button';button.id='harness-mobile-input-button';button.setAttribute('data-harness-mobile-input-menu','true');button.setAttribute('aria-label','添加附件');button.setAttribute('aria-haspopup','menu');button.setAttribute('aria-expanded','false');button.title='添加附件';button.textContent='＋';button.style.cssText='display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;border:0;border-radius:999px;background:transparent;color:inherit;font-size:24px;line-height:1;';" +
+          "var menu=document.createElement('div');menu.id='harness-mobile-input-menu';menu.setAttribute('role','menu');menu.setAttribute('aria-label','附件与输入');menu.hidden=true;menu.style.cssText='position:absolute;left:0;bottom:calc(100% + 8px);z-index:2147483000;min-width:132px;padding:6px;border-radius:12px;background:var(--background,#fff);box-shadow:0 8px 28px rgba(0,0,0,.24);';" +
+          "var closeMenu=function(){menu.hidden=true;button.setAttribute('aria-expanded','false');};" +
+          "var addItem=function(label,action){var item=document.createElement('button');item.type='button';item.setAttribute('role','menuitem');item.setAttribute('aria-label',label);item.textContent=label;item.style.cssText='display:block;width:100%;padding:10px 12px;border:0;background:transparent;text-align:left;white-space:nowrap;';item.addEventListener('click',function(){closeMenu();action();});menu.appendChild(item);};" +
+          "addItem('相册',function(){photoInput.click();});" +
+          "addItem('拍摄',function(){window.HarnessMobileControl&&window.HarnessMobileControl.inputAction&&window.HarnessMobileControl.inputAction('capture');});" +
+          "addItem('语音输入',function(){window.HarnessMobileControl&&window.HarnessMobileControl.inputAction&&window.HarnessMobileControl.inputAction('speech');});" +
+          "addItem('文件',function(){fileInput.click();});" +
+          "button.addEventListener('click',function(){if(button.disabled)return;menu.hidden=!menu.hidden;button.setAttribute('aria-expanded',menu.hidden?'false':'true');if(!menu.hidden){var textarea=currentTextarea();if(textarea)textarea.blur();var first=menu.querySelector('[role=menuitem]');if(first)first.focus();}});" +
+          "menu.addEventListener('keydown',function(event){if(event.key==='Escape'){event.preventDefault();closeMenu();button.focus();}});" +
+          "wrapper.appendChild(button);wrapper.appendChild(menu);var anchor=card.querySelector('[aria-haspopup=\"listbox\"]');if(anchor&&anchor.parentElement)anchor.parentElement.insertBefore(wrapper,anchor);else card.appendChild(wrapper);syncState(button);" +
         "};" +
-        "var mount=function(){" +
-          "if(typeof DataTransfer!=='function')return;" +
-          "var card=document.querySelector('[data-composer-card]');" +
-          "if(!card)return;" +
-          "if(document.getElementById('harness-mobile-photo-button'))return;" +
-          "var staleInput=document.getElementById('harness-mobile-photo-input');" +
-          "if(staleInput&&staleInput.parentElement)staleInput.parentElement.removeChild(staleInput);" +
-          "var input=document.createElement('input');" +
-          "input.type='file';" +
-          "input.accept='image/*';" +
-          "input.multiple=true;" +
-          "input.id='harness-mobile-photo-input';" +
-          "input.setAttribute('aria-hidden','true');" +
-          "input.tabIndex=-1;" +
-          "input.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;';" +
-          "var button=document.createElement('button');" +
-          "button.type='button';" +
-          "button.id='harness-mobile-photo-button';" +
-          "button.setAttribute('data-harness-mobile-add-photo','true');" +
-          "button.setAttribute('aria-label','添加照片或截图');" +
-          "button.title='添加照片或截图';" +
-          "button.innerHTML='<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M4 8.5h3l1.4-2h7.2l1.4 2h3v10H4z\"/><circle cx=\"12\" cy=\"13.5\" r=\"3.2\"/></svg>';" +
-          "var copyFile=function(file){return new Promise(function(resolve,reject){" +
-            "try{" +
-              "var reader=new FileReader();" +
-              "reader.onload=function(){try{resolve(new File([reader.result],file.name,{type:file.type,lastModified:file.lastModified}));}catch(error){reject(error);}};" +
-              "reader.onerror=function(){reject(reader.error||new Error('Unable to read selected image'));};" +
-              "reader.readAsArrayBuffer(file);" +
-            "}catch(error){reject(error);}" +
-          "});};" +
-          "var dispatchFiles=function(files){" +
-            "try{" +
-              "var card2=document.querySelector('[data-composer-card]');" +
-              "var textarea=card2?card2.querySelector('textarea[data-phase]'):null;" +
-              "var transfer=new DataTransfer();" +
-              "for(var i=0;i<files.length;i++)transfer.items.add(files[i]);" +
-              "if(textarea&&!textarea.disabled&&!textarea.readOnly&&typeof ClipboardEvent==='function'){" +
-                "try{" +
-                  "var paste=new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true});" +
-                  "if(paste.clipboardData&&paste.clipboardData.items.length>0){textarea.dispatchEvent(paste);return;}" +
-                "}catch(pasteError){}" +
-              "}" +
-              "if(typeof DragEvent==='function'){" +
-                "document.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));" +
-              "}" +
-            "}catch(error){console.warn('Harness Mobile image intake failed',error);}" +
-          "};" +
-          "var intake=function(){" +
-            "var selected=Array.prototype.slice.call(input.files||[]);" +
-            "if(!selected.length)return;" +
-            "Promise.all(selected.map(copyFile)).then(function(files){input.value='';dispatchFiles(files);}).catch(function(error){console.warn('Harness Mobile image copy failed',error);dispatchFiles(selected);});" +
-          "};" +
-          "button.addEventListener('click',function(){if(!button.disabled)input.click();});" +
-          "input.addEventListener('change',intake);" +
-          "var anchor=card.querySelector('[aria-haspopup=\"listbox\"]');" +
-          "if(anchor&&anchor.parentElement){anchor.parentElement.insertBefore(button,anchor);}" +
-          "else{card.appendChild(button);}" +
-          "document.body.appendChild(input);" +
-          "syncState(button);" +
-        "};" +
+        "document.addEventListener('click',function(event){var entry=document.getElementById('harness-mobile-input-entry');var menu=document.getElementById('harness-mobile-input-menu');var button=document.getElementById('harness-mobile-input-button');if(entry&&menu&&!menu.hidden&&!entry.contains(event.target)){menu.hidden=true;if(button)button.setAttribute('aria-expanded','false');}},true);" +
         "mount();" +
-        "var syncOrMount=function(){" +
-          "var button=document.getElementById('harness-mobile-photo-button');" +
-          "if(button){syncState(button);return;}" +
-          "mount();" +
-        "};" +
-        "var affectsFileEntry=function(records){return records.some(function(record){" +
-          "if(record.type==='attributes')return !!record.target.matches&&record.target.matches('textarea[data-phase]');" +
-          "var target=record.target&&record.target.nodeType===1?record.target:record.target&&record.target.parentElement;" +
-          "if(target&&target.closest&&target.closest('[data-composer-card]'))return true;" +
-          "var nodes=[].slice.call(record.addedNodes||[]).concat([].slice.call(record.removedNodes||[]));" +
-          "return nodes.some(function(node){return node.nodeType===1&&(node.matches&&node.matches('[data-composer-card]')||node.querySelector&&node.querySelector('[data-composer-card]'));});" +
-        "});};" +
-        "if(!window.__harnessMobileFileEntryObserver){" +
-          "window.__harnessMobileFileEntryObserver=new MutationObserver(function(records){if(affectsFileEntry(records))syncOrMount();});" +
-          "window.__harnessMobileFileEntryObserver.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','readonly','data-phase']});" +
-        "}" +
+        "var syncOrMount=function(){var button=document.getElementById('harness-mobile-input-button');if(button){syncState(button);return;}mount();};" +
+        "var affectsEntry=function(records){return records.some(function(record){if(record.type==='attributes')return !!record.target.matches&&record.target.matches('textarea[data-phase]');var target=record.target&&record.target.nodeType===1?record.target:record.target&&record.target.parentElement;if(target&&target.closest&&target.closest('[data-composer-card]'))return true;var nodes=[].slice.call(record.addedNodes||[]).concat([].slice.call(record.removedNodes||[]));return nodes.some(function(node){return node.nodeType===1&&((node.matches&&node.matches('[data-composer-card]'))||(node.querySelector&&node.querySelector('[data-composer-card]')));});});};" +
+        "window.__harnessMobileInputEntryObserver=new MutationObserver(function(records){if(affectsEntry(records))syncOrMount();});" +
+        "window.__harnessMobileInputEntryObserver.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','readonly','data-phase']});" +
         "}())";
 
     private final Handler handler = new Handler(Looper.getMainLooper());

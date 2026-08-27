@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>DeepSeek Harness · Orbit 手机端预览</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --primary:#4968e8;
+      --primary-soft:#edf1ff;
+      --surface:#f5f7fb;
+      --surface-raised:#fff;
+      --text:#171a24;
+      --muted:#72798a;
+      --border:#e5e8f0;
+      --success:#1f9d68;
+      --warning:#d68a17;
+      --danger:#d84a54;
+      --shadow:0 18px 54px rgba(33,43,80,.18);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:#e9edf5;color:var(--text)}
+    button{font:inherit;color:inherit}
+    body{display:grid;place-items:center;padding:24px}
+    .stage{display:grid;grid-template-columns:minmax(240px,360px) auto;align-items:center;gap:44px;max-width:980px;width:100%}
+    .intro h1{font-size:clamp(32px,5vw,56px);line-height:1.04;letter-spacing:-.04em;margin:0 0 18px}
+    .intro h1 span{color:var(--primary)}
+    .intro p{font-size:16px;line-height:1.8;color:#596174;margin:0 0 24px}
+    .legend{display:flex;flex-wrap:wrap;gap:8px}
+    .legend span{border:1px solid #d7ddeb;border-radius:999px;background:rgba(255,255,255,.7);padding:7px 11px;font-size:12px;color:#626a7d}
+    .phone{position:relative;width:min(390px,calc(100vw - 32px));height:min(844px,calc(100vh - 32px));min-height:620px;border:8px solid #171a24;border-radius:44px;background:var(--surface);overflow:hidden;box-shadow:var(--shadow)}
+    .statusbar{height:28px;display:flex;align-items:center;justify-content:space-between;padding:2px 19px 0;font-weight:700;font-size:11px;background:var(--surface-raised)}
+    .status-icons{display:flex;align-items:center;gap:5px}
+    .signal{width:13px;height:8px;display:flex;gap:1px;align-items:end}.signal i{display:block;width:2px;background:#171a24;border-radius:1px}.signal i:nth-child(1){height:3px}.signal i:nth-child(2){height:5px}.signal i:nth-child(3){height:7px}.signal i:nth-child(4){height:8px}
+    .battery{width:17px;height:8px;border:1.5px solid #171a24;border-radius:2px;position:relative}.battery:after{content:"";position:absolute;right:-3px;top:2px;width:2px;height:3px;background:#171a24;border-radius:0 1px 1px 0}.battery:before{content:"";position:absolute;inset:1px;background:#171a24;border-radius:1px}
+    .app{height:calc(100% - 28px);position:relative;overflow:hidden}
+    .page{position:absolute;inset:0 0 74px;overflow:auto;background:var(--surface);opacity:0;pointer-events:none;transform:translateY(5px);transition:opacity .18s,transform .18s}.page.active{opacity:1;pointer-events:auto;transform:none}
+    .topbar{height:58px;display:flex;align-items:center;gap:12px;padding:0 16px;position:sticky;top:0;z-index:3;background:rgba(255,255,255,.94);border-bottom:1px solid var(--border);backdrop-filter:blur(14px)}
+    .brandmark{width:30px;height:30px;border-radius:11px;background:var(--primary);display:grid;place-items:center;box-shadow:0 6px 16px rgba(73,104,232,.26)}
+    .brandmark svg{width:19px;height:19px}.top-title{min-width:0;flex:1}.top-title b{display:block;font-size:17px}.top-title small{display:block;color:var(--muted);font-size:10px;margin-top:1px}
+    .iconbtn{width:40px;height:40px;border:0;background:transparent;border-radius:13px;display:grid;place-items:center}.iconbtn:hover,.iconbtn:focus-visible{background:var(--primary-soft);outline:2px solid transparent}.iconbtn svg{width:21px;height:21px}
+    .content{padding:14px 16px 24px}
+    .search{height:42px;border:1px solid var(--border);background:#eef1f6;border-radius:14px;display:flex;align-items:center;gap:8px;padding:0 12px;color:var(--muted);font-size:13px;margin-bottom:14px}.search svg{width:18px}
+    .section-head{display:flex;align-items:center;justify-content:space-between;margin:16px 2px 8px}.section-head b{font-size:13px}.section-head span{font-size:11px;color:var(--muted)}
+    .chat-list{background:var(--surface-raised);border:1px solid var(--border);border-radius:18px;overflow:hidden}
+    .chat-row{width:100%;border:0;border-bottom:1px solid var(--border);background:#fff;padding:13px 12px;display:grid;grid-template-columns:45px 1fr auto;gap:11px;text-align:left;cursor:pointer}.chat-row:last-child{border-bottom:0}.chat-row:hover,.chat-row:focus-visible{background:#f8f9ff;outline:0}.avatar{width:45px;height:45px;border-radius:15px;display:grid;place-items:center;font-size:18px;font-weight:700;color:#fff}.avatar.ai{background:linear-gradient(145deg,#4968e8,#7b5fe7)}.avatar.space{background:linear-gradient(145deg,#2a9b86,#54b875)}.avatar.task{background:linear-gradient(145deg,#e18a31,#d95d73)}.chat-copy{min-width:0}.chat-title{display:flex;gap:7px;align-items:center;font-size:14px;font-weight:650}.dot{width:7px;height:7px;border-radius:50%;background:var(--success)}.chat-preview{margin-top:6px;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-meta{text-align:right;color:#9399a7;font-size:10px}.badge{display:inline-grid;place-items:center;min-width:18px;height:18px;border-radius:9px;background:var(--primary);color:#fff;font-size:10px;margin-top:8px;padding:0 5px}.badge[data-read-state="confirming"]{background:#8791aa}.badge[hidden]{display:none}
+    .quick{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.quick-card{border:1px solid var(--border);background:#fff;border-radius:16px;padding:13px 10px;text-align:left;min-height:88px}.quick-card i{display:grid;width:28px;height:28px;border-radius:10px;background:var(--primary-soft);color:var(--primary);place-items:center;font-style:normal;margin-bottom:10px}.quick-card b{display:block;font-size:12px}.quick-card small{display:block;color:var(--muted);font-size:9px;margin-top:3px}
+    .hero{border-radius:20px;background:linear-gradient(135deg,#314fc4,#6c78ed);color:#fff;padding:20px;margin-bottom:14px;position:relative;overflow:hidden}.hero:after{content:"";position:absolute;width:140px;height:140px;border:28px solid rgba(255,255,255,.08);border-radius:50%;right:-58px;top:-65px}.hero small{opacity:.78;font-size:11px}.hero h2{font-size:21px;margin:7px 0 8px}.hero p{font-size:12px;line-height:1.6;margin:0;opacity:.86;max-width:240px}
+    .space-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.space-card{border:1px solid var(--border);border-radius:18px;background:#fff;padding:15px;min-height:130px}.space-icon{width:34px;height:34px;border-radius:12px;display:grid;place-items:center;background:#edf1ff;color:var(--primary);font-weight:800}.space-card b{display:block;font-size:13px;margin-top:20px}.space-card small{display:block;color:var(--muted);font-size:10px;margin-top:5px}.space-card .people{display:flex;margin-top:10px}.people i{display:grid;place-items:center;width:20px;height:20px;border:2px solid #fff;border-radius:50%;background:#d8def8;color:#49516a;font-size:7px;margin-left:-5px}.people i:first-child{margin-left:0}
+    .summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:13px}.metric{background:#fff;border:1px solid var(--border);border-radius:15px;padding:12px 10px}.metric strong{display:block;font-size:20px}.metric span{font-size:9px;color:var(--muted)}
+    .task-card{border:1px solid var(--border);background:#fff;border-radius:17px;padding:14px;margin-bottom:9px}.task-top{display:flex;gap:10px;align-items:start}.task-state{width:9px;height:9px;border:2px solid currentColor;border-radius:50%;margin-top:5px}.task-state.run{color:var(--primary);box-shadow:0 0 0 4px var(--primary-soft)}.task-state.wait{color:var(--warning)}.task-state.done{background:var(--success);border-color:var(--success)}.task-main{flex:1}.task-main b{font-size:13px}.task-main p{font-size:10px;color:var(--muted);line-height:1.5;margin:5px 0 9px}.progress{height:5px;background:#edf0f6;border-radius:3px;overflow:hidden}.progress i{display:block;height:100%;background:var(--primary);border-radius:3px}.task-side{font-size:9px;color:var(--muted)}
+    .scope{border:1px solid #dbe1f2;background:#fff;border-radius:16px;padding:11px 12px;margin-bottom:10px}.scope-label{font-size:9px;color:var(--muted);margin-bottom:7px}.scope-chips{display:flex;gap:6px;flex-wrap:wrap}.scope-chip{border:1px solid #d8def0;background:var(--primary-soft);color:#354fbc;border-radius:999px;padding:6px 9px;font-size:10px;font-weight:650}.scope-chip.secondary{background:#f5f7fb;color:#596174}.sample-note{font-size:9px;line-height:1.5;color:#6b7280;background:#fff8e9;border:1px solid #f0d69e;border-radius:11px;padding:8px 10px;margin-bottom:11px}.object-list{background:#fff;border:1px solid var(--border);border-radius:18px;overflow:hidden}.object-row{width:100%;min-height:92px;border:0;border-bottom:1px solid var(--border);background:#fff;padding:13px 12px;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;cursor:pointer}.object-row:last-child{border-bottom:0}.object-row:hover,.object-row:focus-visible{background:#f8f9ff;outline:2px solid var(--primary);outline-offset:-2px}.object-row h3{font-size:13px;margin:0 0 4px}.object-row p{font-size:10px;line-height:1.45;color:var(--muted);margin:0}.object-meta{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.object-meta span{font-size:8px;border-radius:999px;background:#f0f2f7;padding:4px 6px;color:#626a7d}.row-side{display:flex;flex-direction:column;align-items:end;justify-content:space-between;color:var(--muted);font-size:9px}.row-side b{color:var(--primary);font-size:16px}.object-detail{position:absolute;inset:0;width:100%;max-width:100%;min-width:0;background:var(--surface);z-index:24;transform:translateX(100%);overflow-x:hidden;overflow-y:auto}.object-detail.open{transform:translateX(0)}.object-detail .detail-top{position:sticky;top:0;z-index:3;width:100%;min-width:0}.detail-context{max-width:100%;font-size:9px;color:var(--muted);padding:10px 16px 0;overflow-wrap:anywhere}.detail-body{width:100%;max-width:100%;min-width:0;padding:10px 16px 28px;overflow-x:hidden}.detail-section{width:100%;max-width:100%;min-width:0;background:#fff;border:1px solid var(--border);border-radius:16px;padding:13px;margin-bottom:9px;overflow-wrap:anywhere}.detail-section h3{font-size:12px;margin:0 0 8px}.detail-section p,.detail-section li{font-size:10px;line-height:1.55;color:#596174;overflow-wrap:anywhere}.detail-section p{margin:0}.detail-section ul{padding-left:16px;margin:0}.timeline{border-left:2px solid #dce2f6;padding-left:12px}.timeline p{margin:0 0 8px}.canvas-tools{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}.canvas-tools button{border:1px solid var(--border);background:#fff;border-radius:9px;min-width:34px;height:32px}.canvas-viewport{height:190px;overflow:hidden;border:1px solid var(--border);border-radius:13px;background:linear-gradient(#eef1f6 1px,transparent 1px),linear-gradient(90deg,#eef1f6 1px,transparent 1px);background-size:18px 18px;touch-action:none}.canvas-map{position:relative;width:310px;height:190px;transform-origin:center;transition:transform .16s}.node{position:absolute;width:82px;border:2px solid #bac7f3;background:#fff;border-radius:11px;padding:8px;font-size:9px;box-shadow:0 4px 10px rgba(33,43,80,.08)}.node strong{display:block;font-size:10px;margin-bottom:3px}.node.a{left:12px;top:70px}.node.b{left:116px;top:22px}.node.c{left:216px;top:86px;border-color:#6e88eb}.edge{position:absolute;height:2px;background:#8ea1dd;transform-origin:left}.edge.ab{width:105px;left:78px;top:79px;transform:rotate(-26deg)}.edge.bc{width:102px;left:178px;top:65px;transform:rotate(24deg)}
+    .profile-card{display:flex;align-items:center;gap:13px;background:#fff;border:1px solid var(--border);border-radius:19px;padding:16px;margin-bottom:14px}.profile-avatar{width:49px;height:49px;border-radius:18px;background:linear-gradient(145deg,#1f263d,#566589);color:#fff;display:grid;place-items:center;font-weight:800}.profile-card b{font-size:14px}.profile-card span{display:block;color:var(--success);font-size:10px;margin-top:5px}.settings{background:#fff;border:1px solid var(--border);border-radius:18px;overflow:hidden}.setting{width:100%;height:54px;display:flex;align-items:center;gap:11px;padding:0 13px;border:0;border-bottom:1px solid var(--border);background:#fff;text-align:left;font-size:13px}.setting:last-child{border:0}.setting i{width:29px;height:29px;border-radius:10px;background:#f0f2f7;display:grid;place-items:center;font-style:normal}.setting small{margin-left:auto;color:var(--muted)}
+    .nav{position:absolute;left:0;right:0;bottom:0;height:74px;background:rgba(255,255,255,.97);border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(4,1fr);padding:7px 4px max(6px,env(safe-area-inset-bottom));z-index:10}.nav button{border:0;background:transparent;color:#8a91a1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border-radius:13px;font-size:9px;font-weight:600}.nav button svg{width:23px;height:23px}.nav button.active{color:var(--primary);background:linear-gradient(180deg,var(--primary-soft),rgba(237,241,255,0))}
+    .chat-detail{position:absolute;inset:0;background:var(--surface);z-index:20;transform:translateX(105%);transition:transform .24s cubic-bezier(.22,.75,.24,1)}.chat-detail.open{transform:none}.detail-top{height:58px;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 9px}.detail-title{flex:1;min-width:0;text-align:center}.detail-title b{display:block;font-size:14px;overflow-wrap:anywhere}.detail-title small{font-size:9px;color:var(--success)}.messages{height:calc(100% - 126px);overflow:auto;padding:16px 16px 108px;overflow-x:hidden}.msg{max-width:82%;font-size:12px;line-height:1.6;padding:11px 13px;border-radius:16px;margin-bottom:11px}.msg.ai{background:#fff;border:1px solid var(--border);border-top-left-radius:5px}.msg.me{background:var(--primary);color:#fff;margin-left:auto;border-top-right-radius:5px}.live-workflow{border:1px solid #cfd8f5;background:#f9faff;border-radius:14px;padding:10px 11px;margin:5px 0 11px;transition:.18s}.live-workflow.archived{background:#f4f6fa;border-color:var(--border)}.live-head{display:flex;align-items:center;gap:7px;font-size:10px}.live-dot{width:7px;height:7px;border-radius:50%;background:var(--success);box-shadow:0 0 0 4px rgba(31,157,104,.10)}.archived .live-dot{background:var(--muted);box-shadow:none}.live-head strong{font-size:11px}.live-head small{margin-left:auto;color:var(--muted)}.live-current{font-size:10px;color:#596174;margin:7px 0;display:flex;justify-content:space-between;gap:8px}.live-actions{display:flex;gap:6px}.live-actions button,.live-toggle{border:1px solid #d8def0;background:#fff;border-radius:9px;min-height:32px;padding:0 9px;font-size:9px}.live-toggle{margin-left:auto}.live-events{border-top:1px solid var(--border);margin-top:9px;padding-top:8px}.live-events[hidden],.summary-message[hidden]{display:none}.live-events p{font-size:9px;color:var(--muted);margin:0 0 5px}.live-id{font-size:8px;color:#8991a2;margin-top:7px}.live-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin:8px 0}.live-counts span{min-width:0;border-radius:9px;background:#eef1f8;padding:6px 4px;text-align:center;font-size:8px;color:#626a7d}.live-counts b{display:block;font-size:11px;color:var(--text)}.live-goal{border-left:3px solid var(--primary);background:#fff;padding:7px 8px;margin-bottom:8px;font-size:9px;color:#596174}.live-checklist{list-style:none;padding:0;margin:0 0 8px}.live-checklist li{display:flex;gap:6px;align-items:flex-start;font-size:9px;color:#596174;margin-bottom:5px}.task-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin:0 0 10px}.task-types span{min-width:0;border:1px solid var(--border);border-radius:10px;background:#fff;padding:7px 4px;text-align:center;font-size:8px;line-height:1.3;color:#626a7d}.task-types b{display:block;color:var(--text);font-size:11px}.queue-strip{position:absolute;left:10px;right:10px;bottom:72px;z-index:21;min-width:0;border:1px solid #d8def0;border-radius:14px;background:#fff;padding:9px 10px;box-shadow:0 9px 28px rgba(33,43,80,.14)}.queue-strip[hidden]{display:none}.queue-main{display:flex;align-items:flex-start;gap:8px;min-width:0}.queue-main strong{flex:0 0 auto;font-size:10px;color:var(--primary)}.queue-main span{min-width:0;font-size:9px;color:#596174;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.queue-strip small{display:block;margin-top:5px;color:#8991a2;font-size:8px;line-height:1.3}.queue-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}.queue-actions button{min-height:30px;border:1px solid var(--border);border-radius:9px;background:#f8f9fc;padding:0 8px;font-size:9px}.queue-actions button:last-child{background:var(--primary-soft);color:#354fbc}.composer{height:68px;background:#fff;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:10px 11px}.composer button{width:36px;height:36px;border:0;background:#f0f2f7;border-radius:12px}.composer .input{height:42px;border:1px solid var(--border);border-radius:15px;flex:1;color:var(--muted);font-size:11px;display:flex;align-items:center;padding:0 12px}.composer .send{background:var(--primary);color:#fff;border-radius:14px}
+    .input-tray{position:absolute;left:10px;right:10px;bottom:184px;z-index:22;display:grid;grid-template-columns:repeat(4,1fr);gap:9px;padding:13px 10px 11px;border:1px solid var(--border);border-radius:20px;background:#fff;box-shadow:0 16px 42px rgba(33,43,80,.2)}.input-tray[hidden]{display:none}.input-action{min-width:0;min-height:76px;border:0;border-radius:15px;background:transparent;padding:8px 3px 5px;color:var(--muted);font-size:10px}.input-action i{width:38px;height:38px;margin:0 auto 6px;display:grid;place-items:center;border-radius:13px;background:var(--primary-soft);color:var(--primary);font-size:18px;font-style:normal;font-weight:700}.input-action:active{background:var(--primary-soft)}
+    .attachment-preview{position:absolute;left:12px;right:12px;bottom:184px;z-index:23;min-height:70px;display:grid;grid-template-columns:54px 1fr 34px;gap:10px;align-items:center;padding:8px;border:1px solid #d8def0;border-radius:16px;background:#fff;box-shadow:0 12px 34px rgba(33,43,80,.18)}.attachment-preview[hidden]{display:none}.preview-thumb{height:52px;border-radius:11px;background:linear-gradient(145deg,#4968e8,#7cd3b4);position:relative;overflow:hidden}.preview-thumb:after{content:"截图";position:absolute;inset:auto 4px 4px;color:#fff;font-size:8px}.attachment-preview b{display:block;font-size:11px}.attachment-preview small{display:block;color:var(--muted);font-size:9px;margin-top:4px}.attachment-preview button{width:34px;height:34px;border:0;border-radius:50%;background:#f0f2f7}
+    .toast{position:absolute;left:50%;bottom:86px;transform:translate(-50%,10px);background:#1b2030;color:#fff;border-radius:12px;padding:9px 13px;font-size:10px;opacity:0;pointer-events:none;transition:.2s;z-index:30;white-space:nowrap}.toast.show{opacity:1;transform:translate(-50%,0)}
+    @media(max-width:780px){body{padding:16px}.stage{display:block}.intro{display:none}.phone{margin:auto}}
+    @media(max-width:390px){.detail-body{padding-left:12px;padding-right:12px}.detail-section,.object-row,.live-workflow,.queue-strip{max-width:100%;min-width:0}.detail-section *{max-width:100%;overflow-wrap:anywhere}.canvas-viewport{width:100%}.queue-main{flex-wrap:wrap}.queue-main span{width:100%}}
+    @media(prefers-color-scheme:dark){body{background:#151824}.phone{border-color:#080a10}.stage{color:#fff}}
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="intro" aria-labelledby="preview-title">
+      <div class="legend"><span>原创 Orbit 设计语言</span><span>真实信息架构</span><span>单手可达</span></div>
+      <h1 id="preview-title">熟悉，但不<span>照抄</span>。</h1>
+      <p>保留即时通讯类产品的低学习成本，用 DeepSeek Harness 自己的四域结构组织对话、代理团队、任务和桌面/移动设置。点击手机内导航与第一条会话可体验交互。</p>
+      <div class="legend"><span>16px 页面边距</span><span>44px+ 触控目标</span><span>状态先于装饰</span><span>浅色 Orbit Blue</span></div>
+    </section>
+
+    <section class="phone" aria-label="DeepSeek Harness 手机端交互预览">
+      <div class="statusbar"><span>09:41</span><div class="status-icons"><div class="signal"><i></i><i></i><i></i><i></i></div><span>5G</span><div class="battery"></div></div></div>
+      <div class="app">
+        <section class="page active" data-page="chat">
+          <header class="topbar"><div class="brandmark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="7" stroke="white" stroke-width="2"/><path d="M12 3v4m0 10v4M3 12h4m10 0h4" stroke="white" stroke-width="2" stroke-linecap="round"/></svg></div><div class="top-title"><b>对话</b><small>2 个智能体正在工作</small></div><button class="iconbtn" aria-label="发起新对话" data-toast="新建对话连接真实会话入口"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button></header>
+          <div class="content">
+            <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索对话和任务</span></div>
+            <div class="section-head"><b>最近对话</b><span>全部 8</span></div>
+            <div class="chat-list">
+              <button class="chat-row" id="open-chat" data-conversation-id="conversation_demo_7a31" data-latest-message-id="message_demo_f82a"><span class="avatar ai">H</span><span class="chat-copy"><span class="chat-title"><span class="dot"></span>手机端体验重构</span><span class="chat-preview">正在完成 iOS 恢复与四域导航验证…</span></span><span class="chat-meta">刚刚<span class="badge" data-unread-badge data-conversation-id="conversation_demo_7a31" data-latest-message-id="message_demo_f82a" data-read-state="unread" aria-label="2 条未读">2</span></span></button>
+              <button class="chat-row" data-toast="打开真实会话：构建问题排查"><span class="avatar task">构</span><span class="chat-copy"><span class="chat-title">构建问题排查</span><span class="chat-preview">Android 静态验证已通过</span></span><span class="chat-meta">10:26</span></button>
+              <button class="chat-row" data-toast="打开真实会话：插件市场规划"><span class="avatar space">插</span><span class="chat-copy"><span class="chat-title">插件市场规划</span><span class="chat-preview">信息架构评审结果已整理</span></span><span class="chat-meta">昨天</span></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" data-page="agents">
+          <header class="topbar"><div class="top-title"><b>代理团队</b><small>按权威项目与来源会话查看</small></div><button class="iconbtn" aria-label="筛选代理团队" data-toast="筛选保留在当前项目与来源会话上下文"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button></header>
+          <div class="content"><div class="scope" data-mobile-context-scope="agent-team" data-project-id="project_demo_mobile" data-source-session-id="session_demo_7a31"><div class="scope-label">查看范围 · bridge/server 权威标识</div><div class="scope-chips"><button class="scope-chip" data-toast="当前项目 project_demo_mobile">当前项目 · mobile…</button><button class="scope-chip secondary" data-toast="可清除来源会话筛选并保留当前项目">来源会话 · …7a31 ×</button></div></div><div class="sample-note">说明性样例数据；实际产品由 bridge/server 提供。禁止通过同名项目、会话或团队猜测身份。</div><div class="section-head"><b>当前与最近团队</b><span>筛选内 1</span></div><div class="object-list"><button class="object-row" data-open-detail="team" data-mobile-object-row="agent-team" data-project-id="project_demo_mobile" data-source-session-id="session_demo_7a31" data-team-id="team_demo_a184"><span><h3>移动协作体验</h3><p>共同目标：完成团队/任务的权威上下文、详情和移动协作画布。</p><span class="object-meta"><span>team …a184</span><span>3 名成员</span><span>进行中</span></span></span><span class="row-side"><span>刚刚</span><b>›</b></span></button></div></div>
+        </section>
+
+        <section class="page" data-page="task">
+          <header class="topbar"><div class="top-title"><b>任务</b><small>当前项目 · 来源会话 · 真实类型</small></div><button class="iconbtn" aria-label="筛选任务" data-toast="筛选团队、真实类型、状态与时间"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button></header>
+          <div class="content"><div class="scope" data-mobile-context-scope="task" data-project-id="project_demo_mobile" data-source-session-id="session_demo_7a31"><div class="scope-label">查看范围 · Agent Team task · 进行中</div><div class="scope-chips"><button class="scope-chip" data-toast="当前项目 project_demo_mobile">当前项目 · mobile…</button><button class="scope-chip secondary" data-toast="来源会话 session_demo_7a31">来源会话 · …7a31 ×</button></div></div><div class="sample-note">说明性样例数据；实际目标、依赖、状态与产出由 bridge/server 提供，不按标题合并同名任务。</div><div class="task-types" aria-label="任务真实类型"><span><b>1</b>来源会话任务</span><span><b>1</b>Agent Team</span><span><b>0</b>Project Tasks</span></div><div class="summary"><div class="metric"><strong>2</strong><span>进行中</span></div><div class="metric"><strong>1</strong><span>受阻</span></div><div class="metric"><strong>1</strong><span>待审</span></div></div><div class="object-list"><button class="object-row" data-open-chat-task data-mobile-object-row="task" data-task-type="conversation_todo" data-conversation-id="conversation_demo_7a31" data-task-id="todo_demo_12d8"><span><h3>会话任务 · 官方排队消息条</h3><p>持续目标下的待处理项；返回来源会话查看同一权威清单。</p><span class="object-meta"><span>todo …12d8</span><span>来源会话任务</span><span>进行中</span></span></span><span class="row-side"><span>同一会话</span><b>›</b></span></button><button class="object-row" data-open-detail="task" data-mobile-object-row="task" data-task-type="agent_team_task" data-project-id="project_demo_mobile" data-source-session-id="session_demo_7a31" data-team-id="team_demo_a184" data-task-id="task_demo_f631"><span><h3>完善团队任务详情</h3><p>目标：提供上下文、职责、依赖、时间线、产出和可缩放画布。</p><span class="object-meta"><span>task …f631</span><span>Team task</span><span>协作负责</span></span></span><span class="row-side"><span>进行中</span><b>›</b></span></button></div></div>
+        </section>
+
+        <section class="page" data-page="profile">
+          <header class="topbar"><div class="top-title"><b>我的</b><small>桌面设置与手机设置</small></div></header>
+          <div class="content"><article class="profile-card"><div class="profile-avatar">DS</div><div><b>DeepSeek Harness</b><span>● Desktop 已连接</span></div></article><div class="section-head"><b>设置</b><span>与 Desktop 同源</span></div><div class="settings"><button class="setting" data-toast="打开语言、外观与会话默认项"><i>◐</i>通用与外观<small>跟随系统 ›</small></button><button class="setting" data-toast="打开主模型与子代理路由"><i>◇</i>模型路由与代理<small>只读摘要 ›</small></button><button class="setting" data-toast="打开真实代理团队设置"><i>◎</i>代理团队<small>成员与并发 ›</small></button><button class="setting" data-toast="打开 Desktop 插件与技能管理"><i>✦</i>插件与 Skills<small>已安装 ›</small></button><button class="setting" data-toast="打开 MCP 服务器与工具授权"><i>⌘</i>MCP 与连接<small>服务器 ›</small></button><button class="setting" data-toast="打开浏览器会话和定时任务"><i>◷</i>浏览器与定时任务<small>管理 ›</small></button><button class="setting" data-toast="打开已配对 Desktop 与远程线路"><i>⌁</i>电脑与移动端<small>1 台 ›</small></button><button class="setting" data-toast="权限仍由系统选择器按需请求"><i>⌾</i>隐私、记忆与数据<small>按需 ›</small></button><button class="setting" data-toast="查看版本与开源许可"><i>i</i>关于 Harness<small>1.0.28 ›</small></button></div></div>
+        </section>
+
+        <nav class="nav" aria-label="主要导航">
+          <button class="active" data-nav="chat" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 5.5h14v10H9l-4 3v-13Z"/></svg>对话</button>
+          <button data-nav="agents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3.5 19c.7-4 2.6-6 5.5-6s4.8 2 5.5 6M14.5 14.5c2.9-.6 5 .9 6 4.5"/></svg>代理团队</button>
+          <button data-nav="task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4h12v16H6z"/><path d="m9 9 2 2 4-4M9 15h6"/></svg>任务</button>
+          <button data-nav="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M5 21c.7-4 3-6 7-6s6.3 2 7 6"/></svg>我的</button>
+        </nav>
+
+        <section class="chat-detail" aria-hidden="true">
+          <header class="detail-top"><button class="iconbtn" id="close-chat" aria-label="返回对话列表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 5-7 7 7 7"/></svg></button><div class="detail-title"><b>手机端体验重构</b><small data-chat-read-status>● 2 个智能体工作中</small></div><button class="iconbtn" aria-label="会话详情" data-toast="打开会话详情"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></button></header>
+          <div class="messages"><div class="msg me">完成后记得给我看一下。</div><div class="msg ai">可以。我会先更新规范和交互预览，再验证本轮契约。</div><section class="live-workflow" data-live-workflow="live" data-run-id="run_demo_4f82" data-turn-id="turn_demo_19c7" aria-label="本轮实时工作流"><div class="live-head"><i class="live-dot" aria-hidden="true"></i><strong data-live-stage>实现中 · 第 2 阶段</strong><small>权威实时流</small><button class="live-toggle" data-live-toggle aria-expanded="false">展开</button></div><div class="live-current"><span data-live-action>正在更新对话生命周期契约</span><span data-live-elapsed>00:08</span></div><div class="live-counts" data-session-task-summary data-conversation-id="conversation_demo_7a31"><span><b>2</b>已完成</span><span><b>1</b>进行中</span><span><b>2</b>待处理</span></div><div class="live-actions"><button data-stop-workflow>停止</button><button data-open-detail="task">查看任务</button></div><div class="live-events" hidden><div class="live-goal" data-goal-id="goal_demo_64b2" data-goal-revision="3"><b>持续目标</b><br>交付可信、单列且可恢复的移动协作体验。</div><ul class="live-checklist" data-session-task-list><li>✓ 已完成 · 权威上下文与详情</li><li>● 进行中 · 官方排队消息条</li><li>○ 待处理 · 360px 窄屏复核</li></ul><p>10:36 · bridge 确认 run …4f82</p><p>10:36 · 会话任务清单 revision 12</p><p data-live-event>10:37 · 预览交互正在更新</p><div class="live-id">turn …19c7 · run …4f82（说明性样例；生产由 bridge/server 提供）</div></div></section><div class="msg ai summary-message" hidden data-workflow-summary>本轮已完成：实时工作流卡已归档，团队/任务详情与协作画布保持不变。</div></div>
+          <div class="attachment-preview" data-attachment-preview hidden><div class="preview-thumb" aria-label="截图缩略图"></div><div><b>最近截图 · 交互预览</b><small>确认选择后进入官方附件预览；6 秒未操作自动消失</small></div><button data-close-attachment aria-label="关闭截图建议">×</button></div>
+          <div class="input-tray" data-input-tray hidden role="menu" aria-label="附件与输入"><button class="input-action" data-input-action="gallery" role="menuitem"><i>▧</i>相册</button><button class="input-action" data-input-action="camera" role="menuitem"><i>◉</i>拍摄</button><button class="input-action" data-input-action="speech" role="menuitem"><i>≈</i>语音输入</button><button class="input-action" data-input-action="file" role="menuitem"><i>▰</i>文件</button></div>
+          <section class="queue-strip" data-official-queue data-queue-id="queue_demo_2c91" data-message-id="queued_message_demo_91e2" data-conversation-id="conversation_demo_7a31" data-queue-revision="8" aria-label="官方排队消息"><div class="queue-main"><strong data-queue-count>官方队列 · 2 条</strong><span data-queue-preview>队首：补充窄屏任务详情验证</span></div><small>生产复用 bridge/server 权威队列，不在本地复制</small><div class="queue-actions"><button data-queue-action="edit">编辑</button><button data-queue-action="delete">删除</button><button data-queue-action="send-now">立即发送</button></div></section>
+          <div class="composer"><button aria-label="附件与输入" data-input-menu-toggle aria-expanded="false">＋</button><div class="input" data-composer-preview-input>给智能体发消息</div><button class="send" aria-label="发送">↑</button></div>
+        </section>
+
+        <section class="object-detail" id="team-detail" aria-hidden="true" data-mobile-object-detail="agent-team" data-project-id="project_demo_mobile" data-source-session-id="session_demo_7a31" data-team-id="team_demo_a184">
+          <header class="detail-top"><button class="iconbtn" data-close-detail aria-label="返回代理团队列表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 5-7 7 7 7"/></svg></button><div class="detail-title"><b>移动协作体验</b><small>团队详情 · team …a184</small></div><button class="iconbtn" aria-label="更多团队操作" data-toast="高风险团队操作仍由桌面端权限处理">•••</button></header>
+          <div class="detail-context">当前项目 mobile… / 来源会话 …7a31 · 返回将恢复筛选与列表位置</div>
+          <div class="detail-body"><div class="sample-note">说明性样例；实际产品由 bridge/server 按完整 ID 提供。</div><section class="detail-section"><h3>共同目标</h3><p>让代理团队与任务在手机上具备可信来源、完整详情和连续返回体验。</p></section><section class="detail-section"><h3>成员职责与当前任务</h3><ul><li><b>协作</b>：详情与协作画布 · task …f631</li><li><b>验证</b>：交互与契约检查 · task …b203</li><li><b>统筹</b>：集成、审阅与交付</li></ul></section><section class="detail-section"><h3>依赖与阻塞</h3><p>task …b203 依赖 task …f631 的预览契约；当前无服务端阻塞。</p></section><section class="detail-section"><h3>关键时间线</h3><div class="timeline"><p><b>09:42</b> · 来源会话建立团队</p><p><b>10:08</b> · 任务详情进入实现</p><p><b>10:31</b> · 等待交互验证</p></div></section><section class="detail-section"><h3>产出与验证</h3><p>UX 蓝图、视觉系统、HTML 交互预览；验证证据由任务详情关联。</p></section><section class="detail-section"><h3>可缩放协作画布</h3><div class="canvas-tools"><button data-zoom="out" aria-label="缩小协作画布">−</button><button data-zoom="in" aria-label="放大协作画布">＋</button><button data-zoom="fit">适配</button></div><div class="canvas-viewport" data-mobile-collaboration-canvas="team" data-team-id="team_demo_a184" aria-label="团队成员和任务依赖画布"><div class="canvas-map"><i class="edge ab"></i><i class="edge bc"></i><div class="node a"><strong>统筹</strong>共同目标</div><div class="node b"><strong>协作</strong>task …f631</div><div class="node c"><strong>验证</strong>task …b203</div></div></div><details><summary>查看无障碍关系列表</summary><ul><li>统筹 → 协作：分配 task …f631</li><li>task …b203 依赖 task …f631</li></ul></details></section></div>
+        </section>
+
+        <section class="object-detail" id="task-detail" aria-hidden="true" data-mobile-object-detail="task" data-project-id="project_demo_mobile" data-source-session-id="session_demo_7a31" data-team-id="team_demo_a184" data-task-id="task_demo_f631">
+          <header class="detail-top"><button class="iconbtn" data-close-detail aria-label="返回任务列表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 5-7 7 7 7"/></svg></button><div class="detail-title"><b>完善团队任务详情</b><small>Agent Team task · task …f631</small></div><button class="iconbtn" aria-label="更多任务操作" data-toast="动作语义由真实任务类型决定">•••</button></header>
+          <div class="detail-context">当前项目 mobile… / 来源会话 …7a31 / 团队 …a184</div>
+          <div class="detail-body"><div class="sample-note">说明性样例；完整 project/session/team/task ID 与状态由 bridge/server 提供。</div><section class="detail-section"><h3>任务目标与共同目标</h3><p><b>任务：</b>建立团队/任务详情与缩放画布。<br><b>团队：</b>交付可信、连续的移动协作体验。</p></section><section class="detail-section"><h3>负责人职责</h3><p>协作负责三份设计文件、交互契约和预览验证；文件范围由权威任务声明。</p></section><section class="detail-section"><h3>依赖与阻塞</h3><p>无前置依赖；被 task …b203 引用。阻塞原因仅显示 bridge/server 返回值。</p></section><section class="detail-section"><h3>状态时间线</h3><div class="timeline"><p><b>09:46</b> · 已认领</p><p><b>10:08</b> · 规范完成</p><p><b>10:24</b> · 预览实现中</p></div></section><section class="detail-section"><h3>产出与验证证据</h3><ul><li>mobile-ux-blueprint.md</li><li>mobile-visual-system.md</li><li>mobile-orbit-preview/index.html</li></ul></section><section class="detail-section"><h3>关联对象</h3><p>团队 team …a184 · 来源会话 …7a31；跨域打开时携带返回上下文，不复制详情。</p><button class="scope-chip" data-open-detail="team" style="margin-top:9px">在画布中聚焦当前任务</button></section></div>
+        </section>
+        <div class="toast" role="status" aria-live="polite"></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const pages = [...document.querySelectorAll('[data-page]')];
+      const navButtons = [...document.querySelectorAll('.nav [data-nav]')];
+      const toast = document.querySelector('.toast');
+      let timer = 0;
+      function showToast(text) {
+        toast.textContent = text;
+        toast.classList.add('show');
+        clearTimeout(timer);
+        timer = setTimeout(() => toast.classList.remove('show'), 1800);
+      }
+      function select(name) {
+        pages.forEach(page => page.classList.toggle('active', page.dataset.page === name));
+        navButtons.forEach(button => {
+          const active = button.dataset.nav === name;
+          button.classList.toggle('active', active);
+          if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+        });
+      }
+      document.addEventListener('click', event => {
+        const target = event.target.closest('[data-nav],[data-toast]');
+        if (!target) return;
+        if (target.dataset.nav) select(target.dataset.nav);
+        if (target.dataset.toast) showToast(target.dataset.toast);
+      });
+      const detail = document.querySelector('.chat-detail');
+      const objectDetails = [...document.querySelectorAll('.object-detail')];
+      const returnStack = [];
+      function openObjectDetail(kind, trigger) {
+        const target = document.querySelector(`#${kind}-detail`);
+        if (!target) return;
+        const activePage = document.querySelector('.page.active');
+        const parentDetail = trigger.closest('.object-detail');
+        returnStack.push({ page: activePage?.dataset.page || 'chat', scrollTop: activePage?.scrollTop || 0, trigger, parentDetail });
+        objectDetails.forEach(item => { item.classList.remove('open'); item.setAttribute('aria-hidden', 'true'); });
+        target.classList.add('open');
+        target.setAttribute('aria-hidden', 'false');
+        target.querySelector('[data-close-detail]')?.focus();
+      }
+      function closeObjectDetail(target) {
+        target.classList.remove('open');
+        target.setAttribute('aria-hidden', 'true');
+        const returnState = returnStack.pop();
+        if (!returnState) return;
+        if (returnState.parentDetail) {
+          returnState.parentDetail.classList.add('open');
+          returnState.parentDetail.setAttribute('aria-hidden', 'false');
+        } else {
+          const page = document.querySelector(`[data-page="${returnState.page}"]`);
+          if (page) page.scrollTop = returnState.scrollTop;
+        }
+        returnState.trigger?.focus();
+      }
+      const openChatRow = document.querySelector('#open-chat');
+      const unreadBadge = openChatRow.querySelector('[data-unread-badge]');
+      const chatReadStatus = detail.querySelector('[data-chat-read-status]');
+      let latestMessageLoaded = false;
+      let authoritativeReadReceipt = false;
+      function commitReadStateIfAuthoritative() {
+        if (!latestMessageLoaded || !authoritativeReadReceipt || unreadBadge.dataset.readState === 'read') return;
+        unreadBadge.dataset.readState = 'read';
+        unreadBadge.hidden = true;
+        chatReadStatus.textContent = '● 已读已由服务端同步';
+        showToast('服务端已确认已读，多端同步');
+      }
+      openChatRow.addEventListener('click', () => {
+        detail.dataset.returnPage = '';
+        detail.classList.add('open');
+        detail.setAttribute('aria-hidden', 'false');
+        if (unreadBadge.dataset.readState !== 'unread') return;
+        unreadBadge.dataset.readState = 'confirming';
+        unreadBadge.textContent = '…';
+        unreadBadge.setAttribute('aria-label', '正在确认已读');
+        chatReadStatus.textContent = '正在确认已读…';
+        setTimeout(() => {
+          latestMessageLoaded = true;
+          detail.dataset.latestMessageLoaded = 'true';
+          setTimeout(() => {
+            authoritativeReadReceipt = true;
+            detail.dataset.readReceipt = 'confirmed';
+            commitReadStateIfAuthoritative();
+          }, 420);
+        }, 320);
+      });
+      document.querySelector('#close-chat').addEventListener('click', () => { detail.classList.remove('open'); detail.setAttribute('aria-hidden', 'true'); if (detail.dataset.returnPage) select(detail.dataset.returnPage); });
+      document.querySelector('[data-open-chat-task]').addEventListener('click', () => { detail.dataset.returnPage = 'task'; detail.classList.add('open'); detail.setAttribute('aria-hidden', 'false'); document.querySelector('[data-live-workflow]').scrollIntoView({ block: 'center' }); });
+      const inputTray = document.querySelector('[data-input-tray]');
+      const inputToggle = document.querySelector('[data-input-menu-toggle]');
+      const attachmentPreview = document.querySelector('[data-attachment-preview]');
+      const composerPreviewInput = document.querySelector('[data-composer-preview-input]');
+      let attachmentPreviewTimer = 0;
+      const closeInputTray = () => { inputTray.hidden = true; inputToggle.setAttribute('aria-expanded', 'false'); };
+      const showAttachmentPreview = source => {
+        closeInputTray();
+        attachmentPreview.hidden = false;
+        attachmentPreview.querySelector('b').textContent = `${source} · 交互预览`;
+        clearTimeout(attachmentPreviewTimer);
+        attachmentPreviewTimer = setTimeout(() => { attachmentPreview.hidden = true; }, 6000);
+      };
+      inputToggle.addEventListener('click', () => {
+        inputTray.hidden = !inputTray.hidden;
+        inputToggle.setAttribute('aria-expanded', String(!inputTray.hidden));
+        if (!inputTray.hidden) inputTray.querySelector('[role="menuitem"]')?.focus();
+      });
+      document.querySelectorAll('[data-input-action]').forEach(button => button.addEventListener('click', () => {
+        const action = button.dataset.inputAction;
+        if (action === 'gallery') showAttachmentPreview('最近截图');
+        else if (action === 'camera') showAttachmentPreview('刚刚拍摄');
+        else if (action === 'speech') {
+          closeInputTray();
+          composerPreviewInput.textContent = '正在使用系统语音识别…';
+          setTimeout(() => { composerPreviewInput.textContent = '把语音识别结果填入当前草稿'; }, 1200);
+        } else { closeInputTray(); showToast('打开系统文件选择器'); }
+      }));
+      document.querySelector('[data-close-attachment]').addEventListener('click', () => { clearTimeout(attachmentPreviewTimer); attachmentPreview.hidden = true; });
+      document.querySelectorAll('[data-queue-action]').forEach(button => button.addEventListener('click', () => {
+        const action = button.dataset.queueAction;
+        showToast(action === 'edit' ? '打开权威队列项编辑器；不复制到本地草稿' : action === 'delete' ? '已请求删除；预览不伪造队列回执' : '已请求立即发送；顺序由权威队列确认');
+      }));
+      const workflow = document.querySelector('[data-live-workflow]');
+      const workflowEvents = workflow.querySelector('.live-events');
+      const workflowToggle = workflow.querySelector('[data-live-toggle]');
+      const workflowSummary = document.querySelector('[data-workflow-summary]');
+      let workflowSeconds = 8;
+      let workflowTick = 0;
+      const demoActions = ['正在更新对话生命周期契约', '正在连接 run / turn 权威标识', '正在验证卡片归档顺序'];
+      const workflowTimer = setInterval(() => {
+        if (workflow.dataset.liveWorkflow !== 'live') return;
+        workflowSeconds += 1;
+        workflowTick += 1;
+        workflow.querySelector('[data-live-elapsed]').textContent = `${String(Math.floor(workflowSeconds / 60)).padStart(2, '0')}:${String(workflowSeconds % 60).padStart(2, '0')}`;
+        if (workflowTick % 4 === 0) {
+          const action = demoActions[(workflowTick / 4) % demoActions.length | 0];
+          workflow.querySelector('[data-live-action]').textContent = action;
+          workflow.querySelector('[data-live-event]').textContent = `实时样例 · ${action}`;
+        }
+      }, 1000);
+      function archiveWorkflow() {
+        clearInterval(workflowTimer);
+        workflow.dataset.liveWorkflow = 'archived';
+        workflow.classList.add('archived');
+        workflow.querySelector('[data-live-stage]').textContent = '已归档 · 本轮完成';
+        workflow.querySelector('[data-live-action]').textContent = '总结回复已到达';
+        workflowEvents.hidden = true;
+        workflowToggle.textContent = '查看记录';
+        workflowToggle.setAttribute('aria-expanded', 'false');
+        workflow.querySelector('[data-stop-workflow]').hidden = true;
+        workflowSummary.hidden = false;
+        showToast('总结到达：本轮卡片已自动收起归档');
+      }
+      workflowToggle.addEventListener('click', () => {
+        workflowEvents.hidden = !workflowEvents.hidden;
+        workflowToggle.textContent = workflowEvents.hidden ? (workflow.dataset.liveWorkflow === 'live' ? '展开' : '查看记录') : '收起';
+        workflowToggle.setAttribute('aria-expanded', String(!workflowEvents.hidden));
+      });
+      workflow.querySelector('[data-stop-workflow]').addEventListener('click', () => showToast('停止需由 bridge/server 确认，预览不伪造结果'));
+      document.querySelectorAll('[data-open-detail]').forEach(button => button.addEventListener('click', () => openObjectDetail(button.dataset.openDetail, button)));
+      document.querySelectorAll('[data-close-detail]').forEach(button => button.addEventListener('click', () => closeObjectDetail(button.closest('.object-detail'))));
+      let canvasScale = 1;
+      let canvasPan = { x: 0, y: 0 };
+      function applyCanvasTransform() {
+        document.querySelectorAll('.canvas-map').forEach(map => { map.style.transform = `translate(${canvasPan.x}px, ${canvasPan.y}px) scale(${canvasScale})`; });
+      }
+      document.querySelectorAll('[data-zoom]').forEach(button => button.addEventListener('click', () => {
+        if (button.dataset.zoom === 'fit') { canvasScale = 1; canvasPan = { x: 0, y: 0 }; }
+        else canvasScale = Math.min(1.6, Math.max(.7, canvasScale + (button.dataset.zoom === 'in' ? .15 : -.15)));
+        applyCanvasTransform();
+        showToast(`协作画布 ${Math.round(canvasScale * 100)}%`);
+      }));
+      document.querySelectorAll('.canvas-viewport').forEach(viewport => {
+        let drag = null;
+        viewport.addEventListener('pointerdown', event => { drag = { x: event.clientX, y: event.clientY, originX: canvasPan.x, originY: canvasPan.y }; viewport.setPointerCapture(event.pointerId); });
+        viewport.addEventListener('pointermove', event => { if (!drag) return; canvasPan = { x: drag.originX + event.clientX - drag.x, y: drag.originY + event.clientY - drag.y }; applyCanvasTransform(); });
+        viewport.addEventListener('pointerup', () => { drag = null; });
+        viewport.addEventListener('pointercancel', () => { drag = null; });
+      });
+    })();
+  </script>
+</body>
+</html>

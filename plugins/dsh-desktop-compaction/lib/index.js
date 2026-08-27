@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import * as basicCompaction from '@deepseek-ai/dsh-compaction-basic'
 
 const BasicCompactionEngine = basicCompaction.BasicCompactionEngine || basicCompaction.default
@@ -10,6 +11,18 @@ const SUMMARY_SHRINK_RETRIES = 3
 const SUMMARY_SHRINK_RATIO = 0.24
 const DESKTOP_COMPACTION_POLICY_VERSION = 1
 const CONTEXT_RECOVERY_GUIDANCE = '上下文压缩在多次安全缩减后仍无法完成。请执行 /compact focus on 当前任务；若仍失败，请新建会话并只带检查点摘要。'
+const CODEX_OVERLOAD_MAX_RETRIES = 5
+const CODEX_OVERLOAD_INITIAL_DELAY_MS = 1000
+const CODEX_OVERLOAD_MAX_DELAY_MS = 16000
+const CODEX_OVERLOAD_JITTER_RATIO = 0.2
+const CODEX_OVERLOAD_POLICY_KEY = JSON.stringify([
+  'desktop-codex-overload-v1',
+  CODEX_OVERLOAD_MAX_RETRIES,
+  CODEX_OVERLOAD_INITIAL_DELAY_MS,
+  CODEX_OVERLOAD_MAX_DELAY_MS,
+  CODEX_OVERLOAD_JITTER_RATIO
+])
+const CODEX_OVERLOAD_RECOVERY_GUIDANCE = `Codex 服务持续过载，已完成 ${CODEX_OVERLOAD_MAX_RETRIES} 次自动退避重试。本轮上下文仍已保留；稍后可直接继续，无需新建会话或手动压缩。`
 
 const DEFAULT_MODEL_POLICIES = Object.freeze([
   Object.freeze({
@@ -69,6 +82,67 @@ function isContextOverflowError(error) {
   return /context (?:window|length|overflow)|prompt (?:is )?too long|maximum context|model token limit|input length.+exceeds/iu.test(message)
 }
 
+function isCodexOverloadFailure({ provider, failure } = {}) {
+  if (provider !== 'openai-codex' || failure?.code !== 'PI_AI_ERROR') return false
+  return /\bservers?\b[^\n]{0,80}\b(?:overloaded|over capacity|busy|unavailable)\b|\bplease try again later\b/iu.test(String(failure.message || ''))
+}
+
+function codexOverloadDelay(retry, random = Math.random) {
+  const exponent = Math.min(Math.max(Number(retry) - 1, 0), 1024)
+  const exponential = Math.min(CODEX_OVERLOAD_INITIAL_DELAY_MS * 2 ** exponent, CODEX_OVERLOAD_MAX_DELAY_MS)
+  const jitter = 1 - CODEX_OVERLOAD_JITTER_RATIO + 2 * CODEX_OVERLOAD_JITTER_RATIO * random()
+  return Math.min(exponential * jitter, CODEX_OVERLOAD_MAX_DELAY_MS)
+}
+
+function cancellableDelay(delayMs, signal) {
+  if (signal?.aborted) return Promise.resolve(false)
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.('abort', onAbort)
+      resolve(true)
+    }, delayMs)
+    function onAbort() {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+  })
+}
+
+async function recoverCodexOverload(ctx, payload, next, internals = {}) {
+  const { agent, turn, step, provider, failure, signal } = payload || {}
+  if (!isCodexOverloadFailure({ provider, failure }) || signal?.aborted) return next()
+  const events = Array.isArray(agent?.session?.events) ? agent.session.events : []
+  const prior = events.findLast(event => event.type === 'llm/retry'
+    && event.data?.turn === turn
+    && event.data?.step === step
+    && event.data?.provider === provider
+    && event.data?.policyKey === CODEX_OVERLOAD_POLICY_KEY)
+  const retry = (prior?.data?.retry || 0) + 1
+  if (retry > CODEX_OVERLOAD_MAX_RETRIES) {
+    ctx.logger?.error?.(CODEX_OVERLOAD_RECOVERY_GUIDANCE)
+    return next()
+  }
+  const retryId = prior?.data?.retryId || (internals.createRetryId || randomUUID)()
+  const delayMs = codexOverloadDelay(retry, internals.random)
+  agent.session.append('llm/retry', {
+    retryId,
+    turn,
+    step,
+    provider,
+    mode: 'normal',
+    policyKey: CODEX_OVERLOAD_POLICY_KEY,
+    retry,
+    maxRetries: CODEX_OVERLOAD_MAX_RETRIES,
+    delayMs,
+    failure
+  })
+  const wait = internals.wait || cancellableDelay
+  if (!await wait(delayMs, signal) || signal?.aborted) return undefined
+  agent.session.append('llm/retry-started', { retryId, turn, step, retry })
+  return { kind: 'retry' }
+}
+
 function blockCallIds(message, type, key) {
   const ids = []
   for (const block of Array.isArray(message?.content) ? message.content : []) {
@@ -109,9 +183,9 @@ function shrinkCompactionInput(input, ratio = SUMMARY_SHRINK_RATIO) {
 class DesktopCompactionEngine extends BasicCompactionEngine {
   constructor(ctx, config = {}) {
     super(ctx, desktopEngineConfig(config))
-    ctx.on('agent/request-error', ({ failure, signal }, next) => {
-      if (!signal.aborted && failure?.code === CONTEXT_WINDOW_EXCEEDED_CODE) ctx.logger.error(CONTEXT_RECOVERY_GUIDANCE)
-      return next()
+    ctx.on('agent/request-error', (payload, next) => {
+      if (!payload?.signal?.aborted && payload?.failure?.code === CONTEXT_WINDOW_EXCEEDED_CODE) ctx.logger.error(CONTEXT_RECOVERY_GUIDANCE)
+      return recoverCodexOverload(ctx, payload, next)
     })
   }
 
@@ -138,14 +212,20 @@ class DesktopCompactionEngine extends BasicCompactionEngine {
 }
 
 export {
+  CODEX_OVERLOAD_MAX_RETRIES,
+  CODEX_OVERLOAD_POLICY_KEY,
+  CODEX_OVERLOAD_RECOVERY_GUIDANCE,
   CONTEXT_RECOVERY_GUIDANCE,
   DEFAULT_ENGINE_CONFIG,
   DEFAULT_MODEL_POLICIES,
   DESKTOP_COMPACTION_POLICY_VERSION,
   DesktopCompactionEngine,
   SUMMARY_SHRINK_RETRIES,
+  codexOverloadDelay,
   desktopEngineConfig,
+  isCodexOverloadFailure,
   isContextOverflowError,
+  recoverCodexOverload,
   shrinkCompactionInput,
   toolPairsBalanced
 }

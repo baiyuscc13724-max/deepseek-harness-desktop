@@ -184,6 +184,8 @@ let mobileSyncState = {
   control: { protocolVersion: 1, devices: [] },
   remote: { enabled: true, preference: 'auto', status: 'disabled', active: null, adapters: {} }
 }
+let computerUsePluginState = { loading: true, notice: '', error: '', session: null }
+let computerUsePluginMutationPending = false
 let relayTesting = false
 let themeCatalog = []
 let selectedWallpaperId = null
@@ -2269,6 +2271,47 @@ async function publishMobileSyncState() {
   await runtimeView.executeJavaScript(`window.__HARNESS_DESKTOP_MOBILE_SYNC_STATE__ = ${serialized}; window.__HARNESS_DESKTOP_RENDER_MOBILE_SYNC__?.();`, true).catch(() => {})
 }
 
+async function publishComputerUsePluginState() {
+  if (!runtimeView.getURL()) return
+  const serialized = JSON.stringify(computerUsePluginState).replaceAll('<', '\\u003c')
+  await runtimeView.executeJavaScript(`(() => { const snapshot = ${serialized}; window.__HARNESS_DESKTOP_COMPUTER_USE_STATE__ = snapshot; window.dispatchEvent(new CustomEvent('harness-desktop:computer-use-state', { detail: snapshot })); })();`, true).catch(() => {})
+}
+
+async function refreshComputerUsePluginState({ notice = '', loading = false } = {}) {
+  if (computerUsePluginMutationPending) return computerUsePluginState
+  if (loading) {
+    computerUsePluginState = { ...computerUsePluginState, loading: true, notice: '', error: '' }
+    await publishComputerUsePluginState()
+  }
+  try {
+    const session = await api.getComputerUseState()
+    if (computerUsePluginMutationPending) return computerUsePluginState
+    computerUsePluginState = { loading: false, notice, error: '', session }
+  } catch (error) {
+    if (computerUsePluginMutationPending) return computerUsePluginState
+    computerUsePluginState = { ...computerUsePluginState, loading: false, notice: '', error: error.message || String(error) }
+  }
+  await publishComputerUsePluginState()
+  return computerUsePluginState
+}
+
+async function mutateComputerUsePluginState(operation, notice) {
+  if (computerUsePluginMutationPending) return computerUsePluginState
+  computerUsePluginMutationPending = true
+  computerUsePluginState = { ...computerUsePluginState, loading: true, notice: '', error: '' }
+  await publishComputerUsePluginState()
+  try {
+    const session = await operation()
+    computerUsePluginState = { loading: false, notice: typeof notice === 'function' ? notice(session) : notice, error: '', session }
+  } catch (error) {
+    computerUsePluginState = { ...computerUsePluginState, loading: false, notice: '', error: error.message || String(error) }
+  } finally {
+    computerUsePluginMutationPending = false
+  }
+  await publishComputerUsePluginState()
+  return computerUsePluginState
+}
+
 async function publishAppearanceState() {
   applyShellTheme()
   applyShellUiMode()
@@ -2363,6 +2406,7 @@ runtimeView.addEventListener('dom-ready', async () => {
   await publishTerminalSettingsState()
   await publishGitRuntimeState()
   await publishMobileSyncState()
+  await publishComputerUsePluginState()
   await publishAppearanceState()
   await publishModelRoutingState()
   startupWebviewReady = true
@@ -2455,6 +2499,18 @@ runtimeView.addEventListener('will-navigate', event => {
       gitRuntimeState = { ...gitRuntimeState, authenticating: false, message: `GitHub 登录启动失败：${error.message}` }
       publishGitRuntimeState()
     })
+  } else if (target.hostname === 'computer-use-refresh') {
+    refreshComputerUsePluginState({ notice: 'refreshed', loading: true })
+  } else if (target.hostname === 'computer-use-status') {
+    refreshComputerUsePluginState()
+  } else if (target.hostname === 'computer-use-toggle') {
+    const enabled = target.searchParams.get('enabled') !== '0'
+    mutateComputerUsePluginState(
+      () => api.setComputerUseEnabled(enabled),
+      session => enabled ? (session?.authorization?.scope === 'none' ? 'requested' : 'resumed') : 'stopped'
+    )
+  } else if (target.hostname === 'computer-use-revoke-permanent') {
+    mutateComputerUsePluginState(() => api.revokeComputerUsePermanentGrant(), 'revoked')
   } else if (target.hostname === 'open-mobile-sync') {
     openMobileSync()
   } else if (target.hostname === 'open-appearance') {
@@ -2994,6 +3050,11 @@ api.onMobileSyncState(state => {
   renderMobileSync(state)
   publishMobileSyncState()
 })
+api.onComputerUseAuthorization(session => {
+  if (computerUsePluginMutationPending) return
+  computerUsePluginState = { loading: false, notice: '', error: '', session }
+  publishComputerUsePluginState()
+})
 api.onPetState(renderPetState)
 api.onUpdateResult(async result => {
   updateState = { ...updateState, ...result, checking: false }
@@ -3043,6 +3104,11 @@ async function startOfficialWorkspace() {
   modelRoutingState = { ...routing, meters: { ...meters, loading: false, error: '' }, saving: false, saved: false, error: '' }
   gitRuntimeState = { ...gitRuntimeState, ...gitStatus, loading: false }
   mobileSyncState = await api.getMobileSyncState()
+  try {
+    computerUsePluginState = { loading: false, notice: '', error: '', session: await api.getComputerUseState() }
+  } catch (error) {
+    computerUsePluginState = { ...computerUsePluginState, loading: false, error: error.message || String(error) }
+  }
   await hydrateIntegratedTerminal()
   const themeAssets = await api.getThemeAssets()
   themeCatalog = themeIntegration.prepareCatalog(window.harnessDesktopThemes || [], themeAssets)

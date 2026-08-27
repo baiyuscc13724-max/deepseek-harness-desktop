@@ -47,6 +47,85 @@ test('Desktop compaction policy reserves headroom and adds a Codex-specific wind
   assert.equal(Object.hasOwn(clamped, 'retainTokens'), false)
 })
 
+test('Codex overload recovery recognizes only the unclassified transient error and uses bounded backoff', async () => {
+  const {
+    CODEX_OVERLOAD_MAX_RETRIES,
+    codexOverloadDelay,
+    isCodexOverloadFailure
+  } = await plugin()
+  const overloaded = { message: 'Codex error: Our servers are currently overloaded. Please try again later.', code: 'PI_AI_ERROR' }
+  assert.equal(isCodexOverloadFailure({ provider: 'openai-codex', failure: overloaded }), true)
+  assert.equal(isCodexOverloadFailure({ provider: 'openai-codex', failure: { ...overloaded, code: 'SERVER' } }), false)
+  assert.equal(isCodexOverloadFailure({ provider: 'other', failure: overloaded }), false)
+  assert.equal(isCodexOverloadFailure({ provider: 'openai-codex', failure: { message: 'invalid model', code: 'PI_AI_ERROR' } }), false)
+  assert.equal(CODEX_OVERLOAD_MAX_RETRIES, 5)
+  assert.equal(codexOverloadDelay(1, () => 0.5), 1000)
+  assert.equal(codexOverloadDelay(5, () => 0.5), 16000)
+  assert.equal(codexOverloadDelay(9, () => 1), 16000)
+})
+
+test('Codex overload recovery persists visible retry state and preserves the retry chain', async () => {
+  const { CODEX_OVERLOAD_POLICY_KEY, recoverCodexOverload } = await plugin()
+  const events = []
+  const waits = []
+  const session = {
+    events,
+    append(type, data) { events.push({ type, data }) }
+  }
+  const payload = {
+    agent: { session },
+    turn: 4,
+    step: 7,
+    provider: 'openai-codex',
+    failure: { message: 'Our servers are currently overloaded. Please try again later.', code: 'PI_AI_ERROR' },
+    signal: { aborted: false }
+  }
+  let nextCalls = 0
+  const internals = {
+    createRetryId: () => 'desktop-retry-id',
+    random: () => 0.5,
+    wait: async delayMs => { waits.push(delayMs); return true }
+  }
+  assert.deepEqual(await recoverCodexOverload({ logger: {} }, payload, async () => { nextCalls += 1 }, internals), { kind: 'retry' })
+  assert.deepEqual(await recoverCodexOverload({ logger: {} }, payload, async () => { nextCalls += 1 }, internals), { kind: 'retry' })
+  assert.equal(nextCalls, 0)
+  assert.deepEqual(waits, [1000, 2000])
+  const scheduled = events.filter(event => event.type === 'llm/retry')
+  assert.deepEqual(scheduled.map(event => event.data.retry), [1, 2])
+  assert.equal(scheduled[0].data.retryId, 'desktop-retry-id')
+  assert.equal(scheduled[1].data.retryId, 'desktop-retry-id')
+  assert.equal(scheduled[0].data.policyKey, CODEX_OVERLOAD_POLICY_KEY)
+  assert.equal(scheduled[0].data.maxRetries, 5)
+  assert.equal(events.filter(event => event.type === 'llm/retry-started').length, 2)
+})
+
+test('Codex overload recovery stops after its budget and keeps the session resumable', async () => {
+  const {
+    CODEX_OVERLOAD_MAX_RETRIES,
+    CODEX_OVERLOAD_POLICY_KEY,
+    CODEX_OVERLOAD_RECOVERY_GUIDANCE,
+    recoverCodexOverload
+  } = await plugin()
+  const events = Array.from({ length: CODEX_OVERLOAD_MAX_RETRIES }, (_, index) => ({
+    type: 'llm/retry',
+    data: { turn: 1, step: 2, provider: 'openai-codex', policyKey: CODEX_OVERLOAD_POLICY_KEY, retry: index + 1, retryId: 'chain' }
+  }))
+  const errors = []
+  let nextCalls = 0
+  const result = await recoverCodexOverload({ logger: { error: message => errors.push(message) } }, {
+    agent: { session: { events, append() { throw new Error('must not append after exhaustion') } } },
+    turn: 1,
+    step: 2,
+    provider: 'openai-codex',
+    failure: { message: 'Our servers are currently overloaded. Please try again later.', code: 'PI_AI_ERROR' },
+    signal: { aborted: false }
+  }, async () => { nextCalls += 1; return { kind: 'next' } })
+  assert.deepEqual(result, { kind: 'next' })
+  assert.equal(nextCalls, 1)
+  assert.deepEqual(errors, [CODEX_OVERLOAD_RECOVERY_GUIDANCE])
+  assert.match(errors[0], /上下文仍已保留/u)
+})
+
 test('summary overflow shrinking removes only an old balanced prefix', async () => {
   const { shrinkCompactionInput, toolPairsBalanced } = await plugin()
   const messages = [
@@ -112,8 +191,10 @@ test('provider-confirmed context overflow compacts durable surface and retries t
     return originalOn(name, handler, ...rest)
   }
   const engine = new DesktopCompactionEngine(ctx)
-  const overflowHandler = handlers.get('agent/request-error')[0]
+  const requestErrorHandlers = handlers.get('agent/request-error')
+  const overflowHandler = requestErrorHandlers[0]
   assert.equal(typeof overflowHandler, 'function')
+  assert.equal(typeof requestErrorHandlers[1], 'function', 'Desktop transient recovery must follow the base overflow handler')
   const session = {
     requestHeader: () => ({ config: { provider: 'openai-codex', model: 'gpt-5.6-sol' } }),
     surface: { replaceGeneration: 0 }

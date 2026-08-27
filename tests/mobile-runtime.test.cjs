@@ -6,7 +6,7 @@ const vm = require('node:vm')
 
 const SOURCE = fs.readFileSync(path.join(__dirname, '..', 'mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-runtime.js'), 'utf8')
 
-function installRuntime(fetchImpl, timeZone = 'UTC') {
+function installRuntime(fetchImpl, timeZone = 'UTC', platform = '') {
   function DateTimeFormat() {
     if (!new.target) return new DateTimeFormat()
   }
@@ -25,8 +25,16 @@ function installRuntime(fetchImpl, timeZone = 'UTC') {
     observe() {}
   }
   class HTMLInputElement {}
+  class CustomEvent {
+    constructor(type, init = {}) {
+      this.type = type
+      this.detail = init.detail
+    }
+  }
+  const listeners = new Map()
   const context = {
     AbortSignal,
+    CustomEvent,
     Error,
     HTMLInputElement,
     Intl: { DateTimeFormat },
@@ -35,16 +43,29 @@ function installRuntime(fetchImpl, timeZone = 'UTC') {
     Request,
     Response,
     URL,
+    addEventListener: (type, listener) => {
+      const entries = listeners.get(type) || []
+      entries.push(listener)
+      listeners.set(type, entries)
+    },
     clearTimeout: () => {},
+    dispatchEvent: event => {
+      for (const listener of listeners.get(event.type) || []) listener(event)
+      return true
+    },
     document,
     eval,
     fetch: fetchImpl,
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    removeEventListener: (type, listener) => {
+      listeners.set(type, (listeners.get(type) || []).filter(entry => entry !== listener))
+    },
     setTimeout: callback => {
       queueMicrotask(callback)
       return 1
     }
   }
+  if (platform) context.HarnessMobilePlatform = platform
   context.window = context
   vm.runInNewContext(SOURCE, context, { filename: 'mobile-runtime.js' })
   return context
@@ -56,6 +77,25 @@ function jsonResponse(payload, status = 200) {
     headers: { 'content-type': 'application/json' }
   })
 }
+
+test('mobile runtime defaults to Android and gates native-only capabilities on iOS', () => {
+  const fetchImpl = async () => new Response('', { status: 404 })
+  const android = installRuntime(fetchImpl)
+  assert.equal(android.document.documentElement.dataset.harnessMobilePlatform, 'android')
+  assert.equal(android.window.__harnessMobileCapabilities.imeSendBridge, true)
+  assert.equal(android.window.__harnessMobileCapabilities.nativeImeInsets, true)
+  assert.equal(android.window.__harnessMobileCapabilities.screenshotSuggestion, true)
+  assert.equal(android.window.__harnessMobileCapabilities.controlSettings, true)
+
+  const ios = installRuntime(fetchImpl, 'UTC', 'ios')
+  assert.equal(ios.document.documentElement.dataset.harnessMobilePlatform, 'ios')
+  assert.equal(ios.window.__harnessMobileCapabilities.imeSendBridge, false)
+  assert.equal(ios.window.__harnessMobileCapabilities.nativeImeInsets, false)
+  assert.equal(ios.window.__harnessMobileCapabilities.screenshotSuggestion, false)
+  assert.equal(ios.window.__harnessMobileCapabilities.controlSettings, false)
+  assert.equal(ios.window.__harnessMobileImeSendBridge, undefined)
+  assert.equal(ios.window.__harnessMobileScreenshotSuggestion, undefined)
+})
 
 test('mobile runtime normalizes Android offset-only prompt time zones without changing IANA zones', async () => {
   const bodies = []
@@ -104,6 +144,76 @@ test('mobile runtime retries session history when the server reports an internal
   const response = await runtime.window.fetch('https://mobile.test/api/session.history', { method: 'POST' })
   assert.equal(historyCalls, 2)
   assert.equal((await response.json()).result.ok, true)
+})
+
+test('mobile runtime acknowledges unread only after fresh authoritative history for the same session', async () => {
+  const runtime = installRuntime(async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url
+    if (!url.includes('/api/session.history')) return new Response('', { status: 404 })
+    const request = JSON.parse(init.body)
+    return jsonResponse({ result: { ok: true, value: { sessionId: request.sessionId, events: [] } } })
+  })
+  const receipts = []
+  runtime.addEventListener('harness-mobile-session-history-receipt', event => receipts.push(event.detail))
+
+  await runtime.window.fetch('https://mobile.test/api/session.history', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 'session-one' })
+  })
+
+  assert.equal(receipts.length, 1)
+  assert.deepEqual(JSON.parse(JSON.stringify(receipts[0])), {
+    sessionId: 'session-one',
+    authoritative: true,
+    latestLoaded: true
+  })
+  assert.equal(Object.isFrozen(receipts[0]), true)
+})
+
+test('mobile runtime rejects mismatched, missing, failed, and subagent history receipts', async () => {
+  const runtime = installRuntime(async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url
+    if (url.includes('/api/subagent.history')) {
+      return jsonResponse({ result: { ok: true, value: { sessionId: 'subagent-session', events: [] } } })
+    }
+    if (!url.includes('/api/session.history')) return new Response('', { status: 404 })
+    const request = init?.body ? JSON.parse(init.body) : {}
+    if (request.sessionId === 'mismatch') return jsonResponse({ result: { ok: true, value: { sessionId: 'other', events: [] } } })
+    if (request.sessionId === 'missing-response') return jsonResponse({ result: { ok: true, value: { events: [] } } })
+    if (request.sessionId === 'failed') return jsonResponse({ result: { ok: false, error: { code: 'invalid', message: 'failed' } } }, 400)
+    return jsonResponse({ result: { ok: true, value: { sessionId: 'response-only', events: [] } } })
+  })
+  const receipts = []
+  runtime.addEventListener('harness-mobile-session-history-receipt', event => receipts.push(event.detail))
+
+  await runtime.window.fetch('https://mobile.test/api/session.history', { method: 'POST', body: JSON.stringify({ sessionId: 'mismatch' }) })
+  await runtime.window.fetch('https://mobile.test/api/session.history', { method: 'POST', body: JSON.stringify({ sessionId: 'missing-response' }) })
+  await runtime.window.fetch('https://mobile.test/api/session.history', { method: 'POST', body: JSON.stringify({}) })
+  await runtime.window.fetch('https://mobile.test/api/session.history', { method: 'POST', body: JSON.stringify({ sessionId: 'failed' }) })
+  await runtime.window.fetch('https://mobile.test/api/subagent.history', { method: 'POST', body: JSON.stringify({ sessionId: 'subagent-session' }) })
+
+  assert.deepEqual(receipts, [])
+})
+
+test('mobile runtime does not acknowledge a stale history fallback', async () => {
+  let historyCalls = 0
+  const runtime = installRuntime(async input => {
+    const url = typeof input === 'string' ? input : input.url
+    if (!url.includes('/api/session.history')) return new Response('', { status: 404 })
+    historyCalls++
+    if (historyCalls === 1) return jsonResponse({ result: { ok: true, value: { sessionId: 'stale-session', events: [] } } })
+    return jsonResponse({ result: { ok: false, error: { code: 'internal', message: 'temporarily unavailable' } } }, 503)
+  })
+  const receipts = []
+  runtime.addEventListener('harness-mobile-session-history-receipt', event => receipts.push(event.detail))
+  const options = { method: 'POST', body: JSON.stringify({ sessionId: 'stale-session' }) }
+
+  await runtime.window.fetch('https://mobile.test/api/session.history', options)
+  const stale = await runtime.window.fetch('https://mobile.test/api/session.history', options)
+
+  assert.equal((await stale.json()).result.value.sessionId, 'stale-session')
+  assert.equal(historyCalls, 4)
+  assert.equal(receipts.length, 1)
 })
 
 test('mobile runtime retries subagent history but leaves unrelated requests alone', async () => {
@@ -177,11 +287,14 @@ test('mobile runtime does not replay a history request cancelled by page navigat
     historyCalls++
     throw new Error('request aborted')
   })
+  const receipts = []
+  runtime.addEventListener('harness-mobile-session-history-receipt', event => receipts.push(event.detail))
   await assert.rejects(
-    runtime.window.fetch('https://mobile.test/api/session.history', { method: 'POST', signal: controller.signal }),
+    runtime.window.fetch('https://mobile.test/api/session.history', { method: 'POST', body: JSON.stringify({ sessionId: 'aborted' }), signal: controller.signal }),
     /aborted/
   )
   assert.equal(historyCalls, 1)
+  assert.deepEqual(receipts, [])
 })
 
 test('Android WebRTC DataChannel dependency retains its license without adding audio permission', () => {

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -26,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class HarnessWebProxy implements AutoCloseable {
+    private static final String TAG = "HarnessWebProxy";
     private static final int MAX_HEADER_BYTES = 64 * 1024;
     private static final int LAN_CONNECT_TIMEOUT_MS = 800;
     private static final int REMOTE_CONNECT_TIMEOUT_MS = 2_200;
@@ -45,6 +47,7 @@ final class HarnessWebProxy implements AutoCloseable {
     private ServerSocket server;
 
     private record RoutePreference(String key) {}
+    private record ConnectedRoute(Socket socket, PairingProfile.Route route) {}
 
     HarnessWebProxy(Context context) {
         connectivityManager = context.getSystemService(ConnectivityManager.class);
@@ -89,11 +92,12 @@ final class HarnessWebProxy implements AutoCloseable {
             OutputStream clientOutput = client.getOutputStream();
             byte[] header = readHeader(clientInput);
             if (header.length == 0) return;
-            Socket upstream = connectRoute();
-            if (upstream == null) {
+            ConnectedRoute connected = connectRoute();
+            if (connected == null) {
                 sendUnavailable(clientOutput);
                 return;
             }
+            Socket upstream = connected.socket();
             try (upstream) {
                 upstream.setTcpNoDelay(true);
                 if (isConnectRequest(header)) {
@@ -107,7 +111,7 @@ final class HarnessWebProxy implements AutoCloseable {
                 boolean webSocketUpgrade = isWebSocketUpgrade(header);
                 boolean eventStreamRequest = isEventStreamRequest(header);
                 OutputStream upstreamOutput = upstream.getOutputStream();
-                upstreamOutput.write(rewriteRequest(header, webSocketUpgrade || eventStreamRequest));
+                upstreamOutput.write(rewriteRequest(header, webSocketUpgrade || eventStreamRequest, routeAuthority(connected.route())));
                 forwardRequestBody(header, clientInput, upstreamOutput);
                 upstreamOutput.flush();
 
@@ -118,11 +122,12 @@ final class HarnessWebProxy implements AutoCloseable {
                     forwardSingleHttpResponse(upstream.getInputStream(), clientOutput, requestMethod(header), eventStreamRequest);
                 }
             }
-        } catch (IOException ignored) {
+        } catch (IOException error) {
+            Log.w(TAG, "Proxy request failed: " + error.getClass().getSimpleName() + ": " + error.getMessage());
         }
     }
 
-    private Socket connectRoute() {
+    private ConnectedRoute connectRoute() {
         long now = System.currentTimeMillis();
         RoutePreference preferred = lastGoodRoute.get();
         List<PairingProfile.Route> candidates = prioritizeRoutes(routes, retryAfter, preferred == null ? null : preferred.key(), now);
@@ -133,10 +138,12 @@ final class HarnessWebProxy implements AutoCloseable {
                 Socket socket = connect(route);
                 retryAfter.remove(route.key());
                 lastGoodRoute.set(new RoutePreference(route.key()));
-                return socket;
+                Log.i(TAG, "Route " + route.id + " connected to " + route.host + ":" + route.port);
+                return new ConnectedRoute(socket, route);
             } catch (IOException error) {
                 if (preferred != null && route.key().equals(preferred.key())) lastGoodRoute.compareAndSet(preferred, null);
                 retryAfter.put(route.key(), now + ("lan".equals(route.id) ? LAN_RETRY_DELAY_MS : REMOTE_RETRY_DELAY_MS));
+                Log.w(TAG, "Route " + route.id + " failed for " + route.host + ":" + route.port + ": " + error.getMessage());
             }
         }
         return null;
@@ -159,9 +166,31 @@ final class HarnessWebProxy implements AutoCloseable {
 
     private Socket connect(PairingProfile.Route route) throws IOException {
         if (route.usesSocks5()) return connectThroughSocks5(route);
-        Socket socket = createDirectSocket(route);
+        int timeout = "lan".equals(route.id) ? LAN_CONNECT_TIMEOUT_MS : REMOTE_CONNECT_TIMEOUT_MS;
+        IOException networkBoundFailure = null;
+        if ("lan".equals(route.id)) {
+            Socket networkBound = createNetworkBoundLanSocket();
+            if (networkBound != null) {
+                try { return connectSocket(networkBound, route, timeout); }
+                catch (IOException error) { networkBoundFailure = error; }
+            }
+        }
+
+        // Prefer a non-VPN Wi-Fi/Ethernet socket for ordinary LAN traffic, but
+        // fall back to Android's normal route selection when the desktop QR was
+        // produced from a TUN/TAP address. This does not create or replace a VPN;
+        // it only lets the user's existing system route reach the paired desktop.
         try {
-            socket.connect(new InetSocketAddress(route.host, route.port), "lan".equals(route.id) ? LAN_CONNECT_TIMEOUT_MS : REMOTE_CONNECT_TIMEOUT_MS);
+            return connectSocket(new Socket(), route, timeout);
+        } catch (IOException error) {
+            if (networkBoundFailure != null) error.addSuppressed(networkBoundFailure);
+            throw error;
+        }
+    }
+
+    private static Socket connectSocket(Socket socket, PairingProfile.Route route, int timeout) throws IOException {
+        try {
+            socket.connect(new InetSocketAddress(route.host, route.port), timeout);
             return socket;
         } catch (IOException error) {
             try { socket.close(); } catch (IOException ignored) {}
@@ -169,17 +198,16 @@ final class HarnessWebProxy implements AutoCloseable {
         }
     }
 
-    private Socket createDirectSocket(PairingProfile.Route route) {
-        if ("lan".equals(route.id) && connectivityManager != null) {
-            for (Network network : connectivityManager.getAllNetworks()) {
-                NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
-                if (capabilities == null || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue;
-                if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) continue;
-                try { return network.getSocketFactory().createSocket(); }
-                catch (IOException ignored) {}
-            }
+    private Socket createNetworkBoundLanSocket() {
+        if (connectivityManager == null) return null;
+        for (Network network : connectivityManager.getAllNetworks()) {
+            NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
+            if (capabilities == null || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue;
+            if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) continue;
+            try { return network.getSocketFactory().createSocket(); }
+            catch (IOException ignored) {}
         }
-        return new Socket();
+        return null;
     }
 
     static Socket connectThroughSocks5(PairingProfile.Route route) throws IOException {
@@ -244,7 +272,7 @@ final class HarnessWebProxy implements AutoCloseable {
         return output.toByteArray();
     }
 
-    private static byte[] rewriteRequest(byte[] input, boolean preserveConnection) {
+    static byte[] rewriteRequest(byte[] input, boolean preserveConnection, String upstreamAuthority) {
         String header = new String(input, StandardCharsets.ISO_8859_1);
         String[] lines = header.split("\r\n", -1);
         if (lines.length < 2) return input;
@@ -262,18 +290,26 @@ final class HarnessWebProxy implements AutoCloseable {
             }
         }
 
-        StringBuilder rewritten = new StringBuilder(header.length() + 24).append(requestLine).append("\r\n");
+        StringBuilder rewritten = new StringBuilder(header.length() + 48)
+            .append(requestLine).append("\r\n")
+            .append("Host: ").append(upstreamAuthority).append("\r\n");
         for (int index = 1; index < lines.length; index++) {
             String line = lines[index];
             if (line.isEmpty()) continue;
             int separator = line.indexOf(':');
             String name = separator < 0 ? "" : line.substring(0, separator).trim();
+            if ("host".equalsIgnoreCase(name)) continue;
             if (!preserveConnection && ("connection".equalsIgnoreCase(name) || "proxy-connection".equalsIgnoreCase(name))) continue;
             rewritten.append(line).append("\r\n");
         }
         if (!preserveConnection) rewritten.append("Connection: close\r\n");
         rewritten.append("\r\n");
         return rewritten.toString().getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    private static String routeAuthority(PairingProfile.Route route) {
+        String host = route.host.contains(":") ? "[" + route.host + "]" : route.host;
+        return host + ":" + route.port;
     }
 
     private static void forwardRequestBody(byte[] header, InputStream input, OutputStream output) throws IOException {

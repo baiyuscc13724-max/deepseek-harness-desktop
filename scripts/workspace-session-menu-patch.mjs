@@ -4,6 +4,7 @@ const PATCH_MARKER = 'const HD_SESSION_MENU_STATE_KEY = "harness.desktop.session
 
 const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harness.desktop.session-menu.v1";
 		const HD_SESSION_MENU_EVENT = "harness-desktop-session-menu-change";
+		const HD_SESSION_HISTORY_RECEIPT_EVENT = "harness-mobile-session-history-receipt";
 		function readSessionMenuState() {
 			try {
 				const parsed = JSON.parse(localStorage.getItem(HD_SESSION_MENU_STATE_KEY) ?? "{}");
@@ -24,13 +25,34 @@ const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harn
 			try { localStorage.setItem(HD_SESSION_MENU_STATE_KEY, JSON.stringify(state)); } catch {}
 			window.dispatchEvent(new CustomEvent(HD_SESSION_MENU_EVENT, { detail: { sessionId, flag, enabled } }));
 		}
-		function useSessionMenuRevision() {
+		function sessionHistoryReceiptSessionId(event) {
+			if (event?.type !== HD_SESSION_HISTORY_RECEIPT_EVENT) return null;
+			const detail = event.detail;
+			if (!detail || typeof detail !== "object") return null;
+			const keys = Object.keys(detail);
+			if (keys.length !== 3 || !keys.includes("sessionId") || !keys.includes("authoritative") || !keys.includes("latestLoaded")) return null;
+			const sessionId = Object.getOwnPropertyDescriptor(detail, "sessionId");
+			const authoritative = Object.getOwnPropertyDescriptor(detail, "authoritative");
+			const latestLoaded = Object.getOwnPropertyDescriptor(detail, "latestLoaded");
+			if (!sessionId || !authoritative || !latestLoaded || sessionId.get || authoritative.get || latestLoaded.get) return null;
+			return typeof sessionId.value === "string" && sessionId.value.length > 0 && sessionId.value.length <= 256 && authoritative.value === true && latestLoaded.value === true ? sessionId.value : null;
+		}
+		function useSessionMenuRevision(sessionId) {
 			const [revision, setRevision] = (0, react.useState)(0);
 			(0, react.useEffect)(() => {
 				const refresh = () => setRevision((value) => value + 1);
+				const acknowledgeLoadedHistory = (event) => {
+					const loadedSessionId = sessionHistoryReceiptSessionId(event);
+					if (loadedSessionId !== sessionId || !sessionMenuFlag(sessionId, "unread")) return;
+					setSessionMenuFlag(sessionId, "unread", false);
+				};
 				window.addEventListener(HD_SESSION_MENU_EVENT, refresh);
-				return () => window.removeEventListener(HD_SESSION_MENU_EVENT, refresh);
-			}, []);
+				window.addEventListener(HD_SESSION_HISTORY_RECEIPT_EVENT, acknowledgeLoadedHistory);
+				return () => {
+					window.removeEventListener(HD_SESSION_MENU_EVENT, refresh);
+					window.removeEventListener(HD_SESSION_HISTORY_RECEIPT_EVENT, acknowledgeLoadedHistory);
+				};
+			}, [sessionId]);
 			return revision;
 		}
 		function sessionMenuOrder(rows) {
@@ -170,7 +192,7 @@ const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harn
 			}), open && react_dom.createPortal((0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)("button", { type: "button", tabIndex: -1, className: "hd-session-menu-dismiss", "aria-label": labels.dismiss, onClick: close }), panel] }), document.body)] });
 		}
 		function SessionNodeItem({ node, currentId, now, onOpen, onRename, onArchive, onMove, workspaces, drag, flat = false, t }) {
-			useSessionMenuRevision();
+			useSessionMenuRevision(node.id);
 			const row = node;
 			const title = displayTitle(node, t);
 			const selected = node.id === currentId;
@@ -184,7 +206,6 @@ const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harn
 					role: "treeitem",
 					"aria-selected": selected,
 					onClick: () => {
-						if (unread) setSessionMenuFlag(node.id, "unread", false);
 						onOpen(node.id);
 					},
 					draggable: drag !== void 0,

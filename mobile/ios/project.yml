@@ -17,6 +17,12 @@ targets:
     platform: iOS
     sources:
       - path: HarnessMobile
+        excludes:
+          - Resources/mobile-compat.css
+          - Resources/mobile-runtime.js
+    resources:
+      - path: HarnessMobile/Resources/mobile-compat.css
+      - path: HarnessMobile/Resources/mobile-runtime.js
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.harnessdesktop.mobile
