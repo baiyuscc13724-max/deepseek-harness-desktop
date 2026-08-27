@@ -17,16 +17,105 @@ const appStateStore = readFileSync(path.join(root, 'electron/store/app-state-sto
 require(integrationPath)
 const uiModule = globalThis.harnessPrPreviewUpdateIntegration
 
-test('PR 快速预览默认启用并复用正常更新通知，不再加载独立悬浮卡片', () => {
+test('设置页不再挂载三版本卡，主界面只保留单一版本入口', () => {
   assert.doesNotMatch(index, /pr-preview-update-(?:integration\.js|css)/)
-  assert.doesNotMatch(app, /ensurePrPreviewController|harnessPrPreviewUpdateIntegration/)
+  assert.doesNotMatch(app, /row\.id = 'harness-desktop-update-row'/)
+  assert.doesNotMatch(app, /<div class="hd-update-line"><span>Harness Desktop/)
+  assert.match(app, /trigger\.id = 'harness-desktop-version-button'/)
+  assert.match(app, /center\.id = 'harness-desktop-update-center'/)
+  assert.match(app, /aria-haspopup', 'dialog'/)
+  assert.match(app, /aria-expanded', 'false'/)
+  assert.match(app, /createTextNode\('span', 'hd-version-marker', '#'\)/)
+  const versionStyle = app.match(/#harness-desktop-version-button \{[^}]+\}/)?.[0] || ''
+  assert.match(versionStyle, /bottom:1px/)
+  assert.match(versionStyle, /border:0/)
+  assert.match(versionStyle, /background:transparent/)
+  assert.match(versionStyle, /box-shadow:none/)
+  assert.doesNotMatch(versionStyle, /border-radius:18px|min-height:36px/)
   assert.match(appStateStore, /previewEnabled: true/)
-  assert.match(app, /function showPrPreviewNotice\(candidate/)
-  assert.match(app, /pendingUpdateKind = 'preview'/)
-  assert.match(app, /function showComponentUpdateNotice[\s\S]{0,2000}pendingUpdateKind = 'components'/, 'the shared update notice must preserve the component staging path')
-  assert.match(app, /showUpdateNotice\(\{/)
-  assert.match(app, /pendingUpdateKind !== 'preview'/)
-  assert.match(app, /await api\.applyPrPreviewUpdate\(\)/)
+})
+
+test('版本入口消费 displayVersion 和 pendingCount，打开中心不会清零', () => {
+  assert.match(app, /state\.displayVersion/)
+  assert.match(app, /state\.pendingCount/)
+  assert.match(app, /`\(\+\$\{pendingCount\}\)`/)
+  assert.match(app, /`v\$\{displayVersion\.replace\(\/\^v\/iu, ''\)\}`/)
+  assert.match(app, /trigger\.dataset\.pending = String\(pendingCount > 0\)/)
+  const openHandler = app.match(/trigger\.addEventListener\('click',[\s\S]{0,500}?\n      \}\)/)?.[0] || ''
+  assert.ok(openHandler, '必须注册版本入口打开动作')
+  assert.doesNotMatch(openHandler, /pendingCount\s*=|\.pendingCount\s*=/, '打开更新中心不得清空待更新计数')
+})
+
+test('相同 items 使用稳定签名跳过 replaceChildren，避免 MutationObserver 重绘循环', () => {
+  assert.match(app, /const itemsSignature = JSON\.stringify\(\{ checking: state\.checking === true, items \}\)/)
+  assert.match(app, /if \(list\.dataset\.signature !== itemsSignature\)/)
+  assert.match(app, /list\.dataset\.signature = itemsSignature[\s\S]{0,180}list\.replaceChildren/)
+})
+
+test('无更新版本行不显示，过滤后空列表显示当前已是最新', () => {
+  assert.match(app, /const shouldDisplayUpdateItem = item => item && !\(\['desktop', 'component', 'harness'\]\.includes\(item\.kind\) && \['up-to-date', 'disabled'\]\.includes\(item\.status\)\)/)
+  assert.match(app, /\.filter\(shouldDisplayUpdateItem\)/)
+  assert.match(app, /state\.checking \? '正在检查可用更新…' : '当前已是最新'/)
+})
+
+test('更新中心逐条渲染 items，并只为 active 预览提供一个全局退出入口', () => {
+  assert.match(app, /Array\.isArray\(state\.items\)/)
+  assert.match(app, /items\.map\(buildUpdateItem\)/)
+  assert.match(app, /if \(item\.details\.length\)[\s\S]*hd-update-detail-list[\s\S]*item\.details\.map\(detail => createTextNode\('li'/)
+  for (const field of ['id', 'kind', 'version', 'title', 'summary', 'details', 'source', 'signed', 'actionable', 'status', 'pr', 'expiresAt']) {
+    assert.match(app, new RegExp(`\\b${field}:`), `缺少更新项字段 ${field}`)
+  }
+  assert.match(app, /立即检查/)
+  assert.match(app, /立即更新/)
+  assert.match(app, /data-hd-exit-preview hidden>退出当前预览/)
+  assert.match(app, /item\.status === 'active'/)
+  const itemBuilder = app.match(/const buildUpdateItem = item => \{[\s\S]*?\n  \}/)?.[0] || ''
+  assert.doesNotMatch(itemBuilder, /退出预览/, '每张 PR 候选卡不得重复提供退出按钮')
+  assert.match(itemBuilder, /item\.status === 'ready' \? 'apply' : item\.status === 'available' \? 'install' : null/)
+  assert.match(itemBuilder, /if \(action && item\.actionable && item\.signed && item\.id\)/)
+  assert.doesNotMatch(itemBuilder, /item\.status === 'active'[^\n]*\? ['"](?:apply|install)/, 'active PR 卡不得出现更新或应用动作')
+  const centerMarkup = app.match(/center\.innerHTML = `[\s\S]*?`/)?.[0] || ''
+  assert.doesNotMatch(centerMarkup, /<input|data-hd-auto|data-hd-preview/)
+  assert.match(centerMarkup, /data-hd-check>立即检查/)
+  assert.match(centerMarkup, /data-hd-exit-preview hidden>退出当前预览/)
+})
+
+test('更新动作只回传 opaque id 与固定 action，不传 kind、URL 或 PR 数据', () => {
+  assert.match(app, /request\('update-action', \{ id: item\.id, action \}\)/)
+  assert.match(app, /new URLSearchParams\(values\)/)
+  assert.match(app, /target\.searchParams\.get\('id'\)/)
+  assert.match(app, /target\.searchParams\.get\('action'\)/)
+  assert.match(app, /new Set\(\['check', 'install', 'apply', 'exit', 'settings'\]\)/)
+  assert.doesNotMatch(app, /request\('update-action', \{[^}]*kind/)
+  assert.doesNotMatch(app, /request\('update-action', \{[^}]*(?:url|pr|manifest|key)/i)
+  const actionRunner = app.match(/async function runUnifiedUpdateAction\(id, action\)[\s\S]*?(?=\nasync function installUpdate)/)?.[0] || ''
+  assert.match(actionRunner, /runUnifiedUpdateAction\(safeId, action\)[\s\S]*getUnifiedUpdateState\(\)/)
+  const href = uiModule.installActionHref({ id: 'pr 42&x', kind: 'pr-preview', signed: true, actionable: true })
+  assert.equal(href, 'harness-desktop://update-action/?id=pr+42%26x&action=install')
+  assert.equal(uiModule.installActionHref({ id: 'x' }, 'delete'), '')
+})
+
+test('状态使用中文文案，发现更新只发布状态且不再自动打开旧遮罩', () => {
+  for (const label of ['可更新', '已准备，等待应用', '当前使用中', '已过期', '已停用', '已是最新', '检查失败']) {
+    assert.match(app, new RegExp(label))
+  }
+  const previewNotice = app.match(/function showPrPreviewNotice\(candidate\)[\s\S]*?\n\}/)?.[0] || ''
+  assert.ok(previewNotice)
+  assert.doesNotMatch(previewNotice, /showUpdateNotice|updateNoticeOverlay/)
+  const checker = app.match(/async function checkUpdates\(\)[\s\S]*?\n\}/)?.[0] || ''
+  assert.ok(checker)
+  assert.match(checker, /checkUnifiedUpdates/)
+  assert.doesNotMatch(checker, /showUpdateNotice|updateNoticeOverlay/)
+  const previewRefresh = app.match(/async function refreshPrPreviewState\(\{ discover = false \} = \{\}\)[\s\S]*?(?=\nasync function setPrPreviewChannelEnabled)/)?.[0] || ''
+  assert.match(previewRefresh, /checkPrPreviewUpdates\(\)[\s\S]*getUnifiedUpdateState\(\)/)
+  const previewToggle = app.match(/async function setPrPreviewChannelEnabled\(enabled\)[\s\S]*?(?=\nasync function publishUpdateState)/)?.[0] || ''
+  assert.match(previewToggle, /if \(enabled\)[\s\S]*else[\s\S]*getUnifiedUpdateState\(\)/)
+  const componentNotice = app.match(/function showComponentUpdateNotice\(componentState\)[\s\S]*?\n\}/)?.[0] || ''
+  assert.ok(componentNotice)
+  assert.doesNotMatch(componentNotice, /showUpdateNotice|updateNoticeOverlay/)
+  const updateEvent = app.match(/api\.onUpdateResult\(async result => \{[\s\S]*?\n\}\)/)?.[0] || ''
+  assert.match(updateEvent, /getUnifiedUpdateState\(\)/)
+  assert.doesNotMatch(updateEvent, /showUpdateNotice|updateNoticeOverlay/)
 })
 
 test('零输入预览界面导出显式 init 入口，供根协调者接入', () => {
@@ -115,6 +204,37 @@ test('候选规范化：默认 CNB 来源、签名标记失败关闭并保留编
 
   assert.equal(uiModule.normalizeCandidate(null), null)
   assert.equal(uiModule.normalizeCandidate('invalid'), null)
+})
+
+test('统一更新项规范化会在完成或失效后关闭动作能力', () => {
+  const future = uiModule.normalizeUpdateItem({
+    id: 'desktop', kind: 'desktop', version: '2.0.0', title: '桌面更新', summary: '说明', details: ['修复更新流程'],
+    source: 'cnb', signed: true, actionable: true, status: 'available', pr: null,
+    expiresAt: '2099-01-01T00:00:00.000Z'
+  }, Date.parse('2026-01-01T00:00:00.000Z'))
+  assert.equal(future.actionable, true)
+  assert.equal(future.status, 'available')
+  assert.equal(future.source, 'cnb')
+  assert.deepEqual(future.details, ['修复更新流程'])
+
+  const completed = uiModule.normalizeUpdateItem({ id: 'component', kind: 'component', actionable: true, status: 'completed' })
+  assert.equal(completed.actionable, false)
+  const expired = uiModule.normalizeUpdateItem({ id: 'pr-7', kind: 'pr', actionable: true, expiresAt: '2020-01-01T00:00:00.000Z' })
+  assert.equal(expired.status, 'expired')
+  assert.equal(expired.actionable, false)
+})
+
+test('统一中心保持零文本输入、可访问焦点、窄屏和主题变量兼容', () => {
+  const centerMarkup = app.match(/center\.innerHTML = `[\s\S]*?<\/div>`/)?.[0] || ''
+  assert.ok(centerMarkup, '必须定义更新中心结构')
+  assert.doesNotMatch(centerMarkup, /type="(?:text|search|url|password)"|<textarea/i)
+  assert.match(centerMarkup, /role="dialog"/)
+  assert.match(centerMarkup, /aria-modal="true"/)
+  assert.match(centerMarkup, /aria-live="polite"/)
+  assert.match(app, /@media \(max-width:640px\)/)
+  assert.match(app, /@media \(prefers-reduced-motion:reduce\)/)
+  assert.match(app, /--dsw-alias-bg-layer-1/)
+  assert.match(app, /:focus-visible/)
 })
 
 test('状态机：checking / available / none / error 均有独立呈现分支', () => {

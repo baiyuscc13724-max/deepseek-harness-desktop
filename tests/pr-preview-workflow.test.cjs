@@ -230,6 +230,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     draft: false,
     merged_at: null,
     title: 'Fix signed preview discovery',
+    body: '## Summary\n- 修复预览更新发现\n- 展示清晰的更新内容\n\n## Testing\n- https://example.invalid/internal-log',
     user: { login: 'Harness-Contributor' },
     head: { sha: headSha, repo: { full_name: repository, fork: false } },
     base: { ref: 'main', repo: { full_name: repository } }
@@ -255,6 +256,9 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
   assert.equal(result.previewIndex.sequence, 88_000_001)
   assert.equal(result.previewIndex.prNumber, pullRequest)
   assert.equal(result.previewIndex.title, 'Fix signed preview discovery')
+  assert.equal(result.previewIndex.notes, '修复预览更新发现；展示清晰的更新内容')
+  assert.equal(result.previewManifest.componentManifest.notes, result.previewIndex.notes)
+  assert.doesNotMatch(result.previewIndex.notes, /https?:|@[a-z0-9-]+|[a-f0-9]{40}/i)
   assert.equal(result.previewIndex.author, 'harness-contributor')
   assert.equal(result.previewIndex.baseRef, 'main')
   assert.equal(result.previewManifest.expiresAt, result.previewIndex.expiresAt)

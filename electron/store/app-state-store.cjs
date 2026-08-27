@@ -6,8 +6,10 @@ const VALID_THEME_IDS = new Set(THEME_CATALOG.map(theme => theme.id))
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 const DEFAULT_THEME_ID = 'porcelain-mist'
 const VALID_UI_MODES = new Set(['official', 'aurora', 'spatial', 'tactile'])
-const CURRENT_SCHEMA_VERSION = 12
+const CURRENT_SCHEMA_VERSION = 14
 const MAX_WALLPAPER_LIBRARY_ITEMS = 48
+const MAX_PREVIEW_CANDIDATES = 128
+const PREVIEW_CANDIDATE_ID = /^pr-[a-f0-9]{64}$/
 const VALID_TERMINAL_SHELL_IDS = new Set(['powershell', 'cmd', 'git-bash', 'wsl', 'default'])
 const WALLPAPER_ID = /^[a-z0-9][a-z0-9-]{0,79}$/
 const WALLPAPER_FILE = /^(?:custom-background|wallpaper-[a-z0-9-]{1,80})\.(?:png|jpe?g|webp|gif|apng|mp4|webm)$/i
@@ -66,7 +68,8 @@ const DEFAULT_STATE = Object.freeze({
     skippedVersion: null,
     previewEnabled: true,
     lastPreviewSequence: 0,
-    lastPreviewHeadSha: null
+    lastPreviewHeadSha: null,
+    previewCandidates: []
   },
   appearance: {
     themeId: DEFAULT_THEME_ID,
@@ -106,17 +109,45 @@ function cloneDefaultState() {
   return JSON.parse(JSON.stringify(DEFAULT_STATE))
 }
 
+function normalizePreviewCandidate(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const id = String(value.id || '')
+  if (!PREVIEW_CANDIDATE_ID.test(id)) return null
+  if (!value.index || typeof value.index !== 'object' || Array.isArray(value.index)) return null
+  if (!value.previewManifest || typeof value.previewManifest !== 'object' || Array.isArray(value.previewManifest)) return null
+  const serialized = JSON.stringify({ index: value.index, previewManifest: value.previewManifest })
+  if (Buffer.byteLength(serialized, 'utf8') > 512 * 1024) return null
+  return {
+    id,
+    provider: value.provider === 'github' ? 'github' : 'cnb',
+    ...(value.indexProvider === 'github' || value.indexProvider === 'cnb' ? { indexProvider: value.indexProvider } : {}),
+    index: JSON.parse(JSON.stringify(value.index)),
+    previewManifest: JSON.parse(JSON.stringify(value.previewManifest))
+  }
+}
+
+function normalizePreviewCandidates(value) {
+  const output = []
+  const seen = new Set()
+  for (const input of Array.isArray(value) ? value.slice(-MAX_PREVIEW_CANDIDATES * 2) : []) {
+    const candidate = normalizePreviewCandidate(input)
+    if (!candidate || seen.has(candidate.id)) continue
+    seen.add(candidate.id)
+    output.push(candidate)
+    if (output.length > MAX_PREVIEW_CANDIDATES) output.shift()
+  }
+  return output
+}
+
 function normalizeState(input) {
   const base = cloneDefaultState()
   const value = input && typeof input === 'object' ? input : {}
   const memory = value.memory && typeof value.memory === 'object' ? value.memory : null
   const savedSchemaVersion = Number(value.schemaVersion || 0)
-  const previewEnabled = savedSchemaVersion < 11
-    ? true
-    : hasOwn(value.updates, 'previewEnabled') ? value.updates.previewEnabled === true : base.updates.previewEnabled
-  // Schema 11 makes PR preview discovery a default startup service. Profiles
-  // created under the former opt-in default migrate on once; an explicit
-  // disable saved after that migration remains respected.
+  const previewEnabled = true
+  // Schema 14 moves update discovery behind the single Hermes-style version
+  // entry. Automatic checks and the signed PR preview channel are persisted as
+  // hard-enabled so removed UI toggles cannot leave updates silently off.
   // New profiles use bounded automatic local memory. A saved boolean is an
   // explicit user preference, so migrations must never turn a stored `false`
   // back on. Missing fields inherit the new defaults independently, allowing
@@ -138,7 +169,7 @@ function normalizeState(input) {
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     updates: {
-      checkOnStartup: value.updates?.checkOnStartup !== false,
+      checkOnStartup: true,
       channel: value.updates?.channel === 'prerelease' ? 'prerelease' : 'stable',
       lastCheckedAt: value.updates?.lastCheckedAt || null,
       skippedVersion: value.updates?.skippedVersion || null,
@@ -148,7 +179,8 @@ function normalizeState(input) {
         : 0,
       lastPreviewHeadSha: /^[a-f0-9]{40}$/.test(String(value.updates?.lastPreviewHeadSha || ''))
         ? String(value.updates.lastPreviewHeadSha)
-        : null
+        : null,
+      previewCandidates: normalizePreviewCandidates(value.updates?.previewCandidates)
     },
     appearance: {
       themeId,
@@ -298,12 +330,28 @@ class AppStateStore {
   }
 
   updatePreferences(patch = {}) {
-    if (Object.prototype.hasOwnProperty.call(patch, 'checkOnStartup')) {
-      this.state.updates.checkOnStartup = Boolean(patch.checkOnStartup)
-    }
+    this.state.updates.checkOnStartup = true
+    this.state.updates.previewEnabled = true
     if (patch.channel) this.state.updates.channel = patch.channel === 'prerelease' ? 'prerelease' : 'stable'
     if (Object.prototype.hasOwnProperty.call(patch, 'skippedVersion')) this.state.updates.skippedVersion = patch.skippedVersion || null
-    if (Object.prototype.hasOwnProperty.call(patch, 'previewEnabled')) this.state.updates.previewEnabled = patch.previewEnabled === true
+    this.#persist()
+    return this.get()
+  }
+
+  savePreviewUpdateState(value = {}) {
+    const sequence = Number(value.sequence || 0)
+    const headSha = String(value.headSha || '').trim().toLowerCase()
+    if (sequence !== 0 && (!Number.isSafeInteger(sequence) || sequence < 0)) throw new Error('PR 预览更新序号无效。')
+    if (sequence > 0 && !/^[a-f0-9]{40}$/.test(headSha)) throw new Error('PR 预览更新 commit 无效。')
+    const currentSequence = this.state.updates.lastPreviewSequence || 0
+    const currentSha = this.state.updates.lastPreviewHeadSha
+    if (sequence < currentSequence) throw new Error('拒绝回退到旧的 PR 预览更新序号。')
+    if (sequence === currentSequence && sequence > 0 && currentSha && currentSha !== headSha) {
+      throw new Error('同一 PR 预览更新序号指向了不同 commit。')
+    }
+    this.state.updates.lastPreviewSequence = sequence
+    this.state.updates.lastPreviewHeadSha = sequence > 0 ? headSha : null
+    this.state.updates.previewCandidates = normalizePreviewCandidates(value.candidates)
     this.#persist()
     return this.get()
   }
@@ -318,9 +366,12 @@ class AppStateStore {
     if (sequence === currentSequence && currentSha && currentSha !== normalizedSha) {
       throw new Error('同一 PR 预览更新序号指向了不同 commit。')
     }
-    if (sequence === currentSequence && currentSha === normalizedSha) return this.get()
+    const remainingCandidates = this.state.updates.previewCandidates.filter(candidate => Number(candidate.index?.sequence || 0) > sequence)
+    const queueChanged = remainingCandidates.length !== this.state.updates.previewCandidates.length
+    if (sequence === currentSequence && currentSha === normalizedSha && !queueChanged) return this.get()
     this.state.updates.lastPreviewSequence = sequence
     this.state.updates.lastPreviewHeadSha = normalizedSha
+    this.state.updates.previewCandidates = remainingCandidates
     this.#persist()
     return this.get()
   }
@@ -421,11 +472,14 @@ module.exports = {
   AppStateStore,
   DEFAULT_STATE,
   DEFAULT_THEME_ID,
+  MAX_PREVIEW_CANDIDATES,
   MAX_WALLPAPER_LIBRARY_ITEMS,
   VALID_TERMINAL_SHELL_IDS,
   VALID_THEME_IDS,
   normalizeState,
   normalizePetPositions,
+  normalizePreviewCandidate,
+  normalizePreviewCandidates,
   normalizeWallpaperItem,
   normalizeWallpaperLibrary
 }

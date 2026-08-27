@@ -79,6 +79,43 @@
     }
   }
 
+  const terminalStatuses = new Set(['current', 'installed', 'completed', 'expired', 'invalid', 'unavailable', 'disabled', 'up-to-date', 'active'])
+
+  function normalizeUpdateItem(item, now = Date.now()) {
+    if (!item || typeof item !== 'object') return null
+    const expiresAt = String(item.expiresAt || '').trim()
+    const expires = expiresAt ? Date.parse(expiresAt) : NaN
+    const status = Number.isFinite(expires) && expires <= now
+      ? 'expired'
+      : String(item.status || 'available').trim()
+    const pr = item.pr && typeof item.pr === 'object' ? item.pr : null
+    return {
+      id: String(item.id || '').trim(),
+      kind: String(item.kind || 'component').trim(),
+      version: String(item.version || '').trim(),
+      title: String(item.title || '').trim(),
+      summary: String(item.summary || '').trim(),
+      details: Array.isArray(item.details) ? item.details.slice(0, 8).map(detail => String(detail || '').trim().slice(0, 600)).filter(Boolean) : [],
+      source: String(item.source || '').trim(),
+      signed: item.signed === true,
+      actionable: item.actionable === true && !terminalStatuses.has(status),
+      status,
+      pr: pr ? {
+        number: Number.isFinite(Number(pr.number)) ? Number(pr.number) : null,
+        title: String(pr.title || '').trim()
+      } : null,
+      expiresAt
+    }
+  }
+
+  function installActionHref(item, action = 'install') {
+    const normalized = normalizeUpdateItem(item)
+    const allowedActions = new Set(['check', 'install', 'apply', 'exit', 'settings'])
+    if (!normalized || !normalized.id || !allowedActions.has(action)) return ''
+    const query = new URLSearchParams({ id: normalized.id, action })
+    return `harness-desktop://update-action/?${query.toString()}`
+  }
+
   function element(tag, className, text) {
     const node = document.createElement(tag)
     if (className) node.className = className
@@ -357,6 +394,8 @@
     init,
     create: createPrPreviewUpdate,
     normalizeCandidate,
+    normalizeUpdateItem,
+    installActionHref,
     escapeHtml
   }
 })(typeof window !== 'undefined' ? window : globalThis)

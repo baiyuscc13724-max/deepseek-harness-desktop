@@ -53,6 +53,7 @@ const { PrPreviewActivationStore } = require('./bridge/pr-preview-activation-sto
 const { OFFICIAL_PREVIEW_REPOSITORY } = require('./bridge/pr-preview-update-contract.cjs')
 const { resolvePrPreviewUpdateConfig } = require('./bridge/pr-preview-update-config.cjs')
 const { PrPreviewUpdateService } = require('./bridge/pr-preview-update-service.cjs')
+const { previewChangeDetails, previewChangeSummary } = require('./bridge/update-summary.cjs')
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
 const { TerminalManager } = require('./bridge/terminal-service.cjs')
@@ -3782,11 +3783,14 @@ function prPreviewStateAdapter() {
   return {
     async load() {
       const updates = ensureStateStore().get().updates || {}
-      if (!updates.lastPreviewSequence || !updates.lastPreviewHeadSha) return null
-      return { sequence: updates.lastPreviewSequence, headSha: updates.lastPreviewHeadSha }
+      return {
+        sequence: updates.lastPreviewSequence || 0,
+        headSha: updates.lastPreviewHeadSha || '',
+        candidates: updates.previewCandidates || []
+      }
     },
     async save(next) {
-      return ensureStateStore().markPreviewCandidate(next.sequence, next.headSha)
+      return ensureStateStore().savePreviewUpdateState(next)
     }
   }
 }
@@ -3826,6 +3830,7 @@ function previewClientCandidate(discovery) {
   const notes = String(discovery.notes || '').trim()
   const attribution = `作者 @${discovery.author} · 基线 ${discovery.baseRef}`
   return {
+    id: discovery.candidateId,
     pr: {
       number: discovery.prNumber,
       title: discovery.title,
@@ -3868,14 +3873,19 @@ function isPendingPreviewReady(componentState, activation) {
   )
 }
 
+async function reconciledPrPreviewActivation(componentState, activationStore) {
+  const activation = await activationStore.get()
+  if (!activation || componentState?.phase !== 'failed' || componentState.pending) return activation
+  return activationStore.reconcileActive(componentState.active)
+}
+
 async function getPrPreviewUpdateState() {
   const context = await ensurePrPreviewUpdateContext()
-  const appState = ensureStateStore().get()
   const componentState = await context.component.store.get()
-  const activation = await context.activation.get()
+  const activation = await reconciledPrPreviewActivation(componentState, context.activation)
   const ready = isPendingPreviewReady(componentState, activation)
   return {
-    enabled: appState.updates?.previewEnabled === true || Boolean(activation),
+    enabled: true,
     configured: context.enabled,
     configSource: context.config.source || '',
     componentPhase: componentState.phase,
@@ -3888,13 +3898,8 @@ async function getPrPreviewUpdateState() {
 
 async function checkPrPreviewUpdates() {
   const context = await ensurePrPreviewUpdateContext()
-  const preferences = ensureStateStore().get().updates || {}
   const current = await getPrPreviewUpdateState()
   if (current.ready && current.candidate) return { ...current, available: true, reason: 'ready' }
-  if (!preferences.previewEnabled) {
-    lastPrPreviewCandidate = null
-    return { ...(await getPrPreviewUpdateState()), available: false, reason: 'disabled' }
-  }
   if (!context.enabled) {
     lastPrPreviewCandidate = null
     return { ...(await getPrPreviewUpdateState()), available: false, reason: 'not-configured' }
@@ -3904,6 +3909,18 @@ async function checkPrPreviewUpdates() {
     lastPrPreviewCandidate = null
     return { ...(await getPrPreviewUpdateState()), ...discovery, candidate: null }
   }
+  const pending = await preparePrPreviewCandidate(discovery.candidateId)
+  if (!pending) {
+    lastPrPreviewCandidate = null
+    return { ...(await getPrPreviewUpdateState()), available: false, reason: 'not-actionable', candidate: null }
+  }
+  lastPrPreviewCandidate = pending
+  return { ...(await getPrPreviewUpdateState()), available: true, candidate: pending.clientCandidate }
+}
+
+async function preparePrPreviewCandidate(candidateId) {
+  const context = await ensurePrPreviewUpdateContext()
+  const discovery = await context.service.verifyCandidate(candidateId)
   const componentService = new ComponentUpdateService({
     store: context.component.store,
     manifestUrls: [discovery.manifestSource],
@@ -3914,18 +3931,8 @@ async function checkPrPreviewUpdates() {
     AdmZipImpl: AdmZip
   })
   const checkResult = await componentService.check()
-  if (checkResult.plan.mode !== 'components') {
-    lastPrPreviewCandidate = null
-    return {
-      ...(await getPrPreviewUpdateState()),
-      available: false,
-      reason: checkResult.plan.reason || checkResult.plan.mode,
-      candidate: null
-    }
-  }
-  const clientCandidate = previewClientCandidate(discovery)
-  lastPrPreviewCandidate = { discovery, componentService, checkResult, clientCandidate }
-  return { ...(await getPrPreviewUpdateState()), available: true, candidate: clientCandidate }
+  if (checkResult.plan.mode !== 'components') return null
+  return { discovery, componentService, checkResult, clientCandidate: previewClientCandidate(discovery) }
 }
 
 async function resetPendingPreview(componentStore, activation) {
@@ -3938,13 +3945,18 @@ async function resetPendingPreview(componentStore, activation) {
   return true
 }
 
-async function stagePrPreviewUpdate() {
+async function stagePrPreviewUpdate(candidateId = '') {
   const context = await ensurePrPreviewUpdateContext()
   const preferences = ensureStateStore().get().updates || {}
   if (!preferences.previewEnabled || !context.enabled) throw new Error('PR 快速预览通道尚未启用。')
-  const pending = lastPrPreviewCandidate
+  const selectedId = String(candidateId || lastPrPreviewCandidate?.discovery?.candidateId || '')
+  const pending = selectedId ? await preparePrPreviewCandidate(selectedId) : null
   if (!pending?.discovery?.available) throw new Error('没有经过验证且等待确认的 PR 预览候选。')
+  const previousActivation = await context.activation.get()
   const baseline = await context.component.store.pointer()
+  if (previousActivation && baseline?.releaseVersion !== previousActivation.candidate.releaseVersion) {
+    throw new Error('活动组件指针与当前 PR 预览激活记录不一致，拒绝继续前进。')
+  }
   const activation = await context.activation.capture({
     baseline,
     prNumber: pending.discovery.prNumber,
@@ -3958,22 +3970,22 @@ async function stagePrPreviewUpdate() {
   })
   try {
     await pending.componentService.stage(pending.checkResult, progress => send('prPreviewUpdates:progress', progress))
-    await context.service.accept(pending.discovery)
+    await context.service.accept(pending.discovery.candidateId)
     return { ...(await getPrPreviewUpdateState()), ready: true, candidate: pending.clientCandidate }
   } catch (error) {
     await resetPendingPreview(context.component.store, activation).catch(() => {})
-    await context.activation.clear().catch(() => {})
+    await context.activation.restore(previousActivation)
     throw error
   }
 }
 
-async function applyPrPreviewUpdate() {
+async function applyPrPreviewUpdate(candidateId = '') {
   const context = await ensurePrPreviewUpdateContext()
   const [componentState, activation] = await Promise.all([
     context.component.store.get(),
     context.activation.get()
   ])
-  if (!isPendingPreviewReady(componentState, activation)) await stagePrPreviewUpdate()
+  if (!isPendingPreviewReady(componentState, activation)) await stagePrPreviewUpdate(candidateId)
   else await ensureStateStore().markPreviewCandidate(activation.candidate.sequence, activation.candidate.headSha)
   const launched = await launchReadyComponentUpdate(context.component)
   return { ok: true, launched }
@@ -3981,17 +3993,18 @@ async function applyPrPreviewUpdate() {
 
 async function exitPrPreviewUpdate() {
   const context = await ensurePrPreviewUpdateContext()
-  await ensureStateStore().updatePreferences({ previewEnabled: false })
+  await ensureStateStore().updatePreferences({ previewEnabled: true })
   lastPrPreviewCandidate = null
-  const activation = await context.activation.get()
-  if (!activation) return { ...(await getPrPreviewUpdateState()), restored: false, restarting: false }
   const componentStore = context.component.store
+  let state = await componentStore.get()
+  let activation = await reconciledPrPreviewActivation(state, context.activation)
+  if (!activation) return { ...(await getPrPreviewUpdateState()), restored: false, restarting: false }
   const cancelled = await resetPendingPreview(componentStore, activation)
-  const state = await componentStore.get()
-  const activePreview = state.active?.releaseVersion === activation.candidate.releaseVersion
-  if (!activePreview) {
-    await context.activation.clear()
-    return { ...(await getPrPreviewUpdateState()), restored: false, cancelled, restarting: false }
+  state = await componentStore.get()
+  activation = await context.activation.reconcileActive(state.active)
+  if (!activation) return { ...(await getPrPreviewUpdateState()), restored: false, cancelled, restarting: false }
+  if (state.active?.releaseVersion !== activation.candidate.releaseVersion) {
+    throw new Error('活动组件指针与 PR 预览激活记录协调后仍不一致，拒绝退出以保留稳定回滚点。')
   }
   if (activation.baseline) await componentStore.atomicWrite(componentStore.pointerFile, activation.baseline)
   else await rm(componentStore.pointerFile, { force: true })
@@ -4011,10 +4024,147 @@ async function exitPrPreviewUpdate() {
   return { ...(await getPrPreviewUpdateState()), restored: true, restarting: true }
 }
 
-async function setPrPreviewEnabled(enabled) {
-  if (enabled !== true) return exitPrPreviewUpdate()
+async function setPrPreviewEnabled() {
   await ensureStateStore().updatePreferences({ previewEnabled: true })
   return getPrPreviewUpdateState()
+}
+
+function unifiedUpdateSource(value, fallback = 'bundled') {
+  const source = String(value || '').toLowerCase()
+  if (source === 'cnb' || source.includes('cnb.cool')) return 'cnb'
+  if (source === 'github' || source.includes('github.com') || source.includes('githubusercontent.com')) return 'github'
+  if (source === 'store') return 'store'
+  return fallback
+}
+
+function unifiedUpdateItem(value) {
+  return {
+    id: String(value.id),
+    kind: value.kind,
+    version: String(value.version || ''),
+    title: String(value.title || ''),
+    summary: String(value.summary || ''),
+    details: Array.isArray(value.details) ? value.details.slice(0, 8).map(detail => String(detail || '').trim().slice(0, 600)).filter(Boolean) : [],
+    source: unifiedUpdateSource(value.source),
+    signed: value.signed === true,
+    actionable: value.actionable === true,
+    status: value.status || 'up-to-date',
+    pr: value.pr || null,
+    expiresAt: value.expiresAt || null
+  }
+}
+
+async function getUnifiedUpdateState() {
+  const [component, previewContext] = await Promise.all([
+    getComponentUpdateState(),
+    ensurePrPreviewUpdateContext()
+  ])
+  const preferences = ensureStateStore().get().updates || {}
+  const [previewCandidates, storedActivation] = await Promise.all([
+    previewContext.enabled
+      ? previewContext.service.listCandidates({ includeExpired: true })
+      : [],
+    previewContext.activation.get()
+  ])
+  const activation = storedActivation && component.state?.phase === 'failed' && !component.state.pending
+    ? await previewContext.activation.reconcileActive(component.state.active)
+    : storedActivation
+  const items = []
+  const appUpdate = lastUpdatePayload?.app
+  const desktopReady = Boolean(readyUpdate?.installerPath && existsSync(readyUpdate.installerPath))
+  const desktopStatus = desktopReady ? 'ready' : appUpdate?.error ? 'error' : appUpdate?.updateAvailable ? 'available' : 'up-to-date'
+  if (['available', 'ready', 'error'].includes(desktopStatus)) {
+    items.push(unifiedUpdateItem({
+      id: 'desktop', kind: 'desktop',
+      version: desktopReady ? readyUpdate.version : appUpdate?.latestVersion || app.getVersion(),
+      title: 'Harness Desktop',
+      summary: appUpdate?.error || (desktopReady ? '已下载，等待安装' : '桌面应用更新可用'),
+      source: STORE_BUILD ? 'store' : appUpdate?.source || 'github', signed: !STORE_BUILD,
+      actionable: !STORE_BUILD && (desktopReady || appUpdate?.updateAvailable === true),
+      status: desktopStatus
+    }))
+  }
+  const componentPlan = component.lastCheck?.plan
+  const componentReady = component.state?.phase === 'ready'
+  const componentAvailable = componentPlan?.mode === 'components'
+  const componentError = component.state?.failure?.message || ''
+  const componentStatus = componentError ? 'error' : componentReady ? 'ready' : componentAvailable ? 'available' : 'up-to-date'
+  const componentVersion = componentReady
+    ? component.state?.pending?.releaseVersion
+    : componentPlan?.releaseVersion || component.pointer?.releaseVersion || app.getVersion()
+  const previewOwnsComponent = Boolean(activation?.candidate && [
+    component.state?.pending?.releaseVersion,
+    component.state?.active?.releaseVersion
+  ].includes(activation.candidate.releaseVersion))
+  if (!previewOwnsComponent && ['available', 'ready', 'error'].includes(componentStatus)) {
+    items.push(unifiedUpdateItem({
+      id: 'component', kind: 'component', version: componentVersion,
+      title: '运行组件', summary: componentError || (componentReady ? '已暂存，等待重启应用' : '组件更新可用'),
+      source: component.source ? 'bundled' : 'bundled', signed: true,
+      actionable: component.enabled && (componentReady || componentAvailable),
+      status: componentStatus
+    }))
+  }
+  if (activation?.candidate) {
+    const active = component.state?.active?.releaseVersion === activation.candidate.releaseVersion
+    const ready = isPendingPreviewReady(component.state, activation)
+    items.push(unifiedUpdateItem({
+      id: `active-pr-${activation.candidate.sequence}-${activation.candidate.headSha}`,
+      kind: 'pr-preview', version: activation.candidate.releaseVersion,
+      title: activation.candidate.title,
+      summary: active ? 'PR 预览已启用，可退出并回滚' : ready ? 'PR 预览已验证，等待重启' : 'PR 预览激活状态待恢复',
+      source: activation.candidate.provider, signed: true, actionable: active || ready,
+      status: active ? 'active' : ready ? 'ready' : 'error',
+      pr: { number: activation.candidate.prNumber, title: activation.candidate.title, url: `https://github.com/${OFFICIAL_PREVIEW_REPOSITORY}/pull/${activation.candidate.prNumber}` }
+    }))
+  }
+  for (const candidate of previewCandidates) {
+    if (activation?.candidate && candidate.sequence === activation.candidate.sequence && candidate.headSha === activation.candidate.headSha) continue
+    const expired = candidate.expired === true
+    items.push(unifiedUpdateItem({
+      id: candidate.candidateId, kind: 'pr-preview', version: candidate.manifest?.releaseVersion,
+      title: candidate.title, summary: previewChangeSummary(candidate), details: previewChangeDetails(candidate),
+      source: candidate.provider, signed: true, actionable: !expired,
+      status: expired ? 'expired' : 'available', expiresAt: candidate.expiresAt,
+      pr: { number: candidate.prNumber, title: candidate.title, url: `https://github.com/${OFFICIAL_PREVIEW_REPOSITORY}/pull/${candidate.prNumber}` }
+    }))
+  }
+  const effectiveVersion = activation?.candidate && component.state?.active?.releaseVersion === activation.candidate.releaseVersion
+    ? activation.candidate.releaseVersion
+    : component.pointer?.releaseVersion || app.getVersion()
+  return {
+    displayVersion: effectiveVersion,
+    pendingCount: items.filter(item => item.actionable && ['available', 'ready'].includes(item.status)).length,
+    items,
+    preferences
+  }
+}
+
+async function checkUnifiedUpdates() {
+  await Promise.all([
+    checkUpdates(),
+    checkPrPreviewUpdates().catch(() => null)
+  ])
+  return getUnifiedUpdateState()
+}
+
+async function runUnifiedUpdateAction(candidateId, action) {
+  const id = String(candidateId || '')
+  const operation = String(action || '')
+  if (!['check', 'install', 'apply', 'exit', 'settings'].includes(operation)) throw new Error('统一更新动作无效。')
+  if (operation === 'check') return checkUnifiedUpdates()
+  if (operation === 'settings') return ensureStateStore().get().updates
+  if (id === 'desktop') {
+    if (operation === 'install') return installAppUpdate()
+    if (operation === 'apply') return launchReadyAppUpdate()
+  }
+  if (id === 'component') {
+    if (operation === 'install') return stageComponentUpdates()
+    if (operation === 'apply') return launchReadyComponentUpdate()
+  }
+  if (/^pr-[a-f0-9]{64}$/.test(id) && ['install', 'apply'].includes(operation)) return applyPrPreviewUpdate(id)
+  if (/^active-pr-[1-9]\d*-[a-f0-9]{40}$/.test(id) && operation === 'exit') return exitPrPreviewUpdate()
+  throw new Error('统一更新候选或动作组合无效。')
 }
 
 // Reconcile the latest component check plan against the store's active pointer
@@ -4543,9 +4693,7 @@ function createWindow() {
 
   petWindowController?.syncPreferences(ensureStateStore().get().pet)
 
-  if (ensureStateStore().get().updates.checkOnStartup) {
-    setTimeout(() => checkUpdates().catch(() => {}), 2500).unref()
-  }
+  setTimeout(() => checkUpdates().catch(() => {}), 2500).unref()
 }
 
 ipcMain.handle('updates:preferences', desktopShellOnly(() => ensureStateStore().get().updates))
@@ -4554,6 +4702,9 @@ ipcMain.handle('updates:setPreferences', desktopShellOnly(patch => ensureStateSt
 ipcMain.handle('updates:check', desktopShellOnly(() => checkUpdates()))
 ipcMain.handle('updates:install', desktopShellOnly(() => installAppUpdate()))
 ipcMain.handle('updates:launchReady', desktopShellOnly(() => launchReadyAppUpdate()))
+ipcMain.handle('unifiedUpdates:getState', desktopShellOnly(() => getUnifiedUpdateState()))
+ipcMain.handle('unifiedUpdates:check', desktopShellOnly(() => checkUnifiedUpdates()))
+ipcMain.handle('unifiedUpdates:action', desktopShellOnly(request => runUnifiedUpdateAction(request?.id, request?.action)))
 ipcMain.handle('componentUpdates:getState', desktopShellOnly(() => getComponentUpdateState()))
 ipcMain.handle('componentUpdates:check', desktopShellOnly(() => checkComponentUpdates()))
 ipcMain.handle('componentUpdates:stage', desktopShellOnly(() => stageComponentUpdates()))
