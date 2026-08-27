@@ -89,27 +89,50 @@ async function installedCatalog() {
   return installedCatalogPromise
 }
 
-async function installedModelsFor(provider) {
+function modelsFromCatalogData(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  const models = []
+  const seen = new Set()
+  for (const group of Object.values(value)) {
+    if (!group || typeof group !== 'object') continue
+    const candidates = Array.isArray(group) ? group : Object.values(group)
+    for (const candidate of candidates) {
+      const model = normalizeModel(candidate)
+      if (!MODEL_ID.test(model) || seen.has(model)) continue
+      seen.add(model)
+      models.push(model)
+      if (models.length >= 2000) return models
+    }
+  }
+  return models
+}
+
+async function installedModelsFor(provider, modelDataRoot) {
+  if (!PROVIDER_ID.test(provider)) return []
+  if (modelDataRoot) {
+    const data = await readJson(path.join(path.resolve(modelDataRoot), `${provider}.json`)).catch(() => null)
+    if (data) return modelsFromCatalogData(data)
+  }
   const catalog = await installedCatalog()
   try {
-    return catalog.getBuiltinModels(provider).map(normalizeModel).filter(Boolean)
+    return catalog.getBuiltinModels(provider).map(normalizeModel).filter(model => MODEL_ID.test(model))
   } catch {
     return []
   }
 }
 
-async function providerCatalog(settings, routes) {
+async function providerCatalog(settings, routes, modelDataRoot) {
   const configured = settings?.['llm-pi-ai']?.providers || {}
   const rows = new Map()
   for (const [id, profile] of Object.entries(configured)) {
     if (!PROVIDER_ID.test(id)) continue
     const configuredModels = Array.isArray(profile?.models) ? profile.models.map(normalizeModel).filter(Boolean) : []
-    const catalogModels = await installedModelsFor(id)
+    const catalogModels = await installedModelsFor(id, modelDataRoot)
     rows.set(id, { id, name: String(profile?.displayName || profile?.name || id), models: [...new Set([...configuredModels, ...catalogModels])] })
   }
   for (const route of routes) {
     if (!route?.provider || !PROVIDER_ID.test(route.provider)) continue
-    const row = rows.get(route.provider) || { id: route.provider, name: route.provider, models: await installedModelsFor(route.provider) }
+    const row = rows.get(route.provider) || { id: route.provider, name: route.provider, models: await installedModelsFor(route.provider, modelDataRoot) }
     if (route.model && !row.models.includes(route.model)) row.models.push(route.model)
     rows.set(route.provider, row)
   }
@@ -159,7 +182,7 @@ async function getModelRouting(options) {
     subagent,
     basePreset: selectedBasePreset(settings, stored),
     managedPresetId: ROUTING_PRESET_ID,
-    providers: await providerCatalog(settings, [main, subagent]),
+    providers: await providerCatalog(settings, [main, subagent], options.installedModelDataRoot),
     configured: Boolean(settingsMain.provider || storedMain)
   }
 }
