@@ -215,7 +215,7 @@
   function renderFiles(opts = {}) {
     if (opts.preserve) captureDataScroll('files')
     filesView.replaceChildren()
-    filesView.append(dataHeader('rightWorkspaceFilesSearch', '文件', '查看当前会话工作区中的上传文件；文本和代码可直接预览。', filesQuery, value => {
+    filesView.append(dataHeader('rightWorkspaceFilesSearch', '文件', '查看当前会话工作区中的上传文件；文本、图片、音视频和 PDF 可预览，其余类型可用系统应用打开。', filesQuery, value => {
       filesQuery = value
       renderFiles({ preserve: true })
       document.querySelector('#rightWorkspaceFilesSearch')?.focus({ preventScroll: true })
@@ -270,14 +270,99 @@
     renderFiles(opts.preserve ? { preserve: true } : {})
   }
 
+  function safePreviewSource(file) {
+    const value = String(file.contentUrl || file.dataUrl || '')
+    if (file.previewKind === 'image' && /^data:image\/(?:avif|bmp|gif|jpeg|png|webp|x-icon);base64,/iu.test(value)) return value
+    try {
+      const parsed = new URL(value)
+      if (parsed.protocol === 'http:' && ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsed.hostname.toLowerCase())) return parsed.toString()
+    } catch {}
+    return ''
+  }
+
+  function documentOpenAction(file, fallbackPath) {
+    if (!file.openable && !file.contentUrl) return null
+    const local = !file.contentUrl && typeof file.path === 'string' && file.path
+    const action = button('使用系统应用打开', 'right-workspace-secondary')
+    action.setAttribute('aria-live', 'polite')
+    action.addEventListener('click', async () => {
+      const original = action.textContent
+      action.disabled = true
+      action.setAttribute('aria-busy', 'true')
+      action.textContent = '正在打开…'
+      try {
+        const result = local
+          ? await api.openLocal(file.path)
+          : await api.openRightWorkspaceFile({ sessionId: activeSessionId(), path: file.path || fallbackPath, name: file.name || 'workspace-file' })
+        action.textContent = String(result?.action || '').startsWith('reveal') ? '已在文件夹中显示' : '已打开'
+      } catch (error) {
+        action.textContent = error?.message || '打开失败'
+        action.classList.add('is-error')
+      } finally {
+        action.setAttribute('aria-busy', 'false')
+        setTimeout(() => {
+          action.disabled = false
+          action.textContent = original
+          action.classList.remove('is-error')
+        }, 2400)
+      }
+    })
+    return action
+  }
+
   function renderDocument(file, fallbackPath) {
     documentView.replaceChildren()
     const header = element('header', 'right-workspace-document-header')
-    header.append(element('strong', '', file.path || fallbackPath), element('span', '', formatSize(file.size)))
+    const identity = element('div', 'right-workspace-document-identity')
+    identity.append(element('strong', '', file.path || fallbackPath), element('span', '', formatSize(file.size)))
+    const actions = element('div', 'right-workspace-document-actions')
+    const openAction = documentOpenAction(file, fallbackPath)
+    if (openAction) actions.append(openAction)
+    header.append(identity, actions)
     documentView.append(header)
+
+    const previewKind = file.previewKind || (file.previewable ? 'text' : '')
+    const source = safePreviewSource({ ...file, previewKind })
+    if (file.previewable && source && previewKind === 'image') {
+      const image = element('img', 'right-workspace-document-image')
+      image.src = source
+      image.alt = file.name || '图片预览'
+      image.addEventListener('error', () => image.replaceWith(statusPanel('图片解码失败；可使用系统应用打开。')), { once: true })
+      documentView.append(image)
+      return
+    }
+    if (file.previewable && source && previewKind === 'audio') {
+      const audio = element('audio', 'right-workspace-document-audio')
+      audio.src = source
+      audio.controls = true
+      audio.preload = 'metadata'
+      documentView.append(audio)
+      return
+    }
+    if (file.previewable && source && previewKind === 'video') {
+      const video = element('video', 'right-workspace-document-video')
+      video.src = source
+      video.controls = true
+      video.preload = 'metadata'
+      documentView.append(video)
+      return
+    }
+    if (file.previewable && source && previewKind === 'pdf') {
+      const frame = element('iframe', 'right-workspace-document-pdf')
+      frame.src = source
+      frame.title = `${file.name || 'PDF'} 预览`
+      frame.referrerPolicy = 'no-referrer'
+      documentView.append(frame)
+      return
+    }
     if (!file.previewable) {
-      const reasons = { unsupported: '此文件类型不支持内嵌预览。', 'too-large': '文件超过 1 MB 预览上限。', binary: '文件包含二进制内容。' }
-      documentView.append(statusPanel(reasons[file.reason] || '无法安全预览此文件。'))
+      const reasons = {
+        external: '此文件类型将使用系统应用打开。',
+        unsupported: '此文件类型将使用系统应用打开。',
+        'too-large': '文件超过内嵌预览上限，可使用系统应用打开。',
+        binary: '文件包含二进制内容，可使用系统应用打开。'
+      }
+      documentView.append(statusPanel(reasons[file.reason] || '无法安全内嵌预览；可使用系统应用打开。'))
       return
     }
     const pre = element('pre', 'right-workspace-document-text')

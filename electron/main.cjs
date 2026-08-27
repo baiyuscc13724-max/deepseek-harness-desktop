@@ -2,7 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, na
 const { spawn, execFile } = require('node:child_process')
 const { createHash, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync } = require('node:fs')
-const { mkdir, open, readFile, readdir, realpath, rm, stat, unlink, writeFile } = require('node:fs/promises')
+const { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, unlink, writeFile } = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -56,7 +56,7 @@ const { PrPreviewUpdateService } = require('./bridge/pr-preview-update-service.c
 const { normalizeLocalTarget, openLocalTarget } = require('./bridge/local-target-service.cjs')
 const { StorageManagementService } = require('./bridge/storage-management-service.cjs')
 const { TerminalManager } = require('./bridge/terminal-service.cjs')
-const { loadRightWorkspaceResource, previewLocalDocument } = require('./bridge/right-workspace-service.cjs')
+const { loadRightWorkspaceResource, materializeRightWorkspaceFile, previewLocalDocument } = require('./bridge/right-workspace-service.cjs')
 const { MemoryService, createMemoryPack } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
 const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
@@ -93,6 +93,7 @@ const { mobileBootstrapSource } = require('../renderer/theme-integration.js')
 const desktopPackage = require('../package.json')
 
 const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3080'
+const RIGHT_WORKSPACE_OPEN_CLEANUP_MS = 60 * 60 * 1000
 const WALLPAPER_SCHEME = 'harness-wallpaper'
 const LOCAL_RUNTIME_HOSTS = new Set(['127.0.0.1', 'localhost'])
 const SELF_TEST_MODE = process.argv.includes('--self-test')
@@ -4716,6 +4717,37 @@ ipcMain.handle('rightWorkspace:resource', (event, kind, payload) => {
     path: payload?.path,
     fetchImpl: (url, options) => net.fetch(url.toString(), options)
   })
+})
+ipcMain.handle('rightWorkspace:openFile', async (event, payload) => {
+  assertDesktopShellSender(event)
+  const runtimeUrl = runtimeState.status === 'ready' ? runtimeState.url : null
+  const file = await materializeRightWorkspaceFile({
+    runtimeUrl,
+    sessionId: payload?.sessionId,
+    path: payload?.path,
+    name: payload?.name,
+    tempBase: app.getPath('temp'),
+    fetchImpl: (url, options) => net.fetch(url.toString(), options),
+    mkdirImpl: mkdir,
+    mkdtempImpl: mkdtemp,
+    openImpl: open,
+    realpathImpl: realpath,
+    lstatImpl: lstat,
+    rmImpl: rm
+  })
+  try {
+    const result = await openLocalTarget(file.destination, {
+      statImpl: stat,
+      openPath: target => shell.openPath(target),
+      showItemInFolder: target => shell.showItemInFolder(target)
+    })
+    const cleanup = setTimeout(() => rm(file.directory, { recursive: true, force: true }).catch(() => {}), RIGHT_WORKSPACE_OPEN_CLEANUP_MS)
+    cleanup.unref?.()
+    return { opened: result.ok && String(result.action || '').startsWith('open-'), revealed: String(result.action || '').startsWith('reveal'), action: result.action, name: file.name }
+  } catch (error) {
+    await rm(file.directory, { recursive: true, force: true }).catch(() => {})
+    throw error
+  }
 })
 ipcMain.handle('rightWorkspace:previewLocal', (event, value) => {
   assertDesktopShellSender(event)
