@@ -89,7 +89,7 @@ test('main process delegates confirmation state without retaining plaintext fing
   assert.match(main, /new ComputerUseConfirmationStore\(\)/)
   assert.match(main, /computerUseConfirmations\.authorize\(action, \{ \.\.\.parameters, surface: computerUseSurface\(target\) \}\)/)
   assert.match(main, /await revalidateComputerUseTarget\(target\)/)
-  assert.match(main, /sourceX = Math\.max\(0, Math\.min\(sourceWidth - 1/)
+  assert.match(main, /mapComputerUseScreenshotPoint\(parameters, surface/u)
   assert.match(main, /target\.fingerprint/)
   assert.match(main, /generation: computerUseSessionGeneration/)
   assert.match(main, /urls = \[mainWindow\.webContents\.getURL\(\)\]/)

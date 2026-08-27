@@ -30,6 +30,7 @@ const { ensureModelAdmissionPlugin } = require('./bridge/model-admission-plugin-
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
+const { SCREENSHOT_COORDINATE_SPACE, mapComputerUseScreenshotPoint } = require('./bridge/computer-use-coordinate-space.cjs')
 const { ComputerUseConfirmationStore } = require('./bridge/computer-use-confirmation-store.cjs')
 const { ComputerUseAppPolicy } = require('./bridge/computer-use-app-policy.cjs')
 const { ComputerUseIndicatorController, shouldShowComputerUseIndicator } = require('./bridge/computer-use-indicator.cjs')
@@ -2245,7 +2246,17 @@ async function captureHarnessComputerUseScreenshot() {
   const displayed = scaled.getSize()
   computerUseHarnessSurface = { width: displayed.width, height: displayed.height, sourceWidth: size.width, sourceHeight: size.height }
   const file = await ensureComputerUseScreenshotStore().save(scaled.toPNG())
-  return { file, width: displayed.width, height: displayed.height, sourceWidth: size.width, sourceHeight: size.height, scope: 'Harness Desktop window', target_id: 'harness' }
+  const minimumY = Math.ceil(36 * displayed.height / Math.max(1, size.height))
+  return {
+    file,
+    width: displayed.width,
+    height: displayed.height,
+    coordinateSpace: SCREENSHOT_COORDINATE_SPACE,
+    inputBounds: { xMin: 0, yMin: minimumY, xMaxExclusive: displayed.width, yMaxExclusive: displayed.height },
+    inputHint: 'click/type/scroll 的 x/y 直接使用本截图 width/height 的像素坐标；宿主会自动映射到目标，禁止预先缩放。',
+    scope: 'Harness Desktop window',
+    target_id: 'harness'
+  }
 }
 
 async function captureExternalComputerUseScreenshot(target) {
@@ -2260,7 +2271,16 @@ async function captureExternalComputerUseScreenshot(target) {
   const displayed = scaled.getSize()
   target.lastSize = { width: displayed.width, height: displayed.height, sourceWidth: shot.width, sourceHeight: shot.height }
   const file = await ensureComputerUseScreenshotStore().save(scaled.toPNG())
-  return { file, width: displayed.width, height: displayed.height, sourceWidth: shot.width, sourceHeight: shot.height, scope: target.label, target_id: target.id }
+  return {
+    file,
+    width: displayed.width,
+    height: displayed.height,
+    coordinateSpace: SCREENSHOT_COORDINATE_SPACE,
+    inputBounds: { xMin: 0, yMin: 0, xMaxExclusive: displayed.width, yMaxExclusive: displayed.height },
+    inputHint: 'click/type/scroll 的 x/y 直接使用本截图 width/height 的像素坐标；宿主会自动映射到目标，禁止预先缩放。',
+    scope: target.label,
+    target_id: target.id
+  }
 }
 
 async function verifyExternalComputerUseSurface(target) {
@@ -2350,14 +2370,11 @@ async function modelComputerUseAction(input = {}) {
   if (confirmation) return confirmation
   if (target.kind === 'window') await verifyExternalComputerUseSurface(target)
   const surface = computerUseSurface(target)
-  const x = Math.round(Number(parameters.x)); const y = Math.round(Number(parameters.y))
   const targetScale = target.kind === 'window' ? target.lastSize : computerUseHarnessSurface
   const sourceWidth = Math.max(1, Number(targetScale?.sourceWidth) || surface.width)
   const sourceHeight = Math.max(1, Number(targetScale?.sourceHeight) || surface.height)
   const minimumY = target.kind === 'harness' ? Math.ceil(36 * surface.height / sourceHeight) : 0
-  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < minimumY || x >= surface.width || y >= surface.height) throw new Error('操作坐标超出当前目标的可控区域。')
-  const sourceX = Math.max(0, Math.min(sourceWidth - 1, Math.round(x * sourceWidth / surface.width)))
-  const sourceY = Math.max(0, Math.min(sourceHeight - 1, Math.round(y * sourceHeight / surface.height)))
+  const { x, y, sourceX, sourceY, coordinateSpace } = mapComputerUseScreenshotPoint(parameters, surface, { sourceWidth, sourceHeight, minimumY })
   if (target.kind === 'window') {
     await revalidateComputerUseTarget(target)
     try {
@@ -2383,7 +2400,7 @@ async function modelComputerUseAction(input = {}) {
       for (const character of String(parameters.text || '').slice(0, 2000)) mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: character })
     }
   }
-    return { completed: true, action, x, y, target_id: target.id, app: target.label }
+    return { completed: true, action, x, y, coordinateSpace, target_id: target.id, app: target.label }
   } finally {
     await syncComputerUseIndicator()
   }
