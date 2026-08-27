@@ -28,6 +28,14 @@ public final class MainActivityTest {
         assertEquals(20, MainActivity.MAX_PICKED_IMAGES);
     }
 
+    @Test public void nativeBackUsesTheFixedRuntimeProtocolAndDeclinesOnlyExplicitFalse() {
+        assertEquals("window.__harnessMobileHandleBack()", MainActivity.MOBILE_BACK_SCRIPT);
+        assertTrue(MainActivity.mobileBackDeclined("false"));
+        assertFalse(MainActivity.mobileBackDeclined("true"));
+        assertFalse(MainActivity.mobileBackDeclined("null"));
+        assertFalse(MainActivity.mobileBackDeclined(null));
+    }
+
     @Test public void acceptsOnlyPrivateLanPairingLinks() {
         assertTrue(PairingLinkValidator.isSafeHarnessUrl("http://192.168.1.8:3081/__harness_mobile__/pair/abc", true));
         assertTrue(PairingLinkValidator.isSafeHarnessUrl("http://10.0.0.3:4000/", false));

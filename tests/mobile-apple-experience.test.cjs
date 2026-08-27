@@ -229,6 +229,10 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'data-harness-mobile-conversation-list-title',
     'data-harness-mobile-model-routing="true"',
     '#harness-mobile-model-routing',
+    'harness-mobile-model-meters',
+    'data-harness-mobile-plugin-config="true"',
+    '#harness-mobile-plugin-config',
+    'data-harness-mobile-home-text="true"',
     '#harness-mobile-screenshot-suggestion',
     'data-harness-mobile-composer-frame="true"',
     'width: calc(100vw - 32px) !important',
@@ -276,6 +280,11 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     "['Settings', '设置']",
     'decorateMobileModelSettings',
     "fetch('/__harness_mobile__/model-routing'",
+    "fetch('/__harness_mobile__/provider-meters'",
+    '余额与额度',
+    'decorateMobilePluginSettings',
+    "fetch('/__harness_mobile__/plugins'",
+    '只读显示已配对电脑的真实插件状态',
     '只读显示，来源：已配对电脑',
     '不代表凭据或连接状态',
     'installScreenshotSuggestion',
@@ -300,7 +309,9 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'officialAgentSessionId',
     'openOfficialAgentCanvas',
     'openOfficialScheduledTasks',
-    '代理团队跟随当前来源会话；切换其他项目会话后，这里自动显示其团队与协作画布。',
+    '团队属于来源会话，不会因项目名称相同而合并。',
+    '选择其他项目或会话',
+    'officialSourceContext',
     'data-harness-mobile-switch-context',
     "['Open in new window', '在新窗口中打开']",
     "['Delete workspace', '删除项目']",
@@ -316,8 +327,12 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     "document.addEventListener('pointerdown'",
     'mobileMenu.contains(event.target)',
     '[data-harness-mobile-session-row="true"][aria-selected="true"]',
+    'window.__harnessMobileHandleBack',
+    'data-harness-mobile-home-text="true"',
+    '<span>首页</span>',
     "root.dataset.harnessMobileDomain = activeDomain?.id || 'conversations'"
   ], 'Android mobile shell behavior and large-text containment')
+  assert.doesNotMatch(runtime, /当前项目 · 已绑定/u, 'mobile context must explain its source instead of claiming an opaque binding')
   assert.doesNotMatch(runtime, /搜索对话和任务/u, 'conversation search must not imply that Scheduled Tasks are mixed into conversation search')
   assert.doesNotMatch(runtime, /settings\.describe|credentials\.(?:describe|set|unset)/u, 'mobile UI must not bypass the official protected settings and credentials plane')
   assert.doesNotMatch(runtime, /data-harness-mobile-action="more"/, 'mobile app bar must not expose an empty overflow action')

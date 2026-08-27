@@ -27,12 +27,21 @@ const DEFAULT_IOS_DOWNLOAD_URL = ''
 const DESKTOP_CONTROL_STATE_FILE = 'mobile-sync.desktop-control.json'
 const MOBILE_MODEL_PROVIDER_LIMIT = 64
 const MOBILE_MODEL_LIMIT = 256
+const MOBILE_PROVIDER_METER_LIMIT = 64
+const MOBILE_METER_TEXT_LIMIT = 16
+const MOBILE_PLUGIN_LIMIT = 128
 
 function safeMobileModelText(value, limit) {
   return String(value || '')
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .trim()
     .slice(0, limit)
+}
+
+function safeMobilePublicText(value, limit) {
+  const text = safeMobileModelText(value, limit)
+  if (/(?:[A-Za-z]:[\\/]|\\\\|file:\/\/|(?:^|\s)\/(?:Users|home|tmp|var|etc|opt)\/)/i.test(text)) return ''
+  return text
 }
 
 function mobileModelRoutingDto(value) {
@@ -68,6 +77,77 @@ function mobileModelRoutingDto(value) {
     subagent,
     providers
   }
+}
+
+function mobileMeterText(value) {
+  const label = safeMobilePublicText(value?.label, 120) || ({
+    balance: '余额',
+    'usage-window': '套餐用量',
+    'spending-budget': '消费限额',
+    'token-counter': '用量'
+  })[value?.kind]
+  if (!label) return ''
+  if (value.kind === 'balance') {
+    const total = safeMobilePublicText(value.total, 80) || '—'
+    const currency = safeMobilePublicText(value.currency, 16)
+    return safeMobilePublicText(`${label}: ${total}${currency ? ` ${currency}` : ''}`, 240)
+  }
+  if (value.kind === 'usage-window') {
+    const remaining = Number(value.remainingPercent)
+    return safeMobilePublicText(`${label}: 剩余 ${Number.isFinite(remaining) ? Math.max(0, Math.min(100, remaining)).toFixed(0) : '—'}%`, 240)
+  }
+  if (value.kind === 'spending-budget') {
+    const used = safeMobilePublicText(value.used, 64) || '—'
+    const limit = safeMobilePublicText(value.limit, 64) || '—'
+    return safeMobilePublicText(`${label}: ${used} / ${limit}`, 240)
+  }
+  if (value.kind === 'token-counter') {
+    const amount = safeMobilePublicText(value.value, 80) || '—'
+    const unit = safeMobilePublicText(value.unit, 24)
+    return safeMobilePublicText(`${label}: ${amount}${unit ? ` ${unit}` : ''}`, 240)
+  }
+  return ''
+}
+
+function mobileProviderMetersDto(value) {
+  const providers = []
+  for (const snapshot of Array.isArray(value?.snapshots) ? value.snapshots.slice(0, MOBILE_PROVIDER_METER_LIMIT) : []) {
+    const id = safeMobilePublicText(snapshot?.provider?.id, 128)
+    if (!id) continue
+    const status = snapshot?.stale === true ? 'stale' : snapshot?.status === 'ready' ? 'ready' : 'unavailable'
+    const meters = []
+    for (const row of Array.isArray(snapshot?.meters) ? snapshot.meters : []) {
+      const text = mobileMeterText(row)
+      if (!text || meters.includes(text)) continue
+      meters.push(text)
+      if (meters.length >= MOBILE_METER_TEXT_LIMIT) break
+    }
+    providers.push({
+      id,
+      name: safeMobilePublicText(snapshot?.provider?.name, 160) || id,
+      status,
+      meters,
+      unavailableReason: status === 'ready' ? '' : safeMobilePublicText(snapshot?.message, 240)
+    })
+  }
+  return { providers }
+}
+
+function mobilePluginsDto(value) {
+  const plugins = []
+  for (const row of Array.isArray(value?.plugins) ? value.plugins.slice(0, MOBILE_PLUGIN_LIMIT) : []) {
+    const id = safeMobilePublicText(row?.id, 160)
+    if (!id) continue
+    plugins.push({
+      id,
+      name: safeMobilePublicText(row?.name, 200) || id,
+      version: safeMobilePublicText(row?.version, 80),
+      enabled: row?.enabled === true,
+      configurable: row?.configurable === true,
+      unavailableReason: safeMobilePublicText(row?.unavailableReason, 240)
+    })
+  }
+  return { plugins }
 }
 
 function sha256(value) {
@@ -289,6 +369,8 @@ class MobileSyncService extends EventEmitter {
     getThemeScript = null,
     readThemeAsset = null,
     getModelRouting = null,
+    getProviderMeters = null,
+    getPlugins = null,
     chooseWorkspaceDirectory = null,
     controlBroker = null,
     desktopControlStateFile = null,
@@ -313,6 +395,8 @@ class MobileSyncService extends EventEmitter {
     this.getThemeScript = getThemeScript
     this.readThemeAsset = readThemeAsset
     this.getModelRouting = getModelRouting
+    this.getProviderMeters = getProviderMeters
+    this.getPlugins = getPlugins
     this.chooseWorkspaceDirectory = chooseWorkspaceDirectory
     this.workspacePickerRequest = null
     this.controlBroker = controlBroker || new MobileControlBroker({ now })
@@ -747,6 +831,42 @@ class MobileSyncService extends EventEmitter {
       }
       return
     }
+    if (requestUrl.pathname === '/__harness_mobile__/provider-meters') {
+      if (request.method !== 'GET') {
+        writeResponse(response, 405, JSON.stringify({ ok: false, error: 'Provider meters are read-only.' }), { 'Allow': 'GET', 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      if (typeof this.getProviderMeters !== 'function') {
+        writeResponse(response, 503, JSON.stringify({ ok: false, error: '无法从已配对电脑读取账户额度。' }), { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      try {
+        const meters = mobileProviderMetersDto(await this.getProviderMeters())
+        response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff' })
+        response.end(JSON.stringify({ ok: true, ...meters }))
+      } catch {
+        writeResponse(response, 503, JSON.stringify({ ok: false, error: '无法从已配对电脑读取账户额度。' }), { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+      }
+      return
+    }
+    if (requestUrl.pathname === '/__harness_mobile__/plugins') {
+      if (request.method !== 'GET') {
+        writeResponse(response, 405, JSON.stringify({ ok: false, error: 'Plugin inventory is read-only.' }), { 'Allow': 'GET', 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      if (typeof this.getPlugins !== 'function') {
+        writeResponse(response, 503, JSON.stringify({ ok: false, error: '无法从已配对电脑读取插件状态。' }), { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      try {
+        const plugins = mobilePluginsDto(await this.getPlugins())
+        response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff' })
+        response.end(JSON.stringify({ ok: true, ...plugins }))
+      } catch {
+        writeResponse(response, 503, JSON.stringify({ ok: false, error: '无法从已配对电脑读取插件状态。' }), { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
+      }
+      return
+    }
     if (requestUrl.pathname === '/__harness_mobile__/workspace/choose' && request.method === 'POST') {
       if (request.headers['x-harness-mobile-request'] !== 'workspace-picker') {
         writeResponse(response, 403, JSON.stringify({ ok: false, error: 'Workspace picker request intent is missing.' }), { 'Content-Type': 'application/json; charset=utf-8' })
@@ -919,7 +1039,10 @@ module.exports = {
   isIosUserAgent,
   iosSetupPage,
   lanAddresses,
+  mobileMeterText,
   mobileModelRoutingDto,
+  mobilePluginsDto,
+  mobileProviderMetersDto,
   parseCookies,
   safeDeviceName,
   safeIosDownloadUrl,

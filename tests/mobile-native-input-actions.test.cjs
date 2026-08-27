@@ -49,14 +49,34 @@ test('composer actions use a temporary thumb-friendly four-tile panel', () => {
   assert.match(mobileCss, /min-height: 82px !important;/)
 })
 
-test('gallery and files retain user-initiated system picker flows', () => {
+test('picker URIs keep temporary read grants through official paste/drop preview intake', () => {
   assert.match(activity, /ActivityResultContracts\.PickVisualMedia/)
+  assert.match(activity, /new ActivityResultContracts\.PickMultipleVisualMedia\(MAX_PICKED_IMAGES\)/)
   assert.match(activity, /Intent\.ACTION_OPEN_DOCUMENT/)
+  assert.match(activity, /Intent\.FLAG_GRANT_READ_URI_PERMISSION/)
+  assert.match(activity, /Intent\.EXTRA_ALLOW_MULTIPLE, multiple/)
+  assert.match(activity, /setAllowContentAccess\(true\)/)
+  assert.doesNotMatch(activity, /takePersistableUriPermission/)
   assert.match(adapter, /photoInput\.click\(\)/)
   assert.match(adapter, /fileInput\.click\(\)/)
-  assert.match(adapter, /new DataTransfer\(\)/)
-  assert.match(adapter, /ClipboardEvent\('paste'/)
-  assert.match(adapter, /DragEvent\('drop'/)
+  assert.match(adapter, /reader\.readAsArrayBuffer\(file\)/)
+  assert.match(adapter, /new File\(\[reader\.result\]/)
+  assert.match(adapter, /new Event\('paste'/)
+  assert.match(adapter, /Object\.defineProperty\(paste,'clipboardData'/)
+  assert.match(adapter, /textarea\.dispatchEvent\(paste\);return/)
+  assert.match(adapter, /new Event\('drop'/)
+  assert.match(adapter, /Object\.defineProperty\(drop,'dataTransfer'/)
+  assert.match(adapter, /target\.dispatchEvent\(drop\)/)
+  assert.doesNotMatch(manifest, /android\.permission\.(?:READ_MEDIA_IMAGES|READ_MEDIA_VIDEO|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE)/)
+})
+
+test('system and edge back use the fixed runtime protocol without double dispatch', () => {
+  assert.match(activity, /MOBILE_BACK_SCRIPT = "window\.__harnessMobileHandleBack\(\)"/)
+  assert.match(activity, /webView\.evaluateJavascript\(MOBILE_BACK_SCRIPT, value -> \{/)
+  assert.match(activity, /if \(!mobileBackDeclined\(value\)\) return;/)
+  assert.match(activity, /if \(webView\.canGoBack\(\)\) webView\.goBack\(\);/)
+  assert.match(activity, /return "false"\.equals\(javascriptResult\);/)
+  assert.doesNotMatch(activity, /const layers=|dispatchEvent\(new KeyboardEvent\('keydown'/)
 })
 
 test('camera capture uses a bounded FileProvider URI and always cleans temporary files', () => {

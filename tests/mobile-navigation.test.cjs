@@ -42,7 +42,7 @@ test('mobile navigation only delegates to the versioned bridge or official seman
   assert.match(runtime, /\[data-mobile-slot="\$\{domain\.slot\}"\]/u)
   assert.match(runtime, /\[data-slot="agent-teams\.trigger"\] button, button\[data-slot="agent-teams\.trigger"\]/u)
   assert.match(runtime, /\[data-slot="settings\.trigger"\] button, button\[data-slot="settings\.trigger"\]/u)
-  assert.doesNotMatch(runtime, /(?:空间|任务|我的)(?:首页|页面).*createElement|createElement\(['"](?:main|article)['"]\)/u)
+  assert.doesNotMatch(runtime, /(?:空间|任务|我的)(?:首页|页面).*createElement|data-harness-mobile-domain-placeholder/u)
 })
 
 test('missing domain handlers are disabled and explained instead of opening placeholders', () => {
@@ -61,7 +61,7 @@ test('mobile settings keeps real desktop categories and adds mobile summaries wi
   assert.match(runtime, /const buttons = \[\.\.\.nav\.querySelectorAll\('button'\)\]/u)
   assert.match(runtime, /button\.dataset\.harnessMobileSettingsCategory = 'true'/u)
   assert.match(runtime, /button\.dataset\.harnessMobileSettingsSummary = meta\.summary/u)
-  assert.doesNotMatch(runtime, /mobileSettingsCategories[^]*createElement\(['"](?:main|article)['"]\)/u)
+  assert.doesNotMatch(runtime, /mobileSettingsCategories[^]*data-harness-mobile-settings-placeholder/u)
 })
 
 test('Orbit navigation is thumb-safe, selected without color alone, and IME-aware', () => {

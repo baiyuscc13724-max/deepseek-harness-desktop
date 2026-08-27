@@ -2426,6 +2426,8 @@ function ensureMobileSyncService() {
     getThemeScript: () => `${mobileBootstrapSource};(() => { fetch('/__harness_mobile__/appearance', { credentials: 'same-origin' }).then(response => { if (!response.ok) throw new Error('appearance ' + response.status); return response.json(); }).then(payload => { window.__HARNESS_DESKTOP_THEME_STATE__ = payload.state; window.__HARNESS_DESKTOP_THEMES__ = payload.catalog; window.__HARNESS_DESKTOP_RENDER_THEMES__?.(); window.__harnessMobileThemeBridgeLoading = false; }).catch(error => { window.__harnessMobileThemeBridgeLoading = false; console.warn('Unable to load mobile appearance:', error); }); })();`,
     readThemeAsset: readMobileThemeAsset,
     getModelRouting: () => getModelRouting(modelRoutingOptions()),
+    getProviderMeters: () => getProviderMeters(false),
+    getPlugins: getInstalledPlugins,
     chooseWorkspaceDirectory
   })
   mobileSyncService.on('state', state => send('mobileSync:state', state))
@@ -3612,6 +3614,78 @@ function providerMeterRegistry() {
 async function getProviderMeters(force = false) {
   const registry = await providerMeterRegistry()
   return registry.readAll({ dshHome: desktopDshHome(), force, fetchImpl: net.fetch, spawnImpl: spawn })
+}
+
+async function callRuntimeRpc(endpoint, payload) {
+  if (runtimeState.status !== 'ready' || !runtimeState.url) throw new Error('Harness runtime is unavailable.')
+  const rpcId = randomUUID()
+  const response = await net.fetch(new URL(`/api/${endpoint}`, runtimeState.url).toString(), {
+    method: 'POST',
+    headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload }),
+    signal: AbortSignal.timeout(5000)
+  })
+  if (!response.ok) throw new Error(`Harness runtime RPC failed with HTTP ${response.status}.`)
+  const result = await response.json()
+  if (result?.type !== 'server-response' || result.rpcId !== rpcId || !result.result?.ok) {
+    throw new Error('Harness runtime RPC returned an unavailable result.')
+  }
+  return result.result.value
+}
+
+async function installedPluginPackage(moduleName) {
+  const specifier = String(moduleName || '').trim()
+  if (!/^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/.test(specifier)) return null
+  let manifestFile
+  try {
+    manifestFile = require.resolve(`${specifier}/package.json`, {
+      paths: [path.join(desktopDshHome(), 'profiles', 'web'), path.dirname(bundledNodeModulesRoot())]
+    })
+  } catch {
+    return null
+  }
+  try {
+    const manifest = JSON.parse(await readFile(manifestFile, 'utf8'))
+    return {
+      name: typeof manifest?.name === 'string' ? manifest.name : specifier,
+      version: typeof manifest?.version === 'string' ? manifest.version : ''
+    }
+  } catch {
+    return null
+  }
+}
+
+function pluginUnavailableReason(entry) {
+  if (entry?.enabled !== true) return '插件已停用。'
+  return ({
+    failed: '插件挂载失败。',
+    pending: '插件正在等待依赖。',
+    loading: '插件仍在加载。',
+    unloading: '插件正在卸载。'
+  })[entry?.fiberPhase] || (entry?.fiberPhase === null ? '插件当前未挂载。' : '')
+}
+
+async function getInstalledPlugins() {
+  const [inventory, settings] = await Promise.all([
+    callRuntimeRpc('pluginInventory/list', { args: {} }),
+    callRuntimeRpc('settings.describe', {})
+  ])
+  if (!Array.isArray(inventory?.entries) || !Array.isArray(settings?.namespaces)) {
+    throw new Error('Harness runtime plugin inventory is unavailable.')
+  }
+  const configurableNamespaces = new Set(settings.namespaces.map(row => String(row?.ns || '')).filter(Boolean))
+  const entries = inventory.entries.slice(0, 128)
+  const manifests = await Promise.all(entries.map(entry => installedPluginPackage(entry?.moduleName)))
+  return {
+    plugins: entries.map((entry, index) => ({
+      id: String(entry?.entryId || ''),
+      name: manifests[index]?.name || (/^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/.test(String(entry?.moduleName || '')) ? String(entry.moduleName) : String(entry?.entryId || '')),
+      version: manifests[index]?.version || '',
+      enabled: entry?.enabled === true,
+      configurable: configurableNamespaces.has(String(entry?.entryId || '')),
+      unavailableReason: pluginUnavailableReason(entry)
+    }))
+  }
 }
 
 function pluginMarketplaceOptions() {

@@ -96,9 +96,11 @@ test('screenshot notice stays in composer flow and only opens the system photo p
 
   assertContainsAll(adapter, [
     "makeInput('harness-mobile-photo-input','image/*')",
-    "var paste=new ClipboardEvent('paste'",
+    "var paste=new Event('paste'",
+    "Object.defineProperty(paste,'clipboardData'",
     'textarea.dispatchEvent(paste)',
-    "new DragEvent('drop'",
+    "var drop=new Event('drop'",
+    "Object.defineProperty(drop,'dataTransfer'",
     'new File([reader.result]'
   ], 'official attachment preview bridge')
 })

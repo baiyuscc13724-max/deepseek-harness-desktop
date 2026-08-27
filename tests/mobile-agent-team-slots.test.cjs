@@ -34,6 +34,14 @@ test('project tasks expose project and task references without name guessing', (
   assert.match(client, /"data-harness-mobile-task-id": String\(safeTask\.taskRef\)/u)
 })
 
+test('mobile team source context is explainable and switches through an authoritative session choice', () => {
+  assert.match(runtime, /const officialSourceContext = \(\) =>/u)
+  assert.match(runtime, /团队属于来源会话，不会因项目名称相同而合并/u)
+  assert.match(runtime, /选择其他项目或会话/u)
+  assert.match(runtime, /source\?\.scrollIntoView/u)
+  assert.doesNotMatch(runtime, /当前项目 · 已绑定/u)
+})
+
 test('mobile Scheduled Tasks opens the authoritative reminders and automation workspace', () => {
   assert.match(runtime, /\{ id: 'tasks', label: '定时任务'/u)
   assert.match(runtime, /if \(domain\.id === 'tasks'\)/u)

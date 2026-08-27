@@ -767,7 +767,7 @@
     shell = document.createElement('div')
     shell.id = 'harness-mobile-app-shell'
     const navigationItems = mobileDomains.map(domain => `<button type="button" role="tab" data-harness-mobile-domain="${domain.id}" data-mobile-route="${domain.route}"><span data-harness-mobile-domain-icon>${appIcon(domain.id)}</span><span data-harness-mobile-domain-label>${domain.label}</span></button>`).join('')
-    shell.innerHTML = `<header data-harness-mobile-appbar="true"><button type="button" data-harness-mobile-action="menu" aria-label="打开会话历史">${appIcon('menu')}</button><div data-harness-mobile-heading><strong>新对话</strong><span>Harness Mobile</span></div><button type="button" data-harness-mobile-action="new" aria-label="新建会话">${appIcon('new')}</button></header><button type="button" data-harness-mobile-conversation-search-proxy aria-label="搜索项目和对话"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>搜索项目和对话</span></button><div data-harness-mobile-conversation-search-box hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" enterkeyhint="search" aria-label="搜索项目和对话" placeholder="搜索项目和对话"><button type="button" aria-label="清除搜索">×</button></div><div data-harness-mobile-conversation-list-title><strong>项目与对话</strong><span data-harness-mobile-conversation-count>0 个项目 · 0 个对话</span></div><button type="button" data-harness-mobile-drawer-scrim aria-label="关闭会话历史"></button><nav data-harness-mobile-navigation role="tablist" aria-label="主要导航">${navigationItems}</nav><p data-harness-mobile-navigation-status role="status" aria-live="polite" aria-atomic="true"></p><div data-harness-mobile-app-menu hidden aria-label="会话功能"></div>`
+    shell.innerHTML = `<header data-harness-mobile-appbar="true"><button type="button" data-harness-mobile-action="menu" data-harness-mobile-home-text="true" aria-label="首页"><span>首页</span></button><div data-harness-mobile-heading><strong>新对话</strong><span>Harness Mobile</span></div><button type="button" data-harness-mobile-action="new" aria-label="新建会话">${appIcon('new')}</button></header><button type="button" data-harness-mobile-conversation-search-proxy aria-label="搜索项目和对话"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>搜索项目和对话</span></button><div data-harness-mobile-conversation-search-box hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" enterkeyhint="search" aria-label="搜索项目和对话" placeholder="搜索项目和对话"><button type="button" aria-label="清除搜索">×</button></div><div data-harness-mobile-conversation-list-title><strong>项目与对话</strong><span data-harness-mobile-conversation-count>0 个项目 · 0 个对话</span></div><button type="button" data-harness-mobile-drawer-scrim aria-label="关闭会话历史"></button><nav data-harness-mobile-navigation role="tablist" aria-label="主要导航">${navigationItems}</nav><p data-harness-mobile-navigation-status role="status" aria-live="polite" aria-atomic="true"></p><div data-harness-mobile-app-menu hidden aria-label="会话功能"></div>`
     const searchProxy = shell.querySelector('[data-harness-mobile-conversation-search-proxy]')
     const searchBox = shell.querySelector('[data-harness-mobile-conversation-search-box]')
     const searchInput = searchBox.querySelector('input')
@@ -804,10 +804,15 @@
       if (root.dataset.harnessMobileChatDetail === 'open') {
         mobileNavigationState.activeDomain = 'conversations'
         setSidebarExpanded(true)
+        syncMobileAppShell()
         return
       }
-      if (sidebarExpanded() && root.dataset.harnessMobileConversationSearch === 'open') closeSearch()
-      setSidebarExpanded(!sidebarExpanded())
+      if (root.dataset.harnessMobileConversationSearch === 'open') closeSearch()
+      const conversations = mobileDomains.find(domain => domain.id === 'conversations')
+      if (conversations && mobileNavigationState.activeDomain !== 'conversations') navigateMobileDomain(conversations, shell)
+      mobileNavigationState.activeDomain = 'conversations'
+      setSidebarExpanded(true)
+      syncMobileAppShell()
     })
     shell.querySelector('[data-harness-mobile-action="new"]').addEventListener('click', () => {
       releaseComposerFocus()
@@ -856,9 +861,83 @@
     return shell
   }
 
+  const installMobileBackHandler = () => {
+    window.__harnessMobileHandleBack = () => {
+      const shell = document.getElementById('harness-mobile-app-shell')
+      if (!shell) return false
+
+      const settings = document.querySelector('[data-harness-mobile-settings-dialog="true"]')
+      if (settings && root.dataset.harnessMobileSettingsOpen === 'true') {
+        const action = root.dataset.harnessMobileSettingsView === 'detail'
+          ? settings.querySelector('[data-harness-mobile-settings-back="true"]')
+          : settings.querySelector('[data-harness-mobile-settings-close="true"]')
+        action?.click?.()
+        return Boolean(action)
+      }
+
+      const suggestionClose = document.querySelector('[data-harness-mobile-composer-suggestion="true"] button[data-action="close"]')
+      if (suggestionClose) {
+        suggestionClose.click()
+        return true
+      }
+
+      const appMenu = shell.querySelector('[data-harness-mobile-app-menu]')
+      if (appMenu && !appMenu.hidden) {
+        appMenu.hidden = true
+        return true
+      }
+
+      if (root.dataset.harnessMobileConversationSearch === 'open') {
+        const box = shell.querySelector('[data-harness-mobile-conversation-search-box]')
+        const proxy = shell.querySelector('[data-harness-mobile-conversation-search-proxy]')
+        const input = box?.querySelector('input')
+        if (input) input.value = ''
+        mobileConversationFilter = ''
+        applyMobileConversationFilter()
+        if (box) box.hidden = true
+        proxy?.setAttribute?.('aria-expanded', 'false')
+        delete root.dataset.harnessMobileConversationSearch
+        return true
+      }
+
+      if (root.dataset.harnessMobileAgentDetailOpen === 'true') {
+        document.querySelector('[data-harness-mobile-agent-detail-toggle]')?.click?.()
+        return true
+      }
+
+      const sheet = [...document.querySelectorAll('[role="dialog"][aria-modal="true"], dialog')]
+        .find(dialog => dialog.dataset.harnessMobileSettingsDialog !== 'true')
+      if (sheet) {
+        const close = [...sheet.querySelectorAll('button')].find(button => /^(?:关闭|Close|取消|Cancel|×)$|(?:关闭|Close)/i.test(`${button.getAttribute('aria-label') || ''} ${(button.textContent || '').trim()}`.trim()))
+        if (close) {
+          close.click()
+          return true
+        }
+      }
+
+      if (root.dataset.harnessMobileChatDetail === 'open') {
+        mobileNavigationState.activeDomain = 'conversations'
+        setSidebarExpanded(true)
+        syncMobileAppShell()
+        return true
+      }
+
+      if (mobileNavigationState.activeDomain !== 'conversations' || !sidebarExpanded()) {
+        const conversations = mobileDomains.find(domain => domain.id === 'conversations')
+        if (conversations && mobileNavigationState.activeDomain !== 'conversations') navigateMobileDomain(conversations, shell)
+        mobileNavigationState.activeDomain = 'conversations'
+        setSidebarExpanded(true)
+        syncMobileAppShell()
+        return true
+      }
+      return false
+    }
+  }
+
   const syncMobileAppShell = () => {
     const shell = installMobileAppShell()
     if (!shell) return
+    installMobileBackHandler()
     installNavigationBridgeSubscription(shell)
     if (!shell.dataset.harnessMobileConversationHomeOpened && sidebarNode() && setSidebarExpanded(true)) {
       shell.dataset.harnessMobileConversationHomeOpened = 'true'
@@ -886,17 +965,23 @@
     actionButton.hidden = !conversationsDomain
     if (!conversationsDomain) shell.querySelector('[data-harness-mobile-app-menu]').hidden = true
     const nonConversationDomain = activeDomain?.id && activeDomain.id !== 'conversations'
-    const menuIcon = chatDetail ? 'back' : (drawerOpen || nonConversationDomain ? 'brand' : 'menu')
+    const menuIcon = chatDetail ? 'back' : 'home-text'
     const actionIcon = chatDetail ? 'more' : (nonConversationDomain ? 'filter' : 'new')
     if (menuButton.dataset.harnessMobileIcon !== menuIcon) {
       menuButton.dataset.harnessMobileIcon = menuIcon
-      menuButton.innerHTML = appIcon(menuIcon)
+      if (menuIcon === 'home-text') {
+        menuButton.dataset.harnessMobileHomeText = 'true'
+        menuButton.innerHTML = '<span>首页</span>'
+      } else {
+        delete menuButton.dataset.harnessMobileHomeText
+        menuButton.innerHTML = appIcon(menuIcon)
+      }
     }
     if (actionButton.dataset.harnessMobileIcon !== actionIcon) {
       actionButton.dataset.harnessMobileIcon = actionIcon
       actionButton.innerHTML = appIcon(actionIcon)
     }
-    menuButton.setAttribute('aria-label', chatDetail ? '返回对话列表' : (nonConversationDomain ? '返回对话' : (drawerOpen ? 'Harness Mobile' : '打开会话历史')))
+    menuButton.setAttribute('aria-label', chatDetail ? '返回对话列表' : '首页')
     actionButton.setAttribute('aria-label', chatDetail ? '更多会话功能' : (nonConversationDomain ? '筛选当前页面' : '新建会话'))
     root.dataset.harnessMobileDomain = activeDomain?.id || 'conversations'
     root.dataset.harnessMobileDrawer = drawerOpen ? 'open' : 'closed'
@@ -1003,7 +1088,77 @@
     return card
   }
 
-  const renderMobileModelRouting = (panel, routing) => {
+  const meterStatusLabel = status => ({
+    ready: '可用',
+    'auth-required': '需要登录或密钥',
+    unavailable: '暂不可用',
+    unsupported: '暂不支持',
+    stale: '上次结果',
+    error: '读取失败'
+  })[String(status || '').toLowerCase()] || '状态未知'
+
+  const meterLine = meter => {
+    if (typeof meter === 'string') return meter
+    if (meter?.kind === 'balance') {
+      const total = Number(meter.total)
+      return Number.isFinite(total) ? `${meter.currency || ''} ${total}`.trim() : '余额未返回'
+    }
+    if (meter?.kind === 'usage-window') {
+      const remaining = Number(meter.remainingPercent)
+      return Number.isFinite(remaining) ? `剩余 ${Math.max(0, Math.min(100, remaining))}%` : '用量未返回'
+    }
+    if (meter?.kind === 'spending-budget') {
+      const used = String(meter.used ?? '').trim()
+      const limit = String(meter.limit ?? '').trim()
+      return used && limit ? `已用 ${used} / ${limit}` : '消费限额未返回'
+    }
+    return '额度详情未返回'
+  }
+
+  const appendMobileProviderMeters = (panel, meters) => {
+    const section = document.createElement('section')
+    section.className = 'harness-mobile-model-meters'
+    const title = document.createElement('h2')
+    title.textContent = '余额与额度'
+    const note = document.createElement('p')
+    note.textContent = '实时读取自已配对电脑；不在手机保存账户凭据。'
+    section.append(title, note)
+    const providers = Array.isArray(meters?.providers) ? meters.providers : []
+    if (!providers.length) {
+      const empty = document.createElement('div')
+      empty.className = 'harness-mobile-model-empty'
+      empty.textContent = meters?.unavailableReason || '已配对电脑没有返回可显示的余额或额度信息。'
+      section.appendChild(empty)
+    }
+    for (const snapshot of providers) {
+      const card = document.createElement('article')
+      card.className = 'harness-mobile-model-meter'
+      const heading = document.createElement('div')
+      const provider = document.createElement('strong')
+      provider.textContent = snapshot?.name || snapshot?.id || '模型提供方'
+      const status = document.createElement('span')
+      status.textContent = meterStatusLabel(snapshot?.status)
+      heading.append(provider, status)
+      card.appendChild(heading)
+      const rows = Array.isArray(snapshot?.meters) ? snapshot.meters : []
+      for (const meter of rows) {
+        const row = document.createElement('p')
+        const value = document.createElement('b')
+        value.textContent = meterLine(meter)
+        row.appendChild(value)
+        card.appendChild(row)
+      }
+      if (!rows.length || snapshot?.unavailableReason) {
+        const message = document.createElement('small')
+        message.textContent = String(snapshot?.unavailableReason || '该提供方没有返回可显示的额度明细。')
+        card.appendChild(message)
+      }
+      section.appendChild(card)
+    }
+    panel.appendChild(section)
+  }
+
+  const renderMobileModelRouting = (panel, routing, meters) => {
     panel.replaceChildren()
     panel.setAttribute('aria-busy', 'false')
 
@@ -1024,6 +1179,7 @@
     const subagentNote = routing.subagent?.inheritMain ? '跟随主模型' : '独立子代理路由'
     routes.appendChild(modelRouteCard('子代理', routing.subagent, subagentNote))
     panel.appendChild(routes)
+    appendMobileProviderMeters(panel, meters)
 
     const catalog = document.createElement('section')
     catalog.className = 'harness-mobile-model-catalog'
@@ -1086,17 +1242,29 @@
     loading.textContent = '正在从已配对电脑读取模型配置…'
     panel.appendChild(loading)
     try {
-      const response = await fetch('/__harness_mobile__/model-routing', {
+      const meterRequest = fetch('/__harness_mobile__/provider-meters', {
         cache: 'no-store',
         credentials: 'same-origin',
         headers: { Accept: 'application/json' }
-      })
+      }).then(async response => {
+        if (!response.ok) throw new Error(`provider meters ${response.status}`)
+        const payload = await response.json()
+        return payload?.ok === true && Array.isArray(payload.providers) ? { providers: payload.providers } : { unavailableReason: '电脑端没有返回权威额度数据。', providers: [] }
+      }).catch(() => ({ unavailableReason: '当前电脑端版本暂不支持手机读取余额，请更新电脑端后重试。', providers: [] }))
+      const [response, meters] = await Promise.all([
+        fetch('/__harness_mobile__/model-routing', {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' }
+        }),
+        meterRequest
+      ])
       if (!response.ok) throw new Error(`model routing ${response.status}`)
       const payload = await response.json()
       const routing = payload?.ok === true ? payload.routing : null
       if (!routing || !Array.isArray(routing.providers)) throw new Error('invalid model routing response')
       if (!panel.isConnected || content.dataset.harnessMobileModelRouting !== 'true') return
-      renderMobileModelRouting(panel, routing)
+      renderMobileModelRouting(panel, routing, meters)
     } catch {
       if (!panel.isConnected || content.dataset.harnessMobileModelRouting !== 'true') return
       panel.replaceChildren()
@@ -1132,6 +1300,95 @@
     panel.setAttribute('aria-label', '手机模型配置只读视图')
     content.appendChild(panel)
     loadMobileModelRouting(panel, content)
+  }
+
+  const pluginSettingsButton = button => /^(?:Plugins?|插件)$/i.test(settingsButtonRawLabel(button))
+
+  const renderMobilePlugins = (panel, payload) => {
+    panel.replaceChildren()
+    panel.setAttribute('aria-busy', 'false')
+    const intro = document.createElement('section')
+    intro.className = 'harness-mobile-plugin-intro'
+    const title = document.createElement('h2')
+    title.textContent = '已安装插件'
+    const copy = document.createElement('p')
+    copy.textContent = '只读显示已配对电脑的真实插件状态；凭据和敏感配置不会发送到手机。'
+    intro.append(title, copy)
+    panel.appendChild(intro)
+    const plugins = Array.isArray(payload?.plugins) ? payload.plugins : []
+    if (!plugins.length) {
+      const empty = document.createElement('section')
+      empty.className = 'harness-mobile-plugin-empty'
+      const heading = document.createElement('h3')
+      heading.textContent = payload?.unavailableReason ? '暂时无法读取插件配置' : '没有已安装插件'
+      const reason = document.createElement('p')
+      reason.textContent = payload?.unavailableReason || '已配对电脑返回的权威插件列表为空。'
+      empty.append(heading, reason)
+      panel.appendChild(empty)
+      return
+    }
+    const list = document.createElement('div')
+    list.className = 'harness-mobile-plugin-list'
+    for (const plugin of plugins) {
+      const card = document.createElement('article')
+      card.className = 'harness-mobile-plugin-card'
+      const heading = document.createElement('div')
+      const name = document.createElement('strong')
+      name.textContent = String(plugin?.name || plugin?.id || '未命名插件')
+      const state = document.createElement('span')
+      state.textContent = plugin?.enabled ? '已启用' : '未启用'
+      heading.append(name, state)
+      const identity = document.createElement('p')
+      identity.textContent = [plugin?.id ? `ID：${plugin.id}` : '', plugin?.version ? `版本：${plugin.version}` : ''].filter(Boolean).join(' · ')
+      const config = document.createElement('small')
+      config.textContent = plugin?.unavailableReason || (plugin?.configurable ? '有可配置项；敏感值仅在电脑端编辑' : '此插件没有可公开显示的配置项')
+      card.append(heading, identity, config)
+      list.appendChild(card)
+    }
+    panel.appendChild(list)
+  }
+
+  const loadMobilePlugins = async (panel, content) => {
+    panel.setAttribute('aria-busy', 'true')
+    panel.innerHTML = '<div class="harness-mobile-plugin-loading" role="status">正在从已配对电脑读取插件配置…</div>'
+    try {
+      const response = await fetch('/__harness_mobile__/plugins', {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      })
+      if (!response.ok) throw new Error(`plugins ${response.status}`)
+      const payload = await response.json()
+      if (payload?.ok !== true || !Array.isArray(payload.plugins)) throw new Error('invalid plugins response')
+      if (!panel.isConnected || content.dataset.harnessMobilePluginConfig !== 'true') return
+      renderMobilePlugins(panel, payload)
+    } catch {
+      if (!panel.isConnected || content.dataset.harnessMobilePluginConfig !== 'true') return
+      renderMobilePlugins(panel, { plugins: [], unavailableReason: '无法从已配对电脑读取。请确认电脑端已更新并正在运行，然后重试。' })
+      const retry = document.createElement('button')
+      retry.type = 'button'
+      retry.className = 'harness-mobile-plugin-retry'
+      retry.textContent = '重试'
+      retry.addEventListener('click', () => loadMobilePlugins(panel, content))
+      panel.appendChild(retry)
+    }
+  }
+
+  const decorateMobilePluginSettings = (nav, content) => {
+    const active = nav?.querySelector?.('button[aria-current="true"]')
+    const existing = content?.querySelector?.(':scope > #harness-mobile-plugin-config')
+    if (!pluginSettingsButton(active)) {
+      if (content) delete content.dataset.harnessMobilePluginConfig
+      existing?.remove()
+      return
+    }
+    content.dataset.harnessMobilePluginConfig = 'true'
+    if (existing) return
+    const panel = document.createElement('div')
+    panel.id = 'harness-mobile-plugin-config'
+    panel.setAttribute('aria-label', '手机插件配置只读视图')
+    content.appendChild(panel)
+    loadMobilePlugins(panel, content)
   }
 
   const decorateSettingsDialog = (dialog, nav, content) => {
@@ -1198,6 +1455,7 @@
     if (!dialog.dataset.harnessMobileSettingsView) dialog.dataset.harnessMobileSettingsView = 'list'
     setSettingsView(dialog, dialog.dataset.harnessMobileSettingsView)
     decorateMobileModelSettings(nav, content)
+    decorateMobilePluginSettings(nav, content)
   }
 
   const decorateDialogs = () => {
@@ -1822,24 +2080,58 @@
     return ''
   }
 
+  const boundedContextLabel = (node, fallback) => {
+    if (!node) return fallback
+    const clone = node.cloneNode(true)
+    for (const child of clone.querySelectorAll('button,svg,[data-harness-mobile-session-row="true"],[data-harness-mobile-navigation-chrome="true"]')) child.remove()
+    const text = String(clone.textContent || '').replace(/\s+/g, ' ').trim()
+    return text ? text.slice(0, 80) : fallback
+  }
+
+  const officialSourceContext = () => {
+    const rows = [...document.querySelectorAll('[role="treeitem"]')]
+    const sessionRow = rows.find(row => row.dataset.harnessMobileSessionRow === 'true' && (row.getAttribute('aria-selected') === 'true' || row.getAttribute('aria-current') === 'page')) || null
+    let projectRow = sessionRow?.closest?.('[data-harness-mobile-project-row="true"]') || null
+    if (!projectRow && sessionRow) {
+      for (let index = rows.indexOf(sessionRow) - 1; index >= 0; index -= 1) {
+        if (rows[index].dataset?.harnessMobileProjectRow === 'true') {
+          projectRow = rows[index]
+          break
+        }
+      }
+    }
+    return {
+      sessionRow,
+      projectLabel: boundedContextLabel(projectRow, '未分组'),
+      sessionLabel: boundedContextLabel(sessionRow, '当前会话')
+    }
+  }
+
   const ensureMobileContextScope = (workbench, sessionId) => {
     let scope = workbench.querySelector(':scope > [data-harness-mobile-context-scope]')
     if (!scope) {
       scope = document.createElement('section')
       scope.dataset.harnessMobileContextScope = 'agent-team'
-      scope.innerHTML = '<small>查看范围 · 权威上下文</small><div><span data-harness-mobile-project-context>当前项目 · 已绑定</span><span data-harness-mobile-session-context></span></div><p>代理团队跟随当前来源会话；切换其他项目会话后，这里自动显示其团队与协作画布。</p><button type="button" data-harness-mobile-switch-context>切换项目 / 来源会话</button>'
+      scope.innerHTML = '<small>团队来源</small><div><span data-harness-mobile-project-context></span><span data-harness-mobile-session-context></span></div><p>团队属于来源会话，不会因项目名称相同而合并。要查看其他团队，请先回首页选择对应项目中的会话，再进入代理团队。</p><button type="button" data-harness-mobile-switch-context>选择其他项目或会话</button>'
       workbench.insertBefore(scope, workbench.querySelector('.dat-head') || workbench.firstElementChild)
       scope.querySelector('[data-harness-mobile-switch-context]')?.addEventListener('click', () => {
         document.querySelector('[data-harness-mobile-domain="conversations"]')?.click()
         setTimeout(() => {
           setSidebarExpanded(true)
           syncMobileAppShell()
+          const source = officialSourceContext().sessionRow
+          source?.scrollIntoView?.({ block: 'center' })
+          source?.focus?.({ preventScroll: true })
         }, 80)
       })
     }
+    const context = officialSourceContext()
     scope.dataset.harnessMobileSourceSessionId = sessionId || ''
+    const project = scope.querySelector('[data-harness-mobile-project-context]')
     const session = scope.querySelector('[data-harness-mobile-session-context]')
-    if (session) session.textContent = sessionId ? `来源会话 · ${shortStableRef(sessionId)}` : '来源会话 · 等待权威标识'
+    if (project) project.textContent = `所属项目 · ${context.projectLabel}`
+    if (session) session.textContent = sessionId ? `来源会话 · ${context.sessionLabel}` : '来源会话 · 等待权威标识'
+    scope.setAttribute('aria-label', sessionId ? `团队来源，${context.projectLabel}，${context.sessionLabel}，标识 ${shortStableRef(sessionId)}` : '团队来源等待权威会话标识')
     return scope
   }
 
@@ -1877,13 +2169,14 @@
     hub.replaceChildren()
     const scope = document.createElement('section')
     scope.dataset.harnessMobileTaskScope = 'true'
+    const sourceContext = officialSourceContext()
     const scopeLabel = document.createElement('small')
-    scopeLabel.textContent = '查看范围 · 当前项目 / 来源会话'
+    scopeLabel.textContent = '任务来源'
     const scopeChips = document.createElement('div')
     const projectChip = document.createElement('span')
-    projectChip.textContent = '当前项目 · 已绑定'
+    projectChip.textContent = `所属项目 · ${sourceContext.projectLabel}`
     const sessionChip = document.createElement('span')
-    sessionChip.textContent = sessionId ? `来源会话 · ${shortStableRef(sessionId)}` : '来源会话 · 等待权威标识'
+    sessionChip.textContent = sessionId ? `来源会话 · ${sourceContext.sessionLabel}` : '来源会话 · 等待权威标识'
     scopeChips.append(projectChip, sessionChip)
     scope.append(scopeLabel, scopeChips)
     hub.appendChild(scope)

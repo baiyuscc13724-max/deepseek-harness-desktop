@@ -6,7 +6,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { WebSocket, WebSocketServer } = require('ws')
 
-const { BROWSER_FORBIDDEN_PORTS, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
+const { BROWSER_FORBIDDEN_PORTS, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, mobilePluginsDto, mobileProviderMetersDto, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
 const { MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
 
 async function createRuntime(label) {
@@ -170,6 +170,115 @@ test('paired phones receive only a bounded read-only model routing projection', 
   assert.equal((await failed.text()).includes('deepseek-chat'), false, 'failures never replay a previous ready projection')
   service.revokeDevice(service.state().devices[0].id)
   assert.equal((await fetch(endpoint, { headers: { Cookie: paired.cookie } })).status, 401)
+})
+
+test('mobile account and plugin projections are bounded and omit private source fields', () => {
+  const meters = mobileProviderMetersDto({
+    snapshots: Array.from({ length: 70 }, (_, provider) => ({
+      provider: { id: `provider-${provider}`, name: `Provider ${provider}`, credential: 'SECRET' },
+      status: provider === 0 ? 'ready' : 'auth-required',
+      stale: provider === 1,
+      message: 'public reason',
+      configPath: 'D:\\Private\\settings.yaml',
+      meters: Array.from({ length: 20 }, (_, meter) => ({ kind: 'token-counter', label: `Meter ${meter}`, value: meter, unit: 'tokens', secret: 'SECRET' }))
+    }))
+  })
+  assert.equal(meters.providers.length, 64)
+  assert.equal(meters.providers[0].meters.length, 16)
+  assert.equal(meters.providers[0].status, 'ready')
+  assert.equal(meters.providers[1].status, 'stale')
+  assert.equal(meters.providers[2].status, 'unavailable')
+  assert.deepEqual(Object.keys(meters.providers[0]).sort(), ['id', 'meters', 'name', 'status', 'unavailableReason'])
+
+  const plugins = mobilePluginsDto({ plugins: Array.from({ length: 140 }, (_, index) => ({
+    id: `plugin-${index}`,
+    name: `Plugin ${index}`,
+    version: '1.2.3',
+    enabled: true,
+    configurable: index === 0,
+    unavailableReason: index === 0 ? 'D:\\Private\\plugin failed' : '',
+    apiKey: 'SECRET',
+    path: 'D:\\Private\\plugin',
+    config: { endpoint: 'https://private.example' }
+  })) })
+  assert.equal(plugins.plugins.length, 128)
+  assert.deepEqual(Object.keys(plugins.plugins[0]).sort(), ['configurable', 'enabled', 'id', 'name', 'unavailableReason', 'version'])
+  assert.equal(plugins.plugins[0].configurable, true)
+  assert.equal(plugins.plugins[0].unavailableReason, '')
+  const projected = JSON.stringify({ meters, plugins })
+  for (const forbidden of ['SECRET', 'Private', 'settings.yaml', 'apiKey', 'configPath', 'private.example']) {
+    assert.equal(projected.includes(forbidden), false, `mobile projections must omit ${forbidden}`)
+  }
+})
+
+test('paired phones receive GET-only no-store account meters and plugin inventory', async t => {
+  let failMeters = false
+  let failPlugins = false
+  const service = new MobileSyncService({
+    store: createStore(),
+    getRuntimeTarget: () => null,
+    getProviderMeters: async () => {
+      if (failMeters) throw new Error('D:\\Private\\meter-source failed with SECRET')
+      return { snapshots: [{
+        provider: { id: 'deepseek', name: 'DeepSeek', apiKey: 'SECRET' },
+        status: 'ready',
+        stale: false,
+        message: '',
+        meters: [{ kind: 'balance', label: '余额', total: 12.5, currency: 'CNY', credential: 'SECRET' }]
+      }] }
+    },
+    getPlugins: async () => {
+      if (failPlugins) throw new Error('D:\\Private\\plugin-source failed with SECRET')
+      return { plugins: [{
+        id: 'agent-loop', name: '@deepseek-ai/dsh-agent-loop', version: '0.1.1-rc.2', enabled: true, configurable: true,
+        unavailableReason: '', path: 'D:\\Private\\plugin', config: { secret: 'SECRET' }
+      }] }
+    },
+    host: '127.0.0.1',
+    port: 0,
+    qrFactory: async () => 'qr'
+  })
+  t.after(() => service.stop())
+  await service.start()
+  const origin = service.state().origins[0]
+  const metersEndpoint = `${origin}/__harness_mobile__/provider-meters`
+  const pluginsEndpoint = `${origin}/__harness_mobile__/plugins`
+  assert.equal((await fetch(metersEndpoint)).status, 401)
+  assert.equal((await fetch(pluginsEndpoint)).status, 401)
+
+  const paired = await pair(service)
+  for (const endpoint of [metersEndpoint, pluginsEndpoint]) {
+    const rejected = await fetch(endpoint, { method: 'POST', headers: { Cookie: paired.cookie } })
+    assert.equal(rejected.status, 405)
+    assert.equal(rejected.headers.get('allow'), 'GET')
+    assert.equal(rejected.headers.get('cache-control'), 'no-store')
+  }
+
+  const metersResponse = await fetch(metersEndpoint, { headers: { Cookie: paired.cookie } })
+  assert.equal(metersResponse.status, 200)
+  assert.equal(metersResponse.headers.get('cache-control'), 'no-store')
+  assert.deepEqual(await metersResponse.json(), {
+    ok: true,
+    providers: [{ id: 'deepseek', name: 'DeepSeek', status: 'ready', meters: ['余额: 12.5 CNY'], unavailableReason: '' }]
+  })
+  const pluginsResponse = await fetch(pluginsEndpoint, { headers: { Cookie: paired.cookie } })
+  assert.equal(pluginsResponse.status, 200)
+  assert.equal(pluginsResponse.headers.get('cache-control'), 'no-store')
+  assert.deepEqual(await pluginsResponse.json(), {
+    ok: true,
+    plugins: [{ id: 'agent-loop', name: '@deepseek-ai/dsh-agent-loop', version: '0.1.1-rc.2', enabled: true, configurable: true, unavailableReason: '' }]
+  })
+
+  failMeters = true
+  failPlugins = true
+  for (const endpoint of [metersEndpoint, pluginsEndpoint]) {
+    const failed = await fetch(endpoint, { headers: { Cookie: paired.cookie } })
+    assert.equal(failed.status, 503)
+    assert.equal(failed.headers.get('cache-control'), 'no-store')
+    const text = await failed.text()
+    assert.equal(text.includes('SECRET'), false)
+    assert.equal(text.includes('Private'), false)
+  }
 })
 
 test('paired mobile devices can request the desktop-owned workspace picker without supplying a path', async t => {

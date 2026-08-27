@@ -774,6 +774,17 @@
     display: none !important;
   }
 
+  [data-harness-mobile-appbar="true"] > button[data-harness-mobile-home-text="true"] {
+    padding: 0 !important;
+    color: var(--hm-color-primary-strong, #3154d8) !important;
+    background: var(--hm-color-primary-soft, #eef3ff) !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    letter-spacing: .02em !important;
+    line-height: 44px !important;
+    white-space: nowrap !important;
+  }
+
   [data-harness-mobile-appbar="true"] > button[data-harness-mobile-icon="brand"] {
     width: 32px;
     min-width: 32px;
@@ -2213,6 +2224,121 @@
     background: var(--dsw-alias-brand-primary, #4f6ef7) !important;
     font: inherit !important;
     font-weight: 600 !important;
+  }
+
+  .harness-mobile-model-meters {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+
+  .harness-mobile-model-meters > p {
+    color: var(--dsw-alias-label-secondary, #6b6b73) !important;
+    font-size: 13px !important;
+    line-height: 19px !important;
+  }
+
+  .harness-mobile-model-meter {
+    padding: 14px 16px !important;
+    border: 1px solid color-mix(in srgb, currentColor 9%, transparent) !important;
+    border-radius: 16px !important;
+    background: var(--dsw-alias-bg-elevated, #fff) !important;
+  }
+
+  .harness-mobile-model-meter > div,
+  .harness-mobile-model-meter > p {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 12px !important;
+  }
+
+  .harness-mobile-model-meter > div > span,
+  .harness-mobile-model-meter > p > span,
+  .harness-mobile-model-meter > small {
+    color: var(--dsw-alias-label-secondary, #6b6b73) !important;
+    font-size: 12px !important;
+    line-height: 18px !important;
+  }
+
+  .harness-mobile-model-meter > p {
+    margin-top: 10px !important;
+    font-size: 13px !important;
+  }
+
+  html[data-harness-mobile="true"] [data-harness-mobile-settings-content="true"][data-harness-mobile-plugin-config="true"] > :not(#harness-mobile-plugin-config) {
+    display: none !important;
+  }
+
+  #harness-mobile-plugin-config {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 632px !important;
+    min-height: 100% !important;
+    margin: 0 auto !important;
+    padding: 20px 16px max(32px, env(safe-area-inset-bottom)) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 14px !important;
+    overflow-y: auto !important;
+    background: var(--dsw-alias-bg-base, #f7f7f8) !important;
+  }
+
+  #harness-mobile-plugin-config h2,
+  #harness-mobile-plugin-config h3,
+  #harness-mobile-plugin-config p {
+    margin: 0 !important;
+  }
+
+  .harness-mobile-plugin-intro,
+  .harness-mobile-plugin-empty,
+  .harness-mobile-plugin-loading,
+  .harness-mobile-plugin-card {
+    padding: 16px !important;
+    border: 1px solid color-mix(in srgb, currentColor 9%, transparent) !important;
+    border-radius: 16px !important;
+    background: var(--dsw-alias-bg-elevated, #fff) !important;
+  }
+
+  .harness-mobile-plugin-intro > p,
+  .harness-mobile-plugin-empty > p,
+  .harness-mobile-plugin-card > p,
+  .harness-mobile-plugin-card > small {
+    margin-top: 6px !important;
+    color: var(--dsw-alias-label-secondary, #6b6b73) !important;
+    font-size: 13px !important;
+    line-height: 19px !important;
+  }
+
+  .harness-mobile-plugin-list {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+
+  .harness-mobile-plugin-card > div {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 12px !important;
+  }
+
+  .harness-mobile-plugin-card > div > span {
+    flex: none !important;
+    padding: 3px 8px !important;
+    border-radius: 999px !important;
+    color: var(--dsw-alias-brand-primary, #4f6ef7) !important;
+    background: color-mix(in srgb, var(--dsw-alias-brand-primary, #4f6ef7) 12%, transparent) !important;
+    font-size: 12px !important;
+  }
+
+  .harness-mobile-plugin-retry {
+    min-height: 44px !important;
+    border: 0 !important;
+    border-radius: 22px !important;
+    color: #fff !important;
+    background: var(--dsw-alias-brand-primary, #4f6ef7) !important;
+    font-weight: 650 !important;
   }
 
   #harness-mobile-input-entry {

@@ -72,6 +72,7 @@ public final class MainActivity extends AppCompatActivity {
     private static final long MOBILE_UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1_000L;
     private static final long MAX_CAPTURE_BYTES = 12L * 1024L * 1024L;
     static final int MAX_PICKED_IMAGES = 20;
+    static final String MOBILE_BACK_SCRIPT = "window.__harnessMobileHandleBack()";
 
     private LinearLayout pairingPanel;
     private EditText pairingUrl;
@@ -465,7 +466,11 @@ public final class MainActivity extends AppCompatActivity {
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setDatabaseEnabled(true);
         webView.getSettings().setAllowFileAccess(false);
-        webView.getSettings().setAllowContentAccess(false);
+        // File chooser results are content:// URIs protected by picker-scoped grants.
+        // WebView must be allowed to read those selected URIs so FileReader can copy
+        // them into page-owned File objects before the temporary grant expires. This
+        // does not grant storage/media access and providers still enforce each URI.
+        webView.getSettings().setAllowContentAccess(true);
         webView.getSettings().setMediaPlaybackRequiresUserGesture(true);
         webView.getSettings().setUserAgentString(webView.getSettings().getUserAgentString() + " HarnessMobile/1 Android");
         webView.addJavascriptInterface(new MobileControlBridge(), "HarnessMobileControl");
@@ -530,6 +535,7 @@ public final class MainActivity extends AppCompatActivity {
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
                     .addCategory(Intent.CATEGORY_OPENABLE)
                     .setType(primary)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
                 if (acceptTypes != null && acceptTypes.length > 1) {
                     intent.putExtra(Intent.EXTRA_MIME_TYPES, acceptTypes);
@@ -1179,32 +1185,20 @@ public final class MainActivity extends AppCompatActivity {
         }
         if (backDispatchPending || webView == null) return;
         backDispatchPending = true;
-        String dismissTopLayer = "(() => {" +
-            "const visible=node=>{if(!node)return false;const s=getComputedStyle(node),r=node.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0};" +
-            "const layers=[...document.querySelectorAll('[role=menu],[role=listbox],[role=dialog],dialog')].filter(visible);" +
-            "const target=layers.at(-1);" +
-            "if(target){" +
-              "const buttons=[...target.querySelectorAll('button')].filter(visible);" +
-              "let close=buttons.find(button=>/close|关闭|返回/i.test([button.getAttribute('aria-label'),button.getAttribute('title'),button.textContent].filter(Boolean).join(' ')));" +
-              "if(!close&&target.matches('[role=dialog],dialog')){const tr=target.getBoundingClientRect();close=buttons.find(button=>{const r=button.getBoundingClientRect(),text=(button.textContent||'').trim();return r.width<=72&&r.height<=72&&r.right>tr.right-96&&r.top<tr.top+112&&(!text||text==='×'||text==='✕')});}" +
-              "if(close){close.click();return true;}" +
-              "target.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}));" +
-              "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}));" +
-              "return true;" +
-            "}" +
-            "const sidebar=[...document.querySelectorAll('[data-slot=sidebar] > div')].find(node=>visible(node)&&!String(node.className||'').includes('_collapsed'));" +
-            "if(sidebar){const button=[...sidebar.querySelectorAll('button')].filter(visible).find(item=>/收起|关闭|collapse|close/i.test([item.getAttribute('aria-label'),item.getAttribute('title')].filter(Boolean).join(' ')));if(button){button.click();return true;}}" +
-            "return false;" +
-        "})()";
-        webView.evaluateJavascript(dismissTopLayer, value -> {
+        // The mobile runtime owns layer/sidebar/SPA navigation. evaluateJavascript
+        // completes asynchronously; only its explicit false result delegates the
+        // same physical/edge-back gesture to WebView history or Activity exit.
+        // Any true/null/error result is treated as consumed to prevent double-back.
+        webView.evaluateJavascript(MOBILE_BACK_SCRIPT, value -> {
             backDispatchPending = false;
-            if ("true".equals(value)) return;
-            // Browser history contains pairing/home redirects and is not a
-            // mobile navigation stack. Once no in-page layer is open, Android
-            // Back should behave like a normal phone app: move this task to the
-            // background while the proxy/tunnel and desktop generation continue.
-            if (!moveTaskToBack(true)) finishAfterTransition();
+            if (!mobileBackDeclined(value)) return;
+            if (webView.canGoBack()) webView.goBack();
+            else if (!moveTaskToBack(true)) finishAfterTransition();
         });
+    }
+
+    static boolean mobileBackDeclined(String javascriptResult) {
+        return "false".equals(javascriptResult);
     }
 
     /**
