@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "repository": "baiyuscc13724-max/deepseek-harness-desktop",
+  "channel": "pr-preview",
+  "prNumber": 33,
+  "title": "feat: roll up all pending v1.0.49 preview changes",
+  "author": "baiyuscc13724-max",
+  "baseRef": "main",
+  "headSha": "5f6e26895f158204aaed61812243e047721fa114",
+  "sequence": 54000001,
+  "publishedAt": "2026-08-27T10:38:23.000Z",
+  "expiresAt": "2026-09-03T10:38:23.000Z",
+  "keyId": "harness-preview-v1",
+  "kind": "pr-preview-manifest",
+  "componentManifest": {
+    "schemaVersion": 1,
+    "releaseVersion": "1.0.50-pr.54.1",
+    "channel": "prerelease",
+    "publishedAt": "2026-08-27T10:38:23.000Z",
+    "keyId": "harness-preview-v1",
+    "bootstrap": {
+      "minVersion": "1.0.49"
+    },
+    "components": [
+      {
+        "id": "desktop-shell",
+        "version": "1.0.50-pr.54.1",
+        "kind": "zip",
+        "target": "shell",
+        "platform": "win32",
+        "arch": "x64",
+        "size": 37766318,
+        "unpackedSize": 42942632,
+        "sha256": "fd46d8256ddf0d5525edabd8138182ab264e96e3e2c17080b90dd903411c289c",
+        "urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/pr-preview-33-5f6e26895f15-run-33063862046-1/desktop-shell-1.0.50-pr.54.1-win32-x64.zip",
+          "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/pr-preview-33-5f6e26895f15-run-33063862046-1/desktop-shell-1.0.50-pr.54.1-win32-x64.zip"
+        ],
+        "required": true,
+        "restart": true,
+        "signature": "KqfcViSOSnmeKQjUjJW8U2aYNYxTBzx0RyhZB59TdfkWNGYJwJKSD++3Pw/58MdjcyBPWIQj6Fo1HNaWBwZCDQ=="
+      }
+    ],
+    "notes": "设置页改为 Hermes 风格的单一版本入口，桌面应用、内置组件和签名预览统一进入同一个更新中心；自动检查与预览发现保持启用。；Computer Use 授权后可控制完整 Windows 桌面并恢复永久授权；点击和滚动直接使用最新截图坐标，不再因重复缩放而出现越界错误。；内置浏览器默认在后台使用结构化页面控制；首次打开或新建标签可以正常进入公开网页，同时继续拒绝错误页、内部页、私网目标和未经确认的关键操作。；Agent Teams 会准确区分权限不足与成员失败；Codex 临时过载会进行可取消的渐进重试，失败后保留当前会话并给出恢复说明。；已安装的签名预览会被持久记住；同一份预览即使重新发布也不会反复提示安装，只有内容真正变化时才会显示为新的更新。；每个预览都必须通过来源校验、数字签名、完整性检查、到期检查、明确安装、启动健康检查和稳定版本回滚保护",
+    "signature": "UOXbgyjo7b/sKujbLtSovUTkWbGOFEyD1N9D4Iee9e+KExuv8vQY3fCw5n/s8IIpF4Jr5Uz4baiRp1DOLmXYDg=="
+  },
+  "signature": "haKqMNAkY/nKanu1Yy04NlIkLCvGgojLxTGJlhZdj+24WV/E8q0h3RZwRocU2pp9jr8WirLOL1MTCHlxlbhPCg=="
+}
