@@ -2,20 +2,20 @@
   "schemaVersion": 1,
   "repository": "baiyuscc13724-max/deepseek-harness-desktop",
   "channel": "pr-preview",
-  "prNumber": 16,
-  "title": "feat(browser): keep structured control running in background",
+  "prNumber": 27,
+  "title": "docs: clarify PR preview activation",
   "author": "baiyuscc13724-max",
   "baseRef": "main",
-  "headSha": "5fe2a2ff4a8392c1dbd1b65e0ddbdbd033e09e08",
-  "sequence": 15000001,
-  "publishedAt": "2026-08-25T22:21:01.000Z",
-  "expiresAt": "2026-09-01T22:21:01.000Z",
+  "headSha": "64f5567e452518942de8fd2fda672d461fa3c16f",
+  "sequence": 33000001,
+  "publishedAt": "2026-08-27T03:45:55.000Z",
+  "expiresAt": "2026-09-03T03:45:55.000Z",
   "keyId": "harness-preview-v1",
   "kind": "pr-preview-index",
   "manifestUrls": [
-    "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/pr-preview/manifests/5fe2a2ff4a8392c1dbd1b65e0ddbdbd033e09e08.json",
-    "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/pr-preview/manifests/5fe2a2ff4a8392c1dbd1b65e0ddbdbd033e09e08.json"
+    "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/git/raw/main/component-feeds/pr-preview/manifests/64f5567e452518942de8fd2fda672d461fa3c16f.json",
+    "https://raw.githubusercontent.com/baiyuscc13724-max/deepseek-harness-desktop/main/component-feeds/pr-preview/manifests/64f5567e452518942de8fd2fda672d461fa3c16f.json"
   ],
-  "notes": "feat(browser): keep structured control running in background — @baiyuscc13724-max; exact head 5fe2a2ff4a8392c1dbd1b65e0ddbdbd033e09e08.",
-  "signature": "97Z1Wqc7E4hB+DpsNhttAl55kH5tUL2LxsQgnoPl/PiGyMwdnX6svcoKi6lto11irkUtPX96HoBGsTKbv6VKAQ=="
+  "notes": "docs: clarify PR preview activation — @baiyuscc13724-max; exact head 64f5567e452518942de8fd2fda672d461fa3c16f.",
+  "signature": "ngR+E/1PjVuwySkcwXiK2LW0zl15HI+W235SR5gdvO6CgEtThVqjX8d6Yqkl8ZrcLiqVGRreQyMiFHQ9CFeBBw=="
 }

@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "repository": "baiyuscc13724-max/deepseek-harness-desktop",
+  "channel": "pr-preview",
+  "prNumber": 27,
+  "title": "docs: clarify PR preview activation",
+  "author": "baiyuscc13724-max",
+  "baseRef": "main",
+  "headSha": "64f5567e452518942de8fd2fda672d461fa3c16f",
+  "sequence": 33000001,
+  "publishedAt": "2026-08-27T03:45:55.000Z",
+  "expiresAt": "2026-09-03T03:45:55.000Z",
+  "keyId": "harness-preview-v1",
+  "kind": "pr-preview-manifest",
+  "componentManifest": {
+    "schemaVersion": 1,
+    "releaseVersion": "1.0.49-pr.33.1",
+    "channel": "prerelease",
+    "publishedAt": "2026-08-27T03:45:55.000Z",
+    "keyId": "harness-preview-v1",
+    "bootstrap": {
+      "minVersion": "1.0.48"
+    },
+    "components": [
+      {
+        "id": "desktop-shell",
+        "version": "1.0.49-pr.33.1",
+        "kind": "zip",
+        "target": "shell",
+        "platform": "win32",
+        "arch": "x64",
+        "size": 37751012,
+        "unpackedSize": 42887136,
+        "sha256": "254b67fccede7e91df29161cbe915e97d0156115eb40227b2e917d5c04d70dc0",
+        "urls": [
+          "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/pr-preview-27-64f5567e4525-run-33037306444-1/desktop-shell-1.0.49-pr.33.1-win32-x64.zip",
+          "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/pr-preview-27-64f5567e4525-run-33037306444-1/desktop-shell-1.0.49-pr.33.1-win32-x64.zip"
+        ],
+        "required": true,
+        "restart": true,
+        "signature": "itDt+NljQe0IALy5CHStWY2TCsSiJNJmSHEkQ3fU6sLzmI0nIVU8zVnyLUBiC1iPZ8toaHdTf01yMCr5SeGzDw=="
+      }
+    ],
+    "notes": "Approved same-repository PR #27 at exact head 64f5567e452518942de8fd2fda672d461fa3c16f. Build run 33037306444; no PR code executed by the signing job.",
+    "signature": "jTq4kmuVctdNaRIIsyRV2yfWFFbb4OxJcuAck72PlguqqPdqoCzcoycrnjOpdEyEomELqezhdwWnpreePyGdAQ=="
+  },
+  "signature": "BemmTwcXQK07HrwSLfah5/pmD9nh2SwAT9O+JNAPfc2u3zES3hwPpBYhbbrkxNKuzk4gZnLx6nK6EbJa2W34BQ=="
+}
