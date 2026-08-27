@@ -60,7 +60,7 @@
         node.setAttribute('role', 'link')
       }
       node.setAttribute('aria-label', `在右侧工作区安全预览 ${target}`)
-      node.title = `${target}\n单击在右侧预览；内容只会从当前工作区读取，HTML 和程序源码不会执行；右键可复制`
+      node.title = `${target}\n单击在右侧安全预览；相对路径只从当前工作区读取，明确绝对路径可只读预览本机文件；HTML 和程序源码不会执行；右键可复制`
     }
 
     const decorate = root => {

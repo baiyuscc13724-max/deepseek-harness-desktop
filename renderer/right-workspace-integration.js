@@ -392,7 +392,10 @@
     host.classList.remove('hidden')
     syncChrome()
     try {
-      const result = await resource('filePreview', { path: target })
+      const result = await factory.loadDocumentPreview(target, {
+        workspacePreview: path => resource('filePreview', { path }),
+        localPreview: path => api.previewRightWorkspaceLocal(path)
+      })
       renderDocument(result.file || {}, target)
     } catch (error) { documentView.replaceChildren(statusPanel(error.message || String(error), true)) }
   }

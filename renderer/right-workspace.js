@@ -193,6 +193,30 @@
     return canRestore ? 'restore-browser' : 'sync-only'
   }
 
+  function isExplicitLocalTarget(value) {
+    const target = String(value || '').trim()
+    if (!target || target.length > 4096 || /[\u0000\r\n]/u.test(target)) return false
+    if (/^file:\/\//iu.test(target)) {
+      try {
+        const url = new URL(target)
+        return !url.hostname || url.hostname.toLowerCase() === 'localhost'
+      } catch { return false }
+    }
+    if (/^[a-z]:[\\/]/iu.test(target)) return true
+    if (/^\\\\/u.test(target)) return false
+    return /^\/(?!\/)/u.test(target)
+  }
+
+  async function loadDocumentPreview(target, { workspacePreview, localPreview } = {}) {
+    if (typeof workspacePreview !== 'function' || typeof localPreview !== 'function') throw new TypeError('document preview adapters are required')
+    try {
+      return await workspacePreview(target)
+    } catch (workspaceError) {
+      if (!isExplicitLocalTarget(target)) throw workspaceError
+      return { file: await localPreview(target) }
+    }
+  }
+
   function normalizeBrowserOpenIntent(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
     const exactKeys = expected => {
@@ -622,6 +646,8 @@
     create: createWorkspace,
     createCore, // 纯逻辑核心，Node 测试可直接使用
     browserStateModeAction,
+    isExplicitLocalTarget,
+    loadDocumentPreview,
     normalizeBrowserOpenIntent,
     browserIntentTabAction,
     isShortcutPressed: (event) => {
