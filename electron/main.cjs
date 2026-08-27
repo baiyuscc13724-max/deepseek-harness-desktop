@@ -3648,9 +3648,11 @@ function safeUpdateUrl(value) {
 }
 
 function modelRoutingOptions() {
+  const nodeModulesRoot = bundledNodeModulesRoot()
   return {
     dshHome: desktopDshHome(),
-    shippedPresetRoot: path.join(bundledNodeModulesRoot(), '@deepseek-ai', 'dsh', 'config', 'agent-presets')
+    shippedPresetRoot: path.join(nodeModulesRoot, '@deepseek-ai', 'dsh', 'config', 'agent-presets'),
+    installedModelDataRoot: path.join(nodeModulesRoot, '@earendil-works', 'pi-ai', 'dist', 'providers', 'data')
   }
 }
 

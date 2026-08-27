@@ -155,6 +155,12 @@ test('subagents follow the main model unless the user explicitly configures a se
   assert.match(compatibilityPreset, /model: new-model/)
 })
 
+test('desktop model routing reads provider catalogs from the extracted DSH runtime', () => {
+  const main = readFileSync(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  assert.match(main, /const nodeModulesRoot = bundledNodeModulesRoot\(\)/u)
+  assert.match(main, /installedModelDataRoot: path\.join\(nodeModulesRoot, '@earendil-works', 'pi-ai', 'dist', 'providers', 'data'\)/u)
+})
+
 test('model routing catalog merges configured and installed provider models without reading credentials', async t => {
   const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-catalog-'))
   t.after(() => rm(dshHome, { recursive: true, force: true }))
@@ -167,6 +173,25 @@ test('model routing catalog merges configured and installed provider models with
   assert.ok(result.providers[0].models.includes('qwen3.7-max'))
   assert.ok(result.providers[0].models.length > 1)
   assert.equal(result.subagent.inheritMain, true)
+})
+
+test('packaged runtime model data restores the full catalog when ESM discovery is unavailable', async t => {
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-model-packaged-catalog-'))
+  const installedModelDataRoot = path.join(dshHome, 'runtime-model-data')
+  t.after(() => rm(dshHome, { recursive: true, force: true }))
+  await mkdir(installedModelDataRoot, { recursive: true })
+  await writeFile(path.join(dshHome, 'settings.yaml'), 'agent-default-model:\n  provider: openai-codex\n  model: configured-current\nllm-pi-ai:\n  providers:\n    openai-codex:\n      apiKeyEnv: OPENAI_CODEX_ACCESS_TOKEN\n')
+  await writeFile(path.join(installedModelDataRoot, 'openai-codex.json'), JSON.stringify({
+    'openai-codex-responses': {
+      'catalog-first': { id: 'catalog-first', provider: 'openai-codex' },
+      'catalog-second': { id: 'catalog-second', provider: 'openai-codex' },
+      invalid: { id: ' spaced model ', provider: 'openai-codex' }
+    }
+  }))
+
+  const result = await getModelRouting({ dshHome, shippedPresetRoot, installedModelDataRoot })
+  const provider = result.providers.find(row => row.id === 'openai-codex')
+  assert.deepEqual(provider.models, ['catalog-first', 'catalog-second', 'configured-current'])
 })
 
 test('a catalog provider with only a credential reference still exposes its full installed model list', async t => {
