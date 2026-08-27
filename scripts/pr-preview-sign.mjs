@@ -27,6 +27,7 @@ const {
   validateAndVerifyPreviewManifest
 } = require('../electron/bridge/pr-preview-update-contract.cjs')
 const { normalizeOfficialManifestUrls, normalizePrPreviewUpdateConfig } = require('../electron/bridge/pr-preview-update-config.cjs')
+const { previewChangeNotes } = require('../electron/bridge/update-summary.cjs')
 const {
   createSignedComponentDescriptor,
   createSignedReleaseManifest,
@@ -114,7 +115,8 @@ function trustedPullRequest(pr, { repository, prNumber, headSha }) {
   if (!title || Array.from(title).length > 200 || Buffer.byteLength(title, 'utf8') > 512 || /[\u0000-\u001f\u007f]/.test(title)) throw new Error('GitHub PR title 无效。')
   const author = String(pr.user?.login || '').trim().toLowerCase()
   if (!/^(?!.*--)[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(author)) throw new Error('GitHub PR author login 无效。')
-  return { prNumber, title, author, baseRef: 'main' }
+  const changeNotes = previewChangeNotes({ title, body: pr.body })
+  return { prNumber, title, author, baseRef: 'main', changeNotes }
 }
 
 export function validateTrustedBuildRun(run, expected) {
@@ -148,6 +150,7 @@ export async function signPreview(options) {
   ])
   const trustedRun = validateTrustedBuildRun(run, { repository, headSha, prNumber, buildRunId })
   const prIdentity = trustedPullRequest(pr, { repository, prNumber, headSha })
+  const { changeNotes, ...signedPrIdentity } = prIdentity
   const officialStableVersion = trustedOfficialStableRelease(stableRelease)
   const expectedPreviewVersion = previewVersion(officialStableVersion, trustedRun.runNumber, trustedRun.runAttempt)
   const expectedPreviewSequence = previewSequence(trustedRun.runNumber, trustedRun.runAttempt)
@@ -221,7 +224,7 @@ export async function signPreview(options) {
     keyId,
     bootstrap: { minVersion: officialStableVersion },
     components: [component],
-    notes: `Approved same-repository PR #${prNumber} at exact head ${headSha}. Build run ${buildRunId}; no PR code executed by the signing job.`
+    notes: changeNotes
   }, privateKey)
   const trustedKeys = { [keyId]: publicKey }
   validateAndVerifyManifest(componentManifest, trustedKeys, { now: Math.max(Date.now(), publishedAt.getTime()) })
@@ -230,7 +233,7 @@ export async function signPreview(options) {
     schemaVersion: 1,
     repository,
     channel: 'pr-preview',
-    ...prIdentity,
+    ...signedPrIdentity,
     headSha,
     sequence: expectedPreviewSequence,
     publishedAt: publishedIso,
@@ -242,7 +245,7 @@ export async function signPreview(options) {
     ...common,
     kind: 'pr-preview-index',
     manifestUrls: manifestUrls(headSha),
-    notes: `${prIdentity.title} — @${prIdentity.author}; exact head ${headSha}.`
+    notes: changeNotes
   }, privateKey)
   const now = Math.max(Date.now(), publishedAt.getTime())
   const verifiedIndex = validateAndVerifyPreviewIndex(previewIndex, trustedKeys, { now, normalizeManifestUrls: normalizeOfficialManifestUrls })
