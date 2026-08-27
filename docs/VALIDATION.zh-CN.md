@@ -44,6 +44,20 @@ npm run release:orchestrate -- run --version 1.0.29 --through windows
 25. 对 `UNIQUE_OWNER`、`DEPENDENCY_BLOCKED`、`RESOURCE_CONFLICT` 和 `FORMAL_HANDOFF` 分别提供成立与伪造证据；Host 只准入成立的一项。重复、过期、环路、`fanout>1`、LAN hop、暂停发送方和未配置的 `MANDATORY_REVIEW` 必须拒绝。请求 `wake_level=2` 时确认降级为 L1 Inbox，`subagents.followup`、root followup 和模型 driver 均没有被调用。
 26. 目标成员在自然协调边界调用 `collaboration_inbox`，确认只能读取/确认自己的项；其他成员为空。重启 Host 后 Presence 路由、Inbox 和冷却仍有效。检查 `agent_collaboration.json` 使用 Host 私有原始映射，模型公开结果仅保留不透明引用。
 27. 在 Intent 入箱后执行真实 UI Stop：团队持久变为 paused，发送方不能再发起协作，目标不被唤醒；恢复前 Inbox 不返回旧项。由用户在后续直接回合显式 `team_resume` 后，旧 `pauseEpoch` 项应为 `superseded` 而不是重放。并发订阅继续按 50ms 窗口合并 SSE，受影响 root 收到更新，其他 root 不收到无关快照。
+
+### 计划追踪与恢复专项
+
+- **计划门禁与重放**：保存 draft 后分别尝试 spawn、claim、complete，均须在 child driver 或任务 mutation 前拒绝；提交后核对 canonical plan hash/revision。完全相同请求重放不得新增团队、成员、任务或 attempt；相同请求标识配不同 hash、旧 revision 或实质变化必须以幂等/CAS 冲突拒绝。
+- **任务先于成员**：无持久任务的公开 spawn 必须拒绝；模拟成员启动前崩溃，确认可以从未发布占位恢复；模拟 child 已发布但 work followup 失败，确认保留 partial/uncertain 记录且重放 fail closed，不重复 child。
+- **Stop 竞态与 fencing**：在 spawn、claim、complete 各自进入串行边界时并发 Stop，验证新 `pauseEpoch` 先持久化；旧 `claimId/leaseEpoch/attempt` 的完成、释放和 checkpoint 回写全部拒绝。中断失败不得恢复 active；正常新 epoch 操作不被旧事件污染。
+- **checkpoint 边界**：零 checkpoint 必须可安全预览/恢复，不能凭空生成；合法 checkpoint 始终标记未验证。注入 Host 状态、完成百分比、权限、路径、凭据、消息正文、外部 receipt 或超限内容必须拒绝或从安全投影删除，不能覆盖 Host attempt/interruption 历史。
+- **两阶段 Resume**：preview 只读、零唤醒且团队仍为 paused；commit 必须绑定 request、preview、team revision 与 pause epoch，并在状态变化同一事务保存 receipt。完全相同 request/CAS 重放幂等；同 request 不同内容、旧 token、过期 preview/CAS 拒绝。混合健康、失败、权限 unknown、陈旧 claim 和 `outcome_unknown` 节点时，只恢复健康节点，异常节点保留 Attention，不能冻结全队或批量误重放。
+- **授权、能力与外部副作用**：逐项覆盖 `unknown|human_attested|host_verified`；普通布尔、错 plan hash、非 direct-human 和模型 checkpoint 都不得生成 `host_verified` 或升级 capability。工具不能提供可验证权限事实时只能返回 `unknown`，不得猜成 allowed。外部 effect identity 必须由 Host 导出，模型 `idempotencyKey` 不权威；`resolve_unknown` 只允许精确 direct-human root。对有稳定 command/receipt 协议的夹具验证幂等收敛；对任意外部 UI/无 receipt/网络超时夹具必须产生 `outcome_unknown` 并阻塞自动重试，测试名称和文档均不得声称普遍 exactly-once。
+- **同项目跨会话**：同一 canonical `projectKey` 的另一个最外层直接用户先 preview adopt/handoff，再 CAS commit；核对 append-only `ownershipHistory`，全部旧 worker lease/claim 被撤销、旧 child 不 reparent、未完成任务回 pending，旧 attempt/checkpoint/任务历史保留。跨项目、同名不同 project、成员调用、自动续轮、旧 revision 和缺少直接用户授权全部拒绝。
+- **迁移与依赖**：分别载入旧空/无 worker 团队和含活跃 worker、pending/in_progress/completed/cancelled 记录的旧存储；前者必须成为 `draft + legacy_unplanned`，后者不得强行中断现有 worker，但在 recommit 前必须拒绝新扩张、spawn 与 claim。确认非破坏升级、顺序与审计字段保留，缺省新字段使用安全值。继续覆盖依赖环、缺失依赖、reopen 与进行中 dependent 冲突、跨团队来源关闭/取消失效，以及 force close 只取消未完成任务并保留 completed 历史。
+- **陈旧回写**：Stop、adopt、reopen 和新 attempt 后，使用旧 claim/lease 的 complete、release、checkpoint 必须返回陈旧 fencing 错误并保持状态逐字不变；只有当前 fence 或已提交且完全匹配的 receipt 可以幂等收敛。
+- **桌面与手机真实性**：四主区固定为 Ready/Running/Attention/Done，Cancelled 只进历史；不得根据模型文本渲染数值百分比，只允许 Host 验证里程碑计数、attempt、最后活动和时间。checkpoint 与成员 Todo 里程碑均明示未验证，permission unknown 与 `outcome_unknown` 有独立说明；手机首屏和无障碍摘要必须回答“需要确认什么、卡在哪里、下一步做什么”，保留键盘/读屏、44px 触控、焦点、对比度、减少动态和无横向滚动门禁。
+
 28. 对项目协作纯协议核心生成 owner、contributor、reviewer 三种设备 Grant，确认公开投影只含 `projectRef/collaboratorRef/deviceRef`，不含私有项目、用户或设备句柄；篡改 Grant、越权事件、原始身份字段、非 lossless JSON、过期事件、错序/错链和伪造签名必须拒绝。
 29. 按游标分页重放离线事件并篡改游标，确认 HMAC 绑定项目和偏移；执行设备撤权、Ed25519 设备密钥轮换和双签 authority epoch 迁移，确认旧 Grant、旧签名或被撤权设备不能再写入。
 30. 将 Host snapshot 写入 AES-256-GCM 项目状态存储，确认磁盘仅有不透明 `projectRef`、revision、nonce、密文和 tag，不含私有项目/用户/设备句柄、项目 secret、成员表、事件或 Authority 私钥。错误密钥、密文篡改、同文件并发 CAS、last-seen rollback 和外部 minimum revision 回退必须失败；恢复后事件 sequence/hash chain 连续。持久服务只有加密 CAS 成功后才能发布内存变更。

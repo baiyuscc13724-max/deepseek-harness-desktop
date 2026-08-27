@@ -377,7 +377,7 @@ test('the task board is a read-only projection of only the selected team', async
   assert.doesNotMatch(source, /boardBlockedDerived: "[^"]*blockedBy/u)
 
   assert.match(column, /relationIds\(task\.blockedBy\)\.length/u)
-  assert.match(column, /return "blocked"/u)
+  assert.match(column, /return "attention"/u)
   assert.ok(
     column.indexOf('status === "cancelled"') < column.indexOf('relationIds(task.blockedBy).length'),
     'terminal cancellation must remain visible instead of being remapped to a derived blocked column'
@@ -425,7 +425,7 @@ test('selected board task becomes the visual focus with a truthful live workflow
   assert.match(focus, /props\.detailConnection \|\| props\.connection/u)
   assert.match(focus, /events\.slice\(0, eventLimit\)/u)
   assert.match(focus, /t\("taskNextStep"\)/u)
-  for (const field of ['taskBrief', 'taskDescription', 'taskClaimant', 'taskCompletionProgress', 'taskResponsible', 'taskClaimedAt', 'taskCompletedAt', 'taskModelUsed']) assert.match(focus, new RegExp(`t\\("${field}"\\)`, 'u'))
+  for (const field of ['taskBrief', 'taskDescription', 'taskClaimant', 'taskResponsible', 'taskClaimedAt', 'taskCompletedAt', 'taskModelUsed']) assert.match(focus, new RegExp(`t\\("${field}"\\)`, 'u'))
   assert.doesNotMatch(focus, /t\("files"\)|filesHidden/u)
   assert.match(workflow, /workflow\.stages\.forEach/u)
   assert.match(workflow, /runtimeWorkflow\.events/u)
@@ -444,24 +444,18 @@ test('selected board task becomes the visual focus with a truthful live workflow
   assert.match(source, /\.dat-task-stage-track\{display:grid;grid-template-columns:minmax\(0,1fr\) 28px minmax\(0,1fr\) 28px minmax\(0,1fr\)/u)
   assert.match(source, /\.dat-task-workflow-runtime\{display:grid/u)
   assert.match(source, /\.dat-task-runtime-list\{[^}]*overflow:auto/u)
-  for (const copy of ['任务简介', '详细任务', '领取人', '完成进度', '责任人', '领取时间', '完成时间', '使用的模型', '实时执行记录', 'Task brief', 'Detailed task', 'Claimed by', 'Completion progress', 'Responsible lead', 'Live execution log']) assert.ok(source.includes(copy), `missing focused-detail copy: ${copy}`)
+  for (const copy of ['任务简介', '详细任务', '领取人', '责任人', '领取时间', '完成时间', '使用的模型', '实时执行记录', 'Host 里程碑', '成员 checkpoint（未验证）', 'Task brief', 'Detailed task', 'Claimed by', 'Responsible lead', 'Live execution log', 'Host milestones', 'Member checkpoint (unverified)']) assert.ok(source.includes(copy), `missing focused-detail copy: ${copy}`)
 })
 
-test('indeterminate task progress uses a fresh random seven-color pulse stream on every pass', async () => {
+test('runtime task workflow never invents indeterminate or numeric completion progress', async () => {
   const source = await clientSource()
   const workflow = componentSource(source, ['TaskWorkflow'])
+  const focus = componentSource(source, ['TaskDetailFocus'])
 
-  assert.match(source, /function randomTaskProgressPulse\(\)/u)
-  assert.match(source, /index < 7/u)
-  assert.match(source, /Math\.random\(\) \* 360/u)
-  assert.match(source, /--dat-pulse-c/u)
-  assert.match(source, /linear-gradient\(90deg,transparent 0%,var\(--dat-pulse-c1\)/u)
-  assert.match(source, /@keyframes dat-task-progress-flow/u)
-  assert.match(source, /@keyframes dat-task-progress-aura/u)
+  assert.doesNotMatch(`${workflow}\n${focus}`, /randomTaskProgressPulse|progressPercent|\.percent\b|aria-valuenow|role: "progressbar"|\+ "%"/u)
+  assert.match(source, /boardMilestones: "成员计划里程碑（未验证） \{completed\}\/\{total\}"/u)
+  assert.match(source, /boardFactLegend: "事实来源：任务状态、依赖、尝试次数、权限\/副作用结论与时间来自 Host 权威投影；成员 Todo 里程碑、checkpoint 和提交结果均明确标为未验证。"/u)
   assert.match(source, /prefers-reduced-motion:reduce/u)
-  assert.match(workflow, /useState\(randomTaskProgressPulse\)/u)
-  assert.match(workflow, /onAnimationIteration:[\s\S]{0,160}setPulseColors\(randomTaskProgressPulse\(\)\)/u)
-  assert.doesNotMatch(source, /\.dat-task-progress-fill\.is-indeterminate\{width:34%/u)
 })
 
 test('task columns queue without stretching the page before entering task focus', async () => {
@@ -478,12 +472,12 @@ test('task columns queue without stretching the page before entering task focus'
   assert.match(source, /\.dat-board-card-title\{[^}]*-webkit-line-clamp:3/u)
   assert.match(source, /\.dat-board-card-owner\{[^}]*text-overflow:ellipsis[^}]*white-space:nowrap/u)
 
-  assert.match(sort, /pendingQueue = columnId === "pending"/u)
+  assert.match(sort, /pendingQueue = columnId === "ready"/u)
   assert.match(sort, /"completedAt", "updatedAt", "createdAt"/u)
   assert.match(sort, /pendingQueue \? leftTime - rightTime : rightTime - leftTime/u)
   assert.match(sort, /localeCompare\(String\(taskId\(right\)\)\)/u)
   assert.ok(board.indexOf('sortBoardColumnTasks(') < board.indexOf('.slice(0, column.limit)'), 'stable queue order must be applied before any projection cap')
-  assert.equal((board.match(/limit: 200/gu) || []).length, 5)
+  assert.equal((board.match(/limit: 200/gu) || []).length, 4)
 
   const helperStart = source.indexOf('function taskBoardTime(task, fields)')
   const helperEnd = source.indexOf('function eventRelatesToTask(event, task)', helperStart)
@@ -492,7 +486,45 @@ test('task columns queue without stretching the page before entering task focus'
   assert.deepEqual(helpers.sortBoardColumnTasks([
     { id: 'older', status: 'completed', updatedAt: '2026-08-22T12:00:00Z' },
     { id: 'newer', status: 'completed', updatedAt: '2026-08-23T12:00:00Z' }
-  ], 'completed').map((task) => task.id), ['newer', 'older'])
+  ], 'done').map((task) => task.id), ['newer', 'older'])
+})
+
+test('runtime task board exposes four truthful columns and keeps cancellation in history without model percentages', async () => {
+  const source = await clientSource()
+  const card = componentSource(source, ['BoardTaskCard'])
+  const board = componentSource(source, ['TaskBoardWorkspace'])
+  assert.match(board, /\{ id: "ready", label: t\("boardPending"\)/u)
+  assert.match(board, /\{ id: "running", label: t\("boardProgress"\)/u)
+  assert.match(board, /\{ id: "attention", label: t\("boardBlocked"\)/u)
+  assert.match(board, /\{ id: "done", label: t\("boardCompleted"\)/u)
+  assert.match(board, /cancelledTasks[\s\S]*?h\("details", \{ className: "dat-board-history" \}/u)
+  assert.match(card, /boardAttempt/u)
+  assert.match(card, /boardMilestones/u)
+  assert.match(card, /boardCheckpoint/u)
+  assert.match(card, /lastActivity/u)
+  assert.doesNotMatch(`${card}\n${board}`, /progressPercent|\.percent\b|aria-valuenow|role: "progressbar"|\+ "%"/u)
+})
+
+test('runtime task board derives Attention from permission unknown and uncertain external effects', async () => {
+  const source = await clientSource()
+  const start = source.indexOf('    function taskBoardColumn(')
+  const end = source.indexOf('    function taskBoardNextKey(', start)
+  assert.ok(start >= 0 && end > start)
+  const helpers = Function(
+    'normalizeState',
+    'relationIds',
+    `${source.slice(start, end)}\nreturn { taskBoardColumn, taskBoardAttentionFacts };`
+  )(
+    value => String(value || '').toLowerCase(),
+    value => Array.isArray(value) ? value : []
+  )
+  const permissionUnknown = { state: 'pending', capabilities: [{ name: 'desktop-control', status: 'unknown', source: 'not provable' }] }
+  const uncertainEffect = { state: 'pending', externalEffects: [{ name: 'external-ui', policy: 'confirm_each', outcome: 'outcome_unknown' }] }
+  assert.equal(helpers.taskBoardColumn(permissionUnknown), 'attention')
+  assert.equal(helpers.taskBoardColumn(uncertainEffect), 'attention')
+  const t = key => key
+  assert.ok(helpers.taskBoardAttentionFacts(t, permissionUnknown).some(value => /permission/i.test(value)))
+  assert.ok(helpers.taskBoardAttentionFacts(t, uncertainEffect).some(value => /effect/i.test(value)))
 })
 
 test('Project Automation uses redacted state, explicit allowed actions, and refetch-only SSE', async () => {

@@ -248,6 +248,11 @@
       ['Blocked', '已阻塞'],
       ['Completed', '已完成'],
       ['Cancelled', '已取消'],
+      ['Ready', '就绪'],
+      ['Running', '执行中'],
+      ['Attention', '需关注'],
+      ['Done', '已完成'],
+      ['Cancelled history', '已取消历史'],
       ['No tasks in this column', '此列暂无任务'],
       ['Team execution flow', '团队执行流程'],
       ['This page explains how teams work today. It is view only and cannot edit the flow yet.', '此页说明团队当前如何工作；现阶段仅供查看。'],
@@ -2145,23 +2150,79 @@
     return value ? String(value) : '状态未知'
   }
 
+  const taskProjectionPermissionAttention = task => (Array.isArray(task?.capabilities) ? task.capabilities : []).some(capability => ['unknown', 'denied', 'unavailable'].includes(String(capability?.status || capability?.state || '').toLowerCase()))
+  const taskProjectionEffectAttention = task => (Array.isArray(task?.externalEffects) ? task.externalEffects : []).some(effect => ['confirm_each', 'confirmation_required'].includes(String(effect?.policy || '').toLowerCase()) || ['outcome_unknown', 'unknown'].includes(String(effect?.outcome || '').toLowerCase()))
+
+  const taskProjectionState = task => {
+    const status = String(task?.status || task?.state || 'pending').toLowerCase().replace(/[\s-]+/g, '_')
+    if (/^(?:completed|done)$/.test(status)) return 'done'
+    if (/^(?:cancelled|canceled)$/.test(status)) return 'cancelled'
+    if (status === 'blocked' || status === 'failed' || (Array.isArray(task?.blockedBy) && task.blockedBy.length) || (Array.isArray(task?.failedBy) && task.failedBy.length) || (Array.isArray(task?.conflictsWith) && task.conflictsWith.length) || task?.permissionRequired === true || task?.approvalRequired === true || task?.confirmationRequired === true || task?.requiresConfirmation === true || task?.sideEffectApprovalRequired === true || task?.stale === true || taskProjectionPermissionAttention(task) || taskProjectionEffectAttention(task)) return 'attention'
+    if (/^(?:in_progress|running|active)$/.test(status)) return 'running'
+    return 'ready'
+  }
+
+  const taskProjectionFacts = task => {
+    const facts = []
+    const blocked = Array.isArray(task?.blockedBy) ? task.blockedBy.length : 0
+    const failed = Array.isArray(task?.failedBy) ? task.failedBy.length : 0
+    const conflicts = Array.isArray(task?.conflictsWith) ? task.conflictsWith.length : 0
+    if (blocked) facts.push(`${blocked} 个依赖未完成`)
+    if (failed) facts.push(`${failed} 个前置任务失败`)
+    if (conflicts) facts.push(`${conflicts} 个资源冲突`)
+    if (task?.permissionRequired === true || task?.permissionDenied === true || taskProjectionPermissionAttention(task)) facts.push('权限需要处理')
+    if (task?.approvalRequired === true || task?.confirmationRequired === true || task?.requiresConfirmation === true) facts.push('等待人工确认')
+    if (task?.sideEffectApprovalRequired === true || taskProjectionEffectAttention(task)) facts.push('副作用边界需要确认')
+    if (task?.stale === true) facts.push('状态已滞留')
+    const reason = typeof task?.blockReason === 'string' ? task.blockReason.trim() : typeof task?.blockedReason === 'string' ? task.blockedReason.trim() : ''
+    if (reason && !facts.includes(reason)) facts.push(reason)
+    return facts
+  }
+
+  const taskProjectionAttempt = task => {
+    const values = [task?.attempt, task?.attemptNumber, task?.retryCount]
+    for (let index = 0; index < values.length; index += 1) {
+      if (values[index] === undefined || values[index] === null || values[index] === '') continue
+      const value = Number(values[index])
+      if (Number.isFinite(value) && value >= 0) return index === 2 ? value + 1 : value
+    }
+    return null
+  }
+
+  const taskProjectionMilestones = task => {
+    const progress = task?.progress && typeof task.progress === 'object' ? task.progress : task?.milestones && typeof task.milestones === 'object' ? task.milestones : null
+    const completed = Number(progress?.completed ?? progress?.done), total = Number(progress?.total)
+    return Number.isFinite(completed) && completed >= 0 && Number.isFinite(total) && total > 0 ? `${Math.min(completed, total)}/${total} 个成员计划里程碑（未验证）` : ''
+  }
+
+  const taskProjectionTime = task => task?.updatedAt || task?.lastActivityAt || task?.completedAt || task?.claimedAt || task?.createdAt || ''
+
   const mobileTasksState = { request: 0, sessionId: '', loading: false, loadedAt: 0, team: null, project: null, error: '' }
 
   const appendTaskHubRow = (list, task, kind, onOpen) => {
     const row = document.createElement(onOpen ? 'button' : 'article')
     if (onOpen) row.type = 'button'
     row.dataset.harnessMobileTaskHubRow = kind
+    row.dataset.harnessMobileTaskState = taskProjectionState(task)
     const id = task?.id || task?.taskId || task?.taskRef || ''
     if (id) row.dataset.harnessMobileTaskId = String(id)
     const title = document.createElement('strong')
     title.textContent = String(task?.title || task?.summary || '未命名任务')
     const detail = document.createElement('span')
-    const blocked = Array.isArray(task?.blockedBy) ? task.blockedBy.length : 0
-    detail.textContent = `${kind === 'agent-team' ? '团队任务' : '项目任务'} · ${taskStatusLabel(task?.status || task?.state)}${blocked ? ` · ${blocked} 个依赖未完成` : ''}`
+    const facts = taskProjectionFacts(task)
+    detail.textContent = `${kind === 'agent-team' ? '团队任务' : '项目任务'} · ${taskStatusLabel(task?.status || task?.state)}${facts.length ? ` · ${facts.slice(0, 2).join('；')}` : ''}`
     const meta = document.createElement('small')
-    meta.textContent = id ? `任务 ${shortStableRef(id)}` : '权威任务标识未提供'
+    const attempt = taskProjectionAttempt(task), milestones = taskProjectionMilestones(task), at = taskProjectionTime(task)
+    const values = [id ? `任务 ${shortStableRef(id)}` : '权威任务标识未提供']
+    if (attempt !== null) values.push(`尝试 ${attempt}`)
+    if (milestones) values.push(milestones)
+    if (at && Number.isFinite(Date.parse(at))) values.push(`最后活动 ${new Date(at).toLocaleString()}`)
+    meta.textContent = values.join(' · ')
     row.append(title, detail, meta)
-    if (onOpen) row.addEventListener('click', onOpen)
+    if (onOpen) {
+      row.setAttribute('aria-label', `${title.textContent}，${detail.textContent}，${meta.textContent}`)
+      row.addEventListener('click', onOpen)
+    }
     list.appendChild(row)
   }
 
@@ -2185,8 +2246,32 @@
     const selectedTeam = teamState.team || null
     const teamTasks = Array.isArray(selectedTeam?.tasks) ? selectedTeam.tasks : []
     const projectTasks = Array.isArray(mobileTasksState.project?.tasks) ? mobileTasksState.project.tasks : []
-    const activeTeamTasks = teamTasks.filter(task => !/^(?:completed|done|cancelled|canceled)$/i.test(String(task?.status || task?.state || '')))
-    const activeProjectTasks = projectTasks.filter(task => !/^(?:completed|done|cancelled|canceled)$/i.test(String(task?.status || task?.state || '')))
+    const allTasks = [...teamTasks, ...projectTasks]
+    const activeTeamTasks = teamTasks.filter(task => !['done', 'cancelled'].includes(taskProjectionState(task)))
+    const activeProjectTasks = projectTasks.filter(task => !['done', 'cancelled'].includes(taskProjectionState(task)))
+    const activeTasks = [...activeTeamTasks, ...activeProjectTasks]
+
+    const triage = document.createElement('section')
+    triage.dataset.harnessMobileTaskTriage = 'true'
+    const confirmationTasks = activeTasks.filter(task => task?.approvalRequired === true || task?.confirmationRequired === true || task?.requiresConfirmation === true || task?.sideEffectApprovalRequired === true || taskProjectionPermissionAttention(task) || taskProjectionEffectAttention(task))
+    const attentionTasks = activeTasks.filter(task => taskProjectionState(task) === 'attention')
+    const nextTask = attentionTasks[0] || activeTasks.find(task => taskProjectionState(task) === 'running') || activeTasks.find(task => taskProjectionState(task) === 'ready') || null
+    const memberNextStep = typeof nextTask?.nextStep?.text === 'string' ? nextTask.nextStep.text.trim().slice(0, 160) : ''
+    const triageRows = [
+      ['需要确认什么', confirmationTasks.length ? `${confirmationTasks.length} 项等待人工确认；打开负责人会话核对权限或副作用边界。` : 'Host 投影中没有待人工确认项。'],
+      ['卡在哪里', attentionTasks.length ? `${attentionTasks.length} 项需要关注：${taskProjectionFacts(attentionTasks[0]).slice(0, 2).join('；') || taskStatusLabel(attentionTasks[0]?.status || attentionTasks[0]?.state)}。` : 'Host 投影中没有阻塞、失败前置、权限或冲突事实。'],
+      ['下一步做什么', nextTask ? (taskProjectionState(nextTask) === 'attention' ? `先处理“${String(nextTask.title || nextTask.summary || '未命名任务')}”的上方事实。` : taskProjectionState(nextTask) === 'running' ? (memberNextStep ? `成员建议的下一步（未验证）：${memberNextStep}` : `等待“${String(nextTask.title || nextTask.summary || '未命名任务')}”提交可核对 checkpoint。`) : `等待成员认领“${String(nextTask.title || nextTask.summary || '未命名任务')}”。`) : '当前没有进行中或待处理任务；可查看已完成与取消历史。']
+    ]
+    triageRows.forEach(([label, copy]) => {
+      const card = document.createElement('article')
+      const heading = document.createElement('strong')
+      const body = document.createElement('span')
+      heading.textContent = label
+      body.textContent = copy
+      card.append(heading, body)
+      triage.appendChild(card)
+    })
+    hub.appendChild(triage)
 
     const types = document.createElement('section')
     types.dataset.harnessMobileTaskTypes = 'true'
@@ -2204,7 +2289,6 @@
     })
     hub.appendChild(types)
 
-    const allTasks = [...teamTasks, ...projectTasks]
     const metrics = document.createElement('section')
     metrics.dataset.harnessMobileTaskMetrics = 'true'
     const metricCopy = [
