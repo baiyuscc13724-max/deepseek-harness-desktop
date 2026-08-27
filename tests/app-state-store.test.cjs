@@ -31,6 +31,38 @@ test('AppStateStore persists only validated integrated-terminal shell preference
   assert.deepEqual(normalizeState({ schemaVersion: 9, terminal: { shellId: 'git-bash', command: 'malicious.exe' } }).terminal, { shellId: 'git-bash' })
 })
 
+test('AppStateStore persists bounded session-menu state across renderer origins and restarts', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-session-menu-state-'))
+  const file = path.join(dir, 'app-state.json')
+  const firstOrigin = new AppStateStore(file)
+  assert.deepEqual(firstOrigin.get().sessionMenu, { initialized: false, pinned: [], unread: [] })
+
+  firstOrigin.syncSessionMenuState({
+    pinned: ['legacy-pin', 'legacy-pin', '', ' padded '],
+    unread: ['legacy-unread']
+  })
+  firstOrigin.updateSessionMenuFlag({ sessionId: 'new-pin', flag: 'pinned', enabled: true })
+  firstOrigin.updateSessionMenuFlag({ sessionId: 'legacy-unread', flag: 'unread', enabled: false })
+
+  const secondOriginAfterRestart = new AppStateStore(file)
+  assert.deepEqual(secondOriginAfterRestart.get().sessionMenu, {
+    initialized: true,
+    pinned: ['new-pin', 'legacy-pin'],
+    unread: []
+  })
+  secondOriginAfterRestart.syncSessionMenuState({ pinned: ['stale-origin-pin'], unread: ['stale-origin-unread'] })
+  assert.deepEqual(secondOriginAfterRestart.get().sessionMenu.pinned, ['new-pin', 'legacy-pin'], 'a later origin cannot overwrite initialized desktop state')
+  assert.deepEqual(secondOriginAfterRestart.get().sessionMenu.unread, [])
+
+  assert.throws(() => secondOriginAfterRestart.updateSessionMenuFlag({ sessionId: '../bad ', flag: 'pinned', enabled: true }), /会话 ID 无效/)
+  assert.throws(() => secondOriginAfterRestart.updateSessionMenuFlag({ sessionId: 'valid', flag: 'unknown', enabled: true }), /状态标识无效/)
+  assert.throws(() => secondOriginAfterRestart.updateSessionMenuFlag({ sessionId: 'valid', flag: 'pinned', enabled: 1 }), /状态值无效/)
+
+  const bounded = normalizeState({ sessionMenu: { initialized: true, pinned: Array.from({ length: 1005 }, (_, index) => `pin-${index}`), unread: ['ok', 'ok', ''] } })
+  assert.equal(bounded.sessionMenu.pinned.length, 1000)
+  assert.deepEqual(bounded.sessionMenu.unread, ['ok'])
+})
+
 test('AppStateStore records only monotonic signed PR preview candidates', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-preview-state-'))
   const file = path.join(dir, 'app-state.json')
