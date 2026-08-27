@@ -5,7 +5,7 @@ const path = require('node:path')
 const { mkdtemp, readFile, rm } = require('node:fs/promises')
 const { ensureDesktopComputerUsePlugin } = require('../electron/bridge/desktop-computer-use-plugin-service.cjs')
 
-test('Computer Use is built in with pushed session/permanent unlimited authorization', async () => {
+test('Computer Use is built in with pushed session/permanent unlimited authorization and permanent auto-restore', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'computer-use-'))
   try {
     const repositoryRoot = path.resolve(__dirname, '..')
@@ -45,6 +45,8 @@ test('Computer Use is built in with pushed session/permanent unlimited authoriza
     assert.match(plugin, /installSettingsSection/u)
     assert.match(plugin, /Settings > Plugins > Plugin configuration/u)
     assert.match(plugin, /cannot grant itself authorization/u)
+    assert.match(plugin, /automatically restores the shared control session when the app launches/u)
+    assert.doesNotMatch(plugin, /never starts control merely because the app launched/u)
     assert.doesNotMatch(plugin, /仅在用户明确开启后截取或操作 Harness Desktop 自身窗口/u)
 
     assert.equal(manifest.exports['./client'], './lib/client.js')
@@ -62,7 +64,15 @@ test('Computer Use is built in with pushed session/permanent unlimited authoriza
     assert.match(client, /computer-use-status/u)
     assert.match(client, /computer-use-toggle/u)
     assert.match(client, /computer-use-revoke-permanent/u)
-    assert.doesNotMatch(renderer, /computer-use-(?:refresh|status|toggle|revoke-permanent)/u)
+    for (const action of ['computer-use-refresh', 'computer-use-status', 'computer-use-toggle', 'computer-use-revoke-permanent']) {
+      assert.match(renderer, new RegExp(action, 'u'), `desktop renderer missing ${action} bridge`)
+    }
+    assert.match(renderer, /__HARNESS_DESKTOP_COMPUTER_USE_STATE__/u)
+    assert.match(renderer, /harness-desktop:computer-use-state/u)
+    assert.match(renderer, /api\.setComputerUseEnabled\(enabled\)/u)
+    assert.match(renderer, /api\.revokeComputerUsePermanentGrant\(\)/u)
+    assert.match(renderer, /computerUsePluginMutationPending/u)
+    assert.match(renderer, /if \(computerUsePluginMutationPending\) return/u)
     assert.doesNotMatch(renderer, /pluginMutation|setComputerUseAppPolicy/u)
 
     assert.match(main, /new ComputerUseAppPolicy/u)
@@ -93,12 +103,17 @@ test('Computer Use is built in with pushed session/permanent unlimited authoriza
     assert.match(main, /computerUse:setDefaultAccess/u)
     assert.match(main, /computerUse:setAppOverride/u)
     assert.match(main, /async function authorizeComputerUse[\s\S]{0,900}computerUseUnlimited = true[\s\S]{0,400}setComputerUseEnabled\(true\)/u)
-    const restoreGrant = main.slice(main.indexOf('async function restoreComputerUseGrant()'), main.indexOf('async function setComputerUseEnabled(enabled)'))
-    assert.match(restoreGrant, /computerUseAuthorizedScope = 'forever'[\s\S]*setComputerUseEnabled\(false\)/u)
-    assert.doesNotMatch(restoreGrant, /setComputerUseEnabled\(true\)/u)
+    const restoreGrant = main.slice(main.indexOf('async function restoreComputerUseGrant()'), main.indexOf('function queueComputerUseSystemTransition(action)'))
+    assert.match(restoreGrant, /computerUseAuthorizedScope = 'forever'[\s\S]*setComputerUseEnabled\(true\)/u)
+    assert.doesNotMatch(restoreGrant, /setComputerUseEnabled\(false\)/u)
+    assert.match(main, /pauseComputerUseForSystemInterruption/u)
+    assert.match(main, /resumeComputerUseAfterSystemInterruption/u)
+    assert.match(main, /powerMonitor\.on\('unlock-screen'[\s\S]{0,350}resumeComputerUseAfterSystemInterruption/u)
+    assert.match(main, /powerMonitor\.on\('resume'[\s\S]{0,350}resumeComputerUseAfterSystemInterruption/u)
     assert.match(client, /一键开启窗口读取、点击、输入和滚动/u)
     assert.match(client, /按 Esc 可随时停止/u)
-    assert.match(client, /软件启动时不会自动控制/u)
+    assert.match(client, /软件启动时自动恢复/u)
+    assert.match(client, /Always on \(restored after restart\)/u)
     assert.doesNotMatch(main, /desktopCapturer/u)
 
     for (const channel of ['computerUse:requestAuthorization', 'computerUse:authorize', 'computerUse:decline', 'computerUse:revokePermanent', 'computerUse:policy', 'computerUse:setDefaultAccess', 'computerUse:setAppOverride', 'computerUse:revokeAppOverride']) {

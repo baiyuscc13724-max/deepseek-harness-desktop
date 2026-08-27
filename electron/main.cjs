@@ -153,11 +153,13 @@ const browserOperations = new BrowserOperationCoordinator()
 let browserSidebarVisible = false
 let browserContentVisible = true
 let workspacePickerPromise = null
-// 当前控制会话必须由用户显式授权；授权卡片（本次授权/永久授权）由模型请求时在对话框上方弹出。
-// 永久授权持久化到 grant.json；重启只恢复授权，不自动开启控制，下一次显式调用时再恢复会话。
+// 首次控制必须由用户显式授权；授权卡片（本次授权/永久授权）由模型请求时在对话框上方弹出。
+// 永久授权持久化到 grant.json；重启后自动恢复共享控制，系统锁定/挂起期间仍会安全暂停。
 let computerUseEnabled = false
 let computerUseAuthorizedScope = 'none' // 'none' | 'session' | 'forever'
 let computerUseUnlimited = false
+let computerUseResumeAfterSystemInterruption = false
+let computerUseSystemTransition = Promise.resolve()
 let computerUseAuthorizationRequest = null // { id, requestedAt, requestedBy }
 let computerUseSessionGeneration = 0
 let computerUseScreenshotStore = null
@@ -2127,6 +2129,7 @@ async function revokeComputerUsePermanentGrant() {
   computerUseAuthorizedScope = 'none'
   computerUseUnlimited = false
   computerUseAuthorizationRequest = null
+  computerUseResumeAfterSystemInterruption = false
   computerUseConfirmations.clear()
   windowsComputerUse?.setUnlimited?.(false)
   const wasEnabled = computerUseEnabled
@@ -2142,8 +2145,26 @@ async function restoreComputerUseGrant() {
   computerUseUnlimited = true
   computerUseAuthorizationRequest = null
   ensureWindowsComputerUse().setUnlimited?.(true)
-  await setComputerUseEnabled(false)
+  await setComputerUseEnabled(true)
   return grant
+}
+
+function queueComputerUseSystemTransition(action) {
+  computerUseSystemTransition = computerUseSystemTransition.then(action, action).catch(error => {
+    console.warn(`Unable to synchronize Computer Use with the system lifecycle: ${error.message}`)
+  })
+  return computerUseSystemTransition
+}
+
+function pauseComputerUseForSystemInterruption() {
+  computerUseResumeAfterSystemInterruption ||= computerUseEnabled && computerUseAuthorizedScope === 'forever'
+  return setComputerUseEnabled(false)
+}
+
+async function resumeComputerUseAfterSystemInterruption() {
+  if (!computerUseResumeAfterSystemInterruption || computerUseAuthorizedScope !== 'forever') return computerUseState()
+  computerUseResumeAfterSystemInterruption = false
+  return setComputerUseEnabled(true)
 }
 
 async function setComputerUseEnabled(enabled) {
@@ -4987,24 +5008,26 @@ app.whenReady().then(async () => {
     wallpaperScreenLocked = true
     syncWallpaperLifecycle('screen-locked')
     computerUseScreenLocked = true
-    setComputerUseEnabled(false).catch(() => {})
+    queueComputerUseSystemTransition(() => pauseComputerUseForSystemInterruption())
   })
   powerMonitor.on('unlock-screen', () => {
     computerUseScreenLocked = false
     wallpaperScreenLocked = false
     syncWallpaperLifecycle('screen-unlocked')
+    queueComputerUseSystemTransition(() => resumeComputerUseAfterSystemInterruption())
   })
   powerMonitor.on('suspend', () => {
     wallpaperSystemSuspended = true
     syncWallpaperLifecycle('system-suspend')
     endActiveWindowDrag()
     computerUseScreenLocked = true
-    setComputerUseEnabled(false).catch(() => {})
+    queueComputerUseSystemTransition(() => pauseComputerUseForSystemInterruption())
   })
   powerMonitor.on('resume', () => {
     computerUseScreenLocked = false
     wallpaperSystemSuspended = false
     syncWallpaperLifecycle('system-resumed')
+    queueComputerUseSystemTransition(() => resumeComputerUseAfterSystemInterruption())
   })
   screen.on('display-metrics-changed', () => refitWallpaperLifecycle('display-metrics-changed'))
   screen.on('display-added', () => refitWallpaperLifecycle('display-added'))
