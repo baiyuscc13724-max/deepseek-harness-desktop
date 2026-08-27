@@ -1,41 +1,41 @@
 {
   "schemaVersion": 1,
-  "releaseVersion": "1.0.48",
+  "releaseVersion": "1.0.49",
   "channel": "stable",
-  "publishedAt": "2026-08-26T17:14:41.000Z",
+  "publishedAt": "2026-08-27T08:12:42.000Z",
   "keyId": "harness-components-02643f81164c594a",
   "bootstrap": {
-    "minVersion": "1.0.48"
+    "minVersion": "1.0.49"
   },
   "components": [
     {
       "id": "desktop-shell",
-      "version": "1.0.48",
+      "version": "1.0.49",
       "kind": "zip",
       "target": "shell",
       "platform": "win32",
       "arch": "x64",
-      "size": 37750607,
-      "unpackedSize": 42886141,
-      "sha256": "c4ce4c0270236d398981746cdd2f7fd939a2dfbeb5954b6ffe556d48c028386b",
+      "size": 37752132,
+      "unpackedSize": 42892559,
+      "sha256": "0f02c02129e8140311e0c5003a2bc6428f9132fcbe7d71da84d95173202ed17b",
       "urls": [
-        "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.48/desktop-shell-1.0.48-win32-x64.zip",
-        "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.48/desktop-shell-1.0.48-win32-x64.zip"
+        "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.49/desktop-shell-1.0.49-win32-x64.zip",
+        "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.49/desktop-shell-1.0.49-win32-x64.zip"
       ],
       "required": true,
       "restart": true,
-      "signature": "7M5CXJ1XmrtaNQCDhjVa3DAVCTNtYeNTHr4TQYvmdr1C6xMrMy3ie7vb8wJiHZz8iu+fgodcCzILtFu+kSfVAg=="
+      "signature": "jyoqCp/ftw/GnEcCDgov06nwd8UnFQq6ISAXtZmIY5YOZez6OXugyTcvPZSrK5+GzA0E6Xna2VEXXIPDA9ymCw=="
     }
   ],
   "fallback": {
-    "version": "1.0.48",
-    "size": 177837952,
-    "sha256": "52c913305d140684e8c983457e98c711cfe2cc82b8799b3985ff700fdd82b3a7",
+    "version": "1.0.49",
+    "size": 177835964,
+    "sha256": "66bda34f6c756b8f23e7c0cf5b64ed4815d6ae3531c50da8a14d4d27e28db88b",
     "urls": [
-      "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.48/Harness-Desktop-1.0.48-win-x64.exe",
-      "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.48/Harness-Desktop-1.0.48-win-x64.exe"
+      "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.49/Harness-Desktop-1.0.49-win-x64.exe",
+      "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.49/Harness-Desktop-1.0.49-win-x64.exe"
     ]
   },
-  "notes": "Harness Desktop 1.0.48 signed production shell baseline for win32-x64.",
-  "signature": "uiZ5J8Yf/twd8OV0q0pkqoE1fWut1C/E+/5F2pS8s2IWNgkMdB3uqePSgBauMgX4BbSiIft32TAM8JJpTo+LBQ=="
+  "notes": "Harness Desktop 1.0.49 signed production shell baseline for win32-x64.",
+  "signature": "dNlcvr0MDLFkJEgIfraKqOf0owLIKYfg0Xkppl5SRIIe89t16aApoMu3C6NObJdFjByEktvm1vmmj7K2qlWQCQ=="
 }

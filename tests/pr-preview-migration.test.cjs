@@ -102,10 +102,12 @@ test('preview queue adapter uses synchronous AppStateStore reads and persists th
   assert.match(adapter, /const updates = ensureStateStore\(\)\.get\(\)\.updates \|\| \{\}/)
   assert.match(adapter, /sequence: updates\.lastPreviewSequence \|\| 0/)
   assert.match(adapter, /headSha: updates\.lastPreviewHeadSha \|\| ''/)
+  assert.match(adapter, /installedHeads: updates\.installedPreviewHeads \|\| \[\]/)
   assert.match(adapter, /candidates: updates\.previewCandidates \|\| \[\]/)
   assert.match(adapter, /async save\(next\)[\s\S]*savePreviewUpdateState\(next\)/)
 
   assert.match(store, /const MAX_PREVIEW_CANDIDATES = 128/)
+  assert.match(store, /const MAX_INSTALLED_PREVIEW_HEADS = 128/)
   assert.match(store, /savePreviewUpdateState\(value = \{\}\)/)
   assert.match(store, /markPreviewCandidate\(sequence, headSha\)/)
   assert.match(store, /sequence < currentSequence\) throw new Error\('拒绝回退到旧的 PR 预览更新序号。'\)/)

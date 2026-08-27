@@ -21,18 +21,18 @@
 
 ## 下载
 
-目标稳定版：**v1.0.48** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.48)
+目标稳定版：**v1.0.49** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.49)
 
-> 已发布的 `v1.0.47`、其精确 18 项资产、组件和签名 Android APK 全部保持不可变；更早的 `v1.0.46`、`android-v1.0.46.1` 与候选 Tag 也不会移动、重建或复用。本次完整功能使用新的统一 `v1.0.48`，并重新通过锁定 SHA 的全平台构建、Windows 安装升级、Android 签名身份、P2P/中继安全和 PR Preview 更新/回滚门禁。正式发布完成前，请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
+> 已发布的 `v1.0.48`、其精确 18 项资产、组件和签名 Android APK 全部保持不可变；更早版本与候选 Tag 也不会移动、重建或复用。本次修复使用新的统一 `v1.0.49`，完整包含 P2P/WSS 可用性、Computer Use 指示与路由、Agent Teams 成果可见性改进，并重新通过锁定 SHA 的全平台构建、Windows 安装升级、Android 签名身份和更新/回滚门禁。正式发布完成前，请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.48/Harness-Desktop-1.0.48-win-x64.exe) |
-| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.48/Harness-Desktop-1.0.48-portable-x64.exe) |
-| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.48/Harness-Desktop-1.0.48-mac-arm64.dmg) |
-| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.48/Harness-Desktop-1.0.48-mac-x64.dmg) |
-| Android 手机端 1.0.48 | 与桌面端扫码配对、P2P/中继同步会话、发送照片并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.48/Harness-Mobile-1.0.48-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.48/Harness-Mobile-1.0.48-android-universal.apk.sha256) |
-| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.48/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.49/Harness-Desktop-1.0.49-win-x64.exe) |
+| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.49/Harness-Desktop-1.0.49-portable-x64.exe) |
+| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.49/Harness-Desktop-1.0.49-mac-arm64.dmg) |
+| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.49/Harness-Desktop-1.0.49-mac-x64.dmg) |
+| Android 手机端 1.0.49 | 与桌面端扫码配对、P2P/中继同步会话、发送照片并授权固定手机操作 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.49/Harness-Mobile-1.0.49-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.49/Harness-Mobile-1.0.49-android-universal.apk.sha256) |
+| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.49/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 
@@ -54,7 +54,7 @@ scoop install harness-desktop/harness-desktop
 | 外观皮肤 | 从顶部快捷入口切换桌面配色和背景；手机端拥有独立皮肤设置与不透明核心表面，不会读取或套用电脑壁纸文件 |
 | DSH 插件与 Skills | 在应用内发现、安装和更新；随包受管 Skills 支持 Codex 风格 `$` 触发，`@` 继续用于文件引用；英文简介自动生成中文摘要并保留原文 |
 | 主模型与子代理 | 子代理可跟随主模型或单独选模型；目录区分运行中、可继续与只读历史，结束任务不会删除完整记录 |
-| 协作团队（实验） | 启用后自动判断：简单任务由主模型 solo；只有一个独立辅助时使用普通 `subagent`；至少两个持续独立工作流且需要依赖、交接或文件边界时才建团队。任务支持显式取消、失败前置投影和一致重开；优雅退休/关闭拒绝遗留工作，强制关闭会先记录取消审计。成员禁止再创建隐藏子层；详见[代理团队用户指南](docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md) |
+| 协作团队（实验） | 启用后自动判断：简单任务由主模型 solo；只有一个独立辅助时使用普通 `subagent`；至少两个持续独立工作流且需要依赖、交接或文件边界时才建团队。任务支持显式取消、失败前置投影和一致重开，成员完成后的有界文本成果直接显示在任务卡片与详情；优雅退休/关闭拒绝遗留工作，强制关闭会先记录取消审计。成员禁止再创建隐藏子层；详见[代理团队用户指南](docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md) |
 | 桌面更新 | Ed25519 签名发布清单、国内源优先、全球源自动回退、逐跳 HTTPS 与 SHA-256 校验，并在更新前展示改动内容 |
 | 用户配置保护 | 主题、插件和模型路由保存在用户目录，更新官方 Harness 时不会被覆盖 |
 | MCP 连接 | 设置页管理官方 MCP 客户端的 stdio 与 Streamable HTTP 连接；秘密只保存凭据引用，启用本地进程前明确确认 |
@@ -65,7 +65,7 @@ scoop install harness-desktop/harness-desktop
 | 自动本地记忆与缓存 | 显式开启后低干扰使用，只保存稳定偏好和项目约束；敏感信息硬过滤，托盘“数据与隐私”保留查看、关闭、预览和全部删除，不宣称模型自训练 |
 | Android / iOS 移动工作台 | 跨 Windows/macOS 扫码配对；局域网优先，异地先协商原生 WebRTC P2P DataChannel 直连，失败时保持端到端加密 WSS/443 后备；秘密由操作系统加密存储，iOS 不提供跨 App 控制 |
 | 个人 WSS 中转 | 在“手机与远程同步”中检测并保存自己的无凭据 `wss://` 地址；服务仅承担 P2P 信令与加密帧盲转发，强制容量、速率和背压上限，仓库附 Caddy/systemd 部署示例 |
-| Computer Use | 在“设置 → 插件 → 插件配置”查看状态并请求、停止或撤销；本次/永久授权只能在可信宿主卡选择，永久授权会在应用启动时自动恢复共享控制，锁屏/挂起期间仍安全暂停 |
+| Computer Use | 在“设置 → 插件 → 插件配置”授权后直接捕获并控制整个 Windows 虚拟桌面（含多屏），不再选择单个窗口，也不设置内容级敏感操作过滤；永久授权会在启动时自动恢复，锁屏/挂起期间暂停，Esc/停止/撤销可立即收回控制 |
 | 签名组件增量更新 | 生产 Ed25519 验签、CNB 优先/GitHub 后备、按组件暂存、健康检查和自动回滚；完整安装包始终作为后备 |
 
 ## 三步开始

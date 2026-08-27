@@ -107,8 +107,6 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   authorizeComputerUse: scope => ipcRenderer.invoke('computerUse:authorize', String(scope || '')),
   declineComputerUseAuthorization: () => ipcRenderer.invoke('computerUse:decline'),
   revokeComputerUsePermanentGrant: () => ipcRenderer.invoke('computerUse:revokePermanent'),
-  confirmComputerUseAction: id => ipcRenderer.invoke('computerUse:confirm', id),
-  rejectComputerUseAction: id => ipcRenderer.invoke('computerUse:reject', id),
   getComputerUsePolicy: () => ipcRenderer.invoke('computerUse:policy'),
   setComputerUseDefaultAccess: access => ipcRenderer.invoke('computerUse:setDefaultAccess', String(access || '')),
   setComputerUseAppOverride: (id, decision) => ipcRenderer.invoke('computerUse:setAppOverride', String(id || ''), String(decision || '')),

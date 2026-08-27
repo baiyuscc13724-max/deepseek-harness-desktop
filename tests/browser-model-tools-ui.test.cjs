@@ -20,7 +20,7 @@ test('browser model tools remain user-authorized, background-capable, structured
   assert.match(main, /dataPlane: \{ primary: 'cdp-dom', structuredRefs: true, loopbackApi: true, screenshotRequired: false/u)
   assert.match(main, /transport: 'authenticated-loopback-json'/u)
   assert.match(main, /allowBlankNavigation = action === 'navigate' \|\| action === 'tabOpen'/u)
-  assert.match(main, /allowBlankNavigation && url === 'about:blank'/u)
+  assert.match(main, /allowBlankNavigation && isModelBootstrapSourceUrl\(url\)/u)
   assert.match(main, /browserSecurityPolicy\.modelBootstrapNavigate/u)
   assert.match(main, /trustedPrivateOrigins: browserModelBootstrapTrustedPrivateOrigins\(\)/u)
   assert.match(main, /if \(action === 'observe'\) return observeBrowserForModel\(context\.signal\)/u)

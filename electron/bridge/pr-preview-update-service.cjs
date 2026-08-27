@@ -19,6 +19,7 @@ const {
 const DEFAULT_MAX_REDIRECTS = 2
 const DEFAULT_MAX_JSON_BYTES = 1024 * 1024
 const MAX_PERSISTED_CANDIDATES = 128
+const MAX_INSTALLED_PREVIEW_HEADS = 128
 const CANDIDATE_ID_PATTERN = /^pr-[a-f0-9]{64}$/
 
 function responseHeader(response, name) {
@@ -104,24 +105,44 @@ function normalizeStoredCandidate(value, { verifyId = true } = {}) {
   return { id, provider, indexProvider, index: value.index, previewManifest: value.previewManifest }
 }
 
+function normalizeInstalledPreviewHeads(value) {
+  const output = []
+  const seen = new Set()
+  for (const input of Array.isArray(value) ? value.slice(-MAX_INSTALLED_PREVIEW_HEADS * 2) : []) {
+    let headSha = ''
+    try { headSha = normalizeHeadSha(input) } catch { continue }
+    if (seen.has(headSha)) continue
+    seen.add(headSha)
+    output.push(headSha)
+    if (output.length > MAX_INSTALLED_PREVIEW_HEADS) output.shift()
+  }
+  return output
+}
+
 function normalizePreviewState(value) {
-  if (value === null || value === undefined) return { sequence: 0, headSha: '', candidates: [] }
+  if (value === null || value === undefined) return { sequence: 0, headSha: '', installedHeads: [], candidates: [] }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('PR 预览防重放状态无效。')
   const sequence = Number(value.sequence || 0)
   const accepted = sequence === 0 && !value.headSha
     ? { sequence: 0, headSha: '' }
     : { sequence: normalizeSequence(sequence), headSha: normalizeHeadSha(value.headSha) }
+  const installedHeads = normalizeInstalledPreviewHeads([
+    ...(Array.isArray(value.installedHeads) ? value.installedHeads : []),
+    ...(accepted.sequence > 0 ? [accepted.headSha] : [])
+  ])
+  const installed = new Set(installedHeads)
   const candidates = []
   const seen = new Set()
   for (const input of Array.isArray(value.candidates) ? value.candidates.slice(-MAX_PERSISTED_CANDIDATES * 2) : []) {
     const candidate = normalizeStoredCandidate(input, { verifyId: false })
     const candidateSequence = Number(candidate.index?.sequence || 0)
-    if (!Number.isSafeInteger(candidateSequence) || candidateSequence <= accepted.sequence || seen.has(candidate.id)) continue
+    const candidateHeadSha = String(candidate.index?.headSha || '').toLowerCase()
+    if (!Number.isSafeInteger(candidateSequence) || candidateSequence <= accepted.sequence || installed.has(candidateHeadSha) || seen.has(candidate.id)) continue
     seen.add(candidate.id)
     candidates.push(candidate)
     if (candidates.length > MAX_PERSISTED_CANDIDATES) candidates.shift()
   }
-  return { ...accepted, candidates }
+  return { ...accepted, installedHeads, candidates }
 }
 
 function createMemoryPreviewState(initial = null) {
@@ -235,6 +256,8 @@ class PrPreviewUpdateService {
     }
     const failures = []
     const unchanged = []
+    const alreadyInstalled = []
+    const installedHeads = new Set(previous.installedHeads)
     let indexResult = null
     for (const url of this.indexUrls) {
       try {
@@ -243,6 +266,10 @@ class PrPreviewUpdateService {
         const disposition = replayDisposition(index, highWater)
         if (disposition === 'older') throw new Error('PR 预览 sequence 回退，拒绝重放。')
         if (disposition === 'conflict') throw new Error('PR 预览相同 sequence 对应不同 head SHA，拒绝重放。')
+        if (installedHeads.has(index.headSha)) {
+          alreadyInstalled.push({ ...fetched, value: index })
+          continue
+        }
         if (disposition === 'same') { unchanged.push({ ...fetched, value: index }); continue }
         indexResult = { ...fetched, value: index }
         break
@@ -252,7 +279,26 @@ class PrPreviewUpdateService {
       if (unchanged.length) {
         const accepted = unchanged.at(-1)
         const queued = previous.candidates.find(value => value.index?.sequence === accepted.value.sequence && value.index?.headSha === accepted.value.headSha)
-        return queued ? this.#verifyRecord(queued, now, false) : { available: false, reason: 'not-newer', repository: OFFICIAL_PREVIEW_REPOSITORY, headSha: accepted.value.headSha, sequence: accepted.value.sequence, indexSource: accepted.source }
+        if (queued) return this.#verifyRecord(queued, now, false)
+      }
+      if (alreadyInstalled.length) {
+        const installed = alreadyInstalled.reduce((latest, value) => value.value.sequence > latest.value.sequence ? value : latest)
+        if (installed.value.sequence > previous.sequence) {
+          await this.state.save({
+            sequence: installed.value.sequence,
+            headSha: installed.value.headSha,
+            installedHeads: previous.installedHeads,
+            candidates: previous.candidates.filter(value => (
+              Number(value.index?.sequence || 0) > installed.value.sequence &&
+              value.index?.headSha !== installed.value.headSha
+            ))
+          })
+        }
+        return { available: false, reason: 'already-installed', repository: OFFICIAL_PREVIEW_REPOSITORY, headSha: installed.value.headSha, sequence: installed.value.sequence, indexSource: installed.source }
+      }
+      if (unchanged.length) {
+        const accepted = unchanged.at(-1)
+        return { available: false, reason: 'not-newer', repository: OFFICIAL_PREVIEW_REPOSITORY, headSha: accepted.value.headSha, sequence: accepted.value.sequence, indexSource: accepted.source }
       }
       throw new Error(`所有 PR 预览索引源均不可用：${failures.join('；')}`)
     }
@@ -271,7 +317,7 @@ class PrPreviewUpdateService {
       previewManifest: manifestResult.payload
     })
     const candidates = [...previous.candidates.filter(value => value.id !== record.id), record].slice(-MAX_PERSISTED_CANDIDATES)
-    await this.state.save({ sequence: previous.sequence, headSha: previous.headSha, candidates })
+    await this.state.save({ sequence: previous.sequence, headSha: previous.headSha, installedHeads: previous.installedHeads, candidates })
     return this.#verifyRecord(record, now, false)
   }
 
@@ -283,12 +329,16 @@ class PrPreviewUpdateService {
     if (disposition === 'conflict') throw new Error('PR 预览相同 sequence 对应不同 head SHA，拒绝接受。')
     if (disposition === 'same') return { accepted: false, reason: 'already-accepted', sequence: verified.sequence, headSha: verified.headSha }
     const nextState = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       repository: OFFICIAL_PREVIEW_REPOSITORY,
       sequence: verified.sequence,
       headSha: verified.headSha,
       acceptedAt: new Date(this.#now()).toISOString(),
-      candidates: previous.candidates.filter(value => Number(value.index?.sequence || 0) > verified.sequence)
+      installedHeads: normalizeInstalledPreviewHeads([...previous.installedHeads, verified.headSha]),
+      candidates: previous.candidates.filter(value => (
+        Number(value.index?.sequence || 0) > verified.sequence &&
+        value.index?.headSha !== verified.headSha
+      ))
     }
     await this.state.save(nextState)
     return { accepted: true, state: nextState }
@@ -299,11 +349,13 @@ module.exports = {
   CANDIDATE_ID_PATTERN,
   DEFAULT_MAX_JSON_BYTES,
   DEFAULT_MAX_REDIRECTS,
+  MAX_INSTALLED_PREVIEW_HEADS,
   MAX_PERSISTED_CANDIDATES,
   PrPreviewUpdateService,
   createMemoryPreviewState,
   fetchOfficialPreviewJson,
   fetchPreviewWithFallback,
+  normalizeInstalledPreviewHeads,
   normalizePreviewState,
   previewCandidateId,
   resolveOfficialPreviewRedirect

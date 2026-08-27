@@ -31,7 +31,7 @@ function identity(overrides = {}) {
 
 // 假原生适配器：记录调用，绝不触碰真实用户应用。
 function fakeAdapter(options = {}) {
-  const calls = { clicks: [], scrolls: [], types: [], screenshots: [], binds: [] }
+  const calls = { clicks: [], scrolls: [], types: [], screenshots: [], globalClicks: [], globalScrolls: [], globalTypes: [], binds: [] }
   const adapter = {
     calls,
     capabilities: () => ({
@@ -44,12 +44,19 @@ function fakeAdapter(options = {}) {
       signatureVerification: true,
       signatureThumbprint: false,
       screenshot: true,
+      desktopScreenshot: true,
       input: true,
+      globalInput: true,
       ...options.capabilities
     }),
     listWindows: options.listWindows || (() => [{ hwnd: 7, pid: 4242, title: 'Demo Window', className: 'DemoClass', rect: { left: 0, top: 0, right: 640, bottom: 480 }, width: 640, height: 480 }]),
     identityFor: options.identityFor || (hwnd => ({ ...identity(), hwnd })),
+    desktopBounds: options.desktopBounds || (() => ({ x: -1920, y: 0, width: 3840, height: 1080 })),
+    captureDesktop: options.captureDesktop || (() => ({ x: -1920, y: 0, width: 4, height: 1, format: 'bgra', bgra: Buffer.from([1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]), blank: false })),
     captureWindow: options.captureWindow || (() => ({ width: 2, height: 1, format: 'bgra', bgra: Buffer.alloc(8, 0xff), blank: false })),
+    sendGlobalMouseClick: options.sendGlobalMouseClick || (params => { calls.globalClicks.push(params); return { delivered: true } }),
+    sendGlobalScroll: options.sendGlobalScroll || (params => { calls.globalScrolls.push(params); return { delivered: true } }),
+    sendGlobalText: options.sendGlobalText || (text => { calls.globalTypes.push(text); return { delivered: true } }),
     sendMouseClick: options.sendMouseClick || ((hwnd, params) => { calls.clicks.push({ hwnd, params }); return { delivered: true } }),
     sendScroll: options.sendScroll || ((hwnd, params) => { calls.scrolls.push({ hwnd, params }); return { delivered: true } }),
     sendText: options.sendText || ((hwnd, text) => { calls.types.push({ hwnd, text }); return { delivered: true } })
@@ -121,18 +128,15 @@ test('系统/提权窗口：即使已持久允许，动作仍被永久拒绝', a
   assert.equal(adapter.calls.clicks.length, 0)
 })
 
-test('敏感输入永久拦截：即使应用已允许也不执行 type', async () => {
+test('窗口输入不再按文本内容设置敏感操作边界', async () => {
   const adapter = fakeAdapter()
   const computer = new WindowsComputerUse({ adapter, hashFile: async () => A })
   const bound = await computer.bind(7)
   computer.allow(bound.identity)
-  await assert.rejects(computer.type(7, { text: 'password=p@ssw0rd123' }), error => error.code === 'sensitive-input-blocked')
-  await assert.rejects(computer.type(7, { text: 'verification code: 123456' }), error => error.code === 'sensitive-input-blocked')
-  assert.equal(adapter.calls.types.length, 0)
-  await computer.type(7, { text: '普通文本没有风险' })
-  await computer.type(7, { text: 'hello world' })
+  await computer.type(7, { text: 'password=p@ssw0rd123' })
+  await computer.type(7, { text: 'verification code: 123456' })
   assert.equal(adapter.calls.types.length, 2)
-  assert.equal(adapter.calls.types[0].text, '普通文本没有风险')
+  assert.match(adapter.calls.types[0].text, /password=/u)
 })
 
 test('无限制授权：系统/UAC、应用策略与敏感输入门禁全部放行', async () => {
@@ -150,6 +154,23 @@ test('无限制授权：系统/UAC、应用策略与敏感输入门禁全部放�
   await assert.rejects(computer.click(7, { x: 1, y: 1 }, elevated), error => error.code === 'window-denied')
 })
 
+test('全桌面模式不选择窗口，并以虚拟桌面坐标直接截图和输入', async () => {
+  const adapter = fakeAdapter()
+  const computer = new WindowsComputerUse({ adapter, hashFile: async () => A })
+  assert.deepEqual(computer.desktopBounds(), { x: -1920, y: 0, width: 3840, height: 1080 })
+  await assert.rejects(computer.desktopScreenshot(), error => error.code === 'computer-use-disabled')
+  computer.setUnlimited(true)
+  const shot = await computer.desktopScreenshot()
+  assert.deepEqual({ x: shot.x, y: shot.y, width: shot.width, height: shot.height }, { x: -1920, y: 0, width: 4, height: 1 })
+  await computer.globalClick({ x: -100, y: 80 })
+  await computer.globalScroll({ x: 200, y: 300, deltaY: -120 })
+  await computer.globalType({ text: 'password=p@ssw0rd123 verification code: 123456' })
+  assert.deepEqual(adapter.calls.globalClicks, [{ x: -100, y: 80 }])
+  assert.deepEqual(adapter.calls.globalScrolls, [{ x: 200, y: 300, deltaY: -120 }])
+  assert.match(adapter.calls.globalTypes[0], /verification code/u)
+  assert.equal(adapter.calls.binds.length, 0)
+})
+
 test('能力缺失必须 capability-unavailable，绝不伪造', async () => {
   const noInput = fakeAdapter({ capabilities: { input: false } })
   const computer = new WindowsComputerUse({ adapter: noInput, hashFile: async () => A })
@@ -161,6 +182,11 @@ test('能力缺失必须 capability-unavailable，绝不伪造', async () => {
     return true
   })
   await assert.rejects(computer.scroll(7, { deltaY: 50 }), error => error.code === 'capability-unavailable')
+
+  const noGlobal = fakeAdapter({ capabilities: { desktopScreenshot: false, globalInput: false } })
+  const computerGlobal = new WindowsComputerUse({ adapter: noGlobal, hashFile: async () => A, unlimited: true })
+  await assert.rejects(computerGlobal.desktopScreenshot(), error => error.code === 'capability-unavailable' && error.capability === 'desktopScreenshot')
+  await assert.rejects(computerGlobal.globalClick({ x: 0, y: 0 }), error => error.code === 'capability-unavailable' && error.capability === 'globalInput')
 
   const noEnum = fakeAdapter({ capabilities: { windowEnumeration: false } })
   const computer2 = new WindowsComputerUse({ adapter: noEnum, hashFile: async () => A })
@@ -224,7 +250,9 @@ test('koffi 适配器工厂：非 Windows 返回 null；Windows 上能力探测�
   assert.equal(typeof caps.windowEnumeration, 'boolean')
   assert.equal(typeof caps.identity, 'boolean')
   assert.equal(typeof caps.screenshot, 'boolean')
+  assert.equal(typeof caps.desktopScreenshot, 'boolean')
   assert.equal(typeof caps.input, 'boolean')
+  assert.equal(typeof caps.globalInput, 'boolean')
   assert.equal(caps.signatureThumbprint, false)
   // 本测试不做任何窗口枚举/控制
   assert.ok(SYSTEM_PROCESS_NAMES.includes('consent.exe'))

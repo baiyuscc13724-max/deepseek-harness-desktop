@@ -62,6 +62,8 @@ test('sign workflow plans up to five exact runs before one protected batch appro
   assert.equal((source.match(/name: pr-preview-signing$/gm) || []).length, 1, 'the entire batch must use one protected environment job')
   assert.match(source, /Batch must contain 1-5 build run ids/)
   assert.match(source, /Duplicate build run ids are not allowed/)
+  assert.match(source, /printf '%s\\n' "\$BUILD_RUN_IDS"/, 'a single run id must still end with a countable record delimiter')
+  assert.doesNotMatch(source, /printf '%s' "\$BUILD_RUN_IDS"/)
   assert.match(source, /PR preview signing batch awaiting protected approval/)
   assert.match(source, /harness-pr-preview-signing-batch-plan/)
   assert.match(source, /refs\/heads\/\$DEFAULT_BRANCH/)

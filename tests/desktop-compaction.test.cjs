@@ -211,12 +211,121 @@ test('provider-confirmed context overflow compacts durable surface and retries t
   assert.equal(nextCalls, 0)
 })
 
+test('Codex overload recovery writes official durable retry events with five bounded exponential waits', async () => {
+  const {
+    CODEX_OVERLOAD_GUIDANCE,
+    CODEX_OVERLOAD_MAX_RETRIES,
+    CODEX_OVERLOAD_POLICY_KEY,
+    recoverCodexOverload
+  } = await plugin()
+  const events = [
+    { type: 'turn/start', data: { turn: 7 } },
+    { type: 'request/header', data: { header: { config: { provider: 'openai-codex', model: 'gpt-5.6-sol' } } } },
+    { type: 'step/start', data: { turn: 7, step: 3 } }
+  ]
+  const session = {
+    events,
+    append(type, data) {
+      const event = { seq: events.length, type, data }
+      events.push(event)
+      return event
+    }
+  }
+  const failure = { code: 'PI_AI_ERROR', message: 'The model is overloaded; please try again later.', status: 503 }
+  const delays = []
+  const errors = []
+  let nextCalls = 0
+  const payload = {
+    agent: { session }, turn: 7, step: 3, provider: 'openai-codex', failure,
+    signal: new AbortController().signal
+  }
+  const internals = {
+    createRetryId: () => 'retry-chain-1',
+    delay: async delayMs => { delays.push(delayMs); return true }
+  }
+  for (let retry = 1; retry <= CODEX_OVERLOAD_MAX_RETRIES; retry += 1) {
+    assert.deepEqual(await recoverCodexOverload(payload, async () => { nextCalls += 1 }, { logger: { error: value => errors.push(value) } }, internals), { kind: 'retry' })
+  }
+  assert.deepEqual(delays, [1_000, 2_000, 4_000, 8_000, 16_000])
+  const scheduled = events.filter(event => event.type === 'llm/retry')
+  const started = events.filter(event => event.type === 'llm/retry-started')
+  assert.equal(scheduled.length, 5)
+  assert.equal(started.length, 5)
+  assert.deepEqual(scheduled.map(event => event.data.retry), [1, 2, 3, 4, 5])
+  assert.ok(scheduled.every(event => event.data.retryId === 'retry-chain-1'))
+  assert.ok(scheduled.every(event => event.data.mode === 'normal' && event.data.maxRetries === 5))
+  assert.ok(scheduled.every(event => event.data.policyKey === CODEX_OVERLOAD_POLICY_KEY))
+  assert.ok(scheduled.every(event => event.data.failure === failure))
+  assert.deepEqual(started.map(event => event.data.retry), [1, 2, 3, 4, 5])
+
+  assert.equal(await recoverCodexOverload(payload, async () => { nextCalls += 1; return 'terminal' }, { logger: { error: value => errors.push(value) } }, internals), 'terminal')
+  assert.equal(nextCalls, 1)
+  assert.deepEqual(errors, [CODEX_OVERLOAD_GUIDANCE])
+  assert.equal(events.filter(event => event.type === 'llm/retry').length, 5)
+})
+
+test('Codex overload recovery excludes auth, credits, other providers, and broad PI failures', async () => {
+  const { isCodexOverloadFailure, recoverCodexOverload } = await plugin()
+  assert.equal(isCodexOverloadFailure({
+    provider: 'openai-codex',
+    failure: { code: 'PI_AI_ERROR', message: 'NotCreditsErrorBut overloaded' }
+  }), true, 'credential markers must use bounded matching')
+  assert.equal(isCodexOverloadFailure({
+    provider: 'openai-codex',
+    failure: { code: 'PI_AI_ERROR', message: 'PREAUTHPOST says try again later' }
+  }), true, 'auth marker must use bounded matching')
+  const events = []
+  const session = { events, append: (type, data) => events.push({ type, data }) }
+  const cases = [
+    { provider: 'openai-codex', failure: { code: 'AUTH', message: 'overloaded' } },
+    { provider: 'openai-codex', failure: { code: 'CreditsError', message: 'try again later' } },
+    { provider: 'openai-codex', failure: { code: 'PI_AI_ERROR', message: 'AUTH: service overloaded' } },
+    { provider: 'openai-codex', failure: { code: 'PI_AI_ERROR', message: 'CreditsError: try again later' } },
+    { provider: 'openai', failure: { code: 'PI_AI_ERROR', message: 'overloaded' } },
+    { provider: 'openai-codex', failure: { code: 'PI_AI_ERROR', message: 'rate limit exceeded' } },
+    { provider: 'openai-codex', failure: { code: 'PI_AI_ERROR', message: 'overload protection is active' } }
+  ]
+  let nextCalls = 0
+  let waits = 0
+  for (const item of cases) {
+    const result = await recoverCodexOverload({
+      agent: { session }, turn: 1, step: 1, signal: new AbortController().signal, ...item
+    }, async () => { nextCalls += 1; return 'next' }, { logger: { error: () => {} } }, {
+      delay: async () => { waits += 1; return true }
+    })
+    assert.equal(result, 'next')
+  }
+  assert.equal(nextCalls, cases.length)
+  assert.equal(waits, 0)
+  assert.deepEqual(events, [])
+})
+
+test('Codex overload backoff is cancellable after scheduling and before retry starts', async () => {
+  const { cancellableDelay, recoverCodexOverload } = await plugin()
+  const controller = new AbortController()
+  const events = []
+  const session = {
+    events,
+    append(type, data) { events.push({ type, data }) }
+  }
+  const pending = recoverCodexOverload({
+    agent: { session }, turn: 2, step: 4, provider: 'openai-codex',
+    failure: { code: 'PI_AI_ERROR', message: 'try again later' }, signal: controller.signal
+  }, async () => assert.fail('cancelled recovery must not delegate or retry'), { logger: { error: () => {} } }, {
+    createRetryId: () => 'cancelled-retry',
+    delay: cancellableDelay
+  })
+  controller.abort(new Error('stop'))
+  assert.equal(await pending, undefined)
+  assert.deepEqual(events.map(event => event.type), ['llm/retry'])
+})
+
 test('Desktop compaction plugin installation is profile-local and repeatable', async t => {
   const dshHome = await mkdtemp(path.join(os.tmpdir(), 'desktop-compaction-'))
   t.after(() => rm(dshHome, { recursive: true, force: true }))
   const bundledRoot = path.join(root, 'plugins', 'dsh-desktop-compaction')
   const first = await ensureDesktopCompactionPlugin({ dshHome, bundledRoot })
-  assert.equal(first.version, '1.0.48')
+  assert.equal(first.version, '1.0.49')
   const installed = path.join(first.destination, 'lib', 'index.js')
   assert.match(await readFile(installed, 'utf8'), /class DesktopCompactionEngine extends BasicCompactionEngine/u)
   await writeFile(installed, 'stale')
@@ -243,6 +352,7 @@ test('plugin declares one official compaction-engine module graph and inherits i
   assert.equal(DesktopCompactionEngine.Config, basic.default.Config)
   const manifest = JSON.parse(await readFile(path.join(root, 'plugins/dsh-desktop-compaction/package.json'), 'utf8'))
   assert.equal(manifest.main, 'lib/index.js')
+  assert.match(manifest.description, /Codex overload recovery/u)
   assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-compaction-basic'], '^0.1.1-rc.2')
   assert.equal(manifest.dsh, undefined)
 })
