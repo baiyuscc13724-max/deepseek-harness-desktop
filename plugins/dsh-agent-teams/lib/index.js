@@ -1762,6 +1762,12 @@ function authenticateParticipant(team, sessionId) {
   if (!["running", "idle", "ready"].includes(member.state)) reject("caller is not an active member of this team", "AGENT_TEAMS_UNAUTHORIZED");
   return member;
 }
+function requireAssignableMember(member) {
+  if (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true || !["running", "idle", "ready"].includes(member.state)) {
+    reject(`target assignee is not assignable (current state: ${member.state})`, "AGENT_TEAMS_ASSIGNEE_UNAVAILABLE");
+  }
+  return member;
+}
 function requireLead(team, sessionId) {
   if (team.rootLeadSessionId !== sessionId) reject("operation requires the team root lead", "AGENT_TEAMS_UNAUTHORIZED");
 }
@@ -2478,11 +2484,12 @@ async function createTask(store, caller, input) {
       if (target.tasks.every((candidate) => candidate.id !== dependency.taskId)) reject("cross-team task dependency does not exist", "AGENT_TEAMS_INVALID_TASK");
     }
     const assigneeReference = optionalString(input.assigneeSessionId, "assigneeSessionId", 256);
-    const assigneeSessionId = assigneeReference === undefined ? undefined : resolveMember(team, assigneeReference).sessionId;
-    if (assigneeSessionId !== undefined) {
-      authenticateParticipant(team, assigneeSessionId);
-      if (caller.id !== team.rootLeadSessionId && assigneeSessionId !== caller.id) reject("only the lead can assign a new task to another member", "AGENT_TEAMS_UNAUTHORIZED");
+    const assigneeMember = assigneeReference === undefined ? undefined : resolveMember(team, assigneeReference);
+    const assigneeSessionId = assigneeMember?.sessionId;
+    if (assigneeSessionId !== undefined && caller.id !== team.rootLeadSessionId && assigneeSessionId !== caller.id) {
+      reject("only the lead can assign a new task to another member", "AGENT_TEAMS_UNAUTHORIZED");
     }
+    if (assigneeMember !== undefined) requireAssignableMember(assigneeMember);
     const timestamp = now();
     const task = {
       id: randomUUID(),
@@ -2569,8 +2576,7 @@ async function updateTask(store, caller, input) {
       clearTaskReleaseMetadata(task);
     } else if (action === "assign") {
       if (!isLead) reject("only the team lead can assign a task", "AGENT_TEAMS_UNAUTHORIZED");
-      const assignee = resolveMember(team, input.assigneeSessionId).sessionId;
-      authenticateParticipant(team, assignee);
+      const assignee = requireAssignableMember(resolveMember(team, input.assigneeSessionId)).sessionId;
       if (task.assigneeSessionId === assignee && (task.state === "pending" || task.state === "in_progress")) {
         // Re-assigning the current holder (a pending pre-assignment or an in-progress
         // claimant) is a safe idempotent no-op; a retried assign never switches holders.

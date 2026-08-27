@@ -1182,6 +1182,35 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(gracefulFailureMember.state, 'failed')
     assert.equal(gracefulFailureMember.shutdownUnconfirmed, true)
     assert.equal(gracefulFailureMember.stopUnconfirmed, true)
+    const failedAssigneeTask = (await tools.get('team_task_create').execute({
+      team_id: memberGracefulFailureTeam.id,
+      title: 'Reject unavailable assignee precisely'
+    }, { agent: rootAgent, signal: new AbortController().signal })).task
+    for (const operation of [
+      tools.get('team_task_create').execute({
+        team_id: memberGracefulFailureTeam.id,
+        title: 'Must not bind failed assignee',
+        assignee_session_id: memberGracefulFailureWorker.sessionId
+      }, { agent: rootAgent, signal: new AbortController().signal }),
+      tools.get('team_task_update').execute({
+        team_id: memberGracefulFailureTeam.id,
+        task_id: failedAssigneeTask.id,
+        action: 'assign',
+        assignee_session_id: memberGracefulFailureWorker.sessionId
+      }, { agent: rootAgent, signal: new AbortController().signal })
+    ]) {
+      await assert.rejects(operation, error => {
+        assert.equal(error?.code, 'AGENT_TEAMS_ASSIGNEE_UNAVAILABLE')
+        assert.equal(error?.message, 'target assignee is not assignable (current state: failed)')
+        assert.doesNotMatch(error.message, /caller|lead-session|SendAudit|shutdownUnconfirmed|stopUnconfirmed/u)
+        return true
+      })
+    }
+    const statusAfterFailedAssignee = await tools.get('team_status').execute({ team_id: memberGracefulFailureTeam.id }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(statusAfterFailedAssignee.ok, true)
+    assert.equal(statusAfterFailedAssignee.team.id, memberGracefulFailureTeam.id)
+    assert.equal(statusAfterFailedAssignee.team.members.find(member => member.sessionId === rootAgent.id).state, 'running')
+    assert.equal(statusAfterFailedAssignee.team.members.find(member => member.sessionId === memberGracefulFailureWorker.sessionId).state, 'failed')
     leadAvailable = false
     activeInitiator = recoveryAgent
     await assert.rejects(
