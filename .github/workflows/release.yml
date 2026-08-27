@@ -6,7 +6,7 @@ on:
       tag:
         description: Candidate version label; no Tag is required or created by this workflow
         required: true
-        default: v1.0.48
+        default: v1.0.49
       source_revision:
         description: Exact 40-character candidate commit to build and test before Tag creation
         required: true
