@@ -1,14 +1,16 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtemp, open, realpath, rm, stat, writeFile } = require('node:fs/promises')
+const { lstat, mkdir, mkdtemp, open, readFile, realpath, rm, stat, writeFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const {
-  MAX_LOCAL_PREVIEW_BYTES, MAX_RESPONSE_BYTES, loadRightWorkspaceResource, previewLocalDocument, resourceUrl, runtimeOrigin
+  MAX_LOCAL_PREVIEW_BYTES, MAX_RESPONSE_BYTES, fetchRightWorkspaceFile, fileContentUrl,
+  loadRightWorkspaceResource, materializeRightWorkspaceFile, previewLocalDocument, resourceUrl, responseBytes, runtimeOrigin, safeOpenFileName
 } = require('../electron/bridge/right-workspace-service.cjs')
+const { blocksDirectOpen } = require('../electron/bridge/local-target-service.cjs')
 
 function response(body, options = {}) {
-  const bytes = Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))
+  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))
   return {
     ok: options.ok !== false,
     status: options.status || 200,
@@ -20,6 +22,7 @@ function response(body, options = {}) {
 test('right workspace proxy accepts only the credential-free Harness loopback runtime', () => {
   assert.equal(runtimeOrigin('http://127.0.0.1:8906/chat'), 'http://127.0.0.1:8906')
   assert.equal(runtimeOrigin('http://localhost:3000/'), 'http://localhost:3000')
+  assert.equal(runtimeOrigin('http://[::1]:3080/'), 'http://[::1]:3080')
   assert.throws(() => runtimeOrigin('https://example.com'), error => error.code === 'RIGHT_WORKSPACE_RUNTIME_FORBIDDEN')
   assert.throws(() => runtimeOrigin('http://user:pass@127.0.0.1:8906'), error => error.code === 'RIGHT_WORKSPACE_RUNTIME_FORBIDDEN')
 })
@@ -27,28 +30,41 @@ test('right workspace proxy accepts only the credential-free Harness loopback ru
 test('right workspace resource URLs are fixed and session-bound', () => {
   assert.equal(resourceUrl('http://127.0.0.1:8906', 'files', { sessionId: 'session-1' }).toString(), 'http://127.0.0.1:8906/api/desktop-files/state?sessionId=session-1')
   assert.equal(resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: 'uploads/a b.md' }).searchParams.get('path'), 'uploads/a b.md')
+  assert.equal(fileContentUrl('http://127.0.0.1:8906', { sessionId: 'session-1', path: 'images/a b.png' }).toString(), 'http://127.0.0.1:8906/api/desktop-files/content?sessionId=session-1&path=images%2Fa+b.png')
   assert.throws(() => resourceUrl('http://127.0.0.1:8906', 'unknown', { sessionId: 'session-1' }), error => error.code === 'RIGHT_WORKSPACE_BAD_RESOURCE')
   assert.throws(() => resourceUrl('http://127.0.0.1:8906', 'files', { sessionId: ' bad ' }), error => error.code === 'RIGHT_WORKSPACE_BAD_SESSION')
   assert.equal(resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: '../secret.txt' }).searchParams.get('path'), '../secret.txt')
   assert.equal(resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: 'C:\\workspace\\file.ts:4' }).searchParams.get('path'), 'C:\\workspace\\file.ts:4')
   assert.throws(() => resourceUrl('http://127.0.0.1:8906', 'filePreview', { sessionId: 'session-1', path: 'bad\npath' }), error => error.code === 'RIGHT_WORKSPACE_BAD_PATH')
+  assert.equal(safeOpenFileName('payload.exe:stream.txt'), 'payload.exe_stream.txt')
+  assert.equal(safeOpenFileName('payload.exe.   '), 'payload.exe')
+  assert.equal(blocksDirectOpen(safeOpenFileName('payload.exe.')), true)
+  assert.equal(blocksDirectOpen(safeOpenFileName('shortcut.lnk . ')), true)
+  assert.equal(safeOpenFileName('CON.txt'), '_CON.txt')
 })
 
-test('explicit local-document previews are text-only, bounded, and reject network paths', async t => {
+test('explicit local-document previews render safe images, bound text, and leave every other file system-openable', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'right-workspace-local-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const markdown = path.join(directory, 'notes.md')
   const commonJs = path.join(directory, 'config.cjs')
-  const binary = path.join(directory, 'image.bin')
+  const image = path.join(directory, 'image.png')
+  const binary = path.join(directory, 'archive.bin')
   await writeFile(markdown, '# Notes')
   await writeFile(commonJs, 'module.exports = true')
+  await writeFile(image, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
   await writeFile(binary, Buffer.from([0, 1, 2]))
   const adapters = { realpathImpl: realpath, statImpl: stat, openImpl: open }
   const preview = await previewLocalDocument(markdown, adapters)
   assert.equal(preview.previewable, true)
   assert.equal(preview.text, '# Notes')
+  assert.equal(preview.previewKind, 'text')
   assert.equal((await previewLocalDocument(commonJs, adapters)).text, 'module.exports = true')
-  assert.equal((await previewLocalDocument(binary, adapters)).reason, 'unsupported')
+  const imagePreview = await previewLocalDocument(image, adapters)
+  assert.equal(imagePreview.previewKind, 'image')
+  assert.equal(imagePreview.dataUrl, 'data:image/png;base64,iVBORw==')
+  assert.equal((await previewLocalDocument(binary, adapters)).reason, 'external')
+  assert.equal((await previewLocalDocument(binary, adapters)).openable, true)
   const growing = await previewLocalDocument(markdown, {
     realpathImpl: async value => value,
     statImpl: async () => ({ isFile: () => true, size: 1 }),
@@ -73,6 +89,96 @@ test('right workspace proxy performs bounded GET-only JSON requests', async () =
     runtimeUrl: 'http://127.0.0.1:8906', kind: 'files', sessionId: 'root-session',
     fetchImpl: async () => response('{}', { contentLength: MAX_RESPONSE_BYTES + 1 })
   }), error => error.code === 'RIGHT_WORKSPACE_RESPONSE_TOO_LARGE')
+})
+
+test('workspace file previews receive a loopback content URL and can be materialized for a system application', async () => {
+  const preview = await loadRightWorkspaceResource({
+    runtimeUrl: 'http://127.0.0.1:8906', kind: 'filePreview', sessionId: 'root-session', path: 'docs/image.png',
+    fetchImpl: async () => response({ file: { path: 'docs/image.png', name: 'image.png', previewKind: 'image', previewable: true } })
+  })
+  assert.equal(preview.file.contentUrl, 'http://127.0.0.1:8906/api/desktop-files/content?sessionId=root-session&path=docs%2Fimage.png')
+  let requested
+  const opened = await fetchRightWorkspaceFile({
+    runtimeUrl: 'http://localhost:3000', sessionId: 'root-session', path: 'docs/image.png', name: 'image.png',
+    fetchImpl: async (url, options) => { requested = { url: url.toString(), options }; return response(Buffer.from([1, 2, 3])) }
+  })
+  assert.equal(requested.url, 'http://localhost:3000/api/desktop-files/content?sessionId=root-session&path=docs%2Fimage.png')
+  assert.equal(requested.options.redirect, 'error')
+  assert.equal(requested.options.signal instanceof AbortSignal, true)
+  assert.equal(opened.name, 'image.png')
+  assert.deepEqual(opened.bytes, Buffer.from([1, 2, 3]))
+})
+
+test('unknown-length responses are bounded while streaming', async () => {
+  let cancelled = false
+  const chunks = [Buffer.alloc(3), Buffer.alloc(3)]
+  const response = {
+    headers: { get: () => null },
+    body: { getReader: () => ({
+      read: async () => chunks.length ? { done: false, value: chunks.shift() } : { done: true },
+      cancel: async () => { cancelled = true },
+      releaseLock: () => {}
+    }) }
+  }
+  await assert.rejects(responseBytes(response, 5), error => error.code === 'RIGHT_WORKSPACE_RESPONSE_TOO_LARGE')
+  assert.equal(cancelled, true)
+})
+
+test('workspace files materialize into unique private directories with exclusive file creation', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'right-workspace-open-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const openFlags = []
+  const adapters = {
+    runtimeUrl: 'http://127.0.0.1:8906', sessionId: 'root-session', path: 'payload.exe', name: 'payload.exe',
+    tempBase: path.join(root, 'cache'),
+    fetchImpl: async () => response(Buffer.from([1, 2, 3])),
+    mkdirImpl: mkdir,
+    mkdtempImpl: mkdtemp,
+    openImpl: async (...args) => { openFlags.push(args.slice(1)); return open(...args) },
+    realpathImpl: realpath,
+    lstatImpl: lstat,
+    rmImpl: rm
+  }
+  const first = await materializeRightWorkspaceFile(adapters)
+  const second = await materializeRightWorkspaceFile(adapters)
+  assert.notEqual(first.directory, second.directory)
+  assert.equal(first.destination.startsWith(first.directory + path.sep), true)
+  assert.deepEqual(openFlags, [['wx', 0o600], ['wx', 0o600]])
+  assert.deepEqual(await readFile(first.destination), Buffer.from([1, 2, 3]))
+  assert.equal((await lstat(first.destination)).isSymbolicLink(), false)
+})
+
+test('workspace materialization rejects reparse points at both the trusted base and random directory', async () => {
+  const root = path.resolve(os.tmpdir(), 'right-workspace-unsafe-root')
+  const baseOptions = {
+    runtimeUrl: 'http://127.0.0.1:8906', sessionId: 'root-session', path: 'payload.exe', name: 'payload.exe', tempBase: root,
+    fetchImpl: async () => response(Buffer.from([1])),
+    mkdirImpl: async () => {},
+    mkdtempImpl: async () => path.join(root, 'harness-workspace-open-attacker'),
+    openImpl: async () => { throw new Error('must not create a file') },
+    realpathImpl: async value => value,
+    rmImpl: async () => {}
+  }
+  let madeDirectory = false
+  await assert.rejects(materializeRightWorkspaceFile({
+    ...baseOptions,
+    mkdtempImpl: async () => { madeDirectory = true; return path.join(root, 'harness-workspace-open-attacker') },
+    lstatImpl: async () => ({ isDirectory: () => true, isFile: () => false, isSymbolicLink: () => true })
+  }), error => error.code === 'RIGHT_WORKSPACE_UNSAFE_TEMP_PATH')
+  assert.equal(madeDirectory, false)
+
+  let lstatCalls = 0
+  let removed = false
+  await assert.rejects(materializeRightWorkspaceFile({
+    ...baseOptions,
+    lstatImpl: async () => ({
+      isDirectory: () => true,
+      isFile: () => false,
+      isSymbolicLink: () => ++lstatCalls > 1
+    }),
+    rmImpl: async () => { removed = true }
+  }), error => error.code === 'RIGHT_WORKSPACE_UNSAFE_TEMP_PATH')
+  assert.equal(removed, true)
 })
 
 test('right workspace proxy preserves safe runtime errors and rejects invalid JSON', async () => {

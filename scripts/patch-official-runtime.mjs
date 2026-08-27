@@ -6,8 +6,10 @@ import { createChatStopFollowState, reduceChatStopFollowState } from './chat-sto
 import { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 import { patchWorkspaceSessionMenuSource } from './workspace-session-menu-patch.mjs'
 import { patchCodexParityRuntime } from './codex-parity-runtime-patch.mjs'
+import { patchToolResultImageSource } from './tool-result-image-patch.mjs'
 
 export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
+export { patchToolResultImageSource } from './tool-result-image-patch.mjs'
 export { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 export { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 
@@ -15,6 +17,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runtimeClient = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js')
 const directoryPickerRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-directory-picker-native', 'lib', 'index.js')
 const conversationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
+const toolUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-tool', 'lib', 'client.js')
 const tokenMeterRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-token-meter', 'lib', 'index.js')
 const subagentRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js')
 const sandboxRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-sandbox', 'lib', 'index.js')
@@ -1531,6 +1534,13 @@ export async function patchInstalledConversation(file = conversationRuntime) {
   return cache.changed
 }
 
+export async function patchInstalledToolResultImages(file = toolUiRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchToolResultImageSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 export async function patchInstalledTokenMeter(file = tokenMeterRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchTokenMeterSource(source)
@@ -1649,6 +1659,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const attachmentProfileChanged = await patchInstalledAttachmentProfile()
   const pickerChanged = await patchInstalledDirectoryPicker()
   const conversationChanged = await patchInstalledConversation()
+  const toolResultImagesChanged = await patchInstalledToolResultImages()
   const tokenMeterChanged = await patchInstalledTokenMeter()
   const subagentChanged = await patchInstalledSubagent()
   const agentLoopChanged = await patchInstalledAgentLoop()
@@ -1670,6 +1681,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
   process.stdout.write(conversationChanged ? 'Patched conversation telemetry, view navigation, and sticky response copy.\n' : 'Conversation telemetry, view navigation, and sticky response copy already patched.\n')
+  process.stdout.write(toolResultImagesChanged ? 'Patched durable tool-result image delivery.\n' : 'Durable tool-result image delivery already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
   process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
   process.stdout.write(agentLoopChanged ? 'Patched abortable streams and queued-turn recovery.\n' : 'Abortable streams and queued-turn recovery already patched.\n')

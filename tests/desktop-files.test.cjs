@@ -67,9 +67,11 @@ test('right-workspace previews are bounded text and preserve workspace containme
   await writeFile(path.join(directory, 'page.html'), '<script>neverRun()</script>')
   await writeFile(path.join(directory, 'main.cs'), 'Console.WriteLine("source");')
   await writeFile(path.join(directory, 'config.cjs'), 'module.exports = { safe: true }')
+  await writeFile(path.join(directory, 'image.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+  await writeFile(path.join(directory, 'document.pdf'), Buffer.from('%PDF-1.7'))
   await writeFile(path.join(directory, 'binary.bin'), Buffer.from([0, 1, 2, 3]))
   await writeFile(path.join(outside, 'secret.txt'), 'outside')
-  const { MAX_PREVIEW_BYTES, previewFile } = await plugin()
+  const { MAX_PREVIEW_BYTES, contentHeaders, previewFile } = await plugin()
   const notes = await previewFile(directory, 'notes.md')
   assert.equal(notes.previewable, true)
   assert.equal(notes.text, '# Notes\n\nHello')
@@ -80,16 +82,40 @@ test('right-workspace previews are bounded text and preserve workspace containme
   assert.equal((await previewFile(directory, 'page.html')).text, '<script>neverRun()</script>')
   assert.equal((await previewFile(directory, 'main.cs')).previewable, true)
   assert.equal((await previewFile(directory, 'config.cjs')).text, 'module.exports = { safe: true }')
+  assert.deepEqual(await previewFile(directory, 'image.png'), {
+    path: 'image.png', name: 'image.png', size: 4, extension: '.png', openable: true,
+    previewKind: 'image', mimeType: 'image/png', previewable: true
+  })
+  assert.equal((await previewFile(directory, 'document.pdf')).previewKind, 'pdf')
+  assert.match(contentHeaders('document.pdf', 8, { previewKind: 'pdf', mimeType: 'application/pdf' })['content-disposition'], /^inline;/u)
+  assert.equal(contentHeaders('page.html', 4)['content-type'], 'application/octet-stream')
+  assert.match(contentHeaders('page.html', 4)['content-disposition'], /^attachment;/u)
   assert.deepEqual(await previewFile(directory, 'binary.bin'), {
-    path: 'binary.bin', name: 'binary.bin', size: 4, extension: '.bin', previewable: false, reason: 'unsupported'
+    path: 'binary.bin', name: 'binary.bin', size: 4, extension: '.bin', openable: true, previewable: false, reason: 'external'
   })
   await assert.rejects(previewFile(directory, '../secret.txt'), error => error.code === 'FILES_PATH_ESCAPE')
 })
 
-test('file plugin registers a GET-only text preview route beside download', async () => {
+test('inline preview matrix covers browser-safe media while active content stays external', async () => {
+  const { INLINE_PREVIEW_TYPES } = await plugin()
+  const expected = {
+    image: ['.avif', '.bmp', '.gif', '.ico', '.jpeg', '.jpg', '.png', '.webp'],
+    audio: ['.aac', '.flac', '.m4a', '.mp3', '.oga', '.ogg', '.opus', '.wav'],
+    video: ['.m4v', '.mov', '.mp4', '.ogv', '.webm'],
+    pdf: ['.pdf']
+  }
+  for (const [kind, extensions] of Object.entries(expected)) {
+    for (const extension of extensions) assert.equal(INLINE_PREVIEW_TYPES.get(extension)?.previewKind, kind, `${extension} must render as ${kind}`)
+  }
+  for (const extension of ['.html', '.svg', '.js', '.exe', '.lnk']) assert.equal(INLINE_PREVIEW_TYPES.has(extension), false)
+})
+
+test('file plugin registers GET-only preview, inline-content and download routes', async () => {
   const source = await readFile(path.join(root, 'plugins/dsh-desktop-files/lib/index.js'), 'utf8')
   assert.match(source, /path: '\/api\/desktop-files\/preview'/u)
+  assert.match(source, /path: '\/api\/desktop-files\/content'/u)
   assert.match(source, /previewFile\(cwd, requestedPath\)/u)
+  assert.match(source, /contentHeaders\(file\.name, file\.info\.size, presentation\)/u)
   assert.match(source, /req\.method !== 'GET'/u)
   assert.match(source, /trustedRequest\(req\)/u)
   assert.doesNotMatch(source, /text\/html/u)

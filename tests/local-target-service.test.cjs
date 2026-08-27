@@ -49,7 +49,27 @@ test('opens directories and documents but never executes authored launchable fil
   assert.deepEqual(opened, [project, document])
   assert.deepEqual(revealed, [executable, macApp])
   assert.equal(blocksDirectOpen('script.ps1'), true)
+  for (const target of ['C:\\safe\\payload.exe.', 'C:\\safe\\launch.cmd. ', 'C:\\safe\\shortcut.lnk.', 'C:\\safe\\payload.exe:stream.txt', 'C:\\safe\\note.txt:payload.exe:$DATA', 'C:\\safe\\note.txt:evil.vbs:$DATA']) {
+    assert.equal(blocksDirectOpen(target), true, `${target} must stay blocked after Windows path normalization`)
+  }
   assert.equal(blocksDirectOpen('source.ts'), false)
+
+  let dangerousOpened = false
+  const dangerousRevealed = []
+  const dangerous = await openLocalTarget('C:\\safe\\payload.exe.', {
+    statImpl: async () => ({ isDirectory: () => false }),
+    openPath: async () => { dangerousOpened = true; return '' },
+    showItemInFolder: value => dangerousRevealed.push(value)
+  })
+  assert.equal(dangerous.action, 'reveal-blocked-executable')
+  const ads = await openLocalTarget('C:\\safe\\note.txt:payload.exe:$DATA', {
+    statImpl: async () => ({ isDirectory: () => false }),
+    openPath: async () => { dangerousOpened = true; return '' },
+    showItemInFolder: value => dangerousRevealed.push(value)
+  })
+  assert.equal(ads.action, 'reveal-blocked-executable')
+  assert.equal(dangerousOpened, false)
+  assert.deepEqual(dangerousRevealed, ['C:\\safe\\payload.exe.', 'C:\\safe\\note.txt:payload.exe:$DATA'])
 })
 
 test('reveal opens a file location and missing targets fail clearly', async t => {

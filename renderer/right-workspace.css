@@ -228,9 +228,16 @@ body.dsh-right-workspace-open .browser-quick-button {
 .right-workspace-suggestions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:10px 0 14px; color:var(--shell-text-secondary); font-size:11px; }
 .right-workspace-chip { min-height:27px; border-radius:999px; padding:0 9px; font-size:11px; }
 .right-workspace-document-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--shell-border); padding-bottom:12px; }
-.right-workspace-document-header strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.right-workspace-document-header span { flex:none; color:var(--shell-text-secondary); font-size:11px; }
-.right-workspace-document-text { box-sizing:border-box; min-height:calc(100% - 45px); margin:0; overflow:auto; padding:16px 2px; color:var(--shell-text); background:transparent; font:12px/1.65 "Cascadia Code",Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; tab-size:2; }
+.right-workspace-document-identity { display:grid; min-width:0; gap:3px; }
+.right-workspace-document-identity strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.right-workspace-document-identity span { color:var(--shell-text-secondary); font-size:11px; }
+.right-workspace-document-actions { display:flex; flex:none; align-items:center; gap:7px; }
+.right-workspace-document-actions .is-error { color:#d92d20; }
+.right-workspace-document-text { box-sizing:border-box; min-height:calc(100% - 58px); margin:0; overflow:auto; padding:16px 2px; color:var(--shell-text); background:transparent; font:12px/1.65 "Cascadia Code",Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; tab-size:2; }
+.right-workspace-document-image { display:block; max-width:100%; max-height:calc(100% - 72px); margin:16px auto 0; border-radius:8px; object-fit:contain; }
+.right-workspace-document-audio { display:block; width:min(620px,100%); margin:28px auto 0; }
+.right-workspace-document-video { display:block; width:min(100%,960px); max-height:calc(100% - 72px); margin:16px auto 0; border-radius:8px; background:#000; }
+.right-workspace-document-pdf { display:block; box-sizing:border-box; width:100%; height:calc(100% - 58px); min-height:360px; border:0; margin:0; background:#fff; }
 body.dsh-right-workspace-open #runtimeView { width:calc(100% - min(var(--browser-panel-width, var(--dsh-right-workspace-width)),100vw)); }
 body.dsh-right-workspace-open .runtime-status { right:min(var(--browser-panel-width, var(--dsh-right-workspace-width)),100vw); }
 @media (max-width:900px) {
@@ -245,6 +252,9 @@ body.dsh-right-workspace-open .runtime-status { right:min(var(--browser-panel-wi
   .right-workspace-data-pane,.right-workspace-document-pane { padding:14px; }
   .right-workspace-schedule-form { grid-template-columns:1fr; }
   .right-workspace-row { align-items:flex-start; }
+  .right-workspace-document-header { align-items:flex-start; flex-direction:column; }
+  .right-workspace-document-actions { width:100%; }
+  .right-workspace-document-actions .right-workspace-secondary { width:100%; min-height:40px; }
 }
 @media (prefers-reduced-motion:reduce) {
   .right-workspace-modes button,.right-workspace-secondary,.right-workspace-primary,.right-workspace-chip { transition:none!important; }

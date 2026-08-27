@@ -69,7 +69,17 @@ function normalizeLocalTarget(value) {
 }
 
 function blocksDirectOpen(file) {
-  return BLOCKED_OPEN_EXTENSIONS.has(path.extname(file).toLowerCase())
+  const raw = String(file || '')
+  const windowsAuthored = /^[a-z]:[\\/]/iu.test(raw) || /^\\\\/u.test(raw)
+  const basenames = windowsAuthored
+    ? [path.win32.basename(raw)]
+    : [...new Set([path.basename(raw), path.posix.basename(raw)])]
+  for (const basename of basenames) {
+    const windowsName = basename.replace(/[. ]+$/u, '')
+    if (windowsName.includes(':')) return true
+    if (BLOCKED_OPEN_EXTENSIONS.has(path.extname(windowsName).toLowerCase())) return true
+  }
+  return false
 }
 
 async function openLocalTarget(value, {

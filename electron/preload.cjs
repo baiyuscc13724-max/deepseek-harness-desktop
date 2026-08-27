@@ -76,6 +76,7 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   deleteAllMemories: request => ipcRenderer.invoke('memory:deleteAll', request || {}),
   exportMemories: () => ipcRenderer.invoke('memory:export'),
   getRightWorkspaceResource: (kind, payload) => ipcRenderer.invoke('rightWorkspace:resource', String(kind || ''), payload || {}),
+  openRightWorkspaceFile: payload => ipcRenderer.invoke('rightWorkspace:openFile', payload || {}),
   previewRightWorkspaceLocal: target => ipcRenderer.invoke('rightWorkspace:previewLocal', target),
   getBrowserState: () => ipcRenderer.invoke('browser:state'),
   setBrowserVisible: visible => ipcRenderer.invoke('browser:setVisible', Boolean(visible)),
