@@ -9,7 +9,7 @@
 //     也无法读取或写入任何敏感字段，Cookie 只在独立分区内由真实浏览器管理；
 //   - 模型访问（modelNavigate/modelAction）：走更严策略（公网 + origin 已
 //     授权 + 分权 + 敏感拦截 + 关键动作人工确认）；modelBootstrapNavigate
-//     仅允许当前可用的 about:blank 标签建立预览 origin，绝不因此授予读取或操作权限；
+//     仅允许刚创建尚无 URL 或当前为 about:blank 的可用标签建立预览 origin，绝不因此授予读取或操作权限；
 //   - stop() 停机、revokeAll() 整体撤销授权、auditSnapshot() 查看有界审计。
 // 纯 Node 实现，无 Electron 依赖，可独立用 node:test 测试。
 
@@ -26,6 +26,10 @@ function policyError(code, message) {
   const error = new Error(message)
   error.code = code
   return error
+}
+
+function isModelBootstrapSourceUrl(value) {
+  return value === '' || value === 'about:blank'
 }
 
 class BrowserSecurityPolicy {
@@ -157,15 +161,15 @@ class BrowserSecurityPolicy {
   }
 
   /**
-   * 仅供当前可用的 about:blank 标签建立首个 HTTP(S) origin。公网目标只能作为未授权
-   * 预览打开；本机/内网目标必须是已获用户授权的精确 origin，或当前受管
-   * Harness Web origin。成功只绑定标签 origin，不授予 read/click/type 等权限。
+   * 仅供刚创建尚无 URL 或当前为 about:blank 的可用标签建立首个 HTTP(S) origin。
+   * 公网目标只能作为未授权预览打开；本机/内网目标必须是已获用户授权的精确 origin，
+   * 或当前受管 Harness Web origin。成功只绑定标签 origin，不授予 read/click/type 等权限。
    */
   modelBootstrapNavigate(url, { tabId, currentUrl, visible = false, available = true, trustedPrivateOrigins = [] } = {}) {
     if (this.isModelStopped) throw policyError('stopped', '浏览器模型控制已停止。')
     let origin = null
     try {
-      if (currentUrl !== 'about:blank') throw policyError('bootstrap-not-blank', '模型仅可从当前 about:blank 标签建立首个站点来源。')
+      if (!isModelBootstrapSourceUrl(currentUrl)) throw policyError('bootstrap-not-blank', '模型仅可从刚创建的空标签或当前 about:blank 标签建立首个站点来源。')
       if (available !== true) throw policyError('tab-unavailable', '当前浏览器活动标签已不可用。')
       const id = String(tabId || '').trim()
       if (!id) throw policyError('no-tab-id', '活动标签缺少 id。')
@@ -351,5 +355,6 @@ class BrowserSecurityPolicy {
 }
 
 module.exports = {
-  BrowserSecurityPolicy
+  BrowserSecurityPolicy,
+  isModelBootstrapSourceUrl
 }
