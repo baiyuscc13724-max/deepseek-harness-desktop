@@ -368,12 +368,32 @@ test('official workspace sidebar receives the persistent Codex-style session men
   for (const marker of [
     'harness.desktop.session-menu.v1', '置顶', '标记为未读', '复制会话 ID',
     '在新窗口中打开', 'open-session-window', 'moveSession', 'react_dom.createPortal',
-    'id.length <= 256', 'window.innerWidth - 228', 'hd-session-menu-dismiss',
+    'id.length > 256', 'window.innerWidth - 228', 'hd-session-menu-dismiss',
     'document.addEventListener("scroll", close, true)', 'HD_SESSION_MENU_ICONS',
     'hd-session-menu-icon-slot', 'icon: "rename"', 'icon: "newWindow"',
+    'syncDesktopSessionMenuState', 'bridge.setSessionMenuFlag',
     'strokeWidth: "1.35"', 'shape-rendering:geometricPrecision'
   ]) assert.ok(source.includes(marker), `missing sidebar session menu marker: ${marker}`)
   assert.doesNotMatch(source, /id: "fork"/u)
   assert.doesNotMatch(source, /glyph:\s*"[⌃✎◉▣▱▢↗]"/u)
   assert.doesNotThrow(() => new Function(source))
+})
+
+test('desktop shell owns session-menu persistence independently of the random runtime port', async () => {
+  const [main, guestPreload, detachedPreload] = await Promise.all([
+    readFile(path.join(root, 'electron/main.cjs'), 'utf8'),
+    readFile(path.join(root, 'electron/guest-preload.cjs'), 'utf8'),
+    readFile(path.join(root, 'electron/session-menu-preload.cjs'), 'utf8')
+  ])
+  assert.match(main, /'--port',\s*'0'/u)
+  assert.match(main, /function assertLocalRuntimeSender\(event\)[\s\S]{0,500}senderOrigin === runtimeOrigin/u)
+  assert.match(main, /ipcMain\.handle\('sessionMenu:sync'[\s\S]{0,220}assertLocalRuntimeSender\(event\)/u)
+  assert.match(main, /ipcMain\.handle\('sessionMenu:setFlag'[\s\S]{0,220}updateSessionMenuFlag/u)
+  assert.match(main, /function openDetachedSessionWindow\(sessionId\)[\s\S]{0,1400}preload: path\.join\(__dirname, 'session-menu-preload\.cjs'\)/u)
+  for (const preload of [guestPreload, detachedPreload]) {
+    assert.match(preload, /syncSessionMenuState[\s\S]{0,260}ipcRenderer\.invoke\('sessionMenu:sync'/u)
+    assert.match(preload, /setSessionMenuFlag[\s\S]{0,260}ipcRenderer\.invoke\('sessionMenu:setFlag'/u)
+    assert.match(preload, /safeSessionMenuIds[\s\S]{0,400}ids\.length >= 1000/u)
+  }
+  assert.doesNotMatch(detachedPreload, /window:beginDrag|chooseWorkspaceDirectory|onWallpaperLifecycle/u)
 })

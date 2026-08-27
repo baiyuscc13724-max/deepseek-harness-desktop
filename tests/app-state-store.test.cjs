@@ -31,6 +31,38 @@ test('AppStateStore persists only validated integrated-terminal shell preference
   assert.deepEqual(normalizeState({ schemaVersion: 9, terminal: { shellId: 'git-bash', command: 'malicious.exe' } }).terminal, { shellId: 'git-bash' })
 })
 
+test('AppStateStore persists bounded session-menu state across renderer origins and restarts', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-session-menu-state-'))
+  const file = path.join(dir, 'app-state.json')
+  const firstOrigin = new AppStateStore(file)
+  assert.deepEqual(firstOrigin.get().sessionMenu, { initialized: false, pinned: [], unread: [] })
+
+  firstOrigin.syncSessionMenuState({
+    pinned: ['legacy-pin', 'legacy-pin', '', ' padded '],
+    unread: ['legacy-unread']
+  })
+  firstOrigin.updateSessionMenuFlag({ sessionId: 'new-pin', flag: 'pinned', enabled: true })
+  firstOrigin.updateSessionMenuFlag({ sessionId: 'legacy-unread', flag: 'unread', enabled: false })
+
+  const secondOriginAfterRestart = new AppStateStore(file)
+  assert.deepEqual(secondOriginAfterRestart.get().sessionMenu, {
+    initialized: true,
+    pinned: ['new-pin', 'legacy-pin'],
+    unread: []
+  })
+  secondOriginAfterRestart.syncSessionMenuState({ pinned: ['stale-origin-pin'], unread: ['stale-origin-unread'] })
+  assert.deepEqual(secondOriginAfterRestart.get().sessionMenu.pinned, ['new-pin', 'legacy-pin'], 'a later origin cannot overwrite initialized desktop state')
+  assert.deepEqual(secondOriginAfterRestart.get().sessionMenu.unread, [])
+
+  assert.throws(() => secondOriginAfterRestart.updateSessionMenuFlag({ sessionId: '../bad ', flag: 'pinned', enabled: true }), /会话 ID 无效/)
+  assert.throws(() => secondOriginAfterRestart.updateSessionMenuFlag({ sessionId: 'valid', flag: 'unknown', enabled: true }), /状态标识无效/)
+  assert.throws(() => secondOriginAfterRestart.updateSessionMenuFlag({ sessionId: 'valid', flag: 'pinned', enabled: 1 }), /状态值无效/)
+
+  const bounded = normalizeState({ sessionMenu: { initialized: true, pinned: Array.from({ length: 1005 }, (_, index) => `pin-${index}`), unread: ['ok', 'ok', ''] } })
+  assert.equal(bounded.sessionMenu.pinned.length, 1000)
+  assert.deepEqual(bounded.sessionMenu.unread, ['ok'])
+})
+
 test('AppStateStore records only monotonic signed PR preview candidates', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-preview-state-'))
   const file = path.join(dir, 'app-state.json')
@@ -137,7 +169,7 @@ test('new installs use Porcelain Mist while preserving an explicitly selected no
 
 test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
   const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
-  assert.equal(migrated.schemaVersion, 12)
+  assert.equal(migrated.schemaVersion, 13)
   assert.equal(migrated.appearance.themeId, 'porcelain-mist')
   const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
   assert.equal(explicitOfficial.appearance.themeId, 'official')
@@ -175,7 +207,7 @@ test('new profiles enable bounded automatic local memory and preserve explicit c
 
 test('memory migration defaults missing preferences on without overriding an explicit saved false', () => {
   const missing = normalizeState({ schemaVersion: 8 })
-  assert.equal(missing.schemaVersion, 12)
+  assert.equal(missing.schemaVersion, 13)
   assert.deepEqual(missing.memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
 
   const disabled = normalizeState({ schemaVersion: 8, memory: { enabled: false, autoRecall: true, autoCapture: true } })
@@ -198,7 +230,7 @@ test('explicit memory disable survives migration and later unrelated persistence
   store.updatePreferences({ checkOnStartup: false })
 
   const persisted = JSON.parse(readFileSync(file, 'utf8'))
-  assert.equal(persisted.schemaVersion, 12)
+  assert.equal(persisted.schemaVersion, 13)
   assert.deepEqual(persisted.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
   assert.equal(new AppStateStore(file).get().memory.enabled, false)
 })

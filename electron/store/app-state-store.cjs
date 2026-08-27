@@ -6,8 +6,11 @@ const VALID_THEME_IDS = new Set(THEME_CATALOG.map(theme => theme.id))
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 const DEFAULT_THEME_ID = 'porcelain-mist'
 const VALID_UI_MODES = new Set(['official', 'aurora', 'spatial', 'tactile'])
-const CURRENT_SCHEMA_VERSION = 12
+const CURRENT_SCHEMA_VERSION = 13
 const MAX_WALLPAPER_LIBRARY_ITEMS = 48
+const MAX_SESSION_MENU_IDS = 1000
+const MAX_SESSION_ID_LENGTH = 256
+const VALID_SESSION_MENU_FLAGS = new Set(['pinned', 'unread'])
 const VALID_TERMINAL_SHELL_IDS = new Set(['powershell', 'cmd', 'git-bash', 'wsl', 'default'])
 const WALLPAPER_ID = /^[a-z0-9][a-z0-9-]{0,79}$/
 const WALLPAPER_FILE = /^(?:custom-background|wallpaper-[a-z0-9-]{1,80})\.(?:png|jpe?g|webp|gif|apng|mp4|webm)$/i
@@ -21,6 +24,27 @@ function boundedInteger(value, minimum, maximum, fallback) {
   const number = Number(value)
   if (!Number.isFinite(number)) return fallback
   return Math.min(maximum, Math.max(minimum, Math.round(number)))
+}
+
+function normalizeSessionMenuIds(value) {
+  const seen = new Set()
+  const ids = []
+  for (const candidate of Array.isArray(value) ? value : []) {
+    if (typeof candidate !== 'string' || !candidate || candidate.length > MAX_SESSION_ID_LENGTH || candidate.trim() !== candidate || seen.has(candidate)) continue
+    seen.add(candidate)
+    ids.push(candidate)
+    if (ids.length >= MAX_SESSION_MENU_IDS) break
+  }
+  return ids
+}
+
+function normalizeSessionMenuState(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return {
+    initialized: input.initialized === true,
+    pinned: normalizeSessionMenuIds(input.pinned),
+    unread: normalizeSessionMenuIds(input.unread)
+  }
 }
 
 // Bound Wallpaper Engine project directory for one-click import/sync. Only
@@ -99,6 +123,11 @@ const DEFAULT_STATE = Object.freeze({
   },
   terminal: {
     shellId: null
+  },
+  sessionMenu: {
+    initialized: false,
+    pinned: [],
+    unread: []
   }
 })
 
@@ -181,7 +210,8 @@ function normalizeState(input) {
     },
     terminal: {
       shellId: VALID_TERMINAL_SHELL_IDS.has(value.terminal?.shellId) ? value.terminal.shellId : null
-    }
+    },
+    sessionMenu: normalizeSessionMenuState(value.sessionMenu)
   }
 }
 
@@ -406,6 +436,29 @@ class AppStateStore {
     return this.get()
   }
 
+  syncSessionMenuState(value = {}) {
+    if (!this.state.sessionMenu.initialized) {
+      this.state.sessionMenu = normalizeSessionMenuState({ ...value, initialized: true })
+      this.#persist()
+    }
+    return this.get()
+  }
+
+  updateSessionMenuFlag(value = {}) {
+    const sessionId = typeof value.sessionId === 'string' ? value.sessionId : ''
+    if (!sessionId || sessionId.length > MAX_SESSION_ID_LENGTH || sessionId.trim() !== sessionId) throw new Error('会话 ID 无效。')
+    const flag = typeof value.flag === 'string' ? value.flag : ''
+    if (!VALID_SESSION_MENU_FLAGS.has(flag)) throw new Error('会话菜单状态标识无效。')
+    if (typeof value.enabled !== 'boolean') throw new Error('会话菜单状态值无效。')
+    const current = this.state.sessionMenu[flag]
+    this.state.sessionMenu.initialized = true
+    this.state.sessionMenu[flag] = value.enabled
+      ? [sessionId, ...current.filter(id => id !== sessionId)].slice(0, MAX_SESSION_MENU_IDS)
+      : current.filter(id => id !== sessionId)
+    this.#persist()
+    return this.get()
+  }
+
   updateTerminalPreferences(patch = {}) {
     if (Object.prototype.hasOwnProperty.call(patch, 'shellId')) {
       const shellId = patch.shellId == null || patch.shellId === '' ? null : String(patch.shellId)
@@ -421,9 +474,11 @@ module.exports = {
   AppStateStore,
   DEFAULT_STATE,
   DEFAULT_THEME_ID,
+  MAX_SESSION_MENU_IDS,
   MAX_WALLPAPER_LIBRARY_ITEMS,
   VALID_TERMINAL_SHELL_IDS,
   VALID_THEME_IDS,
+  normalizeSessionMenuState,
   normalizeState,
   normalizePetPositions,
   normalizeWallpaperItem,

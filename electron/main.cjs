@@ -203,6 +203,14 @@ function ensureStateStore() {
   return appStateStore
 }
 
+function sessionMenuStatePayload(state = ensureStateStore().get()) {
+  const sessionMenu = state?.sessionMenu || {}
+  return {
+    pinned: Array.isArray(sessionMenu.pinned) ? [...sessionMenu.pinned] : [],
+    unread: Array.isArray(sessionMenu.unread) ? [...sessionMenu.unread] : []
+  }
+}
+
 function ensureTerminalManager() {
   if (!terminalManager) {
     terminalManager = new TerminalManager({
@@ -2415,6 +2423,17 @@ function desktopShellOnly(handler) {
   }
 }
 
+function assertLocalRuntimeSender(event) {
+  const senderUrl = event.senderFrame?.url || event.sender?.getURL?.() || ''
+  let allowed = false
+  try {
+    const senderOrigin = new URL(senderUrl).origin
+    const runtimeOrigin = runtimeState.status === 'ready' && runtimeState.url ? new URL(runtimeState.url).origin : ''
+    allowed = isLocalRuntimeUrl(senderUrl) && senderOrigin === runtimeOrigin
+  } catch {}
+  if (!allowed) throw new Error('只允许当前本机 Harness 运行时访问会话菜单状态。')
+}
+
 function mobileSyncSecretAdapter() {
   try {
     if (!safeStorage.isEncryptionAvailable()) return null
@@ -4367,6 +4386,7 @@ function openDetachedSessionWindow(sessionId) {
     title: 'Harness Desktop',
     webPreferences: {
       partition: 'persist:harness',
+      preload: path.join(__dirname, 'session-menu-preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
@@ -4935,6 +4955,14 @@ ipcMain.handle('shell:openExternal', (event, value) => {
   return openRoutedBrowserLink(value, { source: 'user', intent: browserIntentForLink(value), userChoice: 'system' })
 })
 ipcMain.handle('shell:openLocal', desktopShellOnly((value, options = {}) => openDesktopLocalTarget(value, Boolean(options.reveal))))
+ipcMain.handle('sessionMenu:sync', (event, value) => {
+  assertLocalRuntimeSender(event)
+  return sessionMenuStatePayload(ensureStateStore().syncSessionMenuState(value || {}))
+})
+ipcMain.handle('sessionMenu:setFlag', (event, value) => {
+  assertLocalRuntimeSender(event)
+  return sessionMenuStatePayload(ensureStateStore().updateSessionMenuFlag(value || {}))
+})
 ipcMain.handle('workspace:chooseDirectory', event => {
   if (!isLocalRuntimeUrl(event.sender.getURL())) throw new Error('只允许本机 Harness 界面选择工作区。')
   return chooseWorkspaceDirectory()

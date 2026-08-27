@@ -48,6 +48,43 @@ function safeSessionContext(value) {
   return Object.freeze({ sessionId })
 }
 
+function safeSessionMenuIds(value) {
+  const ids = []
+  const seen = new Set()
+  for (const candidate of Array.isArray(value) ? value : []) {
+    if (typeof candidate !== 'string' || !candidate || candidate.length > 256 || candidate.trim() !== candidate || seen.has(candidate)) continue
+    seen.add(candidate)
+    ids.push(candidate)
+    if (ids.length >= 1000) break
+  }
+  return Object.freeze(ids)
+}
+
+function safeSessionMenuState(value) {
+  return Object.freeze({
+    pinned: safeSessionMenuIds(value?.pinned),
+    unread: safeSessionMenuIds(value?.unread)
+  })
+}
+
+function safeSessionMenuFlag(value) {
+  const sessionId = typeof value?.sessionId === 'string' ? value.sessionId : ''
+  const flag = value?.flag === 'pinned' || value?.flag === 'unread' ? value.flag : ''
+  if (!sessionId || sessionId.length > 256 || sessionId.trim() !== sessionId || !flag || typeof value?.enabled !== 'boolean') return null
+  return Object.freeze({ sessionId, flag, enabled: value.enabled })
+}
+
+async function syncSessionMenuState(value) {
+  const state = safeSessionMenuState(value)
+  return safeSessionMenuState(await ipcRenderer.invoke('sessionMenu:sync', state))
+}
+
+async function setSessionMenuFlag(value) {
+  const request = safeSessionMenuFlag(value)
+  if (!request) return null
+  return safeSessionMenuState(await ipcRenderer.invoke('sessionMenu:setFlag', request))
+}
+
 function subscribeRightWorkspaceCommands(listener) {
   if (typeof listener !== 'function') return () => {}
   const wrapped = (_event, value) => {
@@ -120,6 +157,8 @@ contextBridge.exposeInMainWorld('harnessDesktopGuest', Object.freeze({
     if (intent) ipcRenderer.sendToHost('right-workspace:intent', intent)
     return Boolean(intent)
   },
+  syncSessionMenuState,
+  setSessionMenuFlag,
   onRightWorkspaceCommand: subscribeRightWorkspaceCommands,
   onWallpaperLifecycle: subscribeWallpaperLifecycle
 }))

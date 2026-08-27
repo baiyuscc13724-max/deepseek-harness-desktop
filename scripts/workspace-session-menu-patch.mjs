@@ -4,16 +4,53 @@ const PATCH_MARKER = 'const HD_SESSION_MENU_STATE_KEY = "harness.desktop.session
 
 const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harness.desktop.session-menu.v1";
 		const HD_SESSION_MENU_EVENT = "harness-desktop-session-menu-change";
+		let hdSessionMenuDesktopState = null;
+		let hdSessionMenuDesktopRevision = 0;
+		let hdSessionMenuDesktopHydrated = false;
+		let hdSessionMenuDesktopSyncPromise = null;
+		function normalizeSessionMenuState(value) {
+			const input = value && typeof value === "object" ? value : {};
+			const normalizeIds = (ids) => {
+				const seen = new Set();
+				return (Array.isArray(ids) ? ids : []).filter((id) => {
+					if (typeof id !== "string" || !id || id.length > 256 || id.trim() !== id || seen.has(id)) return false;
+					seen.add(id);
+					return true;
+				}).slice(0, 1000);
+			};
+			return { pinned: normalizeIds(input.pinned), unread: normalizeIds(input.unread) };
+		}
 		function readSessionMenuState() {
+			if (hdSessionMenuDesktopState) return { pinned: [...hdSessionMenuDesktopState.pinned], unread: [...hdSessionMenuDesktopState.unread] };
 			try {
-				const parsed = JSON.parse(localStorage.getItem(HD_SESSION_MENU_STATE_KEY) ?? "{}");
-				return {
-					pinned: Array.isArray(parsed.pinned) ? parsed.pinned.filter((id) => typeof id === "string" && id.length <= 256).slice(0, 1000) : [],
-					unread: Array.isArray(parsed.unread) ? parsed.unread.filter((id) => typeof id === "string" && id.length <= 256).slice(0, 1000) : []
-				};
+				return normalizeSessionMenuState(JSON.parse(localStorage.getItem(HD_SESSION_MENU_STATE_KEY) ?? "{}"));
 			} catch {
 				return { pinned: [], unread: [] };
 			}
+		}
+		function persistSessionMenuState(value) {
+			const state = normalizeSessionMenuState(value);
+			hdSessionMenuDesktopState = state;
+			try { localStorage.setItem(HD_SESSION_MENU_STATE_KEY, JSON.stringify(state)); } catch {}
+			return state;
+		}
+		function dispatchSessionMenuChange(detail) {
+			window.dispatchEvent(new CustomEvent(HD_SESSION_MENU_EVENT, { detail }));
+		}
+		function syncDesktopSessionMenuState() {
+			if (hdSessionMenuDesktopHydrated) return Promise.resolve(readSessionMenuState());
+			if (hdSessionMenuDesktopSyncPromise) return hdSessionMenuDesktopSyncPromise;
+			const bridge = window.harnessDesktopGuest;
+			if (!bridge || typeof bridge.syncSessionMenuState !== "function") return Promise.resolve(readSessionMenuState());
+			const revision = hdSessionMenuDesktopRevision;
+			hdSessionMenuDesktopSyncPromise = Promise.resolve(bridge.syncSessionMenuState(readSessionMenuState())).then((value) => {
+				if (revision !== hdSessionMenuDesktopRevision || !value || !Array.isArray(value.pinned) || !Array.isArray(value.unread)) return readSessionMenuState();
+				hdSessionMenuDesktopHydrated = true;
+				const state = persistSessionMenuState(value);
+				dispatchSessionMenuChange({ hydrated: true });
+				return state;
+			}).catch(() => readSessionMenuState()).finally(() => { hdSessionMenuDesktopSyncPromise = null; });
+			return hdSessionMenuDesktopSyncPromise;
 		}
 		function sessionMenuFlag(sessionId, flag) {
 			return readSessionMenuState()[flag].includes(sessionId);
@@ -21,15 +58,35 @@ const SESSION_MENU_IMPLEMENTATION = `\t\tconst HD_SESSION_MENU_STATE_KEY = "harn
 		function setSessionMenuFlag(sessionId, flag, enabled) {
 			const state = readSessionMenuState();
 			state[flag] = enabled ? [sessionId, ...state[flag].filter((id) => id !== sessionId)] : state[flag].filter((id) => id !== sessionId);
-			try { localStorage.setItem(HD_SESSION_MENU_STATE_KEY, JSON.stringify(state)); } catch {}
-			window.dispatchEvent(new CustomEvent(HD_SESSION_MENU_EVENT, { detail: { sessionId, flag, enabled } }));
+			const revision = ++hdSessionMenuDesktopRevision;
+			persistSessionMenuState(state);
+			dispatchSessionMenuChange({ sessionId, flag, enabled });
+			const bridge = window.harnessDesktopGuest;
+			if (!bridge || typeof bridge.setSessionMenuFlag !== "function") return;
+			Promise.resolve(bridge.setSessionMenuFlag({ sessionId, flag, enabled })).then((value) => {
+				if (revision !== hdSessionMenuDesktopRevision || !value || !Array.isArray(value.pinned) || !Array.isArray(value.unread)) return;
+				hdSessionMenuDesktopHydrated = true;
+				persistSessionMenuState(value);
+				dispatchSessionMenuChange({ sessionId, flag, enabled, persisted: true });
+			}).catch(() => {});
 		}
 		function useSessionMenuRevision() {
 			const [revision, setRevision] = (0, react.useState)(0);
 			(0, react.useEffect)(() => {
 				const refresh = () => setRevision((value) => value + 1);
+				const refreshStorage = (event) => {
+					if (event.key !== HD_SESSION_MENU_STATE_KEY) return;
+					hdSessionMenuDesktopState = null;
+					hdSessionMenuDesktopRevision += 1;
+					refresh();
+				};
 				window.addEventListener(HD_SESSION_MENU_EVENT, refresh);
-				return () => window.removeEventListener(HD_SESSION_MENU_EVENT, refresh);
+				window.addEventListener("storage", refreshStorage);
+				void syncDesktopSessionMenuState();
+				return () => {
+					window.removeEventListener(HD_SESSION_MENU_EVENT, refresh);
+					window.removeEventListener("storage", refreshStorage);
+				};
 			}, []);
 			return revision;
 		}
