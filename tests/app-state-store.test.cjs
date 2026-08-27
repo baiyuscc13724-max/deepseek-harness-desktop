@@ -3,20 +3,20 @@ const assert = require('node:assert/strict')
 const { mkdtempSync, readFileSync, writeFileSync } = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { AppStateStore, normalizeState } = require('../electron/store/app-state-store.cjs')
+const { AppStateStore, MAX_PREVIEW_CANDIDATES, normalizeState } = require('../electron/store/app-state-store.cjs')
 
-test('AppStateStore persists update preferences', () => {
+test('AppStateStore hard-enables discovery while persisting safe update preferences', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-state-'))
   const file = path.join(dir, 'app-state.json')
   const store = new AppStateStore(file)
   store.updatePreferences({ checkOnStartup: false, channel: 'prerelease', previewEnabled: true })
   const restored = new AppStateStore(file).get()
-  assert.equal(restored.updates.checkOnStartup, false)
+  assert.equal(restored.updates.checkOnStartup, true)
   assert.equal(restored.updates.channel, 'prerelease')
   assert.equal(restored.updates.previewEnabled, true)
   assert.equal(normalizeState({ updates: {} }).updates.previewEnabled, true)
-  assert.equal(normalizeState({ schemaVersion: 10, updates: { previewEnabled: false } }).updates.previewEnabled, true)
-  assert.equal(normalizeState({ schemaVersion: 11, updates: { previewEnabled: false } }).updates.previewEnabled, false)
+  assert.equal(normalizeState({ schemaVersion: 13, updates: { checkOnStartup: false, previewEnabled: false } }).updates.checkOnStartup, true)
+  assert.equal(normalizeState({ schemaVersion: 14, updates: { checkOnStartup: false, previewEnabled: false } }).updates.previewEnabled, true)
 })
 
 test('AppStateStore persists only validated integrated-terminal shell preferences', () => {
@@ -46,11 +46,43 @@ test('AppStateStore records only monotonic signed PR preview candidates', () => 
     skippedVersion: null,
     previewEnabled: true,
     lastPreviewSequence: 4,
-    lastPreviewHeadSha: firstSha
+    lastPreviewHeadSha: firstSha,
+    previewCandidates: []
   })
   assert.throws(() => store.markPreviewCandidate(3, firstSha), /拒绝回退/)
   assert.throws(() => store.markPreviewCandidate(4, secondSha), /不同 commit/)
   assert.throws(() => store.markPreviewCandidate(5, 'bad'), /commit 无效/)
+})
+
+test('AppStateStore persists a bounded opaque PR candidate queue without weakening accepted sequence', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-preview-queue-'))
+  const file = path.join(dir, 'app-state.json')
+  const store = new AppStateStore(file)
+  const candidate = {
+    id: `pr-${'a'.repeat(64)}`,
+    provider: 'github',
+    index: { sequence: 8, headSha: 'b'.repeat(40), signature: 'signed-index' },
+    previewManifest: { sequence: 8, headSha: 'b'.repeat(40), signature: 'signed-manifest' }
+  }
+  store.savePreviewUpdateState({ sequence: 4, headSha: 'c'.repeat(40), candidates: [candidate, { ...candidate, id: '../forged' }] })
+  const restored = new AppStateStore(file).get().updates
+  assert.equal(restored.lastPreviewSequence, 4)
+  assert.deepEqual(restored.previewCandidates, [candidate])
+  assert.equal(MAX_PREVIEW_CANDIDATES, 128)
+  const boundedInput = Array.from({ length: MAX_PREVIEW_CANDIDATES + 1 }, (_, index) => ({
+    id: `pr-${index.toString(16).padStart(64, '0')}`,
+    provider: index % 2 ? 'github' : 'cnb',
+    index: { sequence: index + 1 },
+    previewManifest: { sequence: index + 1 }
+  }))
+  const bounded = store.savePreviewUpdateState({ sequence: 4, headSha: 'c'.repeat(40), candidates: boundedInput }).updates.previewCandidates
+  assert.equal(bounded.length, MAX_PREVIEW_CANDIDATES)
+  assert.equal(bounded[0].id, boundedInput[1].id)
+  assert.equal(bounded.at(-1).id, boundedInput.at(-1).id)
+  assert.throws(() => store.savePreviewUpdateState({ sequence: 3, headSha: 'c'.repeat(40), candidates: [] }), /拒绝回退/)
+  const recovered = store.markPreviewCandidate(MAX_PREVIEW_CANDIDATES + 1, 'd'.repeat(40)).updates
+  assert.equal(recovered.lastPreviewSequence, MAX_PREVIEW_CANDIDATES + 1)
+  assert.deepEqual(recovered.previewCandidates, [])
 })
 
 test('AppStateStore persists only validated appearance fields', () => {
@@ -137,7 +169,7 @@ test('new installs use Porcelain Mist while preserving an explicitly selected no
 
 test('legacy untouched official defaults migrate once to Porcelain Mist', () => {
   const migrated = normalizeState({ schemaVersion: 2, appearance: { themeId: 'official' } })
-  assert.equal(migrated.schemaVersion, 12)
+  assert.equal(migrated.schemaVersion, 14)
   assert.equal(migrated.appearance.themeId, 'porcelain-mist')
   const explicitOfficial = normalizeState({ schemaVersion: 3, appearance: { themeId: 'official' } })
   assert.equal(explicitOfficial.appearance.themeId, 'official')
@@ -175,7 +207,7 @@ test('new profiles enable bounded automatic local memory and preserve explicit c
 
 test('memory migration defaults missing preferences on without overriding an explicit saved false', () => {
   const missing = normalizeState({ schemaVersion: 8 })
-  assert.equal(missing.schemaVersion, 12)
+  assert.equal(missing.schemaVersion, 14)
   assert.deepEqual(missing.memory, { enabled: true, sensitivityMode: 'reject', autoRecall: true, autoCapture: true })
 
   const disabled = normalizeState({ schemaVersion: 8, memory: { enabled: false, autoRecall: true, autoCapture: true } })
@@ -198,7 +230,7 @@ test('explicit memory disable survives migration and later unrelated persistence
   store.updatePreferences({ checkOnStartup: false })
 
   const persisted = JSON.parse(readFileSync(file, 'utf8'))
-  assert.equal(persisted.schemaVersion, 12)
+  assert.equal(persisted.schemaVersion, 14)
   assert.deepEqual(persisted.memory, { enabled: false, sensitivityMode: 'reject', autoRecall: false, autoCapture: false })
   assert.equal(new AppStateStore(file).get().memory.enabled, false)
 })

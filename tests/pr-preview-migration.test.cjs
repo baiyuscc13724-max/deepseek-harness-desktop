@@ -58,51 +58,55 @@ test('existing installations can receive updater code as a stable shell without 
   assert.match(activationStore, /拒绝覆盖稳定回滚点/)
 })
 
-test('preview IPC is zero-input and acceptance happens only after successful component staging', async () => {
+test('legacy preview IPC stays zero-input while unified actions use opaque ids after successful staging', async () => {
   const [main, preload, renderer] = await Promise.all([
     load('electron/main.cjs'),
     load('electron/preload.cjs'),
     load('renderer/app.js')
   ])
 
-  assert.match(main, /await pending\.componentService\.stage\([\s\S]*await context\.service\.accept\(pending\.discovery\)/)
+  assert.match(main, /await pending\.componentService\.stage\(pending\.checkResult,[\s\S]*await context\.service\.accept\(pending\.discovery\.candidateId\)/)
   assert.match(main, /ipcMain\.handle\('prPreviewUpdates:check', desktopShellOnly\(\(\) => checkPrPreviewUpdates\(\)\)\)/)
   assert.match(main, /ipcMain\.handle\('prPreviewUpdates:apply', desktopShellOnly\(\(\) => applyPrPreviewUpdate\(\)\)\)/)
+  assert.match(main, /ipcMain\.handle\('unifiedUpdates:action', desktopShellOnly\(request => runUnifiedUpdateAction\(request\?\.id, request\?\.action\)\)\)/)
   assert.match(main, /function isPendingPreviewReady/)
   assert.match(main, /candidate: lastPrPreviewCandidate\?\.clientCandidate \|\| \(ready \? activationClientCandidate\(activation\) : null\)/)
-  assert.match(main, /enabled: appState\.updates\?\.previewEnabled === true \|\| Boolean\(activation\)/)
-  assert.match(main, /const current = await getPrPreviewUpdateState\(\)[\s\S]*if \(current\.ready && current\.candidate\)[\s\S]*if \(!preferences\.previewEnabled\)/)
-  assert.match(main, /if \(!isPendingPreviewReady\(componentState, activation\)\) await stagePrPreviewUpdate\(\)/)
+  assert.match(main, /enabled: true/)
+  assert.match(main, /const current = await getPrPreviewUpdateState\(\)[\s\S]*if \(current\.ready && current\.candidate\)/)
+  assert.doesNotMatch(main, /if \(!preferences\.previewEnabled\)/)
+  assert.match(main, /if \(!isPendingPreviewReady\(componentState, activation\)\) await stagePrPreviewUpdate\(candidateId\)/)
   assert.match(main, /else await ensureStateStore\(\)\.markPreviewCandidate\(activation\.candidate\.sequence, activation\.candidate\.headSha\)/)
   assert.match(main, /prNumber: pending\.discovery\.prNumber[\s\S]*provider: pending\.discovery\.provider/)
   assert.match(preload, /checkPrPreviewUpdates: \(\) => ipcRenderer\.invoke\('prPreviewUpdates:check'\)/)
   assert.match(preload, /applyPrPreviewUpdate: \(\) => ipcRenderer\.invoke\('prPreviewUpdates:apply'\)/)
+  assert.match(preload, /runUnifiedUpdateAction: \(id, action\) => ipcRenderer\.invoke\('unifiedUpdates:action', \{ id: String\(id \|\| ''\), action: String\(action \|\| ''\) \}\)/)
   assert.doesNotMatch(preload, /checkPrPreviewUpdates:\s*(?:\([^)]*\w[^)]*\)|\w+)\s*=>/)
-  assert.match(renderer, /data-hd-preview/)
+  assert.doesNotMatch(renderer, /data-hd-preview/)
   assert.doesNotMatch(renderer, /preview.*(?:prompt|PR\s*编号|Token|仓库).*input/i)
 })
 
-test('preview state adapter uses the synchronous AppStateStore get() API and never calls load()', async () => {
+test('preview queue adapter uses synchronous AppStateStore reads and persists the full verified queue', async () => {
   const [main, store] = await Promise.all([
     load('electron/main.cjs'),
     load('electron/store/app-state-store.cjs')
   ])
 
-  // The real AppStateStore loads synchronously in its constructor; get() is the
-  // only public reader. The isolated client fails at runtime with
-  // "ensureStateStore(...).load is not a function", so the adapter and the
-  // preview IPC read paths must never reference load().
+  // AppStateStore loads synchronously in its constructor; get() remains the
+  // only public reader, including for the persisted signed candidate queue.
   assert.doesNotMatch(main, /ensureStateStore\(\)\.load\(/)
-  assert.match(main, /const appState = ensureStateStore\(\)\.get\(\)/)
-  assert.match(main, /const preferences = ensureStateStore\(\)\.get\(\)\.updates \|\| \{\}/)
+  assert.match(main, /enabled: true/)
+  assert.doesNotMatch(main, /if \(!preferences\.previewEnabled\)/)
 
-  // The adapter keeps the load/save contract PrPreviewUpdateService validates,
-  // backed by the synchronous store: get() for reads and markPreviewCandidate
-  // for writes, preserving the monotonic sequence / same-sequence-SHA semantics.
-  assert.match(
-    main,
-    /function prPreviewStateAdapter\(\)\s*\{\s*return \{\s*async load\(\)[\s\S]*const updates = ensureStateStore\(\)\.get\(\)\.updates \|\| \{\}[\s\S]*if \(!updates\.lastPreviewSequence \|\| !updates\.lastPreviewHeadSha\) return null[\s\S]*return \{ sequence: updates\.lastPreviewSequence, headSha: updates\.lastPreviewHeadSha \}[\s\S]*async save\(next\)[\s\S]*return ensureStateStore\(\)\.markPreviewCandidate\(next\.sequence, next\.headSha\)/
-  )
+  const adapter = main.match(/function prPreviewStateAdapter\(\)[\s\S]*?(?=\nasync function ensurePrPreviewUpdateContext)/)?.[0] || ''
+  assert.match(adapter, /async load\(\)/)
+  assert.match(adapter, /const updates = ensureStateStore\(\)\.get\(\)\.updates \|\| \{\}/)
+  assert.match(adapter, /sequence: updates\.lastPreviewSequence \|\| 0/)
+  assert.match(adapter, /headSha: updates\.lastPreviewHeadSha \|\| ''/)
+  assert.match(adapter, /candidates: updates\.previewCandidates \|\| \[\]/)
+  assert.match(adapter, /async save\(next\)[\s\S]*savePreviewUpdateState\(next\)/)
+
+  assert.match(store, /const MAX_PREVIEW_CANDIDATES = 128/)
+  assert.match(store, /savePreviewUpdateState\(value = \{\}\)/)
   assert.match(store, /markPreviewCandidate\(sequence, headSha\)/)
   assert.match(store, /sequence < currentSequence\) throw new Error\('拒绝回退到旧的 PR 预览更新序号。'\)/)
   assert.match(store, /同一 PR 预览更新序号指向了不同 commit。/)

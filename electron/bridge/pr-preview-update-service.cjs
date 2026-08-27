@@ -1,3 +1,5 @@
+const { createHash } = require('node:crypto')
+const { canonicalJson } = require('./component-update-contract.cjs')
 const {
   OFFICIAL_PREVIEW_REPOSITORY,
   assertIndexMatchesManifest,
@@ -16,6 +18,8 @@ const {
 
 const DEFAULT_MAX_REDIRECTS = 2
 const DEFAULT_MAX_JSON_BYTES = 1024 * 1024
+const MAX_PERSISTED_CANDIDATES = 128
+const CANDIDATE_ID_PATTERN = /^pr-[a-f0-9]{64}$/
 
 function responseHeader(response, name) {
   if (typeof response?.headers?.get === 'function') return response.headers.get(name)
@@ -29,9 +33,7 @@ function resolveOfficialPreviewRedirect(fromUrl, location, { kind, headSha = '',
   }
   const from = safeOfficialPreviewUrl(fromUrl, { kind, headSha })
   const target = safeOfficialPreviewUrl(new URL(String(location || ''), from).toString(), { kind, headSha })
-  if (officialPreviewProvider(new URL(from)) !== officialPreviewProvider(new URL(target))) {
-    throw new Error('PR 预览请求拒绝跨来源重定向。')
-  }
+  if (officialPreviewProvider(new URL(from)) !== officialPreviewProvider(new URL(target))) throw new Error('PR 预览请求拒绝跨来源重定向。')
   return target
 }
 
@@ -51,21 +53,11 @@ async function responseJson(response, maxBytes) {
   throw new Error('PR 预览响应读取器不可用。')
 }
 
-async function fetchOfficialPreviewJson({
-  url,
-  kind,
-  headSha = '',
-  fetchImpl = globalThis.fetch,
-  maxRedirects = DEFAULT_MAX_REDIRECTS,
-  maxBytes = DEFAULT_MAX_JSON_BYTES
-}) {
+async function fetchOfficialPreviewJson({ url, kind, headSha = '', fetchImpl = globalThis.fetch, maxRedirects = DEFAULT_MAX_REDIRECTS, maxBytes = DEFAULT_MAX_JSON_BYTES }) {
   if (typeof fetchImpl !== 'function') throw new Error('PR 预览下载器不可用。')
   let current = safeOfficialPreviewUrl(url, { kind, headSha })
   for (let redirectCount = 0; ; redirectCount += 1) {
-    const response = await fetchImpl(current, {
-      redirect: 'manual',
-      headers: { Accept: 'application/json', 'User-Agent': 'Harness-Desktop-PR-Preview' }
-    })
+    const response = await fetchImpl(current, { redirect: 'manual', headers: { Accept: 'application/json', 'User-Agent': 'Harness-Desktop-PR-Preview' } })
     const status = Number(response?.status)
     if (status >= 300 && status < 400) {
       const location = responseHeader(response, 'location')
@@ -76,9 +68,7 @@ async function fetchOfficialPreviewJson({
     if (!Number.isSafeInteger(status) || status < 200 || status >= 300) throw new Error(`PR 预览请求失败（HTTP ${status || 'unknown'}）。`)
     if (response.url) {
       const finalUrl = safeOfficialPreviewUrl(response.url, { kind, headSha })
-      if (officialPreviewProvider(new URL(finalUrl)) !== officialPreviewProvider(new URL(current))) {
-        throw new Error('PR 预览响应发生未授权跨来源重定向。')
-      }
+      if (officialPreviewProvider(new URL(finalUrl)) !== officialPreviewProvider(new URL(current))) throw new Error('PR 预览响应发生未授权跨来源重定向。')
       current = finalUrl
     }
     return { payload: await responseJson(response, maxBytes), source: current, provider: officialPreviewProvider(new URL(current)) }
@@ -98,31 +88,53 @@ async function fetchPreviewWithFallback({ urls, kind, headSha = '', fetchImpl, v
   throw new Error(`所有 PR 预览${kind === 'index' ? '索引' : '清单'}源均不可用：${failures.join('；')}`)
 }
 
+function previewCandidateId(index, previewManifest) {
+  const digest = createHash('sha256').update(canonicalJson({ index, previewManifest }), 'utf8').digest('hex')
+  return `pr-${digest}`
+}
+
+function normalizeStoredCandidate(value, { verifyId = true } = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('PR 预览持久候选无效。')
+  const id = String(value.id || '')
+  if (!CANDIDATE_ID_PATTERN.test(id)) throw new Error('PR 预览候选 id 无效。')
+  if (!value.index || !value.previewManifest) throw new Error('PR 预览候选缺少签名载荷。')
+  if (verifyId && id !== previewCandidateId(value.index, value.previewManifest)) throw new Error('PR 预览候选 id 与签名载荷不一致。')
+  const provider = value.provider === 'github' ? 'github' : 'cnb'
+  const indexProvider = value.indexProvider === 'github' ? 'github' : value.indexProvider === 'cnb' ? 'cnb' : provider
+  return { id, provider, indexProvider, index: value.index, previewManifest: value.previewManifest }
+}
+
 function normalizePreviewState(value) {
-  if (value === null || value === undefined) return { sequence: 0, headSha: '' }
+  if (value === null || value === undefined) return { sequence: 0, headSha: '', candidates: [] }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('PR 预览防重放状态无效。')
   const sequence = Number(value.sequence || 0)
-  if (sequence === 0 && !value.headSha) return { sequence: 0, headSha: '' }
-  return { sequence: normalizeSequence(sequence), headSha: normalizeHeadSha(value.headSha) }
+  const accepted = sequence === 0 && !value.headSha
+    ? { sequence: 0, headSha: '' }
+    : { sequence: normalizeSequence(sequence), headSha: normalizeHeadSha(value.headSha) }
+  const candidates = []
+  const seen = new Set()
+  for (const input of Array.isArray(value.candidates) ? value.candidates.slice(-MAX_PERSISTED_CANDIDATES * 2) : []) {
+    const candidate = normalizeStoredCandidate(input, { verifyId: false })
+    const candidateSequence = Number(candidate.index?.sequence || 0)
+    if (!Number.isSafeInteger(candidateSequence) || candidateSequence <= accepted.sequence || seen.has(candidate.id)) continue
+    seen.add(candidate.id)
+    candidates.push(candidate)
+    if (candidates.length > MAX_PERSISTED_CANDIDATES) candidates.shift()
+  }
+  return { ...accepted, candidates }
 }
 
 function createMemoryPreviewState(initial = null) {
   let value = initial
   return {
     async load() { return value },
-    async save(next) { value = { ...next } }
+    async save(next) { value = JSON.parse(JSON.stringify(next)) }
   }
 }
 
 function assertStateStore(state) {
-  if (!state || typeof state.load !== 'function' || typeof state.save !== 'function') {
-    throw new Error('PR 预览服务需要可注入的 load/save 状态存储。')
-  }
+  if (!state || typeof state.load !== 'function' || typeof state.save !== 'function') throw new Error('PR 预览服务需要可注入的 load/save 状态存储。')
   return state
-}
-
-function previewCandidateKey(value) {
-  return `${normalizeSequence(value?.sequence)}:${normalizeHeadSha(value?.headSha)}`
 }
 
 function replayDisposition(index, previous) {
@@ -132,17 +144,7 @@ function replayDisposition(index, previous) {
 }
 
 class PrPreviewUpdateService {
-  constructor({
-    enabled = false,
-    channelUrls,
-    indexUrls = channelUrls || OFFICIAL_PREVIEW_INDEX_URLS,
-    trustedKeys = {},
-    fetchImpl = globalThis.fetch,
-    clock = () => Date.now(),
-    state = createMemoryPreviewState(),
-    maxRedirects = DEFAULT_MAX_REDIRECTS,
-    maxBytes = DEFAULT_MAX_JSON_BYTES
-  } = {}) {
+  constructor({ enabled = false, channelUrls, indexUrls = channelUrls || OFFICIAL_PREVIEW_INDEX_URLS, trustedKeys = {}, fetchImpl = globalThis.fetch, clock = () => Date.now(), state = createMemoryPreviewState(), maxRedirects = DEFAULT_MAX_REDIRECTS, maxBytes = DEFAULT_MAX_JSON_BYTES } = {}) {
     this.enabled = enabled === true
     this.indexUrls = normalizeOfficialIndexUrls(indexUrls)
     this.trustedKeys = trustedKeys
@@ -153,7 +155,6 @@ class PrPreviewUpdateService {
     this.maxBytes = maxBytes
     this.activeDiscovery = null
     this.activeAcceptance = null
-    this.pendingCandidates = new Map()
   }
 
   async discover() {
@@ -163,139 +164,147 @@ class PrPreviewUpdateService {
     return this.activeDiscovery
   }
 
+  async listCandidates({ includeExpired = true } = {}) {
+    const now = this.#now()
+    const state = await this.#loadState()
+    const output = []
+    for (const record of state.candidates) {
+      try {
+        const result = this.#verifyRecord(record, now, true)
+        if (includeExpired || Date.parse(result.expiresAt) > now) output.push(result)
+      } catch {}
+    }
+    return output
+  }
+
+  async verifyCandidate(candidateId) {
+    if (!this.enabled) throw new Error('PR 快速预览通道尚未启用。')
+    const id = String(candidateId || '')
+    if (!CANDIDATE_ID_PATTERN.test(id)) throw new Error('PR 预览候选 id 无效。')
+    const state = await this.#loadState()
+    const record = state.candidates.find(value => value.id === id)
+    if (!record) throw new Error('PR 预览候选不存在或未经本服务验证。')
+    return this.#verifyRecord(record, this.#now(), false)
+  }
+
   async accept(candidate) {
     if (!this.enabled) return { accepted: false, reason: 'disabled' }
     if (this.activeAcceptance) return this.activeAcceptance
-    this.activeAcceptance = this.#accept(candidate).finally(() => { this.activeAcceptance = null })
+    const candidateId = typeof candidate === 'string' ? candidate : candidate?.candidateId
+    this.activeAcceptance = this.#accept(candidateId).finally(() => { this.activeAcceptance = null })
     return this.activeAcceptance
   }
 
-  async #loadState() {
-    return normalizePreviewState(await this.state.load())
+  #now() {
+    const now = Number(this.clock())
+    if (!Number.isFinite(now)) throw new Error('PR 预览时钟无效。')
+    return now
+  }
+
+  async #loadState() { return normalizePreviewState(await this.state.load()) }
+
+  #verifyRecord(record, now, allowExpired) {
+    const stored = normalizeStoredCandidate(record)
+    const index = validateAndVerifyPreviewIndex(stored.index, this.trustedKeys, { now, allowExpired, normalizeManifestUrls: normalizeOfficialManifestUrls })
+    const previewManifest = validateAndVerifyPreviewManifest(stored.previewManifest, this.trustedKeys, { now, allowExpired })
+    assertIndexMatchesManifest(index, previewManifest)
+    if (stored.id !== previewCandidateId(stored.index, stored.previewManifest)) throw new Error('PR 预览候选 id 复验失败。')
+    return {
+      candidateId: stored.id,
+      available: Date.parse(previewManifest.expiresAt) > now,
+      expired: Date.parse(previewManifest.expiresAt) <= now,
+      channel: 'pr-preview', repository: OFFICIAL_PREVIEW_REPOSITORY,
+      prNumber: index.prNumber, title: index.title, author: index.author, baseRef: index.baseRef,
+      headSha: index.headSha, sequence: index.sequence, publishedAt: previewManifest.publishedAt,
+      expiresAt: previewManifest.expiresAt, notes: index.notes, provider: stored.provider,
+      indexSource: this.indexUrls[stored.indexProvider === 'github' ? 1 : 0],
+      manifestSource: index.manifestUrls[stored.provider === 'github' ? 1 : 0],
+      manifest: stored.previewManifest.componentManifest
+    }
   }
 
   async #discover() {
-    const now = Number(this.clock())
-    if (!Number.isFinite(now)) throw new Error('PR 预览时钟无效。')
+    const now = this.#now()
     const previous = await this.#loadState()
+    let highWater = { sequence: previous.sequence, headSha: previous.headSha }
+    for (const record of previous.candidates) {
+      try {
+        const verified = this.#verifyRecord(record, now, true)
+        if (verified.sequence > highWater.sequence) highWater = { sequence: verified.sequence, headSha: verified.headSha }
+      } catch {}
+    }
     const failures = []
     const unchanged = []
     let indexResult = null
     for (const url of this.indexUrls) {
       try {
-        const fetched = await fetchOfficialPreviewJson({
-          url,
-          kind: 'index',
-          fetchImpl: this.fetchImpl,
-          maxRedirects: this.maxRedirects,
-          maxBytes: this.maxBytes
-        })
-        const index = validateAndVerifyPreviewIndex(fetched.payload, this.trustedKeys, {
-          now,
-          normalizeManifestUrls: normalizeOfficialManifestUrls
-        })
-        const disposition = replayDisposition(index, previous)
+        const fetched = await fetchOfficialPreviewJson({ url, kind: 'index', fetchImpl: this.fetchImpl, maxRedirects: this.maxRedirects, maxBytes: this.maxBytes })
+        const index = validateAndVerifyPreviewIndex(fetched.payload, this.trustedKeys, { now, normalizeManifestUrls: normalizeOfficialManifestUrls })
+        const disposition = replayDisposition(index, highWater)
         if (disposition === 'older') throw new Error('PR 预览 sequence 回退，拒绝重放。')
         if (disposition === 'conflict') throw new Error('PR 预览相同 sequence 对应不同 head SHA，拒绝重放。')
-        if (disposition === 'same') {
-          unchanged.push({ ...fetched, value: index })
-          continue
-        }
+        if (disposition === 'same') { unchanged.push({ ...fetched, value: index }); continue }
         indexResult = { ...fetched, value: index }
         break
-      } catch (error) {
-        failures.push(`${officialPreviewProvider(new URL(url))}: ${error.message}`)
-      }
+      } catch (error) { failures.push(`${officialPreviewProvider(new URL(url))}: ${error.message}`) }
     }
     if (!indexResult) {
       if (unchanged.length) {
         const accepted = unchanged.at(-1)
-        return {
-          available: false,
-          reason: 'not-newer',
-          repository: OFFICIAL_PREVIEW_REPOSITORY,
-          headSha: accepted.value.headSha,
-          sequence: accepted.value.sequence,
-          indexSource: accepted.source
-        }
+        const queued = previous.candidates.find(value => value.index?.sequence === accepted.value.sequence && value.index?.headSha === accepted.value.headSha)
+        return queued ? this.#verifyRecord(queued, now, false) : { available: false, reason: 'not-newer', repository: OFFICIAL_PREVIEW_REPOSITORY, headSha: accepted.value.headSha, sequence: accepted.value.sequence, indexSource: accepted.source }
       }
       throw new Error(`所有 PR 预览索引源均不可用：${failures.join('；')}`)
     }
     const index = indexResult.value
     const manifestResult = await fetchPreviewWithFallback({
-      urls: index.manifestUrls,
-      kind: 'manifest',
-      headSha: index.headSha,
-      fetchImpl: this.fetchImpl,
-      maxRedirects: this.maxRedirects,
-      maxBytes: this.maxBytes,
+      urls: index.manifestUrls, kind: 'manifest', headSha: index.headSha, fetchImpl: this.fetchImpl,
+      maxRedirects: this.maxRedirects, maxBytes: this.maxBytes,
       validate: payload => validateAndVerifyPreviewManifest(payload, this.trustedKeys, { now })
     })
-    const previewManifest = manifestResult.value
-    assertIndexMatchesManifest(index, previewManifest)
-    const result = {
-      available: true,
-      channel: 'pr-preview',
-      repository: OFFICIAL_PREVIEW_REPOSITORY,
-      prNumber: index.prNumber,
-      title: index.title,
-      author: index.author,
-      baseRef: index.baseRef,
-      headSha: index.headSha,
-      sequence: index.sequence,
-      publishedAt: previewManifest.publishedAt,
-      expiresAt: previewManifest.expiresAt,
-      notes: index.notes,
+    assertIndexMatchesManifest(index, manifestResult.value)
+    const record = normalizeStoredCandidate({
+      id: previewCandidateId(indexResult.payload, manifestResult.payload),
       provider: manifestResult.provider,
-      indexSource: indexResult.source,
-      manifestSource: manifestResult.source,
-      manifest: manifestResult.payload.componentManifest
-    }
-    this.pendingCandidates.set(previewCandidateKey(result), {
-      headSha: result.headSha,
-      sequence: result.sequence,
-      expiresAt: result.expiresAt
+      indexProvider: indexResult.provider,
+      index: indexResult.payload,
+      previewManifest: manifestResult.payload
     })
-    return result
+    const candidates = [...previous.candidates.filter(value => value.id !== record.id), record].slice(-MAX_PERSISTED_CANDIDATES)
+    await this.state.save({ sequence: previous.sequence, headSha: previous.headSha, candidates })
+    return this.#verifyRecord(record, now, false)
   }
 
-  async #accept(candidate) {
-    const key = previewCandidateKey(candidate)
-    const pending = this.pendingCandidates.get(key)
-    if (!pending) throw new Error('PR 预览候选未经本服务验证，拒绝接受。')
-    const now = Number(this.clock())
-    if (!Number.isFinite(now)) throw new Error('PR 预览时钟无效。')
-    if (Date.parse(pending.expiresAt) <= now) {
-      this.pendingCandidates.delete(key)
-      throw new Error('PR 预览候选已过期，拒绝接受。')
-    }
+  async #accept(candidateId) {
+    const verified = await this.verifyCandidate(candidateId)
     const previous = await this.#loadState()
-    const disposition = replayDisposition(pending, previous)
+    const disposition = replayDisposition(verified, previous)
     if (disposition === 'older') throw new Error('PR 预览 sequence 回退，拒绝接受。')
     if (disposition === 'conflict') throw new Error('PR 预览相同 sequence 对应不同 head SHA，拒绝接受。')
-    if (disposition === 'same') return { accepted: false, reason: 'already-accepted', sequence: pending.sequence, headSha: pending.headSha }
+    if (disposition === 'same') return { accepted: false, reason: 'already-accepted', sequence: verified.sequence, headSha: verified.headSha }
     const nextState = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       repository: OFFICIAL_PREVIEW_REPOSITORY,
-      sequence: pending.sequence,
-      headSha: pending.headSha,
-      acceptedAt: new Date(now).toISOString()
+      sequence: verified.sequence,
+      headSha: verified.headSha,
+      acceptedAt: new Date(this.#now()).toISOString(),
+      candidates: previous.candidates.filter(value => Number(value.index?.sequence || 0) > verified.sequence)
     }
     await this.state.save(nextState)
-    for (const [candidateKey, value] of this.pendingCandidates) {
-      if (value.sequence <= pending.sequence) this.pendingCandidates.delete(candidateKey)
-    }
     return { accepted: true, state: nextState }
   }
 }
 
 module.exports = {
+  CANDIDATE_ID_PATTERN,
   DEFAULT_MAX_JSON_BYTES,
   DEFAULT_MAX_REDIRECTS,
+  MAX_PERSISTED_CANDIDATES,
   PrPreviewUpdateService,
   createMemoryPreviewState,
   fetchOfficialPreviewJson,
   fetchPreviewWithFallback,
   normalizePreviewState,
+  previewCandidateId,
   resolveOfficialPreviewRedirect
 }

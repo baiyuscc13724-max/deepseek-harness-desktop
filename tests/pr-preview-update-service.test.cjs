@@ -5,8 +5,10 @@ const { canonicalJson, validateAndVerifyManifest, withoutSignature } = require('
 const { OFFICIAL_PREVIEW_REPOSITORY } = require('../electron/bridge/pr-preview-update-contract.cjs')
 const { OFFICIAL_PREVIEW_INDEX_URLS } = require('../electron/bridge/pr-preview-update-config.cjs')
 const {
+  MAX_PERSISTED_CANDIDATES,
   PrPreviewUpdateService,
   createMemoryPreviewState,
+  normalizePreviewState,
   resolveOfficialPreviewRedirect
 } = require('../electron/bridge/pr-preview-update-service.cjs')
 
@@ -87,7 +89,25 @@ test('preview discovery is default-off, accepts no PR number and performs no net
   assert.equal(calls, 0)
 })
 
-test('discovery falls back across both layers, returns display metadata, and persists only after explicit accept', async () => {
+test('persisted candidate normalization retains exactly the newest 128 unique entries', () => {
+  assert.equal(MAX_PERSISTED_CANDIDATES, 128)
+  const candidates = Array.from({ length: MAX_PERSISTED_CANDIDATES + 1 }, (_, index) => ({
+    id: `pr-${index.toString(16).padStart(64, '0')}`,
+    provider: index % 2 ? 'github' : 'cnb',
+    index: { sequence: index + 1 },
+    previewManifest: { sequence: index + 1 }
+  }))
+  const normalized = normalizePreviewState({ candidates })
+  assert.equal(normalized.candidates.length, MAX_PERSISTED_CANDIDATES)
+  assert.equal(normalized.candidates[0].id, candidates[1].id)
+  assert.equal(normalized.candidates.at(-1).id, candidates.at(-1).id)
+  const afterRecovery = normalizePreviewState({ sequence: 64, headSha: 'f'.repeat(40), candidates })
+  assert.equal(afterRecovery.candidates.length, 65)
+  assert.equal(afterRecovery.candidates[0].index.sequence, 65)
+  assert.equal(afterRecovery.candidates.at(-1).index.sequence, 129)
+})
+
+test('discovery falls back across both layers, persists the signed queue, and advances accepted state only after explicit accept', async () => {
   const data = fixture()
   const calls = []
   let stored = null
@@ -126,11 +146,14 @@ test('discovery falls back across both layers, returns display metadata, and per
   assert.equal(result.manifest.channel, 'prerelease')
   assert.equal(result.manifest.components[0].id, 'desktop-shell')
   assert.deepEqual(calls, [...OFFICIAL_PREVIEW_INDEX_URLS, ...manifestUrls()])
-  assert.equal(stored, null)
+  assert.equal(stored.sequence, 0)
+  assert.equal(stored.candidates.length, 1)
+  assert.equal(stored.candidates[0].id, result.candidateId)
   const accepted = await service.accept(result)
   assert.equal(accepted.accepted, true)
   assert.equal(stored.sequence, 23)
   assert.equal(stored.headSha, SHA)
+  assert.deepEqual(stored.candidates, [])
 })
 
 test('discover does not hide deferred candidates; accept advances monotonic state and rejects unverified candidates', async () => {
@@ -145,7 +168,7 @@ test('discover does not hide deferred candidates; accept advances monotonic stat
   const first = await service.discover()
   assert.equal(first.available, true)
   assert.equal((await service.discover()).available, true)
-  await assert.rejects(() => service.accept({ sequence: 24, headSha: 'f'.repeat(40) }), /未经本服务验证/)
+  await assert.rejects(() => service.accept({ sequence: 24, headSha: 'f'.repeat(40) }), /候选 id 无效|未经本服务验证/)
   assert.equal((await service.accept(first)).accepted, true)
   const duplicate = await service.discover()
   assert.equal(duplicate.available, false)
@@ -154,6 +177,64 @@ test('discover does not hide deferred candidates; accept advances monotonic stat
   currentIndex = { ...data.index, sequence: 22 }
   signed(currentIndex, data.privateKey)
   await assert.rejects(() => service.discover(), /sequence 回退.*拒绝重放/)
+})
+
+test('newer latest entries append without hiding deferred signed candidates and each id is reverified', async () => {
+  const data = fixture(23)
+  let stored = null
+  let currentIndex = data.index
+  let currentManifest = data.previewManifest
+  const state = {
+    async load() { return stored },
+    async save(value) { stored = JSON.parse(JSON.stringify(value)) }
+  }
+  const fetchImpl = async url => OFFICIAL_PREVIEW_INDEX_URLS.includes(url)
+    ? response(url, currentIndex)
+    : response(url, currentManifest)
+  const service = new PrPreviewUpdateService({ enabled: true, trustedKeys: data.trustedKeys, fetchImpl, clock: () => NOW, state })
+  const first = await service.discover()
+
+  const component = signed({ ...data.previewManifest.componentManifest.components[0], version: '1.0.41-pr.24' }, data.privateKey)
+  const componentManifest = signed({
+    ...data.previewManifest.componentManifest,
+    releaseVersion: '1.0.41-pr.24',
+    components: [component]
+  }, data.privateKey)
+  currentIndex = signed({ ...data.index, sequence: 24 }, data.privateKey)
+  currentManifest = signed({ ...data.previewManifest, sequence: 24, componentManifest }, data.privateKey)
+  const second = await service.discover()
+  const queued = await service.listCandidates()
+  assert.deepEqual(queued.map(value => value.sequence), [23, 24])
+  assert.notEqual(first.candidateId, second.candidateId)
+  assert.equal((await service.verifyCandidate(first.candidateId)).sequence, 23)
+  assert.equal((await service.accept(first.candidateId)).accepted, true)
+  assert.deepEqual((await service.listCandidates()).map(value => value.sequence), [24])
+})
+
+test('expired or tampered persisted candidates remain non-actionable and cannot be accepted', async () => {
+  const data = fixture(23)
+  let stored = null
+  let now = NOW
+  const state = {
+    async load() { return stored },
+    async save(value) { stored = JSON.parse(JSON.stringify(value)) }
+  }
+  const fetchImpl = async url => OFFICIAL_PREVIEW_INDEX_URLS.includes(url)
+    ? response(url, data.index)
+    : response(url, data.previewManifest)
+  const service = new PrPreviewUpdateService({ enabled: true, trustedKeys: data.trustedKeys, fetchImpl, clock: () => now, state })
+  const candidate = await service.discover()
+  now = Date.parse('2026-08-27T10:00:00.000Z')
+  const listed = await service.listCandidates()
+  assert.equal(listed[0].expired, true)
+  await assert.rejects(() => service.accept(candidate.candidateId), /已过期/)
+  stored.candidates[0].previewManifest.componentManifest.components[0].sha256 = 'e'.repeat(64)
+  assert.deepEqual(await service.listCandidates(), [])
+  await assert.rejects(() => service.verifyCandidate(candidate.candidateId), /id 与签名载荷不一致|签名校验失败/)
+  now = NOW
+  const recovered = await service.discover()
+  assert.equal(recovered.candidateId, candidate.candidateId)
+  assert.equal((await service.listCandidates()).length, 1)
 })
 
 test('state loads before source selection and stale or conflicting CNB indexes fall back to newer GitHub', async () => {
@@ -166,9 +247,10 @@ test('state loads before source selection and stale or conflicting CNB indexes f
 
   for (const cnbIndex of [older, conflict]) {
     const events = []
+    let saved = null
     const state = {
-      async load() { events.push('load'); return { sequence: 22, headSha: 'f'.repeat(40) } },
-      async save() { throw new Error('discover must not save') }
+      async load() { events.push('load'); return saved || { sequence: 22, headSha: 'f'.repeat(40) } },
+      async save(value) { events.push('save'); saved = value }
     }
     const fetchImpl = async url => {
       events.push(url)

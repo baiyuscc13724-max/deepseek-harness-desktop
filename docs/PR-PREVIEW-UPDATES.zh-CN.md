@@ -9,7 +9,7 @@
 安全边界分成四段，候选签名与对外提升严格分离：
 
 1. **无密钥构建**：`.github/workflows/pr-preview-build.yml` 仅响应 `pull_request`，且 job 只在 `head.repo.full_name == github.repository`、`fork == false` 时运行。在 checkout PR 之前，它先以 GitHub API 只读取得最新 published、non-prerelease 的官方稳定 `vX.Y.Z`；之后才以只读权限、无持久化 checkout 凭据检出事件中的 40 位 head SHA。`npm ci` 禁用 lifecycle scripts。组件版本固定为稳定基线的 next patch 加 workflow sequence/attempt，例如 PR 的 `package.json=1.0.40`、官方稳定版 `v1.0.44` 时仍生成 `1.0.45-pr.<sequence>.<attempt>`。PR 自报 package 版本不参与版本基线。输出只是 ZIP 和 `pr-preview-build.json`，不签名、不发布。
-2. **受保护候选签名**：`.github/workflows/pr-preview-sign.yml` 只能人工 `workflow_dispatch`，必须从仓库 default branch 发起，并进入受保护的 `pr-preview-signing` Environment。签名 job 检出的始终是 dispatch 的可信默认分支提交，而不是 PR 提交；它独立再次查询同一个 GitHub latest stable 基线。下载物只作为有大小上限的字节和 ZIP 元数据读取，绝不执行其中的脚本、二进制或 lifecycle hook。该阶段只发布四项不可变 GitHub prerelease 候选并保存恢复 artifact，绝不推 CNB handoff、绝不写 `latest`，也不持有 `CNB_PR_PREVIEW_PUSH_TOKEN`。
+2. **受保护候选批量签名**：`.github/workflows/pr-preview-sign.yml` 只能人工 `workflow_dispatch`，必须从仓库 default branch 发起。一次输入 1–5 个成功的无密钥 build run id；无密钥 `plan-batch` job 先解析并逐项验证 PR、完整 head、run 与 artifact，在 Job Summary 显示精确批次，随后整个批次只进入一次受保护的 `pr-preview-signing` Environment 审批。签名 job 检出的始终是 dispatch 的可信默认分支提交，而不是 PR 提交；审批后还会逐项重新查询并顺序签署，独立再次查询同一个 GitHub latest stable 基线。下载物只作为有大小上限的字节和 ZIP 元数据读取，绝不执行其中的脚本、二进制或 lifecycle hook。每个候选仍只发布四项不可变 GitHub prerelease 资产并保存独立恢复 artifact；该阶段绝不推 CNB handoff、绝不写 `latest`，也不持有 `CNB_PR_PREVIEW_PUSH_TOKEN`。
 3. **本机真实 gate**：维护者在隔离 profile 上使用上述精确 immutable Tag、head、sequence 和组件 SHA-256 完成真实暂存、helper 切换、`--component-health-check`、正常重启、退出预览、恢复稳定 pointer 和再次健康检查，并验证失败候选回滚。证据 JSON 必须绑定 `schemaVersion: 1`、`result: passed`、候选 tag/head/sequence/component SHA、baseline/activated/restored release、`healthy`/`rollback` 两项 passed、`createdAt`；dispatch 另传该文件精确 SHA-256，任一字段或字节变化都失败关闭。
 4. **受保护证据提升与云到云镜像**：`.github/workflows/pr-preview-promote.yml` 使用完全独立的 `pr-preview-promotion` Environment。它重新下载精确签名 run 的恢复 artifact 和 immutable GitHub release 全部四项资产，重新验证生产公钥签名、expiry、PR 仍 open/non-draft/head 未变、全部 digest、本机证据 SHA-256 和双源单调 sequence；全部通过后才生成 evidence-bound `cnb-mirror-request.json`，并通过专用 `CNB_PR_PREVIEW_PUSH_TOKEN` 向 CNB 固定 `pr-preview` 分支交接白名单元数据。CNB 随后直接从 GitHub 下载二进制；只有全部 size/SHA-256 与回读一致后才可原子提升签名 `latest`。
 
@@ -31,6 +31,12 @@
 
 当前初始合同只构建 `win32-x64` 的无原生 `desktop-shell` 预览组件。增加 macOS 目标时必须为每个目标保持相同的 run/head/artifact/hash 绑定，不得把 Windows 描述符复用为 macOS 描述符。
 
+## 批量签名操作
+
+在 GitHub Actions 中人工运行 `Verify and Sign PR Preview Batch`，只填写 `build_run_ids`。可使用逗号、空格或换行分隔 1–5 个成功的 `Build Same-Repository PR Preview` run id；不再逐个填写 PR 编号和 head SHA。规划 job 会从 GitHub API 派生并验证每一项的 PR/head/artifact，把审批清单写入 Job Summary；检查该清单后，只需批准一次 `pr-preview-signing` Environment，签名 job 就会再次逐项验证并顺序处理整个批次。
+
+批次内任一候选失败都会让整次 workflow 失败。已经创建的 immutable prerelease 资产不会被覆盖；按相同 run id 列表重新运行时，会先比对现有资产的 size/SHA-256，再安全续跑。失败或成功的签名批次都不会更新 `latest`、不会推送 CNB、不会对用户生效。每个候选保留原有独立恢复 artifact 名，因此后续本机 gate 与 promotion 仍按单个 PR/head 独立执行，不能借批量签名跳过真实更新、重启、回滚证据或第二次受保护审批。
+
 ## 签名输出
 
 可信签名脚本生成候选材料；签名 workflow 删除尚未经过本机 gate 的临时镜像请求，只发布并保留以下不可变候选：
@@ -42,7 +48,7 @@
 
 只有 promotion workflow 重新验证这四项不可变字节和本机证据后，才重新生成 `cnb-mirror-request.json`。该请求额外携带 `localGateEvidence` 的候选身份、baseline/activated/restored release、healthy/rollback 结果、createdAt 和精确 evidence SHA-256；它只描述云到云复制、逐资产验证、CNB 回读和提升前置条件，不包含执行网络请求或提升指针的代码。
 
-不可变 Tag 为 `pr-preview-<pr>-<sha12>-run-<runId>-<attempt>`；签名 job 还会从 GitHub 解析该 Tag 并确认它仍精确指向完整 head SHA。把 run id/attempt 纳入 Tag 可防止同一 head 的独立重建互相覆盖。签名 feed 的单调 `sequence` 使用 `workflow run number × 1,000,000 + run attempt`，因此同一 run 的重新执行也是严格更新的候选，不会与前一次 attempt 共享 sequence；下一个 run 又始终大于前一个 run 的任一受支持 attempt。GitHub 资产上传禁止 `--clobber`：重试时已存在资产必须同时匹配 size 和 GitHub `sha256:` digest，否则整个操作失败。签名 job 只建立不可变版本，不生成或替换 latest 指针。
+不可变 Tag 为 `pr-preview-<pr>-<sha12>-run-<runId>-<attempt>`；签名 job 还会从 GitHub 解析该 Tag 并确认它仍精确指向完整 head SHA。把 run id/attempt 纳入 Tag 可防止同一 head 的独立重建互相覆盖。签名 feed 的单调 `sequence` 继续使用无密钥构建的 `workflow run number × 1,000,000 + run attempt`；批量签名只聚合审批，不会重编号或共享 sequence。因此同一 build run 的重新执行也是严格更新的候选，不会与前一次 attempt 共享 sequence；下一个 build run 又始终大于前一个 run 的任一受支持 attempt。GitHub 资产上传禁止 `--clobber`：重试时已存在资产必须同时匹配 size 和 GitHub `sha256:` digest，否则整个操作失败。签名 job 只建立不可变版本，不生成或替换 latest 指针。
 
 每个组件必须恰好有两个 URL，顺序与身份固定为：
 

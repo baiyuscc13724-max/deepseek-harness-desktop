@@ -97,13 +97,13 @@ function verifyPreviewSignature(value, key, label) {
   if (!verify(null, payload, key, signature)) throw new Error(`${label}签名校验失败。`)
 }
 
-function normalizePreviewWindow(input, now) {
+function normalizePreviewWindow(input, now, { allowExpired = false } = {}) {
   const publishedAt = new Date(input.publishedAt)
   const expiresAt = new Date(input.expiresAt)
   const publishedMs = publishedAt.getTime()
   const expiresMs = expiresAt.getTime()
   if (!Number.isFinite(publishedMs) || publishedMs > now + CLOCK_SKEW_MS) throw new Error('PR 预览发布时间无效。')
-  if (!Number.isFinite(expiresMs) || expiresMs <= now) throw new Error('PR 预览已过期。')
+  if (!Number.isFinite(expiresMs) || (!allowExpired && expiresMs <= now)) throw new Error('PR 预览已过期。')
   if (expiresMs <= publishedMs || expiresMs - publishedMs > MAX_PREVIEW_LIFETIME_MS) throw new Error('PR 预览有效期无效。')
   return { publishedAt: publishedAt.toISOString(), expiresAt: expiresAt.toISOString() }
 }
@@ -144,7 +144,7 @@ function validateOfficialPreviewComponentUrls(manifest, metadata) {
   return manifest
 }
 
-function validateCommon(input, allowedKeys, expectedKind, trustedKeys, now, label) {
+function validateCommon(input, allowedKeys, expectedKind, trustedKeys, now, label, options = {}) {
   assertPlainObject(input, label)
   assertOnlyKeys(input, allowedKeys, label)
   if (input.schemaVersion !== PR_PREVIEW_SCHEMA_VERSION || input.kind !== expectedKind) throw new Error(`${label}协议版本或类型不受支持。`)
@@ -153,7 +153,7 @@ function validateCommon(input, allowedKeys, expectedKind, trustedKeys, now, labe
   const keyId = normalizePreviewKeyId(input.keyId)
   const key = trustedPreviewKey(trustedKeys, keyId)
   verifyPreviewSignature(input, key, label)
-  const window = normalizePreviewWindow(input, now)
+  const window = normalizePreviewWindow(input, now, options)
   return {
     schemaVersion: PR_PREVIEW_SCHEMA_VERSION,
     kind: expectedKind,
@@ -171,18 +171,19 @@ function validateCommon(input, allowedKeys, expectedKind, trustedKeys, now, labe
   }
 }
 
-function validateAndVerifyPreviewIndex(input, trustedKeys, { now = Date.now(), normalizeManifestUrls } = {}) {
+function validateAndVerifyPreviewIndex(input, trustedKeys, { now = Date.now(), normalizeManifestUrls, allowExpired = false } = {}) {
   if (typeof normalizeManifestUrls !== 'function') throw new Error('PR 预览清单地址验证器不可用。')
-  const common = validateCommon(input, INDEX_KEYS, 'pr-preview-index', trustedKeys, now, 'PR 预览索引')
+  const common = validateCommon(input, INDEX_KEYS, 'pr-preview-index', trustedKeys, now, 'PR 预览索引', { allowExpired })
   const manifestUrls = normalizeManifestUrls(input.manifestUrls, common.headSha)
   const notes = String(input.notes || '')
   if (Buffer.byteLength(notes, 'utf8') > 64 * 1024) throw new Error('PR 预览说明过长。')
   return { ...common, manifestUrls, notes }
 }
 
-function validateAndVerifyPreviewManifest(input, trustedKeys, { now = Date.now() } = {}) {
-  const common = validateCommon(input, MANIFEST_KEYS, 'pr-preview-manifest', trustedKeys, now, 'PR 预览清单')
-  const manifest = validateAndVerifyManifest(input.componentManifest, trustedKeys, { now })
+function validateAndVerifyPreviewManifest(input, trustedKeys, { now = Date.now(), allowExpired = false } = {}) {
+  const common = validateCommon(input, MANIFEST_KEYS, 'pr-preview-manifest', trustedKeys, now, 'PR 预览清单', { allowExpired })
+  const componentNow = allowExpired ? Math.min(now, Date.parse(input.expiresAt) - 1) : now
+  const manifest = validateAndVerifyManifest(input.componentManifest, trustedKeys, { now: componentNow })
   if (manifest.keyId !== common.keyId) throw new Error('PR 预览清单与组件清单 keyId 不一致。')
   if (manifest.channel !== 'prerelease') throw new Error('PR 预览组件清单必须使用 prerelease 通道。')
   validateOfficialPreviewComponentUrls(manifest, common)

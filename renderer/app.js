@@ -142,6 +142,9 @@ let gitRuntimeState = {
   sshAgent: { available: false, running: false }
 }
 let updateState = {
+  displayVersion: '当前版本',
+  pendingCount: 0,
+  items: [],
   checking: false,
   installing: false,
   installProgress: null,
@@ -1032,7 +1035,7 @@ function showUpdateNotice(result, { force = false } = {}) {
   updateNoticeInstall.focus()
 }
 
-function showComponentUpdateNotice(componentState, { force = false } = {}) {
+function showComponentUpdateNotice(componentState) {
   const check = componentState?.lastCheck
   if (!componentState?.enabled || check?.mode !== 'components' || !check.releaseVersion) return false
   const planned = Array.isArray(check.components) ? check.components : []
@@ -1048,14 +1051,6 @@ function showComponentUpdateNotice(componentState, { force = false } = {}) {
   if (allAlreadyActive && !midFlight) return false
   pendingUpdateKind = 'components'
   pendingComponentUpdate = componentState
-  const components = planned
-  showUpdateNotice({
-    updateAvailable: true,
-    latestVersion: check.releaseVersion,
-    currentVersion: updateState.app?.currentVersion || '当前组件版本',
-    notes: components.map(component => `增量更新 ${component.id} → ${component.version}`).join('\n') || '已发现经过签名的组件增量更新。',
-    url: ''
-  }, { force })
   return true
 }
 
@@ -1479,23 +1474,43 @@ function officialSettingsBootstrap() {
       [data-hd-settings-layout="true"] > nav { width:176px; padding-inline:10px; }
       [data-hd-settings-layout="true"] [data-hd-settings-options="true"] { padding:6px 18px 22px; }
     }
-    #harness-desktop-update-row { box-sizing:border-box; margin-top:10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; color:var(--dsw-alias-label-primary); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
-    #harness-desktop-update-row .hd-update-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
-    #harness-desktop-update-row .hd-update-title { font-size:14px; line-height:22px; }
-    #harness-desktop-update-row .hd-update-status { margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
-    #harness-desktop-update-row .hd-update-lines { display:grid; gap:6px; margin-top:12px; }
-    #harness-desktop-update-row .hd-update-line { display:flex; justify-content:space-between; gap:12px; color:var(--dsw-alias-label-secondary); font-size:12px; }
-    #harness-desktop-update-row .hd-update-line strong { color:var(--dsw-alias-label-primary); font-weight:400; text-align:right; }
-    #harness-desktop-update-row .hd-update-notes { margin-top:12px; border:1px solid var(--dsw-alias-border-l2); border-radius:10px; padding:10px 12px; color:var(--dsw-alias-label-secondary); background:var(--dsw-alias-bg-layer-2); font-size:12px; line-height:1.55; }
-    #harness-desktop-update-row .hd-update-notes strong { display:block; margin-bottom:5px; color:var(--dsw-alias-label-primary); font-weight:600; }
-    #harness-desktop-update-row .hd-update-notes ul { display:grid; gap:4px; margin:0; padding-left:18px; }
-    #harness-desktop-update-row .hd-update-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:12px; }
-    #harness-desktop-update-row .hd-policy-links { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:12px; }
-    #harness-desktop-update-row .hd-policy-links a { min-height:auto; padding:0; border-radius:0; color:var(--dsw-alias-label-secondary); background:transparent; text-decoration:underline; }
-    #harness-desktop-update-row button, #harness-desktop-update-row a { box-sizing:border-box; min-height:34px; border:0; border-radius:17px; padding:6px 14px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); font:inherit; font-size:13px; text-decoration:none; cursor:pointer; }
-    #harness-desktop-update-row button:hover, #harness-desktop-update-row a:hover { background:var(--dsw-alias-interactive-bg-hover); }
-    #harness-desktop-update-row button:disabled { cursor:default; opacity:.55; }
-    #harness-desktop-update-row label { display:flex; align-items:center; gap:7px; margin-left:auto; color:var(--dsw-alias-label-secondary); font-size:12px; cursor:pointer; }
+    #harness-desktop-version-button { position:fixed; z-index:9997; right:9px; bottom:1px; display:inline-flex; align-items:center; gap:4px; min-height:22px; border:0; border-radius:4px; padding:2px 4px; color:var(--dsw-alias-label-tertiary,#7b8494); background:transparent; box-shadow:none; font:500 12px/18px ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; cursor:pointer; opacity:.88; }
+    #harness-desktop-version-button[data-pending="true"] { color:var(--dsw-alias-brand-primary,#315efb); font-weight:600; opacity:1; }
+    #harness-desktop-version-button:hover { color:var(--dsw-alias-brand-primary,#315efb); background:color-mix(in srgb,var(--dsw-alias-brand-primary,#315efb) 7%,transparent); text-decoration:underline; text-underline-offset:2px; }
+    #harness-desktop-version-button:focus-visible, #harness-desktop-update-center button:focus-visible { outline:2px solid var(--dsw-alias-brand-primary,#315efb); outline-offset:2px; }
+    .hd-update-count[hidden] { display:none; }
+    #harness-desktop-update-center { position:fixed; z-index:9998; inset:0; display:grid; place-items:center; box-sizing:border-box; padding:28px; color:var(--dsw-alias-label-primary,#20242b); background:rgba(12,20,28,.38); backdrop-filter:blur(5px); }
+    #harness-desktop-update-center[hidden] { display:none; }
+    .hd-update-center-dialog { display:flex; flex-direction:column; box-sizing:border-box; width:min(760px,calc(100vw - 40px)); max-height:min(760px,calc(100vh - 40px)); overflow:hidden; border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:18px; background:var(--dsw-alias-bg-layer-2,#f7f8fa); box-shadow:0 24px 70px rgba(0,0,0,.28); }
+    .hd-update-center-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding:20px 22px 16px; border-bottom:1px solid var(--dsw-alias-border-l2,#d5d9df); background:var(--dsw-alias-bg-layer-1,#fff); }
+    .hd-update-center-head h2 { margin:0; font-size:20px; line-height:1.3; }
+    .hd-update-center-head p { margin:5px 0 0; color:var(--dsw-alias-label-secondary,#667085); font-size:12px; }
+    .hd-update-center-head button { flex:none; width:32px; height:32px; border:0; border-radius:8px; padding:0; color:var(--dsw-alias-label-secondary,#667085); background:transparent; font-size:22px; cursor:pointer; }
+    .hd-update-center-head button:hover { background:var(--dsw-alias-interactive-bg-hover,#eef1f5); }
+    .hd-update-center-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 16px; padding:12px 22px; border-bottom:1px solid var(--dsw-alias-border-l2,#d5d9df); background:var(--dsw-alias-bg-layer-1,#fff); }
+    .hd-update-center-toolbar button, .hd-update-item-actions button { min-height:34px; border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:9px; padding:0 13px; color:inherit; background:var(--dsw-alias-bg-layer-2,#f7f8fa); font:inherit; font-size:12px; cursor:pointer; }
+    .hd-update-center-toolbar button:hover:not(:disabled), .hd-update-item-actions button:hover:not(:disabled) { background:var(--dsw-alias-interactive-bg-hover,#eef1f5); }
+    .hd-update-center-toolbar button:disabled, .hd-update-item-actions button:disabled { cursor:wait; opacity:.58; }
+    .hd-update-items { display:grid; gap:12px; overflow:auto; padding:16px 22px 22px; }
+    .hd-update-empty { border:1px dashed var(--dsw-alias-border-l2,#d5d9df); border-radius:12px; padding:28px 18px; color:var(--dsw-alias-label-secondary,#667085); background:var(--dsw-alias-bg-layer-1,#fff); text-align:center; font-size:13px; }
+    .hd-update-item { display:grid; gap:9px; border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:13px; padding:14px 15px; background:var(--dsw-alias-bg-layer-1,#fff); }
+    .hd-update-item[data-actionable="true"] { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary,#315efb) 42%,var(--dsw-alias-border-l2,#d5d9df)); }
+    .hd-update-item-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }
+    .hd-update-item-title { min-width:0; }
+    .hd-update-item-title strong { display:block; font-size:14px; line-height:1.45; overflow-wrap:anywhere; }
+    .hd-update-item-title span { display:block; margin-top:2px; color:var(--dsw-alias-label-secondary,#667085); font-size:11px; }
+    .hd-update-item-badges { display:flex; flex:none; flex-wrap:wrap; justify-content:flex-end; gap:5px; }
+    .hd-update-badge { border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:999px; padding:2px 7px; color:var(--dsw-alias-label-secondary,#667085); background:var(--dsw-alias-bg-layer-2,#f7f8fa); font-size:10px; }
+    .hd-update-badge[data-signed="true"] { color:#138a57; border-color:color-mix(in srgb,#138a57 45%,transparent); }
+    .hd-update-summary { margin:0; color:var(--dsw-alias-label-secondary,#667085); font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .hd-update-detail-block { display:grid; gap:5px; }
+    .hd-update-detail-list { display:grid; gap:5px; margin:0; padding-left:18px; color:var(--dsw-alias-label-primary,#20242b); font-size:12px; line-height:1.55; }
+    .hd-update-detail-list li { padding-left:2px; overflow-wrap:anywhere; }
+    .hd-update-meta { display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--dsw-alias-label-tertiary,#7b8494); font-size:10px; }
+    .hd-update-item-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
+    .hd-update-item-actions .hd-update-apply { border-color:var(--dsw-alias-brand-primary,#315efb); color:#fff; background:var(--dsw-alias-brand-primary,#315efb); }
+    @media (max-width:640px) { #harness-desktop-version-button { right:5px; bottom:1px; } #harness-desktop-update-center { padding:10px; } .hd-update-center-dialog { width:100%; max-height:100%; border-radius:14px; } .hd-update-center-head, .hd-update-center-toolbar, .hd-update-items { padding-left:14px; padding-right:14px; } .hd-update-item-head { flex-direction:column; } .hd-update-item-badges { justify-content:flex-start; } }
+    @media (prefers-reduced-motion:reduce) { #harness-desktop-version-button, #harness-desktop-update-center { transition:none; } }
     #harness-desktop-mobile-sync-row { box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:18px; margin-top:10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; color:var(--dsw-alias-label-primary); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
     #harness-desktop-mobile-sync-row .hd-mobile-copy { min-width:0; }
     #harness-desktop-mobile-sync-row .hd-mobile-title { font-size:14px; line-height:22px; }
@@ -1538,26 +1553,6 @@ function officialSettingsBootstrap() {
   `
   document.head.appendChild(style)
 
-  const versionText = result => {
-    if (!result) return '等待首次检查'
-    if (result.storeManaged) return `${result.currentVersion || '当前版本'}（由 Microsoft Store 管理）`
-    if (result.error) return `检查失败：${result.error}`
-    const current = result.currentVersion || '未知'
-    const latest = result.latestVersion || current
-    if (result.kind === 'harness' && result.updateAvailable && result.updatePolicy === 'desktop-bundled') {
-      return `${current} → ${latest}（官方已发布，随桌面兼容版更新）`
-    }
-    return result.updateAvailable ? `${current} → ${latest}（有新版）` : `${current}（已是最新）`
-  }
-
-  const noteLines = value => {
-    const lines = String(value || '').replace(/\r/g, '').split('\n')
-      .map(line => line.trim().replace(/^[-*+]\s+/, '').replace(/^#{1,6}\s+/, ''))
-      .filter(line => line && !/^Full Changelog:/i.test(line) && !/^https?:\/\//i.test(line))
-      .slice(0, 6)
-    return lines.length ? lines : ['本次更新包含体验优化与问题修复，完整内容可查看发布页。']
-  }
-
   const setText = (element, value) => {
     if (element && element.textContent !== value) element.textContent = value
   }
@@ -1567,97 +1562,204 @@ function officialSettingsBootstrap() {
     location.href = `harness-desktop://${action}/${query ? `?${query}` : ''}`
   }
 
+  const createTextNode = (tag, className, text) => {
+    const element = document.createElement(tag)
+    if (className) element.className = className
+    element.textContent = String(text || '')
+    return element
+  }
+
+  const updateKindLabel = kind => ({ desktop: '桌面版', component: '组件', harness: '组件', pr: 'PR 预览', preview: 'PR 预览', 'pr-preview': 'PR 预览' })[kind] || '更新'
+  const updateSourceLabel = source => source === 'github' ? 'GitHub 后备' : source === 'cnb' ? 'CNB 优先' : String(source || '官方来源')
+  const updateStatusLabel = status => ({
+    available: '可更新', ready: '已准备，等待应用', active: '当前使用中', expired: '已过期',
+    disabled: '已停用', 'up-to-date': '已是最新', error: '检查失败', installing: '正在更新',
+    current: '已是最新', installed: '已安装', completed: '已完成', invalid: '已失效', unavailable: '不可用'
+  })[status] || '状态未知'
+  const terminalUpdateStatuses = new Set(['current', 'installed', 'completed', 'expired', 'invalid', 'unavailable', 'disabled', 'up-to-date', 'active'])
+  const shouldDisplayUpdateItem = item => item && !(['desktop', 'component', 'harness'].includes(item.kind) && ['up-to-date', 'disabled'].includes(item.status))
+
+  const normalizeUpdateItem = value => {
+    if (!value || typeof value !== 'object') return null
+    const expiresAt = String(value.expiresAt || '').trim()
+    const expires = expiresAt ? Date.parse(expiresAt) : NaN
+    const expired = Number.isFinite(expires) && expires <= Date.now()
+    const status = expired ? 'expired' : String(value.status || 'available').trim()
+    return {
+      id: String(value.id || '').trim(),
+      kind: String(value.kind || 'component').trim(),
+      version: String(value.version || '').trim(),
+      title: String(value.title || '').trim(),
+      summary: String(value.summary || '').trim(),
+      details: Array.isArray(value.details) ? value.details.slice(0, 8).map(detail => String(detail || '').trim().slice(0, 600)).filter(Boolean) : [],
+      source: String(value.source || '').trim(),
+      signed: value.signed === true,
+      actionable: value.actionable === true && !terminalUpdateStatuses.has(status),
+      status,
+      pr: value.pr && typeof value.pr === 'object' ? {
+        number: Number.isFinite(Number(value.pr.number)) ? Number(value.pr.number) : null,
+        title: String(value.pr.title || '').trim()
+      } : null,
+      expiresAt: expiresAt
+    }
+  }
+
+  const closeUpdateCenter = () => {
+    const center = document.querySelector('#harness-desktop-update-center')
+    const trigger = document.querySelector('#harness-desktop-version-button')
+    if (!center || center.hidden) return
+    center.hidden = true
+    center.setAttribute('aria-hidden', 'true')
+    trigger?.setAttribute('aria-expanded', 'false')
+    trigger?.focus()
+  }
+
+  const buildUpdateItem = item => {
+    const card = document.createElement('article')
+    card.className = 'hd-update-item'
+    card.dataset.actionable = String(item.actionable)
+
+    const head = document.createElement('div')
+    head.className = 'hd-update-item-head'
+    const title = document.createElement('div')
+    title.className = 'hd-update-item-title'
+    title.append(createTextNode('strong', '', item.title || `${updateKindLabel(item.kind)} ${item.version || ''}`.trim()))
+    title.append(createTextNode('span', '', [item.version, item.pr?.number ? `PR #${item.pr.number}` : ''].filter(Boolean).join(' · ') || updateKindLabel(item.kind)))
+    const badges = document.createElement('div')
+    badges.className = 'hd-update-item-badges'
+    badges.append(createTextNode('span', 'hd-update-badge', updateKindLabel(item.kind)))
+    badges.append(createTextNode('span', 'hd-update-badge', updateSourceLabel(item.source)))
+    const signed = createTextNode('span', 'hd-update-badge', item.signed ? '已签名' : '签名未确认')
+    signed.dataset.signed = String(item.signed)
+    badges.append(signed)
+    head.append(title, badges)
+    card.append(head)
+
+    if (item.details.length) {
+      const detailBlock = document.createElement('div')
+      detailBlock.className = 'hd-update-detail-block'
+      detailBlock.append(createTextNode('p', 'hd-update-summary', item.summary || '本次更新内容：'))
+      const detailList = document.createElement('ul')
+      detailList.className = 'hd-update-detail-list'
+      detailList.append(...item.details.map(detail => createTextNode('li', '', detail)))
+      detailBlock.append(detailList)
+      card.append(detailBlock)
+    } else if (item.summary) {
+      card.append(createTextNode('p', 'hd-update-summary', item.summary))
+    }
+    const meta = document.createElement('div')
+    meta.className = 'hd-update-meta'
+    meta.append(createTextNode('span', '', `状态：${updateStatusLabel(item.status)}`))
+    if (item.expiresAt) meta.append(createTextNode('span', '', `有效期至：${new Date(item.expiresAt).toLocaleString()}`))
+    card.append(meta)
+
+    const action = item.status === 'ready' ? 'apply' : item.status === 'available' ? 'install' : null
+    if (action && item.actionable && item.signed && item.id) {
+      const actions = document.createElement('div')
+      actions.className = 'hd-update-item-actions'
+      const apply = createTextNode('button', 'hd-update-apply', action === 'apply' ? '确认应用' : '立即更新')
+      apply.type = 'button'
+      apply.setAttribute('aria-label', `${action === 'apply' ? '应用' : '更新'} ${item.title || item.version || item.id}`)
+      apply.addEventListener('click', () => request('update-action', { id: item.id, action }))
+      actions.append(apply)
+      card.append(actions)
+    }
+    return card
+  }
+
   const paint = () => {
     const state = window.__HARNESS_DESKTOP_UPDATE_STATE__ || {}
-    const row = document.querySelector('#harness-desktop-update-row')
-    if (!row) return
-    const hasAppUpdate = Boolean(state.app?.updateAvailable)
-    const hasHarnessUpdate = Boolean(state.harness?.updateAvailable)
-    const failed = Boolean(state.app?.error || state.harness?.error)
-    const checked = state.preferences?.lastCheckedAt
+    const trigger = document.querySelector('#harness-desktop-version-button')
+    const center = document.querySelector('#harness-desktop-update-center')
+    if (!trigger || !center) return
+    const pendingCount = Math.max(0, Number.parseInt(state.pendingCount, 10) || 0)
+    const displayVersion = String(state.displayVersion || state.app?.currentVersion || '当前版本')
+    const versionLabel = displayVersion === '当前版本' ? displayVersion : `v${displayVersion.replace(/^v/iu, '')}`
+    setText(trigger.querySelector('[data-hd-version]'), versionLabel)
+    const count = trigger.querySelector('[data-hd-pending-count]')
+    setText(count, `(+${pendingCount})`)
+    count.hidden = pendingCount < 1
+    trigger.dataset.pending = String(pendingCount > 0)
+    trigger.setAttribute('aria-label', pendingCount > 0 ? `当前有效版本 ${displayVersion}，有 ${pendingCount} 项待更新` : `当前有效版本 ${displayVersion}，暂无待更新`)
+
+    const items = Array.isArray(state.items) ? state.items.map(normalizeUpdateItem).filter(shouldDisplayUpdateItem) : []
+    const list = center.querySelector('[data-hd-update-items]')
+    const itemsSignature = JSON.stringify({ checking: state.checking === true, items })
+    if (list.dataset.signature !== itemsSignature) {
+      list.dataset.signature = itemsSignature
+      list.replaceChildren(...(items.length ? items.map(buildUpdateItem) : [createTextNode('div', 'hd-update-empty', state.checking ? '正在检查可用更新…' : '当前已是最新')]))
+    }
     const progress = state.installProgress
-    const percent = progress?.total ? Math.min(100, Math.round(progress.received * 100 / progress.total)) : 0
-    const status = state.app?.storeManaged && !state.installing && !state.installError
-      ? state.checking ? '正在检查官方 Harness 更新…' : '桌面应用更新由 Microsoft Store 管理'
-      : progress?.phase === 'current'
-        ? '当前桌面版已经是最新版本'
-        : progress?.phase === 'ready'
-          ? '更新已在后台下载完成，等待安装确认'
-        : state.installing
-      ? progress?.phase === 'checksum'
-        ? '正在验证桌面版更新…'
-        : progress?.phase === 'source'
-          ? `正在连接下载源 ${progress.attempt || 1}/${progress.totalSources || 1}：${progress.source || '镜像站'}…`
-        : progress?.phase === 'launch'
-          ? '校验完成，正在启动中文升级程序…'
-          : `正在下载桌面版更新${percent ? `：${percent}%` : '…'}`
-      : state.installError
-        ? `桌面版更新失败：${state.installError}`
-        : state.checking
-          ? '正在检查桌面版和官方 Harness…'
-          : hasAppUpdate
-            ? '检测到可下载安装的桌面新版'
-            : hasHarnessUpdate
-              ? '官方核心有新版；兼容验证后会随桌面版更新'
-            : failed
-              ? '部分更新源检查失败'
-              : checked
-                ? `最近检查：${new Date(checked).toLocaleString()}`
-                : '启动后会自动检查更新'
-    setText(row.querySelector('[data-hd-status]'), status)
-    setText(row.querySelector('[data-hd-app]'), versionText(state.app))
-    setText(row.querySelector('[data-hd-harness]'), versionText(state.harness))
-    const notesBox = row.querySelector('[data-hd-notes]')
-    const shouldShowNotes = Boolean(state.app?.updateAvailable)
-    notesBox.hidden = !shouldShowNotes
-    if (shouldShowNotes) {
-      const signature = `${state.app.latestVersion || ''}:${state.app.notes || ''}`
-      if (notesBox.dataset.signature !== signature) {
-        notesBox.dataset.signature = signature
-        notesBox.querySelector('strong').textContent = `${state.app.latestVersion || '新版本'} 更新内容`
-        const list = notesBox.querySelector('ul')
-        list.replaceChildren(...noteLines(state.app.notes).map(note => {
-          const item = document.createElement('li')
-          item.textContent = note
-          return item
-        }))
-      }
+    const summary = progress?.phase === 'current'
+      ? '当前桌面版已经是最新版本'
+      : progress?.phase === 'ready'
+        ? '更新已准备好，等待安装确认'
+        : state.installError
+          ? `更新失败：${state.installError}`
+          : pendingCount > 0
+            ? `${pendingCount} 项待处理；打开中心不会清除提醒。`
+            : '桌面版、组件与 PR 候选会统一显示在这里。'
+    setText(center.querySelector('[data-hd-update-summary]'), summary)
+    const check = center.querySelector('[data-hd-check]')
+    check.disabled = Boolean(state.checking || state.installing)
+    setText(check, state.checking ? '正在检查…' : '立即检查')
+    const activePreview = items.find(item => ['pr', 'preview', 'pr-preview'].includes(item.kind) && item.status === 'active') || null
+    const exitPreview = center.querySelector('[data-hd-exit-preview]')
+    exitPreview.hidden = !activePreview
+    exitPreview.dataset.id = activePreview?.id || ''
+  }
+
+  const mountUpdateCenter = () => {
+    if (typeof document.querySelectorAll !== 'function' || typeof document.body?.append !== 'function') return
+    let trigger = document.querySelector('#harness-desktop-version-button')
+    if (!trigger) {
+      trigger = document.createElement('button')
+      trigger.id = 'harness-desktop-version-button'
+      trigger.type = 'button'
+      trigger.setAttribute('aria-haspopup', 'dialog')
+      trigger.setAttribute('aria-controls', 'harness-desktop-update-center')
+      trigger.setAttribute('aria-expanded', 'false')
+      const marker = createTextNode('span', 'hd-version-marker', '#')
+      marker.setAttribute('aria-hidden', 'true')
+      const version = createTextNode('span', '', '当前版本')
+      version.dataset.hdVersion = ''
+      const count = createTextNode('span', 'hd-update-count', '')
+      count.dataset.hdPendingCount = ''
+      count.hidden = true
+      trigger.append(marker, version, count)
+      document.body.append(trigger)
     }
-    const checkButton = row.querySelector('[data-hd-check]')
-    const installButton = row.querySelector('[data-hd-install]')
-    const autoCheck = row.querySelector('[data-hd-auto]')
-    if (checkButton.disabled !== Boolean(state.checking || state.installing)) checkButton.disabled = Boolean(state.checking || state.installing)
-    const canInstall = Boolean(state.app?.updateAvailable && state.app?.installer && state.app?.checksums)
-    if (installButton.hidden === canInstall) installButton.hidden = !canInstall
-    if (installButton.disabled !== Boolean(state.installing)) installButton.disabled = Boolean(state.installing)
-    setText(installButton, state.installing ? '正在更新…' : progress?.phase === 'ready' ? '安装已下载的更新' : '下载并安装桌面版更新')
-    if (autoCheck.checked !== (state.preferences?.checkOnStartup !== false)) autoCheck.checked = state.preferences?.checkOnStartup !== false
-    const previewToggle = row.querySelector('[data-hd-preview]')
-    const previewEnabled = state.preview?.enabled === true
-    const previewConfigured = state.preview?.configured === true
-    if (previewToggle.checked !== previewEnabled) previewToggle.checked = previewEnabled
-    previewToggle.disabled = Boolean(state.preview?.changing || (!previewConfigured && !previewEnabled))
-    setText(row.querySelector('[data-hd-preview-status]'), state.preview?.active
-      ? '正在使用已签名 PR 预览，可随时恢复稳定基线'
-      : state.preview?.ready
-        ? '候选已下载并校验，等待你继续应用'
-        : !previewConfigured
-          ? '当前组件尚未配置独立预览公钥'
-          : previewEnabled
-            ? state.preview?.checking ? '正在从 CNB 优先发现已批准候选…' : '默认开启；候选仍需你确认后才会应用'
-            : '已关闭')
-    const release = row.querySelector('[data-hd-release]')
-    const releaseHidden = !state.app?.updateAvailable || !state.app?.url || canInstall
-    if (release.hidden !== releaseHidden) release.hidden = releaseHidden
-    const releaseUrl = state.app?.url || ''
-    if (release.dataset.url !== releaseUrl) release.dataset.url = releaseUrl
-    const links = state.distribution?.links || {}
-    for (const [name, url] of Object.entries({ privacy: links.privacy, aiReport: links.aiReport, pluginPolicy: links.pluginPolicy })) {
-      const link = row.querySelector(`[data-hd-policy="${name}"]`)
-      if (!link) continue
-      link.hidden = !url
-      link.dataset.url = url || ''
+    let center = document.querySelector('#harness-desktop-update-center')
+    if (!center) {
+      center = document.createElement('section')
+      center.id = 'harness-desktop-update-center'
+      center.hidden = true
+      center.setAttribute('aria-hidden', 'true')
+      center.innerHTML = `
+        <div class="hd-update-center-dialog" role="dialog" aria-modal="true" aria-labelledby="harnessDesktopUpdateTitle" aria-describedby="harnessDesktopUpdateSummary">
+          <header class="hd-update-center-head"><div><h2 id="harnessDesktopUpdateTitle">更新中心</h2><p id="harnessDesktopUpdateSummary" data-hd-update-summary></p></div><button type="button" data-hd-close aria-label="关闭更新中心">×</button></header>
+          <div class="hd-update-center-toolbar"><button type="button" data-hd-check>立即检查</button><button type="button" data-hd-exit-preview hidden>退出当前预览</button></div>
+          <div class="hd-update-items" data-hd-update-items aria-live="polite"></div>
+        </div>`
+      document.body.append(center)
+      center.querySelector('[data-hd-close]').addEventListener('click', closeUpdateCenter)
+      center.querySelector('[data-hd-check]').addEventListener('click', () => request('check-updates'))
+      center.querySelector('[data-hd-exit-preview]').addEventListener('click', event => {
+        const id = event.currentTarget.dataset.id || ''
+        if (id) request('update-action', { id, action: 'exit' })
+      })
+      center.addEventListener('click', event => { if (event.target === center) closeUpdateCenter() })
     }
+    if (!trigger.dataset.hdBound) {
+      trigger.dataset.hdBound = 'true'
+      trigger.addEventListener('click', () => {
+        center.hidden = false
+        center.setAttribute('aria-hidden', 'false')
+        trigger.setAttribute('aria-expanded', 'true')
+        center.querySelector('[data-hd-close]')?.focus()
+      })
+    }
+    paint()
   }
 
   const paintGit = () => {
@@ -1837,7 +1939,11 @@ function officialSettingsBootstrap() {
   }
 
   const mount = () => {
-    const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
+    mountUpdateCenter()
+    const dialogs = typeof document.querySelectorAll === 'function'
+      ? [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')]
+      : [document.querySelector('[role="dialog"][aria-modal="true"]')]
+    const dialog = dialogs.find(candidate => candidate && candidate.id !== 'harness-desktop-update-center' && (typeof candidate.closest !== 'function' || !candidate.closest('#harness-desktop-update-center')))
     if (!dialog) return
     const settingsNav = dialog.querySelector(':scope > nav')
     const general = settingsNav
@@ -1866,55 +1972,6 @@ function officialSettingsBootstrap() {
     mountTerminal(section)
     mountGit(section)
     mountMobile(section)
-    if (!section || section.querySelector('#harness-desktop-update-row')) {
-      paint()
-      return
-    }
-
-    const row = document.createElement('div')
-    row.id = 'harness-desktop-update-row'
-    row.innerHTML = `
-      <div class="hd-update-head">
-        <div>
-          <div class="hd-update-title">桌面版与 Harness 更新</div>
-          <div class="hd-update-status" data-hd-status>启动后会自动检查更新</div>
-        </div>
-      </div>
-      <div class="hd-update-lines">
-        <div class="hd-update-line"><span>Harness Desktop</span><strong data-hd-app>等待首次检查</strong></div>
-        <div class="hd-update-line"><span>DeepSeek Harness 官方核心</span><strong data-hd-harness>等待首次检查</strong></div>
-        <div class="hd-update-line"><span>PR 快速预览（CNB 优先）</span><strong data-hd-preview-status>默认开启</strong></div>
-      </div>
-      <div class="hd-update-notes" data-hd-notes hidden><strong>新版本更新内容</strong><ul></ul></div>
-      <div class="hd-update-actions">
-        <button type="button" data-hd-check>立即检查</button>
-        <button type="button" data-hd-install hidden>下载并安装桌面版更新</button>
-        <a href="#" data-hd-release hidden>打开桌面版下载页</a>
-        <label><input type="checkbox" data-hd-auto checked /> 启动时自动检查</label>
-        <label><input type="checkbox" data-hd-preview checked /> 启用 PR 快速预览</label>
-      </div>
-      <div class="hd-policy-links">
-        <a href="#" data-hd-policy="privacy">隐私政策</a>
-        <a href="#" data-hd-policy="aiReport">举报不当 AI 内容</a>
-        <a href="#" data-hd-policy="pluginPolicy">插件内容规则</a>
-      </div>
-    `
-    row.querySelector('[data-hd-check]').addEventListener('click', () => request('check-updates'))
-    row.querySelector('[data-hd-install]').addEventListener('click', () => request('install-update'))
-    row.querySelector('[data-hd-release]').addEventListener('click', event => {
-      event.preventDefault()
-      request('open-release', { url: event.currentTarget.dataset.url || '' })
-    })
-    row.querySelector('[data-hd-auto]').addEventListener('change', event => request('auto-check', { enabled: event.currentTarget.checked ? '1' : '0' }))
-    row.querySelector('[data-hd-preview]').addEventListener('change', event => {
-      event.currentTarget.disabled = true
-      request('preview-updates-toggle', { enabled: event.currentTarget.checked ? '1' : '0' })
-    })
-    row.querySelectorAll('[data-hd-policy]').forEach(link => link.addEventListener('click', event => {
-      event.preventDefault()
-      request('open-external', { url: event.currentTarget.dataset.url || '' })
-    }))
-    section.appendChild(row)
     paint()
   }
 
@@ -1947,6 +2004,11 @@ function officialSettingsBootstrap() {
     }, 80)
   }
   new MutationObserver(scheduleMount).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeUpdateCenter()
+    })
+  }
   mount()
 }
 
@@ -2101,18 +2163,11 @@ function officialSubagentEnhancementsBootstrap() {
   scan()
 }
 
-function showPrPreviewNotice(candidate, { force = false } = {}) {
+function showPrPreviewNotice(candidate) {
   if (!candidate) return false
   pendingUpdateKind = 'preview'
   pendingComponentUpdate = null
-  const notes = [candidate.commit?.subject, candidate.description, candidate.pr?.title].filter(Boolean).join('\n')
-  showUpdateNotice({
-    updateAvailable: true,
-    latestVersion: candidate.version || `PR #${candidate.pr?.number || '候选'}`,
-    currentVersion: updateState.app?.currentVersion || '当前版本',
-    notes: notes || '已发现经过签名校验的 PR 快速预览更新。',
-    url: candidate.pr?.url || ''
-  }, { force })
+  prPreviewState = { ...prPreviewState, available: true, candidate }
   return true
 }
 
@@ -2138,6 +2193,13 @@ async function refreshPrPreviewState({ discover = false } = {}) {
     const result = await api.checkPrPreviewUpdates()
     prPreviewState = { ...prPreviewState, ...result, checking: false, available: result.available === true, candidate: result.candidate || null, error: '' }
     if (result.available && result.candidate) showPrPreviewNotice(result.candidate)
+    if (typeof api.getUnifiedUpdateState === 'function') {
+      try {
+        updateState = { ...updateState, ...(await api.getUnifiedUpdateState()) }
+      } catch (error) {
+        updateState = { ...updateState, installError: error.message || String(error) }
+      }
+    }
   } catch (error) {
     prPreviewState = { ...prPreviewState, checking: false, available: false, candidate: null, error: error.message }
   }
@@ -2155,10 +2217,16 @@ async function setPrPreviewChannelEnabled(enabled) {
       ...updateState,
       preferences: { ...(updateState.preferences || {}), previewEnabled: enabled === true }
     }
-    if (enabled) await refreshPrPreviewState({ discover: true })
-    else if (pendingUpdateKind === 'preview') {
-      closeUpdateNotice()
-      pendingUpdateKind = 'installer'
+    if (enabled) {
+      await refreshPrPreviewState({ discover: true })
+    } else {
+      if (pendingUpdateKind === 'preview') {
+        closeUpdateNotice()
+        pendingUpdateKind = 'installer'
+      }
+      if (typeof api.getUnifiedUpdateState === 'function') {
+        updateState = { ...updateState, ...(await api.getUnifiedUpdateState()) }
+      }
     }
   } catch (error) {
     prPreviewState = { ...prPreviewState, changing: false, error: error.message }
@@ -2254,16 +2322,16 @@ async function publishModelRoutingState() {
   await modelRoutingIntegration.publish(runtimeView, modelRoutingState).catch(() => {})
 }
 
-async function checkUpdates({ forceNotice = false } = {}) {
+async function checkUpdates() {
   updateState = { ...updateState, checking: true, installError: '' }
   await publishUpdateState()
   try {
-    const result = await api.checkUpdates()
-    const componentState = result.component || null
+    const result = typeof api.checkUnifiedUpdates === 'function'
+      ? await api.checkUnifiedUpdates()
+      : await api.checkUpdates()
     updateState = { ...updateState, ...result, checking: false, installError: '' }
     pendingUpdateKind = 'installer'
     pendingComponentUpdate = null
-    if (!showComponentUpdateNotice(componentState, { force: forceNotice })) showUpdateNotice(result.app, { force: forceNotice })
   } catch (error) {
     updateState = { ...updateState, checking: false, app: { error: error.message }, harness: updateState.harness }
   }
@@ -2271,11 +2339,41 @@ async function checkUpdates({ forceNotice = false } = {}) {
   if (prPreviewState.enabled && (prPreviewState.configured || prPreviewState.ready)) await refreshPrPreviewState({ discover: true })
 }
 
-async function installUpdate() {
-  updateState = { ...updateState, installing: true, installError: '', installProgress: { phase: 'checksum' } }
+async function runUnifiedUpdateAction(id, action) {
+  const allowedActions = new Set(['check', 'install', 'apply', 'exit', 'settings'])
+  const safeId = String(id || '').trim()
+  if (!safeId || !allowedActions.has(action) || typeof api.runUnifiedUpdateAction !== 'function') return
+  const busy = ['install', 'apply'].includes(action)
+  if (busy) updateState = { ...updateState, installing: true, installError: '' }
   await publishUpdateState()
   try {
+    const result = await api.runUnifiedUpdateAction(safeId, action)
+    if (result && typeof result === 'object') updateState = { ...updateState, ...result }
+    if (typeof api.getUnifiedUpdateState === 'function') updateState = { ...updateState, ...(await api.getUnifiedUpdateState()) }
+    updateState = { ...updateState, installing: false, installError: '' }
+  } catch (error) {
+    updateState = { ...updateState, installing: false, installError: error.message || String(error) }
+  }
+  await publishUpdateState()
+}
+
+async function installUpdate({ kind = '', id = '' } = {}) {
+  const normalizedKind = String(kind || '').toLowerCase()
+  if (['pr', 'preview'].includes(normalizedKind)) pendingUpdateKind = 'preview'
+  else if (['component', 'components', 'harness'].includes(normalizedKind)) pendingUpdateKind = 'components'
+  else if (normalizedKind) pendingUpdateKind = 'installer'
+  updateState = { ...updateState, installing: true, installError: '', installProgress: { phase: 'checksum', kind: normalizedKind, id } }
+  await publishUpdateState()
+  try {
+    const preview = pendingUpdateKind === 'preview'
     const component = pendingUpdateKind === 'components'
+    if (preview) {
+      await api.applyPrPreviewUpdate({ id })
+      updateState = { ...updateState, installing: false, installError: '', installProgress: null }
+      await refreshPrPreviewState()
+      await publishUpdateState()
+      return
+    }
     const result = component ? await api.stageComponentUpdates() : await api.installUpdate()
     const ready = component ? result?.state?.phase === 'ready' : result?.ready
     const version = component ? result?.state?.pending?.releaseVersion || pendingComponentUpdate?.lastCheck?.releaseVersion : result?.version
@@ -2321,9 +2419,13 @@ runtimeView.addEventListener('will-navigate', event => {
   if (target.protocol !== 'harness-desktop:') return
   event.preventDefault()
   if (target.hostname === 'check-updates') {
-    checkUpdates({ forceNotice: true })
+    checkUpdates()
+  } else if (target.hostname === 'update-action') {
+    const id = target.searchParams.get('id') || ''
+    const action = target.searchParams.get('action') || ''
+    runUnifiedUpdateAction(id, action)
   } else if (target.hostname === 'install-update') {
-    installUpdate()
+    installUpdate({ kind: target.searchParams.get('kind') || '', id: target.searchParams.get('id') || '' })
   } else if (target.hostname === 'auto-check') {
     const enabled = target.searchParams.get('enabled') !== '0'
     api.setUpdatePreferences({ checkOnStartup: enabled }).then(preferences => {
@@ -2954,12 +3056,19 @@ api.onComputerUseAuthorization(session => {
   publishComputerUsePluginState()
 })
 api.onPetState(renderPetState)
-api.onUpdateResult(result => {
+api.onUpdateResult(async result => {
   updateState = { ...updateState, ...result, checking: false }
-  publishUpdateState()
   pendingUpdateKind = 'installer'
   pendingComponentUpdate = null
-  if (!showComponentUpdateNotice(result.component)) showUpdateNotice(result.app)
+  showComponentUpdateNotice(result.component)
+  if (typeof api.getUnifiedUpdateState === 'function') {
+    try {
+      updateState = { ...updateState, ...(await api.getUnifiedUpdateState()) }
+    } catch (error) {
+      updateState = { ...updateState, installError: error.message || String(error) }
+    }
+  }
+  await publishUpdateState()
 })
 api.onUpdateInstallProgress(progress => {
   updateState = { ...updateState, installing: progress?.phase !== 'ready', installError: '', installProgress: progress }
@@ -2977,6 +3086,13 @@ api.onPrPreviewUpdateProgress(progress => {
 async function startOfficialWorkspace() {
   distributionState = await api.getDistribution()
   updateState = { ...updateState, preferences: await api.getUpdatePreferences(), distribution: distributionState }
+  if (typeof api.getUnifiedUpdateState === 'function') {
+    try {
+      updateState = { ...updateState, ...(await api.getUnifiedUpdateState()) }
+    } catch (error) {
+      updateState = { ...updateState, installError: error.message || String(error) }
+    }
+  }
   try {
     prPreviewState = { ...prPreviewState, ...(await api.getPrPreviewUpdateState()), error: '' }
   } catch (error) {

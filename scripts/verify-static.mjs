@@ -196,11 +196,7 @@ if (!html.includes('id="skinQuickButton"') || !html.includes('id="skinPickerOver
 for (const id of ['updateReadyOverlay', 'updateReadyDetail', 'updateLaterButton', 'updateNowButton', 'updateLaunchError']) {
   if (!html.includes(`id="${id}"`)) throw new Error(`In-app update confirmation is missing: ${id}`)
 }
-for (const id of ['updateNoticeOverlay', 'updateNoticeTitle', 'updateNoticeNotes', 'updateNoticeLater', 'updateNoticeRelease', 'updateNoticeInstall']) {
-  if (!html.includes(`id="${id}"`)) throw new Error(`Proactive update notification is missing: ${id}`)
-}
 if (!rendererStyles.includes('.update-ready-dialog')) throw new Error('In-app update confirmation must inherit the active desktop theme.')
-if (!rendererStyles.includes('.update-notice-dialog')) throw new Error('Update release notes notification must inherit the active desktop theme.')
 
 const rendererScript = await readFile(path.join(root, 'renderer/app.js'), 'utf8')
 const guestPreload = await readFile(path.join(root, 'electron/guest-preload.cjs'), 'utf8')
@@ -215,22 +211,19 @@ if (!rendererScript.includes("document.addEventListener('pointerdown'") || !rend
   throw new Error('The top-bar desktop pet card must close when the user clicks anywhere outside the card, including the isolated official WebView.')
 }
 if (rendererScript.includes('showCompatibility') || rendererScript.includes('compatibilityMode')) throw new Error('Renderer must expose one official workspace, not native/Web mode switching.')
-if (!rendererScript.includes('harness-desktop-update-row') || !rendererScript.includes('api.getUpdatePreferences()')) {
-  throw new Error('Desktop and Harness update status must be integrated into the official General settings surface.')
+for (const contract of ['harness-desktop-version-button', 'harness-desktop-update-center', 'displayVersion', 'pendingCount', 'api.getUpdatePreferences()']) {
+  if (!rendererScript.includes(contract)) throw new Error(`The compact unified update entry is missing: ${contract}`)
 }
 for (const contract of ['dataset.hdSettingsLayout', 'dataset.hdSettingsContent', 'dataset.hdSettingsOptions', 'width:min(1120px']) {
   if (!rendererScript.includes(contract)) throw new Error(`The functional settings dialog layout enhancement is missing: ${contract}`)
 }
-if (!rendererScript.includes('element.textContent !== value') || !rendererScript.includes('mountScheduled') || !rendererScript.includes('new MutationObserver(scheduleMount)')) {
-  throw new Error('Official settings integration must prevent MutationObserver self-trigger loops.')
+if (!rendererScript.includes('element.textContent !== value') || !rendererScript.includes('mountScheduled') || !rendererScript.includes('new MutationObserver(scheduleMount)') || !rendererScript.includes('list.dataset.signature !== itemsSignature')) {
+  throw new Error('Official settings and unified update integration must prevent MutationObserver self-trigger loops.')
 }
-if (!rendererScript.includes("request('install-update')") || !rendererScript.includes('api.installUpdate()') || !rendererScript.includes('下载并安装桌面版更新')) {
-  throw new Error('Official General settings must install verified Harness Desktop updates, not only open a download page.')
+for (const contract of ["request('update-action'", 'api.runUnifiedUpdateAction', 'api.getUnifiedUpdateState', '立即更新', '确认应用']) {
+  if (!rendererScript.includes(contract)) throw new Error(`The unified center must keep verified updates behind an explicit in-app action: ${contract}`)
 }
-if (!rendererScript.includes('showUpdateReady(version') || !rendererScript.includes('api.launchReadyUpdate()') || !rendererScript.includes('api.applyComponentUpdates()')) {
-  throw new Error('A verified update must use the in-app confirmation before opening the visible installer wizard.')
-}
-for (const contract of ['showUpdateNotice(result.app', 'normalizedReleaseNotes', 'data-hd-notes', '更新内容', 'officialSubagentEnhancementsBootstrap', 'hd-subagent-panel', 'hd-subagent-running-indicator']) {
+for (const contract of ['data-hd-update-items', '当前已是最新', 'officialSubagentEnhancementsBootstrap', 'hd-subagent-panel', 'hd-subagent-running-indicator']) {
   if (!rendererScript.includes(contract)) throw new Error(`Desktop enhancement contract is missing: ${contract}`)
 }
 const workspaceLinksIntegration = await readFile(path.join(root, 'renderer/workspace-links-integration.js'), 'utf8')
@@ -412,16 +405,19 @@ const desktopMain = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
 for (const contract of ['createWssRelayAdapter', 'MobileRelayConfigStore', "detached: process.platform !== 'win32'", 'terminateProcessTree(child)', 'runtimeProbeOptions: { runtimeHome: desktopDshHome(), logOutput: true, timeoutMs: 180_000 }', 'ensureComputerUseScreenshotStore().save(scaled.toPNG())', 'clearComputerUseScreenshots()']) {
   if (!desktopMain.includes(contract)) throw new Error(`Cross-platform desktop runtime contract is missing: ${contract}`)
 }
-for (const contract of ['ensurePrPreviewUpdateContext', 'checkPrPreviewUpdates', 'stagePrPreviewUpdate', 'context.service.accept(pending.discovery)', 'exitPrPreviewUpdate', "ipcMain.handle('prPreviewUpdates:apply'"]) {
+for (const contract of ['ensurePrPreviewUpdateContext', 'checkPrPreviewUpdates', 'stagePrPreviewUpdate', 'context.service.accept(pending.discovery.candidateId)', 'exitPrPreviewUpdate', 'getUnifiedUpdateState', 'checkUnifiedUpdates', 'runUnifiedUpdateAction', "ipcMain.handle('prPreviewUpdates:apply'", "ipcMain.handle('unifiedUpdates:action'"]) {
   if (!desktopMain.includes(contract)) throw new Error(`PR preview desktop integration contract is missing: ${contract}`)
 }
 const desktopPreload = await readFile(path.join(root, 'electron/preload.cjs'), 'utf8')
-for (const contract of ['getPrPreviewUpdateState', 'setPrPreviewUpdatesEnabled', 'checkPrPreviewUpdates', 'applyPrPreviewUpdate', 'exitPrPreviewUpdates']) {
+for (const contract of ['getPrPreviewUpdateState', 'setPrPreviewUpdatesEnabled', 'checkPrPreviewUpdates', 'applyPrPreviewUpdate', 'exitPrPreviewUpdates', 'getUnifiedUpdateState', 'checkUnifiedUpdates', 'runUnifiedUpdateAction']) {
   if (!desktopPreload.includes(contract)) throw new Error(`PR preview preload contract is missing: ${contract}`)
 }
 const desktopRenderer = await readFile(path.join(root, 'renderer/app.js'), 'utf8')
-for (const contract of ['setPrPreviewChannelEnabled', 'refreshPrPreviewState', 'preview-updates-toggle', 'data-hd-preview']) {
+for (const contract of ['refreshPrPreviewState', 'harness-desktop-version-button', 'harness-desktop-update-center', 'update-action']) {
   if (!desktopRenderer.includes(contract)) throw new Error(`PR preview renderer integration contract is missing: ${contract}`)
+}
+for (const removedToggle of ['data-hd-auto', 'data-hd-preview']) {
+  if (desktopRenderer.includes(removedToggle)) throw new Error(`Automatic update discovery must not expose a user toggle: ${removedToggle}`)
 }
 const iosInfo = await readFile(path.join(root, 'mobile/ios/HarnessMobile/Resources/Info.plist'), 'utf8')
 for (const contract of ['NSCameraUsageDescription', 'NSLocalNetworkUsageDescription', 'NSAllowsLocalNetworking', 'harnessmobile']) {
