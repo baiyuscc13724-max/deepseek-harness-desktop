@@ -19,12 +19,19 @@ const mobileCss = read('assets', 'mobile-compat.css')
 function extractJavaStringConstant(source, name) {
   const start = source.indexOf(`String ${name} =`)
   assert.notEqual(start, -1, `${name} constant must exist`)
-  const end = source.indexOf(';\n', start)
-  const expression = source.slice(start, end)
+  const tail = source.slice(start)
+  const terminator = tail.search(/;\r?\n/u)
+  assert.notEqual(terminator, -1, `${name} constant must terminate on its declaration line`)
+  const expression = tail.slice(0, terminator)
   return [...expression.matchAll(/"((?:\\.|[^"\\])*)"/g)]
     .map(match => JSON.parse(`"${match[1]}"`))
     .join('')
 }
+
+test('Java string extraction is independent of checkout line endings', () => {
+  const source = 'String SAMPLE =\r\n    "const mobile = true;";\r\nString NEXT = "ignored";\r\n'
+  assert.equal(extractJavaStringConstant(source, 'SAMPLE'), 'const mobile = true;')
+})
 
 test('injected composer input script is valid JavaScript', () => {
   const script = extractJavaStringConstant(adapter, 'FILE_ENTRY_JS')
