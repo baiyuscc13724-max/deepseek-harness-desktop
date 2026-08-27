@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const { mkdtempSync, readFileSync, writeFileSync } = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { AppStateStore, MAX_PREVIEW_CANDIDATES, normalizeState } = require('../electron/store/app-state-store.cjs')
+const { AppStateStore, MAX_INSTALLED_PREVIEW_HEADS, MAX_PREVIEW_CANDIDATES, normalizeState } = require('../electron/store/app-state-store.cjs')
 
 test('AppStateStore hard-enables discovery while persisting safe update preferences', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-state-'))
@@ -47,6 +47,7 @@ test('AppStateStore records only monotonic signed PR preview candidates', () => 
     previewEnabled: true,
     lastPreviewSequence: 4,
     lastPreviewHeadSha: firstSha,
+    installedPreviewHeads: [firstSha],
     previewCandidates: []
   })
   assert.throws(() => store.markPreviewCandidate(3, firstSha), /拒绝回退/)
@@ -83,6 +84,35 @@ test('AppStateStore persists a bounded opaque PR candidate queue without weakeni
   const recovered = store.markPreviewCandidate(MAX_PREVIEW_CANDIDATES + 1, 'd'.repeat(40)).updates
   assert.equal(recovered.lastPreviewSequence, MAX_PREVIEW_CANDIDATES + 1)
   assert.deepEqual(recovered.previewCandidates, [])
+})
+
+test('AppStateStore remembers installed preview heads and drops re-signed duplicates from the queue', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'harness-preview-installed-'))
+  const file = path.join(dir, 'app-state.json')
+  const store = new AppStateStore(file)
+  const firstSha = 'a'.repeat(40)
+  const secondSha = 'b'.repeat(40)
+  const candidate = (id, sequence, headSha) => ({
+    id: `pr-${id.repeat(64)}`,
+    provider: 'github',
+    index: { sequence, headSha, signature: 'signed-index' },
+    previewManifest: { sequence, headSha, signature: 'signed-manifest' }
+  })
+
+  const saved = store.savePreviewUpdateState({
+    sequence: 4,
+    headSha: firstSha,
+    installedHeads: [firstSha, 'invalid'],
+    candidates: [candidate('a', 8, firstSha), candidate('b', 9, secondSha)]
+  }).updates
+  assert.deepEqual(saved.installedPreviewHeads, [firstSha])
+  assert.deepEqual(saved.previewCandidates.map(value => value.index.headSha), [secondSha])
+
+  const installed = store.markPreviewCandidate(9, secondSha).updates
+  assert.deepEqual(installed.installedPreviewHeads, [firstSha, secondSha])
+  assert.deepEqual(installed.previewCandidates, [])
+  assert.equal(MAX_INSTALLED_PREVIEW_HEADS, 128)
+  assert.deepEqual(normalizeState({ updates: { lastPreviewSequence: 3, lastPreviewHeadSha: firstSha } }).updates.installedPreviewHeads, [firstSha])
 })
 
 test('AppStateStore persists only validated appearance fields', () => {

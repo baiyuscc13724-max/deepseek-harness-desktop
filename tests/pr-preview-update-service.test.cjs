@@ -5,6 +5,7 @@ const { canonicalJson, validateAndVerifyManifest, withoutSignature } = require('
 const { OFFICIAL_PREVIEW_REPOSITORY } = require('../electron/bridge/pr-preview-update-contract.cjs')
 const { OFFICIAL_PREVIEW_INDEX_URLS } = require('../electron/bridge/pr-preview-update-config.cjs')
 const {
+  MAX_INSTALLED_PREVIEW_HEADS,
   MAX_PERSISTED_CANDIDATES,
   PrPreviewUpdateService,
   createMemoryPreviewState,
@@ -105,6 +106,12 @@ test('persisted candidate normalization retains exactly the newest 128 unique en
   assert.equal(afterRecovery.candidates.length, 65)
   assert.equal(afterRecovery.candidates[0].index.sequence, 65)
   assert.equal(afterRecovery.candidates.at(-1).index.sequence, 129)
+
+  const installedHeads = Array.from({ length: MAX_INSTALLED_PREVIEW_HEADS + 1 }, (_, index) => index.toString(16).padStart(40, '0'))
+  const boundedHistory = normalizePreviewState({ installedHeads }).installedHeads
+  assert.equal(boundedHistory.length, MAX_INSTALLED_PREVIEW_HEADS)
+  assert.equal(boundedHistory[0], installedHeads[1])
+  assert.equal(boundedHistory.at(-1), installedHeads.at(-1))
 })
 
 test('discovery falls back across both layers, persists the signed queue, and advances accepted state only after explicit accept', async () => {
@@ -153,6 +160,7 @@ test('discovery falls back across both layers, persists the signed queue, and ad
   assert.equal(accepted.accepted, true)
   assert.equal(stored.sequence, 23)
   assert.equal(stored.headSha, SHA)
+  assert.deepEqual(stored.installedHeads, [SHA])
   assert.deepEqual(stored.candidates, [])
 })
 
@@ -172,7 +180,19 @@ test('discover does not hide deferred candidates; accept advances monotonic stat
   assert.equal((await service.accept(first)).accepted, true)
   const duplicate = await service.discover()
   assert.equal(duplicate.available, false)
-  assert.equal(duplicate.reason, 'not-newer')
+  assert.equal(duplicate.reason, 'already-installed')
+
+  currentIndex = signed({ ...data.index, sequence: 24 }, data.privateKey)
+  const resignedSameHead = await service.discover()
+  assert.equal(resignedSameHead.available, false)
+  assert.equal(resignedSameHead.reason, 'already-installed')
+  assert.equal(resignedSameHead.sequence, 24)
+  assert.deepEqual(await state.load(), {
+    sequence: 24,
+    headSha: SHA,
+    installedHeads: [SHA],
+    candidates: []
+  })
 
   currentIndex = { ...data.index, sequence: 22 }
   signed(currentIndex, data.privateKey)
@@ -194,14 +214,22 @@ test('newer latest entries append without hiding deferred signed candidates and 
   const service = new PrPreviewUpdateService({ enabled: true, trustedKeys: data.trustedKeys, fetchImpl, clock: () => NOW, state })
   const first = await service.discover()
 
-  const component = signed({ ...data.previewManifest.componentManifest.components[0], version: '1.0.41-pr.24' }, data.privateKey)
+  const nextSha = 'e'.repeat(40)
+  const previousTag = `pr-preview-42-${SHA.slice(0, 12)}-run-67890-1`
+  const nextTag = `pr-preview-42-${nextSha.slice(0, 12)}-run-67890-1`
+  const previousComponent = data.previewManifest.componentManifest.components[0]
+  const component = signed({
+    ...previousComponent,
+    version: '1.0.41-pr.24',
+    urls: previousComponent.urls.map(url => url.replace(previousTag, nextTag))
+  }, data.privateKey)
   const componentManifest = signed({
     ...data.previewManifest.componentManifest,
     releaseVersion: '1.0.41-pr.24',
     components: [component]
   }, data.privateKey)
-  currentIndex = signed({ ...data.index, sequence: 24 }, data.privateKey)
-  currentManifest = signed({ ...data.previewManifest, sequence: 24, componentManifest }, data.privateKey)
+  currentIndex = signed({ ...data.index, sequence: 24, headSha: nextSha, manifestUrls: manifestUrls(nextSha) }, data.privateKey)
+  currentManifest = signed({ ...data.previewManifest, sequence: 24, headSha: nextSha, componentManifest }, data.privateKey)
   const second = await service.discover()
   const queued = await service.listCandidates()
   assert.deepEqual(queued.map(value => value.sequence), [23, 24])

@@ -9,7 +9,9 @@ const VALID_UI_MODES = new Set(['official', 'aurora', 'spatial', 'tactile'])
 const CURRENT_SCHEMA_VERSION = 14
 const MAX_WALLPAPER_LIBRARY_ITEMS = 48
 const MAX_PREVIEW_CANDIDATES = 128
+const MAX_INSTALLED_PREVIEW_HEADS = 128
 const PREVIEW_CANDIDATE_ID = /^pr-[a-f0-9]{64}$/
+const PREVIEW_HEAD_SHA = /^[a-f0-9]{40}$/
 const VALID_TERMINAL_SHELL_IDS = new Set(['powershell', 'cmd', 'git-bash', 'wsl', 'default'])
 const WALLPAPER_ID = /^[a-z0-9][a-z0-9-]{0,79}$/
 const WALLPAPER_FILE = /^(?:custom-background|wallpaper-[a-z0-9-]{1,80})\.(?:png|jpe?g|webp|gif|apng|mp4|webm)$/i
@@ -69,6 +71,7 @@ const DEFAULT_STATE = Object.freeze({
     previewEnabled: true,
     lastPreviewSequence: 0,
     lastPreviewHeadSha: null,
+    installedPreviewHeads: [],
     previewCandidates: []
   },
   appearance: {
@@ -139,6 +142,19 @@ function normalizePreviewCandidates(value) {
   return output
 }
 
+function normalizeInstalledPreviewHeads(value) {
+  const output = []
+  const seen = new Set()
+  for (const input of Array.isArray(value) ? value.slice(-MAX_INSTALLED_PREVIEW_HEADS * 2) : []) {
+    const headSha = String(input || '').trim().toLowerCase()
+    if (!PREVIEW_HEAD_SHA.test(headSha) || seen.has(headSha)) continue
+    seen.add(headSha)
+    output.push(headSha)
+    if (output.length > MAX_INSTALLED_PREVIEW_HEADS) output.shift()
+  }
+  return output
+}
+
 function normalizeState(input) {
   const base = cloneDefaultState()
   const value = input && typeof input === 'object' ? input : {}
@@ -166,6 +182,16 @@ function normalizeState(input) {
     wallpaperEngineProject: null,
     wallpaperEngineSignature: null
   })
+  const lastPreviewSequence = Number.isSafeInteger(value.updates?.lastPreviewSequence) && value.updates.lastPreviewSequence >= 0
+    ? value.updates.lastPreviewSequence
+    : 0
+  const lastPreviewHeadSha = PREVIEW_HEAD_SHA.test(String(value.updates?.lastPreviewHeadSha || ''))
+    ? String(value.updates.lastPreviewHeadSha).toLowerCase()
+    : null
+  const installedPreviewHeads = normalizeInstalledPreviewHeads([
+    ...(Array.isArray(value.updates?.installedPreviewHeads) ? value.updates.installedPreviewHeads : []),
+    ...(lastPreviewSequence > 0 && lastPreviewHeadSha ? [lastPreviewHeadSha] : [])
+  ])
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     updates: {
@@ -174,12 +200,9 @@ function normalizeState(input) {
       lastCheckedAt: value.updates?.lastCheckedAt || null,
       skippedVersion: value.updates?.skippedVersion || null,
       previewEnabled,
-      lastPreviewSequence: Number.isSafeInteger(value.updates?.lastPreviewSequence) && value.updates.lastPreviewSequence >= 0
-        ? value.updates.lastPreviewSequence
-        : 0,
-      lastPreviewHeadSha: /^[a-f0-9]{40}$/.test(String(value.updates?.lastPreviewHeadSha || ''))
-        ? String(value.updates.lastPreviewHeadSha)
-        : null,
+      lastPreviewSequence,
+      lastPreviewHeadSha,
+      installedPreviewHeads,
       previewCandidates: normalizePreviewCandidates(value.updates?.previewCandidates)
     },
     appearance: {
@@ -342,16 +365,23 @@ class AppStateStore {
     const sequence = Number(value.sequence || 0)
     const headSha = String(value.headSha || '').trim().toLowerCase()
     if (sequence !== 0 && (!Number.isSafeInteger(sequence) || sequence < 0)) throw new Error('PR 预览更新序号无效。')
-    if (sequence > 0 && !/^[a-f0-9]{40}$/.test(headSha)) throw new Error('PR 预览更新 commit 无效。')
+    if (sequence > 0 && !PREVIEW_HEAD_SHA.test(headSha)) throw new Error('PR 预览更新 commit 无效。')
     const currentSequence = this.state.updates.lastPreviewSequence || 0
     const currentSha = this.state.updates.lastPreviewHeadSha
     if (sequence < currentSequence) throw new Error('拒绝回退到旧的 PR 预览更新序号。')
     if (sequence === currentSequence && sequence > 0 && currentSha && currentSha !== headSha) {
       throw new Error('同一 PR 预览更新序号指向了不同 commit。')
     }
+    const installedPreviewHeads = normalizeInstalledPreviewHeads([
+      ...(hasOwn(value, 'installedHeads') && Array.isArray(value.installedHeads) ? value.installedHeads : this.state.updates.installedPreviewHeads),
+      ...(sequence > 0 ? [headSha] : [])
+    ])
+    const installedSet = new Set(installedPreviewHeads)
     this.state.updates.lastPreviewSequence = sequence
     this.state.updates.lastPreviewHeadSha = sequence > 0 ? headSha : null
+    this.state.updates.installedPreviewHeads = installedPreviewHeads
     this.state.updates.previewCandidates = normalizePreviewCandidates(value.candidates)
+      .filter(candidate => !installedSet.has(String(candidate.index?.headSha || '').toLowerCase()))
     this.#persist()
     return this.get()
   }
@@ -359,18 +389,24 @@ class AppStateStore {
   markPreviewCandidate(sequence, headSha) {
     if (!Number.isSafeInteger(sequence) || sequence <= 0) throw new Error('PR 预览更新序号无效。')
     const normalizedSha = String(headSha || '').trim().toLowerCase()
-    if (!/^[a-f0-9]{40}$/.test(normalizedSha)) throw new Error('PR 预览更新 commit 无效。')
+    if (!PREVIEW_HEAD_SHA.test(normalizedSha)) throw new Error('PR 预览更新 commit 无效。')
     const currentSequence = this.state.updates.lastPreviewSequence || 0
     const currentSha = this.state.updates.lastPreviewHeadSha
     if (sequence < currentSequence) throw new Error('拒绝回退到旧的 PR 预览更新序号。')
     if (sequence === currentSequence && currentSha && currentSha !== normalizedSha) {
       throw new Error('同一 PR 预览更新序号指向了不同 commit。')
     }
-    const remainingCandidates = this.state.updates.previewCandidates.filter(candidate => Number(candidate.index?.sequence || 0) > sequence)
+    const installedPreviewHeads = normalizeInstalledPreviewHeads([...this.state.updates.installedPreviewHeads, normalizedSha])
+    const remainingCandidates = this.state.updates.previewCandidates.filter(candidate => (
+      Number(candidate.index?.sequence || 0) > sequence &&
+      String(candidate.index?.headSha || '').toLowerCase() !== normalizedSha
+    ))
     const queueChanged = remainingCandidates.length !== this.state.updates.previewCandidates.length
-    if (sequence === currentSequence && currentSha === normalizedSha && !queueChanged) return this.get()
+    const historyChanged = JSON.stringify(installedPreviewHeads) !== JSON.stringify(this.state.updates.installedPreviewHeads)
+    if (sequence === currentSequence && currentSha === normalizedSha && !queueChanged && !historyChanged) return this.get()
     this.state.updates.lastPreviewSequence = sequence
     this.state.updates.lastPreviewHeadSha = normalizedSha
+    this.state.updates.installedPreviewHeads = installedPreviewHeads
     this.state.updates.previewCandidates = remainingCandidates
     this.#persist()
     return this.get()
@@ -472,11 +508,13 @@ module.exports = {
   AppStateStore,
   DEFAULT_STATE,
   DEFAULT_THEME_ID,
+  MAX_INSTALLED_PREVIEW_HEADS,
   MAX_PREVIEW_CANDIDATES,
   MAX_WALLPAPER_LIBRARY_ITEMS,
   VALID_TERMINAL_SHELL_IDS,
   VALID_THEME_IDS,
   normalizeState,
+  normalizeInstalledPreviewHeads,
   normalizePetPositions,
   normalizePreviewCandidate,
   normalizePreviewCandidates,

@@ -3712,6 +3712,7 @@ function prPreviewStateAdapter() {
       return {
         sequence: updates.lastPreviewSequence || 0,
         headSha: updates.lastPreviewHeadSha || '',
+        installedHeads: updates.installedPreviewHeads || [],
         candidates: updates.previewCandidates || []
       }
     },
