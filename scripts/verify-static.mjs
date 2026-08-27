@@ -58,7 +58,7 @@ required.push(
 
 required.push(
   'docs/MOBILE_APPLE_EXPERIENCE.zh-CN.md',
-  'docs/SECURITY-REVIEW-v1.0.48.zh-CN.md',
+  'docs/SECURITY-REVIEW-v1.0.49.zh-CN.md',
   'electron/bridge/native-p2p-host.cjs',
   'electron/bridge/sync-transports/native-p2p-adapter.cjs',
   'renderer/native-p2p.html',
