@@ -83,7 +83,8 @@ test('TodoDock and QueueDock controls stay outside the Stop-as-Send interception
   const bridge = section(runtime, '  const installImeSendBridge = () => {', '  const installComposerLift = () => {')
   assertContainsAll(bridge, [
     "event.target?.closest?.('[data-composer-card] button')",
-    'const isSend = button => !stopAsSend(button)'
+    'const dispatchOfficialEnter = textarea =>',
+    "const keydown = new KeyboardEvent('keydown'"
   ], 'Stop-as-Send boundary')
   assert.doesNotMatch(bridge, /todo-panel|harnessMobileSessionTaskPanel|data-queue-dock|harnessMobileQueueDock/u)
 

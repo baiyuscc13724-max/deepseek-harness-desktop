@@ -35,7 +35,7 @@ test('draft text immediately presents Stop as send intent without treating it as
     'delete button.dataset.harnessMobileStopAsSend',
     'window.__harnessMobileSyncComposerIntent?.(input)'
   ], 'send-intent presentation')
-  assert.match(runtime, /const isSend = button => !stopAsSend\(button\) && \/send message\|发送消息\|发送\/i\.test\(actionLabel\(button\)\)/u)
+  assert.match(runtime, /const isStop = button => stopAsSend\(button\) \|\| \/stop generating\|停止生成\|停止运行\/i\.test\(actionLabel\(button\)\)/u)
 
   const decoratedRule = cssRule('[data-composer-card] button[data-harness-mobile-stop-as-send="true"]')
   assert.match(decoratedRule, /background:\s*var\(--hm-color-primary/u)
@@ -43,19 +43,101 @@ test('draft text immediately presents Stop as send intent without treating it as
   assert.match(cssRule('[data-composer-card] button[data-harness-mobile-stop-as-send="true"]::after'), /content:\s*"↑"\s*!important/u)
 })
 
-test('send-intent clicks are captured before Stop and wait for the official Send control', () => {
+test('send-intent clicks are captured before Stop and use the official textarea Enter contract', () => {
   assertContainsAll(runtime, [
     "document.addEventListener('click'",
     'event.preventDefault()',
     'event.stopImmediatePropagation()',
-    'pendingStop = button',
-    'activateOfficialSend(textarea)',
-    'if (button !== stop || !(textarea.value || \'\').trim()) return',
-    '.find(button => isSend(button) && !button.disabled && visible(button))',
-    'if (++attempts < 12) setTimeout(activate, 24)'
-  ], 'guarded send activation')
-  assert.match(runtime, /if \(!hasDraft\) \{[^]*pendingStop = null[^]*return null/u)
+    'dispatchOfficialEnter(textarea)',
+    "const keydown = new KeyboardEvent('keydown'",
+    "key: 'Enter', code: 'Enter', keyCode: 13, which: 13",
+    'textarea.dispatchEvent(keydown)',
+    'return keydown.defaultPrevented',
+    'if (pendingSendTextarea === textarea) setTimeout(() => dispatchOfficialEnter(textarea), 0)'
+  ], 'guarded Enter activation')
+  assert.match(runtime, /if \(!hasDraft\) \{[^]*pendingSendTextarea = null[^]*return null/u)
   assert.match(runtime, /const isStop = button => stopAsSend\(button\) \|\|/u)
+  assert.doesNotMatch(runtime, /activateOfficialSend|pendingStop|\.find\(button => isSend\(button\)/u)
+})
+
+test('send-intent tap behavior dispatches one cancellable Enter to the official textarea', () => {
+  const start = runtime.indexOf('  const installImeSendBridge = () => {')
+  const end = runtime.indexOf('  const installComposerLift = () => {', start)
+  assert.ok(start >= 0 && end > start)
+  const source = runtime.slice(start, end)
+  const listeners = new Map()
+  const attributes = new Map([['aria-label', 'Stop generating']])
+  const button = {
+    dataset: {},
+    title: '',
+    getAttribute: name => attributes.has(name) ? attributes.get(name) : null,
+    setAttribute: (name, value) => attributes.set(name, String(value)),
+    removeAttribute: name => attributes.delete(name),
+    closest: selector => selector === '[data-composer-card]' ? card : null
+  }
+  let dispatchedEnter = null
+  const textarea = {
+    value: 'queued from tap',
+    matches: selector => selector === '[data-composer-card] textarea',
+    closest: selector => selector === '[data-composer-card]' ? card : null,
+    focus() {},
+    dispatchEvent(event) {
+      dispatchedEnter = event
+      if (event.type === 'keydown' && event.key === 'Enter') event.preventDefault()
+      return !event.defaultPrevented
+    }
+  }
+  const card = {
+    querySelectorAll: selector => selector === 'button' ? [button] : [],
+    querySelector: selector => selector === 'textarea' ? textarea : null
+  }
+  const documentMock = {
+    addEventListener(type, listener) {
+      const entries = listeners.get(type) || []
+      entries.push(listener)
+      listeners.set(type, entries)
+    },
+    querySelector(selector) {
+      if (selector === '[data-composer-card] textarea') return textarea
+      if (selector === '[data-composer-card]') return card
+      return null
+    }
+  }
+  class FakeKeyboardEvent {
+    constructor(type, init) {
+      this.type = type
+      Object.assign(this, init)
+      this.defaultPrevented = false
+    }
+    preventDefault() { if (this.cancelable) this.defaultPrevented = true }
+  }
+  const windowMock = {}
+  const install = new Function('window', 'document', 'navigator', 'KeyboardEvent', 'setTimeout', 'mobileCapabilities', `${source}; return installImeSendBridge`) (
+    windowMock,
+    documentMock,
+    { language: 'zh-CN' },
+    FakeKeyboardEvent,
+    callback => { callback(); return 1 },
+    { imeSendBridge: true }
+  )
+  install()
+  assert.equal(button.dataset.harnessMobileStopAsSend, 'true')
+  assert.equal(attributes.get('aria-label'), '发送消息')
+
+  let prevented = false
+  let stopped = false
+  const click = {
+    target: { closest: selector => selector === '[data-composer-card] button' ? button : null },
+    preventDefault: () => { prevented = true },
+    stopImmediatePropagation: () => { stopped = true }
+  }
+  for (const listener of listeners.get('click') || []) listener(click)
+  assert.equal(prevented, true)
+  assert.equal(stopped, true)
+  assert.equal(dispatchedEnter?.type, 'keydown')
+  assert.equal(dispatchedEnter?.key, 'Enter')
+  assert.equal(dispatchedEnter?.code, 'Enter')
+  assert.equal(dispatchedEnter?.defaultPrevented, true)
 })
 
 test('screenshot notice stays in composer flow and only opens the system photo picker', () => {
@@ -96,13 +178,13 @@ test('screenshot notice stays in composer flow and only opens the system photo p
 
   assertContainsAll(adapter, [
     "makeInput('harness-mobile-photo-input','image/*')",
-    "var paste=new Event('paste'",
-    "Object.defineProperty(paste,'clipboardData'",
-    'textarea.dispatchEvent(paste)',
     "var drop=new Event('drop'",
     "Object.defineProperty(drop,'dataTransfer'",
+    "types:['Files']",
+    'waitForRail(files,before,8000)',
     'new File([reader.result]'
-  ], 'official attachment preview bridge')
+  ], 'confirmed official attachment preview bridge')
+  assert.doesNotMatch(adapter, /dispatchPaste|clipboardData/u)
 })
 
 test('IME, history, theme, navigation, attachment and control bridges remain mounted', () => {

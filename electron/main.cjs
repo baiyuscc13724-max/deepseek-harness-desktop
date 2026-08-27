@@ -2428,7 +2428,8 @@ function ensureMobileSyncService() {
     getModelRouting: () => getModelRouting(modelRoutingOptions()),
     getProviderMeters: () => getProviderMeters(false),
     getPlugins: getInstalledPlugins,
-    chooseWorkspaceDirectory
+    chooseWorkspaceDirectory,
+    fetchImpl: (url, options) => net.fetch(url, options)
   })
   mobileSyncService.on('state', state => send('mobileSync:state', state))
   return mobileSyncService

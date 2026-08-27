@@ -45,6 +45,12 @@ test('mobile navigation only delegates to the versioned bridge or official seman
   assert.doesNotMatch(runtime, /(?:空间|任务|我的)(?:首页|页面).*createElement|data-harness-mobile-domain-placeholder/u)
 })
 
+test('settings is reachable only through 我的, never the conversation action menu', () => {
+  const menuSource = runtime.slice(runtime.indexOf('const renderMobileMenu'), runtime.indexOf('const readAuthoritativeProjects'))
+  assert.doesNotMatch(menuSource, /settings\.trigger|sidebar\.settings|textContent = '设置'/u)
+  assert.match(runtime, /id: 'me', label: '我的', route: '\/m\/me', slot: 'navigation\.me'/u)
+})
+
 test('missing domain handlers are disabled and explained instead of opening placeholders', () => {
   assert.match(runtime, /button\.disabled = !available/u)
   assert.match(runtime, /button\.setAttribute\('aria-disabled', available \? 'false' : 'true'\)/u)
