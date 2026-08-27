@@ -471,8 +471,8 @@
   }
 
   /* During generation, a non-empty draft changes the official Stop control's
-     presentation and accessible name to send intent. The runtime still guards
-     the real Stop action and waits for React's official Send control. */
+     presentation and accessible name to send intent. The runtime guards the
+     real Stop action and routes the tap through the official textarea Enter policy. */
   [data-composer-card] button[data-harness-mobile-stop-as-send="true"] {
     position: relative !important;
     color: #fff !important;
@@ -1605,6 +1605,30 @@
 
   :root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-composer-tool="true"] {
     display: none !important;
+  }
+
+  :root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-permission-trigger="true"] {
+    box-sizing: border-box !important;
+    flex: 0 1 auto !important;
+    width: auto !important;
+    min-width: 44px !important;
+    max-width: 132px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    overflow: hidden !important;
+    padding: 0 10px !important;
+    border-radius: 14px !important;
+    touch-action: manipulation !important;
+  }
+
+  :root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-permission-trigger="true"] > span:not([aria-hidden="true"]) {
+    min-width: 0 !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
   }
 
   :root[data-harness-mobile-chat-detail="open"] #harness-mobile-input-button,
@@ -4132,4 +4156,229 @@
   html[data-harness-mobile="true"] [data-harness-mobile-settings-content="true"] [class*="_cubeRow"] {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
+}
+
+[data-harness-mobile-document-rail="true"] {
+  box-sizing: border-box !important;
+  display: flex !important;
+  gap: 8px !important;
+  width: 100% !important;
+  overflow-x: auto !important;
+  padding: 2px 2px 8px !important;
+  scrollbar-width: none;
+}
+
+[data-harness-mobile-document-rail="true"]::-webkit-scrollbar {
+  display: none;
+}
+
+[data-harness-mobile-document-rail="true"] > article {
+  box-sizing: border-box !important;
+  flex: 0 0 min(280px, 78vw) !important;
+  min-width: 0 !important;
+  min-height: 64px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  padding: 10px 10px 10px 12px !important;
+  border: 1px solid var(--hm-color-border, var(--dsw-alias-border-l2)) !important;
+  border-radius: 14px !important;
+  background: var(--hm-color-surface, var(--dsw-specific-input-major)) !important;
+}
+
+[data-harness-mobile-document-rail="true"] > article > span {
+  min-width: 0 !important;
+  display: grid !important;
+  gap: 3px !important;
+}
+
+[data-harness-mobile-document-rail="true"] strong,
+[data-harness-mobile-document-rail="true"] small {
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+}
+
+[data-harness-mobile-document-rail="true"] small {
+  color: var(--hm-color-text-secondary, var(--dsw-alias-label-secondary)) !important;
+  font-size: 12px !important;
+}
+
+[data-harness-mobile-document-rail="true"] button {
+  flex: none !important;
+  min-width: 44px !important;
+  min-height: 44px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  padding: 6px 9px !important;
+  color: var(--hm-color-primary, #4968e8) !important;
+  background: var(--hm-color-surface-active, #eaf0ff) !important;
+  font: inherit !important;
+  font-size: 12px !important;
+}
+
+[data-harness-mobile-conversation-list-title] > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+[data-harness-mobile-conversation-list-title] [data-harness-mobile-project-details] {
+  pointer-events: auto;
+  flex: none;
+  min-width: 88px;
+  min-height: 48px;
+  margin-left: 12px;
+  border: 1px solid var(--hm-color-border, var(--dsw-alias-border-l2));
+  border-radius: 16px;
+  padding: 0 13px;
+  color: var(--hm-color-primary, #4968e8);
+  background: var(--hm-color-surface, var(--dsw-specific-input-major));
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+[data-harness-mobile-project-sheet] {
+  position: fixed;
+  z-index: 25000;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 48px 0 0;
+  background: rgb(18 25 38 / 46%);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+[data-harness-mobile-project-sheet] > section {
+  box-sizing: border-box;
+  width: min(100%, 720px);
+  max-height: min(82dvh, 760px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--hm-color-border, var(--dsw-alias-border-l2));
+  border-radius: 24px 24px 0 0;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  color: var(--hm-color-text, #172133);
+  background: var(--hm-color-surface, var(--dsw-specific-input-major));
+  box-shadow: 0 -14px 42px rgb(18 25 38 / 18%);
+}
+
+[data-harness-mobile-project-sheet] header {
+  flex: none;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px 8px 20px;
+  border-bottom: 1px solid var(--hm-color-border, var(--dsw-alias-border-l2));
+}
+
+[data-harness-mobile-project-sheet] h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 26px;
+}
+
+[data-harness-mobile-project-sheet] header button,
+[data-harness-mobile-project-identity="true"] button {
+  min-width: 48px;
+  min-height: 48px;
+  border: 0;
+  border-radius: 14px;
+  padding: 0 13px;
+  color: var(--hm-color-primary, #4968e8);
+  background: var(--hm-color-surface-active, #eaf0ff);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+[data-harness-mobile-project-sheet] header button {
+  font-size: 24px;
+  line-height: 1;
+}
+
+[data-harness-mobile-project-identity-list="true"] {
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+  padding: 16px;
+  overscroll-behavior: contain;
+}
+
+[data-harness-mobile-project-status="true"] {
+  margin: 20px 4px;
+  color: var(--hm-color-text-secondary, #72798a);
+  text-align: center;
+}
+
+[data-harness-mobile-project-identity="true"] {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  padding: 16px;
+  border: 1px solid var(--hm-color-border, var(--dsw-alias-border-l2));
+  border-radius: 18px;
+  background: var(--hm-color-surface-subtle, #f5f7fb);
+}
+
+[data-harness-mobile-project-identity="true"] > span,
+[data-harness-mobile-project-identity="true"] > p {
+  grid-column: 1 / -1;
+}
+
+[data-harness-mobile-project-identity="true"] > span {
+  margin-top: 4px;
+  color: var(--hm-color-text-secondary, #72798a);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+[data-harness-mobile-project-identity="true"] strong,
+[data-harness-mobile-project-identity="true"] code {
+  min-width: 0;
+  align-self: center;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default !important;
+  cursor: text;
+}
+
+[data-harness-mobile-project-identity="true"] code {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+[data-harness-mobile-project-identity="true"] > p {
+  min-height: 18px;
+  margin: 0;
+  color: var(--hm-color-primary, #4968e8);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+[data-chat-flow-kind],
+[data-chat-flow-kind] :where(p, li, blockquote, pre, code, strong, em, span:not([role="button"])) {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default !important;
+}
+
+[data-chat-flow-kind] :where(button, [role="button"], input, textarea, select),
+#harness-mobile-app-shell,
+[data-harness-mobile-project-sheet] button {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
 }

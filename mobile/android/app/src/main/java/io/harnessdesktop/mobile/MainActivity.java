@@ -339,12 +339,11 @@ public final class MainActivity extends AppCompatActivity {
         checkMobileAppUpdate();
         if (webView == null || swipeRefresh == null || swipeRefresh.getVisibility() != View.VISIBLE) return;
         // Home/Recents、系统照片选择器和 Android Back 后恢复时保留当前
-        // WebView 文档、草稿、附件与流式会话。只唤醒页面并重新注入幂等的
-        // 移动适配，不 reload；真正的断网仍由 NetworkCallback 的重试链处理。
+        // WebView 文档、草稿、附件与流式会话。Android 会发送真实的可见性/
+        // 焦点变化；不得伪造 online/focus，也不得重新注入页面运行时，否则
+        // 官方客户端会重连健康会话或重复安装观察器。
         webView.onResume();
         webView.resumeTimers();
-        if (mobileUiAdapter != null) mobileUiAdapter.inject(webView);
-        webView.evaluateJavascript("(() => { window.dispatchEvent(new Event('online')); window.dispatchEvent(new Event('focus')); return true; })()", null);
     }
 
     private void checkMobileAppUpdate() {

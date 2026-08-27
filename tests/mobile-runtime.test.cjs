@@ -297,6 +297,112 @@ test('mobile runtime does not replay a history request cancelled by page navigat
   assert.deepEqual(receipts, [])
 })
 
+test('document upload uses the authoritative loaded session and appends returned workspace references', async () => {
+  const uploads = []
+  const runtime = installRuntime(async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input.url
+    if (url.includes('/api/session.history')) {
+      return jsonResponse({ result: { ok: true, value: { sessionId: 'session-one', events: [] } } })
+    }
+    if (url.includes('/__harness_mobile__/documents/upload')) {
+      uploads.push({ url, init })
+      return jsonResponse({ ok: true, schemaVersion: 1, file: { path: 'uploads/brief.pdf', name: 'brief.pdf', size: 12 } }, 201)
+    }
+    return new Response('', { status: 404 })
+  })
+  await runtime.window.fetch('https://mobile.test/api/session.history', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 'session-one' })
+  })
+  assert.equal(runtime.window.__harnessMobileCurrentSessionId, 'session-one')
+
+  const makeNode = tagName => {
+    const listeners = new Map()
+    const node = {
+      tagName,
+      dataset: {},
+      children: [],
+      parentElement: null,
+      textContent: '',
+      setAttribute() {},
+      addEventListener(type, listener) { (listeners.get(type) || listeners.set(type, []).get(type)).push(listener) },
+      dispatchEvent(event) { for (const listener of listeners.get(event.type) || []) listener(event); return true },
+      append(...children) {
+        for (const child of children) {
+          child.parentElement = node
+          node.children.push(child)
+        }
+      },
+      appendChild(child) { node.append(child); return child },
+      remove() {
+        if (!node.parentElement) return
+        node.parentElement.children = node.parentElement.children.filter(child => child !== node)
+        node.parentElement = null
+      },
+      querySelector(selector) {
+        const path = selector.match(/data-harness-mobile-document-path="([^"]+)"/)?.[1]
+        if (path) return node.children.find(child => child.dataset?.harnessMobileDocumentPath === path) || null
+        return null
+      }
+    }
+    Object.defineProperty(node, 'childElementCount', { get: () => node.children.length })
+    return node
+  }
+  class FakeTextarea {
+    constructor() { this._value = ''; this.disabled = false; this.readOnly = false }
+    get value() { return this._value }
+    set value(value) { this._value = String(value) }
+    setSelectionRange() {}
+    dispatchEvent() { return true }
+    focus() {}
+  }
+  class FakeEvent {
+    constructor(type, init = {}) { this.type = type; Object.assign(this, init) }
+  }
+  const textarea = new FakeTextarea()
+  const card = makeNode('div')
+  let documentRail = null
+  card.querySelector = selector => {
+    if (selector === '[data-harness-mobile-document-rail="true"]') return documentRail
+    return null
+  }
+  card.insertBefore = child => {
+    child.parentElement = card
+    card.children.unshift(child)
+    if (child.dataset?.harnessMobileDocumentRail === 'true') documentRail = child
+  }
+  runtime.HTMLTextAreaElement = FakeTextarea
+  runtime.Event = FakeEvent
+  runtime.CSS = { escape: value => value }
+  runtime.document.querySelector = selector => {
+    if (selector === '[data-composer-card] textarea[data-phase]') return textarea
+    if (selector === '[data-composer-card]') return card
+    return null
+  }
+  runtime.document.createElement = makeNode
+
+  const states = []
+  const file = { name: 'brief.pdf', type: 'application/pdf', size: 12 }
+  const accepted = await runtime.window.__harnessMobileReceiveDocuments([file], (...args) => states.push(args))
+  assert.equal(accepted, true)
+  assert.equal(uploads.length, 1)
+  assert.match(uploads[0].url, /sessionId=session-one/u)
+  assert.match(uploads[0].url, /name=brief\.pdf/u)
+  assert.equal(uploads[0].init.method, 'POST')
+  assert.equal(uploads[0].init.credentials, 'same-origin')
+  assert.equal(uploads[0].init.headers['X-Harness-Mobile-Request'], 'document-upload')
+  assert.equal(uploads[0].init.headers['Content-Type'], 'application/octet-stream')
+  assert.equal(uploads[0].init.body, file)
+  assert.equal(textarea.value, '请查看文件：@uploads/brief.pdf')
+  assert.equal(documentRail?.children.length, 1)
+  assert.equal(states.at(-1)?.[0], 'success')
+
+  const removePreview = documentRail.children[0].children[1]
+  removePreview.dispatchEvent(new FakeEvent('click'))
+  assert.equal(textarea.value, '')
+  assert.equal(card.children.length, 0)
+})
+
 test('Android WebRTC DataChannel dependency retains its license without adding audio permission', () => {
   const root = path.join(__dirname, '..', 'mobile', 'android', 'app')
   const gradle = fs.readFileSync(path.join(root, 'build.gradle.kts'), 'utf8')

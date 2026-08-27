@@ -38,6 +38,162 @@ test('injected composer input script is valid JavaScript', () => {
   assert.doesNotThrow(() => new Function(script))
 })
 
+test('new-session image and document wait for the official workspace before intake', async () => {
+  const script = extractJavaStringConstant(adapter, 'FILE_ENTRY_JS')
+  const documentListeners = new Map()
+  const makeNode = tagName => {
+    const listeners = new Map()
+    const node = {
+      tagName,
+      id: '',
+      dataset: {},
+      style: {},
+      children: [],
+      parentElement: null,
+      hidden: false,
+      disabled: false,
+      readOnly: false,
+      value: '',
+      setAttribute(name, value) { node[name] = String(value) },
+      getAttribute(name) { return node[name] ?? null },
+      removeAttribute(name) { delete node[name] },
+      appendChild(child) { child.parentElement = node; node.children.push(child); return child },
+      removeChild(child) { node.children = node.children.filter(item => item !== child); child.parentElement = null },
+      addEventListener(type, listener) { (listeners.get(type) || listeners.set(type, []).get(type)).push(listener) },
+      dispatchEvent(event) { for (const listener of listeners.get(event.type) || []) listener(event); return !event.defaultPrevented },
+      querySelector() { return null },
+      querySelectorAll() { return [] },
+      contains(target) { return target === node || node.children.includes(target) },
+      click() { node.dispatchEvent(new FakeEvent('click')) },
+      blur() {},
+      focus() {}
+    }
+    return node
+  }
+  class FakeEvent {
+    constructor(type, init = {}) { this.type = type; Object.assign(this, init); this.defaultPrevented = false }
+    preventDefault() { if (this.cancelable) this.defaultPrevented = true }
+    stopPropagation() { this.propagationStopped = true }
+  }
+  class FakeCustomEvent extends FakeEvent {
+    constructor(type, init = {}) { super(type, init); this.detail = init.detail }
+  }
+  class FakeFile {
+    constructor(parts, name, options = {}) {
+      this.parts = parts
+      this.name = name
+      this.type = options.type || ''
+      this.lastModified = options.lastModified || 0
+      this.size = parts.reduce((sum, part) => sum + (part.byteLength || part.length || 0), 0)
+    }
+  }
+  class FakeFileReader {
+    readAsArrayBuffer(file) {
+      this.result = file.bytes
+      queueMicrotask(() => this.onload?.())
+    }
+  }
+  class FakeMutationObserver { observe() {}; disconnect() {} }
+  const body = makeNode('body')
+  const card = makeNode('section')
+  const textarea = makeNode('textarea')
+  textarea.readOnly = true
+  textarea.dataset.phase = 'inert'
+  textarea['data-phase'] = 'inert'
+  textarea['aria-haspopup'] = 'menu'
+  textarea.closest = selector => selector === '[data-composer-card]' ? card : null
+  let workspaceRequests = 0
+  card.click = () => {
+    workspaceRequests++
+    textarea.readOnly = false
+    textarea.dataset.phase = 'active'
+    textarea['data-phase'] = 'active'
+    queueMicrotask(() => {
+      windowMock.__harnessMobileCurrentSessionId = `session-${workspaceRequests}`
+      windowMock.dispatchEvent(new FakeCustomEvent('harness-mobile-session-history-receipt', {
+        detail: { sessionId: windowMock.__harnessMobileCurrentSessionId }
+      }))
+    })
+  }
+  const railImages = []
+  card.querySelector = selector => selector === 'textarea[data-phase]' ? textarea : null
+  card.querySelectorAll = selector => selector === '[role="group"] img[alt]' ? railImages : []
+  const findById = (node, id) => {
+    if (node.id === id) return node
+    for (const child of node.children) {
+      const match = findById(child, id)
+      if (match) return match
+    }
+    return null
+  }
+  const documentMock = {
+    body,
+    documentElement: body,
+    createElement: makeNode,
+    getElementById: id => findById(body, id) || findById(card, id),
+    querySelector: selector => {
+      if (selector === '[data-composer-card]') return card
+      if (selector === '[data-composer-card] textarea[data-phase]') return textarea
+      return null
+    },
+    addEventListener(type, listener) { (documentListeners.get(type) || documentListeners.set(type, []).get(type)).push(listener) },
+    dispatchEvent(event) { for (const listener of documentListeners.get(event.type) || []) listener(event); return !event.defaultPrevented }
+  }
+  documentMock.addEventListener('drop', event => {
+    if (!event.dataTransfer?.types?.includes('Files')) return
+    for (const file of event.dataTransfer.files) {
+      railImages.push({ getAttribute: name => name === 'alt' ? file.name : null })
+    }
+  })
+  const windowListeners = new Map()
+  const receivedDocuments = []
+  const windowMock = {
+    innerWidth: 390,
+    dispatchEvent(event) { for (const listener of windowListeners.get(event.type) || []) listener(event); return !event.defaultPrevented },
+    addEventListener(type, listener) { (windowListeners.get(type) || windowListeners.set(type, []).get(type)).push(listener) },
+    removeEventListener(type, listener) {
+      const listeners = windowListeners.get(type) || []
+      const index = listeners.indexOf(listener)
+      if (index >= 0) listeners.splice(index, 1)
+    },
+    __harnessMobileReceiveDocuments(files) {
+      receivedDocuments.push(...files.map(file => file.name))
+      return true
+    }
+  }
+  const timers = new Map()
+  let nextTimer = 0
+  const setTimeoutMock = callback => { const id = ++nextTimer; timers.set(id, callback); return id }
+  const clearTimeoutMock = id => timers.delete(id)
+  const bridge = { open() {} }
+  new Function('window', 'document', 'HarnessMobileInputs', 'FileReader', 'File', 'Event', 'CustomEvent', 'MutationObserver', 'setTimeout', 'clearTimeout', 'setInterval', 'HTMLTextAreaElement', 'fetch', script)(
+    windowMock, documentMock, bridge, FakeFileReader, FakeFile, FakeEvent, FakeCustomEvent,
+    FakeMutationObserver, setTimeoutMock, clearTimeoutMock, () => 1, class {}, async () => new Response()
+  )
+  const input = documentMock.getElementById('harness-mobile-photo-input')
+  assert.ok(input)
+  input.files = [{ name: 'phone-photo.png', type: 'image/png', lastModified: 1, bytes: new Uint8Array([1, 2, 3]) }]
+  input.dispatchEvent(new FakeEvent('change'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(workspaceRequests, 1)
+  assert.equal(railImages.length, 1)
+  assert.equal(railImages[0].getAttribute('alt'), 'phone-photo.png')
+  assert.equal(windowMock.__harnessMobileAttachmentState?.phase, 'success')
+  assert.equal(windowMock.__harnessMobileAttachmentState?.count, 1)
+
+  textarea.readOnly = true
+  textarea.dataset.phase = 'inert'
+  textarea['data-phase'] = 'inert'
+  windowMock.__harnessMobileCurrentSessionId = ''
+  const fileInput = documentMock.getElementById('harness-mobile-file-input')
+  assert.ok(fileInput)
+  fileInput.files = [{ name: 'brief.pdf', type: 'application/pdf', lastModified: 2, bytes: new Uint8Array([4, 5, 6]) }]
+  fileInput.dispatchEvent(new FakeEvent('change'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(workspaceRequests, 2)
+  assert.deepEqual(receivedDocuments, ['brief.pdf'])
+})
+
 test('composer plus menu exposes exactly the four native input choices', () => {
   for (const label of ['相册', '拍摄', '语音输入', '文件']) {
     assert.match(adapter, new RegExp(`addItem\\('${label}'`))
@@ -56,7 +212,7 @@ test('composer actions use a temporary thumb-friendly four-tile panel', () => {
   assert.match(mobileCss, /min-height: 82px !important;/)
 })
 
-test('picker URIs keep temporary read grants through official paste/drop preview intake', () => {
+test('picker URIs keep temporary read grants through confirmed official attachment intake', () => {
   assert.match(activity, /ActivityResultContracts\.PickVisualMedia/)
   assert.match(activity, /new ActivityResultContracts\.PickMultipleVisualMedia\(MAX_PICKED_IMAGES\)/)
   assert.match(activity, /Intent\.ACTION_OPEN_DOCUMENT/)
@@ -68,12 +224,31 @@ test('picker URIs keep temporary read grants through official paste/drop preview
   assert.match(adapter, /fileInput\.click\(\)/)
   assert.match(adapter, /reader\.readAsArrayBuffer\(file\)/)
   assert.match(adapter, /new File\(\[reader\.result\]/)
-  assert.match(adapter, /new Event\('paste'/)
-  assert.match(adapter, /Object\.defineProperty\(paste,'clipboardData'/)
-  assert.match(adapter, /textarea\.dispatchEvent\(paste\);return/)
+
+  // The attachment plugin owns a document-level drop listener. Use the exact
+  // standard fields it reads without assuming DataTransfer is constructible,
+  // and never dispatch a delayed paste fallback that could duplicate images.
+  assert.match(adapter, /files:files,items:files\.map/)
+  assert.match(adapter, /types:\['Files'\]/)
+  assert.doesNotMatch(adapter, /new DataTransfer\(\)|typeof DataTransfer/)
   assert.match(adapter, /new Event\('drop'/)
   assert.match(adapter, /Object\.defineProperty\(drop,'dataTransfer'/)
-  assert.match(adapter, /target\.dispatchEvent\(drop\)/)
+  assert.match(adapter, /document\.dispatchEvent\(drop\)/)
+  assert.doesNotMatch(adapter, /new Event\('paste'|clipboardData|dispatchPaste/)
+
+  // Event dispatch itself is not acceptance. React must render every selected
+  // filename in the official attachment rail within a bounded observation window.
+  assert.match(adapter, /var waitForRail=/)
+  assert.match(adapter, /new MutationObserver\(check\)/)
+  assert.match(adapter, /querySelectorAll\('\[role=\\"group\\"\] img\[alt\]'\)/)
+  assert.match(adapter, /waitForRail\(files,before,8000\)/)
+  assert.doesNotMatch(adapter, /dispatchEvent\([^)]*\)\s*\?\s*/)
+  assert.match(adapter, /__harnessMobileAttachmentState/)
+  assert.match(adapter, /harness-mobile-attachment-state/)
+  assert.match(adapter, /setAttachmentState\('error'/)
+  assert.match(adapter, /var images=\[\];var documents=\[\]/)
+  assert.match(adapter, /typeof window\.__harnessMobileReceiveDocuments==='function'/)
+  assert.match(adapter, /当前电脑端还不能接收文档/)
   assert.doesNotMatch(manifest, /android\.permission\.(?:READ_MEDIA_IMAGES|READ_MEDIA_VIDEO|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE)/)
 })
 
@@ -121,7 +296,9 @@ test('existing screen capture observation and WebView state-preserving resume re
   assert.match(activity, /webView\.onResume\(\)/)
   assert.match(activity, /webView\.resumeTimers\(\)/)
   const onResume = activity.slice(activity.indexOf('protected void onResume()'), activity.indexOf('private void checkMobileAppUpdate()'))
-  assert.doesNotMatch(onResume, /\.reload\(\)/)
+  assert.doesNotMatch(onResume, /\.reload\(\)|\.loadUrl\(|\.stopLoading\(\)|mobileUiAdapter\.inject/)
+  assert.doesNotMatch(onResume, /dispatchEvent\(new Event\('(online|focus)'\)\)/)
+  assert.match(onResume, /不得伪造 online\/focus/)
 })
 
 test('LAN proxy prefers a non-VPN socket but falls back to Android system routing', () => {
