@@ -6,11 +6,13 @@ const { readFile } = require('node:fs/promises')
 const root = path.join(__dirname, '..')
 
 test('browser model tools remain user-authorized, background-capable, structured and secret-blind', async () => {
-  const [main, html, renderer, preload] = await Promise.all([
+  const [main, html, renderer, preload, runtimeVerifier, staticVerifier] = await Promise.all([
     readFile(path.join(root, 'electron', 'main.cjs'), 'utf8'),
     readFile(path.join(root, 'renderer', 'index.html'), 'utf8'),
     readFile(path.join(root, 'renderer', 'browser-sidebar.js'), 'utf8'),
-    readFile(path.join(root, 'electron', 'preload.cjs'), 'utf8')
+    readFile(path.join(root, 'electron', 'preload.cjs'), 'utf8'),
+    readFile(path.join(root, 'scripts', 'verify-browser-tools-runtime.mjs'), 'utf8'),
+    readFile(path.join(root, 'scripts', 'verify-static.mjs'), 'utf8')
   ])
   assert.match(main, /requireBrowserForModel/u)
   assert.doesNotMatch(main, /function requireBrowserForModel[\s\S]{0,700}tab-not-visible/u)
@@ -73,6 +75,14 @@ test('browser model tools remain user-authorized, background-capable, structured
   assert.match(main, /effectiveActions = control\.active/u)
   assert.match(main, /await setComputerUseEnabled\(false\)/u)
   assert.doesNotMatch(renderer, /grantCurrentBrowserOrigin|revokeCurrentBrowserOrigin|resumeBrowserModelControl/u)
+  assert.doesNotMatch(preload, /grantCurrentBrowserOrigin|revokeCurrentBrowserOrigin|browser:grantCurrent|browser:revokeCurrent/u)
+  assert.doesNotMatch(main, /grantCurrentBrowserOrigin|browser:grantCurrent|browser:revokeCurrent/u)
+  assert.doesNotMatch(runtimeVerifier, /grantCurrentBrowserOrigin|revokeCurrentBrowserOrigin/u)
+  assert.doesNotMatch(staticVerifier, /browser:grantCurrent|browser:revokeCurrent/u)
+  assert.match(runtimeVerifier, /surface !== 'background'/u)
+  assert.match(runtimeVerifier, /call\(state, 'stop'\)/u)
+  const modelBrowserAction = main.slice(main.indexOf('async function modelBrowserAction'), main.indexOf('function browserControlStateFile'))
+  assert.doesNotMatch(modelBrowserAction, /setBrowserSidebarVisible\(true\)/u, 'ordinary model browser actions must stay in the background')
   assert.doesNotMatch(renderer, /executeJavaScript|document\.cookie/u)
   for (const channel of ['browser:confirmModelAction', 'browser:newTab', 'browser:switchTab', 'browser:closeTab', 'computerUse:requestAuthorization', 'computerUse:authorize']) {
     assert.ok(preload.includes(channel))

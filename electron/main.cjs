@@ -61,7 +61,6 @@ const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
 const { BrowserSecurityPolicy } = require('./bridge/browser-security-policy.cjs')
 const { DECISIONS: BROWSER_LINK_DECISIONS, routeBrowserLink } = require('./bridge/browser-link-router.cjs')
 const { MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, isSensitiveText } = require('./bridge/browser-action-gate.cjs')
-const { hostPublicInfo } = require('./bridge/browser-url-policy.cjs')
 const { BrowserOperationCoordinator } = require('./bridge/browser-operation-coordinator.cjs')
 const { BrowserNavigationLane, attachBrowserNavigationGuard } = require('./bridge/browser-navigation-guard.cjs')
 const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
@@ -495,7 +494,6 @@ async function browserStatePayload(patch = {}) {
       partition: browserSecurityPolicy?.partitionName || BrowserSecurityPolicy.partitionName(),
       isolatedFromHarness: true
     },
-    authorizations: browserSecurityPolicy?.authorizations() || { count: 0, entries: [], unifiedControl: false },
     control: sharedComputerUseControlState(),
     session: {
       ready: sessionReady,
@@ -959,21 +957,6 @@ async function resumeBrowserModelControl() {
   return publishBrowserState()
 }
 
-async function grantCurrentBrowserOrigin(actions) {
-  const ticket = browserOperations.ticket()
-  if (!browserState.origin) throw new Error('请先打开需要授权的站点。')
-  await resumeBrowserModelControl()
-  browserOperations.assert(ticket)
-  const origin = browserState.origin
-  const privateNetwork = !hostPublicInfo(new URL(origin).hostname).public
-  browserSecurityPolicy.grant(origin, {
-    actions: Array.isArray(actions) ? actions : [],
-    ttlMs: 2 * 60 * 60 * 1000,
-    ...(privateNetwork ? { by: 'user', allowPrivateNetwork: true } : {})
-  })
-  return publishBrowserState()
-}
-
 async function clearAllBrowserData(confirmed) {
   if (confirmed !== true) throw new Error('重置独立浏览器 Profile 需要用户明确确认。')
   const view = ensureBrowserSession()
@@ -1387,11 +1370,9 @@ async function modelBrowserAction(input = {}, context = {}) {
   const action = String(input.action || '')
   const parameters = input.payload && typeof input.payload === 'object' ? input.payload : input
   if (action === 'status') {
-    const authorizations = browserSecurityPolicy?.authorizations() || { entries: [] }
-    const current = authorizations.entries.find(entry => entry.origin === browserState.origin)
     const bounds = browserView?.getBounds?.() || { width: 0, height: 0 }
     const control = sharedComputerUseControlState()
-    const effectiveActions = control.active ? ['read', 'click', 'type', 'upload', 'download', 'submit'] : (current?.actions || [])
+    const effectiveActions = control.active ? ['read', 'click', 'type', 'upload', 'download', 'submit'] : []
     const visible = browserSidebarVisible && browserContentVisible
     const activeTab = browserTabs.get(activeBrowserTabId)
     const contents = liveBrowserContents()
@@ -4781,20 +4762,6 @@ ipcMain.handle('browser:clearSiteData', (event, request) => {
 ipcMain.handle('browser:clearAllData', (event, request) => {
   assertDesktopShellSender(event)
   return clearAllBrowserData(request?.confirmed === true)
-})
-ipcMain.handle('browser:grantCurrent', (event, actions) => {
-  assertDesktopShellSender(event)
-  return grantCurrentBrowserOrigin(actions)
-})
-ipcMain.handle('browser:revokeCurrent', async event => {
-  assertDesktopShellSender(event)
-  browserOperations.ticket()
-  const origin = browserState.origin
-  if (origin) abortBrowserTransfers(origin)
-  await withBrowserTransferLock(async () => {
-    if (origin && browserSecurityPolicy && !browserSecurityPolicy.isStopped) browserSecurityPolicy.revoke(origin)
-  })
-  return publishBrowserState()
 })
 ipcMain.handle('browser:resumeModelControl', event => {
   assertDesktopShellSender(event)
