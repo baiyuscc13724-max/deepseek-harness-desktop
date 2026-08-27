@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.0.51
+
+### Agent Teams 计划先行与可恢复执行
+
+- 团队计划现在持久经历 `draft → committed → active`：任务或安全边界变化会回到 draft；精确 plan revision/hash 的 CAS commit 才能允许新认领或成员启动；无已建立成员时 committed 可被观察，首个成功 claim 或完整 child publication 才进入 active。
+- 公开 spawn 必须绑定至少一个已持久化任务。Host 在调用 continuable child 前原子保存成员占位、任务预绑定、计划 revision/hash 和启动意图；启动前失败、publication 不确定与 work followup 失败均保留可恢复审计，不重复猜测执行。
+- 每个团队持久化 `pauseEpoch`，每次任务尝试拥有单调 `attempt`、`claimId` 与 `leaseEpoch`。旧 claim、旧 epoch 和迟到 complete/release/checkpoint 写入会被拒绝；完全相同的已完成 receipt 可安全重放。
+- Stop 先持久化新 epoch 和暂停门禁，再取消排队唤醒并中断成员。Resume 改为 preview + CAS commit，receipt 绑定 requestId/previewId/pauseEpoch/teamRevision，异常节点不冻结健康节点，也不会自动唤醒任何成员。
+- 成员 checkpoint/next step 始终标记 `verified:false`，不能携带权限、外部结果、路径、凭据、原始消息或进度百分比。最后一份未验证上下文在 release、再次 claim、Stop、force-retire 与 adopt 后继续保留旧 fence/报告者用于恢复审计，直到新持有者明确覆盖。
+- capability 默认为 `unknown`，只有注册过的 Host 证据才能成为 verified；模型布尔只可形成 `human_attested` plan 授权，不能产生 `host_verified`。`confirm_each` 在没有 Host 验证入口时持续 fail closed。
+- 外部副作用显式区分 `none | idempotent | confirm_each | forbidden` 与 `outcome_unknown`。effect identity 只由 Host 从 team/task/effect 稳定派生；任意 UI 或第三方动作不声明通用 exactly-once，未知结果在直接用户根会话解决前阻止重试和完成。
+- 同一 canonical project 的 direct-human root 可通过短期单次 token handoff/adopt 接管暂停团队；接管递增 epoch、撤销全部旧 lease、退休旧 parent worker、释放未完成任务且不伪造 reparent。私有 project/token hash 只保留在 durable store，不进入公开团队或 handoff 投影。
+- v4 及更早团队采用非破坏迁移：空/无 worker 团队进入 `legacy_unplanned` draft；已有在途工作的团队保留旧执行并进入 `legacy_active_gate`，但新 claim/spawn 前必须按当前计划重新提交。
+
+### 桌面与手机任务规划追踪
+
+- 桌面工作台和 Mobile Orbit 统一采用 Ready / Running / Attention / Done 四个主区；Cancelled 只进入历史，不再显示模型臆测百分比、随机脉冲或伪 progressbar。
+- Attention 只呈现 Host 可核对事实：依赖失败、权限未知、capability 未证实、外部结果不确定、文件冲突、陈旧 lease、成员失败或部分 publication；成员 checkpoint 与下一步明确标注“未验证”。
+- 手机代理团队首屏直接回答“需要确认什么 / 卡在哪里 / 下一步做什么”，Running 任务可展示成员建议的下一步但不把它当作 Host 指令或完成事实。
+- Android 与 iOS 共用字节一致的移动 runtime/CSS，保留 48dp Android、44pt iOS 触控基线、可见键盘焦点、非纯颜色状态、放大文字、减少动态效果、安全区和无横向滚动布局。
+
+### Mobile APP 修复
+
+- 四域导航、系统/边缘返回、首页、项目/会话上下文与设置入口统一走版本化原生桥或权威语义控件；设置只从“我的”进入，不通过对话菜单或坐标猜测。
+- 项目、会话、团队和任务继续使用稳定身份；同名项目不合并。权限模式、项目身份和来源会话投影均有新增回归测试。
+- Android 前台恢复不再伪造网页 `online`/`focus` 事件，也不重复注入 runtime；保留 WebView 草稿、滚动、IME 和页面状态，系统/边缘返回不会双重派发。
+- 相册、拍摄、语音和文件继续使用固定原生动作与系统授权。文件结果通过已配对设备鉴权、POST + intent header、50 MiB 上限、有限上游响应和官方 `/api/desktop-files/upload` 路径进入工作区；手机不能提供本机落盘路径。
+- 文档、图片、相机临时 URI、IME 截图提示、导航与 session task panel 的边界均补充自动化覆盖；Android/iOS 共用资源在合并后继续逐字节一致。
+
+### 安全、验证与发布完整性
+
+- 新增 [`docs/SECURITY-REVIEW-v1.0.51.zh-CN.md`](docs/SECURITY-REVIEW-v1.0.51.zh-CN.md)，记录 plan 授权、fencing、checkpoint、外部副作用、handoff/adopt、Mobile 文档上传与公开投影边界。v1.0.51 不扩大 v1.0.50 已审查的 Computer Use 桌面权限。
+- 合并后的本地门禁通过 Agent Teams 128/128、Mobile 119/119、全仓 1540 通过/0 失败/2 跳过；Android `testDebugUnitTest`、`lintDebug`、`assembleDebug` 共 50 个任务成功，验证期间未安装 APK、未升级或重启当前 Harness Desktop。
+- 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由、移动更新示例和发布工作流统一到 `1.0.51`；Android `versionCode=1005100`，iOS build code 为 `10051`。
+- 正式发布只走仓库 resumable publisher：精确 main SHA、不可变 `v1.0.51`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。
+- 已发布 `v1.0.50` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变，不移动、不覆盖、不复用。
+
 ## 1.0.50
 
 ### Mobile Orbit 工作台与跨平台体验

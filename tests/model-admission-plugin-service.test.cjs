@@ -43,7 +43,7 @@ test('Host-only model admission plugin installs atomically and patches the Web p
     const second = await ensureModelAdmissionPlugin({ dshHome: root, bundledRoot })
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.version, '1.0.50')
+    assert.equal(first.version, '1.0.51')
 
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-model-admission/g) || []).length, 1)
