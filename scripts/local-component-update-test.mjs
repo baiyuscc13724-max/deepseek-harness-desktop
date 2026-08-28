@@ -66,7 +66,8 @@ async function runPackagedSelfTest(executable, profile, output) {
       throw new Error(`Packaged baseline exited with code ${code} before writing its final self-test report (last phase: ${written?.phase || 'none'}).`)
     })
   ])
-  await Promise.race([exitPromise, delay(2_000)])
+  const exitCode = await exitPromise
+  if (exitCode !== 0) throw new Error(`Packaged baseline exited with code ${exitCode} after writing its final self-test report.`)
   if (!report.ok) throw new Error(`Packaged baseline self-test failed: ${JSON.stringify(report.error || report.checks)}`)
   return report
 }

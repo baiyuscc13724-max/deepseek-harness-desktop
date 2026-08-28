@@ -507,6 +507,9 @@ test('official publisher delegates every release package to commit-bound GitHub 
   const artifactUpload = buildSteps.find(step => String(step.uses || '').startsWith('actions/upload-artifact@'))
   assert.equal(componentGate.if, "runner.os == 'Windows'")
   assert.match(componentGate.run, /npm run test:component-local[\s\S]*--app-exe[\s\S]*--profile/u)
+  const componentTest = read('scripts/local-component-update-test.mjs')
+  assert.match(componentTest, /const exitCode = await exitPromise[\s\S]*Packaged baseline exited with code/u, 'the baseline process must release its single-instance lock before component activation')
+  assert.doesNotMatch(componentTest, /Promise\.race\(\[exitPromise, delay\(2_000\)\]\)/u)
   assert.ok(buildSteps.indexOf(componentGate) < buildSteps.indexOf(artifactUpload))
   for (const jobName of ['build', 'ios-simulators', 'prepare-windows-candidate']) {
     const steps = workflow.jobs[jobName].steps
