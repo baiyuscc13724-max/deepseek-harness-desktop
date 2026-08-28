@@ -1511,20 +1511,26 @@ function officialSettingsBootstrap() {
     .hd-update-item-actions .hd-update-apply { border-color:var(--dsw-alias-brand-primary,#315efb); color:#fff; background:var(--dsw-alias-brand-primary,#315efb); }
     @media (max-width:640px) { #harness-desktop-version-button { right:5px; bottom:1px; } #harness-desktop-update-center { padding:10px; } .hd-update-center-dialog { width:100%; max-height:100%; border-radius:14px; } .hd-update-center-head, .hd-update-center-toolbar, .hd-update-items { padding-left:14px; padding-right:14px; } .hd-update-item-head { flex-direction:column; } .hd-update-item-badges { justify-content:flex-start; } }
     @media (prefers-reduced-motion:reduce) { #harness-desktop-version-button, #harness-desktop-update-center { transition:none; } }
-    #harness-desktop-mobile-sync-row { box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:18px; margin-top:10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; color:var(--dsw-alias-label-primary); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
-    #harness-desktop-mobile-sync-row .hd-mobile-copy { min-width:0; }
-    #harness-desktop-mobile-sync-row .hd-mobile-title { font-size:14px; line-height:22px; }
-    #harness-desktop-mobile-sync-row .hd-mobile-status { overflow:hidden; margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
-    #harness-desktop-mobile-sync-row .hd-mobile-actions { display:flex; flex:none; align-items:center; gap:8px; }
-    #harness-desktop-mobile-sync-row button { box-sizing:border-box; min-height:34px; border:0; border-radius:17px; padding:6px 14px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); font:inherit; font-size:13px; cursor:pointer; }
-    #harness-desktop-mobile-sync-row button:hover { background:var(--dsw-alias-interactive-bg-hover); }
-    #harness-desktop-mobile-sync-row .hd-mobile-stop { color:#fff; background:#d92d20; }
-    #harness-desktop-mobile-sync-row .hd-mobile-stop:hover { background:#b42318; }
-    #harness-desktop-mobile-sync-row .hd-mobile-switch { position:relative; width:42px; min-width:42px; height:24px; min-height:24px; border-radius:12px; padding:0; background:var(--dsw-alias-bg-module-platform); }
-    #harness-desktop-mobile-sync-row .hd-mobile-switch::after { content:''; position:absolute; left:3px; top:3px; width:18px; height:18px; border-radius:50%; background:var(--dsw-alias-label-tertiary); transition:transform .16s ease,background .16s ease; }
-    #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"] { background:var(--dsw-alias-brand-primary,#315efb); }
-    #harness-desktop-mobile-sync-row .hd-mobile-switch[aria-pressed="true"]::after { background:#fff; transform:translateX(18px); }
-    #harness-desktop-mobile-sync-row .hd-mobile-switch:disabled { cursor:wait; opacity:.6; }
+    [data-hd-mobile-entry-host="true"] { display:flex!important; align-items:center; gap:4px; min-width:0; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] { flex-direction:row!important; justify-content:flex-start!important; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] > button:not(#harness-desktop-mobile-sync-entry) { order:1; flex:0 1 auto; width:auto; min-width:0; margin-left:0; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] > #harness-desktop-mobile-sync-entry { order:2; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="true"] { flex-direction:column!important; gap:0; }
+    #harness-desktop-mobile-sync-entry { position:relative; box-sizing:border-box; display:inline-flex; flex:none; align-items:center; justify-content:center; width:42px!important; min-width:42px; height:42px!important; min-height:42px; margin:4px 0 4px 4px!important; border:0; border-radius:12px!important; padding:0!important; color:var(--dsw-alias-label-secondary,#667085); background:transparent; font:inherit; cursor:pointer; }
+    #harness-desktop-mobile-sync-entry:hover { color:var(--dsw-alias-label-primary,#20242b); background:var(--dsw-alias-interactive-bg-hover,#eef1f5); }
+    #harness-desktop-mobile-sync-entry:focus-visible { outline:2px solid var(--dsw-alias-brand-primary,#315efb); outline-offset:2px; }
+    #harness-desktop-mobile-sync-entry svg { width:18px; height:18px; flex:none; }
+    #harness-desktop-mobile-sync-entry .hd-mobile-entry-dot { position:absolute; right:7px; top:7px; box-sizing:border-box; width:7px; height:7px; border:2px solid var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-layer-1,#fff)); border-radius:50%; background:var(--dsw-alias-label-tertiary,#98a2b3); }
+    #harness-desktop-mobile-sync-entry[data-state="waiting"] .hd-mobile-entry-dot { background:#e98a15; }
+    #harness-desktop-mobile-sync-entry[data-state="connected"] .hd-mobile-entry-dot { background:#16a36a; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="true"] #harness-desktop-mobile-sync-entry { width:36px!important; min-width:36px; height:36px!important; min-height:36px; margin:0!important; border-radius:50%!important; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="true"] #harness-desktop-mobile-sync-entry .hd-mobile-entry-dot { right:4px; top:4px; }
+    #harness-desktop-mobile-sync-tooltip { position:fixed; z-index:9997; box-sizing:border-box; width:max-content; max-width:min(260px,calc(100vw - 20px)); border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:10px; padding:9px 11px; color:var(--dsw-alias-label-primary,#20242b); background:var(--dsw-alias-bg-layer-1,#fff); box-shadow:0 10px 28px rgba(0,0,0,.2); pointer-events:none; }
+    #harness-desktop-mobile-sync-tooltip[hidden] { display:none; }
+    #harness-desktop-mobile-sync-tooltip strong, #harness-desktop-mobile-sync-tooltip span { display:block; }
+    #harness-desktop-mobile-sync-tooltip strong { font-size:12px; font-weight:600; line-height:18px; }
+    #harness-desktop-mobile-sync-tooltip span { margin-top:2px; color:var(--dsw-alias-label-secondary,#667085); font-size:11px; line-height:16px; }
+    @media (prefers-reduced-motion:reduce) { #harness-desktop-mobile-sync-entry { transition:none; } }
     #harness-desktop-git-row { box-sizing:border-box; margin-top:10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; color:var(--dsw-alias-label-primary); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
     #harness-desktop-git-row .hd-git-compact { display:flex; align-items:center; justify-content:space-between; gap:18px; }
     #harness-desktop-git-row .hd-git-copy { min-width:0; }
@@ -1877,69 +1883,97 @@ function officialSettingsBootstrap() {
 
   const paintMobile = () => {
     const state = window.__HARNESS_DESKTOP_MOBILE_SYNC_STATE__ || {}
-    const row = document.querySelector('#harness-desktop-mobile-sync-row')
-    if (!row) return
+    const entry = document.querySelector('#harness-desktop-mobile-sync-entry')
+    if (!entry) return
     const enabled = Boolean(state.enabled && state.running)
     const devices = Array.isArray(state.devices) ? state.devices.length : 0
     const remote = state.remote || {}
     const controlDevices = Array.isArray(state.control?.devices) ? state.control.devices : []
     const controlReady = controlDevices.filter(device => device.ready).length
-    const controlActive = controlDevices.some(device => device.enabled || device.queued > 0)
-    const nativeAdapter = (Array.isArray(remote.adapters) ? remote.adapters : []).find(adapter => adapter?.id === 'native-p2p')
-    const remoteLabel = remote.active === 'native-p2p'
-      ? nativeAdapter?.path === 'direct'
-        ? '原生 P2P 直连'
-        : nativeAdapter?.path === 'negotiating'
-          ? 'WSS/443（P2P 协商中）'
-          : 'WSS/443 加密中继'
-      : remote.active === 'wss-relay' ? 'WSS/443' : remote.active === 'easytier' ? 'EasyTier' : remote.active === 'tailscale' ? 'Tailscale' : ''
-    const detail = enabled
-      ? remote.status === 'connected'
-        ? `${devices} 台设备 · ${remoteLabel || '远程通道'}已连接${controlReady ? ` · ${controlReady} 台控制就绪` : ''}`
-        : `${devices} 台设备 · 局域网可用${remote.enabled === false ? '' : '，远程通道准备中'}${controlReady ? ` · ${controlReady} 台控制就绪` : ''}`
-      : `${devices} 台已配对设备 · 当前已关闭`
-    setText(row.querySelector('[data-hd-mobile-status]'), detail)
-    const toggle = row.querySelector('[data-hd-mobile-toggle]')
-    toggle.setAttribute('aria-pressed', String(enabled))
-    toggle.setAttribute('aria-label', enabled ? '关闭手机同步' : '开启手机同步')
-    toggle.title = enabled ? '关闭手机同步' : '开启手机同步'
-    toggle.disabled = Boolean(state.changing)
-    const stop = row.querySelector('[data-hd-mobile-stop]')
-    stop.hidden = !controlActive
-    stop.disabled = Boolean(state.controlStopping)
+    const connected = enabled && (devices > 0 || remote.status === 'connected')
+    const detail = !enabled
+      ? devices > 0 ? `${devices} 台设备已配对，手机同步未开启` : '手机同步未开启'
+      : connected
+        ? `${devices || 1} 台设备已连接${controlReady ? ` · ${controlReady} 台控制就绪` : ''}`
+        : '等待手机连接'
+    entry.dataset.state = connected ? 'connected' : enabled ? 'waiting' : 'off'
+    entry.setAttribute('aria-label', `手机与远程同步，${detail}`)
+    setText(document.querySelector('#harness-desktop-mobile-sync-tooltip [data-hd-mobile-entry-status]'), detail)
   }
 
-  const mountMobile = section => {
-    if (!section || section.querySelector('#harness-desktop-mobile-sync-row')) {
+  const findSettingsTrigger = () => {
+    const semantic = document.querySelector('[data-slot="settings.trigger"] button, button[data-slot="settings.trigger"], [data-slot="sidebar.settings"] button, button[data-slot="sidebar.settings"]')
+    if (semantic) return semantic
+    const slot = document.querySelector('[data-slot="settings.trigger"], [data-slot="sidebar.settings"]')
+    const slottedButton = slot?.matches?.('button') ? slot : slot?.querySelector?.('button') || slot?.closest?.('button')
+    if (slottedButton) return slottedButton
+    if (typeof document.querySelectorAll !== 'function') return null
+    return [...document.querySelectorAll('button')].find(button => {
+      const label = [button.getAttribute?.('aria-label'), button.getAttribute?.('title'), button.textContent].filter(Boolean).join(' ').trim()
+      return /^(?:设置|Settings)$/i.test(label)
+    }) || null
+  }
+
+  const mountMobileEntry = () => {
+    document.querySelector('#harness-desktop-mobile-sync-row')?.remove()
+    const settingsTrigger = findSettingsTrigger()
+    const host = settingsTrigger?.parentElement
+    if (!settingsTrigger || !host || typeof document.body?.append !== 'function') {
       paintMobile()
       return
     }
-    const row = document.createElement('div')
-    row.id = 'harness-desktop-mobile-sync-row'
-    row.innerHTML = `
-      <div class="hd-mobile-copy">
-        <div class="hd-mobile-title">手机与远程同步</div>
-        <div class="hd-mobile-status" data-hd-mobile-status>首次扫码配对，之后自动连接</div>
-      </div>
-      <div class="hd-mobile-actions">
-        <button class="hd-mobile-stop" type="button" data-hd-mobile-stop hidden>立即停止控制</button>
-        <button type="button" data-hd-mobile-manage>管理设备</button>
-        <button class="hd-mobile-switch" type="button" role="switch" aria-pressed="false" data-hd-mobile-toggle><span hidden>开关</span></button>
-      </div>
-    `
-    row.querySelector('[data-hd-mobile-manage]').addEventListener('click', () => request('open-mobile-sync'))
-    row.querySelector('[data-hd-mobile-stop]').addEventListener('click', () => request('mobile-control-stop'))
-    row.querySelector('[data-hd-mobile-toggle]').addEventListener('click', event => {
-      const enabled = event.currentTarget.getAttribute('aria-pressed') !== 'true'
-      event.currentTarget.disabled = true
-      request('mobile-sync-toggle', { enabled: enabled ? '1' : '0' })
-    })
-    section.appendChild(row)
+    let entry = document.querySelector('#harness-desktop-mobile-sync-entry')
+    if (!entry) {
+      entry = document.createElement('button')
+      entry.id = 'harness-desktop-mobile-sync-entry'
+      entry.type = 'button'
+      entry.setAttribute('aria-haspopup', 'dialog')
+      entry.setAttribute('aria-describedby', 'harness-desktop-mobile-sync-tooltip')
+      entry.innerHTML = '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="5" y="2.5" width="10" height="15" rx="2.2" stroke="currentColor" stroke-width="1.45"/><path d="M8.2 5.1h3.6M9.2 14.9h1.6" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/></svg><span class="hd-mobile-entry-dot" aria-hidden="true"></span>'
+      entry.addEventListener('click', () => request('open-mobile-sync'))
+      const showTooltip = () => {
+        const tooltip = document.querySelector('#harness-desktop-mobile-sync-tooltip')
+        if (!tooltip || typeof entry.getBoundingClientRect !== 'function') return
+        tooltip.hidden = false
+        const entryRect = entry.getBoundingClientRect()
+        const tooltipRect = tooltip.getBoundingClientRect()
+        const left = Math.max(10, Math.min(window.innerWidth - tooltipRect.width - 10, entryRect.left + entryRect.width / 2 - tooltipRect.width / 2))
+        tooltip.style.left = `${Math.round(left)}px`
+        tooltip.style.bottom = `${Math.max(10, Math.round(window.innerHeight - entryRect.top + 8))}px`
+      }
+      const hideTooltip = () => {
+        const tooltip = document.querySelector('#harness-desktop-mobile-sync-tooltip')
+        if (tooltip) tooltip.hidden = true
+      }
+      entry.addEventListener('pointerenter', showTooltip)
+      entry.addEventListener('pointerleave', hideTooltip)
+      entry.addEventListener('focus', showTooltip)
+      entry.addEventListener('blur', hideTooltip)
+    }
+    let tooltip = document.querySelector('#harness-desktop-mobile-sync-tooltip')
+    if (!tooltip) {
+      tooltip = document.createElement('div')
+      tooltip.id = 'harness-desktop-mobile-sync-tooltip'
+      tooltip.setAttribute('role', 'tooltip')
+      tooltip.hidden = true
+      tooltip.innerHTML = '<strong>手机与远程同步</strong><span data-hd-mobile-entry-status>正在检查连接状态…</span>'
+      document.body.append(tooltip)
+    }
+    const previousHost = entry.parentElement
+    if (previousHost && previousHost !== host) {
+      delete previousHost.dataset.hdMobileEntryHost
+      delete previousHost.dataset.hdMobileCompact
+    }
+    if (entry.parentElement !== host || entry.nextSibling !== settingsTrigger) host.insertBefore(entry, settingsTrigger)
+    const triggerRect = typeof settingsTrigger.getBoundingClientRect === 'function' ? settingsTrigger.getBoundingClientRect() : null
+    host.dataset.hdMobileEntryHost = 'true'
+    host.dataset.hdMobileCompact = String(Boolean(triggerRect && triggerRect.width > 0 && triggerRect.width <= 44))
     paintMobile()
   }
 
   const mount = () => {
     mountUpdateCenter()
+    mountMobileEntry()
     const dialogs = typeof document.querySelectorAll === 'function'
       ? [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')]
       : [document.querySelector('[role="dialog"][aria-modal="true"]')]
@@ -1971,7 +2005,6 @@ function officialSettingsBootstrap() {
     const section = slot?.parentElement || options?.firstElementChild || options
     mountTerminal(section)
     mountGit(section)
-    mountMobile(section)
     paint()
   }
 

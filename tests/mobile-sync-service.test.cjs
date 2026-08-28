@@ -6,8 +6,9 @@ const os = require('node:os')
 const path = require('node:path')
 const { WebSocket, WebSocketServer } = require('ws')
 
-const { BROWSER_FORBIDDEN_PORTS, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, mobilePluginsDto, mobileProviderMetersDto, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
+const { BROWSER_FORBIDDEN_PORTS, MOBILE_DOCUMENT_MAX_BYTES, MOBILE_DOCUMENT_UPLOAD_CONTRACT, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, mobilePluginsDto, mobileProviderMetersDto, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
 const { MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
+const electronMainSource = readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
 async function createRuntime(label) {
   const server = http.createServer((request, response) => {
@@ -95,6 +96,104 @@ test('mobile bridge requires one-time pairing and proxies HTTP without protocol 
   assert.equal(upstreamHeaders.referer, `${runtime.url}/conversation/abc`)
   assert.equal(upstreamHeaders.cookie, 'official_session=yes')
   assert.equal(service.state().devices.length, 1)
+})
+
+test('paired phones upload general documents through the official live-session workspace route', async t => {
+  const observed = []
+  const runtime = http.createServer(async (request, response) => {
+    const requestUrl = new URL(request.url, 'http://runtime.local')
+    if (requestUrl.pathname !== '/api/desktop-files/upload' || request.method !== 'POST') {
+      response.writeHead(404).end()
+      return
+    }
+    const chunks = []
+    for await (const chunk of request) chunks.push(Buffer.from(chunk))
+    const content = Buffer.concat(chunks)
+    const sessionId = requestUrl.searchParams.get('sessionId')
+    const name = requestUrl.searchParams.get('name')
+    observed.push({ sessionId, name, content, headers: request.headers })
+    response.setHeader('Content-Type', 'application/json; charset=utf-8')
+    if (sessionId === 'root-session') {
+      response.writeHead(201)
+      response.end(JSON.stringify({ schemaVersion: 1, file: { path: `uploads/${name}`, name, size: content.length } }))
+      return
+    }
+    if (sessionId === 'malformed-success') {
+      response.writeHead(201)
+      response.end(JSON.stringify({ schemaVersion: 1, file: { path: 'D:\\Secret\\stolen.pdf', name, size: content.length } }))
+      return
+    }
+    response.writeHead(sessionId === 'too-large-upstream' ? 413 : 409)
+    response.end(JSON.stringify({
+      code: sessionId === 'too-large-upstream' ? 'FILES_TOO_LARGE' : 'FILES_SESSION_NOT_LIVE',
+      error: 'D:\\Private\\workspace must never cross the mobile boundary'
+    }))
+  })
+  await new Promise(resolve => runtime.listen(0, '127.0.0.1', resolve))
+  const runtimeUrl = `http://127.0.0.1:${runtime.address().port}`
+  const service = new MobileSyncService({
+    store: createStore(), getRuntimeTarget: () => runtimeUrl, host: '127.0.0.1', port: 0,
+    qrFactory: async () => 'qr'
+  })
+  t.after(async () => {
+    await service.stop()
+    await new Promise(resolve => runtime.close(resolve))
+  })
+  await service.start()
+  const origin = service.state().origins[0]
+  const endpoint = `${origin}${MOBILE_DOCUMENT_UPLOAD_CONTRACT.path}`
+  const bytes = Buffer.from('quarterly report\n', 'utf8')
+
+  assert.equal((await fetch(`${endpoint}?sessionId=root-session&name=report.pdf`, { method: 'POST', body: bytes })).status, 401)
+  const paired = await pair(service)
+  const cookieHeaders = { Cookie: paired.cookie }
+  assert.equal((await fetch(`${endpoint}?sessionId=root-session&name=report.pdf`, { method: 'GET', headers: cookieHeaders })).status, 405)
+  assert.equal((await fetch(`${endpoint}?sessionId=root-session&name=report.pdf`, { method: 'POST', headers: cookieHeaders, body: bytes })).status, 403)
+  assert.equal((await fetch(`${endpoint}?sessionId=%20root-session&name=report.pdf`, {
+    method: 'POST', headers: { ...cookieHeaders, 'X-Harness-Mobile-Request': 'document-upload' }, body: bytes
+  })).status, 400)
+
+  const meta = await fetch(`${origin}/__harness_mobile__/meta`, { headers: cookieHeaders })
+  assert.deepEqual((await meta.json()).documents, MOBILE_DOCUMENT_UPLOAD_CONTRACT)
+  assert.equal(MOBILE_DOCUMENT_UPLOAD_CONTRACT.maxBytes, MOBILE_DOCUMENT_MAX_BYTES)
+
+  const uploaded = await fetch(`${endpoint}?sessionId=root-session&name=${encodeURIComponent('季度报告.pdf')}`, {
+    method: 'POST',
+    headers: { ...cookieHeaders, 'Content-Type': 'application/pdf', 'X-Harness-Mobile-Request': 'document-upload' },
+    body: bytes
+  })
+  assert.equal(uploaded.status, 201)
+  assert.deepEqual(await uploaded.json(), {
+    ok: true, schemaVersion: 1, file: { path: 'uploads/季度报告.pdf', name: '季度报告.pdf', size: bytes.length }
+  })
+  assert.equal(observed.length, 1)
+  assert.equal(observed[0].sessionId, 'root-session')
+  assert.equal(observed[0].name, '季度报告.pdf')
+  assert.deepEqual(observed[0].content, bytes)
+  assert.equal(observed[0].headers['content-type'], 'application/octet-stream')
+  assert.equal(observed[0].headers.cookie, undefined, 'mobile pairing credentials never reach the official runtime')
+
+  const stale = await fetch(`${endpoint}?sessionId=stale-session&name=secret.pdf`, {
+    method: 'POST', headers: { ...cookieHeaders, 'X-Harness-Mobile-Request': 'document-upload' }, body: bytes
+  })
+  assert.equal(stale.status, 409)
+  const staleText = await stale.text()
+  assert.match(staleText, /FILES_SESSION_NOT_LIVE/)
+  assert.doesNotMatch(staleText, /Private|workspace|[A-Za-z]:\\/)
+
+  const rejectedLarge = await fetch(`${endpoint}?sessionId=too-large-upstream&name=large.pdf`, {
+    method: 'POST', headers: { ...cookieHeaders, 'X-Harness-Mobile-Request': 'document-upload' }, body: bytes
+  })
+  assert.equal(rejectedLarge.status, 413)
+  assert.doesNotMatch(await rejectedLarge.text(), /Private|workspace|[A-Za-z]:\\/)
+
+  const malformed = await fetch(`${endpoint}?sessionId=malformed-success&name=stolen.pdf`, {
+    method: 'POST', headers: { ...cookieHeaders, 'X-Harness-Mobile-Request': 'document-upload' }, body: bytes
+  })
+  assert.equal(malformed.status, 502)
+  const malformedText = await malformed.text()
+  assert.match(malformedText, /DOCUMENT_UPLOAD_REJECTED/)
+  assert.doesNotMatch(malformedText, /Secret|stolen\.pdf.*D:|[A-Za-z]:\\/)
 })
 
 test('mobile model routing projection bounds provider and model catalogs', () => {
@@ -476,6 +575,54 @@ test('mobile bridge proxies WebSocket and follows a replaced official runtime ta
   current = runtimeB.url
   const response = await fetch(`${origin}/next`, { headers: { Cookie: paired.cookie } })
   assert.equal(await response.text(), 'official-b:/next')
+})
+
+test('agent stop or completion never owns the mobile sync service lifecycle', () => {
+  assert.equal((electronMainSource.match(/mobileSyncService\?\.stop\(/g) || []).length, 1)
+  const beforeQuit = electronMainSource.slice(electronMainSource.indexOf("app.on('before-quit'"))
+  assert.match(beforeQuit, /mobileSyncService\?\.stop\(\{ persist: false \}\)/u)
+  const beforeShutdown = electronMainSource.slice(0, electronMainSource.indexOf("app.on('before-quit'"))
+  assert.doesNotMatch(beforeShutdown, /session\.cancel[^]*mobileSyncService\?\.stop|session-status[^]*mobileSyncService\?\.stop/u)
+})
+
+test('paired HTTP and WebSocket connections survive an upstream session stop', async t => {
+  const runtime = await createRuntime('official-idle')
+  const service = new MobileSyncService({
+    store: createStore(),
+    getRuntimeTarget: () => runtime.url,
+    host: '127.0.0.1',
+    port: 0,
+    qrFactory: async () => 'qr'
+  })
+  t.after(async () => {
+    await service.stop()
+    await runtime.close()
+  })
+  await service.start()
+  const paired = await pair(service)
+  const origin = service.state().origins[0]
+  const client = new WebSocket(origin.replace(/^http/, 'ws') + '/events', { headers: { Cookie: paired.cookie } })
+  await new Promise((resolve, reject) => {
+    client.once('open', resolve)
+    client.once('error', reject)
+  })
+  const roundTrip = value => new Promise((resolve, reject) => {
+    client.once('message', message => resolve(String(message)))
+    client.once('error', reject)
+    client.send(value)
+  })
+  assert.equal(await roundTrip('before-stop'), 'official-idle:before-stop')
+  const stopped = await fetch(`${origin}/api/session.cancel`, {
+    method: 'POST',
+    headers: { Cookie: paired.cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'session-one' })
+  })
+  assert.equal(stopped.status, 200)
+  assert.equal(service.state().running, true)
+  assert.equal(await roundTrip('after-stop'), 'official-idle:after-stop')
+  const idle = await fetch(`${origin}/conversation/session-one`, { headers: { Cookie: paired.cookie } })
+  assert.equal(await idle.text(), 'official-idle:/conversation/session-one')
+  client.close()
 })
 
 test('revoking a paired phone immediately closes its live connection and rejects reuse', async t => {

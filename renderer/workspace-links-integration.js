@@ -60,7 +60,7 @@
         node.setAttribute('role', 'link')
       }
       node.setAttribute('aria-label', `在右侧工作区安全预览 ${target}`)
-      node.title = `${target}\n单击在右侧安全预览；相对路径只从当前工作区读取，明确绝对路径可只读预览本机文件；HTML 和程序源码不会执行；右键可复制`
+      node.title = `${target}\n单击在右侧安全预览；相对路径只从当前工作区读取，明确绝对路径可只读预览本机文件；HTML 和程序源码不会执行；右键可打开所在文件夹或复制路径`
     }
 
     const decorate = root => {
@@ -86,6 +86,14 @@
         else delete code.dataset.hdLocalTarget
       }
     }
+
+    document.addEventListener('contextmenu', event => {
+      const local = event.target.closest?.('[data-hd-local-target]')
+      window.__HARNESS_DESKTOP_CONTEXT_LOCAL_TARGET__ = {
+        value: local?.dataset?.hdLocalTarget || '',
+        at: Date.now()
+      }
+    }, true)
 
     document.addEventListener('click', event => {
       const local = event.target.closest?.('[data-hd-local-target]')

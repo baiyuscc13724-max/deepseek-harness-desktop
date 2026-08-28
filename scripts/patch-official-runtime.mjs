@@ -7,9 +7,15 @@ import { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patc
 import { patchWorkspaceSessionMenuSource } from './workspace-session-menu-patch.mjs'
 import { patchCodexParityRuntime } from './codex-parity-runtime-patch.mjs'
 import { patchToolResultImageSource } from './tool-result-image-patch.mjs'
+import { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.mjs'
+import { patchConversationWorkTreeSource } from './conversation-work-tree-patch.mjs'
+import { patchTimelineReferenceActionSource } from './timeline-reference-patch.mjs'
 
 export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
+export { patchConversationWorkTreeSource } from './conversation-work-tree-patch.mjs'
+export { patchTimelineReferenceActionSource } from './timeline-reference-patch.mjs'
 export { patchToolResultImageSource } from './tool-result-image-patch.mjs'
+export { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.mjs'
 export { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 export { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 
@@ -1002,17 +1008,25 @@ const FS_EDIT_REMEDIES_ORIGINAL = String(`const REMEDIES = {
 \tFS_STALE_VERSION: "re-read the file, then retry",
 \tFS_NOT_OBSERVED: "read the file, then retry"
 };`)
-const FS_EDIT_REMEDIES_PATCHED = String(`const REMEDIES = {
+const FS_EDIT_REMEDIES_V1 = String(`const REMEDIES = {
 \tFS_STALE_VERSION: "re-read the file, then retry",
 \tFS_NOT_OBSERVED: "read the file, then retry",
 \tFS_EDIT_NOT_FOUND: "do not repeat the same edit call; re-read the file, copy a short exact unique old_string from the current content, then retry once"
 };`)
+const FS_EDIT_REMEDIES_PATCHED = String(`const REMEDIES = {
+\tFS_STALE_VERSION: "re-read the exact target file, then retry",
+\tFS_NOT_OBSERVED: "read the exact target file before editing it, then retry",
+\tFS_EDIT_NOT_FOUND: "the edit was not applied; do not repeat or guess—read the exact target file around the intended location, copy a short current literal old_string, then retry once"
+};`)
 const FS_EDIT_PROMPT_ORIGINAL = '\t\ttext: "Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session."'
-const FS_EDIT_PROMPT_PATCHED = '\t\ttext: "Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. Build old_string only from the latest read result or the exact after text of an edit that just succeeded, and keep it short but unique. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. On FS_EDIT_NOT_FOUND, never repeat the same call: re-read the file, rebuild old_string from the current content, then retry once. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session."'
+const FS_EDIT_PROMPT_V1 = '\t\ttext: "Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. Build old_string only from the latest read result or the exact after text of an edit that just succeeded, and keep it short but unique. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. On FS_EDIT_NOT_FOUND, never repeat the same call: re-read the file, rebuild old_string from the current content, then retry once. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session."'
+const FS_EDIT_PROMPT_PATCHED = '\t\ttext: "Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. Immediately before the first edit to a target file, read that exact file around the intended location and copy a short unique old_string verbatim; a read of another file, a grep/search snippet, a remembered fragment, or an inferred function shape is not a valid basis. The only exception is an old_string copied from the exact after text of an edit that just succeeded on the same file. If old_string appears multiple times, make it more specific or set replace_all true only when every match must change. On FS_EDIT_NOT_FOUND, never repeat or guess: re-read the exact target region, rebuild old_string, then retry once."'
 const FS_EDIT_DESCRIPTION_ORIGINAL = '\t\tdescription: "Edit an existing UTF-8 text file by replacing literal text.",'
-const FS_EDIT_DESCRIPTION_PATCHED = '\t\tdescription: "Edit an existing UTF-8 text file by replacing one current literal match. A missing old_string fails closed: re-read and rebuild the edit instead of repeating it.",'
+const FS_EDIT_DESCRIPTION_V1 = '\t\tdescription: "Edit an existing UTF-8 text file by replacing one current literal match. A missing old_string fails closed: re-read and rebuild the edit instead of repeating it.",'
+const FS_EDIT_DESCRIPTION_PATCHED = '\t\tdescription: "Edit an existing UTF-8 text file by replacing one current literal match. Before the first edit to a target, copy old_string from a fresh read of that exact file; another file, search output, memory, or inference is not a valid source. A missing match is a safe no-op and requires a fresh target-file read, never fuzzy replacement.",'
 const FS_EDIT_OLD_STRING_DESCRIPTION_ORIGINAL = '\t\t\t\tdescription: "Literal text to replace. Must match exactly."'
-const FS_EDIT_OLD_STRING_DESCRIPTION_PATCHED = '\t\t\t\tdescription: "Literal text copied from the current file content. Must match exactly; keep it short but unique."'
+const FS_EDIT_OLD_STRING_DESCRIPTION_V1 = '\t\t\t\tdescription: "Literal text copied from the current file content. Must match exactly; keep it short but unique."'
+const FS_EDIT_OLD_STRING_DESCRIPTION_PATCHED = '\t\t\t\tdescription: "Short unique literal copied verbatim from the latest read of this exact target file (or the exact after text of its immediately preceding successful edit). Must match exactly."'
 
 const SANDBOX_APPROVAL_REQUEST_ORIGINAL = `\tconst outcome = await approval.approver.request({`
 const SANDBOX_APPROVAL_REQUEST_PATCHED = `\tif (typeof approval.approver.effectivePolicy === "function" && approval.approver.effectivePolicy(approval.agent.session) === "never") throw new Error("sandbox escalation is unavailable because approval prompts are disabled in this session");
@@ -1227,6 +1241,12 @@ export function patchConversationCacheSource(source) {
   const assistantCopy = patchAssistantCopySource(output)
   output = assistantCopy.source
   changed ||= assistantCopy.changed
+  const workTree = patchConversationWorkTreeSource(output)
+  output = workTree.source
+  changed ||= workTree.changed
+  const timelineReferenceAction = patchTimelineReferenceActionSource(output)
+  output = timelineReferenceAction.source
+  changed ||= timelineReferenceAction.changed
   return { source: output, changed }
 }
 
@@ -1492,14 +1512,15 @@ export function patchFsSearchSource(source) {
 export function patchFsEditSource(source) {
   let output = source
   let changed = false
-  for (const [original, patched, label] of [
-    [FS_EDIT_REMEDIES_ORIGINAL, FS_EDIT_REMEDIES_PATCHED, 'edit not-found remediation'],
-    [FS_EDIT_PROMPT_ORIGINAL, FS_EDIT_PROMPT_PATCHED, 'edit system-prompt recovery guidance'],
-    [FS_EDIT_DESCRIPTION_ORIGINAL, FS_EDIT_DESCRIPTION_PATCHED, 'edit tool description'],
-    [FS_EDIT_OLD_STRING_DESCRIPTION_ORIGINAL, FS_EDIT_OLD_STRING_DESCRIPTION_PATCHED, 'edit old_string description']
+  for (const [candidates, patched, label] of [
+    [[FS_EDIT_REMEDIES_V1, FS_EDIT_REMEDIES_ORIGINAL], FS_EDIT_REMEDIES_PATCHED, 'edit not-found remediation'],
+    [[FS_EDIT_PROMPT_V1, FS_EDIT_PROMPT_ORIGINAL], FS_EDIT_PROMPT_PATCHED, 'edit system-prompt recovery guidance'],
+    [[FS_EDIT_DESCRIPTION_V1, FS_EDIT_DESCRIPTION_ORIGINAL], FS_EDIT_DESCRIPTION_PATCHED, 'edit tool description'],
+    [[FS_EDIT_OLD_STRING_DESCRIPTION_V1, FS_EDIT_OLD_STRING_DESCRIPTION_ORIGINAL], FS_EDIT_OLD_STRING_DESCRIPTION_PATCHED, 'edit old_string description']
   ]) {
     if (output.includes(patched)) continue
-    if (!output.includes(original)) throw new Error(`Pinned DSH ${label} changed; refusing an unsafe edit-recovery patch.`)
+    const original = candidates.find(candidate => output.includes(candidate))
+    if (original === undefined) throw new Error(`Pinned DSH ${label} changed; refusing an unsafe edit-recovery patch.`)
     output = output.replace(original, patched)
     changed = true
   }
@@ -1536,9 +1557,10 @@ export async function patchInstalledConversation(file = conversationRuntime) {
 
 export async function patchInstalledToolResultImages(file = toolUiRuntime) {
   const source = await readFile(file, 'utf8')
-  const patched = patchToolResultImageSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
-  return patched.changed
+  const images = patchToolResultImageSource(source)
+  const recoverable = patchRecoverableToolErrorSource(images.source)
+  if (images.changed || recoverable.changed) await writeFile(file, recoverable.source, 'utf8')
+  return images.changed || recoverable.changed
 }
 
 export async function patchInstalledTokenMeter(file = tokenMeterRuntime) {
@@ -1681,7 +1703,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
   process.stdout.write(conversationChanged ? 'Patched conversation telemetry, view navigation, and sticky response copy.\n' : 'Conversation telemetry, view navigation, and sticky response copy already patched.\n')
-  process.stdout.write(toolResultImagesChanged ? 'Patched durable tool-result image delivery.\n' : 'Durable tool-result image delivery already patched.\n')
+  process.stdout.write(toolResultImagesChanged ? 'Patched durable tool results and recoverable edit-conflict presentation.\n' : 'Durable tool results and recoverable edit-conflict presentation already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
   process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
   process.stdout.write(agentLoopChanged ? 'Patched abortable streams and queued-turn recovery.\n' : 'Abortable streams and queued-turn recovery already patched.\n')

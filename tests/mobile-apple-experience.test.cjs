@@ -158,7 +158,7 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'completeFileChooser',
     'protected void onResume()',
     'mobileUiAdapter.inject(webView)',
-    "window.dispatchEvent(new Event('online'))",
+    '不得伪造 online/focus',
     'MOBILE_UPDATE_CHECK_INTERVAL_MS',
     'lastMobileUpdateCheckAt',
     'hideSoftKeyboard()',
@@ -176,6 +176,8 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     "document.querySelector('[data-slot=\\\"conversation\\\"]') ||",
     "document.querySelector('[data-slot=\\\"sidebar\\\"]') ||"
   ], 'Android native file chooser and shell readiness')
+  const resumeSource = mainActivity.slice(mainActivity.indexOf('protected void onResume()'), mainActivity.indexOf('private void checkMobileAppUpdate()'))
+  assert.doesNotMatch(resumeSource, /dispatchEvent\(new Event\('(online|focus)'\)\)|\.reload\(\)|\.loadUrl\(|mobileUiAdapter\.inject/u, 'foreground resume must preserve the live WebView without reconnect signals or runtime reinjection')
   assert.doesNotMatch(mainActivity, /\.isBlank\(|List\.of\(|(?<!Collectors)\.toList\(/u, 'minSdk 26 production code must not use newer un-desugared Java collection/string APIs')
   assert.doesNotMatch(mainActivity, /new ActivityResultContracts\.PickVisualMedia\(\)/u, 'the gallery path must not regress to a single-photo picker')
   assert.match(manifest, /android:windowSoftInputMode="stateAlwaysHidden\|adjustResize"/u, 'pairing and reconnect surfaces must not summon the IME')
@@ -235,7 +237,7 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'data-harness-mobile-home-text="true"',
     '#harness-mobile-screenshot-suggestion',
     'data-harness-mobile-composer-frame="true"',
-    'width: calc(100vw - 32px) !important',
+    'max-width: 100% !important',
     'position: fixed !important',
     'width: 100vw !important',
     'height: 100dvh !important',
@@ -261,8 +263,8 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'harnessMobileComposerLifted',
     'harness-mobile-ime-change',
     'releaseComposerFocus',
-    'pendingStop',
-    'activateOfficialSend',
+    'pendingSendTextarea',
+    'dispatchOfficialEnter',
     'structuralSelector',
     'records.some(needsMount)',
     'installSidebarAutoClose',

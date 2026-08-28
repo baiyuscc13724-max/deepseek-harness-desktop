@@ -3,6 +3,7 @@
 
   const api = window.desktopHarness
   const factory = window.HarnessRightWorkspace
+  const deviceFactory = window.HarnessDeviceWorkspace
   const host = document.querySelector('#browserSidebar')
   const slot = document.querySelector('#rightWorkspaceSlot')
   const runtimeView = document.querySelector('#runtimeView')
@@ -64,6 +65,10 @@
     } else if (kind === 'browser') {
       shape('circle', { cx: '8', cy: '8', r: '6', stroke: 'currentColor', 'stroke-width': '1.2' })
       shape('path', { d: 'M2.15 8h11.7M8 2c1.65 1.62 2.48 3.62 2.48 6S9.65 12.38 8 14C6.35 12.38 5.52 10.38 5.52 8S6.35 3.62 8 2Z', stroke: 'currentColor', 'stroke-width': '1.05' })
+    } else if (kind === 'devices') {
+      shape('rect', { x: '1.5', y: '2.5', width: '9', height: '7', rx: '1.2', stroke: 'currentColor', 'stroke-width': '1.2' })
+      shape('path', { d: 'M4.5 13h3M6 9.5V13', stroke: 'currentColor', 'stroke-width': '1.2', 'stroke-linecap': 'round' })
+      shape('rect', { x: '11.5', y: '5', width: '3', height: '7.5', rx: '0.8', stroke: 'currentColor', 'stroke-width': '1.1' })
     } else {
       shape('circle', { cx: '8', cy: '8', r: '6', stroke: 'currentColor', 'stroke-width': '1.2' })
       shape('path', { d: 'M8 4.35v3.9l2.65 1.55', stroke: 'currentColor', 'stroke-width': '1.2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
@@ -81,7 +86,8 @@
     const items = [
       { id: 'files', label: '文件', icon: 'files', shortcut: `${primaryKey}+P`, ariaShortcut: 'Control+P Meta+P' },
       { id: 'browser', label: '浏览器', icon: 'browser', shortcut: `${primaryKey}+T`, ariaShortcut: 'Control+T Meta+T' },
-      { id: 'schedules', label: '已安排', icon: 'schedules', shortcut: `${primaryKey}+Shift+A`, ariaShortcut: 'Control+Shift+A Meta+Shift+A' }
+      { id: 'schedules', label: '已安排', icon: 'schedules', shortcut: `${primaryKey}+Shift+A`, ariaShortcut: 'Control+Shift+A Meta+Shift+A' },
+      { id: 'devices', label: '设备', icon: 'devices', shortcut: `${primaryKey}+Shift+D`, ariaShortcut: 'Control+Shift+D Meta+Shift+D' }
     ]
     for (const item of items) {
       const action = button(undefined, 'right-workspace-home-action', () => openMode(item.id, { push: true }))
@@ -127,6 +133,8 @@
   documentView.id = 'rightWorkspaceDocumentPane'
   documentView.setAttribute('aria-label', '文档预览')
   const browserView = createBrowserView()
+  const deviceWorkspace = deviceFactory?.create({ api })
+  const devicesView = deviceWorkspace?.view || statusPanel('设备面板未能加载。', true)
 
   const controller = factory.create({
     host,
@@ -143,6 +151,7 @@
   controller.registerMode({ id: 'browser', title: '浏览器', view: browserView })
   controller.registerMode({ id: 'files', title: '文件', view: filesView })
   controller.registerMode({ id: 'schedules', title: '已安排', view: schedulesView })
+  controller.registerMode({ id: 'devices', title: '设备', view: devicesView })
   controller.registerMode({ id: 'document', title: '文档预览', view: documentView })
   controller.replace('browser')
   controller.close()
@@ -568,6 +577,8 @@
       // aligned so later title/loading events cannot carry stale visible=true.
       await api.setBrowserVisible(false).catch(() => null)
     }
+    if (id === 'devices') deviceWorkspace?.activate()
+    else deviceWorkspace?.deactivate()
     syncChrome()
     if (id === 'files') loadFiles()
     if (id === 'schedules') loadSchedules()
@@ -648,7 +659,9 @@
         ? 'browser'
         : event.shiftKey && key === 'a'
           ? 'schedules'
-          : ''
+          : event.shiftKey && key === 'd'
+            ? 'devices'
+            : ''
     if (!mode) return
     event.preventDefault()
     openMode(mode, { push: true })
@@ -657,6 +670,7 @@
   async function closeWorkspace(reason = 'api') {
     browserRestorePending = false
     controller.setOpen(false, reason)
+    deviceWorkspace?.deactivate()
     syncChrome()
     await api.setBrowserVisible(false).catch(() => null)
     host.classList.add('hidden')
@@ -676,12 +690,16 @@
   window.addEventListener('keydown', onHomeShortcut)
   controller.on('modechange', () => {
     syncChrome()
-    if (controller.getActiveModeId() !== 'browser') api.setBrowserVisible(false).catch(() => {})
+    const activeMode = controller.getActiveModeId()
+    if (activeMode !== 'browser') api.setBrowserVisible(false).catch(() => {})
+    if (activeMode === 'devices') deviceWorkspace?.activate()
+    else deviceWorkspace?.deactivate()
   })
   controller.on('push', syncChrome)
   controller.on('replace', syncChrome)
   controller.on('close', () => {
     browserRestorePending = false
+    deviceWorkspace?.deactivate()
     syncChrome()
     setBrowserContentVisible(false)
     api.setBrowserVisible(false).catch(() => {})

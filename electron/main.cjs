@@ -26,6 +26,10 @@ const { ensureDesktopFilesPlugin } = require('./bridge/desktop-files-plugin-serv
 const { ensureDesktopProgressPlugin } = require('./bridge/desktop-progress-plugin-service.cjs')
 const { ensureDesktopCompactionPlugin } = require('./bridge/desktop-compaction-plugin-service.cjs')
 const { ensureDesktopComputerUsePlugin } = require('./bridge/desktop-computer-use-plugin-service.cjs')
+const { ensureDesktopAndroidPlugin } = require('./bridge/desktop-android-plugin-service.cjs')
+const { DesktopDeviceProvider } = require('./bridge/desktop-device-stream.cjs')
+const { WindowsDesktopUi } = require('./bridge/windows-desktop-ui.cjs')
+const { WindowsUiAutomationSource } = require('./bridge/windows-ui-automation-source.cjs')
 const { ensureModelAdmissionPlugin } = require('./bridge/model-admission-plugin-service.cjs')
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
@@ -167,6 +171,8 @@ let computerUseScreenshotStore = null
 let computerUseAppPolicy = null
 let computerUseIndicator = null
 let windowsComputerUse = null
+let desktopDeviceProvider = null
+let windowsDesktopUi = null
 let computerUseCurrentTarget = null // 仅保留给旧应用策略 IPC；模型不再选择窗口级目标。
 const COMPUTER_USE_DESKTOP_TARGET = Object.freeze({ id: 'desktop', kind: 'desktop', label: '整个电脑桌面' })
 let computerUseDesktopSurface = null
@@ -1835,6 +1841,160 @@ function ensureWindowsComputerUse() {
   return windowsComputerUse
 }
 
+function encodeDesktopDeviceFrame(shot) {
+  if (!shot?.bgra || !Number.isSafeInteger(Number(shot.width)) || !Number.isSafeInteger(Number(shot.height))) {
+    throw Object.assign(new Error('桌面设备帧无法编码。'), { code: 'desktop-frame-invalid' })
+  }
+  const bitmap = Buffer.from(shot.bgra)
+  for (let index = 3; index < bitmap.length; index += 4) bitmap[index] = 255
+  const image = nativeImage.createFromBitmap(bitmap, { width: Number(shot.width), height: Number(shot.height), scaleFactor: 1 })
+  if (image.isEmpty()) throw Object.assign(new Error('桌面设备帧无法解码。'), { code: 'desktop-frame-invalid' })
+  const scale = Math.min(1, 1_280 / Number(shot.width), 1_280 / Number(shot.height))
+  const scaled = scale < 1
+    ? image.resize({ width: Math.max(1, Math.round(Number(shot.width) * scale)), height: Math.max(1, Math.round(Number(shot.height) * scale)), quality: 'good' })
+    : image
+  const size = scaled.getSize()
+  return { width: size.width, height: size.height, png: scaled.toPNG() }
+}
+
+function ensureWindowsDesktopUi() {
+  if (!desktopDeviceProvider) {
+    desktopDeviceProvider = new DesktopDeviceProvider({
+      computerUse: ensureWindowsComputerUse(),
+      getControlState: computerUseState,
+      requestAuthorization: requestComputerUseAuthorization,
+      enableControl: setComputerUseEnabled,
+      stopControl: () => setComputerUseEnabled(false),
+      frameEncoder: encodeDesktopDeviceFrame,
+      frameStore: ensureComputerUseScreenshotStore(),
+      maxFps: 2
+    })
+  }
+  if (!windowsDesktopUi) {
+    windowsDesktopUi = new WindowsDesktopUi({
+      provider: desktopDeviceProvider,
+      controlSource: new WindowsUiAutomationSource(),
+      browserControlAvailable: () => Boolean(browserControlServer)
+    })
+  }
+  return windowsDesktopUi
+}
+
+const DESKTOP_ANDROID_ROUTES = Object.freeze({
+  devices: '/_dsh/dsh-android/devices',
+  status: '/_dsh/dsh-android/status',
+  switchDevice: '/_dsh/dsh-android/switch-device',
+  capture: '/_dsh/dsh-android/capture',
+  control: '/_dsh/dsh-android/control',
+  deviceAction: '/_dsh/dsh-android/device-action'
+})
+const DESKTOP_ANDROID_BUTTONS = new Set(['home', 'back', 'recents', 'power', 'volume_up', 'volume_down', 'menu', 'enter', 'delete'])
+const DESKTOP_ANDROID_DEVICE_ACTIONS = new Set(['notifications', 'quick-settings', 'lock', 'wake', 'assistant'])
+
+function desktopAndroidSerial(value) {
+  const serial = String(value || '').trim()
+  if (!serial || serial.length > 256 || /[\u0000-\u001f\u007f]/u.test(serial)) throw new Error('Android 设备序列号无效。')
+  return serial
+}
+
+function desktopAndroidRequestBody(action, payload = {}) {
+  if (action === 'devices') return {}
+  if (action === 'status' || action === 'capture') return payload.device ? { device: desktopAndroidSerial(payload.device) } : {}
+  if (action === 'switchDevice') return { device: desktopAndroidSerial(payload.device) }
+  if (action === 'deviceAction') {
+    const name = String(payload.name || '')
+    if (!DESKTOP_ANDROID_DEVICE_ACTIONS.has(name)) throw new Error('Android 设备动作不受支持。')
+    return { action: name, ...(payload.device ? { device: desktopAndroidSerial(payload.device) } : {}) }
+  }
+  if (action !== 'control') throw new Error('Android 右栏动作不受支持。')
+  const device = desktopAndroidSerial(payload.device)
+  const control = payload.control && typeof payload.control === 'object' ? payload.control : {}
+  const kind = String(control.kind || '')
+  if (kind === 'tap') {
+    const x = Number(control.x); const y = Number(control.y)
+    if (![x, y].every(Number.isFinite) || x < 0 || x > 1 || y < 0 || y > 1) throw new Error('Android 点击坐标无效。')
+    return { device, action: { kind, x, y } }
+  }
+  if (kind === 'drag') {
+    const values = ['fromX', 'fromY', 'toX', 'toY'].map(key => Number(control[key]))
+    if (!values.every(Number.isFinite) || values.some(value => value < 0 || value > 1)) throw new Error('Android 拖动坐标无效。')
+    const durationMs = Math.max(50, Math.min(5_000, Number(control.durationMs) || 300))
+    return { device, action: { kind, fromX: values[0], fromY: values[1], toX: values[2], toY: values[3], durationMs } }
+  }
+  if (kind === 'button') {
+    const name = String(control.name || '')
+    if (!DESKTOP_ANDROID_BUTTONS.has(name)) throw new Error('Android 按键不受支持。')
+    return { device, action: { kind, name } }
+  }
+  if (kind === 'type') {
+    const text = String(control.text || '')
+    if (!text || text.length > 4_000) throw new Error('Android 输入文本为空或过长。')
+    return { device, action: { kind, text } }
+  }
+  if (kind === 'rotate') return { device, action: { kind } }
+  throw new Error('Android 控制动作不受支持。')
+}
+
+function desktopAndroidHttpRequest(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const body = options.body === undefined ? null : Buffer.from(JSON.stringify(options.body), 'utf8')
+    const request = http.request(url, {
+      method: options.method || (body ? 'POST' : 'GET'),
+      headers: {
+        origin: options.origin || new URL(url).origin,
+        'sec-fetch-site': 'same-origin',
+        ...(body ? { 'content-type': 'application/json', 'content-length': String(body.length) } : {})
+      }
+    }, response => {
+      const chunks = []
+      let bytes = 0
+      const maximum = Number(options.maximum) || 1024 * 1024
+      response.on('data', chunk => {
+        bytes += chunk.length
+        if (bytes > maximum) {
+          request.destroy(new Error('Android 右栏响应超过大小上限。'))
+          return
+        }
+        chunks.push(chunk)
+      })
+      response.on('end', () => resolve({ status: Number(response.statusCode) || 0, headers: response.headers, body: Buffer.concat(chunks) }))
+    })
+    request.setTimeout(15_000, () => request.destroy(new Error('Android 右栏请求超时。')))
+    request.on('error', reject)
+    if (body) request.write(body)
+    request.end()
+  })
+}
+
+async function desktopAndroidPanelAction(input = {}) {
+  const action = String(input.action || '')
+  const route = DESKTOP_ANDROID_ROUTES[action]
+  if (!route) throw new Error('Android 右栏动作不受支持。')
+  if (runtimeState.status !== 'ready' || !isLocalRuntimeUrl(runtimeState.url)) throw new Error('Harness 运行时尚未就绪。')
+  const base = new URL(runtimeState.url)
+  const response = await desktopAndroidHttpRequest(new URL(route, base), {
+    body: desktopAndroidRequestBody(action, input.payload),
+    origin: base.origin
+  })
+  const text = response.body.toString('utf8')
+  let body = {}
+  try { body = text ? JSON.parse(text) : {} } catch { throw new Error('Android 右栏返回了无效数据。') }
+  if (response.status < 200 || response.status >= 300) throw new Error(String(body?.error || `Android 右栏请求失败（${response.status}）。`))
+  for (const key of ['streamUrl', 'screenshotUrl']) {
+    if (typeof body[key] === 'string') body[key] = new URL(body[key], base).toString()
+  }
+  if (action === 'capture' && typeof body.screenshotUrl === 'string') {
+    const screenshotUrl = new URL(body.screenshotUrl)
+    if (screenshotUrl.origin !== base.origin) throw new Error('Android 截图能力 URL 越界。')
+    const screenshot = await desktopAndroidHttpRequest(screenshotUrl, { method: 'GET', origin: base.origin, maximum: 12 * 1024 * 1024 })
+    if (screenshot.status < 200 || screenshot.status >= 300) throw new Error(`Android 截图读取失败（${screenshot.status}）。`)
+    const type = String(screenshot.headers['content-type'] || 'image/png').split(';')[0]
+    if (!/^image\/(?:png|jpeg|webp)$/u.test(type)) throw new Error('Android 截图返回类型无效。')
+    body.data = `data:${type};base64,${screenshot.body.toString('base64')}`
+  }
+  return body
+}
+
 function computerUseGrantFile() {
   return path.join(desktopRuntimePaths().root, 'computer-use', 'grant.json')
 }
@@ -2329,6 +2489,7 @@ async function modelComputerUseAction(input = {}) {
 async function desktopModelToolAction(input = {}, context = {}) {
   if (input.scope === 'computer') return modelComputerUseAction(input)
   await syncComputerUseIndicator()
+  if (input.scope === 'desktop') return ensureWindowsDesktopUi().action(input)
   if (input.scope === 'memory') return modelMemoryAction(input)
   return modelBrowserAction(input, context)
 }
@@ -2428,7 +2589,8 @@ function ensureMobileSyncService() {
     getModelRouting: () => getModelRouting(modelRoutingOptions()),
     getProviderMeters: () => getProviderMeters(false),
     getPlugins: getInstalledPlugins,
-    chooseWorkspaceDirectory
+    chooseWorkspaceDirectory,
+    fetchImpl: (url, options) => net.fetch(url, options)
   })
   mobileSyncService.on('state', state => send('mobileSync:state', state))
   return mobileSyncService
@@ -3738,6 +3900,9 @@ function desktopCompactionPluginOptions() {
 function desktopComputerUsePluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-computer-use') }
 }
+function desktopAndroidPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-android') }
+}
 function modelAdmissionPluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-model-admission') }
 }
@@ -4419,12 +4584,21 @@ async function openRoutedBrowserLink(value, context = {}) {
 }
 
 async function guestLocalTargetAtPoint(guest, params) {
-  if (/^harness-desktop:\/\/open-local(?:[/?#]|$)/i.test(params.linkURL || '')) return params.linkURL
+  for (const candidate of [params.linkURL, params.srcURL]) {
+    if (!candidate) continue
+    try {
+      normalizeLocalTarget(candidate)
+      return candidate
+    } catch {}
+  }
   const x = Number.isFinite(params.x) ? params.x : 0
   const y = Number.isFinite(params.y) ? params.y : 0
   return guest.executeJavaScript(`(() => {
     const element = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
-    return element?.closest?.('[data-hd-local-target]')?.dataset?.hdLocalTarget || '';
+    const pointed = element?.closest?.('[data-hd-local-target]')?.dataset?.hdLocalTarget || '';
+    if (pointed) return pointed;
+    const recent = window.__HARNESS_DESKTOP_CONTEXT_LOCAL_TARGET__;
+    return recent && Date.now() - Number(recent.at || 0) < 5000 ? String(recent.value || '') : '';
   })()`, true).catch(() => '')
 }
 
@@ -4441,7 +4615,7 @@ async function showGuestContextMenu(guest, params) {
     template.push(
       { label: '在右侧工作区预览', click: () => send('rightWorkspace:previewLocal', localValue) },
       { label: '打开文件或项目', click: () => openDesktopLocalTarget(localValue).catch(() => {}) },
-      { label: '在文件夹中显示', click: () => openDesktopLocalTarget(localValue, true).catch(() => {}) },
+      { label: '打开链接所在文件夹', click: () => openDesktopLocalTarget(localValue, true).catch(() => {}) },
       { label: '复制本机路径', click: () => clipboard.writeText(local.path) },
       { type: 'separator' }
     )
@@ -5138,6 +5312,15 @@ ipcMain.handle('workspace:chooseDirectory', event => {
   if (!isLocalRuntimeUrl(event.sender.getURL())) throw new Error('只允许本机 Harness 界面选择工作区。')
   return chooseWorkspaceDirectory()
 })
+ipcMain.handle('desktopDevice:action', async (event, input = {}) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) assertLocalRuntimeSender(event)
+  const result = await ensureWindowsDesktopUi().action(input)
+  if (String(input?.action || '') !== 'screenshot' || !result?.file) return result
+  const png = await readFile(result.file)
+  if (!png.length || png.length > 12 * 1024 * 1024) throw Object.assign(new Error('桌面设备预览帧超过安全上限。'), { code: 'desktop-frame-too-large' })
+  return { ...result, data: `data:image/png;base64,${png.toString('base64')}` }
+})
+ipcMain.handle('desktopAndroid:action', desktopShellOnly(input => desktopAndroidPanelAction(input)))
 
 if (HAS_SINGLE_INSTANCE_LOCK && !SELF_TEST_MODE) {
   app.on('second-instance', () => {
@@ -5249,6 +5432,9 @@ app.whenReady().then(async () => {
     })
     await ensureDesktopComputerUsePlugin(desktopComputerUsePluginOptions()).catch(error => {
       console.warn(`Unable to prepare desktop Computer Use plugin: ${error.message}`)
+    })
+    await ensureDesktopAndroidPlugin(desktopAndroidPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare adapted Android device plugin: ${error.message}`)
     })
     await ensureModelAdmissionPlugin(modelAdmissionPluginOptions()).catch(error => {
       console.warn(`Unable to prepare model admission plugin: ${error.message}`)

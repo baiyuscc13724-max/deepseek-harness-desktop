@@ -30,8 +30,9 @@ async function loadClientPlugin(reactOverrides = {}) {
     ...reactOverrides
   }
   const plugin = registration.factory(name => {
-    if (name !== 'react') throw new Error(`unexpected client dependency: ${name}`)
-    return React
+    if (name === 'react') return React
+    if (name === '@deepseek-ai/dsh-client-runtime/client') return { isAppendSurfaceEvent: event => event?.surfaceOp === 'append' }
+    throw new Error(`unexpected client dependency: ${name}`)
   })
   return { browser, plugin, React }
 }

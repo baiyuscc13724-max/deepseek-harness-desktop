@@ -2372,6 +2372,22 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function MobileSessionContext(props) {
+      var sessionId = props && props.session && typeof props.session.sessionId === "string" ? props.session.sessionId : "";
+      useEffect(function () {
+        if (!sessionId || typeof window === "undefined") return;
+        var detail = Object.freeze({ sessionId: sessionId, authoritative: true, source: "conversation.input.dock" });
+        window.__harnessMobileOfficialSessionContext = detail;
+        try { window.dispatchEvent(new CustomEvent("harness-mobile-session-context", { detail: detail })); } catch (_) {}
+        return function () {
+          if (window.__harnessMobileOfficialSessionContext && window.__harnessMobileOfficialSessionContext.sessionId === sessionId) window.__harnessMobileOfficialSessionContext = null;
+          var cleared = Object.freeze({ sessionId: "", previousSessionId: sessionId, authoritative: true, source: "conversation.input.dock" });
+          try { window.dispatchEvent(new CustomEvent("harness-mobile-session-context", { detail: cleared })); } catch (_) {}
+        };
+      }, [sessionId]);
+      return null;
+    }
+
     function apply(ctx) {
       injectStyles();
       try { ctx.effect(function () { return ctx.locale.register(NS, { zh: zh, en: en }); }, "agent-teams: dictionaries"); } catch (_) {}
@@ -2381,6 +2397,7 @@ window.__ModuleLoader__.load({
       function View(props) { return h(TeamView, Object.assign({}, props, { sessions: ctx.sessions })); }
       function Settings() { return h(AgentTeamsSettings, { sessions: ctx.sessions }); }
       ctx.slots.inject("conversation.view", function () { return ctx.slots.register({ name: "conversation.view", id: "agent-teams", order: 20, locale: NS, label: function () { return translate("title"); } }, View); });
+      ctx.slots.inject("conversation.input.dock", function () { return ctx.slots.register({ name: "conversation.input.dock", id: "agent-teams-mobile-session-context", order: 1000 }, MobileSessionContext); });
       ctx.slots.inject("settings.section", function () { return ctx.slots.register({ name: "settings.section", id: "agent-teams-settings", order: 35, locale: NS, label: function () { return translate("settingsTitle"); } }, Settings); });
     }
 

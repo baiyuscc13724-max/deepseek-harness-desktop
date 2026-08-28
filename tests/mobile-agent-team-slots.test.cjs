@@ -16,6 +16,9 @@ test('official Agent Teams exposes stable mobile navigation and context slots', 
   assert.match(client, /"data-harness-mobile-team-id": team \? String\(teamId\(team\)\) : undefined/u)
   assert.match(client, /"data-mobile-slot": "agent-teams\.context-switcher"/u)
   assert.match(client, /"data-harness-mobile-team-id": String\(teamId\(team\)\)/u)
+  assert.match(client, /props && props\.session && typeof props\.session\.sessionId === "string"/u)
+  assert.match(client, /"harness-mobile-session-context"/u)
+  assert.match(client, /name: "conversation\.input\.dock", id: "agent-teams-mobile-session-context"/u)
 })
 
 test('team canvas and durable task details expose authoritative entity identifiers', () => {
@@ -42,12 +45,14 @@ test('mobile team source context is explainable and switches through an authorit
   assert.doesNotMatch(runtime, /当前项目 · 已绑定/u)
 })
 
-test('mobile Scheduled Tasks opens the authoritative reminders and automation workspace', () => {
-  assert.match(runtime, /\{ id: 'tasks', label: '定时任务'/u)
-  assert.match(runtime, /if \(domain\.id === 'tasks'\)/u)
-  assert.match(runtime, /const agentsDomain = mobileDomains\.find\(item => item\.id === 'agents'\)/u)
-  assert.match(runtime, /agentsTarget\.click\(\)/u)
-  assert.match(runtime, /const openOfficialScheduledTasks = \(\) =>/u)
-  assert.match(runtime, /data-harness-mobile-workspace-view="automation"/u)
-  assert.doesNotMatch(runtime, /root\.dataset\.harnessMobileDomain === 'tasks'\) loadMobileTasksHub/u)
+test('mobile Scheduled Tasks reuses only the authoritative reminders and project automation workspace', () => {
+  assert.match(client, /"aria-labelledby": "dat-automation-title"/u)
+  assert.match(client, /"aria-labelledby": "dat-session-schedules"/u)
+  assert.match(client, /"aria-labelledby": "dat-project-automation"/u)
+  assert.match(client, /fetch\("\/api\/desktop-schedules\/state\?sessionId="/u)
+  assert.match(client, /fetch\("\/api\/agent-teams\/project\/automations\/state"/u)
+  assert.match(runtime, /const openOfficialScheduledTasks = shell => waitForOfficialWorkspace/u)
+  assert.match(runtime, /domain\.id === 'tasks'[^]*dat-automation-title/u)
+  assert.doesNotMatch(runtime, /mobileTasksState|renderMobileTasksHub|loadMobileTasksHub|harnessMobileTasksHub/u)
+  assert.doesNotMatch(runtime, /\/api\/agent-teams\/project\/tasks\/state/u)
 })

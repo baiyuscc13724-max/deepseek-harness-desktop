@@ -30,6 +30,22 @@ const MOBILE_MODEL_LIMIT = 256
 const MOBILE_PROVIDER_METER_LIMIT = 64
 const MOBILE_METER_TEXT_LIMIT = 16
 const MOBILE_PLUGIN_LIMIT = 128
+const MOBILE_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024
+const MOBILE_DOCUMENT_RESPONSE_MAX_BYTES = 64 * 1024
+const MOBILE_DOCUMENT_UPLOAD_TIMEOUT_MS = 60 * 1000
+const MOBILE_DOCUMENT_UPLOAD_PATH = '/__harness_mobile__/documents/upload'
+const MOBILE_DOCUMENT_UPLOAD_INTENT = 'document-upload'
+const MOBILE_DOCUMENT_UPLOAD_CONTRACT = Object.freeze({
+  version: 1,
+  path: MOBILE_DOCUMENT_UPLOAD_PATH,
+  method: 'POST',
+  body: 'raw',
+  sessionQuery: 'sessionId',
+  nameQuery: 'name',
+  intentHeader: Object.freeze({ name: 'X-Harness-Mobile-Request', value: MOBILE_DOCUMENT_UPLOAD_INTENT }),
+  maxBytes: MOBILE_DOCUMENT_MAX_BYTES,
+  responseSchemaVersion: 1
+})
 
 function safeMobileModelText(value, limit) {
   return String(value || '')
@@ -303,6 +319,94 @@ function readJsonBody(request, limit = 64 * 1024) {
   })
 }
 
+function boundedDocumentIdentity(value, field, limit) {
+  const text = typeof value === 'string' ? value : ''
+  if (!text || text.length > limit || text.trim() !== text || text.includes('\u0000') || /[\r\n]/u.test(text)) {
+    throw Object.assign(new TypeError(`${field} is invalid.`), { code: 'DOCUMENT_INVALID_IDENTITY' })
+  }
+  return text
+}
+
+function readBinaryBody(request, limit = MOBILE_DOCUMENT_MAX_BYTES) {
+  const advertised = Number(request.headers['content-length'] || 0)
+  if (Number.isFinite(advertised) && advertised > limit) {
+    throw Object.assign(new Error('Document exceeds the upload limit.'), { code: 'BODY_TOO_LARGE' })
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let size = 0
+    const chunks = []
+    const finish = (error, value) => {
+      if (settled) return
+      settled = true
+      if (error) reject(error)
+      else resolve(value)
+    }
+    const onData = chunk => {
+      if (settled) return
+      const value = Buffer.from(chunk)
+      size += value.length
+      if (size > limit) {
+        request.off('data', onData)
+        request.on('data', () => {})
+        request.resume()
+        finish(Object.assign(new Error('Document exceeds the upload limit.'), { code: 'BODY_TOO_LARGE' }))
+        return
+      }
+      chunks.push(value)
+    }
+    request.on('data', onData)
+    request.once('end', () => finish(null, Buffer.concat(chunks, size)))
+    request.once('error', error => finish(error))
+  })
+}
+
+async function boundedJsonResponse(response, limit = MOBILE_DOCUMENT_RESPONSE_MAX_BYTES) {
+  const advertised = Number(response.headers?.get?.('content-length') || 0)
+  if (Number.isFinite(advertised) && advertised > limit) throw new Error('Official upload response is too large.')
+  const reader = response.body?.getReader?.()
+  if (!reader) {
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.length > limit) throw new Error('Official upload response is too large.')
+    return JSON.parse(bytes.toString('utf8') || '{}')
+  }
+  const chunks = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunk = Buffer.from(value)
+      size += chunk.length
+      if (size > limit) {
+        await reader.cancel().catch(() => {})
+        throw new Error('Official upload response is too large.')
+      }
+      chunks.push(chunk)
+    }
+  } finally { reader.releaseLock?.() }
+  return JSON.parse(Buffer.concat(chunks, size).toString('utf8') || '{}')
+}
+
+function safeOfficialDocument(value, expectedSize) {
+  const relativePath = typeof value?.path === 'string' ? value.path : ''
+  const name = typeof value?.name === 'string' ? value.name : ''
+  const size = Number(value?.size)
+  const segments = relativePath.split('/')
+  if (relativePath.length > 4096 || segments[0] !== 'uploads' || segments.length !== 2 || segments.some(segment => !segment || segment === '.' || segment === '..')) return null
+  if (!name || name.length > 240 || name !== segments[1] || name.includes('\u0000') || /[\r\n\\/]/u.test(name)) return null
+  if (!Number.isSafeInteger(size) || size !== expectedSize) return null
+  return { path: relativePath, name, size }
+}
+
+function documentUploadError(status, code) {
+  if (status === 409 && code === 'FILES_SESSION_NOT_LIVE') return { status: 409, code, error: '当前会话尚未运行。' }
+  if (status === 409 && code === 'FILES_NO_WORKSPACE') return { status: 409, code, error: '当前会话没有可用的工作目录。' }
+  if (status === 413 || code === 'FILES_TOO_LARGE') return { status: 413, code: 'FILES_TOO_LARGE', error: '文档超过 50 MB 上传限制。' }
+  if (status === 400 && code === 'FILES_EMPTY_UPLOAD') return { status: 400, code, error: '不能上传空文档。' }
+  return { status: status >= 400 && status < 500 ? status : 502, code: 'DOCUMENT_UPLOAD_REJECTED', error: '电脑工作区未接受该文档。' }
+}
+
 const BROWSER_FORBIDDEN_PORTS = new Set([
   1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
   101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179,
@@ -374,7 +478,8 @@ class MobileSyncService extends EventEmitter {
     chooseWorkspaceDirectory = null,
     controlBroker = null,
     desktopControlStateFile = null,
-    relayConfigStore = null
+    relayConfigStore = null,
+    fetchImpl = globalThis.fetch
   }) {
     super()
     if (!store) throw new Error('MobileSyncService requires a store.')
@@ -401,6 +506,8 @@ class MobileSyncService extends EventEmitter {
     this.workspacePickerRequest = null
     this.controlBroker = controlBroker || new MobileControlBroker({ now })
     this.relayConfigStore = relayConfigStore
+    if (typeof fetchImpl !== 'function') throw new Error('MobileSyncService requires fetchImpl for document uploads.')
+    this.fetchImpl = fetchImpl
     this.desktopControlStateFile = desktopControlStateFile || path.join(path.dirname(this.store.file || this.stateDir), DESKTOP_CONTROL_STATE_FILE)
     this.desktopControlAuth = null
     this.server = null
@@ -739,6 +846,77 @@ class MobileSyncService extends EventEmitter {
     this.publish()
   }
 
+  async #uploadDocument(request, response, requestUrl) {
+    if (request.method !== 'POST') {
+      writeResponse(response, 405, JSON.stringify({ ok: false, code: 'DOCUMENT_METHOD_NOT_ALLOWED', error: 'Document upload requires POST.' }), { 'Allow': 'POST', 'Content-Type': 'application/json; charset=utf-8' })
+      return
+    }
+    if (request.headers['x-harness-mobile-request'] !== MOBILE_DOCUMENT_UPLOAD_INTENT) {
+      writeResponse(response, 403, JSON.stringify({ ok: false, code: 'DOCUMENT_INTENT_REQUIRED', error: 'Document upload intent is missing.' }), { 'Content-Type': 'application/json; charset=utf-8' })
+      return
+    }
+    let sessionId
+    let fileName
+    try {
+      sessionId = boundedDocumentIdentity(requestUrl.searchParams.get('sessionId'), 'sessionId', 256)
+      fileName = boundedDocumentIdentity(requestUrl.searchParams.get('name'), 'name', 512)
+    } catch {
+      writeResponse(response, 400, JSON.stringify({ ok: false, code: 'DOCUMENT_INVALID_IDENTITY', error: '会话或文档名称无效。' }), { 'Content-Type': 'application/json; charset=utf-8' })
+      return
+    }
+    const target = this.runtimeTarget()
+    if (!target) {
+      writeResponse(response, 503, JSON.stringify({ ok: false, code: 'DOCUMENT_RUNTIME_UNAVAILABLE', error: '电脑工作台尚未就绪。' }), { 'Retry-After': '2', 'Content-Type': 'application/json; charset=utf-8' })
+      return
+    }
+    let content
+    try { content = await readBinaryBody(request) }
+    catch (error) {
+      if (error?.code === 'BODY_TOO_LARGE') {
+        writeResponse(response, 413, JSON.stringify({ ok: false, code: 'FILES_TOO_LARGE', error: '文档超过 50 MB 上传限制。' }), { 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      throw error
+    }
+    if (!content.length) {
+      writeResponse(response, 400, JSON.stringify({ ok: false, code: 'FILES_EMPTY_UPLOAD', error: '不能上传空文档。' }), { 'Content-Type': 'application/json; charset=utf-8' })
+      return
+    }
+    // DSH's browser session.prompt wire accepts text and raster images only.
+    // General documents therefore stay on the official desktop-files route,
+    // whose live root Agent supplies the authoritative workspace cwd. The
+    // mobile bridge never accepts or materializes a client-authored path.
+    const upstreamUrl = new URL('/api/desktop-files/upload', `${target}/`)
+    upstreamUrl.searchParams.set('sessionId', sessionId)
+    upstreamUrl.searchParams.set('name', fileName)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), MOBILE_DOCUMENT_UPLOAD_TIMEOUT_MS)
+    timer.unref?.()
+    let upstream
+    let payload
+    try {
+      upstream = await this.fetchImpl(upstreamUrl, {
+        method: 'POST', redirect: 'error', cache: 'no-store', signal: controller.signal,
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: content
+      })
+      payload = await boundedJsonResponse(upstream)
+    } catch {
+      writeResponse(response, 502, JSON.stringify({ ok: false, code: 'DOCUMENT_UPLOAD_UNAVAILABLE', error: '无法把文档交给电脑工作区。' }), { 'Content-Type': 'application/json; charset=utf-8' })
+      return
+    } finally { clearTimeout(timer) }
+    if (upstream.status === 201 && payload?.schemaVersion === 1) {
+      const file = safeOfficialDocument(payload.file, content.length)
+      if (file) {
+        response.writeHead(201, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff' })
+        response.end(JSON.stringify({ ok: true, schemaVersion: 1, file }))
+        return
+      }
+    }
+    const mapped = documentUploadError(upstream.status, typeof payload?.code === 'string' ? payload.code : '')
+    writeResponse(response, mapped.status, JSON.stringify({ ok: false, code: mapped.code, error: mapped.error }), { 'Content-Type': 'application/json; charset=utf-8' })
+  }
+
   async #handleHttp(request, response) {
     const requestUrl = new URL(request.url || '/', 'http://harness-mobile.local')
     const isDesktopControlRequest = requestUrl.pathname.startsWith('/__harness_mobile__/control/desktop-')
@@ -811,6 +989,10 @@ class MobileSyncService extends EventEmitter {
     const device = this.#deviceFromRequest(request)
     if (!device) {
       writeResponse(response, 401, pairingErrorPage('请在电脑端打开“手机同步”，扫描新的配对二维码。'))
+      return
+    }
+    if (requestUrl.pathname === MOBILE_DOCUMENT_UPLOAD_PATH) {
+      await this.#uploadDocument(request, response, requestUrl)
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/model-routing') {
@@ -915,7 +1097,7 @@ class MobileSyncService extends EventEmitter {
     }
     if (requestUrl.pathname === '/__harness_mobile__/meta') {
       response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
-      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, protocol: MOBILE_PROTOCOL_DESCRIPTOR, deviceId: device.id, platform: device.platform, deviceClass: device.deviceClass, appVersion: device.appVersion, targetReady: Boolean(this.runtimeTarget()) }))
+      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, protocol: MOBILE_PROTOCOL_DESCRIPTOR, documents: MOBILE_DOCUMENT_UPLOAD_CONTRACT, deviceId: device.id, platform: device.platform, deviceClass: device.deviceClass, appVersion: device.appVersion, targetReady: Boolean(this.runtimeTarget()) }))
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/theme.js' && request.method === 'GET') {
@@ -1029,6 +1211,8 @@ module.exports = {
   MobileSyncService,
   BRIDGE_API_VERSION,
   MOBILE_PROTOCOL_DESCRIPTOR,
+  MOBILE_DOCUMENT_MAX_BYTES,
+  MOBILE_DOCUMENT_UPLOAD_CONTRACT,
   COOKIE_NAME,
   PAIRING_TTL_MS,
   BROWSER_FORBIDDEN_PORTS,

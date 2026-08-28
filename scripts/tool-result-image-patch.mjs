@@ -79,6 +79,14 @@ const REPLACEMENTS = [
 ]
 
 const COMPLETE_MARKERS = REPLACEMENTS.map(([, patched]) => patched)
+const OFFICIAL_COMPLETE_MARKERS = [
+  'else if (block.type !== "image") parts.push(JSON.stringify(block, null, 2));',
+  'function resultImages(block) {',
+  'const images = resultImages(block);',
+  'images.length > 0 ? renderMessageImages({',
+  'function ToolCallBranch({ renderSlot, renderMessageImages,',
+  'function ToolCallTree({ renderSlot, renderMessageImages,'
+]
 
 /**
  * Patch the pinned official Tool UI so durable ImageBlocks in tool results are
@@ -86,6 +94,11 @@ const COMPLETE_MARKERS = REPLACEMENTS.map(([, patched]) => patched)
  * flattened to JSON metadata inside the generic tool card.
  */
 export function patchToolResultImageSource(source) {
+  const officialPresent = OFFICIAL_COMPLETE_MARKERS.filter(marker => source.includes(marker))
+  if (officialPresent.length === OFFICIAL_COMPLETE_MARKERS.length) return { source, changed: false }
+  if (officialPresent.length > 0) {
+    throw new Error('Pinned DSH official tool-result image delivery patch is incomplete; refusing an unsafe repair.')
+  }
   const present = COMPLETE_MARKERS.filter(marker => source.includes(marker))
   if (present.length > 0 && present.length < COMPLETE_MARKERS.length) {
     throw new Error('Pinned DSH tool-result image delivery patch is incomplete; refusing an unsafe repair.')

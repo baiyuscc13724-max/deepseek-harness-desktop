@@ -79,7 +79,7 @@
                 android:resource="@xml/mobile_update_paths" />
         </provider>
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name=".MobileInputFileProvider"
             android:authorities="${applicationId}.mobile-inputs"
             android:exported="false"
             android:grantUriPermissions="true">

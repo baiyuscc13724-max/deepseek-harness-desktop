@@ -20,8 +20,9 @@ async function clientPlugin() {
   new Function('window', source)(browser)
   assert.ok(registration?.factory, 'client module registration missing')
   return registration.factory(name => {
-    if (name !== 'react') throw new Error(`unexpected client dependency: ${name}`)
-    return { createElement() {}, useState() {}, useEffect() {}, useRef() {} }
+    if (name === 'react') return { createElement() {}, useState() {}, useEffect() {}, useRef() {} }
+    if (name === '@deepseek-ai/dsh-client-runtime/client') return { isAppendSurfaceEvent: event => event?.surfaceOp === 'append' }
+    throw new Error(`unexpected client dependency: ${name}`)
   })
 }
 
@@ -360,7 +361,7 @@ test('client keeps session id copy in archive and sidebar paths without a top-ri
   assert.match(source, /harness-desktop-session/u)
   assert.match(source, /openRequestedDesktopSession/u)
   assert.match(source, /exports\.apply = apply/u)
-  assert.match(source, /exports\.inject = \["slots", "locale", "sessions", "workspaces"\]/u)
+  assert.match(source, /exports\.inject = \["slots", "locale", "sessions", "workspaces", "inputTriggers"\]/u)
 })
 
 test('official workspace sidebar receives the persistent Codex-style session menu', async () => {

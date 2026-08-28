@@ -1,11 +1,13 @@
 package io.harnessdesktop.mobile;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.net.ConnectivityManager;
@@ -44,6 +46,7 @@ import androidx.activity.result.PickVisualMediaRequest;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -67,6 +70,7 @@ public final class MainActivity extends AppCompatActivity {
     static final String PREFS = "harness_mobile";
     static final String SAVED_ORIGIN = "saved_origin";
     static final String SAVED_PROFILE = "saved_profile";
+    static final String SAVED_SESSION = "saved_session";
     private static final long[] WORKBENCH_RETRY_DELAYS_MS = { 800L, 1500L, 2500L, 4000L, 5000L };
     private static final long NETWORK_RECONNECT_DEBOUNCE_MS = 1_500L;
     private static final long MOBILE_UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1_000L;
@@ -164,6 +168,13 @@ public final class MainActivity extends AppCompatActivity {
         new ActivityResultContracts.StartActivityForResult(),
         result -> completeFileChooser(toChosenUris(result.getResultCode(), result.getData()))
     );
+    private final ActivityResultLauncher<String> composerCameraPermission = registerForActivityResult(
+        new ActivityResultContracts.RequestPermission(),
+        granted -> {
+            if (Boolean.TRUE.equals(granted)) launchSystemCamera();
+            else Toast.makeText(this, "需要相机权限才能拍摄", Toast.LENGTH_SHORT).show();
+        }
+    );
     private final ActivityResultLauncher<Intent> systemCamera = registerForActivityResult(
         new ActivityResultContracts.StartActivityForResult(),
         result -> completeCameraCapture(result.getResultCode())
@@ -177,6 +188,14 @@ public final class MainActivity extends AppCompatActivity {
         ValueCallback<Uri[]> callback = fileChooserCallback;
         fileChooserCallback = null;
         if (callback != null) callback.onReceiveValue(uris);
+    }
+
+    private void requestSystemCamera() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            launchSystemCamera();
+            return;
+        }
+        composerCameraPermission.launch(Manifest.permission.CAMERA);
     }
 
     private void launchSystemCamera() {
@@ -339,12 +358,11 @@ public final class MainActivity extends AppCompatActivity {
         checkMobileAppUpdate();
         if (webView == null || swipeRefresh == null || swipeRefresh.getVisibility() != View.VISIBLE) return;
         // Home/Recents、系统照片选择器和 Android Back 后恢复时保留当前
-        // WebView 文档、草稿、附件与流式会话。只唤醒页面并重新注入幂等的
-        // 移动适配，不 reload；真正的断网仍由 NetworkCallback 的重试链处理。
+        // WebView 文档、草稿、附件与流式会话。Android 会发送真实的可见性/
+        // 焦点变化；不得伪造 online/focus，也不得重新注入页面运行时，否则
+        // 官方客户端会重连健康会话或重复安装观察器。
         webView.onResume();
         webView.resumeTimers();
-        if (mobileUiAdapter != null) mobileUiAdapter.inject(webView);
-        webView.evaluateJavascript("(() => { window.dispatchEvent(new Event('online')); window.dispatchEvent(new Event('focus')); return true; })()", null);
     }
 
     private void checkMobileAppUpdate() {
@@ -450,6 +468,7 @@ public final class MainActivity extends AppCompatActivity {
 
     @SuppressLint("SetJavaScriptEnabled")
     private void configureWebView() {
+        if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true);
         localProxy = new HarnessWebProxy(this);
         easyTierClient = new EasyTierClient();
         wssRelayClient = new WssRelayClient();
@@ -1229,6 +1248,15 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
+    private static String safeSessionReference(String value) {
+        if (value == null || !value.startsWith("session-") || value.length() < 16 || value.length() > 256) return "";
+        for (int index = 8; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (!Character.isLetterOrDigit(character) && character != '-' && character != '_') return "";
+        }
+        return value;
+    }
+
     private final class MobileControlBridge {
         @JavascriptInterface public void openSettings() {
             runOnUiThread(() -> startActivity(new Intent(MainActivity.this, ControlSettingsActivity.class)));
@@ -1237,9 +1265,20 @@ public final class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void inputAction(String action) {
             if (!"capture".equals(action) && !"speech".equals(action)) return;
             runOnUiThread(() -> {
-                if ("capture".equals(action)) launchSystemCamera();
+                if ("capture".equals(action)) requestSystemCamera();
                 else launchSystemSpeechRecognizer();
             });
+        }
+
+        @JavascriptInterface public void rememberSession(String sessionId) {
+            String safe = safeSessionReference(sessionId);
+            android.content.SharedPreferences.Editor editor = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+            if (safe.isEmpty()) editor.remove(SAVED_SESSION); else editor.putString(SAVED_SESSION, safe);
+            editor.apply();
+        }
+
+        @JavascriptInterface public String restoreSession() {
+            return safeSessionReference(getSharedPreferences(PREFS, MODE_PRIVATE).getString(SAVED_SESSION, ""));
         }
 
         @JavascriptInterface public String status() {

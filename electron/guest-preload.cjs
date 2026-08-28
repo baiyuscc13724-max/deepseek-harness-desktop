@@ -85,6 +85,32 @@ async function setSessionMenuFlag(value) {
   return safeSessionMenuState(await ipcRenderer.invoke('sessionMenu:setFlag', request))
 }
 
+const DESKTOP_DEVICE_ACTIONS = new Set(['status', 'targets', 'selectTarget', 'observe', 'inspect', 'click', 'type', 'scroll', 'screenshot', 'requestAuthorization', 'stop'])
+function safeDesktopDeviceAction(value) {
+  const action = typeof value?.action === 'string' && DESKTOP_DEVICE_ACTIONS.has(value.action) ? value.action : ''
+  if (!action) return null
+  const source = value?.payload && typeof value.payload === 'object' && !Array.isArray(value.payload) ? value.payload : value
+  const payload = {}
+  const targetId = typeof (source.target_id ?? source.targetId) === 'string' ? String(source.target_id ?? source.targetId).slice(0, 160) : ''
+  const ref = typeof source.ref === 'string' ? source.ref.slice(0, 240) : ''
+  if (targetId) payload.target_id = targetId
+  if (ref) payload.ref = ref
+  if (typeof source.text === 'string') payload.text = source.text.slice(0, 500)
+  if (Number.isFinite(Number(source.x))) payload.x = Math.round(Number(source.x))
+  if (Number.isFinite(Number(source.y))) payload.y = Math.round(Number(source.y))
+  if (Number.isFinite(Number(source.delta_y ?? source.deltaY))) payload.delta_y = Math.max(-800, Math.min(800, Math.round(Number(source.delta_y ?? source.deltaY))))
+  if (source.button === 'right' || source.button === 'middle' || source.button === 'left') payload.button = source.button
+  if (source.force === true) payload.force = true
+  if (Number.isSafeInteger(Number(source.maxNodes))) payload.maxNodes = Math.max(1, Math.min(500, Number(source.maxNodes)))
+  return Object.freeze({ action, payload: Object.freeze(payload) })
+}
+
+async function desktopDeviceAction(value) {
+  const request = safeDesktopDeviceAction(value)
+  if (!request) throw new Error('桌面设备操作无效。')
+  return ipcRenderer.invoke('desktopDevice:action', request)
+}
+
 function subscribeRightWorkspaceCommands(listener) {
   if (typeof listener !== 'function') return () => {}
   const wrapped = (_event, value) => {
@@ -159,6 +185,7 @@ contextBridge.exposeInMainWorld('harnessDesktopGuest', Object.freeze({
   },
   syncSessionMenuState,
   setSessionMenuFlag,
+  desktopDeviceAction,
   onRightWorkspaceCommand: subscribeRightWorkspaceCommands,
   onWallpaperLifecycle: subscribeWallpaperLifecycle
 }))

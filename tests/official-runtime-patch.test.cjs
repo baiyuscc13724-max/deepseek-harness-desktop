@@ -380,12 +380,12 @@ test('literal edit not-found failures require a fresh read and one rebuilt retry
   const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-tool-fs', 'lib', 'index.js'), 'utf8')
   const first = patchFsEditSource(fixture)
 
-  assert.equal(first.changed, !fixture.includes('do not repeat the same edit call'))
-  assert.match(first.source, /FS_EDIT_NOT_FOUND: "do not repeat the same edit call; re-read the file, copy a short exact unique old_string from the current content, then retry once"/u)
-  assert.match(first.source, /Build old_string only from the latest read result or the exact after text of an edit that just succeeded, and keep it short but unique\./u)
-  assert.match(first.source, /On FS_EDIT_NOT_FOUND, never repeat the same call: re-read the file, rebuild old_string from the current content, then retry once\./u)
-  assert.match(first.source, /A missing old_string fails closed: re-read and rebuild the edit instead of repeating it\./u)
-  assert.match(first.source, /Literal text copied from the current file content\. Must match exactly; keep it short but unique\./u)
+  assert.equal(first.changed, !fixture.includes('Immediately before the first edit to a target file'))
+  assert.match(first.source, /FS_EDIT_NOT_FOUND: "the edit was not applied; do not repeat or guess—read the exact target file around the intended location, copy a short current literal old_string, then retry once"/u)
+  assert.match(first.source, /Immediately before the first edit to a target file, read that exact file around the intended location and copy a short unique old_string verbatim/u)
+  assert.match(first.source, /a read of another file, a grep\/search snippet, a remembered fragment, or an inferred function shape is not a valid basis/u)
+  assert.match(first.source, /A missing match is a safe no-op and requires a fresh target-file read, never fuzzy replacement\./u)
+  assert.match(first.source, /Short unique literal copied verbatim from the latest read of this exact target file/u)
   assert.equal(patchFsEditSource(first.source).changed, false)
 
   const remediationStart = first.source.indexOf('const REMEDIES = {')
@@ -400,16 +400,16 @@ test('literal edit not-found failures require a fresh read and one rebuilt retry
   const remediated = remediateFsError(original)
   assert.equal(remediated.code, 'FS_EDIT_NOT_FOUND')
   assert.equal(remediated.cause, original)
-  assert.match(remediated.message, /do not repeat the same edit call/u)
-  assert.match(remediated.message, /re-read the file/u)
+  assert.match(remediated.message, /do not repeat or guess/u)
+  assert.match(remediated.message, /read the exact target file/u)
   assert.match(remediated.message, /retry once/u)
   const unrelated = new StubFsError('unrelated', 'FS_OTHER')
   assert.equal(remediateFsError(unrelated), unrelated)
 
-  const drifted = fixture.replace(
-    'FS_NOT_OBSERVED: "read the file, then retry"',
-    'FS_NOT_OBSERVED: "read the file, then retry" /* upstream drift */'
-  )
+  const driftAnchor = fixture.includes('FS_NOT_OBSERVED: "read the exact target file before editing it, then retry"')
+    ? 'FS_NOT_OBSERVED: "read the exact target file before editing it, then retry"'
+    : 'FS_NOT_OBSERVED: "read the file, then retry"'
+  const drifted = fixture.replace(driftAnchor, `${driftAnchor} /* upstream drift */`)
   assert.notEqual(drifted, fixture)
   assert.throws(() => patchFsEditSource(drifted), /Pinned DSH edit not-found remediation changed/u)
 })

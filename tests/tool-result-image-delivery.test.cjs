@@ -13,11 +13,11 @@ test('durable tool-result images render in chat instead of flattening to JSON', 
   const patched = first.source
 
   assert.match(patched, /function resultImages\(block\)/u)
-  assert.match(patched, /block\.content\.filter\(\(item\) => item\.type === "image"\)/u)
+  assert.match(patched, /block\.content\.filter\(\(item\) => item\??\.type === "image"/u)
   assert.match(patched, /images\.length > 0 \? renderMessageImages\(\{\s*images,\s*align: "start"/u)
   assert.match(patched, /function ToolCallTree\(\{ renderSlot, renderMessageImages,/u)
-  assert.match(patched, /ToolCallBranch, \{\s*renderSlot,\s*renderMessageImages,\s*block/u)
-  assert.match(patched, /ToolCall, \{\s*renderSlot,\s*renderMessageImages,\s*callId/u)
+  assert.match(patched, /ToolCallBranch, \{\s*renderSlot,\s*renderMessageImages,\s*(?:sessionId,\s*)?block/u)
+  assert.match(patched, /ToolCall, \{\s*renderSlot,\s*renderMessageImages,\s*(?:sessionId,\s*)?callId/u)
   assert.match(patched, /else if \(block\.type !== "image"\) parts\.push\(JSON\.stringify/u)
   assert.doesNotMatch(patched, /else parts\.push\(JSON\.stringify\(block, null, 2\)\)/u)
   assert.doesNotThrow(() => new Function(patched))
@@ -53,12 +53,12 @@ test('runtime installer applies the image delivery patch and fails closed on dri
 
   assert.match(installer, /dsh-client-ui-tool', 'lib', 'client\.js'/u)
   assert.match(installer, /const toolResultImagesChanged = await patchInstalledToolResultImages\(\)/u)
-  assert.match(installer, /Patched durable tool-result image delivery/u)
+  assert.match(installer, /Patched durable tool results and recoverable edit-conflict presentation/u)
 
   const incomplete = patched.replace('images.length > 0 ? renderMessageImages({', 'images.length > 0 ? missingImageRenderer({')
   assert.throws(() => patchToolResultImageSource(incomplete), /patch is incomplete/u)
-  const missingNestedForward = patched.replace(/\n\s*renderMessageImages,\n\s*block: child,/u, '\n\t\t\t\t\t\tblock: child,')
-  assert.throws(() => patchToolResultImageSource(missingNestedForward), /patch is incomplete/u)
+  const missingTreeForward = patched.replace('function ToolCallTree({ renderSlot, renderMessageImages,', 'function ToolCallTree({ renderSlot, missingImageRenderer,')
+  assert.throws(() => patchToolResultImageSource(missingTreeForward), /patch is incomplete/u)
 
   const original = fixture.includes('function resultImages(block)')
     ? fixture.replace('function resultImages(block)', 'function upstreamResultImages(block)')

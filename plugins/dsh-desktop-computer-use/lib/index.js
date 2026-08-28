@@ -2,6 +2,7 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 import { readFile } from 'node:fs/promises'
+import { registerDesktopControl } from './desktop-control.js'
 
 const name = 'desktop-computer-use'
 const inject = ['systemPrompt', 'tools']
@@ -9,7 +10,7 @@ const computerUseSettingsNamespace = settingsNamespace(name)
 // Presence-only namespace: authorization, policy, and session state remain owned by the trusted Electron Host.
 const computerUseSettingsSchema = z.object({})
 
-async function execute(action, payload) {
+async function execute(scope, action, payload) {
   const file = process.env.HARNESS_DESKTOP_CAPABILITIES_STATE_FILE
   if (!file) throw new Error('桌面能力不可用。')
   const state = JSON.parse(await readFile(file, 'utf8'))
@@ -18,7 +19,7 @@ async function execute(action, payload) {
   const response = await fetch(new URL('/action', state.origin), {
     method: 'POST',
     headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scope: 'computer', action, payload })
+    body: JSON.stringify({ scope, action, payload })
   })
   const body = await response.json()
   if (!response.ok) throw new Error(body.error || 'Computer Use 失败。')
@@ -51,7 +52,7 @@ function apply(ctx) {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }]
     },
-    execute: args => execute(args.action, {
+    execute: args => execute('computer', args.action, {
       x: args.x,
       y: args.y,
       text: args.text,
@@ -59,6 +60,7 @@ function apply(ctx) {
       confirmation_id: args.confirmation_id
     })
   }))
+  registerDesktopControl(ctx)
 }
 
 export { apply, computerUseSettingsNamespace, inject, name }

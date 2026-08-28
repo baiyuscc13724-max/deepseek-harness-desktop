@@ -55,6 +55,14 @@ Copyright (c) 2026 bradeGithub
 
 The marketplace lists and can execute installation code from independent third-party repositories. Those repositories retain their own licenses and are not endorsed by Harness Desktop, DeepSeek, or the marketplace author. Users must review and trust a plugin before installing it.
 
+## dsh-android
+
+Harness Desktop redistributes an adapted copy of `@zseven-w/dsh-android` version `0.1.0-rc.4`, licensed under the MIT License, to provide ADB-backed physical-device and user-installed emulator tooling. The retained package includes its upstream `LICENSE` and `THIRD_PARTY_NOTICES.md`; Harness Desktop adds device-center integration and a non-workspace-shrinking right-panel adaptation.
+
+Source: https://github.com/ZSeven-W/dsh-android
+
+Harness Desktop does not redistribute ADB, Android SDK/JDK/Gradle installations, Android Studio, AVDs, emulator binaries, or Android system images. Users supply those environments separately.
+
 ## OpenAI agent skills
 
 Harness Desktop adapts the `imagegen` and `openai-docs` agent skills from `openai/skills` commit `49f948faa9258a0c61caceaf225e179651397431` under the Apache License 2.0.

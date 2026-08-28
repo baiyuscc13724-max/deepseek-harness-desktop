@@ -6,10 +6,11 @@ const path = require('node:path')
 const root = path.resolve(__dirname, '..')
 const source = file => readFile(path.join(root, file), 'utf8')
 const { createCore, isExplicitLocalTarget, isShortcutPressed, loadDocumentPreview, browserStateModeAction } = require('../renderer/right-workspace.js')
+const { mapFramePoint, mapNormalizedPoint } = require('../renderer/device-workspace.js')
 
 test('right workspace core provides bounded width and deterministic pane history', () => {
   const core = createCore({ width: 460 })
-  for (const id of ['browser', 'files', 'schedules', 'document']) core.register({ id, title: id })
+  for (const id of ['browser', 'files', 'schedules', 'devices', 'document']) core.register({ id, title: id })
   assert.equal(core.replace('browser'), true)
   assert.equal(core.push('files'), true)
   assert.equal(core.push('document'), true)
@@ -19,10 +20,18 @@ test('right workspace core provides bounded width and deterministic pane history
   assert.equal(core.setWidth(5000), 1200)
   const saved = core.serialize()
   const restored = createCore()
-  for (const id of ['browser', 'files', 'schedules', 'document']) restored.register({ id })
+  for (const id of ['browser', 'files', 'schedules', 'devices', 'document']) restored.register({ id })
   assert.equal(restored.restore(saved), true)
   assert.equal(restored.activeId, 'files')
   assert.equal(isShortcutPressed({ key: ']', ctrlKey: true, shiftKey: true }), true)
+})
+
+test('device workspace maps displayed frame coordinates without guessing scale', () => {
+  const image = { getBoundingClientRect: () => ({ left: 100, top: 50, width: 400, height: 200 }) }
+  assert.deepEqual(mapFramePoint({ clientX: 300, clientY: 150 }, image, { width: 800, height: 400 }), { x: 400, y: 200 })
+  assert.deepEqual(mapFramePoint({ clientX: 10, clientY: 999 }, image, { width: 800, height: 400 }), { x: 0, y: 399 })
+  assert.deepEqual(mapNormalizedPoint({ clientX: 300, clientY: 150 }, image), { x: 0.5, y: 0.5 })
+  assert.deepEqual(mapNormalizedPoint({ clientX: 10, clientY: 999 }, image), { x: 0, y: 1 })
 })
 
 test('only explicit absolute targets may fall back to local read-only preview', () => {
@@ -58,7 +67,7 @@ test('document preview falls back locally only after an absolute target escapes 
 })
 
 test('background browser state cannot replace an explicitly selected workspace mode', () => {
-  for (const activeModeId of ['files', 'schedules', 'document']) {
+  for (const activeModeId of ['files', 'schedules', 'devices', 'document']) {
     assert.equal(browserStateModeAction({
       restorePending: false,
       nativeVisible: true,
@@ -82,19 +91,20 @@ test('background browser state cannot replace an explicitly selected workspace m
   }), 'sync-only', 'a hidden native browser does not open the workspace')
 })
 
-test('Desktop shell exposes one unified right workspace with browser, files and schedules', async () => {
-  const [html, integration, styles, browser, app, links] = await Promise.all([
+test('Desktop shell exposes one unified right workspace with browser, files, schedules and devices', async () => {
+  const [html, integration, styles, browser, app, links, devices] = await Promise.all([
     source('renderer/index.html'), source('renderer/right-workspace-integration.js'),
     source('renderer/right-workspace.css'), source('renderer/browser-sidebar.js'),
-    source('renderer/app.js'), source('renderer/workspace-links-integration.js')
+    source('renderer/app.js'), source('renderer/workspace-links-integration.js'), source('renderer/device-workspace.js')
   ])
-  for (const id of ['browserSidebar', 'rightWorkspaceBack', 'rightWorkspaceTitle', 'rightWorkspaceBrowserButton', 'rightWorkspaceFilesButton', 'rightWorkspaceSchedulesButton', 'rightWorkspaceSlot']) {
+  for (const id of ['browserSidebar', 'rightWorkspaceBack', 'rightWorkspaceTitle', 'rightWorkspaceBrowserButton', 'rightWorkspaceFilesButton', 'rightWorkspaceSchedulesButton', 'rightWorkspaceDevicesButton', 'rightWorkspaceSlot']) {
     assert.match(html, new RegExp(`id="${id}"`), `missing right workspace element ${id}`)
   }
   assert.match(html, /right-workspace\.css/u)
   assert.match(html, /right-workspace\.js/u)
+  assert.match(html, /device-workspace\.js/u)
   assert.match(html, /right-workspace-integration\.js/u)
-  for (const mode of ['home', 'browser', 'files', 'schedules', 'document']) assert.match(integration, new RegExp(`id: '${mode}'`))
+  for (const mode of ['home', 'browser', 'files', 'schedules', 'devices', 'document']) assert.match(integration, new RegExp(`id: '${mode}'`))
   assert.match(html, /right-workspace-toggle-icon/u)
   assert.match(html, /title="切换右侧工作区"/u)
   assert.match(integration, /rightWorkspaceHomePane/u)
@@ -102,7 +112,28 @@ test('Desktop shell exposes one unified right workspace with browser, files and 
   assert.match(integration, /Control\+P Meta\+P/u)
   assert.match(integration, /Control\+T Meta\+T/u)
   assert.match(integration, /Control\+Shift\+A Meta\+Shift\+A/u)
+  assert.match(integration, /Control\+Shift\+D Meta\+Shift\+D/u)
   assert.match(integration, /openHome/u)
+  assert.match(integration, /deviceWorkspace\?\.activate/u)
+  assert.doesNotMatch(integration, /openAndroidDevicePanel|closeWorkspace\('android-device'/u)
+  assert.match(devices, /desktopDeviceAction/u)
+  assert.match(devices, /desktopAndroidAction/u)
+  assert.match(devices, /switchDevice/u)
+  assert.match(devices, /pointerdown/u)
+  assert.match(devices, /data-device-source-view|dataset\.deviceSourceView/u)
+  assert.match(devices, /right-workspace-phone-frame/u)
+  assert.match(devices, /right-workspace-monitor-screen/u)
+  assert.doesNotMatch(devices, /monitor-neck|monitor-base|phone-speaker/u)
+  assert.match(styles, /\.right-workspace-monitor-frame,\.right-workspace-android-frame \{[^}]*max-width:100%;[^}]*max-height:100%;[^}]*background:transparent/u)
+  assert.match(styles, /\.right-workspace-monitor-screen,\.right-workspace-phone-frame \{[^}]*border:0;[^}]*background:transparent/u)
+  assert.match(devices, /right-workspace-device-controls-toggle/u)
+  assert.match(styles, /\.right-workspace-device-pane\.is-controls-open/u)
+  assert.doesNotMatch(devices, /onOpenAndroid/u)
+  assert.match(devices, /requestAuthorization/u)
+  assert.match(devices, /selectTarget/u)
+  assert.match(devices, /onContextMenu|contextmenu/u)
+  assert.match(devices, /delta_y/u)
+  assert.match(devices, /avoid capturing Harness itself|避免捕获 Harness 自身/u)
   assert.match(integration, /openMode\(item\.id, \{ push: true \}\)/u)
   assert.match(integration, /quickButton\?\.setAttribute\('aria-expanded'/u)
   assert.match(integration, /getRightWorkspaceResource/u)
@@ -124,9 +155,10 @@ test('Desktop shell exposes one unified right workspace with browser, files and 
   assert.match(html, /img-src[^;]*http:\/\/127\.0\.0\.1:\*/u)
   assert.match(html, /media-src[^;]*http:\/\/127\.0\.0\.1:\*/u)
   assert.match(styles, /body\.dsh-right-workspace-open #runtimeView/u)
-  assert.match(styles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*0;[\s\S]{0,260}padding-top:\s*var\(--dsh-workbench-header-height\)/u)
-  assert.match(styles, /\.dsh-right-workspace::before \{[\s\S]{0,260}height:\s*var\(--dsh-workbench-header-height\)/u)
-  assert.match(styles, /\.dsh-right-workspace:not\(\.is-home\)::before/u)
+  assert.match(styles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*var\(--dsh-workbench-header-height\);[\s\S]{0,260}padding-top:\s*0/u)
+  assert.match(styles, /\.dsh-right-workspace::before \{[\s\S]{0,180}top:\s*calc\(-1 \* var\(--dsh-workbench-header-height\)\);[\s\S]{0,220}height:\s*var\(--dsh-workbench-header-height\)/u)
+  assert.match(styles, /\.dsh-right-workspace::before \{[\s\S]{0,360}-webkit-app-region:\s*drag/u)
+  assert.doesNotMatch(styles, /\.dsh-right-workspace:not\(\.is-home\)::before/u)
   assert.match(styles, /body\.dsh-right-workspace-open \.pet-quick-button/u)
   assert.match(styles, /\.dsh-right-workspace\.is-home \.dsh-right-workspace__header/u)
   assert.match(styles, /\.right-workspace-home-actions/u)

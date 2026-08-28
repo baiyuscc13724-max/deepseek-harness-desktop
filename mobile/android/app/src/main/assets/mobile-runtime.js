@@ -23,6 +23,40 @@
     })
   }
 
+  const installAbortSignalAnyCompatibility = () => {
+    const Signal = window.AbortSignal
+    const Controller = window.AbortController
+    if (!Signal || !Controller || typeof Signal.any === 'function') return
+    Object.defineProperty(Signal, 'any', {
+      configurable: true,
+      writable: true,
+      value(signals) {
+        const sources = Array.from(signals)
+        const controller = new Controller()
+        const listeners = []
+        const abortFrom = source => {
+          if (!controller.signal.aborted) controller.abort(source.reason)
+          for (const [signal, listener] of listeners) signal.removeEventListener('abort', listener)
+          listeners.length = 0
+        }
+        for (const signal of sources) {
+          if (!signal || typeof signal.aborted !== 'boolean' || typeof signal.addEventListener !== 'function') {
+            throw new TypeError('AbortSignal.any expects AbortSignal values')
+          }
+          if (signal.aborted) {
+            abortFrom(signal)
+            break
+          }
+          const listener = () => abortFrom(signal)
+          listeners.push([signal, listener])
+          signal.addEventListener('abort', listener, { once: true })
+        }
+        return controller.signal
+      }
+    })
+  }
+  installAbortSignalAnyCompatibility()
+
   const serverAcceptsTimeZone = value => value === 'UTC' || /^[A-Za-z][A-Za-z0-9._+-]*(?:\/[A-Za-z0-9._+-]+)+$/.test(String(value || ''))
   const installTimeZoneCompatibility = () => {
     const prototype = window.Intl?.DateTimeFormat?.prototype
@@ -494,11 +528,11 @@
 
   const mobileDomains = Object.freeze([
     { id: 'conversations', label: '对话', route: '/m/conversations', slot: 'navigation.conversations' },
-    { id: 'agents', label: '代理团队', route: '/m/agents', slot: 'navigation.agents' },
-    { id: 'tasks', label: '定时任务', route: '/m/tasks', slot: 'navigation.tasks' },
+    { id: 'agents', label: '代理团队', route: '/m/agents', slot: 'agent-teams.view.canvas' },
+    { id: 'tasks', label: '定时任务', route: '/m/tasks', slot: 'agent-teams.view.automation' },
     { id: 'me', label: '我的', route: '/m/me', slot: 'navigation.me' }
   ])
-  const mobileNavigationState = { activeDomain: 'conversations' }
+  const mobileNavigationState = { activeDomain: 'conversations', pendingDomain: '' }
 
   const mobileNavigationBridge = () => {
     const bridge = window.HarnessMobileNavigation
@@ -523,10 +557,7 @@
       return [...document.querySelectorAll('[data-slot="conversation"] header button, [data-slot="conversation"] [role="tab"], header [role="tab"]')]
         .find(button => /^(?:代理团队|Agent Teams)(?:\s|$)/i.test(accessibleButtonText(button))) || null
     }
-    if (domain.id === 'tasks') {
-      return [...document.querySelectorAll('button,[role="tab"]')]
-        .find(button => /^(?:项目任务|Project Tasks)(?:\s|$)/i.test(accessibleButtonText(button))) || null
-    }
+    if (domain.id === 'tasks') return null
     if (domain.id === 'me') {
       const semanticTarget = document.querySelector('[data-slot="settings.trigger"] button, button[data-slot="settings.trigger"], [data-slot="sidebar.settings"] button, button[data-slot="sidebar.settings"]')
       if (semanticTarget) return semanticTarget
@@ -561,46 +592,114 @@
     return Boolean(officialMobileTarget(domain))
   }
 
+  let navigationNoticeTimer = null
+  const announceNavigationLoading = (shell, domain) => {
+    const status = shell?.querySelector?.('[data-harness-mobile-navigation-status]')
+    if (!status) return
+    clearTimeout(navigationNoticeTimer)
+    status.textContent = `正在打开${domain.label}…`
+    status.dataset.visible = 'true'
+  }
+
   const announceNavigationUnavailable = (shell, domain) => {
     const status = shell?.querySelector?.('[data-harness-mobile-navigation-status]')
-    if (status) status.textContent = `${domain.label}入口暂不可用。请在已配对电脑上使用，或等待工作台提供该页面。`
+    if (!status) return
+    status.textContent = `${domain.label}暂时无法打开：桌面工作台尚未提供完整内容。请稍后重试。`
+    status.dataset.visible = 'true'
+    clearTimeout(navigationNoticeTimer)
+    navigationNoticeTimer = setTimeout(() => {
+      delete status.dataset.visible
+      status.textContent = ''
+    }, 6_000)
   }
 
-  const openOfficialAgentCanvas = () => {
-    let attempts = 0
-    const open = () => {
-      const buttons = [...document.querySelectorAll('.dat-workspace-nav button')]
-      const canvas = document.querySelector('[data-harness-mobile-workspace-view="canvas"]')
-        || buttons.find(button => /^(?:团队画布|团队关系|Team canvas|Team relationships)(?:\s|\d|$)/i.test(accessibleButtonText(button)))
-      if (canvas && !canvas.disabled && canvas.getAttribute?.('aria-disabled') !== 'true') {
-        if (canvas.getAttribute('aria-current') !== 'page') canvas.click()
-        root.dataset.harnessMobileAgentDetailOpen = 'true'
-        decorateAgentTeamsWorkbench()
-        for (const details of document.querySelectorAll('.dat-overview details[open]')) details.open = false
-        document.querySelector('.dat-shell')?.scrollTo?.({ top: 0, behavior: 'auto' })
-        return
-      }
-      if (++attempts < 10) setTimeout(open, 40)
-    }
-    setTimeout(open, 0)
+  const clearNavigationNotice = shell => {
+    const status = shell?.querySelector?.('[data-harness-mobile-navigation-status]')
+    if (!status) return
+    clearTimeout(navigationNoticeTimer)
+    delete status.dataset.visible
+    status.textContent = ''
   }
 
-  const openOfficialScheduledTasks = () => {
+  const officialWorkspaceContent = (workbench, domain) => {
+    if (!workbench) return null
+    if (domain.id === 'tasks') return workbench.querySelector('[aria-labelledby="dat-automation-title"], #dat-automation-title')
+    if (domain.id === 'agents') return workbench.querySelector('[data-mobile-slot="agent-teams.canvas"], [aria-labelledby="dat-empty-canvas-title"], #dat-empty-canvas-title')
+    return null
+  }
+
+  const waitForOfficialWorkspace = (domain, shell) => new Promise(resolve => {
     let attempts = 0
-    const open = () => {
-      const buttons = [...document.querySelectorAll('.dat-workspace-nav button')]
-      const automation = document.querySelector('[data-harness-mobile-workspace-view="automation"]')
-        || buttons.find(button => /^(?:定时与自动化|定时任务与自动化|Schedules\s*(?:&|and)\s*automation)(?:\s|\d|$)/i.test(accessibleButtonText(button)))
-      if (automation && !automation.disabled && automation.getAttribute?.('aria-disabled') !== 'true') {
-        if (automation.getAttribute('aria-current') !== 'page') automation.click()
-        document.querySelector('.dat-shell')?.scrollTo?.({ top: 0, behavior: 'auto' })
-        decorateAgentTeamsWorkbench()
+    let selected = false
+    const inspect = () => {
+      const workbench = document.querySelector('[data-mobile-slot="agent-teams.workspace"] .dat-shell, .dat-view[data-mobile-slot="agent-teams.workspace"] .dat-shell')
+      const target = workbench?.querySelector?.(`[data-mobile-slot="${domain.slot}"]`) || null
+      if (workbench && String(workbench.textContent || '').trim() && target && accessibleButtonText(target) && !target.disabled && target.getAttribute?.('aria-disabled') !== 'true') {
+        if (target.getAttribute?.('aria-current') !== 'page' && !selected) {
+          selected = true
+          target.click()
+          setTimeout(inspect, 0)
+          return
+        }
+        const content = officialWorkspaceContent(workbench, domain)
+        if (content && (content.childElementCount > 0 || String(content.textContent || '').trim())) {
+          if (domain.id === 'agents') {
+            root.dataset.harnessMobileAgentDetailOpen = 'true'
+            for (const details of workbench.querySelectorAll?.('.dat-overview details[open]') || []) details.open = false
+          }
+          workbench.scrollTo?.({ top: 0, behavior: 'auto' })
+          decorateAgentTeamsWorkbench()
+          clearNavigationNotice(shell)
+          resolve(true)
+          return
+        }
+      }
+      if (++attempts < 160) setTimeout(inspect, 50)
+      else {
+        announceNavigationUnavailable(shell, domain)
+        resolve(false)
+      }
+    }
+    setTimeout(inspect, 0)
+  })
+
+  const openOfficialAgentCanvas = shell => waitForOfficialWorkspace(mobileDomains.find(item => item.id === 'agents'), shell)
+  const openOfficialScheduledTasks = shell => waitForOfficialWorkspace(mobileDomains.find(item => item.id === 'tasks'), shell)
+
+  const officialSettingsDialog = () => {
+    decorateDialogs()
+    const dialog = document.querySelector('[data-harness-mobile-settings-dialog="true"]')
+    const nav = dialog?.querySelector?.(':scope > nav')
+    const content = nav?.nextElementSibling
+    return dialog && content && (nav?.querySelectorAll?.('button').length || 0) >= 3 && String(dialog.textContent || '').trim() ? dialog : null
+  }
+
+  const waitForOfficialSettings = (shell) => new Promise(resolve => {
+    let attempts = 0
+    let clicked = false
+    const inspect = () => {
+      if (officialSettingsDialog()) {
+        clearNavigationNotice(shell)
+        resolve(true)
         return
       }
-      if (++attempts < 10) setTimeout(open, 40)
+      const domain = mobileDomains.find(item => item.id === 'me')
+      const target = domain ? officialMobileTarget(domain) : null
+      if (!clicked && target && !target.disabled && target.getAttribute?.('aria-disabled') !== 'true') {
+        clicked = true
+        target.click()
+        setTimeout(inspect, 0)
+        return
+      }
+      if (++attempts < 160) setTimeout(inspect, 50)
+      else {
+        if (domain) announceNavigationUnavailable(shell, domain)
+        resolve(false)
+      }
     }
-    setTimeout(open, 0)
-  }
+    setSidebarExpanded(true)
+    setTimeout(inspect, 0)
+  })
 
   const activateOfficialDomain = (domain, shell) => {
     if (domain.id === 'conversations') {
@@ -611,35 +710,26 @@
       else document.querySelector?.('[data-slot="conversation"] [data-conversation-scroll]')?.scrollTo?.({ top: 0, behavior: 'smooth' })
       return true
     }
-    if (domain.id === 'tasks') {
-      const agentsDomain = mobileDomains.find(item => item.id === 'agents')
-      const agentsTarget = agentsDomain ? officialMobileTarget(agentsDomain) : null
-      if (agentsTarget && !agentsTarget.disabled && agentsTarget.getAttribute?.('aria-disabled') !== 'true') {
-        releaseComposerFocus()
-        if (sidebarExpanded()) setSidebarExpanded(false)
-        agentsTarget.click()
-        openOfficialScheduledTasks()
-        return true
-      }
-    }
-    let target = officialMobileTarget(domain)
-    if (!target && domain.id === 'me' && sidebarNode()) {
+    if (domain.id === 'agents' || domain.id === 'tasks') {
       releaseComposerFocus()
-      setSidebarExpanded(true)
-      let attempts = 0
-      const openSettings = () => {
-        target = officialMobileTarget(domain)
-        if (target && !target.disabled && target.getAttribute?.('aria-disabled') !== 'true') {
-          target.click()
-          syncMobileNavigation(shell)
-          return
+      if (sidebarExpanded()) setSidebarExpanded(false)
+      const workspaceTarget = document.querySelector(`[data-mobile-slot="${domain.slot}"]`)
+      if (!workspaceTarget) {
+        const agentsDomain = mobileDomains.find(item => item.id === 'agents')
+        const agentsTrigger = agentsDomain ? officialMobileTarget(agentsDomain) : null
+        if (!agentsTrigger || agentsTrigger.disabled || agentsTrigger.getAttribute?.('aria-disabled') === 'true') {
+          announceNavigationUnavailable(shell, domain)
+          return false
         }
-        if (++attempts < 8) setTimeout(openSettings, 32)
-        else announceNavigationUnavailable(shell, domain)
+        agentsTrigger.click()
       }
-      setTimeout(openSettings, 0)
-      return true
+      return domain.id === 'tasks' ? openOfficialScheduledTasks(shell) : openOfficialAgentCanvas(shell)
     }
+    if (domain.id === 'me') {
+      releaseComposerFocus()
+      return waitForOfficialSettings(shell)
+    }
+    const target = officialMobileTarget(domain)
     if (!target || target.disabled || target.getAttribute?.('aria-disabled') === 'true') {
       announceNavigationUnavailable(shell, domain)
       return false
@@ -647,8 +737,26 @@
     releaseComposerFocus()
     if (sidebarExpanded()) setSidebarExpanded(false)
     target.click()
-    if (domain.id === 'agents') openOfficialAgentCanvas()
     return true
+  }
+
+  const settleMobileDomain = (domain, shell, activation) => {
+    const guarded = domain.id === 'agents' || domain.id === 'tasks' || domain.id === 'me'
+    if (guarded) {
+      mobileNavigationState.pendingDomain = domain.id
+      announceNavigationLoading(shell, domain)
+    }
+    Promise.resolve(activation).then(success => {
+      if (success) {
+        mobileNavigationState.activeDomain = domain.id
+        clearNavigationNotice(shell)
+      } else {
+        announceNavigationUnavailable(shell, domain)
+      }
+    }).catch(() => announceNavigationUnavailable(shell, domain)).finally(() => {
+      if (mobileNavigationState.pendingDomain === domain.id) mobileNavigationState.pendingDomain = ''
+      syncMobileAppShell()
+    })
   }
 
   const navigateMobileDomain = (domain, shell) => {
@@ -661,18 +769,14 @@
     if (bridgeSupportsDomain(bridge, state, domain)) {
       try {
         const result = bridge.navigate(domain.route)
-        if (result && typeof result.then === 'function') {
-          result.then(value => {
-            if (value === false) announceNavigationUnavailable(shell, domain)
-            syncMobileNavigation(shell)
-          }).catch(() => announceNavigationUnavailable(shell, domain))
-        } else if (result === false) {
-          announceNavigationUnavailable(shell, domain)
-          syncMobileNavigation(shell)
-          return
-        }
-        mobileNavigationState.activeDomain = domain.id
-        syncMobileAppShell()
+        const activation = Promise.resolve(result).then(value => {
+          if (value === false) return false
+          if (domain.id === 'agents') return openOfficialAgentCanvas(shell)
+          if (domain.id === 'tasks') return openOfficialScheduledTasks(shell)
+          if (domain.id === 'me') return waitForOfficialSettings(shell)
+          return true
+        })
+        settleMobileDomain(domain, shell, activation)
         return
       } catch {
         announceNavigationUnavailable(shell, domain)
@@ -680,8 +784,7 @@
         return
       }
     }
-    if (activateOfficialDomain(domain, shell)) mobileNavigationState.activeDomain = domain.id
-    syncMobileAppShell()
+    settleMobileDomain(domain, shell, activateOfficialDomain(domain, shell))
   }
 
   const syncMobileNavigation = shell => {
@@ -689,8 +792,9 @@
     if (!navigation) return
     const bridge = mobileNavigationBridge()
     const state = bridgeNavigationState(bridge)
-    const active = state?.domain || domainFromRoute(state?.route || state?.pathname) || mobileNavigationState.activeDomain
-    if (mobileDomains.some(domain => domain.id === active)) mobileNavigationState.activeDomain = active
+    const reported = state?.domain || domainFromRoute(state?.route || state?.pathname)
+    const active = mobileNavigationState.pendingDomain ? mobileNavigationState.activeDomain : (reported || mobileNavigationState.activeDomain)
+    if (!mobileNavigationState.pendingDomain && mobileDomains.some(domain => domain.id === active)) mobileNavigationState.activeDomain = active
     for (const domain of mobileDomains) {
       const button = navigation.querySelector(`[data-harness-mobile-domain="${domain.id}"]`)
       if (!button) continue
@@ -747,16 +851,123 @@
       })
       panel.appendChild(button)
     }
-    const settings = document.querySelector('[data-slot="settings.trigger"] button, button[data-slot="settings.trigger"], [data-slot="sidebar.settings"] button, button[data-slot="sidebar.settings"]')
-    if (settings && mobileNavigationState.activeDomain === 'conversations') {
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.textContent = '设置'
-      button.addEventListener('click', () => {
-        settings.click()
-        panel.hidden = true
-      })
-      panel.appendChild(button)
+  }
+
+  const readAuthoritativeProjects = async () => {
+    const rpcId = globalThis.crypto?.randomUUID?.() || `mobile-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const envelope = { type: 'client-request', rpcId, method: 'workspace.list', payload: {} }
+    const response = await fetch('/api/workspace.list', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope)
+    })
+    if (!response.ok) throw new Error('workspace-list-http')
+    const receipt = await response.json()
+    if (receipt?.rpcId !== rpcId || receipt?.result?.ok !== true || !Array.isArray(receipt.result.value?.items)) {
+      throw new Error('workspace-list-invalid')
+    }
+    return receipt.result.value.items.map(item => {
+      if (!item || typeof item.workspaceId !== 'string' || !item.workspaceId || item.workspaceId.length > 512 || typeof item.title !== 'string' || item.title.length > 300) {
+        throw new Error('workspace-list-item-invalid')
+      }
+      return { workspaceId: item.workspaceId, title: item.title }
+    })
+  }
+
+  const copyProjectIdentity = async (value, status, successText) => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value)
+      else {
+        const input = document.createElement('textarea')
+        input.value = value
+        input.readOnly = true
+        input.setAttribute('aria-hidden', 'true')
+        input.style.cssText = 'position:fixed;inset:auto auto 0 0;opacity:0;pointer-events:none'
+        document.body.appendChild(input)
+        input.select()
+        input.setSelectionRange?.(0, value.length)
+        const copied = document.execCommand?.('copy') === true
+        input.remove()
+        if (!copied) throw new Error('copy-unavailable')
+      }
+      status.textContent = successText
+      navigator.vibrate?.(10)
+    } catch {
+      status.textContent = '复制失败，请长按文字复制'
+    }
+  }
+
+  const openProjectIdentitySheet = async () => {
+    document.querySelector('[data-harness-mobile-project-sheet]')?.remove()
+    const backdrop = document.createElement('div')
+    backdrop.dataset.harnessMobileProjectSheet = 'true'
+    backdrop.setAttribute('role', 'presentation')
+    const sheet = document.createElement('section')
+    sheet.setAttribute('role', 'dialog')
+    sheet.setAttribute('aria-modal', 'true')
+    sheet.setAttribute('aria-labelledby', 'harness-mobile-project-title')
+    const header = document.createElement('header')
+    const title = document.createElement('h2')
+    title.id = 'harness-mobile-project-title'
+    title.textContent = '项目详情'
+    const close = document.createElement('button')
+    close.type = 'button'
+    close.setAttribute('aria-label', '关闭项目详情')
+    close.textContent = '×'
+    header.append(title, close)
+    const list = document.createElement('div')
+    list.dataset.harnessMobileProjectIdentityList = 'true'
+    const loading = document.createElement('p')
+    loading.dataset.harnessMobileProjectStatus = 'true'
+    loading.setAttribute('role', 'status')
+    loading.textContent = '正在读取项目…'
+    list.appendChild(loading)
+    sheet.append(header, list)
+    backdrop.appendChild(sheet)
+    document.body.appendChild(backdrop)
+    const dismiss = () => backdrop.remove()
+    close.addEventListener('click', dismiss)
+    backdrop.addEventListener('click', event => { if (event.target === backdrop) dismiss() })
+    close.focus()
+    try {
+      const projects = await readAuthoritativeProjects()
+      list.textContent = ''
+      if (!projects.length) {
+        const empty = document.createElement('p')
+        empty.dataset.harnessMobileProjectStatus = 'true'
+        empty.textContent = '还没有项目'
+        list.appendChild(empty)
+        return
+      }
+      for (const project of projects) {
+        const card = document.createElement('article')
+        card.dataset.harnessMobileProjectIdentity = 'true'
+        const nameLabel = document.createElement('span')
+        nameLabel.textContent = '项目名称'
+        const name = document.createElement('strong')
+        name.textContent = project.title
+        const copyName = document.createElement('button')
+        copyName.type = 'button'
+        copyName.textContent = '复制名称'
+        copyName.setAttribute('aria-label', `复制项目名称：${project.title}`)
+        const idLabel = document.createElement('span')
+        idLabel.textContent = '项目 ID'
+        const id = document.createElement('code')
+        id.textContent = project.workspaceId
+        const copyId = document.createElement('button')
+        copyId.type = 'button'
+        copyId.textContent = '复制 ID'
+        copyId.setAttribute('aria-label', `复制项目 ID：${project.workspaceId}`)
+        const status = document.createElement('p')
+        status.setAttribute('role', 'status')
+        status.setAttribute('aria-live', 'polite')
+        copyName.addEventListener('click', () => copyProjectIdentity(project.title, status, '已复制项目名称'))
+        copyId.addEventListener('click', () => copyProjectIdentity(project.workspaceId, status, '已复制项目 ID'))
+        card.append(nameLabel, name, copyName, idLabel, id, copyId, status)
+        list.appendChild(card)
+      }
+    } catch {
+      loading.textContent = '无法读取项目，请稍后重试'
     }
   }
 
@@ -767,7 +978,7 @@
     shell = document.createElement('div')
     shell.id = 'harness-mobile-app-shell'
     const navigationItems = mobileDomains.map(domain => `<button type="button" role="tab" data-harness-mobile-domain="${domain.id}" data-mobile-route="${domain.route}"><span data-harness-mobile-domain-icon>${appIcon(domain.id)}</span><span data-harness-mobile-domain-label>${domain.label}</span></button>`).join('')
-    shell.innerHTML = `<header data-harness-mobile-appbar="true"><button type="button" data-harness-mobile-action="menu" data-harness-mobile-home-text="true" aria-label="首页"><span>首页</span></button><div data-harness-mobile-heading><strong>新对话</strong><span>Harness Mobile</span></div><button type="button" data-harness-mobile-action="new" aria-label="新建会话">${appIcon('new')}</button></header><button type="button" data-harness-mobile-conversation-search-proxy aria-label="搜索项目和对话"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>搜索项目和对话</span></button><div data-harness-mobile-conversation-search-box hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" enterkeyhint="search" aria-label="搜索项目和对话" placeholder="搜索项目和对话"><button type="button" aria-label="清除搜索">×</button></div><div data-harness-mobile-conversation-list-title><strong>项目与对话</strong><span data-harness-mobile-conversation-count>0 个项目 · 0 个对话</span></div><button type="button" data-harness-mobile-drawer-scrim aria-label="关闭会话历史"></button><nav data-harness-mobile-navigation role="tablist" aria-label="主要导航">${navigationItems}</nav><p data-harness-mobile-navigation-status role="status" aria-live="polite" aria-atomic="true"></p><div data-harness-mobile-app-menu hidden aria-label="会话功能"></div>`
+    shell.innerHTML = `<header data-harness-mobile-appbar="true"><button type="button" data-harness-mobile-action="menu" data-harness-mobile-home-text="true" aria-label="首页"><span>首页</span></button><div data-harness-mobile-heading><strong>新对话</strong><span>Harness Mobile</span></div><button type="button" data-harness-mobile-action="new" aria-label="新建会话">${appIcon('new')}</button></header><button type="button" data-harness-mobile-conversation-search-proxy aria-label="搜索项目和对话"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>搜索项目和对话</span></button><div data-harness-mobile-conversation-search-box hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" enterkeyhint="search" aria-label="搜索项目和对话" placeholder="搜索项目和对话"><button type="button" aria-label="清除搜索">×</button></div><div data-harness-mobile-conversation-list-title><div><strong>项目与对话</strong><span data-harness-mobile-conversation-count>0 个项目 · 0 个对话</span></div><button type="button" data-harness-mobile-project-details>项目详情</button></div><button type="button" data-harness-mobile-drawer-scrim aria-label="关闭会话历史"></button><nav data-harness-mobile-navigation role="tablist" aria-label="主要导航">${navigationItems}</nav><p data-harness-mobile-navigation-status role="status" aria-live="polite" aria-atomic="true"></p><div data-harness-mobile-app-menu hidden aria-label="会话功能"></div>`
     const searchProxy = shell.querySelector('[data-harness-mobile-conversation-search-proxy]')
     const searchBox = shell.querySelector('[data-harness-mobile-conversation-search-box]')
     const searchInput = searchBox.querySelector('input')
@@ -797,6 +1008,10 @@
         applyMobileConversationFilter()
         searchInput.focus()
       } else closeSearch()
+    })
+    shell.querySelector('[data-harness-mobile-project-details]').addEventListener('click', () => {
+      releaseComposerFocus()
+      openProjectIdentitySheet()
     })
     shell.querySelector('[data-harness-mobile-action="menu"]').addEventListener('click', () => {
       releaseComposerFocus()
@@ -850,7 +1065,14 @@
       if (event.key === 'Escape' && !mobileMenu.hidden) mobileMenu.hidden = true
     })
     for (const domain of mobileDomains) {
-      shell.querySelector(`[data-harness-mobile-domain="${domain.id}"]`)?.addEventListener('click', () => {
+      shell.querySelector(`[data-harness-mobile-domain="${domain.id}"]`)?.addEventListener('click', event => {
+        const visibleConversation = document.querySelector('[data-harness-mobile-conversation="true"]')
+        const detailComposer = visibleConversation?.querySelector?.('[data-composer-card]')
+        if (domain.id !== 'conversations' && detailComposer && visible(visibleConversation)) {
+          event.preventDefault()
+          event.stopPropagation()
+          return
+        }
         mobileMenu.hidden = true
         navigateMobileDomain(domain, shell)
       })
@@ -865,6 +1087,12 @@
     window.__harnessMobileHandleBack = () => {
       const shell = document.getElementById('harness-mobile-app-shell')
       if (!shell) return false
+
+      const projectSheet = document.querySelector('[data-harness-mobile-project-sheet]')
+      if (projectSheet) {
+        projectSheet.remove()
+        return true
+      }
 
       const settings = document.querySelector('[data-harness-mobile-settings-dialog="true"]')
       if (settings && root.dataset.harnessMobileSettingsOpen === 'true') {
@@ -1469,10 +1697,17 @@
       )
       if (settings) {
         settingsOpen = true
+        delete dialog.dataset.harnessMobileRiskConfirmation
         decorateSettingsDialog(dialog, nav, content)
       } else {
         dialog.dataset.harnessMobileSheet = 'true'
         delete dialog.dataset.harnessMobileSettingsDialog
+        const riskConfirmation = Boolean(
+          dialog.querySelector('input[type="checkbox"]') &&
+          [...dialog.querySelectorAll('button')].some(button => /Full access/i.test(accessibleButtonText(button)))
+        )
+        if (riskConfirmation) dialog.dataset.harnessMobileRiskConfirmation = 'true'
+        else delete dialog.dataset.harnessMobileRiskConfirmation
       }
     }
     if (settingsOpen) root.dataset.harnessMobileSettingsOpen = 'true'
@@ -1579,9 +1814,23 @@
       for (const button of composer.querySelectorAll('button')) {
         delete button.dataset.harnessMobileComposerAction
         delete button.dataset.harnessMobileComposerTool
+        delete button.dataset.harnessMobilePermissionTrigger
         if (button.id === 'harness-mobile-input-button') continue
+        // Portal/overlay actions can still be DOM descendants of the composer.
+        // They are official menu choices, not toolbar tools to hide on mobile.
+        if (button.closest?.('[role="menu"], [role="listbox"]')) continue
+        const attachmentRail = button.closest?.('[role="group"]')
+        if (attachmentRail?.querySelector?.('img[alt]')) continue
         const label = accessibleButtonText(button)
-        if (/send message|发送消息|发送|stop generating|停止生成|停止运行/i.test(label)) {
+        if (/^(?:访问模式|Access mode)(?:[，,:]|\s|$)/i.test(label)) {
+          // Preserve the official PermissionSelect and its RiskConfirmation.
+          // Mobile only gives the trigger a touch-safe seat; it never submits
+          // /permission itself or bypasses the Full access acknowledgement.
+          button.dataset.harnessMobilePermissionTrigger = 'true'
+          for (let container = button.parentElement; container && container !== composer; container = container.parentElement) {
+            container.dataset.harnessMobilePermissionContext = 'true'
+          }
+        } else if (/send message|发送消息|发送|stop generating|停止生成|停止运行/i.test(label)) {
           button.dataset.harnessMobileComposerAction = 'true'
         } else {
           button.dataset.harnessMobileComposerTool = 'true'
@@ -1591,6 +1840,11 @@
     if (inputScroll) inputScroll.dataset.harnessMobileComposerInput = 'true'
     if (input) {
       input.dataset.harnessMobileComposerTextarea = 'true'
+      if (input.readOnly && input.getAttribute('data-phase') === 'inert' && input.getAttribute('aria-haspopup') === 'menu') {
+        // A workspace-trigger composer has no authoritative session yet. Never
+        // let a newly selected document inherit the previously viewed session.
+        window.__harnessMobileCurrentSessionId = ''
+      }
       input.placeholder = '发消息…'
       window.__harnessMobileSyncComposerIntent?.(input)
     }
@@ -1623,7 +1877,8 @@
     if (button.closest('[data-conversation-scroll]') && !button.closest('[data-composer-card]')) return
     setTemporary(button.parentElement, 'min-width', '0px')
     setTemporary(button.parentElement, 'max-width', '100%')
-    setTemporary(button.parentElement, 'overflow', 'hidden')
+    // The command button shares its toolbar with PermissionSelect. Clipping the
+    // whole toolbar hides the official access-mode menu after it opens.
     setTemporary(button, 'min-width', '0px')
     setTemporary(button, 'max-width', '100%')
   }
@@ -1633,16 +1888,12 @@
     if (window.__harnessMobileImeSendBridge || typeof document.addEventListener !== 'function') return
     window.__harnessMobileImeSendBridge = true
     let composing = false
-    let pendingStop = null
-    let activationToken = 0
+    let pendingSendTextarea = null
     const stopPresentation = new WeakMap()
     const composerTextarea = target => target?.matches?.('[data-composer-card] textarea') ? target : null
     const actionLabel = button => `${button?.getAttribute?.('aria-label') || ''} ${button?.title || ''}`.trim()
     const stopAsSend = button => button?.dataset?.harnessMobileStopAsSend === 'true'
     const isStop = button => stopAsSend(button) || /stop generating|停止生成|停止运行/i.test(actionLabel(button))
-    // A decorated Stop advertises send intent to the user, but it is never the
-    // official Send control that activateOfficialSend is allowed to click.
-    const isSend = button => !stopAsSend(button) && /send message|发送消息|发送/i.test(actionLabel(button))
     const restoreStopPresentation = button => {
       const saved = stopPresentation.get(button)
       if (!saved) return
@@ -1671,7 +1922,7 @@
       const hasDraft = Boolean((textarea?.value || '').trim())
       if (!hasDraft) {
         for (const button of buttons) if (stopAsSend(button)) restoreStopPresentation(button)
-        pendingStop = null
+        pendingSendTextarea = null
         return null
       }
       const stop = buttons.find(button => isStop(button)) || null
@@ -1681,25 +1932,25 @@
     window.__harnessMobileSyncComposerIntent = textarea => syncStopIntent(
       composerTextarea(textarea) || document.querySelector('[data-composer-card] textarea')
     )
-    const activateOfficialSend = textarea => {
-      const token = ++activationToken
-      let attempts = 0
-      const activate = () => {
-        if (token !== activationToken) return
-        const card = textarea?.closest?.('[data-composer-card]') || document.querySelector('[data-composer-card]')
-        const send = [...(card?.querySelectorAll?.('button') || [])].find(button => isSend(button) && !button.disabled && visible(button))
-        if (send) {
-          pendingStop = null
-          activationToken++
-          send.click()
-          textarea?.focus?.({ preventScroll: true })
-          return
-        }
-        if (++attempts < 12) setTimeout(activate, 24)
-        else pendingStop = null
+    // Busy conversations deliberately keep Stop mounted while the official
+    // textarea's Enter handler owns Queue/Steer policy. A dressed-up Stop can
+    // therefore never become a real Send button by waiting for DOM replacement.
+    // Route the tap through that exact keyboard contract instead — the same path
+    // the user confirmed already works from the Android keyboard.
+    const dispatchOfficialEnter = textarea => {
+      if (!textarea || !(textarea.value || '').trim()) return false
+      if (composing) {
+        pendingSendTextarea = textarea
+        return false
       }
-      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(activate)
-      else setTimeout(activate, 16)
+      pendingSendTextarea = null
+      textarea.focus?.({ preventScroll: true })
+      const keydown = new KeyboardEvent('keydown', {
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+        bubbles: true, cancelable: true, composed: true
+      })
+      textarea.dispatchEvent(keydown)
+      return keydown.defaultPrevented
     }
     document.addEventListener('input', event => {
       const textarea = composerTextarea(event.target)
@@ -1717,21 +1968,7 @@
       composing = false
       if (!textarea) return
       syncStopIntent(textarea)
-      if (pendingStop) activateOfficialSend(textarea)
-    }, true)
-    document.addEventListener('pointerdown', event => {
-      const button = event.target?.closest?.('[data-composer-card] button')
-      const textarea = button?.closest?.('[data-composer-card]')?.querySelector?.('textarea')
-      if (!button || !textarea) return
-      const stop = syncStopIntent(textarea)
-      if (button !== stop || (!composing && !(textarea.value || '').trim())) return
-      pendingStop = button
-      // Let Android commit the current IME candidate, then wait for React to
-      // mount the real Send button. The following click capture remains the
-      // authoritative guard against accidentally invoking Stop.
-      setTimeout(() => {
-        if (pendingStop === button) activateOfficialSend(textarea)
-      }, 0)
+      if (pendingSendTextarea === textarea) setTimeout(() => dispatchOfficialEnter(textarea), 0)
     }, true)
     document.addEventListener('click', event => {
       const button = event.target?.closest?.('[data-composer-card] button')
@@ -1741,8 +1978,7 @@
       if (button !== stop || !(textarea.value || '').trim()) return
       event.preventDefault()
       event.stopImmediatePropagation()
-      pendingStop = button
-      activateOfficialSend(textarea)
+      dispatchOfficialEnter(textarea)
     }, true)
     window.__harnessMobileSyncComposerIntent()
   }
@@ -1861,6 +2097,103 @@
       }
     }
     const validHistorySessionId = value => typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : ''
+    const mobileSessionBridge = () => {
+      const bridge = window.HarnessMobileControl
+      return bridge && typeof bridge.rememberSession === 'function' && typeof bridge.restoreSession === 'function' ? bridge : null
+    }
+    const rememberMobileSession = sessionId => {
+      try { mobileSessionBridge()?.rememberSession(validHistorySessionId(sessionId)) } catch {}
+    }
+    const restoredMobileSessionId = () => {
+      try { return validHistorySessionId(mobileSessionBridge()?.restoreSession()) } catch { return '' }
+    }
+    let restoreSessionInFlight = ''
+    const applyOfficialSessionContext = detail => {
+      if (detail?.authoritative !== true || detail?.source !== 'conversation.input.dock') return
+      const sessionId = validHistorySessionId(detail.sessionId)
+      if (sessionId) {
+        window.__harnessMobileCurrentSessionId = sessionId
+        window.__harnessMobileCurrentSessionSource = 'conversation.input.dock'
+        restoreSessionInFlight = ''
+        rememberMobileSession(sessionId)
+        return
+      }
+      const previousSessionId = validHistorySessionId(detail.previousSessionId)
+      if (window.__harnessMobileCurrentSessionSource !== 'conversation.input.dock') return
+      if (previousSessionId && window.__harnessMobileCurrentSessionId !== previousSessionId) return
+      window.__harnessMobileCurrentSessionId = ''
+      window.__harnessMobileCurrentSessionSource = ''
+      restoreSessionInFlight = ''
+      rememberMobileSession('')
+    }
+    const officialComposerSessionId = () => {
+      const card = document.querySelector?.('[data-composer-card]')
+      if (!card) return ''
+      const candidates = new Set()
+      let node = card
+      for (let nodeDepth = 0; node && nodeDepth < 10; nodeDepth++, node = node.parentElement) {
+        for (const key of Object.getOwnPropertyNames(node)) {
+          if (!key.startsWith('__reactFiber$')) continue
+          let fiber = node[key]
+          for (let fiberDepth = 0; fiber && fiberDepth < 80; fiberDepth++, fiber = fiber.return) {
+            const props = fiber.memoizedProps
+            const officialRoot = props && typeof props.useSession === 'function' && typeof props.useInput === 'function' && typeof props.renderSlot === 'function' && props.SessionProvider
+            const sessionId = officialRoot ? validHistorySessionId(props.sessionId) : ''
+            if (sessionId) candidates.add(sessionId)
+          }
+        }
+      }
+      return candidates.size === 1 ? [...candidates][0] : ''
+    }
+    const officialSessionRowId = row => {
+      const candidates = new Set()
+      for (const key of Object.getOwnPropertyNames(row || {})) {
+        if (!key.startsWith('__reactFiber$')) continue
+        let fiber = row[key]
+        for (let fiberDepth = 0; fiber && fiberDepth < 12; fiberDepth++, fiber = fiber.return) {
+          const props = fiber.memoizedProps
+          const sessionId = validHistorySessionId(props?.node?.id)
+          const officialRow = sessionId && fiber.key === sessionId && typeof props.onOpen === 'function' && typeof props.onRename === 'function' && typeof props.onArchive === 'function'
+          if (officialRow) candidates.add(sessionId)
+        }
+      }
+      return candidates.size === 1 ? [...candidates][0] : ''
+    }
+    const syncOfficialComposerSession = () => {
+      if (window.__harnessMobileCurrentSessionSource === 'conversation.input.dock') return
+      const sessionId = officialComposerSessionId()
+      if (sessionId) {
+        window.__harnessMobileCurrentSessionId = sessionId
+        window.__harnessMobileCurrentSessionSource = 'conversation.snapshot'
+        rememberMobileSession(sessionId)
+      } else if (window.__harnessMobileCurrentSessionSource === 'conversation.snapshot') {
+        window.__harnessMobileCurrentSessionId = ''
+        window.__harnessMobileCurrentSessionSource = ''
+        rememberMobileSession('')
+      }
+    }
+    const hasOfficialConversationSession = () => window.__harnessMobileCurrentSessionSource === 'conversation.input.dock' || window.__harnessMobileCurrentSessionSource === 'conversation.snapshot'
+    const restoreOfficialSession = () => {
+      if (hasOfficialConversationSession()) return false
+      const sessionId = restoredMobileSessionId()
+      if (!sessionId || restoreSessionInFlight === sessionId) return false
+      const matches = [...(document.querySelectorAll?.('[data-harness-mobile-session-row="true"]') || [])].filter(row => officialSessionRowId(row) === sessionId)
+      if (matches.length !== 1) return false
+      restoreSessionInFlight = sessionId
+      matches[0].click()
+      return true
+    }
+    window.addEventListener?.('harness-mobile-session-context', event => applyOfficialSessionContext(event?.detail))
+    applyOfficialSessionContext(window.__harnessMobileOfficialSessionContext)
+    try {
+      const sessionObserver = new MutationObserver(() => {
+        syncOfficialComposerSession()
+        restoreOfficialSession()
+      })
+      sessionObserver.observe(document.documentElement, { childList: true, subtree: true })
+    } catch {}
+    syncOfficialComposerSession()
+    restoreOfficialSession()
     const requestHistorySessionId = async (input, init) => {
       try {
         const request = typeof Request !== 'undefined' && input instanceof Request
@@ -1888,6 +2221,11 @@
       if (!requestedSessionId || typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') return
       const loadedSessionId = await responseHistorySessionId(response)
       if (!loadedSessionId || loadedSessionId !== requestedSessionId) return
+      if (hasOfficialConversationSession() && window.__harnessMobileCurrentSessionId !== loadedSessionId) return
+      if (!hasOfficialConversationSession()) {
+        window.__harnessMobileCurrentSessionId = loadedSessionId
+        window.__harnessMobileCurrentSessionSource = 'session.history'
+      }
       const detail = Object.freeze({ sessionId: loadedSessionId, authoritative: true, latestLoaded: true })
       window.dispatchEvent(new CustomEvent(SESSION_HISTORY_RECEIPT_EVENT, { detail }))
     }
@@ -1921,6 +2259,10 @@
       if (!isSessionHistory && !isSubagentHistory) return nativeFetch(input, init)
 
       const requestedSessionId = isSessionHistory ? await requestHistorySessionId(input, init) : ''
+      if (requestedSessionId && requestedSessionId !== window.__harnessMobileCurrentSessionId && !hasOfficialConversationSession()) {
+        window.__harnessMobileCurrentSessionId = ''
+        window.__harnessMobileCurrentSessionSource = ''
+      }
       const key = await historyKey(input, init)
       // Never replay a successful history snapshot merely because it is fresh.
       // Android's system picker backgrounds the WebView; a cached blank baseline
@@ -1969,6 +2311,128 @@
       inFlight.set(key, request)
       try { return (await request).clone() }
       finally { if (inFlight.get(key) === request) inFlight.delete(key) }
+    }
+  }
+
+  const installDocumentUploadBridge = () => {
+    if (window.__harnessMobileDocumentUploadInstalled) return
+    window.__harnessMobileDocumentUploadInstalled = true
+    const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+    const validSessionId = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(value)
+    const validUploadedFile = value => {
+      const path = value?.path
+      return typeof path === 'string' && path.startsWith('uploads/') && path.length <= 512 && !path.includes('..') && !path.includes('\\') && !path.includes('\0')
+    }
+    const writeComposerDraft = next => {
+      const textarea = document.querySelector('[data-composer-card] textarea[data-phase]')
+      if (!textarea || textarea.disabled || textarea.readOnly) return false
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      if (setter) setter.call(textarea, next)
+      else textarea.value = next
+      textarea.setSelectionRange?.(next.length, next.length)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      textarea.focus?.({ preventScroll: true })
+      window.__harnessMobileSyncComposerIntent?.(textarea)
+      return true
+    }
+    const appendDocumentReferences = files => {
+      const textarea = document.querySelector('[data-composer-card] textarea[data-phase]')
+      if (!textarea || textarea.disabled || textarea.readOnly) return false
+      const references = files.map(file => `@${file.path}`).join(' ')
+      const current = textarea.value || ''
+      const separator = current && !/\s$/u.test(current) ? '\n' : ''
+      return writeComposerDraft(`${current}${separator}请查看文件：${references}\n`)
+    }
+    const renderDocumentPreviews = files => {
+      const card = document.querySelector('[data-composer-card]')
+      if (!card) return
+      let rail = card.querySelector('[data-harness-mobile-document-rail="true"]')
+      if (!rail) {
+        rail = document.createElement('section')
+        rail.dataset.harnessMobileDocumentRail = 'true'
+        rail.setAttribute('role', 'group')
+        rail.setAttribute('aria-label', '待发送文件')
+        const input = card.querySelector('[data-input-scroll]')
+        card.insertBefore(rail, input || card.firstChild)
+      }
+      for (const file of files) {
+        if (rail.querySelector(`[data-harness-mobile-document-path="${CSS.escape(file.path)}"]`)) continue
+        const chip = document.createElement('article')
+        chip.dataset.harnessMobileDocumentPath = file.path
+        const copy = document.createElement('span')
+        const name = document.createElement('strong')
+        name.textContent = file.name || file.path.slice('uploads/'.length)
+        const meta = document.createElement('small')
+        meta.textContent = `${Math.max(0, Number(file.size) || 0).toLocaleString()} 字节 · 已上传`
+        copy.append(name, meta)
+        const remove = document.createElement('button')
+        remove.type = 'button'
+        remove.textContent = '移除预览'
+        remove.setAttribute('aria-label', `移除文件预览 ${name.textContent}`)
+        remove.addEventListener('click', () => {
+          const textarea = document.querySelector('[data-composer-card] textarea[data-phase]')
+          if (textarea && !textarea.disabled && !textarea.readOnly) {
+            const reference = `@${file.path}`
+            const next = String(textarea.value || '').replace(reference, '').replace(/请查看文件：(?=\s*(?:\n|$))/u, '').replace(/[ \t]+\n/gu, '\n').replace(/\n{3,}/gu, '\n\n').replace(/\s+$/u, '')
+            writeComposerDraft(next)
+          }
+          chip.remove()
+          if (!rail.childElementCount) rail.remove()
+        })
+        chip.append(copy, remove)
+        rail.appendChild(chip)
+      }
+    }
+    window.__harnessMobileReceiveDocuments = async (selected, reportState) => {
+      const files = [...(selected || [])].slice(0, 20)
+      const report = typeof reportState === 'function' ? reportState : () => {}
+      const sessionId = window.__harnessMobileCurrentSessionId
+      if (!validSessionId(sessionId)) {
+        report('error', files.length, '会话仍在加载，请稍后重试')
+        return false
+      }
+      if (!files.length) return false
+      report('pending', files.length, `正在上传 ${files.length} 个文件…`)
+      const uploaded = []
+      let failed = 0
+      for (const file of files) {
+        if (!file || file.size <= 0 || file.size > MAX_DOCUMENT_BYTES) {
+          failed++
+          continue
+        }
+        try {
+          const response = await fetch(`/__harness_mobile__/documents/upload?sessionId=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(file.name || 'document')}`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: {
+              'X-Harness-Mobile-Request': 'document-upload',
+              'Content-Type': 'application/octet-stream'
+            },
+            body: file
+          })
+          if (response.status !== 201) throw new Error(`upload ${response.status}`)
+          const payload = await response.json()
+          if (payload?.ok !== true || !validUploadedFile(payload.file)) throw new Error('invalid upload response')
+          uploaded.push(payload.file)
+        } catch (error) {
+          console.warn('Harness Mobile document upload failed', error)
+          failed++
+        }
+      }
+      if (uploaded.length) {
+        renderDocumentPreviews(uploaded)
+        if (!appendDocumentReferences(uploaded)) {
+          report('error', failed + uploaded.length, '文件已上传，但当前输入框不可用')
+          return false
+        }
+      }
+      if (failed) {
+        report('error', failed, uploaded.length ? `已添加 ${uploaded.length} 个文件，${failed} 个失败` : '文件没有上传成功，请重试')
+        return false
+      }
+      report('success', uploaded.length, `已添加 ${uploaded.length} 个文件`)
+      return uploaded.length === files.length
     }
   }
 
@@ -2090,7 +2554,9 @@
 
   const officialSourceContext = () => {
     const rows = [...document.querySelectorAll('[role="treeitem"]')]
-    const sessionRow = rows.find(row => row.dataset.harnessMobileSessionRow === 'true' && (row.getAttribute('aria-selected') === 'true' || row.getAttribute('aria-current') === 'page')) || null
+    const sessionRow = document.querySelector('[data-harness-mobile-session-row="true"][aria-selected="true"]')
+      || rows.find(row => row.dataset.harnessMobileSessionRow === 'true' && row.getAttribute('aria-current') === 'page')
+      || null
     let projectRow = sessionRow?.closest?.('[data-harness-mobile-project-row="true"]') || null
     if (!projectRow && sessionRow) {
       for (let index = rows.indexOf(sessionRow) - 1; index >= 0; index -= 1) {
@@ -2133,167 +2599,6 @@
     if (session) session.textContent = sessionId ? `来源会话 · ${context.sessionLabel}` : '来源会话 · 等待权威标识'
     scope.setAttribute('aria-label', sessionId ? `团队来源，${context.projectLabel}，${context.sessionLabel}，标识 ${shortStableRef(sessionId)}` : '团队来源等待权威会话标识')
     return scope
-  }
-
-  const taskStatusLabel = value => {
-    const status = String(value || '').toLowerCase()
-    if (status === 'in_progress' || status === 'running' || status === 'active') return '进行中'
-    if (status === 'pending' || status === 'queued') return '待处理'
-    if (status === 'completed' || status === 'done') return '已完成'
-    if (status === 'cancelled' || status === 'canceled') return '已取消'
-    if (status === 'blocked') return '受阻'
-    return value ? String(value) : '状态未知'
-  }
-
-  const mobileTasksState = { request: 0, sessionId: '', loading: false, loadedAt: 0, team: null, project: null, error: '' }
-
-  const appendTaskHubRow = (list, task, kind, onOpen) => {
-    const row = document.createElement(onOpen ? 'button' : 'article')
-    if (onOpen) row.type = 'button'
-    row.dataset.harnessMobileTaskHubRow = kind
-    const id = task?.id || task?.taskId || task?.taskRef || ''
-    if (id) row.dataset.harnessMobileTaskId = String(id)
-    const title = document.createElement('strong')
-    title.textContent = String(task?.title || task?.summary || '未命名任务')
-    const detail = document.createElement('span')
-    const blocked = Array.isArray(task?.blockedBy) ? task.blockedBy.length : 0
-    detail.textContent = `${kind === 'agent-team' ? '团队任务' : '项目任务'} · ${taskStatusLabel(task?.status || task?.state)}${blocked ? ` · ${blocked} 个依赖未完成` : ''}`
-    const meta = document.createElement('small')
-    meta.textContent = id ? `任务 ${shortStableRef(id)}` : '权威任务标识未提供'
-    row.append(title, detail, meta)
-    if (onOpen) row.addEventListener('click', onOpen)
-    list.appendChild(row)
-  }
-
-  const renderMobileTasksHub = (hub, workbench, sessionId) => {
-    hub.replaceChildren()
-    const scope = document.createElement('section')
-    scope.dataset.harnessMobileTaskScope = 'true'
-    const sourceContext = officialSourceContext()
-    const scopeLabel = document.createElement('small')
-    scopeLabel.textContent = '任务来源'
-    const scopeChips = document.createElement('div')
-    const projectChip = document.createElement('span')
-    projectChip.textContent = `所属项目 · ${sourceContext.projectLabel}`
-    const sessionChip = document.createElement('span')
-    sessionChip.textContent = sessionId ? `来源会话 · ${sourceContext.sessionLabel}` : '来源会话 · 等待权威标识'
-    scopeChips.append(projectChip, sessionChip)
-    scope.append(scopeLabel, scopeChips)
-    hub.appendChild(scope)
-
-    const teamState = mobileTasksState.team || {}
-    const selectedTeam = teamState.team || null
-    const teamTasks = Array.isArray(selectedTeam?.tasks) ? selectedTeam.tasks : []
-    const projectTasks = Array.isArray(mobileTasksState.project?.tasks) ? mobileTasksState.project.tasks : []
-    const activeTeamTasks = teamTasks.filter(task => !/^(?:completed|done|cancelled|canceled)$/i.test(String(task?.status || task?.state || '')))
-    const activeProjectTasks = projectTasks.filter(task => !/^(?:completed|done|cancelled|canceled)$/i.test(String(task?.status || task?.state || '')))
-
-    const types = document.createElement('section')
-    types.dataset.harnessMobileTaskTypes = 'true'
-    const typeCopy = [
-      ['会话任务', '查看'],
-      ['团队任务', `${teamTasks.length}`],
-      ['项目任务', `${projectTasks.length}`]
-    ]
-    typeCopy.forEach(([label, count]) => {
-      const item = document.createElement('span')
-      const value = document.createElement('b')
-      value.textContent = count
-      item.append(value, document.createTextNode(label))
-      types.appendChild(item)
-    })
-    hub.appendChild(types)
-
-    const allTasks = [...teamTasks, ...projectTasks]
-    const metrics = document.createElement('section')
-    metrics.dataset.harnessMobileTaskMetrics = 'true'
-    const metricCopy = [
-      ['进行中', allTasks.filter(task => /^(?:in_progress|running|active)$/i.test(String(task?.status || task?.state || ''))).length],
-      ['受阻', allTasks.filter(task => String(task?.status || task?.state || '').toLowerCase() === 'blocked' || (Array.isArray(task?.blockedBy) && task.blockedBy.length)).length],
-      ['待处理', allTasks.filter(task => /^(?:pending|queued)$/i.test(String(task?.status || task?.state || ''))).length]
-    ]
-    metricCopy.forEach(([label, count]) => {
-      const item = document.createElement('span')
-      const value = document.createElement('b')
-      value.textContent = String(count)
-      item.append(value, document.createTextNode(label))
-      metrics.appendChild(item)
-    })
-    hub.appendChild(metrics)
-
-    const head = document.createElement('div')
-    head.dataset.harnessMobileTaskHubHead = 'true'
-    const heading = document.createElement('strong')
-    heading.textContent = '当前任务'
-    const refresh = document.createElement('button')
-    refresh.type = 'button'
-    refresh.textContent = mobileTasksState.loading ? '刷新中…' : '刷新'
-    refresh.disabled = mobileTasksState.loading
-    refresh.addEventListener('click', () => loadMobileTasksHub(workbench, true))
-    head.append(heading, refresh)
-    hub.appendChild(head)
-
-    const list = document.createElement('div')
-    list.dataset.harnessMobileTaskHubList = 'true'
-    const conversation = document.createElement('button')
-    conversation.type = 'button'
-    conversation.dataset.harnessMobileTaskHubRow = 'conversation'
-    conversation.innerHTML = '<strong>来源会话任务</strong><span>TodoDock、持续目标与官方队列仍由该会话权威维护</span><small>返回同一会话查看和操作</small>'
-    conversation.addEventListener('click', () => {
-      document.querySelector('[data-harness-mobile-domain="conversations"]')?.click()
-      setTimeout(() => document.querySelector('[data-harness-mobile-session-row="true"][aria-selected="true"]')?.click(), 80)
-    })
-    list.appendChild(conversation)
-
-    activeTeamTasks.slice(0, 6).forEach(task => appendTaskHubRow(list, task, 'agent-team'))
-    activeProjectTasks.slice(0, 4).forEach(task => appendTaskHubRow(list, task, 'project-task'))
-    if (!activeTeamTasks.length && !activeProjectTasks.length) {
-      const empty = document.createElement('p')
-      empty.dataset.harnessMobileTaskHubEmpty = 'true'
-      empty.textContent = mobileTasksState.loading ? '正在读取权威任务…' : (mobileTasksState.error || '当前范围没有待处理的团队或项目任务')
-      list.appendChild(empty)
-    }
-    hub.appendChild(list)
-  }
-
-  const loadMobileTasksHub = (workbench, force = false) => {
-    if (!workbench || root.dataset.harnessMobileDomain !== 'tasks') return
-    const sessionId = officialAgentSessionId(workbench)
-    let hub = workbench.querySelector(':scope > [data-harness-mobile-tasks-hub]')
-    if (!hub) {
-      hub = document.createElement('section')
-      hub.dataset.harnessMobileTasksHub = 'true'
-      workbench.appendChild(hub)
-    }
-    if (!sessionId) {
-      mobileTasksState.error = '桌面端尚未提供当前会话的权威标识'
-      renderMobileTasksHub(hub, workbench, '')
-      return
-    }
-    const fresh = mobileTasksState.sessionId === sessionId && Date.now() - mobileTasksState.loadedAt < 1_500
-    if ((mobileTasksState.loading && mobileTasksState.sessionId === sessionId) || (!force && fresh)) return
-    mobileTasksState.sessionId = sessionId
-    mobileTasksState.loading = true
-    mobileTasksState.error = ''
-    const request = ++mobileTasksState.request
-    renderMobileTasksHub(hub, workbench, sessionId)
-    Promise.all([
-      fetch(`/api/agent-teams/state?sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(response => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))),
-      fetch('/api/agent-teams/project/tasks/state', { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(response => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
-    ]).then(([team, project]) => {
-      if (request !== mobileTasksState.request) return
-      mobileTasksState.team = team
-      mobileTasksState.project = project
-      mobileTasksState.loadedAt = Date.now()
-    }).catch(() => {
-      if (request !== mobileTasksState.request) return
-      mobileTasksState.error = '权威任务暂时无法读取，请稍后刷新'
-      mobileTasksState.loadedAt = Date.now()
-    }).finally(() => {
-      if (request !== mobileTasksState.request) return
-      mobileTasksState.loading = false
-      renderMobileTasksHub(hub, workbench, sessionId)
-    })
   }
 
   const decorateAgentTeamsWorkbench = () => {
@@ -2390,6 +2695,7 @@
     installSidebarAutoClose()
     syncMobileAppShell()
     installHistoryRecovery()
+    installDocumentUploadBridge()
     installThemeBridge()
     if (mobileCapabilities.screenshotSuggestion) installScreenshotSuggestion()
     if (mobileCapabilities.controlSettings) installControlSettingsEntry()

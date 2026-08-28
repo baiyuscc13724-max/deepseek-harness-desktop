@@ -67,7 +67,7 @@ test('Codex-style background browser uses an isolated login profile with an opti
   }
 })
 
-test('Codex-style browser pane owns a responsive full-height column while preserving the global workbench baseline', async () => {
+test('Codex-style browser pane begins below a full-width global workbench header', async () => {
   const [workspaceStyles, shellStyles, controller, renderer, main, app] = await Promise.all([
     readFile(path.join(root, 'renderer', 'right-workspace.css'), 'utf8'),
     readFile(path.join(root, 'renderer', 'styles.css'), 'utf8'),
@@ -78,10 +78,10 @@ test('Codex-style browser pane owns a responsive full-height column while preser
   ])
 
   assert.match(workspaceStyles, /--dsh-workbench-header-height:\s*76px/u)
-  assert.match(workspaceStyles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*0;[\s\S]{0,260}padding-top:\s*var\(--dsh-workbench-header-height\)/u)
-  assert.doesNotMatch(workspaceStyles, /\.dsh-right-workspace \{[\s\S]{0,180}[\r\n]\s*top:\s*var\(--dsh-workbench-header-height\)/u)
-  assert.match(workspaceStyles, /\.dsh-right-workspace::before \{[\s\S]{0,260}height:\s*var\(--dsh-workbench-header-height\)[\s\S]{0,160}background:\s*inherit/u)
-  assert.match(workspaceStyles, /\.dsh-right-workspace:not\(\.is-home\)::before \{[\s\S]{0,160}var\(--shell-layer/u)
+  assert.match(workspaceStyles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*var\(--dsh-workbench-header-height\);[\s\S]{0,260}padding-top:\s*0/u)
+  assert.doesNotMatch(workspaceStyles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*0;[\s\S]{0,260}padding-top:\s*var\(--dsh-workbench-header-height\)/u)
+  assert.match(workspaceStyles, /\.dsh-right-workspace::before \{[\s\S]{0,180}top:\s*calc\(-1 \* var\(--dsh-workbench-header-height\)\);[\s\S]{0,220}height:\s*var\(--dsh-workbench-header-height\)[\s\S]{0,160}background:\s*inherit/u)
+  assert.doesNotMatch(workspaceStyles, /\.dsh-right-workspace:not\(\.is-home\)::before/u)
   assert.match(workspaceStyles, /body\.dsh-right-workspace-open \.browser-quick-button \{\s*z-index:\s*9/u)
   assert.doesNotMatch(workspaceStyles, /transition:[^;]*width/u)
   assert.match(workspaceStyles, /--dsh-right-workspace-width:\s*640px/u)

@@ -40,7 +40,9 @@ test('desktop themes lock the outer viewport while preserving mobile page scroll
   assert.match(source, /data-hd-wallpaper-kind="video"[\s\S]*?var\(--hd-theme-readable-surface\)/u)
   assert.doesNotMatch(source, /syncWallpaperVideo\(customThemeFromState\(state\)\)/u)
   assert.doesNotMatch(source, /(?:watchdog|location\.reload|\.reload\(\))/iu)
-  assert.match(source, /\[data-composer-seat\] \{ overflow-anchor:none; \}/u)
+  assert.match(source, /\[data-conversation-scroll\] > \[data-composer-seat\] \{ position:sticky!important; z-index:18; bottom:0!important;[\s\S]*?max-height:min\(58dvh,520px\); overflow-anchor:none; \}/u)
+  assert.match(source, /\[data-composer-seat\] \[data-composer-card="true"\] \{ min-height:0!important; max-height:min\(54dvh,480px\); overflow:hidden; \}/u)
+  assert.match(source, /\[data-composer-seat\] \[data-input-scroll="true"\] \{ min-height:0!important; max-height:min\(var\(--dsh-composer-text-max-height,280px\),40dvh\)!important; overflow-y:auto;/u)
 })
 
 test('custom skins keep composer and question controls readable', async () => {

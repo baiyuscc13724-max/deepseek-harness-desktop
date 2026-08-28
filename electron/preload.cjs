@@ -111,6 +111,8 @@ contextBridge.exposeInMainWorld('desktopHarness', {
   setComputerUseDefaultAccess: access => ipcRenderer.invoke('computerUse:setDefaultAccess', String(access || '')),
   setComputerUseAppOverride: (id, decision) => ipcRenderer.invoke('computerUse:setAppOverride', String(id || ''), String(decision || '')),
   revokeComputerUseAppOverride: id => ipcRenderer.invoke('computerUse:revokeAppOverride', String(id || '')),
+  desktopDeviceAction: input => ipcRenderer.invoke('desktopDevice:action', input || {}),
+  desktopAndroidAction: input => ipcRenderer.invoke('desktopAndroid:action', input || {}),
   getMobileSyncState: () => ipcRenderer.invoke('mobileSync:getState'),
   setMobileSyncEnabled: enabled => ipcRenderer.invoke('mobileSync:setEnabled', enabled),
   setMobileSyncRemoteEnabled: enabled => ipcRenderer.invoke('mobileSync:setRemoteEnabled', enabled),
