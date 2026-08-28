@@ -132,7 +132,11 @@ test('runtime installer threads session identity, applies delivery patches and f
   assert.match(installer, /Patched durable tool-result image delivery/u)
   assert.match(ownerPatched, /ChatNodeSeat\(\{ nodeKey, sessionId, selectedCallId,/u)
   assert.match(ownerPatched, /node === void 0 \? null : \{\s*sessionId,\s*selectedCallId,/u)
-  assert.match(ownerPatched, /ConversationWorkTreeGroup\(\{ item, sessionId, useSession,/u)
+  assert.ok(
+    /ConversationWorkTreeGroup\(\{ item, sessionId, useSession,/u.test(ownerPatched)
+      || /order\.map\(\(nodeKey\)[\s\S]*nodeKey,\s*sessionId,\s*useSession,/u.test(ownerPatched),
+    'the installed grouped or flat conversation tree must forward sessionId'
+  )
   assert.equal(patchToolResultOwnerSource(ownerPatched).changed, false)
 
   const incomplete = patched.replace('data-tool-result-deliverables', 'missing-tool-result-deliverables')
