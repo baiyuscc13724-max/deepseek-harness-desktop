@@ -2,19 +2,21 @@ import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchAssistantCopySource } from './assistant-copy-patch.mjs'
+import { patchAttachmentInputConversationSource, patchAttachmentInputSource } from './attachment-input-patch.mjs'
 import { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 import { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 import { patchWorkspaceSessionMenuSource } from './workspace-session-menu-patch.mjs'
 import { patchCodexParityRuntime } from './codex-parity-runtime-patch.mjs'
-import { patchToolResultImageSource } from './tool-result-image-patch.mjs'
+import { patchToolResultImageSource, patchToolResultOwnerSource } from './tool-result-image-patch.mjs'
 import { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.mjs'
 import { patchConversationWorkTreeSource } from './conversation-work-tree-patch.mjs'
 import { patchTimelineReferenceActionSource } from './timeline-reference-patch.mjs'
 
 export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
+export { patchAttachmentInputConversationSource, patchAttachmentInputSource } from './attachment-input-patch.mjs'
 export { patchConversationWorkTreeSource } from './conversation-work-tree-patch.mjs'
 export { patchTimelineReferenceActionSource } from './timeline-reference-patch.mjs'
-export { patchToolResultImageSource } from './tool-result-image-patch.mjs'
+export { patchToolResultImageSource, patchToolResultOwnerSource } from './tool-result-image-patch.mjs'
 export { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.mjs'
 export { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 export { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
@@ -23,6 +25,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runtimeClient = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js')
 const directoryPickerRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-directory-picker-native', 'lib', 'index.js')
 const conversationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
+const attachmentUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-attachment', 'lib', 'client.js')
 const toolUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-tool', 'lib', 'client.js')
 const tokenMeterRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-token-meter', 'lib', 'index.js')
 const subagentRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js')
@@ -1551,8 +1554,17 @@ export async function patchInstalledDirectoryPicker(file = directoryPickerRuntim
 export async function patchInstalledConversation(file = conversationRuntime) {
   const source = await readFile(file, 'utf8')
   const cache = patchConversationCacheSource(source)
-  if (cache.changed) await writeFile(file, cache.source, 'utf8')
-  return cache.changed
+  const deliveryOwner = patchToolResultOwnerSource(cache.source)
+  const inputLabels = patchAttachmentInputConversationSource(deliveryOwner.source)
+  if (cache.changed || deliveryOwner.changed || inputLabels.changed) await writeFile(file, inputLabels.source, 'utf8')
+  return cache.changed || deliveryOwner.changed || inputLabels.changed
+}
+
+export async function patchInstalledAttachmentInput(file = attachmentUiRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchAttachmentInputSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
 }
 
 export async function patchInstalledToolResultImages(file = toolUiRuntime) {
@@ -1681,6 +1693,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const attachmentProfileChanged = await patchInstalledAttachmentProfile()
   const pickerChanged = await patchInstalledDirectoryPicker()
   const conversationChanged = await patchInstalledConversation()
+  const attachmentInputChanged = await patchInstalledAttachmentInput()
   const toolResultImagesChanged = await patchInstalledToolResultImages()
   const tokenMeterChanged = await patchInstalledTokenMeter()
   const subagentChanged = await patchInstalledSubagent()
@@ -1702,8 +1715,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
-  process.stdout.write(conversationChanged ? 'Patched conversation telemetry, view navigation, and sticky response copy.\n' : 'Conversation telemetry, view navigation, and sticky response copy already patched.\n')
-  process.stdout.write(toolResultImagesChanged ? 'Patched durable tool results and recoverable edit-conflict presentation.\n' : 'Durable tool results and recoverable edit-conflict presentation already patched.\n')
+  process.stdout.write(conversationChanged ? 'Patched conversation telemetry, view navigation, labels, and sticky response copy.\n' : 'Conversation telemetry, view navigation, labels, and sticky response copy already patched.\n')
+  process.stdout.write(attachmentInputChanged ? 'Patched recoverable image dragging and draft image transfer.\n' : 'Recoverable image dragging and draft image transfer already patched.\n')
+  process.stdout.write(toolResultImagesChanged ? 'Patched durable tool-result image delivery, file delivery, and recoverable edit-conflict presentation.\n' : 'Durable tool-result image delivery, file delivery, and recoverable edit-conflict presentation already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
   process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
   process.stdout.write(agentLoopChanged ? 'Patched abortable streams and queued-turn recovery.\n' : 'Abortable streams and queued-turn recovery already patched.\n')

@@ -8,19 +8,18 @@
  * 主内容区（参考现有 body.browser-sidebar-open 模式）。
  *
  * 布局断点：
- *  - 默认（>900px）：桌面右侧分栏，宽度 = var(--dsh-right-workspace-width)，
- *    主内容由接线方收窄，面板本身不遮挡。
- *  - ≤900px：近全宽覆盖层（calc(100vw - 48px)），is-overlay 生效。
+ *  - 默认（>900px）：空闲首页保持紧凑宽度，具体工具恢复用户可调宽度；
+ *    两者都覆盖在官方工作区右侧，不改变或挤压 #runtimeView。
+ *  - ≤900px：具体工具采用近全宽覆盖层（calc(100vw - 48px)）。
  *  - ≤620px：全宽覆盖层（100vw）。
  *  - prefers-reduced-motion: 关闭位移与过渡，只保留不透明切换。
- *
- * 该面板不处理主内容收窄职责本身（那是接线方/其他模块的事），
- * 但提供了与 browser-sidebar 一致的辅助规则示例（见文末注释）。
  */
 :root {
-  /* The official two-row header remains a single full-width surface. The
-     right workspace begins below it instead of slicing through it. */
+  /* Keep the official two-row baseline as an internal safe area. The right
+     workspace itself owns the whole column so its top surface can react to
+     width, mode, theme, and wallpaper changes together with the content. */
   --dsh-workbench-header-height: 76px;
+  --dsh-right-workspace-home-width: 280px;
   --dsh-right-workspace-width: 640px;
 }
 
@@ -28,38 +27,40 @@
 .dsh-right-workspace {
   position: fixed;
   z-index: 8;
-  top: var(--dsh-workbench-header-height);
+  top: 0;
   right: 0;
   bottom: 0;
   display: flex;
+  box-sizing: border-box;
   flex-direction: column;
   width: min(var(--dsh-right-workspace-width), 100vw);
-  padding-top: 0;
+  padding-top: var(--dsh-workbench-header-height);
   color: var(--shell-text, #1f2937);
   background: var(--shell-workbench-background, var(--shell-surface, #f7f8fa));
   background-attachment: fixed;
   border-left: 1px solid var(--shell-border, rgba(127, 127, 127, .22));
-  box-shadow: inset 0 1px 0 var(--shell-border, rgba(127, 127, 127, .22));
+  box-shadow: -10px 0 28px rgba(15, 23, 42, .10), inset 0 1px 0 var(--shell-border, rgba(127, 127, 127, .22));
   transition: transform .22s ease, visibility 0s linear .22s;
   app-region: no-drag;
   -webkit-app-region: no-drag;
 }
-/* Extend the global header surface across the reserved right-hand width.
-   Because the panel itself starts below the header, its divider and resize
-   handle cannot cut through the title/tabs row. */
+/* The safe-area surface is part of the workspace state tree instead of an
+   exposed piece of the outer shell. Home follows the workbench wallpaper;
+   concrete tools follow the current panel layer. */
 .dsh-right-workspace::before {
   position: absolute;
   z-index: 0;
-  top: calc(-1 * var(--dsh-workbench-header-height));
+  top: 0;
   right: 0;
   left: 0;
   height: var(--dsh-workbench-header-height);
   background: inherit;
   background-attachment: fixed;
   content: "";
-  pointer-events: auto;
-  app-region: drag;
-  -webkit-app-region: drag;
+  pointer-events: none;
+}
+.dsh-right-workspace:not(.is-home)::before {
+  background: color-mix(in srgb, var(--shell-layer, #fff) 94%, transparent);
 }
 body.dsh-right-workspace-open .pet-quick-button,
 body.dsh-right-workspace-open .skin-quick-button,
@@ -163,12 +164,13 @@ body.dsh-right-workspace-open .browser-quick-button {
 
 /* ---------- 窄屏覆盖态 ---------- */
 @media (max-width: 900px) {
-  .dsh-right-workspace {
-    width: calc(100vw - 48px); /* 近全宽覆盖层 */
+  .dsh-right-workspace.browser-sidebar:not(.is-home) {
+    width: calc(100vw - 48px); /* 具体工具采用近全宽覆盖层 */
   }
 }
 @media (max-width: 620px) {
-  .dsh-right-workspace {
+  .dsh-right-workspace.browser-sidebar:not(.is-home),
+  .dsh-right-workspace.browser-sidebar.is-home {
     width: 100vw; /* 全宽覆盖层 */
   }
 }
@@ -184,6 +186,10 @@ body.dsh-right-workspace-open .browser-quick-button {
 .dsh-right-workspace.browser-sidebar {
   width: min(var(--browser-panel-width, var(--dsh-right-workspace-width)), 100vw);
 }
+.dsh-right-workspace.browser-sidebar.is-home {
+  width: min(var(--dsh-right-workspace-home-width), 100vw);
+}
+.dsh-right-workspace.is-home .dsh-right-workspace__handle { display:none; }
 .dsh-right-workspace__header.browser-sidebar-header { z-index: 5; }
 .right-workspace-modes { display:flex; min-width:0; gap:3px; }
 .right-workspace-modes button { min-height:24px; border:0; border-bottom:2px solid transparent; border-radius:0; padding:0 7px; color:var(--shell-text-secondary); background:transparent; cursor:pointer; }
@@ -192,8 +198,8 @@ body.dsh-right-workspace-open .browser-quick-button {
 .dsh-right-workspace__slot { position:relative; overflow:hidden; }
 .right-workspace-pane { box-sizing:border-box; width:100%; height:100%; min-height:0; }
 .dsh-right-workspace.is-home .dsh-right-workspace__header { display:none; }
-.right-workspace-home { display:grid; place-items:center; overflow:auto; padding:48px; color:var(--shell-text); background:transparent; }
-.right-workspace-home-actions { display:grid; width:min(520px,100%); gap:6px; }
+.right-workspace-home { display:grid; place-items:center; overflow:auto; padding:clamp(20px,4vw,36px); color:var(--shell-text); background:transparent; }
+.right-workspace-home-actions { display:grid; width:100%; gap:6px; }
 .right-workspace-home-action { display:flex; min-width:0; min-height:38px; align-items:center; gap:10px; border:0; border-radius:8px; padding:0 10px; color:var(--shell-text); background:transparent; font:inherit; text-align:left; cursor:pointer; }
 .right-workspace-home-action:hover { background:var(--shell-hover,rgba(31,41,55,.07)); }
 .right-workspace-home-action:focus-visible { outline:2px solid var(--shell-accent); outline-offset:1px; }
@@ -281,12 +287,18 @@ body.dsh-right-workspace-open .browser-quick-button {
 .right-workspace-device-controls-toggle svg { width:20px; height:20px; }
 .right-workspace-device-controls-toggle:focus-visible { outline:2px solid var(--shell-accent); outline-offset:2px; }
 .right-workspace-device-error { position:absolute; z-index:9; right:10px; bottom:10px; left:10px; margin:0; border-radius:9px; padding:9px 11px; color:#d92d20; background:var(--shell-surface); font-size:12px; box-shadow:0 8px 20px rgba(0,0,0,.14); }
-body.dsh-right-workspace-open #runtimeView { width:calc(100% - min(var(--browser-panel-width, var(--dsh-right-workspace-width)),100vw)); }
-body.dsh-right-workspace-open .runtime-status { right:min(var(--browser-panel-width, var(--dsh-right-workspace-width)),100vw); }
+.right-workspace-document-pane.is-interactive { display:flex; flex-direction:column; overflow:hidden; }
+.right-workspace-document-pane.is-interactive .right-workspace-document-header { flex:none; }
+.right-workspace-document-app-stage { display:flex; flex:1; min-height:0; flex-direction:column; margin-top:10px; overflow:hidden; border:1px solid var(--shell-border); border-radius:10px; background:#fff; }
+.right-workspace-document-app-status { flex:none; min-height:18px; border-bottom:1px solid var(--shell-border); padding:7px 10px; color:var(--shell-text-secondary); background:var(--shell-layer-2); font-size:11px; line-height:1.45; }
+.right-workspace-document-app-status.is-error { color:#d92d20; }
+.right-workspace-document-app { display:block; flex:1; width:100%; min-height:280px; border:0; background:#fff; }
+/* The right workspace is an overlay: opening or expanding it must never
+   reflow the official Harness workbench beneath it. */
+body.dsh-right-workspace-open #runtimeView { width:100%; }
+body.dsh-right-workspace-open .runtime-status { right:0; }
 @media (max-width:900px) {
   .right-workspace-modes button { padding:0 6px; }
-  body.dsh-right-workspace-open #runtimeView { width:100%; }
-  body.dsh-right-workspace-open .runtime-status { right:0; }
 }
 @media (max-width:620px) {
   .right-workspace-modes button { font-size:11px; }
@@ -294,9 +306,6 @@ body.dsh-right-workspace-open .runtime-status { right:min(var(--browser-panel-wi
   .right-workspace-home { padding:28px 18px; }
   .right-workspace-data-pane,.right-workspace-document-pane { padding:14px; }
   .right-workspace-schedule-form { grid-template-columns:1fr; }
-  .right-workspace-device-sources { grid-template-columns:repeat(2,minmax(0,1fr)); }
-  .right-workspace-device-toolbar,.right-workspace-device-compose { align-items:stretch; flex-direction:column; }
-  .right-workspace-device-toolbar .right-workspace-device-button,.right-workspace-device-compose .right-workspace-device-button { width:100%; }
   .right-workspace-row { align-items:flex-start; }
   .right-workspace-document-header { align-items:flex-start; flex-direction:column; }
   .right-workspace-document-actions { width:100%; }

@@ -92,9 +92,9 @@ test('background browser state cannot replace an explicitly selected workspace m
 })
 
 test('Desktop shell exposes one unified right workspace with browser, files, schedules and devices', async () => {
-  const [html, integration, styles, browser, app, links, devices] = await Promise.all([
+  const [html, integration, styles, shellStyles, browser, app, links, devices] = await Promise.all([
     source('renderer/index.html'), source('renderer/right-workspace-integration.js'),
-    source('renderer/right-workspace.css'), source('renderer/browser-sidebar.js'),
+    source('renderer/right-workspace.css'), source('renderer/styles.css'), source('renderer/browser-sidebar.js'),
     source('renderer/app.js'), source('renderer/workspace-links-integration.js'), source('renderer/device-workspace.js')
   ])
   for (const id of ['browserSidebar', 'rightWorkspaceBack', 'rightWorkspaceTitle', 'rightWorkspaceBrowserButton', 'rightWorkspaceFilesButton', 'rightWorkspaceSchedulesButton', 'rightWorkspaceDevicesButton', 'rightWorkspaceSlot']) {
@@ -145,20 +145,34 @@ test('Desktop shell exposes one unified right workspace with browser, files, sch
   assert.match(integration, /schedulesSnapshot\.history/u)
   assert.match(integration, /submit\.type = 'submit'/u)
   assert.match(integration, /textContent = file\.text/u)
-  for (const kind of ['image', 'audio', 'video', 'pdf']) assert.match(integration, new RegExp(`previewKind === '${kind}'`))
+  for (const kind of ['image', 'audio', 'video', 'pdf', 'html-app']) assert.match(integration, new RegExp(`previewKind === '${kind}'`))
+  assert.match(integration, /setAttribute\('sandbox', 'allow-scripts allow-pointer-lock'\)/u)
+  assert.doesNotMatch(integration, /allow-same-origin/u)
+  assert.match(links, /工作区 HTML 可隔离试玩/u)
+  assert.match(styles, /\.right-workspace-document-app-stage/u)
+  assert.match(styles, /\.right-workspace-document-pane\.is-interactive/u)
   assert.match(integration, /openRightWorkspaceFile/u)
   assert.match(integration, /safePreviewSource/u)
   assert.match(integration, /setAttribute\('aria-busy', 'true'\)/u)
   assert.match(integration, /setAttribute\('aria-live', 'polite'\)/u)
   assert.match(integration, /startsWith\('reveal'\) \? '已在文件夹中显示' : '已打开'/u)
+  assert.match(integration, /安装包、脚本等主动内容只会在文件夹中显示/u)
   assert.doesNotMatch(integration, /innerHTML|executeJavaScript|openExternal|file:\/\//u)
   assert.match(html, /img-src[^;]*http:\/\/127\.0\.0\.1:\*/u)
   assert.match(html, /media-src[^;]*http:\/\/127\.0\.0\.1:\*/u)
-  assert.match(styles, /body\.dsh-right-workspace-open #runtimeView/u)
-  assert.match(styles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*var\(--dsh-workbench-header-height\);[\s\S]{0,260}padding-top:\s*0/u)
-  assert.match(styles, /\.dsh-right-workspace::before \{[\s\S]{0,180}top:\s*calc\(-1 \* var\(--dsh-workbench-header-height\)\);[\s\S]{0,220}height:\s*var\(--dsh-workbench-header-height\)/u)
-  assert.match(styles, /\.dsh-right-workspace::before \{[\s\S]{0,360}-webkit-app-region:\s*drag/u)
-  assert.doesNotMatch(styles, /\.dsh-right-workspace:not\(\.is-home\)::before/u)
+  assert.match(styles, /--dsh-right-workspace-home-width:\s*280px/u)
+  assert.match(styles, /\.dsh-right-workspace\.browser-sidebar\.is-home \{[\s\S]{0,120}width:\s*min\(var\(--dsh-right-workspace-home-width\),\s*100vw\)/u)
+  assert.match(styles, /\.dsh-right-workspace\.is-home \.dsh-right-workspace__handle \{ display:none; \}/u)
+  assert.match(styles, /body\.dsh-right-workspace-open #runtimeView \{ width:100%; \}/u)
+  assert.match(styles, /body\.dsh-right-workspace-open \.runtime-status \{ right:0; \}/u)
+  assert.doesNotMatch(styles, /#runtimeView \{ width:calc\(100% -/u)
+  assert.match(shellStyles, /body\.browser-sidebar-open #runtimeView \{ width:100%; \}/u)
+  assert.match(shellStyles, /body\.browser-sidebar-open \.runtime-status \{ right:0; \}/u)
+  assert.match(shellStyles, /body\.dsh-right-workspace-open \.terminal-panel,body\.browser-sidebar-open \.terminal-panel \{ right:0; \}/u)
+  assert.doesNotMatch(shellStyles, /browser-sidebar-open #runtimeView \{ width:calc\(100% -/u)
+  assert.match(styles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*0;[\s\S]{0,320}padding-top:\s*var\(--dsh-workbench-header-height\)/u)
+  assert.match(styles, /\.dsh-right-workspace::before \{[\s\S]{0,260}height:\s*var\(--dsh-workbench-header-height\)/u)
+  assert.match(styles, /\.dsh-right-workspace:not\(\.is-home\)::before/u)
   assert.match(styles, /body\.dsh-right-workspace-open \.pet-quick-button/u)
   assert.match(styles, /\.dsh-right-workspace\.is-home \.dsh-right-workspace__header/u)
   assert.match(styles, /\.right-workspace-home-actions/u)
@@ -187,7 +201,7 @@ test('Desktop shell exposes one unified right workspace with browser, files, sch
   assert.doesNotMatch(links, /code\.querySelector\('a,button'\)/u)
   assert.match(links, /相对路径只从当前工作区读取/u)
   assert.match(links, /明确绝对路径可只读预览本机文件/u)
-  assert.match(links, /HTML 和程序源码不会执行/u)
+  assert.match(links, /程序和安装包不会执行/u)
 })
 
 test('guest bridge publishes bounded session/browser intents and accepts bounded draft commands', async () => {

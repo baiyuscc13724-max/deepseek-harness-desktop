@@ -224,7 +224,7 @@
   function renderFiles(opts = {}) {
     if (opts.preserve) captureDataScroll('files')
     filesView.replaceChildren()
-    filesView.append(dataHeader('rightWorkspaceFilesSearch', '文件', '查看当前会话工作区中的上传文件；文本、图片、音视频和 PDF 可预览，其余类型可用系统应用打开。', filesQuery, value => {
+    filesView.append(dataHeader('rightWorkspaceFilesSearch', '文件', '查看当前会话工作区中的上传文件；文本和常用媒体可预览，自包含 HTML 可隔离试玩，其余类型可下载或用系统应用打开。', filesQuery, value => {
       filesQuery = value
       renderFiles({ preserve: true })
       document.querySelector('#rightWorkspaceFilesSearch')?.focus({ preventScroll: true })
@@ -292,13 +292,13 @@
   function documentOpenAction(file, fallbackPath) {
     if (!file.openable && !file.contentUrl) return null
     const local = !file.contentUrl && typeof file.path === 'string' && file.path
-    const action = button('使用系统应用打开', 'right-workspace-secondary')
+    const action = button('使用系统应用打开或显示', 'right-workspace-secondary')
     action.setAttribute('aria-live', 'polite')
     action.addEventListener('click', async () => {
       const original = action.textContent
       action.disabled = true
       action.setAttribute('aria-busy', 'true')
-      action.textContent = '正在打开…'
+      action.textContent = '正在安全处理…'
       try {
         const result = local
           ? await api.openLocal(file.path)
@@ -320,6 +320,7 @@
   }
 
   function renderDocument(file, fallbackPath) {
+    documentView.classList.remove('is-interactive')
     documentView.replaceChildren()
     const header = element('header', 'right-workspace-document-header')
     const identity = element('div', 'right-workspace-document-identity')
@@ -356,6 +357,36 @@
       documentView.append(video)
       return
     }
+    if (file.previewable && source && previewKind === 'html-app') {
+      documentView.classList.add('is-interactive')
+      const stage = element('div', 'right-workspace-document-app-stage')
+      const state = element('div', 'right-workspace-document-app-status', '隔离试玩：脚本可运行；网络、表单和宿主文件访问已禁用。')
+      state.setAttribute('aria-live', 'polite')
+      const frame = element('iframe', 'right-workspace-document-app')
+      frame.title = `${file.name || 'HTML'} 隔离试玩`
+      frame.referrerPolicy = 'no-referrer'
+      frame.setAttribute('sandbox', 'allow-scripts allow-pointer-lock')
+      frame.setAttribute('allow', 'fullscreen')
+      frame.setAttribute('allowfullscreen', '')
+      frame.addEventListener('load', () => {
+        state.textContent = '试玩已载入；单击画面即可操作，重新加载可恢复初始状态。'
+      })
+      frame.addEventListener('error', () => {
+        state.textContent = '试玩载入失败；可重新加载或使用系统浏览器打开。'
+        state.classList.add('is-error')
+      })
+      const reload = button('重新加载', 'right-workspace-secondary', () => {
+        state.textContent = '正在重新加载隔离试玩…'
+        state.classList.remove('is-error')
+        frame.src = source
+        frame.focus({ preventScroll: true })
+      })
+      actions.prepend(reload)
+      stage.append(state, frame)
+      documentView.append(stage)
+      frame.src = source
+      return
+    }
     if (file.previewable && source && previewKind === 'pdf') {
       const frame = element('iframe', 'right-workspace-document-pdf')
       frame.src = source
@@ -366,12 +397,12 @@
     }
     if (!file.previewable) {
       const reasons = {
-        external: '此文件类型将使用系统应用打开。',
-        unsupported: '此文件类型将使用系统应用打开。',
-        'too-large': '文件超过内嵌预览上限，可使用系统应用打开。',
-        binary: '文件包含二进制内容，可使用系统应用打开。'
+        external: '此文件类型可交给系统应用打开；安装包、脚本等主动内容只会在文件夹中显示。',
+        unsupported: '此文件类型可交给系统应用打开；主动内容不会直接执行。',
+        'too-large': '文件超过内嵌预览上限，可交给系统应用打开或显示。',
+        binary: '文件包含二进制内容，可交给系统应用打开或显示。'
       }
-      documentView.append(statusPanel(reasons[file.reason] || '无法安全内嵌预览；可使用系统应用打开。'))
+      documentView.append(statusPanel(reasons[file.reason] || '无法安全内嵌预览；可交给系统应用打开或显示。'))
       return
     }
     const pre = element('pre', 'right-workspace-document-text')

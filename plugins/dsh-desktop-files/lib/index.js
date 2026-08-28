@@ -9,10 +9,12 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 const MAX_LIST_ITEMS = 100
 const MAX_PREVIEW_BYTES = 1024 * 1024
+const MAX_HTML_APP_BYTES = 5 * 1024 * 1024
 const UPLOAD_DIRECTORY = 'uploads'
+const HTML_APP_EXTENSIONS = new Set(['.htm', '.html'])
 const TEXT_PREVIEW_EXTENSIONS = new Set([
   '.astro', '.c', '.cc', '.cfg', '.cjs', '.conf', '.cpp', '.cs', '.css', '.csv', '.dart', '.diff', '.env', '.go', '.graphql', '.h', '.hpp',
-  '.htm', '.html', '.ini', '.java', '.js', '.json', '.json5', '.jsonl', '.jsx', '.kt', '.kts', '.less', '.log', '.lua', '.md', '.markdown',
+  '.ini', '.java', '.js', '.json', '.json5', '.jsonl', '.jsx', '.kt', '.kts', '.less', '.log', '.lua', '.md', '.markdown',
   '.mjs', '.mts', '.php', '.pl', '.properties', '.ps1', '.py', '.r', '.rb', '.rs', '.sass', '.scala', '.scss', '.sh', '.sql', '.svelte',
   '.swift', '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml', '.zig'
 ])
@@ -220,12 +222,24 @@ async function resolveDownload(cwd, requestedPath) {
   return { resolved, info, name: path.basename(resolved), line: requested.line, column: requested.column }
 }
 
+function contentPresentation(file) {
+  const extension = path.extname(file.name).toLowerCase()
+  if (HTML_APP_EXTENSIONS.has(extension)) return file.info.size <= MAX_HTML_APP_BYTES
+    ? { previewKind: 'html-app', mimeType: 'text/html; charset=utf-8' }
+    : null
+  return INLINE_PREVIEW_TYPES.get(extension) || null
+}
+
 async function previewFile(cwd, requestedPath) {
   const file = await resolveDownload(cwd, requestedPath)
   const extension = path.extname(file.name).toLowerCase()
   const base = {
     path: String(requestedPath).split(path.sep).join('/'), name: file.name, size: file.info.size, extension, openable: true,
     ...(file.line ? { line: file.line } : {}), ...(file.column ? { column: file.column } : {})
+  }
+  if (HTML_APP_EXTENSIONS.has(extension)) {
+    if (file.info.size > MAX_HTML_APP_BYTES) return { ...base, previewable: false, reason: 'too-large', maxPreviewBytes: MAX_HTML_APP_BYTES }
+    return { ...base, previewable: true, previewKind: 'html-app', mimeType: 'text/html; charset=utf-8', maxPreviewBytes: MAX_HTML_APP_BYTES }
   }
   const inline = INLINE_PREVIEW_TYPES.get(extension)
   if (inline) return { ...base, ...inline, previewable: true }
@@ -246,13 +260,19 @@ async function previewFile(cwd, requestedPath) {
 function contentHeaders(name, size, presentation = null) {
   const ascii = name.replace(/[^\x20-\x7e]/gu, '_').replace(/["\\]/gu, '_') || 'file'
   const inline = Boolean(presentation)
-  return {
+  const headers = {
     'content-type': presentation?.mimeType || 'application/octet-stream',
     'content-length': size,
     'content-disposition': `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff'
   }
+  if (presentation?.previewKind === 'html-app') {
+    headers['content-security-policy'] = "sandbox allow-scripts allow-pointer-lock; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'unsafe-inline' data: blob:; img-src data: blob:; media-src data: blob:; font-src data: blob:; connect-src 'none'; form-action 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; worker-src data: blob:; manifest-src data: blob:"
+  } else if (!presentation) {
+    headers['content-security-policy'] = "sandbox; default-src 'none'"
+  }
+  return headers
 }
 
 function downloadHeaders(name, size) {
@@ -262,6 +282,7 @@ function downloadHeaders(name, size) {
     'content-length': size,
     'content-disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
     'cache-control': 'no-store',
+    'content-security-policy': "sandbox; default-src 'none'",
     'x-content-type-options': 'nosniff'
   }
 }
@@ -319,7 +340,7 @@ function apply(ctx) {
         const requestedPath = requiredQuery(params, 'path', 4096)
         const { cwd } = rootAgent(ctx, sessionId)
         const file = await resolveDownload(cwd, requestedPath)
-        const presentation = INLINE_PREVIEW_TYPES.get(path.extname(file.name).toLowerCase()) || null
+        const presentation = contentPresentation(file)
         res.writeHead(200, contentHeaders(file.name, file.info.size, presentation))
         createReadStream(file.resolved).on('error', () => { if (!res.destroyed) res.destroy() }).pipe(res)
       } catch (error) { return json(res, error.status || 400, errorPayload(error)) }
@@ -343,7 +364,7 @@ function apply(ctx) {
 }
 
 export {
-  INLINE_PREVIEW_TYPES, MAX_DOWNLOAD_BYTES, MAX_PREVIEW_BYTES, MAX_UPLOAD_BYTES, TEXT_PREVIEW_EXTENSIONS, UPLOAD_DIRECTORY,
-  apply, collectBody, contentHeaders, downloadHeaders, inject, listUploads, name, previewFile, resolveDownload,
+  HTML_APP_EXTENSIONS, INLINE_PREVIEW_TYPES, MAX_DOWNLOAD_BYTES, MAX_HTML_APP_BYTES, MAX_PREVIEW_BYTES, MAX_UPLOAD_BYTES, TEXT_PREVIEW_EXTENSIONS, UPLOAD_DIRECTORY,
+  apply, collectBody, contentHeaders, contentPresentation, downloadHeaders, inject, listUploads, name, previewFile, resolveDownload,
   safeFileName, saveUpload, trustedRequest
 }
