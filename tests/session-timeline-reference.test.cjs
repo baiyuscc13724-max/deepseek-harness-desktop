@@ -6,11 +6,11 @@ const { pathToFileURL } = require('node:url')
 
 const root = path.resolve(__dirname, '..')
 
-async function loadTimeline() {
+async function loadTimeline(locale = 'en-US') {
   const source = await readFile(path.join(root, 'plugins/dsh-session-experience/lib/client.js'), 'utf8')
   let registration
   const browser = { __ModuleLoader__: { load(value) { registration = value } } }
-  new Function('window', source)(browser)
+  new Function('window', 'navigator', source)(browser, { language: locale })
   assert.ok(registration?.factory, 'session experience client registration missing')
   const plugin = registration.factory(name => {
     if (name === 'react') return { createElement() {}, useState() {}, useEffect() {}, useRef() {} }
@@ -128,13 +128,17 @@ test('timeline references use stable bounded identities and escape historical co
 })
 
 test('the @ timeline source inserts a structured chip and re-resolves on submit', async () => {
-  const timeline = await loadTimeline()
+  const timeline = await loadTimeline('zh-CN')
   const session = { events: fixtureEvents(), open: async () => {} }
   const sessions = { binding(id) { return id === 'session-a' ? { session } : undefined } }
   const source = timeline.createTimelineReferenceSource({ sessions })
   const candidates = await source.candidates({ sessionId: 'session-a' }, { query: '导出' })
   assert.equal(candidates.length, 1)
   assert.equal(candidates[0].section, '任务时间线')
+  const englishTimeline = await loadTimeline('en-US')
+  const englishSource = englishTimeline.createTimelineReferenceSource({ sessions })
+  const englishCandidates = await englishSource.candidates({ sessionId: 'session-a' }, { query: '导出' })
+  assert.equal(englishCandidates[0].section, 'Task timeline')
   const outcome = source.onPick({ candidate: candidates[0] })
   assert.equal(outcome.insert.source, 'timeline')
   assert.equal(outcome.insert.appearance, 'session')
