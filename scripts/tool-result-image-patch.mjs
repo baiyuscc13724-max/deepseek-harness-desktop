@@ -249,7 +249,7 @@ export function patchToolResultImageSource(source) {
   return { source: output, changed: true }
 }
 
-const OWNER_REPLACEMENTS = [
+const COMMON_OWNER_REPLACEMENTS = [
   ['const ChatNodeSeat = (0, react.memo)(function ChatNodeSeat({ nodeKey, selectedCallId,', 'const ChatNodeSeat = (0, react.memo)(function ChatNodeSeat({ nodeKey, sessionId, selectedCallId,', 'chat node session input'],
   [`			const owner = (0, react.useMemo)(() => node === void 0 ? null : {
 				selectedCallId,`, `			const owner = (0, react.useMemo)(() => node === void 0 ? null : {
@@ -260,7 +260,10 @@ const OWNER_REPLACEMENTS = [
 				selectedCallId,`, `			}, [
 				node,
 				sessionId,
-				selectedCallId,`, 'chat node session dependency'],
+				selectedCallId,`, 'chat node session dependency']
+]
+
+const GROUPED_OWNER_REPLACEMENTS = [
   ['const ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, useSession,', 'const ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, sessionId, useSession,', 'work tree session input'],
   [`					children: item.nodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
 						nodeKey,
@@ -282,14 +285,35 @@ const OWNER_REPLACEMENTS = [
 								useSession,`, 'root chat node session forwarding']
 ]
 
-const OWNER_MARKERS = OWNER_REPLACEMENTS.map(([, patched]) => patched)
+const FLAT_OWNER_REPLACEMENTS = [
+  [`							order.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+								nodeKey,
+								useSession,`, `							order.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+								nodeKey,
+								sessionId,
+								useSession,`, 'flat chat node session forwarding']
+]
 
-/** Thread the authenticated session id through the official chat-node owner. */
+const COMMON_OWNER_MARKERS = COMMON_OWNER_REPLACEMENTS.map(([, patched]) => patched)
+const GROUPED_OWNER_MARKERS = GROUPED_OWNER_REPLACEMENTS.map(([, patched]) => patched)
+const FLAT_OWNER_MARKERS = FLAT_OWNER_REPLACEMENTS.map(([, patched]) => patched)
+
+/** Thread the authenticated session id through either official chat-tree shape. */
 export function patchToolResultOwnerSource(source) {
-  const present = OWNER_MARKERS.filter(marker => source.includes(marker))
-  if (present.length > 0 && present.length < OWNER_MARKERS.length) throw new Error('Pinned DSH tool-result owner patch is incomplete; refusing an unsafe repair.')
-  if (present.length === OWNER_MARKERS.length) return { source, changed: false }
+  const countPresent = markers => markers.filter(marker => source.includes(marker)).length
+  const commonPresent = countPresent(COMMON_OWNER_MARKERS)
+  const groupedPresent = countPresent(GROUPED_OWNER_MARKERS)
+  const flatPresent = countPresent(FLAT_OWNER_MARKERS)
+  const commonComplete = commonPresent === COMMON_OWNER_MARKERS.length
+  const groupedComplete = groupedPresent === GROUPED_OWNER_MARKERS.length
+  const flatComplete = flatPresent === FLAT_OWNER_MARKERS.length
+  if (commonComplete && (groupedComplete || flatComplete)) return { source, changed: false }
+  if (commonPresent + groupedPresent + flatPresent > 0) throw new Error('Pinned DSH tool-result owner patch is incomplete; refusing an unsafe repair.')
+
   let output = source
-  for (const [original, patched, label] of OWNER_REPLACEMENTS) output = replaceOneOf(output, [original], patched, label)
+  for (const [original, patched, label] of COMMON_OWNER_REPLACEMENTS) output = replaceOneOf(output, [original], patched, label)
+  const groupedSource = GROUPED_OWNER_REPLACEMENTS.some(([original, patched]) => source.includes(original) || source.includes(patched))
+  const variant = groupedSource ? GROUPED_OWNER_REPLACEMENTS : FLAT_OWNER_REPLACEMENTS
+  for (const [original, patched, label] of variant) output = replaceOneOf(output, [original], patched, label)
   return { source: output, changed: true }
 }

@@ -99,6 +99,26 @@ test('image generation already persists one attachment before chat delivery', ()
   assert.match(registration, /\{ type: "image", attachment: imageRef\(value\.image\) \}/u)
 })
 
+test('session owner patch supports the pinned flat conversation tree and remains idempotent', async () => {
+  const { patchToolResultOwnerSource } = await import('../scripts/tool-result-image-patch.mjs')
+  const fixture = `const ChatNodeSeat = (0, react.memo)(function ChatNodeSeat({ nodeKey, selectedCallId,
+\t\t\tconst owner = (0, react.useMemo)(() => node === void 0 ? null : {
+\t\t\t\tselectedCallId,
+\t\t\t}, [
+\t\t\t\tnode,
+\t\t\t\tselectedCallId,
+\t\t\t\t\t\t\torder.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+\t\t\t\t\t\t\t\tnodeKey,
+\t\t\t\t\t\t\t\tuseSession,`
+  const first = patchToolResultOwnerSource(fixture)
+  assert.equal(first.changed, true)
+  assert.match(first.source, /ChatNodeSeat\(\{ nodeKey, sessionId, selectedCallId,/u)
+  assert.match(first.source, /node === void 0 \? null : \{\s*sessionId,\s*selectedCallId,/u)
+  assert.match(first.source, /order\.map\(\(nodeKey\)[\s\S]*nodeKey,\s*sessionId,\s*useSession,/u)
+  assert.doesNotMatch(first.source, /ConversationWorkTreeGroup/u)
+  assert.equal(patchToolResultOwnerSource(first.source).changed, false)
+})
+
 test('runtime installer threads session identity, applies delivery patches and fails closed on drift', async () => {
   const { patchToolResultImageSource, patchToolResultOwnerSource } = await import('../scripts/tool-result-image-patch.mjs')
   const installer = readFileSync(path.join(root, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
