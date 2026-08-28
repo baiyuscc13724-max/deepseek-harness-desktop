@@ -107,11 +107,13 @@ Windows 打包组件健康/回滚门禁会等待 baseline 自检进程真正退�
 
 Linux Electron 导航安全门禁仍必须使用真实 `sendInputEvent` 并在页面侧观察 `event.isTrusted === true`。夹具新增 compositor 帧同步、mouse-move hit-test 预热和 2 秒有界 DOM 观察，只吸收云 Runner 的异步投递延迟，不以 `element.click()` 或模型标记替代真实输入证据。
 
+Windows 云端产物审计实测 `app.asar.unpacked` 为 31.69 MiB；对应预算只从 31 MiB 调整为 32 MiB。unpacked 文件数上限、禁止整个 DSH runtime 与 marketplace 物理展开、MinGit、locale、app.asar、安装包和总目录预算继续独立强制执行。
+
 ## 7. 本地隔离验证证据
 
 在未安装 APK、未升级或重启当前 Harness Desktop 的维护工作树中完成：
 
-- 全仓 `npm run verify`：1628 通过、0 失败、2 跳过；
+- 全仓 `npm run verify`：1629 通过、0 失败、2 跳过；
 - Android `testDebugUnitTest + lintDebug + assembleDebug`：50 个任务，`BUILD SUCCESSFUL`；
 - Android 插件重复安装压力测试：连续 3 轮通过；
 - Session Timeline 真实 Electron 夹具：通过；
