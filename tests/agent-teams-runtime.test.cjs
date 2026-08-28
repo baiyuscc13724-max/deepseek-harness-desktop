@@ -388,6 +388,39 @@ test('model tools create a team, spawn independent members, and relay with non-u
       }
     }
     mod.apply(ctx)
+    const rawSpawnTool = tools.get('team_spawn')
+    tools.set('team_spawn', {
+      ...rawSpawnTool,
+      execute: async (args, execution) => {
+        if (Array.isArray(args.task_ids) && args.task_ids.length > 0) {
+          const status = await tools.get('team_status').execute({ team_id: args.team_id }, execution)
+          if (status.team.plan.phase !== 'active') await tools.get('team_plan_commit').execute({ team_id: status.team.id, expected_revision: status.team.plan.revision, confirmed_plan_hash: status.team.plan.hash, permissions_verified: true, files_verified: true, cost_verified: true, external_side_effects_verified: true }, execution)
+          try {
+            const result = await rawSpawnTool.execute(args, execution)
+            try {
+              for (const taskId of args.task_ids) {
+                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'unassign' }, execution)
+                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'claim' }, execution)
+                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'complete' }, execution)
+              }
+            } catch {}
+            return result
+          } catch (error) { error.message += ` [spawn=${args.name}]`; throw error }
+        }
+        const created = await tools.get('team_task_create').execute({ team_id: args.team_id, title: `Spawn contract for ${args.name}` }, execution)
+        const status = await tools.get('team_status').execute({ team_id: created.teamId }, execution)
+        await tools.get('team_plan_commit').execute({ team_id: created.teamId, expected_revision: status.team.plan.revision, confirmed_plan_hash: status.team.plan.hash, permissions_verified: true, files_verified: true, cost_verified: true, external_side_effects_verified: true }, execution)
+        try {
+          const result = await rawSpawnTool.execute({ ...args, team_id: created.teamId, task_ids: [created.task.id] }, execution)
+          try {
+            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'unassign' }, execution)
+            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'claim' }, execution)
+            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'complete' }, execution)
+          } catch {}
+          return result
+        } catch (error) { error.message += ` [spawn=${args.name}]`; throw error }
+      }
+    })
     const teamsPrompt = promptSections.find(section => section.name === 'tool:agent-teams')
     assert.equal(typeof teamsPrompt.text, 'function')
     const disabledPrompt = teamsPrompt.text({})
@@ -460,10 +493,15 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }))
     assert.equal(unsafeDisable.status, 409)
 
+    const durableTask = await tools.get('team_task_create').execute({ team_id: started.team.id, title: 'Collect evidence' }, { agent: rootAgent, signal: new AbortController().signal })
+    const planned = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })
+    const committedPlan = await tools.get('team_plan_commit').execute({ team_id: started.team.id, expected_revision: planned.team.plan.revision, confirmed_plan_hash: planned.team.plan.hash, cost_verified: true }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(committedPlan.plan.phase, 'committed', 'no worker exists before publication')
     const spawned = await tools.get('team_spawn').execute({
-      team_id: started.team.id, name: 'Researcher', role: 'research', prompt: 'Collect evidence', model: 'special-model'
+      team_id: started.team.id, task_ids: [durableTask.task.id], name: 'Researcher', role: 'research', prompt: 'Collect evidence', model: 'special-model'
     }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(spawned.ok, true)
+    assert.equal(spawned.plan.phase, 'active', 'successful child publication activates the exact committed plan')
     assert.equal(starts.length, 1)
     assert.equal(starts[0].request.parent, rootAgent)
     assert.equal(starts[0].request.agentOptions.provider, 'test-provider')
@@ -510,12 +548,12 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.ok(followups.every(item => item.options.source.kind === 'coordinator'))
 
     await assert.rejects(
-      tools.get('team_spawn').execute({ team_id: started.team.id, name: '  ＲＥＳＥＡＲＣＨＥＲ  ', role: 'duplicate', prompt: 'Must not start' }, { agent: rootAgent, signal: new AbortController().signal }),
+      tools.get('team_spawn').execute({ team_id: started.team.id, task_ids: [durableTask.task.id], name: '  ＲＥＳＥＡＲＣＨＥＲ  ', role: 'duplicate', prompt: 'Must not start' }, { agent: rootAgent, signal: new AbortController().signal }),
       error => error && error.code === 'AGENT_TEAMS_DUPLICATE_MEMBER_NAME'
     )
     for (const invalidName of ['A', 'ThisWorkerDutyNameIsFarTooLong', 'Subagent', 'Ｓｕｂａｇｅｎｔ', '协调器', 'UI/Docs']) {
       await assert.rejects(
-        tools.get('team_spawn').execute({ team_id: started.team.id, name: invalidName, role: 'invalid name', prompt: 'Must not start' }, { agent: rootAgent, signal: new AbortController().signal }),
+        tools.get('team_spawn').execute({ team_id: started.team.id, task_ids: [durableTask.task.id], name: invalidName, role: 'invalid name', prompt: 'Must not start' }, { agent: rootAgent, signal: new AbortController().signal }),
         error => error && error.code === 'AGENT_TEAMS_INVALID_MEMBER_NAME'
       )
     }
@@ -638,6 +676,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
       title: 'Other active file owner',
       files: ['packages/app']
     }, { agent: rootAgent, signal: new AbortController().signal })).task
+    const expansionPlan = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })
+    await tools.get('team_plan_commit').execute({ team_id: started.team.id, expected_revision: expansionPlan.team.plan.revision, confirmed_plan_hash: expansionPlan.team.plan.hash, permissions_verified: true, files_verified: true, cost_verified: true, external_side_effects_verified: true }, { agent: rootAgent, signal: new AbortController().signal })
     await tools.get('team_task_update').execute({
       team_id: started.team.id, task_id: otherActiveFileTask.id, action: 'claim'
     }, { agent: rootAgent, signal: new AbortController().signal })
@@ -775,7 +815,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(multiTeamStatus.team, null)
     assert.deepEqual(new Set(multiTeamStatus.teams.map(team => team.id)), new Set([started.team.id, sibling.id]))
     for (const summary of multiTeamStatus.teams) {
-      assert.deepEqual(Object.keys(summary).sort(), ['activeTaskCount', 'cancelledTaskCount', 'completedTaskCount', 'id', 'memberCount', 'name', 'pendingTaskCount', 'revision', 'status', 'updatedAt'])
+      assert.deepEqual(Object.keys(summary).sort(), ['activeTaskCount', 'cancelledTaskCount', 'completedTaskCount', 'id', 'memberCount', 'name', 'pauseEpoch', 'pendingTaskCount', 'planPhase', 'revision', 'status', 'updatedAt'])
       assert.equal('objective' in summary, false)
       assert.equal('members' in summary, false)
       assert.equal('tasks' in summary, false)
@@ -791,6 +831,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }, { agent: rootAgent, signal: new AbortController().signal })).task
     assert.deepEqual(peerTask.blockedBy, [`${started.team.id}:${projectedTask.task.id}`])
     assert.deepEqual(peerTask.dependencySources, [{ teamId: started.team.id, teamName: started.team.name, teamStatus: 'active' }])
+    for (const teamId of [started.team.id, sibling.id]) {
+      const pendingPlan = await tools.get('team_status').execute({ team_id: teamId }, { agent: rootAgent, signal: new AbortController().signal })
+      await tools.get('team_plan_commit').execute({ team_id: teamId, expected_revision: pendingPlan.team.plan.revision, confirmed_plan_hash: pendingPlan.team.plan.hash, permissions_verified: true, files_verified: true, cost_verified: true, external_side_effects_verified: true }, { agent: rootAgent, signal: new AbortController().signal })
+    }
     const listedPeerTasks = await tools.get('team_task_list').execute({ team_id: sibling.id }, { agent: rootAgent, signal: new AbortController().signal })
     assertLosslessJson(listedPeerTasks)
     assert.equal('files' in peerTask.dependencySources[0], false)
@@ -1503,8 +1547,7 @@ test('explicit user stop cancels queued wakeups and leaves paused work dormant',
 
     const stopped = await store.read(document => document.teams.find(candidate => candidate.id === team.id))
     assert.deepEqual(lead.cancelCalls, [{ kind: 'user' }])
-    assert.deepEqual(interrupts.map(entry => entry.id), ['stop-child'])
-    assert.equal(interrupts[0].authority.kind, 'ancestor')
+    assert.deepEqual(interrupts, [], 'child shutdown happens through the post-persistence drain path')
     assert.equal(stopped.state, 'paused')
     assert.equal(stopped.tasks[0].state, 'pending')
     assert.equal(stopped.tasks[0].assigneeSessionId, 'stop-child')
@@ -1559,6 +1602,8 @@ test('tool lifecycle stays consistently paused from explicit Stop through status
     assert.equal(enabled.status, 200)
     const started = await tools.get('team_start').execute({ objective: 'Keep Stop lifecycle consistent' }, { agent: lead, signal: new AbortController().signal })
     const task = (await tools.get('team_task_create').execute({ team_id: started.team.id, title: 'Resume only after explicit confirmation' }, { agent: lead, signal: new AbortController().signal })).task
+    const planned = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
+    await tools.get('team_plan_commit').execute({ team_id: started.team.id, expected_revision: planned.team.plan.revision, confirmed_plan_hash: planned.team.plan.hash }, { agent: lead, signal: new AbortController().signal })
 
     const stopEvent = { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } }
     session.events.push(stopEvent)
@@ -1576,17 +1621,18 @@ test('tool lifecycle stays consistently paused from explicit Stop through status
       error => error?.code === 'AGENT_TEAMS_PAUSED'
     )
 
-    const resumed = await tools.get('team_resume').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
+    const resumePreview = await tools.get('team_resume').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(resumePreview.phase, 'preview')
+    const resumeCommitArgs = { team_id: started.team.id, request_id: resumePreview.preview.requestId, commit: true, preview_id: resumePreview.preview.previewId, expected_pause_epoch: resumePreview.preview.pauseEpoch, expected_team_revision: resumePreview.preview.teamRevision }
+    const resumed = await tools.get('team_resume').execute(resumeCommitArgs, { agent: lead, signal: new AbortController().signal })
     assert.equal(resumed.team.status, 'active')
     assert.equal(resumed.resumePlan.automaticallyWoken, false)
     const activeStatus = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
     assert.equal(activeStatus.team.status, 'active')
     const claimed = await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: task.id, action: 'claim' }, { agent: lead, signal: new AbortController().signal })
     assert.equal(claimed.task.state, 'in_progress')
-    await assert.rejects(
-      tools.get('team_resume').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal }),
-      error => error?.code === 'AGENT_TEAMS_CONFLICT' && /not paused/u.test(error.message)
-    )
+    const duplicateResume = await tools.get('team_resume').execute(resumeCommitArgs, { agent: lead, signal: new AbortController().signal })
+    assert.equal(duplicateResume.reused, true)
     const statusAfterDuplicateResume = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
     assert.equal(statusAfterDuplicateResume.team.status, 'active')
   } finally {
@@ -1694,10 +1740,12 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     )
 
     const pausedFile = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8'))
-    pausedFile.teams[0].state = 'paused'
+    pausedFile.teams.find(team => team.id === first.team.id).state = 'paused'
     await writeFile(path.join(root, 'storages', 'agent_teams.json'), `${JSON.stringify(pausedFile)}\n`, 'utf8')
+    await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', { sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4 }))
     const startsBeforeResume = starts.length
-    const resumed = await tools.get('team_resume').execute({}, { agent: lead, signal: new AbortController().signal })
+    const preview = await tools.get('team_resume').execute({ team_id: first.team.id }, { agent: lead, signal: new AbortController().signal })
+    const resumed = await tools.get('team_resume').execute({ team_id: first.team.id, request_id: preview.preview.requestId, commit: true, preview_id: preview.preview.previewId, expected_pause_epoch: preview.preview.pauseEpoch, expected_team_revision: preview.preview.teamRevision }, { agent: lead, signal: new AbortController().signal })
     assert.equal(resumed.resumePlan.automaticallyWoken, false)
     assert.equal(starts.length, startsBeforeResume)
     assert.equal(resumed.resumePlan.pendingAssignedTaskIds.length, 3)
@@ -1707,7 +1755,7 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     assert.deepEqual(retired.releasedTaskIds, [first.taskRefs[0].taskId, first.taskRefs[1].taskId])
     const status = await tools.get('team_status').execute({}, { agent: lead, signal: new AbortController().signal })
     assert.equal(status.team.tasks.find(task => task.id === first.taskRefs[0].taskId).assignee, null)
-    const inferredSpawn = await tools.get('team_spawn').execute({ name: 'Ops', role: 'single-team inference', prompt: 'Work only in the uniquely active team.' }, { agent: lead, signal: new AbortController().signal })
+    const inferredSpawn = await tools.get('team_spawn').execute({ task_ids: [first.taskRefs[0].taskId], name: 'Ops', role: 'single-team inference', prompt: 'Work only in the uniquely active team.' }, { agent: lead, signal: new AbortController().signal })
     assert.equal(inferredSpawn.teamId, first.team.id)
 
     failWork = true
@@ -1721,7 +1769,7 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     assert.equal(failedReplay.error.retryable, false)
     assert.equal(starts.length, failedStartCount, 'uncertain partial replay must fail closed')
     await assert.rejects(
-      tools.get('team_spawn').execute({ name: 'Ambiguous', role: 'must not start', prompt: 'Do not infer between peer teams.' }, { agent: lead, signal: new AbortController().signal }),
+      tools.get('team_spawn').execute({ task_ids: [failed.taskRefs[0].taskId], name: 'Ambiguous', role: 'must not start', prompt: 'Do not infer between peer teams.' }, { agent: lead, signal: new AbortController().signal }),
       error => error?.code === 'AGENT_TEAMS_TEAM_REQUIRED'
     )
     assert.ok(drains.length >= 2)

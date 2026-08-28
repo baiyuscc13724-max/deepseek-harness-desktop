@@ -63,13 +63,31 @@ window.__ModuleLoader__.load({
       boardScope: "当前团队任务（仅查看）",
       boardReadOnly: "仅查看",
       boardReadOnlyHint: "这里用于查看最新状态。要创建、分配或完成任务，请在负责人对话中提出；系统仍会校验你的权限和任务状态是否为最新。",
-      boardPending: "待处理",
-      boardProgress: "进行中",
-      boardBlocked: "已阻塞",
-      boardCompleted: "已完成",
+      boardPending: "Ready · 就绪",
+      boardProgress: "Running · 执行中",
+      boardBlocked: "Attention · 需关注",
+      boardCompleted: "Done · 已完成",
       boardCancelled: "已取消",
-      boardEmpty: "此列暂无任务",
-      boardBlockedDerived: "前置任务尚未完成，因此这些任务暂时不能开始；这不会改变它们原来的任务状态。",
+      boardEmpty: "此区暂无任务",
+      boardBlockedDerived: "“需关注”只汇集 Host 投影中的阻塞、失败前置、权限、确认、副作用或冲突事实；不会改写任务的权威状态。",
+      boardFactLegend: "事实来源：任务状态、依赖、尝试次数、权限/副作用结论与时间来自 Host 权威投影；成员 Todo 里程碑、checkpoint 和提交结果均明确标为未验证。",
+      boardCancelledHistoryHint: "取消的任务只进入历史，不占用当前四个主区。",
+      boardOpenCancelled: "查看已取消历史 {count}",
+      boardHideCancelled: "收起已取消历史",
+      boardAttempt: "尝试 {value}",
+      boardMilestones: "成员计划里程碑（未验证） {completed}/{total}",
+      boardMemberCheckpoint: "成员 checkpoint（未验证）",
+      boardMemberNextStep: "成员下一步（未验证）",
+      boardCheckpoint: "成员提交结果（未独立验证）",
+      boardHostFacts: "Host 事实",
+      boardNeedsConfirmation: "等待人工确认",
+      boardPermissionAttention: "权限需要处理",
+      boardSideEffectAttention: "副作用边界需要确认",
+      boardStaleAttention: "状态已滞留，请由负责人刷新",
+      boardNextReady: "下一步：等待成员认领；若有依赖，先完成依赖。",
+      boardNextRunning: "下一步：执行成员继续推进，并提交可核对 checkpoint。",
+      boardNextAttention: "下一步：按上方 Host 事实解除阻塞或完成确认。",
+      boardNextDone: "下一步：负责人核对成果与质量记录。",
       boardMore: "另有 {count} 项未显示；可在团队画布的列表模式查看",
       boardOpenCanvas: "查看团队关系",
       flowTitle: "团队执行流程",
@@ -156,13 +174,31 @@ window.__ModuleLoader__.load({
       boardScope: "Selected team tasks (view only)",
       boardReadOnly: "View only",
       boardReadOnlyHint: "This page shows the latest status. To create, assign, or complete a task, ask in the lead conversation; permission and current-state checks still apply.",
-      boardPending: "Pending",
-      boardProgress: "In progress",
-      boardBlocked: "Blocked",
-      boardCompleted: "Completed",
+      boardPending: "Ready",
+      boardProgress: "Running",
+      boardBlocked: "Attention",
+      boardCompleted: "Done",
       boardCancelled: "Cancelled",
-      boardEmpty: "No tasks in this column",
-      boardBlockedDerived: "These tasks cannot start until their prerequisites finish; their stored task status is unchanged.",
+      boardEmpty: "No tasks in this section",
+      boardBlockedDerived: "Attention contains only blocker, failed prerequisite, permission, confirmation, side-effect, or conflict facts in the Host projection. It never rewrites authoritative task state.",
+      boardFactLegend: "Source of truth: task state, dependencies, attempts, permission/effect findings, and timestamps come from the Host projection. Member Todo milestones, checkpoints, and submitted results remain explicitly unverified.",
+      boardCancelledHistoryHint: "Cancelled tasks stay in history and never occupy the four current sections.",
+      boardOpenCancelled: "View cancelled history {count}",
+      boardHideCancelled: "Hide cancelled history",
+      boardAttempt: "Attempt {value}",
+      boardMilestones: "Member plan milestones (unverified) {completed}/{total}",
+      boardMemberCheckpoint: "Member checkpoint (unverified)",
+      boardMemberNextStep: "Member next step (unverified)",
+      boardCheckpoint: "Member-submitted result (not independently verified)",
+      boardHostFacts: "Host facts",
+      boardNeedsConfirmation: "Waiting for human confirmation",
+      boardPermissionAttention: "Permission needs attention",
+      boardSideEffectAttention: "Side-effect boundary needs confirmation",
+      boardStaleAttention: "State is stale; ask the lead to refresh it",
+      boardNextReady: "Next: wait for a member to claim this task; finish dependencies first when listed.",
+      boardNextRunning: "Next: the member continues and submits a reviewable checkpoint.",
+      boardNextAttention: "Next: resolve the Host facts above or complete the required confirmation.",
+      boardNextDone: "Next: the lead verifies the result and quality records.",
       boardMore: "{count} more are hidden; use List mode in Team canvas to review them",
       boardOpenCanvas: "View team relationships",
       flowTitle: "Team execution flow",
@@ -355,16 +391,16 @@ window.__ModuleLoader__.load({
       taskClaimant: "领取人",
       taskResponsible: "责任人",
       taskClaimedAt: "领取时间",
-      taskCompletionProgress: "完成进度",
+      taskCompletionProgress: "Host 里程碑",
       taskModelUsed: "使用的模型",
       taskNotClaimed: "尚未领取",
       taskNotCompleted: "尚未完成",
       taskModelUndetermined: "尚未确定",
       taskModelConfigured: "配置：{value}",
-      taskProgressPlan: "{percent}% · 已完成 {completed}/{total} 项",
-      taskProgressComplete: "100% · 已完成",
-      taskProgressPending: "0% · 尚未开始",
-      taskProgressWorking: "进行中 · 暂无细分计划",
+      taskProgressPlan: "已记录 {completed}/{total} 个里程碑",
+      taskProgressComplete: "任务状态已由 Host 标记完成",
+      taskProgressPending: "任务尚未开始",
+      taskProgressWorking: "任务正在进行；暂无 Host 里程碑计数",
       taskWorkflowPlan: "当前执行计划",
       taskWorkflowPlanEmpty: "执行成员尚未记录细分计划；任务状态仍会实时更新。",
       taskWorkflowTimeline: "实时执行记录",
@@ -402,16 +438,16 @@ window.__ModuleLoader__.load({
       taskClaimant: "Claimed by",
       taskResponsible: "Responsible lead",
       taskClaimedAt: "Claimed at",
-      taskCompletionProgress: "Completion progress",
+      taskCompletionProgress: "Host milestones",
       taskModelUsed: "Model used",
       taskNotClaimed: "Not claimed",
       taskNotCompleted: "Not completed",
       taskModelUndetermined: "Not determined",
       taskModelConfigured: "Configured: {value}",
-      taskProgressPlan: "{percent}% · {completed}/{total} items completed",
-      taskProgressComplete: "100% · Completed",
-      taskProgressPending: "0% · Not started",
-      taskProgressWorking: "In progress · No detailed plan yet",
+      taskProgressPlan: "{completed}/{total} milestones recorded",
+      taskProgressComplete: "Task state is marked completed by the Host",
+      taskProgressPending: "Task has not started",
+      taskProgressWorking: "Task is running; no Host milestone count is available",
       taskWorkflowPlan: "Current execution plan",
       taskWorkflowPlanEmpty: "The member has not recorded a detailed plan yet. Task status will still update live.",
       taskWorkflowTimeline: "Live execution log",
@@ -484,6 +520,7 @@ window.__ModuleLoader__.load({
         ".dat-task-progress{display:grid;gap:7px;margin-top:13px}.dat-task-progress-copy{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px}.dat-task-progress-copy span{color:var(--dsw-alias-label-secondary);text-align:right}.dat-task-progress-track{position:relative;height:7px;overflow:visible;clip-path:inset(-18px 0 -18px 0 round 999px);border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 5%,var(--dsw-alias-bg-layer-1));box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)}.dat-task-progress-fill{display:block;height:100%;min-width:0;border-radius:inherit;background:var(--dsw-alias-brand-primary);transition:width .2s ease}.dat-task-progress-fill.is-indeterminate{position:absolute;top:50%;left:0;width:9px;height:9px;overflow:visible;background:var(--dat-pulse-c7);box-shadow:0 0 0 2px color-mix(in srgb,var(--dat-pulse-c7) 28%,transparent),0 0 10px var(--dat-pulse-c7),0 0 24px color-mix(in srgb,var(--dat-pulse-c6) 72%,transparent);transform:translate(-50%,-50%);animation:dat-task-progress-flow 1.8s cubic-bezier(.35,0,.16,1) infinite}.dat-task-progress-fill.is-indeterminate::before{content:\"\";position:absolute;top:50%;right:45%;width:96px;height:4px;border-radius:999px;background:linear-gradient(90deg,transparent 0%,var(--dat-pulse-c1) 14%,var(--dat-pulse-c2) 28%,var(--dat-pulse-c3) 42%,var(--dat-pulse-c4) 56%,var(--dat-pulse-c5) 70%,var(--dat-pulse-c6) 84%,var(--dat-pulse-c7) 100%);filter:blur(.35px) saturate(1.35);opacity:.9;transform:translateY(-50%)}.dat-task-progress-fill.is-indeterminate::after{content:\"\";position:absolute;inset:-6px;border:1px solid color-mix(in srgb,var(--dat-pulse-c7) 72%,transparent);border-radius:50%;animation:dat-task-progress-aura .72s ease-out infinite}@keyframes dat-task-progress-flow{0%{left:0;opacity:0;transform:translate(-50%,-50%) scale(.62)}8%{opacity:1}48%{transform:translate(-50%,-50%) scale(1)}88%{opacity:1}100%{left:100%;opacity:0;transform:translate(-50%,-50%) scale(1.18)}}@keyframes dat-task-progress-aura{0%{opacity:.9;transform:scale(.45)}100%{opacity:0;transform:scale(1.35)}}@media (prefers-reduced-motion:reduce){.dat-task-progress-fill{transition:none}.dat-task-progress-fill.is-indeterminate{left:50%;animation:none}.dat-task-progress-fill.is-indeterminate::after{animation:none;opacity:.45}}.dat-task-workflow-runtime{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:12px}.dat-task-runtime-pane{min-width:0;padding:11px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-task-runtime-head{display:flex;align-items:flex-start;justify-content:space-between;gap:9px;margin-bottom:8px}.dat-task-runtime-head h4{margin:0;font-size:12px}.dat-task-runtime-head p{margin:3px 0 0}.dat-task-plan{display:grid;gap:7px;max-height:330px;margin:0;padding:0;overflow:auto;list-style:none}.dat-task-plan li{display:grid;grid-template-columns:17px minmax(0,1fr);gap:6px;align-items:start;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}.dat-task-plan li[data-state=completed]{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}.dat-task-plan li[data-state=in_progress]{color:var(--dsw-alias-label-primary);font-weight:600}.dat-task-plan-mark{color:var(--dsw-alias-label-tertiary);text-align:center}.dat-task-plan li[data-state=completed] .dat-task-plan-mark{color:var(--dsw-alias-state-success-primary)}.dat-task-plan li[data-state=in_progress] .dat-task-plan-mark{color:var(--dsw-alias-brand-primary)}.dat-task-runtime-list{display:grid;gap:0;max-height:360px;overflow:auto;border-top:1px solid var(--dsw-alias-border-l2)}.dat-task-runtime-event{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:start;padding:9px 2px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dat-task-runtime-dot{width:8px;height:8px;margin-top:4px;border-radius:50%;background:var(--dsw-alias-label-tertiary)}.dat-task-runtime-event[data-status=running] .dat-task-runtime-dot{background:var(--dsw-alias-brand-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-brand-primary) 15%,transparent)}.dat-task-runtime-event[data-status=completed] .dat-task-runtime-dot{background:var(--dsw-alias-state-success-primary)}.dat-task-runtime-event[data-status=failed] .dat-task-runtime-dot{background:var(--dsw-alias-state-error-primary)}.dat-task-runtime-event[data-status=blocked] .dat-task-runtime-dot{background:var(--dsw-alias-state-warn-primary)}.dat-task-runtime-copy{min-width:0}.dat-task-runtime-copy strong,.dat-task-runtime-copy span{display:block;overflow-wrap:anywhere}.dat-task-runtime-copy strong{font-size:12px}.dat-task-runtime-copy span{margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-task-runtime-event time{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}.dat-task-runtime-empty{margin:10px 0}.dat-task-runtime-limit{margin:8px 0 0}.dat-task-copy-section{display:grid;gap:10px;margin:11px 0 14px}.dat-task-copy-block{padding:10px 11px;border-left:3px solid var(--dsw-alias-border-l3);border-radius:0 9px 9px 0;background:var(--dsw-alias-bg-layer-2)}.dat-task-copy-block:first-child{border-left-color:var(--dsw-alias-brand-primary)}.dat-task-copy-block h4{margin:0 0 5px;color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:650}.dat-task-copy-block p{margin:0;font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}.dat-task-focus-facts{padding-top:11px;border-top:1px solid var(--dsw-alias-border-l2)}@container dat-workspace (min-width:760px){.dat-task-workflow-runtime{grid-template-columns:minmax(220px,.72fr) minmax(0,1.45fr)}.dat-task-focus-facts{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20px}}",
         ".dat-workspace{container-type:inline-size;container-name:dat-workspace;min-width:0}.dat-workspace-main{min-width:0}.dat-workspace-nav{position:sticky;top:0;z-index:12;display:flex;align-items:center;gap:5px;box-sizing:border-box;width:100%;max-width:100%;margin:0 0 14px;padding:4px;overflow-x:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 96%,transparent);box-shadow:0 6px 18px rgba(35,72,80,.08);backdrop-filter:blur(12px);scrollbar-width:thin;overscroll-behavior-inline:contain}.dat-workspace-nav button{display:flex;flex:1 0 auto;align-items:center;justify-content:space-between;gap:8px;min-width:max-content;border:0;border-radius:8px;padding:8px 10px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;text-align:left;white-space:nowrap}.dat-workspace-nav button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dat-workspace-nav button[aria-current=page]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font-weight:650}.dat-workspace-nav small{color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-workspace-view{min-width:0}.dat-workspace-view-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:0 0 12px}.dat-workspace-view-head h2{margin:0;font-size:18px}.dat-workspace-view-head p{max-width:760px;margin:4px 0 0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.5}.dat-workspace-view-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}",
         ".dat-board-shell{min-width:0}.dat-board-shell.dat-inspector-open{min-width:0}.dat-board-main{container-type:inline-size;container-name:dat-board-main;min-width:0}.dat-board-toolbar{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap;margin:0 0 10px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-board-note{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 24%,var(--dsw-alias-border-l2));border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}.dat-task-board{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-items:start}.dat-board-column{display:flex;flex-direction:column;box-sizing:border-box;height:clamp(360px,56vh,640px);min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}.dat-board-column[data-column=blocked]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 30%,var(--dsw-alias-border-l2))}.dat-board-column-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;margin-bottom:9px;padding:0 2px}.dat-board-column-heading{display:flex;align-items:center;gap:7px;min-width:0}.dat-board-column-heading h3{margin:0;font-size:13px}.dat-board-status-dot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-label-tertiary);flex:none}.dat-board-column[data-column=in_progress] .dat-board-status-dot{background:var(--dsw-alias-brand-primary)}.dat-board-column[data-column=blocked] .dat-board-status-dot{background:var(--dsw-alias-state-warn-primary)}.dat-board-column[data-column=completed] .dat-board-status-dot{background:var(--dsw-alias-state-success-primary)}.dat-board-column-list{display:grid;grid-auto-rows:max-content;align-content:start;gap:8px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:2px}.dat-board-card{display:grid;align-self:start;gap:7px;width:100%;min-width:0;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:10px;background:var(--dsw-alias-bg-layer-2);color:inherit;font:inherit;text-align:left;cursor:pointer;content-visibility:auto;contain-intrinsic-size:auto 108px}.dat-board-card:hover{border-color:var(--dsw-alias-border-l3);background:var(--dsw-alias-interactive-bg-hover)}.dat-board-card:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-board-card-top,.dat-board-card-bottom{display:flex;align-items:center;justify-content:space-between;gap:7px;min-width:0}.dat-board-card-id{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.dat-board-card-title{display:-webkit-box;overflow:hidden;font-size:13px;font-weight:650;line-height:1.45;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:3}.dat-board-card-owner{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dat-board-card-flags{display:flex;gap:5px;flex-wrap:wrap}.dat-board-card-flag{border-radius:999px;padding:2px 6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-board-card-flag.is-warning{color:var(--dsw-alias-state-warn-primary)}.dat-board-empty{padding:22px 8px;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:12px}.dat-board-overflow{padding:7px 2px 1px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-board-shell .dat-scrim{display:block;position:fixed;inset:0;z-index:39;border:0;background:rgba(0,0,0,.28)}.dat-board-shell .dat-inspector{position:fixed;z-index:40;top:0;right:0;bottom:0;width:min(390px,92vw);max-height:none;border-radius:12px 0 0 12px}.dat-board-shell .dat-inspector-body{max-height:calc(100vh - 60px)}",
+        ".dat-board-column[data-column=attention]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 38%,var(--dsw-alias-border-l2))}.dat-board-column[data-column=running] .dat-board-status-dot{background:var(--dsw-alias-brand-primary)}.dat-board-column[data-column=attention] .dat-board-status-dot{background:var(--dsw-alias-state-warn-primary)}.dat-board-column[data-column=done] .dat-board-status-dot{background:var(--dsw-alias-state-success-primary)}.dat-board-card{min-height:44px;scroll-margin-block:72px}.dat-board-card:focus-visible,.dat-board-history>summary:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-board-card-facts{display:grid;gap:3px;margin-top:8px;padding:8px;border-left:3px solid var(--dsw-alias-state-warn-primary);border-radius:6px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45}.dat-board-card-facts strong{color:var(--dsw-alias-label-primary)}.dat-board-card-time{color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-board-card-next{margin-top:8px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45}.dat-board-history{margin-top:12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-board-history>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:650}.dat-board-history-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:8px;margin-top:8px}.dat-board-card-result{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}.dat-board-card-result strong{color:var(--dsw-alias-label-secondary)}",
         ".dat-flow-blueprint{display:grid;gap:10px}.dat-flow-chain{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background-color:var(--dsw-alias-bg-layer-1);background-image:radial-gradient(circle,var(--dsw-alias-border-l2) 1px,transparent 1px);background-size:18px 18px}.dat-flow-step{display:grid;gap:5px;min-width:0;padding:11px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.dat-flow-step strong{font-size:13px}.dat-flow-step span{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}.dat-flow-arrow{display:grid;place-items:center;color:var(--dsw-alias-label-tertiary)}.dat-flow-boundary{margin:0;padding:10px;border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}",
         ".dat-automation-grid{display:grid;gap:12px}.dat-automation-panel{padding:14px}.dat-automation-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px}.dat-automation-panel-head h3{margin:0;font-size:14px}.dat-automation-list{display:grid;gap:0}.dat-schedule-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--dsw-alias-border-l2)}.dat-schedule-row:first-child{border-top:0}.dat-schedule-copy{min-width:0}.dat-schedule-copy strong{display:block;font-size:13px;overflow-wrap:anywhere}.dat-schedule-copy span{display:block;margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:11px;overflow-wrap:anywhere}.dat-schedule-history{margin-top:12px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2)}.dat-schedule-history h4{margin:0 0 7px;font-size:12px}.dat-schedule-boundary{padding:10px;border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}",
         ".dat-project-tasks-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin-bottom:12px}.dat-project-tasks-form .dat-label{margin-top:0}.dat-project-task-card{display:grid;gap:8px}.dat-project-task-card h4{margin:0;font-size:13px;overflow-wrap:anywhere}.dat-project-task-card .dat-actions{margin:0}.dat-project-task-columns{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}.dat-project-task-column{min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-1)}.dat-project-task-column h3{margin:0;font-size:13px}.dat-project-task-list{display:grid;gap:8px;margin-top:9px}",
@@ -491,7 +528,7 @@ window.__ModuleLoader__.load({
         ".dat-empty-workbench{margin-bottom:12px}.dat-empty-workbench .dat-task-board{opacity:.96}.dat-empty-workbench .dat-board-column{height:clamp(250px,40vh,420px)}.dat-empty-workbench .dat-board-empty{padding:28px 8px}.dat-onboarding-slot{margin-top:12px}.dat-team-mode{padding:10px 12px}.dat-team-mode-bar{display:flex;align-items:center;justify-content:space-between;gap:12px}.dat-team-mode-copy{min-width:0;flex:1 1 420px}.dat-team-mode-title{display:flex;align-items:center;gap:7px}.dat-team-mode-title h2{margin:0;font-size:14px}.dat-team-mode-copy p{margin:3px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}.dat-team-mode-actions{display:flex;align-items:center;justify-content:flex-end;gap:9px;flex-wrap:wrap}.dat-team-mode-switch{display:inline-flex;align-items:center;gap:7px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}.dat-team-mode-switch input{position:relative;box-sizing:border-box;width:34px;height:20px;margin:0;border:1px solid var(--dsw-alias-border-l3);border-radius:999px;appearance:none;background:var(--dsw-alias-bg-layer-2);cursor:pointer;transition:background .16s ease,border-color .16s ease}.dat-team-mode-switch input::after{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-label-tertiary);content:\"\";transition:transform .16s ease,background .16s ease}.dat-team-mode-switch input:checked{border-color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 20%,var(--dsw-alias-bg-layer-2))}.dat-team-mode-switch input:checked::after{transform:translateX(14px);background:var(--dsw-alias-state-success-primary)}.dat-team-mode-switch input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-team-mode-switch input:disabled{opacity:.5;cursor:wait}.dat-onboarding-details{margin-top:9px;border-top:1px solid var(--dsw-alias-border-l2);padding-top:8px}.dat-onboarding-details>summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px}.dat-onboarding-details[open]>summary{margin-bottom:10px}.dat-onboarding-fields{padding:0 2px}.dat-empty-canvas-panel{overflow:hidden;padding:14px}.dat-empty-canvas-route{display:flex;align-items:stretch;gap:8px;min-width:0;overflow-x:auto;padding:2px 1px 8px;scrollbar-width:thin}.dat-empty-canvas-node{display:flex;flex:1 0 170px;min-width:170px;max-width:240px;flex-direction:column;gap:5px;padding:14px;border:1px dashed var(--dsw-alias-border-l3);border-radius:11px;background:var(--dsw-alias-bg-layer-2)}.dat-empty-canvas-node strong{font-size:13px}.dat-empty-canvas-node span{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}.dat-empty-canvas-arrow{display:grid;place-items:center;flex:0 0 24px;color:var(--dsw-alias-brand-primary);font-size:18px}.dat-empty-canvas-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:4px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2)}",
         "@container dat-workspace (min-width:680px){.dat-flow-chain{grid-template-columns:repeat(3,minmax(0,1fr))}.dat-flow-arrow{transform:rotate(-90deg)}.dat-participant-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dat-project-task-columns{grid-template-columns:repeat(2,minmax(0,1fr))}.dat-automation-grid{grid-template-columns:minmax(0,1fr) minmax(260px,.72fr)}}",
         "@container dat-board-main (min-width:680px){.dat-task-board{grid-template-columns:repeat(2,minmax(0,1fr))}}",
-        "@container dat-board-main (min-width:900px){.dat-task-board{grid-template-columns:repeat(4,minmax(0,1fr))}}@container dat-board-main (min-width:1200px){.dat-task-board{grid-template-columns:repeat(5,minmax(0,1fr))}}",
+        "@container dat-board-main (min-width:900px){.dat-task-board{grid-template-columns:repeat(4,minmax(0,1fr))}}",
         "@container dat-workspace (min-width:900px){.dat-project-task-columns{grid-template-columns:repeat(4,minmax(0,1fr))}.dat-task-focus-grid{grid-template-columns:minmax(0,1.55fr) minmax(280px,.72fr)}}",
         "@container dat-workspace (max-width:900px){.dat-active-shell.dat-inspector-open{display:block}.dat-active-shell .dat-scrim{display:block;position:fixed;inset:0;z-index:39;border:0;background:rgba(0,0,0,.28)}.dat-active-shell .dat-inspector{position:fixed;z-index:40;top:0;right:0;bottom:0;width:min(390px,92vw);max-height:none;border-radius:12px 0 0 12px}.dat-active-shell .dat-inspector-body{max-height:calc(100vh - 60px)}}",
         "@media(max-width:620px){.dat-workspace-nav{overflow-x:auto;border-radius:10px}.dat-project-tasks-form{grid-template-columns:1fr}.dat-workspace-view-head{display:block}.dat-workspace-view-actions{justify-content:flex-start;margin-top:9px}.dat-schedule-row,.dat-participant-row{grid-template-columns:minmax(0,1fr)}.dat-participant-state{text-align:left}.dat-team-mode-bar{align-items:flex-start;flex-direction:column}.dat-team-mode-actions{width:100%;justify-content:space-between}.dat-active-shell .dat-inspector{width:100%;border-radius:0}.dat-task-focus-head{align-items:flex-start}.dat-task-focus-head-copy{align-items:flex-start;flex-direction:column}.dat-task-focus-head>.dat-row{align-self:flex-start}.dat-task-focus-body{padding:12px}.dat-task-focus-hero{display:block}.dat-task-focus-hero>.dat-badge{margin-top:8px}.dat-task-stage-track{grid-template-columns:1fr;gap:6px}.dat-task-stage-arrow{transform:rotate(90deg)}.dat-task-block-row{grid-template-columns:1fr;margin-top:7px}.dat-task-block-branch{grid-column:auto}}",
@@ -1186,31 +1223,11 @@ window.__ModuleLoader__.load({
       return { lifecycleState: lifecycleState, currentState: blocked ? "blocked" : lifecycleState, stages: stages, blocked: blocked, blockedAt: blocked ? safeTaskTime(task.updatedAt) : "", nextKey: blocked ? "blockedTaskNext" : lifecycleState === "completed" ? "taskNextCompleted" : lifecycleState === "in_progress" ? "taskNextProgress" : "taskNextPending" };
     }
     function taskDetailProgressText(t, progress, task) {
-      var state = taskStateKind(task);
+      var state = taskStateKind(task), completed = Number(progress && progress.completed), total = Number(progress && progress.total);
       if (state === "completed") return t("taskProgressComplete");
-      if (progress && Number.isFinite(progress.percent) && Number(progress.total) > 0) return t("taskProgressPlan", { percent: progress.percent, completed: progress.completed || 0, total: progress.total });
+      if (Number.isFinite(completed) && completed >= 0 && Number.isFinite(total) && total > 0) return t("taskProgressPlan", { completed: Math.min(completed, total), total: total });
       if (state === "pending" || state === "blocked" && !(task.claimedAt || task.startedAt)) return t("taskProgressPending");
       return t("taskProgressWorking");
-    }
-    function randomTaskProgressPulse() {
-      var origin = Math.random() * 360;
-      var colors = [];
-      for (var index = 0; index < 7; index += 1) {
-        var hue = Math.round((origin + index * 360 / 7 + Math.random() * 34 - 17 + 360) % 360);
-        var saturation = Math.round(78 + Math.random() * 20);
-        var lightness = Math.round(56 + Math.random() * 14);
-        colors.push("hsl(" + hue + "," + saturation + "%," + lightness + "%)");
-      }
-      for (var cursor = colors.length - 1; cursor > 0; cursor -= 1) {
-        var swap = Math.floor(Math.random() * (cursor + 1));
-        var value = colors[cursor]; colors[cursor] = colors[swap]; colors[swap] = value;
-      }
-      return colors;
-    }
-    function taskProgressPulseStyle(colors) {
-      var style = {};
-      (Array.isArray(colors) ? colors : []).slice(0, 7).forEach(function (color, index) { style["--dat-pulse-c" + (index + 1)] = color; });
-      return style;
     }
     function taskRunStatusText(t, status) {
       var key = status === "completed" ? "taskRunCompleted" : status === "failed" ? "taskRunFailed" : status === "stopped" ? "taskRunStopped" : status === "blocked" ? "taskRunBlocked" : status === "continued" ? "taskRunContinued" : status === "unknown" ? "taskRunUnknown" : "taskRunRunning";
@@ -1514,12 +1531,11 @@ window.__ModuleLoader__.load({
 
     function TaskWorkflow(props) {
       var t = props.t, workflow = props.workflow, detail = props.detail, runtime = props.runtime;
-      var pulseState = useState(randomTaskProgressPulse), pulseColors = pulseState[0], setPulseColors = pulseState[1];
       if (!workflow || !detail) return null;
       var progress = runtime && runtime.progress, plan = runtime && Array.isArray(runtime.plan) ? runtime.plan : [];
       var runtimeWorkflow = runtime && runtime.workflow || {}, runtimeEvents = Array.isArray(runtimeWorkflow.events) ? runtimeWorkflow.events : [];
       var unavailableReason = runtimeWorkflow.unavailableReason, runtimeEmptyText = !runtime ? props.error ? t("taskWorkflowUnavailable") : t("taskWorkflowLoading") : unavailableReason === "overlapping_tasks" ? t("taskWorkflowAmbiguous") : unavailableReason === "shared_lead_session" ? t("taskWorkflowSharedLead") : unavailableReason === "session_unavailable" ? t("taskWorkflowSessionUnavailable") : t("taskWorkflowEmpty");
-      var progressText = taskDetailProgressText(t, progress, detail.task), percent = progress && Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, progress.percent)) : null;
+      var progressText = taskDetailProgressText(t, progress, detail.task);
       function stageStateText(value) { return t(value === "current" ? "taskStageCurrent" : value === "reached" ? "taskStageReached" : value === "unknown" ? "taskStageUnknown" : "taskStageUpcoming"); }
       var stageNodes = [];
       workflow.stages.forEach(function (stage, index) {
@@ -1533,9 +1549,8 @@ window.__ModuleLoader__.load({
       var blockerText = props.blockerText || detail.reason || (detail.blockedBy.length ? t("blockedBy", { value: detail.blockedBy.join(", ") }) : t("blockedTaskUnknown"));
       return h("section", { className: "dat-task-workflow", "aria-labelledby": "dat-task-workflow-title" },
         h("div", { className: "dat-task-workflow-head" }, h("div", null, h("h3", { id: "dat-task-workflow-title" }, t("taskWorkflow")), h("p", { className: "dat-note" }, t("taskWorkflowHint"))), h("div", { className: "dat-row" }, h("span", { className: "dat-badge" }, statusLabel(t, workflow.currentState)), props.connection ? h("span", { className: "dat-badge" }, h("span", { className: "dat-dot", style: props.connection === "live" ? null : { background: "var(--dsw-alias-state-warn-primary)" } }), t(props.connection)) : null)),
-        h("div", { className: "dat-task-progress" },
-          h("div", { className: "dat-task-progress-copy" }, h("strong", null, t("taskCompletionProgress")), h("span", null, progressText)),
-          h("div", { className: "dat-task-progress-track", role: "progressbar", "aria-label": t("taskCompletionProgress"), "aria-valuemin": 0, "aria-valuemax": 100, "aria-valuenow": percent === null ? undefined : percent, "aria-valuetext": progressText }, h("span", { className: "dat-task-progress-fill" + (percent === null ? " is-indeterminate" : ""), "aria-hidden": true, style: percent === null ? taskProgressPulseStyle(pulseColors) : { width: percent + "%" }, onAnimationIteration: percent === null ? function (event) { if (event.animationName === "dat-task-progress-flow") setPulseColors(randomTaskProgressPulse()); } : undefined }))
+        h("div", { className: "dat-task-progress", role: "status", "aria-label": t("taskCompletionProgress") },
+          h("div", { className: "dat-task-progress-copy" }, h("strong", null, t("taskCompletionProgress")), h("span", null, progressText))
         ),
         h("div", { className: "dat-task-stage-track" }, stageNodes),
         workflow.blocked ? h("div", { className: "dat-task-block-row" }, h("div", { className: "dat-task-block-branch", "data-active": "true" },
@@ -1645,11 +1660,63 @@ window.__ModuleLoader__.load({
 
     function taskBoardColumn(task) {
       var status = normalizeState(task.status || task.state || "pending");
-      if (status === "completed") return "completed";
+      if (status === "completed") return "done";
       if (status === "cancelled") return "cancelled";
-      if (relationIds(task.blockedBy).length) return "blocked";
-      if (status === "in_progress") return "in_progress";
-      return "pending";
+      if (status === "blocked" || status === "failed" || relationIds(task.blockedBy).length || relationIds(task.failedBy).length || relationIds(task.conflictsWith).length || task.permissionRequired === true || task.approvalRequired === true || task.confirmationRequired === true || task.requiresConfirmation === true || task.sideEffectApprovalRequired === true || task.stale === true || taskBoardPermissionAttention(task) || taskBoardEffectAttention(task)) return "attention";
+      if (status === "in_progress" || status === "running") return "running";
+      return "ready";
+    }
+
+    function taskBoardPermissionAttention(task) {
+      return (Array.isArray(task && task.capabilities) ? task.capabilities : []).some(function (capability) {
+        var status = String(capability && (capability.status || capability.state) || "").toLowerCase();
+        return status === "unknown" || status === "denied" || status === "unavailable";
+      });
+    }
+
+    function taskBoardEffectAttention(task) {
+      return (Array.isArray(task && task.externalEffects) ? task.externalEffects : []).some(function (effect) {
+        var policy = String(effect && effect.policy || "").toLowerCase(), outcome = String(effect && effect.outcome || "").toLowerCase();
+        return policy === "confirm_each" || policy === "confirmation_required" || outcome === "outcome_unknown" || outcome === "unknown";
+      });
+    }
+
+    function taskBoardAttempt(task) {
+      var values = [task && task.attempt, task && task.attemptNumber, task && task.retryCount];
+      for (var index = 0; index < values.length; index += 1) {
+        var value = Number(values[index]);
+        if (Number.isFinite(value) && value >= 0) return index === 2 ? value + 1 : value;
+      }
+      return null;
+    }
+
+    function taskBoardMilestones(task) {
+      var progress = task && task.progress && typeof task.progress === "object" ? task.progress : task && task.milestones && typeof task.milestones === "object" ? task.milestones : null;
+      var completed = Number(progress && (progress.completed ?? progress.done)), total = Number(progress && progress.total);
+      return Number.isFinite(completed) && completed >= 0 && Number.isFinite(total) && total > 0 ? { completed: Math.min(completed, total), total: total } : null;
+    }
+
+    function taskBoardAttentionFacts(t, task) {
+      var facts = [];
+      var blocked = relationIds(task.blockedBy), failed = relationIds(task.failedBy), conflicts = relationIds(task.conflictsWith);
+      if (blocked.length) facts.push(t("blockedBy", { value: blocked.join(", ") }));
+      if (failed.length) facts.push(t("failedBy", { value: failed.join(", ") }));
+      if (conflicts.length) facts.push(t("conflicts", { value: conflicts.join(", ") }));
+      if (task.permissionRequired === true || task.permissionDenied === true || taskBoardPermissionAttention(task)) facts.push(t("boardPermissionAttention"));
+      if (task.approvalRequired === true || task.confirmationRequired === true || task.requiresConfirmation === true) facts.push(t("boardNeedsConfirmation"));
+      if (task.sideEffectApprovalRequired === true || taskBoardEffectAttention(task)) facts.push(t("boardSideEffectAttention"));
+      if (task.stale === true) facts.push(t("boardStaleAttention"));
+      var reason = typeof task.blockReason === "string" ? task.blockReason.trim() : typeof task.blockedReason === "string" ? task.blockedReason.trim() : "";
+      if (reason && facts.indexOf(reason) < 0) facts.push(reason);
+      return facts;
+    }
+
+    function taskBoardNextKey(column) {
+      return column === "running" ? "boardNextRunning" : column === "attention" ? "boardNextAttention" : column === "done" ? "boardNextDone" : "boardNextReady";
+    }
+
+    function taskBoardColumnLabel(t, column) {
+      return t(column === "running" ? "boardProgress" : column === "attention" ? "boardBlocked" : column === "done" ? "boardCompleted" : column === "cancelled" ? "boardCancelled" : "boardPending");
     }
 
     function taskBoardTime(task, fields) {
@@ -1663,8 +1730,8 @@ window.__ModuleLoader__.load({
     }
 
     function sortBoardColumnTasks(tasks, columnId) {
-      var pendingQueue = columnId === "pending";
-      var fields = columnId === "completed" ? ["completedAt", "updatedAt", "createdAt"] : columnId === "pending" ? ["createdAt", "updatedAt"] : ["updatedAt", "createdAt"];
+      var pendingQueue = columnId === "ready";
+      var fields = columnId === "done" ? ["completedAt", "updatedAt", "createdAt"] : columnId === "ready" ? ["createdAt", "updatedAt"] : ["updatedAt", "createdAt"];
       return tasks.slice().sort(function (left, right) {
         var leftTime = taskBoardTime(left, fields), rightTime = taskBoardTime(right, fields);
         var timeOrder = pendingQueue ? leftTime - rightTime : rightTime - leftTime;
@@ -1689,20 +1756,27 @@ window.__ModuleLoader__.load({
      * selected-team safe projection, derived blocked column, and read-only UI.
      */
     function BoardTaskCard(props) {
-      var task = props.task, t = props.t, id = taskId(task);
+      var task = props.task, t = props.t, id = taskId(task), column = taskBoardColumn(task);
       var assigned = task.assigneeSessionId || task.assigneeId || task.assignee || task.memberId || "";
       var member = (props.members || []).filter(function (item) { return memberId(item) === assigned || memberSession(item) === assigned; })[0];
       var owner = member ? simpleMemberName(member, member.isLead || member.kind === "lead" || memberSession(member) === props.leadSessionId, t) : t("unassigned");
-      var model = member ? memberModelText(member, t) : "";
-      var dependencies = relationIds(task.dependsOn).length + relationIds(task.blockedBy).length;
-      var conflicts = relationIds(task.conflictsWith).length;
-      return h("button", { type: "button", className: "dat-board-card", onClick: function (event) { props.onOpen(event, task); }, "aria-label": (task.title || task.name || t("taskFallback", { id: id })) + " · " + statusLabel(t, taskBoardColumn(task)) },
-        h("div", { className: "dat-board-card-top" }, h("span", { className: "dat-board-card-id" }, "#" + id), h("span", { className: "dat-board-card-flag" }, statusLabel(t, taskBoardColumn(task)))),
+      var model = member ? memberModelText(member, t) : "", attempt = taskBoardAttempt(task), milestones = taskBoardMilestones(task), attentionFacts = taskBoardAttentionFacts(t, task);
+      var updatedAt = task.updatedAt || task.lastActivityAt || task.completedAt || task.claimedAt || task.createdAt;
+      return h("button", { type: "button", className: "dat-board-card", "data-state": column, onClick: function (event) { props.onOpen(event, task); }, "aria-label": (task.title || task.name || t("taskFallback", { id: id })) + " · " + taskBoardColumnLabel(t, column) },
+        h("div", { className: "dat-board-card-top" }, h("span", { className: "dat-board-card-id" }, "#" + id), h("span", { className: "dat-board-card-flag" }, taskBoardColumnLabel(t, column))),
         h("div", { className: "dat-board-card-title" }, task.title || task.name || t("taskFallback", { id: id })),
-        visibleTaskResult(task) ? h("div", { className: "dat-board-card-result" }, h("strong", null, t("taskResultPreview")), h("span", null, taskResultPreviewText(visibleTaskResult(task), 180))) : null,
         h("div", { className: "dat-board-card-owner" }, owner, model ? " · " + model : ""),
-        dependencies || conflicts ? h("div", { className: "dat-board-card-flags" }, dependencies ? h("span", { className: "dat-board-card-flag" + (taskBoardColumn(task) === "blocked" ? " is-warning" : "") }, t("taskDependencies") + " " + dependencies) : null, conflicts ? h("span", { className: "dat-board-card-flag is-warning" }, t("conflicts", { value: conflicts })) : null) : null
+        attentionFacts.length ? h("div", { className: "dat-board-card-facts", role: "note" }, h("strong", null, t("boardHostFacts")), attentionFacts.slice(0, 3).map(function (fact, index) { return h("span", { key: index }, fact); })) : null,
+        milestones || attempt !== null || updatedAt ? h("div", { className: "dat-board-card-flags" }, milestones ? h("span", { className: "dat-board-card-flag" }, t("boardMilestones", milestones)) : null, attempt !== null ? h("span", { className: "dat-board-card-flag" }, t("boardAttempt", { value: attempt })) : null, updatedAt ? h("time", { className: "dat-board-card-time", dateTime: String(updatedAt) }, t("lastActivity", { value: formatTime(updatedAt) })) : null) : null,
+        task.checkpoint && typeof task.checkpoint.text === "string" && task.checkpoint.text.trim() ? h("div", { className: "dat-board-card-result" }, h("strong", null, t("boardMemberCheckpoint")), h("span", null, taskResultPreviewText(task.checkpoint, 180))) : null,
+        task.nextStep && typeof task.nextStep.text === "string" && task.nextStep.text.trim() ? h("div", { className: "dat-board-card-result" }, h("strong", null, t("boardMemberNextStep")), h("span", null, taskResultPreviewText(task.nextStep, 180))) : null,
+        visibleTaskResult(task) ? h("div", { className: "dat-board-card-result" }, h("strong", null, t("boardCheckpoint")), h("span", null, taskResultPreviewText(visibleTaskResult(task), 180))) : null,
+        h("div", { className: "dat-board-card-next" }, t(taskBoardNextKey(column)))
       );
+    }
+
+    function cancelledHistoryProjection(t) {
+      return { id: "cancelled", label: t("boardCancelled"), limit: 200 };
     }
 
     function TaskBoardWorkspace(props) {
@@ -1739,27 +1813,31 @@ window.__ModuleLoader__.load({
         return function () { document.removeEventListener("keydown", onKey); };
       }, [selectedTaskId]);
       var columns = [
-        { id: "pending", label: t("boardPending"), limit: 200 },
-        { id: "in_progress", label: t("boardProgress"), limit: 200 },
-        { id: "blocked", label: t("boardBlocked"), limit: 200 },
-        { id: "completed", label: t("boardCompleted"), limit: 200 },
-        { id: "cancelled", label: t("boardCancelled"), limit: 200 }
+        { id: "ready", label: t("boardPending"), limit: 200 },
+        { id: "running", label: t("boardProgress"), limit: 200 },
+        { id: "attention", label: t("boardBlocked"), limit: 200 },
+        { id: "done", label: t("boardCompleted"), limit: 200 }
       ];
+      var cancelledHistory = cancelledHistoryProjection(t);
+      var cancelledTasks = sortBoardColumnTasks(tasks.filter(function (task) { return taskBoardColumn(task) === cancelledHistory.id; }), cancelledHistory.id);
       return h("section", { className: "dat-workspace-view", "aria-labelledby": "dat-task-board-title", "aria-readonly": "true" },
         h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-task-board-title" }, t("boardTitle")), h("p", null, t("boardIntro"))), h("div", { className: "dat-workspace-view-actions" }, h("span", { className: "dat-badge" }, t("boardReadOnly")), h(Button, { small: true, onClick: function () { props.setWorkspaceView("canvas"); } }, t("boardOpenCanvas")))),
         h("div", { className: "dat-board-toolbar" }, h("div", null, h("strong", null, teamName(team, t)), h("div", { className: "dat-note", style: { marginTop: 2 } }, team.objective || t("unknown"))), h("div", { className: "dat-row" }, h("span", { className: "dat-badge" }, t("boardScope")), h("span", { className: "dat-badge" }, t("revision", { value: team.revision || "–" })))),
-        h("div", { className: "dat-board-note", role: "note" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, t("boardReadOnlyHint"), " ", t("boardBlockedDerived"))),
+        h("div", { className: "dat-board-note", role: "note" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, t("boardReadOnlyHint"), " ", t("boardBlockedDerived"), " ", t("boardFactLegend"))),
         projectionLimited ? h("div", { className: "dat-board-note dat-board-projection-note", role: "note" }, h("span", { "aria-hidden": "true" }, "⚠"), h("span", null, t("boardProjectionLimited", { shown: tasks.length, total: totalTaskCount }))) : null,
         selectionNotice ? h("div", { className: "dat-board-note", role: "status" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, selectionNotice)) : null,
         h("div", { className: "dat-board-shell" + (selectedTaskId ? " dat-task-focus-open" : "") },
-          h("div", { className: "dat-board-main", hidden: !!selectedTaskId, "aria-hidden": selectedTaskId ? true : undefined, inert: selectedTaskId ? "" : undefined }, h("div", { className: "dat-task-board" }, columns.map(function (column) {
-            var columnTasks = sortBoardColumnTasks(tasks.filter(function (task) { return taskBoardColumn(task) === column.id; }), column.id);
-            var visible = columnTasks.slice(0, column.limit);
-            return h("section", { key: column.id, className: "dat-board-column", "data-column": column.id, "aria-labelledby": "dat-board-column-" + column.id },
-              h("div", { className: "dat-board-column-head" }, h("div", { className: "dat-board-column-heading" }, h("span", { className: "dat-board-status-dot", "aria-hidden": "true" }), h("h3", { id: "dat-board-column-" + column.id }, column.label)), h("span", { className: "dat-badge" }, columnTasks.length)),
-              h("div", { className: "dat-board-column-list" }, visible.length ? visible.map(function (task) { return h(BoardTaskCard, { key: taskId(task), task: task, members: members, leadSessionId: team.leadSessionId, t: t, onOpen: openTaskDetail }); }) : h("div", { className: "dat-board-empty" }, t("boardEmpty")), columnTasks.length > visible.length ? h("div", { className: "dat-board-overflow" }, t("boardMore", { count: columnTasks.length - visible.length })) : null)
-            );
-          }))),
+          h("div", { className: "dat-board-main", hidden: !!selectedTaskId, "aria-hidden": selectedTaskId ? true : undefined, inert: selectedTaskId ? "" : undefined },
+            h("div", { className: "dat-task-board" }, columns.map(function (column) {
+              var columnTasks = sortBoardColumnTasks(tasks.filter(function (task) { return taskBoardColumn(task) === column.id; }), column.id);
+              var visible = columnTasks.slice(0, column.limit);
+              return h("section", { key: column.id, className: "dat-board-column", "data-column": column.id, "aria-labelledby": "dat-board-column-" + column.id },
+                h("div", { className: "dat-board-column-head" }, h("div", { className: "dat-board-column-heading" }, h("span", { className: "dat-board-status-dot", "aria-hidden": "true" }), h("h3", { id: "dat-board-column-" + column.id }, column.label)), h("span", { className: "dat-badge" }, columnTasks.length)),
+                h("div", { className: "dat-board-column-list" }, visible.length ? visible.map(function (task) { return h(BoardTaskCard, { key: taskId(task), task: task, members: members, leadSessionId: team.leadSessionId, t: t, onOpen: openTaskDetail }); }) : h("div", { className: "dat-board-empty" }, t("boardEmpty")), columnTasks.length > visible.length ? h("div", { className: "dat-board-overflow" }, t("boardMore", { count: columnTasks.length - visible.length })) : null)
+              );
+            })),
+            cancelledTasks.length ? h("details", { className: "dat-board-history" }, h("summary", null, t("boardOpenCancelled", { count: cancelledTasks.length })), h("p", { className: "dat-note" }, t("boardCancelledHistoryHint")), h("div", { className: "dat-board-history-list" }, cancelledTasks.slice(0, cancelledHistory.limit).map(function (task) { return h(BoardTaskCard, { key: taskId(task), task: task, members: members, leadSessionId: team.leadSessionId, t: t, onOpen: openTaskDetail }); }))) : null
+          ),
           selectedTaskId ? h(TaskDetailFocus, { t: t, task: selectedTask, assignee: selectedAssignee, responsible: responsible, runtimeDetail: taskDetailLive.detail, runtimeError: taskDetailLive.error, detailConnection: taskDetailLive.connection, events: selectedTaskEvents, tasks: tasks, teamsById: teamsById, connection: props.connection, detailRef: detailRef, onClose: closeTaskDetail }) : null
         )
       );
@@ -1768,10 +1846,10 @@ window.__ModuleLoader__.load({
     function EmptyTaskBoardWorkspace(props) {
       var t = props.t;
       var columns = [
-        { id: "pending", label: t("boardPending") },
-        { id: "in_progress", label: t("boardProgress") },
-        { id: "blocked", label: t("boardBlocked") },
-        { id: "completed", label: t("boardCompleted") }
+        { id: "ready", label: t("boardPending") },
+        { id: "running", label: t("boardProgress") },
+        { id: "attention", label: t("boardBlocked") },
+        { id: "done", label: t("boardCompleted") }
       ];
       return h(React.Fragment, null,
         h("section", { className: "dat-workspace-view dat-empty-workbench", "data-empty-workspace": "board", "aria-labelledby": "dat-empty-board-title", "aria-readonly": "true" },

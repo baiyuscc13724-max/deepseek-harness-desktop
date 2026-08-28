@@ -28,6 +28,30 @@
 
 短暂成员状态在重启时校正：`provisioning/running/shutting_down` 不会作为正在执行的事实直接恢复，而转换为 `ready` 或 `failed`。成员会话本身由官方 continuable session 持久化，可在新消息到达时冷恢复。
 
+### 计划先行与任务 fencing
+
+团队计划先以 `draft` 保存，并经过 `committed` 才能成为 `active`；只有 Host 完整校验目标、依赖 DAG、成员、文件边界、能力和外部副作用后，计划才可执行。未提交 draft 可以查看和修订，但不能启动成员，也不能认领或完成任务。提交记录绑定 canonical plan hash 与单调 revision：完全相同的 hash/revision 重放只返回既有结果；相同请求标识搭配不同计划、旧 revision 或计划发生实质变化时拒绝并要求重新校验，不能把“请求曾成功”误当成新计划也获批。
+
+授权事实只有 `unknown`、`human_attested`、`host_verified` 三态。普通工具布尔值、模型声明、错误 plan hash 和非 direct-human 回合最多形成 `human_attested`，绝不能产生 `host_verified`，也不能批量把 capability 从 `unknown` 升级为可用；`host_verified` 必须绑定 Host 私有验证记录和当前精确 plan hash。任何实质计划变化都会回到 draft，并使旧授权失效。
+
+公开成员启动必须绑定至少一个已经持久化的任务。Host 在同一原子 mutation 中保存成员占位、任务预分配和启动意图，随后才调用官方 continuable child；没有任务的 spawn 在调用 child driver 前拒绝。若启动前可证明没有发布 child，可以安全恢复该占位；如果 child 是否发布或工作 followup 是否送达不确定，则保留部分失败和 Host attempt 记录，不自动重复执行。
+
+每个团队持久化 `pauseEpoch`；每次任务执行尝试拥有单调 attempt，以及与当前认领绑定的 `claimId/leaseEpoch`。认领、完成、释放和 checkpoint 写入都必须携带当前 fencing 前提；旧 Stop epoch、旧 claim 或旧 attempt 的迟到回写被拒绝。Host attempt/interruption 历史是有界的权威事实；成员 checkpoint/next step 单独保存并明确标记为**未验证自报**，不能覆盖 Host 状态、权限结果、任务完成或外部副作用结果，也不能接收路径、凭据、原始消息或其他敏感字段注入。
+
+### Stop 与两阶段 Resume
+
+直接用户 Stop 的顺序固定为：先持久化新的 `pauseEpoch` 和暂停门禁，再取消排队唤醒、隔离新启动并中断成员。Stop 与 spawn/claim/complete 并发时，只有携带当前 epoch 与 claim fencing 的 mutation 可以提交；中断调用成功与否不会回滚已发布的暂停事实。
+
+Resume 是两阶段协议。预览阶段只返回绑定 request、team revision、pause epoch 和当前任务/成员事实的恢复计划，团队仍保持 `paused`，不唤醒成员、不改任务；提交阶段必须携带该预览的 CAS 前提，并原子保存提交 receipt。完全相同 request 与 CAS 的已提交恢复请求可依据 receipt 幂等返回既有结果；同 request 搭配不同内容、过期 preview、revision 或 epoch 必须拒绝。恢复按节点隔离：健康且前提仍成立的任务可以继续，失败成员、权限未知、无有效 claim、外部副作用 `outcome_unknown` 或其他异常节点保持 Attention，不得因一个异常节点冻结整个团队，也不得被批量误判为可重放。
+
+### 能力、外部副作用与跨会话接管
+
+能力预检只记录 Host 可验证的事实。当前工具无法证明的权限必须投影为 `unknown`，既不能伪造为允许，也不能把 unknown 当成永久拒绝；执行前需要重新取得可验证能力。外部效果的稳定 effect identity 由 Host 根据团队、任务和已声明效果导出；模型提供的 `idempotencyKey` 只是非权威输入，不能覆盖 Host identity。`prepare` 必须先持久化 `outcome_unknown` 与 attempt fence，再允许调用外部系统；只有持有当前 attempt 的结果或精确 direct-human root 的 `resolve_unknown` 才能解除阻塞。对于参与稳定 command id、receipt 和幂等重放协议的工具，可以在协议边界内收敛为一次逻辑效果；任意外部 UI 点击、未提供 receipt 的系统、网络超时后的第三方动作都**不保证 exactly-once**。
+
+原负责人会话不可继续时，另一个最外层直接用户会话只能在 Host 证明双方绑定同一 canonical `projectKey` 后发起 adopt/handoff；操作必须显示来源、目标、计划 revision 和未决风险，并以 CAS 提交。所有 ownership 变化追加到不可改写的 `ownershipHistory`。adopt 撤销所有旧 worker 的 lease/claim，把其未完成任务安全放回 `pending`；旧 child 只保留审计身份，绝不 reparent 给新 root。跨项目、仅项目同名、普通成员、自动续轮或缺少直接用户授权的请求全部拒绝。接管只改变后续协调权，不篡改旧 attempt、checkpoint、消息和任务历史。Stop、adopt、reopen 或新 attempt 之后，旧 complete/release/checkpoint 不得改变状态；只有当前 fence 或已持久化且完全匹配的 receipt 可以幂等收敛。
+
+旧存储迁移采用非破坏门禁：空团队或没有 worker 的团队进入 `draft + legacy_unplanned`；仍有活跃 worker 的团队不被迁移强行中断，但标记 legacy gate，禁止新的扩张、spawn 或 claim，直到 direct-human root 按当前 canonical 计划 recommit。迁移保留既有成员、任务顺序、完成历史和审计字段。
+
 ## 消息授权
 
 团队插件先验证调用者是精确 live agent，且发送者与接收者属于同一活跃团队。队友到队友的消息仍通过固定负责人作为官方 subagent 的直接父级进行投递，从而不绕过官方 lineage 检查。消息使用 `coordinator/relay` 来源并记录真实 `senderSessionId`，永远不获得 `user` 权限。
@@ -36,7 +60,7 @@
 
 ## 团队运行时任务（旧任务板）
 
-团队运行时任务状态只有 `pending`、`in_progress`、`completed`。`blockedBy` 从未完成依赖派生，不单独持久化。完成前置任务会自然解除后续任务阻塞。认领要求任务未分配、未阻塞且状态为 pending。这套任务继续保存在 `agent_teams.json`，由团队模型工具维护；它不会自动迁移、复制或双写到下面的 Project Tasks。
+团队运行时任务保留 `pending`、`in_progress`、`completed`、`cancelled` 四个持久主状态。桌面与手机把它们连同 Host 门禁派生为 Ready / Running / Attention / Done 四个主区；`cancelled` 只进入历史，Attention 是阻塞、失败、权限未知、陈旧租约或副作用不确定等事实的安全投影，不是模型估算的第五种完成百分比。`blockedBy` 从未完成依赖派生，不单独冒充进度；完成前置任务会自然解除后续任务阻塞。认领要求任务已属于已提交计划、未分配、未阻塞且状态为 `pending`，并发布新的 claim fencing。这套任务继续保存在 `agent_teams.json`，由团队模型工具维护；它不会自动迁移、复制或双写到下面的 Project Tasks。
 
 ## Project Tasks（项目级任务域）
 

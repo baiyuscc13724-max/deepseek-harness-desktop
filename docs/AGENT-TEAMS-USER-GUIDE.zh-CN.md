@@ -72,6 +72,21 @@
 请列出所有团队、未完成任务、跨团队阻塞和文件冲突风险，不要为了提高并行数而新增成员。
 ```
 
+## 先提交计划，再开始执行
+
+新团队先形成可检查的计划 draft。draft 应列出目标、持久任务、依赖、负责人、文件或外部资源边界、所需能力，以及可能产生的外部副作用。只要计划仍是 draft，成员就不能启动，任务也不能认领或完成；“已经写进输入框”“负责人说可以”或出现成员占位都不等于计划已提交。
+
+Host 提交计划时会绑定计划 hash 和 revision。完全相同的请求重放会返回同一计划，不会重复创建成员；如果任务、边界、权限、费用风险或外部副作用发生实质变化，必须重新检查并提交新 revision。公开添加成员必须同时绑定至少一个已经持久化的任务；无任务 spawn 会在启动成员前被拒绝。
+
+任务工作区使用四个主区：
+
+- **Ready**：计划已提交且前提满足，尚未持有有效 claim；
+- **Running**：Host 已发布当前 attempt 和 claim fencing，成员正在执行；
+- **Attention**：依赖、失败、权限 unknown、陈旧 claim、未确认外部副作用或其他事实需要处理；
+- **Done**：Host 已接受当前 claim/attempt 的完成写入。
+
+`Cancelled` 保留在历史中，不冒充 Done。页面不会根据模型措辞猜测“73% 完成”之类的百分比；只显示 Host 已验证的里程碑计数、attempt、最后活动时间和明确状态。成员提交的 checkpoint/下一步会标为**未验证自报**，可用于恢复上下文，但不是完成证明、权限证明或外部操作成功证明。
+
 ## 普通 subagent 与团队成员的区别
 
 两者都使用独立上下文，但用途和生命周期不同：
@@ -282,6 +297,18 @@ AI 的选择是成本与任务风险之间的默认策略，不是精确费用�
 ```text
 成员“实现者”失败了。先检查它的状态和文件改动；释放它的进行中任务，优雅退役。若无法响应则强制退役。然后创建“实现者-替补”，把未完成任务和必要背景重新交给它，不要重复已核验的成果。
 ```
+
+## Stop、恢复与外部副作用
+
+用户 Stop 会先把新的暂停 epoch 持久化，再取消排队工作并中断成员。因此，即使某个中断调用失败，迟到的启动、认领或完成写入也不能越过暂停门禁。Stop 后不要依靠刷新页面或重新发送旧提示来“隐式继续”。
+
+恢复分两步：先生成只读 Resume preview，核对哪些任务可继续、哪些成员失败、哪些 claim 已陈旧，以及哪些权限或外部结果仍不确定；预览完成后团队仍是 `paused`。再由最外层直接用户明确提交该 preview。提交时 Host 会比较 request、团队 revision 和 pause epoch，并原子保存 receipt；过期预览会拒绝而不是套用到新状态。健康节点可以继续，异常节点留在 Attention；一个失败成员不会冻结全部团队。重复提交完全相同且已经成功的 request/CAS 只返回既有 receipt，不重复唤醒；旧 token 或同 request 的不同内容会拒绝。
+
+能力显示 `unknown` 表示当前 Host 没有足够事实证明允许或拒绝，并不等于“已授权”。授权投影只有 `unknown`、`human_attested`、`host_verified`：模型声明、普通布尔和成员 checkpoint 不能产生 `host_verified`，也不能把 capability 升级为允许。应先完成绑定当前精确计划 hash 的 Host 验证，再执行受保护操作。成员 checkpoint 和 Todo 里程碑都只是**未验证自报**，不能把 `unknown` 改成允许，也不能冒充 Host 已完成事实。
+
+**Exactly-once 边界：**只有明确参与稳定 command id、receipt 和幂等重放协议的工具，才可以在该协议范围内把重复请求收敛为一次逻辑效果。任意外部 UI 点击、未提供 receipt 的系统操作、第三方网络超时后的动作都不能保证 exactly-once。外部 effect identity 由 Host 导出，模型给出的 `idempotencyKey` 不具权威性。看到 `outcome_unknown` 时不要自动重试；先到权威系统核对是否已发生，再由精确 direct-human root 通过专用 reconciliation 决定继续。
+
+同一 canonical `projectKey` 的另一个最外层会话可以在直接用户授权下预览并提交 adopt/handoff；旧 owner 记录会追加保留，旧 worker 的 claim/lease 被撤销，未完成任务安全回到 `pending`，旧 child 不会被 reparent。跨项目、只因项目名称相同、成员自动发起或没有直接用户授权的接管都会拒绝。旧团队若显示 `legacy_unplanned`，现有活跃 worker 不会被迁移强停，但在按当前计划 recommit 前不能扩张、spawn 或领取新任务。
 
 ## 优雅关闭与强制关闭
 

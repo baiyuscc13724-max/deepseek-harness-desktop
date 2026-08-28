@@ -375,12 +375,13 @@ test('Agent Teams workspace exposes tasks, events, and one unified agent catalog
   assert.match(source, /@media\(max-width:620px\)/u)
 })
 
-test('task board renders cancelled tasks as their own terminal column before derived blockers', async () => {
+test('task board keeps cancellation in history and exposes only four truthful active columns', async () => {
   const source = await clientSource()
   assert.match(source, /boardCancelled: "已取消"/u)
-  assert.match(source, /\{ id: "cancelled", label: t\("boardCancelled"\), limit: 200 \}/u)
-  assert.match(source, /if \(status === "cancelled"\) return "cancelled";\s*if \(relationIds\(task\.blockedBy\)\.length\) return "blocked"/u)
-  assert.match(source, /min-width:1200px.*repeat\(5,minmax\(0,1fr\)\)/u)
+  assert.match(source, /if \(status === "cancelled"\) return "cancelled"/u)
+  assert.match(source, /cancelledTasks\.length \? h\("details", \{ className: "dat-board-history" \}/u)
+  assert.match(source, /var columns = \[\s*\{ id: "ready"[\s\S]*?\{ id: "running"[\s\S]*?\{ id: "attention"[\s\S]*?\{ id: "done"[\s\S]*?\];/u)
+  assert.match(source, /repeat\(4,minmax\(0,1fr\)\)/u)
 })
 
 test('canvas exposes canonical member and task state kinds for complete status presentation', async () => {

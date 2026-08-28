@@ -5,6 +5,9 @@ const path = require('node:path')
 
 const root = path.resolve(__dirname, '..')
 const runtime = fs.readFileSync(path.join(root, 'mobile/android/app/src/main/assets/mobile-runtime.js'), 'utf8')
+const iosRuntime = fs.readFileSync(path.join(root, 'mobile/ios/HarnessMobile/Resources/mobile-runtime.js'), 'utf8')
+const androidCss = fs.readFileSync(path.join(root, 'mobile/android/app/src/main/assets/mobile-compat.css'), 'utf8')
+const iosCss = fs.readFileSync(path.join(root, 'mobile/ios/HarnessMobile/Resources/mobile-compat.css'), 'utf8')
 const client = fs.readFileSync(path.join(root, 'plugins/dsh-agent-teams/lib/client.js'), 'utf8')
 
 test('official Agent Teams exposes stable mobile navigation and context slots', () => {
@@ -55,4 +58,24 @@ test('mobile Scheduled Tasks reuses only the authoritative reminders and project
   assert.match(runtime, /domain\.id === 'tasks'[^]*dat-automation-title/u)
   assert.doesNotMatch(runtime, /mobileTasksState|renderMobileTasksHub|loadMobileTasksHub|harnessMobileTasksHub/u)
   assert.doesNotMatch(runtime, /\/api\/agent-teams\/project\/tasks\/state/u)
+})
+
+test('Android and iOS reuse the official Agent Teams workspace without duplicate task projections', () => {
+  assert.equal(runtime, iosRuntime)
+  assert.equal(androidCss, iosCss)
+  for (const source of [runtime, iosRuntime]) {
+    assert.doesNotMatch(source, /mobileTasksState|renderMobileTasksHub|loadMobileTasksHub|harnessMobileTasksHub|taskProjectionState/u)
+  }
+  const start = client.indexOf('    function taskBoardColumn(task)')
+  const end = client.indexOf('    function taskBoardAttempt(task)', start)
+  assert.ok(start >= 0 && end > start)
+  const boardProjection = client.slice(start, end)
+  assert.match(boardProjection, /taskBoardPermissionAttention\(task\)/u)
+  assert.match(boardProjection, /status === "unknown" \|\| status === "denied" \|\| status === "unavailable"/u)
+  assert.match(boardProjection, /policy === "confirm_each"[^]*outcome === "outcome_unknown"/u)
+  assert.doesNotMatch(boardProjection, /progressPercent|\.percent\b|百分比/u)
+  assert.match(client, /boardPending: "Ready · 就绪"/u)
+  assert.match(client, /boardProgress: "Running · 执行中"/u)
+  assert.match(client, /boardBlocked: "Attention · 需关注"/u)
+  assert.match(client, /boardCompleted: "Done · 已完成"/u)
 })

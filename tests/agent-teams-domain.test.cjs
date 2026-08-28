@@ -4,6 +4,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { mkdir, mkdtemp, readFile, rm, stat, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
+const { createHash } = require('node:crypto')
 
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
 let pluginPromise
@@ -24,6 +25,38 @@ async function fixture() {
 function worker(id, name) {
   const timestamp = new Date().toISOString()
   return { id: `member-${id}`, sessionId: id, name, role: 'test worker', kind: 'worker', state: 'ready', createdAt: timestamp, updatedAt: timestamp }
+}
+
+async function resumeTwoPhase(mod, ctx, store, lead, teamId) {
+  const requestId = `resume-${teamId}`
+  const preview = await mod.resumePausedTeam(ctx, store, lead, { teamId, requestId })
+  return mod.resumePausedTeam(ctx, store, lead, {
+    teamId, requestId, commit: true, previewId: preview.preview.previewId,
+    expectedPauseEpoch: preview.preview.pauseEpoch,
+    expectedTeamRevision: preview.preview.teamRevision
+  })
+}
+
+async function activateCurrentPlan(store, teamId) {
+  await store.mutate(document => {
+    const team = document.teams.find(candidate => candidate.id === teamId)
+    const material = {
+      objective: team.objective,
+      tasks: team.tasks.map(task => ({
+        id: task.id, title: task.title, description: task.description, dependsOn: task.dependsOn,
+        crossTeamDependsOn: task.crossTeamDependsOn || [], files: task.files || [], capabilities: task.capabilities || [],
+        externalEffects: (task.externalEffects || []).map(effect => ({ name: effect.name, policy: effect.policy, idempotencyKey: effect.idempotencyKey }))
+      }))
+    }
+    const timestamp = new Date().toISOString()
+    const hash = createHash('sha256').update(JSON.stringify(material)).digest('hex')
+    team.plan = {
+      phase: 'active', revision: team.plan?.revision || 1, hash,
+      committedAt: timestamp, activatedAt: timestamp, migrationState: 'ready',
+      authorization: { source: 'human_attested', attestedAt: timestamp, confirmedPlanHash: hash, permissions: 'unknown', files: 'unknown', cost: 'unknown', externalSideEffects: 'unknown' }
+    }
+    team.updatedAt = timestamp
+  })
 }
 
 test('disabled Agent Teams initialization creates no storage file', async () => {
@@ -60,7 +93,7 @@ test('v1 store migration performs crash reconciliation in the same initializatio
     const store = new mod.AgentTeamsStore(file)
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
-    assert.equal(migrated.version, 4)
+    assert.equal(migrated.version, 5)
     assert.deepEqual(migrated.settings, legacy.settings)
     const migratedTeam = migrated.teams[0]
     assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-lead').state, 'ready')
@@ -68,7 +101,13 @@ test('v1 store migration performs crash reconciliation in the same initializatio
     assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-worker').runId, undefined)
     assert.equal(migratedTeam.messages[0].status, 'failed')
     assert.match(migratedTeam.messages[0].deliveryError, /retry manually/u)
-    assert.deepEqual(migratedTeam.tasks, legacy.teams[0].tasks)
+    assert.equal(migratedTeam.tasks[0].id, legacy.teams[0].tasks[0].id)
+    assert.equal(migratedTeam.tasks[0].state, 'completed')
+    assert.equal(migratedTeam.tasks[0].description, 'durable detail')
+    assert.deepEqual(migratedTeam.tasks[0].files, ['src/legacy.js'])
+    assert.equal(migratedTeam.tasks[0].completedAt, timestamp)
+    assert.equal(migratedTeam.tasks[0].attempt, 0)
+    assert.deepEqual(migratedTeam.tasks[0].attemptHistory, [])
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -81,7 +120,7 @@ test('v2 stores migrate additively to the bootstrap-capable schema', async () =>
     await writeFile(file, `${JSON.stringify({ version: 2, settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 }, teams: [] })}\n`, 'utf8')
     const store = new mod.AgentTeamsStore(file)
     await store.init()
-    assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 4)
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 5)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -106,7 +145,8 @@ test('attention, resume planning, and confirmed retirement task release are dete
   assert.deepEqual(attention.blockedTasks, ['dependent'])
   const plan = mod.buildResumePlan(team, [team])
   assert.equal(plan.automaticallyWoken, false)
-  assert.deepEqual(plan.failedMemberIds, ['failed-id'])
+  assert.deepEqual(plan.attentionMemberIds, ['failed-id'])
+  assert.deepEqual(plan.nodes, [{ memberId: 'failed-id', status: 'attention', reason: 'member state is failed' }])
   assert.deepEqual(plan.strandedTaskIds, ['stranded'])
   const released = mod.releaseRetiredMemberTasks(team, 'failed-session', timestamp)
   assert.deepEqual(released, ['stranded'])
@@ -360,6 +400,8 @@ test('one fixed root lead may own multiple peer teams with explicit selection', 
       teamId: second.id, title: 'Second task', crossTeamDependsOn: [`${first.id}:${firstTask.id}`]
     })).task
     assert.deepEqual(secondTask.blockedBy, [`${first.id}:${firstTask.id}`])
+    await activateCurrentPlan(fx.store, first.id)
+    await activateCurrentPlan(fx.store, second.id)
     await assert.rejects(
       fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: second.id, taskId: secondTask.id, action: 'claim' }),
       error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
@@ -380,6 +422,7 @@ test('one fixed root lead may own multiple peer teams with explicit selection', 
     const blockedAfterClose = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, {
       teamId: second.id, title: 'Blocked after source closes', crossTeamDependsOn: [`${closingSource.id}:${incomplete.id}`]
     })).task
+    await activateCurrentPlan(fx.store, second.id)
     await fx.store.mutate(document => { document.teams.find(team => team.id === closingSource.id).state = 'closed' })
     const blockedProjection = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session', second.id).team.tasks.find(task => task.id === blockedAfterClose.id)
     assert.deepEqual(blockedProjection.blockedBy, [`${closingSource.id}:${incomplete.id}`])
@@ -408,6 +451,7 @@ test('reopen and complete preserve dependency consistency', async () => {
     const team = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Dependency consistency' })
     const prerequisite = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Prerequisite' })).task
     const dependent = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Dependent', dependsOn: [prerequisite.id] })).task
+    await activateCurrentPlan(fx.store, team.id)
     await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'claim' })
     await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'complete' })
     await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: dependent.id, action: 'claim' })
@@ -455,6 +499,7 @@ test('cancelled dependents do not falsely prevent reopening their completed prer
     const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Ignore cancelled dependents in progress guards' })
     const prerequisite = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Completed prerequisite' })).task
     const dependent = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Cancelled dependent', dependsOn: [prerequisite.id] })).task
+    await activateCurrentPlan(fx.store, team.id)
     await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'claim' })
     await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'complete' })
     await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: dependent.id, action: 'cancel' })
@@ -491,10 +536,12 @@ test('cross-team prerequisite completion and claim remain atomic across stores',
     const source = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Atomic source' })
     const target = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Atomic target' })
     const prerequisite = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: source.id, title: 'Prerequisite' })).task
+    await activateCurrentPlan(fx.store, source.id)
     await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: source.id, taskId: prerequisite.id, action: 'claim' })
     const dependent = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, {
       teamId: target.id, title: 'Dependent', crossTeamDependsOn: [`${source.id}:${prerequisite.id}`]
     })).task
+    await activateCurrentPlan(fx.store, target.id)
     const peer = new fx.mod.AgentTeamsStore(fx.file)
     await peer.init()
     let unsafePublication = false
@@ -592,13 +639,14 @@ test('shared tasks enforce dependencies and exactly one concurrent claimant', as
 
     const base = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Foundation', files: ['src/shared.js'] })).task
     const dependent = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Integration', dependsOn: [base.id], files: ['src/shared.js'] })).task
+    await activateCurrentPlan(fx.store, team.id)
 
     await assert.rejects(
       fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: dependent.id, action: 'claim' }),
       error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
     )
-    await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: base.id, action: 'claim' })
-    await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: base.id, action: 'complete' })
+    const baseClaim = (await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: base.id, action: 'claim' })).task
+    await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: base.id, action: 'complete', claimId: baseClaim.claimId, leaseEpoch: baseClaim.leaseEpoch })
 
     const claims = await Promise.allSettled([
       fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: dependent.id, action: 'claim' }),
@@ -634,6 +682,7 @@ test('task updates distinguish invalid state from caller permission failures', a
     const task = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, {
       teamId: team.id, title: 'Lead-owned task', assigneeSessionId: 'lead-session'
     })).task
+    await activateCurrentPlan(fx.store, team.id)
 
     await assert.rejects(
       fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: task.id, action: 'complete' }),
@@ -674,6 +723,7 @@ test('repeated claim and assign are idempotent while different members still con
     const storedTask = id => fx.store.snapshot().teams.find(item => item.id === team.id).tasks.find(candidate => candidate.id === id)
 
     const task = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Handoff', files: ['src/handoff.js'] })).task
+    await activateCurrentPlan(fx.store, team.id)
     const claimed = (await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: task.id, action: 'claim' })).task
     assert.equal(claimed.status, 'in_progress')
     assert.equal(claimed.assignee, 'worker-a')
@@ -719,6 +769,7 @@ test('repeated claim and assign are idempotent while different members still con
 
     // Races still admit exactly one claimant: the replay fulfils while the other member stays rejected.
     const target = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Raced' })).task
+    await activateCurrentPlan(fx.store, team.id)
     await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: target.id, action: 'claim' })
     const outcomes = await Promise.allSettled([
       fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: target.id, action: 'claim' }),
@@ -828,12 +879,13 @@ test('completed member results persist on tasks and project to the user without 
       title: 'Deliver a visible result',
       assigneeSessionId: 'result-worker'
     })).task
+    await activateCurrentPlan(fx.store, team.id)
     reconciler = fx.mod.createSubagentEventReconciler(ctx, fx.store, Promise.resolve(), 60_000)
     const started = reconciler.enqueue('start', { id: 'result-worker', runId: 'result-run' })
     await reconciler.flush()
     await started
-    await fx.mod.updateTask(fx.store, { id: 'result-worker' }, { teamId: team.id, taskId: task.id, action: 'claim' })
-    await fx.mod.updateTask(fx.store, { id: 'result-worker' }, { teamId: team.id, taskId: task.id, action: 'complete' })
+    const resultClaim = (await fx.mod.updateTask(fx.store, { id: 'result-worker' }, { teamId: team.id, taskId: task.id, action: 'claim' })).task
+    await fx.mod.updateTask(fx.store, { id: 'result-worker' }, { teamId: team.id, taskId: task.id, action: 'complete', claimId: resultClaim.claimId, leaseEpoch: resultClaim.leaseEpoch })
     const ended = reconciler.enqueue('end', {
       id: 'result-worker',
       runId: 'result-run',
@@ -889,8 +941,7 @@ test('user-aborted root turns synchronously clear queued wakeups and interrupt o
   mod.observeUserStops(ctx, store, new Promise(() => {}))
   handlers['session/event'](session, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
   assert.deepEqual(cancelCalls, [[{ kind: 'user' }]])
-  assert.deepEqual(interrupts.map(([id]) => id), ['child-a', 'child-b'])
-  assert.ok(interrupts.every(([, authority]) => authority.kind === 'ancestor' && authority.agent === lead))
+  assert.deepEqual(interrupts, [], 'children are interrupted only after the durable pause reconciliation, never synchronously before it')
 
   const timestamp = new Date().toISOString()
   const document = {
@@ -933,6 +984,7 @@ test('pause gate survives initial reconciliation failure and resume repairs dura
       document.teams.find(candidate => candidate.id === team.id).members.push(worker('repair-child', 'Repair'))
     })
     const task = (await fx.mod.createTask(fx.store, { id: lead.id }, { teamId: team.id, title: 'Remain gated until durable resume' })).task
+    await activateCurrentPlan(fx.store, team.id)
 
     const unavailable = Promise.reject(new Error('initial pause coordination unavailable'))
     fx.mod.observeUserStops(ctx, fx.store, unavailable)
@@ -949,7 +1001,7 @@ test('pause gate survives initial reconciliation failure and resume repairs dura
       error => error?.code === 'AGENT_TEAMS_PAUSED'
     )
 
-    const resumed = await fx.mod.resumePausedTeam(ctx, fx.store, lead, { teamId: team.id })
+    const resumed = await resumeTwoPhase(fx.mod, ctx, fx.store, lead, team.id)
     assert.equal(resumed.team.state, 'active')
     assert.equal(resumed.team.status, 'active')
     assert.equal(resumed.resumePlan.automaticallyWoken, false)
@@ -961,7 +1013,7 @@ test('pause gate survives initial reconciliation failure and resume repairs dura
     assert.equal(projected.teams.find(candidate => candidate.id === team.id).status, 'active')
     const claimed = await fx.mod.updateTask(fx.store, { id: 'repair-child' }, { teamId: team.id, taskId: task.id, action: 'claim' })
     assert.equal(claimed.task.status, 'in_progress')
-    assert.deepEqual(interrupts, ['repair-child'])
+    assert.deepEqual(interrupts, [], 'Stop uses the durable drain path instead of pre-persistence interruption')
     assert.deepEqual(drains, [['repair-child']])
     assert.ok(warnings.some(warning => /initial pause coordination unavailable/u.test(warning)))
   } finally { await rm(fx.root, { recursive: true, force: true }) }
@@ -1028,7 +1080,7 @@ test('explicit user stop preserves failures, isolates late starts, and projects 
     assert.equal(snapshot.members[1].runId, undefined)
     assert.equal(warnings.length, 0)
 
-    await fx.mod.resumePausedTeam(ctx, fx.store, lead, { teamId: team.id })
+    await resumeTwoPhase(fx.mod, ctx, fx.store, lead, team.id)
     snapshot = fx.store.snapshot().teams[0]
     assert.equal(snapshot.state, 'active')
     assert.equal(snapshot.members[1].state, 'ready')
@@ -1075,7 +1127,7 @@ test('queued lifecycle starts cannot cross an explicit Stop and resume epoch', a
     await paused
 
     const ignoredWhilePaused = reconciler.enqueue('start', { id: 'epoch-child', runId: 'queued-while-paused' })
-    await fx.mod.resumePausedTeam(ctx, fx.store, lead, { teamId: team.id })
+    await resumeTwoPhase(fx.mod, ctx, fx.store, lead, team.id)
     await reconciler.flush()
     await Promise.all([queuedBeforeStop, ignoredWhilePaused])
 
