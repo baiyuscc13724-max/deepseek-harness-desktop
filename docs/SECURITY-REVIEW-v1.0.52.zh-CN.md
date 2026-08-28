@@ -105,6 +105,8 @@ Android 插件安装改为临时目录 + 备份目录的可恢复替换。Window
 
 Windows 打包组件健康/回滚门禁会等待 baseline 自检进程真正退出并释放 Electron 单实例锁，再启动组件激活。该修复只消除固定 2 秒等待造成的测试竞态；健康确认、失败回滚、状态存储和正式产物信任边界没有放宽。
 
+Linux Electron 导航安全门禁仍必须使用真实 `sendInputEvent` 并在页面侧观察 `event.isTrusted === true`。夹具新增 compositor 帧同步、mouse-move hit-test 预热和 2 秒有界 DOM 观察，只吸收云 Runner 的异步投递延迟，不以 `element.click()` 或模型标记替代真实输入证据。
+
 ## 7. 本地隔离验证证据
 
 在未安装 APK、未升级或重启当前 Harness Desktop 的维护工作树中完成：

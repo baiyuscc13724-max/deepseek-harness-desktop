@@ -11,6 +11,17 @@ const { BrowserSecurityPolicy } = require('../../electron/bridge/browser-securit
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 const exerciseRealInput = process.env.HARNESS_BROWSER_TEST_REAL_INPUT === '1'
 
+async function waitForDomClick(contents, expectedId, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs
+  let observed
+  while (Date.now() < deadline) {
+    observed = await contents.executeJavaScript('window.__lastClick', true).catch(() => undefined)
+    if (observed?.id === expectedId) return observed
+    await wait(25)
+  }
+  return observed
+}
+
 function listen(server) {
   return new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -111,8 +122,14 @@ async function run() {
     }
 
     const trustedClick = async selector => {
+      if (exerciseRealInput) {
+        view.webContents.focus()
+        await view.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))', true)
+      }
       const target = await view.webContents.executeJavaScript(`(() => { const element=document.querySelector(${JSON.stringify(selector)}); const rect=element.getBoundingClientRect(); const tag=element.tagName.toLowerCase(); const submit=element.type==='submit'||element.type==='image'; return { x:rect.left+rect.width/2, y:rect.top+rect.height/2, url:String(tag==='a'?element.href:(submit?element.formAction:'')) } })()`, true)
       if (exerciseRealInput) {
+        view.webContents.sendInputEvent({ type: 'mouseMove', x: target.x, y: target.y })
+        await wait(20)
         view.webContents.sendInputEvent({ type: 'mouseDown', x: target.x, y: target.y, button: 'left', clickCount: 1 })
         view.webContents.sendInputEvent({ type: 'mouseUp', x: target.x, y: target.y, button: 'left', clickCount: 1 })
       } else {
@@ -155,7 +172,7 @@ async function run() {
     lane.markModel('observe-after-resume')
     assert.equal(lane.snapshot().actor, 'cancelled-model', 'a new model action must not revive the stopped document epoch')
     if (exerciseRealInput) {
-      const observedClick = await view.webContents.executeJavaScript('window.__lastClick', true)
+      const observedClick = await waitForDomClick(view.webContents, 'no-navigation')
       assert.deepEqual(observedClick, { trusted: true, id: 'no-navigation' }, `unexpected DOM click provenance: ${JSON.stringify(observedClick)}`)
     }
     await wait(1_200)

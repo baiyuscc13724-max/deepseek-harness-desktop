@@ -92,6 +92,7 @@ v1.0.52 是一次统一的桌面、Android 与 iOS/iPadOS 源码稳定更新，�
 - Android `testDebugUnitTest + lintDebug + assembleDebug`：50 个任务，`BUILD SUCCESSFUL`；
 - Android 插件重复安装压力测试：连续 3 轮通过；
 - Windows 打包组件健康/回滚门禁会等待 baseline 自检进程真正退出并释放单实例锁，不再以固定 2 秒等待留下活动进程而误报 `awaiting-health` 超时；
+- Linux Electron 导航安全门禁在发送真实鼠标输入前等待 compositor 帧并建立 hit-test，再有界等待 DOM `isTrusted` 点击证据，避免云 Runner 调度延迟造成未定义误报，同时不降级真实输入要求；
 - Session Timeline 真实 Electron 夹具：通过；
 - Right Workspace 首页/工具页/窄屏真实 Electron 几何夹具：通过；
 - Android/iOS 共用 runtime 与 CSS：合并后逐字节一致；

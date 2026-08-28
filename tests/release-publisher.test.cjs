@@ -589,7 +589,12 @@ test('Linux Electron gates install and configure the SUID sandbox before exercis
   const desktopExercise = releaseSteps.find(step => step.name === 'Verify browser navigation security in Electron (Windows and macOS)')
   assert.equal(linuxConfigure.if, "runner.os == 'Linux'")
   assert.equal(linuxExercise.if, "runner.os == 'Linux'")
+  assert.equal(linuxExercise.env.HARNESS_BROWSER_TEST_REAL_INPUT, '1')
   assert.equal(desktopExercise.if, "runner.os != 'Linux'")
+  const browserFixture = read('tests/fixtures/browser-navigation-guard-electron.cjs')
+  assert.match(browserFixture, /requestAnimationFrame\(\(\) => requestAnimationFrame/u, 'real input must wait for a composited renderer frame')
+  assert.match(browserFixture, /type: 'mouseMove'[\s\S]*await wait\(20\)[\s\S]*type: 'mouseDown'/u, 'real input must establish hit testing before the click')
+  assert.match(browserFixture, /waitForDomClick\(view\.webContents, 'no-navigation'\)/u, 'DOM provenance must use a bounded asynchronous observation')
 })
 
 test('pre-Tag candidate disables the opaque previous-stable upgrade loop and retains fast current-package gates', () => {
