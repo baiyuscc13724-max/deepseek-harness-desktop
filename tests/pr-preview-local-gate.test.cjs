@@ -49,7 +49,7 @@ async function loadGate() {
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harness-pr-preview-gate-test-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
   const bundle = path.join(root, 'candidate')
   const input = path.join(root, 'component-input')
   const profile = path.join(root, 'profile')

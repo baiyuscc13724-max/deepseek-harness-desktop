@@ -94,6 +94,7 @@ v1.0.52 是一次统一的桌面、Android 与 iOS/iPadOS 源码稳定更新，�
 - Windows 打包组件健康/回滚门禁会等待 baseline 自检进程真正退出并释放单实例锁，不再以固定 2 秒等待留下活动进程而误报 `awaiting-health` 超时；
 - Linux Electron 导航安全门禁在发送真实鼠标输入前等待 compositor 帧并建立 hit-test，再有界等待 DOM `isTrusted` 点击证据，避免云 Runner 调度延迟造成未定义误报，同时不降级真实输入要求；
 - 云端 Windows 审计实测受控 `app.asar.unpacked` 为 31.69 MiB；仅将该项上限从 31 MiB 收紧调整为 32 MiB，文件数、DSH runtime/marketplace 禁止物理展开及其他包体预算保持不变；
+- PR Preview 本地门禁清理临时 profile 时对 Windows `EBUSY`/`EPERM` 使用 Node 原生有界重试；持续锁仍会失败，不会吞掉测试或清理错误；
 - Session Timeline 真实 Electron 夹具：通过；
 - Right Workspace 首页/工具页/窄屏真实 Electron 几何夹具：通过；
 - Android/iOS 共用 runtime 与 CSS：合并后逐字节一致；

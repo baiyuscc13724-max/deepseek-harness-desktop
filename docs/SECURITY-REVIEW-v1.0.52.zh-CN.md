@@ -109,6 +109,8 @@ Linux Electron 导航安全门禁仍必须使用真实 `sendInputEvent` 并在�
 
 Windows 云端产物审计实测 `app.asar.unpacked` 为 31.69 MiB；对应预算只从 31 MiB 调整为 32 MiB。unpacked 文件数上限、禁止整个 DSH runtime 与 marketplace 物理展开、MinGit、locale、app.asar、安装包和总目录预算继续独立强制执行。
 
+PR Preview 本地门禁删除临时 profile 时使用 Node `fs.rm` 的有界 `maxRetries`/`retryDelay`，仅吸收 Windows 短暂 `EBUSY`/`EPERM`。重试耗尽仍抛错，候选验证、健康确认和证据文件断言不变。
+
 ## 7. 本地隔离验证证据
 
 在未安装 APK、未升级或重启当前 Harness Desktop 的维护工作树中完成：

@@ -36,6 +36,7 @@
 - Windows 打包组件健康/回滚门禁现在等待 baseline 自检进程真正退出并释放单实例锁，移除固定 2 秒后继续导致 `awaiting-health` 假超时的竞态；正式健康确认与回滚判定保持不变。
 - Linux Electron 导航安全门禁在真实鼠标输入前等待 compositor 帧并先发送 mouse move 建立 hit-test，再有界等待 DOM `isTrusted` 点击证据；消除云 Runner 调度延迟导致的 `undefined` 假失败，不改成脚本点击。
 - Windows 云端审计实测受控 `app.asar.unpacked` 为 31.69 MiB；按 v1.0.52 正式插件增长仅把该项预算从 31 MiB 调整到 32 MiB，物理文件数、禁止整个 DSH runtime/marketplace 展开以及其他产物预算均不放宽。
+- PR Preview 本地门禁的临时 profile 清理使用 Node 原生有界 `maxRetries`/`retryDelay`，吸收 Windows 杀毒或进程收尾造成的短暂 `EBUSY`/`EPERM`；持续锁仍会使门禁失败。
 - 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由、移动更新示例和发布工作流统一到 `1.0.52`；Android `versionCode=1005200`，iOS build code 为 `10052`。
 - 正式发布只走仓库 resumable publisher：精确 main SHA、不可变 `v1.0.52`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。
 - 已发布 `v1.0.51` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变，不移动、不覆盖、不复用。
