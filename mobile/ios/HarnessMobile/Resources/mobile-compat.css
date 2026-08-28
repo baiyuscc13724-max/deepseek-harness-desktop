@@ -2550,7 +2550,7 @@
     font-size: 25px !important;
   }
 
-  #harness-mobile-input-menu {
+  #harness-mobile-input-menu:not([hidden]) {
     box-sizing: border-box !important;
     position: fixed !important;
     left: 12px !important;
