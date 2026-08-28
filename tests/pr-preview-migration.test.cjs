@@ -24,7 +24,7 @@ test('PR preview updater stays inside the desktop-shell component boundary', asy
   )
   assert.match(main, /new PrPreviewUpdateService/)
   assert.match(main, /new ComponentUpdateService/)
-  assert.match(main, /launchReadyComponentUpdate\(context\.component\)/)
+  assert.match(main, /launchReadyComponentUpdate\(context\.component, progress => sendPrPreviewUpdateProgress\(progressId, progress\)\)/)
   assert.match(main, /PrPreviewActivationStore/)
 
   assert.equal(pkg.main, 'electron/bootstrap.cjs')
@@ -74,7 +74,7 @@ test('legacy preview IPC stays zero-input while unified actions use opaque ids a
   assert.match(main, /enabled: true/)
   assert.match(main, /const current = await getPrPreviewUpdateState\(\)[\s\S]*if \(current\.ready && current\.candidate\)/)
   assert.doesNotMatch(main, /if \(!preferences\.previewEnabled\)/)
-  assert.match(main, /if \(!isPendingPreviewReady\(componentState, activation\)\) await stagePrPreviewUpdate\(candidateId\)/)
+  assert.match(main, /if \(!isPendingPreviewReady\(componentState, activation\)\) \{[\s\S]*await stagePrPreviewUpdate\(candidateId\)[\s\S]*\} else await ensureStateStore/)
   assert.match(main, /else await ensureStateStore\(\)\.markPreviewCandidate\(activation\.candidate\.sequence, activation\.candidate\.headSha\)/)
   assert.match(main, /prNumber: pending\.discovery\.prNumber[\s\S]*provider: pending\.discovery\.provider/)
   assert.match(preload, /checkPrPreviewUpdates: \(\) => ipcRenderer\.invoke\('prPreviewUpdates:check'\)/)

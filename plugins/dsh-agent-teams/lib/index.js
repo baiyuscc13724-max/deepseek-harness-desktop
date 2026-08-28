@@ -28,6 +28,7 @@ const UI_MAX_EVENTS_PER_TEAM = 50;
 const UI_MAX_TASK_WORKFLOW_EVENTS = 80;
 const UI_MAX_TASK_RUNTIME_SOURCE_EVENTS = 2_000;
 const UI_MAX_TASK_PLAN_ITEMS = 40;
+const UI_MAX_OWNERSHIP_EVENTS = 8;
 const UI_TASK_DETAIL_DESCRIPTION_CHARS = 32_768;
 const UI_TASK_RESULT_CHARS = 12_000;
 const SSE_COALESCE_MS = 50;
@@ -1387,6 +1388,11 @@ function projectTeamForUi(team, nameTeams = []) {
     ...team.messages.flatMap((message) => [message.createdAt, message.deliveredAt]),
   ]) ?? team.updatedAt;
   const lifecycleState = effectiveTeamState(team);
+  const ownershipHistory = (team.ownershipHistory ?? []).slice(-UI_MAX_OWNERSHIP_EVENTS).map((entry) => ({
+    kind: entry.kind,
+    at: entry.at,
+    pauseEpoch: entry.pauseEpoch,
+  }));
   return {
     id: team.id,
     rootLeadSessionId: team.rootLeadSessionId,
@@ -1399,6 +1405,7 @@ function projectTeamForUi(team, nameTeams = []) {
     plan: clone(team.plan),
     ...(team.resume === undefined ? {} : { resume: clone(team.resume) }),
     ...(team.handoff === undefined ? {} : { handoff: { targetRootSessionId: team.handoff.targetRootSessionId, createdAt: team.handoff.createdAt, expiresAt: team.handoff.expiresAt } }),
+    ownershipHistory,
     createdAt: team.createdAt,
     updatedAt: team.updatedAt,
     leadSessionId: team.rootLeadSessionId,
@@ -1408,6 +1415,7 @@ function projectTeamForUi(team, nameTeams = []) {
     projection: {
       tasksTruncated: tasks.length < team.tasks.length,
       eventsTruncated: visibleMessages.length < team.messages.length || inboundEvents.length < rawInbound.length,
+      ownershipHistoryTruncated: ownershipHistory.length < (team.ownershipHistory ?? []).length,
     },
     // Cross-team inbound delivery history is metadata-only; message bodies remain host-private.
     inboundEvents,

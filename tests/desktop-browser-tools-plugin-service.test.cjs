@@ -340,7 +340,8 @@ test('browser_control normalizes unavailable-tab, stop, and shared Computer Use 
     { action: 'click', code: 'tab-unavailable', error: '当前浏览器活动标签已不可用。' },
     { action: 'screenshot', code: 'stopped', error: '浏览器模型控制已停止；需要用户重新启用共享控制。' },
     { action: 'click', code: 'computer-use-authorization-required', error: '浏览器控制等待共享授权。' },
-    { action: 'screenshot', code: 'computer-use-disabled', error: '共享控制会话已停止。' }
+    { action: 'screenshot', code: 'computer-use-disabled', error: '共享控制会话已停止。' },
+    { action: 'click', code: 'browser-outcome-unknown', error: '上一次浏览器状态变更的结果未知。' }
   ]
   for (const rejection of rejections) {
     await withBrowserEndpoint(async action => {

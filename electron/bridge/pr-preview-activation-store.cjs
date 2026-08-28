@@ -1,7 +1,7 @@
 const path = require('node:path')
 const { readFile, rm } = require('node:fs/promises')
 const { atomicWriteJson, normalizeReleasePointer } = require('./component-update-store.cjs')
-const { normalizeVersion } = require('./component-update-contract.cjs')
+const { compareVersions, normalizeVersion } = require('./component-update-contract.cjs')
 const {
   normalizeBaseRef,
   normalizeGithubAuthor,
@@ -11,7 +11,7 @@ const {
   normalizeSequence
 } = require('./pr-preview-update-contract.cjs')
 
-const PR_PREVIEW_ACTIVATION_SCHEMA_VERSION = 2
+const PR_PREVIEW_ACTIVATION_SCHEMA_VERSION = 3
 const MAX_ACTIVATION_HISTORY = 32
 
 function normalizeCandidate(candidate) {
@@ -37,7 +37,7 @@ function sameReleasePointer(left, right) {
 
 function normalizeActivationRecord(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  if (![1, PR_PREVIEW_ACTIVATION_SCHEMA_VERSION].includes(value.schemaVersion)) return null
+  if (![1, 2, PR_PREVIEW_ACTIVATION_SCHEMA_VERSION].includes(value.schemaVersion)) return null
   const capturedAt = new Date(value.capturedAt)
   if (!Number.isFinite(capturedAt.getTime())) throw new Error('PR 预览稳定回滚点时间无效。')
   const baseline = normalizeReleasePointer(value.baseline ?? null)
@@ -45,6 +45,9 @@ function normalizeActivationRecord(value) {
     ? []
     : (Array.isArray(value.history) ? value.history : []).slice(-MAX_ACTIVATION_HISTORY).map(normalizeCandidate)
   const candidate = normalizeCandidate(value.candidate)
+  const stableTakeover = value.schemaVersion >= 3 ? normalizeReleasePointer(value.stableTakeover ?? null) : null
+  if (stableTakeover && !/^\d+\.\d+\.\d+$/.test(stableTakeover.releaseVersion)) throw new Error('正式版接管目标必须是稳定版本。')
+  if (stableTakeover && compareVersions(stableTakeover.releaseVersion, candidate.releaseVersion) <= 0) throw new Error('正式版接管目标必须新于当前 PR 预览。')
   let previousSequence = 0
   for (const entry of [...history, candidate]) {
     if (entry.sequence <= previousSequence) throw new Error('PR 预览激活历史 sequence 必须严格递增。')
@@ -55,7 +58,8 @@ function normalizeActivationRecord(value) {
     capturedAt: capturedAt.toISOString(),
     baseline,
     history,
-    candidate
+    candidate,
+    ...(stableTakeover ? { stableTakeover } : {})
   }
 }
 
@@ -87,7 +91,8 @@ class PrPreviewActivationStore {
       const next = normalizeActivationRecord({
         ...current,
         history: [...current.history, current.candidate].slice(-MAX_ACTIVATION_HISTORY),
-        candidate: proposed
+        candidate: proposed,
+        stableTakeover: null
       })
       await this.atomicWrite(this.file, next)
       return next
@@ -110,24 +115,42 @@ class PrPreviewActivationStore {
     return restored
   }
 
+  async prepareStableTakeover(target) {
+    const current = await this.get()
+    if (!current) return null
+    const pointer = normalizeReleasePointer(target)
+    if (!/^\d+\.\d+\.\d+$/.test(pointer.releaseVersion)) throw new Error('正式版接管目标必须是稳定版本。')
+    if (compareVersions(pointer.releaseVersion, current.candidate.releaseVersion) <= 0) throw new Error('正式版接管目标必须新于当前 PR 预览。')
+    const next = normalizeActivationRecord({ ...current, stableTakeover: pointer })
+    await this.atomicWrite(this.file, next)
+    return next
+  }
+
   async reconcileActive(active) {
     const current = await this.get()
     if (!current) return null
     const pointer = normalizeReleasePointer(active ?? null)
     const releaseVersion = pointer?.releaseVersion || ''
-    if (current.candidate.releaseVersion === releaseVersion) return current
+    if (current.candidate.releaseVersion === releaseVersion) {
+      if (!current.stableTakeover) return current
+      const reconciled = normalizeActivationRecord({ ...current, stableTakeover: null })
+      await this.atomicWrite(this.file, reconciled)
+      return reconciled
+    }
+    if (current.stableTakeover && sameReleasePointer(current.stableTakeover, pointer)) return this.clear()
     const historyIndex = current.history.findIndex(candidate => candidate.releaseVersion === releaseVersion)
     if (historyIndex >= 0) {
       const reconciled = normalizeActivationRecord({
         ...current,
         history: current.history.slice(0, historyIndex),
-        candidate: current.history[historyIndex]
+        candidate: current.history[historyIndex],
+        stableTakeover: null
       })
       await this.atomicWrite(this.file, reconciled)
       return reconciled
     }
     if (sameReleasePointer(current.baseline, pointer)) return this.clear()
-    throw new Error('活动组件指针不属于当前 PR 预览、激活历史或稳定回滚点，拒绝协调。')
+    throw new Error('活动组件指针不属于当前 PR 预览、激活历史或稳定回滚点，也不是已验证的正式版接管目标，拒绝协调。')
   }
 
   async clear() {

@@ -503,6 +503,123 @@ test('client disconnect aborts the handler signal before a side effect can run',
   }
 })
 
+test('a disconnected non-cooperative mutation cannot poison later read actions', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'browser-control-abandoned-'))
+  const stateFile = path.join(root, 'browser.json')
+  let enterHandler
+  const entered = new Promise(resolve => { enterHandler = resolve })
+  const neverSettles = new Promise(() => {})
+  const calls = []
+  const server = new BrowserControlServer({
+    stateFile,
+    handler: async body => {
+      calls.push(body.action)
+      if (body.action === 'scroll') {
+        enterHandler()
+        return neverSettles
+      }
+      return { action: body.action }
+    }
+  })
+  try {
+    await server.start()
+    const secret = JSON.parse(await readFile(stateFile, 'utf8'))
+    const target = new URL('/action', secret.origin)
+    const headers = { Authorization: `Bearer ${secret.token}`, 'Content-Type': 'application/json' }
+    const body = JSON.stringify({ action: 'scroll', request_id: 'abandoned_scroll_001' })
+    const abandoned = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.pathname,
+      method: 'POST',
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(body) }
+    })
+    abandoned.on('error', () => {})
+    abandoned.end(body)
+    await entered
+    abandoned.destroy()
+    await waitFor(() => server.activeRequests.size === 0, 'abandoned browser request did not release its server slot')
+
+    const read = await fetch(`${secret.origin}/action`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ action: 'console', request_id: 'read_after_abandoned_001' }),
+      signal: AbortSignal.timeout(1_000)
+    })
+    assert.equal(read.status, 200)
+    assert.deepEqual((await read.json()).result, { action: 'console' })
+
+    const blockedMutation = await fetch(`${secret.origin}/action`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ action: 'reload', request_id: 'mutation_after_abandoned_001' }),
+      signal: AbortSignal.timeout(1_000)
+    })
+    assert.equal(blockedMutation.status, 409)
+    assert.equal((await blockedMutation.json()).code, 'browser-outcome-unknown')
+    assert.deepEqual(calls, ['scroll', 'console'])
+
+    const stopped = await fetch(`${secret.origin}/action`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ action: 'stop', request_id: 'stop_after_abandoned_001' }),
+      signal: AbortSignal.timeout(1_000)
+    })
+    assert.equal(stopped.status, 200)
+    server.resumeScope('browser')
+
+    const recovered = await fetch(`${secret.origin}/action`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ action: 'reload', request_id: 'mutation_after_recovery_001' }),
+      signal: AbortSignal.timeout(1_000)
+    })
+    assert.equal(recovered.status, 200)
+    assert.deepEqual((await recovered.json()).result, { action: 'reload' })
+  } finally {
+    await server.stop()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('an internally timed-out mutation also leaves read diagnostics available and fences new mutations', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'browser-control-outcome-unknown-'))
+  const stateFile = path.join(root, 'browser.json')
+  const calls = []
+  const server = new BrowserControlServer({
+    stateFile,
+    handler: async body => {
+      calls.push(body.action)
+      if (body.action === 'scroll') {
+        throw Object.assign(new Error('browser input outcome unknown'), { code: 'browser-outcome-unknown', statusCode: 504 })
+      }
+      return { action: body.action }
+    }
+  })
+  try {
+    await server.start()
+    const secret = JSON.parse(await readFile(stateFile, 'utf8'))
+    const headers = { Authorization: `Bearer ${secret.token}`, 'Content-Type': 'application/json' }
+    const post = (action, requestId) => fetch(`${secret.origin}/action`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ action, request_id: requestId }),
+      signal: AbortSignal.timeout(1_000)
+    })
+
+    const timedOut = await post('scroll', 'timed_out_scroll_001')
+    assert.equal(timedOut.status, 504)
+    assert.equal((await timedOut.json()).code, 'browser-outcome-unknown')
+
+    const read = await post('console', 'read_after_timeout_001')
+    assert.equal(read.status, 200)
+    assert.deepEqual((await read.json()).result, { action: 'console' })
+
+    const blockedMutation = await post('reload', 'mutation_after_timeout_001')
+    assert.equal(blockedMutation.status, 409)
+    assert.equal((await blockedMutation.json()).code, 'browser-outcome-unknown')
+    assert.deepEqual(calls, ['scroll', 'console'])
+  } finally {
+    await server.stop()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('replayed request ids reuse one result and conflicting payloads are rejected', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'browser-control-idempotency-'))
   const stateFile = path.join(root, 'browser.json')

@@ -134,7 +134,7 @@ const updateNoticeInstall = document.querySelector('#updateNoticeInstall')
 
 let pendingUpdateKind = 'installer'
 let pendingComponentUpdate = null
-let prPreviewState = { enabled: true, configured: false, checking: false, changing: false, available: false, candidate: null, error: '' }
+let prPreviewState = { enabled: true, configured: false, checking: false, changing: false, available: false, candidate: null, progress: null, error: '' }
 let gitRuntimeState = {
   loading: true, authenticating: false, preparing: false, message: '',
   git: { available: false, source: null, version: null },
@@ -1509,6 +1509,19 @@ function officialSettingsBootstrap() {
     .hd-update-meta { display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--dsw-alias-label-tertiary,#7b8494); font-size:10px; }
     .hd-update-item-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
     .hd-update-item-actions .hd-update-apply { border-color:var(--dsw-alias-brand-primary,#315efb); color:#fff; background:var(--dsw-alias-brand-primary,#315efb); }
+    .hd-update-progress { display:grid; gap:8px; border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#315efb) 26%,var(--dsw-alias-border-l2,#d5d9df)); border-radius:10px; padding:10px 11px; background:color-mix(in srgb,var(--dsw-alias-brand-primary,#315efb) 5%,var(--dsw-alias-bg-layer-2,#f7f8fa)); }
+    .hd-update-progress[data-phase="error"] { border-color:color-mix(in srgb,#d92d20 45%,var(--dsw-alias-border-l2,#d5d9df)); background:color-mix(in srgb,#d92d20 5%,var(--dsw-alias-bg-layer-2,#f7f8fa)); }
+    .hd-update-progress-head { display:flex; justify-content:space-between; gap:12px; color:var(--dsw-alias-label-primary,#20242b); font-size:11px; line-height:1.45; }
+    .hd-update-progress-head span:last-child { flex:none; color:var(--dsw-alias-label-secondary,#667085); }
+    .hd-update-progress-steps { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:5px; margin:0; padding:0; list-style:none; }
+    .hd-update-progress-steps li { display:flex; align-items:center; gap:5px; min-width:0; color:var(--dsw-alias-label-tertiary,#7b8494); font-size:10px; white-space:nowrap; }
+    .hd-update-progress-steps li::before { content:''; box-sizing:border-box; flex:none; width:8px; height:8px; border:1px solid currentColor; border-radius:50%; background:transparent; }
+    .hd-update-progress-steps li[data-state="complete"], .hd-update-progress-steps li[data-state="current"] { color:var(--dsw-alias-brand-primary,#315efb); }
+    .hd-update-progress-steps li[data-state="complete"]::before { border-color:var(--dsw-alias-brand-primary,#315efb); background:var(--dsw-alias-brand-primary,#315efb); }
+    .hd-update-progress-steps li[data-state="current"]::before { border-width:2px; }
+    .hd-update-progress-steps li[data-state="error"] { color:#d92d20; }
+    .hd-update-progress progress { display:block; width:100%; height:7px; border:0; accent-color:var(--dsw-alias-brand-primary,#315efb); }
+    .hd-update-progress-detail { margin:0; color:var(--dsw-alias-label-secondary,#667085); font-size:10px; line-height:1.45; overflow-wrap:anywhere; }
     @media (max-width:640px) { #harness-desktop-version-button { right:5px; bottom:1px; } #harness-desktop-update-center { padding:10px; } .hd-update-center-dialog { width:100%; max-height:100%; border-radius:14px; } .hd-update-center-head, .hd-update-center-toolbar, .hd-update-items { padding-left:14px; padding-right:14px; } .hd-update-item-head { flex-direction:column; } .hd-update-item-badges { justify-content:flex-start; } }
     @media (prefers-reduced-motion:reduce) { #harness-desktop-version-button, #harness-desktop-update-center { transition:none; } }
     [data-hd-mobile-entry-host="true"] { display:flex!important; align-items:center; gap:4px; min-width:0; }
@@ -1532,17 +1545,22 @@ function officialSettingsBootstrap() {
     #harness-desktop-mobile-sync-tooltip span { margin-top:2px; color:var(--dsw-alias-label-secondary,#667085); font-size:11px; line-height:16px; }
     @media (prefers-reduced-motion:reduce) { #harness-desktop-mobile-sync-entry { transition:none; } }
     #harness-desktop-git-row { box-sizing:border-box; margin-top:10px; padding:16px 18px; border:1px solid var(--dsw-alias-border-l2); border-radius:16px; color:var(--dsw-alias-label-primary); background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent); box-shadow:0 5px 18px rgba(43,81,91,.045); }
-    #harness-desktop-git-row .hd-git-compact { display:flex; align-items:center; justify-content:space-between; gap:18px; }
-    #harness-desktop-git-row .hd-git-copy { min-width:0; }
-    #harness-desktop-git-row .hd-git-title { font-size:14px; line-height:22px; }
-    #harness-desktop-git-row .hd-git-summary { overflow:hidden; margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
+    #harness-desktop-git-row .hd-git-compact { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+    #harness-desktop-git-row .hd-git-disclosure { display:flex; flex:1 1 auto; align-items:center; justify-content:space-between; gap:12px; min-width:0; min-height:44px; border-radius:10px; padding:0; background:transparent; text-align:left; }
+    #harness-desktop-git-row .hd-git-disclosure:hover { background:transparent; }
+    #harness-desktop-git-row .hd-git-disclosure:focus-visible { outline:2px solid var(--dsw-alias-brand-primary,#315efb); outline-offset:4px; }
+    #harness-desktop-git-row .hd-git-copy { display:block; min-width:0; }
+    #harness-desktop-git-row .hd-git-title { display:block; font-size:14px; line-height:22px; }
+    #harness-desktop-git-row .hd-git-summary { display:block; overflow:hidden; margin-top:4px; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
+    #harness-desktop-git-row .hd-git-chevron { flex:none; color:var(--dsw-alias-label-tertiary); font-size:16px; line-height:1; transition:transform .16s ease; }
+    #harness-desktop-git-row .hd-git-disclosure[aria-expanded="true"] .hd-git-chevron { transform:rotate(180deg); }
     #harness-desktop-git-row button { box-sizing:border-box; min-height:34px; border:0; border-radius:17px; padding:6px 14px; color:var(--dsw-alias-label-primary); background:var(--dsw-alias-bg-module-platform); font:inherit; font-size:13px; cursor:pointer; }
     #harness-desktop-git-row button:hover { background:var(--dsw-alias-interactive-bg-hover); }
     #harness-desktop-git-row button:disabled { cursor:wait; opacity:.55; }
-    #harness-desktop-git-row .hd-git-switch { position:relative; flex:none; width:42px; min-width:42px; height:24px; min-height:24px; border-radius:12px; padding:0; }
+    #harness-desktop-git-row .hd-git-switch { position:relative; flex:none; width:42px; min-width:42px; height:24px; min-height:24px; border-radius:12px; background:var(--dsw-alias-bg-module-platform); }
     #harness-desktop-git-row .hd-git-switch::after { content:''; position:absolute; left:3px; top:3px; width:18px; height:18px; border-radius:50%; background:var(--dsw-alias-label-tertiary); transition:transform .16s ease,background .16s ease; }
-    #harness-desktop-git-row .hd-git-switch[aria-pressed="true"] { background:var(--dsw-alias-brand-primary,#315efb); }
-    #harness-desktop-git-row .hd-git-switch[aria-pressed="true"]::after { background:#fff; transform:translateX(18px); }
+    #harness-desktop-git-row .hd-git-switch[aria-checked="true"] { background:var(--dsw-alias-brand-primary,#315efb); }
+    #harness-desktop-git-row .hd-git-switch[aria-checked="true"]::after { background:#fff; transform:translateX(18px); }
     #harness-desktop-git-row .hd-git-details { margin-top:14px; border-top:1px solid var(--dsw-alias-border-l2); padding-top:14px; }
     #harness-desktop-git-row .hd-git-details[hidden] { display:none; }
     #harness-desktop-git-row .hd-git-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
@@ -1610,6 +1628,114 @@ function officialSettingsBootstrap() {
     }
   }
 
+  const previewProgressPhases = new Set(['prepare', 'download', 'verify', 'commit', 'ready', 'apply', 'restart', 'error'])
+  const previewProgressSteps = ['下载', '校验', '安装', '重启']
+
+  const normalizePreviewProgress = value => {
+    if (!value || typeof value !== 'object') return null
+    const phase = previewProgressPhases.has(value.phase) ? value.phase : 'prepare'
+    return {
+      phase,
+      failedPhase: previewProgressPhases.has(value.failedPhase) ? value.failedPhase : '',
+      candidateId: String(value.candidateId || '').trim(),
+      releaseVersion: String(value.releaseVersion || '').trim(),
+      component: String(value.component || '').trim(),
+      index: Number.isSafeInteger(Number(value.index)) ? Number(value.index) : 0,
+      totalComponents: Math.max(0, Number.parseInt(value.totalComponents, 10) || 0),
+      received: Math.max(0, Number(value.received) || 0),
+      total: Math.max(0, Number(value.total) || 0),
+      message: String(value.message || '').trim().slice(0, 1000)
+    }
+  }
+
+  const formatUpdateBytes = value => {
+    let amount = Math.max(0, Number(value) || 0)
+    const units = ['B', 'KB', 'MB', 'GB']
+    let unit = 0
+    while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1 }
+    return `${amount >= 10 || unit === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`
+  }
+
+  const previewProgressMessage = progress => {
+    if (!progress) return ''
+    if (progress.phase === 'error') return progress.message || '预览更新失败，可以重试。'
+    if (progress.phase === 'prepare') return '正在验证预览清单与签名…'
+    if (progress.phase === 'download') return `正在下载${progress.component ? ` ${progress.component}` : '预览组件'}…`
+    if (progress.phase === 'verify') return `正在校验${progress.component ? ` ${progress.component}` : '下载内容'}…`
+    if (progress.phase === 'commit') return `正在安装${progress.component ? ` ${progress.component}` : '预览组件'}…`
+    if (progress.phase === 'ready') return '下载、校验与安装已完成，正在准备切换版本…'
+    if (progress.phase === 'apply') return '正在原子切换预览组件…'
+    if (progress.phase === 'restart') return '正在重启并执行健康检查；失败会自动回滚…'
+    return '正在处理预览更新…'
+  }
+
+  const previewProgressForItem = (item, progress) => {
+    if (!progress || !['pr', 'preview', 'pr-preview'].includes(item.kind)) return null
+    if (progress.candidateId && progress.candidateId === item.id) return progress
+    if (progress.releaseVersion && progress.releaseVersion === item.version) return progress
+    return null
+  }
+
+  const paintPreviewProgress = (card, progress) => {
+    const action = card.querySelector('[data-hd-update-action]')
+    let region = card.querySelector('[data-hd-pr-progress]')
+    if (!progress) {
+      region?.remove()
+      card.removeAttribute('aria-busy')
+      if (action) {
+        action.disabled = false
+        setText(action, action.dataset.defaultLabel || '立即更新')
+      }
+      return false
+    }
+
+    const phaseForStep = progress.phase === 'error' ? (progress.failedPhase || 'prepare') : progress.phase
+    const stepIndex = ({ prepare: 0, download: 0, verify: 1, commit: 2, ready: 2, apply: 2, restart: 3 })[phaseForStep] ?? 0
+    const busy = progress.phase !== 'error'
+    const determinate = progress.phase === 'download' && progress.total > 0
+    const percent = determinate ? Math.max(0, Math.min(100, Math.round(progress.received / progress.total * 100))) : null
+    const message = previewProgressMessage(progress)
+    const componentPosition = progress.totalComponents > 0
+      ? `组件 ${Math.min(progress.totalComponents, progress.index + 1)}/${progress.totalComponents}`
+      : ''
+    const bytePosition = determinate ? `${formatUpdateBytes(progress.received)} / ${formatUpdateBytes(progress.total)}` : ''
+
+    if (!region) {
+      region = document.createElement('div')
+      region.dataset.hdPrProgress = ''
+      region.className = 'hd-update-progress'
+      region.setAttribute('role', 'status')
+      region.setAttribute('aria-live', 'polite')
+      region.setAttribute('aria-atomic', 'true')
+      const actions = card.querySelector('.hd-update-item-actions')
+      card.insertBefore(region, actions || null)
+    }
+    region.dataset.phase = progress.phase
+    const head = document.createElement('div')
+    head.className = 'hd-update-progress-head'
+    head.append(createTextNode('strong', '', message), createTextNode('span', '', percent === null ? componentPosition : `${percent}%`))
+    const steps = document.createElement('ol')
+    steps.className = 'hd-update-progress-steps'
+    steps.setAttribute('aria-label', '预览更新阶段')
+    steps.append(...previewProgressSteps.map((label, index) => {
+      const step = createTextNode('li', '', label)
+      step.dataset.state = index < stepIndex ? 'complete' : index === stepIndex ? (progress.phase === 'error' ? 'error' : 'current') : 'pending'
+      return step
+    }))
+    const meter = document.createElement('progress')
+    meter.max = 100
+    if (percent !== null) meter.value = percent
+    meter.setAttribute('aria-label', message)
+    const detail = createTextNode('p', 'hd-update-progress-detail', [componentPosition, bytePosition].filter(Boolean).join(' · ') || (busy ? '请保持应用开启，完成后会自动重启。' : '可检查网络后重试；已下载的无效内容不会被应用。'))
+    region.replaceChildren(head, steps, meter, detail)
+    card.setAttribute('aria-busy', String(busy))
+    if (action) {
+      action.disabled = busy
+      setText(action, progress.phase === 'error' ? '重试更新' : '更新进行中…')
+    }
+    return busy
+  }
+
   const closeUpdateCenter = () => {
     const center = document.querySelector('#harness-desktop-update-center')
     const trigger = document.querySelector('#harness-desktop-version-button')
@@ -1623,6 +1749,7 @@ function officialSettingsBootstrap() {
   const buildUpdateItem = item => {
     const card = document.createElement('article')
     card.className = 'hd-update-item'
+    card.dataset.id = item.id
     card.dataset.actionable = String(item.actionable)
 
     const head = document.createElement('div')
@@ -1665,6 +1792,8 @@ function officialSettingsBootstrap() {
       actions.className = 'hd-update-item-actions'
       const apply = createTextNode('button', 'hd-update-apply', action === 'apply' ? '确认应用' : '立即更新')
       apply.type = 'button'
+      apply.dataset.hdUpdateAction = action
+      apply.dataset.defaultLabel = apply.textContent
       apply.setAttribute('aria-label', `${action === 'apply' ? '应用' : '更新'} ${item.title || item.version || item.id}`)
       apply.addEventListener('click', () => request('update-action', { id: item.id, action }))
       actions.append(apply)
@@ -1695,16 +1824,32 @@ function officialSettingsBootstrap() {
       list.dataset.signature = itemsSignature
       list.replaceChildren(...(items.length ? items.map(buildUpdateItem) : [createTextNode('div', 'hd-update-empty', state.checking ? '正在检查可用更新…' : '当前已是最新')]))
     }
+    const previewProgress = normalizePreviewProgress(state.preview?.progress)
+    let displayedPreviewProgress = null
+    let previewBusy = false
+    for (const item of items) {
+      const card = [...list.querySelectorAll('.hd-update-item')].find(candidate => candidate.dataset.id === item.id)
+      const itemProgress = previewProgressForItem(item, previewProgress)
+      if (itemProgress) displayedPreviewProgress = itemProgress
+      if (card) previewBusy = paintPreviewProgress(card, itemProgress) || previewBusy
+    }
+    if (previewBusy) {
+      for (const action of list.querySelectorAll('[data-hd-update-action]')) action.disabled = true
+    }
+    list.setAttribute('aria-busy', String(previewBusy))
+    center.querySelector('.hd-update-center-dialog')?.setAttribute('aria-busy', String(previewBusy))
     const progress = state.installProgress
-    const summary = progress?.phase === 'current'
-      ? '当前桌面版已经是最新版本'
-      : progress?.phase === 'ready'
-        ? '更新已准备好，等待安装确认'
-        : state.installError
-          ? `更新失败：${state.installError}`
-          : pendingCount > 0
-            ? `${pendingCount} 项待处理；打开中心不会清除提醒。`
-            : '桌面版、组件与 PR 候选会统一显示在这里。'
+    const summary = state.installError
+      ? `更新失败：${state.installError}`
+      : displayedPreviewProgress
+        ? previewProgressMessage(displayedPreviewProgress)
+        : progress?.phase === 'current'
+          ? '当前桌面版已经是最新版本'
+          : progress?.phase === 'ready'
+            ? '更新已准备好，等待安装确认'
+            : pendingCount > 0
+              ? `${pendingCount} 项待处理；打开中心不会清除提醒。`
+              : '桌面版、组件与 PR 候选会统一显示在这里。'
     setText(center.querySelector('[data-hd-update-summary]'), summary)
     const check = center.querySelector('[data-hd-check]')
     check.disabled = Boolean(state.checking || state.installing)
@@ -1790,6 +1935,14 @@ function officialSettingsBootstrap() {
     authenticate.disabled = Boolean(state.loading || state.authenticating || state.preparing || (!ready && !canPrepare))
     setText(refresh, state.loading ? '正在检查…' : '刷新状态')
     setText(authenticate, state.preparing ? '正在安装…' : state.authenticating ? '等待浏览器授权…' : ready ? (github.connected ? '重新连接 GitHub' : '连接 GitHub') : '安装内置 Git')
+    const statusSwitch = row.querySelector('[data-hd-git-status-switch]')
+    const connected = github.connected === true
+    if (statusSwitch) {
+      const connectionLabel = connected ? 'GitHub 已连接' : 'GitHub 未连接'
+      statusSwitch.setAttribute('aria-checked', String(connected))
+      statusSwitch.setAttribute('aria-label', connectionLabel)
+      statusSwitch.title = connectionLabel
+    }
   }
 
   const mountGit = section => {
@@ -1801,8 +1954,11 @@ function officialSettingsBootstrap() {
     row.id = 'harness-desktop-git-row'
     row.innerHTML = `
       <div class="hd-git-compact">
-        <div class="hd-git-copy"><div class="hd-git-title">Git 与仓库连接</div><div class="hd-git-summary" data-hd-git-summary>正在检查 Git 组件…</div></div>
-        <button class="hd-git-switch" type="button" role="switch" aria-pressed="false" aria-expanded="false" aria-controls="harness-desktop-git-details" aria-label="显示 Git 详情" title="显示 Git 详情" data-hd-git-toggle><span hidden>显示详情</span></button>
+        <button class="hd-git-disclosure" type="button" aria-expanded="false" aria-controls="harness-desktop-git-details" aria-label="显示 Git 详情" title="显示 Git 详情" data-hd-git-toggle>
+          <span class="hd-git-copy"><span class="hd-git-title">Git 与仓库连接</span><span class="hd-git-summary" data-hd-git-summary>正在检查 Git 组件…</span></span>
+          <span class="hd-git-chevron" aria-hidden="true">⌄</span>
+        </button>
+        <span class="hd-git-switch" role="switch" aria-checked="false" aria-readonly="true" aria-label="GitHub 未连接" title="GitHub 未连接" data-hd-git-status-switch></span>
       </div>
       <div id="harness-desktop-git-details" class="hd-git-details" data-hd-git-details hidden>
         <div class="hd-git-lines">
@@ -1815,8 +1971,7 @@ function officialSettingsBootstrap() {
       </div>
     `
     row.querySelector('[data-hd-git-toggle]').addEventListener('click', event => {
-      const expanded = event.currentTarget.getAttribute('aria-pressed') !== 'true'
-      event.currentTarget.setAttribute('aria-pressed', String(expanded))
+      const expanded = event.currentTarget.getAttribute('aria-expanded') !== 'true'
       event.currentTarget.setAttribute('aria-expanded', String(expanded))
       event.currentTarget.setAttribute('aria-label', expanded ? '收起 Git 详情' : '显示 Git 详情')
       event.currentTarget.title = expanded ? '收起 Git 详情' : '显示 Git 详情'
@@ -2221,7 +2376,7 @@ async function refreshPrPreviewState({ discover = false } = {}) {
       await publishUpdateState()
       return prPreviewState
     }
-    prPreviewState = { ...prPreviewState, checking: true, available: false, candidate: null }
+    prPreviewState = { ...prPreviewState, checking: true, available: false, candidate: null, progress: null }
     await publishUpdateState()
     const result = await api.checkPrPreviewUpdates()
     prPreviewState = { ...prPreviewState, ...result, checking: false, available: result.available === true, candidate: result.candidate || null, error: '' }
@@ -2377,15 +2532,45 @@ async function runUnifiedUpdateAction(id, action) {
   const safeId = String(id || '').trim()
   if (!safeId || !allowedActions.has(action) || typeof api.runUnifiedUpdateAction !== 'function') return
   const busy = ['install', 'apply'].includes(action)
-  if (busy) updateState = { ...updateState, installing: true, installError: '' }
+  const previewAction = /^(?:pr-[a-f0-9]{64}|active-pr-[1-9]\d*-[a-f0-9]{40})$/.test(safeId)
+  if (busy) {
+    updateState = { ...updateState, installing: true, installError: '' }
+    if (previewAction) {
+      const selected = updateState.items?.find(item => item?.id === safeId)
+      prPreviewState = {
+        ...prPreviewState,
+        checking: true,
+        progress: {
+          kind: 'pr-preview',
+          candidateId: safeId,
+          releaseVersion: String(selected?.version || ''),
+          phase: action === 'apply' ? 'apply' : 'prepare'
+        },
+        error: ''
+      }
+    }
+  }
   await publishUpdateState()
   try {
     const result = await api.runUnifiedUpdateAction(safeId, action)
     if (result && typeof result === 'object') updateState = { ...updateState, ...result }
     if (typeof api.getUnifiedUpdateState === 'function') updateState = { ...updateState, ...(await api.getUnifiedUpdateState()) }
     updateState = { ...updateState, installing: false, installError: '' }
+    if (previewAction) prPreviewState = { ...prPreviewState, checking: false }
   } catch (error) {
-    updateState = { ...updateState, installing: false, installError: error.message || String(error) }
+    const message = error?.message || String(error)
+    updateState = { ...updateState, installing: false, installError: message }
+    if (previewAction) {
+      const previous = prPreviewState.progress && typeof prPreviewState.progress === 'object'
+        ? prPreviewState.progress
+        : { candidateId: safeId, phase: 'prepare' }
+      prPreviewState = {
+        ...prPreviewState,
+        checking: false,
+        progress: { ...previous, failedPhase: String(previous.phase || 'prepare'), phase: 'error', message },
+        error: message
+      }
+    }
   }
   await publishUpdateState()
 }
@@ -3115,7 +3300,10 @@ api.onComponentUpdateProgress(progress => {
   publishUpdateState()
 })
 api.onPrPreviewUpdateProgress(progress => {
-  prPreviewState = { ...prPreviewState, checking: true, progress, error: '' }
+  const phase = String(progress?.phase || 'prepare')
+  const busy = phase !== 'error'
+  prPreviewState = { ...prPreviewState, checking: busy && phase !== 'ready', progress, error: '' }
+  updateState = { ...updateState, installing: busy, installError: '' }
   publishUpdateState()
 })
 

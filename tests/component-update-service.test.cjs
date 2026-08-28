@@ -1,11 +1,11 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { generateKeyPairSync } = require('node:crypto')
-const { mkdir, mkdtemp, rename, rm, writeFile } = require('node:fs/promises')
+const { access, mkdir, mkdtemp, rename, rm, writeFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const { ComponentUpdateStore, componentDirectoryName } = require('../electron/bridge/component-update-store.cjs')
-const { ComponentUpdateService, effectiveComponentLastCheck, safeManifestUrl } = require('../electron/bridge/component-update-service.cjs')
+const { ComponentUpdateService, bundledReleaseSupersedesPointer, effectiveComponentLastCheck, safeManifestUrl } = require('../electron/bridge/component-update-service.cjs')
 const { createSignedComponentDescriptor, createSignedReleaseManifest } = require('../electron/bridge/component-update-builder.cjs')
 
 function signedFixture() {
@@ -90,6 +90,51 @@ test('full desktop version suppresses its own component release without an activ
   assert.equal(result.plan.mode, 'none')
   assert.equal(result.plan.reason, 'release-not-newer')
   assert.deepEqual(result.plan.components, [])
+})
+
+test('a bundled stable release supersedes preview or stale pointers but never a newer in-flight update', () => {
+  const previewPointer = { releaseVersion: '1.0.24-pr.88.1', components: [] }
+  assert.equal(bundledReleaseSupersedesPointer('1.0.24', previewPointer, { phase: 'idle', pending: null }), true)
+  assert.equal(bundledReleaseSupersedesPointer('1.0.23', previewPointer, { phase: 'idle', pending: null }), false)
+  assert.equal(bundledReleaseSupersedesPointer('1.0.24', previewPointer, {
+    phase: 'ready',
+    pending: { releaseVersion: '1.0.24-pr.89.1' }
+  }), true)
+  assert.equal(bundledReleaseSupersedesPointer('1.0.24', previewPointer, {
+    phase: 'ready',
+    pending: { releaseVersion: '1.0.25-pr.90.1' }
+  }), false)
+  assert.equal(bundledReleaseSupersedesPointer('1.0.24', previewPointer, { phase: 'applying', pending: null }), false)
+})
+
+test('adopting the bundled stable baseline removes a ready preview pointer and pending stage', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harness-component-bundled-takeover-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const fixture = signedFixture()
+  const store = new ComponentUpdateStore(root)
+  const component = {
+    id: fixture.shell.id,
+    version: '1.0.24-pr.88.1',
+    sha256: fixture.shell.sha256,
+    directory: componentDirectoryName({ ...fixture.shell, version: '1.0.24-pr.88.1' })
+  }
+  await writeFile(store.pointerFile, `${JSON.stringify({ releaseVersion: '1.0.24-pr.88.1', components: [component] })}\n`)
+  await store.beginStaging({
+    mode: 'components',
+    releaseVersion: '1.0.24',
+    components: [fixture.shell],
+    desiredComponents: [fixture.shell]
+  })
+  await store.markReady()
+  await writeFile(store.previewActivationFile, '{"schemaVersion":3}\n')
+
+  const state = await store.adoptBundledBaseline()
+  assert.equal(await store.pointer(), null)
+  await assert.rejects(access(store.previewActivationFile), error => error?.code === 'ENOENT')
+  assert.equal(state.phase, 'idle')
+  assert.equal(state.active, null)
+  assert.equal(state.pending, null)
+  assert.equal(state.failure, null)
 })
 
 test('stage downloads only changed components and marks the full desired pointer ready', async t => {
