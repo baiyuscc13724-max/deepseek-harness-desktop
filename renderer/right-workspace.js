@@ -25,8 +25,8 @@
  *    并自行调用 controller.handleShortcut(event) 仅暴露 key handler。
  *
  * 断点（与 right-workspace.css 一致）：
- *  - 默认（>900px）：桌面右侧分栏，宽度 = --dsh-right-workspace-width。
- *  - ≤900px：近全宽覆盖层（calc(100vw - 48px)），is-overlay = true。
+ *  - 默认（>900px）：紧凑首页或用户可调的工具覆盖层，不收窄官方工作区。
+ *  - ≤900px：具体工具采用近全宽覆盖层（calc(100vw - 48px)），is-overlay = true。
  *  - ≤620px：全宽覆盖层（100vw）。
  */
 (() => {

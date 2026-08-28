@@ -83,9 +83,9 @@ test('background browser state cannot replace an explicitly selected workspace m
 })
 
 test('Desktop shell exposes one unified right workspace with browser, files and schedules', async () => {
-  const [html, integration, styles, browser, app, links] = await Promise.all([
+  const [html, integration, styles, shellStyles, browser, app, links] = await Promise.all([
     source('renderer/index.html'), source('renderer/right-workspace-integration.js'),
-    source('renderer/right-workspace.css'), source('renderer/browser-sidebar.js'),
+    source('renderer/right-workspace.css'), source('renderer/styles.css'), source('renderer/browser-sidebar.js'),
     source('renderer/app.js'), source('renderer/workspace-links-integration.js')
   ])
   for (const id of ['browserSidebar', 'rightWorkspaceBack', 'rightWorkspaceTitle', 'rightWorkspaceBrowserButton', 'rightWorkspaceFilesButton', 'rightWorkspaceSchedulesButton', 'rightWorkspaceSlot']) {
@@ -129,8 +129,17 @@ test('Desktop shell exposes one unified right workspace with browser, files and 
   assert.doesNotMatch(integration, /innerHTML|executeJavaScript|openExternal|file:\/\//u)
   assert.match(html, /img-src[^;]*http:\/\/127\.0\.0\.1:\*/u)
   assert.match(html, /media-src[^;]*http:\/\/127\.0\.0\.1:\*/u)
-  assert.match(styles, /body\.dsh-right-workspace-open #runtimeView/u)
-  assert.match(styles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*0;[\s\S]{0,260}padding-top:\s*var\(--dsh-workbench-header-height\)/u)
+  assert.match(styles, /--dsh-right-workspace-home-width:\s*280px/u)
+  assert.match(styles, /\.dsh-right-workspace\.browser-sidebar\.is-home \{[\s\S]{0,120}width:\s*min\(var\(--dsh-right-workspace-home-width\),\s*100vw\)/u)
+  assert.match(styles, /\.dsh-right-workspace\.is-home \.dsh-right-workspace__handle \{ display:none; \}/u)
+  assert.match(styles, /body\.dsh-right-workspace-open #runtimeView \{ width:100%; \}/u)
+  assert.match(styles, /body\.dsh-right-workspace-open \.runtime-status \{ right:0; \}/u)
+  assert.doesNotMatch(styles, /#runtimeView \{ width:calc\(100% -/u)
+  assert.match(shellStyles, /body\.browser-sidebar-open #runtimeView \{ width:100%; \}/u)
+  assert.match(shellStyles, /body\.browser-sidebar-open \.runtime-status \{ right:0; \}/u)
+  assert.match(shellStyles, /body\.dsh-right-workspace-open \.terminal-panel,body\.browser-sidebar-open \.terminal-panel \{ right:0; \}/u)
+  assert.doesNotMatch(shellStyles, /browser-sidebar-open #runtimeView \{ width:calc\(100% -/u)
+  assert.match(styles, /\.dsh-right-workspace \{[\s\S]{0,180}top:\s*0;[\s\S]{0,320}padding-top:\s*var\(--dsh-workbench-header-height\)/u)
   assert.match(styles, /\.dsh-right-workspace::before \{[\s\S]{0,260}height:\s*var\(--dsh-workbench-header-height\)/u)
   assert.match(styles, /\.dsh-right-workspace:not\(\.is-home\)::before/u)
   assert.match(styles, /body\.dsh-right-workspace-open \.pet-quick-button/u)
