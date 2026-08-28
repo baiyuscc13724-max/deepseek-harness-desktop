@@ -564,6 +564,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const uiStateResponse = await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${rootAgent.id}`))
     assert.equal(uiStateResponse.status, 200)
     const uiState = JSON.parse(uiStateResponse.body)
+    assert.deepEqual(uiState.team.ownershipHistory, [])
+    assert.equal(uiState.team.projection.ownershipHistoryTruncated, false)
     const uiEvent = uiState.team.messages.at(-1)
     assert.equal(uiEvent.eventType, 'delivery')
     assert.equal(uiEvent.fromName, 'Lead')

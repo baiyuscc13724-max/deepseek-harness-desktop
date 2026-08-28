@@ -2,6 +2,7 @@ const path = require('node:path')
 const { mkdirSync, writeFileSync } = require('node:fs')
 const { app, protocol } = require('electron')
 const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
+const { bundledReleaseSupersedesPointer } = require('./bridge/component-update-service.cjs')
 const { confirmComponentActivation, prepareComponentActivation, rollbackUnhealthyActivation } = require('./bridge/component-update-health.cjs')
 const { installComponentModulePaths, resolveComponentLayout } = require('./bridge/component-runtime-resolver.cjs')
 const { applyUserDataOverride } = require('./bridge/user-data-override.cjs')
@@ -31,6 +32,10 @@ async function boot() {
   const bundledRoot = path.resolve(__dirname, '..')
   const componentRoot = path.join(app.getPath('userData'), 'component-updates')
   const store = new ComponentUpdateStore(componentRoot)
+  const [persistedState, persistedPointer] = await Promise.all([store.get(), store.pointer()])
+  if (bundledReleaseSupersedesPointer(app.getVersion(), persistedPointer, persistedState)) {
+    await store.adoptBundledBaseline()
+  }
   let prepared = { action: 'use-current', pointer: null, state: await store.get() }
   let layout
   try {

@@ -80,6 +80,31 @@ test('更新中心逐条渲染 items，并只为 active 预览提供一个全局
   assert.match(centerMarkup, /data-hd-exit-preview hidden>退出当前预览/)
 })
 
+test('PR 预览在原卡片内显示下载、校验、安装和重启进度且不反复替换列表', () => {
+  assert.match(app, /const previewProgressSteps = \['下载', '校验', '安装', '重启'\]/)
+  for (const phase of ['prepare', 'download', 'verify', 'commit', 'ready', 'apply', 'restart', 'error']) {
+    assert.match(app, new RegExp(`['"]${phase}['"]`), `缺少预览进度阶段 ${phase}`)
+  }
+  assert.match(app, /progress\.phase === 'download' && progress\.total > 0/)
+  assert.match(app, /Math\.round\(progress\.received \/ progress\.total \* 100\)/)
+  assert.match(app, /document\.createElement\('progress'\)/)
+  assert.match(app, /region\.setAttribute\('role', 'status'\)/)
+  assert.match(app, /region\.setAttribute\('aria-live', 'polite'\)/)
+  assert.match(app, /card\.setAttribute\('aria-busy', String\(busy\)\)/)
+  assert.match(app, /action\.disabled = busy/)
+  assert.match(app, /progress\.phase === 'error' \? '重试更新' : '更新进行中…'/)
+  assert.match(app, /previewProgressForItem\(item, previewProgress\)/)
+  assert.match(app, /if \(previewBusy\) \{[\s\S]*list\.querySelectorAll\('\[data-hd-update-action\]'\)[\s\S]*action\.disabled = true/)
+  assert.match(app, /list\.setAttribute\('aria-busy', String\(previewBusy\)\)/)
+  assert.match(app, /const itemsSignature = JSON\.stringify\(\{ checking: state\.checking === true, items \}\)/)
+})
+
+test('预览进度事件绑定 opaque 候选并在失败后保留可见重试状态', () => {
+  assert.match(app, /candidateId: safeId[\s\S]*phase: action === 'apply' \? 'apply' : 'prepare'/)
+  assert.match(app, /api\.onPrPreviewUpdateProgress\(progress => \{[\s\S]*progress, error: ''[\s\S]*installing: busy/)
+  assert.match(app, /failedPhase: String\(previous\.phase \|\| 'prepare'\), phase: 'error', message/)
+})
+
 test('更新动作只回传 opaque id 与固定 action，不传 kind、URL 或 PR 数据', () => {
   assert.match(app, /request\('update-action', \{ id: item\.id, action \}\)/)
   assert.match(app, /new URLSearchParams\(values\)/)

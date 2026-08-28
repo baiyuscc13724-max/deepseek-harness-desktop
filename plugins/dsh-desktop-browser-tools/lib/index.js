@@ -27,14 +27,15 @@ const MUTATING_ACTIONS = new Set([
 // 成功形状的 blocked 结果（retryable:false），避免模型反复重试产生噪音；
 // 服务端门禁本身保持不变。
 const SAFE_REJECTION_CODES = new Set([
-  'tab-unavailable', 'stopped', 'computer-use-authorization-required', 'computer-use-disabled'
+  'tab-unavailable', 'stopped', 'computer-use-authorization-required', 'computer-use-disabled', 'browser-outcome-unknown'
 ])
 
 const BLOCKED_GUIDANCE = {
   'tab-unavailable': '当前浏览器活动标签已关闭或失效。不要重试原动作；请重新调用 browser_control status，再用 tabList/tabSwitch 或 navigate 建立可用标签。',
   stopped: '浏览器模型控制已被停止，操作已被安全阻止。请勿重试或继续调用 browser_control；恢复需用户重新启用共享控制。',
   'computer-use-authorization-required': '浏览器控制复用内置 Computer Use 授权，授权卡已推送到对话框上方。请等待用户选择“本次授权”或“永久授权”；不要继续调用 browser_control。',
-  'computer-use-disabled': '浏览器控制与内置 Computer Use 的共享控制会话已停止。无需重新授权，但不要继续调用 browser_control；必须由用户恢复控制后再从 status 开始。'
+  'computer-use-disabled': '浏览器控制与内置 Computer Use 的共享控制会话已停止。无需重新授权，但不要继续调用 browser_control；必须由用户恢复控制后再从 status 开始。',
+  'browser-outcome-unknown': '上一次浏览器状态变更未能确认结果。不要重试或继续调用变更型 browser_control；可以使用 status、observe、console 等只读动作检查页面，或请用户停止并恢复共享控制后再继续。'
 }
 
 function requestIdForExecution(exec) {

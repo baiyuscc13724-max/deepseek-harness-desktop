@@ -438,6 +438,23 @@ test('canonical project ownership and adoption revoke every old worker lease wit
   assert.match(source, /name: "team_adopt"[\s\S]*?requireDirectHumanRoot/u)
 })
 
+test('the selected-team UI projection bounds ownership history and exposes only safe lifecycle facts', async () => {
+  const source = await readFile(pluginFile, 'utf8')
+  const start = source.indexOf('function projectTeamForUi(')
+  const end = source.indexOf('function projectTeamSummary(', start)
+  assert.ok(start >= 0 && end > start)
+  const projection = source.slice(start, end)
+  const historyStart = projection.indexOf('const ownershipHistory =')
+  const historyEnd = projection.indexOf('  return {', historyStart)
+  assert.ok(historyStart >= 0 && historyEnd > historyStart)
+  const historyMapping = projection.slice(historyStart, historyEnd)
+
+  assert.match(source, /const UI_MAX_OWNERSHIP_EVENTS = 8/u)
+  assert.match(historyMapping, /slice\(-UI_MAX_OWNERSHIP_EVENTS\)[\s\S]*?kind: entry\.kind[\s\S]*?at: entry\.at[\s\S]*?pauseEpoch: entry\.pauseEpoch/u)
+  assert.doesNotMatch(historyMapping, /sourceRootSessionId|targetRootSessionId|projectKey|tokenHash|claimId/u)
+  assert.match(projection, /ownershipHistoryTruncated: ownershipHistory\.length < \(team\.ownershipHistory \?\? \[\]\)\.length/u)
+})
+
 test('same-project adoption retains private audit hashes without exposing them in public results', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-handoff-projection-'))
   const mod = await loadPlugin('handoff-projection')

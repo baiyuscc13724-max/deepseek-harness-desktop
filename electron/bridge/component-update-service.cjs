@@ -57,6 +57,12 @@ function effectiveComponentLastCheck(checkResult, pointer, storeState) {
   }
 }
 
+function bundledReleaseSupersedesPointer(bundledVersion, pointer, storeState) {
+  if (!['idle', 'failed', 'staging', 'ready'].includes(storeState?.phase)) return false
+  const persistedVersions = [pointer?.releaseVersion, storeState?.pending?.releaseVersion].filter(Boolean)
+  return persistedVersions.length > 0 && persistedVersions.every(version => compareVersions(bundledVersion, version) >= 0)
+}
+
 function safeManifestUrl(value) {
   const url = new URL(String(value || '').trim())
   if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('组件更新清单必须使用无凭据、无片段的 HTTPS 地址。')
@@ -223,6 +229,7 @@ class ComponentUpdateService {
 
 module.exports = {
   ComponentUpdateService,
+  bundledReleaseSupersedesPointer,
   commitImmutableComponent,
   currentComponentMap,
   effectiveComponentLastCheck,

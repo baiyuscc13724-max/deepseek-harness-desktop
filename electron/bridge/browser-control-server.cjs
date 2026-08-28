@@ -48,6 +48,7 @@ class BrowserControlServer {
     this.sockets = new Set()
     this.activeRequests = new Map()
     this.scopeTails = new Map()
+    this.unknownOutcomes = new Map()
     this.stopEpochs = new Map([...CONTROL_SCOPES].map(scope => [scope, 0]))
     this.stoppedScopes = new Set()
     this.recentRequests = new Map()
@@ -108,6 +109,7 @@ class BrowserControlServer {
     if (!CONTROL_SCOPES.has(normalized)) throw controlError('browser-request-scope-invalid', '桌面模型操作 scope 无效。')
     this.stopEpochs.set(normalized, (this.stopEpochs.get(normalized) || 0) + 1)
     this.stoppedScopes.delete(normalized)
+    this.unknownOutcomes.delete(normalized)
     return { scope: normalized, stopped: false, epoch: this.stopEpochs.get(normalized) }
   }
 
@@ -128,6 +130,7 @@ class BrowserControlServer {
     // A handler is required to cooperate with AbortSignal, but a stale or
     // broken handler must not keep the next server generation behind its tail.
     this.scopeTails.clear()
+    this.unknownOutcomes.clear()
     this.recentRequests.clear()
     await this.#closeServer(server)
     await this.#removeStateFiles()
@@ -175,12 +178,50 @@ class BrowserControlServer {
     response.end(data)
   }
 
+  #isMutation(scope, action) {
+    return REPLAY_ACTIONS[scope]?.has(String(action || '')) === true
+  }
+
+  #markUnknownOutcome(context, action) {
+    if (!this.#isMutation(context.scope, action)) return
+    this.unknownOutcomes.set(context.scope, { action: String(action || ''), at: Date.now() })
+  }
+
+  #runHandler(body, context) {
+    const action = String(body?.action || '')
+    if (context.signal.aborted) return Promise.reject(controlError('browser-action-cancelled', '浏览器操作已取消。', 499))
+    const operation = Promise.resolve().then(() => this.handler(body, {
+      signal: context.signal,
+      requestId: context.requestId,
+      scope: context.scope
+    }))
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (callback, value) => {
+        if (settled) return
+        settled = true
+        context.signal.removeEventListener('abort', onAbort)
+        callback(value)
+      }
+      const onAbort = () => {
+        this.#markUnknownOutcome(context, action)
+        finish(reject, controlError('browser-action-cancelled', '浏览器操作已取消。', 499))
+      }
+      context.signal.addEventListener('abort', onAbort, { once: true })
+      if (context.signal.aborted) onAbort()
+      operation.then(
+        value => finish(resolve, value),
+        error => {
+          if (error?.code === 'browser-outcome-unknown') this.#markUnknownOutcome(context, action)
+          finish(reject, error)
+        }
+      )
+    })
+  }
+
   async #dispatch(body, context) {
     const action = String(body?.action || '')
-    const execute = async () => {
-      if (context.signal.aborted) throw controlError('browser-action-cancelled', '浏览器操作已取消。', 499)
-      return this.handler(body, { signal: context.signal, requestId: context.requestId, scope: context.scope })
-    }
+    const execute = () => this.#runHandler(body, context)
     if (action === 'stop') {
       this.stopEpochs.set(context.scope, (this.stopEpochs.get(context.scope) || 0) + 1)
       if (context.scope === 'browser') this.stoppedScopes.add(context.scope)
@@ -190,6 +231,13 @@ class BrowserControlServer {
       return execute()
     }
     if (action === 'status') return execute()
+    if (this.#isMutation(context.scope, action) && this.unknownOutcomes.has(context.scope)) {
+      throw controlError(
+        'browser-outcome-unknown',
+        '上一次浏览器状态变更在连接中断时未能确认结果。为避免重复副作用，新的状态变更已阻止；可以继续 status、observe、console 等只读诊断，或先停止并恢复控制会话。',
+        409
+      )
+    }
     const tail = this.scopeTails.get(context.scope) || Promise.resolve()
     const pending = tail.then(execute, execute)
     this.scopeTails.set(context.scope, pending.then(() => undefined, () => undefined))

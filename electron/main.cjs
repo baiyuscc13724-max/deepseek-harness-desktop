@@ -63,7 +63,7 @@ const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
 const { BrowserSecurityPolicy, isModelBootstrapSourceUrl } = require('./bridge/browser-security-policy.cjs')
 const { DECISIONS: BROWSER_LINK_DECISIONS, routeBrowserLink } = require('./bridge/browser-link-router.cjs')
 const { MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, isSensitiveText } = require('./bridge/browser-action-gate.cjs')
-const { BrowserOperationCoordinator } = require('./bridge/browser-operation-coordinator.cjs')
+const { BrowserOperationCoordinator, runBrowserOperation } = require('./bridge/browser-operation-coordinator.cjs')
 const { BrowserNavigationLane, attachBrowserNavigationGuard } = require('./bridge/browser-navigation-guard.cjs')
 const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
 const { BrowserDiagnostics, safeUrl: safeBrowserDiagnosticUrl } = require('./bridge/browser-diagnostics.cjs')
@@ -586,9 +586,17 @@ function markBrowserUserNavigation(tabId = activeBrowserTabId, reason = 'browser
   browserNavigationLane(tabId)?.markUser(reason)
 }
 
-async function dispatchModelBrowserInput(tabId, reason, contents, events) {
+async function dispatchModelBrowserInput(tabId, reason, contents, events, ticket = null) {
   const lane = markBrowserModelNavigation(tabId, reason)
   const finish = lane.beginModelInput(reason)
+  const sendInputCommand = (method, parameters) => runBrowserOperation(
+    () => contents.debugger.sendCommand(method, parameters),
+    {
+      signal: ticket?.signal,
+      timeoutCode: 'browser-outcome-unknown',
+      timeoutMessage: '浏览器输入通道未在时限内确认操作结果；结果未知，不得自动重试。请先使用 status/observe 检查页面，必要时停止并恢复控制。'
+    }
+  )
   try {
     if (!contents.debugger?.isAttached?.() || browserTabs.get(String(tabId || ''))?.fileChooserControl !== true) {
       throw Object.assign(new Error('后台浏览器输入通道当前不可用。'), { code: 'browser-input-unavailable' })
@@ -602,7 +610,7 @@ async function dispatchModelBrowserInput(tabId, reason, contents, events) {
             : input.type === 'mouseMove'
               ? 'mouseMoved'
               : input.type
-        await contents.debugger.sendCommand('Input.dispatchMouseEvent', {
+        await sendInputCommand('Input.dispatchMouseEvent', {
           type,
           x: Math.round(Number(input.x) || 0),
           y: Math.round(Number(input.y) || 0),
@@ -627,7 +635,7 @@ async function dispatchModelBrowserInput(tabId, reason, contents, events) {
             : input.type === 'keyDown' && keyCode === 'Space'
               ? ' '
               : ''
-        await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        await sendInputCommand('Input.dispatchKeyEvent', {
           type: input.type,
           key,
           code: keyCode,
@@ -1542,7 +1550,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     const bounds = view.getBounds()
     const deltaY = Math.max(-1200, Math.min(1200, Number(parameters.delta_y) || 0))
     const deltaX = Math.max(-1200, Math.min(1200, Number(parameters.delta_x) || 0))
-    await dispatchModelBrowserInput(tabId, 'scroll', view.webContents, [{ type: 'mouseWheel', x: Math.floor(bounds.width / 2), y: Math.floor(bounds.height / 2), deltaY, deltaX }])
+    await dispatchModelBrowserInput(tabId, 'scroll', view.webContents, [{ type: 'mouseWheel', x: Math.floor(bounds.width / 2), y: Math.floor(bounds.height / 2), deltaY, deltaX }], ticket)
     browserOperations.assert(ticket)
     return { scrolled: true, deltaX, deltaY }
   }
@@ -1551,7 +1559,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     browserOperations.assert(ticket)
     if (!field) throw new Error('元素已失效，请重新 observe。')
     authorizeBrowserRead(origin, tabId, field.tag)
-    await dispatchModelBrowserInput(tabId, 'hover', view.webContents, [{ type: 'mouseMove', x: field.x, y: field.y, movementX: 0, movementY: 0 }])
+    await dispatchModelBrowserInput(tabId, 'hover', view.webContents, [{ type: 'mouseMove', x: field.x, y: field.y, movementX: 0, movementY: 0 }], ticket)
     browserOperations.assert(ticket)
     return { hovered: true, ref: String(parameters.ref) }
   }
@@ -1565,7 +1573,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     await dispatchModelBrowserInput(tabId, 'keypress', view.webContents, [
       { type: 'keyDown', keyCode: key },
       { type: 'keyUp', keyCode: key }
-    ])
+    ], ticket)
     browserOperations.assert(ticket)
     return { pressed: true, key, confirmed: key === 'Enter' }
   }
@@ -3890,6 +3898,18 @@ function activationClientCandidate(activation) {
   }
 }
 
+function activePrPreviewItemId(candidate) {
+  return candidate ? `active-pr-${candidate.sequence}-${candidate.headSha}` : ''
+}
+
+function sendPrPreviewUpdateProgress(candidateId, progress = {}) {
+  send('prPreviewUpdates:progress', {
+    ...progress,
+    kind: 'pr-preview',
+    candidateId: String(candidateId || '')
+  })
+}
+
 function isPendingPreviewReady(componentState, activation) {
   return Boolean(
     activation &&
@@ -3900,7 +3920,7 @@ function isPendingPreviewReady(componentState, activation) {
 
 async function reconciledPrPreviewActivation(componentState, activationStore) {
   const activation = await activationStore.get()
-  if (!activation || componentState?.phase !== 'failed' || componentState.pending) return activation
+  if (!activation || componentState?.pending || !['idle', 'failed'].includes(componentState?.phase)) return activation
   return activationStore.reconcileActive(componentState.active)
 }
 
@@ -3977,6 +3997,7 @@ async function stagePrPreviewUpdate(candidateId = '') {
   const selectedId = String(candidateId || lastPrPreviewCandidate?.discovery?.candidateId || '')
   const pending = selectedId ? await preparePrPreviewCandidate(selectedId) : null
   if (!pending?.discovery?.available) throw new Error('没有经过验证且等待确认的 PR 预览候选。')
+  sendPrPreviewUpdateProgress(selectedId, { phase: 'prepare', releaseVersion: pending.checkResult.plan.releaseVersion })
   const previousActivation = await context.activation.get()
   const baseline = await context.component.store.pointer()
   if (previousActivation && baseline?.releaseVersion !== previousActivation.candidate.releaseVersion) {
@@ -3994,7 +4015,7 @@ async function stagePrPreviewUpdate(candidateId = '') {
     provider: pending.discovery.provider
   })
   try {
-    await pending.componentService.stage(pending.checkResult, progress => send('prPreviewUpdates:progress', progress))
+    await pending.componentService.stage(pending.checkResult, progress => sendPrPreviewUpdateProgress(selectedId, progress))
     await context.service.accept(pending.discovery.candidateId)
     return { ...(await getPrPreviewUpdateState()), ready: true, candidate: pending.clientCandidate }
   } catch (error) {
@@ -4010,9 +4031,12 @@ async function applyPrPreviewUpdate(candidateId = '') {
     context.component.store.get(),
     context.activation.get()
   ])
-  if (!isPendingPreviewReady(componentState, activation)) await stagePrPreviewUpdate(candidateId)
-  else await ensureStateStore().markPreviewCandidate(activation.candidate.sequence, activation.candidate.headSha)
-  const launched = await launchReadyComponentUpdate(context.component)
+  const progressId = String(candidateId || lastPrPreviewCandidate?.discovery?.candidateId || activePrPreviewItemId(activation?.candidate))
+  if (!isPendingPreviewReady(componentState, activation)) {
+    if (/^active-pr-/.test(progressId)) throw new Error('该 PR 预览不再处于可应用状态，请重新检查更新。')
+    await stagePrPreviewUpdate(candidateId)
+  } else await ensureStateStore().markPreviewCandidate(activation.candidate.sequence, activation.candidate.headSha)
+  const launched = await launchReadyComponentUpdate(context.component, progress => sendPrPreviewUpdateProgress(progressId, progress))
   return { ok: true, launched }
 }
 
@@ -4085,15 +4109,12 @@ async function getUnifiedUpdateState() {
     ensurePrPreviewUpdateContext()
   ])
   const preferences = ensureStateStore().get().updates || {}
-  const [previewCandidates, storedActivation] = await Promise.all([
+  const [previewCandidates, activation] = await Promise.all([
     previewContext.enabled
       ? previewContext.service.listCandidates({ includeExpired: true })
       : [],
-    previewContext.activation.get()
+    reconciledPrPreviewActivation(component.state, previewContext.activation)
   ])
-  const activation = storedActivation && component.state?.phase === 'failed' && !component.state.pending
-    ? await previewContext.activation.reconcileActive(component.state.active)
-    : storedActivation
   const items = []
   const appUpdate = lastUpdatePayload?.app
   const desktopReady = Boolean(readyUpdate?.installerPath && existsSync(readyUpdate.installerPath))
@@ -4109,22 +4130,21 @@ async function getUnifiedUpdateState() {
       status: desktopStatus
     }))
   }
-  const componentPlan = component.lastCheck?.plan
+  const componentPlan = component.lastCheck
   const componentReady = component.state?.phase === 'ready'
   const componentAvailable = componentPlan?.mode === 'components'
   const componentError = component.state?.failure?.message || ''
-  const componentStatus = componentError ? 'error' : componentReady ? 'ready' : componentAvailable ? 'available' : 'up-to-date'
+  const componentStatus = componentReady ? 'ready' : componentAvailable ? 'available' : componentError ? 'error' : 'up-to-date'
   const componentVersion = componentReady
     ? component.state?.pending?.releaseVersion
     : componentPlan?.releaseVersion || component.pointer?.releaseVersion || app.getVersion()
-  const previewOwnsComponent = Boolean(activation?.candidate && [
-    component.state?.pending?.releaseVersion,
-    component.state?.active?.releaseVersion
-  ].includes(activation.candidate.releaseVersion))
-  if (!previewOwnsComponent && ['available', 'ready', 'error'].includes(componentStatus)) {
+  const previewOwnsDisplayedComponent = Boolean(
+    activation?.candidate && componentVersion === activation.candidate.releaseVersion
+  )
+  if (!previewOwnsDisplayedComponent && ['available', 'ready', 'error'].includes(componentStatus)) {
     items.push(unifiedUpdateItem({
       id: 'component', kind: 'component', version: componentVersion,
-      title: '运行组件', summary: componentError || (componentReady ? '已暂存，等待重启应用' : '组件更新可用'),
+      title: '运行组件', summary: componentError && componentAvailable ? `上次更新失败：${componentError}，可以重试` : componentError || (componentReady ? '已暂存，等待重启应用' : '组件更新可用'),
       source: component.source ? 'bundled' : 'bundled', signed: true,
       actionable: component.enabled && (componentReady || componentAvailable),
       status: componentStatus
@@ -4134,7 +4154,7 @@ async function getUnifiedUpdateState() {
     const active = component.state?.active?.releaseVersion === activation.candidate.releaseVersion
     const ready = isPendingPreviewReady(component.state, activation)
     items.push(unifiedUpdateItem({
-      id: `active-pr-${activation.candidate.sequence}-${activation.candidate.headSha}`,
+      id: activePrPreviewItemId(activation.candidate),
       kind: 'pr-preview', version: activation.candidate.releaseVersion,
       title: activation.candidate.title,
       summary: active ? 'PR 预览已启用，可退出并回滚' : ready ? 'PR 预览已验证，等待重启' : 'PR 预览激活状态待恢复',
@@ -4188,6 +4208,7 @@ async function runUnifiedUpdateAction(candidateId, action) {
     if (operation === 'apply') return launchReadyComponentUpdate()
   }
   if (/^pr-[a-f0-9]{64}$/.test(id) && ['install', 'apply'].includes(operation)) return applyPrPreviewUpdate(id)
+  if (/^active-pr-[1-9]\d*-[a-f0-9]{40}$/.test(id) && operation === 'apply') return applyPrPreviewUpdate(id)
   if (/^active-pr-[1-9]\d*-[a-f0-9]{40}$/.test(id) && operation === 'exit') return exitPrPreviewUpdate()
   throw new Error('统一更新候选或动作组合无效。')
 }
@@ -4225,9 +4246,26 @@ async function stageComponentUpdates() {
   return getComponentUpdateState()
 }
 
-async function launchReadyComponentUpdate(contextOverride = null) {
+async function prepareStableComponentTakeover(context, readyState) {
+  if (readyState?.phase !== 'ready' || !readyState.pending) return null
+  const activationStore = new PrPreviewActivationStore(context.store.root)
+  const activation = await activationStore.get()
+  if (!activation) return null
+  if (readyState.active?.releaseVersion !== activation.candidate.releaseVersion) {
+    throw new Error('当前活动组件不是已记录的 PR 预览，拒绝准备正式版接管。')
+  }
+  return activationStore.prepareStableTakeover({
+    releaseVersion: readyState.pending.releaseVersion,
+    components: readyState.pending.components
+  })
+}
+
+async function launchReadyComponentUpdate(contextOverride = null, onProgress = null) {
   const context = contextOverride || await ensureComponentUpdateService()
   if (!contextOverride && !context.enabled) throw new Error('组件增量更新尚未启用。')
+  const readyState = await context.store.get()
+  if (!contextOverride) await prepareStableComponentTakeover(context, readyState)
+  onProgress?.({ phase: 'apply', releaseVersion: readyState.pending?.releaseVersion || '' })
   const bootstrap = componentUpdateBootstrapContext()
   const bundledRoot = bootstrap?.bundledRoot || app.getAppPath()
   const userDataOverride = resolveUserDataOverride(process.argv, app.commandLine.getSwitchValue('user-data-dir'))
@@ -4243,6 +4281,7 @@ async function launchReadyComponentUpdate(contextOverride = null) {
       '--component-health-check'
     ]
   })
+  onProgress?.({ phase: 'restart', releaseVersion: launched.releaseVersion || readyState.pending?.releaseVersion || '' })
   // The update is being applied and the app is about to restart; drop the stale
   // in-memory check so nothing reports the (now-applied) release as still pending.
   lastComponentUpdateCheck = null

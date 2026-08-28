@@ -139,6 +139,28 @@ test('reconciles an unhealthy forward activation to the previous PR while retain
   assert.equal(await memory.store.get(), null)
 })
 
+test('clears preview activation only after an exact newer stable takeover succeeds', async () => {
+  const memory = memoryStore()
+  await memory.store.capture({ baseline: baseline(), ...candidate() })
+  const stableTarget = baseline('1.0.45')
+
+  const prepared = await memory.store.prepareStableTakeover(stableTarget)
+  assert.deepEqual(prepared.stableTakeover, stableTarget)
+
+  const failedBackToPreview = await memory.store.reconcileActive(baseline('1.0.45-pr.27'))
+  assert.equal(failedBackToPreview.candidate.releaseVersion, '1.0.45-pr.27')
+  assert.equal(failedBackToPreview.stableTakeover, undefined)
+
+  await memory.store.prepareStableTakeover(stableTarget)
+  assert.equal(await memory.store.reconcileActive(stableTarget), null)
+  assert.equal(await memory.store.get(), null)
+
+  const rejected = memoryStore()
+  await rejected.store.capture({ baseline: baseline(), ...candidate() })
+  await assert.rejects(() => rejected.store.prepareStableTakeover(baseline('1.0.46-pr.28')), /必须是稳定版本/)
+  await assert.rejects(() => rejected.store.prepareStableTakeover(baseline('1.0.44')), /必须新于当前 PR 预览/)
+})
+
 test('fails closed on an unknown active pointer without losing the stable rollback record', async () => {
   const memory = memoryStore()
   await memory.store.capture({ baseline: baseline(), ...candidate() })
@@ -176,4 +198,18 @@ test('migrates schema v1 records and validates preview identity', async () => {
     baseline: null,
     candidate: { ...candidate(), releaseVersion: '1.0.45' }
   }), /prerelease/)
+  assert.throws(() => normalizeActivationRecord({
+    schemaVersion: PR_PREVIEW_ACTIVATION_SCHEMA_VERSION,
+    capturedAt: '2026-08-25T09:00:00.000Z',
+    baseline: baseline(),
+    candidate: candidate(),
+    stableTakeover: baseline('1.0.46-pr.28')
+  }), /必须是稳定版本/)
+  assert.throws(() => normalizeActivationRecord({
+    schemaVersion: PR_PREVIEW_ACTIVATION_SCHEMA_VERSION,
+    capturedAt: '2026-08-25T09:00:00.000Z',
+    baseline: baseline(),
+    candidate: candidate(),
+    stableTakeover: baseline('1.0.44')
+  }), /必须新于当前 PR 预览/)
 })

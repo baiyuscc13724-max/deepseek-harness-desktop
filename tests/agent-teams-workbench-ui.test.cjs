@@ -505,6 +505,49 @@ test('runtime task board exposes four truthful columns and keeps cancellation in
   assert.doesNotMatch(`${card}\n${board}`, /progressPercent|\.percent\b|aria-valuenow|role: "progressbar"|\+ "%"/u)
 })
 
+test('task board surfaces the durable plan lifecycle, authorization preflight, and safe handoff state', async () => {
+  const source = await clientSource()
+  const lifecycle = componentSource(source, ['PlanLifecyclePanel'])
+  const authorizationLabel = componentSource(source, ['planAuthorizationLabel'])
+  const board = componentSource(source, ['TaskBoardWorkspace'])
+
+  assert.match(board, /h\(PlanLifecyclePanel, \{ t: t, team: team \}\)/u)
+  assert.match(lifecycle, /phaseOrder = \["draft", "committed", "active"\]/u)
+  assert.match(lifecycle, /plan\.committedAt[\s\S]*?plan\.activatedAt/u)
+  assert.match(lifecycle, /authorization\.permissions[\s\S]*?authorization\.files[\s\S]*?authorization\.cost[\s\S]*?authorization\.externalSideEffects/u)
+  assert.match(authorizationLabel, /planAuthHostVerified[\s\S]*?planAuthHumanAttested[\s\S]*?planAuthUnknown/u)
+  assert.match(lifecycle, /team\.handoff[\s\S]*?team\.ownershipHistory[\s\S]*?ownershipHistoryTruncated/u)
+  assert.match(lifecycle, /plan\.migrationState === "legacy_unplanned"[\s\S]*?plan\.migrationState === "legacy_active_gate"/u)
+  assert.doesNotMatch(lifecycle, /targetRootSessionId|sourceRootSessionId|tokenHash|confirmedPlanHash|plan\.hash/u)
+
+  assert.match(source, /planLifecycleTitle: "计划生命周期"[\s\S]*?planLifecycleTitle: "Plan lifecycle"/u)
+  assert.match(source, /\.dat-plan-steps\{[^}]*grid-template-columns:repeat\(3/u)
+  assert.match(source, /@media\(max-width:620px\)\{[\s\S]*?\.dat-plan-lifecycle-head\{display:block\}[\s\S]*?\.dat-plan-steps,\.dat-preflight-grid\{grid-template-columns:1fr\}/u)
+})
+
+test('task details expose lease attempts, bounded interruption history, capability checks, and effect fences without claim credentials', async () => {
+  const source = await clientSource()
+  const card = componentSource(source, ['BoardTaskCard'])
+  const assurance = componentSource(source, ['TaskAssurancePanel'])
+  const focus = componentSource(source, ['TaskDetailFocus'])
+  const sidebar = componentSource(source, ['TaskDetailSidebar'])
+
+  assert.match(card, /taskBoardLeaseEpoch[\s\S]*?boardLeaseEpoch/u)
+  assert.match(card, /taskBoardCapabilitySummary[\s\S]*?boardCapabilities/u)
+  assert.match(focus, /h\(TaskAssurancePanel, \{ t: t, task: task \}\)/u)
+  assert.match(sidebar, /h\(TaskAssurancePanel, \{ t: t, task: task \}\)/u)
+  assert.match(assurance, /task\.attemptHistory[\s\S]*?task\.interruptionHistory/u)
+  assert.match(assurance, /history\.slice\(0, 12\)/u)
+  assert.match(assurance, /task\.capabilities[\s\S]*?task\.externalEffects/u)
+  assert.match(assurance, /task\.checkpoint[\s\S]*?task\.nextStep[\s\S]*?taskMemberReports/u)
+  assert.match(assurance, /data-status[\s\S]*?taskCapabilityLabel[\s\S]*?taskEffectOutcomeLabel/u)
+  assert.doesNotMatch(assurance, /claimId|assigneeSessionId|sourceRootSessionId|targetRootSessionId|entry\.reason/u)
+
+  assert.match(source, /boardLeaseEpoch: "租约代次 \{value\}"[\s\S]*?boardLeaseEpoch: "Lease epoch \{value\}"/u)
+  assert.match(source, /\.dat-assurance-grid\{[^}]*grid-template-columns:repeat\(2/u)
+  assert.match(source, /@media\(max-width:760px\)\{\.dat-plan-grid,\.dat-assurance-grid\{grid-template-columns:1fr\}/u)
+})
+
 test('runtime task board derives Attention from permission unknown and uncertain external effects', async () => {
   const source = await clientSource()
   const start = source.indexOf('    function taskBoardColumn(')

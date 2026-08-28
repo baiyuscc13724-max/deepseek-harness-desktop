@@ -118,6 +118,7 @@ class ComponentUpdateStore {
     this.root = resolved
     this.stateFile = path.join(resolved, 'state.json')
     this.pointerFile = path.join(resolved, 'current.json')
+    this.previewActivationFile = path.join(resolved, 'pr-preview-activation.json')
     this.readFile = options.readFileImpl || readFile
     this.atomicWrite = options.atomicWriteImpl || atomicWriteJson
     this.rm = options.rmImpl || rm
@@ -267,6 +268,22 @@ class ComponentUpdateStore {
       phase: 'failed',
       active: current.lastKnownGood,
       pending: null
+    }, current.revision)
+  }
+
+  async adoptBundledBaseline() {
+    const current = await this.get()
+    if (!['idle', 'failed', 'staging', 'ready'].includes(current.phase)) throw new Error(`当前更新阶段不允许切换到内置正式版：${current.phase}`)
+    await this.rm(this.pointerFile, { force: true })
+    await this.rm(this.previewActivationFile, { force: true })
+    if (current.pending?.releaseVersion) await this.discardStaging(current.pending.releaseVersion)
+    return this.writeState({
+      ...current,
+      phase: 'idle',
+      active: null,
+      lastKnownGood: null,
+      pending: null,
+      failure: null
     }, current.revision)
   }
 

@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { BrowserOperationCoordinator } = require('../electron/bridge/browser-operation-coordinator.cjs')
+const { BrowserOperationCoordinator, runBrowserOperation } = require('../electron/bridge/browser-operation-coordinator.cjs')
 
 test('Profile reset invalidates in-flight browser tickets and blocks reentry', () => {
   const coordinator = new BrowserOperationCoordinator()
@@ -50,4 +50,29 @@ test('an aborted request signal cannot start or continue a model action', () => 
   const alreadyAborted = new AbortController()
   alreadyAborted.abort()
   assert.throws(() => coordinator.modelTicket(alreadyAborted.signal), error => error.code === 'browser-action-cancelled')
+})
+
+test('browser operations reject a non-responsive transport at a bounded deadline', async () => {
+  await assert.rejects(
+    runBrowserOperation(() => new Promise(() => {}), {
+      timeoutMs: 20,
+      timeoutCode: 'browser-outcome-unknown',
+      timeoutMessage: 'outcome unknown'
+    }),
+    error => error.code === 'browser-outcome-unknown' && error.statusCode === 504 && error.message === 'outcome unknown'
+  )
+})
+
+test('browser operations stop waiting when their request is aborted', async () => {
+  const controller = new AbortController()
+  const pending = runBrowserOperation(() => new Promise(() => {}), { signal: controller.signal, timeoutMs: 1_000 })
+  controller.abort()
+  await assert.rejects(pending, error => error.code === 'browser-action-cancelled' && error.statusCode === 499)
+})
+
+test('browser operations preserve successful values before the deadline', async () => {
+  assert.deepEqual(
+    await runBrowserOperation(async () => ({ completed: true }), { timeoutMs: 100 }),
+    { completed: true }
+  )
 })
