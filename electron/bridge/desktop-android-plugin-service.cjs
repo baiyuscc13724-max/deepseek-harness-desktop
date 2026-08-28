@@ -1,6 +1,7 @@
 const { cp, mkdir, readFile, rename, rm, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 const YAML = require('yaml')
+const { setTimeout: delay } = require('node:timers/promises')
 const { physicalUnpackedPath } = require('./dsh-resolver.cjs')
 
 const PLUGIN_ID = 'dsh-android'
@@ -13,12 +14,44 @@ async function readText(file, fallback = '') {
   })
 }
 
+const TRANSIENT_RENAME_CODES = new Set(['EACCES', 'EBUSY', 'EPERM'])
+
+async function renameWithRetry(source, destination, attempts = 8) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(source, destination)
+      return
+    } catch (error) {
+      if (attempt >= attempts - 1 || !TRANSIENT_RENAME_CODES.has(error?.code)) throw error
+      await delay(Math.min(400, 25 * 2 ** attempt))
+    }
+  }
+}
+
 async function replaceDirectory(source, destination) {
-  const temporary = `${destination}.desktop-${process.pid}-${Date.now()}`
-  await rm(temporary, { recursive: true, force: true })
+  const nonce = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const temporary = `${destination}.desktop-new-${nonce}`
+  const backup = `${destination}.desktop-old-${nonce}`
+  const remove = target => rm(target, { recursive: true, force: true, maxRetries: 6, retryDelay: 50 })
+  await remove(temporary)
+  await remove(backup)
   await cp(source, temporary, { recursive: true, force: true })
-  await rm(destination, { recursive: true, force: true })
-  await rename(temporary, destination)
+  let movedExisting = false
+  try {
+    await renameWithRetry(destination, backup)
+    movedExisting = true
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+  try {
+    await renameWithRetry(temporary, destination)
+    if (movedExisting) await remove(backup)
+  } catch (error) {
+    if (movedExisting) await renameWithRetry(backup, destination).catch(() => {})
+    throw error
+  } finally {
+    await remove(temporary).catch(() => {})
+  }
 }
 
 async function ensurePatchEntry(file) {

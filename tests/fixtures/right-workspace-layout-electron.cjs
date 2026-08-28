@@ -50,23 +50,46 @@ async function run() {
     })()`, true)
 
     assert.deepEqual(desktop.viewport, { width: 1460, height: 930 })
-    assert.deepEqual(desktop.panel, { top: 76, right: 1460, bottom: 930, left: 819, width: 641, height: 854 })
-    assert.deepEqual(desktop.runtime, { top: 0, right: 820, width: 820, height: 930 })
-    assert.deepEqual(desktop.handle, { top: 76, bottom: 930 })
-    assert.deepEqual(desktop.extension.top, '-76px')
+    assert.deepEqual(desktop.panel, { top: 0, right: 1460, bottom: 930, left: 1180, width: 280, height: 930 })
+    assert.deepEqual(desktop.runtime, { top: 0, right: 1460, width: 1460, height: 930 })
+    assert.deepEqual(desktop.handle, { top: 0, bottom: 0 })
+    assert.deepEqual(desktop.extension.top, '0px')
     assert.deepEqual(desktop.extension.height, '76px')
     assert.equal(desktop.overflowX, false)
+
+    const tool = await window.webContents.executeJavaScript(`(() => {
+      const panelNode = document.getElementById('workspace')
+      panelNode.classList.remove('is-home')
+      const panel = panelNode.getBoundingClientRect()
+      const runtime = document.getElementById('runtimeView').getBoundingClientRect()
+      const handle = panelNode.querySelector('.dsh-right-workspace__handle').getBoundingClientRect()
+      const before = getComputedStyle(panelNode, '::before')
+      return {
+        panel: { top: panel.top, right: panel.right, bottom: panel.bottom, left: panel.left, width: panel.width, height: panel.height },
+        runtime: { right: runtime.right, width: runtime.width },
+        handle: { top: handle.top, bottom: handle.bottom },
+        extension: { top: before.top, height: before.height },
+        overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth
+      }
+    })()`, true)
+    assert.deepEqual(tool.panel, { top: 0, right: 1460, bottom: 930, left: 820, width: 640, height: 930 })
+    assert.deepEqual(tool.runtime, { right: 1460, width: 1460 })
+    assert.deepEqual(tool.handle, { top: 0, bottom: 930 })
+    assert.deepEqual(tool.extension, { top: '0px', height: '76px' })
+    assert.equal(tool.overflowX, false)
 
     window.setContentSize(800, 700)
     await new Promise(resolve => setTimeout(resolve, 50))
     const compact = await window.webContents.executeJavaScript(`(() => {
       const panel = document.getElementById('workspace').getBoundingClientRect()
       const runtime = document.getElementById('runtimeView').getBoundingClientRect()
-      return { panelTop: panel.top, panelBottom: panel.bottom, panelRight: panel.right, runtimeWidth: runtime.width, viewportWidth: innerWidth, overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth }
+      return { panelTop: panel.top, panelBottom: panel.bottom, panelLeft: panel.left, panelRight: panel.right, panelWidth: panel.width, runtimeWidth: runtime.width, viewportWidth: innerWidth, overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth }
     })()`, true)
-    assert.equal(compact.panelTop, 76)
+    assert.equal(compact.panelTop, 0)
     assert.equal(compact.panelBottom, 700)
+    assert.equal(compact.panelLeft, 48)
     assert.equal(compact.panelRight, compact.viewportWidth)
+    assert.equal(compact.panelWidth, 752)
     assert.equal(compact.runtimeWidth, compact.viewportWidth)
     assert.equal(compact.overflowX, false)
   } finally {

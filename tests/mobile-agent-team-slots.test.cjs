@@ -19,9 +19,7 @@ test('official Agent Teams exposes stable mobile navigation and context slots', 
   assert.match(client, /"data-harness-mobile-team-id": team \? String\(teamId\(team\)\) : undefined/u)
   assert.match(client, /"data-mobile-slot": "agent-teams\.context-switcher"/u)
   assert.match(client, /"data-harness-mobile-team-id": String\(teamId\(team\)\)/u)
-  assert.match(client, /props && props\.session && typeof props\.session\.sessionId === "string"/u)
-  assert.match(client, /"harness-mobile-session-context"/u)
-  assert.match(client, /name: "conversation\.input\.dock", id: "agent-teams-mobile-session-context"/u)
+  assert.doesNotMatch(client, /conversation\.input\.dock|agent-teams-mobile-session-context/u)
 })
 
 test('team canvas and durable task details expose authoritative entity identifiers', () => {

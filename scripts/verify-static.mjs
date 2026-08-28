@@ -194,10 +194,10 @@ for (const removedSurface of ['nativeChatSurface', 'webCompatibilitySurface', 's
 
 const rendererStyles = await readFile(path.join(root, 'renderer/styles.css'), 'utf8')
 const rightWorkspaceStyles = await readFile(path.join(root, 'renderer/right-workspace.css'), 'utf8')
-for (const contract of ['top: var(--dsh-workbench-header-height)', 'padding-top: 0', 'top: calc(-1 * var(--dsh-workbench-header-height))', 'height: var(--dsh-workbench-header-height)']) {
-  if (!rightWorkspaceStyles.includes(contract)) throw new Error(`Right workspace full-width header contract is missing: ${contract}`)
+for (const contract of ['top: 0', 'padding-top: var(--dsh-workbench-header-height)', 'height: var(--dsh-workbench-header-height)', '.dsh-right-workspace:not(.is-home)::before']) {
+  if (!rightWorkspaceStyles.includes(contract)) throw new Error(`Right workspace overlay header contract is missing: ${contract}`)
 }
-if (rightWorkspaceStyles.includes('.dsh-right-workspace:not(.is-home)::before')) throw new Error('Right workspace tool modes must not tint or split the global header extension.')
+if (!rightWorkspaceStyles.includes('body.dsh-right-workspace-open #runtimeView { width:100%; }')) throw new Error('Right workspace must overlay the official workbench instead of shrinking it.')
 const rightWorkspaceElectronFixture = await readFile(path.join(root, 'tests/fixtures/right-workspace-layout-electron.cjs'), 'utf8')
 for (const contract of ['panelRect.top', 'handleRect.top', "getComputedStyle(panel, '::before')", 'runtimeWidth', 'overflowX']) {
   if (!rightWorkspaceElectronFixture.includes(contract)) throw new Error(`Right workspace Electron geometry gate is missing: ${contract}`)
