@@ -21,18 +21,18 @@
 
 ## 下载
 
-目标稳定版：**v1.0.51** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.51)
+目标稳定版：**v1.0.52** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.52)
 
-> 已发布的 `v1.0.50`、其精确 18 项资产、组件和签名 Android APK 全部保持不可变；更早版本与候选 Tag 也不会移动、重建或复用。新的统一 `v1.0.51` 重点加入可审计的 Agent Teams 计划/认领/暂停/恢复/接管契约与四栏任务板，并合入 Mobile APP 的导航、项目身份、附件、权限、IME、前台恢复和文档上传修复。正式发布仍绑定精确 main SHA，经全平台云构建、Android 长期证书签名、组件签名、18 项清单和 GitHub→CNB 云镜像后才提升 stable feed；完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
+> 已发布的 `v1.0.51`、其精确 18 项资产、组件、签名 Android APK 与 stable feed 全部保持不可变；更早版本与候选 Tag 也不会移动、重建或复用。新的统一 `v1.0.52` 修复更新器、Agent Teams 与 Git 连接状态展示，强化 browser_control 超时和未知结果 fencing，并合入不挤压对话的右侧工作区、跨会话附件/时间线、桌面与 Android 设备工作区及 Mobile 会话修复。正式发布仍绑定精确 main SHA，经全平台云构建、Android 长期证书签名、组件签名、精确 18 项清单和 GitHub→CNB 云镜像后才提升 stable feed；完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.51/Harness-Desktop-1.0.51-win-x64.exe) |
-| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.51/Harness-Desktop-1.0.51-portable-x64.exe) |
-| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.51/Harness-Desktop-1.0.51-mac-arm64.dmg) |
-| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.51/Harness-Desktop-1.0.51-mac-x64.dmg) |
-| Android 手机端 1.0.51 | 扫码配对、四域工作台、原生输入、受限文档上传与固定手机控制 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.51/Harness-Mobile-1.0.51-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.51/Harness-Mobile-1.0.51-android-universal.apk.sha256) |
-| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.51/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.52/Harness-Desktop-1.0.52-win-x64.exe) |
+| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.52/Harness-Desktop-1.0.52-portable-x64.exe) |
+| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.52/Harness-Desktop-1.0.52-mac-arm64.dmg) |
+| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.52/Harness-Desktop-1.0.52-mac-x64.dmg) |
+| Android 手机端 1.0.52 | 扫码配对、四域工作台、原生输入、受限文档上传与固定手机控制 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.52/Harness-Mobile-1.0.52-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.52/Harness-Mobile-1.0.52-android-universal.apk.sha256) |
+| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.52/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 
@@ -60,6 +60,8 @@ scoop install harness-desktop/harness-desktop
 | MCP 连接 | 设置页管理官方 MCP 客户端的 stdio 与 Streamable HTTP 连接；秘密只保存凭据引用，启用本地进程前明确确认 |
 | 可观察定时任务 | 复用官方 Schedule；查看当前会话任务、精确 ID、下次运行和逾期状态。任务不唤醒系统，关闭会话后只会在恢复时补投递 |
 | 文件上传、下载和编辑 | 用户主动把文件导入工作区 `uploads/`，下载工作区内普通文件；编辑通过官方 `read` / `edit` 工具准备为待检查草稿，不绕过文件策略 |
+| 右侧工作区与会话附件 | 工作区覆盖在官方会话右侧，不压缩聊天区域；文本、源码、HTML、图片、音频、视频与 PDF 按路径/MIME/大小边界只读预览，工具结果附件按真实会话归属投递并可从时间线重新定位 |
+| 设备工作区 | 在同一右栏查看并操作已授权的 Windows 桌面流或已配对 Android 手机；设备来源、画面比例、控制状态和停止入口保持可见，未授权或能力缺失时不猜测操作 |
 | 集成终端 | 仅供用户在桌面壳中打开固定 PowerShell、CMD、Git Bash、WSL 或系统默认 shell；终端数量和输入有界，不作为模型的任意 Shell/脚本旁路 |
 | 自适应进度 | 按计划、里程碑、失败与阻塞等语义事件显示“当前 / 已完成 / 下一步”，不按固定步数、工具数或时间刷屏 |
 | 自动本地记忆与缓存 | 显式开启后低干扰使用，只保存稳定偏好和项目约束；敏感信息硬过滤，托盘“数据与隐私”保留查看、关闭、预览和全部删除，不宣称模型自训练 |

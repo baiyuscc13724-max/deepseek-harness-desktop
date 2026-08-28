@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.0.52
+
+### 更新器、Git 与 Agent Teams 状态修复
+
+- Git/GitHub 的真实连接状态与详情折叠彻底分离：已连接时开关保持开启，信息可默认折叠；未连接和 Git 未准备好各自呈现，Git、GCM、SSH 状态及全部既有动作不被折叠逻辑覆盖。
+- 稳定版更新、签名 PR Preview、安装前说明、进度、失败重试、稍后安装和回滚继续共存；更新仍需要用户明确确认，不静默下载或安装。
+- Agent Teams 只注册官方 `conversation.view`，不再向输入 dock 注入隐藏 session 组件；Mobile 复用官方团队工作区、画布和自动化表面，移除重复的 Mobile task hub，同时保留 Ready / Running / Attention / Done 与全部 plan/claim/lease 安全契约。
+
+### browser_control 超时与结果未知 fencing
+
+- CDP 输入统一经过 8 秒有界执行；服务端把处理器与 abort 信号竞争，即使底层 Promise 不合作也会释放序列化 scope tail，不再让一次悬挂输入导致后续调用连续卡满外层 60 秒。
+- 点击、输入、选择或导航超时后返回 `browser-outcome-unknown` 并 fence 后续可变操作；只读 observe/截图/console/network 仍可用于核对现场，显式停止并重建控制会话后才清除 fence。
+- 浏览器工具适配层把未知结果作为安全阻止而非可重试错误；原有密码、账户、验证码、支付、银行与交易流程禁区保持不变。
+
+### 右侧工作区、附件与时间线
+
+- 右侧工作区改为覆盖官方会话而不是缩小 `#runtimeView`：首页 280px、工具页 640px 默认宽度，800px 窄屏保留 48px 上下文边缘，顶部 76px 安全区随主题和模式一体呈现。
+- 文本、源码、隔离 HTML、图片、音频、视频和 PDF 可在右栏只读预览；程序与安装包不执行，本地目标先规范化为 `local.path`，相对路径继续受工作区边界限制。
+- 图片、文件、音频和视频工具结果统一持久转发并绑定真实 owner/session；跨会话完成通知、附件定位、草稿转移、归档历史和可恢复编辑冲突不会再误挂到当前前台会话或静默覆盖。
+- Session Timeline 与 Right Workspace 增加真实 Electron 夹具，分别验证会话引用及首页/工具页/窄屏几何。
+
+### 桌面、Android 与 Mobile 设备体验
+
+- 统一设备工作区可查看已授权 Windows 桌面流和已配对 Android 手机，保持设备来源、连接状态、画面比例、控制工具和停止入口可见，不挤压官方会话。
+- Android 控制继续只开放固定动作；Shell、脚本、密码、支付、银行、验证码、清除数据、静默安装卸载和权限绕过禁止，文本/文件/清缓存继续由手机二次确认。
+- Android 插件安装使用临时目录、备份恢复和对 Windows `EACCES`/`EBUSY`/`EPERM` 的有界退避重试，避免短暂文件锁留下半安装状态。
+- Android/iOS 共用移动 runtime/CSS 保持逐字节一致；Mobile 继续复用官方会话与 Agent Teams 表面，并保留较新的会话安全转移、附件状态、前台恢复和文档上传边界。
+
+### 安全、验证与发布完整性
+
+- 新增 [`docs/SECURITY-REVIEW-v1.0.52.zh-CN.md`](docs/SECURITY-REVIEW-v1.0.52.zh-CN.md)，记录浏览器 unknown-outcome、路径规范化、附件归属、设备控制和 Mobile 官方表面复用边界；Computer Use 全桌面权限未扩大。
+- 集成树通过全仓 1628 通过/0 失败/2 跳过；Android 50 个 compile/unit/lint/assemble 任务成功；Android 插件连续 3 轮重复安装、Session Timeline 和 Right Workspace Electron 夹具均通过。
+- 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由、移动更新示例和发布工作流统一到 `1.0.52`；Android `versionCode=1005200`，iOS build code 为 `10052`。
+- 正式发布只走仓库 resumable publisher：精确 main SHA、不可变 `v1.0.52`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。
+- 已发布 `v1.0.51` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变，不移动、不覆盖、不复用。
+
 ## 1.0.51
 
 ### Agent Teams 计划先行与可恢复执行
