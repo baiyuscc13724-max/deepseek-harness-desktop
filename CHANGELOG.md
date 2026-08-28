@@ -27,6 +27,7 @@
 - Android 控制继续只开放固定动作；Shell、脚本、密码、支付、银行、验证码、清除数据、静默安装卸载和权限绕过禁止，文本/文件/清缓存继续由手机二次确认。
 - Android 插件安装使用临时目录、备份恢复和对 Windows `EACCES`/`EBUSY`/`EPERM` 的有界退避重试，避免短暂文件锁留下半安装状态。
 - Android/iOS 共用移动 runtime/CSS 保持逐字节一致；Mobile 继续复用官方会话与 Agent Teams 表面，并保留较新的会话安全转移、附件状态、前台恢复和文档上传边界。
+- Android 四宫格附件菜单改为 body 级固定面板，不再被真实 WebView 中带 transform/overflow 的 composer 祖先裁剪；菜单内点击、外部关闭和 composer 重挂载后的孤立面板清理均有回归测试，四个固定原生动作不变。
 
 ### 安全、验证与发布完整性
 

@@ -72,6 +72,7 @@ v1.0.52 是一次统一的桌面、Android 与 iOS/iPadOS 源码稳定更新，�
 - Android/iOS 继续共享逐字节一致的 `mobile-runtime.js` 和 `mobile-compat.css`。
 - Mobile 不通过额外输入 dock 猜测会话，而是复用官方会话和团队工作区；项目、会话、团队和任务继续使用稳定 ID。
 - 会话安全转移、时间线引用、附件状态与前台恢复保留较新的实现，避免合并回退到旧的重复状态。
+- Android 四宫格附件菜单挂载到页面 body，固定面板不再被真实 WebView 中带 transform/overflow 的 composer 祖先裁剪；菜单自身点击不会被误判为外部点击，composer 重挂载会清理孤立面板，四个固定动作不变。
 - 文档上传继续要求已配对 cookie、POST intent、50 MiB 上限和官方工作区上传路径；手机不能决定桌面落盘路径。
 - Android 原生输入、系统/边缘返回、相册、拍摄、语音、文件选择、IME 与临时 URI 清理边界不变。
 

@@ -99,6 +99,8 @@ Android/iOS 移动运行时继续复用官方会话、Todo/Queue 和 Agent Teams
 
 文档与附件仍只经已配对 cookie、POST intent、50 MiB 上限和官方工作区上传路径转发；手机不能决定桌面本地落盘路径。Android/iOS 的 `mobile-runtime.js` 与 `mobile-compat.css` 保持逐字节一致。
 
+Android 四宫格附件菜单被移动到 `document.body`，避免 fixed 面板受 composer 的 transform/overflow containing block 裁剪。该 portal 只改变呈现层级，不新增动作或权限；菜单内点击明确排除在 outside-click 关闭条件之外，composer 重挂载会删除孤立旧菜单。
+
 Android 插件安装改为临时目录 + 备份目录的可恢复替换。Windows 上遇到 `EACCES`、`EBUSY` 或 `EPERM` 临时锁时进行有界退避重试；新目录启用失败时尝试恢复旧目录，不在删除旧版本后留下半安装状态。
 
 ## 7. 本地隔离验证证据

@@ -248,8 +248,12 @@ test('conversation images show their complete intrinsic frame before optional or
   assert.doesNotMatch(imageRules, /object-fit: cover !important;/)
 })
 
-test('composer actions use a temporary thumb-friendly four-tile panel', () => {
+test('composer actions use a body-level touch-safe four-tile panel', () => {
   assert.match(adapter, /if\(textarea\)textarea\.blur\(\)/)
+  assert.match(adapter, /\(document\.body\|\|document\.documentElement\)\.appendChild\(menu\)/, 'the fixed panel must escape transformed or clipped composer ancestors on real WebViews')
+  assert.doesNotMatch(adapter, /wrapper\.appendChild\(menu\)/)
+  assert.match(adapter, /!entry\.contains\(event\.target\)&&!menu\.contains\(event\.target\)/, 'portaling the panel must not make its own taps look like outside clicks')
+  assert.match(adapter, /staleMenu&&staleMenu\.parentElement/, 'composer remounts must remove an orphaned body-level panel')
   assert.match(mobileCss, /#harness-mobile-input-menu\s*\{[^}]*position: fixed !important;/s)
   assert.match(mobileCss, /grid-template-columns: repeat\(4, minmax\(0, 1fr\)\) !important;/)
   assert.match(mobileCss, /#harness-mobile-input-menu\[hidden\]\s*\{\s*display: none !important;/s)
