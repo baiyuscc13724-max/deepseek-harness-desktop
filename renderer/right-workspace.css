@@ -238,6 +238,12 @@ body.dsh-right-workspace-open .browser-quick-button {
 .right-workspace-document-audio { display:block; width:min(620px,100%); margin:28px auto 0; }
 .right-workspace-document-video { display:block; width:min(100%,960px); max-height:calc(100% - 72px); margin:16px auto 0; border-radius:8px; background:#000; }
 .right-workspace-document-pdf { display:block; box-sizing:border-box; width:100%; height:calc(100% - 58px); min-height:360px; border:0; margin:0; background:#fff; }
+.right-workspace-document-pane.is-interactive { display:flex; flex-direction:column; overflow:hidden; }
+.right-workspace-document-pane.is-interactive .right-workspace-document-header { flex:none; }
+.right-workspace-document-app-stage { display:flex; flex:1; min-height:0; flex-direction:column; margin-top:10px; overflow:hidden; border:1px solid var(--shell-border); border-radius:10px; background:#fff; }
+.right-workspace-document-app-status { flex:none; min-height:18px; border-bottom:1px solid var(--shell-border); padding:7px 10px; color:var(--shell-text-secondary); background:var(--shell-layer-2); font-size:11px; line-height:1.45; }
+.right-workspace-document-app-status.is-error { color:#d92d20; }
+.right-workspace-document-app { display:block; flex:1; width:100%; min-height:280px; border:0; background:#fff; }
 body.dsh-right-workspace-open #runtimeView { width:calc(100% - min(var(--browser-panel-width, var(--dsh-right-workspace-width)),100vw)); }
 body.dsh-right-workspace-open .runtime-status { right:min(var(--browser-panel-width, var(--dsh-right-workspace-width)),100vw); }
 @media (max-width:900px) {

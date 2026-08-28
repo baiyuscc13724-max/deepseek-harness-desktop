@@ -60,7 +60,7 @@
         node.setAttribute('role', 'link')
       }
       node.setAttribute('aria-label', `在右侧工作区安全预览 ${target}`)
-      node.title = `${target}\n单击在右侧安全预览；相对路径只从当前工作区读取，明确绝对路径可只读预览本机文件；HTML 和程序源码不会执行；右键可复制`
+      node.title = `${target}\n单击在右侧安全预览；相对路径只从当前工作区读取，明确绝对路径可只读预览本机文件；工作区 HTML 可隔离试玩，程序和安装包不会执行；右键可复制`
     }
 
     const decorate = root => {
@@ -88,6 +88,10 @@
     }
 
     document.addEventListener('click', event => {
+      // Only replace an ordinary primary-button activation. Modified clicks keep
+      // the runtime's native new-window behavior, which the desktop host still
+      // routes through its browser policy instead of executing inside the chat.
+      if (event.button !== 0 || event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return
       const local = event.target.closest?.('[data-hd-local-target]')
       if (local) {
         event.preventDefault()

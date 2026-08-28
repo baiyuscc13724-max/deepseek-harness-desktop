@@ -6,10 +6,10 @@ import { createChatStopFollowState, reduceChatStopFollowState } from './chat-sto
 import { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 import { patchWorkspaceSessionMenuSource } from './workspace-session-menu-patch.mjs'
 import { patchCodexParityRuntime } from './codex-parity-runtime-patch.mjs'
-import { patchToolResultImageSource } from './tool-result-image-patch.mjs'
+import { patchToolResultImageSource, patchToolResultOwnerSource } from './tool-result-image-patch.mjs'
 
 export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
-export { patchToolResultImageSource } from './tool-result-image-patch.mjs'
+export { patchToolResultImageSource, patchToolResultOwnerSource } from './tool-result-image-patch.mjs'
 export { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 export { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 
@@ -1530,8 +1530,9 @@ export async function patchInstalledDirectoryPicker(file = directoryPickerRuntim
 export async function patchInstalledConversation(file = conversationRuntime) {
   const source = await readFile(file, 'utf8')
   const cache = patchConversationCacheSource(source)
-  if (cache.changed) await writeFile(file, cache.source, 'utf8')
-  return cache.changed
+  const deliveryOwner = patchToolResultOwnerSource(cache.source)
+  if (cache.changed || deliveryOwner.changed) await writeFile(file, deliveryOwner.source, 'utf8')
+  return cache.changed || deliveryOwner.changed
 }
 
 export async function patchInstalledToolResultImages(file = toolUiRuntime) {

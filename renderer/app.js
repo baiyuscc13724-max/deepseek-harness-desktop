@@ -2450,7 +2450,10 @@ runtimeView.addEventListener('will-navigate', event => {
     if (url) api.openLink(url).catch(() => {})
   } else if (target.hostname === 'open-external') {
     const url = target.searchParams.get('url')
-    if (url) api.openLink(url).catch(() => {})
+    // A plain left click in chat is an explicit user request to leave Harness.
+    // Keep validation in the main-process router, but select the system browser
+    // rather than silently replacing the right-side embedded workspace.
+    if (url) api.openLink(url, { userChoice: 'system' }).catch(() => {})
   } else if (target.hostname === 'copy-session-id') {
     const value = target.searchParams.get('value')
     if (value) api.copyText(value).catch(() => {})

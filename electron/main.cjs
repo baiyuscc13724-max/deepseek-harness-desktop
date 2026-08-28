@@ -4386,6 +4386,35 @@ function externalWebUrl(value) {
   }
 }
 
+function resolveGuestLocalTarget(value) {
+  try { return normalizeLocalTarget(value) } catch {}
+
+  let authored = String(value || '').trim()
+  if (!authored || authored.length > 4096 || /[\u0000\r\n]/u.test(authored)) return null
+  if (/^harness-desktop:/i.test(authored)) return null
+  const pairs = [['`', '`'], ['"', '"'], ["'", "'"], ['<', '>'], ['（', '）'], ['(', ')']]
+  for (const [left, right] of pairs) {
+    if (authored.startsWith(left) && authored.endsWith(right) && authored.length > left.length + right.length) {
+      authored = authored.slice(left.length, -right.length).trim()
+      break
+    }
+  }
+  if (authored.startsWith('@')) authored = authored.slice(1)
+  if (!authored || /^(?:[a-z][a-z0-9+.-]*:|[?#])/i.test(authored)) return null
+  try { authored = decodeURIComponent(authored) } catch {}
+  if (/^(?:[a-z][a-z0-9+.-]*:|[?#])/i.test(authored)) return null
+  authored = authored.replace(/(?:#L\d+(?:C\d+)?|:\d+(?::\d+)?)$/i, '')
+  if (!authored || authored.includes(':')) return null
+
+  // Relative targets are project links, never ambient process paths. Resolve
+  // them against the managed workspace and reject every traversal outside it.
+  const root = path.resolve(desktopRuntimePaths().workspace)
+  const resolved = path.resolve(root, authored)
+  const relative = path.relative(root, resolved)
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null
+  return { path: resolved, line: null, column: null }
+}
+
 function browserIntentForLink(value, fallback = 'navigation') {
   try {
     const target = new URL(value)
@@ -4432,17 +4461,14 @@ async function guestLocalTargetAtPoint(guest, params) {
 async function showGuestContextMenu(guest, params) {
   const template = []
   const localValue = await guestLocalTargetAtPoint(guest, params)
-  let local = null
-  if (localValue) local = (() => {
-    try { return normalizeLocalTarget(localValue) } catch { return null }
-  })()
+  const local = localValue ? resolveGuestLocalTarget(localValue) : null
   const external = externalWebUrl(params.linkURL)
 
   if (local) {
     template.push(
-      { label: '在右侧工作区预览', click: () => send('rightWorkspace:previewLocal', localValue) },
-      { label: '打开文件或项目', click: () => openDesktopLocalTarget(localValue).catch(() => {}) },
-      { label: '在文件夹中显示', click: () => openDesktopLocalTarget(localValue, true).catch(() => {}) },
+      { label: '在右侧工作区预览', click: () => send('rightWorkspace:previewLocal', local.path) },
+      { label: '打开此项目', click: () => openDesktopLocalTarget(local.path).catch(() => {}) },
+      { label: '在文件夹中显示', click: () => openDesktopLocalTarget(local.path, true).catch(() => {}) },
       { label: '复制本机路径', click: () => clipboard.writeText(local.path) },
       { type: 'separator' }
     )
