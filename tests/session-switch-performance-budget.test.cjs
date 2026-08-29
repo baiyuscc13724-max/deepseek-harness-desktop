@@ -8,7 +8,8 @@ const test = require('node:test')
 
 const root = path.resolve(__dirname, '..')
 const benchmarkUrl = pathToFileURL(path.join(root, 'scripts', 'session-switch-performance-benchmark.mjs')).href
-const electronExecutable = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron')
+const electronRelative = process.platform === 'win32' ? ['electron.exe'] : process.platform === 'darwin' ? ['Electron.app', 'Contents', 'MacOS', 'Electron'] : ['electron']
+const electronExecutable = path.join(root, 'node_modules', 'electron', 'dist', ...electronRelative)
 const electronDisplayReady = process.platform !== 'linux' || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
 const electronBenchmarkReady = existsSync(electronExecutable) && electronDisplayReady
 const electronBenchmarkRequired = process.env.HARNESS_PERFORMANCE_ELECTRON_REQUIRED === '1' || process.env.npm_lifecycle_event === 'test:performance:synthetic'
@@ -30,11 +31,14 @@ function healthyMetrics() {
 }
 
 test('session benchmark models a genuinely long multi-session workload', async () => {
-  const { DEFAULT_SCENARIO } = await import(benchmarkUrl)
+  const { DEFAULT_SCENARIO, electronExecutablePath } = await import(benchmarkUrl)
   assert.ok(DEFAULT_SCENARIO.sessions >= 8)
   assert.ok(DEFAULT_SCENARIO.messagesPerSession >= 1200)
   assert.ok(DEFAULT_SCENARIO.measuredSwitches >= 180)
   assert.ok(DEFAULT_SCENARIO.scrollSamples >= 120)
+  assert.equal(electronExecutablePath('darwin'), path.join(root, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron'))
+  assert.equal(electronExecutablePath('win32'), path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe'))
+  assert.equal(electronExecutablePath('linux'), path.join(root, 'node_modules', 'electron', 'dist', 'electron'))
 })
 
 test('performance budgets combine calibration ratios with leak-specific ceilings', async () => {

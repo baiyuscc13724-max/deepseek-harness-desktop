@@ -260,9 +260,18 @@ async function runElectronWorker() {
   }
 }
 
+export function electronExecutablePath(platform = process.platform) {
+  const relative = platform === 'win32'
+    ? ['electron.exe']
+    : platform === 'darwin'
+      ? ['Electron.app', 'Contents', 'MacOS', 'Electron']
+      : ['electron']
+  return path.join(root, 'node_modules', 'electron', 'dist', ...relative)
+}
+
 export function runBenchmark({ quick = false } = {}) {
   const scenario = quick ? QUICK_SCENARIO : DEFAULT_SCENARIO
-  const executable = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron')
+  const executable = electronExecutablePath()
   const profileRoot = mkdtempSync(path.join(os.tmpdir(), 'hd-session-performance-'))
   const resultFile = path.join(profileRoot, 'result.json')
   const launcher = path.join(profileRoot, 'benchmark-launcher.cjs')

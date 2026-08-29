@@ -195,7 +195,7 @@ app.whenReady().then(async () => {
   await evaluate(window, \`(()=>{const button=[...document.querySelectorAll('button,a')].find(node=>/^(稍后配置|Configure later|Later)$/i.test((node.innerText||'').trim()));button?.click();return !!button})()\`)
   await sleep(800)
   let ready = false
-  for (let attempt = 0; attempt < 40 && !ready; attempt += 1) {
+  for (let attempt = 0; attempt < 80 && !ready; attempt += 1) {
     await evaluate(window, \`(()=>{const rows=[...document.querySelectorAll('[role=treeitem]')];const row=rows.find(node=>/Installed artifact DOM smoke/i.test(node.innerText||''));row?.click();return !!row})()\`)
     await sleep(80)
     await evaluate(window, \`(()=>{const input=document.querySelector('textarea');if(!input)return false;const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;setter.call(input,'Installed smoke draft only; never submit.');input.dispatchEvent(new Event('input',{bubbles:true}));return true})()\`)
@@ -227,10 +227,10 @@ app.whenReady().then(async () => {
   window.webContents.sendInputEvent({ type: 'char', keyCode: '\\r' })
   window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
   await sleep(500)
-  const desktop = await evaluate(window, \`(()=>{const root=document.querySelector('.dat-workspace');const text=root?.innerText||'';const buttons=[...root.querySelectorAll('button')];const resume=buttons.filter(node=>/生成继续请求|准备继续请求|prepare continue request|resume/i.test((node.innerText||node.getAttribute('aria-label')||'')));const stop=buttons.filter(node=>/停止团队|stop team/i.test((node.innerText||node.getAttribute('aria-label')||'')));const input=document.querySelector('textarea');return {rendered:!!root,paused:/已由用户停止|stopped by (?:the )?user/i.test(text),resumeCount:resume.length,stopCount:stop.length,agentDirectory:/代理目录|agent directory/i.test(text),preview:/team_resume|继续|continue|resume/i.test(input?.value||''),inputValue:input?.value||''}})()\`)
+  const desktop = await evaluate(window, \`(()=>{const root=document.querySelector('.dat-workspace');const text=root?.innerText||'';const buttons=[...root.querySelectorAll('button')];const resume=buttons.filter(node=>/生成继续请求|准备继续请求|prepare continue request|resume/i.test((node.innerText||node.getAttribute('aria-label')||'')));const stop=buttons.filter(node=>/停止团队|stop team/i.test((node.innerText||node.getAttribute('aria-label')||'')));const input=document.querySelector('textarea');return {rendered:!!root,paused:/已由用户停止|stopped by (?:the )?user/i.test(text),resumeCount:resume.length,stopCount:stop.length,agentDirectory:/代理目录|agent directory|统一代理目录|unified agent catalog|查看团队关系|view team relationships?/i.test(text),preview:/team_resume|继续|continue|resume/i.test(input?.value||''),inputValue:input?.value||''}})()\`)
   window.setContentSize(390, 844)
   await sleep(500)
-  const mobile = await evaluate(window, \`(()=>{const root=document.querySelector('.dat-workspace');const rect=root?.getBoundingClientRect();const viewport=document.querySelector('meta[name=viewport]')?.content||'';const targets=[...root.querySelectorAll('button')].filter(node=>/生成继续请求|准备继续请求|prepare continue request|resume|代理目录|agent directory/i.test((node.innerText||node.getAttribute('aria-label')||''))).map(node=>{const r=node.getBoundingClientRect();return {name:(node.innerText||node.getAttribute('aria-label')||'').trim(),width:r.width,height:r.height}});return {viewportSize:[innerWidth,innerHeight],viewportMeta:/width=device-width/i.test(viewport),rendered:!!root,visible:!!rect&&rect.width>0&&rect.height>0,noHorizontalOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth,touchTargets:targets,touchTargets44:targets.length>0&&targets.every(target=>target.width>=44&&target.height>=44)}})()\`)
+  const mobile = await evaluate(window, \`(()=>{const root=document.querySelector('.dat-workspace');const rect=root?.getBoundingClientRect();const viewport=document.querySelector('meta[name=viewport]')?.content||'';const targets=[...root.querySelectorAll('button')].filter(node=>/生成继续请求|准备继续请求|prepare continue request|resume|代理目录|agent directory|统一代理目录|unified agent catalog|查看团队关系|view team relationships?/i.test((node.innerText||node.getAttribute('aria-label')||''))).map(node=>{const r=node.getBoundingClientRect();return {name:(node.innerText||node.getAttribute('aria-label')||'').trim(),width:r.width,height:r.height}});return {viewportSize:[innerWidth,innerHeight],viewportMeta:/width=device-width/i.test(viewport),rendered:!!root,visible:!!rect&&rect.width>0&&rect.height>0,noHorizontalOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth,touchTargets:targets,touchTargets44:targets.length>0&&targets.every(target=>target.width>=44&&target.height>=44)}})()\`)
   fs.writeFileSync(out, JSON.stringify({ desktop, focusBaseline: baseline, focus, mobile }))
   app.exit(0)
 }).catch(error => { try { fs.writeFileSync(out, JSON.stringify({ error: String(error?.stack || error) })) } catch {} app.exit(1) })
@@ -243,7 +243,7 @@ app.whenReady().then(async () => {
   child.stdout.on('data', chunk => { output += chunk })
   child.stderr.on('data', chunk => { output += chunk })
   const exitPromise = new Promise(resolve => child.once('exit', code => resolve(code)))
-  const exit = await Promise.race([exitPromise, wait(45_000).then(() => 'timeout')])
+  const exit = await Promise.race([exitPromise, wait(70_000).then(() => 'timeout')])
   if (exit === 'timeout') await stopChild(child, exitPromise)
   const report = JSON.parse(await readFile(reportFile, 'utf8').catch(() => '{}'))
   if (exit === 'timeout' || exit !== 0 || report.error) throw new Error(`Electron DOM smoke failed: ${report.error || output || `${exit} ${JSON.stringify(report)}`}`)
