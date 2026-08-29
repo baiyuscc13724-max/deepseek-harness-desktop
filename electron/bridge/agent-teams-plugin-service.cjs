@@ -87,25 +87,33 @@ async function ensurePatchEntry(file) {
   return true
 }
 
-async function installRuntimeDependencies(pluginRoot, dependencies = {}) {
+async function installRuntimeDependencies(pluginRoot, dependencies = {}, dependencyRoot = '') {
   const installed = new Set()
+  const expandedRoot = String(dependencyRoot || '').trim()
   async function install(packageName) {
     if (installed.has(packageName)) return
     installed.add(packageName)
     let packageFile
     try {
-      try { packageFile = physicalUnpackedPath(require.resolve(`${packageName}/package.json`)) } catch {
-        let directory = path.dirname(physicalUnpackedPath(require.resolve(packageName)))
-        for (let depth = 0; depth < 12; depth += 1) {
-          const candidate = path.join(directory, 'package.json')
-          const candidateManifest = JSON.parse(await readText(candidate, '{}'))
-          if (candidateManifest.name === packageName) { packageFile = candidate; break }
-          const parent = path.dirname(directory)
-          if (parent === directory) break
-          directory = parent
+      if (expandedRoot) {
+        const candidate = path.join(path.resolve(expandedRoot), ...packageName.split('/'), 'package.json')
+        const candidateStat = await stat(candidate).catch(() => null)
+        if (!candidateStat?.isFile()) throw new Error(`package.json not found in expanded runtime: ${candidate}`)
+        packageFile = candidate
+      } else {
+        try { packageFile = physicalUnpackedPath(require.resolve(`${packageName}/package.json`)) } catch {
+          let directory = path.dirname(physicalUnpackedPath(require.resolve(packageName)))
+          for (let depth = 0; depth < 12; depth += 1) {
+            const candidate = path.join(directory, 'package.json')
+            const candidateManifest = JSON.parse(await readText(candidate, '{}'))
+            if (candidateManifest.name === packageName) { packageFile = candidate; break }
+            const parent = path.dirname(directory)
+            if (parent === directory) break
+            directory = parent
+          }
         }
+        if (!packageFile) throw new Error('package.json not found')
       }
-      if (!packageFile) throw new Error('package.json not found')
     } catch (error) {
       error.message = `无法解析协作团队插件运行依赖 ${packageName}：${error.message}`
       throw error
@@ -122,7 +130,7 @@ async function installRuntimeDependencies(pluginRoot, dependencies = {}) {
   return [...installed]
 }
 
-async function ensureAgentTeamsPlugin({ dshHome, bundledRoot, allowArtifactFixture = false, requireArtifact = false }) {
+async function ensureAgentTeamsPlugin({ dshHome, bundledRoot, dependencyRoot = '', allowArtifactFixture = false, requireArtifact = false }) {
   const artifact = requireArtifact
     ? await validateAgentTeamsArtifactRoot(bundledRoot, { allowArtifactFixture })
     : { source: path.resolve(physicalUnpackedPath(path.resolve(bundledRoot))), kind: 'development-or-packaged-startup' }
@@ -151,7 +159,7 @@ async function ensureAgentTeamsPlugin({ dshHome, bundledRoot, allowArtifactFixtu
     await rm(temporary, { recursive: true, force: true })
     await rm(backup, { recursive: true, force: true })
     await cp(source, temporary, { recursive: true, force: true })
-    runtimeDependencies = await installRuntimeDependencies(temporary, manifest.dependencies)
+    runtimeDependencies = await installRuntimeDependencies(temporary, manifest.dependencies, dependencyRoot)
     patchBefore = await readText(patchFile, '[]\n')
     try {
       await renameDirectory(destination, backup)

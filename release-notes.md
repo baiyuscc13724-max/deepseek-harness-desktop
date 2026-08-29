@@ -18,6 +18,7 @@ v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥�
 - `resolve_unknown` 改用 Host 发行、短时效、单用途授权，绑定 root、turn、team/task/effect、attempt、outcome、pauseEpoch、team revision 和规范化参数摘要；替换参数、过期、跨回合、跨工具与重放全部拒绝。
 - 项目设备、E2EE 与 LAN 私钥通过 Host secret capability 和系统安全存储桥接；profile 只保留不敏感引用，迁移、篡改、能力不可用和落盘泄露都有动态门禁。
 - 安全信道 receipt 具备持久化、重启和容量语义；same-dedupe 的检查与 Inbox 追加进入同一串行 mutation，双实例竞态不再依赖调用方自行规避。
+- 打包版首次启动从真实的版本化 runtime cache复制 Agent Teams 依赖，避免对 `app.asar` 虚拟目录递归复制；修复 Windows 在 `preparing-runtime` 阶段退出、APP 无法打开的问题。
 
 ## 环境密钥可直接输入安全覆盖
 
@@ -45,8 +46,8 @@ v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥�
 
 发布候选在提交前完成：
 
-- 全仓 `npm run verify`：1716 通过、0 失败、5 个平台/环境条件跳过（1721 总计）；
-- Agent Teams 专项：159 通过、0 失败、2 个环境门禁跳过；
+- 全仓 `npm run verify`：1717 通过、0 失败、5 个平台/环境条件跳过（1722 总计）；
+- Agent Teams 专项：160 通过、0 失败、2 个环境门禁跳过；
 - 模型密钥行为、迁移、泄露与官方 runtime：28/28；
 - Agent Teams 安装后 artifact-fixture 工作区 smoke：2/2；
 - P1 release-blocking 安全/持久化矩阵：11/11；

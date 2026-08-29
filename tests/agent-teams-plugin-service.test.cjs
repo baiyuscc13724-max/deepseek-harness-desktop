@@ -49,6 +49,44 @@ test('Agent Teams plugin installs an explicitly marked artifact fixture into the
   }
 })
 
+test('packaged startup installs Agent Teams dependencies from the expanded runtime root', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-expanded-runtime-'))
+  try {
+    const bundledRoot = await artifactFixture(root)
+    const manifestFile = path.join(bundledRoot, 'package.json')
+    const manifest = JSON.parse(await readFile(manifestFile, 'utf8'))
+    manifest.dependencies = { 'agent-teams-runtime-root-fixture': '1.0.0' }
+    await writeFile(manifestFile, JSON.stringify(manifest), 'utf8')
+
+    const dependencyRoot = path.join(root, 'expanded-runtime', 'node_modules')
+    const directRoot = path.join(dependencyRoot, 'agent-teams-runtime-root-fixture')
+    const transitiveRoot = path.join(dependencyRoot, 'agent-teams-runtime-transitive-fixture')
+    await mkdir(directRoot, { recursive: true })
+    await mkdir(transitiveRoot, { recursive: true })
+    await writeFile(path.join(directRoot, 'package.json'), JSON.stringify({
+      name: 'agent-teams-runtime-root-fixture',
+      version: '1.0.0',
+      dependencies: { 'agent-teams-runtime-transitive-fixture': '1.0.0' }
+    }))
+    await writeFile(path.join(directRoot, 'index.js'), 'module.exports = "direct"\n')
+    await writeFile(path.join(transitiveRoot, 'package.json'), JSON.stringify({ name: 'agent-teams-runtime-transitive-fixture', version: '1.0.0' }))
+    await writeFile(path.join(transitiveRoot, 'index.js'), 'module.exports = "transitive"\n')
+
+    const installed = await ensureAgentTeamsPlugin({
+      dshHome: root,
+      bundledRoot,
+      dependencyRoot,
+      allowArtifactFixture: true,
+      requireArtifact: true
+    })
+    assert.deepEqual(installed.runtimeDependencies, ['agent-teams-runtime-root-fixture', 'agent-teams-runtime-transitive-fixture'])
+    assert.equal(await readFile(path.join(installed.destination, 'node_modules', 'agent-teams-runtime-root-fixture', 'index.js'), 'utf8'), 'module.exports = "direct"\n')
+    assert.equal(await readFile(path.join(installed.destination, 'node_modules', 'agent-teams-runtime-transitive-fixture', 'index.js'), 'utf8'), 'module.exports = "transitive"\n')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('plugin install rolls back the previous directory when patch publication fails', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-rollback-'))
   try {
@@ -117,6 +155,7 @@ test('desktop startup installs Agent Teams without patching the official runtime
   const main = await readFile(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
   const pkg = JSON.parse(await readFile(path.resolve(__dirname, '..', 'package.json'), 'utf8'))
   assert.match(main, /ensureAgentTeamsPlugin\(agentTeamsPluginOptions\(\)\)/u)
+  assert.match(main, /dependencyRoot:\s*bundledNodeModulesRoot\(\)/u)
   assert.ok(pkg.build.files.includes('plugins/dsh-agent-teams/**/*'))
   assert.ok(pkg.build.asarUnpack.includes('plugins/dsh-agent-teams/**/*'))
 })

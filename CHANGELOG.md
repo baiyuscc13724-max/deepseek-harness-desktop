@@ -9,6 +9,7 @@
 - 新建团队、显式 Stop 后 Resume、handoff/adopt/recover、未知能力、文件冲突、跨项目/所有权变化、真实副作用、`outcome_unknown`、不可逆风险与目标歧义继续硬性停止；授权保持 `human_attested`，不伪造 `host_verified`。
 - accepted-completed 接管继续绑定原 owner epoch；`resolve_unknown` 改用 Host 发行、短时效、单用途且绑定完整参数摘要的授权，替换参数、过期、跨回合/工具和重放均拒绝。
 - 项目设备/E2EE/LAN 私钥通过 Host secret capability 与系统安全存储托管；secure-channel receipt 持久化，collaboration same-dedupe 的检查与 Inbox 追加进入同一串行 mutation，覆盖重启、容量和双实例竞态。
+- 打包版首次启动从已展开的版本化 runtime cache复制 Agent Teams 的运行依赖，不再对 `app.asar` 虚拟目录执行递归 `fs.cp`；Windows packaged self-test 与普通启动因此不会在 `preparing-runtime` 阶段退出。
 
 ### 模型密钥编辑与无障碍
 
@@ -32,7 +33,7 @@
 ### 验证与发布身份
 
 - 新增 [`docs/SECURITY-REVIEW-v1.0.54.zh-CN.md`](docs/SECURITY-REVIEW-v1.0.54.zh-CN.md) 与 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)，记录自动驾驶授权、secret custody、密钥覆盖和性能证据边界。
-- 全仓 `npm run verify` 最终 1716 通过/0 失败/5 跳过；Agent Teams 159 通过/0 失败/2 跳过；模型密钥 28/28；安装后 artifact-fixture smoke 2/2；P1 release-blocking 矩阵 11/11；Android unit test、release R8 与 JNI mapping 门禁通过；`npm run verify:release` 与 `git diff --check` 通过。
+- 全仓 `npm run verify` 最终 1717 通过/0 失败/5 跳过；Agent Teams 160 通过/0 失败/2 跳过；模型密钥 28/28；安装后 artifact-fixture smoke 2/2；P1 release-blocking 矩阵 11/11；Android unit test、release R8 与 JNI mapping 门禁通过；`npm run verify:release` 与 `git diff --check` 通过。
 - macOS Host IPC endpoint 增加 100 UTF-8 bytes 硬上限及长 `TMPDIR` 回退，Windows 命名管道前缀保持兼容；安装后 workbench smoke 同步真实 Stop/continue 文案；Windows 云端冷启动使用独立 350 ms 上限但不放宽稳态性能与泄漏门禁。
 - 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由和移动更新示例统一到 `1.0.54`；Android `versionCode=1005400`，iOS build code 为 `10054`。
 - 正式发布只走仓库 resumable publisher：精确 main SHA、不可变 `v1.0.54`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。

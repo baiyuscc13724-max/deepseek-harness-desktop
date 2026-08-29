@@ -3976,7 +3976,11 @@ function modelAdmissionPluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-model-admission') }
 }
 function agentTeamsPluginOptions() {
-  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-agent-teams') }
+  return {
+    dshHome: desktopDshHome(),
+    bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-agent-teams'),
+    dependencyRoot: bundledNodeModulesRoot()
+  }
 }
 function sessionExperiencePluginOptions() {
   return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-session-experience') }
