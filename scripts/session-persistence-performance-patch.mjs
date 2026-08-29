@@ -72,7 +72,7 @@ const LIST_ARTIFACTS_PATCHED = `\t${(async function listArtifacts(signal) {
   }
   signal?.throwIfAborted();
   return artifacts;
-}).toString().replace('async function listArtifacts', 'async listArtifacts')}`
+}).toString().replace(/\r\n?/g, '\n').replace('async function listArtifacts', 'async listArtifacts')}`
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
