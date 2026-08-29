@@ -186,9 +186,15 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 app.disableHardwareAcceleration()
 app.setPath('userData', ${JSON.stringify(path.join(temporaryRoot, 'electron-user-data'))})
 async function evaluate(window, source) { return window.webContents.executeJavaScript(source, true) }
+async function setViewport(window, width, height) {
+  const inspector = window.webContents.debugger
+  if (!inspector.isAttached()) inspector.attach('1.3')
+  await inspector.sendCommand('Emulation.setDeviceMetricsOverride', { width, height, screenWidth: width, screenHeight: height, deviceScaleFactor: 1, mobile: false })
+}
 app.whenReady().then(async () => {
   const window = new BrowserWindow({ show: false, width: 1280, height: 900, webPreferences: { sandbox: true, contextIsolation: true } })
   await window.loadURL(url)
+  await setViewport(window, 1280, 900)
   await sleep(500)
   await evaluate(window, \`(()=>{const button=[...document.querySelectorAll('button')].find(node=>/^(继续|Continue)$/i.test((node.innerText||'').trim()));button?.click();return !!button})()\`)
   await sleep(500)
@@ -227,10 +233,11 @@ app.whenReady().then(async () => {
   window.webContents.sendInputEvent({ type: 'char', keyCode: '\\r' })
   window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
   await sleep(500)
-  const desktop = await evaluate(window, \`(()=>{const root=document.querySelector('.dat-workspace');const text=root?.innerText||'';const buttons=[...root.querySelectorAll('button')];const resume=buttons.filter(node=>/生成继续请求|准备继续请求|prepare continue request|resume/i.test((node.innerText||node.getAttribute('aria-label')||'')));const stop=buttons.filter(node=>/停止团队|stop team/i.test((node.innerText||node.getAttribute('aria-label')||'')));const input=document.querySelector('textarea');return {rendered:!!root,paused:/已由用户停止|stopped by (?:the )?user/i.test(text),resumeCount:resume.length,stopCount:stop.length,agentDirectory:/代理目录|agent directory|统一代理目录|unified agent catalog|查看团队关系|view team relationships?/i.test(text),preview:/team_resume|继续|continue|resume/i.test(input?.value||''),inputValue:input?.value||''}})()\`)
-  window.setContentSize(390, 844)
+  const desktop = await evaluate(window, \`(()=>{const root=document.querySelector('.dat-workspace');const text=root?.innerText||'';const buttons=[...root.querySelectorAll('button')];const resume=buttons.filter(node=>/生成继续请求|准备继续请求|prepare continue request|resume/i.test((node.innerText||node.getAttribute('aria-label')||'')));const stop=buttons.filter(node=>/停止团队|stop team/i.test((node.innerText||node.getAttribute('aria-label')||'')));const input=document.querySelector('textarea');return {viewportSize:[innerWidth,innerHeight],rendered:!!root,paused:/已由用户停止|stopped by (?:the )?user/i.test(text),resumeCount:resume.length,stopCount:stop.length,agentDirectory:/代理目录|agent directory|统一代理目录|unified agent catalog|查看团队关系|view team relationships?/i.test(text),preview:/team_resume|继续|continue|resume/i.test(input?.value||''),inputValue:input?.value||''}})()\`)
+  await setViewport(window, 390, 844)
   await sleep(500)
   const mobile = await evaluate(window, \`(()=>{const root=document.querySelector('.dat-workspace');const rect=root?.getBoundingClientRect();const viewport=document.querySelector('meta[name=viewport]')?.content||'';const targets=[...root.querySelectorAll('button')].filter(node=>/生成继续请求|准备继续请求|prepare continue request|resume|代理目录|agent directory|统一代理目录|unified agent catalog|查看团队关系|view team relationships?/i.test((node.innerText||node.getAttribute('aria-label')||''))).map(node=>{const r=node.getBoundingClientRect();return {name:(node.innerText||node.getAttribute('aria-label')||'').trim(),width:r.width,height:r.height}});return {viewportSize:[innerWidth,innerHeight],viewportMeta:/width=device-width/i.test(viewport),rendered:!!root,visible:!!rect&&rect.width>0&&rect.height>0,noHorizontalOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth,touchTargets:targets,touchTargets44:targets.length>0&&targets.every(target=>target.width>=44&&target.height>=44)}})()\`)
+  if (window.webContents.debugger.isAttached()) window.webContents.debugger.detach()
   fs.writeFileSync(out, JSON.stringify({ desktop, focusBaseline: baseline, focus, mobile }))
   app.exit(0)
 }).catch(error => { try { fs.writeFileSync(out, JSON.stringify({ error: String(error?.stack || error) })) } catch {} app.exit(1) })
@@ -246,12 +253,13 @@ app.whenReady().then(async () => {
   const exit = await Promise.race([exitPromise, wait(70_000).then(() => 'timeout')])
   if (exit === 'timeout') await stopChild(child, exitPromise)
   const report = JSON.parse(await readFile(reportFile, 'utf8').catch(() => '{}'))
-  if (exit === 'timeout' || exit !== 0 || report.error) throw new Error(`Electron DOM smoke failed: ${report.error || output || `${exit} ${JSON.stringify(report)}`}`)
+  if (exit === 'timeout' || exit !== 0 || report.error) throw new Error(`Electron DOM smoke failed: ${report.error || `exit=${exit} report=${JSON.stringify(report)} output=${output}`}`)
+  if (report.desktop?.viewportSize?.[0] !== 1280 || report.desktop?.viewportSize?.[1] !== 900) throw new Error(`1280x900 Electron desktop-viewport contract failed: ${JSON.stringify(report.desktop)}`)
   if (!report.desktop?.rendered || !report.desktop.paused || report.desktop.resumeCount < 1 || report.desktop.stopCount !== 0 || !report.desktop.agentDirectory || !report.desktop.preview) throw new Error(`Paused/Resume DOM interaction failed: ${JSON.stringify(report.desktop)}`)
   const ringChanged = ['outlineStyle', 'outlineWidth', 'outlineColor', 'boxShadow'].some(field => report.focus?.[field] !== report.focusBaseline?.[field])
   if (!report.focus?.focused || !report.focus.nativeOrAria || !report.focus.name || !report.focus.ring || !ringChanged || !report.focus.inViewport || !report.focus.unobscured) throw new Error(`Keyboard focus contract failed: ${JSON.stringify({ baseline: report.focusBaseline, focused: report.focus, ringChanged })}`)
   if (!report.mobile?.rendered || !report.mobile.visible || !report.mobile.noHorizontalOverflow || !report.mobile.viewportMeta || !report.mobile.touchTargets44 || report.mobile.viewportSize?.[0] !== 390 || report.mobile.viewportSize?.[1] !== 844) throw new Error(`390x844 Electron mobile-viewport contract failed: ${JSON.stringify(report.mobile)}`)
-  return { desktop: true, mobileViewport: 'Electron Chromium 390x844 (not Android/iOS hardware)', keyboardAndAria: true, focusStyleChanged: true, focusedRectInViewport: true, visibleFocusUnobscured: true, touchTargets44: true, stopResumePreview: true, unifiedAgentDirectory: true }
+  return { desktop: true, desktopViewport: 'Electron Chromium 1280x900', mobileViewport: 'Electron Chromium 390x844 (not Android/iOS hardware)', keyboardAndAria: true, focusStyleChanged: true, focusedRectInViewport: true, visibleFocusUnobscured: true, touchTargets44: true, stopResumePreview: true, unifiedAgentDirectory: true }
 }
 
 export async function runInstalledSmoke(options) {

@@ -52,6 +52,7 @@ test('artifact-fixture smoke boots real DSH Web, proves state and SSE, and rende
     assert.equal(report.dom.focusedRectInViewport, true)
     assert.equal(report.dom.visibleFocusUnobscured, true)
     assert.equal(report.dom.touchTargets44, true)
+    assert.equal(report.dom.desktopViewport, 'Electron Chromium 1280x900')
     assert.equal(report.dom.mobileViewport, 'Electron Chromium 390x844 (not Android/iOS hardware)')
     assert.equal(report.hostResolveUnknown.bridgePresent, true)
     assert.equal(report.hostResolveUnknown.ciDialogClicked, false)
