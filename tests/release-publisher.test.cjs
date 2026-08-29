@@ -595,6 +595,8 @@ test('Linux Electron gates install and configure the SUID sandbox before exercis
   assert.match(browserFixture, /requestAnimationFrame\(\(\) => requestAnimationFrame/u, 'real input must wait for a composited renderer frame')
   assert.match(browserFixture, /type: 'mouseMove'[\s\S]*await wait\(20\)[\s\S]*type: 'mouseDown'/u, 'real input must establish hit testing before the click')
   assert.match(browserFixture, /waitForDomClick\(view\.webContents, 'no-navigation'\)/u, 'DOM provenance must use a bounded asynchronous observation')
+  assert.match(browserFixture, /waitForDeniedCode\(denied, 'browser-action-cancelled'\)/u, 'stopped renderer timers must await the exact guard receipt within a bound')
+  assert.doesNotMatch(browserFixture, /await wait\(1_200\)/u, 'cloud navigation safety must not depend on one fixed macOS timer delay')
 })
 
 test('pre-Tag candidate disables the opaque previous-stable upgrade loop and retains fast current-package gates', () => {

@@ -22,6 +22,16 @@ async function waitForDomClick(contents, expectedId, timeoutMs = 2_000) {
   return observed
 }
 
+async function waitForDeniedCode(denied, expectedCode, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const observed = denied.find(item => item.code === expectedCode)
+    if (observed) return observed
+    await wait(25)
+  }
+  return denied.find(item => item.code === expectedCode)
+}
+
 function listen(server) {
   return new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -175,10 +185,10 @@ async function run() {
       const observedClick = await waitForDomClick(view.webContents, 'no-navigation')
       assert.deepEqual(observedClick, { trusted: true, id: 'no-navigation' }, `unexpected DOM click provenance: ${JSON.stringify(observedClick)}`)
     }
-    await wait(1_200)
+    const stoppedModelDenial = await waitForDeniedCode(denied, 'browser-action-cancelled')
     assert.equal(targetHits, modelTargetHits, 'a stopped model timer revived after model control resumed')
     assert.equal(new URL(view.webContents.getURL()).origin, sourceOrigin, 'a stopped model timer committed after control resumed')
-    assert.ok(denied.some(item => item.code === 'browser-action-cancelled'), `stopped model timer did not reach the guard: ${JSON.stringify(denied)}`)
+    assert.ok(stoppedModelDenial, `stopped model timer did not reach the guard: ${JSON.stringify(denied)}`)
 
     policy.pauseModelControl()
     assert.equal(policy.isModelStopped, true)
