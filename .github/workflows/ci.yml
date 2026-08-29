@@ -38,6 +38,10 @@ jobs:
           sudo chown root:root "$sandbox"
           sudo chmod 4755 "$sandbox"
           test "$(stat -c '%u:%g:%a' "$sandbox")" = '0:0:4755'
+      - name: Run synthetic Electron performance budget
+        env:
+          HARNESS_PERFORMANCE_ELECTRON_REQUIRED: '1'
+        run: xvfb-run -a npm run test:performance:synthetic
       - name: Run Agent Teams installed-workbench artifact-fixture smoke
         env:
           HARNESS_AGENT_TEAMS_INSTALLED_SMOKE: '1'

@@ -1,11 +1,20 @@
 'use strict'
 
 const assert = require('node:assert/strict')
+const { existsSync } = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const test = require('node:test')
 
-const benchmarkUrl = pathToFileURL(path.resolve(__dirname, '..', 'scripts', 'session-switch-performance-benchmark.mjs')).href
+const root = path.resolve(__dirname, '..')
+const benchmarkUrl = pathToFileURL(path.join(root, 'scripts', 'session-switch-performance-benchmark.mjs')).href
+const electronExecutable = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron')
+const electronDisplayReady = process.platform !== 'linux' || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
+const electronBenchmarkReady = existsSync(electronExecutable) && electronDisplayReady
+const electronBenchmarkRequired = process.env.HARNESS_PERFORMANCE_ELECTRON_REQUIRED === '1' || process.env.npm_lifecycle_event === 'test:performance:synthetic'
+const electronSkipReason = electronBenchmarkRequired
+  ? false
+  : 'The heavyweight Electron benchmark runs only in the isolated test:performance:synthetic lifecycle and mandatory cloud performance gate.'
 
 function healthyMetrics() {
   return {
@@ -50,7 +59,8 @@ test('performance budgets combine calibration ratios with leak-specific ceilings
   }
 })
 
-test('quick Electron stress fixture stays inside the regression budget', { timeout: 120_000 }, async () => {
+test('quick Electron stress fixture stays inside the regression budget', { timeout: 120_000, skip: electronSkipReason }, async () => {
+  assert.equal(electronBenchmarkReady, true, `Required Electron benchmark runtime is unavailable: ${electronExecutable}`)
   const { QUICK_SCENARIO, runBenchmark } = await import(benchmarkUrl)
   const result = runBenchmark({ quick: true })
   assert.deepEqual(result.scenario, QUICK_SCENARIO)

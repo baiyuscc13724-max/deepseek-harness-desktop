@@ -106,6 +106,18 @@ jobs:
           sudo chown root:root "$sandbox"
           sudo chmod 4755 "$sandbox"
           test "$(stat -c '%u:%g:%a' "$sandbox")" = '0:0:4755'
+      - name: Run synthetic Electron performance budget (Linux)
+        if: runner.os == 'Linux'
+        env:
+          HARNESS_PERFORMANCE_ELECTRON_REQUIRED: '1'
+        run: xvfb-run -a npm run test:performance:synthetic
+      - name: Run synthetic Electron performance budget (Windows and macOS)
+        if: runner.os != 'Linux'
+        env:
+          HARNESS_PERFORMANCE_ELECTRON_REQUIRED: '1'
+        run: |
+          node node_modules/electron/install.js
+          npm run test:performance:synthetic
       - name: Verify browser navigation security in Electron (Linux)
         if: runner.os == 'Linux'
         env:

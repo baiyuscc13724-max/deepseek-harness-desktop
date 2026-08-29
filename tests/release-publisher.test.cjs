@@ -546,8 +546,8 @@ test('desktop publication cannot stage a macOS artifact before the unsigned buil
 
 test('Linux Electron gates install and configure the SUID sandbox before exercising Electron', () => {
   const workflows = [
-    { file: '.github/workflows/ci.yml', job: 'verify', exercise: 'Verify browser navigation security in Electron' },
-    { file: '.github/workflows/release.yml', job: 'build', exercise: 'Verify browser navigation security in Electron (Linux)' }
+    { file: '.github/workflows/ci.yml', job: 'verify', performance: 'Run synthetic Electron performance budget', exercise: 'Verify browser navigation security in Electron' },
+    { file: '.github/workflows/release.yml', job: 'build', performance: 'Run synthetic Electron performance budget (Linux)', exercise: 'Verify browser navigation security in Electron (Linux)' }
   ]
 
   for (const contract of workflows) {
@@ -556,12 +556,17 @@ test('Linux Electron gates install and configure the SUID sandbox before exercis
     const steps = workflow.jobs[contract.job].steps
     const installDependencies = steps.find(step => /^npm ci(?:\s|$)/u.test(String(step.run || '')))
     const configure = steps.find(step => String(step.name || '').startsWith('Configure Electron sandbox'))
+    const performance = steps.find(step => step.name === contract.performance)
     const exercise = steps.find(step => step.name === contract.exercise)
     assert.ok(installDependencies, `${contract.file} must install dependencies`)
     assert.ok(configure, `${contract.file} must configure the Electron sandbox`)
+    assert.ok(performance, `${contract.file} must run the synthetic Electron performance budget`)
     assert.ok(exercise, `${contract.file} must exercise Electron`)
     assert.ok(steps.indexOf(installDependencies) < steps.indexOf(configure))
-    assert.ok(steps.indexOf(configure) < steps.indexOf(exercise))
+    assert.ok(steps.indexOf(configure) < steps.indexOf(performance))
+    assert.ok(steps.indexOf(performance) < steps.indexOf(exercise))
+    assert.equal(performance.env.HARNESS_PERFORMANCE_ELECTRON_REQUIRED, '1')
+    assert.match(performance.run, /xvfb-run -a npm run test:performance:synthetic/u)
     assert.match(configure.run, /set -euo pipefail/u)
     assert.match(configure.run, /node node_modules\/electron\/install\.js/u)
     assert.match(configure.run, /sandbox="\$GITHUB_WORKSPACE\/node_modules\/electron\/dist\/chrome-sandbox"/u)
@@ -585,12 +590,21 @@ test('Linux Electron gates install and configure the SUID sandbox before exercis
   const release = YAML.parse(read('.github/workflows/release.yml'))
   const releaseSteps = release.jobs.build.steps
   const linuxConfigure = releaseSteps.find(step => step.name === 'Configure Electron sandbox for Linux')
+  const linuxPerformance = releaseSteps.find(step => step.name === 'Run synthetic Electron performance budget (Linux)')
+  const desktopPerformance = releaseSteps.find(step => step.name === 'Run synthetic Electron performance budget (Windows and macOS)')
   const linuxExercise = releaseSteps.find(step => step.name === 'Verify browser navigation security in Electron (Linux)')
   const desktopExercise = releaseSteps.find(step => step.name === 'Verify browser navigation security in Electron (Windows and macOS)')
   assert.equal(linuxConfigure.if, "runner.os == 'Linux'")
+  assert.equal(linuxPerformance.if, "runner.os == 'Linux'")
   assert.equal(linuxExercise.if, "runner.os == 'Linux'")
   assert.equal(linuxExercise.env.HARNESS_BROWSER_TEST_REAL_INPUT, '1')
+  assert.equal(desktopPerformance.if, "runner.os != 'Linux'")
+  assert.equal(desktopPerformance.env.HARNESS_PERFORMANCE_ELECTRON_REQUIRED, '1')
+  assert.match(desktopPerformance.run, /node node_modules\/electron\/install\.js[\s\S]*npm run test:performance:synthetic/u)
   assert.equal(desktopExercise.if, "runner.os != 'Linux'")
+  assert.ok(releaseSteps.indexOf(linuxConfigure) < releaseSteps.indexOf(linuxPerformance))
+  assert.ok(releaseSteps.indexOf(linuxPerformance) < releaseSteps.indexOf(linuxExercise))
+  assert.ok(releaseSteps.indexOf(desktopPerformance) < releaseSteps.indexOf(desktopExercise))
   const browserFixture = read('tests/fixtures/browser-navigation-guard-electron.cjs')
   assert.match(browserFixture, /requestAnimationFrame\(\(\) => requestAnimationFrame/u, 'real input must wait for a composited renderer frame')
   assert.match(browserFixture, /type: 'mouseMove'[\s\S]*await wait\(20\)[\s\S]*type: 'mouseDown'/u, 'real input must establish hit testing before the click')

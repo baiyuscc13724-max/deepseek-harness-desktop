@@ -17,9 +17,9 @@ test('raw upstream anchors patch directly to complete gated v3', async () => {
   assert.match(result.source, /keyRestoreCompensationFailed/u)
 })
 
-test('complete installed direct v2 migrates exactly to executable gated v3', async () => {
-  const { patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
-  const directV2 = readFileSync(runtimeFile, 'utf8')
+test('complete direct v2 fixture migrates exactly to executable gated v3', async () => {
+  const { createModelSettingsKeyOverrideDirectV2Fixture, patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
+  const directV2 = createModelSettingsKeyOverrideDirectV2Fixture(readFileSync(runtimeFile, 'utf8'))
   assert.match(directV2, /@harness-desktop\/model-settings-key-override-direct-v2/u)
   const patched = patchModelSettingsKeyOverrideSource(directV2).source
 
@@ -42,7 +42,7 @@ test('complete installed direct v2 migrates exactly to executable gated v3', asy
   assert.doesNotThrow(() => new Function(patched))
 })
 
-test('complete gated v3 is idempotent', async () => {
+test('complete installed gated v3 is idempotent', async () => {
   const { patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
   const v3 = patchModelSettingsKeyOverrideSource(readFileSync(runtimeFile, 'utf8')).source
   const second = patchModelSettingsKeyOverrideSource(v3)
@@ -51,8 +51,8 @@ test('complete gated v3 is idempotent', async () => {
 })
 
 test('partial v2 and partial v3 are both rejected fail-closed', async () => {
-  const { patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
-  const v2 = readFileSync(runtimeFile, 'utf8')
+  const { createModelSettingsKeyOverrideDirectV2Fixture, patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
+  const v2 = createModelSettingsKeyOverrideDirectV2Fixture(readFileSync(runtimeFile, 'utf8'))
   const partialV2 = v2.replace('disabled: disabled || credentialMode === "restore"', 'disabled: disabled')
   assert.throws(() => patchModelSettingsKeyOverrideSource(partialV2), /v2 patch is incomplete/u)
 
