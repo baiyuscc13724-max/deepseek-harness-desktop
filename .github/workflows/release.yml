@@ -6,7 +6,7 @@ on:
       tag:
         description: Candidate version label; no Tag is required or created by this workflow
         required: true
-        default: v1.0.53
+        default: v1.0.54
       source_revision:
         description: Exact 40-character candidate commit to build and test before Tag creation
         required: true
@@ -91,6 +91,10 @@ jobs:
         run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - name: Verify source and smoke tests
         run: npm run verify
+      - name: Run Agent Teams P1 release-blocking matrix
+        env:
+          HARNESS_AGENT_TEAMS_P1_RELEASE_GATES: '1'
+        run: node --test tests/agent-teams-p1-release-gates.test.cjs
       - name: Configure Electron sandbox for Linux
         if: runner.os == 'Linux'
         run: |
@@ -125,6 +129,34 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run dist
+      - name: Verify formal Agent Teams artifact and installed Web workbench (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t roots < <(find dist -type d -path '*/resources/app.asar.unpacked/plugins/dsh-agent-teams' -print)
+          test "${#roots[@]}" -eq 1
+          xvfb-run -a node scripts/verify-agent-teams-installed-smoke.mjs --artifact-root "${roots[0]}"
+      - name: Verify formal Agent Teams artifact and installed Web workbench (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $roots = @(Get-ChildItem -LiteralPath dist -Directory -Recurse | Where-Object { $_.FullName -match '[\\/]resources[\\/]app\.asar\.unpacked[\\/]plugins[\\/]dsh-agent-teams$' })
+          if ($roots.Count -ne 1) { throw "Expected exactly one formal Windows Agent Teams unpacked root; found $($roots.Count)." }
+          node scripts/verify-agent-teams-installed-smoke.mjs --artifact-root $roots[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "Formal Windows Agent Teams installed smoke failed with exit $LASTEXITCODE." }
+      - name: Verify formal Agent Teams artifacts and installed Web workbench (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          roots=(
+            'dist/mac/Harness Desktop.app/Contents/Resources/app.asar.unpacked/plugins/dsh-agent-teams'
+            'dist/mac-arm64/Harness Desktop.app/Contents/Resources/app.asar.unpacked/plugins/dsh-agent-teams'
+          )
+          for root in "${roots[@]}"; do
+            node scripts/verify-agent-teams-installed-smoke.mjs --artifact-root "$root"
+          done
       - name: Verify unsigned macOS packages
         if: runner.os == 'macOS'
         shell: bash

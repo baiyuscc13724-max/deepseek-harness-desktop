@@ -8,9 +8,23 @@ import {
   generateKeyPairSync,
   hkdfSync,
   randomBytes,
+  randomUUID,
   sign as cryptoSign,
   verify as cryptoVerify,
 } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 const SECURE_CHANNEL_VERSION = 1;
 const PACKET_ALGORITHM = "x25519-hkdf-sha256+a256gcm+ed25519";
@@ -21,8 +35,11 @@ const MAX_PACKET_BYTES = 256 * 1024;
 const MAX_PACKET_LIFETIME_MS = 10 * 60 * 1_000;
 const DEFAULT_CLOCK_SKEW_MS = 2 * 60 * 1_000;
 const DEFAULT_REPLAY_CAPACITY = 5_000;
+const REPLAY_STORE_VERSION = 1;
+const REPLAY_LOCK_TIMEOUT_MS = 5_000;
+const REPLAY_STALE_LOCK_MS = 30_000;
 const MAX_PAYLOAD_DEPTH = 32;
-const PACKET_REPLAY_SCOPE = "channel_instance";
+const PACKET_REPLAY_SCOPE = "durable_store";
 const FORBIDDEN_RAW_KEYS = new Set(["sessionid", "membersessionid", "targetsessionid", "userid", "deviceid", "accountid", "email", "ipaddress"]);
 
 function isRecord(value) {
@@ -144,6 +161,12 @@ function shaRef(prefix, ...values) {
   for (const value of values) hash.update(value);
   return `${prefix}_${hash.digest("base64url")}`;
 }
+function defaultReplayFilePath(projectRef, targetDeviceRef, recipientEncryptionKeyId) {
+  const dshHome = process.env.DSH_HOME;
+  if (typeof dshHome !== "string" || dshHome.trim() === "") return undefined;
+  const scope = createHash("sha256").update(`${projectRef}\u0000${targetDeviceRef}\u0000${recipientEncryptionKeyId}`).digest("base64url");
+  return join(resolve(dshHome), "storages", "project-packet-replay", `${scope}.json`);
+}
 function packetHeader(value) {
   return {
     version: value.version,
@@ -228,6 +251,151 @@ function withPacketKey(privateKey, publicKey, projectRef, authorityEpoch, sender
   }
 }
 
+function replayReceipt(value, index) {
+  if (!isRecord(value)) throw new TypeError(`replay receipt[${index}] must be an object`);
+  assertAllowedKeys(value, new Set(["packetRef", "projectRef", "authorityEpoch", "targetDeviceRef", "expiresAt"]), `replay receipt[${index}]`);
+  return {
+    packetRef: nonEmptyString(value.packetRef, `replay receipt[${index}].packetRef`, 128),
+    projectRef: opaqueRef(value.projectRef, `replay receipt[${index}].projectRef`, PROJECT_REF),
+    authorityEpoch: safeInteger(value.authorityEpoch, `replay receipt[${index}].authorityEpoch`, 1),
+    targetDeviceRef: opaqueRef(value.targetDeviceRef, `replay receipt[${index}].targetDeviceRef`, DEVICE_REF),
+    expiresAt: safeInteger(value.expiresAt, `replay receipt[${index}].expiresAt`),
+  };
+}
+function replayDocument(value, capacity) {
+  if (!isRecord(value)) throw new TypeError("project packet replay state must be an object");
+  assertAllowedKeys(value, new Set(["version", "receipts"]), "project packet replay state");
+  if (value.version !== REPLAY_STORE_VERSION || !Array.isArray(value.receipts) || value.receipts.length > capacity) throw new TypeError("project packet replay state is invalid or exceeds capacity");
+  const receipts = value.receipts.map(replayReceipt);
+  if (new Set(receipts.map((item) => item.packetRef)).size !== receipts.length) throw new TypeError("project packet replay state contains duplicate receipts");
+  return { version: REPLAY_STORE_VERSION, receipts };
+}
+function waitForReplayLock(milliseconds) {
+  if (typeof SharedArrayBuffer === "function" && typeof Atomics?.wait === "function") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+function syncDirectory(filePath) {
+  let directory;
+  try {
+    directory = openSync(dirname(filePath), "r");
+    fsyncSync(directory);
+  } catch {
+    // Directory fsync is unavailable on some Windows filesystems. The file itself
+    // is still flushed before the atomic rename.
+  } finally {
+    if (directory !== undefined) closeSync(directory);
+  }
+}
+
+export class ProjectPacketReplayStore {
+  constructor(filePath, { capacity = DEFAULT_REPLAY_CAPACITY, now = Date.now, lockTimeoutMs = REPLAY_LOCK_TIMEOUT_MS, staleLockMs = REPLAY_STALE_LOCK_MS } = {}) {
+    this.filePath = resolve(nonEmptyString(filePath, "replay filePath", 4_096));
+    this.lockPath = `${this.filePath}.lock`;
+    this.capacity = safeInteger(capacity, "replay capacity", 1);
+    if (typeof now !== "function") throw new TypeError("replay now must be a function");
+    this.now = now;
+    this.lockTimeoutMs = safeInteger(lockTimeoutMs, "replay lockTimeoutMs", 1);
+    this.staleLockMs = safeInteger(staleLockMs, "replay staleLockMs", this.lockTimeoutMs);
+  }
+
+  claim(input) {
+    const receipt = replayReceipt(input, 0);
+    const current = safeInteger(this.now(), "replay current time");
+    if (receipt.expiresAt <= current) throw new Error("secure project packet lifetime is invalid or expired");
+    return this.#withLock(() => {
+      const document = this.#read();
+      document.receipts = document.receipts.filter((item) => item.expiresAt > current);
+      const existing = document.receipts.find((item) => item.packetRef === receipt.packetRef);
+      if (existing !== undefined) {
+        if (existing.projectRef !== receipt.projectRef || existing.authorityEpoch !== receipt.authorityEpoch || existing.targetDeviceRef !== receipt.targetDeviceRef || existing.expiresAt !== receipt.expiresAt) {
+          const conflict = new Error("secure project packet replay receipt conflicts with its durable binding");
+          conflict.code = "PROJECT_PACKET_REPLAY_CONFLICT";
+          throw conflict;
+        }
+        return Object.freeze({ accepted: false, count: document.receipts.length });
+      }
+      if (document.receipts.length >= this.capacity) {
+        const full = new Error("secure project packet replay receipt capacity is exhausted until a receipt expires");
+        full.code = "PROJECT_PACKET_REPLAY_CAPACITY";
+        throw full;
+      }
+      document.receipts.push(receipt);
+      this.#write(document);
+      return Object.freeze({ accepted: true, count: document.receipts.length });
+    });
+  }
+
+  count({ projectRef, authorityEpoch, targetDeviceRef } = {}) {
+    const scope = {
+      projectRef: opaqueRef(projectRef, "projectRef", PROJECT_REF),
+      authorityEpoch: safeInteger(authorityEpoch, "authorityEpoch", 1),
+      targetDeviceRef: opaqueRef(targetDeviceRef, "targetDeviceRef", DEVICE_REF),
+    };
+    const current = safeInteger(this.now(), "replay current time");
+    return this.#withLock(() => this.#read().receipts.filter((item) => item.expiresAt > current && item.projectRef === scope.projectRef && item.authorityEpoch === scope.authorityEpoch && item.targetDeviceRef === scope.targetDeviceRef).length);
+  }
+
+  #read() {
+    if (!existsSync(this.filePath)) return { version: REPLAY_STORE_VERSION, receipts: [] };
+    return replayDocument(JSON.parse(readFileSync(this.filePath, "utf8")), this.capacity);
+  }
+  #write(document) {
+    const validated = replayDocument(document, this.capacity);
+    mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 });
+    const temporary = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    let descriptor;
+    try {
+      descriptor = openSync(temporary, "wx", 0o600);
+      writeFileSync(descriptor, `${canonicalJson(validated)}\n`, "utf8");
+      fsyncSync(descriptor);
+      closeSync(descriptor);
+      descriptor = undefined;
+      renameSync(temporary, this.filePath);
+      syncDirectory(this.filePath);
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+      rmSync(temporary, { force: true });
+    }
+  }
+  #withLock(operation) {
+    mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 });
+    const startedAt = Date.now();
+    let descriptor;
+    while (descriptor === undefined) {
+      try {
+        descriptor = openSync(this.lockPath, "wx", 0o600);
+        writeFileSync(descriptor, `${process.pid} ${randomUUID()}\n`, "utf8");
+        fsyncSync(descriptor);
+      } catch (error) {
+        const createdLock = descriptor !== undefined;
+        if (descriptor !== undefined) closeSync(descriptor);
+        descriptor = undefined;
+        if (createdLock) rmSync(this.lockPath, { force: true });
+        if (error?.code !== "EEXIST") throw error;
+        try {
+          if (Date.now() - statSync(this.lockPath).mtimeMs > this.staleLockMs) {
+            rmSync(this.lockPath, { force: true });
+            continue;
+          }
+        } catch (staleError) {
+          if (staleError?.code === "ENOENT") continue;
+          throw staleError;
+        }
+        if (Date.now() - startedAt >= this.lockTimeoutMs) {
+          const timeout = new Error("project packet replay store lock timed out");
+          timeout.code = "PROJECT_PACKET_REPLAY_LOCK_TIMEOUT";
+          throw timeout;
+        }
+        waitForReplayLock(10);
+      }
+    }
+    try { return operation(); }
+    finally {
+      closeSync(descriptor);
+      rmSync(this.lockPath, { force: true });
+    }
+  }
+}
+
 export function generateProjectTransportKeys() {
   return Object.freeze({ signing: generateKeyPairSync("ed25519"), encryption: generateKeyPairSync("x25519") });
 }
@@ -287,7 +455,7 @@ export function sealProjectPacket({ projectRef, authorityEpoch, senderDeviceRef,
 }
 
 export class ProjectSecureChannel {
-  constructor({ projectRef, authorityEpoch, targetDeviceRef, recipientEncryptionPrivateKey, resolveSenderSigningKey, verifyTlsPeer = () => false, now = Date.now, clockSkewMs = DEFAULT_CLOCK_SKEW_MS, replayCapacity = DEFAULT_REPLAY_CAPACITY } = {}) {
+  constructor({ projectRef, authorityEpoch, targetDeviceRef, recipientEncryptionPrivateKey, resolveSenderSigningKey, verifyTlsPeer = () => false, now = Date.now, clockSkewMs = DEFAULT_CLOCK_SKEW_MS, replayCapacity = DEFAULT_REPLAY_CAPACITY, replayStore, replayFilePath } = {}) {
     this.projectRef = opaqueRef(projectRef, "projectRef", PROJECT_REF);
     this.authorityEpoch = safeInteger(authorityEpoch, "authorityEpoch", 1);
     this.targetDeviceRef = opaqueRef(targetDeviceRef, "targetDeviceRef", DEVICE_REF);
@@ -302,11 +470,15 @@ export class ProjectSecureChannel {
     this.now = now;
     this.clockSkewMs = safeInteger(clockSkewMs, "clockSkewMs", 1);
     this.replayCapacity = safeInteger(replayCapacity, "replayCapacity", 1);
+    if (replayStore !== undefined && replayFilePath !== undefined) throw new TypeError("replayStore and replayFilePath are mutually exclusive");
+    if (replayStore !== undefined && (typeof replayStore !== "object" || typeof replayStore.claim !== "function")) throw new TypeError("replayStore must provide a synchronous claim operation");
+    const effectiveReplayFilePath = replayFilePath ?? defaultReplayFilePath(this.projectRef, this.targetDeviceRef, this.recipientEncryptionKeyId);
+    this.replayStore = replayStore ?? (effectiveReplayFilePath === undefined ? undefined : new ProjectPacketReplayStore(effectiveReplayFilePath, { capacity: this.replayCapacity, now: this.now }));
     this.seenPackets = new Map();
   }
 
   toJSON() {
-    return { version: SECURE_CHANNEL_VERSION, projectRef: this.projectRef, authorityEpoch: this.authorityEpoch, targetDeviceRef: this.targetDeviceRef, recipientEncryptionKeyId: this.recipientEncryptionKeyId, replayCount: this.seenPackets.size };
+    return { version: SECURE_CHANNEL_VERSION, projectRef: this.projectRef, authorityEpoch: this.authorityEpoch, targetDeviceRef: this.targetDeviceRef, recipientEncryptionKeyId: this.recipientEncryptionKeyId, replayScope: this.replayStore === undefined ? "channel_instance" : PACKET_REPLAY_SCOPE, replayCount: this.seenPackets.size };
   }
 
   open(packet, { tlsPeer } = {}) {
@@ -324,11 +496,7 @@ export class ProjectSecureChannel {
     if (envelope.packetRef !== expectedPacketRef) throw new Error("secure project packet reference is invalid");
     if (!cryptoVerify(null, Buffer.from(canonicalJson(packetSignatureBody(envelope))), senderPublicKey, Buffer.from(envelope.signature, "base64url"))) throw new Error("secure project packet signature is invalid");
     this.#pruneReplay(current);
-    if (this.seenPackets.has(envelope.packetRef)) {
-      const error = new Error("secure project packet replay was rejected");
-      error.code = "PROJECT_PACKET_REPLAY";
-      throw error;
-    }
+    if (this.replayStore === undefined && this.seenPackets.has(envelope.packetRef)) this.#replayError();
     let payload, plaintext, copied, aad;
     try {
       const ephemeralPublicKey = keyObject({ key: envelope.ephemeral, type: "spki", format: "der" }, "public", "x25519", "ephemeralPublicKey");
@@ -352,14 +520,30 @@ export class ProjectSecureChannel {
       plaintext?.fill(0);
       aad?.fill(0);
     }
-    this.seenPackets.set(envelope.packetRef, envelope.expiresAt);
-    this.#pruneReplay(current);
+    if (this.replayStore === undefined) {
+      this.#pruneReplay(current);
+      if (this.seenPackets.has(envelope.packetRef)) this.#replayError();
+      if (this.seenPackets.size >= this.replayCapacity) {
+        const full = new Error("secure project packet replay receipt capacity is exhausted until a receipt expires");
+        full.code = "PROJECT_PACKET_REPLAY_CAPACITY";
+        throw full;
+      }
+      this.seenPackets.set(envelope.packetRef, envelope.expiresAt);
+    } else {
+      const claimed = this.replayStore.claim({ packetRef: envelope.packetRef, projectRef: envelope.projectRef, authorityEpoch: envelope.authorityEpoch, targetDeviceRef: envelope.targetDeviceRef, expiresAt: envelope.expiresAt });
+      if (claimed?.accepted !== true) this.#replayError();
+      this.seenPackets.set(envelope.packetRef, envelope.expiresAt);
+    }
     return immutable({ packetRef: envelope.packetRef, projectRef: envelope.projectRef, authorityEpoch: envelope.authorityEpoch, senderDeviceRef: envelope.senderDeviceRef, targetDeviceRef: envelope.targetDeviceRef, transport: envelope.transport, payload, createdAt: envelope.createdAt, expiresAt: envelope.expiresAt });
   }
 
+  #replayError() {
+    const error = new Error("secure project packet replay was rejected");
+    error.code = "PROJECT_PACKET_REPLAY";
+    throw error;
+  }
   #pruneReplay(current) {
     for (const [packetRef, expiresAt] of this.seenPackets) if (expiresAt <= current) this.seenPackets.delete(packetRef);
-    while (this.seenPackets.size > this.replayCapacity) this.seenPackets.delete(this.seenPackets.keys().next().value);
   }
 }
 

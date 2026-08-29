@@ -8,6 +8,7 @@ const { execFile, execFileSync } = require('node:child_process')
 const { existsSync, realpathSync } = require('node:fs')
 const { mkdir, mkdtemp, realpath, rm, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
+const { createProjectSecretCapability } = require('./fixtures/project-secret-capability.cjs')
 
 const execFileAsync = promisify(execFile)
 const pluginUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')).href
@@ -39,7 +40,7 @@ async function fixture() {
   await writeFile(path.join(source, 'SECOND.md'), 'two\n')
   await git(source, ['add', '-A'])
   await git(source, ['-c', 'user.name=Tools Test', '-c', 'user.email=test@localhost', 'commit', '-m', 'initial'])
-  const entry = new entryMod.ProjectEntryService({ dshHome, now: () => Date.now() })
+  const entry = new entryMod.ProjectEntryService({ dshHome, secretCapability: createProjectSecretCapability(), now: () => Date.now() })
   await entry.createProject({ projectName: 'Foundation tools', displayName: 'Owner' })
   const rootAgent = agent('root-foundations', source, 'lead')
   const workerA = agent('worker-foundations-a', source)

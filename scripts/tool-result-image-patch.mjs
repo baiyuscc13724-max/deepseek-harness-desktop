@@ -19,6 +19,41 @@ const RESULT_TEXT_LEGACY = `		function resultText(node) {
 			return block.content.filter((item) => item.type === "image").map(({ attachment }) => ({ attachment }));
 		}`
 
+const RESULT_DELIVERABLES_LEGACY = `		/** Render same-origin media and attachment-only downloads; never invoke local files. */
+		function ResultDeliverables({ files, sessionId }) {
+			if (files.length === 0 || typeof sessionId !== "string" || sessionId === "") return null;
+			return (0, react_jsx_runtime.jsx)("div", {
+				"data-tool-result-deliverables": true,
+				style: { display: "grid", gap: 8, marginTop: 8, maxWidth: 640 },
+				children: files.map((file) => {
+					const downloadUrl = resultFileUrl(sessionId, file, "download");
+					const location = (0, react_jsx_runtime.jsx)("code", { style: { overflowWrap: "anywhere" }, children: file.path });
+					const download = (0, react_jsx_runtime.jsx)("a", { href: downloadUrl, download: file.name, children: file.kind === "active" ? \`仅下载（不会执行）：${'${file.name}'}\` : \`下载：${'${file.name}'}\` });
+					if (file.kind === "image") return (0, react_jsx_runtime.jsxs)("figure", { style: { margin: 0 }, children: [(0, react_jsx_runtime.jsx)("img", { src: resultFileUrl(sessionId, file, "content"), alt: file.name, loading: "lazy", style: { display: "block", maxWidth: "100%", maxHeight: 480, objectFit: "contain" } }), (0, react_jsx_runtime.jsxs)("figcaption", { style: { display: "grid", gap: 4 }, children: [download, location] })] }, file.path);
+					if (file.kind === "audio") return (0, react_jsx_runtime.jsxs)("div", { style: { display: "grid", gap: 4 }, children: [(0, react_jsx_runtime.jsx)("audio", { src: resultFileUrl(sessionId, file, "content"), controls: true, preload: "metadata", style: { display: "block", width: "100%" } }), download, location] }, file.path);
+					if (file.kind === "video") return (0, react_jsx_runtime.jsxs)("div", { style: { display: "grid", gap: 4 }, children: [(0, react_jsx_runtime.jsx)("video", { src: resultFileUrl(sessionId, file, "content"), controls: true, preload: "metadata", style: { display: "block", maxWidth: "100%", maxHeight: 480 } }), download, location] }, file.path);
+					return (0, react_jsx_runtime.jsxs)("div", { style: { display: "grid", gap: 4 }, "data-download-only": file.kind === "active" || void 0, children: [download, location] }, file.path);
+				})
+			});
+		}`
+
+const RESULT_DELIVERABLES_PATCHED = `		const resultDeliverablesNoDownload = "@harness-desktop/tool-result-deliverables-no-download-v2";
+		/** Render same-origin media previews and local file references without download controls. */
+		function ResultDeliverables({ files, sessionId }) {
+			if (files.length === 0 || typeof sessionId !== "string" || sessionId === "") return null;
+			return (0, react_jsx_runtime.jsx)("div", {
+				"data-tool-result-deliverables": true,
+				style: { display: "grid", gap: 8, marginTop: 8, maxWidth: 640 },
+				children: files.map((file) => {
+					const location = (0, react_jsx_runtime.jsx)("code", { style: { overflowWrap: "anywhere" }, children: file.path });
+					if (file.kind === "image") return (0, react_jsx_runtime.jsxs)("figure", { style: { margin: 0 }, children: [(0, react_jsx_runtime.jsx)("img", { src: resultFileUrl(sessionId, file, "content"), alt: file.name, loading: "lazy", style: { display: "block", maxWidth: "100%", maxHeight: 480, objectFit: "contain" } }), (0, react_jsx_runtime.jsx)("figcaption", { style: { display: "grid", gap: 4 }, children: location })] }, file.path);
+					if (file.kind === "audio") return (0, react_jsx_runtime.jsxs)("div", { style: { display: "grid", gap: 4 }, children: [(0, react_jsx_runtime.jsx)("audio", { src: resultFileUrl(sessionId, file, "content"), controls: true, preload: "metadata", style: { display: "block", width: "100%" } }), location] }, file.path);
+					if (file.kind === "video") return (0, react_jsx_runtime.jsxs)("div", { style: { display: "grid", gap: 4 }, children: [(0, react_jsx_runtime.jsx)("video", { src: resultFileUrl(sessionId, file, "content"), controls: true, preload: "metadata", style: { display: "block", maxWidth: "100%", maxHeight: 480 } }), location] }, file.path);
+					return (0, react_jsx_runtime.jsx)("div", { style: { display: "grid", gap: 4 }, children: location }, file.path);
+				})
+			});
+		}`
+
 const RESULT_TEXT_PATCHED = `		function resultText(node) {
 			const parts = [];
 			for (const block of node.content) if (block.type === "text") parts.push(block.text);
@@ -114,23 +149,7 @@ const RESULT_TEXT_PATCHED = `		function resultText(node) {
 		function resultFileUrl(sessionId, file, route) {
 			return \`/api/desktop-files/${'${route}'}?sessionId=${'${encodeURIComponent(sessionId)}'}&path=${'${encodeURIComponent(file.path)}'}\`;
 		}
-		/** Render same-origin media and attachment-only downloads; never invoke local files. */
-		function ResultDeliverables({ files, sessionId }) {
-			if (files.length === 0 || typeof sessionId !== "string" || sessionId === "") return null;
-			return (0, react_jsx_runtime.jsx)("div", {
-				"data-tool-result-deliverables": true,
-				style: { display: "grid", gap: 8, marginTop: 8, maxWidth: 640 },
-				children: files.map((file) => {
-					const downloadUrl = resultFileUrl(sessionId, file, "download");
-					const location = (0, react_jsx_runtime.jsx)("code", { style: { overflowWrap: "anywhere" }, children: file.path });
-					const download = (0, react_jsx_runtime.jsx)("a", { href: downloadUrl, download: file.name, children: file.kind === "active" ? \`仅下载（不会执行）：${'${file.name}'}\` : \`下载：${'${file.name}'}\` });
-					if (file.kind === "image") return (0, react_jsx_runtime.jsxs)("figure", { style: { margin: 0 }, children: [(0, react_jsx_runtime.jsx)("img", { src: resultFileUrl(sessionId, file, "content"), alt: file.name, loading: "lazy", style: { display: "block", maxWidth: "100%", maxHeight: 480, objectFit: "contain" } }), (0, react_jsx_runtime.jsxs)("figcaption", { style: { display: "grid", gap: 4 }, children: [download, location] })] }, file.path);
-					if (file.kind === "audio") return (0, react_jsx_runtime.jsxs)("div", { style: { display: "grid", gap: 4 }, children: [(0, react_jsx_runtime.jsx)("audio", { src: resultFileUrl(sessionId, file, "content"), controls: true, preload: "metadata", style: { display: "block", width: "100%" } }), download, location] }, file.path);
-					if (file.kind === "video") return (0, react_jsx_runtime.jsxs)("div", { style: { display: "grid", gap: 4 }, children: [(0, react_jsx_runtime.jsx)("video", { src: resultFileUrl(sessionId, file, "content"), controls: true, preload: "metadata", style: { display: "block", maxWidth: "100%", maxHeight: 480 } }), download, location] }, file.path);
-					return (0, react_jsx_runtime.jsxs)("div", { style: { display: "grid", gap: 4 }, "data-download-only": file.kind === "active" || void 0, children: [download, location] }, file.path);
-				})
-			});
-		}`
+${RESULT_DELIVERABLES_PATCHED}`
 
 const TOOL_CALL_SIGNATURE_ORIGINAL = 'const ToolCall = (0, react.memo)(function ToolCall({ renderSlot, callId, toolName, block, openFile, selected, cwd, home, inspectCall, t, children }) {'
 const TOOL_CALL_SIGNATURE_LEGACY = 'const ToolCall = (0, react.memo)(function ToolCall({ renderSlot, renderMessageImages, callId, toolName, block, openFile, selected, cwd, home, inspectCall, t, children }) {'
@@ -228,11 +247,17 @@ function replaceOneOf(source, originals, patched, label) {
 
 /** Patch the pinned official Tool UI with durable media and safe file delivery. */
 export function patchToolResultImageSource(source) {
-  const present = FINAL_MARKERS.filter(marker => source.includes(marker))
+  let output = source
+  let migrated = false
+  if (output.includes(RESULT_DELIVERABLES_LEGACY)) {
+    output = replaceOneOf(output, [RESULT_DELIVERABLES_LEGACY], RESULT_DELIVERABLES_PATCHED, 'download-free result deliverables')
+    migrated = true
+  }
+  const present = FINAL_MARKERS.filter(marker => output.includes(marker))
   if (present.length > 0 && present.length < FINAL_MARKERS.length) throw new Error('Pinned DSH tool-result delivery patch is incomplete; refusing an unsafe repair.')
-  if (present.length === FINAL_MARKERS.length) return { source, changed: false }
+  if (present.length === FINAL_MARKERS.length) return { source: output, changed: migrated }
 
-  let output = replaceOneOf(source, [RESULT_TEXT_LEGACY, RESULT_TEXT_ORIGINAL], RESULT_TEXT_PATCHED, 'result content projection')
+  output = replaceOneOf(output, [RESULT_TEXT_LEGACY, RESULT_TEXT_ORIGINAL], RESULT_TEXT_PATCHED, 'result content projection')
   output = replaceOneOf(output, [TOOL_CALL_SIGNATURE_LEGACY, TOOL_CALL_SIGNATURE_ORIGINAL], TOOL_CALL_SIGNATURE_PATCHED, 'tool call delivery inputs')
   output = replaceOneOf(output, [TOOL_CALL_IMAGES_LEGACY, TOOL_CALL_IMAGES_ORIGINAL], TOOL_CALL_IMAGES_PATCHED, 'tool result delivery collection')
   output = replaceOneOf(output, [TOOL_CALL_CHILDREN_LEGACY, TOOL_CALL_CHILDREN_ORIGINAL], TOOL_CALL_CHILDREN_PATCHED, 'tool result delivery rendering')
@@ -263,26 +288,44 @@ const COMMON_OWNER_REPLACEMENTS = [
 				selectedCallId,`, 'chat node session dependency']
 ]
 
-const GROUPED_OWNER_REPLACEMENTS = [
+const GROUPED_OWNER_SHARED_REPLACEMENTS = [
   ['const ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, useSession,', 'const ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, sessionId, useSession,', 'work tree session input'],
-  [`					children: item.nodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
-						nodeKey,
-						useSession,`, `					children: item.nodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
-						nodeKey,
-						sessionId,
-						useSession,`, 'nested chat node session forwarding'],
-  [`							buildConversationWorkTreeItems(order, nodeStore).map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
-								item,
-								useSession,`, `							buildConversationWorkTreeItems(order, nodeStore).map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
-								item,
-								sessionId,
-								useSession,`, 'work tree session forwarding'],
   [`							}, item.key) : (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
 								nodeKey: item.nodeKey,
 								useSession,`, `							}, item.key) : (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
 								nodeKey: item.nodeKey,
 								sessionId,
 								useSession,`, 'root chat node session forwarding']
+]
+
+const GROUPED_LIST_OWNER_VARIANTS = [
+  [`							buildConversationWorkTreeItems(order, nodeStore).map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
+								item,
+								useSession,`, `							buildConversationWorkTreeItems(order, nodeStore).map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
+								item,
+								sessionId,
+								useSession,`, 'raw work tree session forwarding'],
+  [`							workTreeItems.map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
+								item,
+								useSession,`, `							workTreeItems.map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
+								item,
+								sessionId,
+								useSession,`, 'rendered work tree session forwarding']
+]
+
+const GROUPED_NODE_OWNER_VARIANTS = [
+  [`					children: item.nodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+						nodeKey,
+						useSession,`, `					children: item.nodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+						nodeKey,
+						sessionId,
+						useSession,`, 'nested raw chat node session forwarding'],
+  [`					children: renderedNodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+						nodeKey,
+						useSession,`, `					children: renderedNodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+						nodeKey,
+						sessionId,
+						useSession,`, 'nested rendered chat node session forwarding']
 ]
 
 const FLAT_OWNER_REPLACEMENTS = [
@@ -295,25 +338,37 @@ const FLAT_OWNER_REPLACEMENTS = [
 ]
 
 const COMMON_OWNER_MARKERS = COMMON_OWNER_REPLACEMENTS.map(([, patched]) => patched)
-const GROUPED_OWNER_MARKERS = GROUPED_OWNER_REPLACEMENTS.map(([, patched]) => patched)
+const GROUPED_OWNER_SHARED_MARKERS = GROUPED_OWNER_SHARED_REPLACEMENTS.map(([, patched]) => patched)
+const GROUPED_LIST_OWNER_MARKERS = GROUPED_LIST_OWNER_VARIANTS.map(([, patched]) => patched)
+const GROUPED_NODE_OWNER_MARKERS = GROUPED_NODE_OWNER_VARIANTS.map(([, patched]) => patched)
 const FLAT_OWNER_MARKERS = FLAT_OWNER_REPLACEMENTS.map(([, patched]) => patched)
 
-/** Thread the authenticated session id through either official chat-tree shape. */
+/** Thread the authenticated session id through each exact supported chat-tree shape. */
 export function patchToolResultOwnerSource(source) {
   const countPresent = markers => markers.filter(marker => source.includes(marker)).length
   const commonPresent = countPresent(COMMON_OWNER_MARKERS)
-  const groupedPresent = countPresent(GROUPED_OWNER_MARKERS)
+  const groupedSharedPresent = countPresent(GROUPED_OWNER_SHARED_MARKERS)
+  const groupedListPresent = countPresent(GROUPED_LIST_OWNER_MARKERS)
+  const groupedNodePresent = countPresent(GROUPED_NODE_OWNER_MARKERS)
   const flatPresent = countPresent(FLAT_OWNER_MARKERS)
   const commonComplete = commonPresent === COMMON_OWNER_MARKERS.length
-  const groupedComplete = groupedPresent === GROUPED_OWNER_MARKERS.length
+  const groupedComplete = groupedSharedPresent === GROUPED_OWNER_SHARED_MARKERS.length && groupedListPresent === 1 && groupedNodePresent === 1
   const flatComplete = flatPresent === FLAT_OWNER_MARKERS.length
   if (commonComplete && (groupedComplete || flatComplete)) return { source, changed: false }
-  if (commonPresent + groupedPresent + flatPresent > 0) throw new Error('Pinned DSH tool-result owner patch is incomplete; refusing an unsafe repair.')
+  if (commonPresent + groupedSharedPresent + groupedListPresent + groupedNodePresent + flatPresent > 0) throw new Error('Pinned DSH tool-result owner patch is incomplete; refusing an unsafe repair.')
 
   let output = source
   for (const [original, patched, label] of COMMON_OWNER_REPLACEMENTS) output = replaceOneOf(output, [original], patched, label)
-  const groupedSource = GROUPED_OWNER_REPLACEMENTS.some(([original, patched]) => source.includes(original) || source.includes(patched))
-  const variant = groupedSource ? GROUPED_OWNER_REPLACEMENTS : FLAT_OWNER_REPLACEMENTS
-  for (const [original, patched, label] of variant) output = replaceOneOf(output, [original], patched, label)
+  const groupedSource = [...GROUPED_OWNER_SHARED_REPLACEMENTS, ...GROUPED_LIST_OWNER_VARIANTS, ...GROUPED_NODE_OWNER_VARIANTS]
+    .some(([original, patched]) => source.includes(original) || source.includes(patched))
+  if (groupedSource) {
+    for (const [original, patched, label] of GROUPED_OWNER_SHARED_REPLACEMENTS) output = replaceOneOf(output, [original], patched, label)
+    const listVariants = GROUPED_LIST_OWNER_VARIANTS.filter(([original]) => source.includes(original))
+    const nodeVariants = GROUPED_NODE_OWNER_VARIANTS.filter(([original]) => source.includes(original))
+    if (listVariants.length !== 1 || nodeVariants.length !== 1) throw new Error('Pinned DSH grouped chat-tree variant changed; refusing an unsafe tool-result owner patch.')
+    for (const [original, patched, label] of [listVariants[0], nodeVariants[0]]) output = replaceOneOf(output, [original], patched, label)
+  } else {
+    for (const [original, patched, label] of FLAT_OWNER_REPLACEMENTS) output = replaceOneOf(output, [original], patched, label)
+  }
   return { source: output, changed: true }
 }

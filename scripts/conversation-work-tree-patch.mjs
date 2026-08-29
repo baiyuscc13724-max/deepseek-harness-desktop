@@ -2,6 +2,9 @@ const PATCH_MARKER = 'conversationWorkTreeMarker = "@harness-desktop/conversatio
 const FLOW_PATCH_MARKER = 'conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2"'
 const MANUAL_PATCH_MARKER = 'conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3"'
 const RECOVERABLE_PATCH_MARKER = 'conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4"'
+const AUTO_COMPLETE_PATCH_MARKER = 'conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5"'
+const PERFORMANCE_PATCH_MARKER = 'conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6"'
+const SNAPSHOT_PRIORITY_PATCH_MARKER = 'conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7"'
 
 const WORK_TREE_CSS = ".hd-work-tree{min-width:0;border-radius:10px}.hd-work-tree-toggle{box-sizing:border-box;width:100%;min-height:44px;border:0;border-radius:9px;padding:0 10px;color:var(--dsw-alias-label-secondary);background:transparent;align-items:center;gap:8px;font:inherit;text-align:left;cursor:pointer;display:flex;transition:color .14s ease,background-color .14s ease}.hd-work-tree-toggle:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.hd-work-tree-toggle:focus-visible{outline:2px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 68%,transparent);outline-offset:2px}.hd-work-tree-chevron{width:16px;height:16px;flex:none;place-items:center;display:grid}.hd-work-tree-title{color:var(--dsw-alias-label-primary-dimmed);font-size:14px;font-weight:600;line-height:20px}.hd-work-tree-count{min-width:0;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;overflow:hidden}.hd-work-tree-status{color:var(--dsw-alias-label-tertiary);white-space:nowrap;align-items:center;gap:6px;margin-left:auto;font-size:12px;line-height:18px;display:inline-flex}.hd-work-tree-status:before{content:\"\";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}.hd-work-tree[data-state=running] .hd-work-tree-toggle{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 5%,transparent)}.hd-work-tree[data-state=running] .hd-work-tree-status{color:var(--dsw-alias-brand-primary)}.hd-work-tree[data-state=error] .hd-work-tree-status{color:var(--dsw-alias-state-error-primary)}.hd-work-tree[data-state=stopped] .hd-work-tree-status{color:var(--dsw-alias-state-warning-primary)}.hd-work-tree-body{position:relative;flex-direction:column;gap:8px;margin:2px 0 6px 20px;padding:0 0 4px 18px;display:flex}.hd-work-tree-body:before{content:\"\";position:absolute;top:0;bottom:8px;left:0;width:1px;background:var(--dsw-alias-border-l2)}.hd-work-tree-body[hidden]{display:none}.hd-work-tree-body>[data-chat-flow-key]{position:relative}.hd-work-tree-body>[data-chat-flow-key]:before{content:\"\";position:absolute;top:12px;left:-18px;width:10px;height:1px;background:var(--dsw-alias-border-l2)}@media(max-width:620px){.hd-work-tree-toggle{padding-inline:6px}.hd-work-tree-body{margin-left:16px;padding-left:14px}.hd-work-tree-body>[data-chat-flow-key]:before{left:-14px;width:8px}}.hd-work-tree[data-open] .hd-work-tree-toggle{position:sticky;top:8px;z-index:5;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 82%,transparent);background:color-mix(in srgb,var(--dsw-alias-bg-base) 92%,transparent);box-shadow:0 6px 18px color-mix(in srgb,#000 12%,transparent);-webkit-backdrop-filter:blur(14px) saturate(1.06);backdrop-filter:blur(14px) saturate(1.06)}.hd-work-tree[data-open] .hd-work-tree-body>[data-chat-flow-key]{scroll-margin-top:64px}@media(max-width:620px){.hd-work-tree[data-open] .hd-work-tree-toggle{top:6px}}@media(prefers-reduced-motion:reduce){.hd-work-tree-toggle{transition:none}}"
 
@@ -11,6 +14,9 @@ const STYLE_PATCH = `\t\tconst conversationWorkTreeCss = ${JSON.stringify(WORK_T
 \t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";
 \t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";
 \t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";
+\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";
+\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";
+\t\tconst conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7";
 \t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";
 \t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(conversationWorkTreeMarker) + "]") === null) {
 \t\t\tconst conversationWorkTreeTag = document.createElement("style");
@@ -95,6 +101,41 @@ function conversationIsWorkNode(node, nodeKey, finalReplyByTurn) {
   if (node?.kind === 'tool-call') return true
   if (node?.kind === 'assistant-step') return turn !== null && finalReplyByTurn.get(turn) !== nodeKey
   return node?.kind === 'context' || node?.kind === 'compaction' || node?.kind === 'manual-compaction' || node?.kind === 'model-retry' || node?.kind === 'unknown'
+}
+
+export function reduceConversationWorkTreeDisclosure(state, event) {
+  const current = state ?? { open: false, automatic: false, userControlled: false, active: false }
+  if (event?.type === 'toggle') {
+    return { ...current, open: !current.open, automatic: false, userControlled: true }
+  }
+  if (event?.type !== 'activity') return current
+  const active = event.active === true
+  const selected = event.selected === true
+  let next = { ...current, active }
+  if (active !== current.active && !current.userControlled) {
+    if (active) next = { ...next, open: true, automatic: true }
+    else if (current.automatic) next = { ...next, open: selected, automatic: false }
+  }
+  if (selected) next = { ...next, open: true }
+  return next
+}
+
+export function reduceConversationWorkTreeRenderCount(count, event) {
+  const total = Number.isSafeInteger(event?.total) && event.total > 0 ? event.total : 0
+  if (event?.open !== true || total === 0) return 0
+  const current = Number.isSafeInteger(count) && count > 0 ? Math.min(count, total) : 0
+  if (event?.type !== 'advance' && current > 0) return current
+  return Math.min(total, current + 64)
+}
+
+export function conversationWorkTreeRenderKeys(nodeKeys, renderedCount, selectedNodeKey) {
+  const total = Array.isArray(nodeKeys) ? nodeKeys.length : 0
+  const prefixEnd = Number.isSafeInteger(renderedCount) && renderedCount > 0 ? Math.min(renderedCount, total) : 0
+  const selectedIndex = typeof selectedNodeKey === 'string' ? nodeKeys.indexOf(selectedNodeKey) : -1
+  if (selectedIndex < prefixEnd || selectedIndex < 0) return nodeKeys.slice(0, prefixEnd)
+  const priorityStart = Math.max(prefixEnd, Math.min(selectedIndex - 32, total - 64))
+  const priorityEnd = Math.min(total, Math.max(selectedIndex + 1, priorityStart + 64))
+  return nodeKeys.slice(0, prefixEnd).concat(nodeKeys.slice(priorityStart, priorityEnd))
 }
 
 function preFlowBuildConversationWorkTreeItems(order, nodeStore) {
@@ -186,7 +227,8 @@ export function buildConversationWorkTreeItems(order, nodeStore) {
         active: false,
         failed: false,
         stopped: false,
-        callIds: []
+        callIds: [],
+        callNodeKeys: new Map()
       }
       items.push(group)
     } else if (group.turn === null && turn !== null) {
@@ -199,6 +241,7 @@ export function buildConversationWorkTreeItems(order, nodeStore) {
     group.failed ||= stats.failed
     group.stopped ||= stats.stopped
     group.callIds.push(...stats.callIds)
+    for (const callId of stats.callIds) group.callNodeKeys.set(callId, nodeKey)
   }
   void conversationUnscopedWorkTrees
   return items
@@ -275,6 +318,12 @@ const LEGACY_WORK_TREE_ITEMS_SOURCE = bundleFunctionSource(legacyBuildConversati
 const PRE_FLOW_WORK_TREE_ITEMS_SOURCE = bundleFunctionSource(preFlowBuildConversationWorkTreeItems).replace('function preFlowBuildConversationWorkTreeItems', 'function buildConversationWorkTreeItems')
 const WORK_NODE_SOURCE = bundleFunctionSource(conversationIsWorkNode)
 const WORK_TREE_ITEMS_SOURCE = bundleFunctionSource(buildConversationWorkTreeItems)
+const PRE_PRIORITY_WORK_TREE_ITEMS_SOURCE = WORK_TREE_ITEMS_SOURCE
+  .replace('\n\t\t        callIds: [],\n\t\t        callNodeKeys: new Map()', '\n\t\t        callIds: []')
+  .replace('\n\t\t    for (const callId of stats.callIds) group.callNodeKeys.set(callId, nodeKey)', '')
+const DISCLOSURE_REDUCER_SOURCE = bundleFunctionSource(reduceConversationWorkTreeDisclosure)
+const RENDER_COUNT_REDUCER_SOURCE = bundleFunctionSource(reduceConversationWorkTreeRenderCount)
+const RENDER_KEYS_SOURCE = bundleFunctionSource(conversationWorkTreeRenderKeys)
 const PRE_RECOVERABLE_TOOL_STATS_SOURCE = bundleFunctionSource(preRecoverableConversationToolRootStats).replaceAll('preRecoverableConversationToolRootStats', 'conversationToolRootStats')
 const RECOVERABLE_TOOL_STATS_SOURCE = bundleFunctionSource(conversationToolRootStats)
 
@@ -284,17 +333,41 @@ const WORK_TREE_HELPERS = [
   conversationToolRootStats,
   conversationWorkNodeStats,
   conversationIsWorkNode,
+  reduceConversationWorkTreeDisclosure,
+  reduceConversationWorkTreeRenderCount,
+  conversationWorkTreeRenderKeys,
   buildConversationWorkTreeItems
 ].map(bundleFunctionSource).join('\n')
 
 const COMPONENT_ANCHOR = '\t\tfunction ChatView({ useSession, useSessions, useStore, renderSlot, sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, forkAt, fileMentions, t }) {'
 const COMPONENT_PATCH = `${WORK_TREE_HELPERS}
 \t\tconst ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, useSession, selectedCallId, cwd, openFile, inspectCall, forkAt, renderMessageImages, fileMentions, renderSlot, t }) {
-\t\t\tconst selected = selectedCallId !== void 0 && item.callIds.includes(selectedCallId);
-\t\t\tconst [open, setOpen] = (0, react.useState)(item.active || selected);
+\t\t\tconst selectedNodeKey = selectedCallId === void 0 ? void 0 : item.callNodeKeys.get(selectedCallId);
+\t\t\tconst selected = selectedNodeKey !== void 0;
+\t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => ({ open: item.active || selected, automatic: item.active && !selected, userControlled: false, active: item.active }));
 \t\t\t(0, react.useEffect)(() => {
-\t\t\t\tif (selected) setOpen(true);
-\t\t\t}, [selected]);
+\t\t\t\tsetDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "activity", active: item.active, selected }));
+\t\t\t}, [item.active, selected]);
+\t\t\tconst open = disclosure.open;
+\t\t\tconst [renderedCount, setRenderedCount] = (0, react.useState)(0);
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tsetRenderedCount((value) => reduceConversationWorkTreeRenderCount(value, { type: "sync", open, total: item.nodeKeys.length }));
+\t\t\t}, [open, item.nodeKeys.length]);
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tif (!open || renderedCount >= item.nodeKeys.length) return;
+\t\t\t\tlet cancelled = false;
+\t\t\t\tconst advance = () => {
+\t\t\t\t\tif (!cancelled) setRenderedCount((value) => reduceConversationWorkTreeRenderCount(value, { type: "advance", open: true, total: item.nodeKeys.length }));
+\t\t\t\t};
+\t\t\t\tconst idle = globalThis.requestIdleCallback;
+\t\t\t\tconst handle = typeof idle === "function" ? idle(advance, { timeout: 50 }) : globalThis.setTimeout(advance, 0);
+\t\t\t\treturn () => {
+\t\t\t\t\tcancelled = true;
+\t\t\t\t\tif (typeof idle === "function") globalThis.cancelIdleCallback?.(handle);
+\t\t\t\t\telse globalThis.clearTimeout(handle);
+\t\t\t\t};
+\t\t\t}, [open, renderedCount, item.nodeKeys.length]);
+\t\t\tconst renderedNodeKeys = open ? conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey) : [];
 \t\t\tconst state = item.active ? "running" : item.failed ? "error" : item.stopped ? "stopped" : "done";
 \t\t\tconst status = t(\`workTree.status.\${state}\`);
 \t\t\tconst count = t("workTree.steps", { count: item.count });
@@ -311,7 +384,7 @@ const COMPONENT_PATCH = `${WORK_TREE_HELPERS}
 \t\t\t\t\tclassName: "hd-work-tree-toggle",
 \t\t\t\t\t"aria-expanded": open,
 \t\t\t\t\t"aria-label": \`\${action} · \${status} · \${count}\`,
-\t\t\t\t\tonClick: () => setOpen((value) => !value),
+\t\t\t\t\tonClick: () => setDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "toggle" })),
 \t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {
 \t\t\t\t\t\tclassName: "hd-work-tree-chevron",
 \t\t\t\t\t\t"aria-hidden": true,
@@ -330,7 +403,8 @@ const COMPONENT_PATCH = `${WORK_TREE_HELPERS}
 \t\t\t\t}), (0, react_jsx_runtime.jsx)("div", {
 \t\t\t\t\tclassName: "hd-work-tree-body",
 \t\t\t\t\thidden: !open,
-\t\t\t\t\tchildren: item.nodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+\t\t\t\t\t"aria-busy": open && renderedCount < item.nodeKeys.length || void 0,
+\t\t\t\t\tchildren: renderedNodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
 \t\t\t\t\t\tnodeKey,
 \t\t\t\t\t\tuseSession,
 \t\t\t\t\t\tselectedCallId,
@@ -348,6 +422,18 @@ const COMPONENT_PATCH = `${WORK_TREE_HELPERS}
 \t\t});
 ${COMPONENT_ANCHOR}`
 
+const NODE_STORE_SELECTOR_ANCHOR = '\t\t\tconst nodeStore = useSession((s) => s.chat.nodes);'
+const NODE_STORE_SELECTOR_PATCHED = `${NODE_STORE_SELECTOR_ANCHOR}
+\t\t\t/* MutableChatNodeStore is stable; values() is its cached content snapshot revision. */
+\t\t\tconst nodeSnapshot = useSession((s) => s.chat.nodes.values());`
+const WORK_TREE_MEMO_ANCHOR = '\t\t\tconst pendingSteering = (0, react.useMemo)(() => inbox.filter((item) => item.placement === "steering"), [inbox]);'
+const WORK_TREE_MEMO_V6 = `${WORK_TREE_MEMO_ANCHOR}
+\t\t\t/* DSH_DESKTOP_MEMOIZED_WORK_TREE: unrelated view state must not refold the full transcript. */
+\t\t\tconst workTreeItems = (0, react.useMemo)(() => buildConversationWorkTreeItems(order, nodeStore), [order, nodeStore]);`
+const WORK_TREE_MEMO_PATCHED = `${WORK_TREE_MEMO_ANCHOR}
+\t\t\t/* DSH_DESKTOP_MEMOIZED_WORK_TREE: values() changes for content upserts; unrelated view state reuses it. */
+\t\t\tconst workTreeItems = (0, react.useMemo)(() => buildConversationWorkTreeItems(order, nodeStore), [order, nodeSnapshot]);`
+
 const RENDER_ORIGINAL = `\t\t\t\t\t\t\torder.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
 \t\t\t\t\t\t\t\tnodeKey,
 \t\t\t\t\t\t\t\tuseSession,
@@ -362,7 +448,7 @@ const RENDER_ORIGINAL = `\t\t\t\t\t\t\torder.map((nodeKey) => (0, react_jsx_runt
 \t\t\t\t\t\t\t\tt
 \t\t\t\t\t\t\t}, nodeKey)),`
 
-const RENDER_PATCHED = `\t\t\t\t\t\t\tbuildConversationWorkTreeItems(order, nodeStore).map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
+const RENDER_PATCHED = `\t\t\t\t\t\t\tworkTreeItems.map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
 \t\t\t\t\t\t\t\titem,
 \t\t\t\t\t\t\t\tuseSession,
 \t\t\t\t\t\t\t\tselectedCallId,
@@ -425,8 +511,47 @@ const STICKY_MARKER_PAIR = '\t\tconst conversationWorkTreeStickyMarker = "@harne
 const FLOW_MARKER_TRIPLE = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
 const MANUAL_MARKER_QUAD = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
 const RECOVERABLE_MARKER_QUINT = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
+const AUTO_COMPLETE_MARKER_SEXT = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
+const PERFORMANCE_MARKER_SEPT = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
+const SNAPSHOT_PRIORITY_MARKER_OCT = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";\n\t\tconst conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
+const WORK_TREE_COMPONENT_PREFIX = '\t\tconst ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({'
+const SELECTED_CALL_V6 = '\t\t\tconst selected = selectedCallId !== void 0 && item.callIds.includes(selectedCallId);'
+const SELECTED_CALL_V7 = '\t\t\tconst selectedNodeKey = selectedCallId === void 0 ? void 0 : item.callNodeKeys.get(selectedCallId);\n\t\t\tconst selected = selectedNodeKey !== void 0;'
 const AUTO_TOGGLE_STATE_BLOCK = '\t\t\tconst [open, setOpen] = (0, react.useState)(item.active || selected);\n\t\t\tconst wasActive = (0, react.useRef)(item.active);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (item.active === wasActive.current) return;\n\t\t\t\twasActive.current = item.active;\n\t\t\t\tsetOpen(item.active);\n\t\t\t}, [item.active]);'
 const MANUAL_STATE_BLOCK = '\t\t\tconst [open, setOpen] = (0, react.useState)(item.active || selected);'
+const PRE_AUTO_COMPLETE_STATE_BLOCK = `${MANUAL_STATE_BLOCK}\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (selected) setOpen(true);\n\t\t\t}, [selected]);`
+const AUTO_COMPLETE_STATE_BLOCK = '\t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => ({ open: item.active || selected, automatic: item.active && !selected, userControlled: false, active: item.active }));\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tsetDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "activity", active: item.active, selected }));\n\t\t\t}, [item.active, selected]);\n\t\t\tconst open = disclosure.open;'
+const PERFORMANCE_STATE_BLOCK = `${AUTO_COMPLETE_STATE_BLOCK}
+\t\t\tconst [renderedCount, setRenderedCount] = (0, react.useState)(0);
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tsetRenderedCount((value) => reduceConversationWorkTreeRenderCount(value, { type: "sync", open, total: item.nodeKeys.length }));
+\t\t\t}, [open, item.nodeKeys.length]);
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tif (!open || renderedCount >= item.nodeKeys.length) return;
+\t\t\t\tlet cancelled = false;
+\t\t\t\tconst advance = () => {
+\t\t\t\t\tif (!cancelled) setRenderedCount((value) => reduceConversationWorkTreeRenderCount(value, { type: "advance", open: true, total: item.nodeKeys.length }));
+\t\t\t\t};
+\t\t\t\tconst idle = globalThis.requestIdleCallback;
+\t\t\t\tconst handle = typeof idle === "function" ? idle(advance, { timeout: 50 }) : globalThis.setTimeout(advance, 0);
+\t\t\t\treturn () => {
+\t\t\t\t\tcancelled = true;
+\t\t\t\t\tif (typeof idle === "function") globalThis.cancelIdleCallback?.(handle);
+\t\t\t\t\telse globalThis.clearTimeout(handle);
+\t\t\t\t};
+\t\t\t}, [open, renderedCount, item.nodeKeys.length]);`
+const MANUAL_TOGGLE_HANDLER = '\t\t\t\t\tonClick: () => setOpen((value) => !value),'
+const AUTO_COMPLETE_TOGGLE_HANDLER = '\t\t\t\t\tonClick: () => setDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "toggle" })),'
+const EAGER_WORK_TREE_CHILDREN_START = '\t\t\t\t\thidden: !open,\n\t\t\t\t\tchildren: item.nodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {'
+const BATCHED_WORK_TREE_CHILDREN_START = '\t\t\t\t\thidden: !open,\n\t\t\t\t\t"aria-busy": open && renderedCount < item.nodeKeys.length || void 0,\n\t\t\t\t\tchildren: open ? item.nodeKeys.slice(0, renderedCount).map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {'
+const PRIORITY_WORK_TREE_CHILDREN_START = '\t\t\t\t\thidden: !open,\n\t\t\t\t\t"aria-busy": open && renderedCount < item.nodeKeys.length || void 0,\n\t\t\t\t\tchildren: renderedNodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {'
+const EAGER_WORK_TREE_CHILDREN_END = '\t\t\t\t\t}, nodeKey))\n\t\t\t\t})]'
+const BATCHED_WORK_TREE_CHILDREN_END = '\t\t\t\t\t}, nodeKey)) : null\n\t\t\t\t})]'
+const PRIORITY_WORK_TREE_CHILDREN_END = '\t\t\t\t\t}, nodeKey))\n\t\t\t\t})]'
+const RENDER_KEYS_ANCHOR = '\t\t\t}, [open, renderedCount, item.nodeKeys.length]);\n\t\t\tconst state = item.active ? "running"'
+const RENDER_KEYS_PATCHED = '\t\t\t}, [open, renderedCount, item.nodeKeys.length]);\n\t\t\tconst renderedNodeKeys = open ? conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey) : [];\n\t\t\tconst state = item.active ? "running"'
+const EAGER_WORK_TREE_RENDER = '\t\t\t\t\t\t\tbuildConversationWorkTreeItems(order, nodeStore).map((item) =>'
+const MEMOIZED_WORK_TREE_RENDER = '\t\t\t\t\t\t\tworkTreeItems.map((item) =>'
 
 function replaceExactlyOnce(source, original, patched, label) {
   const first = source.indexOf(original)
@@ -443,13 +568,21 @@ function assertComplete(source) {
     '@harness-desktop/conversation-work-tree-flow-v2',
     '@harness-desktop/conversation-work-tree-manual-v3',
     '@harness-desktop/conversation-work-tree-recoverable-v4',
+    '@harness-desktop/conversation-work-tree-auto-complete-v5',
+    '@harness-desktop/conversation-work-tree-performance-v6',
+    '@harness-desktop/conversation-work-tree-snapshot-priority-v7',
     'FS_EDIT_NOT_FOUND',
     'work-tree:flow:',
     'position:sticky',
     'scroll-margin-top:64px',
     'const conversationUnscopedWorkTrees = true',
     'function buildConversationWorkTreeItems',
+    'function reduceConversationWorkTreeDisclosure',
+    'function reduceConversationWorkTreeRenderCount',
+    'function conversationWorkTreeRenderKeys',
     'const ConversationWorkTreeGroup',
+    'userControlled: false',
+    'type: "toggle"',
     'className: "hd-work-tree-toggle"',
     '"aria-expanded": open',
     'hidden: !open',
@@ -457,11 +590,25 @@ function assertComplete(source) {
     'workTree.status.error',
     '"row.retry":',
     'workTree.collapse',
-    'buildConversationWorkTreeItems(order, nodeStore).map'
+    'DSH_DESKTOP_MEMOIZED_WORK_TREE',
+    'const nodeSnapshot = useSession((s) => s.chat.nodes.values())',
+    '[order, nodeSnapshot]',
+    'workTreeItems.map',
+    'item.callNodeKeys.get(selectedCallId)',
+    'conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey)',
+    'requestIdleCallback'
   ]) {
     if (!source.includes(required)) throw new Error('Installed conversation work-tree patch is incomplete; refusing to continue.')
   }
-  if (source.includes(AUTO_TOGGLE_STATE_BLOCK)) throw new Error('Installed conversation work-tree still overrides the user-selected disclosure state.')
+  if (source.includes(AUTO_TOGGLE_STATE_BLOCK) || source.includes(PRE_AUTO_COMPLETE_STATE_BLOCK) || source.includes(MANUAL_TOGGLE_HANDLER)) {
+    throw new Error('Installed conversation work-tree does not preserve the automatic-versus-user disclosure state.')
+  }
+  if (source.includes(EAGER_WORK_TREE_CHILDREN_START) || source.includes(EAGER_WORK_TREE_RENDER)) {
+    throw new Error('Installed conversation work-tree still performs eager long-session render work.')
+  }
+  if (source.includes('[order, nodeStore]') || source.includes(BATCHED_WORK_TREE_CHILDREN_START)) {
+    throw new Error('Installed conversation work-tree still depends on a stable mutable store or delays selected calls behind the prefix.')
+  }
 }
 
 export function patchConversationWorkTreeSource(source) {
@@ -499,6 +646,51 @@ export function patchConversationWorkTreeSource(source) {
       migrated = replaceExactlyOnce(migrated, MANUAL_MARKER_QUAD, RECOVERABLE_MARKER_QUINT, 'recoverable edit-conflict work-tree marker')
       changed = true
     }
+    if (!migrated.includes(AUTO_COMPLETE_PATCH_MARKER)) {
+      if (!migrated.includes(DISCLOSURE_REDUCER_SOURCE)) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_COMPONENT_PREFIX, `${DISCLOSURE_REDUCER_SOURCE}\n${WORK_TREE_COMPONENT_PREFIX}`, 'work-tree disclosure reducer')
+      }
+      migrated = replaceExactlyOnce(migrated, PRE_AUTO_COMPLETE_STATE_BLOCK, AUTO_COMPLETE_STATE_BLOCK, 'automatic completed work-tree disclosure state')
+      migrated = replaceExactlyOnce(migrated, MANUAL_TOGGLE_HANDLER, AUTO_COMPLETE_TOGGLE_HANDLER, 'user-controlled work-tree disclosure handler')
+      migrated = replaceExactlyOnce(migrated, RECOVERABLE_MARKER_QUINT, AUTO_COMPLETE_MARKER_SEXT, 'automatic completed work-tree marker')
+      changed = true
+    }
+    if (!migrated.includes(PERFORMANCE_PATCH_MARKER)) {
+      if (!migrated.includes(RENDER_COUNT_REDUCER_SOURCE)) {
+        migrated = replaceExactlyOnce(migrated, `${DISCLOSURE_REDUCER_SOURCE}\n${WORK_TREE_COMPONENT_PREFIX}`, `${DISCLOSURE_REDUCER_SOURCE}\n${RENDER_COUNT_REDUCER_SOURCE}\n${WORK_TREE_COMPONENT_PREFIX}`, 'bounded work-tree render reducer')
+      }
+      migrated = replaceExactlyOnce(migrated, AUTO_COMPLETE_STATE_BLOCK, PERFORMANCE_STATE_BLOCK, 'incremental work-tree render state')
+      migrated = replaceExactlyOnce(migrated, EAGER_WORK_TREE_CHILDREN_START, BATCHED_WORK_TREE_CHILDREN_START, 'collapsed work-tree child render')
+      migrated = replaceExactlyOnce(migrated, EAGER_WORK_TREE_CHILDREN_END, BATCHED_WORK_TREE_CHILDREN_END, 'batched work-tree child render')
+      migrated = replaceExactlyOnce(migrated, WORK_TREE_MEMO_ANCHOR, WORK_TREE_MEMO_PATCHED, 'memoized work-tree projection')
+      migrated = replaceExactlyOnce(migrated, EAGER_WORK_TREE_RENDER, MEMOIZED_WORK_TREE_RENDER, 'memoized work-tree renderer')
+      migrated = replaceExactlyOnce(migrated, AUTO_COMPLETE_MARKER_SEXT, PERFORMANCE_MARKER_SEPT, 'long-session work-tree performance marker')
+      changed = true
+    }
+    if (!migrated.includes(SNAPSHOT_PRIORITY_PATCH_MARKER)) {
+      if (migrated.includes(PRE_PRIORITY_WORK_TREE_ITEMS_SOURCE)) {
+        migrated = replaceExactlyOnce(migrated, PRE_PRIORITY_WORK_TREE_ITEMS_SOURCE, WORK_TREE_ITEMS_SOURCE, 'selected-call node ownership index')
+      } else if (!migrated.includes(WORK_TREE_ITEMS_SOURCE)) {
+        throw new Error('Pinned DSH work-tree grouping changed; refusing an unsafe selected-call priority migration.')
+      }
+      if (!migrated.includes(RENDER_KEYS_SOURCE)) {
+        migrated = replaceExactlyOnce(migrated, `${RENDER_COUNT_REDUCER_SOURCE}\n${WORK_TREE_COMPONENT_PREFIX}`, `${RENDER_COUNT_REDUCER_SOURCE}\n${RENDER_KEYS_SOURCE}\n${WORK_TREE_COMPONENT_PREFIX}`, 'selected-call priority window helper')
+      }
+      migrated = replaceExactlyOnce(migrated, SELECTED_CALL_V6, SELECTED_CALL_V7, 'selected-call node ownership lookup')
+      migrated = replaceExactlyOnce(migrated, RENDER_KEYS_ANCHOR, RENDER_KEYS_PATCHED, 'selected-call priority render keys')
+      migrated = replaceExactlyOnce(migrated, BATCHED_WORK_TREE_CHILDREN_START, PRIORITY_WORK_TREE_CHILDREN_START, 'selected-call priority child window')
+      migrated = replaceExactlyOnce(migrated, BATCHED_WORK_TREE_CHILDREN_END, PRIORITY_WORK_TREE_CHILDREN_END, 'selected-call priority child window end')
+      if (!migrated.includes('const nodeSnapshot = useSession((s) => s.chat.nodes.values());')) {
+        migrated = replaceExactlyOnce(migrated, NODE_STORE_SELECTOR_ANCHOR, NODE_STORE_SELECTOR_PATCHED, 'mutable chat-node content snapshot selector')
+      }
+      if (migrated.includes(WORK_TREE_MEMO_V6)) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_MEMO_V6, WORK_TREE_MEMO_PATCHED, 'chat-node content snapshot memo dependency')
+      } else if (!migrated.includes(WORK_TREE_MEMO_PATCHED)) {
+        throw new Error('Pinned DSH memoized work-tree projection changed; refusing an unsafe mutable-store migration.')
+      }
+      migrated = replaceExactlyOnce(migrated, PERFORMANCE_MARKER_SEPT, SNAPSHOT_PRIORITY_MARKER_OCT, 'snapshot-safe selected-call priority marker')
+      changed = true
+    }
     if (!migrated.includes('"row.retry":')) {
       migrated = replaceExactlyOnce(migrated, ZH_ROW_STOPPED, ZH_ROW_RETRY, 'Chinese recoverable edit status')
       migrated = replaceExactlyOnce(migrated, EN_ROW_STOPPED, EN_ROW_RETRY, 'English recoverable edit status')
@@ -509,6 +701,8 @@ export function patchConversationWorkTreeSource(source) {
   }
   let output = replaceExactlyOnce(source, STYLE_ANCHOR, STYLE_PATCH, 'work-tree style anchor')
   output = replaceExactlyOnce(output, COMPONENT_ANCHOR, COMPONENT_PATCH, 'work-tree component anchor')
+  output = replaceExactlyOnce(output, NODE_STORE_SELECTOR_ANCHOR, NODE_STORE_SELECTOR_PATCHED, 'mutable chat-node content snapshot selector')
+  output = replaceExactlyOnce(output, WORK_TREE_MEMO_ANCHOR, WORK_TREE_MEMO_PATCHED, 'memoized work-tree projection')
   output = replaceExactlyOnce(output, RENDER_ORIGINAL, RENDER_PATCHED, 'work-tree chat flow renderer')
   output = replaceExactlyOnce(output, ZH_LOCALE_ORIGINAL, ZH_LOCALE_PATCHED, 'Chinese work-tree labels')
   output = replaceExactlyOnce(output, EN_LOCALE_ORIGINAL, EN_LOCALE_PATCHED, 'English work-tree labels')

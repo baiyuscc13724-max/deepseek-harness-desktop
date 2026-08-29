@@ -119,6 +119,12 @@ test('v1 store migration performs crash reconciliation in the same initializatio
     assert.equal(migratedTeam.tasks[0].completedAt, timestamp)
     assert.equal(migratedTeam.tasks[0].attempt, 0)
     assert.deepEqual(migratedTeam.tasks[0].attemptHistory, [])
+    assert.equal(migratedTeam.plan.migrationState, 'legacy_active_gate')
+    assert.deepEqual(
+      [migratedTeam.plan.authorization.source, migratedTeam.plan.authorization.permissions, migratedTeam.plan.authorization.files, migratedTeam.plan.authorization.cost, migratedTeam.plan.authorization.externalSideEffects],
+      ['unknown', 'unknown', 'unknown', 'unknown', 'unknown'],
+      'legacy active work keeps its migration gate and is not silently upgraded by new defaults'
+    )
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -132,6 +138,83 @@ test('v2 stores migrate additively to the bootstrap-capable schema', async () =>
     const store = new mod.AgentTeamsStore(file)
     await store.init()
     assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 6)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('startup additively reconciles safe old active authorization without rewriting plan or acceptance history', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-authorization-reconcile-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  const mod = await plugin()
+  const lead = { id: 'reconcile-lead', options: { provider: 'test', model: 'test' } }
+  const ctx = { agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] } }
+  const oldAuthorization = plan => ({
+    source: 'human_attested', attestedAt: plan.authorization.attestedAt, confirmedPlanHash: plan.hash,
+    permissions: 'unknown', files: 'unknown', cost: 'unknown', externalSideEffects: 'unknown'
+  })
+  try {
+    const initial = new mod.AgentTeamsStore(file, { enabled: true, maxMembers: 4, maxActiveTurns: 4 })
+    await initial.init()
+
+    const safeTeam = await mod.createTeam(initial, lead, { objective: 'Upgrade safe old active authorization' })
+    const safeTask = await mod.createTask(initial, lead, { teamId: safeTeam.id, title: 'Accepted internal work', files: ['src/safe.js'] })
+    let draft = initial.snapshot().teams.find(team => team.id === safeTeam.id).plan
+    await mod.commitTeamPlan(ctx, initial, lead, { teamId: safeTeam.id, expectedRevision: draft.revision, confirmedPlanHash: draft.hash })
+    const safeClaim = (await mod.updateTask(initial, lead, { teamId: safeTeam.id, taskId: safeTask.task.id, action: 'claim' })).task
+    await mod.updateTask(initial, lead, { teamId: safeTeam.id, taskId: safeTask.task.id, action: 'complete', claimId: safeClaim.claimId, leaseEpoch: safeClaim.leaseEpoch })
+
+    const capabilityTeam = await mod.createTeam(initial, lead, { objective: 'Keep old unknown capability authorization' })
+    await mod.createTask(initial, lead, { teamId: capabilityTeam.id, title: 'Protected work', capabilities: [{ name: 'protected-access', status: 'unknown' }] })
+    draft = initial.snapshot().teams.find(team => team.id === capabilityTeam.id).plan
+    await mod.commitTeamPlan(ctx, initial, lead, { teamId: capabilityTeam.id, expectedRevision: draft.revision, confirmedPlanHash: draft.hash })
+
+    const conflictTeam = await mod.createTeam(initial, lead, { objective: 'Keep old conflicting file authorization' })
+    await mod.createTask(initial, lead, { teamId: conflictTeam.id, title: 'Writer one', files: ['src/shared'] })
+    await mod.createTask(initial, lead, { teamId: conflictTeam.id, title: 'Writer two', files: ['src/shared/file.js'] })
+    draft = initial.snapshot().teams.find(team => team.id === conflictTeam.id).plan
+    await mod.commitTeamPlan(ctx, initial, lead, { teamId: conflictTeam.id, expectedRevision: draft.revision, confirmedPlanHash: draft.hash })
+
+    const effectTeam = await mod.createTeam(initial, lead, { objective: 'Keep old real effect authorization' })
+    await mod.createTask(initial, lead, { teamId: effectTeam.id, title: 'External publish', externalEffects: [{ name: 'publish-once', policy: 'idempotent' }] })
+    draft = initial.snapshot().teams.find(team => team.id === effectTeam.id).plan
+    await mod.commitTeamPlan(ctx, initial, lead, { teamId: effectTeam.id, expectedRevision: draft.revision, confirmedPlanHash: draft.hash })
+
+    let preserved
+    await initial.mutate(document => {
+      for (const team of document.teams) {
+        team.plan.phase = 'active'
+        team.plan.activatedAt ??= team.updatedAt
+        team.plan.authorization = oldAuthorization(team.plan)
+      }
+      const team = document.teams.find(candidate => candidate.id === safeTeam.id)
+      preserved = {
+        hash: team.plan.hash,
+        revision: team.plan.revision,
+        acceptance: structuredClone(team.tasks[0].acceptance)
+      }
+    })
+    initial.close()
+
+    const reloaded = new mod.AgentTeamsStore(file)
+    await reloaded.init()
+    const snapshot = reloaded.snapshot()
+    const safe = snapshot.teams.find(team => team.id === safeTeam.id)
+    assert.deepEqual(
+      [safe.plan.authorization.source, safe.plan.authorization.permissions, safe.plan.authorization.files, safe.plan.authorization.cost, safe.plan.authorization.externalSideEffects],
+      ['human_attested', 'human_attested', 'human_attested', 'human_attested', 'human_attested']
+    )
+    assert.deepEqual({ hash: safe.plan.hash, revision: safe.plan.revision, acceptance: safe.tasks[0].acceptance }, preserved)
+    const projected = mod.teamSnapshot(snapshot, lead.id, safeTeam.id).team
+    assert.deepEqual(projected.plan.authorization, safe.plan.authorization, 'UI projection observes the reconciled durable authorization')
+
+    const capability = snapshot.teams.find(team => team.id === capabilityTeam.id)
+    const conflict = snapshot.teams.find(team => team.id === conflictTeam.id)
+    const effect = snapshot.teams.find(team => team.id === effectTeam.id)
+    assert.equal(capability.plan.authorization.permissions, 'unknown')
+    assert.equal(conflict.plan.authorization.files, 'unknown')
+    assert.equal(effect.plan.authorization.externalSideEffects, 'unknown')
+    const persisted = JSON.parse(await readFile(file, 'utf8'))
+    assert.deepEqual(persisted.teams.find(team => team.id === safeTeam.id).plan.authorization, safe.plan.authorization, 'startup reconciliation is atomically persisted')
+    reloaded.close()
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

@@ -204,7 +204,10 @@
     }
     if (/^[a-z]:[\\/]/iu.test(target)) return true
     if (/^\\\\/u.test(target)) return false
-    return /^\/(?!\/)/u.test(target)
+    if (!/^\/(?!\/)/u.test(target)) return false
+    // A root-relative runtime URL is not a local POSIX file. This second gate
+    // prevents alternate callers from sending chat/API links to fs.realpath.
+    return !/[?#]/u.test(target) && !/^\/api(?:\/|$)/iu.test(target)
   }
 
   async function loadDocumentPreview(target, { workspacePreview, localPreview } = {}) {
@@ -405,6 +408,7 @@
     function toggle() { return controller.setOpen(!core.isOpen()) }
 
     function setOpen(next, reason = 'api') {
+      const wasOpen = core.isOpen()
       if (!next) {
         core.setOpen(false)
       } else if (!core.activeId && core.ids().length) {
@@ -412,11 +416,13 @@
       } else {
         core.setOpen(true)
       }
+      const isOpen = core.isOpen()
+      if (isOpen === wasOpen) return isOpen
       renderChrome()
-      emit(next ? 'open' : 'close', { reason })
+      emit(isOpen ? 'open' : 'close', { reason })
       emit('statechange', core.serialize())
       if (opts.storageKey) persist()
-      return core.isOpen()
+      return isOpen
     }
 
     /* --- 持久化：可选 Web Storage 适配器，默认关闭 --- */
@@ -490,7 +496,15 @@
 
       /* 宽度 */
       getWidth: () => core.width(),
-      setWidth: (value) => { core.setWidth(value); applyWidth(); emit('resize', { width: core.width() }); emit('statechange', core.serialize()); return core.width() },
+      setWidth: (value) => {
+        const previous = core.width()
+        const width = core.setWidth(value)
+        if (width === previous) return width
+        applyWidth()
+        emit('resize', { width })
+        emit('statechange', core.serialize())
+        return width
+      },
       resetWidth: () => controller.setWidth(opts.defaultWidth),
 
       /* 窄屏覆盖状态 */
@@ -536,6 +550,9 @@
 
       /* 销毁：解除监听、移除宿主 */
       destroy() {
+        if (dragFrame) cancelAnimationFrame(dragFrame)
+        dragFrame = 0
+        pendingDragWidth = null
         for (const set of listeners.values()) set.clear()
         listeners.clear()
         window.removeEventListener('keydown', onGlobalKeyDown)
@@ -562,6 +579,15 @@
     }
     /* --- 宽度拖动 --- */
     let dragging = false
+    let pendingDragWidth = null
+    let dragFrame = 0
+    function flushDragWidth() {
+      dragFrame = 0
+      if (pendingDragWidth == null) return
+      const width = pendingDragWidth
+      pendingDragWidth = null
+      controller.setWidth(width)
+    }
     function onHandleDown(event) {
       dragging = true
       handle?.setPointerCapture?.(event.pointerId)
@@ -569,12 +595,14 @@
     }
     function onHandleMove(event) {
       if (!dragging || !handle) return
-      const desired = Math.max(opts.minWidth, Math.min(opts.maxWidth, Math.round(window.innerWidth - event.clientX)))
-      controller.setWidth(desired)
+      pendingDragWidth = Math.max(opts.minWidth, Math.min(opts.maxWidth, Math.round(window.innerWidth - event.clientX)))
+      if (!dragFrame) dragFrame = requestAnimationFrame(flushDragWidth)
     }
     function onHandleUp(event) {
       if (!dragging) return
       dragging = false
+      if (dragFrame) cancelAnimationFrame(dragFrame)
+      flushDragWidth()
       handle?.releasePointerCapture?.(event.pointerId)
       if (opts.storageKey) persist()
     }

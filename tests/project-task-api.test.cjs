@@ -6,9 +6,12 @@ const { EventEmitter } = require('node:events')
 const { Readable } = require('node:stream')
 const { mkdtemp, rm } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
+const { ENDPOINT_ENV, TOKEN_ENV, createAgentTeamsSecretService } = require('../electron/bridge/agent-teams-secret-service.cjs')
+const { createProjectSecretCapability } = require('./fixtures/project-secret-capability.cjs')
 
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
 const runtimeFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-web.js')
+const outerSecretContext = Object.freeze({ purpose: 'agent-teams/device/v1', binding: 'project_task_api_fixture_0001' })
 
 function request(method, url, body, headers = {}) {
   const req = body === undefined ? new EventEmitter() : Readable.from([Buffer.from(JSON.stringify(body))])
@@ -66,7 +69,24 @@ async function cleanupAll(cleanups) {
 async function setupApply({ seedLegacy = false } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'project-task-api-'))
   const previousHome = process.env.DSH_HOME
+  const previousSecretEndpoint = process.env[ENDPOINT_ENV]
+  const previousSecretToken = process.env[TOKEN_ENV]
   process.env.DSH_HOME = root
+  const fixtureCapability = createProjectSecretCapability()
+  const secretService = createAgentTeamsSecretService({
+    protector: {
+      async protect(plaintext) {
+        return Buffer.from(await fixtureCapability.protect(plaintext, outerSecretContext), 'base64')
+      },
+      async unprotect(ciphertext) {
+        return fixtureCapability.unprotect(ciphertext.toString('base64'), outerSecretContext)
+      },
+    },
+  })
+  await secretService.start()
+  const runtimeEnvironment = secretService.runtimeEnvironment(process.env)
+  process.env[ENDPOINT_ENV] = runtimeEnvironment[ENDPOINT_ENV]
+  process.env[TOKEN_ENV] = runtimeEnvironment[TOKEN_ENV]
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-api=${Date.now()}-${Math.random()}`)
   let legacyStore
   if (seedLegacy) {
@@ -79,14 +99,23 @@ async function setupApply({ seedLegacy = false } = {}) {
   const routes = new Map()
   const cleanups = []
   mod.apply(harness(routes, cleanups), { enabled: true, maxMembers: 8, maxActiveTurns: 8 })
-  return { root, previousHome, mod, routes, cleanups, legacyStore }
+  assert.equal(process.env[ENDPOINT_ENV], undefined)
+  assert.equal(process.env[TOKEN_ENV], undefined)
+  return { root, previousHome, previousSecretEndpoint, previousSecretToken, secretService, mod, routes, cleanups, legacyStore }
 }
 async function teardownApply(state) {
   try { await cleanupAll(state.cleanups) }
   finally {
-    if (state.previousHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = state.previousHome
-    await rm(state.root, { recursive: true, force: true })
+    try { await state.secretService.close() }
+    finally {
+      if (state.previousHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = state.previousHome
+      if (state.previousSecretEndpoint === undefined) delete process.env[ENDPOINT_ENV]
+      else process.env[ENDPOINT_ENV] = state.previousSecretEndpoint
+      if (state.previousSecretToken === undefined) delete process.env[TOKEN_ENV]
+      else process.env[TOKEN_ENV] = state.previousSecretToken
+      await rm(state.root, { recursive: true, force: true })
+    }
   }
 }
 

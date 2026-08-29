@@ -1,62 +1,61 @@
-# Harness Desktop 1.0.53
+# Harness Desktop 1.0.54
 
-v1.0.53 是一次保持功能、交互、协议、持久化和安全边界不变的性能与稳定性正式更新，重点优化大型会话库、长对话流、Agent Teams 生命周期和移动端文档体验。
+v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥可用性和长会话响应速度的正式更新。它修复了普通项目内续作反复要求用户发送“继续”的问题，也恢复了环境密钥场景下直接输入安全覆盖的能力，同时保留真实外部副作用和不可逆操作的硬门禁。
 
 本版本不会静默替用户安装。桌面端只有在用户于更新中心明确点击更新/安装后才会切换版本；Android 仍必须由用户手动安装长期证书签名的 APK。
 
-## 大型会话库显著提速
+## Agent Teams 自动驾驶不再反复打断
 
-- JSONL 会话制品枚举改为最多 8 路有界滑动并发，同时保留输入顺序、最早索引错误、重复检测、取消和已启动读取收敛语义。
-- 983 个真实会话的直接基准中，中位枚举耗时约从 958 ms 降至 172 ms，约 5.6 倍。
-- 已附着会话摘要复用精确增量 `sessionListMetadata` 投影；投影缺失时仍执行原始全量折叠，不会牺牲新鲜度或正确性。
-- 没有自动分离历史会话、截断事件、缩短保留期或降低可继续性。
+- 同一 exact live root、同一 canonical project、团队 active 且未暂停，且 capability 已验证、文件无冲突、外部 effect 全为 `none` 时，修复、复测、checkpoint、reclaim、reopen 和无歧义重规划可沿既定目标自动继续。
+- 默认 AI 选择的 main/subagent 路由属于普通授权范围，不会因为 main-tier 成员或全员已退休而额外索要“继续”。
+- 新运行以成功发布后的 `publishedAt` 保留持续授权；旧团队只接受与 member session、claimId、leaseEpoch 精确绑定的历史执行收据，retired/failed 占位本身不能伪造授权。
+- 新建团队、显式 Stop 后 Resume、handoff/adopt/recover、未知能力、文件冲突、跨项目或所有权扩张、真实外部副作用、`outcome_unknown`、不可逆风险和目标歧义仍然硬性停止。
+- 持续授权保持 `human_attested`，绝不会被模型升级成 `host_verified`。
 
-## 桌宠、渲染与设置响应
+## Agent Teams P1 安全与持久化整改
 
-- 桌宠会话优先级、稳定排序与状态计数合并为单次遍历；10,000 组随机差分验证输出一致，2,500 会话基准约从 257.35 ms 降至 10.80 ms。
-- 主题、模型路由、工作区链接、设置集成和子代理扫描只响应相关 DOM 变更，并使用单一单调定时器合并刷新。
-- 普通聊天流和工具输出不再反复触发无关的设置或模型挂载；主题、右侧工作区和可见交互保持不变。
+- accepted-completed 团队接管继续把 acceptance 绑定到原负责人 epoch；adopt 不篡改 `acceptedBy`，旧 claim/lease 在新 pause epoch 下失效。
+- `resolve_unknown` 改用 Host 发行、短时效、单用途授权，绑定 root、turn、team/task/effect、attempt、outcome、pauseEpoch、team revision 和规范化参数摘要；替换参数、过期、跨回合、跨工具与重放全部拒绝。
+- 项目设备、E2EE 与 LAN 私钥通过 Host secret capability 和系统安全存储桥接；profile 只保留不敏感引用，迁移、篡改、能力不可用和落盘泄露都有动态门禁。
+- 安全信道 receipt 具备持久化、重启和容量语义；same-dedupe 的检查与 Inbox 追加进入同一串行 mutation，双实例竞态不再依赖调用方自行规避。
 
-## Agent Teams 生命周期与正式版整合
+## 环境密钥可直接输入安全覆盖
 
-- 协作状态在单次遍历中建立成员、状态和任务索引，大型状态投影基准约从 585.14 ms 降至 85.32 ms。
-- Store 关闭时注销共享实例并清理监听；Agent Teams 与 Session Experience 的语言订阅跟随 Cordis effect 生命周期释放。
-- 团队计划、任务、claim/lease、Stop、两阶段 Resume、handoff/adopt、协作收件箱、外部副作用 fencing 和移动端团队表面全部保留。
-- 关闭团队不会自动删除或分离历史可继续会话；未完成任务仍必须按既有协调协议处理。
+- 启动环境中的 Provider secret 仍不可读取、显示或回写；设置和审计层只保存 credential ref，不保存原始密钥。
+- 原密码字段现在可直接键入或粘贴。输入第一个字符即创建隔离的 `HARNESS_DESKTOP_<PROVIDER>_API_KEY` 覆盖，不需要额外开启“自定义密钥”。
+- 支持覆盖的新增、修改、删除和“恢复环境来源”；恢复失败会按最新 settings revision 补偿重绑仍存在的覆盖，避免普通单故障留下孤儿引用。
+- 删除自定义 Provider 会清理页面托管的普通或 `HARNESS_DESKTOP_*` 凭据引用，但不会把环境引用误当作可删除 secret。
+- 字段使用原生 label、稳定 id、密码掩码、`autocomplete=new-password`、持续帮助文本和不小于 44px 的输入/恢复/删除/确认目标；没有粘贴拦截。
 
-## Mobile 文档与跨端一致性
+## 长会话与工作区性能门禁
 
-- Android 增加原生文档查看路径，要求有效配对鉴权和可信同源请求；下载为 100 MiB 有界、缓存交接、只读打开，并在 Activity/Executor 生命周期结束时清理。
-- Android 与 iOS 的 `mobile-runtime.js`、`mobile-compat.css` 继续保持逐字节一致。
-- 原生输入、附件、系统/边缘返回、会话上下文、Agent Teams 工作区与前台恢复语义不变。
-- 密码、支付、银行、验证码、Shell、脚本、静默安装卸载、清除数据和权限绕过仍禁止。
-
-## 更小的正式包
-
-- Marketplace 的脚本、文档、仓库元数据、离线审计报告和其他 source-only 文件不再进入正式包。
-- 运行时插件、注册表、技能、安装和更新功能不变；产物审计会拒绝 source-only 文件回流。
-- 打包输入原始体积减少 6,180,439 bytes，约 5.89 MiB。
+- 大型消息树投影基准由约 150.828 ms 降至 1.128 ms；折叠的 4,000 步对话不再急切渲染全部前缀，首批固定为 64 项，并优先保证深层已选调用可达。
+- 会话字段投影基准由约 113.540 ms 降至 0.436 ms；160 个会话制品由约 2,457.747 ms 降至 279.330 ms。
+- 会话列表、会话持久化、Conversation Work Tree、Session Experience 生命周期、renderer observer 和右侧工作区进入同一双层门禁。
+- 最终合成 Electron 场景覆盖 8 个会话、每个 1,200 条逻辑消息、180 次切换和 120 次滚动：switch p95 9.5 ms、最长 long task 91 ms、无保留堆增长、listener cleanup 回到 0。该结果表示预算通过，不把不同场景的时序差异包装成绝对性能承诺。
+- 会话性能补丁与 tool-result owner/session 补丁精确支持 raw、flat 及 `workTreeItems + renderedNodeKeys` 组合；完整组合幂等，任一半补丁继续 fail closed。
 
 ## 验证
 
-维护树在发布前完成：
+发布候选在提交前完成：
 
-- 全仓 `npm run verify`：1660 通过、0 失败、2 个平台条件跳过；
-- Agent Teams 专项：240/240；
-- 渲染与插件专项：89/89；
-- Mobile Node 测试：49/49；
-- Android `testDebugUnitTest`：成功；
-- `git diff --check`：通过。
+- 全仓 `npm run verify`：1714 通过、0 失败、4 个平台/环境条件跳过（1718 总计）；
+- Agent Teams 专项：159 通过、0 失败、2 个环境门禁跳过；
+- 模型密钥行为、迁移、泄露与官方 runtime：28/28；
+- Agent Teams 安装后 artifact-fixture 工作区 smoke：2/2；
+- P1 release-blocking 安全/持久化矩阵：11/11；
+- 长会话双层门禁：synthetic 3/3 + production 31/31；
+- `npm run verify:release` 与 `git diff --check`：通过。
 
-正式发布仍由同一 resumable publisher 从精确 main 提交执行全平台 GitHub Actions 构建、iOS 模拟器验证、Windows 安装/卸载与打包自检、Android 长期证书签名、生产组件签名、精确 18 项资产清单、GitHub→CNB 云到云镜像，并在所有不可变资产就绪后才提升三个 stable feed。
+正式发布继续由仓库唯一的 resumable publisher 从精确 main 提交执行全平台 GitHub Actions 构建、iPhone/iPad 模拟器验证、Windows 安装/卸载与打包自检、Android 长期证书签名、生产组件签名、精确 18 项资产清单、GitHub→CNB 云到云镜像，并在所有不可变资产就绪后才提升三个 stable feed。
 
 ## 版本身份
 
-- 桌面根包、lockfile 和 14 个随包插件：`1.0.53`
-- Android：`versionName=1.0.53`、`versionCode=1005300`
-- iOS/iPadOS 源码：`MARKETING_VERSION=1.0.53`、build `10053`
-- 正式不可变 Tag：`v1.0.53`
-- 上一版 `v1.0.52` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变
+- 桌面根包、lockfile 和 14 个随包插件：`1.0.54`
+- Android：`versionName=1.0.54`、`versionCode=1005400`
+- iOS/iPadOS 源码：`MARKETING_VERSION=1.0.54`、build `10054`
+- 正式不可变 Tag：`v1.0.54`
+- 已发布 `v1.0.53` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变
 
 ## 获取更新
 
@@ -66,7 +65,7 @@ v1.0.53 是一次保持功能、交互、协议、持久化和安全边界不变
 
 ### Android
 
-下载 `Harness-Mobile-1.0.53-android-universal.apk` 及其 `.sha256`，核对摘要后由用户手动安装。若 Android 提示签名冲突，请不要强行覆盖来源不明的旧包。
+下载 `Harness-Mobile-1.0.54-android-universal.apk` 及其 `.sha256`，核对摘要后由用户手动安装。若 Android 提示签名冲突，请不要强行覆盖来源不明的旧包。
 
 ### macOS 与 iPhone/iPad
 
@@ -74,9 +73,9 @@ macOS 提供 Intel 和 Apple Silicon 的 DMG/ZIP 预览包，当前仍采用明�
 
 ## 下载与完整性
 
-- GitHub Release：[v1.0.53](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.53)
+- GitHub Release：[v1.0.54](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.54)
 - 永久最新版入口：[GitHub Releases / latest](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)
-- 桌面摘要：[SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.53/SHA256SUMS.txt)
-- 组件摘要：[COMPONENT-SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.53/COMPONENT-SHA256SUMS.txt)
+- 桌面摘要：[SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/SHA256SUMS.txt)
+- 组件摘要：[COMPONENT-SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/COMPONENT-SHA256SUMS.txt)
 
-如果 GitHub 下载受限，可把同一文件名中的下载前缀换为 `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.53/`。GitHub 与 CNB 文件应具有相同大小和 SHA-256；不一致时不要运行该文件。
+如果 GitHub 下载受限，可把同一文件名中的下载前缀换为 `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.54/`。GitHub 与 CNB 文件应具有相同大小和 SHA-256；不一致时不要运行该文件。

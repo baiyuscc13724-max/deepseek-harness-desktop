@@ -284,7 +284,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     let leadAvailable = true
     const rootAgent = {
       id: 'lead-session', status: 'running', options: { provider: 'test-provider', model: 'test-model' },
-      session: { events: [
+      session: { header: { cwd: root }, events: [
         { type: 'turn/start', data: {} },
         { type: 'user/message', data: { source: { kind: 'user' } } }
       ] },
@@ -463,6 +463,19 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(enabledPrompt, /first release\/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn/u)
     assert.match(enabledPrompt, /call team_bootstrap directly with a stable request_id and do not call team_start first/u)
     assert.match(enabledPrompt, /persists all tasks before starting members/u)
+    assert.match(enabledPrompt, /first fully successful spawn records publication and activates it/u)
+    assert.match(enabledPrompt, /later recommit persists active even after every published worker gracefully retires/u)
+    assert.match(enabledPrompt, /Provisioning or initial publication\/work-followup failure never establishes this history/u)
+    assert.match(enabledPrompt, /Upgraded retired workers without the new marker qualify only through a task submission\/result or checkpoint bound to their exact historical claim/u)
+    assert.match(enabledPrompt, /retired state alone and former-root adoption history do not qualify/u)
+    assert.match(enabledPrompt, /same exact live root may recommit a later draft during an automatic goal round without another user message/u)
+    assert.match(enabledPrompt, /team remains active and unpaused in the same canonical project/u)
+    assert.match(enabledPrompt, /every capability is individually verified, file scopes are conflict-free, cost stays within the direct user's ordinary default AI-routing grant, every effect policy is none/u)
+    assert.match(enabledPrompt, /already active main-tier worker does not itself create a new cost grant or block safe continuation/u)
+    assert.match(enabledPrompt, /continuing\/default grant stays human_attested and never becomes Host proof/u)
+    assert.match(enabledPrompt, /New team creation, bootstrap, Stop recovery\/resume, handoff\/adopt\/recover, resolve_unknown, cross-project scope/u)
+    assert.match(tools.get('team_plan_commit').description, /later automatic goal round may recommit without a new user message only for the same exact live root and canonical project/u)
+    assert.match(tools.get('team_plan_commit').description, /Continuing\/default authority remains human_attested, never host_verified/u)
     assert.match(enabledPrompt, /Never invent a leader→group-leader→hidden-worker hierarchy/u)
     assert.match(enabledPrompt, /Every new member re-reads the latest route for its chosen tier/u)
     assert.match(enabledPrompt, /changing the subagent route never changes main-tier members/u)
@@ -513,12 +526,62 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(spawned.member.routeSource, 'live-lead-explicit-model')
     assert.equal(spawned.member.provider, 'test-provider')
     assert.equal(spawned.member.model, 'special-model')
+    assert.match(spawned.member.publishedAt, /^\d{4}-\d{2}-\d{2}T/u)
     assert.match(starts[0].request.prompt[0].text, /Do not begin any task/u)
     assert.match(followups[0].content[0].text, /use team_expansion_request with explicit deliverables, acceptance criteria, and non-overlapping file\/resource boundaries/u)
     assert.match(followups[0].content[0].text, /root coordinator decides whether to create persistent tasks and visible peer members without bypassing maxMembers or maxActiveTurns/u)
     assert.equal(followups[0].options.source.kind, 'coordinator')
     assert.equal(starts[0].childId, spawned.member.sessionId)
     assert.equal(followups[0].childId, spawned.member.sessionId)
+
+    rootAgent.session.events.push({ type: 'turn/end', data: {} }, { type: 'turn/start', data: { continuation: 'goal' } })
+    const automaticTask = await tools.get('team_task_create').execute({
+      team_id: started.team.id, title: 'Safe automatic-round regression', files: ['src/automatic-round.js']
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    const automaticDraft = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })
+    const automaticCommit = await tools.get('team_plan_commit').execute({
+      team_id: started.team.id,
+      expected_revision: automaticDraft.team.plan.revision,
+      confirmed_plan_hash: automaticDraft.team.plan.hash
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(automaticCommit.plan.phase, 'active', 'a safe established team recommits across a real turn without a new user/message')
+    assert.equal(automaticCommit.plan.authorization.source, 'human_attested')
+    assert.equal(JSON.stringify(automaticCommit).includes('host_verified'), false)
+    assert.equal(automaticTask.task.status, 'pending')
+
+    const crossProjectTask = await tools.get('team_task_create').execute({
+      team_id: started.team.id, title: 'Cross-project negative control', files: ['src/cross-project-negative.js']
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    const crossProjectDraft = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })
+    rootAgent.session.header.cwd = path.join(root, 'different-project')
+    await assert.rejects(
+      tools.get('team_plan_commit').execute({ team_id: started.team.id, expected_revision: crossProjectDraft.team.plan.revision, confirmed_plan_hash: crossProjectDraft.team.plan.hash }, { agent: rootAgent, signal: new AbortController().signal }),
+      error => error?.code === 'AGENT_TEAMS_CROSS_PROJECT_FORBIDDEN'
+    )
+    rootAgent.session.header.cwd = root
+    await tools.get('team_plan_commit').execute({ team_id: started.team.id, expected_revision: crossProjectDraft.team.plan.revision, confirmed_plan_hash: crossProjectDraft.team.plan.hash }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(crossProjectTask.task.status, 'pending')
+
+    for (const [toolName, args] of [
+      ['team_start', { objective: 'Must still require a direct user' }],
+      ['team_bootstrap', { request_id: 'automatic-bootstrap-denied', objective: 'Denied', tasks: [], members: [] }],
+      ['team_resume', { team_id: started.team.id }],
+      ['team_handoff', { team_id: started.team.id, target_root_session_id: recoveryAgent.id }],
+      ['team_adopt', { team_id: started.team.id, handoff_token: 'not-authorized' }],
+      ['team_recover', { team_id: started.team.id, confirm: true }],
+      ['team_task_external_effect', { team_id: started.team.id, task_id: automaticTask.task.id, effect_name: 'none', action: 'resolve_unknown', attempt_id: 'none', outcome: 'not_started', authorization_id: 'none' }]
+    ]) {
+      await assert.rejects(
+        tools.get(toolName).execute(args, { agent: rootAgent, signal: new AbortController().signal }),
+        /direct host-attested human input/u,
+        `${toolName} must not inherit the automatic plan recommit allowance`
+      )
+    }
+    rootAgent.session.events.push(
+      { type: 'turn/end', data: {} },
+      { type: 'turn/start', data: {} },
+      { type: 'user/message', data: { source: { kind: 'user' } } }
+    )
 
     const forbiddenWorkerControl = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
       sessionId: spawned.member.sessionId, action: 'member-stop', memberId: spawned.member.sessionId, mode: 'retire'
@@ -1131,6 +1194,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(workFailureMember.state, 'failed')
     assert.equal(workFailureMember.shutdownUnconfirmed, false)
     assert.equal(workFailureMember.stopUnconfirmed, false)
+    assert.equal(workFailureMember.publishedAt, undefined, 'initial work-followup failure must not establish standing continuation authority')
     assert.match(workFailureMember.error, /initial work followup failed after child became live after confirmed drain/u)
     await tools.get('team_shutdown').execute({ team_id: workFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
@@ -1149,6 +1213,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(workFailureMember.state, 'failed')
     assert.equal(workFailureMember.shutdownUnconfirmed, true)
     assert.equal(workFailureMember.stopUnconfirmed, true)
+    assert.equal(workFailureMember.publishedAt, undefined, 'uncertain cleanup after initial failure still must not establish standing continuation authority')
     assert.match(workFailureMember.error, /initial work followup failed after child became live/u)
     assert.match(workFailureMember.error, /cleanup drain failed: Error: drain failed/u)
     await tools.get('team_shutdown').execute({ team_id: unconfirmedWorkFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })

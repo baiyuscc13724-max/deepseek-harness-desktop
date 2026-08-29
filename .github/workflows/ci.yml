@@ -24,6 +24,10 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - run: npm run verify
+      - name: Run Agent Teams P1 release-blocking matrix
+        env:
+          HARNESS_AGENT_TEAMS_P1_RELEASE_GATES: '1'
+        run: node --test tests/agent-teams-p1-release-gates.test.cjs
       - name: Configure Electron sandbox
         run: |
           set -euo pipefail
@@ -34,6 +38,10 @@ jobs:
           sudo chown root:root "$sandbox"
           sudo chmod 4755 "$sandbox"
           test "$(stat -c '%u:%g:%a' "$sandbox")" = '0:0:4755'
+      - name: Run Agent Teams installed-workbench artifact-fixture smoke
+        env:
+          HARNESS_AGENT_TEAMS_INSTALLED_SMOKE: '1'
+        run: xvfb-run -a node --test tests/agent-teams-installed-workbench-smoke.test.cjs
       - name: Verify browser navigation security in Electron
         env:
           HARNESS_BROWSER_TEST_REAL_INPUT: '1'

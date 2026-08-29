@@ -26,10 +26,9 @@ test('durable tool-result images and explicit local files render without flatten
   assert.match(patched, /data-tool-result-deliverables/u)
   assert.match(patched, /react_jsx_runtime\.jsx\)\("audio"/u)
   assert.match(patched, /react_jsx_runtime\.jsx\)\("video"/u)
-  assert.match(patched, /仅下载（不会执行）/u)
+  assert.match(patched, /@harness-desktop\/tool-result-deliverables-no-download-v2/u)
   assert.match(patched, /\/api\/desktop-files\/\$\{route\}/u)
-  assert.match(patched, /download: file\.name/u)
-  assert.match(patched, /data-download-only/u)
+  assert.doesNotMatch(patched, /下载：|仅下载（不会执行）|download: file\.name|data-download-only|resultFileUrl\(sessionId, file, "download"\)/u)
   assert.match(patched, /function ToolCallTree\(\{ renderSlot, renderMessageImages, sessionId,/u)
   assert.match(patched, /ToolCallBranch, \{\s*renderSlot,\s*renderMessageImages,\s*sessionId,\s*block/u)
   assert.match(patched, /ToolCall, \{\s*renderSlot,\s*renderMessageImages,\s*sessionId,\s*callId/u)
@@ -119,14 +118,50 @@ test('session owner patch supports the pinned flat conversation tree and remains
   assert.equal(patchToolResultOwnerSource(first.source).changed, false)
 })
 
+test('session owner patch supports exact raw and rendered grouped trees while partial variants fail closed', async () => {
+  const { patchToolResultOwnerSource } = await import('../scripts/tool-result-image-patch.mjs')
+  const groupedFixture = (nodeKeys, listItems) => `const ChatNodeSeat = (0, react.memo)(function ChatNodeSeat({ nodeKey, selectedCallId,
+\t\t\tconst owner = (0, react.useMemo)(() => node === void 0 ? null : {
+\t\t\t\tselectedCallId,
+\t\t\t}, [
+\t\t\t\tnode,
+\t\t\t\tselectedCallId,
+const ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, useSession,
+\t\t\t\t\tchildren: ${nodeKeys}.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+\t\t\t\t\t\tnodeKey,
+\t\t\t\t\t\tuseSession,
+\t\t\t\t\t\t\t${listItems}.map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
+\t\t\t\t\t\t\t\titem,
+\t\t\t\t\t\t\t\tuseSession,
+\t\t\t\t\t\t\t}, item.key) : (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+\t\t\t\t\t\t\t\tnodeKey: item.nodeKey,
+\t\t\t\t\t\t\t\tuseSession,`
+
+  for (const [nodeKeys, listItems] of [['item.nodeKeys', 'buildConversationWorkTreeItems(order, nodeStore)'], ['renderedNodeKeys', 'workTreeItems']]) {
+    const first = patchToolResultOwnerSource(groupedFixture(nodeKeys, listItems))
+    assert.equal(first.changed, true)
+    assert.match(first.source, /ConversationWorkTreeGroup\(\{ item, sessionId, useSession,/u)
+    assert.match(first.source, new RegExp(`${nodeKeys.replace('.', '\\.')}\\.map\\(\\(nodeKey\\)[\\s\\S]*nodeKey,\\s*sessionId,\\s*useSession,`, 'u'))
+    assert.match(first.source, new RegExp(`${listItems.replace(/[().]/gu, '\\$&')}\\.map\\(\\(item\\)[\\s\\S]*item,\\s*sessionId,\\s*useSession,`, 'u'))
+    assert.match(first.source, /nodeKey: item\.nodeKey,\s*sessionId,\s*useSession,/u)
+    assert.equal(patchToolResultOwnerSource(first.source).changed, false)
+
+    const partial = first.source.replace(new RegExp(`(${nodeKeys.replace('.', '\\.')}\\.map\\(\\(nodeKey\\)[\\s\\S]*?nodeKey,)\\s*sessionId,`, 'u'), '$1')
+    assert.throws(() => patchToolResultOwnerSource(partial), /patch is incomplete/u)
+  }
+})
+
 test('runtime installer threads session identity, applies delivery patches and fails closed on drift', async () => {
   const { patchToolResultImageSource, patchToolResultOwnerSource } = await import('../scripts/tool-result-image-patch.mjs')
   const installer = readFileSync(path.join(root, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
   const toolFixture = readFileSync(toolUiFile, 'utf8')
   const conversationFixture = readFileSync(conversationFile, 'utf8')
   const patched = patchToolResultImageSource(toolFixture).source
-  const ownerPatched = patchToolResultOwnerSource(conversationFixture).source
+  const ownerPatch = patchToolResultOwnerSource(conversationFixture)
+  const ownerPatched = ownerPatch.source
 
+  assert.match(conversationFixture, /children: renderedNodeKeys\.map\(\(nodeKey\)/u, 'current node_modules must exercise the grouped performance-patch composition')
+  assert.equal(ownerPatch.changed, false, 'the current renderedNodeKeys grouped composition is already complete and must remain idempotent')
   assert.match(installer, /patchToolResultOwnerSource\(cache\.source\)/u)
   assert.match(installer, /const toolResultImagesChanged = await patchInstalledToolResultImages\(\)/u)
   assert.match(installer, /Patched durable tool-result image delivery/u)

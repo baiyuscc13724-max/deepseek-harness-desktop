@@ -81,6 +81,69 @@ test('work tree counts nested calls and exposes running, failed, stopped, and se
   assert.equal(group.active, true)
   assert.equal(group.failed, true)
   assert.deepEqual(group.callIds, ['root-call', 'child-call'])
+  assert.equal(group.callNodeKeys.get('root-call'), 'tool:2')
+  assert.equal(group.callNodeKeys.get('child-call'), 'tool:2', 'nested calls belong to their top-level ChatNodeSeat')
+})
+
+test('completed work trees collapse only when they were opened automatically', async () => {
+  const { reduceConversationWorkTreeDisclosure } = await import(pathToFileURL(patchModule).href)
+  let automatic = { open: true, automatic: true, userControlled: false, active: true }
+  automatic = reduceConversationWorkTreeDisclosure(automatic, { type: 'activity', active: false, selected: false })
+  assert.deepEqual(automatic, { open: false, automatic: false, userControlled: false, active: false })
+
+  let manual = reduceConversationWorkTreeDisclosure(automatic, { type: 'toggle' })
+  assert.equal(manual.open, true)
+  assert.equal(manual.userControlled, true)
+  manual = reduceConversationWorkTreeDisclosure(manual, { type: 'activity', active: true, selected: false })
+  manual = reduceConversationWorkTreeDisclosure(manual, { type: 'activity', active: false, selected: false })
+  assert.equal(manual.open, true, 'a panel opened by the user stays open after later activity completes')
+
+  let closedByUser = { open: true, automatic: true, userControlled: false, active: true }
+  closedByUser = reduceConversationWorkTreeDisclosure(closedByUser, { type: 'toggle' })
+  closedByUser = reduceConversationWorkTreeDisclosure(closedByUser, { type: 'activity', active: false, selected: false })
+  assert.equal(closedByUser.open, false, 'a panel closed by the user is not reopened by completion')
+})
+
+test('work-tree bodies render in bounded cancelable batches', async () => {
+  const { reduceConversationWorkTreeRenderCount } = await import(pathToFileURL(patchModule).href)
+  let rendered = reduceConversationWorkTreeRenderCount(0, { type: 'sync', open: false, total: 4096 })
+  assert.equal(rendered, 0, 'a collapsed group must not create hidden step elements')
+  rendered = reduceConversationWorkTreeRenderCount(rendered, { type: 'sync', open: true, total: 4096 })
+  assert.equal(rendered, 64)
+  rendered = reduceConversationWorkTreeRenderCount(rendered, { type: 'sync', open: true, total: 4096 })
+  assert.equal(rendered, 64, 'ordinary parent renders must not advance background work')
+  rendered = reduceConversationWorkTreeRenderCount(rendered, { type: 'advance', open: true, total: 4096 })
+  assert.equal(rendered, 128)
+  rendered = reduceConversationWorkTreeRenderCount(rendered, { type: 'advance', open: true, total: 130 })
+  assert.equal(rendered, 130)
+  rendered = reduceConversationWorkTreeRenderCount(rendered, { type: 'sync', open: false, total: 4096 })
+  assert.equal(rendered, 0, 'closing cancels and releases the progressive render window')
+})
+
+test('a deeply selected nested call is immediately rendered in one bounded priority window', async () => {
+  const { buildConversationWorkTreeItems, conversationWorkTreeRenderKeys } = await import(pathToFileURL(patchModule).href)
+  const entries = []
+  for (let step = 0; step < 4000; step += 1) {
+    entries.push(tool(`tool:deep:${step}`, 9, {
+      kind: 'result',
+      callId: `root:${step}`,
+      isError: false,
+      subCalls: [{ kind: 'result', callId: `nested:${step}`, isError: false, subCalls: [] }]
+    }))
+  }
+  const group = buildConversationWorkTreeItems(entries.map(([key]) => key), new Map(entries))[0]
+  const selectedNodeKey = group.callNodeKeys.get('nested:3999')
+  const immediate = conversationWorkTreeRenderKeys(group.nodeKeys, 0, selectedNodeKey)
+  const withPrefix = conversationWorkTreeRenderKeys(group.nodeKeys, 64, selectedNodeKey)
+
+  assert.equal(selectedNodeKey, 'tool:deep:3999')
+  assert.equal(immediate.length, 64)
+  assert.ok(immediate.includes(selectedNodeKey), 'the selected node must exist on the first open render')
+  assert.ok(!immediate.includes('tool:deep:0'), 'priority rendering must not materialize the whole prefix')
+  assert.ok(withPrefix.length <= 128)
+  assert.ok(withPrefix.includes('tool:deep:0'))
+  assert.ok(withPrefix.includes(selectedNodeKey))
+  assert.equal(new Set(withPrefix).size, withPrefix.length)
 })
 
 test('recoverable edit no-ops do not leave the completed work tree in a permanent failure state', async () => {
@@ -119,6 +182,52 @@ test('session-level context rows collapse instead of leaking system activity int
   assert.equal(items[0].active, false)
 })
 
+test('thousand-turn transcripts and large tool groups keep collapsed render work bounded', async () => {
+  const { buildConversationWorkTreeItems, reduceConversationWorkTreeRenderCount } = await import(pathToFileURL(patchModule).href)
+  const entries = []
+  for (let turn = 0; turn < 1000; turn += 1) {
+    entries.push([`user:${turn}`, { kind: 'user', location: location(turn), data: {} }])
+    for (let step = 0; step < 4; step += 1) {
+      entries.push(tool(`tool:${turn}:${step}`, turn, { kind: 'result', callId: `call:${turn}:${step}`, isError: false, subCalls: [] }))
+    }
+    entries.push(assistant(`assistant:${turn}`, turn, 'done'))
+  }
+  const items = buildConversationWorkTreeItems(entries.map(([key]) => key), new Map(entries))
+  assert.equal(items.length, 3000)
+  assert.equal(items.filter(item => item.kind === 'work-tree').reduce((total, item) => total + item.nodeKeys.length, 0), 4000)
+  assert.equal(reduceConversationWorkTreeRenderCount(0, { type: 'sync', open: false, total: 4000 }), 0)
+  assert.equal(reduceConversationWorkTreeRenderCount(0, { type: 'sync', open: true, total: 4000 }), 64)
+})
+
+test('memo dependency follows the upstream mutable node-store content snapshot contract', async () => {
+  const { patchConversationWorkTreeSource } = await import(pathToFileURL(patchModule).href)
+  const source = await readFile(conversationRuntime, 'utf8')
+  assert.match(source, /var MutableChatNodeStore = class \{[\s\S]*values\(\) \{[\s\S]*if \(this\.valuesDirty\)[\s\S]*this\.valuesCache = \[\.\.\.this\.byKey\.values\(\)\]/u)
+  assert.match(source, /upsert\(nodes\) \{[\s\S]*this\.byKey\.set\(node\.key, node\)[\s\S]*if \(changed\) this\.valuesDirty = true/u)
+  assert.match(source, /store = new MutableChatNodeStore\(\)/u)
+  assert.match(source, /this\.store\.upsert\(upserts\)[\s\S]*this\.order = sameReferences\$1\(this\.order, next\) \? this\.order : next/u)
+  assert.match(source, /nodes: this\.store/u)
+
+  const classStart = source.indexOf('var MutableChatNodeStore = class {')
+  const classEnd = source.indexOf('\n\t\tvar MutableChatLocationIndex = class {', classStart)
+  assert.ok(classStart >= 0 && classEnd > classStart)
+  const MutableChatNodeStore = new Function('EMPTY_LIST', `${source.slice(classStart, classEnd)}\nreturn MutableChatNodeStore;`)([])
+  const store = new MutableChatNodeStore()
+  const order = ['node:1']
+  store.upsert([{ key: 'node:1', data: { status: 'running' } }])
+  const firstSnapshot = store.values()
+  store.upsert([{ key: 'node:1', data: { status: 'settled' } }])
+  const secondSnapshot = store.values()
+  assert.deepEqual(order, ['node:1'], 'content-only upserts keep the structural order reference valid')
+  assert.notEqual(secondSnapshot, firstSnapshot, 'values() publishes a new cached content snapshot after an in-place upsert')
+  assert.equal(secondSnapshot[0].data.status, 'settled')
+
+  const patched = patchConversationWorkTreeSource(source).source
+  assert.match(patched, /const nodeSnapshot = useSession\(\(s\) => s\.chat\.nodes\.values\(\)\)/u)
+  assert.match(patched, /buildConversationWorkTreeItems\(order, nodeStore\), \[order, nodeSnapshot\]/u)
+  assert.doesNotMatch(patched, /buildConversationWorkTreeItems\(order, nodeStore\), \[order, nodeStore\]/u)
+})
+
 test('guarded runtime patch is idempotent and includes disclosure, locale, and scroll-anchor contracts', async () => {
   const { patchConversationWorkTreeSource } = await import(pathToFileURL(patchModule).href)
   const source = await readFile(conversationRuntime, 'utf8')
@@ -133,13 +242,27 @@ test('guarded runtime patch is idempotent and includes disclosure, locale, and s
     '@harness-desktop/conversation-work-tree-flow-v2',
     '@harness-desktop/conversation-work-tree-manual-v3',
     '@harness-desktop/conversation-work-tree-recoverable-v4',
+    '@harness-desktop/conversation-work-tree-auto-complete-v5',
+    '@harness-desktop/conversation-work-tree-performance-v6',
+    '@harness-desktop/conversation-work-tree-snapshot-priority-v7',
+    'reduceConversationWorkTreeDisclosure',
+    'reduceConversationWorkTreeRenderCount',
+    'conversationWorkTreeRenderKeys',
+    'userControlled: false',
+    'type: "toggle"',
     'FS_EDIT_NOT_FOUND',
     '"row.retry": "未应用，需要重新定位"',
     '"row.retry": "Not applied; target needs to be located again"',
     'work-tree:flow:',
     'position:sticky',
     'scroll-margin-top:64px',
-    'buildConversationWorkTreeItems(order, nodeStore).map',
+    'DSH_DESKTOP_MEMOIZED_WORK_TREE',
+    'const nodeSnapshot = useSession((s) => s.chat.nodes.values())',
+    '[order, nodeSnapshot]',
+    'workTreeItems.map',
+    'item.callNodeKeys.get(selectedCallId)',
+    'conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey)',
+    'requestIdleCallback',
     '"aria-expanded": open',
     'hidden: !open',
     '"data-chat-anchor-key": item.key',
@@ -148,5 +271,5 @@ test('guarded runtime patch is idempotent and includes disclosure, locale, and s
     '"workTree.title": "Work activity"',
     '@media(prefers-reduced-motion:reduce)'
   ]) assert.match(once.source, new RegExp(contract.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'))
-  assert.doesNotMatch(once.source, /wasActive\.current|setOpen\(item\.active\)/u)
+  assert.doesNotMatch(once.source, /wasActive\.current|setOpen\(item\.active\)|children: item\.nodeKeys\.map|item\.nodeKeys\.slice\(0, renderedCount\)|buildConversationWorkTreeItems\(order, nodeStore\)\.map|\[order, nodeStore\]/u)
 })

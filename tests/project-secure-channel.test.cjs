@@ -1,7 +1,9 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const os = require('node:os')
 const path = require('node:path')
 const { createHash, sign: cryptoSign } = require('node:crypto')
+const { mkdtemp, readFile, rm } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const moduleUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-secure-channel.js')).href
@@ -86,22 +88,58 @@ test('ciphertext, signature, exact target, key, and epoch tampering fail closed'
   assert.throws(() => state.channel.open({ ...packet, recipientEncryptionKeyId: `key_${'Z'.repeat(43)}` }), /targets another encryption key/u)
 })
 
-test('authenticated packets are accepted exactly once and replay memory stays private', async () => {
-  const state = await fixture()
-  const packet = state.seal()
-  state.channel.open(packet)
-  assert.throws(() => state.channel.open(packet), error => error?.code === 'PROJECT_PACKET_REPLAY')
-  assert.equal(state.mod.PACKET_REPLAY_SCOPE, 'channel_instance')
-  const reconnected = new state.mod.ProjectSecureChannel({
-    projectRef: PROJECT, authorityEpoch: 3, targetDeviceRef: TARGET,
-    recipientEncryptionPrivateKey: state.recipient.encryption.privateKey,
-    resolveSenderSigningKey: () => state.sender.signing.publicKey,
-    now: () => 60_000_000,
-  })
-  assert.deepEqual(reconnected.open(packet).payload, { type: 'project.event', deviceRef: SENDER, taskRef: 'task_opaque' }, 'packet replay memory resets with a new channel; durable business idempotency must handle reconnects')
-  const projection = JSON.stringify(state.channel)
-  assert.equal(projection.includes(packet.packetRef), false)
-  assert.equal(projection.includes('PRIVATE KEY'), false)
+test('authenticated packets have durable crash-consistent receipts shared across channel instances', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'project-packet-replay-'))
+  try {
+    const replayFilePath = path.join(root, 'packet-receipts.json')
+    const state = await fixture({ replayFilePath })
+    const packet = state.seal()
+    state.channel.open(packet)
+    assert.throws(() => state.channel.open(packet), error => error?.code === 'PROJECT_PACKET_REPLAY')
+    assert.equal(state.mod.PACKET_REPLAY_SCOPE, 'durable_store')
+    const reconnected = new state.mod.ProjectSecureChannel({
+      projectRef: PROJECT, authorityEpoch: 3, targetDeviceRef: TARGET,
+      recipientEncryptionPrivateKey: state.recipient.encryption.privateKey,
+      resolveSenderSigningKey: () => state.sender.signing.publicKey,
+      now: () => 60_000_000,
+      replayFilePath,
+    })
+    assert.throws(() => reconnected.open(packet), error => error?.code === 'PROJECT_PACKET_REPLAY', 'a restart cannot reset the durable replay receipt')
+    const persisted = JSON.parse(await readFile(replayFilePath, 'utf8'))
+    assert.equal(persisted.receipts.length, 1)
+    assert.equal(persisted.receipts[0].packetRef, packet.packetRef)
+    const projection = JSON.stringify(state.channel)
+    assert.equal(projection.includes(packet.packetRef), false)
+    assert.equal(projection.includes('PRIVATE KEY'), false)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('durable replay capacity fails closed, then expired receipts are pruned without crossing authority epochs', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'project-packet-replay-bounds-'))
+  try {
+    const replayFilePath = path.join(root, 'packet-receipts.json')
+    let now = 70_000_000
+    const state = await fixture({ replayFilePath, replayCapacity: 1, now: () => now })
+    const first = state.seal('remote_wss', { sequence: 1 }, { createdAt: now, expiresAt: now + 1_000 })
+    const second = state.seal('remote_wss', { sequence: 2 }, { createdAt: now, expiresAt: now + 60_000 })
+    assert.equal(state.channel.open(first).payload.sequence, 1)
+    assert.throws(() => state.channel.open(second), error => error?.code === 'PROJECT_PACKET_REPLAY_CAPACITY')
+    now += 1_000
+    assert.equal(state.channel.open(second).payload.sequence, 2, 'expiry frees bounded capacity instead of evicting a live receipt')
+    const epochFour = new state.mod.ProjectSecureChannel({
+      projectRef: PROJECT, authorityEpoch: 4, targetDeviceRef: TARGET,
+      recipientEncryptionPrivateKey: state.recipient.encryption.privateKey,
+      resolveSenderSigningKey: () => state.sender.signing.publicKey,
+      now: () => now,
+      replayFilePath,
+      replayCapacity: 1,
+    })
+    assert.throws(() => epochFour.open(second), /scope, epoch, or exact target is invalid/u, 'epoch validation precedes replay receipt lookup')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('payload gate is deeply bounded, descriptor-safe, lossless, and permits shared non-cyclic JSON', async () => {

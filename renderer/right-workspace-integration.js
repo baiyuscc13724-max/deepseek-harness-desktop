@@ -581,15 +581,29 @@
     renderSchedules(opts.preserve ? { preserve: true } : {})
   }
 
+  let chromeState = null
   function syncChrome() {
     const active = controller.getActiveModeId()
+    const open = controller.isOpen()
     const browser = active === 'browser'
-    host.classList.toggle('is-home', active === 'home')
-    for (const node of browserOnly) node.classList.toggle('hidden', !browser)
-    for (const node of modeButtons) node.setAttribute('aria-pressed', String(node.dataset.rightWorkspaceMode === active))
-    quickButton?.setAttribute('aria-expanded', String(controller.isOpen()))
-    document.body.classList.toggle('browser-sidebar-open', controller.isOpen())
-    setBrowserContentVisible(controller.isOpen() && browser)
+    const dockWidth = active === 'home' ? 320 : controller.getWidth()
+    const browserContentVisible = open && browser
+    const previous = chromeState
+    chromeState = { active, open, dockWidth, browserContentVisible }
+    if (!previous || previous.dockWidth !== dockWidth) {
+      document.documentElement.style.setProperty('--dsh-right-workspace-dock-width', `${dockWidth}px`)
+    }
+    if (!previous || previous.active !== active) {
+      host.classList.toggle('is-home', active === 'home')
+      for (const node of browserOnly) node.classList.toggle('hidden', !browser)
+      for (const node of modeButtons) node.setAttribute('aria-pressed', String(node.dataset.rightWorkspaceMode === active))
+    }
+    if (!previous || previous.open !== open) {
+      document.body.classList.toggle('dsh-right-workspace-docked', open)
+      quickButton?.setAttribute('aria-expanded', String(open))
+      document.body.classList.toggle('browser-sidebar-open', open)
+    }
+    if (!previous || previous.browserContentVisible !== browserContentVisible) setBrowserContentVisible(browserContentVisible)
   }
 
   async function openMode(id, options = {}) {
@@ -713,6 +727,7 @@
     context = { sessionId }
     filesSnapshot = null
     schedulesSnapshot = null
+    if (!controller.isOpen()) return
     if (controller.getActiveModeId() === 'files') loadFiles()
     if (controller.getActiveModeId() === 'schedules') loadSchedules()
   }
@@ -738,6 +753,7 @@
   })
   controller.on('resize', ({ width }) => {
     document.documentElement.style.setProperty('--browser-panel-width', `${width}px`)
+    syncChrome()
   })
 
   setBrowserIntentBridgeState('pending')

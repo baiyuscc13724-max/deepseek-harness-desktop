@@ -523,6 +523,78 @@ test('task board surfaces the durable plan lifecycle, authorization preflight, a
   assert.match(source, /planLifecycleTitle: "计划生命周期"[\s\S]*?planLifecycleTitle: "Plan lifecycle"/u)
   assert.match(source, /\.dat-plan-steps\{[^}]*grid-template-columns:repeat\(3/u)
   assert.match(source, /@media\(max-width:620px\)\{[\s\S]*?\.dat-plan-lifecycle-head\{display:block\}[\s\S]*?\.dat-plan-steps,\.dat-preflight-grid\{grid-template-columns:1fr\}/u)
+  assert.match(source, /\.dat-handoff-history>summary\{[^}]*min-height:44px[^}]*\}[\s\S]*?\.dat-handoff-history>summary:focus-visible/u)
+  assert.match(source, /planAuthorizationHumanAttestedHint: "启用自动团队后[^\n]*不是 Host 验证证明。"/u)
+  assert.ok(source.includes('planAuthHumanAttested: "自动驾驶默认授权"'))
+  assert.ok(source.includes('planAuthHumanAttested: "Autopilot default authorization"'))
+  assert.ok(!source.includes('用户已确认（未获 Host 证明）'))
+})
+
+test('runtime CSS gives keyboard buttons a visible ring and mobile controls full touch targets', async () => {
+  const source = await clientSource()
+  assert.match(source, /\.dat-btn:focus,\.dat-btn:focus-visible\{outline:3px solid #2f7cf6;outline-offset:2px;box-shadow:0 0 0 4px rgba\(47,124,246,\.28\)\}/u)
+  assert.match(source, /@media\(max-width:620px\)\{\.dat-workspace-nav\{[^}]*\}\.dat-btn\{[^}]*min-height:44px[^}]*max-width:100%[^}]*overflow-wrap:anywhere[^}]*\}\.dat-workspace-nav button\{[^}]*min-height:44px[^}]*max-width:calc\(100vw - 28px\)/u)
+
+  const injectStylesSource = componentSource(source, ['injectStyles'])
+  const elements = new Map()
+  const document = {
+    getElementById(id) { return elements.get(id) || null },
+    createElement() { return { id: '', textContent: '' } },
+    head: { appendChild(node) { elements.set(node.id, node) } }
+  }
+  const css = Function('document', `${injectStylesSource}\ninjectStyles(); return document.getElementById("dsh-agent-teams-client-style").textContent;`)(document)
+  const focusRule = css.match(/\.dat-btn:focus,\.dat-btn:focus-visible\{([^}]*)\}/u)
+  assert.ok(focusRule, 'runtime stylesheet must include the activeElement focus fallback and focus-visible selector')
+  assert.match(focusRule[1], /outline:3px solid #[0-9a-f]{6}/iu)
+  assert.match(focusRule[1], /box-shadow:0 0 0 4px rgba\([^)]*,\.28\)/u)
+  assert.doesNotMatch(focusRule[1], /transparent|outline:none|outline:0/u)
+  const buttonRules = [...css.matchAll(/\.dat-btn\{([^}]*)\}/gu)].map(match => match[1])
+  assert.ok(buttonRules.some(rule => /min-height:44px/u.test(rule)), 'runtime mobile button rule must guarantee 44px height')
+  const navRules = [...css.matchAll(/\.dat-workspace-nav button\{([^}]*)\}/gu)].map(match => match[1])
+  assert.ok(navRules.some(rule => /min-height:44px/u.test(rule) && /max-width:calc\(100vw - 28px\)/u.test(rule)), 'runtime mobile navigation must stay tappable without escaping the viewport')
+})
+
+test('plan preflight renders safe defaults without warning styling and keeps mixed risk in Attention', async () => {
+  const source = await clientSource()
+  const label = componentSource(source, ['planAuthorizationLabel'])
+  const tone = componentSource(source, ['planAuthorizationTone'])
+  const lifecycle = componentSource(source, ['PlanLifecyclePanel'])
+  const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value !== null && value !== undefined && value !== false) })
+  const runtime = Function('h', 'formatTime', `${label}\n${tone}\n${lifecycle}\nreturn { PlanLifecyclePanel, planAuthorizationTone };`)(h, value => String(value))
+  const copy = {
+    planLifecycleTitle: 'Plan lifecycle', planLifecycleHint: 'Durable facts', planDraft: 'Draft', planCommitted: 'Committed', planActive: 'Active', planRevision: 'Revision {value}', planPauseEpoch: 'Pause {value}',
+    planAuthorization: 'Plan preflight', planAuthorizationSource: 'Authorization basis: {value}', planAuthorizationHumanAttestedHint: 'Default authorization is not Host-verified proof.',
+    planAuthHostVerified: 'Host verified', planAuthHumanAttested: 'Autopilot default authorization', planAuthUnknown: 'Attention · not verified',
+    planPreflightPermissions: 'Permissions', planPreflightFiles: 'File boundaries', planPreflightCost: 'Model cost', planPreflightEffects: 'External side effects', handoffTitle: 'Lead handoff', handoffNone: 'No handoff'
+  }
+  const t = (key, values = {}) => String(copy[key] || key).replace(/\{(\w+)\}/gu, (_, name) => String(values[name]))
+  const walk = (node, visit) => {
+    if (!node || typeof node !== 'object') return
+    visit(node)
+    for (const child of node.children || []) walk(child, visit)
+  }
+  const chips = tree => {
+    const found = []
+    walk(tree, node => { if (node.props?.className === 'dat-status-chip') found.push(node) })
+    return found
+  }
+  const text = node => (node.children || []).filter(value => typeof value === 'string').join(' ')
+  const safeAuthorization = { source: 'human_attested', permissions: 'human_attested', files: 'human_attested', cost: 'human_attested', externalSideEffects: 'human_attested' }
+  const safeTree = runtime.PlanLifecyclePanel({ t, team: { pauseEpoch: 0, plan: { phase: 'active', authorization: safeAuthorization } } })
+  const safeChips = chips(safeTree)
+  assert.equal(safeChips.length, 4)
+  assert.deepEqual(safeChips.map(node => node.props['data-status']), ['autopilot', 'autopilot', 'autopilot', 'autopilot'])
+  assert.ok(safeChips.every(node => text(node) === 'Autopilot default authorization'))
+  assert.ok(safeChips.every(node => node.props.role === 'status' && /: Autopilot default authorization$/u.test(node.props['aria-label'])))
+
+  const mixedAuthorization = { source: 'human_attested', permissions: 'unknown', files: 'forbidden', cost: 'host_verified', externalSideEffects: 'confirm_each' }
+  const mixedTree = runtime.PlanLifecyclePanel({ t, team: { pauseEpoch: 0, plan: { phase: 'draft', authorization: mixedAuthorization } } })
+  const mixedChips = chips(mixedTree)
+  assert.deepEqual(mixedChips.map(node => node.props['data-status']), ['attention', 'attention', 'host_verified', 'attention'])
+  assert.equal(text(mixedChips[2]), 'Host verified')
+  assert.ok([mixedChips[0], mixedChips[1], mixedChips[3]].every(node => text(node) === 'Attention · not verified'))
+  assert.ok([mixedChips[0], mixedChips[1], mixedChips[3]].every(node => !/Host verified/u.test(node.props['aria-label'])))
+  assert.deepEqual(['unknown', 'unavailable', 'forbidden', 'confirm_each', 'outcome_unknown'].map(runtime.planAuthorizationTone), ['attention', 'attention', 'attention', 'attention', 'attention'])
 })
 
 test('task details expose lease attempts, bounded interruption history, capability checks, and effect fences without claim credentials', async () => {

@@ -2,19 +2,27 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
-const { mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
-const { ensureAgentTeamsPlugin } = require('../electron/bridge/agent-teams-plugin-service.cjs')
+const { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } = require('node:fs/promises')
+const { ARTIFACT_FIXTURE_MARKER, ensureAgentTeamsPlugin, validateAgentTeamsArtifactRoot } = require('../electron/bridge/agent-teams-plugin-service.cjs')
 
-const bundledRoot = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams')
+const repositoryPluginRoot = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams')
 
-test('Agent Teams plugin installs into the Web profile idempotently', async () => {
+async function artifactFixture(root) {
+  const bundledRoot = path.join(root, 'artifact-fixture', 'dsh-agent-teams')
+  await cp(repositoryPluginRoot, bundledRoot, { recursive: true })
+  await writeFile(path.join(bundledRoot, ARTIFACT_FIXTURE_MARKER), JSON.stringify({ kind: 'agent-teams-packaged-artifact-fixture', version: 1 }))
+  return bundledRoot
+}
+
+test('Agent Teams plugin installs an explicitly marked artifact fixture into the Web profile idempotently', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-plugin-'))
   try {
-    const first = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot })
-    const second = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot })
+    const bundledRoot = await artifactFixture(root)
+    const first = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot, allowArtifactFixture: true, requireArtifact: true })
+    const second = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot, allowArtifactFixture: true, requireArtifact: true })
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.version, '1.0.53')
+    assert.equal(first.version, '1.0.54')
 
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-agent-teams/g) || []).length, 1)
@@ -34,6 +42,8 @@ test('Agent Teams plugin installs into the Web profile idempotently', async () =
     const manifest = JSON.parse(await readFile(path.join(first.destination, 'package.json'), 'utf8'))
     assert.equal(manifest.dependencies['@peculiar/x509'], '2.0.0')
     assert.equal(manifest.dependencies['reflect-metadata'], '0.2.2')
+    assert.equal(await readFile(path.join(first.destination, 'node_modules', 'reflect-metadata', 'package.json'), 'utf8').then(JSON.parse).then(value => value.name), 'reflect-metadata')
+    await assert.rejects(readFile(path.join(root, 'profiles', 'web', 'node_modules', 'reflect-metadata', 'package.json')), error => error?.code === 'ENOENT')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -42,17 +52,65 @@ test('Agent Teams plugin installs into the Web profile idempotently', async () =
 test('plugin install rolls back the previous directory when patch publication fails', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-rollback-'))
   try {
-    const first = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot })
+    const bundledRoot = await artifactFixture(root)
+    const first = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot, allowArtifactFixture: true, requireArtifact: true })
     const sentinel = path.join(first.destination, 'previous-install.txt')
     await writeFile(sentinel, 'keep me', 'utf8')
+    const sharedSentinel = path.join(root, 'profiles', 'web', 'node_modules', 'reflect-metadata', 'shared.txt')
+    await mkdir(path.dirname(sharedSentinel), { recursive: true })
+    await writeFile(sharedSentinel, 'shared package untouched', 'utf8')
     const patch = path.join(root, 'profiles', 'web', 'cordis.patch.yml')
     await rm(patch, { force: true })
     await mkdir(patch)
-    await assert.rejects(ensureAgentTeamsPlugin({ dshHome: root, bundledRoot }))
+    await assert.rejects(ensureAgentTeamsPlugin({ dshHome: root, bundledRoot, allowArtifactFixture: true, requireArtifact: true }))
     assert.equal(await readFile(sentinel, 'utf8'), 'keep me')
+    assert.equal(await readFile(sharedSentinel, 'utf8'), 'shared package untouched')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('dependency preparation failure preserves destination and shared packages and removes temporary publication', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-dependency-failure-'))
+  try {
+    const bundledRoot = await artifactFixture(root)
+    const first = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot, allowArtifactFixture: true, requireArtifact: true })
+    const installedSentinel = path.join(first.destination, 'installed.txt')
+    const sharedSentinel = path.join(root, 'profiles', 'web', 'node_modules', 'shared-package', 'shared.txt')
+    await writeFile(installedSentinel, 'installed remains', 'utf8')
+    await mkdir(path.dirname(sharedSentinel), { recursive: true })
+    await writeFile(sharedSentinel, 'shared remains', 'utf8')
+    const manifestFile = path.join(bundledRoot, 'package.json')
+    const manifest = JSON.parse(await readFile(manifestFile, 'utf8'))
+    manifest.dependencies['@definitely-missing/agent-teams-smoke'] = '1.0.0'
+    await writeFile(manifestFile, JSON.stringify(manifest), 'utf8')
+    await assert.rejects(ensureAgentTeamsPlugin({ dshHome: root, bundledRoot, allowArtifactFixture: true, requireArtifact: true }), /无法解析协作团队插件运行依赖/u)
+    assert.equal(await readFile(installedSentinel, 'utf8'), 'installed remains')
+    assert.equal(await readFile(sharedSentinel, 'utf8'), 'shared remains')
+    const rows = await readdir(path.dirname(first.destination))
+    assert.deepEqual(rows.filter(name => name.startsWith('dsh-agent-teams.desktop-') || name.startsWith('dsh-agent-teams.backup-')), [])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('default desktop startup mode still installs from a source checkout while gate mode rejects it', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-source-startup-'))
+  try {
+    const installed = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot: repositoryPluginRoot })
+    assert.equal(installed.version, '1.0.54')
+    assert.equal(await readFile(path.join(installed.destination, 'package.json'), 'utf8').then(JSON.parse).then(value => value.name), 'dsh-agent-teams')
+    await assert.rejects(ensureAgentTeamsPlugin({ dshHome: root, bundledRoot: repositoryPluginRoot, requireArtifact: true }), error => error?.code === 'AGENT_TEAMS_ARTIFACT_REQUIRED')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('artifact boundary rejects repository source and fake unpacked roots', async () => {
+  await assert.rejects(validateAgentTeamsArtifactRoot(repositoryPluginRoot), error => error?.code === 'AGENT_TEAMS_ARTIFACT_REQUIRED')
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-fake-artifact-'))
+  try {
+    const fake = path.join(root, 'app.asar.unpacked', 'plugins', 'dsh-agent-teams')
+    await cp(repositoryPluginRoot, fake, { recursive: true })
+    await mkdir(path.join(root, 'app.asar'))
+    await assert.rejects(validateAgentTeamsArtifactRoot(fake), error => error?.code === 'AGENT_TEAMS_ARTIFACT_MARKER_MISSING')
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
 
 test('desktop startup installs Agent Teams without patching the official runtime', async () => {
@@ -64,7 +122,7 @@ test('desktop startup installs Agent Teams without patching the official runtime
 })
 
 test('Agent Teams remains experimental and disabled by default', async () => {
-  const source = await readFile(path.join(bundledRoot, 'lib', 'index.js'), 'utf8')
+  const source = await readFile(path.join(repositoryPluginRoot, 'lib', 'index.js'), 'utf8')
   assert.match(source, /enabled:\s*false/u)
   assert.match(source, /maxMembers:\s*4/u)
   assert.match(source, /HARD_MAX_MEMBERS\s*=\s*8/u)

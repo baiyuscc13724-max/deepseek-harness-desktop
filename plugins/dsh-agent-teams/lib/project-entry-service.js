@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, createPrivate
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import * as nodeTls from "node:tls";
+import { consumeDesktopSecretCapability } from "./desktop-secret-capability.js";
 import { ProjectCollaborationAuthority, ROLE_PERMISSIONS, verifyMembershipGrant } from "./project-collaboration.js";
 import { PersistedProjectAuthority } from "./project-authority-service.js";
 import { EncryptedProjectStateStore } from "./project-state-store.js";
@@ -51,7 +52,11 @@ const ENTRY_ERROR_CODES = Object.freeze([
   "PROJECT_ENTRY_CLOSED",
   "PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN",
   "PROJECT_ENTRY_TASK_CONTEXT_INVALID",
+  "PROJECT_ENTRY_SECRET_UNAVAILABLE",
+  "PROJECT_ENTRY_SECRET_INVALID",
 ]);
+const SECRET_ENVELOPE_VERSION = 1;
+const SECRET_PURPOSES = Object.freeze({ device: "agent-teams/device/v1", pendingJoin: "agent-teams/pending-join/v1", lanAuthority: "agent-teams/lan-authority/v1" });
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -314,7 +319,7 @@ async function readJson(file, fallback) {
  * No transport capability that does not exist at the base layer is pretended.
  */
 export class ProjectEntryService {
-  constructor({ dshHome, WebSocketImpl, resolveWebSocket, tlsModule = nodeTls, now = Date.now } = {}) {
+  constructor({ dshHome, WebSocketImpl, resolveWebSocket, tlsModule = nodeTls, now = Date.now, secretCapability = consumeDesktopSecretCapability() } = {}) {
     this.dshHome = nonEmptyString(dshHome, "dshHome", 4_096);
     this.storages = join(this.dshHome, "storages");
     this.deviceFile = join(this.storages, DEVICE_FILE);
@@ -329,6 +334,8 @@ export class ProjectEntryService {
     this.tlsModule = tlsModule;
     if (typeof now !== "function") throw new TypeError("now must be a function");
     this.now = now;
+    if (!isRecord(secretCapability) || typeof secretCapability.protect !== "function" || typeof secretCapability.unprotect !== "function") throw new TypeError("secretCapability must provide protect and unprotect");
+    this.secretCapability = secretCapability;
     this.operationQueues = new Map();
     this.persisted = undefined;
     this.device = undefined;
@@ -583,7 +590,7 @@ export class ProjectEntryService {
           generatedKey = randomBytes(32);
           device.syncCacheKey = generatedKey.toString("base64url");
           try {
-            await atomicWriteJson(this.deviceFile, device);
+            await this.#writeDeviceFile(device);
             migrated = true;
           } catch (error) {
             delete device.syncCacheKey;
@@ -607,7 +614,7 @@ export class ProjectEntryService {
         };
         const peerDeviceRefs = async () => {
           assertCurrent(projectRef);
-          const fresh = await readJson(this.deviceFile, undefined);
+          const fresh = await this.#loadDeviceFile(true);
           const freshIdentity = validatedCollaboratorIdentity(fresh, this.now);
           if (freshIdentity === undefined) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peers are not currently available");
           const freshStamp = canonicalJson({ authority: fresh.authority, grant: fresh.device.grant, deviceRef: fresh.device.deviceRef, role: fresh.device.role, syncCacheKey: fresh.syncCacheKey, peers: fresh.peers });
@@ -620,7 +627,7 @@ export class ProjectEntryService {
         const peerResolver = async (opened) => {
           const metadata = strictOpenedPeerMetadata(opened);
           assertCurrent(projectRef);
-          const fresh = await readJson(this.deviceFile, undefined);
+          const fresh = await this.#loadDeviceFile(true);
           const freshIdentity = validatedCollaboratorIdentity(fresh, this.now);
           if (freshIdentity === undefined) throw entryError("PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN", "project sync peer is not currently authorized");
           const freshStamp = canonicalJson({ authority: fresh.authority, grant: fresh.device.grant, deviceRef: fresh.device.deviceRef, role: fresh.device.role, syncCacheKey: fresh.syncCacheKey, peers: fresh.peers });
@@ -781,6 +788,7 @@ export class ProjectEntryService {
       if (await this.#loadDeviceFile() !== undefined) {
         return { existing: true, status: await this.#buildStatus() };
       }
+      if (this.secretCapability.available === false) throw entryError("PROJECT_ENTRY_SECRET_UNAVAILABLE", "OS-backed project secret storage is unavailable");
       const secret = randomBytes(32).toString("base64url");
       const encryptionKey = randomBytes(32);
       const authorityKeys = generateKeyPairSync("ed25519");
@@ -819,7 +827,7 @@ export class ProjectEntryService {
         },
         peers: [],
       };
-      await atomicWriteJson(this.deviceFile, device);
+      await this.#writeDeviceFile(device);
       this.device = device;
       this.persisted = persisted;
       return { existing: false, status: await this.#buildStatus() };
@@ -896,7 +904,7 @@ export class ProjectEntryService {
         createdAt: this.now(),
         expiresAt: parsed.payload.expiresAt,
       };
-      await atomicWriteJson(this.pendingJoinFile, pending);
+      await this.#writePendingJoin(pending);
       const joinRequest = encodeExchange(JOIN_REQUEST_PREFIX, {
         version: 1,
         inviteCode: parsed.code,
@@ -926,7 +934,7 @@ export class ProjectEntryService {
         encryptionPublicKey: exportPublicKey(encryptionPublicKey),
       });
       device.peers = peers;
-      await atomicWriteJson(this.deviceFile, device);
+      await this.#writeDeviceFile(device);
       const relay = await this.#loadRelayFile();
       const lanAuthority = await this.#ensureLanAuthorityCredentials();
       const lanClient = await createProjectLanClientCredentials(lanAuthority, { deviceRef: redeemed.member.deviceRef, now: this.now() });
@@ -1060,7 +1068,7 @@ export class ProjectEntryService {
       // The collaborator can then enter the same credential-free WSS URL later,
       // without requiring a second invitation or another exchange of device keys.
       await atomicWriteJson(this.relayFile, { version: RELAY_VERSION, enabled: relayUrl !== "", relayUrl, roomRef });
-      await atomicWriteJson(this.deviceFile, device);
+      await this.#writeDeviceFile(device);
       await rm(this.pendingJoinFile, { force: true });
       this.device = device;
       return { projectRef: device.projectRef, member: response.member, status: await this.#buildStatus() };
@@ -1092,7 +1100,7 @@ export class ProjectEntryService {
       const message = descriptorSafeFrozenCopy(descriptors.message.value);
       assertNoTransportClaims(message);
       const currentDevice = await this.#requireDevice();
-      const freshDevice = await readJson(this.deviceFile, undefined);
+      const freshDevice = await this.#loadDeviceFile(true);
       if (!isRecord(freshDevice)
         || freshDevice.projectRef !== currentDevice.projectRef
         || freshDevice.kind !== currentDevice.kind
@@ -1239,7 +1247,7 @@ export class ProjectEntryService {
       const targetHost = assertPrivateBindHost(host || (currentHosts.includes(savedHost) ? savedHost : preferredLanHost()));
       if (automatic && !credentials.hosts.includes(targetHost)) {
         credentials = await refreshProjectLanServerCredentials(credentials, { hosts: [...new Set([...currentHosts, targetHost])], now: this.now() });
-        await atomicWriteJson(this.lanCredentialsFile, credentials);
+        await this.#writeLanCredentials(credentials);
       }
       const targetPort = port === undefined ? (credentials?.lastEndpoint?.port || 0) : port;
       const channel = await this.#createLocalSecureChannel(device);
@@ -1259,7 +1267,7 @@ export class ProjectEntryService {
       this.lanTransport = transport;
       if (automatic) {
         credentials.lastEndpoint = { host: transport.host, port: transport.boundPort };
-        await atomicWriteJson(this.lanCredentialsFile, credentials);
+        await this.#writeLanCredentials(credentials);
       }
       return this.#lanProjection();
     });
@@ -1506,29 +1514,110 @@ export class ProjectEntryService {
     return device;
   }
 
-  async #loadDeviceFile() {
-    if (this.device !== undefined) return this.device;
-    const device = await readJson(this.deviceFile, undefined);
-    if (device === undefined) return undefined;
-    const persistedCacheKey = exactBase64urlKey(device?.syncCacheKey);
-    const authorityShape = device?.kind !== "collaborator" && device?.syncCacheKey === undefined && typeof device?.secret === "string" && device.secret.length >= 24 && typeof device?.encryptionKey === "string";
-    const collaboratorShape = device?.kind === "collaborator" && (device.syncCacheKey === undefined || persistedCacheKey !== undefined) && isRecord(device.authority) && typeof device.authority.authorityPublicKey === "string";
-    persistedCacheKey?.fill(0);
-    if (!isRecord(device) || device.version !== DEVICE_VERSION || !isRecord(device.device) || (!authorityShape && !collaboratorShape)) {
+  async #sealSecrets(purpose, binding, secrets) {
+    if (this.secretCapability.available === false) throw entryError("PROJECT_ENTRY_SECRET_UNAVAILABLE", "OS-backed project secret storage is unavailable");
+    const plaintext = Buffer.from(JSON.stringify(secrets), "utf8");
+    try {
+      const sealed = await this.secretCapability.protect(plaintext, { purpose, binding });
+      if (typeof sealed !== "string" || sealed.length === 0) throw new Error("invalid sealed secret");
+      return { version: SECRET_ENVELOPE_VERSION, purpose, binding, sealed };
+    } catch (error) {
+      if (error?.code === "PROJECT_ENTRY_SECRET_INVALID") throw entryError("PROJECT_ENTRY_SECRET_INVALID", "project secret protection failed");
+      throw entryError("PROJECT_ENTRY_SECRET_UNAVAILABLE", "OS-backed project secret storage is unavailable");
+    } finally { plaintext.fill(0); }
+  }
+
+  async #openSecrets(envelope, purpose, binding) {
+    if (!isRecord(envelope) || envelope.version !== SECRET_ENVELOPE_VERSION || envelope.purpose !== purpose || envelope.binding !== binding || typeof envelope.sealed !== "string" || envelope.sealed.length === 0) {
+      throw entryError("PROJECT_ENTRY_SECRET_INVALID", "project secret envelope is invalid or was tampered with");
+    }
+    if (this.secretCapability.available === false) throw entryError("PROJECT_ENTRY_SECRET_UNAVAILABLE", "OS-backed project secret storage is unavailable");
+    let plaintext;
+    try {
+      plaintext = await this.secretCapability.unprotect(envelope.sealed, { purpose, binding });
+      const secrets = JSON.parse(plaintext.toString("utf8"));
+      if (!isRecord(secrets)) throw new Error("invalid secret payload");
+      return secrets;
+    } catch (error) {
+      if (error?.code === "PROJECT_ENTRY_SECRET_UNAVAILABLE") throw entryError("PROJECT_ENTRY_SECRET_UNAVAILABLE", "OS-backed project secret storage is unavailable");
+      throw entryError("PROJECT_ENTRY_SECRET_INVALID", "project secret envelope is invalid or was tampered with");
+    } finally { plaintext?.fill(0); }
+  }
+
+  async #writeDeviceFile(device) {
+    const publicDevice = { ...device, device: { ...device.device } };
+    const secrets = {
+      secret: device.secret,
+      encryptionKey: device.encryptionKey,
+      syncCacheKey: device.syncCacheKey,
+      signingPrivateKey: device.device?.signingPrivateKey,
+      encryptionPrivateKey: device.device?.encryptionPrivateKey,
+      lanKey: device.lan?.key,
+    };
+    delete publicDevice.secret; delete publicDevice.encryptionKey; delete publicDevice.syncCacheKey;
+    delete publicDevice.device.signingPrivateKey; delete publicDevice.device.encryptionPrivateKey;
+    if (isRecord(device.lan)) { publicDevice.lan = { ...device.lan }; delete publicDevice.lan.key; }
+    publicDevice.secretEnvelope = await this.#sealSecrets(SECRET_PURPOSES.device, device.projectRef, secrets);
+    await atomicWriteJson(this.deviceFile, publicDevice);
+  }
+
+  async #writePendingJoin(pending) {
+    const document = { ...pending };
+    delete document.signingPrivateKey; delete document.encryptionPrivateKey;
+    document.secretEnvelope = await this.#sealSecrets(SECRET_PURPOSES.pendingJoin, pending.projectRef, { signingPrivateKey: pending.signingPrivateKey, encryptionPrivateKey: pending.encryptionPrivateKey });
+    await atomicWriteJson(this.pendingJoinFile, document);
+  }
+
+  async #writeLanCredentials(credentials) {
+    const document = { ...credentials };
+    delete document.caPrivateKey; delete document.serverPrivateKey;
+    document.secretEnvelope = await this.#sealSecrets(SECRET_PURPOSES.lanAuthority, credentials.projectRef, { caPrivateKey: credentials.caPrivateKey, serverPrivateKey: credentials.serverPrivateKey });
+    await atomicWriteJson(this.lanCredentialsFile, document);
+  }
+
+  async #loadDeviceFile(refresh = false) {
+    if (!refresh && this.device !== undefined) return this.device;
+    const stored = await readJson(this.deviceFile, undefined);
+    if (stored === undefined) return undefined;
+    if (!isRecord(stored) || stored.version !== DEVICE_VERSION || !isRecord(stored.device) || typeof stored.projectRef !== "string") {
       throw entryError("PROJECT_ENTRY_NOT_CREATED", "project device credential file is invalid");
     }
+    const legacy = stored.secretEnvelope === undefined;
+    let device = stored;
+    if (!legacy) {
+      const secrets = await this.#openSecrets(stored.secretEnvelope, SECRET_PURPOSES.device, stored.projectRef);
+      device = { ...stored, device: { ...stored.device, signingPrivateKey: secrets.signingPrivateKey, encryptionPrivateKey: secrets.encryptionPrivateKey } };
+      delete device.secretEnvelope;
+      if (secrets.secret !== undefined) device.secret = secrets.secret;
+      if (secrets.encryptionKey !== undefined) device.encryptionKey = secrets.encryptionKey;
+      if (secrets.syncCacheKey !== undefined) device.syncCacheKey = secrets.syncCacheKey;
+      if (isRecord(stored.lan) && secrets.lanKey !== undefined) device.lan = { ...stored.lan, key: secrets.lanKey };
+    }
+    const persistedCacheKey = exactBase64urlKey(device.syncCacheKey);
+    const privateKeysValid = typeof device.device.signingPrivateKey === "string" && typeof device.device.encryptionPrivateKey === "string";
+    const authorityShape = device.kind !== "collaborator" && device.syncCacheKey === undefined && typeof device.secret === "string" && device.secret.length >= 24 && typeof device.encryptionKey === "string" && privateKeysValid;
+    const collaboratorShape = device.kind === "collaborator" && (device.syncCacheKey === undefined || persistedCacheKey !== undefined) && isRecord(device.authority) && typeof device.authority.authorityPublicKey === "string" && privateKeysValid;
+    persistedCacheKey?.fill(0);
+    if (!authorityShape && !collaboratorShape) throw entryError("PROJECT_ENTRY_NOT_CREATED", "project device credential file is invalid");
     if (device.kind === undefined) device.kind = "authority";
     if (!Array.isArray(device.peers)) device.peers = [];
-    this.device = device;
+    if (legacy) await this.#writeDeviceFile(device);
+    if (!refresh) this.device = device;
     return device;
   }
 
   async #loadPendingJoin() {
-    const pending = await readJson(this.pendingJoinFile, undefined);
-    if (pending === undefined) return undefined;
-    if (!isRecord(pending) || pending.version !== 1 || typeof pending.projectRef !== "string" || typeof pending.authorityKeyId !== "string" || !Number.isSafeInteger(pending.expiresAt)) {
+    const stored = await readJson(this.pendingJoinFile, undefined);
+    if (stored === undefined) return undefined;
+    if (!isRecord(stored) || stored.version !== 1 || typeof stored.projectRef !== "string" || typeof stored.authorityKeyId !== "string" || !Number.isSafeInteger(stored.expiresAt)) {
       throw entryError("PROJECT_ENTRY_INVITE_INVALID", "pending join request is invalid");
     }
+    const legacy = stored.secretEnvelope === undefined;
+    const secrets = legacy ? stored : await this.#openSecrets(stored.secretEnvelope, SECRET_PURPOSES.pendingJoin, stored.projectRef);
+    const pending = { ...stored, signingPrivateKey: secrets.signingPrivateKey, encryptionPrivateKey: secrets.encryptionPrivateKey };
+    delete pending.secretEnvelope;
+    if (typeof pending.signingPrivateKey !== "string" || typeof pending.encryptionPrivateKey !== "string") throw entryError("PROJECT_ENTRY_SECRET_INVALID", "pending project key material is invalid");
+    if (legacy) await this.#writePendingJoin(pending);
     return pending;
   }
 
@@ -1546,19 +1635,23 @@ export class ProjectEntryService {
 
   async #ensureLanAuthorityCredentials() {
     const device = await this.#requireAuthorityDevice();
-    const existing = await readJson(this.lanCredentialsFile, undefined);
-    if (isRecord(existing)
-      && existing.version === 1
-      && existing.projectRef === device.projectRef
-      && Array.isArray(existing.hosts)
-      && existing.hosts.length > 0
-      && typeof existing.caCert === "string"
-      && typeof existing.caPrivateKey === "string"
-      && typeof existing.serverCert === "string"
-      && typeof existing.serverPrivateKey === "string"
-      && Date.parse(existing.expiresAt) > this.now() + 24 * 60 * 60 * 1_000) return existing;
+    const stored = await readJson(this.lanCredentialsFile, undefined);
+    let existing;
+    let legacy = false;
+    if (stored !== undefined) {
+      if (!isRecord(stored) || stored.version !== 1 || stored.projectRef !== device.projectRef || !Array.isArray(stored.hosts) || stored.hosts.length === 0 || typeof stored.caCert !== "string" || typeof stored.serverCert !== "string") {
+        throw entryError("PROJECT_ENTRY_SECRET_INVALID", "project LAN credential file is invalid");
+      }
+      legacy = stored.secretEnvelope === undefined;
+      const secrets = legacy ? stored : await this.#openSecrets(stored.secretEnvelope, SECRET_PURPOSES.lanAuthority, stored.projectRef);
+      existing = { ...stored, caPrivateKey: secrets.caPrivateKey, serverPrivateKey: secrets.serverPrivateKey };
+      delete existing.secretEnvelope;
+      if (typeof existing.caPrivateKey !== "string" || typeof existing.serverPrivateKey !== "string") throw entryError("PROJECT_ENTRY_SECRET_INVALID", "project LAN private keys are invalid");
+      if (legacy) await this.#writeLanCredentials(existing);
+      if (Date.parse(existing.expiresAt) > this.now() + 24 * 60 * 60 * 1_000) return existing;
+    }
     const credentials = await createProjectLanAuthorityCredentials({ projectRef: device.projectRef, hosts: privateLanHosts(), now: this.now() });
-    await atomicWriteJson(this.lanCredentialsFile, credentials);
+    await this.#writeLanCredentials(credentials);
     return credentials;
   }
 

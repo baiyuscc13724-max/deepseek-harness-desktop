@@ -64,6 +64,7 @@ required.push(
   'docs/SECURITY-REVIEW-v1.0.51.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.52.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.53.zh-CN.md',
+  'docs/SECURITY-REVIEW-v1.0.54.zh-CN.md',
   'electron/bridge/native-p2p-host.cjs',
   'electron/bridge/sync-transports/native-p2p-adapter.cjs',
   'renderer/native-p2p.html',
@@ -80,6 +81,15 @@ required.push(
   'tests/mobile-release-version.test.cjs',
   'tests/mobile-appearance-ui.test.cjs',
   'tests/native-p2p-desktop.test.cjs'
+)
+
+required.push(
+  'electron/bridge/dsh-generated-profile-recovery.cjs',
+  'tests/dsh-generated-profile-recovery.test.cjs',
+  'scripts/model-settings-key-override-patch.mjs',
+  'tests/model-settings-key-override.test.cjs',
+  'tests/model-settings-key-override-runtime.test.cjs',
+  'tests/fixtures/model-settings-key-override-runtime.cjs'
 )
 
 // Agent Teams M2-M5 are executable product surfaces, not optional design files.
@@ -231,7 +241,7 @@ for (const contract of ['harness-desktop-version-button', 'harness-desktop-updat
 for (const contract of ['dataset.hdSettingsLayout', 'dataset.hdSettingsContent', 'dataset.hdSettingsOptions', 'width:min(1120px']) {
   if (!rendererScript.includes(contract)) throw new Error(`The functional settings dialog layout enhancement is missing: ${contract}`)
 }
-for (const contract of ['harness-desktop-mobile-sync-entry', 'mountMobileEntry', 'host.insertBefore(entry, settingsTrigger)', "request('open-mobile-sync')"]) {
+for (const contract of ['harness-desktop-mobile-sync-entry', 'mountMobileEntry', 'host.insertBefore(entry, settingsTrigger)', 'watchMobileEntryLayout(host, settingsTrigger)', 'settingsTrigger?.textContent?.trim()', 'grid-template-columns:minmax(0,1fr) 42px', 'activateMobileEntry', "open('open-mobile-sync')"]) {
   if (!rendererScript.includes(contract)) throw new Error(`The mobile sync quick entry beside Settings is missing: ${contract}`)
 }
 if (rendererScript.includes("row.id = 'harness-desktop-mobile-sync-row'") || rendererScript.includes('mountMobile(section)')) {
@@ -801,11 +811,15 @@ if (!(await readFile(path.join(root, 'electron/bridge/dsh-resolver.cjs'), 'utf8'
 }
 
 const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')
-for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledConversation', 'patchConversationWorkTreeSource', 'patchTimelineReferenceActionSource', 'patchInstalledTokenMeter', 'patchInstalledAgentLoop', 'patchInstalledSubagentContinuation', 'const iterator = stream[Symbol.asyncIterator]()', 'activation.accepted.size > 0 && agent.inbox.hasPending', 'internal team queue filtering', '[Agent team message ']) {
+for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledConversation', 'patchConversationWorkTreeSource', 'patchTimelineReferenceActionSource', 'patchInstalledTokenMeter', 'patchInstalledModelSettings', 'patchModelSettingsKeyOverrideSource', 'patchInstalledAgentLoop', 'patchInstalledSubagentContinuation', 'const iterator = stream[Symbol.asyncIterator]()', 'activation.accepted.size > 0 && agent.inbox.hasPending', 'internal team queue filtering', '[Agent team message ']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Guarded desktop runtime patch is missing: ${contract}`)
 }
+const modelSettingsKeyOverridePatch = await readFile(path.join(root, 'scripts/model-settings-key-override-patch.mjs'), 'utf8')
+for (const contract of ['@harness-desktop/model-settings-key-override-gated-v3', 'deriveOverrideKeyRef', 'transitionModelCredentialOverride', 'planModelCredentialOverride', 'managedProviderCredentialRef', 'credentialPlan.credential.op === "unset"', 'expectedRevision: appliedRevision', 'keyRestoreCompensationFailed', 'plannedOps.filter((op) => op.path[op.path.length - 1] === "apiKeyEnv")', 'modelSettingsManagedCredentialRef(row.entry.provider, row.apiKeyEnv, row.credential)', 'htmlFor: credentialInputId', 'autoComplete: "new-password"', 'style: { minHeight: 44, minWidth: 44 }', 'disabled: disabled || credentialMode === "restore" || keyGateClosed', '"aria-describedby": credentialMode === "override"', 'keyEnvironmentHint: "当前认证来自启动环境。直接输入或粘贴会建立独立的本机覆盖', 'keyUnavailable: "暂时无法确认凭据状态', 'keyRestoreEnvironment: "恢复启动环境"', 'launch-environment key is never shown or changed']) {
+  if (!modelSettingsKeyOverridePatch.includes(contract)) throw new Error(`Safe model API-key override patch is missing: ${contract}`)
+}
 const conversationWorkTreePatch = await readFile(path.join(root, 'scripts/conversation-work-tree-patch.mjs'), 'utf8')
-for (const contract of ['@harness-desktop/conversation-work-tree-v1', '@harness-desktop/conversation-work-tree-sticky-v1', '@harness-desktop/conversation-work-tree-flow-v2', '@harness-desktop/conversation-work-tree-manual-v3', '@harness-desktop/conversation-work-tree-recoverable-v4', 'FS_EDIT_NOT_FOUND', 'work-tree:flow:', 'position:sticky', 'scroll-margin-top:64px', 'buildConversationWorkTreeItems', 'ConversationWorkTreeGroup', '"aria-expanded": open', 'hidden: !open', 'workTree.status.error']) {
+for (const contract of ['@harness-desktop/conversation-work-tree-v1', '@harness-desktop/conversation-work-tree-sticky-v1', '@harness-desktop/conversation-work-tree-flow-v2', '@harness-desktop/conversation-work-tree-manual-v3', '@harness-desktop/conversation-work-tree-recoverable-v4', '@harness-desktop/conversation-work-tree-auto-complete-v5', 'reduceConversationWorkTreeDisclosure', 'userControlled: false', 'type: "toggle"', 'FS_EDIT_NOT_FOUND', 'work-tree:flow:', 'position:sticky', 'scroll-margin-top:64px', 'buildConversationWorkTreeItems', 'ConversationWorkTreeGroup', '"aria-expanded": open', 'hidden: !open', 'workTree.status.error']) {
   if (!conversationWorkTreePatch.includes(contract)) throw new Error(`Conversation work-tree patch is missing: ${contract}`)
 }
 const recoverableToolErrorPatch = await readFile(path.join(root, 'scripts/tool-recoverable-error-patch.mjs'), 'utf8')

@@ -1528,11 +1528,11 @@ function officialSettingsBootstrap() {
     .hd-update-progress-detail { margin:0; color:var(--dsw-alias-label-secondary,#667085); font-size:10px; line-height:1.45; overflow-wrap:anywhere; }
     @media (max-width:640px) { #harness-desktop-version-button { right:5px; bottom:1px; } #harness-desktop-update-center { padding:10px; } .hd-update-center-dialog { width:100%; max-height:100%; border-radius:14px; } .hd-update-center-head, .hd-update-center-toolbar, .hd-update-items { padding-left:14px; padding-right:14px; } .hd-update-item-head { flex-direction:column; } .hd-update-item-badges { justify-content:flex-start; } }
     @media (prefers-reduced-motion:reduce) { #harness-desktop-version-button, #harness-desktop-update-center { transition:none; } }
-    [data-hd-mobile-entry-host="true"] { display:flex!important; align-items:center; gap:4px; min-width:0; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] { flex-direction:row!important; justify-content:flex-start!important; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] > button:not(#harness-desktop-mobile-sync-entry) { order:1; flex:0 1 auto; width:auto; min-width:0; margin-left:0; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] > #harness-desktop-mobile-sync-entry { order:2; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="true"] { flex-direction:column!important; gap:0; }
+    [data-hd-mobile-entry-host="true"] { align-items:center; gap:4px; min-width:0; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] { display:grid!important; grid-template-columns:minmax(0,1fr) 42px; justify-content:stretch!important; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] > button:not(#harness-desktop-mobile-sync-entry) { grid-column:1; grid-row:1; width:100%!important; min-width:0; margin-left:0; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] > #harness-desktop-mobile-sync-entry { grid-column:2; grid-row:1; }
+    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="true"] { display:flex!important; flex-direction:column!important; gap:0; }
     #harness-desktop-mobile-sync-entry { position:relative; box-sizing:border-box; display:inline-flex; flex:none; align-items:center; justify-content:center; width:42px!important; min-width:42px; height:42px!important; min-height:42px; margin:4px 0 4px 4px!important; border:0; border-radius:12px!important; padding:0!important; color:var(--dsw-alias-label-secondary,#667085); background:transparent; font:inherit; cursor:pointer; }
     #harness-desktop-mobile-sync-entry:hover { color:var(--dsw-alias-label-primary,#20242b); background:var(--dsw-alias-interactive-bg-hover,#eef1f5); }
     #harness-desktop-mobile-sync-entry:focus-visible { outline:2px solid var(--dsw-alias-brand-primary,#315efb); outline-offset:2px; }
@@ -2255,6 +2255,44 @@ function officialSettingsBootstrap() {
     }) || null
   }
 
+  const mobileEntryCompactForWidth = (width, settingsLabelVisible = false) => !settingsLabelVisible && Number.isFinite(width) && width > 0 && width <= 72
+  let mobileEntryLayoutWidth = 0
+  const syncMobileEntryLayout = (host, settingsTrigger = null, observedWidth) => {
+    const width = Number.isFinite(observedWidth)
+      ? observedWidth
+      : typeof host?.getBoundingClientRect === 'function' ? host.getBoundingClientRect().width : 0
+    mobileEntryLayoutWidth = width
+    const settingsLabelVisible = Boolean(settingsTrigger?.textContent?.trim())
+    if (width <= 0 && !settingsLabelVisible) return
+    const compact = String(mobileEntryCompactForWidth(width, settingsLabelVisible))
+    if (host.dataset.hdMobileCompact !== compact) host.dataset.hdMobileCompact = compact
+  }
+  let mobileEntryLayoutHost = null
+  let mobileEntryLayoutTrigger = null
+  let mobileEntryResizeObserver = null
+  const watchMobileEntryLayout = (host, settingsTrigger) => {
+    if (mobileEntryLayoutHost === host && mobileEntryLayoutTrigger === settingsTrigger) return
+    mobileEntryResizeObserver?.disconnect()
+    mobileEntryLayoutHost = host
+    mobileEntryLayoutTrigger = settingsTrigger
+    mobileEntryLayoutWidth = 0
+    mobileEntryResizeObserver = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(entries => {
+          if (mobileEntryLayoutHost !== host || mobileEntryLayoutTrigger !== settingsTrigger) return
+          const hostEntry = entries.find(entry => entry.target === host)
+          syncMobileEntryLayout(host, settingsTrigger, hostEntry?.contentRect?.width ?? mobileEntryLayoutWidth)
+        })
+      : null
+    mobileEntryResizeObserver?.observe(host)
+    mobileEntryResizeObserver?.observe(settingsTrigger)
+    syncMobileEntryLayout(host, settingsTrigger)
+  }
+  const activateMobileEntry = (event, open = request) => {
+    event?.preventDefault?.()
+    event?.stopPropagation?.()
+    open('open-mobile-sync')
+  }
+
   const mountMobileEntry = () => {
     document.querySelector('#harness-desktop-mobile-sync-row')?.remove()
     const settingsTrigger = findSettingsTrigger()
@@ -2271,7 +2309,8 @@ function officialSettingsBootstrap() {
       entry.setAttribute('aria-haspopup', 'dialog')
       entry.setAttribute('aria-describedby', 'harness-desktop-mobile-sync-tooltip')
       entry.innerHTML = '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="5" y="2.5" width="10" height="15" rx="2.2" stroke="currentColor" stroke-width="1.45"/><path d="M8.2 5.1h3.6M9.2 14.9h1.6" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/></svg><span class="hd-mobile-entry-dot" aria-hidden="true"></span>'
-      entry.addEventListener('click', () => request('open-mobile-sync'))
+      entry.addEventListener('pointerdown', event => event.stopPropagation())
+      entry.addEventListener('click', activateMobileEntry)
       const showTooltip = () => {
         const tooltip = document.querySelector('#harness-desktop-mobile-sync-tooltip')
         if (!tooltip || typeof entry.getBoundingClientRect !== 'function') return
@@ -2306,9 +2345,8 @@ function officialSettingsBootstrap() {
       delete previousHost.dataset.hdMobileCompact
     }
     if (entry.parentElement !== host || entry.nextSibling !== settingsTrigger) host.insertBefore(entry, settingsTrigger)
-    const triggerRect = typeof settingsTrigger.getBoundingClientRect === 'function' ? settingsTrigger.getBoundingClientRect() : null
     host.dataset.hdMobileEntryHost = 'true'
-    host.dataset.hdMobileCompact = String(Boolean(triggerRect && triggerRect.width > 0 && triggerRect.width <= 44))
+    watchMobileEntryLayout(host, settingsTrigger)
     paintMobile()
   }
 

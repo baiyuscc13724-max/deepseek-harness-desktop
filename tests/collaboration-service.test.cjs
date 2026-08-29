@@ -287,6 +287,38 @@ test('concurrent service instances share secrets and preserve both inbox mutatio
   assert.throws(() => validateCollaborationState(tampered), /audit chain is invalid/u)
 }))
 
+test('same dedupe key is admitted once across isolated service instances and becomes eligible after TTL', async () => withService(async ({ filePath }) => {
+  let now = 6_500_000
+  const firstModule = await import(`${serviceUrl}?dedupe-instance=first`)
+  const secondModule = await import(`${serviceUrl}?dedupe-instance=second`)
+  const first = new firstModule.AgentCollaborationService(filePath, { now: () => now })
+  const second = new secondModule.AgentCollaborationService(filePath, { now: () => now })
+  const teams = document(now)
+  await Promise.all([first.syncTeams(teams), second.syncTeams(teams)])
+  const firstTarget = first.discover({ callerSessionId: 'sender-private', rootLeadSessionId: 'root-private', resourceRef: 'src/owned.js' })[0]
+  const secondTarget = second.discover({ callerSessionId: 'sender-private', rootLeadSessionId: 'root-private', resourceRef: 'src/owned.js' })[0]
+  assert.equal(firstTarget.routeRef, secondTarget.routeRef)
+  const request = routeRef => ({
+    callerSessionId: 'sender-private', rootLeadSessionId: 'root-private', routeRef,
+    reason: 'UNIQUE_OWNER', evidence: { resourceRef: 'src/owned.js' }, message: 'Exactly one durable inbox record.'
+  })
+  const results = await Promise.all([first.submitIntent(request(firstTarget.routeRef)), second.submitIntent(request(secondTarget.routeRef))])
+  assert.deepEqual(results.map(result => result.admitted).sort(), [false, true])
+  assert.equal(results.find(result => !result.admitted).code, 'COOLDOWN')
+  let persisted = JSON.parse(await readFile(filePath, 'utf8'))
+  assert.equal(persisted.inbox.length, 1)
+  assert.equal(persisted.audit.filter(event => event.type === 'intent-admitted').length, 1)
+  assert.equal(persisted.audit.filter(event => event.decisionCode === 'COOLDOWN').length, 1)
+
+  now += 90_000
+  await second.syncTeams(document(now))
+  const refreshedTarget = second.discover({ callerSessionId: 'sender-private', rootLeadSessionId: 'root-private', resourceRef: 'src/owned.js' })[0]
+  const afterTtl = await second.submitIntent(request(refreshedTarget.routeRef))
+  assert.equal(afterTtl.admitted, true)
+  persisted = JSON.parse(await readFile(filePath, 'utf8'))
+  assert.equal(persisted.inbox.length, 2, 'expired cooldown changes eligibility without deleting retained inbox history')
+}))
+
 test('state validation migrates legacy state and rejects unsupported persisted fields', async () => {
   const { validateCollaborationState } = await load()
   const legacy = { version: 1, secrets: { directory: 'a'.repeat(24), broker: 'b'.repeat(24), scope: 'c'.repeat(24) }, presence: [], inbox: [], audit: [] }

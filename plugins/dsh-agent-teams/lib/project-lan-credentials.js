@@ -29,7 +29,7 @@ function nonEmptyString(value, field, max = 2_000) {
 }
 
 function pemPrivateKey(buffer) {
-  const body = Buffer.from(buffer).toString("base64").match(/.{1,64}/gu)?.join("\n") ?? "";
+  const body = buffer.toString("base64").match(/.{1,64}/gu)?.join("\n") ?? "";
   return `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----\n`;
 }
 
@@ -59,7 +59,9 @@ async function generateKeys() {
 }
 
 async function exportKey(key) {
-  return pemPrivateKey(await webcrypto.subtle.exportKey("pkcs8", key));
+  const exported = Buffer.from(await webcrypto.subtle.exportKey("pkcs8", key));
+  try { return pemPrivateKey(exported); }
+  finally { exported.fill(0); }
 }
 
 async function importSigningKey(pem, field) {

@@ -6,6 +6,7 @@ const { EventEmitter } = require('node:events')
 const { Readable } = require('node:stream')
 const { mkdtemp, rm } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
+const { createProjectSecretCapability } = require('./fixtures/project-secret-capability.cjs')
 
 const lib = name => pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', name)).href
 const taskStatePath = '/api/agent-teams/project/tasks/state'
@@ -72,9 +73,10 @@ async function fixture() {
   ])
   const authorityHome = await mkdtemp(path.join(os.tmpdir(), 'business-api-authority-'))
   const collaboratorHome = await mkdtemp(path.join(os.tmpdir(), 'business-api-collaborator-'))
+  const secretCapability = createProjectSecretCapability()
   const now = Date.now()
-  const authorityEntry = new entryMod.ProjectEntryService({ dshHome: authorityHome, now: () => now })
-  const collaboratorEntry = new entryMod.ProjectEntryService({ dshHome: collaboratorHome, now: () => now })
+  const authorityEntry = new entryMod.ProjectEntryService({ dshHome: authorityHome, secretCapability, now: () => now })
+  const collaboratorEntry = new entryMod.ProjectEntryService({ dshHome: collaboratorHome, secretCapability, now: () => now })
   await authorityEntry.createProject({ projectName: 'Business API', displayName: 'Owner' })
   await authorityEntry.startLan({ host: '127.0.0.1' })
   const invite = await authorityEntry.createInvite({ displayName: 'Contributor', role: 'contributor' })

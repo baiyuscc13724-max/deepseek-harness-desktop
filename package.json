@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.53",
+  "version": "1.0.54",
   "private": false,
   "description": "Open-source Windows and macOS desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, mobile pairing, packaged self-test, and release gates.",
   "author": {
@@ -19,6 +19,11 @@
     "dist:mac": "node scripts/build-release.mjs",
     "verify": "node scripts/verify-static.mjs && npm run test:smoke",
     "test:smoke": "node --test tests/*.test.cjs",
+    "test:performance": "npm run test:performance:synthetic && npm run test:performance:product",
+    "test:performance:synthetic": "node --test tests/session-switch-performance-budget.test.cjs",
+    "test:performance:product": "node --test tests/session-list-metadata-performance.test.cjs tests/session-persistence-performance.test.cjs tests/conversation-work-tree.test.cjs tests/plugin-client-lifecycle-performance.test.cjs tests/renderer-observer-performance.test.cjs tests/right-workspace-ui.test.cjs",
+    "benchmark:session": "node scripts/session-switch-performance-benchmark.mjs",
+    "benchmark:session:quick": "node scripts/session-switch-performance-benchmark.mjs --quick",
     "test:browser-electron": "electron tests/fixtures/browser-navigation-guard-electron.cjs",
     "test:timeline-electron": "node scripts/test-session-timeline-electron.cjs",
     "test:right-workspace-electron": "node scripts/test-right-workspace-electron.cjs",

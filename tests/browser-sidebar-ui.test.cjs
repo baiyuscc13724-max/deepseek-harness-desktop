@@ -67,7 +67,7 @@ test('Codex-style background browser uses an isolated login profile with an opti
   }
 })
 
-test('Codex-style browser pane owns a full-height overlay without shrinking the workbench', async () => {
+test('Codex-style browser pane docks as a third column with a narrow-window overlay fallback', async () => {
   const [workspaceStyles, shellStyles, controller, renderer, main, app] = await Promise.all([
     readFile(path.join(root, 'renderer', 'right-workspace.css'), 'utf8'),
     readFile(path.join(root, 'renderer', 'styles.css'), 'utf8'),
@@ -83,7 +83,9 @@ test('Codex-style browser pane owns a full-height overlay without shrinking the 
   assert.match(workspaceStyles, /\.dsh-right-workspace:not\(\.is-home\)::before/u)
   assert.match(workspaceStyles, /body\.dsh-right-workspace-open #runtimeView \{ width:100%; \}/u)
   assert.match(workspaceStyles, /body\.dsh-right-workspace-open \.browser-quick-button \{\s*z-index:\s*9/u)
-  assert.doesNotMatch(workspaceStyles, /transition:[^;]*width/u)
+  assert.match(workspaceStyles, /#runtimeView \{ transition:width \.22s ease,height \.16s ease; \}/u)
+  assert.match(workspaceStyles, /@media \(min-width:901px\)[\s\S]*body\.dsh-right-workspace-docked #runtimeView \{[\s\S]{0,180}width:calc\(100% - min\(/u)
+  assert.match(workspaceStyles, /body\.dsh-right-workspace-docked \.runtime-status,[\s\S]{0,100}body\.dsh-right-workspace-docked \.terminal-panel/u)
   assert.match(workspaceStyles, /--dsh-right-workspace-width:\s*640px/u)
   assert.match(shellStyles, /--browser-panel-width:640px/u)
   assert.match(shellStyles, /\.official-shell \{[^\n]*background:var\(--shell-workbench-background,var\(--shell-layer,#fff\)\)/u)

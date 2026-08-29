@@ -38,7 +38,7 @@ test('only explicit absolute targets may fall back to local read-only preview', 
   for (const target of ['D:\\outside\\chapter.txt', 'D:/outside/image.png', 'file:///D:/outside/report.pdf', 'file://localhost/D:/outside/report.pdf', '/tmp/outside/video.mp4']) {
     assert.equal(isExplicitLocalTarget(target), true, `${target} must be eligible for explicit local preview`)
   }
-  for (const target of ['chapter.txt', 'drafts/chapter.txt', '../outside.txt', 'D:relative.txt', '\\\\server\\share\\audio.mp3', '//server/share/file.txt', 'file://server/share/file.txt', 'https://example.com/file.txt']) {
+  for (const target of ['chapter.txt', 'drafts/chapter.txt', '../outside.txt', 'D:relative.txt', '\\\\server\\share\\audio.mp3', '//server/share/file.txt', 'file://server/share/file.txt', 'https://example.com/file.txt', '/api/desktop-files/download?sessionId=session-1&path=notes.md', '/settings?tab=files']) {
     assert.equal(isExplicitLocalTarget(target), false, `${target} must remain workspace-bound`)
   }
 })
@@ -60,6 +60,10 @@ test('document preview falls back locally only after an absolute target escapes 
     localPreview: async () => { throw new Error('must not read locally') }
   }), workspace)
   await assert.rejects(loadDocumentPreview('../outside.txt', {
+    workspacePreview: async () => { throw escaped },
+    localPreview: async () => { localCalls += 1 }
+  }), error => error === escaped)
+  await assert.rejects(loadDocumentPreview('/api/desktop-files/download?sessionId=session-1&path=notes.md', {
     workspacePreview: async () => { throw escaped },
     localPreview: async () => { localCalls += 1 }
   }), error => error === escaped)
@@ -160,12 +164,15 @@ test('Desktop shell exposes one unified right workspace with browser, files, sch
   assert.doesNotMatch(integration, /innerHTML|executeJavaScript|openExternal|file:\/\//u)
   assert.match(html, /img-src[^;]*http:\/\/127\.0\.0\.1:\*/u)
   assert.match(html, /media-src[^;]*http:\/\/127\.0\.0\.1:\*/u)
-  assert.match(styles, /--dsh-right-workspace-home-width:\s*280px/u)
+  assert.match(styles, /--dsh-right-workspace-home-width:\s*320px/u)
   assert.match(styles, /\.dsh-right-workspace\.browser-sidebar\.is-home \{[\s\S]{0,120}width:\s*min\(var\(--dsh-right-workspace-home-width\),\s*100vw\)/u)
   assert.match(styles, /\.dsh-right-workspace\.is-home \.dsh-right-workspace__handle \{ display:none; \}/u)
   assert.match(styles, /body\.dsh-right-workspace-open #runtimeView \{ width:100%; \}/u)
   assert.match(styles, /body\.dsh-right-workspace-open \.runtime-status \{ right:0; \}/u)
-  assert.doesNotMatch(styles, /#runtimeView \{ width:calc\(100% -/u)
+  assert.match(styles, /@media \(min-width:901px\)[\s\S]*body\.dsh-right-workspace-docked #runtimeView \{[\s\S]{0,180}width:calc\(100% - min\(/u)
+  assert.match(styles, /body\.dsh-right-workspace-docked \.runtime-status,[\s\S]{0,100}body\.dsh-right-workspace-docked \.terminal-panel/u)
+  assert.match(integration, /classList\.toggle\('dsh-right-workspace-docked', open\)/u)
+  assert.match(integration, /--dsh-right-workspace-dock-width/u)
   assert.match(shellStyles, /body\.browser-sidebar-open #runtimeView \{ width:100%; \}/u)
   assert.match(shellStyles, /body\.browser-sidebar-open \.runtime-status \{ right:0; \}/u)
   assert.match(shellStyles, /body\.dsh-right-workspace-open \.terminal-panel,body\.browser-sidebar-open \.terminal-panel \{ right:0; \}/u)
@@ -192,7 +199,10 @@ test('Desktop shell exposes one unified right workspace with browser, files, sch
   assert.match(app, /target\.hostname === 'preview-local'/u)
   assert.match(app, /harnessDesktopRightWorkspace\?\.openLocalDocument/u)
   assert.match(links, /route\('preview-local'/u)
+  assert.match(links, /const anchorPath = anchor =>/u)
   assert.match(links, /anchor\.getAttribute\('href'\)/u)
+  assert.match(links, /anchor\.hasAttribute\('download'\)/u)
+  assert.match(links, /else delete anchor\.dataset\.hdLocalTarget/u)
   assert.match(links, /withoutLocation/u)
   assert.match(links, /const nativeFileButton = code\.querySelector\(':scope > button'\)/u)
   assert.match(links, /mark\(nativeFileButton, target\)/u)
@@ -296,4 +306,34 @@ test('right workspace data panes preserve scrollTop only across filter/refresh r
   assert.match(integration, /if \(id === 'schedules'\) loadSchedules\(\)/u)
   assert.match(integration, /^  renderFiles\(\)$/m)
   assert.match(integration, /^  renderSchedules\(\)$/m)
+})
+
+test('desktop shell coalesces resize work and pauses hidden workspace refreshes', async () => {
+  const [workspace, integration, app] = await Promise.all([
+    source('renderer/right-workspace.js'),
+    source('renderer/right-workspace-integration.js'),
+    source('renderer/app.js')
+  ])
+
+  // Repeated state snapshots do not redraw or broadcast, and pointermove bursts
+  // are collapsed into one width mutation per animation frame.
+  assert.match(workspace, /if \(isOpen === wasOpen\) return isOpen/u)
+  assert.match(workspace, /if \(width === previous\) return width/u)
+  assert.match(workspace, /if \(!dragFrame\) dragFrame = requestAnimationFrame\(flushDragWidth\)/u)
+  assert.match(workspace, /if \(dragFrame\) cancelAnimationFrame\(dragFrame\)[\s\S]{0,80}flushDragWidth\(\)/u)
+
+  // Browser state events may be frequent; only changed chrome fields touch DOM
+  // or cross the content-visibility IPC boundary.
+  assert.match(integration, /let chromeState = null/u)
+  assert.match(integration, /previous\.dockWidth !== dockWidth/u)
+  assert.match(integration, /previous\.active !== active/u)
+  assert.match(integration, /previous\.open !== open/u)
+  assert.match(integration, /previous\.browserContentVisible !== browserContentVisible/u)
+  assert.match(integration, /if \(!controller\.isOpen\(\)\) return[\s\S]{0,120}loadFiles\(\)/u)
+
+  // Re-running the settings mount against the same sidebar no longer forces a
+  // layout read. ResizeObserver supplies contentRect and dataset writes dedupe.
+  assert.match(app, /if \(mobileEntryLayoutHost === host && mobileEntryLayoutTrigger === settingsTrigger\) return/u)
+  assert.match(app, /hostEntry\?\.contentRect\?\.width \?\? mobileEntryLayoutWidth/u)
+  assert.match(app, /if \(host\.dataset\.hdMobileCompact !== compact\) host\.dataset\.hdMobileCompact = compact/u)
 })

@@ -48,6 +48,21 @@
       return text
     }
 
+    const keepsRuntimeNavigation = anchor => {
+      const href = String(anchor.getAttribute('href') || '').trim()
+      return !href || anchor.hasAttribute('download') || /^(?:\/(?!\/)|[?#])/u.test(href)
+    }
+
+    const anchorPath = anchor => {
+      const href = String(anchor.getAttribute('href') || '').trim()
+      // Root-relative, protocol-relative, query-only, fragment-only, and explicit
+      // download links are web targets. Reinterpreting `/api/...` as a POSIX path
+      // makes Windows resolve it as (for example) `D:\\api\\...`.
+      // Explicit POSIX files remain available through inline code or file:// URLs.
+      if (keepsRuntimeNavigation(anchor) || /^\/\//u.test(href)) return ''
+      return localPath(href)
+    }
+
     const route = (host, params = {}) => {
       const query = new URLSearchParams(params)
       window.location.href = `harness-desktop://${host}?${query}`
@@ -66,8 +81,9 @@
     const decorate = root => {
       const anchors = root?.matches?.('a[href]') ? [root] : root?.querySelectorAll?.('a[href]') || []
       for (const anchor of anchors) {
-        const target = localPath(anchor.getAttribute('href'))
+        const target = anchorPath(anchor)
         if (target) mark(anchor, target)
+        else delete anchor.dataset.hdLocalTarget
       }
 
       const codes = root?.matches?.('code') ? [root] : root?.querySelectorAll?.('code') || []
@@ -109,7 +125,12 @@
       }
       const anchor = event.target.closest?.('a[href]')
       if (anchor) {
-        const href = anchor.href || anchor.getAttribute('href') || ''
+        const rawHref = String(anchor.getAttribute('href') || '').trim()
+        // Keep runtime navigation and authenticated download endpoints inside the
+        // current document; anchor.href would otherwise expand them to http(s)
+        // and incorrectly send them to the system browser.
+        if (keepsRuntimeNavigation(anchor)) return
+        const href = anchor.href || rawHref
         if (/^https?:/i.test(href)) {
           event.preventDefault()
           event.stopPropagation()

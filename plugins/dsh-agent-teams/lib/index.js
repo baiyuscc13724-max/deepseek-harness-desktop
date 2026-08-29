@@ -8,6 +8,7 @@ import { createUserMessage, HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COLLABORATION_REASONS } from "./collaboration-broker.js";
 import { AgentCollaborationService } from "./collaboration-service.js";
+import { consumeDesktopAuthorizationCapability } from "./desktop-authorization-capability.js";
 import { consumeDesktopGitCapability } from "./desktop-git-capability.js";
 import { ProjectEntryService } from "./project-entry-service.js";
 import { ProjectFoundationsRuntime } from "./project-foundations-runtime.js";
@@ -93,7 +94,12 @@ const BOOTSTRAP_MEMBER_REF_KEYS = new Set(["key", "name", "status", "memberId", 
 const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason", "result", "submission", "acceptance", "attempt", "claimId", "leaseEpoch", "attemptHistory", "interruptionHistory", "checkpoint", "nextStep", "capabilities", "externalEffects"]);
 const TASK_RESULT_KEYS = new Set(["text", "reportedAt", "truncated", "taskId", "claimId", "leaseEpoch", "reportedBy"]);
 const TASK_SUBMISSION_KEYS = new Set(["taskId", "claimId", "leaseEpoch", "submittedAt", "submittedBy", "source"]);
-const TASK_ACCEPTANCE_KEYS = new Set(["taskId", "claimId", "leaseEpoch", "acceptedAt", "acceptedBy"]);
+const TASK_ACCEPTANCE_KEYS = new Set(["taskId", "claimId", "leaseEpoch", "acceptedAt", "acceptedBy", "ownerEpoch"]);
+const RESOLVE_UNKNOWN_AUTHORIZATION_TOOL = "team_task_external_effect";
+const RESOLVE_UNKNOWN_AUTHORIZATION_TTL_MS = 2 * 60 * 1_000;
+const MAX_RESOLVE_UNKNOWN_AUTHORIZATIONS = 4_096;
+const RESOLVE_UNKNOWN_AUTHORIZATION_KEYS = new Set(["authorizationId", "tool", "rootSessionId", "turnKey", "teamId", "taskId", "effectName", "attemptId", "outcome", "pauseEpoch", "teamRevision", "canonicalArgumentsHash", "expiresAt"]);
+const RESOLVE_UNKNOWN_AUTHORIZATION_BRAND = Symbol("agent-teams.resolve-unknown-authorization");
 const TEAM_CLOSURE_KEYS = new Set(["outcome", "closedAt", "attemptedAt", "reason", "forced", "cancelledTaskIds", "failures"]);
 const TEAM_CLOSURE_OUTCOMES = Object.freeze(["succeeded", "cancelled", "forced", "failed"]);
 const TASK_CHECKPOINT_KEYS = new Set(["text", "reportedAt", "reportedBy", "verified", "claimId", "leaseEpoch"]);
@@ -240,8 +246,25 @@ function workerConsumesMemberSlot(member) {
   // naturally failed continuable child (undefined flags) still owns its slot.
   return !(member.state === "failed" && member.shutdownUnconfirmed === false && member.stopUnconfirmed === false);
 }
+function memberHasLegacyExecutionEvidence(team, member) {
+  if ((team.ownershipHistory ?? []).some((entry) => entry.sourceRootSessionId === member.sessionId)) return false;
+  return team.tasks.some((task) => {
+    if (task.submission?.submittedBy === member.sessionId && taskSubmissionMatches(task)) return true;
+    if (task.result?.reportedBy === member.sessionId && task.result.taskId === task.id
+      && (task.attemptHistory ?? []).some((entry) => entry.kind === "claimed" && entry.claimId === task.result.claimId && entry.leaseEpoch === task.result.leaseEpoch)) return true;
+    const checkpoint = task.checkpoint;
+    if (checkpoint?.reportedBy !== member.sessionId) return false;
+    return (task.attemptHistory ?? []).some((entry) => entry.kind === "claimed" && entry.claimId === checkpoint.claimId && entry.leaseEpoch === checkpoint.leaseEpoch);
+  });
+}
 function teamHasEstablishedWorker(team) {
-  return team.members.some((member) => workerConsumesMemberSlot(member) && member.state !== "provisioning");
+  return team.members.some((member) => {
+    if (member.kind !== "worker") return false;
+    if (["running", "idle", "ready"].includes(member.state)) return true;
+    if (member.state === "provisioning") return false;
+    if (member.publishedAt !== undefined && !(member.state === "failed" && (member.shutdownUnconfirmed !== undefined || member.stopUnconfirmed !== undefined))) return true;
+    return memberHasLegacyExecutionEvidence(team, member);
+  });
 }
 function safeLimit(value, field, fallback, maximum = HARD_MAX_MEMBERS) {
   const resolved = value ?? fallback;
@@ -503,6 +526,7 @@ function validateMember(member) {
   assertEnum(member.state, MEMBER_STATES, "member.state");
   assertIsoDate(member.createdAt, "member.createdAt");
   assertIsoDate(member.updatedAt, "member.updatedAt");
+  if (member.publishedAt !== undefined) assertIsoDate(member.publishedAt, "member.publishedAt");
   optionalString(member.runId, "member.runId", 256);
   optionalString(member.model, "member.model", 256);
   const provider = optionalString(member.provider, "member.provider", 128);
@@ -661,6 +685,7 @@ function validateTask(task) {
     positiveInteger(task.acceptance.leaseEpoch, "task.acceptance.leaseEpoch", { allowZero: true });
     assertIsoDate(task.acceptance.acceptedAt, "task.acceptance.acceptedAt");
     nonEmptyString(task.acceptance.acceptedBy, "task.acceptance.acceptedBy", 256);
+    positiveInteger(task.acceptance.ownerEpoch, "task.acceptance.ownerEpoch", { allowZero: true });
     if (!taskAcceptanceMatches(task) || task.state !== "completed") throw new TypeError("task.acceptance must bind the submitted task claim and current lease");
   }
   positiveInteger(task.attempt ?? 0, "task.attempt", { allowZero: true });
@@ -742,6 +767,17 @@ function validateBootstrap(bootstrap) {
   if (new Set(bootstrap.taskRefs.map((ref) => ref.key)).size !== bootstrap.taskRefs.length || new Set(bootstrap.taskRefs.map((ref) => ref.taskId)).size !== bootstrap.taskRefs.length) throw new TypeError("team.bootstrap task refs must be unique");
   if (new Set(bootstrap.memberRefs.map((ref) => ref.key)).size !== bootstrap.memberRefs.length) throw new TypeError("team.bootstrap member refs must be unique");
   return bootstrap;
+}
+
+function acceptanceOwnerMatchesTeam(team, acceptance) {
+  const ownerEpoch = acceptance.ownerEpoch;
+  const currentEpoch = team.pauseEpoch ?? 0;
+  if (ownerEpoch > currentEpoch) return false;
+  if (ownerEpoch === currentEpoch) return acceptance.acceptedBy === team.rootLeadSessionId;
+  const adoption = (team.ownershipHistory ?? []).find((entry) => entry.kind === "handoff_adopted" && entry.pauseEpoch === ownerEpoch + 1);
+  if (adoption !== undefined) return adoption.sourceRootSessionId === acceptance.acceptedBy;
+  const retainedOwner = team.members.find((member) => member.sessionId === acceptance.acceptedBy);
+  return retainedOwner?.kind === "worker" && retainedOwner.state === "retired" && retainedOwner.role === "former root lead retained for durable audit references";
 }
 
 /** Validate one team and all cross-record references. */
@@ -836,7 +872,7 @@ function validateTeam(team) {
   for (const task of team.tasks) {
     if (task.dependsOn.some((id) => !taskIds.has(id))) throw new TypeError(`task ${task.id} references an unknown dependency`);
     if (task.assigneeSessionId !== undefined && !sessions.has(task.assigneeSessionId)) throw new TypeError(`task ${task.id} has an unknown assignee`);
-    if (task.acceptance !== undefined && task.acceptance.acceptedBy !== team.rootLeadSessionId) throw new TypeError(`task ${task.id} acceptance must be authored by the fixed root lead`);
+    if (task.acceptance !== undefined && !acceptanceOwnerMatchesTeam(team, task.acceptance)) throw new TypeError(`task ${task.id} acceptance must bind the root owner at its owner epoch`);
   }
   assertClosureSemantics(team);
   const visiting = new Set();
@@ -899,6 +935,10 @@ function migrateStoreDocument(document) {
       task.capabilities ??= [];
       task.externalEffects ??= [];
       for (const effect of task.externalEffects) effect.idempotencyKey = hostExternalEffectKey(team.id, task.id, effect.name);
+      if (task.acceptance !== undefined && task.acceptance.ownerEpoch === undefined) {
+        const adoption = team.ownershipHistory.find((entry) => entry.kind === "handoff_adopted" && entry.sourceRootSessionId === task.acceptance.acceptedBy);
+        task.acceptance.ownerEpoch = task.acceptance.acceptedBy === team.rootLeadSessionId ? team.pauseEpoch : adoption === undefined ? team.pauseEpoch : adoption.pauseEpoch - 1;
+      }
       if (["in_progress", "completed"].includes(task.state) && task.claimId === undefined) {
         task.claimId = `migrated:${task.id}:${task.attempt}`;
         if (task.state === "in_progress") boundedPush(task.attemptHistory, { kind: "migrated_claim", at: task.claimedAt ?? task.updatedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch }, MAX_TASK_ATTEMPT_HISTORY);
@@ -907,7 +947,7 @@ function migrateStoreDocument(document) {
         task.assigneeSessionId ??= team.rootLeadSessionId;
         const completedAt = task.completedAt ?? task.updatedAt;
         task.submission ??= taskSubmission(task, task.assigneeSessionId, completedAt, "legacy_migration");
-        task.acceptance ??= { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: completedAt, acceptedBy: team.rootLeadSessionId };
+        task.acceptance ??= { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: completedAt, acceptedBy: team.rootLeadSessionId, ownerEpoch: team.pauseEpoch };
         if (task.result !== undefined) Object.assign(task.result, { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, reportedBy: task.result.reportedBy ?? task.assigneeSessionId });
       } else if (legacy && task.state !== "completed") {
         task.result = undefined;
@@ -1981,6 +2021,7 @@ class AgentTeamsStore {
         message.deliveryError = "host restarted before delivery acknowledgement; retry manually";
         teamChanged = true;
       }
+      teamChanged = reconcileSafePlanAuthorization(team) || teamChanged;
       if (teamChanged) team.updatedAt = now();
       changed ||= teamChanged;
     }
@@ -2111,19 +2152,103 @@ function openTurn(agent) {
   }
   return reject("agent-team tools require an open model turn", "AGENT_TEAMS_DRIVER_REQUIRED");
 }
+function currentTurnKey(agent) {
+  for (let index = agent.session.events.length - 1; index >= 0; index -= 1) {
+    const event = agent.session.events[index];
+    if (event?.type !== "turn/start") continue;
+    return createHash("sha256").update(JSON.stringify(["agent-teams-turn-v1", agent.id, index, event.id ?? null, event.time ?? null])).digest("hex");
+  }
+  return reject("agent-team tools require an open model turn", "AGENT_TEAMS_DRIVER_REQUIRED");
+}
 function toolExecution(ctx, exec) {
   const agent = exec.agent;
   if (agent === undefined) reject("agent-team tools require a calling agent", "AGENT_TEAMS_AGENT_REQUIRED");
   if (ctx.agents.get(agent.id) !== agent || agent.status !== "running" || ctx.agents.currentInitiator() !== agent) {
     reject("agent-team tools require the exact live calling agent inside its active driver", "AGENT_TEAMS_DRIVER_REQUIRED");
   }
-  return { agent, events: openTurn(agent) };
+  return { agent, events: openTurn(agent), turnKey: currentTurnKey(agent) };
+}
+function hasDirectHumanRootAuthority(ctx, execution) {
+  return ctx.agents.roots().includes(execution.agent)
+    && execution.events.some((event) => event.type === "user/message" && event.data?.source?.kind === "user");
 }
 function requireDirectHumanRoot(ctx, execution) {
   if (!ctx.agents.roots().includes(execution.agent)) reject("team_start requires a top-level root agent");
-  if (!execution.events.some((event) => event.type === "user/message" && event.data.source.kind === "user")) {
+  if (!hasDirectHumanRootAuthority(ctx, execution)) {
     reject("team_start requires direct host-attested human input in the current root turn");
   }
+}
+function canonicalResolveUnknownArguments(input) {
+  return {
+    action: "resolve_unknown",
+    team_id: input.teamId,
+    task_id: input.taskId,
+    effect_name: input.effectName,
+    attempt_id: input.attemptId,
+    outcome: input.outcome,
+  };
+}
+function resolveUnknownArgumentsHash(input) {
+  return createHash("sha256").update(JSON.stringify(canonicalResolveUnknownArguments(input))).digest("hex");
+}
+function createResolveUnknownAuthorizationGate(provider, options = {}) {
+  const clock = typeof options.now === "function" ? options.now : Date.now;
+  const consumed = new Set();
+  return Object.freeze({
+    async consume(request) {
+      const authorizationId = nonEmptyString(request.authorizationId, "authorizationId", 256);
+      if (request.tool !== RESOLVE_UNKNOWN_AUTHORIZATION_TOOL) reject("Host authorization is bound to a different tool", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+      for (const key of ["rootSessionId", "turnKey", "teamId", "taskId", "effectName", "attemptId"]) nonEmptyString(request[key], `authorization.${key}`, 256);
+      assertEnum(request.outcome, ["succeeded", "failed", "not_started"], "authorization.outcome");
+      positiveInteger(request.pauseEpoch, "authorization.pauseEpoch", { allowZero: true });
+      positiveInteger(request.teamRevision, "authorization.teamRevision");
+      if (request.canonicalArgumentsHash !== resolveUnknownArgumentsHash(request)) reject("Host authorization canonical parameter digest is invalid", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+      if (typeof provider?.consumeResolveUnknown !== "function") reject("resolve_unknown requires a registered Host authorization provider", "AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE");
+      if (consumed.has(authorizationId)) reject("Host authorization was already consumed", "AGENT_TEAMS_HOST_AUTHORIZATION_REPLAY");
+      if (consumed.size >= MAX_RESOLVE_UNKNOWN_AUTHORIZATIONS) reject("Host authorization replay fence is at capacity", "AGENT_TEAMS_HOST_AUTHORIZATION_CAPACITY");
+      // Burn before awaiting the Host so concurrent calls with the same id cannot both pass.
+      consumed.add(authorizationId);
+      const receipt = await provider.consumeResolveUnknown(Object.freeze(clone(request)));
+      if (!isRecord(receipt)) reject("Host authorization receipt is missing", "AGENT_TEAMS_HOST_AUTHORIZATION_INVALID");
+      try { assertAllowedKeys(receipt, RESOLVE_UNKNOWN_AUTHORIZATION_KEYS, "resolve_unknown Host authorization"); }
+      catch { return reject("Host authorization receipt has unsupported fields", "AGENT_TEAMS_HOST_AUTHORIZATION_INVALID"); }
+      for (const key of RESOLVE_UNKNOWN_AUTHORIZATION_KEYS) {
+        if (key === "expiresAt") continue;
+        if (receipt[key] !== request[key]) reject(`Host authorization does not bind ${key}`, "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+      }
+      const current = clock();
+      if (!Number.isSafeInteger(receipt.expiresAt) || receipt.expiresAt <= current) reject("Host authorization expired", "AGENT_TEAMS_HOST_AUTHORIZATION_EXPIRED");
+      if (receipt.expiresAt > current + RESOLVE_UNKNOWN_AUTHORIZATION_TTL_MS) reject("Host authorization lifetime exceeds the short-lived limit", "AGENT_TEAMS_HOST_AUTHORIZATION_INVALID");
+      return Object.freeze({ ...receipt, [RESOLVE_UNKNOWN_AUTHORIZATION_BRAND]: true });
+    },
+  });
+}
+async function authorizeResolveUnknown(store, gate, execution, input) {
+  const authorizationId = nonEmptyString(input.authorizationId, "authorizationId", 256);
+  const outcome = input.outcome;
+  assertEnum(outcome, ["succeeded", "failed", "not_started"], "outcome");
+  const target = await store.read((document) => {
+    const team = resolveTeamForCaller(document, optionalString(input.teamId, "teamId", 256), execution.agent.id);
+    const task = team.tasks.find((candidate) => candidate.id === nonEmptyString(input.taskId, "taskId", 256));
+    if (task === undefined || taskIsTerminal(task)) reject("external effect update requires an unfinished task", "AGENT_TEAMS_TASK_CONFLICT");
+    const effectName = nonEmptyString(input.effectName, "effectName", 200);
+    const effect = task.externalEffects.find((candidate) => candidate.name === effectName);
+    if (effect === undefined) reject("unknown declared external effect", "AGENT_TEAMS_NOT_FOUND");
+    if (effect.outcome !== "outcome_unknown") reject("effect outcome is not unknown", "AGENT_TEAMS_CONFLICT");
+    const attemptId = nonEmptyString(input.attemptId, "attemptId", 256);
+    if (attemptId !== effect.attemptId) reject("external effect attempt is missing or stale", "AGENT_TEAMS_STALE_EXTERNAL_EFFECT");
+    return { teamId: team.id, taskId: task.id, effectName, attemptId, pauseEpoch: team.pauseEpoch ?? 0, teamRevision: team.revision };
+  });
+  const request = {
+    authorizationId,
+    tool: RESOLVE_UNKNOWN_AUTHORIZATION_TOOL,
+    rootSessionId: execution.agent.id,
+    turnKey: execution.turnKey,
+    ...target,
+    outcome,
+    canonicalArgumentsHash: resolveUnknownArgumentsHash({ ...target, outcome }),
+  };
+  return gate.consume(request);
 }
 function relaySource(senderSessionId) {
   return {
@@ -2461,6 +2586,69 @@ async function createTeam(store, lead, input) {
   });
 }
 
+function planFilesAreConflictFree(team) {
+  const tasks = team.tasks.filter((task) => !taskIsTerminal(task));
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const dependsTransitively = (task, targetId, seen = new Set()) => (task.dependsOn ?? []).some((dependencyId) => {
+    if (dependencyId === targetId) return true;
+    if (seen.has(dependencyId)) return false;
+    seen.add(dependencyId);
+    const dependency = byId.get(dependencyId);
+    return dependency !== undefined && dependsTransitively(dependency, targetId, seen);
+  });
+  for (let leftIndex = 0; leftIndex < tasks.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < tasks.length; rightIndex += 1) {
+      const left = tasks[leftIndex], right = tasks[rightIndex];
+      if (dependsTransitively(left, right.id) || dependsTransitively(right, left.id)) continue;
+      if ((left.files ?? []).some((leftFile) => (right.files ?? []).some((rightFile) => fileBoundaryOverlap(leftFile, rightFile)))) return false;
+    }
+  }
+  return true;
+}
+
+function planCapabilitiesAreVerified(team) {
+  return team.tasks.every((task) => task.capabilities.every((capability) => capability.status === "verified"));
+}
+function planEffectsAreOrdinary(team) {
+  return team.tasks.every((task) => task.externalEffects.every((effect) => effect.policy === "none" && effect.outcome !== "outcome_unknown"));
+}
+function reconcileSafePlanAuthorization(team, timestamp = now()) {
+  const plan = team.plan;
+  if (!["committed", "active"].includes(plan?.phase) || plan.migrationState !== "ready" || plan.hash !== teamPlanHash(team) || plan.authorization?.confirmedPlanHash !== plan.hash) return false;
+  const authorization = plan.authorization;
+  if (authorization.source === "host_verified") return false;
+  let changed = false;
+  const attestIfSafe = (field, safe) => {
+    if (!safe || authorization[field] !== "unknown") return;
+    authorization[field] = "human_attested";
+    changed = true;
+  };
+  attestIfSafe("permissions", planCapabilitiesAreVerified(team));
+  attestIfSafe("files", planFilesAreConflictFree(team));
+  // The direct user's ordinary AI-routing grant covers the default model tier chosen
+  // by the root. Unknown or separately billed capabilities remain capability facts;
+  // existing members' main/subagent tiers neither prove nor expand future cost.
+  attestIfSafe("cost", true);
+  attestIfSafe("externalSideEffects", planEffectsAreOrdinary(team));
+  if (changed || authorization.source === "unknown") {
+    authorization.source = "human_attested";
+    authorization.attestedAt = timestamp;
+    changed = true;
+  }
+  return changed;
+}
+function assertAutomaticPlanRecommitAllowed(ctx, team, lead) {
+  requireLiveRootLead(ctx, team, lead);
+  requireActiveTeam(team);
+  if (!teamHasEstablishedWorker(team)) reject("automatic plan recommit requires a team already established from a direct-human turn", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+  const currentProjectKey = projectKeyForRoot(lead);
+  if (team.projectKey === undefined || team.projectKey !== currentProjectKey) reject("automatic plan recommit requires the same canonical project scope", "AGENT_TEAMS_CROSS_PROJECT_FORBIDDEN");
+  if (team.tasks.some((task) => task.capabilities.some((capability) => capability.status === "unavailable"))) reject("automatic plan recommit cannot use an unavailable capability", "AGENT_TEAMS_CAPABILITY_UNAVAILABLE");
+  if (!planCapabilitiesAreVerified(team)) reject("automatic plan recommit cannot expand unknown capabilities", "AGENT_TEAMS_CAPABILITY_UNKNOWN");
+  if (!planFilesAreConflictFree(team)) reject("automatic plan recommit requires conflict-free file ownership", "AGENT_TEAMS_FILE_CONFLICT");
+  if (!planEffectsAreOrdinary(team)) reject("automatic plan recommit is limited to effect-free internal work", "AGENT_TEAMS_EXTERNAL_EFFECT_CONFIRMATION_REQUIRED");
+}
+
 async function commitTeamPlan(ctx, store, lead, input) {
   return store.runOperation(() => store.mutate((document) => {
     assertEnabled(document);
@@ -2469,6 +2657,7 @@ async function commitTeamPlan(ctx, store, lead, input) {
       : findTeam(document, input.teamId);
     requireLiveRootLead(ctx, team, lead);
     requireActiveTeam(team);
+    if (input.automaticContinuation === true) assertAutomaticPlanRecommitAllowed(ctx, team, lead);
     const expectedRevision = input.expectedRevision;
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) reject("expected_revision must be a positive integer", "AGENT_TEAMS_PLAN_CAS_REQUIRED");
     if (team.plan.revision !== expectedRevision) reject("team plan changed; preview it again before commit", "AGENT_TEAMS_STALE_PLAN");
@@ -2481,7 +2670,10 @@ async function commitTeamPlan(ctx, store, lead, input) {
       || team.tasks.some((task) => task.state === "in_progress")
       ? "active"
       : "committed";
-    if (team.plan.phase === targetPhase && team.plan.hash === currentHash && team.plan.authorization?.confirmedPlanHash === currentHash && team.plan.migrationState === "ready") return { teamId: team.id, plan: clone(team.plan), reused: true };
+    if (team.plan.phase === targetPhase && team.plan.hash === currentHash && team.plan.authorization?.confirmedPlanHash === currentHash && team.plan.migrationState === "ready") {
+      if (reconcileSafePlanAuthorization(team)) team.updatedAt = now();
+      return { teamId: team.id, plan: clone(team.plan), reused: true };
+    }
     if (team.tasks.length === 0) reject("a team plan must persist at least one task before commit", "AGENT_TEAMS_EMPTY_PLAN");
     for (const task of team.tasks) {
       if (task.capabilities.some((capability) => capability.status === "unavailable")) reject(`task ${task.id} requires an unavailable capability`, "AGENT_TEAMS_CAPABILITY_UNAVAILABLE");
@@ -2489,24 +2681,29 @@ async function commitTeamPlan(ctx, store, lead, input) {
       if (task.externalEffects.some((effect) => effect.outcome === "outcome_unknown")) reject(`task ${task.id} has an unknown external side-effect outcome`, "AGENT_TEAMS_OUTCOME_UNKNOWN");
     }
     const timestamp = now();
-    // Tool booleans are statements made through a model call, not Host proof.
-    // No trusted Host UI capability token is wired to this operation, therefore
-    // this exact-hash confirmation can only be human-attested.
+    // Enabling Agent Teams is a continuing human attestation for ordinary,
+    // project-bounded internal automation. Caller booleans remain compatible but
+    // are never Host proof and cannot upgrade an unsafe or unresolved fact.
     const asserted = "human_attested";
+    const capabilitiesVerified = team.tasks.every((task) => task.capabilities.every((capability) => capability.status === "verified"));
+    const filesConflictFree = planFilesAreConflictFree(team);
+    const ordinaryEffectsOnly = team.tasks.every((task) => task.externalEffects.every((effect) => effect.policy === "none"));
+    const explicitlyAttestedEffects = input.externalSideEffectsVerified === true
+      && team.tasks.every((task) => task.externalEffects.every((effect) => effect.policy !== "confirm_each"));
     const authorization = {
       source: asserted,
       attestedAt: timestamp,
       confirmedPlanHash: currentHash,
-      permissions: input.permissionsVerified === true ? asserted : "unknown",
-      files: input.filesVerified === true ? asserted : "unknown",
-      cost: input.costVerified === true ? asserted : "unknown",
-      externalSideEffects: input.externalSideEffectsVerified === true ? asserted : team.tasks.every((task) => task.externalEffects.length === 0) ? asserted : "unknown",
+      permissions: capabilitiesVerified ? asserted : "unknown",
+      files: filesConflictFree ? asserted : "unknown",
+      cost: asserted,
+      externalSideEffects: ordinaryEffectsOnly || explicitlyAttestedEffects ? asserted : "unknown",
     };
-    if (team.tasks.some((task) => task.externalEffects.some((effect) => effect.policy === "confirm_each")) && authorization.externalSideEffects !== "host_verified") {
+    if (team.tasks.some((task) => task.externalEffects.some((effect) => effect.policy === "confirm_each"))) {
       reject("confirm_each external effects require a trusted Host UI verification token", "AGENT_TEAMS_EXTERNAL_EFFECT_CONFIRMATION_REQUIRED");
     }
-    // Unknown capabilities are never bulk-upgraded by booleans or model/tool input.
-    // A future Host verifier must attest each capability record individually.
+    // Unknown capabilities and conflicting file scopes are never bulk-upgraded by
+    // booleans or model/tool input. A future Host verifier must attest them.
     team.plan = {
       phase: "committed", revision: team.plan.revision, hash: currentHash,
       committedAt: timestamp, migrationState: "ready", authorization,
@@ -2626,6 +2823,7 @@ function assertTaskExecutionPreflight(team, tasks) {
     if ((task.externalEffects ?? []).some((effect) => effect.outcome === "outcome_unknown")) reject(`task ${task.id} is blocked by outcome_unknown`, "AGENT_TEAMS_OUTCOME_UNKNOWN");
     if ((task.externalEffects ?? []).some((effect) => effect.policy === "forbidden")) reject(`task ${task.id} declares a forbidden external side effect`, "AGENT_TEAMS_EXTERNAL_EFFECT_FORBIDDEN");
     if ((task.externalEffects ?? []).some((effect) => effect.policy === "confirm_each") && team.plan.authorization?.externalSideEffects !== "host_verified") reject(`task ${task.id} external side effects lack trusted Host verification`, "AGENT_TEAMS_EXTERNAL_EFFECT_CONFIRMATION_REQUIRED");
+    if ((task.externalEffects ?? []).some((effect) => effect.policy !== "none") && !["host_verified", "human_attested"].includes(team.plan.authorization?.externalSideEffects)) reject(`task ${task.id} external side effects require an explicit authorization`, "AGENT_TEAMS_EXTERNAL_EFFECT_CONFIRMATION_REQUIRED");
   }
 }
 
@@ -2727,7 +2925,7 @@ async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
     const bootstrapPlanHash = teamPlanHash(team);
     team.plan = {
       phase: "active", revision: 1, hash: bootstrapPlanHash, committedAt: timestamp, activatedAt: timestamp, migrationState: "ready",
-      authorization: { source: "human_attested", attestedAt: timestamp, confirmedPlanHash: bootstrapPlanHash, permissions: "unknown", files: "human_attested", cost: "human_attested", externalSideEffects: "human_attested" },
+      authorization: { source: "human_attested", attestedAt: timestamp, confirmedPlanHash: bootstrapPlanHash, permissions: "human_attested", files: "human_attested", cost: "human_attested", externalSideEffects: "human_attested" },
     };
     document.teams.push(team);
     return { teamId, reused: false };
@@ -2804,6 +3002,7 @@ async function settleSpawnedChildFailure(ctx, store, lead, cleanup) {
     if (!childIdUsedElsewhere) record.sessionId = cleanup.childId;
     record.state = "failed";
     record.runId = undefined;
+    record.publishedAt = undefined;
     record.updatedAt = now();
     for (const task of team.tasks) if (task.state === "pending" && (task.assigneeSessionId === cleanup.childId || task.assigneeSessionId === `provisioning:${cleanup.memberId}`)) {
       task.assigneeSessionId = undefined;
@@ -2935,6 +3134,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
         record.sessionId = started.childId;
         record.state = "running";
         record.updatedAt = now();
+        record.publishedAt = record.updatedAt;
         if ((team.pauseEpoch ?? 0) !== reservation.pauseEpoch) reject("team lease epoch changed during member provisioning", "AGENT_TEAMS_STALE_LEASE");
         for (const taskId of reservation.taskIds) {
           const task = team.tasks.find((candidate) => candidate.id === taskId);
@@ -3225,11 +3425,26 @@ async function updateTaskExternalEffect(store, caller, input) {
     if (effect === undefined) reject("unknown declared external effect", "AGENT_TEAMS_NOT_FOUND");
     const isLead = caller.id === team.rootLeadSessionId;
     if (action === "resolve_unknown") {
-      // The public tool wrapper separately requires the exact direct-human root turn.
-      // No caller-controlled boolean is accepted as authority.
       if (!isLead) reject("outcome_unknown resolution requires the fixed root", "AGENT_TEAMS_EXTERNAL_EFFECT_CONFIRMATION_REQUIRED");
       if (effect.outcome !== "outcome_unknown") reject("effect outcome is not unknown", "AGENT_TEAMS_CONFLICT");
       assertEnum(input.outcome, ["succeeded", "failed", "not_started"], "outcome");
+      const attemptId = nonEmptyString(input.attemptId, "attemptId", 256);
+      if (attemptId !== effect.attemptId) reject("external effect attempt is missing or stale", "AGENT_TEAMS_STALE_EXTERNAL_EFFECT");
+      const authorization = input.authorization;
+      const expected = {
+        tool: RESOLVE_UNKNOWN_AUTHORIZATION_TOOL,
+        rootSessionId: caller.id,
+        teamId: team.id,
+        taskId: task.id,
+        effectName: effect.name,
+        attemptId,
+        outcome: input.outcome,
+        pauseEpoch: team.pauseEpoch ?? 0,
+        teamRevision: team.revision,
+        canonicalArgumentsHash: resolveUnknownArgumentsHash({ teamId: team.id, taskId: task.id, effectName: effect.name, attemptId, outcome: input.outcome }),
+      };
+      if (!isRecord(authorization) || authorization[RESOLVE_UNKNOWN_AUTHORIZATION_BRAND] !== true) reject("resolve_unknown requires a consumed Host authorization", "AGENT_TEAMS_EXTERNAL_EFFECT_CONFIRMATION_REQUIRED");
+      for (const [key, value] of Object.entries(expected)) if (authorization[key] !== value) reject(`Host authorization is stale for ${key}`, "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
       effect.outcome = input.outcome;
       effect.resolvedAt = now();
       effect.resolvedBy = caller.id;
@@ -3312,7 +3527,7 @@ async function updateTask(store, caller, input) {
       task.state = "completed";
       task.completedAt = completedAt;
       task.submission = taskSubmission(task, caller.id, completedAt);
-      task.acceptance = isLead ? { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: completedAt, acceptedBy: caller.id } : undefined;
+      task.acceptance = isLead ? { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: completedAt, acceptedBy: caller.id, ownerEpoch: team.pauseEpoch ?? 0 } : undefined;
       task.cancelledAt = undefined;
       task.cancellationReason = undefined;
           } else if (action === "accept") {
@@ -3322,7 +3537,7 @@ async function updateTask(store, caller, input) {
         if (!taskAcceptanceMatches(task)) reject("task acceptance is stale or malformed", "AGENT_TEAMS_STALE_CLAIM");
         return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), reused: true };
       }
-      task.acceptance = { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: now(), acceptedBy: caller.id };
+      task.acceptance = { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: now(), acceptedBy: caller.id, ownerEpoch: team.pauseEpoch ?? 0 };
     } else if (action === "release") {
       if (task.state !== "in_progress") reject(`only an in-progress task can be released (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       if (!isLead && task.assigneeSessionId !== caller.id) reject("only the task claimant or team lead can release it", "AGENT_TEAMS_UNAUTHORIZED");
@@ -3798,8 +4013,8 @@ function teamSystemPrompt(store) {
     "Once an Agent Team is established for the current goal, the root lead defaults to coordination only: decompose the user's objective into substantive outcomes, persist and assign durable tasks, coordinate dependencies and handoffs, monitor and reconcile task state, review and accept member deliverables, then perform final integration and user-facing synthesis. The root lead must not personally implement, research, design, test, or otherwise substitute for a core professional deliverable that is assigned or should be assigned to a member role. If substantive coverage is missing, create or restructure the relevant durable task and assign or expand the visible team instead of absorbing that work; the root may make only minimal glue changes required to integrate accepted member outputs.",
     "A team's durable tasks and member roles must collectively cover the substantive outputs required to satisfy the user's goal, each with a real deliverable and observable acceptance criteria. Never create decorative, token, or review-only members while leaving the core professional output to the root lead; if the work does not justify delegating its substantive production, do not create a team.",
     "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively choose one Agent Team creation path only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
-    "When a new team already has a complete bounded plan of one through four durable tasks and one through four visible peers, call team_bootstrap directly with a stable request_id and do not call team_start first. Otherwise team_start creates a draft: persist tasks, then use team_plan_commit with the exact plan revision and confirmed_plan_hash before any team_spawn. With no established worker that CAS persists phase committed; the first fully successful spawn activates it, while recommit with an established worker persists active. Both committed and active pass new claim/spawn execution gates. No extra user turn is required after a direct-human CAS commit. Public spawn always requires non-empty persisted task_ids, and the Host atomically pre-binds those tasks with the member placeholder before child creation. Bootstrap persists all tasks before starting members, and exact replay reuses its plan. Neither path may bypass direct-human authority, capacity checks, file-scope separation, capability preflight, or explicit review of partial/uncertain starts.",
-    "An ordinary internal team that the direct user explicitly requested needs no redundant confirmation. Plan authority is explicitly host_verified, human_attested, or unknown. Tool/model booleans can create only human_attested facts, never host_verified facts, and can never bulk-upgrade unknown capability records. Any material change to task scope, file ownership, capability/permission facts, model-cost class, or external effects returns the plan to draft and requires a fresh exact-hash CAS commit. confirm_each remains closed without a trusted Host UI verification token; never infer authority from user prose.",
+    "When a new team already has a complete bounded plan of one through four durable tasks and one through four visible peers, call team_bootstrap directly with a stable request_id and do not call team_start first. Otherwise team_start creates a draft: persist tasks, then use team_plan_commit with the exact plan revision and confirmed_plan_hash before any team_spawn. Without durable successful worker-publication history that CAS persists phase committed; the first fully successful spawn records publication and activates it, while later recommit persists active even after every published worker gracefully retires. Provisioning or initial publication/work-followup failure never establishes this history. Upgraded retired workers without the new marker qualify only through a task submission/result or checkpoint bound to their exact historical claim; retired state alone and former-root adoption history do not qualify. Both committed and active pass new claim/spawn execution gates. A new team or bootstrap still requires the current direct-human root turn. After that direct-human establishment and one successful worker publication, the same exact live root may recommit a later draft during an automatic goal round without another user message only while the team remains active and unpaused in the same canonical project, every capability is individually verified, file scopes are conflict-free, cost stays within the direct user's ordinary default AI-routing grant, every effect policy is none, and no outcome is unknown. Public spawn always requires non-empty persisted task_ids, and the Host atomically pre-binds those tasks with the member placeholder before child creation. Bootstrap persists all tasks before starting members, and exact replay reuses its plan. Neither path may bypass capacity checks, file-scope separation, capability preflight, or explicit review of partial/uncertain starts.",
+    "An ordinary internal team that the direct user explicitly requested needs no redundant confirmation for a dynamically safe automatic-round recommit. Plan authority remains explicitly host_verified, human_attested, or unknown: a continuing/default grant stays human_attested and never becomes Host proof. Tool/model booleans can create only human_attested facts, never host_verified facts, and can never bulk-upgrade unknown capability records. Any material change to task scope, file ownership, capability/permission facts, model-cost class, or external effects returns the plan to draft and requires a fresh exact-hash CAS commit. New team creation, bootstrap, Stop recovery/resume, handoff/adopt/recover, resolve_unknown, cross-project scope, unknown/unavailable or separately billed capabilities, conflicting files, and confirm_each/idempotent/forbidden effects remain behind their direct-human or Host gates. An already active main-tier worker does not itself create a new cost grant or block safe continuation.",
     "A task claim returns claimId and leaseEpoch. Members must echo both for checkpoint, completion, or release; stale attempts are rejected and only an exact completion replay is a no-op. Member checkpoints and next steps are unverified annotations separate from the four authoritative task states (pending, in_progress, completed, cancelled). External effect keys are Host-derived from stable team/task/effect identity. Only participating idempotency protocols can claim exactly-once; outcome_unknown blocks retry until an exact direct-human root resolves it.",
     "Team ownership may move only through team_handoff then team_adopt: both require direct-human root turns, the team must be durably paused, source and target must be exact live roots with the same canonical projectKey, and adoption must present the short-lived single-use token. Adoption increments pauseEpoch, revokes every old claim/lease, retires old-parent workers for bounded audit history, safely releases unfinished work to pending, and never wakes anyone automatically. Unknown scope and cross-project adoption fail closed.",
     "For every team_expansion_request, the fixed root lead approves only when the remaining outcomes are genuinely parallel and independent, inputs and acceptance criteria are explicit, file/external-resource ownership does not conflict, the handoff context is small, critical-path reduction or independent-review value materially exceeds coordination cost, and current member/turn/task budget is sufficient. The Host compares proposed file scopes with other in-progress task files and checks proposal-internal resource hierarchy, but existing external-resource ownership is not persisted and must be verified by the root. If a broad source task is split, first release/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn for visible same-level peers. If rejected, explain the reason to the requester. Never invent a leader→group-leader→hidden-worker hierarchy.",
@@ -4028,7 +4243,7 @@ function registerProjectFoundationsApi(ctx, manager, ready = Promise.resolve()) 
   }), "agent-teams project foundations state route");
 }
 
-function registerTools(ctx, store, ready, collaboration, admission) {
+function registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization) {
   ctx.systemPrompt.section({
     name: "tool:agent-teams",
     order: 116,
@@ -4054,7 +4269,7 @@ function registerTools(ctx, store, ready, collaboration, admission) {
   }));
   ctx.tools.register(defineTool({
     name: "team_plan_commit",
-    description: "CAS-commit the current durable draft plan. Without an established worker it persists committed and the first fully successful spawn activates it; with an established worker recommit persists active. Requires direct-human root authority, but an ordinary internally scoped team explicitly requested by the user needs no extra user turn. Permissions, files, cost, or external-side-effect facts that are not Host-verifiable remain explicit unknown and material changes return the plan to draft.",
+    description: "CAS-commit the current durable draft plan. Without durable successful worker-publication history it persists committed; the first fully successful spawn records publication and activates it, and that history survives graceful retirement while provisioning or initial publication/work-followup failure never establishes it. Upgraded retired workers without the marker require an exact task execution receipt; retired state alone does not qualify. Initial establishment requires direct-human root authority. A later automatic goal round may recommit without a new user message only for the same exact live root and canonical project while the team is active/unpaused, every capability is verified, files are conflict-free, cost remains inside the user's ordinary default AI-routing grant, and every effect is policy none with no outcome_unknown. Any unsafe or uncertain fact fails closed. Continuing/default authority remains human_attested, never host_verified; material changes still require the exact current hash and revision.",
     parameters: {
       team_id: { type: "string" },
       expected_revision: { type: "number", required: true, description: "Exact plan.revision from the latest team projection." },
@@ -4064,7 +4279,7 @@ function registerTools(ctx, store, ready, collaboration, admission) {
       cost_verified: { type: "boolean" },
       external_side_effects_verified: { type: "boolean", description: "True only for direct-user verification of the declared external effects." },
     }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution) => { requireDirectHumanRoot(ctx, execution); return publicResult(await commitTeamPlan(ctx, store, execution.agent, { teamId: args.team_id, expectedRevision: args.expected_revision, confirmedPlanHash: args.confirmed_plan_hash, permissionsVerified: args.permissions_verified, filesVerified: args.files_verified, costVerified: args.cost_verified, externalSideEffectsVerified: args.external_side_effects_verified })); }),
+    execute: run(async (args, execution) => publicResult(await commitTeamPlan(ctx, store, execution.agent, { teamId: args.team_id, expectedRevision: args.expected_revision, confirmedPlanHash: args.confirmed_plan_hash, permissionsVerified: args.permissions_verified, filesVerified: args.files_verified, costVerified: args.cost_verified, externalSideEffectsVerified: args.external_side_effects_verified, automaticContinuation: !hasDirectHumanRootAuthority(ctx, execution) }))),
     presentCall: (args) => present("Commit agent team plan", args.team_id),
   }));
   ctx.tools.register(defineTool({
@@ -4194,14 +4409,15 @@ function registerTools(ctx, store, ready, collaboration, admission) {
     presentCall: (args) => present("Record unverified task checkpoint", args.task_id),
   }));
   ctx.tools.register(defineTool({
-    name: "team_task_external_effect", description: "Fence a declared external side effect. prepare persists outcome_unknown before the action and returns an attemptId; succeeded/failed must echo it. Unknown outcomes block retry and only a direct-user-authorized root may resolve them. Exactly-once is available only to participating idempotent protocols, never arbitrary UI actions.",
-    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, effect_name: { type: "string", required: true }, action: { type: "string", required: true, enum: ["prepare", "succeeded", "failed", "resolve_unknown"] }, attempt_id: { type: "string" }, claim_id: { type: "string" }, lease_epoch: { type: "number" }, outcome: { type: "string", enum: ["succeeded", "failed", "not_started"] } }, output: TOOL_OUTPUT,
+    name: "team_task_external_effect", description: "Fence a declared external side effect. prepare persists outcome_unknown before the action and returns an attemptId; succeeded/failed must echo it. Resolving an unknown outcome requires a short-lived, single-use Host authorization bound to this exact tool, turn, attempt, outcome, team epoch/revision, and canonical parameters. Exactly-once is available only to participating idempotent protocols, never arbitrary UI actions.",
+    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, effect_name: { type: "string", required: true }, action: { type: "string", required: true, enum: ["prepare", "succeeded", "failed", "resolve_unknown"] }, attempt_id: { type: "string" }, claim_id: { type: "string" }, lease_epoch: { type: "number" }, outcome: { type: "string", enum: ["succeeded", "failed", "not_started"] }, authorization_id: { type: "string", description: "Opaque single-use Host confirmation id; required only for resolve_unknown." } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => {
+      let authorization;
       if (args.action === "resolve_unknown") {
         requireDirectHumanRoot(ctx, execution);
-        // resolve_unknown is authorized only after the Host-attested root gate above.
+        authorization = await authorizeResolveUnknown(store, resolveUnknownAuthorization, execution, { authorizationId: args.authorization_id, teamId: args.team_id, taskId: args.task_id, effectName: args.effect_name, attemptId: args.attempt_id, outcome: args.outcome });
       }
-      return publicResult(await updateTaskExternalEffect(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, effectName: args.effect_name, action: args.action, attemptId: args.attempt_id, claimId: args.claim_id, leaseEpoch: args.lease_epoch, outcome: args.outcome }));
+      return publicResult(await updateTaskExternalEffect(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, effectName: args.effect_name, action: args.action, attemptId: args.attempt_id, claimId: args.claim_id, leaseEpoch: args.lease_epoch, outcome: args.outcome, authorization }));
     }),
     presentCall: (args) => present("Fence external task effect", `${args.action}: ${args.effect_name}`),
   }));
@@ -5087,6 +5303,19 @@ function resolveProjectFoundationHostOptions(ctx) {
     return Object.freeze({});
   }
 }
+function resolveAgentTeamsAuthorizationProvider(ctx) {
+  const desktop = consumeDesktopAuthorizationCapability();
+  if (desktop.available === true) return desktop;
+  desktop.dispose?.();
+  let value;
+  try { value = typeof ctx?.get === "function" ? ctx.get("agentTeamsAuthorization") : undefined; }
+  catch { return desktop; }
+  if (isPlainRecord(value)) {
+    const consumeResolveUnknown = ownDataDescriptorOrAbsent(value, "consumeResolveUnknown");
+    if (typeof consumeResolveUnknown === "function") return Object.freeze({ consumeResolveUnknown: (request) => consumeResolveUnknown.call(value, request) });
+  }
+  return desktop;
+}
 
 function apply(ctx, config = {}) {
   const defaults = resolveConfig(config);
@@ -5102,7 +5331,9 @@ function apply(ctx, config = {}) {
   // Root turns, ordinary subagents, Schedule root wakeups, and provider retries remain
   // upstream runtime concerns and must not be represented as covered by this limit.
   const admission = createTeamTurnAdmission();
-  ctx.effect(() => () => admission.close(), "agent-teams worker admission");
+  const authorizationProvider = resolveAgentTeamsAuthorizationProvider(ctx);
+  const resolveUnknownAuthorization = createResolveUnknownAuthorizationGate(authorizationProvider);
+  ctx.effect(() => () => { admission.close(); authorizationProvider?.dispose?.(); }, "agent-teams worker admission");
   // Product wiring for the already-implemented project collaboration domain: create
   // the project authority, issue/ redeem remote invites, and manage the real WSS
   // relay transport. The service never fakes LAN auto-discovery or an unconfigured
@@ -5165,7 +5396,7 @@ function apply(ctx, config = {}) {
       }
     };
   }, "agent-teams collaboration presence");
-  registerTools(ctx, store, ready, collaboration, admission);
+  registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization);
   registerProjectFoundationTools(ctx, projectFoundations, ready);
   registerProjectFoundationsApi(ctx, projectFoundations, ready);
   registerWebApi(ctx, store, ready);
@@ -5197,6 +5428,7 @@ export {
   createProjectAutomationSseBridge,
   createProjectFoundationManager,
   createProjectTaskSseBridge,
+  createResolveUnknownAuthorizationGate,
   createSseBroadcaster,
   createSubagentEventReconciler,
   createTeamTurnAdmission,
@@ -5209,6 +5441,7 @@ export {
   MEMBER_STATES,
   TASK_STATES,
   apply,
+  authorizeResolveUnknown,
   bootstrapTeam,
   buildResumePlan,
   commitTeamPlan,
@@ -5229,10 +5462,12 @@ export {
   projectTaskDetailForUi,
   registerProjectTaskApi,
   releaseRetiredMemberTasks,
+  resolveAgentTeamsAuthorizationProvider,
   resolveConfig,
   resolveModelSelection,
   resolveUniqueLeadTeam,
   shutdownTeam,
+  spawnMember,
   teamSnapshot,
   terminalizeTeamTasks,
   trustedRequest,

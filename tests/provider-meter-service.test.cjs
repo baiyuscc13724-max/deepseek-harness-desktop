@@ -161,10 +161,22 @@ test('Codex with no grant and no client still degrades to an actionable auth-req
   const home = await mkdtemp(path.join(os.tmpdir(), 'harness-codex-auth-required-'))
   await writeFile(path.join(home, 'settings.yaml'), 'llm-pi-ai:\n  providers:\n    openai-codex:\n      displayName: OpenAI Codex\n')
   await writeFile(path.join(home, '.credentials.yaml'), 'version: 1\nrefs: {}\nrecords: {}\n')
+  const events = require('node:events')
+  const spawnMissing = () => {
+    const child = new events.EventEmitter()
+    child.stdout = new events.EventEmitter()
+    child.stdin = new events.EventEmitter()
+    child.stdin.write = () => true
+    child.stdin.on = () => child.stdin
+    child.killed = false
+    child.kill = () => { child.killed = true }
+    process.nextTick(() => child.emit('error', Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' })))
+    return child
+  }
   const registry = new ProviderMeterRegistry({
     adapters: [require('../electron/bridge/provider-meter-adapters/codex-rate-limits.cjs').createCodexRateLimitsAdapter()]
   })
-  const result = await registry.readAll({ dshHome: home, spawnImpl: require('node:child_process').spawn })
+  const result = await registry.readAll({ dshHome: home, spawnImpl: spawnMissing })
   assert.equal(result.snapshots[0].status, 'auth-required')
   assert.equal(result.snapshots[0].meters.length, 0)
 })

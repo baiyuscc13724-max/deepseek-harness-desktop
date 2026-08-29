@@ -44,8 +44,10 @@ test('desktop themes lock the outer viewport while preserving mobile page scroll
   assert.match(source, /const remaining = mutationDeadline - performance\.now\(\)[\s\S]*?mutationTimer = setTimeout\(flushMutationMount, remaining\)[\s\S]*?mount\(false\)/u)
   assert.doesNotMatch(source, /clearTimeout\(mutationTimer\)/u)
   assert.match(source, /\[data-conversation-scroll\] > \[data-composer-seat\] \{ position:sticky!important; z-index:18; bottom:0!important;[\s\S]*?max-height:min\(58dvh,520px\); overflow-anchor:none; \}/u)
-  assert.match(source, /\[data-composer-seat\] \[data-composer-card="true"\] \{ min-height:0!important; max-height:min\(54dvh,480px\); overflow:hidden; \}/u)
+  assert.match(source, /\[data-composer-seat\] \[data-composer-card="true"\] \{ min-height:0!important; max-height:min\(54dvh,480px\); overflow:visible!important; \}/u)
+  assert.doesNotMatch(source, /\[data-composer-card="true"\][^}]*overflow:hidden/u)
   assert.match(source, /\[data-composer-seat\] \[data-input-scroll="true"\] \{ min-height:0!important; max-height:min\(var\(--dsh-composer-text-max-height,280px\),40dvh\)!important; overflow-y:auto;/u)
+  assert.match(source, /\[data-conversation-scroll\] div:has\(> button\[aria-label="回到底部"\]\),[\s\S]*?button\[aria-label="Back to bottom"\] \{ display:none!important; \}/u)
 })
 
 test('custom skins keep composer and question controls readable', async () => {

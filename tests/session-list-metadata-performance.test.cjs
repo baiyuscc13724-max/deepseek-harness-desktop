@@ -13,12 +13,13 @@ async function patcher() {
 }
 
 function compiledSummarize(source) {
-  const start = source.indexOf('function summarize(session, running, projectedMetadata) {')
+  const start = source.indexOf('const sessionListFieldsCache = /* @__PURE__ */ new WeakMap();')
   const end = source.indexOf('\n}\n/**', start)
   assert.notEqual(start, -1)
   assert.notEqual(end, -1)
   const functionSource = source.slice(start, end + 2)
   let folds = 0
+  let fieldFolds = 0
   const sessionListMetadata = events => {
     folds += 1
     let state = { blank: true, lastPromptAt: null }
@@ -34,21 +35,26 @@ function compiledSummarize(source) {
     'sessionListMetadata',
     'sessionListUpdatedAt',
     'sessionListFields',
-    `return (${functionSource})`
+    `${functionSource}\nreturn summarize;`
   )(
     sessionListMetadata,
     (header, metadata) => Math.max(header.createdAt, metadata?.lastPromptAt ?? 0),
-    (header, events) => ({ cwd: header.cwd, eventCount: events.length })
+    (header, events) => {
+      fieldFolds += 1
+      return { cwd: header.cwd, eventCount: events.length }
+    }
   )
-  return { summarize, folds: () => folds }
+  return { summarize, folds: () => folds, fieldFolds: () => fieldFolds }
 }
 
 test('host session-list metadata patch is pinned, idempotent, and drift-safe', async () => {
   const source = await readFile(runtimeFile, 'utf8')
   const { patchHostSessionListingSource } = await patcher()
   const first = patchHostSessionListingSource(source)
-  assert.equal(first.changed, !source.includes('DSH_DESKTOP_PROJECTED_SESSION_LIST_METADATA'))
+  assert.equal(first.changed, !source.includes('DSH_DESKTOP_MEMOIZED_SESSION_LIST_FIELDS'))
   assert.match(first.source, /projectedMetadata \?\? sessionListMetadata\(session\.events\)/u)
+  assert.match(first.source, /DSH_DESKTOP_MEMOIZED_SESSION_LIST_FIELDS/u)
+  assert.match(first.source, /new WeakMap\(\)/u)
   assert.match(first.source, /projections\?\.values\.sessionListMetadata/u)
   const second = patchHostSessionListingSource(first.source)
   assert.equal(second.changed, false)
@@ -64,7 +70,7 @@ test('attached summaries reuse the exact projection fold and retain the fallback
   const source = await readFile(runtimeFile, 'utf8')
   const { patchHostSessionListingSource } = await patcher()
   const patched = patchHostSessionListingSource(source).source
-  const { summarize, folds } = compiledSummarize(patched)
+  const { summarize, folds, fieldFolds } = compiledSummarize(patched)
   const session = {
     id: 'session-a',
     header: { createdAt: 2, cwd: 'C:\\workspace' },
@@ -78,6 +84,7 @@ test('attached summaries reuse the exact projection fold and retain the fallback
   assert.equal(folds(), 1)
   const projected = summarize(session, true, { blank: false, lastPromptAt: 7 })
   assert.equal(folds(), 1, 'an exact live projection must avoid a redundant full metadata fold')
+  assert.equal(fieldFolds(), 1, 'unchanged event storage must reuse list fields instead of rescanning the transcript')
   assert.deepEqual(projected, fallback)
   assert.deepEqual(projected, {
     sessionId: 'session-a',

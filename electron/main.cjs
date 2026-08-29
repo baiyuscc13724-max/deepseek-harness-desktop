@@ -32,6 +32,8 @@ const { WindowsDesktopUi } = require('./bridge/windows-desktop-ui.cjs')
 const { WindowsUiAutomationSource } = require('./bridge/windows-ui-automation-source.cjs')
 const { ensureModelAdmissionPlugin } = require('./bridge/model-admission-plugin-service.cjs')
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
+const { createAgentTeamsAuthorizationService, startAgentTeamsAuthorizationService } = require('./bridge/agent-teams-authorization-service.cjs')
+const { createAgentTeamsSecretService, startAgentTeamsSecretService } = require('./bridge/agent-teams-secret-service.cjs')
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
 const { SCREENSHOT_COORDINATE_SPACE, mapComputerUseScreenshotPoint } = require('./bridge/computer-use-coordinate-space.cjs')
@@ -42,6 +44,7 @@ const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { createGitRuntimeService } = require('./bridge/git-runtime-service.cjs')
 const { terminateProcessTree } = require('./bridge/process-tree.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
+const { appendBoundedRuntimeDiagnostic, isRecoverableGeneratedProfileFailure, resetGeneratedWebProfileRoot } = require('./bridge/dsh-generated-profile-recovery.cjs')
 const { resolveUserDataOverride } = require('./bridge/user-data-override.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
 const { DEFAULT_APP_FEEDS, DEFAULT_MAX_REDIRECTS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile, safeHttpsUpdateUrl } = require('./bridge/update-service.cjs')
@@ -135,6 +138,8 @@ let lastPrPreviewCandidate = null
 let storageManagementService = null
 let terminalManager = null
 let gitRuntimeService = null
+let agentTeamsAuthorizationService = null
+let agentTeamsSecretService = null
 let gitPreparationPromise = null
 const CACHE_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000
 let cacheMaintenanceTimer = null
@@ -2544,6 +2549,33 @@ function mobileSyncSecretAdapter() {
   }
 }
 
+async function ensureAgentTeamsSecretService() {
+  if (agentTeamsSecretService) return agentTeamsSecretService
+  const service = await startAgentTeamsSecretService({
+    isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+    createService: () => createAgentTeamsSecretService({
+      protector: {
+        protect: plaintext => safeStorage.encryptString(Buffer.from(plaintext).toString('base64')),
+        unprotect: ciphertext => Buffer.from(safeStorage.decryptString(Buffer.from(ciphertext)), 'base64')
+      }
+    })
+  })
+  if (service) agentTeamsSecretService = service
+  return service
+}
+
+async function ensureAgentTeamsAuthorizationService() {
+  if (agentTeamsAuthorizationService) return agentTeamsAuthorizationService
+  const service = await startAgentTeamsAuthorizationService({
+    createService: () => createAgentTeamsAuthorizationService({
+      stateFile: path.join(app.getPath('userData'), 'agent-teams-authorizations.json'),
+      showMessageBox: options => mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options)
+    })
+  })
+  if (service) agentTeamsAuthorizationService = service
+  return service
+}
+
 function ensureMobileSyncService() {
   if (mobileSyncService) return mobileSyncService
   const userData = app.getPath('userData')
@@ -3589,6 +3621,10 @@ async function connectExistingRuntime() {
 }
 
 async function startRuntime() {
+  return startRuntimeAttempt(false)
+}
+
+async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
   if (runtimeState.status === 'ready' && runtimeState.url) return runtimeState
   if (runtime && runtime.exitCode == null) return runtimeState
   // Desktop extensions patch the pinned client runtime bundled with this app.
@@ -3623,6 +3659,8 @@ async function startRuntime() {
   let child
   try {
     await ensureBrowserControlServer()
+    const secretService = await ensureAgentTeamsSecretService()
+    const authorizationService = await ensureAgentTeamsAuthorizationService()
     const runtimePaths = desktopRuntimePaths()
     const runtimeEnv = ensureGitRuntimeService().runtimeEnvironment({
       ...process.env,
@@ -3633,12 +3671,18 @@ async function startRuntime() {
       HARNESS_DESKTOP_BROWSER_STATE_FILE: browserControlStateFile(),
       HARNESS_DESKTOP_CAPABILITIES_STATE_FILE: browserControlStateFile()
     })
+    delete runtimeEnv.HARNESS_DESKTOP_SECRET_ENDPOINT
+    delete runtimeEnv.HARNESS_DESKTOP_SECRET_TOKEN
+    delete runtimeEnv.HARNESS_DESKTOP_AUTHORIZATION_ENDPOINT
+    delete runtimeEnv.HARNESS_DESKTOP_AUTHORIZATION_TOKEN
+    const securedRuntimeEnv = secretService ? secretService.runtimeEnvironment(runtimeEnv) : runtimeEnv
+    const authorizedRuntimeEnv = authorizationService ? authorizationService.runtimeEnvironment(securedRuntimeEnv) : securedRuntimeEnv
     child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0', '--no-open'], {
       cwd: runtimePaths.workspace,
       windowsHide: true,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: desktopRuntimeEnvironment(runtimeEnv, runtimePaths)
+      env: desktopRuntimeEnvironment(authorizedRuntimeEnv, runtimePaths)
     })
   } catch (error) {
     setRuntimeState({ status: 'error', url: null, detail: error.message })
@@ -3649,12 +3693,16 @@ async function startRuntime() {
   runtimeOwnedByDesktop = true
   let candidateUrl = null
   let lastErrorText = ''
+  let diagnosticErrorText = ''
 
   const onOutput = (chunk, isError = false) => {
     const output = chunk.toString()
     const detected = detectUrl(output)
     if (detected) candidateUrl = detected
-    if (isError && output.trim()) lastErrorText = output.trim().slice(-1200)
+    if (isError && output.trim()) {
+      diagnosticErrorText = appendBoundedRuntimeDiagnostic(diagnosticErrorText, output)
+      lastErrorText = diagnosticErrorText.trim().slice(-1200)
+    }
   }
 
   child.stdout?.on('data', chunk => onOutput(chunk))
@@ -3693,6 +3741,19 @@ async function startRuntime() {
       url: null,
       detail: lastErrorText || 'DeepSeek Harness 进程已启动，但 22 秒内没有检测到可访问的本地 Web 服务。'
     })
+  }
+  if (!generatedProfileRecoveryAttempted
+    && runtimeState.status === 'error'
+    && child.exitCode != null
+    && isRecoverableGeneratedProfileFailure(diagnosticErrorText)) {
+    setRuntimeState({ status: 'starting', url: null, detail: '检测到临时配置合成冲突，正在安全重置生成文件并重试一次…' })
+    try {
+      await resetGeneratedWebProfileRoot({ dshHome: desktopDshHome() })
+    } catch (error) {
+      setRuntimeState({ status: 'error', url: null, detail: `自动恢复生成配置失败：${error.message}` })
+      return runtimeState
+    }
+    return startRuntimeAttempt(true)
   }
   return runtimeState
 }
@@ -5547,6 +5608,10 @@ app.on('before-quit', event => {
   memoryService?.close()
   browserSecurityPolicy?.stop()
   browserControlServer?.stop().catch(() => {})
+  agentTeamsAuthorizationService?.close().catch(() => {})
+  agentTeamsAuthorizationService = null
+  agentTeamsSecretService?.close().catch(() => {})
+  agentTeamsSecretService = null
   computerUseIndicator?.dispose()
   computerUseIndicator = null
   computerUseEnabled = false

@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "publishedAt": "2026-08-29T02:03:02.526Z",
+  "publishedAt": "2026-08-29T11:46:52.229Z",
   "platforms": {
     "android": {
-      "version": "1.0.53",
-      "url": "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.53/Harness-Mobile-1.0.53-android-universal.apk",
+      "version": "1.0.54",
+      "url": "https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.54/Harness-Mobile-1.0.54-android-universal.apk",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "required": false
     },
     "ios": {
-      "version": "1.0.53",
+      "version": "1.0.54",
       "appStoreUrl": "https://testflight.apple.com/join/REPLACE_ME",
       "required": false
     }

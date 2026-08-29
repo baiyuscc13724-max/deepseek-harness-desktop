@@ -8,19 +8,21 @@
  * 主内容区（参考现有 body.browser-sidebar-open 模式）。
  *
  * 布局断点：
- *  - 默认（>900px）：空闲首页保持紧凑宽度，具体工具恢复用户可调宽度；
- *    两者都覆盖在官方工作区右侧，不改变或挤压 #runtimeView。
- *  - ≤900px：具体工具采用近全宽覆盖层（calc(100vw - 48px)）。
+ *  - 默认（>900px）：右侧工作区作为独立第三列停靠，中间工作区同步收窄；
+ *    首页保持紧凑宽度，具体工具继续使用用户可调宽度。
+ *  - ≤900px：空间不足时回退为近全宽覆盖层（calc(100vw - 48px)）。
  *  - ≤620px：全宽覆盖层（100vw）。
- *  - prefers-reduced-motion: 关闭位移与过渡，只保留不透明切换。
+ *  - prefers-reduced-motion: 关闭位移与尺寸过渡。
  */
 :root {
   /* Keep the official two-row baseline as an internal safe area. The right
      workspace itself owns the whole column so its top surface can react to
      width, mode, theme, and wallpaper changes together with the content. */
   --dsh-workbench-header-height: 76px;
-  --dsh-right-workspace-home-width: 280px;
+  --dsh-right-workspace-home-width: 320px;
   --dsh-right-workspace-width: 640px;
+  --dsh-right-workspace-min-content-width: 560px;
+  --dsh-right-workspace-dock-width: var(--dsh-right-workspace-home-width);
 }
 
 /* ---------- 根容器 ---------- */
@@ -293,10 +295,30 @@ body.dsh-right-workspace-open .browser-quick-button {
 .right-workspace-document-app-status { flex:none; min-height:18px; border-bottom:1px solid var(--shell-border); padding:7px 10px; color:var(--shell-text-secondary); background:var(--shell-layer-2); font-size:11px; line-height:1.45; }
 .right-workspace-document-app-status.is-error { color:#d92d20; }
 .right-workspace-document-app { display:block; flex:1; width:100%; min-height:280px; border:0; background:#fff; }
-/* The right workspace is an overlay: opening or expanding it must never
-   reflow the official Harness workbench beneath it. */
+/* Keep the original overlay behavior as the narrow-window fallback. */
+#runtimeView { transition:width .22s ease,height .16s ease; }
 body.dsh-right-workspace-open #runtimeView { width:100%; }
 body.dsh-right-workspace-open .runtime-status { right:0; }
+
+/* On desktop the workspace is a real third column. Its rendered width and the
+   workbench offset use the same cap so tools can still be resized without ever
+   covering the conversation or squeezing it below a usable width. */
+@media (min-width:901px) {
+  .dsh-right-workspace.browser-sidebar:not(.is-home) {
+    width:min(var(--browser-panel-width,var(--dsh-right-workspace-width)),calc(100vw - var(--dsh-right-workspace-min-content-width)));
+  }
+  .dsh-right-workspace.browser-sidebar.is-home {
+    width:min(var(--dsh-right-workspace-home-width),calc(100vw - var(--dsh-right-workspace-min-content-width)));
+  }
+  .dsh-right-workspace { box-shadow:none; }
+  body.dsh-right-workspace-docked #runtimeView {
+    width:calc(100% - min(var(--dsh-right-workspace-dock-width),calc(100vw - var(--dsh-right-workspace-min-content-width))));
+  }
+  body.dsh-right-workspace-docked .runtime-status,
+  body.dsh-right-workspace-docked .terminal-panel {
+    right:min(var(--dsh-right-workspace-dock-width),calc(100vw - var(--dsh-right-workspace-min-content-width)));
+  }
+}
 @media (max-width:900px) {
   .right-workspace-modes button { padding:0 6px; }
 }

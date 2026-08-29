@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { CollaborationBroker, CollaborationDirectory } from "./collaboration-broker.js";
 
@@ -11,6 +11,8 @@ const MAX_INBOX_ITEMS = 2_000;
 const MAX_AUDIT_EVENTS = 5_000;
 const INBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const COLLABORATION_COOLDOWN_MS = 90_000;
+const STATE_LOCK_TIMEOUT_MS = 5_000;
+const STATE_STALE_LOCK_MS = 30_000;
 const ACTIVE_TASK_STATES = new Set(["pending", "in_progress"]);
 const INBOX_STATES = new Set(["pending", "deferred", "delivered", "acknowledged", "superseded", "expired"]);
 const ROUTE_REF = /^route_[A-Za-z0-9_-]{20,64}$/u;
@@ -233,6 +235,7 @@ function publishStateStore(filePath, document) {
 class CollaborationStateStore {
   constructor(filePath) {
     this.filePath = filePath;
+    this.lockPath = `${filePath}.lock`;
     this.document = undefined;
     const instances = STATE_STORE_INSTANCES.get(filePath) ?? new Set();
     instances.add(this);
@@ -240,21 +243,17 @@ class CollaborationStateStore {
   }
   async init() {
     if (this.document !== undefined) return clone(this.document);
-    return queueStateStore(this.filePath, async () => {
-      const shared = STATE_STORE_DOCUMENTS.get(this.filePath);
-      if (shared !== undefined) {
-        this.document = shared;
-        return clone(shared);
-      }
+    return queueStateStore(this.filePath, () => this.#withFileLock(async () => {
       let document;
       try { document = validateState(JSON.parse(await readFile(this.filePath, "utf8"))); }
       catch (error) {
         if (error?.code !== "ENOENT") throw error;
         document = defaultState();
+        await this.#write(document);
       }
       publishStateStore(this.filePath, document);
       return clone(document);
-    });
+    }));
   }
   snapshot() {
     if (this.document === undefined) throw new Error("collaboration store is not initialized");
@@ -266,12 +265,12 @@ class CollaborationStateStore {
     if (instances?.size === 0) STATE_STORE_INSTANCES.delete(this.filePath);
   }
   mutate(mutator) {
-    return queueStateStore(this.filePath, async () => {
-      let current = STATE_STORE_DOCUMENTS.get(this.filePath);
+    return queueStateStore(this.filePath, () => this.#withFileLock(async () => {
+      let current;
       try { current = validateState(JSON.parse(await readFile(this.filePath, "utf8"))); }
       catch (error) {
         if (error?.code !== "ENOENT") throw error;
-        current ??= defaultState();
+        current = defaultState();
       }
       const draft = clone(current);
       const result = await mutator(draft);
@@ -279,7 +278,45 @@ class CollaborationStateStore {
       await this.#write(document);
       publishStateStore(this.filePath, document);
       return clone(result);
-    });
+    }));
+  }
+  async #withFileLock(operation) {
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const startedAt = Date.now();
+    let handle;
+    while (handle === undefined) {
+      try {
+        handle = await open(this.lockPath, "wx", 0o600);
+        await handle.writeFile(`${process.pid} ${randomUUID()}\n`, "utf8");
+        await handle.sync();
+      } catch (error) {
+        const createdLock = handle !== undefined;
+        await handle?.close().catch(() => undefined);
+        handle = undefined;
+        if (createdLock) await rm(this.lockPath, { force: true }).catch(() => undefined);
+        if (error?.code !== "EEXIST") throw error;
+        try {
+          if (Date.now() - (await stat(this.lockPath)).mtimeMs > STATE_STALE_LOCK_MS) {
+            await rm(this.lockPath, { force: true });
+            continue;
+          }
+        } catch (staleError) {
+          if (staleError?.code === "ENOENT") continue;
+          throw staleError;
+        }
+        if (Date.now() - startedAt >= STATE_LOCK_TIMEOUT_MS) {
+          const timeout = new Error("collaboration state lock timed out");
+          timeout.code = "COLLABORATION_STATE_LOCK_TIMEOUT";
+          throw timeout;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    try { return await operation(); }
+    finally {
+      await handle.close().catch(() => undefined);
+      await rm(this.lockPath, { force: true });
+    }
   }
   async #write(document) {
     await mkdir(dirname(this.filePath), { recursive: true });
@@ -292,6 +329,16 @@ class CollaborationStateStore {
       await handle.close();
       handle = undefined;
       await rename(temp, this.filePath);
+      let directoryHandle;
+      try {
+        directoryHandle = await open(dirname(this.filePath), "r");
+        await directoryHandle.sync();
+      } catch {
+        // Directory fsync is unavailable on some Windows filesystems. The state
+        // file itself is flushed before its atomic rename.
+      } finally {
+        await directoryHandle?.close().catch(() => undefined);
+      }
     } finally {
       await handle?.close().catch(() => undefined);
       await rm(temp, { force: true }).catch(() => undefined);
@@ -576,16 +623,10 @@ export class AgentCollaborationService {
       return decision;
     }
     const now = this.now();
-    const duplicate = this.store.snapshot().inbox.find((item) => item.dedupeKey === decision.dedupeKey && item.createdAt + COLLABORATION_COOLDOWN_MS > now);
-    if (duplicate !== undefined) {
-      this.broker.consume(decision.admissionRef);
-      await this.store.mutate((document) => appendAudit(document, { type: "intent-rejected", actorRouteRef: sender.routeRef, targetRouteRef: decision.routeRef, decisionCode: "COOLDOWN", at: now }));
-      return { admitted: false, code: "COOLDOWN", detail: { retryAfterMs: duplicate.createdAt + COLLABORATION_COOLDOWN_MS - now } };
-    }
     const internal = this.broker.consume(decision.admissionRef);
     if (internal === undefined) throw new Error("collaboration admission expired before persistence");
     if (decision.deliveryMode === "suggestion") {
-      await this.store.mutate((document) => appendAudit(document, { type: "intent-suggested", actorRouteRef: sender.routeRef, targetRouteRef: decision.routeRef, decisionCode: decision.code, at: this.now() }));
+      await this.store.mutate((document) => appendAudit(document, { type: "intent-suggested", actorRouteRef: sender.routeRef, targetRouteRef: decision.routeRef, decisionCode: decision.code, at: now }));
       const { admissionRef: _consumed, ...publicDecision } = decision;
       return publicDecision;
     }
@@ -605,25 +646,34 @@ export class AgentCollaborationService {
       deliveryMode: decision.deliveryMode,
       wakeLevel: decision.wakeLevel,
       status: target.activity === "paused" ? "deferred" : "pending",
-      createdAt: this.now(),
-      expiresAt: this.now() + INBOX_RETENTION_MS,
+      createdAt: now,
+      expiresAt: now + INBOX_RETENTION_MS,
     };
-    await this.store.mutate((document) => {
+    return this.store.mutate((document) => {
+      const duplicate = document.inbox.find((candidate) => candidate.dedupeKey === decision.dedupeKey && candidate.createdAt + COLLABORATION_COOLDOWN_MS > now);
+      if (duplicate !== undefined) {
+        appendAudit(document, { type: "intent-rejected", actorRouteRef: sender.routeRef, targetRouteRef: decision.routeRef, decisionCode: "COOLDOWN", at: now });
+        return { admitted: false, code: "COOLDOWN", detail: { retryAfterMs: duplicate.createdAt + COLLABORATION_COOLDOWN_MS - now } };
+      }
+      document.inbox = document.inbox.filter((candidate) => candidate.createdAt + INBOX_RETENTION_MS > now);
+      if (document.inbox.length >= MAX_INBOX_ITEMS) {
+        appendAudit(document, { type: "intent-rejected", actorRouteRef: sender.routeRef, targetRouteRef: decision.routeRef, decisionCode: "INBOX_CAPACITY", at: now });
+        return { admitted: false, code: "INBOX_CAPACITY" };
+      }
       document.inbox.push(item);
-      if (document.inbox.length > MAX_INBOX_ITEMS) document.inbox.splice(0, document.inbox.length - MAX_INBOX_ITEMS);
       appendAudit(document, { type: "intent-admitted", actorRouteRef: sender.routeRef, targetRouteRef: decision.routeRef, itemRef: item.id, decisionCode: decision.code, at: item.createdAt });
+      return {
+        admitted: true,
+        code: decision.code,
+        inboxItemRef: item.id,
+        routeRef: decision.routeRef,
+        reason: decision.reason,
+        deliveryMode: item.deliveryMode,
+        wakeLevel: item.wakeLevel,
+        dedupeKey: decision.dedupeKey,
+        expiresAt: item.expiresAt,
+      };
     });
-    return {
-      admitted: true,
-      code: decision.code,
-      inboxItemRef: item.id,
-      routeRef: decision.routeRef,
-      reason: decision.reason,
-      deliveryMode: item.deliveryMode,
-      wakeLevel: item.wakeLevel,
-      dedupeKey: decision.dedupeKey,
-      expiresAt: item.expiresAt,
-    };
   }
 
   async listInbox({ callerSessionId, rootLeadSessionId }) {

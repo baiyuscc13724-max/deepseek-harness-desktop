@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.0.54
+
+### Agent Teams 自动续作与安全边界
+
+- 同一 exact live root、同一 canonical project、团队 active/未暂停、能力已验证、文件无冲突且 effect 全为 `none` 时，checkpoint、reclaim、reopen、安全修复、复测和无歧义重规划沿既定目标自动继续，不再每轮要求用户发送“继续”。
+- 默认 AI 选择的 main/subagent 路由进入普通持续授权；成功发布的成员以 `publishedAt` 保留证据，旧团队只接受 session/claimId/leaseEpoch 精确绑定的历史执行收据，retired/failed 占位不能伪造授权。
+- 新建团队、显式 Stop 后 Resume、handoff/adopt/recover、未知能力、文件冲突、跨项目/所有权变化、真实副作用、`outcome_unknown`、不可逆风险与目标歧义继续硬性停止；授权保持 `human_attested`，不伪造 `host_verified`。
+- accepted-completed 接管继续绑定原 owner epoch；`resolve_unknown` 改用 Host 发行、短时效、单用途且绑定完整参数摘要的授权，替换参数、过期、跨回合/工具和重放均拒绝。
+- 项目设备/E2EE/LAN 私钥通过 Host secret capability 与系统安全存储托管；secure-channel receipt 持久化，collaboration same-dedupe 的检查与 Inbox 追加进入同一串行 mutation，覆盖重启、容量和双实例竞态。
+
+### 模型密钥编辑与无障碍
+
+- 环境 secret 保持不可读取、不可回写，但原密码字段允许直接键入/粘贴并创建隔离的 `HARNESS_DESKTOP_<PROVIDER>_API_KEY` 覆盖；设置、日志、审计和模型上下文只接触 credential ref。
+- 支持覆盖新增、修改、删除与恢复环境来源；unset 失败按最新 settings revision 补偿重绑仍存在的引用，自定义 Provider 删除会清理页面托管凭据而不误删环境引用。
+- DeepSeek `credentialOnly`、OpenAI、Codex、custom/pi-ai 和 inheritance/fallback 均有行为测试；字段补齐原生 label、稳定 id、密码掩码、`autocomplete=new-password`、持续帮助文本和 44px 操作目标。
+
+### 长会话、渲染与工作区性能
+
+- 大型消息树投影基准约由 150.828 ms 降至 1.128 ms；折叠的 4,000 步对话首批固定 64 项并优先保证深层 selected call 可达，不截断或删除历史。
+- 会话字段投影约由 113.540 ms 降至 0.436 ms，160 个会话制品约由 2,457.747 ms 降至 279.330 ms；会话列表、持久化、Session Experience 生命周期、renderer observer 和右侧工作区进入双层性能门禁。
+- 最终隔离 Electron 场景的 switch p95 为 9.5 ms、最长 long task 91 ms、无 retained heap/listener 增长；production contracts 31/31 通过。
+- Conversation Work Tree 与 tool-result owner 补丁精确支持 raw、flat 和 `workTreeItems + renderedNodeKeys` 组合；完整组合幂等，半补丁与漂移继续 fail closed。
+
+### 验证与发布身份
+
+- 新增 [`docs/SECURITY-REVIEW-v1.0.54.zh-CN.md`](docs/SECURITY-REVIEW-v1.0.54.zh-CN.md) 与 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)，记录自动驾驶授权、secret custody、密钥覆盖和性能证据边界。
+- 全仓 `npm run verify` 最终 1714 通过/0 失败/4 跳过；Agent Teams 159 通过/0 失败/2 跳过；模型密钥 28/28；安装后 artifact-fixture smoke 2/2；P1 release-blocking 矩阵 11/11；`npm run verify:release` 与 `git diff --check` 通过。
+- 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由和移动更新示例统一到 `1.0.54`；Android `versionCode=1005400`，iOS build code 为 `10054`。
+- 正式发布只走仓库 resumable publisher：精确 main SHA、不可变 `v1.0.54`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。
+- 已发布 `v1.0.53` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变，不移动、不覆盖、不复用。
+
 ## 1.0.53
 
 ### 大型会话与高频渲染性能

@@ -13,6 +13,7 @@ import { patchConversationWorkTreeSource } from './conversation-work-tree-patch.
 import { patchSessionPersistenceListingSource } from './session-persistence-performance-patch.mjs'
 import { patchHostSessionListingSource } from './session-list-metadata-performance-patch.mjs'
 import { patchTimelineReferenceActionSource } from './timeline-reference-patch.mjs'
+import { patchModelSettingsKeyOverrideSource } from './model-settings-key-override-patch.mjs'
 
 export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
 export { patchAttachmentInputConversationSource, patchAttachmentInputSource } from './attachment-input-patch.mjs'
@@ -24,6 +25,7 @@ export { patchToolResultImageSource, patchToolResultOwnerSource } from './tool-r
 export { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.mjs'
 export { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 export { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
+export { patchModelSettingsKeyOverrideSource } from './model-settings-key-override-patch.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runtimeClient = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js')
@@ -40,6 +42,7 @@ const pwshSandboxRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-
 const bashSandboxRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-bash-sandbox', 'lib', 'index.js')
 const windowsAclRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-sandbox-windows-acl', 'lib', 'types-CNjZgO4h.js')
 const modelSelectionRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
+const modelSettingsRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-models', 'lib', 'client.js')
 const workspaceUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js')
 const sessionPersistenceRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session-persistence-jsonl', 'lib', 'index.js')
 const hostApiProxyRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'index.js')
@@ -1659,6 +1662,13 @@ export async function patchInstalledModelSelection(file = modelSelectionRuntime)
   return patched.changed
 }
 
+export async function patchInstalledModelSettings(file = modelSettingsRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchModelSettingsKeyOverrideSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 export async function patchInstalledWorkspaceUi(file = workspaceUiRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchWorkspaceSessionMenuSource(source)
@@ -1726,6 +1736,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const bashSandboxChanged = await patchInstalledBashSandbox()
   const windowsAclChanged = await patchInstalledWindowsAcl()
   const modelSelectionChanged = await patchInstalledModelSelection()
+  const modelSettingsChanged = await patchInstalledModelSettings()
   const workspaceUiChanged = await patchInstalledWorkspaceUi()
   const sessionPersistenceChanged = await patchInstalledSessionPersistence()
   const hostApiProxyChanged = await patchInstalledHostApiProxy()
@@ -1750,6 +1761,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(pwshSandboxChanged || bashSandboxChanged ? 'Patched confined nested-pipe denial classification.\n' : 'Confined nested-pipe denial classification already applied.\n')
   process.stdout.write(windowsAclChanged ? 'Patched Windows ACL token-default DACL intersection.\n' : 'Windows ACL token-default DACL intersection already applied.\n')
   process.stdout.write(modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
+  process.stdout.write(modelSettingsChanged ? 'Patched safe model API-key overrides.\n' : 'Safe model API-key overrides already applied.\n')
   process.stdout.write(workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n')
   process.stdout.write(sessionPersistenceChanged ? 'Patched bounded concurrent session metadata listing.\n' : 'Bounded concurrent session metadata listing already applied.\n')
   process.stdout.write(hostApiProxyChanged ? 'Patched live session-list metadata projection reuse.\n' : 'Live session-list metadata projection reuse already applied.\n')

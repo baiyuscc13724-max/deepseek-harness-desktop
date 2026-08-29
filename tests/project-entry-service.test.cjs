@@ -2,7 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
-const { createHmac, generateKeyPairSync } = require('node:crypto')
+const { createCipheriv, createDecipheriv, createHmac, generateKeyPairSync, randomBytes } = require('node:crypto')
 const { mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 const { once } = require('node:events')
@@ -13,6 +13,42 @@ const { createHealthServer, createRelayRouter } = require('../services/wss-relay
 const serviceUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-entry-service.js')).href
 const taskStoreUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-store.js')).href
 const taskServiceUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-service.js')).href
+
+const controlledProtectorKey = randomBytes(32)
+const controlledSecretCapability = Object.freeze({
+  available: true,
+  async protect(plaintext, { purpose, binding }) {
+    const nonce = randomBytes(12)
+    const cipher = createCipheriv('aes-256-gcm', controlledProtectorKey, nonce)
+    cipher.setAAD(Buffer.from(`${purpose}\0${binding}`))
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()])
+    return Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]).toString('base64')
+  },
+  async unprotect(sealed, { purpose, binding }) {
+    const payload = Buffer.from(sealed, 'base64')
+    const decipher = createDecipheriv('aes-256-gcm', controlledProtectorKey, payload.subarray(0, 12))
+    decipher.setAAD(Buffer.from(`${purpose}\0${binding}`))
+    decipher.setAuthTag(payload.subarray(12, 28))
+    return Buffer.concat([decipher.update(payload.subarray(28)), decipher.final()])
+  }
+})
+function secureEntryClass(Base) {
+  return class SecureProjectEntryService extends Base {
+    constructor(options) { super({ ...options, secretCapability: options?.secretCapability ?? controlledSecretCapability }) }
+  }
+}
+async function readProtectedDevice(file) {
+  const stored = JSON.parse(await readFile(file, 'utf8'))
+  if (!stored.secretEnvelope) return stored
+  const plaintext = await controlledSecretCapability.unprotect(stored.secretEnvelope.sealed, { purpose: stored.secretEnvelope.purpose, binding: stored.secretEnvelope.binding })
+  try {
+    const secrets = JSON.parse(plaintext.toString('utf8'))
+    const device = { ...stored, ...secrets, device: { ...stored.device, signingPrivateKey: secrets.signingPrivateKey, encryptionPrivateKey: secrets.encryptionPrivateKey } }
+    delete device.secretEnvelope
+    if (stored.lan && secrets.lanKey) device.lan = { ...stored.lan, key: secrets.lanKey }
+    return device
+  } finally { plaintext.fill(0) }
+}
 
 async function pairCollaborator(authority, collaborator, { displayName = 'Sync Peer', role = 'contributor' } = {}) {
   const invite = await authority.createInvite({ displayName, role })
@@ -25,7 +61,8 @@ async function pairCollaborator(authority, collaborator, { displayName = 'Sync P
 async function usingService(run) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-entry-'))
   let now = 80_000_000
-  const { ProjectEntryService } = await import(`${serviceUrl}?test=${Date.now()}-${Math.random()}`)
+  const { ProjectEntryService: BaseProjectEntryService } = await import(`${serviceUrl}?test=${Date.now()}-${Math.random()}`)
+  const ProjectEntryService = secureEntryClass(BaseProjectEntryService)
   const service = new ProjectEntryService({ dshHome: root, now: () => now })
   try {
     await run({ root, service, setNow: value => { now = value }, ProjectEntryService })
@@ -77,11 +114,41 @@ test('project creation persists one owner and reopens without exposing private m
     await reopened.close()
   }
 
-  const device = JSON.parse(await readFile(path.join(root, 'storages', 'agent_project_device.json'), 'utf8'))
+  const deviceFile = path.join(root, 'storages', 'agent_project_device.json')
+  const storedDevice = JSON.parse(await readFile(deviceFile, 'utf8'))
+  const device = await readProtectedDevice(deviceFile)
+  assert.equal(storedDevice.device.signingPrivateKey, undefined)
+  assert.equal(storedDevice.device.encryptionPrivateKey, undefined)
+  assert.equal(storedDevice.secret, undefined)
+  assert.equal(storedDevice.encryptionKey, undefined)
+  assert.equal(storedDevice.secretEnvelope.version, 1)
   assert.match(device.device.signingPrivateKey, /^[A-Za-z0-9_-]+$/u)
   assert.match(device.device.encryptionPrivateKey, /^[A-Za-z0-9_-]+$/u)
-  assert.equal(JSON.stringify(device).includes('Private Release'), false)
+  assert.equal(JSON.stringify(storedDevice).includes('Private Release'), false)
 }))
+
+test('project secret storage fails closed when unavailable and rejects tampered envelopes', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-secret-fail-closed-'))
+  const { ProjectEntryService: BaseProjectEntryService } = await import(`${serviceUrl}?secret-fail=${Date.now()}-${Math.random()}`)
+  const unavailable = Object.freeze({ available: false, protect: async () => { const error = new Error('unavailable'); error.code = 'PROJECT_ENTRY_SECRET_UNAVAILABLE'; throw error }, unprotect: async () => { throw new Error('unavailable') } })
+  const blocked = new BaseProjectEntryService({ dshHome: root, secretCapability: unavailable, now: () => 80_000_000 })
+  try {
+    await assert.rejects(blocked.createProject({ projectName: 'Blocked', displayName: 'Owner' }), error => error?.code === 'PROJECT_ENTRY_SECRET_UNAVAILABLE')
+    await assert.rejects(readFile(path.join(root, 'storages', 'agent_project_device.json'), 'utf8'), error => error?.code === 'ENOENT')
+  } finally { await blocked.close() }
+
+  const ProjectEntryService = secureEntryClass(BaseProjectEntryService)
+  const service = new ProjectEntryService({ dshHome: root, now: () => 80_000_000 })
+  await service.createProject({ projectName: 'Tamper', displayName: 'Owner' })
+  await service.close()
+  const deviceFile = path.join(root, 'storages', 'agent_project_device.json')
+  const document = JSON.parse(await readFile(deviceFile, 'utf8'))
+  document.secretEnvelope.sealed = `${document.secretEnvelope.sealed.slice(0, -1)}${document.secretEnvelope.sealed.endsWith('A') ? 'B' : 'A'}`
+  await writeFile(deviceFile, `${JSON.stringify(document)}\n`)
+  const reopened = new ProjectEntryService({ dshHome: root, now: () => 80_000_000 })
+  try { await assert.rejects(reopened.status(), error => error?.code === 'PROJECT_ENTRY_SECRET_INVALID') }
+  finally { await reopened.close(); await rm(root, { recursive: true, force: true }) }
+})
 
 test('Host-only project task context binds execution identity, actor resolution, storage, and derived key', async () => usingService(async ({ root, service }) => {
   const created = await service.createProject({ projectName: 'Task Context', displayName: 'Owner' })
@@ -384,8 +451,8 @@ test('business sync contexts keep authority and collaborator keys local, stable,
     assert.equal(JSON.stringify(authority).includes('peerDeviceRefs'), false)
     assert.equal(JSON.stringify(await service.status()).includes('peerDeviceRefs'), false)
 
-    const authorityDevice = JSON.parse(await readFile(path.join(root, 'storages', 'agent_project_device.json'), 'utf8'))
-    const collaboratorDevice = JSON.parse(await readFile(path.join(collaboratorHome, 'storages', 'agent_project_device.json'), 'utf8'))
+    const authorityDevice = await readProtectedDevice(path.join(root, 'storages', 'agent_project_device.json'))
+    const collaboratorDevice = await readProtectedDevice(path.join(collaboratorHome, 'storages', 'agent_project_device.json'))
     assert.equal(authorityDevice.syncCacheKey, undefined)
     const rawProjectKey = Buffer.from(authorityDevice.encryptionKey, 'base64url')
     const exactAuthorityKey = createHmac('sha256', rawProjectKey).update('dsh/project-business-sync/v1').update('\0').update(authority.projectRef).digest()
@@ -426,12 +493,12 @@ test('legacy collaborator sync cache migrates once and forged opened metadata fa
     await pairCollaborator(service, collaborator)
     await collaborator.close()
     const deviceFile = path.join(collaboratorHome, 'storages', 'agent_project_device.json')
-    const legacy = JSON.parse(await readFile(deviceFile, 'utf8'))
+    const legacy = await readProtectedDevice(deviceFile)
     delete legacy.syncCacheKey
     await writeFile(deviceFile, `${JSON.stringify(legacy)}\n`)
     collaborator = new ProjectEntryService({ dshHome: collaboratorHome, now: () => 80_000_000 })
     const first = await collaborator.localProjectBusinessSyncContext()
-    const migrated = JSON.parse(await readFile(deviceFile, 'utf8'))
+    const migrated = await readProtectedDevice(deviceFile)
     assert.match(migrated.syncCacheKey, /^[A-Za-z0-9_-]{43}$/u)
     const firstKey = first.keyProvider(first.projectRef)
     first.dispose()
@@ -455,7 +522,7 @@ test('legacy collaborator sync cache migrates once and forged opened metadata fa
     authority.dispose(); second.dispose(); firstKey.fill(0)
 
     await collaborator.close()
-    const wrongRolePeer = JSON.parse(await readFile(deviceFile, 'utf8'))
+    const wrongRolePeer = await readProtectedDevice(deviceFile)
     wrongRolePeer.peers[0].role = 'reviewer'
     await writeFile(deviceFile, `${JSON.stringify(wrongRolePeer)}\n`)
     collaborator = new ProjectEntryService({ dshHome: collaboratorHome, now: () => 80_000_000 })
@@ -519,7 +586,7 @@ test('business sync contexts fail closed on grant tamper, authority revision, cl
     await assert.rejects(authority.peerDeviceRefs(), error => error?.code === 'PROJECT_ENTRY_TASK_CONTEXT_INVALID')
     authority.dispose()
 
-    const pairedDevice = JSON.parse(await readFile(path.join(collaboratorHome, 'storages', 'agent_project_device.json'), 'utf8'))
+    const pairedDevice = await readProtectedDevice(path.join(collaboratorHome, 'storages', 'agent_project_device.json'))
     await service.persisted.mutate('revokeDevice', {
       actorDeviceRef: service.device.device.deviceRef,
       targetDeviceRef: pairedDevice.device.deviceRef,
@@ -534,7 +601,7 @@ test('business sync contexts fail closed on grant tamper, authority revision, cl
 
     await collaborator.close()
     const deviceFile = path.join(collaboratorHome, 'storages', 'agent_project_device.json')
-    const original = JSON.parse(await readFile(deviceFile, 'utf8'))
+    const original = await readProtectedDevice(deviceFile)
     const tampered = structuredClone(original)
     tampered.device.role = 'owner'
     await writeFile(deviceFile, `${JSON.stringify(tampered)}\n`)
@@ -560,7 +627,7 @@ test('business sync contexts fail closed on grant tamper, authority revision, cl
 test('business sync device schema rejects authority cache keys and malformed collaborator cache keys', async () => usingService(async ({ root, service, ProjectEntryService }) => {
   await service.createProject({ projectName: 'Business Sync Schema', displayName: 'Owner' })
   const authorityFile = path.join(root, 'storages', 'agent_project_device.json')
-  const authorityDevice = JSON.parse(await readFile(authorityFile, 'utf8'))
+  const authorityDevice = await readProtectedDevice(authorityFile)
   const forgedAuthority = structuredClone(authorityDevice)
   forgedAuthority.syncCacheKey = 'A'.repeat(43)
   await writeFile(authorityFile, `${JSON.stringify(forgedAuthority)}\n`)
@@ -575,7 +642,7 @@ test('business sync device schema rejects authority cache keys and malformed col
     await pairCollaborator(service, collaborator)
     await collaborator.close()
     const collaboratorFile = path.join(collaboratorHome, 'storages', 'agent_project_device.json')
-    const collaboratorDevice = JSON.parse(await readFile(collaboratorFile, 'utf8'))
+    const collaboratorDevice = await readProtectedDevice(collaboratorFile)
     collaboratorDevice.syncCacheKey = 'not-a-32-byte-key'
     await writeFile(collaboratorFile, `${JSON.stringify(collaboratorDevice)}\n`)
     collaborator = new ProjectEntryService({ dshHome: collaboratorHome, now: () => 80_000_000 })
@@ -642,7 +709,8 @@ test('close drains work accepted before shutdown and rejects every new public op
 }))
 
 test('project task context rejects missing, collaborator, stale, mismatched, and revoked local authority membership', async t => {
-  const { ProjectEntryService } = await import(`${serviceUrl}?task-context=${Date.now()}-${Math.random()}`)
+  const { ProjectEntryService: BaseProjectEntryService } = await import(`${serviceUrl}?task-context=${Date.now()}-${Math.random()}`)
+  const ProjectEntryService = secureEntryClass(BaseProjectEntryService)
   const emptyHome = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-empty-context-'))
   const empty = new ProjectEntryService({ dshHome: emptyHome, now: () => 80_000_000 })
   t.after(async () => { await empty.close(); await rm(emptyHome, { recursive: true, force: true }) })
@@ -667,7 +735,7 @@ test('project task context rejects missing, collaborator, stale, mismatched, and
   await assert.rejects(collaborator.localProjectFoundationsContext(), error => error?.code === 'PROJECT_ENTRY_TASK_CONTEXT_FORBIDDEN')
 
   const deviceFile = path.join(authorityHome, 'storages', 'agent_project_device.json')
-  const savedDevice = JSON.parse(await readFile(deviceFile, 'utf8'))
+  const savedDevice = await readProtectedDevice(deviceFile)
   const tamperedDevice = structuredClone(savedDevice)
   tamperedDevice.device.grant.role = 'reviewer'
   await writeFile(deviceFile, `${JSON.stringify(tamperedDevice)}\n`)
@@ -745,7 +813,8 @@ test('two desktops complete the invitation handshake and exchange authenticated 
   class LocalRelaySocket extends WebSocket {
     constructor(_publicUrl, options) { super(localUrl, options) }
   }
-  const { ProjectEntryService } = await import(`${serviceUrl}?pairing=${Date.now()}-${Math.random()}`)
+  const { ProjectEntryService: BaseProjectEntryService } = await import(`${serviceUrl}?pairing=${Date.now()}-${Math.random()}`)
+  const ProjectEntryService = secureEntryClass(BaseProjectEntryService)
   const authority = new ProjectEntryService({ dshHome: authorityHome, WebSocketImpl: LocalRelaySocket, now: () => 80_000_000 })
   const collaborator = new ProjectEntryService({ dshHome: collaboratorHome, WebSocketImpl: LocalRelaySocket, now: () => 80_000_000 })
   t.after(async () => {
@@ -809,7 +878,8 @@ test('two desktops complete the invitation handshake and exchange authenticated 
 test('two paired desktops automatically establish a real LAN mTLS and E2EE connection without exposing PEM fields', async t => {
   const authorityHome = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-lan-authority-'))
   const collaboratorHome = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-lan-collaborator-'))
-  const { ProjectEntryService } = await import(`${serviceUrl}?lan-pairing=${Date.now()}-${Math.random()}`)
+  const { ProjectEntryService: BaseProjectEntryService } = await import(`${serviceUrl}?lan-pairing=${Date.now()}-${Math.random()}`)
+  const ProjectEntryService = secureEntryClass(BaseProjectEntryService)
   const fixedNow = Date.now()
   const authority = new ProjectEntryService({ dshHome: authorityHome, now: () => fixedNow })
   const collaborator = new ProjectEntryService({ dshHome: collaboratorHome, now: () => fixedNow })
@@ -826,6 +896,10 @@ test('two paired desktops automatically establish a real LAN mTLS and E2EE conne
 
   const invite = await authority.createInvite({ displayName: 'LAN Reviewer', role: 'reviewer' })
   const request = await collaborator.createJoinRequest({ inviteCode: invite.inviteCode, displayName: 'LAN Reviewer' })
+  const pendingText = await readFile(path.join(collaboratorHome, 'storages', 'agent_project_pending_join.json'), 'utf8')
+  assert.equal(pendingText.includes('signingPrivateKey'), false)
+  assert.equal(pendingText.includes('encryptionPrivateKey'), false)
+  assert.equal(pendingText.includes('BEGIN PRIVATE KEY'), false)
   const approval = await authority.approveJoinRequest({ joinRequest: request.joinRequest })
   assert.equal(approval.joinResponse.includes('BEGIN PRIVATE KEY'), false, 'the transfer stays encoded instead of rendering PEM in the UI')
   const tamperedApproval = JSON.parse(Buffer.from(approval.joinResponse.slice('joinack_'.length), 'base64url').toString('utf8'))
@@ -833,6 +907,14 @@ test('two paired desktops automatically establish a real LAN mTLS and E2EE conne
   const tamperedJoinResponse = `joinack_${Buffer.from(JSON.stringify(tamperedApproval), 'utf8').toString('base64url')}`
   await assert.rejects(collaborator.completeJoinRequest({ joinResponse: tamperedJoinResponse }), error => error?.code === 'PROJECT_ENTRY_INVITE_INVALID' && /authority signature/u.test(error.message))
   await collaborator.completeJoinRequest({ joinResponse: approval.joinResponse })
+  const diskTexts = await Promise.all([
+    readFile(path.join(authorityHome, 'storages', 'agent_project_device.json'), 'utf8'),
+    readFile(path.join(authorityHome, 'storages', 'agent_project_lan_credentials.json'), 'utf8'),
+    readFile(path.join(collaboratorHome, 'storages', 'agent_project_device.json'), 'utf8')
+  ])
+  for (const text of diskTexts) {
+    for (const forbidden of ['signingPrivateKey', 'encryptionPrivateKey', 'caPrivateKey', 'serverPrivateKey', 'syncCacheKey', 'BEGIN PRIVATE KEY']) assert.equal(text.includes(forbidden), false, `persisted project profile leaked ${forbidden}`)
+  }
   const collaboratorStatus = await collaborator.status()
   assert.deepEqual(collaboratorStatus.lan, { connected: false, reconnecting: false, listening: false, connectionCount: 0 })
 
@@ -932,7 +1014,7 @@ test('collaborator outbound requires a fresh valid grant and exactly one owner a
     await pairCollaborator(service, collaborator)
     const ownerDeviceRef = service.device.device.deviceRef
     await collaborator.close()
-    const original = JSON.parse(await readFile(deviceFile, 'utf8'))
+    const original = await readProtectedDevice(deviceFile)
     const fakeConnectedLan = { canSend: () => true, send: () => { assert.fail('unauthorized collaborator send reached transport') }, stop: async () => undefined }
 
     const nonOwner = structuredClone(original)

@@ -21,6 +21,40 @@ test('streaming text mutations only revisit a containing code path', async () =>
   assert.doesNotMatch(links, /for \(const record of records\) \{\s*decorateNode\(record\.target\)/u)
 })
 
+test('runtime-relative and download anchors stay on the runtime link path', async () => {
+  const links = (await source('renderer/workspace-links-integration.js')).replace(/\r\n/gu, '\n')
+  const start = links.indexOf('const keepsRuntimeNavigation = anchor => {')
+  const end = links.indexOf('\n\n    const route =', start)
+  assert.notEqual(start, -1, 'runtime navigation classifier is required')
+  assert.notEqual(end, -1, 'anchor classifier boundary is required')
+  const classifiers = new Function('localPath', `${links.slice(start, end)}; return { keepsRuntimeNavigation, anchorPath }`)(value => `local:${value}`)
+  const { keepsRuntimeNavigation, anchorPath } = classifiers
+  const anchor = (href, download = false) => ({
+    getAttribute: name => name === 'href' ? href : null,
+    hasAttribute: name => name === 'download' && download
+  })
+
+  const download = anchor('/api/desktop-files/download?sessionId=session-1&path=human_attested')
+  assert.equal(keepsRuntimeNavigation(download), true)
+  assert.equal(keepsRuntimeNavigation(anchor('/settings?tab=files')), true)
+  assert.equal(keepsRuntimeNavigation(anchor('#details')), true)
+  assert.equal(keepsRuntimeNavigation(anchor('docs/report.md', true)), true)
+  assert.equal(keepsRuntimeNavigation(anchor('//cdn.example.com/file.txt')), false)
+  assert.equal(keepsRuntimeNavigation(anchor('docs/report.md')), false)
+  assert.equal(anchorPath(download), '')
+  assert.equal(anchorPath(anchor('/settings?tab=files')), '')
+  assert.equal(anchorPath(anchor('//cdn.example.com/file.txt')), '')
+  assert.equal(anchorPath(anchor('#details')), '')
+  assert.equal(anchorPath(anchor('docs/report.md', true)), '')
+  assert.equal(anchorPath(anchor('docs/report.md')), 'local:docs/report.md')
+  assert.equal(anchorPath(anchor('file:///tmp/report.md')), 'local:file:///tmp/report.md')
+
+  const clickStart = links.indexOf("document.addEventListener('click'")
+  const nativeGuard = links.indexOf('if (keepsRuntimeNavigation(anchor)) return', clickStart)
+  const externalRoute = links.indexOf("route('open-external'", clickStart)
+  assert.ok(clickStart >= 0 && nativeGuard > clickStart && externalRoute > nativeGuard, 'runtime links must bypass the external browser route')
+})
+
 test('plain chat HTTP links take the explicit system-browser route', async () => {
   const [links, renderer, preload, main] = await Promise.all([
     source('renderer/workspace-links-integration.js'),

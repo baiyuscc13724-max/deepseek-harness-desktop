@@ -303,6 +303,7 @@ window.__ModuleLoader__.load({
     var TIMELINE_MODEL_VERSION = 1;
     var TIMELINE_RENDER_LIMIT = 120;
     var timelineComposerActions = Object.create(null);
+    var activeInlineTimelineCleanup = null;
 
     function timelineSession(sessions, sessionId) {
       if (!sessions || !sessionId || typeof sessions.binding !== "function") return null;
@@ -615,7 +616,7 @@ window.__ModuleLoader__.load({
       var composerCard = anchor && typeof anchor.closest === "function" ? anchor.closest('[data-composer-card]') : null;
       var session = timelineSession(sessions, sessionId);
       if (!flow || !session) return;
-      Array.prototype.forEach.call(document.querySelectorAll('body > .dse-inline-timeline'), function (previous) { previous.remove(); });
+      if (typeof activeInlineTimelineCleanup === "function") activeInlineTimelineCleanup();
       var nav = document.createElement("nav");
       nav.className = "dse-inline-timeline";
       nav.dataset.sessionId = String(sessionId || "");
@@ -643,6 +644,7 @@ window.__ModuleLoader__.load({
       var disposed = false;
       var frame = 0;
       var scrollFrame = 0;
+      var focusoutTimer = null;
       function hidePopover() { popover.hidden = true; currentItem = null; }
       function showPopover(item, marker) {
         currentItem = item;
@@ -753,7 +755,13 @@ window.__ModuleLoader__.load({
       if (viewport) viewport.addEventListener("scroll", scheduleScrollSync, { passive: true });
       window.addEventListener("resize", syncCurrentMarker, { passive: true });
       nav.addEventListener("mouseleave", hidePopover);
-      nav.addEventListener("focusout", function () { setTimeout(function () { if (!nav.contains(document.activeElement)) hidePopover(); }, 0); });
+      nav.addEventListener("focusout", function () {
+        if (focusoutTimer !== null) clearTimeout(focusoutTimer);
+        focusoutTimer = setTimeout(function () {
+          focusoutTimer = null;
+          if (!disposed && !nav.contains(document.activeElement)) hidePopover();
+        }, 0);
+      });
       list.addEventListener("keydown", function (event) {
         if (!/^(ArrowUp|ArrowDown|Home|End)$/.test(event.key) || !markerRows.length) return;
         var current = markerRows.findIndex(function (entry) { return entry.button === document.activeElement; });
@@ -762,16 +770,22 @@ window.__ModuleLoader__.load({
         event.preventDefault();
       });
       renderRail();
-      return function () {
+      function cleanup() {
+        if (disposed) return;
         disposed = true;
+        if (activeInlineTimelineCleanup === cleanup) activeInlineTimelineCleanup = null;
         if (frame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
         if (scrollFrame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(scrollFrame);
+        if (focusoutTimer !== null) clearTimeout(focusoutTimer);
+        focusoutTimer = null;
         if (typeof unsubscribe === "function") unsubscribe();
         if (observer) observer.disconnect();
         if (viewport) viewport.removeEventListener("scroll", scheduleScrollSync);
         window.removeEventListener("resize", syncCurrentMarker);
         nav.remove();
-      };
+      }
+      activeInlineTimelineCleanup = cleanup;
+      return cleanup;
     }
 
     function timelineStatusText(status) {

@@ -74,6 +74,27 @@ test('session metadata listing preserves input order while reading at most eight
   assert.ok(maximum <= 8, `expected at most eight concurrent reads, observed ${maximum}`)
 })
 
+test('session metadata listing aborts without launching beyond the active bounded window', async () => {
+  const { JsonlSessionPersistence } = await runtime()
+  const controller = new AbortController()
+  let started = 0
+  let completed = 0
+  const persistence = fakePersistence(JsonlSessionPersistence, 1000, async value => {
+    started += 1
+    try {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      return header(Number(/dir-(\d+)/.exec(value)[1]))
+    } finally {
+      completed += 1
+    }
+  })
+  const listing = persistence.list(controller.signal)
+  setTimeout(() => controller.abort(), 1)
+  await assert.rejects(() => listing, error => error?.name === 'AbortError')
+  assert.equal(started, 8)
+  assert.equal(completed, 8, 'every started read must settle before cancellation returns')
+})
+
 test('session metadata listing reports the earliest input failure and settles the started window', async () => {
   const { JsonlSessionPersistence } = await runtime()
   const completed = []
