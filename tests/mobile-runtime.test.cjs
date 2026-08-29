@@ -183,6 +183,24 @@ test('mobile runtime retries session history when the server reports an internal
   assert.equal((await response.json()).result.ok, true)
 })
 
+test('mobile runtime keeps retrying through a full Desktop runtime restart window', async () => {
+  let historyCalls = 0
+  const runtime = installRuntime(async input => {
+    const url = typeof input === 'string' ? input : input.url
+    if (!url.includes('/api/session.history')) return new Response('', { status: 404 })
+    historyCalls++
+    if (historyCalls < 8) return jsonResponse({ result: { ok: false, error: { code: 'internal', message: 'workbench is restarting' } } }, 503)
+    return jsonResponse({ result: { ok: true, value: { sessionId: 'session-recovered', events: [] } } })
+  })
+
+  const response = await runtime.window.fetch('https://mobile.test/api/session.history', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 'session-recovered' })
+  })
+  assert.equal(historyCalls, 8)
+  assert.equal((await response.json()).result.ok, true)
+})
+
 test('mobile runtime acknowledges unread only after fresh authoritative history for the same session', async () => {
   const runtime = installRuntime(async (input, init) => {
     const url = typeof input === 'string' ? input : input.url

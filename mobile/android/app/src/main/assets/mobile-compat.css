@@ -1444,6 +1444,12 @@
     padding: 14px var(--harness-mobile-page-gutter) 20px !important;
   }
 
+  /* Keep the fixed official timeline in a real gutter instead of laying its
+     44px touch rail over messages, workflow cards, or document references. */
+  :root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-conversation-view="true"][data-conversation-view="chat"] [class*="_scroll"] {
+    padding-left: calc(var(--harness-mobile-page-gutter) + 52px) !important;
+  }
+
   [data-harness-mobile-conversation-view="true"][data-conversation-view="chat"] [class*="_column"] {
     max-width: 760px !important;
     gap: 10px !important;
@@ -1795,6 +1801,16 @@
     padding: 9px 12px !important;
     border-radius: 10px !important;
     touch-action: manipulation !important;
+  }
+
+  @media (max-width: 460px) {
+    :root[data-harness-mobile-chat-detail="open"] .dse-inline-timeline {
+      display: none !important;
+    }
+
+    :root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-conversation-view="true"][data-conversation-view="chat"] [class*="_scroll"] {
+      padding-left: var(--harness-mobile-page-gutter) !important;
+    }
   }
 
   :root[data-harness-mobile-chat-detail="open"] #harness-mobile-input-button,
@@ -4760,4 +4776,29 @@
   min-height: 0 !important;
   max-height: none !important;
   object-fit: contain !important;
+}
+
+[data-harness-mobile-document-reference="true"] {
+  box-sizing: border-box !important;
+  min-height: 44px;
+  margin: 2px 1px;
+  padding: 10px 11px !important;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--hm-color-primary, #4968e8) 18%, var(--hm-color-border, #e3e7ef));
+  border-radius: 10px;
+  color: var(--hm-color-primary-strong, #3154d8) !important;
+  background: color-mix(in srgb, var(--hm-color-primary, #4968e8) 7%, var(--hm-color-surface, #fff));
+  font-weight: 650;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+[data-harness-mobile-document-reference="true"]:active {
+  background: color-mix(in srgb, var(--hm-color-primary, #4968e8) 14%, var(--hm-color-surface, #fff));
+}
+
+[data-harness-mobile-document-reference="true"]:focus-visible {
+  outline: 2px solid var(--hm-color-primary, #4968e8);
+  outline-offset: 2px;
 }

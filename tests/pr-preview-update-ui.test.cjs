@@ -94,9 +94,42 @@ test('PR 预览在原卡片内显示下载、校验、安装和重启进度且�
   assert.match(app, /action\.disabled = busy/)
   assert.match(app, /progress\.phase === 'error' \? '重试更新' : '更新进行中…'/)
   assert.match(app, /previewProgressForItem\(item, previewProgress\)/)
-  assert.match(app, /if \(previewBusy\) \{[\s\S]*list\.querySelectorAll\('\[data-hd-update-action\]'\)[\s\S]*action\.disabled = true/)
-  assert.match(app, /list\.setAttribute\('aria-busy', String\(previewBusy\)\)/)
+  assert.match(app, /if \(updateBusy\) \{[\s\S]*list\.querySelectorAll\('\[data-hd-update-action\]'\)[\s\S]*action\.disabled = true/)
+  assert.match(app, /list\.setAttribute\('aria-busy', String\(updateBusy\)\)/)
   assert.match(app, /const itemsSignature = JSON\.stringify\(\{ checking: state\.checking === true, items \}\)/)
+})
+
+test('桌面版与正式组件在原卡片内显示校验、下载、准备和安装进度', () => {
+  assert.match(app, /const installProgressPhases = new Set\(\['prepare', 'checksum', 'download', 'verify', 'commit', 'ready', 'apply', 'launch', 'restart', 'current', 'error'\]\)/)
+  assert.match(app, /const normalizeInstallProgress = value =>/)
+  assert.match(app, /const installProgressForItem = \(item, progress\) =>/)
+  assert.match(app, /const paintInstallProgress = \(card, item, progress\) =>/)
+  assert.match(app, /progress\.phase === 'download' && progress\.total > 0/)
+  assert.match(app, /Math\.round\(progress\.received \/ progress\.total \* 100\)/)
+  assert.match(app, /region\.dataset\.hdInstallProgress = ''/)
+  assert.match(app, /progress\.phase === 'error' \? '重试更新' : busy \? '更新进行中…'/)
+  assert.match(app, /const updateBusy = previewBusy \|\| installBusy/)
+  assert.match(app, /setText\(apply, '正在启动…'\)[\s\S]*request\('update-action', \{ id: item\.id, action \}\)/)
+  assert.match(app, /setTimeout\(\(\) => \{[\s\S]*更新请求未收到响应，请重试。/)
+  assert.match(app, /installProgress: previewAction[\s\S]*phase: action === 'apply' \? 'apply' : 'prepare'/)
+  assert.match(app, /installProgress: previewAction[\s\S]*failedPhase: String\(previousInstall\.phase \|\| 'prepare'\), phase: 'error', message/)
+  assert.match(app, /installProgress: \{ kind: 'desktop', id: 'desktop', \.\.\.progress \}/)
+  assert.match(app, /installProgress: \{ kind: 'component', id: 'component', \.\.\.progress \}/)
+  assert.match(app, /const busy = !\['ready', 'current', 'error'\]\.includes\(phase\)/)
+})
+
+test('自动检测保持可见且主按钮不会因主题色变成伪禁用态', () => {
+  const centerMarkup = app.match(/center\.innerHTML = `[\s\S]*?`/)?.[0] || ''
+  assert.match(centerMarkup, /data-hd-check-mode/)
+  assert.match(centerMarkup, /自动检查已开启 · 启动后检查/)
+  assert.match(app, /state\.preferences\?\.lastCheckedAt/)
+  assert.match(app, /自动检查已开启 · 上次/)
+  assert.match(app, /checkError: message/)
+  assert.match(app, /refreshPrPreviewState\(\{ discover: !unifiedCheck \}\)/)
+  const primaryStyle = app.match(/\.hd-update-item-actions \.hd-update-apply \{[^}]+\}/)?.[0] || ''
+  assert.match(primaryStyle, /--dsw-alias-label-primary/)
+  assert.match(primaryStyle, /color-mix/)
+  assert.doesNotMatch(primaryStyle, /color:#fff/)
 })
 
 test('预览进度事件绑定 opaque 候选并在失败后保留可见重试状态', () => {

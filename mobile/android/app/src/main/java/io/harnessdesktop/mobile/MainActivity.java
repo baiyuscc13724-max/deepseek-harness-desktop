@@ -92,6 +92,7 @@ public final class MainActivity extends AppCompatActivity {
     private WssRelayClient wssRelayClient;
     private NativeP2pClient nativeP2pClient;
     private MobileUiAdapter mobileUiAdapter;
+    private MobileDocumentViewer mobileDocumentViewer;
     private ScreenCaptureObserver screenCaptureObserver;
     private MobileAssetCache mobileAssetCache;
     private PairingProfileStore pairingProfileStore;
@@ -474,6 +475,7 @@ public final class MainActivity extends AppCompatActivity {
         wssRelayClient = new WssRelayClient();
         nativeP2pClient = new NativeP2pClient(this);
         mobileUiAdapter = new MobileUiAdapter(this);
+        mobileDocumentViewer = new MobileDocumentViewer(this, webView);
         mobileAssetCache = new MobileAssetCache(this);
         pairingProfileStore = new PairingProfileStore(this);
 
@@ -1270,6 +1272,12 @@ public final class MainActivity extends AppCompatActivity {
             });
         }
 
+        @JavascriptInterface public void openDocument(String url, String name, String mimeType) {
+            runOnUiThread(() -> {
+                if (mobileDocumentViewer != null) mobileDocumentViewer.open(url, name, mimeType);
+            });
+        }
+
         @JavascriptInterface public void rememberSession(String sessionId) {
             String safe = safeSessionReference(sessionId);
             android.content.SharedPreferences.Editor editor = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
@@ -1310,6 +1318,7 @@ public final class MainActivity extends AppCompatActivity {
         if (wssRelayClient != null) wssRelayClient.stop();
         if (nativeP2pClient != null) nativeP2pClient.close();
         if (mobileUiAdapter != null) mobileUiAdapter.close();
+        if (mobileDocumentViewer != null) mobileDocumentViewer.close();
         mobileAppUpdateChecker.close();
         super.onDestroy();
     }

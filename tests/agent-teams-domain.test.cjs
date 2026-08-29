@@ -27,6 +27,17 @@ function worker(id, name) {
   return { id: `member-${id}`, sessionId: id, name, role: 'test worker', kind: 'worker', state: 'ready', createdAt: timestamp, updatedAt: timestamp }
 }
 
+function closeFixtureTeam(team, { forced = false } = {}) {
+  const timestamp = new Date().toISOString()
+  const cancelledTaskIds = team.tasks.filter(task => task.state === 'cancelled').map(task => task.id)
+  team.state = 'closed'
+  team.updatedAt = timestamp
+  team.closure = {
+    outcome: forced ? 'forced' : cancelledTaskIds.length > 0 ? 'cancelled' : 'succeeded',
+    attemptedAt: timestamp, closedAt: timestamp, reason: 'test fixture closure', forced, cancelledTaskIds, failures: []
+  }
+}
+
 async function resumeTwoPhase(mod, ctx, store, lead, teamId) {
   const requestId = `resume-${teamId}`
   const preview = await mod.resumePausedTeam(ctx, store, lead, { teamId, requestId })
@@ -93,7 +104,7 @@ test('v1 store migration performs crash reconciliation in the same initializatio
     const store = new mod.AgentTeamsStore(file)
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
-    assert.equal(migrated.version, 5)
+    assert.equal(migrated.version, 6)
     assert.deepEqual(migrated.settings, legacy.settings)
     const migratedTeam = migrated.teams[0]
     assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-lead').state, 'ready')
@@ -120,7 +131,7 @@ test('v2 stores migrate additively to the bootstrap-capable schema', async () =>
     await writeFile(file, `${JSON.stringify({ version: 2, settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 }, teams: [] })}\n`, 'utf8')
     const store = new mod.AgentTeamsStore(file)
     await store.init()
-    assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 5)
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 6)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -157,6 +168,68 @@ test('attention, resume planning, and confirmed retirement task release are dete
   assert.deepEqual(mod.deriveAttention(team).releasedTasks, ['stranded'])
   assert.ok(mod.deriveAttention(team).codes.includes('released_task'))
   assert.equal(team.tasks[2].assigneeSessionId, 'failed-session', 'completed audit history is preserved')
+})
+
+test('explicit release persists Host release facts through the public task projection', async () => {
+  const fx = await fixture()
+  const lead = { id: 'release-lead' }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Project durable release facts' })
+    await fx.store.mutate(document => {
+      document.teams.find(candidate => candidate.id === team.id).members.push(worker('release-worker', 'Release worker'), worker('next-worker', 'Next worker'))
+    })
+    const task = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Release through Host state machine' })).task
+    await activateCurrentPlan(fx.store, team.id)
+    const claim = (await fx.mod.updateTask(fx.store, { id: 'release-worker' }, {
+      teamId: team.id, taskId: task.id, action: 'claim'
+    })).task
+    const release = (await fx.mod.updateTask(fx.store, { id: 'release-worker' }, {
+      teamId: team.id, taskId: task.id, action: 'release', claimId: claim.claimId, leaseEpoch: claim.leaseEpoch
+    })).task
+    assert.equal(release.status, 'pending')
+    assert.ok(release.releasedAt)
+    assert.equal(release.releaseReason, 'released explicitly by the task claimant')
+    assert.equal(release.assignee, null)
+    const projected = fx.mod.teamSnapshot(fx.store.snapshot(), lead.id, team.id).team.tasks.find(candidate => candidate.id === task.id)
+    assert.equal(projected.releasedAt, release.releasedAt)
+    assert.equal(projected.releaseReason, release.releaseReason)
+    assert.equal(projected.assignee, null, 'release projection cannot imply continued ownership or execution')
+    const assigned = (await fx.mod.updateTask(fx.store, lead, {
+      teamId: team.id, taskId: task.id, action: 'assign', assigneeSessionId: 'next-worker'
+    })).task
+    assert.equal(assigned.releasedAt, release.releasedAt)
+    assert.equal(assigned.releaseReason, release.releaseReason)
+    const assignedSnapshot = fx.mod.teamSnapshot(fx.store.snapshot(), lead.id, team.id).team
+    assert.equal(assignedSnapshot.attention.codes.includes('released_task'), false, 'a reassigned pending task is not current release attention before the next claim')
+    assert.equal(assignedSnapshot.attention.required, false)
+    assert.equal(assignedSnapshot.tasks.find(candidate => candidate.id === task.id).releasedAt, release.releasedAt, 'the audit fact remains visible without becoming current attention')
+    const reclaimed = (await fx.mod.updateTask(fx.store, { id: 'next-worker' }, {
+      teamId: team.id, taskId: task.id, action: 'claim'
+    })).task
+    assert.equal(reclaimed.assignee, 'next-worker')
+    assert.equal(reclaimed.releasedAt, release.releasedAt, 'reassignment must not erase the prior Host release fact')
+    assert.equal(reclaimed.releaseReason, release.releaseReason)
+    const completed = (await fx.mod.updateTask(fx.store, { id: 'next-worker' }, {
+      teamId: team.id, taskId: task.id, action: 'complete', claimId: reclaimed.claimId, leaseEpoch: reclaimed.leaseEpoch
+    })).task
+    assert.equal(completed.releasedAt, release.releasedAt, 'completion must retain the latest Host release history')
+    assert.equal(completed.releaseReason, release.releaseReason)
+    assert.equal(completed.submission.submittedBy, 'next-worker')
+    assert.equal(completed.acceptance, undefined)
+    const accepted = (await fx.mod.updateTask(fx.store, lead, {
+      teamId: team.id, taskId: task.id, action: 'accept'
+    })).task
+    assert.equal(accepted.acceptance.acceptedBy, lead.id)
+    const acceptedSnapshot = fx.mod.teamSnapshot(fx.store.snapshot(), lead.id, team.id).team
+    const acceptedTask = acceptedSnapshot.tasks.find(candidate => candidate.id === task.id)
+    assert.equal(acceptedSnapshot.attention.codes.includes('released_task'), false)
+    assert.equal(acceptedSnapshot.attention.required, false)
+    assert.equal(acceptedTask.releasedAt, release.releasedAt)
+    assert.equal(acceptedTask.releaseReason, release.releaseReason)
+    assert.equal(acceptedTask.submission.submittedBy, 'next-worker', 'the former assignee is not projected as the actual executor')
+    assert.equal(acceptedTask.acceptance.acceptedBy, lead.id)
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 
 test('closing a team cancels every unfinished task without rewriting completed audit history', async () => {
@@ -247,6 +320,8 @@ test('force shutdown retries a crash-persisted closing team to one normalized cl
 
     durable = restarted.snapshot().teams.find(candidate => candidate.id === team.id)
     assert.equal(durable.state, 'closed')
+    assert.equal(durable.closure.outcome, 'forced')
+    assert.equal(durable.closure.forced, true)
     assert.equal(durable.members.find(member => member.sessionId === 'closing-worker').state, 'retired')
     for (const taskId of ['closing-pending', 'closing-active']) {
       const task = durable.tasks.find(candidate => candidate.id === taskId)
@@ -263,6 +338,8 @@ test('force shutdown retries a crash-persisted closing team to one normalized cl
     assert.equal(completed.completedAt, timestamp)
     const projected = fx.mod.teamSnapshot(restarted.snapshot(), lead.id, team.id)
     assert.equal(projected.team.status, 'closed')
+    assert.equal(projected.team.closureOutcome, 'forced')
+    assert.equal(projected.team.closure.outcome, 'forced')
     assert.equal(projected.teams.find(candidate => candidate.id === team.id).activeTaskCount, 0)
     assert.deepEqual(fx.mod.deriveAttention(durable).strandedTasks, [])
   } finally { await rm(fx.root, { recursive: true, force: true }) }
@@ -335,6 +412,10 @@ test('initialization migrates legacy unfinished tasks on closed teams to cancell
     assert.equal(stale.state, 'cancelled')
     assert.ok(stale.cancelledAt)
     assert.match(stale.cancellationReason, /legacy closed team/u)
+    const closure = store.snapshot().teams[0].closure
+    assert.equal(closure.outcome, 'cancelled', 'terminalizing legacy pending work must happen before deriving closure outcome')
+    assert.deepEqual(closure.cancelledTaskIds, ['stale'])
+    assert.equal(closure.forced, false)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -378,9 +459,90 @@ test('persisted team and task records reject unsupported fields', async () => {
     const rawTeam = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
     assert.throws(() => fx.mod.validateTeam({ ...rawTeam, injected: 'unsafe' }), /unsupported fields/u)
     const timestamp = new Date().toISOString()
-    assert.throws(() => fx.mod.validateTask({
-      id: 'strict-task', title: 'Strict', state: 'pending', dependsOn: [], files: [], createdAt: timestamp, updatedAt: timestamp, injected: 'unsafe'
-    }), /unsupported fields/u)
+    const baseTask = {
+      id: 'strict-task', title: 'Strict', state: 'pending', dependsOn: [], files: [], createdAt: timestamp, updatedAt: timestamp,
+      attempt: 0, leaseEpoch: 0, attemptHistory: [], interruptionHistory: [], capabilities: [], externalEffects: []
+    }
+    assert.throws(() => fx.mod.validateTask({ ...baseTask, injected: 'unsafe' }), /unsupported fields/u)
+    assert.throws(() => fx.mod.validateTask({ ...baseTask, releasedAt: timestamp }), /releasedAt.*releaseReason|release marker/iu)
+    assert.throws(() => fx.mod.validateTask({ ...baseTask, releaseReason: 'half release marker' }), /releasedAt.*releaseReason|release marker/iu)
+    assert.throws(() => fx.mod.validateTask({ ...baseTask, state: 'cancelled', cancelledAt: timestamp }), /cancelledAt.*cancellationReason|cancellation marker/iu)
+    assert.throws(() => fx.mod.validateTask({ ...baseTask, state: 'cancelled', cancellationReason: 'half cancellation marker' }), /cancelledAt.*cancellationReason|cancellation marker/iu)
+    assert.throws(() => fx.mod.validateTask({ ...baseTask, cancelledAt: timestamp, cancellationReason: 'pending cannot be cancelled' }), /cancellation marker.*cancelled|cancelled state/iu)
+    assert.throws(() => fx.mod.validateTask({ ...baseTask, state: 'cancelled' }), /cancelled state.*cancellation marker|cancelledAt.*cancellationReason/iu)
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('validateTeam rejects contradictory terminal closure receipts', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const created = await fx.mod.createTeam(fx.store, { id: 'receipt-lead' }, { objective: 'Reject contradictory closure claims' })
+    const rawTeam = fx.store.snapshot().teams.find(team => team.id === created.id)
+    const timestamp = new Date().toISOString()
+    const cancelledTask = {
+      id: 'cancelled-task', title: 'Cancelled', state: 'cancelled', dependsOn: [], files: [],
+      createdAt: timestamp, updatedAt: timestamp, cancelledAt: timestamp, cancellationReason: 'cancelled for validation',
+      attempt: 0, leaseEpoch: 0, attemptHistory: [], interruptionHistory: [], capabilities: [], externalEffects: []
+    }
+    const closure = {
+      outcome: 'succeeded', attemptedAt: timestamp, closedAt: timestamp,
+      reason: 'contradictory success', forced: false, cancelledTaskIds: ['cancelled-task'], failures: []
+    }
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'closed', tasks: [cancelledTask], closure }),
+      /succeeded closure cannot contain cancelled tasks/u
+    )
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'closed', tasks: [cancelledTask], closure: { ...closure, outcome: 'cancelled', cancelledTaskIds: [] } }),
+      /cancelledTaskIds must match cancelled tasks/u
+    )
+    const unaccepted = {
+      ...cancelledTask, id: 'unaccepted', title: 'Unaccepted', state: 'completed', cancelledAt: undefined, cancellationReason: undefined,
+      assigneeSessionId: 'receipt-lead', claimId: 'claim-unaccepted', completedAt: timestamp,
+      submission: { taskId: 'unaccepted', claimId: 'claim-unaccepted', leaseEpoch: 0, submittedAt: timestamp, submittedBy: 'receipt-lead', source: 'explicit_complete' }
+    }
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'closed', tasks: [unaccepted], closure: { ...closure, cancelledTaskIds: [] } }),
+      /every completed task to be accepted/u
+    )
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'closed', tasks: [cancelledTask], closure: { ...closure, outcome: 'forced' } }),
+      /forced closure outcome requires forced=true/u
+    )
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'closed', tasks: [cancelledTask], closure: { ...closure, outcome: 'cancelled', forced: true } }),
+      /non-forced closure outcome requires forced=false/u
+    )
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'closed', tasks: [cancelledTask], closure: { ...closure, outcome: 'cancelled', failures: ['impossible terminal failure'] } }),
+      /terminal closure receipt cannot contain failures/u
+    )
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'closed', tasks: [cancelledTask], closure: { ...closure, outcome: 'forced', forced: true, failures: ['forced cannot carry failures'] } }),
+      /terminal closure receipt cannot contain failures/u
+    )
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'active', closure: { ...closure, outcome: 'failed', closedAt: undefined, cancelledTaskIds: [], failures: [] } }),
+      /failed closure receipt requires failures/u
+    )
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'active', closure: { ...closure, outcome: 'failed', closedAt: undefined, failures: ['drain failed'] } }),
+      /failed closure attempt cannot claim terminalized tasks/u
+    )
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'closed', closure: { ...closure, outcome: 'failed', failures: ['drain failed'] } }),
+      /failed closure receipt must describe an open team attempt/u
+    )
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'active', closure: { ...closure, outcome: 'cancelled' } }),
+      /only a closed team may have closure\.closedAt/u
+    )
+    assert.throws(() => fx.mod.validateTeam({ ...rawTeam, state: 'closed', closure: undefined }), /closed team requires a closure receipt/u)
+    assert.throws(
+      () => fx.mod.validateTeam({ ...rawTeam, state: 'closed', tasks: [], closure: { ...closure, cancelledTaskIds: [] } }),
+      /succeeded closure requires at least one accepted completed task/u
+    )
   } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 
@@ -406,12 +568,12 @@ test('one fixed root lead may own multiple peer teams with explicit selection', 
       fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: second.id, taskId: secondTask.id, action: 'claim' }),
       error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
     )
-    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: first.id, taskId: firstTask.id, action: 'claim' })
-    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: first.id, taskId: firstTask.id, action: 'complete' })
+    const firstClaim = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: first.id, taskId: firstTask.id, action: 'claim' })).task
+    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: first.id, taskId: firstTask.id, action: 'complete', claimId: firstClaim.claimId, leaseEpoch: firstClaim.leaseEpoch })
     const claimed = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: second.id, taskId: secondTask.id, action: 'claim' })).task
     assert.deepEqual(claimed.blockedBy, [])
     assert.deepEqual(claimed.dependencySources, [{ teamId: first.id, teamName: 'Team one', teamStatus: 'active' }])
-    await fx.store.mutate(document => { document.teams.find(team => team.id === first.id).state = 'closed' })
+    await fx.store.mutate(document => { closeFixtureTeam(document.teams.find(team => team.id === first.id)) })
     const afterCompletedSourceClosed = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session', second.id).team.tasks.find(task => task.id === secondTask.id)
     assert.deepEqual(afterCompletedSourceClosed.blockedBy, [])
     assert.deepEqual(afterCompletedSourceClosed.dependencySources, [{ teamId: first.id, teamName: 'Team one', teamStatus: 'closed' }])
@@ -423,7 +585,7 @@ test('one fixed root lead may own multiple peer teams with explicit selection', 
       teamId: second.id, title: 'Blocked after source closes', crossTeamDependsOn: [`${closingSource.id}:${incomplete.id}`]
     })).task
     await activateCurrentPlan(fx.store, second.id)
-    await fx.store.mutate(document => { document.teams.find(team => team.id === closingSource.id).state = 'closed' })
+    await fx.store.mutate(document => { closeFixtureTeam(document.teams.find(team => team.id === closingSource.id), { forced: true }) })
     const blockedProjection = fx.mod.teamSnapshot(fx.store.snapshot(), 'lead-session', second.id).team.tasks.find(task => task.id === blockedAfterClose.id)
     assert.deepEqual(blockedProjection.blockedBy, [`${closingSource.id}:${incomplete.id}`])
     assert.equal(blockedProjection.dependencySources[0].teamStatus, 'closed')
@@ -452,16 +614,26 @@ test('reopen and complete preserve dependency consistency', async () => {
     const prerequisite = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Prerequisite' })).task
     const dependent = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Dependent', dependsOn: [prerequisite.id] })).task
     await activateCurrentPlan(fx.store, team.id)
-    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'claim' })
-    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'complete' })
-    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: dependent.id, action: 'claim' })
+    const prerequisiteClaim = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'claim' })).task
+    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'complete', claimId: prerequisiteClaim.claimId, leaseEpoch: prerequisiteClaim.leaseEpoch })
+    const dependentClaim = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: dependent.id, action: 'claim' })).task
     await assert.rejects(
       fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: prerequisite.id, action: 'reopen' }),
       error => error && error.code === 'AGENT_TEAMS_TASK_CONFLICT'
     )
-    await fx.store.mutate(document => { document.teams[0].tasks.find(task => task.id === prerequisite.id).state = 'pending' })
+    await fx.store.mutate(document => {
+      const task = document.teams[0].tasks.find(candidate => candidate.id === prerequisite.id)
+      task.state = 'pending'
+      task.assigneeSessionId = undefined
+      task.claimedAt = undefined
+      task.completedAt = undefined
+      task.claimId = undefined
+      task.submission = undefined
+      task.acceptance = undefined
+      task.result = undefined
+    })
     await assert.rejects(
-      fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: dependent.id, action: 'complete' }),
+      fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: dependent.id, action: 'complete', claimId: dependentClaim.claimId, leaseEpoch: dependentClaim.leaseEpoch }),
       error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
     )
   } finally { await rm(fx.root, { recursive: true, force: true }) }
@@ -500,8 +672,8 @@ test('cancelled dependents do not falsely prevent reopening their completed prer
     const prerequisite = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Completed prerequisite' })).task
     const dependent = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Cancelled dependent', dependsOn: [prerequisite.id] })).task
     await activateCurrentPlan(fx.store, team.id)
-    await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'claim' })
-    await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'complete' })
+    const prerequisiteClaim = (await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'claim' })).task
+    await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'complete', claimId: prerequisiteClaim.claimId, leaseEpoch: prerequisiteClaim.leaseEpoch })
     await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: dependent.id, action: 'cancel' })
     const reopened = (await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: prerequisite.id, action: 'reopen' })).task
     assert.equal(reopened.state, 'pending')
@@ -523,7 +695,7 @@ test('one root has an atomic hard limit of eight unclosed peer teams', async () 
     assert.equal(boundary.filter(result => result.status === 'fulfilled').length, 1)
     assert.equal(boundary.filter(result => result.status === 'rejected' && result.reason?.code === 'AGENT_TEAMS_TEAM_LIMIT').length, 1)
     assert.equal(fx.store.snapshot().teams.filter(team => team.rootLeadSessionId === 'bounded-lead' && team.state !== 'closed').length, 8)
-    await fx.store.mutate(document => { document.teams.find(team => team.id === created[0].id).state = 'closed' })
+    await fx.store.mutate(document => { closeFixtureTeam(document.teams.find(team => team.id === created[0].id), { forced: true }) })
     await fx.mod.createTeam(fx.store, { id: 'bounded-lead' }, { objective: 'Replacement after close' })
     assert.equal(fx.store.snapshot().teams.filter(team => team.rootLeadSessionId === 'bounded-lead' && team.state !== 'closed').length, 8)
   } finally { await rm(fx.root, { recursive: true, force: true }) }
@@ -537,7 +709,7 @@ test('cross-team prerequisite completion and claim remain atomic across stores',
     const target = await fx.mod.createTeam(fx.store, { id: 'lead-session' }, { objective: 'Atomic target' })
     const prerequisite = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: source.id, title: 'Prerequisite' })).task
     await activateCurrentPlan(fx.store, source.id)
-    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: source.id, taskId: prerequisite.id, action: 'claim' })
+    const sourceClaim = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: source.id, taskId: prerequisite.id, action: 'claim' })).task
     const dependent = (await fx.mod.createTask(fx.store, { id: 'lead-session' }, {
       teamId: target.id, title: 'Dependent', crossTeamDependsOn: [`${source.id}:${prerequisite.id}`]
     })).task
@@ -552,7 +724,7 @@ test('cross-team prerequisite completion and claim remain atomic across stores',
     })
     const results = await Promise.allSettled([
       fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: target.id, taskId: dependent.id, action: 'claim' }),
-      fx.mod.updateTask(peer, { id: 'lead-session' }, { teamId: source.id, taskId: prerequisite.id, action: 'complete' })
+      fx.mod.updateTask(peer, { id: 'lead-session' }, { teamId: source.id, taskId: prerequisite.id, action: 'complete', claimId: sourceClaim.claimId, leaseEpoch: sourceClaim.leaseEpoch })
     ])
     assert.equal(results[1].status, 'fulfilled')
     assert.equal(unsafePublication, false)
@@ -647,6 +819,7 @@ test('shared tasks enforce dependencies and exactly one concurrent claimant', as
     )
     const baseClaim = (await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: base.id, action: 'claim' })).task
     await fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: base.id, action: 'complete', claimId: baseClaim.claimId, leaseEpoch: baseClaim.leaseEpoch })
+    await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: base.id, action: 'accept' })
 
     const claims = await Promise.allSettled([
       fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: dependent.id, action: 'claim' }),
@@ -665,7 +838,7 @@ test('shared tasks enforce dependencies and exactly one concurrent claimant', as
     const unassigned = (await fx.mod.updateTask(fx.store, { id: 'lead-session' }, { teamId: team.id, taskId: assigned.id, action: 'unassign' })).task
     assert.equal(unassigned.assigneeSessionId, undefined)
 
-    await fx.store.mutate(document => { document.teams.find(item => item.id === team.id).state = 'closed' })
+    await fx.store.mutate(document => { closeFixtureTeam(document.teams.find(item => item.id === team.id), { forced: true }) })
     await assert.rejects(
       fx.mod.createTask(fx.store, { id: 'lead-session' }, { teamId: team.id, title: 'Archived mutation' }),
       error => error && error.code === 'AGENT_TEAMS_CLOSING'
@@ -696,7 +869,7 @@ test('task updates distinguish invalid state from caller permission failures', a
     for (const action of ['complete', 'release']) {
       await assert.rejects(
         fx.mod.updateTask(fx.store, { id: 'worker-a' }, { teamId: team.id, taskId: task.id, action }),
-        error => error?.code === 'AGENT_TEAMS_UNAUTHORIZED' && /claimant or team lead/u.test(error.message)
+        error => error?.code === 'AGENT_TEAMS_UNAUTHORIZED' && /claimant|foreign claim/u.test(error.message)
       )
     }
     // Re-claiming by the same claimant is a safe no-op instead of a conflict.
@@ -897,13 +1070,23 @@ test('completed member results persist on tasks and project to the user without 
     })
     await reconciler.flush()
     await ended
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, { id: 'result-worker' }, { teamId: team.id, taskId: task.id, action: 'accept' }),
+      error => error?.code === 'AGENT_TEAMS_UNAUTHORIZED'
+    )
+    const accepted = (await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: task.id, action: 'accept' })).task
+    assert.equal(accepted.acceptance.acceptedBy, lead.id)
 
     const durable = fx.store.snapshot()
     const persistedTask = durable.teams.find(candidate => candidate.id === team.id).tasks.find(candidate => candidate.id === task.id)
     assert.deepEqual(persistedTask.result, {
       text: 'Implemented the fix.\n\nValidation passed.',
       reportedAt: persistedTask.result.reportedAt,
-      truncated: false
+      truncated: false,
+      taskId: task.id,
+      claimId: resultClaim.claimId,
+      leaseEpoch: resultClaim.leaseEpoch,
+      reportedBy: 'result-worker'
     })
     assert.equal(Number.isFinite(Date.parse(persistedTask.result.reportedAt)), true)
     assert.equal(JSON.stringify(persistedTask.result).includes('host-private-image-payload'), false)
@@ -1242,4 +1425,151 @@ test('optional project foundation Host options remain fail-closed while projecti
   assert.equal(reads, 0)
   const revoked = Proxy.revocable({}, {}); revoked.revoke()
   assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => revoked.proxy }), {})
+})
+
+test('a lead cannot foreign-complete a worker claim even with the stolen correct fence', async () => {
+  const fx = await fixture()
+  const lead = { id: 'completion-fence-lead' }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Keep worker delivery authority task-scoped' })
+    await fx.store.mutate(document => {
+      document.teams.find(candidate => candidate.id === team.id).members.push(worker('completion-worker', 'Delivery'))
+    })
+    const task = (await fx.mod.createTask(fx.store, lead, {
+      teamId: team.id,
+      title: 'Worker-owned production result',
+      assigneeSessionId: 'completion-worker'
+    })).task
+    await activateCurrentPlan(fx.store, team.id)
+    const claimed = (await fx.mod.updateTask(fx.store, { id: 'completion-worker' }, {
+      teamId: team.id, taskId: task.id, action: 'claim'
+    })).task
+
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, lead, {
+        teamId: team.id, taskId: task.id, action: 'complete',
+        claimId: claimed.claimId, leaseEpoch: claimed.leaseEpoch
+      }),
+      error => error?.code === 'AGENT_TEAMS_UNAUTHORIZED'
+    )
+    await assert.rejects(
+      fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: task.id, action: 'accept' }),
+      error => error?.code === 'AGENT_TEAMS_DELIVERY_REQUIRED'
+    )
+    const durable = fx.store.snapshot().teams.find(candidate => candidate.id === team.id).tasks.find(candidate => candidate.id === task.id)
+    assert.equal(durable.state, 'in_progress')
+    assert.equal(durable.assigneeSessionId, 'completion-worker')
+    assert.equal(durable.claimId, claimed.claimId)
+    assert.equal(durable.result, undefined)
+    assert.equal(durable.acceptance, undefined)
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('unscoped lifecycle output cannot prove one or several completed tasks', async () => {
+  const fx = await fixture()
+  const lead = { id: 'scoped-result-lead' }
+  const ctx = { logger: { warn() {} }, agents: { get: () => undefined } }
+  let reconciler
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Bind every delivery to one task attempt' })
+    await fx.store.mutate(document => {
+      document.teams.find(candidate => candidate.id === team.id).members.push(worker('scoped-worker', 'Scoped'))
+    })
+    const tasks = []
+    for (const title of ['First delivery', 'Second delivery']) tasks.push((await fx.mod.createTask(fx.store, lead, {
+      teamId: team.id, title, assigneeSessionId: 'scoped-worker'
+    })).task)
+    await activateCurrentPlan(fx.store, team.id)
+    reconciler = fx.mod.createSubagentEventReconciler(ctx, fx.store, Promise.resolve(), 60_000)
+    const started = reconciler.enqueue('start', { id: 'scoped-worker', runId: 'shared-run' })
+    await reconciler.flush(); await started
+    for (const task of tasks) {
+      const claim = (await fx.mod.updateTask(fx.store, { id: 'scoped-worker' }, {
+        teamId: team.id, taskId: task.id, action: 'claim'
+      })).task
+      await fx.mod.updateTask(fx.store, { id: 'scoped-worker' }, {
+        teamId: team.id, taskId: task.id, action: 'complete', claimId: claim.claimId, leaseEpoch: claim.leaseEpoch
+      })
+    }
+    const ended = reconciler.enqueue('end', {
+      id: 'scoped-worker', runId: 'shared-run', stopReason: 'completed',
+      lastAssistantMessage: [{ type: 'text', text: 'A generic turn result with no task or fence binding.' }]
+    })
+    await reconciler.flush(); await ended
+
+    const durableTasks = fx.store.snapshot().teams.find(candidate => candidate.id === team.id).tasks
+    assert.equal(durableTasks.every(task => task.result === undefined), true, 'one run-level message must not be copied onto multiple tasks')
+  } finally {
+    reconciler?.close()
+    await rm(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('a graceful close with only cancelled tasks is never projected as succeeded', async () => {
+  const fx = await fixture()
+  const lead = { id: 'cancelled-close-lead' }
+  const ctx = { agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] } }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Close cancellation truthfully' })
+    const task = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Cancelled objective' })).task
+    await fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: task.id, action: 'cancel' })
+    const result = await fx.mod.shutdownTeam(ctx, fx.store, undefined, lead, { teamId: team.id }, new AbortController().signal)
+    assert.equal(result.team.status, 'closed')
+    assert.equal(result.team.closureOutcome, 'cancelled')
+    assert.equal(result.team.closure.outcome, 'cancelled')
+    assert.notEqual(result.team.closure.outcome, 'succeeded')
+    assert.deepEqual(result.team.closure.cancelledTaskIds, [task.id])
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('error and refusal lifecycle endings never attach a success result', async () => {
+  for (const stopReason of ['error', 'refusal']) {
+    const fx = await fixture()
+    const lead = { id: `failed-result-lead-${stopReason}` }
+    const ctx = { logger: { warn() {} }, agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] } }
+    let reconciler
+    try {
+      await fx.store.mutate(document => { document.settings.enabled = true })
+      const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Keep failed endings truthful' })
+      await fx.store.mutate(document => {
+        document.teams.find(candidate => candidate.id === team.id).members.push(worker(`failed-worker-${stopReason}`, 'Failure'))
+      })
+      const task = (await fx.mod.createTask(fx.store, lead, {
+        teamId: team.id, title: 'Task whose lifecycle fails after submission', assigneeSessionId: `failed-worker-${stopReason}`
+      })).task
+      await activateCurrentPlan(fx.store, team.id)
+      reconciler = fx.mod.createSubagentEventReconciler(ctx, fx.store, Promise.resolve(), 60_000)
+      const started = reconciler.enqueue('start', { id: `failed-worker-${stopReason}`, runId: `failed-run-${stopReason}` })
+      await reconciler.flush(); await started
+      const claim = (await fx.mod.updateTask(fx.store, { id: `failed-worker-${stopReason}` }, {
+        teamId: team.id, taskId: task.id, action: 'claim'
+      })).task
+      await fx.mod.updateTask(fx.store, { id: `failed-worker-${stopReason}` }, {
+        teamId: team.id, taskId: task.id, action: 'complete', claimId: claim.claimId, leaseEpoch: claim.leaseEpoch
+      })
+      assert.equal(fx.store.snapshot().teams.find(candidate => candidate.id === team.id).tasks[0].acceptance, undefined)
+      const ended = reconciler.enqueue('end', {
+        id: `failed-worker-${stopReason}`, runId: `failed-run-${stopReason}`, stopReason,
+        lastAssistantMessage: [{ type: 'text', text: 'This text must not be promoted to a successful task result.' }]
+      })
+      await reconciler.flush(); await ended
+      const durable = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
+      assert.equal(durable.members.find(member => member.sessionId === `failed-worker-${stopReason}`).state, 'failed')
+      assert.equal(durable.tasks[0].result, undefined)
+      assert.equal(durable.tasks[0].acceptance, undefined)
+      await assert.rejects(
+        fx.mod.shutdownTeam(ctx, fx.store, undefined, lead, { teamId: team.id }, new AbortController().signal),
+        error => error?.code === 'AGENT_TEAMS_ACCEPTANCE_REQUIRED'
+      )
+      const stillOpen = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
+      assert.equal(stillOpen.state, 'active')
+      assert.equal(stillOpen.closure, undefined)
+    } finally {
+      reconciler?.close()
+      await rm(fx.root, { recursive: true, force: true })
+    }
+  }
 })

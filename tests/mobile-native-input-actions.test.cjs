@@ -10,10 +10,12 @@ const android = path.join(root, 'mobile', 'android', 'app', 'src', 'main')
 const read = (...parts) => fs.readFileSync(path.join(android, ...parts), 'utf8')
 
 const activity = read('java', 'io', 'harnessdesktop', 'mobile', 'MainActivity.java')
+const documentViewer = read('java', 'io', 'harnessdesktop', 'mobile', 'MobileDocumentViewer.java')
 const adapter = read('java', 'io', 'harnessdesktop', 'mobile', 'MobileUiAdapter.java')
 const proxy = read('java', 'io', 'harnessdesktop', 'mobile', 'HarnessWebProxy.java')
 const manifest = read('AndroidManifest.xml')
 const filePaths = read('res', 'xml', 'mobile_file_paths.xml')
+const mobileRuntime = read('assets', 'mobile-runtime.js')
 const mobileCss = read('assets', 'mobile-compat.css')
 
 function extractJavaStringConstant(source, name) {
@@ -322,6 +324,23 @@ test('camera capture requests the targeted permission, uses FileProvider, and cl
   assert.match(activity, /cleanupPendingCameraFile\(\)/)
   assert.match(manifest, /android:authorities="\$\{applicationId\}\.mobile-inputs"/)
   assert.match(filePaths, /<cache-path name="mobile_input_capture" path="mobile-input\/" \/>/)
+})
+
+test('message document references open through an authenticated cache-only native handoff', () => {
+  assert.match(mobileRuntime, /data-harness-mobile-document-reference/)
+  assert.match(mobileRuntime, /\/api\/desktop-files\/content\?sessionId=/)
+  assert.match(mobileRuntime, /bridge\.openDocument\(contentUrl, reference\.name, reference\.mimeType\)/)
+  assert.match(mobileCss, /data-harness-mobile-document-reference="true"[^]*min-height: 44px/u)
+  assert.match(activity, /@JavascriptInterface public void openDocument\(String url, String name, String mimeType\)/)
+  assert.match(documentViewer, /sameOrigin\(current, target\)/)
+  assert.match(documentViewer, /allowedPath\(target\.getPath\(\)\)/)
+  assert.match(documentViewer, /localProxyUrl\(target\)\.openConnection\(\)/)
+  assert.match(documentViewer, /encodedAuthority\("127\.0\.0\.1:" \+ effectivePort\(target\)\)/, 'native downloads must reuse the already-validated local mobile proxy without DNS dependence')
+  assert.match(documentViewer, /MAX_DOCUMENT_BYTES = 100L \* 1024L \* 1024L/)
+  assert.match(documentViewer, /Intent\.ACTION_VIEW/)
+  assert.match(documentViewer, /FLAG_GRANT_READ_URI_PERMISSION/)
+  assert.match(filePaths, /<cache-path name="mobile_document_preview" path="mobile-documents\/" \/>/)
+  assert.doesNotMatch(manifest, /android\.permission\.(?:READ_MEDIA_IMAGES|READ_MEDIA_VIDEO|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE)/)
 })
 
 test('speech delegates to the system recognizer and preserves system language settings', () => {

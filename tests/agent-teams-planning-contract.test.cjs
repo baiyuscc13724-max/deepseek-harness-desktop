@@ -79,7 +79,7 @@ test('v4 migration preserves empty and active teams while adding conservative pl
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
 
-    assert.equal(migrated.version, 5)
+    assert.equal(migrated.version, 6)
     assert.deepEqual(migrated.teams.map(team => team.id), ['empty', 'active'])
     assert.deepEqual(migrated.teams[1].tasks.map(task => [task.id, task.state]), originalTasks.map(task => [task.id, task.state]))
     for (const team of migrated.teams) {

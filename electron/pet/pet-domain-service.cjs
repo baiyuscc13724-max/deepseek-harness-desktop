@@ -126,8 +126,8 @@ class PetDomainService {
         session.nudges = new Set()
         const root = this.rootOf(sessionId)
         if (sessionId === root || !this.groupAwards.has(root)) this.groupAwards.set(root, 0)
-        const running = [...this.sessions.values()].filter(item => item.running).length
-        this.emitCue(this.companionEngine.taskStarted({ state: this.getState(), preferences: this.getPreferences(), running }))
+        const state = this.getState()
+        this.emitCue(this.companionEngine.taskStarted({ state, preferences: this.getPreferences(), running: state.activity.running }))
       } else if (!session.running && wasRunning) {
         this.settleSession(session)
       }
@@ -302,19 +302,46 @@ class PetDomainService {
     this.publish()
   }
 
+  summarizeSessions() {
+    const newest = { needsInput: null, blocked: null, celebrating: null, ready: null, running: null }
+    const activity = { running: 0, needsInput: 0, blocked: 0, ready: 0 }
+    const selectNewest = (current, session) => !current || session.updatedAt > current.updatedAt ? session : current
+    for (const session of this.sessions.values()) {
+      if (session.pendingInput) {
+        activity.needsInput += 1
+        newest.needsInput = selectNewest(newest.needsInput, session)
+      }
+      if (session.blocked) {
+        activity.blocked += 1
+        newest.blocked = selectNewest(newest.blocked, session)
+      }
+      if (session.celebrating) newest.celebrating = selectNewest(newest.celebrating, session)
+      if (session.ready) {
+        activity.ready += 1
+        newest.ready = selectNewest(newest.ready, session)
+      }
+      if (session.running) {
+        activity.running += 1
+        newest.running = selectNewest(newest.running, session)
+      }
+    }
+    const focused = newest.needsInput
+      ? { status: 'needs-input', focusSessionId: newest.needsInput.sessionId }
+      : newest.blocked
+        ? { status: 'blocked', focusSessionId: newest.blocked.sessionId }
+        : newest.celebrating
+          ? { status: 'celebrating', focusSessionId: newest.celebrating.sessionId }
+          : newest.ready
+            ? { status: 'ready', focusSessionId: newest.ready.sessionId }
+            : newest.running
+              ? { status: 'working', focusSessionId: newest.running.sessionId }
+              : null
+    return { activity, focused }
+  }
+
   operationalState() {
-    const sessions = [...this.sessions.values()]
-    const byNewest = list => list.sort((a, b) => b.updatedAt - a.updatedAt)[0]
-    const needsInput = byNewest(sessions.filter(item => item.pendingInput))
-    if (needsInput) return { status: 'needs-input', focusSessionId: needsInput.sessionId }
-    const blocked = byNewest(sessions.filter(item => item.blocked))
-    if (blocked) return { status: 'blocked', focusSessionId: blocked.sessionId }
-    const celebrating = byNewest(sessions.filter(item => item.celebrating))
-    if (celebrating) return { status: 'celebrating', focusSessionId: celebrating.sessionId }
-    const ready = byNewest(sessions.filter(item => item.ready))
-    if (ready) return { status: 'ready', focusSessionId: ready.sessionId }
-    const running = byNewest(sessions.filter(item => item.running))
-    if (running) return { status: 'working', focusSessionId: running.sessionId }
+    const focused = this.summarizeSessions().focused
+    if (focused) return focused
     const persisted = this.store.get()
     if (persisted.fullness <= 0 || persisted.energy <= 0) return { status: 'sleeping', focusSessionId: null }
     return { status: 'idle', focusSessionId: null }
@@ -322,7 +349,10 @@ class PetDomainService {
 
   getState() {
     const persisted = this.store.get()
-    const operational = this.operationalState()
+    const summary = this.summarizeSessions()
+    const operational = summary.focused || (persisted.fullness <= 0 || persisted.energy <= 0
+      ? { status: 'sleeping', focusSessionId: null }
+      : { status: 'idle', focusSessionId: null })
     return {
       ...persisted,
       ...operational,
@@ -334,12 +364,7 @@ class PetDomainService {
       companionCue: this.companionCue,
       lastAward: this.lastAward,
       lastAutoFeed: this.lastAutoFeed,
-      activity: {
-        running: [...this.sessions.values()].filter(item => item.running).length,
-        needsInput: [...this.sessions.values()].filter(item => item.pendingInput).length,
-        blocked: [...this.sessions.values()].filter(item => item.blocked).length,
-        ready: [...this.sessions.values()].filter(item => item.ready).length
-      }
+      activity: summary.activity
     }
   }
 

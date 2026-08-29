@@ -1168,7 +1168,7 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       injectStyles();
       try { ctx.effect(function () { return ctx.locale.register(NS, { zh: zh, en: en }); }, "session-experience: dictionaries"); } catch (_) {}
-      try { ctx.locale.subscribe(function () { try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {} }); } catch (_) {}
+      try { ctx.effect(function () { return ctx.locale.subscribe(function () { try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {} }); }, "session-experience: locale subscription"); } catch (_) {}
       try { ctx.effect(function () { return openRequestedDesktopSession(ctx); }, "session-experience: detached session window"); } catch (_) { openRequestedDesktopSession(ctx); }
       function CompletionEntry() { return h(CompletionNotifications, { sessions: ctx.sessions }); }
       function PaperclipEntry(props) { return h(PaperclipButton, Object.assign({}, props, { sessions: ctx.sessions })); }

@@ -1,9 +1,13 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const os = require('node:os')
+const { createHash } = require('node:crypto')
 const path = require('node:path')
-const { readFile } = require('node:fs/promises')
+const { mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
+const { pathToFileURL } = require('node:url')
 
 const clientFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'client.js')
+const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
 
 async function clientSource() {
   return readFile(clientFile, 'utf8')
@@ -498,6 +502,305 @@ test('completed task cards and detail surfaces show the member result to the use
   assert.equal(helpers.visibleTaskResult({ result: { text: 'Visible result', truncated: false } }).text, 'Visible result')
   assert.equal(helpers.visibleTaskResult({ result: { text: '   ' } }), null)
   assert.equal(helpers.taskResultPreviewText({ text: '123456' }, 4), '1234…')
+})
+
+test('responsibility and closure projections never infer delivery or success from assignment and closed state', async () => {
+  const source = await clientSource()
+  const helperStart = source.indexOf('    function taskResponsibilityProjection(task)')
+  const helperEnd = source.indexOf('    function TaskCard(props)', helperStart)
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'truthful responsibility helpers must remain independently testable')
+  const helpers = Function(`function normalizeState(value) { return String(value || '').toLowerCase().replace(/-/g, '_'); }\nfunction visibleTaskResult(task) { var result = task && task.result; return result && typeof result.text === 'string' && result.text.trim() ? result : null; }\n${source.slice(helperStart, helperEnd)}\nreturn { taskResponsibilityProjection, teamClosureProjection };`)()
+
+  const unsubmitted = helpers.taskResponsibilityProjection({
+    id: 'task', status: 'completed', assigneeSessionId: 'assigned-worker'
+  })
+  assert.equal(unsubmitted.assignedId, 'assigned-worker')
+  assert.equal(unsubmitted.executorId, '', 'the original assignee is not evidence of actual execution')
+  assert.equal(unsubmitted.deliveryKind, 'missing_completed')
+  assert.equal(unsubmitted.acceptanceKind, 'missing_completed')
+
+  const delivered = helpers.taskResponsibilityProjection({
+    id: 'task', status: 'completed', assigneeSessionId: 'assigned-worker',
+    submission: { submittedBy: 'actual-worker', source: 'explicit_complete' },
+    acceptance: { acceptedBy: 'lead' }
+  })
+  assert.equal(delivered.executorId, 'actual-worker')
+  assert.equal(delivered.takeover, true)
+  assert.equal(delivered.deliveryKind, 'submitted')
+  assert.equal(delivered.acceptanceKind, 'accepted')
+
+  const legacy = helpers.taskResponsibilityProjection({
+    id: 'legacy-task', status: 'completed', assigneeSessionId: 'legacy-assignee',
+    submission: { submittedBy: 'legacy-assignee', source: 'legacy_migration' },
+    acceptance: { acceptedBy: 'lead' }, result: { text: 'legacy text', reportedBy: 'legacy-assignee' }
+  })
+  assert.equal(legacy.legacy, true)
+  assert.equal(legacy.executorId, '', 'legacy assignee and synthesized receipts are not current execution proof')
+  assert.equal(legacy.takeover, false)
+  assert.equal(legacy.deliveryKind, 'legacy')
+  assert.equal(legacy.acceptanceKind, 'legacy')
+
+  const released = helpers.taskResponsibilityProjection({
+    id: 'released-task', status: 'pending', assigneeSessionId: 'former-assignee',
+    releasedAt: '2026-08-28T15:00:00.000Z', releaseReason: 'Host released stale ownership'
+  })
+  assert.equal(released.release.at, '2026-08-28T15:00:00.000Z')
+  assert.equal(released.release.reason, 'Host released stale ownership')
+  assert.equal(released.executorId, '', 'release history must not promote the former assignee to actual executor')
+  assert.equal(released.takeover, false, 'release alone is not a successful takeover or delivery')
+  assert.equal(released.deliveryKind, 'missing')
+  assert.equal(released.acceptanceKind, 'not_applicable')
+
+  const cancelled = helpers.taskResponsibilityProjection({
+    id: 'cancelled-task', status: 'cancelled', assigneeSessionId: 'former-assignee',
+    cancelledAt: '2026-08-28T15:05:00.000Z', cancellationReason: 'Lead cancelled the objective'
+  })
+  assert.deepEqual(cancelled.cancellation, { at: '2026-08-28T15:05:00.000Z', reason: 'Lead cancelled the objective' })
+  assert.equal(cancelled.cancelled, true)
+  assert.equal(cancelled.executorId, '', 'cancellation must not infer execution from assignment')
+  assert.equal(cancelled.takeover, false)
+  assert.equal(cancelled.deliveryKind, 'missing')
+  assert.equal(cancelled.acceptanceKind, 'not_applicable')
+
+  assert.deepEqual(helpers.teamClosureProjection({ status: 'closed', closure: { outcome: 'cancelled', cancelledTaskIds: ['a', 'b'], failures: [] } }), {
+    closure: { outcome: 'cancelled', cancelledTaskIds: ['a', 'b'], failures: [] }, outcome: 'cancelled', cancelledCount: 2, failureCount: 0
+  })
+  assert.equal(helpers.teamClosureProjection({ status: 'closed' }).outcome, 'unknown', 'closed alone must never be projected as succeeded')
+  assert.equal(helpers.teamClosureProjection({ status: 'closed', closureOutcome: 'succeeded' }).outcome, 'unknown', 'closureOutcome without a complete receipt is not success proof')
+  assert.equal(helpers.teamClosureProjection({ status: 'closed', taskCount: 0, tasks: [], closure: { outcome: 'succeeded', cancelledTaskIds: [], failures: [] } }).outcome, 'unknown', 'an empty team cannot be presented as successful objective delivery')
+  assert.ok(source.includes('h(ResponsibilityPanel, { t: t, task: task, members: props.members'))
+  assert.match(source, /closed \? h\(TeamClosureBanner/u)
+  assert.match(source, /data-outcome": truth\.outcome/u)
+  assert.ok(source.includes('className: "dat-legacy-record", role: "note", "data-provenance": "legacy_migration"'))
+  assert.ok(source.includes('"data-provenance": truth.legacy ? "legacy_migration" : "current"'))
+  assert.ok(source.includes('actualExecutorLegacy'))
+  assert.ok(source.includes('legacyRecordTitle: "旧迁移记录（未经当前证明）"'))
+  assert.match(source, /className: "dat-responsibility-event", "data-kind": "released"[\s\S]*releaseReasonLabel[\s\S]*dateTime: String\(truth\.release\.at\)/u)
+  assert.match(source, /className: "dat-responsibility-event", "data-kind": "cancelled"[\s\S]*cancellationReasonLabel[\s\S]*dateTime: String\(truth\.cancellation\.at\)/u)
+  assert.match(source, /className: "dat-board-card-facts", role: "note", "data-kind": "released"[\s\S]*truth\.release\.reason/u)
+  assert.match(source, /className: "dat-board-card-facts", role: "note", "data-kind": "cancelled"[\s\S]*truth\.cancellation/u)
+  assert.ok(source.includes('releaseReasonLabel: "释放原因"'))
+  assert.ok(source.includes('releasedAtLabel: "释放时间"'))
+  assert.ok(source.includes('cancellationReasonLabel: "取消原因"'))
+  assert.ok(source.includes('cancelledAtLabel: "取消时间"'))
+  assert.ok(source.includes('团队已关闭，但结果是取消，不等同于成功。'))
+  assert.ok(source.includes('The team is closed, but its outcome is cancellation—not success.'))
+  assert.ok(source.includes('团队被强制关闭；未完成工作不得视为成功。'))
+  assert.ok(source.includes('The team was force closed. Unfinished work must not be treated as success.'))
+  assert.ok(source.includes('团队没有任何任务交付，成功 receipt 不会在此显示为目标交付成功。'))
+  assert.ok(source.includes('The team has no task delivery, so a success receipt is not presented as successful objective delivery here.'))
+  assert.ok(source.includes('合成验收也不是当前负责人审查证据'))
+  assert.ok(source.includes('synthesized acceptance is not evidence of current lead review'))
+  assert.match(source, /var closed = !!\(team && String\(team\.status \|\| team\.state \|\| ""\)\.toLowerCase\(\) === "closed"\)/u)
+  assert.match(source, /!props\.closed && team\.closure \? h\(TeamClosureBanner, \{ t: t, team: team \}\) : null/u)
+  assert.match(source, /props\.closed \? h\(TeamClosureBanner, \{ t: t, team: team \}/u)
+})
+
+test('client cancellation copy and rendering stay generic instead of inventing a lead-specific actor', async () => {
+  const source = await clientSource()
+  assert.equal(source.includes('taskCancelledByLead'), false)
+  assert.ok(source.includes('taskCancelled: "任务已取消；这不是成功完成"'))
+  assert.ok(source.includes('taskCancelled: "Task cancelled; this is not successful completion"'))
+  assert.ok(source.includes('responsibilityFacts: "责任事实"'))
+  assert.ok(source.includes('responsibilityFacts: "Responsibility facts"'))
+
+  const responsibilityStart = source.indexOf('    function ResponsibilityPanel(props)')
+  const responsibilityEnd = source.indexOf('    function teamExplicitlyEmpty(team)', responsibilityStart)
+  const responsibilitySource = source.slice(responsibilityStart, responsibilityEnd)
+  assert.match(responsibilitySource, /truth\.cancelled \? h\("p", \{ className: "dat-responsibility-alert", role: "note" \}, t\("taskCancelled"\)\) : null/u)
+  assert.doesNotMatch(responsibilitySource, /truth\.cancelled[^\n]+leadSessionId|leadSessionId[^\n]+truth\.cancelled/u)
+
+  const boardStart = source.indexOf('    function BoardTaskCard(props)')
+  const boardEnd = source.indexOf('    function cancelledHistoryProjection(t)', boardStart)
+  const boardSource = source.slice(boardStart, boardEnd)
+  assert.match(boardSource, /truth\.cancelled \? h\("div", \{ className: "dat-board-card-facts", role: "note", "data-kind": "cancelled" \}, h\("strong", null, t\("taskCancelled"\)\)/u)
+  assert.doesNotMatch(boardSource, /truth\.cancelled[^\n]+leadSessionId|leadSessionId[^\n]+truth\.cancelled/u)
+})
+
+test('legacy storage migration reaches the client without inventing an executor or current lead review', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-legacy-ui-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  const timestamp = new Date().toISOString()
+  const legacy = {
+    version: 5,
+    settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 },
+    teams: [{
+      id: 'legacy-ui-team', rootLeadSessionId: 'legacy-lead', name: 'Legacy UI', objective: 'Preserve history without inventing proof', revision: 1,
+      state: 'closed', createdAt: timestamp, updatedAt: timestamp,
+      members: [
+        { id: 'legacy-lead-id', sessionId: 'legacy-lead', name: 'Lead', role: 'root lead and coordinator', kind: 'lead', state: 'ready', createdAt: timestamp, updatedAt: timestamp },
+        { id: 'legacy-worker-id', sessionId: 'legacy-worker', name: 'Worker', role: 'legacy worker', kind: 'worker', state: 'retired', createdAt: timestamp, updatedAt: timestamp }
+      ],
+      tasks: [{
+        id: 'legacy-ui-task', title: 'Legacy completed task', state: 'completed', dependsOn: [], files: [],
+        assigneeSessionId: 'legacy-worker', createdAt: timestamp, updatedAt: timestamp, completedAt: timestamp
+      }],
+      messages: []
+    }]
+  }
+  try {
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, `${JSON.stringify(legacy, null, 2)}\n`, 'utf8')
+    const mod = await import(`${pathToFileURL(pluginFile).href}?legacy-ui=${Date.now()}-${Math.random()}`)
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    const migratedTask = store.snapshot().teams[0].tasks[0]
+    assert.equal(migratedTask.submission.source, 'legacy_migration')
+    assert.equal(migratedTask.submission.submittedBy, 'legacy-worker')
+    assert.equal(migratedTask.acceptance.acceptedBy, 'legacy-lead')
+
+    const hostProjectedTask = mod.teamSnapshot(store.snapshot(), 'legacy-lead', 'legacy-ui-team').team.tasks[0]
+    assert.equal(hostProjectedTask.submission.source, 'legacy_migration')
+    const source = await clientSource()
+    const helperStart = source.indexOf('    function taskResponsibilityProjection(task)')
+    const helperEnd = source.indexOf('    function TaskCard(props)', helperStart)
+    const helpers = Function(`function normalizeState(value) { return String(value || '').toLowerCase().replace(/-/g, '_'); }\nfunction visibleTaskResult(task) { var result = task && task.result; return result && typeof result.text === 'string' && result.text.trim() ? result : null; }\n${source.slice(helperStart, helperEnd)}\nreturn { taskResponsibilityProjection };`)()
+    const truth = helpers.taskResponsibilityProjection(hostProjectedTask)
+    assert.equal(truth.legacy, true)
+    assert.equal(truth.assignedId, 'legacy-worker', 'historical assignment remains visible only as history')
+    assert.equal(truth.executorId, '', 'migrated assignee is not actual executor evidence')
+    assert.equal(truth.takeover, false)
+    assert.equal(truth.deliveryKind, 'legacy')
+    assert.equal(truth.acceptanceKind, 'legacy', 'synthesized migration acceptance is not current lead review')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('real cancel and release transitions survive Host projection and drive client responsibility truth', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-markers-ui-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  const lead = { id: 'marker-ui-lead' }
+  try {
+    const mod = await import(`${pathToFileURL(pluginFile).href}?marker-ui=${Date.now()}-${Math.random()}`)
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    await store.mutate(document => { document.settings.enabled = true })
+    const team = await mod.createTeam(store, lead, { objective: 'Project real cancellation and release markers' })
+    const releaseTask = (await mod.createTask(store, lead, { teamId: team.id, title: 'Release through the Host' })).task
+    const cancelTask = (await mod.createTask(store, lead, { teamId: team.id, title: 'Cancel through the Host' })).task
+    await store.mutate(document => {
+      const current = document.teams.find(candidate => candidate.id === team.id)
+      const timestamp = new Date().toISOString()
+      current.members.push(
+        { id: 'marker-worker-id', sessionId: 'marker-worker', name: 'Former', role: 'marker audit', kind: 'worker', state: 'ready', createdAt: timestamp, updatedAt: timestamp },
+        { id: 'marker-next-id', sessionId: 'marker-next', name: 'Next', role: 'completion audit', kind: 'worker', state: 'ready', createdAt: timestamp, updatedAt: timestamp }
+      )
+      const material = {
+        objective: current.objective,
+        tasks: current.tasks.map(task => ({
+          id: task.id, title: task.title, description: task.description, dependsOn: task.dependsOn,
+          crossTeamDependsOn: task.crossTeamDependsOn || [], files: task.files || [], capabilities: task.capabilities || [],
+          externalEffects: (task.externalEffects || []).map(effect => ({ name: effect.name, policy: effect.policy, idempotencyKey: effect.idempotencyKey }))
+        }))
+      }
+      const hash = createHash('sha256').update(JSON.stringify(material)).digest('hex')
+      current.plan = {
+        phase: 'active', revision: current.plan?.revision || 1, hash, committedAt: timestamp, activatedAt: timestamp, migrationState: 'ready',
+        authorization: { source: 'human_attested', attestedAt: timestamp, confirmedPlanHash: hash, permissions: 'unknown', files: 'unknown', cost: 'unknown', externalSideEffects: 'unknown' }
+      }
+      current.updatedAt = timestamp
+    })
+
+    const claim = (await mod.updateTask(store, { id: 'marker-worker' }, { teamId: team.id, taskId: releaseTask.id, action: 'claim' })).task
+    const released = (await mod.updateTask(store, { id: 'marker-worker' }, { teamId: team.id, taskId: releaseTask.id, action: 'release', claimId: claim.claimId, leaseEpoch: claim.leaseEpoch })).task
+    await mod.updateTask(store, lead, { teamId: team.id, taskId: releaseTask.id, action: 'assign', assigneeSessionId: 'marker-next' })
+    const beforeNextClaim = mod.teamSnapshot(store.snapshot(), lead.id, team.id).team
+    assert.equal(beforeNextClaim.attention.codes.includes('released_task'), false)
+    assert.equal(beforeNextClaim.attention.required, false)
+    const nextClaim = (await mod.updateTask(store, { id: 'marker-next' }, { teamId: team.id, taskId: releaseTask.id, action: 'claim' })).task
+    const completed = (await mod.updateTask(store, { id: 'marker-next' }, { teamId: team.id, taskId: releaseTask.id, action: 'complete', claimId: nextClaim.claimId, leaseEpoch: nextClaim.leaseEpoch })).task
+    assert.equal(completed.acceptance, undefined)
+    await mod.updateTask(store, lead, { teamId: team.id, taskId: releaseTask.id, action: 'accept' })
+    await mod.updateTask(store, lead, { teamId: team.id, taskId: cancelTask.id, action: 'cancel' })
+
+    const source = await clientSource()
+    const helperStart = source.indexOf('    function taskResponsibilityProjection(task)')
+    const helperEnd = source.indexOf('    function TaskCard(props)', helperStart)
+    function h(type, props, ...children) {
+      if (typeof type === 'function') return type({ ...(props || {}), children })
+      return { type, props: props || {}, children }
+    }
+    const helpers = Function('h', `function normalizeState(value) { return String(value || '').toLowerCase().replace(/-/g, '_'); }\nfunction visibleTaskResult() { return null; }\nfunction memberSession(member) { return member && member.sessionId || ''; }\nfunction memberId(member) { return member && member.id || ''; }\nfunction simpleMemberName(member) { return member && (member.displayName || member.name) || ''; }\nfunction formatTime(value) { return String(value || ''); }\n${source.slice(helperStart, helperEnd)}\nreturn { taskResponsibilityProjection, ResponsibilityPanel };`)(h)
+    const beforeNextClaimTask = beforeNextClaim.tasks.find(task => task.id === releaseTask.id)
+    const beforePanel = helpers.ResponsibilityPanel({ task: beforeNextClaimTask, members: beforeNextClaim.members, leadSessionId: lead.id, t: key => key })
+    const panelNodes = []
+    ;(function visit(node) { if (Array.isArray(node)) return node.forEach(visit); if (!node || typeof node !== 'object') return; panelNodes.push(node); visit(node.children) })(beforePanel)
+    assert.equal(beforePanel.props['data-status'], 'pending', 'release audit plus a new assignment must not render as current attention before claim')
+    assert.ok(panelNodes.some(node => node.props && node.props['data-kind'] === 'released'), 'release audit remains rendered')
+
+    const acceptedSnapshot = mod.teamSnapshot(store.snapshot(), lead.id, team.id).team
+    assert.equal(acceptedSnapshot.attention.codes.includes('released_task'), false)
+    assert.equal(acceptedSnapshot.attention.required, false)
+    let hostTasks = acceptedSnapshot.tasks
+    const projectedRelease = hostTasks.find(task => task.id === releaseTask.id)
+    const releaseHistory = projectedRelease.interruptionHistory.filter(entry => entry.kind === 'released')
+    assert.equal(releaseHistory.at(-1).at, released.releasedAt)
+    assert.equal(projectedRelease.releasedAt, released.releasedAt)
+    assert.equal(projectedRelease.releaseReason, released.releaseReason)
+    assert.equal(projectedRelease.assigneeSessionId, 'marker-next')
+    assert.equal(projectedRelease.submission.submittedBy, 'marker-next')
+    assert.equal(projectedRelease.acceptance.acceptedBy, lead.id)
+    const releaseTruth = helpers.taskResponsibilityProjection(projectedRelease)
+    assert.deepEqual(releaseTruth.release, { at: released.releasedAt, reason: released.releaseReason })
+    assert.equal(releaseTruth.executorId, 'marker-next')
+    assert.equal(releaseTruth.executorId === 'marker-worker', false, 'the former assignee is not treated as the actual executor')
+    assert.equal(releaseTruth.takeover, false)
+    assert.equal(releaseTruth.acceptanceKind, 'accepted')
+    const acceptedPanel = helpers.ResponsibilityPanel({ task: projectedRelease, members: acceptedSnapshot.members, leadSessionId: lead.id, t: key => key })
+    assert.equal(acceptedPanel.props['data-status'], 'accepted')
+
+    const projectedCancellation = hostTasks.find(task => task.id === cancelTask.id)
+    const cancellationTruth = helpers.taskResponsibilityProjection(projectedCancellation)
+    assert.equal(cancellationTruth.cancelled, true)
+    assert.deepEqual(cancellationTruth.cancellation, { at: projectedCancellation.cancelledAt, reason: 'cancelled explicitly by the team lead' })
+    await mod.updateTask(store, lead, { teamId: team.id, taskId: cancelTask.id, action: 'reopen' })
+    hostTasks = mod.teamSnapshot(store.snapshot(), lead.id, team.id).team.tasks
+    const reopened = hostTasks.find(task => task.id === cancelTask.id)
+    assert.equal(reopened.cancelledAt, undefined)
+    assert.equal(reopened.cancellationReason, undefined)
+    assert.equal(helpers.taskResponsibilityProjection(reopened).cancellation, null)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('real failed shutdown receipt reaches the client as an open failed closure, never forced success', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-failed-ui-'))
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  const lead = { id: 'failed-ui-lead' }
+  try {
+    const mod = await import(`${pathToFileURL(pluginFile).href}?failed-ui=${Date.now()}-${Math.random()}`)
+    const store = new mod.AgentTeamsStore(file)
+    await store.init()
+    await store.mutate(document => { document.settings.enabled = true })
+    const team = await mod.createTeam(store, lead, { objective: 'Project a real failed shutdown receipt' })
+    const timestamp = new Date().toISOString()
+    await store.mutate(document => {
+      document.teams.find(candidate => candidate.id === team.id).members.push({
+        id: 'failed-ui-worker-id', sessionId: 'failed-ui-worker', name: 'Worker', role: 'refusal audit',
+        kind: 'worker', state: 'ready', createdAt: timestamp, updatedAt: timestamp
+      })
+    })
+    const ctx = {
+      agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+      subagents: { followup: async () => { throw new Error('worker refusal') } }
+    }
+    const admission = { run: async (_lead, _childId, _signal, operation) => operation() }
+    const shutdown = await mod.shutdownTeam(ctx, store, admission, lead, { teamId: team.id }, new AbortController().signal)
+    assert.equal(shutdown.team.state, 'active')
+    assert.equal(shutdown.team.closure.outcome, 'failed')
+    assert.equal(shutdown.team.closure.closedAt, undefined)
+    assert.equal(shutdown.failures.length, 1)
+
+    const hostTeam = mod.teamSnapshot(store.snapshot(), lead.id, team.id).team
+    assert.equal(hostTeam.status, 'active')
+    assert.equal(hostTeam.closure.outcome, 'failed')
+    const source = await clientSource()
+    const helperStart = source.indexOf('    function taskResponsibilityProjection(task)')
+    const helperEnd = source.indexOf('    function TaskCard(props)', helperStart)
+    const helpers = Function(`function normalizeState(value) { return String(value || '').toLowerCase().replace(/-/g, '_'); }\nfunction visibleTaskResult() { return null; }\n${source.slice(helperStart, helperEnd)}\nreturn { teamClosureProjection };`)()
+    const truth = helpers.teamClosureProjection(hostTeam)
+    assert.equal(truth.outcome, 'failed')
+    assert.equal(truth.failureCount, 1)
+    assert.equal(truth.closure.closedAt, undefined)
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
 
 test('blocked task detail tolerates real dependency data and stale selections without blanking the workspace', async () => {

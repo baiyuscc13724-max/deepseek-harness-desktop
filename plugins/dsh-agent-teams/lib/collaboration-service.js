@@ -79,8 +79,8 @@ function taskState(task) {
 function memberSessionId(member) {
   return member.sessionId ?? member.childSessionId ?? member.id;
 }
-function memberActivity(member, teams) {
-  const states = teams.map((team) => team.members.find((candidate) => memberSessionId(candidate) === memberSessionId(member))?.state).filter(Boolean);
+function memberActivity(member, teams, knownStates) {
+  const states = knownStates ?? teams.map((team) => team.members.find((candidate) => memberSessionId(candidate) === memberSessionId(member))?.state).filter(Boolean);
   if (states.length > 0 && states.every((state) => state === "retired" || state === "failed")) return "offline";
   if (teams.length > 0 && teams.every((team) => team.state === "paused")) return "paused";
   if (states.some((state) => state === "running" || state === "provisioning")) return "running";
@@ -260,6 +260,11 @@ class CollaborationStateStore {
     if (this.document === undefined) throw new Error("collaboration store is not initialized");
     return clone(this.document);
   }
+  close() {
+    const instances = STATE_STORE_INSTANCES.get(this.filePath);
+    instances?.delete(this);
+    if (instances?.size === 0) STATE_STORE_INSTANCES.delete(this.filePath);
+  }
   mutate(mutator) {
     return queueStateStore(this.filePath, async () => {
       let current = STATE_STORE_DOCUMENTS.get(this.filePath);
@@ -404,6 +409,7 @@ export class AgentCollaborationService {
     this.pendingSyncSnapshot = undefined;
     for (const waiter of this.pendingSyncWaiters.splice(0)) waiter.resolve();
     await this.syncDrain;
+    this.store.close();
   }
   async #syncTeams(teamDocument) {
     await this.init();
@@ -431,26 +437,46 @@ export class AgentCollaborationService {
       const projectRef = opaqueRef("project", secret, rootLeadSessionId);
       nextScopeByRoot.set(rootLeadSessionId, { scopeRef, projectRef });
       const members = new Map();
-      for (const team of teams) for (const member of team.members) {
-        const sessionId = memberSessionId(member);
-        if (typeof sessionId !== "string" || sessionId === "") continue;
-        const existing = members.get(sessionId);
-        members.set(sessionId, existing === undefined ? member : { ...existing, ...member });
+      const memberTeamsBySession = new Map();
+      const memberStatesBySession = new Map();
+      const assignmentsBySession = new Map();
+      for (const team of teams) {
+        for (const member of team.members) {
+          const sessionId = memberSessionId(member);
+          if (typeof sessionId !== "string" || sessionId === "") continue;
+          const existing = members.get(sessionId);
+          members.set(sessionId, existing === undefined ? member : { ...existing, ...member });
+          const memberTeams = memberTeamsBySession.get(sessionId) ?? new Set();
+          const firstInTeam = !memberTeams.has(team);
+          memberTeams.add(team);
+          memberTeamsBySession.set(sessionId, memberTeams);
+          if (firstInTeam && member.state) {
+            const states = memberStatesBySession.get(sessionId) ?? [];
+            states.push(member.state);
+            memberStatesBySession.set(sessionId, states);
+          }
+        }
+        for (const task of team.tasks) {
+          const sessionId = task.assigneeSessionId;
+          if (typeof sessionId !== "string" || sessionId === "") continue;
+          const assignments = assignmentsBySession.get(sessionId) ?? { assigned: [], allAssigned: [], resources: [] };
+          const reference = taskRef(team.id, task.id);
+          assignments.allAssigned.push(reference);
+          if (ACTIVE_TASK_STATES.has(taskState(task))) {
+            assignments.assigned.push(reference);
+            assignments.resources.push(...normalizedFiles(task));
+          }
+          assignmentsBySession.set(sessionId, assignments);
+        }
       }
       for (const [sessionId, member] of members) {
-        const memberTeams = teams.filter((team) => team.members.some((candidate) => memberSessionId(candidate) === sessionId));
-        const assigned = [];
-        const allAssigned = [];
-        const resources = [];
-        for (const team of memberTeams) for (const task of team.tasks) {
-          if (task.assigneeSessionId !== sessionId) continue;
-          allAssigned.push(taskRef(team.id, task.id));
-          if (!ACTIVE_TASK_STATES.has(taskState(task))) continue;
-          assigned.push(taskRef(team.id, task.id));
-          resources.push(...normalizedFiles(task));
-        }
+        const memberTeams = [...(memberTeamsBySession.get(sessionId) ?? [])];
+        const assignments = assignmentsBySession.get(sessionId);
+        const assigned = assignments?.assigned ?? [];
+        const allAssigned = assignments?.allAssigned ?? [];
+        const resources = assignments?.resources ?? [];
         const observedAt = this.now();
-        const activity = memberActivity(member, memberTeams);
+        const activity = memberActivity(member, memberTeams, memberStatesBySession.get(sessionId) ?? []);
         const presenceKey = `${scopeRef}\u0000${sessionId}`;
         const previous = previousPresence.get(presenceKey);
         const pauseChanged = previous !== undefined && (previous.activity === "paused") !== (activity === "paused");

@@ -41,7 +41,8 @@ test('mobile navigation only delegates to the versioned bridge or official seman
   assert.match(runtime, /bridge\.getNavigationState/u)
   assert.match(runtime, /bridge\.subscribe\(sync\)/u)
   assert.match(runtime, /harness-mobile-navigation-change/u)
-  assert.match(runtime, /const detailComposer = visibleConversation\?\.querySelector\?\.\('\[data-composer-card\]'\)[^]*domain\.id !== 'conversations' && detailComposer && visible\(visibleConversation\)[^]*event\.preventDefault\(\)[^]*event\.stopPropagation\(\)/u, 'a transient hidden footer must never steal touches from a visible conversation composer')
+  assert.match(runtime, /const detailComposer = visibleConversation\?\.querySelector\?\.\('\[data-composer-card\]'\)[^]*domain\.id !== 'conversations' && root\.dataset\.harnessMobileChatDetail === 'open' && detailComposer && visible\(visibleConversation\)[^]*event\.preventDefault\(\)[^]*event\.stopPropagation\(\)/u, 'a transient hidden footer must never steal touches from an open conversation detail')
+  assert.match(runtime, /root\.dataset\.harnessMobileChatDetail === 'open'/u, 'a mounted composer behind the home drawer must not block the other three domains')
   assert.match(runtime, /\[data-mobile-slot="\$\{domain\.slot\}"\]/u)
   assert.match(runtime, /\[data-slot="agent-teams\.trigger"\] button, button\[data-slot="agent-teams\.trigger"\]/u)
   assert.match(runtime, /\[data-slot="settings\.trigger"\] button, button\[data-slot="settings\.trigger"\]/u)
@@ -169,6 +170,8 @@ test('official session timeline remains functional and becomes a touch-safe mobi
   assert.match(compat, /\.dse-inline-timeline-marker\s*\{[^}]*width:\s*42px !important;[^}]*height:\s*44px !important;[^}]*touch-action:\s*manipulation !important;/su)
   assert.match(compat, /\.dse-inline-timeline-popover\s*\{[^}]*width:\s*min\(320px, calc\(100vw - 64px\)\) !important;[^}]*overflow:\s*auto !important;/su)
   assert.match(compat, /\.dse-inline-timeline-reference\s*\{[^}]*min-height:\s*44px !important;/su)
+  assert.match(compat, /data-harness-mobile-chat-detail="open"\][^{]*data-conversation-view="chat"\][^{]*\[class\*="_scroll"\]\s*\{[^}]*padding-left:\s*calc\(var\(--harness-mobile-page-gutter\) \+ 52px\) !important;/su, 'the rail must own a real gutter instead of covering conversation content')
+  assert.match(compat, /@media \(max-width:\s*460px\)[^{]*\{[^]*?\.dse-inline-timeline\s*\{[^}]*display:\s*none !important;/su, 'the rail must disappear when a touch-safe gutter would leave too little reading width')
 })
 
 test('Orbit navigation is thumb-safe, selected without color alone, and IME-aware', () => {

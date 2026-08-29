@@ -429,7 +429,58 @@ window.__ModuleLoader__.load({
       taskRunBlocked: "受阻",
       taskRunContinued: "继续处理",
       taskRunUnknown: "状态未知",
-      taskPlanCounts: "{completed}/{total} 项已完成 · {active} 项进行中"
+      taskPlanCounts: "{completed}/{total} 项已完成 · {active} 项进行中",
+      responsibilityTitle: "责任与验收",
+      responsibilityHint: "仅呈现 Host 持久投影；原分配成员不会被推断为实际交付者。",
+      assignedMember: "原分配成员",
+      actualExecutor: "实际交付者",
+      actualExecutorUnknown: "Host 未记录实际交付者",
+      actualExecutorLegacy: "旧记录未证明实际交付者",
+      deliveryState: "交付",
+      deliverySubmitted: "已提交可验收交付",
+      deliveryMissing: "尚无 task-scoped 交付",
+      deliveryMissingCompleted: "异常：任务已完成但没有可核对交付",
+      deliveryLegacy: "旧完成记录：由迁移合成，不是当前交付证明",
+      acceptanceState: "验收",
+      acceptanceAccepted: "负责人已验收",
+      acceptancePending: "等待负责人验收",
+      acceptanceMissingCompleted: "异常：完成记录没有验收事实",
+      acceptanceNotApplicable: "尚未进入验收",
+      acceptanceLegacy: "旧验收占位：未经当前负责人审查证明",
+      acceptedBy: "验收人",
+      submissionSource: "交付来源：{value}",
+      submissionExplicit: "执行者显式完成",
+      submissionLeadTakeover: "负责人接管",
+      submissionForced: "强制收敛",
+      submissionUnknown: "Host 记录来源未知",
+      submissionLegacy: "旧存储迁移合成",
+      legacyRecordTitle: "旧迁移记录（未经当前证明）",
+      legacyRecordHint: "这些字段仅保留历史兼容性；原分配成员不是已证明的实际交付者，合成验收也不是当前负责人审查证据。",
+      legacyResult: "旧结果文本（未经当前证明）",
+      legacyResultPreview: "旧结果文本（未经当前证明）",
+      taskCancelled: "任务已取消；这不是成功完成",
+      responsibilityFacts: "责任事实",
+      taskReleased: "任务曾被释放；这是已记录的责任变更",
+      releaseReasonLabel: "释放原因",
+      releasedAtLabel: "释放时间",
+      taskCancellation: "取消记录",
+      cancellationReasonLabel: "取消原因",
+      cancelledAtLabel: "取消时间",
+      reasonUnavailable: "Host 未记录具体原因",
+      closureOutcome: "关闭结果",
+      closureSucceeded: "目标成功交付",
+      closureCancelled: "已取消关闭",
+      closureForced: "强制关闭",
+      closureFailed: "关闭失败",
+      closureUnknown: "关闭结果未知",
+      closureSucceededBody: "Host 已记录成功关闭与完成的交付链。",
+      closureCancelledBody: "团队已关闭，但结果是取消，不等同于成功。",
+      closureForcedBody: "团队被强制关闭；未完成工作不得视为成功。",
+      closureFailedBody: "关闭流程发生失败；请核对保留的任务与失败记录。",
+      closureUnknownBody: "团队状态为已关闭，但 Host 没有可核对的关闭 outcome；不会推断为成功。",
+      closureEmptyBody: "团队没有任何任务交付，成功 receipt 不会在此显示为目标交付成功。",
+      closureCancelledCount: "取消任务 {count} 项",
+      closureFailureCount: "关闭失败记录 {count} 项"
     });
     Object.assign(en, {
       taskOverview: "Task information",
@@ -476,7 +527,58 @@ window.__ModuleLoader__.load({
       taskRunBlocked: "Blocked",
       taskRunContinued: "Continuing",
       taskRunUnknown: "Unknown status",
-      taskPlanCounts: "{completed}/{total} completed · {active} in progress"
+      taskPlanCounts: "{completed}/{total} completed · {active} in progress",
+      responsibilityTitle: "Responsibility and acceptance",
+      responsibilityHint: "Shows only durable Host projections. The original assignee is never inferred to be the actual deliverer.",
+      assignedMember: "Original assignee",
+      actualExecutor: "Actual deliverer",
+      actualExecutorUnknown: "No actual deliverer recorded by the Host",
+      actualExecutorLegacy: "Legacy record does not prove an actual deliverer",
+      deliveryState: "Delivery",
+      deliverySubmitted: "Reviewable delivery submitted",
+      deliveryMissing: "No task-scoped delivery yet",
+      deliveryMissingCompleted: "Exception: task completed without a reviewable delivery",
+      deliveryLegacy: "Legacy completion record synthesized by migration, not current delivery proof",
+      acceptanceState: "Acceptance",
+      acceptanceAccepted: "Accepted by the lead",
+      acceptancePending: "Awaiting lead acceptance",
+      acceptanceMissingCompleted: "Exception: completion has no acceptance fact",
+      acceptanceNotApplicable: "Not ready for acceptance",
+      acceptanceLegacy: "Legacy acceptance placeholder, not proven current lead review",
+      acceptedBy: "Accepted by",
+      submissionSource: "Delivery source: {value}",
+      submissionExplicit: "Explicit executor completion",
+      submissionLeadTakeover: "Lead takeover",
+      submissionForced: "Forced reconciliation",
+      submissionUnknown: "Unknown Host-recorded source",
+      submissionLegacy: "Synthesized during legacy storage migration",
+      legacyRecordTitle: "Legacy migrated record (not currently proven)",
+      legacyRecordHint: "These fields preserve history only. The original assignee is not a proven actual deliverer, and synthesized acceptance is not evidence of current lead review.",
+      legacyResult: "Legacy result text (not currently proven)",
+      legacyResultPreview: "Legacy result text (not currently proven)",
+      taskCancelled: "Task cancelled; this is not successful completion",
+      responsibilityFacts: "Responsibility facts",
+      taskReleased: "Task was released; this is a recorded responsibility change",
+      releaseReasonLabel: "Release reason",
+      releasedAtLabel: "Released at",
+      taskCancellation: "Cancellation record",
+      cancellationReasonLabel: "Cancellation reason",
+      cancelledAtLabel: "Cancelled at",
+      reasonUnavailable: "No specific reason recorded by the Host",
+      closureOutcome: "Closure outcome",
+      closureSucceeded: "Objective delivered successfully",
+      closureCancelled: "Closed as cancelled",
+      closureForced: "Force closed",
+      closureFailed: "Closure failed",
+      closureUnknown: "Closure outcome unknown",
+      closureSucceededBody: "The Host recorded a successful close with a completed delivery chain.",
+      closureCancelledBody: "The team is closed, but its outcome is cancellation—not success.",
+      closureForcedBody: "The team was force closed. Unfinished work must not be treated as success.",
+      closureFailedBody: "The closure flow failed. Review the preserved tasks and failure records.",
+      closureUnknownBody: "The team is marked closed, but no reviewable closure outcome is present. Success is not inferred.",
+      closureEmptyBody: "The team has no task delivery, so a success receipt is not presented as successful objective delivery here.",
+      closureCancelledCount: "{count} cancelled tasks",
+      closureFailureCount: "{count} closure failures"
     });
     var currentLang = ((typeof navigator !== "undefined" && navigator.language) || "en").toLowerCase().indexOf("zh") === 0 ? "zh" : "en";
     function isChinese() { return String(currentLang || "").toLowerCase().indexOf("zh") === 0; }
@@ -520,6 +622,7 @@ window.__ModuleLoader__.load({
         ".dat-project-entry{margin:0 0 14px;overflow:hidden}.dat-project-entry-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.dat-project-entry-head h2{margin:0;font-size:16px}.dat-project-entry-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:12px}.dat-project-route{padding:11px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);min-width:0}.dat-project-route strong{display:block;font-size:13px;margin-bottom:4px}.dat-project-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-top:12px}.dat-project-form .dat-label{margin-top:0}.dat-project-span{grid-column:1/-1}.dat-project-code{display:block;box-sizing:border-box;width:100%;min-height:72px;resize:vertical;margin-top:7px;border:1px solid var(--dsw-alias-border-l3);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);padding:9px;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}.dat-project-ref{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}.dat-project-entry details{margin-top:12px;border-top:1px solid var(--dsw-alias-border-l2);padding-top:10px}.dat-project-entry summary{cursor:pointer;font-size:13px;font-weight:650}.dat-project-status{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:8px}.dat-project-entry .dat-error{margin-top:10px;margin-bottom:0}@media(max-width:760px){.dat-project-entry-grid,.dat-project-form{grid-template-columns:1fr}.dat-project-span{grid-column:auto}}",
         ".dat-task-open{display:block;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer}.dat-task-open:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}.dat-canvas-task-open{cursor:pointer;text-align:left;color:inherit;font:inherit}.dat-canvas-task-open:hover{border-color:var(--dsw-alias-brand-primary);transform:translateY(-1px)}.dat-canvas-task-open:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-canvas-model{margin-top:2px;font-size:11px;line-height:1.3;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dat-task-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.dat-task-hero .dat-badge{flex:none}.dat-task-facts{display:grid;gap:7px;margin:10px 0 0}.dat-task-fact{display:grid;grid-template-columns:92px minmax(0,1fr);gap:8px;align-items:baseline}.dat-task-fact dt{color:var(--dsw-alias-label-tertiary);font-size:12px}.dat-task-fact dd{margin:0;min-width:0;font-size:12px;line-height:1.45;overflow-wrap:anywhere}.dat-task-section{margin:12px 0 0}.dat-task-section>h3{font-size:12px;margin:0 0 6px;color:var(--dsw-alias-label-tertiary)}.dat-task-events{display:grid;gap:6px}.dat-task-event{padding:7px 9px}.dat-task-event time{display:block;color:var(--dsw-alias-label-tertiary);font-size:11px;margin-top:2px}",
         ".dat-task-result-preview,.dat-board-card-result{display:grid;gap:3px;padding:8px 9px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-success-primary) 34%,var(--dsw-alias-border-l2));border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 8%,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.4;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}.dat-task-result-preview strong,.dat-board-card-result strong{color:var(--dsw-alias-state-success-primary);font-size:11px}.dat-task-result{margin-top:12px;padding:12px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-success-primary) 38%,var(--dsw-alias-border-l2));border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 7%,var(--dsw-alias-bg-layer-1))}.dat-task-result>h3{margin:0 0 8px;font-size:13px}.dat-task-result-text{color:var(--dsw-alias-label-primary);font-size:12px;line-height:1.58;white-space:pre-wrap;overflow-wrap:anywhere}.dat-task-result .dat-note{margin:8px 0 0}",
+        ".dat-responsibility{margin-top:12px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.dat-responsibility[data-status=accepted]{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 38%,var(--dsw-alias-border-l2))}.dat-responsibility[data-status=attention],.dat-responsibility[data-status=legacy]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 48%,var(--dsw-alias-border-l2));background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-2))}.dat-responsibility-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.dat-responsibility-head h3{margin:0;font-size:13px}.dat-responsibility-head p{margin:3px 0 0}.dat-responsibility-chain{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:10px 0 0}.dat-responsibility-chain>div{min-width:0;padding:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dat-responsibility-chain dt{color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-responsibility-chain dd{margin:3px 0 0;color:var(--dsw-alias-label-primary);font-size:12px;line-height:1.4;overflow-wrap:anywhere}.dat-responsibility-source{margin:8px 0 0}.dat-legacy-record{display:grid;gap:3px;margin-top:9px;padding:9px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 44%,var(--dsw-alias-border-l2));border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45}.dat-legacy-record strong{color:var(--dsw-alias-state-warn-primary);font-size:12px}.dat-task-result[data-provenance=legacy_migration],.dat-task-result-preview[data-provenance=legacy_migration],.dat-board-card-result[data-provenance=legacy_migration]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 44%,var(--dsw-alias-border-l2));background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-1))}.dat-task-result[data-provenance=legacy_migration]>h3,.dat-task-result-preview[data-provenance=legacy_migration] strong,.dat-board-card-result[data-provenance=legacy_migration] strong{color:var(--dsw-alias-state-warn-primary)}.dat-responsibility-events{display:grid;gap:7px;margin-top:10px}.dat-responsibility-events h4{margin:0;font-size:12px}.dat-responsibility-event{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;gap:8px;align-items:start;padding:8px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 38%,var(--dsw-alias-border-l2));border-radius:8px;background:var(--dsw-alias-bg-layer-1);font-size:11px;line-height:1.45}.dat-responsibility-event span{overflow-wrap:anywhere}.dat-responsibility-event time{color:var(--dsw-alias-label-tertiary);white-space:nowrap}.dat-responsibility-alert{margin:8px 0 0;color:var(--dsw-alias-state-warn-primary);font-size:12px;font-weight:650}.dat-board-card-executor{margin-top:3px;color:var(--dsw-alias-label-secondary);white-space:normal}.dat-board-card-executor[data-status=attention],.dat-board-card-executor[data-status=missing_completed],.dat-board-card-executor[data-status=legacy]{color:var(--dsw-alias-state-warn-primary)}.dat-closure{border-left:4px solid var(--dsw-alias-label-tertiary)}.dat-closure[data-outcome=succeeded]{border-left-color:var(--dsw-alias-state-success-primary)}.dat-closure[data-outcome=cancelled],.dat-closure[data-outcome=forced]{border-left-color:var(--dsw-alias-state-warn-primary)}.dat-closure[data-outcome=failed]{border-left-color:var(--dsw-alias-state-error-primary)}.dat-closure-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.dat-closure-head>div{display:grid;gap:3px}.dat-closure-head time{color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-closure>.dat-meta{margin:7px 0 0}@media(max-width:620px){.dat-responsibility-head,.dat-closure-head{display:block}.dat-responsibility-head>.dat-status-chip,.dat-closure-head>time{margin-top:7px}.dat-responsibility-chain,.dat-responsibility-event{grid-template-columns:1fr}.dat-responsibility-event time{white-space:normal}}",
         ".dat-task-focus{min-height:clamp(460px,62vh,760px);padding:0;overflow:hidden}.dat-task-focus-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dat-task-focus-head-copy{display:flex;align-items:center;gap:10px;min-width:0}.dat-task-focus-head-copy h2{margin:0;font-size:14px}.dat-task-focus-body{padding:16px}.dat-task-focus-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.dat-task-focus-title{max-width:820px;margin:3px 0 0;font-size:21px;line-height:1.35;overflow-wrap:anywhere}.dat-task-workflow{margin-top:15px;padding:14px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2)}.dat-task-workflow-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.dat-task-workflow-head h3,.dat-task-focus-surface>h3,.dat-task-live-head h3{margin:0;font-size:13px}.dat-task-workflow-head p{margin:4px 0 0}.dat-task-stage-track{display:grid;grid-template-columns:minmax(0,1fr) 28px minmax(0,1fr) 28px minmax(0,1fr);align-items:stretch;gap:0;margin-top:13px}.dat-task-stage{min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-task-stage[data-state=current]{border-color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 8%,var(--dsw-alias-bg-layer-1))}.dat-task-stage[data-state=reached]{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 45%,var(--dsw-alias-border-l2))}.dat-task-stage[data-state=upcoming],.dat-task-stage[data-state=unknown]{opacity:.72}.dat-task-stage-top{display:flex;align-items:center;gap:7px;min-width:0}.dat-task-stage-top strong{font-size:12px;overflow-wrap:anywhere}.dat-task-stage-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-label-tertiary)}.dat-task-stage[data-state=current] .dat-task-stage-dot{background:var(--dsw-alias-brand-primary)}.dat-task-stage[data-state=reached] .dat-task-stage-dot{background:var(--dsw-alias-state-success-primary)}.dat-task-stage>.dat-meta{margin-top:5px}.dat-task-stage>time{display:block;margin-top:4px}.dat-task-stage-arrow{display:grid;place-items:center;color:var(--dsw-alias-label-tertiary)}.dat-task-block-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:28px;margin-top:10px}.dat-task-block-branch{grid-column:2;min-width:0;padding:9px 10px;border:1px dashed var(--dsw-alias-border-l3);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-task-block-branch[data-active=true]{border-style:solid;border-color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,var(--dsw-alias-bg-layer-1))}.dat-task-block-branch[data-active=true] .dat-task-stage-dot{background:var(--dsw-alias-state-warn-primary)}.dat-task-block-branch>.dat-meta{margin-top:5px}.dat-task-block-branch>time,.dat-task-block-branch>p{display:block;margin:4px 0 0}.dat-task-focus-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;margin-top:12px;align-items:start}.dat-task-focus-main{display:grid;gap:12px;min-width:0}.dat-task-focus-surface{box-sizing:border-box;min-width:0;padding:13px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-2)}.dat-task-focus-surface>.dat-meta{margin:7px 0 0}.dat-task-next{border-left:3px solid var(--dsw-alias-brand-primary)}.dat-task-next[data-state=blocked]{border-left-color:var(--dsw-alias-state-warn-primary)}.dat-task-next[data-state=completed]{border-left-color:var(--dsw-alias-state-success-primary)}.dat-task-live{min-width:0}.dat-task-live-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.dat-task-live>.dat-note{margin:5px 0 9px}.dat-task-live-list{display:grid;gap:7px;max-height:clamp(280px,46vh,560px);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:3px}.dat-task-live-list .dat-card{background:var(--dsw-alias-bg-layer-1)}.dat-task-live-empty{padding:22px 8px;text-align:center}.dat-task-live-last{padding-top:9px;border-top:1px solid var(--dsw-alias-border-l2)}",
         ".dat-task-progress{display:grid;gap:7px;margin-top:13px}.dat-task-progress-copy{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px}.dat-task-progress-copy span{color:var(--dsw-alias-label-secondary);text-align:right}.dat-task-progress-track{position:relative;height:7px;overflow:visible;clip-path:inset(-18px 0 -18px 0 round 999px);border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 5%,var(--dsw-alias-bg-layer-1));box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)}.dat-task-progress-fill{display:block;height:100%;min-width:0;border-radius:inherit;background:var(--dsw-alias-brand-primary);transition:width .2s ease}.dat-task-progress-fill.is-indeterminate{position:absolute;top:50%;left:0;width:9px;height:9px;overflow:visible;background:var(--dat-pulse-c7);box-shadow:0 0 0 2px color-mix(in srgb,var(--dat-pulse-c7) 28%,transparent),0 0 10px var(--dat-pulse-c7),0 0 24px color-mix(in srgb,var(--dat-pulse-c6) 72%,transparent);transform:translate(-50%,-50%);animation:dat-task-progress-flow 1.8s cubic-bezier(.35,0,.16,1) infinite}.dat-task-progress-fill.is-indeterminate::before{content:\"\";position:absolute;top:50%;right:45%;width:96px;height:4px;border-radius:999px;background:linear-gradient(90deg,transparent 0%,var(--dat-pulse-c1) 14%,var(--dat-pulse-c2) 28%,var(--dat-pulse-c3) 42%,var(--dat-pulse-c4) 56%,var(--dat-pulse-c5) 70%,var(--dat-pulse-c6) 84%,var(--dat-pulse-c7) 100%);filter:blur(.35px) saturate(1.35);opacity:.9;transform:translateY(-50%)}.dat-task-progress-fill.is-indeterminate::after{content:\"\";position:absolute;inset:-6px;border:1px solid color-mix(in srgb,var(--dat-pulse-c7) 72%,transparent);border-radius:50%;animation:dat-task-progress-aura .72s ease-out infinite}@keyframes dat-task-progress-flow{0%{left:0;opacity:0;transform:translate(-50%,-50%) scale(.62)}8%{opacity:1}48%{transform:translate(-50%,-50%) scale(1)}88%{opacity:1}100%{left:100%;opacity:0;transform:translate(-50%,-50%) scale(1.18)}}@keyframes dat-task-progress-aura{0%{opacity:.9;transform:scale(.45)}100%{opacity:0;transform:scale(1.35)}}@media (prefers-reduced-motion:reduce){.dat-task-progress-fill{transition:none}.dat-task-progress-fill.is-indeterminate{left:50%;animation:none}.dat-task-progress-fill.is-indeterminate::after{animation:none;opacity:.45}}.dat-task-workflow-runtime{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:12px}.dat-task-runtime-pane{min-width:0;padding:11px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-task-runtime-head{display:flex;align-items:flex-start;justify-content:space-between;gap:9px;margin-bottom:8px}.dat-task-runtime-head h4{margin:0;font-size:12px}.dat-task-runtime-head p{margin:3px 0 0}.dat-task-plan{display:grid;gap:7px;max-height:330px;margin:0;padding:0;overflow:auto;list-style:none}.dat-task-plan li{display:grid;grid-template-columns:17px minmax(0,1fr);gap:6px;align-items:start;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}.dat-task-plan li[data-state=completed]{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}.dat-task-plan li[data-state=in_progress]{color:var(--dsw-alias-label-primary);font-weight:600}.dat-task-plan-mark{color:var(--dsw-alias-label-tertiary);text-align:center}.dat-task-plan li[data-state=completed] .dat-task-plan-mark{color:var(--dsw-alias-state-success-primary)}.dat-task-plan li[data-state=in_progress] .dat-task-plan-mark{color:var(--dsw-alias-brand-primary)}.dat-task-runtime-list{display:grid;gap:0;max-height:360px;overflow:auto;border-top:1px solid var(--dsw-alias-border-l2)}.dat-task-runtime-event{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:start;padding:9px 2px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dat-task-runtime-dot{width:8px;height:8px;margin-top:4px;border-radius:50%;background:var(--dsw-alias-label-tertiary)}.dat-task-runtime-event[data-status=running] .dat-task-runtime-dot{background:var(--dsw-alias-brand-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-brand-primary) 15%,transparent)}.dat-task-runtime-event[data-status=completed] .dat-task-runtime-dot{background:var(--dsw-alias-state-success-primary)}.dat-task-runtime-event[data-status=failed] .dat-task-runtime-dot{background:var(--dsw-alias-state-error-primary)}.dat-task-runtime-event[data-status=blocked] .dat-task-runtime-dot{background:var(--dsw-alias-state-warn-primary)}.dat-task-runtime-copy{min-width:0}.dat-task-runtime-copy strong,.dat-task-runtime-copy span{display:block;overflow-wrap:anywhere}.dat-task-runtime-copy strong{font-size:12px}.dat-task-runtime-copy span{margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-task-runtime-event time{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}.dat-task-runtime-empty{margin:10px 0}.dat-task-runtime-limit{margin:8px 0 0}.dat-task-copy-section{display:grid;gap:10px;margin:11px 0 14px}.dat-task-copy-block{padding:10px 11px;border-left:3px solid var(--dsw-alias-border-l3);border-radius:0 9px 9px 0;background:var(--dsw-alias-bg-layer-2)}.dat-task-copy-block:first-child{border-left-color:var(--dsw-alias-brand-primary)}.dat-task-copy-block h4{margin:0 0 5px;color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:650}.dat-task-copy-block p{margin:0;font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}.dat-task-focus-facts{padding-top:11px;border-top:1px solid var(--dsw-alias-border-l2)}@container dat-workspace (min-width:760px){.dat-task-workflow-runtime{grid-template-columns:minmax(220px,.72fr) minmax(0,1.45fr)}.dat-task-focus-facts{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20px}}",
         ".dat-workspace{container-type:inline-size;container-name:dat-workspace;min-width:0}.dat-workspace-main{min-width:0}.dat-workspace-nav{position:sticky;top:0;z-index:12;display:flex;align-items:center;gap:5px;box-sizing:border-box;width:100%;max-width:100%;margin:0 0 14px;padding:4px;overflow-x:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 96%,transparent);box-shadow:0 6px 18px rgba(35,72,80,.08);backdrop-filter:blur(12px);scrollbar-width:thin;overscroll-behavior-inline:contain}.dat-workspace-nav button{display:flex;flex:1 0 auto;align-items:center;justify-content:space-between;gap:8px;min-width:max-content;border:0;border-radius:8px;padding:8px 10px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;text-align:left;white-space:nowrap}.dat-workspace-nav button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dat-workspace-nav button[aria-current=page]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font-weight:650}.dat-workspace-nav small{color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-workspace-view{min-width:0}.dat-workspace-view-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:0 0 12px}.dat-workspace-view-head h2{margin:0;font-size:18px}.dat-workspace-view-head p{max-width:760px;margin:4px 0 0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.5}.dat-workspace-view-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}",
@@ -1153,18 +1256,106 @@ window.__ModuleLoader__.load({
       var max = Number.isFinite(limit) ? limit : 320;
       return text.length > max ? text.slice(0, max).trimEnd() + "…" : text;
     }
+    function taskResultLabel(t, task, preview) {
+      if (taskResponsibilityProjection(task).legacy) return preview ? t("legacyResultPreview") : t("legacyResult");
+      return preview ? t("taskResultPreview") : t("taskResult");
+    }
+    function taskResponsibilityProjection(task) {
+      task = task && typeof task === "object" ? task : {};
+      var submission = task.submission && typeof task.submission === "object" ? task.submission : null;
+      var acceptance = task.acceptance && typeof task.acceptance === "object" ? task.acceptance : null;
+      var result = visibleTaskResult(task), state = normalizeState(task.status || task.state || "pending");
+      var assignedId = task.assigneeSessionId || task.assigneeId || task.assignee || task.memberId || "";
+      var source = String(submission && submission.source || "").toLowerCase(), legacy = source === "legacy_migration";
+      var executorId = legacy ? "" : submission && submission.submittedBy || result && result.reportedBy || "";
+      var takeover = !legacy && !!(submission && (source === "lead_takeover" || source === "lead_completion" || source === "forced_takeover" || executorId && assignedId && String(executorId) !== String(assignedId)));
+      var deliveryKind = legacy ? "legacy" : submission ? "submitted" : result ? "legacy" : state === "completed" ? "missing_completed" : "missing";
+      var acceptanceKind = legacy ? "legacy" : acceptance ? "accepted" : submission ? "pending" : state === "completed" ? "missing_completed" : "not_applicable";
+      var releaseHistory = Array.isArray(task.interruptionHistory) ? task.interruptionHistory.filter(function (entry) { return entry && entry.kind === "released"; }) : [];
+      var latestRelease = releaseHistory.length ? releaseHistory[releaseHistory.length - 1] : null;
+      var release = task.releasedAt || task.releaseReason ? { at: task.releasedAt || "", reason: task.releaseReason || "" } : latestRelease ? { at: latestRelease.at || "", reason: "" } : null;
+      var cancellation = task.cancelledAt || task.cancellationReason ? { at: task.cancelledAt || "", reason: task.cancellationReason || "" } : null;
+      return { assignedId: assignedId, executorId: executorId, submission: submission, acceptance: acceptance, result: result, source: source, legacy: legacy, takeover: takeover, deliveryKind: deliveryKind, acceptanceKind: acceptanceKind, release: release, cancellation: cancellation, cancelled: state === "cancelled" };
+    }
+    function responsibilityMember(members, id) {
+      return (Array.isArray(members) ? members : []).filter(function (member) { return String(memberSession(member)) === String(id || "") || String(memberId(member)) === String(id || ""); })[0] || null;
+    }
+    function responsibilityName(members, id, leadSessionId, t, fallback) {
+      var member = responsibilityMember(members, id);
+      return member ? simpleMemberName(member, member.isLead || member.kind === "lead" || String(memberSession(member)) === String(leadSessionId || ""), t) : fallback;
+    }
+    function deliveryLabel(t, kind) { return t(kind === "submitted" ? "deliverySubmitted" : kind === "legacy" ? "deliveryLegacy" : kind === "missing_completed" ? "deliveryMissingCompleted" : "deliveryMissing"); }
+    function acceptanceLabel(t, kind) { return t(kind === "accepted" ? "acceptanceAccepted" : kind === "legacy" ? "acceptanceLegacy" : kind === "pending" ? "acceptancePending" : kind === "missing_completed" ? "acceptanceMissingCompleted" : "acceptanceNotApplicable"); }
+    function submissionSourceLabel(t, truth) {
+      if (truth.legacy) return t("submissionLegacy");
+      if (truth.takeover) return t("submissionLeadTakeover");
+      if (truth.source === "explicit_complete") return t("submissionExplicit");
+      if (truth.source === "forced" || truth.source === "force_shutdown" || truth.source === "forced_reconciliation") return t("submissionForced");
+      return t("submissionUnknown");
+    }
+    function ResponsibilityPanel(props) {
+      var task = props.task || {}, t = props.t, truth = taskResponsibilityProjection(task), members = props.members || [];
+      var assignedName = responsibilityName(members, truth.assignedId, props.leadSessionId, t, t("unassigned"));
+      var executorName = truth.executorId ? responsibilityName(members, truth.executorId, props.leadSessionId, t, t("actualExecutorUnknown")) : t(truth.legacy ? "actualExecutorLegacy" : "actualExecutorUnknown");
+      var acceptedBy = !truth.legacy && truth.acceptance && truth.acceptance.acceptedBy ? responsibilityName(members, truth.acceptance.acceptedBy, props.leadSessionId, t, t("unknown")) : "";
+      var currentState = normalizeState(task.status || task.state || "pending"), releaseNeedsAttention = !!truth.release && currentState === "pending" && !truth.assignedId;
+      var state = truth.legacy ? "legacy" : truth.cancelled || releaseNeedsAttention || truth.deliveryKind === "missing_completed" || truth.acceptanceKind === "missing_completed" ? "attention" : truth.acceptanceKind === "accepted" ? "accepted" : "pending";
+      return h("section", { className: "dat-responsibility", "data-status": state, "aria-labelledby": props.labelId || "dat-responsibility-title" },
+        h("div", { className: "dat-responsibility-head" }, h("div", null, h("h3", { id: props.labelId || "dat-responsibility-title" }, t("responsibilityTitle")), h("p", { className: "dat-note" }, t("responsibilityHint"))), h("span", { className: "dat-status-chip", "data-status": state }, truth.cancelled ? t("cancelled") : acceptanceLabel(t, truth.acceptanceKind))),
+        h("dl", { className: "dat-responsibility-chain" },
+          h("div", null, h("dt", null, t("assignedMember")), h("dd", null, assignedName)),
+          h("div", null, h("dt", null, t("actualExecutor")), h("dd", null, executorName)),
+          h("div", null, h("dt", null, t("deliveryState")), h("dd", null, deliveryLabel(t, truth.deliveryKind))),
+          h("div", null, h("dt", null, t("acceptanceState")), h("dd", null, acceptanceLabel(t, truth.acceptanceKind))),
+          acceptedBy ? h("div", null, h("dt", null, t("acceptedBy")), h("dd", null, acceptedBy)) : null
+        ),
+        truth.submission ? h("p", { className: "dat-note dat-responsibility-source" }, t("submissionSource", { value: submissionSourceLabel(t, truth) }), truth.submission.submittedAt ? " · " + formatTime(truth.submission.submittedAt) : "") : null,
+        truth.legacy ? h("div", { className: "dat-legacy-record", role: "note", "data-provenance": "legacy_migration" }, h("strong", null, t("legacyRecordTitle")), h("span", null, t("legacyRecordHint"))) : null,
+        truth.release || truth.cancellation ? h("div", { className: "dat-responsibility-events", role: "note" },
+          h("h4", null, t("responsibilityFacts")),
+          truth.release ? h("article", { className: "dat-responsibility-event", "data-kind": "released" }, h("strong", null, t("taskReleased")), h("span", null, t("releaseReasonLabel") + ": " + (truth.release.reason || t("reasonUnavailable"))), truth.release.at ? h("time", { dateTime: String(truth.release.at) }, t("releasedAtLabel") + ": " + formatTime(truth.release.at)) : null) : null,
+          truth.cancellation ? h("article", { className: "dat-responsibility-event", "data-kind": "cancelled" }, h("strong", null, t("taskCancellation")), h("span", null, t("cancellationReasonLabel") + ": " + (truth.cancellation.reason || t("reasonUnavailable"))), truth.cancellation.at ? h("time", { dateTime: String(truth.cancellation.at) }, t("cancelledAtLabel") + ": " + formatTime(truth.cancellation.at)) : null) : null
+        ) : null,
+        truth.cancelled ? h("p", { className: "dat-responsibility-alert", role: "note" }, t("taskCancelled")) : null
+      );
+    }
+    function teamExplicitlyEmpty(team) {
+      if (!team || typeof team !== "object") return false;
+      if (Number.isFinite(team.taskCount)) return team.taskCount === 0;
+      return Array.isArray(team.tasks) && team.tasks.length === 0;
+    }
+    function teamClosureProjection(team) {
+      var closure = team && team.closure && typeof team.closure === "object" ? team.closure : null;
+      var outcome = String(closure && closure.outcome || "unknown").toLowerCase();
+      if (["succeeded", "cancelled", "forced", "failed"].indexOf(outcome) < 0 || outcome === "succeeded" && teamExplicitlyEmpty(team)) outcome = "unknown";
+      return { closure: closure, outcome: outcome, cancelledCount: closure && Array.isArray(closure.cancelledTaskIds) ? closure.cancelledTaskIds.length : 0, failureCount: closure && Array.isArray(closure.failures) ? closure.failures.length : 0 };
+    }
+    function TeamClosureBanner(props) {
+      var t = props.t, truth = teamClosureProjection(props.team), emptySuccess = teamExplicitlyEmpty(props.team) && String(props.team && props.team.closure && props.team.closure.outcome || "").toLowerCase() === "succeeded";
+      var keys = { succeeded: "closureSucceeded", cancelled: "closureCancelled", forced: "closureForced", failed: "closureFailed", unknown: "closureUnknown" }, bodyKeys = { succeeded: "closureSucceededBody", cancelled: "closureCancelledBody", forced: "closureForcedBody", failed: "closureFailedBody", unknown: emptySuccess ? "closureEmptyBody" : "closureUnknownBody" };
+      return h("section", { className: "dat-panel dat-closed dat-closure", "data-outcome": truth.outcome, role: "status", "aria-labelledby": "dat-closure-title" },
+        h("div", { className: "dat-closure-head" }, h("div", null, h("span", { className: "dat-note" }, t("closureOutcome")), h("strong", { id: "dat-closure-title" }, t(keys[truth.outcome]))), truth.closure && truth.closure.closedAt ? h("time", { dateTime: String(truth.closure.closedAt) }, formatTime(truth.closure.closedAt)) : null),
+        h("p", { className: "dat-meta" }, t(bodyKeys[truth.outcome])),
+        truth.cancelledCount || truth.failureCount ? h("div", { className: "dat-row" }, truth.cancelledCount ? h("span", { className: "dat-badge" }, t("closureCancelledCount", { count: truth.cancelledCount })) : null, truth.failureCount ? h("span", { className: "dat-badge" }, t("closureFailureCount", { count: truth.failureCount })) : null) : null,
+        props.children || null
+      );
+    }
 
     function TaskCard(props) {
-      var task = props.task, t = props.t, id = taskId(task), assigned = task.assigneeSessionId || task.assigneeId || task.assignee || task.memberId || "";
+      var task = props.task, t = props.t, id = taskId(task), truth = taskResponsibilityProjection(task), assigned = truth.assignedId;
       var memberText = typeof props.memberName === "function" ? props.memberName(assigned) : "";
+      var executorText = truth.executorId && typeof props.memberName === "function" ? props.memberName(truth.executorId) : "";
       var modelText = typeof props.memberModel === "function" ? props.memberModel(assigned) : "";
       var className = "dat-card" + (props.compact ? " dat-task-row" : "") + (props.onOpen ? " dat-task-open" : "");
       var label = (task.title || task.name || t("taskFallback", { id: id })) + " · " + statusLabel(t, task.status || task.state || "pending");
       var body = [
         h("div", { className: "dat-card-title" }, task.title || task.name || t("taskFallback", { id: id })),
         task.description ? h("div", { className: "dat-meta", style: { marginTop: 4 } }, task.description) : null,
-        visibleTaskResult(task) ? h("div", { className: "dat-task-result-preview", style: { marginTop: 8 } }, h("strong", null, t("taskResultPreview")), h("span", null, taskResultPreviewText(visibleTaskResult(task), props.compact ? 220 : 360))) : null,
-        h("div", { className: "dat-meta", style: { marginTop: 6 } }, "#" + id + " · " + t("assignee") + ": " + (memberText || t("unassigned"))),
+        visibleTaskResult(task) ? h("div", { className: "dat-task-result-preview", style: { marginTop: 8 }, "data-provenance": truth.legacy ? "legacy_migration" : "current" }, h("strong", null, taskResultLabel(t, task, true)), h("span", null, taskResultPreviewText(visibleTaskResult(task), props.compact ? 220 : 360))) : null,
+        h("div", { className: "dat-meta", style: { marginTop: 6 } }, "#" + id + " · " + t("assignedMember") + ": " + (memberText || t("unassigned"))),
+        truth.executorId || normalizeState(task.status || task.state) === "completed" ? h("div", { className: "dat-meta", style: { marginTop: 2 } }, t("actualExecutor") + ": " + (executorText || t(truth.legacy ? "actualExecutorLegacy" : "actualExecutorUnknown")) + " · " + deliveryLabel(t, truth.deliveryKind) + " · " + acceptanceLabel(t, truth.acceptanceKind)) : null,
+        truth.release ? h("div", { className: "dat-meta dat-warn-text", style: { marginTop: 2 } }, t("taskReleased") + " · " + t("releaseReasonLabel") + ": " + (truth.release.reason || t("reasonUnavailable")), truth.release.at ? " · " + formatTime(truth.release.at) : "") : null,
+        truth.cancellation ? h("div", { className: "dat-meta dat-warn-text", style: { marginTop: 2 } }, t("taskCancellation") + " · " + t("cancellationReasonLabel") + ": " + (truth.cancellation.reason || t("reasonUnavailable")), truth.cancellation.at ? " · " + formatTime(truth.cancellation.at) : "") : null,
         modelText ? h("div", { className: "dat-meta", style: { marginTop: 2 } }, t("model") + ": " + modelText) : null,
         arrayText(task.blockedBy) ? h("div", { className: "dat-meta dat-warn-text" }, t("blockedBy", { value: arrayText(task.blockedBy) })) : null,
         arrayText(task.dependencySources) ? h("div", { className: "dat-meta" }, t("dependencySources", { value: dependencySourceText(t, task.dependencySources) })) : null,
@@ -1516,7 +1707,7 @@ window.__ModuleLoader__.load({
           !task ? h("div", { className: "dat-meta" }, t("taskDetailUnavailable")) : h(React.Fragment, null,
             h("div", { className: "dat-task-hero" }, h("h3", { className: "dat-card-title" }, task.title || task.name || t("taskFallback", { id: taskId(task) })), h("span", { className: "dat-badge" }, statusLabel(t, stateKind))),
             task.description ? h("p", { className: "dat-meta", style: { marginTop: 8, whiteSpace: "pre-wrap" } }, task.description) : null,
-            visibleTaskResult(task) ? h("section", { className: "dat-task-result", "aria-labelledby": "dat-task-result-title" }, h("h3", { id: "dat-task-result-title" }, t("taskResult")), h("div", { className: "dat-task-result-text" }, visibleTaskResult(task).text), visibleTaskResult(task).truncated ? h("p", { className: "dat-note" }, t("taskResultTruncated")) : null) : null,
+            visibleTaskResult(task) ? h("section", { className: "dat-task-result", "data-provenance": taskResponsibilityProjection(task).legacy ? "legacy_migration" : "current", "aria-labelledby": "dat-task-result-title" }, h("h3", { id: "dat-task-result-title" }, taskResultLabel(t, task, false)), h("div", { className: "dat-task-result-text" }, visibleTaskResult(task).text), visibleTaskResult(task).truncated ? h("p", { className: "dat-note" }, t("taskResultTruncated")) : null) : null,
             h("dl", { className: "dat-task-facts" },
               detailFact(t("taskRef"), "#" + taskId(task)),
               detailFact(t("assignee"), assignee ? (assignee.displayName || assignee.name || memberId(assignee)) : t("unassigned")),
@@ -1527,6 +1718,7 @@ window.__ModuleLoader__.load({
               detail.conflicts.length ? detailFact(t("conflicts"), detail.conflicts.map(refTitle).join(", ")) : null,
               arrayText(task.dependencySources) ? detailFact(t("dependencySources"), dependencySourceText(t, task.dependencySources)) : null
             ),
+            h(ResponsibilityPanel, { t: t, task: task, members: props.members, leadSessionId: props.leadSessionId, labelId: "dat-sidebar-responsibility-title" }),
             h(TaskAssurancePanel, { t: t, task: task }),
             stateKind === "blocked" ? h("section", { className: "dat-task-section dat-board-note", role: "status", "aria-label": t("blockedTaskReason") }, h("h3", null, t("blockedTaskReason")), h("div", { className: "dat-meta" }, detail.reason || (detail.blockedBy.length ? t("blockedBy", { value: detail.blockedBy.map(refTitle).join(", ") }) : t("blockedTaskUnknown"))), h("p", { className: "dat-note", style: { marginBottom: 0 } }, t("blockedTaskNext"))) : null,
             detail.dependencies.length ? h("section", { className: "dat-task-section", "aria-label": t("taskDependencies") }, h("h3", null, t("taskDependencies")), h("div", { className: "dat-meta" }, detail.dependencies.map(refTitle).join(", "))) : null,
@@ -1632,8 +1824,9 @@ window.__ModuleLoader__.load({
                     arrayText(task.dependencySources) ? detailFact(t("dependencySources"), dependencySourceText(t, task.dependencySources)) : null
                   )
                 ),
+                h(ResponsibilityPanel, { t: t, task: task, members: props.members, leadSessionId: props.leadSessionId, labelId: "dat-task-focus-responsibility-title" }),
                 h(TaskAssurancePanel, { t: t, task: task }),
-                taskResult ? h("section", { className: "dat-task-focus-surface dat-task-result", "aria-labelledby": "dat-task-focus-result-title" }, h("h3", { id: "dat-task-focus-result-title" }, t("taskResult")), h("div", { className: "dat-task-result-text" }, taskResult.text), taskResult.truncated ? h("p", { className: "dat-note" }, t("taskResultTruncated")) : null) : null,
+                taskResult ? h("section", { className: "dat-task-focus-surface dat-task-result", "data-provenance": taskResponsibilityProjection(task).legacy ? "legacy_migration" : "current", "aria-labelledby": "dat-task-focus-result-title" }, h("h3", { id: "dat-task-focus-result-title" }, taskResultLabel(t, task, false)), h("div", { className: "dat-task-result-text" }, taskResult.text), taskResult.truncated ? h("p", { className: "dat-note" }, t("taskResultTruncated")) : null) : null,
                 h("section", { className: "dat-task-focus-surface dat-task-next", "data-state": workflow.currentState, "aria-labelledby": "dat-task-next-title" }, h("h3", { id: "dat-task-next-title" }, t("taskNextStep")), h("p", { className: "dat-meta" }, t(workflow.nextKey))),
                 workflow.blocked ? h("section", { className: "dat-task-focus-surface dat-board-note", role: "status", "aria-label": t("blockedTaskReason") }, h("h3", null, t("blockedTaskReason")), h("div", { className: "dat-meta" }, detail.reason || (detail.blockedBy.length ? t("blockedBy", { value: detail.blockedBy.map(refTitle).join(", ") }) : t("blockedTaskUnknown")))) : null,
                 detail.dependencies.length ? h("section", { className: "dat-task-focus-surface", "aria-label": t("taskDependencies") }, h("h3", null, t("taskDependencies")), h("div", { className: "dat-meta" }, detail.dependencies.map(refTitle).join(", "))) : null
@@ -1883,21 +2076,24 @@ window.__ModuleLoader__.load({
      * selected-team safe projection, derived blocked column, and read-only UI.
      */
     function BoardTaskCard(props) {
-      var task = props.task, t = props.t, id = taskId(task), column = taskBoardColumn(task);
-      var assigned = task.assigneeSessionId || task.assigneeId || task.assignee || task.memberId || "";
-      var member = (props.members || []).filter(function (item) { return memberId(item) === assigned || memberSession(item) === assigned; })[0];
+      var task = props.task, t = props.t, id = taskId(task), column = taskBoardColumn(task), truth = taskResponsibilityProjection(task);
+      var assigned = truth.assignedId;
+      var member = responsibilityMember(props.members, assigned), executor = responsibilityMember(props.members, truth.executorId);
       var owner = member ? simpleMemberName(member, member.isLead || member.kind === "lead" || memberSession(member) === props.leadSessionId, t) : t("unassigned");
+      var executorName = executor ? simpleMemberName(executor, executor.isLead || executor.kind === "lead" || memberSession(executor) === props.leadSessionId, t) : truth.executorId ? t("actualExecutorUnknown") : truth.legacy ? t("actualExecutorLegacy") : "";
       var model = member ? memberModelText(member, t) : "", attempt = taskBoardAttempt(task), leaseEpoch = taskBoardLeaseEpoch(task), capabilitySummary = taskBoardCapabilitySummary(task), milestones = taskBoardMilestones(task), attentionFacts = taskBoardAttentionFacts(t, task);
       var updatedAt = task.updatedAt || task.lastActivityAt || task.completedAt || task.claimedAt || task.createdAt;
       return h("button", { type: "button", className: "dat-board-card", "data-state": column, onClick: function (event) { props.onOpen(event, task); }, "aria-label": (task.title || task.name || t("taskFallback", { id: id })) + " · " + taskBoardColumnLabel(t, column) },
         h("div", { className: "dat-board-card-top" }, h("span", { className: "dat-board-card-id" }, "#" + id), h("span", { className: "dat-board-card-flag" }, taskBoardColumnLabel(t, column))),
         h("div", { className: "dat-board-card-title" }, task.title || task.name || t("taskFallback", { id: id })),
-        h("div", { className: "dat-board-card-owner" }, owner, model ? " · " + model : ""),
-        attentionFacts.length ? h("div", { className: "dat-board-card-facts", role: "note" }, h("strong", null, t("boardHostFacts")), attentionFacts.slice(0, 3).map(function (fact, index) { return h("span", { key: index }, fact); })) : null,
+        h("div", { className: "dat-board-card-owner" }, t("assignedMember") + ": " + owner, model ? " · " + model : ""),
+        truth.executorId || column === "done" ? h("div", { className: "dat-board-card-owner dat-board-card-executor", "data-status": truth.deliveryKind === "missing_completed" || truth.acceptanceKind === "missing_completed" ? "attention" : truth.acceptanceKind }, t("actualExecutor") + ": " + (executorName || t("actualExecutorUnknown")) + " · " + deliveryLabel(t, truth.deliveryKind) + " · " + acceptanceLabel(t, truth.acceptanceKind)) : null,
+        truth.release ? h("div", { className: "dat-board-card-facts", role: "note", "data-kind": "released" }, h("strong", null, t("taskReleased")), h("span", null, t("releaseReasonLabel") + ": " + (truth.release.reason || t("reasonUnavailable"))), truth.release.at ? h("time", { dateTime: String(truth.release.at) }, formatTime(truth.release.at)) : null) : null,
+        truth.cancelled ? h("div", { className: "dat-board-card-facts", role: "note", "data-kind": "cancelled" }, h("strong", null, t("taskCancelled")), h("span", null, t("cancellationReasonLabel") + ": " + (truth.cancellation && truth.cancellation.reason || t("reasonUnavailable"))), truth.cancellation && truth.cancellation.at ? h("time", { dateTime: String(truth.cancellation.at) }, formatTime(truth.cancellation.at)) : null) : attentionFacts.length ? h("div", { className: "dat-board-card-facts", role: "note" }, h("strong", null, t("boardHostFacts")), attentionFacts.slice(0, 3).map(function (fact, index) { return h("span", { key: index }, fact); })) : null,
         milestones || attempt !== null || leaseEpoch !== null || capabilitySummary || updatedAt ? h("div", { className: "dat-board-card-flags" }, milestones ? h("span", { className: "dat-board-card-flag" }, t("boardMilestones", milestones)) : null, attempt !== null ? h("span", { className: "dat-board-card-flag" }, t("boardAttempt", { value: attempt })) : null, leaseEpoch !== null ? h("span", { className: "dat-board-card-flag" }, t("boardLeaseEpoch", { value: leaseEpoch })) : null, capabilitySummary ? h("span", { className: "dat-board-card-flag" }, t("boardCapabilities", capabilitySummary)) : null, updatedAt ? h("time", { className: "dat-board-card-time", dateTime: String(updatedAt) }, t("lastActivity", { value: formatTime(updatedAt) })) : null) : null,
         task.checkpoint && typeof task.checkpoint.text === "string" && task.checkpoint.text.trim() ? h("div", { className: "dat-board-card-result" }, h("strong", null, t("boardMemberCheckpoint")), h("span", null, taskResultPreviewText(task.checkpoint, 180))) : null,
         task.nextStep && typeof task.nextStep.text === "string" && task.nextStep.text.trim() ? h("div", { className: "dat-board-card-result" }, h("strong", null, t("boardMemberNextStep")), h("span", null, taskResultPreviewText(task.nextStep, 180))) : null,
-        visibleTaskResult(task) ? h("div", { className: "dat-board-card-result" }, h("strong", null, t("boardCheckpoint")), h("span", null, taskResultPreviewText(visibleTaskResult(task), 180))) : null,
+        visibleTaskResult(task) ? h("div", { className: "dat-board-card-result", "data-provenance": truth.legacy ? "legacy_migration" : "current" }, h("strong", null, truth.legacy ? t("legacyResultPreview") : t("boardCheckpoint")), h("span", null, taskResultPreviewText(visibleTaskResult(task), 180))) : null,
         h("div", { className: "dat-board-card-next" }, t(taskBoardNextKey(column)))
       );
     }
@@ -1949,6 +2145,7 @@ window.__ModuleLoader__.load({
       var cancelledTasks = sortBoardColumnTasks(tasks.filter(function (task) { return taskBoardColumn(task) === cancelledHistory.id; }), cancelledHistory.id);
       return h("section", { className: "dat-workspace-view", "aria-labelledby": "dat-task-board-title", "aria-readonly": "true" },
         h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-task-board-title" }, t("boardTitle")), h("p", null, t("boardIntro"))), h("div", { className: "dat-workspace-view-actions" }, h("span", { className: "dat-badge" }, t("boardReadOnly")), h(Button, { small: true, onClick: function () { props.setWorkspaceView("canvas"); } }, t("boardOpenCanvas")))),
+        normalizeState(team.status || team.state) === "closed" || team.closure ? h(TeamClosureBanner, { t: t, team: team }) : null,
         h("div", { className: "dat-board-toolbar" }, h("div", null, h("strong", null, teamName(team, t)), h("div", { className: "dat-note", style: { marginTop: 2 } }, team.objective || t("unknown"))), h("div", { className: "dat-row" }, h("span", { className: "dat-badge" }, t("boardScope")), h("span", { className: "dat-badge" }, t("revision", { value: team.revision || "–" })) )),
         h(PlanLifecyclePanel, { t: t, team: team }),
         h("div", { className: "dat-board-note", role: "note" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, t("boardReadOnlyHint"), " ", t("boardBlockedDerived"), " ", t("boardFactLegend"))),
@@ -1966,7 +2163,7 @@ window.__ModuleLoader__.load({
             })),
             cancelledTasks.length ? h("details", { className: "dat-board-history" }, h("summary", null, t("boardOpenCancelled", { count: cancelledTasks.length })), h("p", { className: "dat-note" }, t("boardCancelledHistoryHint")), h("div", { className: "dat-board-history-list" }, cancelledTasks.slice(0, cancelledHistory.limit).map(function (task) { return h(BoardTaskCard, { key: taskId(task), task: task, members: members, leadSessionId: team.leadSessionId, t: t, onOpen: openTaskDetail }); }))) : null
           ),
-          selectedTaskId ? h(TaskDetailFocus, { t: t, task: selectedTask, assignee: selectedAssignee, responsible: responsible, runtimeDetail: taskDetailLive.detail, runtimeError: taskDetailLive.error, detailConnection: taskDetailLive.connection, events: selectedTaskEvents, tasks: tasks, teamsById: teamsById, connection: props.connection, detailRef: detailRef, onClose: closeTaskDetail }) : null
+          selectedTaskId ? h(TaskDetailFocus, { t: t, task: selectedTask, assignee: selectedAssignee, responsible: responsible, members: members, leadSessionId: team.leadSessionId, runtimeDetail: taskDetailLive.detail, runtimeError: taskDetailLive.error, detailConnection: taskDetailLive.connection, events: selectedTaskEvents, tasks: tasks, teamsById: teamsById, connection: props.connection, detailRef: detailRef, onClose: closeTaskDetail }) : null
         )
       );
     }
@@ -2406,11 +2603,12 @@ window.__ModuleLoader__.load({
       ) : null;
       var taskInspector = selectedTaskId ? h(React.Fragment, null,
         h("button", { type: "button", className: "dat-scrim", onClick: closeTaskDetail, "aria-label": t("closePanel") }),
-        h(TaskDetailSidebar, { t: t, task: selectedTask, assignee: selectedAssignee, events: selectedTaskEvents, tasks: tasks, teamsById: teamsById, detailRef: taskDetailRef, modal: inspectorModal, onClose: closeTaskDetail })
+        h(TaskDetailSidebar, { t: t, task: selectedTask, assignee: selectedAssignee, members: members, leadSessionId: team.leadSessionId, events: selectedTaskEvents, tasks: tasks, teamsById: teamsById, detailRef: taskDetailRef, modal: inspectorModal, onClose: closeTaskDetail })
       ) : null;
       return h("div", { className: "dat-active-shell" + (drawerOpen || selectedTaskId ? " dat-inspector-open" : "") },
         h("div", { className: "dat-work-main", "aria-hidden": inspectorModal ? true : undefined, inert: inspectorModal ? "" : undefined },
-          props.closed ? h("section", { className: "dat-panel dat-closed", role: "status" }, h("strong", null, t("closed")), h("div", { className: "dat-meta", style: { marginTop: 4 } }, t("closedBody")), h("div", { style: { marginTop: 10 } }, h(Button, { small: true, onClick: function () { prompt(isChinese() ? "请询问我的下一个目标；收到目标后，由你判断是否需要团队并自动规划必要成员、任务依赖和文件边界，不要让我设计团队结构。" : "Ask for my next objective. After I provide it, decide whether a team is useful and design only the necessary members, task dependencies, and file boundaries yourself; do not ask me to design the team structure.", { creation: true, includeTeams: true }); } }, t("newTeam")))) : props.paused ? h("section", { className: "dat-panel dat-closed", role: "status" }, h("strong", null, t("paused")), h("div", { className: "dat-meta", style: { marginTop: 4 } }, t("pausedBody")), h("div", { style: { marginTop: 10 } }, h(Button, { small: true, onClick: function () { prompt(isChinese() ? "请恢复这个团队。恢复后请先检查未完成任务和成员状态，再继续工作。" : "Please resume this team. After resuming, check unfinished tasks and member status before continuing."); } }, t("continueTeam")))) : null,
+          !props.closed && team.closure ? h(TeamClosureBanner, { t: t, team: team }) : null,
+          props.closed ? h(TeamClosureBanner, { t: t, team: team }, h("div", { style: { marginTop: 10 } }, h(Button, { small: true, onClick: function () { prompt(isChinese() ? "请询问我的下一个目标；收到目标后，由你判断是否需要团队并自动规划必要成员、任务依赖和文件边界，不要让我设计团队结构。" : "Ask for my next objective. After I provide it, decide whether a team is useful and design only the necessary members, task dependencies, and file boundaries yourself; do not ask me to design the team structure.", { creation: true, includeTeams: true }); } }, t("newTeam")))) : props.paused ? h("section", { className: "dat-panel dat-closed", role: "status" }, h("strong", null, t("paused")), h("div", { className: "dat-meta", style: { marginTop: 4 } }, t("pausedBody")), h("div", { style: { marginTop: 10 } }, h(Button, { small: true, onClick: function () { prompt(isChinese() ? "请恢复这个团队。恢复后请先检查未完成任务和成员状态，再继续工作。" : "Please resume this team. After resuming, check unfinished tasks and member status before continuing."); } }, t("continueTeam")))) : null,
           h("header", { className: "dat-command-bar" }, h("div", { className: "dat-command-title" }, h("h2", { className: "dat-title" }, teamName(team, t)), h("p", { className: "dat-subtitle" }, objective), h("div", { className: "dat-row", style: { marginTop: 6 } }, h("span", { className: "dat-badge" }, teamStatusLabel(t, team.status)), h("span", { className: "dat-badge" }, t("revision", { value: team.revision || "–" })))), h("div", { className: "dat-row" }, h(Button, { small: true, disabled: !team.leadSessionId || !props.sessions || typeof props.sessions.setSubagentCatalogOpen !== "function", onClick: openAgentCatalog }, t("openMembers", { count: agentCount })), h(Button, { small: true, ariaPressed: drawerOpen, onClick: openActivityPanel }, t("openActivity", { count: events.length })), completedTasks.length ? h(Button, { small: true, ariaPressed: historyOpen, onClick: function () { setHistoryOpen(!historyOpen); } }, historyOpen ? t("hideHistory") : t("openHistory", { count: completedTasks.length })) : null, !props.closed && !props.paused ? h(Button, { small: true, ariaPressed: actionsOpen, onClick: function () { setActionsOpen(!actionsOpen); } }, actionsOpen ? t("fewerActions") : t("moreActions")) : null)),
           projectionLimited ? h("div", { className: "dat-board-note dat-board-projection-note", role: "note" }, h("span", { "aria-hidden": "true" }, "⚠"), h("span", null, t("boardProjectionLimited", { shown: tasks.length, total: totalTaskCount }))) : null,
           taskSelectionNotice ? h("div", { className: "dat-board-note", role: "status" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, taskSelectionNotice)) : null,
@@ -2583,7 +2781,7 @@ window.__ModuleLoader__.load({
       try { ctx.effect(function () { return ctx.locale.register(NS, { zh: zh, en: en }); }, "agent-teams: dictionaries"); } catch (_) {}
       try { translate = ctx.locale.bind(NS); } catch (_) {}
       try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {}
-      try { ctx.locale.subscribe(function () { try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {} localeListeners.slice().forEach(function (listener) { listener(); }); }); } catch (_) {}
+      try { ctx.effect(function () { return ctx.locale.subscribe(function () { try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {} localeListeners.slice().forEach(function (listener) { listener(); }); }); }, "agent-teams: locale subscription"); } catch (_) {}
       function View(props) { return h(TeamView, Object.assign({}, props, { sessions: ctx.sessions })); }
       function Settings() { return h(AgentTeamsSettings, { sessions: ctx.sessions }); }
       ctx.slots.inject("conversation.view", function () { return ctx.slots.register({ name: "conversation.view", id: "agent-teams", order: 20, locale: NS, label: function () { return translate("title"); } }, View); });

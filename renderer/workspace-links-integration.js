@@ -139,11 +139,16 @@
       const inlineCode = element.closest?.('code')
       if (inlineCode && inlineCode !== element) decorate(inlineCode)
     }
+    const redecorateContainingCode = node => {
+      const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement
+      const inlineCode = element?.matches?.('code') ? element : element?.closest?.('code')
+      if (inlineCode) decorate(inlineCode)
+    }
 
     decorate(document)
     const observer = new MutationObserver(records => {
       for (const record of records) {
-        decorateNode(record.target)
+        redecorateContainingCode(record.target)
         for (const node of record.addedNodes) decorateNode(node)
       }
     })

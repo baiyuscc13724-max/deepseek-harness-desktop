@@ -22,6 +22,32 @@
 2. Client 插件通过原生 Cordis slots 注入团队入口、团队工作台和任务摘要条。
 3. 桌面壳只负责把插件原子复制进 Web profile 并确保 `cordis.patch.yml` 中只有一个注册项。
 
+## 负责人、岗位成员与真实产出边界
+
+一旦为当前目标建立 Agent Team，固定负责人默认只承担协调职责：把用户目标拆成实质成果，持久化并分配任务，维护依赖与交接，核对任务状态，审查并接收成员交付，最后完成最小必要的集成和面向用户的综合说明。负责人不能亲自替代已经分配、或按目标本应分配给岗位成员的实现、研究、设计、测试、文档等核心专业产出；允许的直接修改仅限于把已接收成果接起来所必需的最小胶水工作。发现覆盖缺口时，应重构或新增持久任务并分给可见成员，容量不足时走结构化扩员，而不是由负责人吸收核心工作。
+
+岗位成员对自己已分配且已认领的任务负责：在声明的文件或资源边界内形成真实交付物，依据可观察的验收标准完成验证，并用当前 `claimId/leaseEpoch` 显式完成或释放任务。进度消息、checkpoint、最终报告或一次成功的成员回合都不等于持久任务完成；成员也不得把自己的核心交付反向交给负责人代做，或通过隐藏子代理形成第三层执行者。
+
+真实团队必须满足“产出覆盖”，而不只是“人数覆盖”：
+
+- 团队全部持久任务与岗位职责合起来，必须覆盖用户目标所需的实质成果；每项核心成果都应有明确负责的可见成员、真实交付物和可观察验收标准。
+- 负责人自身的协调、复核、集成和总结不算第二条独立工作流，也不能用来填补成员职责覆盖。
+- 不得创建装饰性、占位性或仅做轻量复核的成员，却把实现、研究、设计、测试等核心产出留给负责人；独立审校可以是有效岗位，但必须有独立审查结论、缺陷证据或架构记录等可验收成果。
+- 若目标不值得把实质生产交给至少两个持续且独立的可见岗位，就不应创建 Agent Team，应按三级门禁选择主模型单独完成或一个普通子代理辅助。
+- 负责人只有在成员交付已经完成并被接收后才能做最终集成；若交付缺失、失败或范围变化，应先重分配、重开或扩充任务，不能用负责人直接补做来伪造团队完成。
+
+这些规则属于注入根会话的运行时职责契约，并由回归测试确认其通过真实 system-prompt 注册通道生效、关键职责语义存在且“接收成员交付”先于最终集成。它们约束模型决策，但不是 Host 对每一次文件编辑或工具调用的机械权限隔离；持久任务、文件范围、claim fencing 与验收记录提供可审计事实，不能把提示词测试误述为已经从执行层绝对阻止负责人越界。
+
+### 交付、验收与责任事实
+
+当前存储 schema v6 把成员交付与负责人验收保存为同一当前 claim 的两份独立 receipt。成员 `complete` 只能由当前 claimant 携带精确 `claimId/leaseEpoch` 提交，并生成绑定 `taskId`、claim、lease、`submittedBy` 和 `submittedAt` 的 `submission`；可见 `result` 也必须绑定同一任务与 claimant，未限定任务的一条会话输出不能批量证明多个任务完成。负责人不能对成员持有的 foreign claim 调用普通 `complete`，只能在有效 submission 之后写入单独的 `acceptance`。依赖满足、正常关闭和孤儿恢复的成功路径都要求当前 submission 与 acceptance 同时匹配；错误、拒绝、未验收完成和取消不能投影为成功。
+
+v1–v5 的已完成历史迁移到 v6 时，会生成成对的兼容 receipt，并把 `submission.source` 标为 `legacy_migration`。客户端以这个来源为整组 provenance：历史 assignee、合成 submission/result/acceptance 可以继续展示，但统一降级为旧迁移记录，不能称为当前实际执行者或当前负责人审查。当前真实完成使用 `explicit_complete`；v6 不用额外的 v7 acceptance-source 枚举来推断来源。
+
+显式 release 会保存成对的 `releasedAt/releaseReason`。这是一条跨后续 assign、claim、complete 和 accept 保留的、有界最新安全释放事实，不是当前 ownership；只有任务仍为 `pending` 且未分配时才触发 release Attention。取消使用成对的 `cancelledAt/cancellationReason`，仅在 `cancelled` 状态有效，reopen 会清除；界面只陈述通用“任务已取消；这不是成功完成”，不根据 reason、来源或 actor 猜测是谁取消。团队 closure receipt 明确区分 `succeeded`、`cancelled`、`forced`、`failed`；空团队的正常关闭/恢复是 `cancelled`，失败关闭没有 `closedAt`，`closed` 本身不等于成功。
+
+这些 receipt 仍有明确边界：负责人可以显式 release 一个 foreign claim，再以自身身份 claim 并同步完成/验收；这是工作台可见且可审计的接管，而不是 Host 机械禁止的行为。`task.files` 是计划、提示和审计边界，通用文件工具并不会据此实施机械访问控制。submission/acceptance 证明的是状态转换、claim 归属与接收者，不证明产物内容正确、测试充分或审查质量；普通负责人 acceptance 也不等同于独立审查，要求岗位独立性的目标仍需单独的审查任务和真实审查证据。
+
 ## 持久化
 
 状态存储在 `$DSH_HOME/storages/agent_teams.json`。所有修改经过单一 Promise 写链，使用同目录临时文件、`fsync` 和原子 `rename` 发布。任务认领在一条串行 mutation 中验证并写入，避免两个队友同时认领。

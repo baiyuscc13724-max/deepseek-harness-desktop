@@ -1073,7 +1073,7 @@
       shell.querySelector(`[data-harness-mobile-domain="${domain.id}"]`)?.addEventListener('click', event => {
         const visibleConversation = document.querySelector('[data-harness-mobile-conversation="true"]')
         const detailComposer = visibleConversation?.querySelector?.('[data-composer-card]')
-        if (domain.id !== 'conversations' && detailComposer && visible(visibleConversation)) {
+        if (domain.id !== 'conversations' && root.dataset.harnessMobileChatDetail === 'open' && detailComposer && visible(visibleConversation)) {
           event.preventDefault()
           event.stopPropagation()
           return
@@ -2044,6 +2044,8 @@
     const inFlight = new Map()
     const STALE_CACHE_MS = 5 * 60_000
     const MAX_CACHE_ENTRIES = 8
+    const MAX_HISTORY_ATTEMPTS = 9
+    const EARLY_STALE_ATTEMPT = 2
     const SESSION_HISTORY_RECEIPT_EVENT = 'harness-mobile-session-history-receipt'
     window.__harnessMobileFetchInstalled = true
 
@@ -2280,7 +2282,7 @@
         let lastError = null
         let lastResponse = null
         let staleFallbackAllowed = false
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < MAX_HISTORY_ATTEMPTS; attempt++) {
           try {
             const attemptInit = { ...(init || {}), signal: attemptSignal(callerSignal, attempt === 0 ? 8_000 : 12_000) }
             if (attemptInit.signal === undefined) delete attemptInit.signal
@@ -2297,14 +2299,22 @@
               return response
             }
             staleFallbackAllowed = response.status >= 500 && response.status <= 504
-            if (callerSignal?.aborted || document.visibilityState === 'hidden' || attempt === 2) break
+            if (staleFallbackAllowed && attempt === EARLY_STALE_ATTEMPT) {
+              const stale = cachedResponse(key, STALE_CACHE_MS)
+              if (stale) return stale
+            }
+            if (callerSignal?.aborted || document.visibilityState === 'hidden' || attempt === MAX_HISTORY_ATTEMPTS - 1) break
           } catch (error) {
             lastError = error
             const retryable = /abort|failed|network|timeout/i.test(String(error?.message || error))
             staleFallbackAllowed = retryable && !callerSignal?.aborted && document.visibilityState !== 'hidden'
-            if (!retryable || callerSignal?.aborted || document.visibilityState === 'hidden' || attempt === 2) break
+            if (staleFallbackAllowed && attempt === EARLY_STALE_ATTEMPT) {
+              const stale = cachedResponse(key, STALE_CACHE_MS)
+              if (stale) return stale
+            }
+            if (!retryable || callerSignal?.aborted || document.visibilityState === 'hidden' || attempt === MAX_HISTORY_ATTEMPTS - 1) break
           }
-          const backoff = 300 * (2 ** attempt) + Math.round(Math.random() * 120)
+          const backoff = Math.min(5_000, 300 * (2 ** attempt)) + Math.round(Math.random() * 120)
           await new Promise(resolve => setTimeout(resolve, backoff))
         }
         const stale = staleFallbackAllowed ? cachedResponse(key, STALE_CACHE_MS) : null
@@ -2684,6 +2694,60 @@
     section.appendChild(row)
   }
 
+  const decorateDocumentReferences = () => {
+    const bridge = window.HarnessMobileControl
+    if (!bridge || typeof bridge.openDocument !== 'function') return
+    const sessionId = typeof window.__harnessMobileCurrentSessionId === 'string' ? window.__harnessMobileCurrentSessionId : ''
+    if (!/^[A-Za-z0-9._:-]{1,256}$/.test(sessionId)) return
+    const extensionPattern = /\.(?:docx?|pdf|rtf|odt|xlsx?|csv|pptx?|md|txt|html?)$/i
+    const mimeTypes = {
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      pdf: 'application/pdf',
+      rtf: 'application/rtf',
+      odt: 'application/vnd.oasis.opendocument.text',
+      xls: 'application/vnd.ms-excel',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      csv: 'text/csv',
+      ppt: 'application/vnd.ms-powerpoint',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      md: 'text/markdown',
+      txt: 'text/plain',
+      html: 'text/html',
+      htm: 'text/html'
+    }
+    const documentReference = value => {
+      let path = String(value || '').trim().replace(/^["'“”‘’]|["'“”‘’]$/g, '')
+      if (!path || path.length > 512 || /[\r\n\0]/.test(path)) return null
+      path = path.replace(/\\/g, '/')
+      const name = path.split('/').filter(Boolean).pop() || ''
+      if (!extensionPattern.test(name)) return null
+      const relativePath = /^(?:[A-Za-z]:\/|\/)/.test(path) ? name : path
+      const extension = name.split('.').pop().toLowerCase()
+      return { path: relativePath, name, mimeType: mimeTypes[extension] || 'application/octet-stream' }
+    }
+    for (const code of document.querySelectorAll('[data-harness-mobile-conversation="true"] code:not([data-harness-mobile-document-reference])')) {
+      if (code.closest?.('[data-composer-card],pre')) continue
+      const reference = documentReference(code.textContent)
+      if (!reference) continue
+      code.dataset.harnessMobileDocumentReference = 'true'
+      code.tabIndex = 0
+      code.setAttribute('role', 'button')
+      code.setAttribute('aria-label', `打开文档 ${reference.name}`)
+      code.title = `打开文档 ${reference.name}`
+      const open = event => {
+        if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return
+        if (event.type === 'click' && String(window.getSelection?.() || '')) return
+        event.preventDefault()
+        event.stopPropagation()
+        const contentUrl = new URL(`/api/desktop-files/content?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(reference.path)}`, window.location.href).toString()
+        bridge.openDocument(contentUrl, reference.name, reference.mimeType)
+      }
+      code.addEventListener('click', open)
+      code.addEventListener('keydown', open)
+    }
+  }
+
   const mount = () => {
     dismissOfficialNotice()
     decorateHeader()
@@ -2694,6 +2758,7 @@
     decorateAgentTeamsWorkbench()
     decorateDialogs()
     decorateConversation()
+    decorateDocumentReferences()
     containComposerContext()
     if (mobileCapabilities.imeSendBridge) installImeSendBridge()
     installComposerLift()

@@ -228,6 +228,15 @@ test('a same-name package without a verifiable repository is never activated', a
   await assert.rejects(access(path.join(dshHome, 'harness-desktop-marketplace.json')), { code: 'ENOENT' })
 })
 
+test('desktop packaging omits marketplace source artifacts outside the audited runtime set', async () => {
+  const pkg = JSON.parse(await readFile(path.resolve(__dirname, '..', 'package.json'), 'utf8'))
+  for (const pattern of [
+    '!node_modules/dsh-plugin-marketplace/{scripts,docs,assets,.github}/**/*',
+    '!node_modules/dsh-plugin-marketplace/{registry,skills}.json.gz',
+    '!node_modules/dsh-plugin-marketplace/{installability-report.json,audit-expected.json,drift-report.json,install.ps1,install.sh,.hooksrc}'
+  ]) assert.ok(pkg.build.files.includes(pattern), `missing package exclusion: ${pattern}`)
+})
+
 test('marketplace installation copies only the audited runtime files without directory enumeration', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harness-marketplace-runtime-files-'))
   const dshHome = path.join(root, 'dsh-home')

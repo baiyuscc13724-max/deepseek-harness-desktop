@@ -10,11 +10,15 @@ import { patchCodexParityRuntime } from './codex-parity-runtime-patch.mjs'
 import { patchToolResultImageSource, patchToolResultOwnerSource } from './tool-result-image-patch.mjs'
 import { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.mjs'
 import { patchConversationWorkTreeSource } from './conversation-work-tree-patch.mjs'
+import { patchSessionPersistenceListingSource } from './session-persistence-performance-patch.mjs'
+import { patchHostSessionListingSource } from './session-list-metadata-performance-patch.mjs'
 import { patchTimelineReferenceActionSource } from './timeline-reference-patch.mjs'
 
 export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
 export { patchAttachmentInputConversationSource, patchAttachmentInputSource } from './attachment-input-patch.mjs'
 export { patchConversationWorkTreeSource } from './conversation-work-tree-patch.mjs'
+export { patchSessionPersistenceListingSource } from './session-persistence-performance-patch.mjs'
+export { patchHostSessionListingSource } from './session-list-metadata-performance-patch.mjs'
 export { patchTimelineReferenceActionSource } from './timeline-reference-patch.mjs'
 export { patchToolResultImageSource, patchToolResultOwnerSource } from './tool-result-image-patch.mjs'
 export { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.mjs'
@@ -37,6 +41,8 @@ const bashSandboxRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-
 const windowsAclRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-sandbox-windows-acl', 'lib', 'types-CNjZgO4h.js')
 const modelSelectionRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
 const workspaceUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js')
+const sessionPersistenceRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session-persistence-jsonl', 'lib', 'index.js')
+const hostApiProxyRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'index.js')
 const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
 const subagentContinuationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js')
 const fsSearchRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-tool-fs-search', 'lib', 'index.js')
@@ -1660,6 +1666,20 @@ export async function patchInstalledWorkspaceUi(file = workspaceUiRuntime) {
   return patched.changed
 }
 
+export async function patchInstalledSessionPersistence(file = sessionPersistenceRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchSessionPersistenceListingSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
+export async function patchInstalledHostApiProxy(file = hostApiProxyRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchHostSessionListingSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
 export async function patchInstalledFsSearch(file = fsSearchRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchFsSearchSource(source)
@@ -1707,6 +1727,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const windowsAclChanged = await patchInstalledWindowsAcl()
   const modelSelectionChanged = await patchInstalledModelSelection()
   const workspaceUiChanged = await patchInstalledWorkspaceUi()
+  const sessionPersistenceChanged = await patchInstalledSessionPersistence()
+  const hostApiProxyChanged = await patchInstalledHostApiProxy()
   const fsSearchChanged = await patchInstalledFsSearch()
   const toolFsChanged = await patchInstalledToolFs()
   const subprocessChanged = await patchInstalledSubprocess()
@@ -1729,6 +1751,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(windowsAclChanged ? 'Patched Windows ACL token-default DACL intersection.\n' : 'Windows ACL token-default DACL intersection already applied.\n')
   process.stdout.write(modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
   process.stdout.write(workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n')
+  process.stdout.write(sessionPersistenceChanged ? 'Patched bounded concurrent session metadata listing.\n' : 'Bounded concurrent session metadata listing already applied.\n')
+  process.stdout.write(hostApiProxyChanged ? 'Patched live session-list metadata projection reuse.\n' : 'Live session-list metadata projection reuse already applied.\n')
   process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
   process.stdout.write(toolFsChanged ? 'Patched literal edit not-found recovery guidance.\n' : 'Literal edit not-found recovery guidance already applied.\n')
   process.stdout.write(subprocessChanged ? 'Patched hidden Windows command and cleanup processes.\n' : 'Hidden Windows command and cleanup process patch already applied.\n')

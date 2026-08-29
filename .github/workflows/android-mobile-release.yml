@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing desktop tag, or immutable android-v<version> standalone tag
         required: true
-        default: v1.0.52
+        default: v1.0.53
       request_id:
         description: Unique publisher request identity
         required: false

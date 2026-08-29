@@ -47,7 +47,21 @@
     }
   }
 
-  function guestModelRoutingBootstrap(selectInitialRoute, resolveSubagentDisplay) {
+  function mutationTouchesSettingsDialog(records) {
+    const selector = '[role="dialog"][aria-modal="true"]'
+    const inside = node => {
+      const element = node?.nodeType === 1 ? node : node?.parentElement
+      return Boolean(element?.matches?.(selector) || element?.closest?.(selector))
+    }
+    const contains = node => {
+      const element = node?.nodeType === 1 ? node : null
+      return Boolean(element?.matches?.(selector) || element?.querySelector?.(selector))
+    }
+    return records.some(record => inside(record.target)
+      || [...(record.addedNodes || []), ...(record.removedNodes || [])].some(contains))
+  }
+
+  function guestModelRoutingBootstrap(selectInitialRoute, resolveSubagentDisplay, mutationTouchesSettingsDialog) {
     if (window.__HARNESS_DESKTOP_MODEL_ROUTING_INSTALLED__) return
     window.__HARNESS_DESKTOP_MODEL_ROUTING_INSTALLED__ = true
 
@@ -350,6 +364,7 @@
       providerRefreshTimer = setTimeout(() => request('refresh-model-routing'), 240)
     }
     new MutationObserver(records => {
+      if (!mutationTouchesSettingsDialog(records)) return
       if (!scheduled) {
         scheduled = true
         setTimeout(() => { scheduled = false; mount() }, 80)
@@ -363,7 +378,7 @@
   }
 
   async function install(webview) {
-    await webview.executeJavaScript(`(${guestModelRoutingBootstrap.toString()})(${selectInitialRoute.toString()},${resolveSubagentDisplay.toString()})`, true)
+    await webview.executeJavaScript(`(${guestModelRoutingBootstrap.toString()})(${selectInitialRoute.toString()},${resolveSubagentDisplay.toString()},${mutationTouchesSettingsDialog.toString()})`, true)
   }
 
   async function publish(webview, state) {
@@ -372,5 +387,5 @@
     await webview.executeJavaScript(`window.__HARNESS_DESKTOP_MODEL_ROUTING_STATE__=${serialized};window.__HARNESS_DESKTOP_RENDER_MODEL_ROUTING__?.();`, true)
   }
 
-  root.harnessModelRoutingIntegration = { install, publish, selectInitialRoute, resolveSubagentDisplay, createModelRoutingSavePayload }
+  root.harnessModelRoutingIntegration = { install, publish, selectInitialRoute, resolveSubagentDisplay, createModelRoutingSavePayload, mutationTouchesSettingsDialog }
 })(window)

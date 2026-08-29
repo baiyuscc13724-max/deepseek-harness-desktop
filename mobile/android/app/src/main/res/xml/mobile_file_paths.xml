@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Only camera files created for a current user action are shared. -->
+    <!-- Only files created for an explicit camera or document-open action are shared. -->
     <cache-path name="mobile_input_capture" path="mobile-input/" />
+    <cache-path name="mobile_document_preview" path="mobile-documents/" />
 </paths>

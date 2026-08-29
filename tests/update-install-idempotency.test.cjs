@@ -13,9 +13,9 @@ test('installing while already current is an idempotent success', () => {
 })
 
 test('renderer clears stale update errors and paints the current state normally', () => {
-  assert.match(renderer, /checking: true, installError: ''/u)
-  assert.match(renderer, /checking: false, installError: ''/u)
+  assert.match(renderer, /checking: true, checkError: '', installError: ''/u)
+  assert.match(renderer, /checking: false, checkError: '', installError: ''/u)
   assert.match(renderer, /if \(!component && result\?\.upToDate\)/u)
   assert.match(renderer, /installProgress: \{ phase: 'current', version \}/u)
-  assert.match(renderer, /progress\?\.phase === 'current'[\s\S]*当前桌面版已经是最新版本/u)
+  assert.match(renderer, /if \(progress\.phase === 'current'\) return '当前桌面版已经是最新版本。'/u)
 })

@@ -14,6 +14,13 @@ function extractFunction(text, name, nextName) {
   return text.slice(start, end)
 }
 
+test('streaming text mutations only revisit a containing code path', async () => {
+  const links = await source('renderer/workspace-links-integration.js')
+  assert.match(links, /const redecorateContainingCode = node =>[\s\S]*?element\?\.matches\?\.\('code'\) \? element : element\?\.closest\?\.\('code'\)[\s\S]*?if \(inlineCode\) decorate\(inlineCode\)/u)
+  assert.match(links, /for \(const record of records\) \{\s*redecorateContainingCode\(record\.target\)\s*for \(const node of record\.addedNodes\) decorateNode\(node\)/u)
+  assert.doesNotMatch(links, /for \(const record of records\) \{\s*decorateNode\(record\.target\)/u)
+})
+
 test('plain chat HTTP links take the explicit system-browser route', async () => {
   const [links, renderer, preload, main] = await Promise.all([
     source('renderer/workspace-links-integration.js'),

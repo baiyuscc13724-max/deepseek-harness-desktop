@@ -63,6 +63,7 @@ required.push(
   'docs/SECURITY-REVIEW-v1.0.50.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.51.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.52.zh-CN.md',
+  'docs/SECURITY-REVIEW-v1.0.53.zh-CN.md',
   'electron/bridge/native-p2p-host.cjs',
   'electron/bridge/sync-transports/native-p2p-adapter.cjs',
   'renderer/native-p2p.html',
@@ -236,7 +237,7 @@ for (const contract of ['harness-desktop-mobile-sync-entry', 'mountMobileEntry',
 if (rendererScript.includes("row.id = 'harness-desktop-mobile-sync-row'") || rendererScript.includes('mountMobile(section)')) {
   throw new Error('Mobile sync must not remain embedded in the General settings section.')
 }
-if (!rendererScript.includes('element.textContent !== value') || !rendererScript.includes('mountScheduled') || !rendererScript.includes('new MutationObserver(scheduleMount)') || !rendererScript.includes('list.dataset.signature !== itemsSignature')) {
+if (!rendererScript.includes('element.textContent !== value') || !rendererScript.includes('mountScheduled') || !rendererScript.includes('officialSettingsMutationTouchesUi') || !rendererScript.includes('if (officialSettingsMutationTouchesUi(records)) scheduleMount()') || !rendererScript.includes('list.dataset.signature !== itemsSignature')) {
   throw new Error('Official settings and unified update integration must prevent MutationObserver self-trigger loops.')
 }
 for (const contract of ["request('update-action'", 'api.runUnifiedUpdateAction', 'api.getUnifiedUpdateState', '立即更新', '确认应用']) {
@@ -309,8 +310,8 @@ for (const token of ['--dsw-alias-button-contrast-fill', '--dsw-alias-button-pri
 if (themeIntegration.includes("root.querySelectorAll('div,main,section')") || themeIntegration.includes('getComputedStyle(element).backgroundColor')) {
   throw new Error('Theme integration must not force a full-page layout scan during sidebar updates.')
 }
-if (!themeIntegration.includes('clearTimeout(mutationTimer)') || !themeIntegration.includes('mutationTimer = setTimeout')) {
-  throw new Error('Theme integration must coalesce mutation refresh work.')
+if (!themeIntegration.includes('mutationDeadline = performance.now() + 120') || !themeIntegration.includes('mutationTimer ??= setTimeout(flushMutationMount, 120)')) {
+  throw new Error('Theme integration must coalesce mutation refresh work without per-mutation timer churn.')
 }
 if (!rendererScript.includes('applyShellTheme()') || !rendererStyles.includes('--shell-surface') || !rendererStyles.includes('--shell-accent')) {
   throw new Error('The standalone skin picker must inherit the selected Harness Desktop theme.')

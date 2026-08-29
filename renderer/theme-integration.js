@@ -996,12 +996,19 @@
     }
     window.__HARNESS_DESKTOP_RENDER_THEMES__ = mount
     let mutationTimer = null
+    let mutationDeadline = 0
+    const flushMutationMount = () => {
+      const remaining = mutationDeadline - performance.now()
+      if (remaining > 0) {
+        mutationTimer = setTimeout(flushMutationMount, remaining)
+        return
+      }
+      mutationTimer = null
+      mount(false)
+    }
     new MutationObserver(() => {
-      clearTimeout(mutationTimer)
-      mutationTimer = setTimeout(() => {
-        mutationTimer = null
-        mount(false)
-      }, 120)
+      mutationDeadline = performance.now() + 120
+      mutationTimer ??= setTimeout(flushMutationMount, 120)
     }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
     mount()
   }

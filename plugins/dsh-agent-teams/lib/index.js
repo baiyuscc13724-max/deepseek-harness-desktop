@@ -18,8 +18,8 @@ import { ProjectTaskWebRuntime, projectTaskWebError } from "./project-task-web.j
 /** Host-only agent-team coordinator. A future client bundle is advertised by package metadata. */
 const name = "agent-teams";
 const inject = ["agents", "subagents", "tools", "systemPrompt", "webServer"];
-const STORE_VERSION = 5;
-const LEGACY_STORE_VERSIONS = new Set([1, 2, 3, 4]);
+const STORE_VERSION = 6;
+const LEGACY_STORE_VERSIONS = new Set([1, 2, 3, 4, 5]);
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_TEAM_MESSAGES = 500;
 const MAX_TEAM_TASKS = 1_000;
@@ -80,7 +80,7 @@ const USER_PAUSE_RECONCILIATIONS = new Map();
 const USER_PAUSE_EPOCHS = new Map();
 const STOPPABLE_MEMBER_STATES = new Set(["provisioning", "running", "idle", "ready", "shutting_down"]);
 const STORE_INSTANCES = new Map();
-const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap", "plan", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory"]);
+const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap", "plan", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory", "closure"]);
 const HANDOFF_KEYS = new Set(["tokenHash", "sourceRootSessionId", "targetRootSessionId", "projectKey", "createdAt", "expiresAt"]);
 const OWNERSHIP_HISTORY_KEYS = new Set(["kind", "sourceRootSessionId", "targetRootSessionId", "projectKey", "tokenHash", "at", "pauseEpoch"]);
 const PLAN_KEYS = new Set(["phase", "revision", "hash", "committedAt", "activatedAt", "authorization", "migrationState"]);
@@ -90,8 +90,12 @@ const RESUME_NODE_KEYS = new Set(["memberId", "status", "reason"]);
 const BOOTSTRAP_KEYS = new Set(["requestId", "inputHash", "phase", "taskRefs", "memberRefs", "createdAt", "updatedAt"]);
 const BOOTSTRAP_TASK_REF_KEYS = new Set(["key", "taskId"]);
 const BOOTSTRAP_MEMBER_REF_KEYS = new Set(["key", "name", "status", "memberId", "sessionId", "errorCode", "errorStage"]);
-const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason", "result", "attempt", "claimId", "leaseEpoch", "attemptHistory", "interruptionHistory", "checkpoint", "nextStep", "capabilities", "externalEffects"]);
-const TASK_RESULT_KEYS = new Set(["text", "reportedAt", "truncated"]);
+const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason", "result", "submission", "acceptance", "attempt", "claimId", "leaseEpoch", "attemptHistory", "interruptionHistory", "checkpoint", "nextStep", "capabilities", "externalEffects"]);
+const TASK_RESULT_KEYS = new Set(["text", "reportedAt", "truncated", "taskId", "claimId", "leaseEpoch", "reportedBy"]);
+const TASK_SUBMISSION_KEYS = new Set(["taskId", "claimId", "leaseEpoch", "submittedAt", "submittedBy", "source"]);
+const TASK_ACCEPTANCE_KEYS = new Set(["taskId", "claimId", "leaseEpoch", "acceptedAt", "acceptedBy"]);
+const TEAM_CLOSURE_KEYS = new Set(["outcome", "closedAt", "attemptedAt", "reason", "forced", "cancelledTaskIds", "failures"]);
+const TEAM_CLOSURE_OUTCOMES = Object.freeze(["succeeded", "cancelled", "forced", "failed"]);
 const TASK_CHECKPOINT_KEYS = new Set(["text", "reportedAt", "reportedBy", "verified", "claimId", "leaseEpoch"]);
 const TASK_HISTORY_KEYS = new Set(["kind", "at", "attempt", "claimId", "leaseEpoch", "reason"]);
 const CAPABILITY_KEYS = new Set(["name", "status", "source", "checkedAt"]);
@@ -512,7 +516,7 @@ function validateMember(member) {
   return member;
 }
 
-function taskResultFromAssistantMessage(content, reportedAt = now()) {
+function taskResultFromAssistantMessage(content, reportedAt = now(), binding) {
   if (!Array.isArray(content)) return undefined;
   const text = content
     .filter((block) => isRecord(block) && block.type === "text" && typeof block.text === "string")
@@ -527,7 +531,62 @@ function taskResultFromAssistantMessage(content, reportedAt = now()) {
     text: truncated ? `${text.slice(0, UI_TASK_RESULT_CHARS - 2).trimEnd()}\n…` : text,
     reportedAt,
     truncated,
+    ...(binding === undefined ? {} : {
+      taskId: binding.taskId,
+      claimId: binding.claimId,
+      leaseEpoch: binding.leaseEpoch,
+      reportedBy: binding.reportedBy,
+    }),
   };
+}
+function taskSubmission(task, callerId, submittedAt = now(), source = "explicit_complete") {
+  return { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? 0, submittedAt, submittedBy: callerId, source };
+}
+function taskSubmissionMatches(task) {
+  const submission = task.submission;
+  return isRecord(submission) && submission.taskId === task.id && submission.claimId === task.claimId
+    && submission.leaseEpoch === (task.leaseEpoch ?? 0) && submission.submittedBy === task.assigneeSessionId;
+}
+function taskAcceptanceMatches(task) {
+  const acceptance = task.acceptance;
+  return isRecord(acceptance) && taskSubmissionMatches(task) && acceptance.taskId === task.id
+    && acceptance.claimId === task.claimId && acceptance.leaseEpoch === (task.leaseEpoch ?? 0);
+}
+function taskSatisfiesDependency(task) {
+  return task?.state === "completed" && taskAcceptanceMatches(task);
+}
+function teamCancelledTaskIds(team) {
+  return (team.tasks ?? []).filter((task) => task.state === "cancelled").map((task) => task.id);
+}
+function assertClosureSemantics(team) {
+  const closure = team.closure;
+  if (closure === undefined) {
+    if (team.state === "closed") throw new TypeError("closed team requires a closure receipt");
+    return;
+  }
+  if (new Set(closure.cancelledTaskIds).size !== closure.cancelledTaskIds.length) throw new TypeError("team.closure.cancelledTaskIds must be unique");
+  if (closure.outcome === "failed") {
+    if (team.state === "closed" || closure.closedAt !== undefined) throw new TypeError("failed closure receipt must describe an open team attempt");
+    if (closure.failures.length === 0) throw new TypeError("failed closure receipt requires failures");
+    if (closure.cancelledTaskIds.length !== 0) throw new TypeError("failed closure attempt cannot claim terminalized tasks");
+    return;
+  }
+  if (team.state !== "closed" || closure.closedAt === undefined) throw new TypeError("terminal closure receipt requires a closed team");
+  if (closure.failures.length !== 0) throw new TypeError("terminal closure receipt cannot contain failures");
+  const cancelledTaskIds = teamCancelledTaskIds(team);
+  if (JSON.stringify([...closure.cancelledTaskIds].sort()) !== JSON.stringify([...cancelledTaskIds].sort())) throw new TypeError("team.closure.cancelledTaskIds must match cancelled tasks");
+  if (closure.outcome === "forced") {
+    if (closure.forced !== true) throw new TypeError("forced closure outcome requires forced=true");
+    return;
+  }
+  if (closure.forced !== false) throw new TypeError("non-forced closure outcome requires forced=false");
+  const reconciled = team.tasks.every((task) => task.state === "cancelled" || taskSatisfiesDependency(task));
+  if (!reconciled) throw new TypeError("non-forced closure requires every completed task to be accepted");
+  if (closure.outcome === "succeeded") {
+    if (cancelledTaskIds.length !== 0) throw new TypeError("succeeded closure cannot contain cancelled tasks");
+    if (team.tasks.length === 0 || !team.tasks.every(taskSatisfiesDependency)) throw new TypeError("succeeded closure requires at least one accepted completed task");
+  }
+  if (closure.outcome === "cancelled" && team.tasks.length > 0 && cancelledTaskIds.length === 0) throw new TypeError("cancelled closure requires cancelled work unless the team had no tasks");
 }
 
 /** Validate one persisted task and its dependency shape. */
@@ -559,9 +618,17 @@ function validateTask(task) {
   assertIsoDate(task.updatedAt, "task.updatedAt");
   if (task.claimedAt !== undefined) assertIsoDate(task.claimedAt, "task.claimedAt");
   if (task.completedAt !== undefined) assertIsoDate(task.completedAt, "task.completedAt");
-  if (task.cancelledAt !== undefined) assertIsoDate(task.cancelledAt, "task.cancelledAt");
+  const hasCancelledAt = task.cancelledAt !== undefined;
+  const hasCancellationReason = task.cancellationReason !== undefined;
+  if (hasCancelledAt !== hasCancellationReason) throw new TypeError("task.cancelledAt and task.cancellationReason must be present together");
+  if (task.state === "cancelled" && !hasCancelledAt) throw new TypeError("cancelled state requires cancellation markers");
+  if (task.state !== "cancelled" && hasCancelledAt) throw new TypeError("task cancellation markers require cancelled state");
+  if (hasCancelledAt) assertIsoDate(task.cancelledAt, "task.cancelledAt");
   optionalString(task.cancellationReason, "task.cancellationReason", 4_096);
-  if (task.releasedAt !== undefined) assertIsoDate(task.releasedAt, "task.releasedAt");
+  const hasReleasedAt = task.releasedAt !== undefined;
+  const hasReleaseReason = task.releaseReason !== undefined;
+  if (hasReleasedAt !== hasReleaseReason) throw new TypeError("task.releasedAt and task.releaseReason must be present together");
+  if (hasReleasedAt) assertIsoDate(task.releasedAt, "task.releasedAt");
   optionalString(task.releaseReason, "task.releaseReason", 4_096);
   if (task.result !== undefined) {
     if (!isRecord(task.result)) throw new TypeError("task.result must be an object");
@@ -569,7 +636,32 @@ function validateTask(task) {
     nonEmptyString(task.result.text, "task.result.text", UI_TASK_RESULT_CHARS);
     assertIsoDate(task.result.reportedAt, "task.result.reportedAt");
     if (typeof task.result.truncated !== "boolean") throw new TypeError("task.result.truncated must be boolean");
-    if (task.state !== "completed") throw new TypeError("task.result requires a completed task");
+    nonEmptyString(task.result.taskId, "task.result.taskId", 256);
+    nonEmptyString(task.result.claimId, "task.result.claimId", 256);
+    positiveInteger(task.result.leaseEpoch, "task.result.leaseEpoch", { allowZero: true });
+    nonEmptyString(task.result.reportedBy, "task.result.reportedBy", 256);
+    if (task.state !== "completed" || !taskSubmissionMatches(task) || task.result.taskId !== task.id || task.result.claimId !== task.claimId || task.result.leaseEpoch !== (task.leaseEpoch ?? 0) || task.result.reportedBy !== task.assigneeSessionId) throw new TypeError("task.result must bind the current task claimant, claim, lease, and submission");
+  }
+  if (task.submission !== undefined) {
+    if (!isRecord(task.submission)) throw new TypeError("task.submission must be an object");
+    assertAllowedKeys(task.submission, TASK_SUBMISSION_KEYS, "task.submission");
+    nonEmptyString(task.submission.taskId, "task.submission.taskId", 256);
+    nonEmptyString(task.submission.claimId, "task.submission.claimId", 256);
+    positiveInteger(task.submission.leaseEpoch, "task.submission.leaseEpoch", { allowZero: true });
+    assertIsoDate(task.submission.submittedAt, "task.submission.submittedAt");
+    nonEmptyString(task.submission.submittedBy, "task.submission.submittedBy", 256);
+    assertEnum(task.submission.source, ["explicit_complete", "legacy_migration"], "task.submission.source");
+    if (!taskSubmissionMatches(task) || task.state !== "completed") throw new TypeError("task.submission must bind the completed task claimant and current lease");
+  }
+  if (task.acceptance !== undefined) {
+    if (!isRecord(task.acceptance)) throw new TypeError("task.acceptance must be an object");
+    assertAllowedKeys(task.acceptance, TASK_ACCEPTANCE_KEYS, "task.acceptance");
+    nonEmptyString(task.acceptance.taskId, "task.acceptance.taskId", 256);
+    nonEmptyString(task.acceptance.claimId, "task.acceptance.claimId", 256);
+    positiveInteger(task.acceptance.leaseEpoch, "task.acceptance.leaseEpoch", { allowZero: true });
+    assertIsoDate(task.acceptance.acceptedAt, "task.acceptance.acceptedAt");
+    nonEmptyString(task.acceptance.acceptedBy, "task.acceptance.acceptedBy", 256);
+    if (!taskAcceptanceMatches(task) || task.state !== "completed") throw new TypeError("task.acceptance must bind the submitted task claim and current lease");
   }
   positiveInteger(task.attempt ?? 0, "task.attempt", { allowZero: true });
   optionalString(task.claimId, "task.claimId", 256);
@@ -708,6 +800,20 @@ function validateTeam(team) {
     }
   }
   assertEnum(team.state, TEAM_STATES, "team.state");
+  if (team.closure !== undefined) {
+    if (!isRecord(team.closure)) throw new TypeError("team.closure must be an object");
+    assertAllowedKeys(team.closure, TEAM_CLOSURE_KEYS, "team.closure");
+    assertEnum(team.closure.outcome, TEAM_CLOSURE_OUTCOMES, "team.closure.outcome");
+    assertIsoDate(team.closure.attemptedAt, "team.closure.attemptedAt");
+    if (team.closure.closedAt !== undefined) assertIsoDate(team.closure.closedAt, "team.closure.closedAt");
+    nonEmptyString(team.closure.reason, "team.closure.reason", 4_096);
+    if (typeof team.closure.forced !== "boolean") throw new TypeError("team.closure.forced must be boolean");
+    assertStringArray(team.closure.cancelledTaskIds, "team.closure.cancelledTaskIds");
+    if (!Array.isArray(team.closure.failures) || team.closure.failures.some((failure) => typeof failure !== "string" || failure.length === 0 || failure.length > 4_096)) throw new TypeError("team.closure.failures must be an array of bounded strings");
+    if (team.state === "closed" && team.closure.closedAt === undefined) throw new TypeError("closed team requires a closure.closedAt receipt");
+    if (team.state !== "closed" && team.closure.closedAt !== undefined) throw new TypeError("only a closed team may have closure.closedAt");
+  }
+  if (team.state === "closed" && team.closure === undefined) throw new TypeError("closed team requires a closure receipt");
   assertIsoDate(team.createdAt, "team.createdAt");
   assertIsoDate(team.updatedAt, "team.updatedAt");
   if (!Array.isArray(team.members) || !Array.isArray(team.tasks) || !Array.isArray(team.messages)) {
@@ -730,7 +836,9 @@ function validateTeam(team) {
   for (const task of team.tasks) {
     if (task.dependsOn.some((id) => !taskIds.has(id))) throw new TypeError(`task ${task.id} references an unknown dependency`);
     if (task.assigneeSessionId !== undefined && !sessions.has(task.assigneeSessionId)) throw new TypeError(`task ${task.id} has an unknown assignee`);
+    if (task.acceptance !== undefined && task.acceptance.acceptedBy !== team.rootLeadSessionId) throw new TypeError(`task ${task.id} acceptance must be authored by the fixed root lead`);
   }
+  assertClosureSemantics(team);
   const visiting = new Set();
   const visited = new Set();
   const visit = (taskId) => {
@@ -791,12 +899,32 @@ function migrateStoreDocument(document) {
       task.capabilities ??= [];
       task.externalEffects ??= [];
       for (const effect of task.externalEffects) effect.idempotencyKey = hostExternalEffectKey(team.id, task.id, effect.name);
-      if (task.state === "in_progress" && task.claimId === undefined) {
+      if (["in_progress", "completed"].includes(task.state) && task.claimId === undefined) {
         task.claimId = `migrated:${task.id}:${task.attempt}`;
-        boundedPush(task.attemptHistory, { kind: "migrated_claim", at: task.claimedAt ?? task.updatedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch }, MAX_TASK_ATTEMPT_HISTORY);
+        if (task.state === "in_progress") boundedPush(task.attemptHistory, { kind: "migrated_claim", at: task.claimedAt ?? task.updatedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch }, MAX_TASK_ATTEMPT_HISTORY);
+      }
+      if (legacy && task.state === "completed") {
+        task.assigneeSessionId ??= team.rootLeadSessionId;
+        const completedAt = task.completedAt ?? task.updatedAt;
+        task.submission ??= taskSubmission(task, task.assigneeSessionId, completedAt, "legacy_migration");
+        task.acceptance ??= { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: completedAt, acceptedBy: team.rootLeadSessionId };
+        if (task.result !== undefined) Object.assign(task.result, { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, reportedBy: task.result.reportedBy ?? task.assigneeSessionId });
+      } else if (legacy && task.state !== "completed") {
+        task.result = undefined;
+        task.submission = undefined;
+        task.acceptance = undefined;
       }
     }
     const timestamp = team.updatedAt ?? team.createdAt ?? now();
+    if (legacy && team.state === "closed") {
+      terminalizeTeamTasks(team, timestamp, "legacy closed team contained unfinished work");
+      const cancelledTaskIds = teamCancelledTaskIds(team);
+      team.closure = {
+        outcome: cancelledTaskIds.length > 0 || team.tasks.length === 0 ? "cancelled" : "succeeded",
+        closedAt: timestamp, attemptedAt: timestamp, reason: "legacy closed team migrated to a consistent closure receipt", forced: false,
+        cancelledTaskIds, failures: [],
+      };
+    }
     if (team.plan === undefined) {
       const hasActiveWorker = (team.members ?? []).some((member) => member.kind === "worker" && member.state !== "retired");
       const hasRunningTask = (team.tasks ?? []).some((task) => task.state === "in_progress");
@@ -898,10 +1026,8 @@ function clearTaskTerminalMetadata(task) {
   task.cancelledAt = undefined;
   task.cancellationReason = undefined;
   task.result = undefined;
-}
-function clearTaskReleaseMetadata(task) {
-  task.releasedAt = undefined;
-  task.releaseReason = undefined;
+  task.submission = undefined;
+  task.acceptance = undefined;
 }
 /** Return the public task projection with blockedBy derived from dependencies. */
 function deriveTask(task, tasks) {
@@ -917,7 +1043,7 @@ function deriveTask(task, tasks) {
     status: task.state,
     dependencies: [...task.dependsOn],
     assignee: task.assigneeSessionId ?? null,
-    blockedBy: task.dependsOn.filter((id) => byId.get(id)?.state !== "completed"),
+    blockedBy: task.dependsOn.filter((id) => !taskSatisfiesDependency(byId.get(id))),
     failedBy: task.dependsOn.filter((id) => byId.get(id)?.state === "cancelled"),
     conflictsWith,
   };
@@ -929,7 +1055,7 @@ function deriveTaskAcrossTeams(task, team, teams) {
   const crossReferences = crossTeamDependencies.map(crossTaskReference);
   const crossBlockedBy = crossTeamDependencies.filter((dependency) => {
     const target = teamsById.get(dependency.teamId)?.tasks.find((candidate) => candidate.id === dependency.taskId);
-    return target?.state !== "completed";
+    return !taskSatisfiesDependency(target);
   }).map(crossTaskReference);
   const crossFailedBy = crossTeamDependencies.filter((dependency) => {
     const target = teamsById.get(dependency.teamId)?.tasks.find((candidate) => candidate.id === dependency.taskId);
@@ -993,7 +1119,7 @@ function deriveAttention(team, teams = [team]) {
   const unconfirmedMembers = team.members.filter((member) => member.kind === "worker" && (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true)).map((member) => member.id);
   const activeSessions = new Set(team.members.filter((member) => !["failed", "retired"].includes(member.state)).map((member) => member.sessionId));
   const strandedTasks = team.tasks.filter((task) => !taskIsTerminal(task) && task.assigneeSessionId !== undefined && !activeSessions.has(task.assigneeSessionId)).map((task) => task.id);
-  const releasedTasks = team.tasks.filter((task) => task.state === "pending" && task.releaseReason !== undefined).map((task) => task.id);
+  const releasedTasks = team.tasks.filter((task) => task.state === "pending" && task.assigneeSessionId === undefined && task.releaseReason !== undefined).map((task) => task.id);
   const failedDeliveries = team.messages.filter((message) => message.status === "failed").map((message) => message.id);
   const bootstrapIncomplete = team.bootstrap !== undefined && team.bootstrap.phase !== "complete";
   const planDraft = team.plan !== undefined && (!["committed", "active"].includes(team.plan.phase) || team.plan.hash !== teamPlanHash(team));
@@ -1049,6 +1175,7 @@ function projectTeam(team, nameTeams = []) {
     leadSessionId: team.rootLeadSessionId,
     objective: team.objective ?? team.name,
     status: lifecycleState,
+    ...(team.closure === undefined ? {} : { closureOutcome: team.closure.outcome }),
     revision: team.revision ?? 1,
     lastActivityAt: latestTimestamp([
       team.updatedAt,
@@ -1123,7 +1250,7 @@ function projectUiTasks(team, peerTeams) {
     }
     const crossTeamDependencies = clone(task.crossTeamDependsOn ?? []);
     const crossReferences = crossTeamDependencies.map(crossTaskReference);
-    const crossBlockedBy = crossTeamDependencies.filter((dependency) => taskMapsByTeam.get(dependency.teamId)?.get(dependency.taskId)?.state !== "completed").map(crossTaskReference);
+    const crossBlockedBy = crossTeamDependencies.filter((dependency) => !taskSatisfiesDependency(taskMapsByTeam.get(dependency.teamId)?.get(dependency.taskId))).map(crossTaskReference);
     const crossFailedBy = crossTeamDependencies.filter((dependency) => taskMapsByTeam.get(dependency.teamId)?.get(dependency.taskId)?.state === "cancelled").map(crossTaskReference);
     const dependencySources = [...new Map(crossTeamDependencies.map((dependency) => {
       const source = teamsById.get(dependency.teamId);
@@ -1136,7 +1263,7 @@ function projectUiTasks(team, peerTeams) {
       dependencies: [...task.dependsOn, ...crossReferences],
       assignee: task.assigneeSessionId ?? null,
       blockedBy: [
-        ...task.dependsOn.filter((id) => localById.get(id)?.state !== "completed"),
+        ...task.dependsOn.filter((id) => !taskSatisfiesDependency(localById.get(id))),
         ...crossBlockedBy,
       ],
       failedBy: [
@@ -1401,8 +1528,10 @@ function projectTeamForUi(team, nameTeams = []) {
     revision: team.revision ?? 1,
     state: lifecycleState,
     status: lifecycleState,
+    ...(team.closure === undefined ? {} : { closureOutcome: team.closure.outcome }),
     pauseEpoch: team.pauseEpoch ?? 0,
     plan: clone(team.plan),
+    ...(team.closure === undefined ? {} : { closure: clone(team.closure) }),
     ...(team.resume === undefined ? {} : { resume: clone(team.resume) }),
     ...(team.handoff === undefined ? {} : { handoff: { targetRootSessionId: team.handoff.targetRootSessionId, createdAt: team.handoff.createdAt, expiresAt: team.handoff.expiresAt } }),
     ownershipHistory,
@@ -1438,6 +1567,7 @@ function projectTeamSummary(team) {
     pendingTaskCount: team.tasks.filter((task) => task.state === "pending").length,
     completedTaskCount: team.tasks.filter((task) => task.state === "completed").length,
     cancelledTaskCount: team.tasks.filter((task) => task.state === "cancelled").length,
+    ...(team.closure === undefined ? {} : { closureOutcome: team.closure.outcome }),
     updatedAt: team.updatedAt,
   };
 }
@@ -1705,9 +1835,9 @@ function createTeamTurnAdmission({
 }
 function registerGracefulLifecycleWaiter(childId) {
   const initialRunId = GRACEFUL_ACTIVE_RUNS.get(childId);
-  let resolve;
-  const promise = new Promise((done) => { resolve = done; });
-  const waiter = { initialRunId, starts: [], ends: [], accepted: false, targetRunId: undefined, resolve };
+  let resolve, rejectPromise;
+  const promise = new Promise((done, fail) => { resolve = done; rejectPromise = fail; });
+  const waiter = { initialRunId, starts: [], ends: [], accepted: false, targetRunId: undefined, resolve, reject: rejectPromise };
   const waiters = GRACEFUL_LIFECYCLE_WAITERS.get(childId) ?? new Set();
   waiters.add(waiter);
   GRACEFUL_LIFECYCLE_WAITERS.set(childId, waiters);
@@ -1720,8 +1850,11 @@ function registerGracefulLifecycleWaiter(childId) {
     if (waiter.targetRunId !== undefined) {
       if (!waiter.ends.some((event) => event.runId === waiter.targetRunId)) return;
     } else if (waiter.ends.length === 0) return;
+    const matched = waiter.targetRunId === undefined ? waiter.ends.at(-1) : waiter.ends.find((event) => event.runId === waiter.targetRunId);
     remove();
-    resolve();
+    if (["error", "refusal"].includes(matched?.stopReason)) {
+      rejectPromise(new HarnessError(`team member ended graceful retirement with ${matched.stopReason}`, "AGENT_TEAMS_GRACEFUL_RETIREMENT_FAILED"));
+    } else resolve(matched);
   };
   waiter.accept = () => {
     waiter.accepted = true;
@@ -1730,8 +1863,8 @@ function registerGracefulLifecycleWaiter(childId) {
     settleIfMatched();
   };
   waiter.start = (runId) => { waiter.starts.push(runId); };
-  waiter.end = (runId) => {
-    waiter.ends.push({ runId });
+  waiter.end = (runId, stopReason) => {
+    waiter.ends.push({ runId, stopReason });
     if (waiter.targetRunId === runId || waiter.targetRunId === undefined) settleIfMatched();
   };
   return { promise, accept: waiter.accept, cancel: remove };
@@ -1763,7 +1896,7 @@ function noteGracefulLifecycleStart(info) {
 function noteGracefulLifecycleEnd(info) {
   const runId = String(info.runId);
   if (GRACEFUL_ACTIVE_RUNS.get(info.id) === runId) GRACEFUL_ACTIVE_RUNS.delete(info.id);
-  for (const waiter of GRACEFUL_LIFECYCLE_WAITERS.get(info.id) ?? []) waiter.end(runId);
+  for (const waiter of GRACEFUL_LIFECYCLE_WAITERS.get(info.id) ?? []) waiter.end(runId, info.stopReason);
 }
 function publishStoreDocument(filePath, document, stamp) {
   for (const instance of STORE_INSTANCES.get(filePath) ?? []) {
@@ -1858,6 +1991,12 @@ class AgentTeamsStore {
   }
   snapshot() {
     return clone(this.document);
+  }
+  close() {
+    this.listeners.clear();
+    const instances = STORE_INSTANCES.get(this.filePath);
+    instances?.delete(this);
+    if (instances?.size === 0) STORE_INSTANCES.delete(this.filePath);
   }
   isEnabled() {
     return this.document.settings.enabled === true;
@@ -2098,22 +2237,32 @@ function terminalizeTeamTasks(team, timestamp = now(), reason = "team closed bef
     task.assigneeSessionId = undefined;
     task.claimedAt = undefined;
     task.completedAt = undefined;
+    task.result = undefined;
+    task.submission = undefined;
+    task.acceptance = undefined;
     task.cancelledAt = timestamp;
     task.cancellationReason = reason;
-    clearTaskReleaseMetadata(task);
-    task.updatedAt = timestamp;
+        task.updatedAt = timestamp;
     cancelledTaskIds.push(task.id);
   }
   return cancelledTaskIds;
 }
-function closeTeamRecord(team, reason = "team closed before delivery acknowledgement") {
+function closeTeamRecord(team, reason = "team closed before delivery acknowledgement", { forced = false, failures = [] } = {}) {
   const timestamp = now();
+  if (failures.length > 0) reject("a failed shutdown attempt cannot be persisted as a closed team", "AGENT_TEAMS_INVALID_CLOSURE");
+  if (!forced) {
+    const unacceptedTaskIds = team.tasks.filter((task) => task.state === "completed" && !taskAcceptanceMatches(task)).map((task) => task.id);
+    if (unacceptedTaskIds.length > 0) reject(`non-forced closure has unaccepted completed tasks: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
+  }
   for (const message of team.messages) {
     if (message.status !== "pending") continue;
     message.status = "failed";
     message.deliveryError = reason;
   }
   terminalizeTeamTasks(team, timestamp, reason);
+  const cancelledTaskIds = teamCancelledTaskIds(team);
+  const outcome = forced ? "forced" : cancelledTaskIds.length > 0 || team.tasks.length === 0 ? "cancelled" : "succeeded";
+  team.closure = { outcome, closedAt: timestamp, attemptedAt: timestamp, reason, forced, cancelledTaskIds, failures: [] };
   team.state = "closed";
   team.updatedAt = timestamp;
   USER_PAUSED_TEAMS.delete(team.id);
@@ -3119,7 +3268,7 @@ async function updateTask(store, caller, input) {
     if (requestedState !== undefined) assertEnum(requestedState, MUTABLE_TASK_STATES, "state");
     if (input.action === undefined && requestedState === undefined) reject("task update requires action or state", "AGENT_TEAMS_INVALID_TASK");
     const action = input.action ?? (requestedState === "in_progress" ? "claim" : requestedState === "completed" ? "complete" : taskIsTerminal(task) ? "reopen" : "release");
-    assertEnum(action, ["claim", "release", "complete", "cancel", "reopen", "assign", "unassign"], "action");
+    assertEnum(action, ["claim", "release", "complete", "accept", "cancel", "reopen", "assign", "unassign"], "action");
     const blockedBy = deriveTaskAcrossTeams(task, team, document.teams).blockedBy;
     const isLead = caller.id === team.rootLeadSessionId;
     if (action === "claim") {
@@ -3147,25 +3296,33 @@ async function updateTask(store, caller, input) {
       // A prior attempt's checkpoint remains explicitly unverified recovery context
       // until this claimant replaces it; fencing metadata keeps its origin visible.
       clearTaskTerminalMetadata(task);
-      clearTaskReleaseMetadata(task);
-    } else if (action === "complete") {
+          } else if (action === "complete") {
       if (task.state === "completed") {
-        if (task.assigneeSessionId !== caller.id) reject("only the original claimant may replay task completion", "AGENT_TEAMS_UNAUTHORIZED");
-        // On a terminal record, validate the retained exact claim before returning a
-        // no-op. A stale worker never turns an already-completed state into success.
+        if (task.assigneeSessionId !== caller.id) reject("only the original claimant may replay task completion; the lead must use accept", "AGENT_TEAMS_UNAUTHORIZED");
         assertCurrentTaskLease(team, task, caller, input, { leadMayOverride: false });
+        if (!taskSubmissionMatches(task)) reject("completed task has no current task-scoped submission fact", "AGENT_TEAMS_DELIVERY_REQUIRED");
         return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), reused: true };
       }
       if (task.state !== "in_progress") reject(`only an in-progress task can be completed (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
-      if (!isLead && task.assigneeSessionId !== caller.id) reject("only the task claimant or team lead can complete it", "AGENT_TEAMS_UNAUTHORIZED");
-      assertCurrentTaskLease(team, task, caller, input);
+      if (task.assigneeSessionId !== caller.id) reject("only the task claimant or team lead acting as that same claimant may submit completion; the lead cannot complete a foreign claim", "AGENT_TEAMS_UNAUTHORIZED");
+      assertCurrentTaskLease(team, task, caller, input, { leadMayOverride: isLead });
       if ((task.externalEffects ?? []).some((effect) => effect.outcome === "outcome_unknown")) reject("task is blocked by an unknown external side-effect outcome", "AGENT_TEAMS_OUTCOME_UNKNOWN");
       if (blockedBy.length > 0) reject(`task is blocked by: ${blockedBy.join(", ")}`, "AGENT_TEAMS_TASK_BLOCKED");
+      const completedAt = now();
       task.state = "completed";
-      task.completedAt = now();
+      task.completedAt = completedAt;
+      task.submission = taskSubmission(task, caller.id, completedAt);
+      task.acceptance = isLead ? { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: completedAt, acceptedBy: caller.id } : undefined;
       task.cancelledAt = undefined;
       task.cancellationReason = undefined;
-      clearTaskReleaseMetadata(task);
+          } else if (action === "accept") {
+      if (!isLead) reject("only the fixed root lead may accept a submitted task", "AGENT_TEAMS_UNAUTHORIZED");
+      if (task.state !== "completed" || !taskSubmissionMatches(task)) reject("acceptance requires a task-scoped completion submission from the current claimant", "AGENT_TEAMS_DELIVERY_REQUIRED");
+      if (task.acceptance !== undefined) {
+        if (!taskAcceptanceMatches(task)) reject("task acceptance is stale or malformed", "AGENT_TEAMS_STALE_CLAIM");
+        return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), reused: true };
+      }
+      task.acceptance = { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: now(), acceptedBy: caller.id };
     } else if (action === "release") {
       if (task.state !== "in_progress") reject(`only an in-progress task can be released (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       if (!isLead && task.assigneeSessionId !== caller.id) reject("only the task claimant or team lead can release it", "AGENT_TEAMS_UNAUTHORIZED");
@@ -3179,7 +3336,8 @@ async function updateTask(store, caller, input) {
       // Keep the most recent unverified checkpoint/next step as bounded recovery
       // context; a subsequent holder cannot use its stale fence to mutate the task.
       clearTaskTerminalMetadata(task);
-      clearTaskReleaseMetadata(task);
+            task.releasedAt = releasedAt;
+      task.releaseReason = isLead ? "released explicitly by the team lead" : "released explicitly by the task claimant";
     } else if (action === "cancel") {
       if (!isLead) reject("only the team lead can cancel a task", "AGENT_TEAMS_UNAUTHORIZED");
       if (taskIsTerminal(task)) reject(`only a pending or in-progress task can be cancelled (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
@@ -3189,8 +3347,7 @@ async function updateTask(store, caller, input) {
       task.completedAt = undefined;
       task.cancelledAt = now();
       task.cancellationReason = "cancelled explicitly by the team lead";
-      clearTaskReleaseMetadata(task);
-    } else if (action === "reopen") {
+          } else if (action === "reopen") {
       if (!isLead) reject("only the team lead can reopen a task", "AGENT_TEAMS_UNAUTHORIZED");
       if (!taskIsTerminal(task)) reject(`only a completed or cancelled task can be reopened (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       const progressed = progressedDependents(document, team.id, task.id);
@@ -3199,8 +3356,7 @@ async function updateTask(store, caller, input) {
       task.assigneeSessionId = undefined;
       task.claimedAt = undefined;
       clearTaskTerminalMetadata(task);
-      clearTaskReleaseMetadata(task);
-    } else if (action === "assign") {
+          } else if (action === "assign") {
       if (!isLead) reject("only the team lead can assign a task", "AGENT_TEAMS_UNAUTHORIZED");
       const assignee = requireAssignableMember(resolveMember(team, input.assigneeSessionId)).sessionId;
       if (task.assigneeSessionId === assignee && (task.state === "pending" || task.state === "in_progress")) {
@@ -3210,8 +3366,7 @@ async function updateTask(store, caller, input) {
       }
       if (task.state !== "pending") reject(`only a pending task can be assigned (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       task.assigneeSessionId = assignee;
-      clearTaskReleaseMetadata(task);
-    } else {
+          } else {
       if (!isLead) reject("only the team lead can unassign a task", "AGENT_TEAMS_UNAUTHORIZED");
       if (task.state !== "pending") reject(`only a pending task can be unassigned (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       task.assigneeSessionId = undefined;
@@ -3262,6 +3417,8 @@ function resetTaskStoppedAfter(task, stoppedAt, pauseEpoch) {
   task.claimId = undefined;
   task.completedAt = undefined;
   task.result = undefined;
+  task.submission = undefined;
+  task.acceptance = undefined;
   // Stop advances the Host lease epoch but preserves the last explicitly unverified
   // checkpoint/next step so a human can inspect recovery context after interruption.
   task.leaseEpoch = pauseEpoch;
@@ -3419,6 +3576,8 @@ async function retireMember(ctx, store, admission, lead, input, signal) {
     if (member.kind !== "worker") reject("unknown worker member", "AGENT_TEAMS_NOT_FOUND");
     const unfinishedTaskIds = team.tasks.filter((task) => task.assigneeSessionId === member.sessionId && !taskIsTerminal(task)).map((task) => task.id);
     if (!force && unfinishedTaskIds.length > 0) reject(`member owns unfinished tasks; complete or release them before graceful retirement: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
+    const invalidSubmissionTaskIds = team.tasks.filter((task) => task.assigneeSessionId === member.sessionId && task.state === "completed" && !taskSubmissionMatches(task)).map((task) => task.id);
+    if (!force && invalidSubmissionTaskIds.length > 0) reject(`member completed tasks without a current task-scoped submission fact: ${invalidSubmissionTaskIds.join(", ")}`, "AGENT_TEAMS_DELIVERY_REQUIRED");
     if (member.state === "retired") return { teamId: team.id, member: clone(member), releasedTaskIds: [], noop: true };
     markMemberShuttingDown(member, force);
     team.updatedAt = member.updatedAt;
@@ -3482,6 +3641,8 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
     if (team.state !== "closing") requireActiveTeam(team);
     const unfinishedTaskIds = team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => task.id);
     if (!force && unfinishedTaskIds.length > 0) reject(`team has unfinished tasks; complete or cancel them before graceful shutdown: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
+    const unacceptedTaskIds = team.tasks.filter((task) => task.state === "completed" && !taskAcceptanceMatches(task)).map((task) => task.id);
+    if (!force && unacceptedTaskIds.length > 0) reject(`team has submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
     team.state = "closing";
     const workers = team.members.filter((member) => member.kind === "worker" && member.state !== "retired");
     for (const member of workers) markMemberShuttingDown(member, force);
@@ -3553,10 +3714,11 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
       });
     }
     const shouldClose = failures.length === 0 && team.members.filter((member) => member.kind === "worker").every((member) => member.state === "retired");
-    if (shouldClose) closeTeamRecord(team, force ? "team was force-closed before unfinished work completed" : "team closed after all tracked work reached a terminal state");
+    if (shouldClose) closeTeamRecord(team, force ? "team was force-closed before unfinished work completed" : "team closed after all tracked work was submitted, accepted, or explicitly cancelled", { forced: force });
     else {
       team.state = failures.length === 0 ? "closing" : "active";
       team.updatedAt = now();
+      team.closure = failures.length === 0 ? undefined : { outcome: "failed", attemptedAt: team.updatedAt, reason: "team shutdown failed before every member retirement was confirmed", forced: force, cancelledTaskIds: [], failures: failures.map((failure) => String(failure).slice(0, 4_096)) };
     }
     return { team: projectTeam(team), failures };
   })));
@@ -3583,6 +3745,8 @@ async function recoverOrphanTeams(ctx, store, caller, input) {
         if (requestedId !== undefined) reject(shutdownUnconfirmed ? "orphan recovery is blocked by an unconfirmed shutdown" : "orphan recovery requires all workers to be inactive", shutdownUnconfirmed ? "AGENT_TEAMS_SHUTDOWN_UNCONFIRMED" : "AGENT_TEAMS_CONFLICT");
         continue;
       }
+      const unacceptedTaskIds = team.tasks.filter((task) => task.state === "completed" && !taskAcceptanceMatches(task)).map((task) => task.id);
+      if (unacceptedTaskIds.length > 0) reject(`orphan recovery cannot certify unaccepted completed tasks: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
       for (const member of team.members) if (member.kind === "worker") confirmMemberRetired(member);
       closeTeamRecord(team, "orphaned team closed by an explicit direct-human recovery");
       recovered.push(projectTeam(team));
@@ -3631,6 +3795,8 @@ function teamSystemPrompt(store) {
     "Agent Teams automatic-team mode is ENABLED.",
     "Before substantive work on every ordinary direct-human root turn, apply the three-level gate below. When the Level 3 conditions are met, choose exactly one creation path in that same turn: use team_bootstrap when the complete bounded task/member plan is already known; otherwise use team_start and then the existing task/spawn tools. Never call both team_start and team_bootstrap for the same team, and never replace the required visible managed members with multiple hidden ordinary subagents.",
     "Keep durable team task state synchronized at every handoff: members must explicitly complete finished tasks before their final report, and the root lead must reconcile every task before retiring members or closing the team. A report or successful subagent turn is not completion evidence. Graceful retirement and shutdown require no unfinished owned work; force shutdown records unfinished work as cancelled rather than leaving permanent pending tasks.",
+    "Once an Agent Team is established for the current goal, the root lead defaults to coordination only: decompose the user's objective into substantive outcomes, persist and assign durable tasks, coordinate dependencies and handoffs, monitor and reconcile task state, review and accept member deliverables, then perform final integration and user-facing synthesis. The root lead must not personally implement, research, design, test, or otherwise substitute for a core professional deliverable that is assigned or should be assigned to a member role. If substantive coverage is missing, create or restructure the relevant durable task and assign or expand the visible team instead of absorbing that work; the root may make only minimal glue changes required to integrate accepted member outputs.",
+    "A team's durable tasks and member roles must collectively cover the substantive outputs required to satisfy the user's goal, each with a real deliverable and observable acceptance criteria. Never create decorative, token, or review-only members while leaving the core professional output to the root lead; if the work does not justify delegating its substantive production, do not create a team.",
     "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively choose one Agent Team creation path only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
     "When a new team already has a complete bounded plan of one through four durable tasks and one through four visible peers, call team_bootstrap directly with a stable request_id and do not call team_start first. Otherwise team_start creates a draft: persist tasks, then use team_plan_commit with the exact plan revision and confirmed_plan_hash before any team_spawn. With no established worker that CAS persists phase committed; the first fully successful spawn activates it, while recommit with an established worker persists active. Both committed and active pass new claim/spawn execution gates. No extra user turn is required after a direct-human CAS commit. Public spawn always requires non-empty persisted task_ids, and the Host atomically pre-binds those tasks with the member placeholder before child creation. Bootstrap persists all tasks before starting members, and exact replay reuses its plan. Neither path may bypass direct-human authority, capacity checks, file-scope separation, capability preflight, or explicit review of partial/uncertain starts.",
     "An ordinary internal team that the direct user explicitly requested needs no redundant confirmation. Plan authority is explicitly host_verified, human_attested, or unknown. Tool/model booleans can create only human_attested facts, never host_verified facts, and can never bulk-upgrade unknown capability records. Any material change to task scope, file ownership, capability/permission facts, model-cost class, or external effects returns the plan to draft and requires a fresh exact-hash CAS commit. confirm_each remains closed without a trusted Host UI verification token; never infer authority from user prose.",
@@ -4016,8 +4182,8 @@ function registerTools(ctx, store, ready, collaboration, admission) {
     })), presentCall: () => present("List team tasks"),
   }));
   ctx.tools.register(defineTool({
-    name: "team_task_update", description: "Atomically claim, release, complete, cancel, reopen, assign, or unassign a team task. Claim returns claimId and leaseEpoch; non-lead completion/release must echo both so stale attempts cannot write. A report or successful member turn never completes the durable task.",
-    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", enum: ["claim", "release", "complete", "cancel", "reopen", "assign", "unassign"], description: "requested transition; repeated claim by the same claimant and lead assign of the current assignee are safe no-ops" }, state: { type: "string", enum: MUTABLE_TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" }, claim_id: { type: "string", description: "Required for non-lead release/complete; exact claimId returned by claim." }, lease_epoch: { type: "number", description: "Required for non-lead release/complete; exact leaseEpoch returned by claim." } }, output: TOOL_OUTPUT,
+    name: "team_task_update", description: "Atomically claim, release, submit completion, independently accept, cancel, reopen, assign, or unassign a team task. Only the exact claimant may complete with its claimId/leaseEpoch; that call persists a task-scoped submission fact. The fixed root uses accept as a separate fact and cannot complete a worker's foreign claim. A report or successful member turn never completes the durable task.",
+    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", enum: ["claim", "release", "complete", "accept", "cancel", "reopen", "assign", "unassign"], description: "requested transition; repeated claim, exact completion replay, acceptance, and lead assign of the current assignee are safe no-ops" }, state: { type: "string", enum: MUTABLE_TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" }, claim_id: { type: "string", description: "Required for non-lead release/complete; exact claimId returned by claim." }, lease_epoch: { type: "number", description: "Required for non-lead release/complete; exact leaseEpoch returned by claim." } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => publicResult(await updateTask(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, action: args.action, state: args.state, assigneeSessionId: args.assignee_session_id, claimId: args.claim_id, leaseEpoch: args.lease_epoch }))),
     presentCall: (args) => present("Update team task", `${args.action}: ${args.task_id}`),
   }));
@@ -4695,21 +4861,25 @@ function registerProjectAutomationApi(ctx, runtime, businessRuntime) {
 }
 
 function attachCompletedTaskResults(team, member, info, reportedAt) {
-  if (member.runId === undefined || info?.runId === undefined || member.runId !== String(info.runId)) return 0;
-  const result = taskResultFromAssistantMessage(info.lastAssistantMessage, reportedAt);
-  if (result === undefined) return 0;
+  if (member.runId === undefined || info?.runId === undefined || member.runId !== String(info.runId) || ["error", "refusal"].includes(info.stopReason)) return 0;
   const runStartedAt = Date.parse(member.updatedAt ?? "");
   if (!Number.isFinite(runStartedAt)) return 0;
-  let attached = 0;
-  for (const task of team.tasks) {
-    if (task.assigneeSessionId !== member.sessionId || task.state !== "completed" || task.result !== undefined) continue;
+  const eligible = (team.tasks ?? []).filter((task) => {
+    if (task.assigneeSessionId !== member.sessionId || task.state !== "completed" || task.result !== undefined || !taskSubmissionMatches(task)) return false;
     const completedAt = Date.parse(task.completedAt ?? "");
-    if (!Number.isFinite(completedAt) || completedAt < runStartedAt) continue;
-    task.result = clone(result);
-    task.updatedAt = reportedAt;
-    attached += 1;
-  }
-  return attached;
+    return Number.isFinite(completedAt) && completedAt >= runStartedAt;
+  });
+  // A turn-level assistant message is not task-scoped evidence. It can only enrich
+  // one unambiguous explicit submission; never clone it across several tasks.
+  if (eligible.length !== 1) return 0;
+  const [task] = eligible;
+  const result = taskResultFromAssistantMessage(info.lastAssistantMessage, reportedAt, {
+    taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? 0, reportedBy: member.sessionId,
+  });
+  if (result === undefined) return 0;
+  task.result = result;
+  task.updatedAt = reportedAt;
+  return 1;
 }
 
 function createSubagentEventReconciler(ctx, store, ready, delayMs = SUBAGENT_RECONCILE_MS) {
@@ -4985,7 +5155,10 @@ function apply(ctx, config = {}) {
             try { await projectTasks.close(); }
             finally {
               try { await collaboration.close(); }
-              finally { await projectEntry.close(); }
+              finally {
+                try { await projectEntry.close(); }
+                finally { store.close(); }
+              }
             }
           }
         }

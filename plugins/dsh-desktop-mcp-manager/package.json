@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-mcp-manager",
-  "version": "1.0.52",
+  "version": "1.0.53",
   "description": "Secure MCP server manager for Harness Desktop",
   "type": "module",
   "main": "lib/index.js",

@@ -146,6 +146,7 @@ let updateState = {
   pendingCount: 0,
   items: [],
   checking: false,
+  checkError: '',
   installing: false,
   installProgress: null,
   installError: '',
@@ -1488,9 +1489,11 @@ function officialSettingsBootstrap() {
     .hd-update-center-head button { flex:none; width:32px; height:32px; border:0; border-radius:8px; padding:0; color:var(--dsw-alias-label-secondary,#667085); background:transparent; font-size:22px; cursor:pointer; }
     .hd-update-center-head button:hover { background:var(--dsw-alias-interactive-bg-hover,#eef1f5); }
     .hd-update-center-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 16px; padding:12px 22px; border-bottom:1px solid var(--dsw-alias-border-l2,#d5d9df); background:var(--dsw-alias-bg-layer-1,#fff); }
-    .hd-update-center-toolbar button, .hd-update-item-actions button { min-height:34px; border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:9px; padding:0 13px; color:inherit; background:var(--dsw-alias-bg-layer-2,#f7f8fa); font:inherit; font-size:12px; cursor:pointer; }
+    .hd-update-center-toolbar button, .hd-update-item-actions button { min-height:36px; border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:9px; padding:0 13px; color:inherit; background:var(--dsw-alias-bg-layer-2,#f7f8fa); font:inherit; font-size:12px; cursor:pointer; }
     .hd-update-center-toolbar button:hover:not(:disabled), .hd-update-item-actions button:hover:not(:disabled) { background:var(--dsw-alias-interactive-bg-hover,#eef1f5); }
     .hd-update-center-toolbar button:disabled, .hd-update-item-actions button:disabled { cursor:wait; opacity:.58; }
+    .hd-update-check-mode { display:inline-flex; align-items:center; gap:6px; min-height:24px; color:var(--dsw-alias-label-secondary,#667085); font-size:11px; line-height:1.35; }
+    .hd-update-check-mode::before { content:''; box-sizing:border-box; width:8px; height:8px; border:2px solid color-mix(in srgb,#138a57 28%,transparent); border-radius:50%; background:#138a57; }
     .hd-update-items { display:grid; gap:12px; overflow:auto; padding:16px 22px 22px; }
     .hd-update-empty { border:1px dashed var(--dsw-alias-border-l2,#d5d9df); border-radius:12px; padding:28px 18px; color:var(--dsw-alias-label-secondary,#667085); background:var(--dsw-alias-bg-layer-1,#fff); text-align:center; font-size:13px; }
     .hd-update-item { display:grid; gap:9px; border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:13px; padding:14px 15px; background:var(--dsw-alias-bg-layer-1,#fff); }
@@ -1508,7 +1511,8 @@ function officialSettingsBootstrap() {
     .hd-update-detail-list li { padding-left:2px; overflow-wrap:anywhere; }
     .hd-update-meta { display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--dsw-alias-label-tertiary,#7b8494); font-size:10px; }
     .hd-update-item-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
-    .hd-update-item-actions .hd-update-apply { border-color:var(--dsw-alias-brand-primary,#315efb); color:#fff; background:var(--dsw-alias-brand-primary,#315efb); }
+    .hd-update-item-actions .hd-update-apply { border-color:color-mix(in srgb,var(--dsw-alias-brand-primary,#315efb) 62%,var(--dsw-alias-border-l2,#d5d9df)); color:var(--dsw-alias-label-primary,#20242b); background:color-mix(in srgb,var(--dsw-alias-brand-primary,#315efb) 14%,var(--dsw-alias-bg-layer-1,#fff)); font-weight:650; }
+    .hd-update-item-actions .hd-update-apply:hover:not(:disabled) { border-color:var(--dsw-alias-brand-primary,#315efb); background:color-mix(in srgb,var(--dsw-alias-brand-primary,#315efb) 22%,var(--dsw-alias-bg-layer-1,#fff)); }
     .hd-update-progress { display:grid; gap:8px; border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#315efb) 26%,var(--dsw-alias-border-l2,#d5d9df)); border-radius:10px; padding:10px 11px; background:color-mix(in srgb,var(--dsw-alias-brand-primary,#315efb) 5%,var(--dsw-alias-bg-layer-2,#f7f8fa)); }
     .hd-update-progress[data-phase="error"] { border-color:color-mix(in srgb,#d92d20 45%,var(--dsw-alias-border-l2,#d5d9df)); background:color-mix(in srgb,#d92d20 5%,var(--dsw-alias-bg-layer-2,#f7f8fa)); }
     .hd-update-progress-head { display:flex; justify-content:space-between; gap:12px; color:var(--dsw-alias-label-primary,#20242b); font-size:11px; line-height:1.45; }
@@ -1736,6 +1740,134 @@ function officialSettingsBootstrap() {
     return busy
   }
 
+  const installProgressPhases = new Set(['prepare', 'checksum', 'download', 'verify', 'commit', 'ready', 'apply', 'launch', 'restart', 'current', 'error'])
+
+  const normalizeInstallProgress = value => {
+    if (!value || typeof value !== 'object') return null
+    const rawKind = String(value.kind || '').trim().toLowerCase()
+    const kind = ['components', 'component', 'harness'].includes(rawKind)
+      ? 'component'
+      : ['desktop', 'installer', 'app'].includes(rawKind)
+        ? 'desktop'
+        : rawKind
+    const phase = installProgressPhases.has(value.phase) ? value.phase : 'prepare'
+    return {
+      phase,
+      failedPhase: installProgressPhases.has(value.failedPhase) ? value.failedPhase : '',
+      id: String(value.id || (kind === 'desktop' ? 'desktop' : kind === 'component' ? 'component' : '')).trim(),
+      kind,
+      version: String(value.version || value.releaseVersion || '').trim(),
+      component: String(value.component || '').trim(),
+      index: Number.isSafeInteger(Number(value.index)) ? Number(value.index) : 0,
+      totalComponents: Math.max(0, Number.parseInt(value.totalComponents, 10) || 0),
+      received: Math.max(0, Number(value.received) || 0),
+      total: Math.max(0, Number(value.total) || 0),
+      message: String(value.message || '').trim().slice(0, 1000)
+    }
+  }
+
+  const installProgressForItem = (item, progress) => {
+    if (!progress || !['desktop', 'component', 'harness'].includes(item.kind)) return null
+    if (progress.id && progress.id === item.id) return progress
+    const itemKind = item.kind === 'harness' ? 'component' : item.kind
+    if (progress.kind && progress.kind === itemKind) return progress
+    return null
+  }
+
+  const installProgressLabels = item => item.kind === 'desktop'
+    ? ['校验', '下载', '准备', '安装']
+    : ['下载', '校验', '安装', '重启']
+
+  const installProgressMessage = (item, progress) => {
+    if (!progress) return ''
+    if (progress.phase === 'error') return progress.message || '更新失败，可以重试。'
+    if (progress.phase === 'current') return '当前桌面版已经是最新版本。'
+    if (item.kind === 'desktop') {
+      if (['prepare', 'checksum'].includes(progress.phase)) return '正在获取并验证桌面安装包校验信息…'
+      if (progress.phase === 'download') return '正在下载桌面安装包…'
+      if (['verify', 'commit'].includes(progress.phase)) return '正在校验并准备桌面安装包…'
+      if (progress.phase === 'ready') return '安装包已下载并校验，等待确认安装。'
+      if (['apply', 'launch'].includes(progress.phase)) return '正在打开经过校验的桌面安装程序…'
+      if (progress.phase === 'restart') return '正在重启并完成桌面更新…'
+    }
+    if (progress.phase === 'prepare') return '正在验证组件更新清单与签名…'
+    if (progress.phase === 'download') return `正在下载${progress.component ? ` ${progress.component}` : '运行组件'}…`
+    if (progress.phase === 'verify') return `正在校验${progress.component ? ` ${progress.component}` : '下载内容'}…`
+    if (progress.phase === 'commit') return `正在安装${progress.component ? ` ${progress.component}` : '运行组件'}…`
+    if (progress.phase === 'ready') return '组件已下载、校验并暂存，等待确认应用。'
+    if (progress.phase === 'apply') return '正在原子切换运行组件…'
+    if (['launch', 'restart'].includes(progress.phase)) return '正在重启并执行组件健康检查…'
+    return '正在处理更新…'
+  }
+
+  const paintInstallProgress = (card, item, progress) => {
+    const action = card.querySelector('[data-hd-update-action]')
+    let region = card.querySelector('[data-hd-install-progress]')
+    if (!progress) {
+      region?.remove()
+      card.removeAttribute('aria-busy')
+      if (action) {
+        action.disabled = false
+        setText(action, action.dataset.defaultLabel || '立即更新')
+      }
+      return false
+    }
+
+    const phaseForStep = progress.phase === 'error' ? (progress.failedPhase || 'prepare') : progress.phase
+    const desktop = item.kind === 'desktop'
+    const stepIndex = desktop
+      ? ({ prepare: 0, checksum: 0, download: 1, verify: 2, commit: 2, ready: 2, apply: 3, launch: 3, restart: 3, current: 3 })[phaseForStep] ?? 0
+      : ({ prepare: 0, download: 0, checksum: 0, verify: 1, commit: 2, ready: 2, apply: 3, launch: 3, restart: 3, current: 3 })[phaseForStep] ?? 0
+    const busy = !['error', 'ready', 'current'].includes(progress.phase)
+    const determinate = progress.phase === 'download' && progress.total > 0
+    const percent = determinate ? Math.max(0, Math.min(100, Math.round(progress.received / progress.total * 100))) : null
+    const message = installProgressMessage(item, progress)
+    const componentPosition = progress.totalComponents > 0
+      ? `组件 ${Math.min(progress.totalComponents, progress.index + 1)}/${progress.totalComponents}`
+      : ''
+    const bytePosition = determinate ? `${formatUpdateBytes(progress.received)} / ${formatUpdateBytes(progress.total)}` : ''
+
+    if (!region) {
+      region = document.createElement('div')
+      region.dataset.hdInstallProgress = ''
+      region.className = 'hd-update-progress'
+      region.setAttribute('role', 'status')
+      region.setAttribute('aria-live', 'polite')
+      region.setAttribute('aria-atomic', 'true')
+      const actions = card.querySelector('.hd-update-item-actions')
+      card.insertBefore(region, actions || null)
+    }
+    region.dataset.phase = progress.phase
+    const head = document.createElement('div')
+    head.className = 'hd-update-progress-head'
+    head.append(createTextNode('strong', '', message), createTextNode('span', '', percent === null ? componentPosition : `${percent}%`))
+    const steps = document.createElement('ol')
+    steps.className = 'hd-update-progress-steps'
+    steps.setAttribute('aria-label', `${updateKindLabel(item.kind)}更新阶段`)
+    steps.append(...installProgressLabels(item).map((label, index) => {
+      const step = createTextNode('li', '', label)
+      step.dataset.state = index < stepIndex ? 'complete' : index === stepIndex ? (progress.phase === 'error' ? 'error' : 'current') : 'pending'
+      return step
+    }))
+    const meter = document.createElement('progress')
+    meter.max = 100
+    if (percent !== null) meter.value = percent
+    meter.setAttribute('aria-label', message)
+    const fallbackDetail = progress.phase === 'error'
+      ? '可检查网络后重试；未通过校验的内容不会被安装。'
+      : progress.phase === 'ready'
+        ? '更新内容已完成完整性校验，只有确认后才会应用。'
+        : '请保持应用开启；下载完成后仍需你确认安装。'
+    const detail = createTextNode('p', 'hd-update-progress-detail', [componentPosition, bytePosition].filter(Boolean).join(' · ') || fallbackDetail)
+    region.replaceChildren(head, steps, meter, detail)
+    card.setAttribute('aria-busy', String(busy))
+    if (action) {
+      action.disabled = busy
+      setText(action, progress.phase === 'error' ? '重试更新' : busy ? '更新进行中…' : action.dataset.defaultLabel || '确认应用')
+    }
+    return busy
+  }
+
   const closeUpdateCenter = () => {
     const center = document.querySelector('#harness-desktop-update-center')
     const trigger = document.querySelector('#harness-desktop-version-button')
@@ -1795,7 +1927,36 @@ function officialSettingsBootstrap() {
       apply.dataset.hdUpdateAction = action
       apply.dataset.defaultLabel = apply.textContent
       apply.setAttribute('aria-label', `${action === 'apply' ? '应用' : '更新'} ${item.title || item.version || item.id}`)
-      apply.addEventListener('click', () => request('update-action', { id: item.id, action }))
+      apply.addEventListener('click', () => {
+        if (apply.disabled) return
+        apply.disabled = true
+        setText(apply, '正在启动…')
+        card.setAttribute('aria-busy', 'true')
+        let receipt = card.querySelector('[data-hd-install-progress]')
+        if (!receipt) {
+          receipt = document.createElement('div')
+          receipt.dataset.hdInstallProgress = ''
+          receipt.className = 'hd-update-progress'
+          receipt.setAttribute('role', 'status')
+          receipt.setAttribute('aria-live', 'polite')
+          receipt.setAttribute('aria-atomic', 'true')
+          card.insertBefore(receipt, actions)
+        }
+        const receiptHead = document.createElement('div')
+        receiptHead.className = 'hd-update-progress-head'
+        receiptHead.append(createTextNode('strong', '', '已收到点击，正在启动安全更新…'))
+        receipt.replaceChildren(receiptHead)
+        request('update-action', { id: item.id, action })
+        setTimeout(() => {
+          if (!card.isConnected || apply.textContent !== '正在启动…') return
+          apply.disabled = false
+          setText(apply, '重试更新')
+          card.setAttribute('aria-busy', 'false')
+          receipt.dataset.phase = 'error'
+          receiptHead.replaceChildren(createTextNode('strong', '', '更新请求未收到响应，请重试。'))
+          receipt.replaceChildren(receiptHead, createTextNode('p', 'hd-update-progress-detail', '如果仍无响应，请先点“立即检查”刷新更新状态。'))
+        }, 5000)
+      })
       actions.append(apply)
       card.append(actions)
     }
@@ -1825,28 +1986,44 @@ function officialSettingsBootstrap() {
       list.replaceChildren(...(items.length ? items.map(buildUpdateItem) : [createTextNode('div', 'hd-update-empty', state.checking ? '正在检查可用更新…' : '当前已是最新')]))
     }
     const previewProgress = normalizePreviewProgress(state.preview?.progress)
+    const installProgress = normalizeInstallProgress(state.installProgress)
     let displayedPreviewProgress = null
+    let displayedInstallProgress = null
+    let displayedInstallItem = null
     let previewBusy = false
+    let installBusy = false
     for (const item of items) {
       const card = [...list.querySelectorAll('.hd-update-item')].find(candidate => candidate.dataset.id === item.id)
-      const itemProgress = previewProgressForItem(item, previewProgress)
-      if (itemProgress) displayedPreviewProgress = itemProgress
-      if (card) previewBusy = paintPreviewProgress(card, itemProgress) || previewBusy
+      const previewItem = ['pr', 'preview', 'pr-preview'].includes(item.kind)
+      if (previewItem) {
+        const itemProgress = previewProgressForItem(item, previewProgress)
+        if (itemProgress) displayedPreviewProgress = itemProgress
+        if (card) previewBusy = paintPreviewProgress(card, itemProgress) || previewBusy
+      } else {
+        const itemProgress = installProgressForItem(item, installProgress)
+        if (itemProgress) {
+          displayedInstallProgress = itemProgress
+          displayedInstallItem = item
+        }
+        if (card) installBusy = paintInstallProgress(card, item, itemProgress) || installBusy
+      }
     }
-    if (previewBusy) {
+    const updateBusy = previewBusy || installBusy
+    if (updateBusy) {
       for (const action of list.querySelectorAll('[data-hd-update-action]')) action.disabled = true
     }
-    list.setAttribute('aria-busy', String(previewBusy))
-    center.querySelector('.hd-update-center-dialog')?.setAttribute('aria-busy', String(previewBusy))
-    const progress = state.installProgress
+    list.setAttribute('aria-busy', String(updateBusy))
+    center.querySelector('.hd-update-center-dialog')?.setAttribute('aria-busy', String(updateBusy))
     const summary = state.installError
       ? `更新失败：${state.installError}`
-      : displayedPreviewProgress
+      : state.checkError
+        ? `检查失败：${state.checkError}`
+        : displayedPreviewProgress
         ? previewProgressMessage(displayedPreviewProgress)
-        : progress?.phase === 'current'
-          ? '当前桌面版已经是最新版本'
-          : progress?.phase === 'ready'
-            ? '更新已准备好，等待安装确认'
+        : displayedInstallProgress && displayedInstallItem
+          ? installProgressMessage(displayedInstallItem, displayedInstallProgress)
+          : state.checking
+            ? '正在自动检查桌面版、组件与 PR 候选…'
             : pendingCount > 0
               ? `${pendingCount} 项待处理；打开中心不会清除提醒。`
               : '桌面版、组件与 PR 候选会统一显示在这里。'
@@ -1854,6 +2031,15 @@ function officialSettingsBootstrap() {
     const check = center.querySelector('[data-hd-check]')
     check.disabled = Boolean(state.checking || state.installing)
     setText(check, state.checking ? '正在检查…' : '立即检查')
+    const lastCheckedAt = Date.parse(String(state.preferences?.lastCheckedAt || ''))
+    const checkMode = center.querySelector('[data-hd-check-mode]')
+    setText(checkMode, state.checking
+      ? '正在检查更新…'
+      : state.checkError
+        ? '自动检查已开启 · 上次检查失败'
+        : Number.isFinite(lastCheckedAt)
+          ? `自动检查已开启 · 上次 ${new Date(lastCheckedAt).toLocaleString()}`
+          : '自动检查已开启 · 启动后检查')
     const activePreview = items.find(item => ['pr', 'preview', 'pr-preview'].includes(item.kind) && item.status === 'active') || null
     const exitPreview = center.querySelector('[data-hd-exit-preview]')
     exitPreview.hidden = !activePreview
@@ -1889,7 +2075,7 @@ function officialSettingsBootstrap() {
       center.innerHTML = `
         <div class="hd-update-center-dialog" role="dialog" aria-modal="true" aria-labelledby="harnessDesktopUpdateTitle" aria-describedby="harnessDesktopUpdateSummary">
           <header class="hd-update-center-head"><div><h2 id="harnessDesktopUpdateTitle">更新中心</h2><p id="harnessDesktopUpdateSummary" data-hd-update-summary></p></div><button type="button" data-hd-close aria-label="关闭更新中心">×</button></header>
-          <div class="hd-update-center-toolbar"><button type="button" data-hd-check>立即检查</button><button type="button" data-hd-exit-preview hidden>退出当前预览</button></div>
+          <div class="hd-update-center-toolbar"><button type="button" data-hd-check>立即检查</button><span class="hd-update-check-mode" data-hd-check-mode role="status" aria-live="polite">自动检查已开启 · 启动后检查</span><button type="button" data-hd-exit-preview hidden>退出当前预览</button></div>
           <div class="hd-update-items" data-hd-update-items aria-live="polite"></div>
         </div>`
       document.body.append(center)
@@ -2182,6 +2368,29 @@ function officialSettingsBootstrap() {
     mount()
     paintMobile()
   }
+  const officialSettingsMutationTouchesUi = records => {
+    const settingsContextSelector = '[role="dialog"][aria-modal="true"],[data-slot="settings.trigger"],[data-slot="sidebar.settings"]'
+    const mountedRootSelector = `${settingsContextSelector},#harness-desktop-mobile-sync-entry,#harness-desktop-mobile-sync-tooltip,#harness-desktop-update-center,#harness-desktop-version-button`
+    const settingsLabel = value => /^(?:设置|Settings)$/i.test(String(value || '').trim())
+    const containsNamedSettingsButton = element => {
+      if (!element) return false
+      const buttons = element.matches?.('button') ? [element] : []
+      if (typeof element.querySelectorAll === 'function') buttons.push(...element.querySelectorAll('button'))
+      return buttons.some(button => settingsLabel([button.getAttribute?.('aria-label'), button.getAttribute?.('title'), button.textContent].filter(Boolean).join(' ')))
+    }
+    for (const record of records) {
+      const target = record.target?.nodeType === 1 ? record.target : record.target?.parentElement
+      if (target?.closest?.(settingsContextSelector) || containsNamedSettingsButton(target)) return true
+      for (const node of [...record.addedNodes, ...record.removedNodes]) {
+        if (node.nodeType !== 1) {
+          if (target?.matches?.('button') && settingsLabel(node.textContent)) return true
+          continue
+        }
+        if (node.matches?.(mountedRootSelector) || node.querySelector?.(mountedRootSelector) || containsNamedSettingsButton(node)) return true
+      }
+    }
+    return false
+  }
   let mountScheduled = false
   const scheduleMount = () => {
     if (mountScheduled) return
@@ -2191,7 +2400,9 @@ function officialSettingsBootstrap() {
       mount()
     }, 80)
   }
-  new MutationObserver(scheduleMount).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
+  new MutationObserver(records => {
+    if (officialSettingsMutationTouchesUi(records)) scheduleMount()
+  }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
   if (typeof document.addEventListener === 'function') {
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape') closeUpdateCenter()
@@ -2342,9 +2553,19 @@ function officialSubagentEnhancementsBootstrap() {
   }
 
   let timer = null
+  let scanDeadline = 0
+  const flushScan = () => {
+    const remaining = scanDeadline - performance.now()
+    if (remaining > 0) {
+      timer = setTimeout(flushScan, remaining)
+      return
+    }
+    timer = null
+    scan()
+  }
   const schedule = () => {
-    clearTimeout(timer)
-    timer = setTimeout(scan, 70)
+    scanDeadline = performance.now() + 70
+    timer ??= setTimeout(flushScan, 70)
   }
   new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true, characterData: true })
   addEventListener('resize', schedule)
@@ -2511,20 +2732,21 @@ async function publishModelRoutingState() {
 }
 
 async function checkUpdates() {
-  updateState = { ...updateState, checking: true, installError: '' }
+  const unifiedCheck = typeof api.checkUnifiedUpdates === 'function'
+  const preservedProgress = updateState.installProgress?.phase === 'ready' ? updateState.installProgress : null
+  updateState = { ...updateState, checking: true, checkError: '', installError: '', installProgress: preservedProgress }
   await publishUpdateState()
   try {
-    const result = typeof api.checkUnifiedUpdates === 'function'
-      ? await api.checkUnifiedUpdates()
-      : await api.checkUpdates()
-    updateState = { ...updateState, ...result, checking: false, installError: '' }
+    const result = unifiedCheck ? await api.checkUnifiedUpdates() : await api.checkUpdates()
+    updateState = { ...updateState, ...result, checking: false, checkError: '', installError: '' }
     pendingUpdateKind = 'installer'
     pendingComponentUpdate = null
   } catch (error) {
-    updateState = { ...updateState, checking: false, app: { error: error.message }, harness: updateState.harness }
+    const message = error?.message || String(error)
+    updateState = { ...updateState, checking: false, checkError: message, app: { error: message }, harness: updateState.harness }
   }
   await publishUpdateState()
-  if (prPreviewState.enabled && (prPreviewState.configured || prPreviewState.ready)) await refreshPrPreviewState({ discover: true })
+  if (prPreviewState.enabled && (prPreviewState.configured || prPreviewState.ready)) await refreshPrPreviewState({ discover: !unifiedCheck })
 }
 
 async function runUnifiedUpdateAction(id, action) {
@@ -2533,10 +2755,27 @@ async function runUnifiedUpdateAction(id, action) {
   if (!safeId || !allowedActions.has(action) || typeof api.runUnifiedUpdateAction !== 'function') return
   const busy = ['install', 'apply'].includes(action)
   const previewAction = /^(?:pr-[a-f0-9]{64}|active-pr-[1-9]\d*-[a-f0-9]{40})$/.test(safeId)
+  const selected = updateState.items?.find(item => item?.id === safeId) || null
+  const selectedKind = safeId === 'desktop'
+    ? 'desktop'
+    : safeId === 'component'
+      ? 'component'
+      : String(selected?.kind || '')
   if (busy) {
-    updateState = { ...updateState, installing: true, installError: '' }
+    updateState = {
+      ...updateState,
+      installing: true,
+      installError: '',
+      installProgress: previewAction
+        ? updateState.installProgress
+        : {
+            kind: selectedKind,
+            id: safeId,
+            version: String(selected?.version || ''),
+            phase: action === 'apply' ? 'apply' : 'prepare'
+          }
+    }
     if (previewAction) {
-      const selected = updateState.items?.find(item => item?.id === safeId)
       prPreviewState = {
         ...prPreviewState,
         checking: true,
@@ -2554,12 +2793,27 @@ async function runUnifiedUpdateAction(id, action) {
   try {
     const result = await api.runUnifiedUpdateAction(safeId, action)
     if (result && typeof result === 'object') updateState = { ...updateState, ...result }
+    if (!previewAction && result?.upToDate) {
+      updateState = { ...updateState, installProgress: { kind: selectedKind, id: safeId, version: result.version || selected?.version || '', phase: 'current' } }
+    } else if (!previewAction && result?.ready) {
+      updateState = { ...updateState, installProgress: { kind: selectedKind, id: safeId, version: result.version || selected?.version || '', phase: 'ready' } }
+    }
     if (typeof api.getUnifiedUpdateState === 'function') updateState = { ...updateState, ...(await api.getUnifiedUpdateState()) }
     updateState = { ...updateState, installing: false, installError: '' }
     if (previewAction) prPreviewState = { ...prPreviewState, checking: false }
   } catch (error) {
     const message = error?.message || String(error)
-    updateState = { ...updateState, installing: false, installError: message }
+    const previousInstall = updateState.installProgress && typeof updateState.installProgress === 'object'
+      ? updateState.installProgress
+      : { kind: selectedKind, id: safeId, version: String(selected?.version || ''), phase: 'prepare' }
+    updateState = {
+      ...updateState,
+      installing: false,
+      installError: message,
+      installProgress: previewAction
+        ? updateState.installProgress
+        : { ...previousInstall, failedPhase: String(previousInstall.phase || 'prepare'), phase: 'error', message }
+    }
     if (previewAction) {
       const previous = prPreviewState.progress && typeof prPreviewState.progress === 'object'
         ? prPreviewState.progress
@@ -3278,7 +3532,7 @@ api.onComputerUseAuthorization(session => {
 })
 api.onPetState(renderPetState)
 api.onUpdateResult(async result => {
-  updateState = { ...updateState, ...result, checking: false }
+  updateState = { ...updateState, ...result, checking: false, checkError: '' }
   pendingUpdateKind = 'installer'
   pendingComponentUpdate = null
   showComponentUpdateNotice(result.component)
@@ -3292,11 +3546,15 @@ api.onUpdateResult(async result => {
   await publishUpdateState()
 })
 api.onUpdateInstallProgress(progress => {
-  updateState = { ...updateState, installing: progress?.phase !== 'ready', installError: '', installProgress: progress }
+  const phase = String(progress?.phase || 'prepare')
+  const busy = !['ready', 'current', 'error'].includes(phase)
+  updateState = { ...updateState, installing: busy, installError: '', installProgress: { kind: 'desktop', id: 'desktop', ...progress } }
   publishUpdateState()
 })
 api.onComponentUpdateProgress(progress => {
-  updateState = { ...updateState, installing: true, installError: '', installProgress: { kind: 'components', ...progress } }
+  const phase = String(progress?.phase || 'prepare')
+  const busy = !['ready', 'current', 'error'].includes(phase)
+  updateState = { ...updateState, installing: busy, installError: '', installProgress: { kind: 'component', id: 'component', ...progress } }
   publishUpdateState()
 })
 api.onPrPreviewUpdateProgress(progress => {

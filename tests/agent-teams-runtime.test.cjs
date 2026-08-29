@@ -278,6 +278,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     let onDrain
     const coldDrainIds = new Set()
     const failGracefulFollowupIds = new Set()
+    const gracefulStopReasons = new Map()
     const failWorkFollowupIds = new Set()
     const drains = []
     let leadAvailable = true
@@ -360,7 +361,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
           if (graceful && !gatedGraceful) {
             const runId = `graceful-lifecycle-${++gracefulLifecycleRun}`
             await listeners.get('subagent/start')({ id: childId, runId })
-            await listeners.get('subagent/end')({ id: childId, runId, stopReason: 'completed' })
+            await listeners.get('subagent/end')({ id: childId, runId, stopReason: gracefulStopReasons.get(childId) || 'completed' })
           }
           if ((failWorkFollowupIds.has(childId) || failWorkFollowupIds.has('*')) && content?.[0]?.text?.includes('Coordinator registration complete')) {
             failWorkFollowupIds.delete('*')
@@ -400,8 +401,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
             try {
               for (const taskId of args.task_ids) {
                 await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'unassign' }, execution)
-                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'claim' }, execution)
-                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'complete' }, execution)
+                const claim = await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'claim' }, execution)
+                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch }, execution)
               }
             } catch {}
             return result
@@ -414,8 +415,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
           const result = await rawSpawnTool.execute({ ...args, team_id: created.teamId, task_ids: [created.task.id] }, execution)
           try {
             await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'unassign' }, execution)
-            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'claim' }, execution)
-            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'complete' }, execution)
+            const claim = await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'claim' }, execution)
+            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch }, execution)
           } catch {}
           return result
         } catch (error) { error.message += ` [spawn=${args.name}]`; throw error }
@@ -817,7 +818,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(multiTeamStatus.team, null)
     assert.deepEqual(new Set(multiTeamStatus.teams.map(team => team.id)), new Set([started.team.id, sibling.id]))
     for (const summary of multiTeamStatus.teams) {
-      assert.deepEqual(Object.keys(summary).sort(), ['activeTaskCount', 'cancelledTaskCount', 'completedTaskCount', 'id', 'memberCount', 'name', 'pauseEpoch', 'pendingTaskCount', 'planPhase', 'revision', 'status', 'updatedAt'])
+      assert.deepEqual(Object.keys(summary).filter(key => key !== 'closureOutcome').sort(), ['activeTaskCount', 'cancelledTaskCount', 'completedTaskCount', 'id', 'memberCount', 'name', 'pauseEpoch', 'pendingTaskCount', 'planPhase', 'revision', 'status', 'updatedAt'])
+      if ('closureOutcome' in summary) assert.equal(summary.closureOutcome, null)
       assert.equal('objective' in summary, false)
       assert.equal('members' in summary, false)
       assert.equal('tasks' in summary, false)
@@ -844,8 +846,17 @@ test('model tools create a team, spawn independent members, and relay with non-u
       tools.get('team_task_update').execute({ team_id: sibling.id, task_id: peerTask.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal }),
       error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
     )
-    await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal })
-    await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'complete' }, { agent: rootAgent, signal: new AbortController().signal })
+    const projectedClaim = await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal })
+    const projectedCompletion = await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'complete', claim_id: projectedClaim.task.claimId, lease_epoch: projectedClaim.task.leaseEpoch }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.deepEqual(projectedCompletion.task.submission, {
+      taskId: projectedTask.task.id,
+      claimId: projectedClaim.task.claimId,
+      leaseEpoch: projectedClaim.task.leaseEpoch,
+      submittedAt: projectedCompletion.task.submission.submittedAt,
+      submittedBy: rootAgent.id,
+      source: 'explicit_complete'
+    })
+    assert.equal(projectedCompletion.task.acceptance.acceptedBy, rootAgent.id)
     const unblockedPeer = await tools.get('team_task_update').execute({ team_id: sibling.id, task_id: peerTask.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal })
     assertLosslessJson(unblockedPeer)
     const acceptedTaskUpdate = await crossRealDshJsonOutputBoundary(unblockedPeer)
@@ -1216,6 +1227,38 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(coldShutdown.team.members.find(member => member.sessionId === coldMember.sessionId).state, 'retired')
     assert.deepEqual(drains.at(-1), { parent: rootAgent, childIds: [coldMember.sessionId] })
 
+    const refusalTeam = (await tools.get('team_start').execute({ objective: 'Refusal retirement must fail closed' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const refusalWorker = (await tools.get('team_spawn').execute({ team_id: refusalTeam.id, name: 'RefusalAudit', role: 'refusal retirement audit', prompt: 'Exercise refusal handling' }, { agent: rootAgent, signal: new AbortController().signal })).member
+    gracefulStopReasons.set(refusalWorker.sessionId, 'refusal')
+    await assert.rejects(
+      tools.get('team_shutdown').execute({ team_id: refusalTeam.id, member_session_id: refusalWorker.sessionId }, { agent: rootAgent, signal: new AbortController().signal }),
+      error => error?.code === 'AGENT_TEAMS_GRACEFUL_RETIREMENT_FAILED' && /refusal/u.test(error.message)
+    )
+    const refusalRecord = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === refusalTeam.id)
+    const refusedMember = refusalRecord.members.find(member => member.sessionId === refusalWorker.sessionId)
+    assert.equal(refusedMember.state, 'failed')
+    assert.notEqual(refusedMember.state, 'retired')
+    assert.equal(refusedMember.shutdownUnconfirmed, true)
+    assert.match(refusedMember.error, /refusal/u)
+    gracefulStopReasons.delete(refusalWorker.sessionId)
+    await tools.get('team_shutdown').execute({ team_id: refusalTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
+
+    const fullRefusalTeam = (await tools.get('team_start').execute({ objective: 'Whole-team refusal must persist a failed open closure attempt' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const fullRefusalWorker = (await tools.get('team_spawn').execute({ team_id: fullRefusalTeam.id, name: 'FullRefusal', role: 'whole-team refusal audit', prompt: 'Refuse graceful retirement for the full-team path' }, { agent: rootAgent, signal: new AbortController().signal })).member
+    gracefulStopReasons.set(fullRefusalWorker.sessionId, 'refusal')
+    const fullRefusal = await tools.get('team_shutdown').execute({ team_id: fullRefusalTeam.id }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(fullRefusal.team.state, 'active')
+    assert.equal(fullRefusal.failures.length, 1)
+    assert.equal(fullRefusal.team.closure.outcome, 'failed')
+    assert.equal(fullRefusal.team.closure.closedAt, undefined)
+    const fullRefusalRecord = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === fullRefusalTeam.id)
+    assert.equal(fullRefusalRecord.state, 'active')
+    assert.equal(fullRefusalRecord.closure.outcome, 'failed')
+    assert.equal(fullRefusalRecord.closure.closedAt, undefined)
+    assert.match(fullRefusalRecord.closure.failures[0], /refusal/u)
+    gracefulStopReasons.delete(fullRefusalWorker.sessionId)
+    await tools.get('team_shutdown').execute({ team_id: fullRefusalTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
+
     const memberGracefulFailureTeam = (await tools.get('team_start').execute({ objective: 'Member graceful send failure' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const memberGracefulFailureWorker = (await tools.get('team_spawn').execute({ team_id: memberGracefulFailureTeam.id, name: 'SendAudit', role: 'send failure audit', prompt: 'Remain available for retirement test' }, { agent: rootAgent, signal: new AbortController().signal })).member
     failGracefulFollowupIds.add(memberGracefulFailureWorker.sessionId)
@@ -1453,14 +1496,54 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.deepEqual(new Set(drains.at(-1).childIds), new Set([fallbackSpawn.member.sessionId, longButValidName.member.sessionId]))
     for (const start of starts) assert.deepEqual(start.request.toolFilter, { deny: ['subagent', 'subagent_fork', 'workflow', 'ralph'] })
 
+    const emptyShutdownTeam = (await tools.get('team_start').execute({ objective: 'Empty shutdown must not certify success' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const emptyShutdown = await tools.get('team_shutdown').execute({ team_id: emptyShutdownTeam.id }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(emptyShutdown.team.state, 'closed')
+    assert.equal(emptyShutdown.team.closure.outcome, 'cancelled')
+    assert.notEqual(emptyShutdown.team.closure.outcome, 'succeeded')
+
+    const emptyOrphan = (await tools.get('team_start').execute({ objective: 'Empty orphan must not certify success' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const orphan = (await tools.get('team_start').execute({ objective: 'Recover orphan' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const orphanStoreFile = path.join(root, 'storages', 'agent_teams.json')
+    const orphanDocument = JSON.parse(await readFile(orphanStoreFile, 'utf8'))
+    const orphanRecord = orphanDocument.teams.find(team => team.id === orphan.id)
+    const orphanTimestamp = new Date().toISOString()
+    orphanRecord.members.push({
+      id: 'orphan-worker-id', sessionId: 'orphan-worker', name: 'OrphanWorker', role: 'orphan recovery audit',
+      kind: 'worker', state: 'ready', createdAt: orphanTimestamp, updatedAt: orphanTimestamp
+    })
+    orphanRecord.tasks.push({
+      id: 'orphan-unaccepted', title: 'Unaccepted orphan delivery', state: 'completed', dependsOn: [], crossTeamDependsOn: [], files: [],
+      assigneeSessionId: 'orphan-worker', createdAt: orphanTimestamp, updatedAt: orphanTimestamp, claimedAt: orphanTimestamp,
+      completedAt: orphanTimestamp, attempt: 1, claimId: 'orphan-claim', leaseEpoch: 0,
+      attemptHistory: [], interruptionHistory: [], capabilities: [], externalEffects: [],
+      submission: { taskId: 'orphan-unaccepted', claimId: 'orphan-claim', leaseEpoch: 0, submittedAt: orphanTimestamp, submittedBy: 'orphan-worker', source: 'explicit_complete' }
+    })
+    orphanRecord.updatedAt = orphanTimestamp
+    await writeFile(orphanStoreFile, `${JSON.stringify(orphanDocument, null, 2)}\n`, 'utf8')
     leadAvailable = false
     activeInitiator = recoveryAgent
+    const emptyOrphanRecovery = await tools.get('team_recover').execute({ team_id: emptyOrphan.id, confirm: true }, { agent: recoveryAgent, signal: new AbortController().signal })
+    assert.equal(emptyOrphanRecovery.recovered[0].state, 'closed')
+    assert.equal(emptyOrphanRecovery.recovered[0].closure.outcome, 'cancelled')
+    assert.notEqual(emptyOrphanRecovery.recovered[0].closure.outcome, 'succeeded')
     const orphanPreview = await tools.get('team_recover').execute({ team_id: orphan.id }, { agent: recoveryAgent, signal: new AbortController().signal })
     assert.equal(orphanPreview.candidates.length, 1)
     assert.equal(orphanPreview.recovered.length, 0)
+    await assert.rejects(
+      tools.get('team_recover').execute({ team_id: orphan.id, confirm: true }, { agent: recoveryAgent, signal: new AbortController().signal }),
+      error => error?.code === 'AGENT_TEAMS_ACCEPTANCE_REQUIRED'
+    )
+    const stillOpen = JSON.parse(await readFile(orphanStoreFile, 'utf8')).teams.find(team => team.id === orphan.id)
+    assert.notEqual(stillOpen.state, 'closed')
+    assert.equal(stillOpen.closure, undefined, 'failed orphan recovery cannot persist a succeeded receipt')
+    const acceptedDocument = JSON.parse(await readFile(orphanStoreFile, 'utf8'))
+    const acceptedTask = acceptedDocument.teams.find(team => team.id === orphan.id).tasks.find(task => task.id === 'orphan-unaccepted')
+    acceptedTask.acceptance = { taskId: acceptedTask.id, claimId: acceptedTask.claimId, leaseEpoch: acceptedTask.leaseEpoch, acceptedAt: new Date().toISOString(), acceptedBy: orphan.rootLeadSessionId }
+    await writeFile(orphanStoreFile, `${JSON.stringify(acceptedDocument, null, 2)}\n`, 'utf8')
     const orphanRecovery = await tools.get('team_recover').execute({ team_id: orphan.id, confirm: true }, { agent: recoveryAgent, signal: new AbortController().signal })
     assert.equal(orphanRecovery.recovered[0].state, 'closed')
+    assert.equal(orphanRecovery.recovered[0].closure.outcome, 'succeeded')
     leadAvailable = true
     activeInitiator = rootAgent
   } finally {
