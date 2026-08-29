@@ -32,7 +32,8 @@
 ### 验证与发布身份
 
 - 新增 [`docs/SECURITY-REVIEW-v1.0.54.zh-CN.md`](docs/SECURITY-REVIEW-v1.0.54.zh-CN.md) 与 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)，记录自动驾驶授权、secret custody、密钥覆盖和性能证据边界。
-- 全仓 `npm run verify` 最终 1714 通过/0 失败/5 跳过；Agent Teams 159 通过/0 失败/2 跳过；模型密钥 28/28；安装后 artifact-fixture smoke 2/2；P1 release-blocking 矩阵 11/11；Android unit test、release R8 与 JNI mapping 门禁通过；`npm run verify:release` 与 `git diff --check` 通过。
+- 全仓 `npm run verify` 最终 1716 通过/0 失败/5 跳过；Agent Teams 159 通过/0 失败/2 跳过；模型密钥 28/28；安装后 artifact-fixture smoke 2/2；P1 release-blocking 矩阵 11/11；Android unit test、release R8 与 JNI mapping 门禁通过；`npm run verify:release` 与 `git diff --check` 通过。
+- macOS Host IPC endpoint 增加 100 UTF-8 bytes 硬上限及长 `TMPDIR` 回退，Windows 命名管道前缀保持兼容；安装后 workbench smoke 同步真实 Stop/continue 文案；Windows 云端冷启动使用独立 350 ms 上限但不放宽稳态性能与泄漏门禁。
 - 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由和移动更新示例统一到 `1.0.54`；Android `versionCode=1005400`，iOS build code 为 `10054`。
 - 正式发布只走仓库 resumable publisher：精确 main SHA、不可变 `v1.0.54`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。
 - 已发布 `v1.0.53` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变，不移动、不覆盖、不复用。

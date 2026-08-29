@@ -1,8 +1,7 @@
 const net = require('node:net')
-const os = require('node:os')
-const path = require('node:path')
-const { randomBytes, randomUUID, timingSafeEqual } = require('node:crypto')
+const { randomBytes, timingSafeEqual } = require('node:crypto')
 const { rm } = require('node:fs/promises')
+const { createLocalIpcEndpoint } = require('./local-ipc-endpoint.cjs')
 
 const ENDPOINT_ENV = 'HARNESS_DESKTOP_SECRET_ENDPOINT'
 const TOKEN_ENV = 'HARNESS_DESKTOP_SECRET_TOKEN'
@@ -21,8 +20,7 @@ function boundedString(value, field, max = 512) {
 }
 
 function defaultEndpoint() {
-  const name = `dsh-agent-teams-secret-${process.pid}-${randomUUID()}.sock`
-  return process.platform === 'win32' ? '\\\\.\\pipe\\' + name : path.join(os.tmpdir(), name)
+  return createLocalIpcEndpoint('ats', { windowsKind: 'agent-teams-secret' })
 }
 
 function envelopePlaintext({ purpose, binding, plaintext }) {

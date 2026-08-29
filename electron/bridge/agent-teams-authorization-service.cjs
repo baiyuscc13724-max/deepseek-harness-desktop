@@ -1,8 +1,8 @@
 const net = require('node:net')
-const os = require('node:os')
 const path = require('node:path')
 const { createHash, randomBytes, randomUUID, timingSafeEqual } = require('node:crypto')
 const { mkdir, open, readFile, rename, rm } = require('node:fs/promises')
+const { createLocalIpcEndpoint } = require('./local-ipc-endpoint.cjs')
 
 const ENDPOINT_ENV = 'HARNESS_DESKTOP_AUTHORIZATION_ENDPOINT'
 const TOKEN_ENV = 'HARNESS_DESKTOP_AUTHORIZATION_TOKEN'
@@ -36,8 +36,7 @@ function validateRequest(value) {
   return Object.freeze(Object.fromEntries(REQUEST_KEYS.map(key => [key, value[key]])))
 }
 function defaultEndpoint() {
-  const name = `dsh-agent-teams-authorization-${process.pid}-${randomUUID()}.sock`
-  return process.platform === 'win32' ? '\\\\.\\pipe\\' + name : path.join(os.tmpdir(), name)
+  return createLocalIpcEndpoint('ata', { windowsKind: 'agent-teams-authorization' })
 }
 async function atomicWriteJson(file, value) {
   await mkdir(path.dirname(file), { recursive: true })

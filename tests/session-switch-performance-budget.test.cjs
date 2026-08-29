@@ -57,6 +57,16 @@ test('performance budgets combine calibration ratios with leak-specific ceilings
     mutate(regressed)
     assert.equal(evaluateBudgets(regressed).pass, false)
   }
+
+  const windowsColdPaint = structuredClone(healthy)
+  windowsColdPaint.runtime = { platform: 'win32', ci: true }
+  windowsColdPaint.firstOpenMs = 278.4
+  windowsColdPaint.longTasks.maxMs = 295
+  assert.equal(evaluateBudgets(windowsColdPaint).pass, true)
+  assert.equal(evaluateBudgets({ ...windowsColdPaint, firstOpenMs: 351 }).pass, false)
+  assert.equal(evaluateBudgets({ ...windowsColdPaint, longTasks: { ...windowsColdPaint.longTasks, maxMs: 351 } }).pass, false)
+  assert.equal(evaluateBudgets({ ...windowsColdPaint, runtime: { platform: 'win32', ci: false } }).pass, false)
+  assert.equal(evaluateBudgets({ ...windowsColdPaint, runtime: { platform: 'linux', ci: true } }).pass, false)
 })
 
 test('quick Electron stress fixture stays inside the regression budget', { timeout: 120_000, skip: electronSkipReason }, async () => {

@@ -45,12 +45,13 @@ v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥�
 
 发布候选在提交前完成：
 
-- 全仓 `npm run verify`：1714 通过、0 失败、5 个平台/环境条件跳过（1719 总计）；
+- 全仓 `npm run verify`：1716 通过、0 失败、5 个平台/环境条件跳过（1721 总计）；
 - Agent Teams 专项：159 通过、0 失败、2 个环境门禁跳过；
 - 模型密钥行为、迁移、泄露与官方 runtime：28/28；
 - Agent Teams 安装后 artifact-fixture 工作区 smoke：2/2；
 - P1 release-blocking 安全/持久化矩阵：11/11；
-- 长会话双层门禁：synthetic 3/3 + production 31/31；
+- 长会话双层门禁：synthetic 3/3 + production 31/31；Windows 云端只对一次性冷启动使用 350 ms 有界上限，switch、scroll、泄漏、listener 与 long-task-rate 门禁不放宽；
+- macOS Host IPC endpoint 以 100 UTF-8 bytes 为硬上限并覆盖长 `TMPDIR` 回退；Windows 命名管道协议保持兼容；
 - Android `testDebugUnitTest`、`minifyReleaseWithR8` 与 `verifyReleaseWebRtcJniSymbols`：通过；
 - `npm run verify:release` 与 `git diff --check`：通过。
 
