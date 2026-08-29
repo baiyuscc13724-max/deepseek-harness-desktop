@@ -16,6 +16,12 @@
 - 支持覆盖新增、修改、删除与恢复环境来源；unset 失败按最新 settings revision 补偿重绑仍存在的引用，自定义 Provider 删除会清理页面托管凭据而不误删环境引用。
 - DeepSeek `credentialOnly`、OpenAI、Codex、custom/pi-ai 和 inheritance/fallback 均有行为测试；字段补齐原生 label、稳定 id、密码掩码、`autocomplete=new-password`、持续帮助文本和 44px 操作目标。
 
+### Android 扫码配对与 Release JNI 完整性
+
+- 修复 v1.0.53 正式 APK 的 R8 混淆改名 WebRTC / jni_zero JNI 绑定，导致扫码启动 P2P 时 `libjingle_peerconnection_so.so` 在 `JNI_OnLoad` 触发 `SIGTRAP` 的原生闪退。
+- Release 规则保持 `org.webrtc.**`、`org.jni_zero.**` 和注解元数据；`assembleRelease` 新增 R8 mapping 硬门禁，精确验证 `PeerConnectionFactory.initialize`、`NativeLibrary.initialize` 与 `JniInit` 未改名。
+- 覆盖安装修正版可直接恢复既有加密配对配置，无需清除 App 数据。
+
 ### 长会话、渲染与工作区性能
 
 - 大型消息树投影基准约由 150.828 ms 降至 1.128 ms；折叠的 4,000 步对话首批固定 64 项并优先保证深层 selected call 可达，不截断或删除历史。
@@ -26,7 +32,7 @@
 ### 验证与发布身份
 
 - 新增 [`docs/SECURITY-REVIEW-v1.0.54.zh-CN.md`](docs/SECURITY-REVIEW-v1.0.54.zh-CN.md) 与 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)，记录自动驾驶授权、secret custody、密钥覆盖和性能证据边界。
-- 全仓 `npm run verify` 最终 1714 通过/0 失败/4 跳过；Agent Teams 159 通过/0 失败/2 跳过；模型密钥 28/28；安装后 artifact-fixture smoke 2/2；P1 release-blocking 矩阵 11/11；`npm run verify:release` 与 `git diff --check` 通过。
+- 全仓 `npm run verify` 最终 1714 通过/0 失败/5 跳过；Agent Teams 159 通过/0 失败/2 跳过；模型密钥 28/28；安装后 artifact-fixture smoke 2/2；P1 release-blocking 矩阵 11/11；Android unit test、release R8 与 JNI mapping 门禁通过；`npm run verify:release` 与 `git diff --check` 通过。
 - 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由和移动更新示例统一到 `1.0.54`；Android `versionCode=1005400`，iOS build code 为 `10054`。
 - 正式发布只走仓库 resumable publisher：精确 main SHA、不可变 `v1.0.54`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。
 - 已发布 `v1.0.53` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变，不移动、不覆盖、不复用。

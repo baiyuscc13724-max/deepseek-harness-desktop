@@ -80,8 +80,30 @@ val verifyReleaseSigningConfiguration = tasks.register("verifyReleaseSigningConf
     }
 }
 
+val verifyReleaseWebRtcJniSymbols = tasks.register("verifyReleaseWebRtcJniSymbols") {
+    dependsOn("minifyReleaseWithR8")
+    doLast {
+        val mappingFile = layout.buildDirectory.file("outputs/mapping/release/mapping.txt").get().asFile
+        if (!mappingFile.isFile) throw GradleException("Release R8 mapping is missing: ${mappingFile.absolutePath}")
+        val mapping = mappingFile.readText()
+        val lines = mapping.lineSequence().toList()
+        val checks = listOf(
+            "PeerConnectionFactory class" to mapping.contains("org.webrtc.PeerConnectionFactory -> org.webrtc.PeerConnectionFactory:"),
+            "PeerConnectionFactory.initialize" to lines.any { it.contains("void initialize(org.webrtc.PeerConnectionFactory\$InitializationOptions)") && it.endsWith(" -> initialize") },
+            "NativeLibrary class" to mapping.contains("org.webrtc.NativeLibrary -> org.webrtc.NativeLibrary:"),
+            "NativeLibrary.initialize" to lines.any { it.contains("void initialize(org.webrtc.NativeLibraryLoader,java.lang.String)") && it.endsWith(" -> initialize") },
+            "jni_zero JniInit class" to mapping.contains("org.jni_zero.JniInit -> org.jni_zero.JniInit:")
+        )
+        val failed = checks.filterNot { it.second }.map { it.first }
+        if (failed.isNotEmpty()) {
+            throw GradleException("Release shrinker renamed WebRTC JNI bindings: ${failed.joinToString()}")
+        }
+    }
+}
+
 tasks.configureEach {
     if (name == "packageRelease" || name == "signReleaseBundle") dependsOn(verifyReleaseSigningConfiguration)
+    if (name == "assembleRelease") dependsOn(verifyReleaseWebRtcJniSymbols)
 }
 
 dependencies {

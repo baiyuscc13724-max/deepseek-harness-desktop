@@ -1,6 +1,6 @@
 # Harness Desktop 1.0.54
 
-v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥可用性和长会话响应速度的正式更新。它修复了普通项目内续作反复要求用户发送“继续”的问题，也恢复了环境密钥场景下直接输入安全覆盖的能力，同时保留真实外部副作用和不可逆操作的硬门禁。
+v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥可用性、Android 配对可靠性和长会话响应速度的正式更新。它修复了普通项目内续作反复要求用户发送“继续”的问题，恢复了环境密钥场景下直接输入安全覆盖的能力，并修复 v1.0.53 Android 正式 APK 扫码配对后由 WebRTC JNI 混淆触发的原生闪退，同时保留真实外部副作用和不可逆操作的硬门禁。
 
 本版本不会静默替用户安装。桌面端只有在用户于更新中心明确点击更新/安装后才会切换版本；Android 仍必须由用户手动安装长期证书签名的 APK。
 
@@ -27,6 +27,12 @@ v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥�
 - 删除自定义 Provider 会清理页面托管的普通或 `HARNESS_DESKTOP_*` 凭据引用，但不会把环境引用误当作可删除 secret。
 - 字段使用原生 label、稳定 id、密码掩码、`autocomplete=new-password`、持续帮助文本和不小于 44px 的输入/恢复/删除/确认目标；没有粘贴拦截。
 
+## Android 扫码配对不再触发原生闪退
+
+- 修复 v1.0.53 正式 APK 在 R8 混淆后改名 WebRTC / jni_zero JNI 绑定，导致扫码启动 P2P 时 `libjingle_peerconnection_so.so` 于 `JNI_OnLoad` 触发 `SIGTRAP` 的问题。
+- Release shrinker 现在保持 `org.webrtc.**`、`org.jni_zero.**` 及其注解元数据；正式 `assembleRelease` 额外解析 R8 mapping，若 `PeerConnectionFactory.initialize`、`NativeLibrary.initialize` 或 `JniInit` 被改名会直接阻断构建。
+- 覆盖安装修正版即可继续使用原有加密配对配置，不要求清除 App 数据或重新读取二维码中的敏感字段。
+
 ## 长会话与工作区性能门禁
 
 - 大型消息树投影基准由约 150.828 ms 降至 1.128 ms；折叠的 4,000 步对话不再急切渲染全部前缀，首批固定为 64 项，并优先保证深层已选调用可达。
@@ -39,12 +45,13 @@ v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥�
 
 发布候选在提交前完成：
 
-- 全仓 `npm run verify`：1714 通过、0 失败、4 个平台/环境条件跳过（1718 总计）；
+- 全仓 `npm run verify`：1714 通过、0 失败、5 个平台/环境条件跳过（1719 总计）；
 - Agent Teams 专项：159 通过、0 失败、2 个环境门禁跳过；
 - 模型密钥行为、迁移、泄露与官方 runtime：28/28；
 - Agent Teams 安装后 artifact-fixture 工作区 smoke：2/2；
 - P1 release-blocking 安全/持久化矩阵：11/11；
 - 长会话双层门禁：synthetic 3/3 + production 31/31；
+- Android `testDebugUnitTest`、`minifyReleaseWithR8` 与 `verifyReleaseWebRtcJniSymbols`：通过；
 - `npm run verify:release` 与 `git diff --check`：通过。
 
 正式发布继续由仓库唯一的 resumable publisher 从精确 main 提交执行全平台 GitHub Actions 构建、iPhone/iPad 模拟器验证、Windows 安装/卸载与打包自检、Android 长期证书签名、生产组件签名、精确 18 项资产清单、GitHub→CNB 云到云镜像，并在所有不可变资产就绪后才提升三个 stable feed。
