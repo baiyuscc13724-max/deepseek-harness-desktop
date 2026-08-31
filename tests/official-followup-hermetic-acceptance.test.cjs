@@ -8,6 +8,7 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 const helper = require('./helpers/official-followup-hermetic.cjs')
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
 const ROOT = path.resolve(__dirname, '..')
 function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`) }
@@ -17,7 +18,7 @@ async function lockFixture(t) {
 }
 function frozenRow(relative, hash = 'A'.repeat(64)) { return `${relative}|${hash}` }
 
-test('accepted alpha.2 source, static gate, migration and publication inputs are exact hash-bound', () => {
+alpha2Audit('accepted alpha.2 source, static gate, migration and publication inputs are exact hash-bound', () => {
   for (const [relative, expected] of Object.entries(helper.ACCEPTED)) assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `accepted input drift: ${relative}`)
   assert.equal(helper.ALPHA2, '0.1.2-alpha.2'); assert.equal(helper.TAG, 'dsh-v0.1.2-alpha.2'); assert.equal(helper.COMMIT, '0a53fb55bea101816fa226bb964ae2bed71c343b')
 })
@@ -95,7 +96,7 @@ test('fresh hypothesis and accepted historical npm evidence remain separate and 
   assert.throws(() => helper.assertExternalAuditBoundary(source, run, path.join(run, 'accepted')), /ACCEPTED_AUDIT_BOUNDARY/u)
 })
 
-test('lock audit proves exact 20 roots, 861 locations, 216 DSH locations, 215 names and strict remote integrity', async t => {
+alpha2Audit('lock audit proves exact 20 roots, 861 locations, 216 DSH locations, 215 names and strict remote integrity', async t => {
   const root = await lockFixture(t), accepted = helper.auditLock(root)
   assert.deepEqual(accepted.graph, { roots: 20, locations: 216, uniqueNames: 215, wrongVersion: 0, nonCanonicalResolved: 0, badIntegrity: 0, removedPackages: 0, mixedRcAlpha: 0 }); assert.equal(accepted.packageEntries, 861)
   assert.deepEqual(Object.keys(accepted.remoteOriginCounts).sort(), [...helper.REMOTE_ORIGINS].sort())

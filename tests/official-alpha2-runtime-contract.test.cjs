@@ -6,6 +6,8 @@ const path = require('node:path')
 const test = require('node:test')
 const vm = require('node:vm')
 
+// Frozen alpha.2 graph assertions are retained for explicit forensic audits only.
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 const ROOT = path.resolve(__dirname, '..')
 const AUDIT_ROOT = process.env.DSH_ALPHA2_AUDIT_ROOT || ROOT
 const CANDIDATE_ROOT = process.env.DSH_ALPHA2_CANDIDATE_ROOT || ROOT
@@ -266,7 +268,7 @@ test('all twenty direct dsh dependencies have unique alpha.2 workspace and integ
   }
 })
 
-test('the maintained product pins and classifies the complete accepted alpha.2 graph', async () => {
+alpha2Audit('the maintained product pins and classifies the complete accepted alpha.2 graph', async () => {
   const pkg = readJson('package.json')
   const lock = readJson('package-lock.json')
   const installedCore = readCandidateJson('node_modules/@deepseek-ai/dsh/package.json')
@@ -294,7 +296,7 @@ test('the maintained product pins and classifies the complete accepted alpha.2 g
   }
 })
 
-test('the detached candidate is one complete canonical alpha.2 graph with removed packages absent', async () => {
+alpha2Audit('the detached candidate is one complete canonical alpha.2 graph with removed packages absent', async () => {
   const pkg = readCandidateJson('package.json')
   const lock = readCandidateJson('package-lock.json')
   const installedCore = readCandidateJson('node_modules/@deepseek-ai/dsh/package.json')
@@ -514,7 +516,7 @@ test('New Session with no explicit current pending or ready recent target only c
   assert.equal(h.service.pendingSessionWorkspaceTarget, undefined)
 })
 
-test('canonical alpha.2 graph rejects every root, location, owner, version and artifact substitution', async () => {
+alpha2Audit('canonical alpha.2 graph rejects every root, location, owner, version and artifact substitution', async () => {
   const pkg = readCandidateJson('package.json')
   const lock = readCandidateJson('package-lock.json')
   const installedCore = readCandidateJson('node_modules/@deepseek-ai/dsh/package.json')

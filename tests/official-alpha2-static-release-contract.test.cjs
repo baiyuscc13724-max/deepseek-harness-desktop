@@ -3,8 +3,9 @@ const test = require('node:test')
 const { readFileSync } = require('node:fs')
 const path = require('node:path')
 
-const root = path.resolve(__dirname, '..')
+const root = path.resolve(process.env.DSH_ALPHA3_CANDIDATE_ROOT || path.resolve(__dirname, '..'))
 const source = readFileSync(path.join(root, 'scripts', 'verify-static.mjs'), 'utf8')
+const TARGET = '0.1.2-alpha.3'
 
 function balancedEnd(text, start) {
   const open = text.indexOf('{', start)
@@ -18,18 +19,18 @@ function balancedEnd(text, start) {
 }
 
 function loadContract() {
-  const constantsStart = source.indexOf("const OFFICIAL_ALPHA2_VERSION = '0.1.2-alpha.2'")
-  const functionStart = source.indexOf('export function assertOfficialAlpha2ReleaseContract(pkg)')
-  assert.notEqual(constantsStart, -1, 'alpha.2 version contract is missing')
-  assert.notEqual(functionStart, -1, 'alpha.2 release contract export is missing')
+  const constantsStart = source.indexOf("const OFFICIAL_ALPHA3_VERSION = '0.1.2-alpha.3'")
+  const functionStart = source.indexOf('export function assertOfficialAlpha3ReleaseContract(pkg)')
+  assert.notEqual(constantsStart, -1, 'alpha.3 version contract is missing')
+  assert.notEqual(functionStart, -1, 'alpha.3 release contract export is missing')
   const functionEnd = balancedEnd(source, functionStart)
-  const productionCalls = source.slice(functionEnd).match(/\bassertOfficialAlpha2ReleaseContract\(pkg\)/g) || []
-  assert.equal(productionCalls.length, 1, 'static gate must invoke the alpha.2 release contract exactly once')
+  const productionCalls = source.slice(functionEnd).match(/\bassertOfficialAlpha3ReleaseContract\(pkg\)/g) || []
+  assert.equal(productionCalls.length, 1, 'static gate must invoke the alpha.3 release contract exactly once')
   const contract = source.slice(constantsStart, functionEnd).replace('export function', 'function')
-  return Function(`${contract}; return { assertOfficialAlpha2ReleaseContract }`)()
+  return Function(`${contract}; return { assertOfficialAlpha3ReleaseContract }`)()
 }
 
-const alpha2Roots = [
+const alpha3Roots = [
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-anonymous-user-id', '@deepseek-ai/dsh-atomic-write', '@deepseek-ai/dsh-bash-local',
   '@deepseek-ai/dsh-code-runtime', '@deepseek-ai/dsh-compaction', '@deepseek-ai/dsh-compaction-basic',
@@ -39,39 +40,47 @@ const alpha2Roots = [
   '@deepseek-ai/dsh-subagent-in-process-driver', '@deepseek-ai/dsh-subprocess',
   '@deepseek-ai/dsh-timeout', '@deepseek-ai/dsh-workflow'
 ]
+const alpha3OptionalRoots = [
+  '@deepseek-ai/dsh-attachment', '@deepseek-ai/dsh-jobs', '@deepseek-ai/dsh-session-persistence',
+  '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-settings', '@deepseek-ai/dsh-util-time'
+]
 
 function manifest() {
   return {
     dependencies: {
-      ...Object.fromEntries(alpha2Roots.map(name => [name, '0.1.2-alpha.2'])),
+      ...Object.fromEntries(alpha3Roots.map(name => [name, TARGET])),
       '@deepseek-ai/cordis-plugin-group': '1.0.1',
       '@earendil-works/pi-ai': '0.82.1',
       yaml: '2.9.0',
       'dsh-plugin-marketplace': 'https://codeload.github.com/bradeGithub/DSH-Plugins-Marketplace/tar.gz/dfe32cb8620658b55441787725f7f03e0491d15e'
-    }
+    },
+    optionalDependencies: Object.fromEntries(alpha3OptionalRoots.map(name => [name, TARGET]))
   }
 }
 
-test('official alpha.2 static release contract accepts only the complete exact 20-root manifest', () => {
-  const { assertOfficialAlpha2ReleaseContract } = loadContract()
-  assert.equal(alpha2Roots.length, 20)
-  assert.doesNotThrow(() => assertOfficialAlpha2ReleaseContract(manifest()))
+test('official alpha.3 static release contract accepts only the complete exact root manifest', () => {
+  const { assertOfficialAlpha3ReleaseContract } = loadContract()
+  assert.equal(alpha3Roots.length, 20)
+  assert.equal(alpha3OptionalRoots.length, 6)
+  assert.doesNotThrow(() => assertOfficialAlpha3ReleaseContract(manifest()))
 })
 
-test('official alpha.2 static release contract fails closed for root regressions and graph drift', () => {
-  const { assertOfficialAlpha2ReleaseContract } = loadContract()
+test('official alpha.3 static release contract fails closed for root regressions and graph drift', () => {
+  const { assertOfficialAlpha3ReleaseContract } = loadContract()
   const cases = [
-    ['missing dependencies', candidate => { delete candidate.dependencies }, /dependencies must be an object/],
-    ['root fallback', candidate => { candidate.dependencies['@deepseek-ai/dsh'] = '0.1.1-rc.2' }, /pinned exactly/],
+    ['missing dependencies', candidate => { delete candidate.dependencies }, /dependencies and optionalDependencies must be objects/],
+    ['missing optional dependencies', candidate => { delete candidate.optionalDependencies }, /dependencies and optionalDependencies must be objects/],
+    ['rc.2 fallback', candidate => { candidate.dependencies['@deepseek-ai/dsh'] = '0.1.1-rc.2' }, /pinned exactly/],
+    ['alpha.2 fallback', candidate => { candidate.dependencies['@deepseek-ai/dsh'] = '0.1.2-alpha.2' }, /pinned exactly/],
     ['root omission', candidate => { delete candidate.dependencies['@deepseek-ai/dsh-compaction-basic'] }, /pinned exactly/],
-    ['floating range', candidate => { candidate.dependencies['@deepseek-ai/dsh-workflow'] = '^0.1.2-alpha.2' }, /pinned exactly/],
-    ['extra DSH root', candidate => { candidate.dependencies['@deepseek-ai/dsh-unreviewed'] = '0.1.2-alpha.2' }, /Unexpected direct DSH root/],
-    ['removed client runtime re-entry', candidate => { candidate.dependencies['@deepseek-ai/dsh-client-runtime'] = '0.1.2-alpha.2' }, /Removed DSH root/],
-    ['removed host apiproxy re-entry', candidate => { candidate.dependencies['@deepseek-ai/dsh-host-apiproxy'] = '0.1.2-alpha.2' }, /Removed DSH root/]
+    ['floating range', candidate => { candidate.dependencies['@deepseek-ai/dsh-workflow'] = `^${TARGET}` }, /pinned exactly/],
+    ['extra DSH root', candidate => { candidate.dependencies['@deepseek-ai/dsh-unreviewed'] = TARGET }, /Unexpected direct DSH root/],
+    ['retired client runtime re-entry', candidate => { candidate.dependencies['@deepseek-ai/dsh-client-runtime'] = TARGET }, /Removed DSH root/],
+    ['retired host apiproxy re-entry', candidate => { candidate.dependencies['@deepseek-ai/dsh-host-apiproxy'] = TARGET }, /Removed DSH root/]
   ]
   for (const [name, mutate, expected] of cases) {
     const candidate = manifest()
     mutate(candidate)
-    assert.throws(() => assertOfficialAlpha2ReleaseContract(candidate), expected, name)
+    assert.throws(() => assertOfficialAlpha3ReleaseContract(candidate), expected, name)
   }
 })

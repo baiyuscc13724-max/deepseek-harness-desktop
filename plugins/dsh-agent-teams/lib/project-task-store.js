@@ -5,8 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { TASK_STATES } from "./project-task-domain.js";
 import { PROJECT_REF, ProjectTaskFieldCipher } from "./project-task-crypto.js";
 
-const PROJECT_TASK_SCHEMA_VERSION = 12;
+const PROJECT_TASK_SCHEMA_VERSION = 13;
 const MAX_EVENTS_PER_QUERY = 500;
+const MAX_WAKE_SIGNALS_PER_CLAIM = 64;
+const DEFAULT_WAKE_LEASE_MS = 30_000;
 const TASK_STATUS_RANK_SQL = "CASE status WHEN 'in_progress' THEN 0 WHEN 'working' THEN 0 WHEN 'in_review' THEN 1 WHEN 'review' THEN 1 WHEN 'awaiting_review' THEN 1 WHEN 'blocked' THEN 2 WHEN 'todo' THEN 3 WHEN 'assigned' THEN 3 WHEN 'queued' THEN 3 WHEN 'pending' THEN 3 WHEN 'backlog' THEN 3 WHEN 'done' THEN 4 WHEN 'completed' THEN 4 WHEN 'canceled' THEN 5 WHEN 'cancelled' THEN 5 ELSE 3 END";
 const TASK_STATUS_GROUP_SQL = "CASE status WHEN 'in_progress' THEN 'in_progress' WHEN 'working' THEN 'in_progress' WHEN 'in_review' THEN 'in_review' WHEN 'review' THEN 'in_review' WHEN 'awaiting_review' THEN 'in_review' WHEN 'blocked' THEN 'blocked' WHEN 'done' THEN 'completed' WHEN 'completed' THEN 'completed' WHEN 'canceled' THEN 'canceled' WHEN 'cancelled' THEN 'canceled' ELSE 'pending' END";
 const COLLABORATION_SECTION_NAMES = new Set(["seats", "tasks", "locks", "handoffs", "recoveries", "evidence", "history", "requests"]);
@@ -1076,8 +1078,97 @@ class ProjectTaskStore {
           }
         }
       }
+      if (["temporarily_empty", "blocked"].includes(result.status) && active === undefined) this.#armTaskWakeWaiter(projectRef, actorRef, timestamp, result.projectRevision);
+      else this.database.prepare("DELETE FROM project_task_wake_waiters WHERE project_ref=? AND actor_ref=?").run(projectRef, actorRef);
       this.database.prepare("INSERT INTO project_task_claim_next_receipts(project_ref,request_id,request_digest,actor_ref,receipt_cipher,created_at) VALUES(?,?,?,?,?,?)").run(projectRef, requestId, requestDigest, actorRef, this.cipher.seal(projectRef, collaborationField("claim-next", requestId, "receipt"), result), timestamp);
       return result;
+    });
+  }
+
+  listTaskWakeProjects(input = {}) {
+    this.#requireReady();
+    const afterProjectRef = input.afterProjectRef === undefined ? "" : nonEmptyString(input.afterProjectRef, "afterProjectRef", 256);
+    const timestamp = safeInteger(input.updatedAt, "updatedAt");
+    const limit = safeInteger(input.limit ?? 16, "limit", 1, MAX_WAKE_SIGNALS_PER_CLAIM);
+    const waiting = this.database.prepare(`SELECT DISTINCT project_ref FROM project_task_wake_waiters
+      WHERE state='waiting' AND project_ref>? ORDER BY project_ref LIMIT ?`).all(afterProjectRef, limit).map((row) => row.project_ref);
+    const expired = this.database.prepare(`SELECT DISTINCT project_ref FROM project_task_wake_waiters
+      WHERE state='dispatching' AND lease_until<=? AND project_ref>? ORDER BY project_ref LIMIT ?`).all(timestamp, afterProjectRef, limit).map((row) => row.project_ref);
+    return Object.freeze([...new Set([...waiting, ...expired])].sort().slice(0, limit));
+  }
+
+  claimTaskWakeSignals(input = {}) {
+    this.#requireReady();
+    const projectRef = normalizeProjectRef(input.projectRef);
+    const dispatcherRef = nonEmptyString(input.dispatcherRef, "dispatcherRef", 256);
+    const timestamp = safeInteger(input.updatedAt, "updatedAt");
+    const limit = safeInteger(input.limit ?? 16, "limit", 1, MAX_WAKE_SIGNALS_PER_CLAIM);
+    const leaseMs = safeInteger(input.leaseMs ?? DEFAULT_WAKE_LEASE_MS, "leaseMs", 1, 10 * 60_000);
+    return this.#transaction(() => {
+      this.#assertProjectRevision(projectRef);
+      const rows = this.database.prepare(`SELECT * FROM project_task_wake_waiters
+        WHERE project_ref=? AND (state='waiting' OR (state='dispatching' AND lease_until<=?))
+        ORDER BY updated_at ASC,actor_ref ASC LIMIT ?`).all(projectRef, timestamp, limit * 4);
+      const signals = [];
+      const reservedTaskRefs = new Set();
+      for (const row of rows) {
+        if (signals.length >= limit) break;
+        if (!this.#wakeActorIsActive(projectRef, row.actor_ref)) continue;
+        const candidateTaskRef = this.#findWakeCandidateTaskRef(projectRef, row.actor_ref, reservedTaskRefs);
+        if (candidateTaskRef === undefined) continue;
+        const redelivered = row.state === "dispatching";
+        const wakeRef = row.wake_ref ?? `wake_${createHash("sha256").update(canonicalJson([projectRef, row.actor_ref, row.generation])).digest("base64url")}`;
+        const changed = this.database.prepare(`UPDATE project_task_wake_waiters SET state='dispatching',wake_ref=?,dispatcher_ref=?,lease_until=?,updated_at=?
+          WHERE project_ref=? AND actor_ref=? AND generation=? AND (state='waiting' OR (state='dispatching' AND lease_until<=?))`).run(wakeRef, dispatcherRef, timestamp + leaseMs, timestamp, projectRef, row.actor_ref, row.generation, timestamp);
+        if (Number(changed.changes) !== 1) continue;
+        reservedTaskRefs.add(candidateTaskRef);
+        signals.push(Object.freeze({ wakeRef, projectRef, actorRef: row.actor_ref, generation: row.generation, projectRevision: this.#assertProjectRevision(projectRef), observedRevision: row.observed_revision, redelivered }));
+      }
+      return Object.freeze(signals);
+    });
+  }
+
+  ackTaskWakeSignal(input = {}) {
+    this.#requireReady();
+    const projectRef = normalizeProjectRef(input.projectRef);
+    const wakeRef = nonEmptyString(input.wakeRef, "wakeRef", 256);
+    const dispatcherRef = nonEmptyString(input.dispatcherRef, "dispatcherRef", 256);
+    const outcome = nonEmptyString(input.outcome, "outcome", 32);
+    if (!new Set(["delivered", "paused", "outcome_unknown", "not_delivered"]).has(outcome)) throw new TypeError("unsupported task wake outcome");
+    const timestamp = safeInteger(input.updatedAt, "updatedAt");
+    return this.#transaction(() => {
+      const row = this.database.prepare("SELECT * FROM project_task_wake_waiters WHERE project_ref=? AND wake_ref=?").get(projectRef, wakeRef);
+      if (row === undefined) throw storeError("task wake signal does not exist", "PROJECT_TASK_WAKE_NOT_FOUND");
+      const targetState = outcome === "not_delivered" ? "waiting" : outcome;
+      if (row.state === targetState && (targetState === "delivered" || targetState === "paused" || targetState === "outcome_unknown")) return { duplicate: true, wakeRef, state: row.state };
+      if (!new Set(["dispatching", "outcome_unknown"]).has(row.state) || row.dispatcher_ref !== dispatcherRef) throw storeError("task wake dispatch lease changed", "PROJECT_TASK_WAKE_CONFLICT");
+      this.database.prepare(`UPDATE project_task_wake_waiters SET state=?,dispatcher_ref=?,lease_until=0,updated_at=? WHERE project_ref=? AND actor_ref=?`).run(targetState, outcome === "not_delivered" ? null : dispatcherRef, timestamp, projectRef, row.actor_ref);
+      return { duplicate: false, wakeRef, state: targetState };
+    });
+  }
+
+  setTaskWakePaused(input = {}) {
+    this.#requireReady();
+    const projectRef = normalizeProjectRef(input.projectRef);
+    const actorRef = nonEmptyString(input.actorRef, "actorRef", 256);
+    if (typeof input.paused !== "boolean") throw new TypeError("paused must be a boolean");
+    const timestamp = safeInteger(input.updatedAt, "updatedAt");
+    return this.#transaction(() => {
+      const projectRevision = this.#assertProjectRevision(projectRef);
+      const row = this.database.prepare("SELECT * FROM project_task_wake_waiters WHERE project_ref=? AND actor_ref=?").get(projectRef, actorRef);
+      if (row === undefined) {
+        this.database.prepare("INSERT INTO project_task_wake_waiters(project_ref,actor_ref,generation,state,wake_ref,dispatcher_ref,lease_until,observed_revision,created_at,updated_at) VALUES(?,?,1,?,?,NULL,0,?,?,?)").run(projectRef, actorRef, input.paused ? "paused" : "waiting", null, projectRevision, timestamp, timestamp);
+        return { actorRef, state: input.paused ? "paused" : "waiting", generation: 1 };
+      }
+      if (input.paused) {
+        if (row.state !== "paused") this.database.prepare("UPDATE project_task_wake_waiters SET state='paused',dispatcher_ref=NULL,lease_until=0,updated_at=? WHERE project_ref=? AND actor_ref=?").run(timestamp, projectRef, actorRef);
+        return { actorRef, state: "paused", generation: row.generation };
+      }
+      if (row.state === "paused") {
+        this.database.prepare("UPDATE project_task_wake_waiters SET generation=generation+1,state='waiting',wake_ref=NULL,dispatcher_ref=NULL,lease_until=0,observed_revision=?,updated_at=? WHERE project_ref=? AND actor_ref=?").run(projectRevision, timestamp, projectRef, actorRef);
+        return { actorRef, state: "waiting", generation: row.generation + 1 };
+      }
+      return { actorRef, state: row.state, generation: row.generation };
     });
   }
 
@@ -1466,9 +1557,26 @@ class ProjectTaskStore {
         COMMIT;`);
       current = 12;
     }
+    if (current === 12) {
+      database.exec(`BEGIN IMMEDIATE;
+        CREATE TABLE project_task_wake_waiters (
+          project_ref TEXT NOT NULL, actor_ref TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation >= 1),
+          state TEXT NOT NULL CHECK(state IN ('waiting','paused','dispatching','outcome_unknown','delivered')),
+          wake_ref TEXT, dispatcher_ref TEXT, lease_until INTEGER NOT NULL DEFAULT 0 CHECK(lease_until >= 0),
+          observed_revision INTEGER NOT NULL CHECK(observed_revision >= 0), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          PRIMARY KEY(project_ref,actor_ref), UNIQUE(project_ref,wake_ref),
+          FOREIGN KEY(project_ref) REFERENCES project_task_projects(project_ref) ON DELETE CASCADE
+        ) STRICT;
+        CREATE INDEX project_task_wake_dispatch ON project_task_wake_waiters(project_ref,state,lease_until,updated_at,actor_ref);
+        PRAGMA user_version = 13;
+        COMMIT;`);
+      current = 13;
+    }
     database.exec(`CREATE INDEX IF NOT EXISTS project_tasks_project_window ON project_tasks(project_ref, updated_at DESC, task_ref ASC);
       CREATE INDEX IF NOT EXISTS project_tasks_collaboration_window ON project_tasks(project_ref,
-        (${TASK_STATUS_RANK_SQL}), COALESCE(priority,-1) DESC, updated_at DESC, created_at DESC, task_ref ASC);`);
+        (${TASK_STATUS_RANK_SQL}), COALESCE(priority,-1) DESC, updated_at DESC, created_at DESC, task_ref ASC);
+      CREATE INDEX IF NOT EXISTS project_task_wake_waiting_projects ON project_task_wake_waiters(state,project_ref,actor_ref);
+      CREATE INDEX IF NOT EXISTS project_task_wake_expired_projects ON project_task_wake_waiters(state,project_ref,lease_until,actor_ref);`);
   }
 
   #closeCollaborationRequest(input, state) {
@@ -1572,6 +1680,49 @@ class ProjectTaskStore {
       if (conflict !== undefined && this.#resourceOverlap(resourceRef, conflict.resource_ref)) return conflict;
     }
     return undefined;
+  }
+
+  #armTaskWakeWaiter(projectRef, actorRef, timestamp, projectRevision) {
+    const row = this.database.prepare("SELECT * FROM project_task_wake_waiters WHERE project_ref=? AND actor_ref=?").get(projectRef, actorRef);
+    if (row === undefined) {
+      this.database.prepare("INSERT INTO project_task_wake_waiters(project_ref,actor_ref,generation,state,wake_ref,dispatcher_ref,lease_until,observed_revision,created_at,updated_at) VALUES(?,?,1,'waiting',NULL,NULL,0,?,?,?)").run(projectRef, actorRef, projectRevision, timestamp, timestamp);
+      return;
+    }
+    if (row.state === "delivered" || row.state === "paused") {
+      this.database.prepare("UPDATE project_task_wake_waiters SET generation=generation+1,state='waiting',wake_ref=NULL,dispatcher_ref=NULL,lease_until=0,observed_revision=?,updated_at=? WHERE project_ref=? AND actor_ref=?").run(projectRevision, timestamp, projectRef, actorRef);
+    }
+  }
+
+  #wakeActorIsActive(projectRef, actorRef) {
+    const seat = this.database.prepare("SELECT kind,state FROM project_collaboration_seats WHERE project_ref=? AND actor_ref=?").get(projectRef, actorRef);
+    if (seat !== undefined) return seat.kind === "root" && seat.state === "active";
+    return this.database.prepare("SELECT coordinator_actor_ref FROM project_collaboration_boards WHERE project_ref=?").get(projectRef)?.coordinator_actor_ref === actorRef;
+  }
+
+  #findWakeCandidateTaskRef(projectRef, actorRef, excludedTaskRefs = new Set()) {
+    if (this.database.prepare("SELECT 1 FROM project_tasks WHERE project_ref=? AND assignee_actor_ref=? AND status='in_progress' LIMIT 1").get(projectRef, actorRef) !== undefined) return undefined;
+    const first = this.database.prepare(`SELECT task.* FROM project_tasks task
+      WHERE task.project_ref=? AND task.status IN ('backlog','todo') AND (task.assignee_actor_ref IS NULL OR task.assignee_actor_ref=?)
+        AND NOT EXISTS (SELECT 1 FROM project_task_relations relation JOIN project_tasks blocker ON blocker.project_ref=relation.project_ref AND blocker.task_ref=relation.source_task_ref
+          WHERE relation.project_ref=task.project_ref AND relation.target_task_ref=task.task_ref AND relation.type='blocks' AND blocker.status<>'done')
+      ORDER BY task.updated_at ASC,task.task_ref ASC LIMIT ?`);
+    const next = this.database.prepare(`SELECT task.* FROM project_tasks task
+      WHERE task.project_ref=? AND task.status IN ('backlog','todo') AND (task.assignee_actor_ref IS NULL OR task.assignee_actor_ref=?)
+        AND (task.updated_at>? OR (task.updated_at=? AND task.task_ref>?))
+        AND NOT EXISTS (SELECT 1 FROM project_task_relations relation JOIN project_tasks blocker ON blocker.project_ref=relation.project_ref AND blocker.task_ref=relation.source_task_ref
+          WHERE relation.project_ref=task.project_ref AND relation.target_task_ref=task.task_ref AND relation.type='blocks' AND blocker.status<>'done')
+      ORDER BY task.updated_at ASC,task.task_ref ASC LIMIT ?`);
+    let boundary;
+    while (true) {
+      const rows = boundary === undefined ? first.all(projectRef, actorRef, CLAIM_NEXT_CANDIDATE_PAGE) : next.all(projectRef, actorRef, boundary.updated_at, boundary.updated_at, boundary.task_ref, CLAIM_NEXT_CANDIDATE_PAGE);
+      for (const row of rows) {
+        const task = this.#decodeTaskRow(projectRef, row);
+        if (excludedTaskRefs.has(task.taskRef)) continue;
+        if (this.#findResourceConflict(projectRef, actorRef, task.taskRef, task.fileScope) === undefined) return task.taskRef;
+      }
+      if (rows.length < CLAIM_NEXT_CANDIDATE_PAGE) return undefined;
+      boundary = rows.at(-1);
+    }
   }
 
   #readCollaborationSnapshot(projectRef, { historyLimit = 100, beforeRevision } = {}) {

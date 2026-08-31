@@ -2,12 +2,13 @@ const assert = require('node:assert/strict')
 const test = require('node:test')
 const { readFileSync } = require('node:fs')
 const path = require('node:path')
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
 const root = path.resolve(__dirname, '..')
 const attachmentFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-attachment', 'lib', 'client.js')
 const conversationFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
 
-test('draft image drag overlay always has bounded recovery exits', async () => {
+alpha2Audit('draft image drag overlay always has bounded recovery exits', async () => {
   const { patchAttachmentInputSource } = await import('../scripts/attachment-input-patch.mjs')
   const first = patchAttachmentInputSource(readFileSync(attachmentFile, 'utf8'))
   const patched = first.source
@@ -25,7 +26,7 @@ test('draft image drag overlay always has bounded recovery exits', async () => {
   assert.equal(patchAttachmentInputSource(patched).changed, false)
 })
 
-test('draft images expose copy and cut controls with cross-conversation paste fallback', async () => {
+alpha2Audit('draft images expose copy and cut controls with cross-conversation paste fallback', async () => {
   const { patchAttachmentInputConversationSource, patchAttachmentInputSource } = await import('../scripts/attachment-input-patch.mjs')
   const patched = patchAttachmentInputSource(readFileSync(attachmentFile, 'utf8')).source
   const labels = patchAttachmentInputConversationSource(readFileSync(conversationFile, 'utf8')).source
@@ -49,7 +50,7 @@ test('draft images expose copy and cut controls with cross-conversation paste fa
   assert.equal(patchAttachmentInputConversationSource(labels).changed, false)
 })
 
-test('runtime installer applies attachment input patches and fails closed on partial state', async () => {
+alpha2Audit('runtime installer applies attachment input patches and fails closed on partial state', async () => {
   const { patchAttachmentInputSource } = await import('../scripts/attachment-input-patch.mjs')
   const installer = readFileSync(path.join(root, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
   const patched = patchAttachmentInputSource(readFileSync(attachmentFile, 'utf8')).source

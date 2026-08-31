@@ -38,8 +38,9 @@ async function fixture() {
     return actor
   }
   const now = () => ++clock
-  const service = new serviceMod.ProjectTaskCommandService({ store, actorResolver, now })
-  return { root, store, service, ownerExecution, agentExecution, reviewerExecution, otherAgentExecution, leadExecution, teamExecution, actorResolver, now, storeMod, serviceMod }
+  const wakeSchedules = []
+  const service = new serviceMod.ProjectTaskCommandService({ store, actorResolver, now, wakeScheduler: (signal) => wakeSchedules.push(signal) })
+  return { root, store, service, ownerExecution, agentExecution, reviewerExecution, otherAgentExecution, leadExecution, teamExecution, actorResolver, now, wakeSchedules, storeMod, serviceMod }
 }
 const randomKey = randomBytes(32)
 async function usingFixture(run) {
@@ -445,6 +446,30 @@ test('claimNextTask derives the exact root actor, rejects Team members, and prev
   const other = collaboration.claimNextTask(fx.otherAgentExecution, { projectRef, requestId: 'other-agent-claim-next' })
   assert.equal(other.status, 'claimed')
   assert.notEqual(other.task.taskRef, first.task.taskRef)
+}))
+
+test('Host wake service ports derive project and actor bindings while preserving dispatcher acknowledgement', async () => usingFixture(async fx => {
+  fx.store.createCollaborationBoard({ projectRef, coordinatorActorRef: 'actor_owner', title: 'Wake board', createdAt: fx.now() })
+  fx.store.upsertCollaborationSeat({ projectRef, actorRef: 'actor_agent', changedByActorRef: 'actor_owner', kind: 'root', state: 'active', duty: 'Sleeper', resourceScope: [], phase: 'waiting', nextStep: 'claim next', updatedAt: fx.now() })
+  const created = fx.service.execute(fx.ownerExecution, command('create', 0, { title: 'Held wake task' }, { taskRef: 'task_wake_service', commandId: 'command_wake_service_create', eventRef: 'event_wake_service_create' }))
+  const held = fx.service.execute(fx.ownerExecution, command('assign', created.task.revision, {}, { taskRef: created.task.taskRef, commandId: 'command_wake_service_hold', eventRef: 'event_wake_service_hold' }), { targetExecution: fx.ownerExecution })
+  assert.equal(fx.store.claimNextTask({ projectRef, requestId: 'wake-service-sleep', actorRef: 'actor_agent', updatedAt: fx.now() }).status, 'temporarily_empty')
+  assert.deepEqual(fx.service.listTaskWakeProjects(fx.agentExecution, { projectRef }), [projectRef])
+  assert.deepEqual(fx.service.claimTaskWakeSignals(fx.agentExecution, { projectRef, dispatcherRef: 'dispatcher_service' }), [])
+  const scheduledBeforeRelease = fx.wakeSchedules.length
+  const releaseCommand = command('assign', held.task.revision, {}, { taskRef: created.task.taskRef, commandId: 'command_wake_service_assign', eventRef: 'event_wake_service_assign' })
+  fx.service.execute(fx.ownerExecution, releaseCommand, { targetExecution: fx.agentExecution })
+  assert.equal(fx.wakeSchedules.length, scheduledBeforeRelease + 1)
+  assert.deepEqual(fx.wakeSchedules.at(-1), { projectRef })
+  assert.equal(fx.service.execute(fx.ownerExecution, releaseCommand, { targetExecution: fx.agentExecution }).duplicate, true)
+  assert.equal(fx.wakeSchedules.length, scheduledBeforeRelease + 1, 'durable command replay does not schedule a duplicate Host pump')
+  const signals = fx.service.claimTaskWakeSignals(fx.ownerExecution, { projectRef, dispatcherRef: 'dispatcher_service' })
+  assert.equal(signals.length, 1)
+  assert.equal(signals[0].actorRef, 'actor_agent')
+  assert.equal(fx.service.ackTaskWakeSignal(fx.ownerExecution, { projectRef, wakeRef: signals[0].wakeRef, dispatcherRef: 'dispatcher_service', outcome: 'delivered' }).state, 'delivered')
+  assert.deepEqual(fx.service.claimTaskWakeSignals(fx.agentExecution, { projectRef, dispatcherRef: 'dispatcher_duplicate' }), [])
+  assert.equal(fx.service.setTaskWakePaused(fx.agentExecution, { projectRef, paused: true }).state, 'paused')
+  assert.throws(() => fx.service.claimTaskWakeSignals({ trusted: 'agent' }, { projectRef, dispatcherRef: 'dispatcher_forged' }), error => error.code === 'PROJECT_TASK_ACTOR_UNRESOLVED')
 }))
 
 test('manual claim cannot give one root a second in_progress task', async () => usingFixture(async fx => {

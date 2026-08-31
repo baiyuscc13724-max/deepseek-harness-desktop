@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.0.56
+
+### 官方 Harness alpha.3 与 Schedule 收敛
+
+- 直接官方 DSH roots 统一精确固定为 `0.1.2-alpha.3`，lockfile、removed-root、unexpected-root、resolved/integrity 和 capability artifact SHA-256/语义片段门禁同步更新。
+- 接入官方 Session Controller 长历史加载、轮次导航/turn-outline、附件队列缩略图、手动断线重连、Schedule catalog 与 Gateway/Remotes stream；Session Experience 移除已退休的 `dsh-client-runtime` fallback。
+- Desktop Schedule profile 安装器改为删除退休的重复插件与 patch 项，只保留一个官方 `@deepseek-ai/dsh-schedule` 入口，并保持第三方 patch 与幂等迁移。
+
+### Agent Teams、Project 任务与跨重启恢复
+
+- 修复 `leaseEpoch=0` UI 可见性、Stop/迟到 submission 竞态、强制退休 claim 清理与 release ledger、retired target replay、pause-before-replay 和 state-only 请求拒绝。
+- Root 破坏性项目任务命令（含 `release`）补齐 revision/CAS/request receipt；幂等 no-op 有持久回执，stale revision 与参数替换 fail closed，外部 effect 变更推进 revision。
+- 顶层会话启动使用 schema v13 持久 waiter/outbox 与 Host wake scheduler，重启后恢复未确认投递而不重复已确认 delivery；精确 workspace 预检结果与 child cwd 一并持久传递。
+- 新增 Agent Teams 使用缺陷审计、OCC、路由/计划、任务板、Stop、恢复、会话启动和跨重启回归覆盖。
+
+### Mobile 导航、设置、输入与附件
+
+- Android/iOS 共享 runtime/CSS 继续字节一致；四域导航优先绑定官方 Agent Teams 画布、正式定时任务视图和官方 Settings 页面，不再创建“我的”重复占位表面。
+- 修复设置页异步挂载、页面隔离、返回层级、项目展开焦点抢占和对话详情状态滞后；loading/reconnecting 的权威工作区不再被误判为不可用。
+- 附件图片预览按 DOM 结构识别为全屏 lightbox，避免通用 sheet 裁切；系统返回优先关闭预览，48px close control 不依赖本地化文本。
+- 原生输入 action、附件上传、tool-result 图片交付和 session task panel 补齐 Android/iOS/Node 契约测试，敏感输入与权限边界不变。
+
+### 版本、安全与发布
+
+- 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由和移动更新示例统一到 `1.0.56`；Android `versionCode=1005600`，iOS build code 为 `10056`。
+- 新增 [`docs/SECURITY-REVIEW-v1.0.56.zh-CN.md`](docs/SECURITY-REVIEW-v1.0.56.zh-CN.md) 与 [`docs/audits/agent-teams-usage-audit.md`](docs/audits/agent-teams-usage-audit.md)，明确 source-level 审计结论与尚待 publisher 动态证明的云端阶段。
+- 正式发布只走仓库 resumable publisher：精确候选 revision、不可变 `v1.0.56`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。
+- 已发布 `v1.0.55` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变，不移动、不覆盖、不复用。
+
 ## 1.0.55
 
 ### Agent Teams 自动续作与安全边界

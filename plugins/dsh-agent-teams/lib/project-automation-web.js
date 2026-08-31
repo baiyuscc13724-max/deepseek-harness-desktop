@@ -104,10 +104,10 @@ function projectSafeAutomationRun(item, definitionMap = new Map()) {
 }
 
 class ProjectAutomationWebRuntime {
-  constructor({ projectEntry, now = Date.now, schedule = setImmediate } = {}) {
+  constructor({ projectEntry, now = Date.now, schedule = setImmediate, wakeScheduler = () => undefined } = {}) {
     if (typeof projectEntry?.localProjectAutomationContext !== "function" || typeof projectEntry?.localProjectTaskContext !== "function") throw new TypeError("projectEntry must provide Automation and Task contexts");
-    if (typeof now !== "function" || typeof schedule !== "function") throw new TypeError("now and schedule must be functions");
-    this.projectEntry = projectEntry; this.now = now; this.schedule = schedule; this.binding = undefined; this.listeners = new Set(); this.tail = Promise.resolve(); this.closing = false; this.closePromise = undefined; this.pumps = new Set();
+    if (typeof now !== "function" || typeof schedule !== "function" || typeof wakeScheduler !== "function") throw new TypeError("now, schedule, and wakeScheduler must be functions");
+    this.projectEntry = projectEntry; this.now = now; this.schedule = schedule; this.wakeScheduler = wakeScheduler; this.binding = undefined; this.listeners = new Set(); this.tail = Promise.resolve(); this.closing = false; this.closePromise = undefined; this.pumps = new Set();
   }
   async state(query = {}) { normalizeEmptyQuery(query); return this.#enqueue(async () => { try { return await this.#withBinding((binding) => this.#safeState(binding)); } catch (error) { if (!UNAVAILABLE_ERRORS.has(error?.code)) throw error; return { capability: await this.#unavailable(error), definitions: [], taskChoices: [], runs: [], recentLedger: [] }; } }); }
   async action(input, query = {}) {
@@ -134,7 +134,7 @@ class ProjectAutomationWebRuntime {
       taskStore = new ProjectTaskStore({ filePath: task.databasePath, keyProvider: task.keyProvider });
       taskStore.initialize();
       const taskExecution = Object.freeze(Object.create(null));
-      const taskService = new ProjectTaskCommandService({ store: taskStore, actorResolver: (candidate, projectRef) => { task.actorResolver(task.execution, projectRef); if (candidate !== taskExecution) throw webError("runner execution is invalid"); return { projectRef, actorRef: systemActorRef, kind: "system", authorities: [] }; } });
+      const taskService = new ProjectTaskCommandService({ store: taskStore, actorResolver: (candidate, projectRef) => { task.actorResolver(task.execution, projectRef); if (candidate !== taskExecution) throw webError("runner execution is invalid"); return { projectRef, actorRef: systemActorRef, kind: "system", authorities: [] }; }, wakeScheduler: this.wakeScheduler });
       const service = new ProjectAutomationCommandService({ store, projectRef: automation.projectRef, actorResolver: automation.actorResolver, refFactory: hostRef, now: this.now });
       const runner = new ProjectAutomationRunner({ store, taskService, taskExecution, projectRef: automation.projectRef, refFactory: hostRef, now: this.now });
       const binding = { automation, task, store, taskStore, service, runner }; this.binding = binding; this.#schedulePump(binding, true); return binding;

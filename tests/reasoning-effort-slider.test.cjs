@@ -2,11 +2,12 @@ const assert = require('node:assert/strict')
 const test = require('node:test')
 const { readFileSync } = require('node:fs')
 const path = require('node:path')
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
 const root = path.resolve(__dirname, '..')
 const runtimeFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
 
-test('official alpha.2 model selection owns an accessible metadata-driven effort menu', async () => {
+alpha2Audit('official alpha.2 model selection owns an accessible metadata-driven effort menu', async () => {
   const { patchInstalledModelSelection } = await import('../scripts/patch-official-runtime.mjs')
   const source = readFileSync(runtimeFile, 'utf8')
 

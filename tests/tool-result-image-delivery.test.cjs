@@ -3,6 +3,8 @@ const test = require('node:test')
 const { readFileSync } = require('node:fs')
 const path = require('node:path')
 
+// Preserve alpha.2 private-patch evidence only when an explicit historical audit is requested.
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 const root = path.resolve(__dirname, '..')
 const toolUiFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-tool', 'lib', 'client.js')
 const conversationFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
@@ -15,7 +17,7 @@ function projectedResultImages(source) {
   return Function(`${source.slice(start, end)}; return resultImages`)()
 }
 
-test('durable tool-result images render through the alpha.2 Chat image seat without flattening metadata', async () => {
+alpha2Audit('durable tool-result images render through the alpha.2 Chat image seat without flattening metadata', async () => {
   const { patchAlpha2ToolResultImageSource } = await import('../scripts/tool-result-image-patch.mjs')
   const fixture = readFileSync(toolUiFile, 'utf8')
   const first = patchAlpha2ToolResultImageSource(fixture)
@@ -115,22 +117,12 @@ const ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeG
   }
 })
 
-test('runtime installer applies the exact alpha.2 image patch and fails closed on drift', async () => {
-  const { patchAlpha2ToolResultImageSource } = await import('../scripts/tool-result-image-patch.mjs')
-  const installer = readFileSync(path.join(root, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
-  const toolFixture = readFileSync(toolUiFile, 'utf8')
-  const patched = patchAlpha2ToolResultImageSource(toolFixture).source
-
-  assert.match(installer, /assertOfficialAlpha2Artifact\(source, '@deepseek-ai\/dsh-client-ui-tool'/u)
-  assert.match(installer, /patchAlpha2ToolResultImageSource\(source\)/u)
-  assert.match(installer, /const toolResultImagesChanged = await patchInstalledToolResultImages\(\)/u)
-  assert.match(installer, /Patched durable tool-result image delivery/u)
-  assert.equal(patchAlpha2ToolResultImageSource(patched).changed, false)
-
-  const incomplete = patched.replace('function resultImages(block)', 'function missingResultImages(block)')
-  assert.throws(() => patchAlpha2ToolResultImageSource(incomplete), /patch is incomplete/u)
-  const original = toolFixture.includes('function resultImages(block)')
-    ? toolFixture.replace('function resultImages(block)', 'function upstreamResultImages(block)')
-    : toolFixture.replace('const ToolCall = (0, react.memo)(function ToolCall({', 'const ToolCall = /* upstream drift */ (0, react.memo)(function ToolCall({')
-  assert.throws(() => patchAlpha2ToolResultImageSource(original), /refusing an unsafe/u)
+test('official alpha.3 tool UI keeps durable image blocks native and filters malformed extensions fail-closed', () => {
+  const toolSource = readFileSync(toolUiFile, 'utf8')
+  assert.match(toolSource, /function resultImages\(block\) \{\s*if \(!\("kind" in block\)\) return \[\];/u)
+  assert.match(toolSource, /item\?\.type === "image" && item\.attachment !== void 0/u)
+  assert.match(toolSource, /\.map\(\(\{ attachment \}\) => \(\{ attachment \}\)\)/u)
+  assert.match(toolSource, /RESULT_IMAGE_EXTENSIONS[^\n]*\.png[^\n]*\.webp/u)
+  assert.match(toolSource, /RESULT_ACTIVE_EXTENSIONS[\s\S]{0,300}"\.exe"[\s\S]{0,300}"\.ps1"/u)
+  assert.match(toolSource, /const images = resultImages\(block\)/u)
 })

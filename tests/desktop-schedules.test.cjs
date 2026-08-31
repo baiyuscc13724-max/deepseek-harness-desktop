@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
+const { mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const { tmpdir } = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -13,18 +13,29 @@ async function plugin() {
   return import(pathToFileURL(path.join(root, 'plugins/dsh-desktop-schedules/lib/index.js')).href)
 }
 
-test('schedule profile installation is additive and idempotent', async t => {
+test('schedule profile removes the Desktop-owned plugin and retains one official schedule entry idempotently', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'dsh-schedules-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const file = path.join(directory, 'cordis.patch.yml')
-  await writeFile(file, '- insert:\n    - id: existing\n      name: existing-plugin\n')
+  await writeFile(file, '- insert:\n    - id: existing\n      name: existing-plugin\n    - id: desktop-schedules\n      name: dsh-desktop-schedules\n')
   assert.equal(await service.ensurePatchEntries(file), true)
   assert.equal(await service.ensurePatchEntries(file), false)
   const rows = YAML.parse(await readFile(file, 'utf8'))
   const entries = rows.flatMap(row => row.insert || [])
   assert.equal(entries.filter(item => item.id === 'schedule' && item.name === '@deepseek-ai/dsh-schedule').length, 1)
-  assert.equal(entries.filter(item => item.id === 'desktop-schedules' && item.name === 'dsh-desktop-schedules').length, 1)
+  assert.equal(entries.filter(item => item.id === 'desktop-schedules' || item.name === 'dsh-desktop-schedules').length, 0)
   assert.ok(entries.some(item => item.id === 'existing'))
+})
+
+test('schedule service deletes the retired Desktop plugin and reports official replacement', async t => {
+  const dshHome = await mkdtemp(path.join(tmpdir(), 'dsh-schedules-home-'))
+  t.after(() => rm(dshHome, { recursive: true, force: true }))
+  const destination = path.join(dshHome, 'profiles', 'web', 'node_modules', 'dsh-desktop-schedules')
+  await mkdir(destination, { recursive: true })
+  await writeFile(path.join(destination, 'stale.js'), 'retired')
+  const result = await service.ensureDesktopSchedulesPlugin({ dshHome })
+  assert.deepEqual(result, { destination, patchChanged: true, version: null, disabled: true, replacement: '@deepseek-ai/dsh-schedule' })
+  await assert.rejects(readFile(path.join(destination, 'stale.js')), { code: 'ENOENT' })
 })
 
 test('observable schedule snapshot folds the official schedule event log', async () => {

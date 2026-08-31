@@ -254,44 +254,21 @@ test('raw-list session forwarding is not accepted as the cache work-tree interme
   assert.throws(() => patchToolResultOwnerSource(malicious), /owner patch is incomplete/u)
 })
 
-test('alpha.2 shell, attachment-label and chat-cache transforms compose across native owners and remain idempotent', async () => {
-  const { patchAlpha2ConversationSources } = await import('../scripts/patch-official-runtime.mjs')
-  const fixture = alpha2CompositionFixture()
-  const composed = patchAlpha2ConversationSources(fixture.conversationSource, fixture.chatSource)
-  assert.equal(composed.changed, true)
-  assert.equal(composed.conversationSource, fixture.installedConversation)
-  assert.equal(composed.chatSource, fixture.installedChat)
-
-  const second = patchAlpha2ConversationSources(composed.conversationSource, composed.chatSource)
-  assert.equal(second.changed, false)
-  assert.equal(second.conversationSource, fixture.installedConversation)
-  assert.equal(second.chatSource, fixture.installedChat)
+test('alpha.3 native conversation, attachment, turn-outline, reconnect, and schedule owners are hash-pinned and never repatched', async () => {
+  const { assertInstalledAlpha3NativeCapabilities } = await import('../scripts/patch-official-runtime.mjs')
+  const before = new Map([
+    ['conversation', fs.readFileSync(CONVERSATION_FILE, 'utf8')],
+    ['chat', fs.readFileSync(CHAT_FILE, 'utf8')]
+  ])
+  assert.equal(await assertInstalledAlpha3NativeCapabilities(), false)
+  assert.equal(await assertInstalledAlpha3NativeCapabilities(), false, 'official native verification must be idempotent')
+  assert.equal(fs.readFileSync(CONVERSATION_FILE, 'utf8'), before.get('conversation'))
+  assert.equal(fs.readFileSync(CHAT_FILE, 'utf8'), before.get('chat'))
+  const runtime = fs.readFileSync(path.join(ROOT, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
+  for (const installer of ['patchInstalledConversation', 'patchInstalledAttachmentInput', 'patchInstalledModelSelection', 'patchInstalledModelSettings', 'patchInstalledWorkspaceUi']) {
+    assert.match(runtime, new RegExp(`targetsAlpha3 \\? false :[^;]*${installer}`, 'u'), `${installer} must not override an alpha.3 native owner`)
+  }
 })
-
-for (const [label, drift] of [
-  ['cache anchor', fixture => ({
-    ...fixture,
-    chatSource: replaceOnce(fixture.chatSource, ALPHA2_USAGE_PAIR[0], ALPHA2_USAGE_PAIR[0].replace('tokenUsage', 'tokenUsage-drift'), 'cache projection consumer')
-  })],
-  ['queue anchor', fixture => ({
-    ...fixture,
-    conversationSource: replaceOnce(fixture.conversationSource, ALPHA2_QUEUE_PAIR[0], ALPHA2_QUEUE_PAIR[0].replace('placement === "queued"', 'placement === "queued-drift"'), 'queue owner')
-  })],
-  ['attachment-label anchor', fixture => ({
-    ...fixture,
-    conversationSource: replaceOnce(fixture.conversationSource, LABEL_PAIRS[0][0], LABEL_PAIRS[0][0].replace('移除图片', '恶意漂移'), 'Chinese attachment label')
-  })]
-]) {
-  test(`alpha.2 ${label} drift fails closed without mutating either native owner`, async () => {
-    const { patchAlpha2ConversationSources } = await import('../scripts/patch-official-runtime.mjs')
-    const malicious = drift(alpha2CompositionFixture())
-    const conversationBefore = malicious.conversationSource
-    const chatBefore = malicious.chatSource
-    assert.throws(() => patchAlpha2ConversationSources(malicious.conversationSource, malicious.chatSource), /Pinned DSH alpha\.2|Pinned DSH/u)
-    assert.equal(malicious.conversationSource, conversationBefore)
-    assert.equal(malicious.chatSource, chatBefore)
-  })
-}
 
 test('unrecognized partial owner markers still fail closed', async () => {
   const { patchToolResultOwnerSource } = await import('../scripts/tool-result-image-patch.mjs')

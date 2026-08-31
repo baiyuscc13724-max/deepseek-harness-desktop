@@ -230,7 +230,7 @@ test('attention, resume planning, and confirmed retirement task release are dete
       { id: 'failed-id', sessionId: 'failed-session', name: 'Failed', role: 'worker', kind: 'worker', state: 'failed', shutdownUnconfirmed: true, createdAt: timestamp, updatedAt: timestamp }
     ],
     tasks: [
-      { id: 'stranded', title: 'Stranded', state: 'in_progress', dependsOn: [], files: [], assigneeSessionId: 'failed-session', claimedAt: timestamp, createdAt: timestamp, updatedAt: timestamp },
+      { id: 'stranded', title: 'Stranded', state: 'in_progress', dependsOn: [], files: [], assigneeSessionId: 'failed-session', claimedAt: timestamp, claimId: 'failed-claim', leaseEpoch: 0, attempt: 1, lifecycleLedger: [], createdAt: timestamp, updatedAt: timestamp },
       { id: 'dependent', title: 'Dependent', state: 'pending', dependsOn: ['stranded'], files: [], createdAt: timestamp, updatedAt: timestamp },
       { id: 'done', title: 'Done', state: 'completed', dependsOn: [], files: [], assigneeSessionId: 'failed-session', createdAt: timestamp, updatedAt: timestamp, completedAt: timestamp }
     ],
@@ -250,6 +250,8 @@ test('attention, resume planning, and confirmed retirement task release are dete
   assert.equal(team.tasks[0].assigneeSessionId, undefined)
   assert.equal(team.tasks[0].releasedAt, timestamp)
   assert.match(team.tasks[0].releaseReason, /force-retired/u)
+  assert.equal(team.tasks[0].claimId, undefined, 'forced retirement revokes the current claim projection')
+  assert.ok(team.tasks[0].lifecycleLedger.some(event => event.kind === 'release' && event.claimId === 'failed-claim'), 'forced retirement preserves an auditable release event')
   assert.deepEqual(mod.deriveAttention(team).releasedTasks, ['stranded'])
   assert.ok(mod.deriveAttention(team).codes.includes('released_task'))
   assert.equal(team.tasks[2].assigneeSessionId, 'failed-session', 'completed audit history is preserved')
@@ -581,7 +583,7 @@ test('persisted team and task records reject unsupported fields', async () => {
     assert.throws(() => fx.mod.validateTeam({ ...rawTeam, injected: 'unsafe' }), /unsupported fields/u)
     const timestamp = new Date().toISOString()
     const baseTask = {
-      id: 'strict-task', title: 'Strict', state: 'pending', dependsOn: [], files: [], createdAt: timestamp, updatedAt: timestamp,
+      id: 'strict-task', title: 'Strict', state: 'pending', revision: 1, dependsOn: [], files: [], createdAt: timestamp, updatedAt: timestamp,
       attempt: 0, leaseEpoch: 0, attemptHistory: [], interruptionHistory: [], capabilities: [], externalEffects: []
     }
     assert.throws(() => fx.mod.validateTask({ ...baseTask, injected: 'unsafe' }), /unsupported fields/u)
@@ -631,7 +633,7 @@ test('validateTeam rejects contradictory terminal closure receipts', async () =>
     const rawTeam = fx.store.snapshot().teams.find(team => team.id === created.id)
     const timestamp = new Date().toISOString()
     const cancelledTask = {
-      id: 'cancelled-task', title: 'Cancelled', state: 'cancelled', dependsOn: [], files: [],
+      id: 'cancelled-task', title: 'Cancelled', state: 'cancelled', revision: 1, dependsOn: [], files: [],
       createdAt: timestamp, updatedAt: timestamp, cancelledAt: timestamp, cancellationReason: 'cancelled for validation',
       attempt: 0, leaseEpoch: 0, attemptHistory: [], interruptionHistory: [], capabilities: [], externalEffects: []
     }
@@ -1434,6 +1436,40 @@ test('explicit user stop preserves failures, isolates late starts, and projects 
     reconciler?.close()
     await rm(fx.root, { recursive: true, force: true })
   }
+})
+
+test('Stop fences a submission committed after the user stop timestamp', async () => {
+  const fx = await fixture()
+  const lead = { id: 'stop-submit-lead' }
+  const childId = 'stop-submit-child'
+  const ctx = {
+    agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+    subagents: { async drainContinuableChildren() {} },
+    logger: { warn() {} }
+  }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Fence a queued submission at Stop' })
+    await fx.store.mutate(document => {
+      document.teams.find(candidate => candidate.id === team.id).members.push(worker(childId, 'Submit'))
+    })
+    const task = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Queued completion', assigneeSessionId: childId })).task
+    await activateCurrentPlan(fx.store, team.id)
+    const claim = (await fx.mod.updateTask(fx.store, { id: childId }, { teamId: team.id, taskId: task.id, action: 'claim' })).task
+    const submission = (await fx.mod.updateTask(fx.store, { id: childId }, {
+      teamId: team.id, taskId: task.id, action: 'complete', claimId: claim.claimId, leaseEpoch: claim.leaseEpoch
+    })).task
+    const stoppedAt = new Date(Date.parse(submission.submission.submittedAt) - 1).toISOString()
+
+    await fx.mod.pauseTeamsForUserStop(ctx, fx.store, lead, [{ teamId: team.id, childIds: [childId] }], stoppedAt)
+
+    const durable = fx.store.snapshot().teams.find(candidate => candidate.id === team.id).tasks.find(candidate => candidate.id === task.id)
+    assert.equal(durable.state, 'pending', 'a submission committed after Stop must not survive as reviewable delivery')
+    assert.equal(durable.claimId, undefined)
+    assert.equal(durable.submission, undefined)
+    assert.equal(durable.leaseEpoch, 1)
+    assert.ok(durable.interruptionHistory.some(entry => entry.kind === 'user_stop' && entry.claimId === claim.claimId))
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 
 test('queued lifecycle starts cannot cross an explicit Stop and resume epoch', async () => {

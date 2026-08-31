@@ -77,7 +77,7 @@ test('SQLite store enables WAL and persists only encrypted sensitive task and ev
   const database = new DatabaseSync(state.filePath, { readOnly: true })
   try {
     assert.equal(database.prepare('PRAGMA journal_mode').get().journal_mode, 'wal')
-    assert.equal(database.prepare('PRAGMA user_version').get().user_version, 12)
+    assert.equal(database.prepare('PRAGMA user_version').get().user_version, 13)
     const rawTask = database.prepare('SELECT title_cipher, requirements_cipher, file_scope_cipher FROM project_tasks').get()
     const rawEvent = database.prepare('SELECT payload_cipher FROM project_task_events').get()
     const raw = JSON.stringify({ rawTask, rawEvent })
@@ -225,7 +225,7 @@ test('wrong keys, ciphertext tampering, and revision rollback floors fail closed
   rollback.close()
 }))
 
-test('schema v1 migrates additively to v12 without losing encrypted task data', async () => {
+test('schema v1 migrates additively to v13 without losing encrypted task data', async () => {
   const storeMod = await import(storeUrl)
   const cryptoMod = await import(cryptoUrl)
   const root = await mkdtemp(path.join(os.tmpdir(), 'project-task-v1-'))
@@ -247,14 +247,14 @@ test('schema v1 migrates additively to v12 without losing encrypted task data', 
   } finally { database.close() }
   const store = new storeMod.ProjectTaskStore({ filePath, keyProvider: () => key })
   try {
-    assert.equal(store.initialize().version, 12)
+    assert.equal(store.initialize().version, 13)
     assert.equal(store.getTask({ projectRef, taskRef }).title, 'legacy secret')
     assert.throws(() => store.getCommandReceipt({ projectRef, commandId: 'command_legacy' }), error => error.code === 'PROJECT_TASK_IDEMPOTENCY_CONFLICT')
     const migrated = new DatabaseSync(filePath, { readOnly: true })
     try {
-      assert.equal(migrated.prepare('PRAGMA user_version').get().user_version, 12)
+      assert.equal(migrated.prepare('PRAGMA user_version').get().user_version, 13)
       assert.equal(migrated.prepare("SELECT 1 FROM pragma_table_info('project_tasks') WHERE name='priority'").get()[1], 1)
-      for (const table of ['project_task_actors', 'project_task_comments', 'project_task_relations', 'project_task_attempts', 'project_task_reviews', 'project_task_command_receipts', 'project_collaboration_boards', 'project_collaboration_seats', 'project_collaboration_locks', 'project_collaboration_handoffs', 'project_collaboration_evidence', 'project_collaboration_history', 'project_collaboration_root_reservations', 'project_collaboration_requests', 'project_task_claim_next_receipts', 'project_collaboration_root_recoveries']) {
+      for (const table of ['project_task_actors', 'project_task_comments', 'project_task_relations', 'project_task_attempts', 'project_task_reviews', 'project_task_command_receipts', 'project_collaboration_boards', 'project_collaboration_seats', 'project_collaboration_locks', 'project_collaboration_handoffs', 'project_collaboration_evidence', 'project_collaboration_history', 'project_collaboration_root_reservations', 'project_collaboration_requests', 'project_task_claim_next_receipts', 'project_collaboration_root_recoveries', 'project_task_wake_waiters']) {
         assert.equal(migrated.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)[1], 1)
       }
     } finally { migrated.close() }
@@ -905,4 +905,103 @@ test('manual claims and every mutation entering in_progress enforce one active t
     const indexes = state.store.database.prepare("PRAGMA index_list('project_tasks')").all()
     assert.equal(indexes.some(index => index.unique === 1 && index.origin === 'c'), false, 'enforcement does not add an unsafe legacy-data unique index')
   } finally { peer.close() }
+}))
+
+test('temporarily_empty arms one durable project-fenced wake that survives restart, deduplicates, and honors pause', async () => usingFixture(async state => {
+  const owner = 'actor_wake_owner', sleeper = 'actor_wake_sleeper', foreign = 'actor_wake_foreign'
+  state.store.createCollaborationBoard({ projectRef, coordinatorActorRef: owner, title: 'Wake project A', createdAt: 1 })
+  state.store.upsertCollaborationSeat({ projectRef, actorRef: sleeper, changedByActorRef: owner, kind: 'root', state: 'active', duty: 'Sleeper', resourceScope: [], phase: 'waiting', nextStep: 'claim next', updatedAt: 2 })
+  state.store.createCollaborationBoard({ projectRef: secondProjectRef, coordinatorActorRef: foreign, title: 'Wake project B', createdAt: 3 })
+  state.store.upsertCollaborationSeat({ projectRef: secondProjectRef, actorRef: foreign, changedByActorRef: foreign, kind: 'root', state: 'active', duty: 'Foreign', resourceScope: [], phase: 'waiting', nextStep: 'claim next', updatedAt: 4 })
+  state.store.createTask(createInput({ commandId: 'command_wake_candidate', eventRef: 'event_wake_candidate', actorRef: owner, createdAt: 4, task: { taskRef: 'task_wake_candidate', status: 'todo', ownerActorRef: owner, assigneeActorRef: owner, title: 'Wake candidate held by B', requirements: {}, fileScope: ['src/wake'] } }))
+
+  const sleeping = state.store.claimNextTask({ projectRef, requestId: 'wake-sleep', actorRef: sleeper, updatedAt: 5 })
+  assert.equal(sleeping.status, 'temporarily_empty')
+  assert.equal(state.store.claimNextTask({ projectRef, requestId: 'wake-sleep', actorRef: sleeper, updatedAt: 6 }).duplicate, true)
+  assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-one', updatedAt: 7, limit: 10 }), [])
+
+  state.store.mutateTask({ projectRef, taskRef: 'task_wake_candidate', commandId: 'command_wake_release', eventRef: 'event_wake_release', expectedRevision: 1, actorRef: owner, type: 'task.assigned', patch: { assigneeActorRef: sleeper }, eventPayload: { source: 'root B release' }, createdAt: 8 })
+  assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef: secondProjectRef, dispatcherRef: 'dispatcher-foreign', updatedAt: 9, limit: 10 }), [])
+  const first = state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-one', updatedAt: 10, limit: 10, leaseMs: 20 })
+  assert.equal(first.length, 1)
+  assert.equal(first[0].actorRef, sleeper)
+  assert.equal(first[0].redelivered, false)
+  assert.match(first[0].wakeRef, /^wake_[A-Za-z0-9_-]{43}$/u)
+  assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-two', updatedAt: 11, limit: 10, leaseMs: 20 }), [])
+
+  state.store.close()
+  state.store = new state.storeMod.ProjectTaskStore({ filePath: state.filePath, keyProvider: state.keyProvider })
+  state.store.initialize()
+  assert.deepEqual(state.store.listTaskWakeProjects({ updatedAt: 31, limit: 10 }), [projectRef], 'startup discovers the durable expired lease without a project mutation')
+  assert.deepEqual(state.store.listTaskWakeProjects({ updatedAt: 31, afterProjectRef: projectRef, limit: 10 }), [], 'startup scan is keyset bounded and project ordered')
+  const replay = state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-restart', updatedAt: 31, limit: 10, leaseMs: 20 })
+  assert.equal(replay.length, 1)
+  assert.equal(replay[0].wakeRef, first[0].wakeRef)
+  assert.equal(replay[0].redelivered, true)
+
+  state.store.ackTaskWakeSignal({ projectRef, wakeRef: replay[0].wakeRef, dispatcherRef: 'dispatcher-restart', outcome: 'paused', updatedAt: 32 })
+  assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-after-pause', updatedAt: 100, limit: 10 }), [])
+  state.store.setTaskWakePaused({ projectRef, actorRef: sleeper, paused: false, updatedAt: 101 })
+  const resumed = state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-resumed', updatedAt: 102, limit: 10 })
+  assert.equal(resumed.length, 1)
+  assert.notEqual(resumed[0].wakeRef, first[0].wakeRef)
+  state.store.ackTaskWakeSignal({ projectRef, wakeRef: resumed[0].wakeRef, dispatcherRef: 'dispatcher-resumed', outcome: 'outcome_unknown', updatedAt: 103 })
+  assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-blind-retry', updatedAt: 200, limit: 10 }), [], 'uncertain Host delivery stays fenced past its old lease')
+  state.store.ackTaskWakeSignal({ projectRef, wakeRef: resumed[0].wakeRef, dispatcherRef: 'dispatcher-resumed', outcome: 'not_delivered', updatedAt: 201 })
+  const reconciled = state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-reconciled', updatedAt: 202, limit: 10 })
+  assert.equal(reconciled[0].wakeRef, resumed[0].wakeRef)
+  state.store.ackTaskWakeSignal({ projectRef, wakeRef: reconciled[0].wakeRef, dispatcherRef: 'dispatcher-reconciled', outcome: 'delivered', updatedAt: 203 })
+  assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-duplicate-event', updatedAt: 300, limit: 10 }), [])
+}))
+
+test('one newly eligible task wakes only one of two durable idle roots in the same dispatch batch', async () => usingFixture(async state => {
+  const owner = 'actor_wake_match_owner', first = 'actor_wake_match_first', second = 'actor_wake_match_second'
+  state.store.createCollaborationBoard({ projectRef, coordinatorActorRef: owner, title: 'Wake matching', createdAt: 1 })
+  for (const [index, actorRef] of [first, second].entries()) state.store.upsertCollaborationSeat({ projectRef, actorRef, changedByActorRef: owner, kind: 'root', state: 'active', duty: `Sleeper ${index}`, resourceScope: [], phase: 'waiting', nextStep: 'claim next', updatedAt: 2 + index })
+  state.store.createTask(createInput({ commandId: 'command_wake_match_create', eventRef: 'event_wake_match_create', actorRef: owner, createdAt: 4, task: { taskRef: 'task_wake_match_only', status: 'todo', ownerActorRef: owner, assigneeActorRef: owner, title: 'Only one candidate', requirements: {}, fileScope: [] } }))
+  assert.equal(state.store.claimNextTask({ projectRef, requestId: 'wake-match-first', actorRef: first, updatedAt: 5 }).status, 'temporarily_empty')
+  assert.equal(state.store.claimNextTask({ projectRef, requestId: 'wake-match-second', actorRef: second, updatedAt: 6 }).status, 'temporarily_empty')
+  state.store.mutateTask({ projectRef, taskRef: 'task_wake_match_only', commandId: 'command_wake_match_release', eventRef: 'event_wake_match_release', expectedRevision: 1, actorRef: owner, type: 'task.assigned', patch: { assigneeActorRef: null }, eventPayload: {}, createdAt: 7 })
+  const signals = state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-wake-match', updatedAt: 8, limit: 10 })
+  assert.equal(signals.length, 1, 'one unassigned task must not wake both idle roots')
+}))
+
+test('two newly eligible tasks can wake two durable idle roots without sharing a candidate', async () => usingFixture(async state => {
+  const owner = 'actor_wake_pair_owner', actors = ['actor_wake_pair_first', 'actor_wake_pair_second']
+  state.store.createCollaborationBoard({ projectRef, coordinatorActorRef: owner, title: 'Wake pair matching', createdAt: 1 })
+  for (const [index, actorRef] of actors.entries()) state.store.upsertCollaborationSeat({ projectRef, actorRef, changedByActorRef: owner, kind: 'root', state: 'active', duty: `Sleeper ${index}`, resourceScope: [], phase: 'waiting', nextStep: 'claim next', updatedAt: 2 + index })
+  for (const index of [1, 2]) state.store.createTask(createInput({ commandId: `command_wake_pair_create_${index}`, eventRef: `event_wake_pair_create_${index}`, actorRef: owner, createdAt: 3 + index, task: { taskRef: `task_wake_pair_${index}`, status: 'todo', ownerActorRef: owner, assigneeActorRef: owner, title: `Candidate ${index}`, requirements: {}, fileScope: [] } }))
+  for (const [index, actorRef] of actors.entries()) assert.equal(state.store.claimNextTask({ projectRef, requestId: `wake-pair-${index}`, actorRef, updatedAt: 6 + index }).status, 'temporarily_empty')
+  for (const index of [1, 2]) state.store.mutateTask({ projectRef, taskRef: `task_wake_pair_${index}`, commandId: `command_wake_pair_release_${index}`, eventRef: `event_wake_pair_release_${index}`, expectedRevision: 1, actorRef: owner, type: 'task.assigned', patch: { assigneeActorRef: null }, eventPayload: {}, createdAt: 8 + index })
+  assert.equal(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-wake-pair', updatedAt: 11, limit: 10 }).length, 2)
+}))
+
+test('blocked claim_next durably wakes after its dependency becomes eligible without another user action', async () => usingFixture(async state => {
+  const owner = 'actor_wake_block_owner', sleeper = 'actor_wake_block_sleeper'
+  state.store.createCollaborationBoard({ projectRef, coordinatorActorRef: owner, title: 'Blocked wake', createdAt: 1 })
+  state.store.upsertCollaborationSeat({ projectRef, actorRef: sleeper, changedByActorRef: owner, kind: 'root', state: 'active', duty: 'Blocked sleeper', resourceScope: [], phase: 'waiting', nextStep: 'claim next', updatedAt: 2 })
+  state.store.createTask(createInput({ commandId: 'command_wake_blocker', eventRef: 'event_wake_blocker', actorRef: owner, createdAt: 3, task: { taskRef: 'task_wake_blocker', status: 'in_progress', ownerActorRef: owner, assigneeActorRef: owner, title: 'Blocking task', requirements: {}, fileScope: [] } }))
+  state.store.createTask(createInput({ commandId: 'command_wake_blocked', eventRef: 'event_wake_blocked', actorRef: owner, createdAt: 4, task: { taskRef: 'task_wake_blocked', status: 'todo', ownerActorRef: owner, assigneeActorRef: sleeper, title: 'Blocked task', requirements: {}, fileScope: [] } }))
+  state.store.mutateTask({ projectRef, taskRef: 'task_wake_blocked', commandId: 'command_wake_block_relation', eventRef: 'event_wake_block_relation', expectedRevision: 1, actorRef: owner, type: 'task.dependency_added', patch: {}, records: [{ kind: 'relation', relationRef: 'relation_wake_block', sourceTaskRef: 'task_wake_blocker', targetTaskRef: 'task_wake_blocked', relationType: 'blocks', createdByActorRef: owner }], eventPayload: {}, createdAt: 5 })
+  const blocked = state.store.claimNextTask({ projectRef, requestId: 'wake-blocked-sleep', actorRef: sleeper, updatedAt: 6 })
+  assert.equal(blocked.status, 'blocked')
+  assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-before-unblock', updatedAt: 7, limit: 10 }), [])
+  state.store.mutateTask({ projectRef, taskRef: 'task_wake_blocker', commandId: 'command_wake_blocker_done', eventRef: 'event_wake_blocker_done', expectedRevision: 1, actorRef: owner, type: 'task.transitioned', patch: { status: 'done' }, eventPayload: {}, createdAt: 8 })
+  const signals = state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-after-unblock', updatedAt: 9, limit: 10 })
+  assert.equal(signals.length, 1)
+  assert.equal(signals[0].actorRef, sleeper)
+}))
+
+test('blocked claim_next durably wakes after its hierarchical resource lock is released', async () => usingFixture(async state => {
+  const owner = 'actor_wake_lock_owner', sleeper = 'actor_wake_lock_sleeper', locker = 'actor_wake_lock_holder'
+  state.store.createCollaborationBoard({ projectRef, coordinatorActorRef: owner, title: 'Lock wake', createdAt: 1 })
+  for (const [index, actorRef] of [sleeper, locker].entries()) state.store.upsertCollaborationSeat({ projectRef, actorRef, changedByActorRef: owner, kind: 'root', state: 'active', duty: `Lock root ${index}`, resourceScope: [], phase: 'waiting', nextStep: 'claim next', updatedAt: 2 + index })
+  state.store.createTask(createInput({ commandId: 'command_wake_lock_task', eventRef: 'event_wake_lock_task', actorRef: owner, createdAt: 4, task: { taskRef: 'task_wake_lock_task', status: 'todo', ownerActorRef: owner, assigneeActorRef: sleeper, title: 'Locked task', requirements: {}, fileScope: ['src/wake/locked'] } }))
+  state.store.acquireCollaborationLock({ projectRef, resourceRef: 'src/wake', ownerActorRef: locker, updatedAt: 5 })
+  assert.equal(state.store.claimNextTask({ projectRef, requestId: 'wake-lock-sleep', actorRef: sleeper, updatedAt: 6 }).status, 'blocked')
+  assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-before-unlock', updatedAt: 7, limit: 10 }), [])
+  state.store.releaseCollaborationLock({ projectRef, resourceRef: 'src/wake', actorRef: locker, updatedAt: 8 })
+  const signals = state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-after-unlock', updatedAt: 9, limit: 10 })
+  assert.equal(signals.length, 1)
+  assert.equal(signals[0].actorRef, sleeper)
 }))

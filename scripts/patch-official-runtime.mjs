@@ -1711,6 +1711,7 @@ export function patchFsEditSource(source) {
 
 const OFFICIAL_RC2_VERSION = '0.1.1-rc.2'
 const OFFICIAL_ALPHA2_VERSION = '0.1.2-alpha.2'
+const OFFICIAL_ALPHA3_VERSION = '0.1.2-alpha.3'
 const OFFICIAL_ALPHA2_SESSION_CONTROLLER_CLIENT_HASH = 'D309F8E61F958A0D751A6D4A7C2E94F5C5A54E1313B3FCB2988A988C703F239C'
 const OFFICIAL_ALPHA2_SESSION_CONTROLLER_HOST_HASH = 'A28FA9A5FFAD5D2E7AF427C0410E973A5E14A36BC070EECF8735B77B95A17CEA'
 const OFFICIAL_ALPHA2_WORKSPACE_PATCHED_HASH = 'B47D4AD32FF91ACDC7B27BE85AA184E4579B1973DF2DB04FB8E58A30590FDE0D'
@@ -2007,6 +2008,37 @@ export async function assertInstalledAlpha2NativeSessionList(file = sessionContr
   return false
 }
 
+const OFFICIAL_ALPHA3_CAPABILITY_ARTIFACTS = Object.freeze([
+  ['@deepseek-ai/dsh-api-session-controller', sessionControllerClientRuntime, '34ACB50A3036753ACE6CFAF6A201D539C5B7D1B6614356C487872D6A4C4A4D4C', ['loadThrough(seq)', 'maxMessages: 200', 'survives connection generations']],
+  ['@deepseek-ai/dsh-client-ui-chat', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat', 'lib', 'client.js'), 'DDD5646548622BDC50E550CAC2451E00D1D8ECE7ADA3C552D7F40705864799FD', ['function TurnNavigatorRail(', 'function mergeTurnRailItems(', 'useProjection("turnOutline")']],
+  ['@deepseek-ai/dsh-client-ui-conversation', conversationRuntime, 'E77F92F7C84E2BEF3644A5C27153140AA94C1AEC2368F37965AEDDB15358A264', ['function QueueThumb(', 'function queueImageRefs(', 'conversation.input.attachments']],
+  ['@deepseek-ai/dsh-client-connection', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-connection', 'lib', 'client.js'), '5767C211D97D5F56BE42620EEC1567DDD6AA25EAAEA02EB684C907B2B541F5B0', ['var ConnectionController = class', 'connection: manual reconnect requested', 'backoffMaxMs: 1e4']],
+  ['@deepseek-ai/dsh-client-ui-schedule', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-schedule', 'lib', 'client.js'), 'E4FFFE5F63290B85E9A6BB8E5F292BE3F60B846C85628A0AB5CBF330BB97C251', ['function ScheduleCatalogAction(', 'formatScheduleFrequency', 'schedule-catalog']],
+  ['@deepseek-ai/dsh-session-turn-outline', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session-turn-outline', 'lib', 'index.js'), 'AEFBA559D0B0E4DE1A8D7C053D9B6D79FF5A22B1C02B333965756CB3E6D6FE50', ['key: "turnOutline"', 'turnOutlineProjectionDefinition']],
+  ['@deepseek-ai/dsh-api-gateway', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-api-gateway', 'lib', 'index.js'), 'C69E238A1B9B7CF36950E05A6AD5E86228A476B956E4AD056FB9125DC156F8A8', ['Remote', 'stream']],
+  ['@deepseek-ai/dsh-api-remotes', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-api-remotes', 'lib', 'index.js'), '2258A0D4037B98CC020CA9FA200DC9929C19050316F50E996C626F54B8F78AD9', ['Remote', 'stream']]
+])
+
+export async function assertInstalledAlpha3NativeCapabilities() {
+  for (const [packageName, file, expectedHash, anchors] of OFFICIAL_ALPHA3_CAPABILITY_ARTIFACTS) {
+    const packageRoot = path.resolve(path.dirname(file), '..')
+    const manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
+    if (manifest.name !== packageName || manifest.version !== OFFICIAL_ALPHA3_VERSION) throw new Error(`Pinned DSH alpha.3 capability package changed: ${packageName}`)
+    const source = await readFile(file, 'utf8')
+    if (sourceSha256(source) !== expectedHash) throw new Error(`Pinned DSH ${packageName}@${OFFICIAL_ALPHA3_VERSION} source hash changed; refusing an unsafe official-first decision.`)
+    for (const anchor of anchors) if (!source.includes(anchor)) throw new Error(`Pinned DSH ${packageName}@${OFFICIAL_ALPHA3_VERSION} capability anchor changed (${anchor}); refusing an unsafe official-first decision.`)
+  }
+  for (const removed of [runtimeClient, hostApiProxyRuntime, path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session-persistence-sqlite', 'package.json')]) {
+    try {
+      await access(removed)
+      throw new Error(`Retired alpha.3 compatibility artifact is unexpectedly installed: ${removed}`)
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+  return false
+}
+
 export async function patchInstalledSessionPersistence(file = sessionPersistenceRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchSessionPersistenceListingSource(source)
@@ -2059,6 +2091,7 @@ const OFFICIAL_ALPHA2_PACKAGING_PEERS = new Set([
   '@deepseek-ai/dsh-util-time'
 ])
 const OFFICIAL_GRAPH_PROOFS = Object.freeze({
+  alpha3: Object.freeze({ version: OFFICIAL_ALPHA3_VERSION, selectedCount: 216, selectedNames: 215, selectedBytes: 63264, selectedSha256: '076516110777c7550d80eb44472ae67c43e4996b3ee2f2956b026199e89fd07a', rootCount: 26, rootBytes: 1492, rootSha256: 'e616f53142ff182dc78237de2db7ce3a33f6ff65c078619495a0a257fc6c272d' }),
   alpha2: Object.freeze({ version: OFFICIAL_ALPHA2_VERSION, selectedCount: 216, selectedNames: 215, selectedBytes: 62384, selectedSha256: '2fe4b564bd064447752eac205304dd39130a717236e85e8d5aaed822530c770c', rootCount: 20, rootBytes: 1111, rootSha256: '90e7639317bff29214acb13396966ba0b8cf22a9ef7c8d2a2f5a0a2bcbeda064' }),
   rc2: Object.freeze({ version: OFFICIAL_RC2_VERSION, selectedCount: 188, selectedNames: 188, selectedBytes: 53868, selectedSha256: '86190efb1c721e2ad2318f6ecbeeab2a17ec8ca79d44efcd60e2c2af4647c7ba', rootCount: 20, rootBytes: 1051, rootSha256: '458670543f54b6293508410d98302bd6f1ba1af2dcd595b98b4fcac2ccfe48d4' })
 })
@@ -2122,9 +2155,9 @@ export function classifyOfficialRuntimeGraph(manifest, lock, installedCoreManife
     throw new Error('Official DSH package and lock root graphs differ; refusing an unsafe runtime patch.')
   }
   const rootVersions = new Set(manifestRootRecords.map(record => record.slice(record.lastIndexOf('\0') + 1, -1)))
-  if (rootVersions.size !== 1 || ![OFFICIAL_RC2_VERSION, OFFICIAL_ALPHA2_VERSION].includes([...rootVersions][0])) throw new Error('Official DSH direct roots are mixed or unproved; refusing an unsafe runtime patch.')
+  if (rootVersions.size !== 1 || ![OFFICIAL_RC2_VERSION, OFFICIAL_ALPHA2_VERSION, OFFICIAL_ALPHA3_VERSION].includes([...rootVersions][0])) throw new Error('Official DSH direct roots are mixed or unproved; refusing an unsafe runtime patch.')
   const version = [...rootVersions][0]
-  const mode = version === OFFICIAL_ALPHA2_VERSION ? 'alpha2' : 'rc2'
+  const mode = version === OFFICIAL_ALPHA3_VERSION ? 'alpha3' : version === OFFICIAL_ALPHA2_VERSION ? 'alpha2' : 'rc2'
   const proof = OFFICIAL_GRAPH_PROOFS[mode]
   if (manifestRoot.count !== proof.rootCount || manifestRoot.bytes !== proof.rootBytes || manifestRoot.sha256 !== proof.rootSha256) throw new Error('Official DSH exact root graph changed; refusing an unsafe runtime patch.')
   if (installedCoreManifest?.name !== '@deepseek-ai/dsh' || installedCoreManifest?.version !== version) throw new Error('Installed @deepseek-ai/dsh identity/version does not match the exact root graph; refusing an unsafe runtime patch.')
@@ -2190,12 +2223,14 @@ async function assertOfficialAlpha2RemovedArtifactsAbsent() {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const officialGraph = await cliOfficialRuntimeGraph()
   const targetsAlpha2 = officialGraph.mode === 'alpha2'
+  const targetsAlpha3 = officialGraph.mode === 'alpha3'
   if (targetsAlpha2) await assertOfficialAlpha2RemovedArtifactsAbsent()
-  const sessionChanged = targetsAlpha2 ? await patchInstalledAlpha2SessionController() : await patchInstalledRuntime()
+  if (targetsAlpha3) await assertInstalledAlpha3NativeCapabilities()
+  const sessionChanged = targetsAlpha3 ? false : targetsAlpha2 ? await patchInstalledAlpha2SessionController() : await patchInstalledRuntime()
   const attachmentProfileChanged = await patchInstalledAttachmentProfile()
   const pickerChanged = await patchInstalledDirectoryPicker()
-  const conversationChanged = await patchInstalledConversation()
-  const attachmentInputChanged = await patchInstalledAttachmentInput()
+  const conversationChanged = targetsAlpha3 ? false : await patchInstalledConversation()
+  const attachmentInputChanged = targetsAlpha3 ? false : await patchInstalledAttachmentInput()
   const toolResultImagesChanged = await patchInstalledToolResultImages()
   const tokenMeterChanged = await patchInstalledTokenMeter()
   const subagentChanged = await patchInstalledSubagent()
@@ -2207,22 +2242,22 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const pwshSandboxChanged = await patchInstalledPwshSandbox()
   const bashSandboxChanged = await patchInstalledBashSandbox()
   const windowsAclChanged = await patchInstalledWindowsAcl(await resolveInstalledWindowsAclRuntime())
-  const modelSelectionChanged = await patchInstalledModelSelection()
-  const modelSettingsChanged = await patchInstalledModelSettings()
+  const modelSelectionChanged = targetsAlpha3 ? false : await patchInstalledModelSelection()
+  const modelSettingsChanged = targetsAlpha3 ? false : await patchInstalledModelSettings()
   const deepSeekDiscoveryChanged = await patchInstalledDeepSeekModelDiscovery()
-  const workspaceUiChanged = await patchInstalledWorkspaceUi()
+  const workspaceUiChanged = targetsAlpha3 ? false : await patchInstalledWorkspaceUi()
   const sessionPersistenceChanged = await patchInstalledSessionPersistence()
-  const hostApiProxyChanged = targetsAlpha2 ? await assertInstalledAlpha2NativeSessionList() : await patchInstalledHostApiProxy()
+  const hostApiProxyChanged = targetsAlpha3 ? false : targetsAlpha2 ? await assertInstalledAlpha2NativeSessionList() : await patchInstalledHostApiProxy()
   const fsSearchChanged = await patchInstalledFsSearch()
   const toolFsChanged = await patchInstalledToolFs()
   const subprocessChanged = await patchInstalledSubprocess()
   const webAppChanged = await patchInstalledWebApp()
   const codexParityChanged = await patchCodexParityRuntime(path.join(root, 'node_modules'))
-  process.stdout.write(targetsAlpha2 ? (sessionChanged ? 'Patched alpha.2 SessionManager rendering performance.\n' : 'Alpha.2 SessionManager rendering performance patch already applied.\n') : (sessionChanged ? 'Patched desktop New Session behavior and SessionManager rendering performance.\n' : 'Desktop New Session and SessionManager rendering performance patches already applied.\n'))
+  process.stdout.write(targetsAlpha3 ? 'Verified official alpha.3 session jump loading and connection-generation recovery.\n' : targetsAlpha2 ? (sessionChanged ? 'Patched alpha.2 SessionManager rendering performance.\n' : 'Alpha.2 SessionManager rendering performance patch already applied.\n') : (sessionChanged ? 'Patched desktop New Session behavior and SessionManager rendering performance.\n' : 'Desktop New Session and SessionManager rendering performance patches already applied.\n'))
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
-  process.stdout.write(conversationChanged ? 'Patched conversation telemetry, view navigation, labels, and sticky response copy.\n' : 'Conversation telemetry, view navigation, labels, and sticky response copy already patched.\n')
-  process.stdout.write(attachmentInputChanged ? 'Patched recoverable image dragging and draft image transfer.\n' : 'Recoverable image dragging and draft image transfer already patched.\n')
+  process.stdout.write(targetsAlpha3 ? 'Adopted official alpha.3 conversation split and whole-session Turn rail without Desktop overlay patches.\n' : conversationChanged ? 'Patched conversation telemetry, view navigation, labels, and sticky response copy.\n' : 'Conversation telemetry, view navigation, labels, and sticky response copy already patched.\n')
+  process.stdout.write(targetsAlpha3 ? 'Adopted official alpha.3 queued-image and pending-submission UI without Desktop attachment overrides.\n' : attachmentInputChanged ? 'Patched recoverable image dragging and draft image transfer.\n' : 'Recoverable image dragging and draft image transfer already patched.\n')
   process.stdout.write(toolResultImagesChanged ? 'Patched durable tool-result image delivery, file delivery, and recoverable edit-conflict presentation.\n' : 'Durable tool-result image delivery, file delivery, and recoverable edit-conflict presentation already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
   process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
@@ -2233,12 +2268,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(toolPwshChanged ? 'Patched confined PowerShell workdir mapping.\n' : 'Confined PowerShell workdir mapping already applied.\n')
   process.stdout.write(pwshSandboxChanged || bashSandboxChanged ? 'Patched confined nested-pipe denial classification.\n' : 'Confined nested-pipe denial classification already applied.\n')
   process.stdout.write(windowsAclChanged ? 'Patched Windows ACL token-default DACL intersection.\n' : 'Windows ACL token-default DACL intersection already applied.\n')
-  process.stdout.write(modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
-  process.stdout.write(modelSettingsChanged ? 'Patched safe model API-key overrides and provider validation.\n' : 'Safe model API-key overrides and provider validation already applied.\n')
+  process.stdout.write(targetsAlpha3 ? 'Verified official alpha.3 model-selection behavior.\n' : modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
+  process.stdout.write(targetsAlpha3 ? 'Verified official alpha.3 model credential settings.\n' : modelSettingsChanged ? 'Patched safe model API-key overrides and provider validation.\n' : 'Safe model API-key overrides and provider validation already applied.\n')
   process.stdout.write(deepSeekDiscoveryChanged ? 'Patched DeepSeek credential validation discovery.\n' : 'DeepSeek credential validation discovery already applied.\n')
-  process.stdout.write(targetsAlpha2 ? (workspaceUiChanged ? 'Patched alpha.2 force-new workspace session behavior; native session menus retained.\n' : 'Alpha.2 force-new workspace session patch already applied; native session menus retained.\n') : (workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n'))
-  process.stdout.write(sessionPersistenceChanged ? 'Patched bounded concurrent session metadata listing.\n' : 'Bounded concurrent session metadata listing already applied.\n')
-  process.stdout.write(targetsAlpha2 ? 'Verified native alpha.2 Session list metadata and bounded cold-summary batching.\n' : (hostApiProxyChanged ? 'Patched live session-list metadata projection reuse.\n' : 'Live session-list metadata projection reuse already applied.\n'))
+  process.stdout.write(targetsAlpha3 ? 'Adopted official alpha.3 workspace and conversation-view selection behavior.\n' : targetsAlpha2 ? (workspaceUiChanged ? 'Patched alpha.2 force-new workspace session behavior; native session menus retained.\n' : 'Alpha.2 force-new workspace session patch already applied; native session menus retained.\n') : (workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n'))
+  process.stdout.write(sessionPersistenceChanged ? 'Patched bounded concurrent JSONL session metadata listing.\n' : 'Bounded concurrent JSONL session metadata listing already applied.\n')
+  process.stdout.write(targetsAlpha3 ? 'Verified alpha.3 JSONL-only persistence and Gateway-owned Remote streams; retired compatibility packages remain absent.\n' : targetsAlpha2 ? 'Verified native alpha.2 Session list metadata and bounded cold-summary batching.\n' : (hostApiProxyChanged ? 'Patched live session-list metadata projection reuse.\n' : 'Live session-list metadata projection reuse already applied.\n'))
   process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
   process.stdout.write(toolFsChanged ? 'Patched literal edit not-found recovery guidance.\n' : 'Literal edit not-found recovery guidance already applied.\n')
   process.stdout.write(subprocessChanged ? 'Patched hidden Windows command and cleanup processes.\n' : 'Hidden Windows command and cleanup process patch already applied.\n')

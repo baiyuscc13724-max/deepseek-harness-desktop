@@ -41,6 +41,7 @@ async function fixture(options = {}) {
   const runtime = new mod.ProjectTaskWebRuntime({
     projectEntry,
     legacySummaryProvider: options.legacySummaryProvider,
+    wakeScheduler: options.wakeScheduler,
     now: (() => { let clock = 1_900_000_000_000; return () => ++clock })(),
   })
   return { mod, root, databasePath, key, context, projectEntry, runtime }
@@ -110,6 +111,17 @@ test('normalizer accepts only plain lossless JSON without invoking accessors', a
   let inheritedHookRuns = 0
   Object.defineProperty(Object.prototype, 'toJSON', { configurable: true, value() { inheritedHookRuns += 1; throw new Error('must not execute') } })
   try { assert.equal(mod.normalizeWebCommand(createCommand('inherited-hook')).payload.title, 'Task inherited-hook'); assert.equal(inheritedHookRuns, 0) } finally { delete Object.prototype.toJSON }
+})
+
+test('successful Web task mutations schedule one Host wake pump while durable replay does not', async () => {
+  const scheduled = []
+  await usingFixture(async ({ runtime }) => {
+    const input = createCommand('wake-scheduler')
+    assert.equal((await runtime.action(input)).ok, true)
+    assert.deepEqual(scheduled, [{ projectRef }])
+    await runtime.action(input)
+    assert.deepEqual(scheduled, [{ projectRef }])
+  }, { wakeScheduler: (signal) => scheduled.push(signal) })
 })
 
 test('state and action expose only safe task fields while legacy tasks remain a separate aggregate', async () => usingFixture(async ({ runtime }) => {

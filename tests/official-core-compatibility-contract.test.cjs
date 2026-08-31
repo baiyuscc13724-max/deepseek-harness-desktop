@@ -237,7 +237,7 @@ test('the current implementation satisfies the adapter-port method contract with
   for (const method of ['state', 'page', 'events', 'action', 'subscribe', 'close']) assert.equal(typeof webMod.ProjectTaskWebRuntime.prototype[method], 'function')
 })
 
-test('schema v12 is forward-fenced, encrypted, project-scoped, and receipt-idempotent', async () => {
+test('schema v13 is forward-fenced, encrypted, project-scoped, and receipt-idempotent', async () => {
   const fixture = await storeFixture()
   try {
     const first = fixture.store.createTask(createTaskInput(projectA, 'A'))
@@ -252,7 +252,7 @@ test('schema v12 is forward-fenced, encrypted, project-scoped, and receipt-idemp
 
     const db = new DatabaseSync(fixture.filePath, { readOnly: true })
     try {
-      assert.equal(db.prepare('PRAGMA user_version').get().user_version, 12)
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version, 13)
       assert.equal(db.prepare('PRAGMA journal_mode').get().journal_mode, 'wal')
       const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name))
       for (const table of [
@@ -276,7 +276,7 @@ test('schema v12 is forward-fenced, encrypted, project-scoped, and receipt-idemp
   try {
     const filePath = path.join(futureRoot, 'future.sqlite')
     const db = new DatabaseSync(filePath)
-    db.exec('PRAGMA user_version=13')
+    db.exec('PRAGMA user_version=14')
     db.close()
     const mod = await import(moduleUrl('project-task-store.js'))
     const store = new mod.ProjectTaskStore({ filePath, keyProvider: () => randomBytes(32) })

@@ -1037,3 +1037,14 @@ test('cross-session workspace renders the project identity and safe seat master-
   assert.match(source, /sessions: ctx\.sessions, workspaces: ctx\.workspaces/u)
   assert.match(source, /exports\.inject = \["slots", "locale", "sessions", "workspaces"\]/u)
 })
+
+test('task board keeps the initial lease epoch visible instead of treating zero as absent', async () => {
+  const source = await clientSource()
+  const helper = componentSource(source, ['taskBoardLeaseEpoch'])
+  const taskBoardLeaseEpoch = Function(`${helper}\nreturn taskBoardLeaseEpoch`)()
+
+  assert.equal(taskBoardLeaseEpoch({ leaseEpoch: 0 }), 0)
+  assert.equal(taskBoardLeaseEpoch({ leaseEpoch: 1 }), 1)
+  assert.equal(taskBoardLeaseEpoch({ leaseEpoch: -1 }), null)
+  assert.equal(taskBoardLeaseEpoch({ leaseEpoch: 'not-a-number' }), null)
+})

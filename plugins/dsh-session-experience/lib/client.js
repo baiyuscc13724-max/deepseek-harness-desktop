@@ -4,7 +4,6 @@ window.__ModuleLoader__.load({
     var module = { exports: {} };
     var exports = module.exports;
     var React = require("react");
-    var Runtime = require("@deepseek-ai/dsh-client-runtime/client");
     var h = React.createElement;
     var useState = React.useState;
     var useEffect = React.useEffect;
@@ -367,8 +366,9 @@ window.__ModuleLoader__.load({
     }
 
     function timelineAppendSurface(event) {
-      if (Runtime && typeof Runtime.isAppendSurfaceEvent === "function") return Runtime.isAppendSurfaceEvent(event);
-      return event && event.surfaceOp === "append";
+      return Boolean(event)
+        && (event.type === "user/message" || event.type === "assistant/message" || event.type === "tool/result")
+        && event.surfaceOp === "append";
     }
 
     function finalizeTimelineItem(item) {

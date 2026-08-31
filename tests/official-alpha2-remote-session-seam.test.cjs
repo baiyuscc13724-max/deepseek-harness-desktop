@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const { readFileSync } = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
 const repoRoot = path.resolve(__dirname, '..')
 const auditRoot = process.env.DSH_ALPHA2_AUDIT_ROOT || repoRoot
@@ -91,7 +92,7 @@ function assertCanonicalProjectInput(input) {
   return { workspaceId: input.workspaceId }
 }
 
-test('audit is pinned to the official alpha.2 tag/commit and exact package versions', () => {
+alpha2Audit('audit is pinned to the official alpha.2 tag/commit and exact package versions', () => {
   const report = readFileSync(path.join(repoRoot, 'docs', 'OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md'), 'utf8')
   assert.match(report, new RegExp(officialTag.replaceAll('.', '\\.')))
   assert.match(report, new RegExp(officialCommit))

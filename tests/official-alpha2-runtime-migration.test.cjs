@@ -6,6 +6,8 @@ const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
 
+// Preserve byte-for-byte alpha.2 migration evidence without treating it as the current runtime gate.
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 const ROOT = path.resolve(__dirname, '..')
 const EXPLICIT_AUDIT_ROOT = process.env.DSH_ALPHA2_AUDIT_ROOT || process.env.DSH_ALPHA2_CANDIDATE_ROOT || null
 const AUDIT_ROOT = EXPLICIT_AUDIT_ROOT || ROOT
@@ -161,7 +163,7 @@ function assertAcceptedAlpha2Graph(pkg, lock, uiReport, remoteReport) {
   assert.match(remoteReport, /语义伪造的 event\/baseline/)
 }
 
-test('accepted audit outputs and deterministic 20-root/215-package evidence are hash-bound', () => {
+alpha2Audit('accepted audit outputs and deterministic 20-root/215-package evidence are hash-bound', () => {
   for (const [relative, expected] of Object.entries(ACCEPTED)) assert.equal(sha256CanonicalText(read(relative)), expected, `accepted audit drift: ${relative}`)
   const report = read('docs/OFFICIAL-ALPHA2-RUNTIME-MIGRATION-PLAN.zh-CN.md')
   for (const fact of [
@@ -179,7 +181,7 @@ test('accepted audit outputs and deterministic 20-root/215-package evidence are 
   assert.match(securityReview, /不是动态发布门禁的通过声明/u)
 })
 
-test('maintained package and lock are the accepted complete canonical alpha.2 runtime', () => {
+alpha2Audit('maintained package and lock are the accepted complete canonical alpha.2 runtime', () => {
   const packageSource = read('package.json')
   const lockSource = read('package-lock.json')
   const pkg = JSON.parse(packageSource)
@@ -251,7 +253,7 @@ test('detached exact-lock alpha.2 graph and two isolated installs are byte-ident
   assert.equal(first.frozenManifestComparison.manifestFileSha256, second.frozenManifestComparison.manifestFileSha256)
 })
 
-test('malicious or accidental maintained alpha.2 graph drift fails closed', () => {
+alpha2Audit('malicious or accidental maintained alpha.2 graph drift fails closed', () => {
   const pkg = json('package.json')
   const lock = json('package-lock.json')
   const ui = read('docs/OFFICIAL-ALPHA2-UI-PATCH-REBASE.zh-CN.md')
@@ -285,7 +287,7 @@ test('malicious or accidental maintained alpha.2 graph drift fails closed', () =
   assert.throws(() => assertAcceptedAlpha2Graph(pkg, lock, ui, remote.replace('canonical project', 'canonical-project')), /canonical project/)
 })
 
-test('accepted alpha.2 patch dispatch uses native replacements while retaining fail-closed legacy helpers', () => {
+alpha2Audit('accepted alpha.2 patch dispatch uses native replacements while retaining fail-closed legacy helpers', () => {
   const pkg = json('package.json')
   const lock = json('package-lock.json')
   const source = read('scripts/patch-official-runtime.mjs')
@@ -305,7 +307,7 @@ test('accepted alpha.2 patch dispatch uses native replacements while retaining f
   assert.match(notice, /MIT License/u)
 })
 
-test('two npm-ls extraneous optionals are a reproducible integrity-locked platform orphan, not a DSH or peer drift', () => {
+alpha2Audit('two npm-ls extraneous optionals are a reproducible integrity-locked platform orphan, not a DSH or peer drift', () => {
   const lockPath = path.join(AUDIT_ROOT, 'package-lock.json')
   const lockSource = fs.readFileSync(lockPath, 'utf8')
   const lock = JSON.parse(lockSource)

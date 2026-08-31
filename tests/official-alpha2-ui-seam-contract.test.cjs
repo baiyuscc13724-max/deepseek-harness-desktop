@@ -5,6 +5,7 @@ const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
 const ROOT = path.resolve(__dirname, '..')
 const ISOLATED = process.env.DSH_ALPHA2_CANDIDATE_ROOT || ROOT
@@ -74,7 +75,7 @@ function inspect(spec, patchSource, io = {}) {
   return { name: spec.name, status: spec.decision }
 }
 
-test('alpha.2 UI evidence presence, hashes, and explicit rebase/retirement decisions are gating', () => {
+alpha2Audit('alpha.2 UI evidence presence, hashes, and explicit rebase/retirement decisions are gating', () => {
   const patch = readText(path.join(ROOT, 'scripts', 'patch-official-runtime.mjs'))
   const results = CASES.map(spec => inspect(spec, patch))
   assert.equal(results.length, 6)

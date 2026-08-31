@@ -290,12 +290,13 @@ export class ProjectSessionLaunchRuntime {
   async status(execution, { batchRef, projectBinding } = {}) {
     await this.init();
     const batch = this.#batch(batchRef); await this.#assertBinding(execution, batch, this.#binding(projectBinding));
+    this.#resumeQueuedBatch(batch, execution);
     for (const slot of batch.slots.filter((candidate) => candidate.state === "outcome_unknown")) await this.#reconcile(batch, slot, execution);
     return this.project(batch);
   }
   async slotStatus(execution,{slotRef,projectBinding}={}) {
     await this.init(); const selected=this.slotByRef.get(text(slotRef,"slotRef",128)); if(!selected) fail("launch slot not found","PROJECT_SESSION_LAUNCH_NOT_FOUND");
-    const {batch,slot}=selected; await this.#assertBinding(execution,batch,this.#binding(projectBinding)); if(slot.state==="outcome_unknown") await this.#reconcile(batch,slot,execution); return this.project(batch);
+    const {batch,slot}=selected; await this.#assertBinding(execution,batch,this.#binding(projectBinding)); this.#resumeQueuedBatch(batch,execution); if(slot.state==="outcome_unknown") await this.#reconcile(batch,slot,execution); return this.project(batch);
   }
   async redeemAdoption(execution, { slotRef, projectBinding } = {}) {
     await this.init();
@@ -403,6 +404,7 @@ export class ProjectSessionLaunchRuntime {
   }
   #pruneProjects() { this.projectOrder = this.projectOrder.filter((projectRef) => (this.queuedByProject.get(projectRef)?.length ?? 0) > 0); }
   async #assertBinding(execution, batch, binding) { if (!this.provider) fail("Host project session launch capability is unavailable", "PROJECT_SESSION_LAUNCH_HOST_UNAVAILABLE"); const current = await this.#resolveProject(execution, binding), seatRef = current.rootSessionRef ?? current.seatRef; if (binding.callerRootRef !== batch.callerRootRef || binding.callerStopRef !== batch.callerStopRef || !this.#matchesProjectBinding(batch, binding) || current.projectRef !== batch.projectRef || current.boardRef !== batch.boardRef || seatRef !== batch.rootSessionRef || current.projectTicket !== batch.projectTicket) fail("launch batch belongs to another canonical project or root", "PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH"); }
+  #resumeQueuedBatch(batch, execution) { if (batch.stopRequested || !batch.slots.some((slot) => slot.state === "queued")) return; this.executionByBatch.set(batch.batchRef, execution); this.#schedulePump(); }
   #schedulePump() { if (this.closed || this.pumpScheduled) return; this.pumpScheduled = true; queueMicrotask(() => { this.pumpScheduled = false; void this.#pump(); }); }
   async #pump() {
     while (!this.closed && this.running < this.maxConcurrent) {

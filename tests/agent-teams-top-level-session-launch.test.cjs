@@ -305,6 +305,34 @@ test('activation replay recovers exact persisted reservation after Host restart 
   } finally { await runtime.close(); await rm(temporary,{recursive:true,force:true}) }
 })
 
+test('status after restart resumes queued slots without requiring another activation command', async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'project-session-status-restart-'))
+  const file = path.join(temporary, 'launch.json')
+  const execution = { projectRef: 'project_A', rootSessionRef: 'root_A' }
+  const ownBinding = projectBinding(execution, 'status-restart-root')
+  let launches = 0
+  const host = provider({ launch: async (_execution, request) => { launches += 1; return { projectRef: request.projectRef, operationRef: request.operationRef, state: 'ready' } } })
+  const mod = await import(`${moduleUrl}?status-restart=${Date.now()}`)
+  let runtime = new mod.ProjectSessionLaunchRuntime({ filePath: file, provider: host })
+  await runtime.init()
+  try {
+    const prepared = await runtime.prepareStart(execution, { requestId: 'status-restart', totalSessions: 2, projectBinding: ownBinding, slots: slots(1) })
+    const adoptions = await runtime.prepareAdoptions(execution, { batchRef: prepared.batchRef, projectBinding: ownBinding })
+    const stored = JSON.parse(await readFile(file, 'utf8'))
+    Object.assign(stored.batches[0], { noHostEffects: false, state: 'queued' })
+    Object.assign(stored.batches[0].slots[0], { slotActorRef: 'actor_status_restart_000000000000000001', taskRef: 'task_status_restart_0000000000000000001', state: 'queued' })
+    await writeFile(file, JSON.stringify(stored), 'utf8')
+    await runtime.close()
+
+    runtime = new mod.ProjectSessionLaunchRuntime({ filePath: file, provider: host })
+    await runtime.init()
+    const ready = await waitFor(() => runtime.status(execution, { batchRef: prepared.batchRef, projectBinding: ownBinding }), value => value.state === 'ready')
+    assert.equal(ready.createdSessionCount, 1)
+    assert.equal(launches, 1)
+    assert.equal(ready.slots[0].slotRef, adoptions.prepared[0].slotRef)
+  } finally { await runtime.close(); await rm(temporary, { recursive: true, force: true }) }
+})
+
 test('Stop cancels queued slots durably without launching them', async () => {
   let launches = 0
   let release

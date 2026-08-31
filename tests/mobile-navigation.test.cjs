@@ -287,44 +287,51 @@ test('我的 resolves the semantic settings slot before generic sidebar dialogs'
   assert.equal(genericQueries, 0, 'My must resolve the semantic settings slot before generic sidebar dialogs')
 })
 
-test('我的 immediately opens official settings and preserves its mobile fallback', async () => {
+test('我的 opens only the authoritative full settings surface', () => {
   const start = runtime.indexOf('  const navigateMobileDomain = (domain, shell) => {')
   const end = runtime.indexOf('  const syncMobileNavigation = shell => {', start)
   assert.ok(start >= 0 && end > start)
   const source = runtime.slice(start, end)
-  const state = { activeDomain: 'conversations', pendingDomain: 'tasks' }
-  const root = { dataset: { harnessMobileSettingsOpen: 'true' } }
-  const status = { textContent: '' }
-  const shell = { querySelector: selector => selector === '[data-harness-mobile-my-status]' ? status : null }
-  let focusReleased = 0
-  let noticesCleared = 0
-  let syncs = 0
-  let continuation
-  const navigate = new Function('root', 'mobileNavigationState', 'releaseComposerFocus', 'clearNavigationNotice', 'syncMobileAppShell', 'waitForOfficialSettings', `${source}\nreturn navigateMobileDomain`) // eslint-disable-line no-new-func
-    (root, state, () => { focusReleased += 1 }, () => { noticesCleared += 1 }, () => { syncs += 1 }, (_shell, shouldContinue) => {
-      continuation = shouldContinue
-      return Promise.resolve(true)
-    })
-  const opening = navigate({ id: 'me', route: 'settings' }, shell)
-  assert.equal(state.activeDomain, 'me')
-  assert.equal(state.pendingDomain, 'me')
-  assert.equal(status.textContent, '正在打开桌面设置…')
-  assert.equal(focusReleased, 1)
-  assert.equal(noticesCleared, 1)
-  assert.equal(syncs, 1)
-  assert.equal(continuation(), true)
-  assert.equal(await opening, true)
-  assert.equal(state.pendingDomain, '')
-  assert.equal(root.dataset.harnessMobileMyOpening, undefined)
-  assert.equal(root.dataset.harnessMobileMyDetail, 'official')
-  assert.equal(status.textContent, '')
-  assert.equal(syncs, 2)
-  assert.equal(source.indexOf("if (domain.id === 'me')") < source.indexOf('const bridge = mobileNavigationBridge()'), true)
-  assert.match(runtime, /<main data-harness-mobile-my-surface hidden[^>]*>[\s\S]*通用设置[\s\S]*模型路由[\s\S]*电脑与移动端/u)
+  assert.doesNotMatch(source, /mobileNavigationState\.activeDomain = 'me'/u, 'do not expose a second mobile-owned settings page while official settings loads')
+  assert.match(source, /if \(domain\.id !== 'me' && root\.dataset\.harnessMobileSettingsOpen === 'true'\)/u)
+  assert.match(runtime, /if \(domain\.id === 'me'\) \{[\s\S]*return waitForOfficialSettings\(shell\)/u)
+  assert.match(runtime, /shell\.querySelector\('\[data-harness-mobile-my-surface\]'\)\?\.remove\(\)/u)
+  assert.match(runtime, /surface\.dataset\.harnessMobileSettingsDialog = 'true'\s+root\.dataset\.harnessMobileSettingsOpen = 'true'/u)
+  assert.match(runtime, /if \(!settingsOpen\) \{[\s\S]*const page = officialSettingsSurface\(\)[\s\S]*visibleOfficialSettingsDialog\(page\)[\s\S]*settingsOpen = true/u)
+  assert.match(runtime, /nativeClose\.click\(\)[\s\S]*mobileNavigationState\.activeDomain = 'conversations'[\s\S]*syncMobileAppShell\(\)/u)
+  assert.doesNotMatch(source, /桌面设置暂未就绪；“我的”页面仍可继续使用/u)
   assert.match(runtime, /mobileNavigationState\.activeDomain === 'conversations' && !shell\.dataset\.harnessMobileConversationHomeOpened/u)
-  assert.match(runtime, /if \(mySurface\) mySurface\.hidden = activeDomain\?\.id !== 'me'/u)
-  assert.match(compat, /\[data-harness-mobile-my-surface\]\s*\{[^}]*position:\s*absolute;[^}]*pointer-events:\s*auto;[^}]*background:/su)
-  assert.match(compat, /\[data-harness-mobile-settings-entry\]\s*\{[^}]*min-height:\s*72px;/su)
+})
+
+test('official settings host remains interactive during mobile presentation isolation', () => {
+  const start = runtime.indexOf('  const syncMobilePresentationIsolation = (domain, shell) => {')
+  const end = runtime.indexOf('  const syncMobileComposerTextareaLayout = textarea => {', start)
+  assert.ok(start >= 0 && end > start)
+  const source = runtime.slice(start, end)
+  const settings = { contains: () => false }
+  const makeSurface = containsSettings => ({
+    dataset: {},
+    hidden: false,
+    inert: false,
+    contains: node => containsSettings && node === settings,
+    setAttribute(name, value) { this[name] = value }
+  })
+  const host = makeSurface(true)
+  const unrelated = makeSurface(false)
+  const document = {
+    querySelector: selector => selector === '[data-harness-mobile-settings-dialog="true"]' ? settings : null,
+    querySelectorAll: () => [host, unrelated]
+  }
+  const isolate = new Function('document', 'root', `${source}\nreturn syncMobilePresentationIsolation`) // eslint-disable-line no-new-func
+    (document, { dataset: {} })
+  isolate('me', { contains: () => false })
+  assert.equal(host.inert, false)
+  assert.equal(host.hidden, false)
+  assert.equal(host['aria-hidden'], 'false')
+  assert.equal(unrelated.inert, true)
+  assert.equal(unrelated.hidden, true)
+  assert.equal(unrelated['aria-hidden'], 'true')
+  assert.match(source, /surface\.contains\?\.\(settingsSurface\)/u)
 })
 
 test('我的 waits for an unobscured official settings dialog before committing', async () => {

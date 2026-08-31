@@ -6,6 +6,7 @@ const { access, mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/pro
 const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
 const root = path.resolve(__dirname, '..')
 const candidateRoot = process.env.DSH_ALPHA2_CANDIDATE_ROOT || root
@@ -13,7 +14,7 @@ const retiredRuntimeFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-
 const alpha2RuntimeFile = path.join(candidateRoot, 'node_modules', '@deepseek-ai', 'dsh-api-session-controller', 'lib', 'index.js')
 const ALPHA2_HOST_SHA256 = 'A28FA9A5FFAD5D2E7AF427C0410E973A5E14A36BC070EECF8735B77B95A17CEA'
 
-test('alpha.2 session-list metadata owner is the pinned official controller artifact', async () => {
+alpha2Audit('alpha.2 session-list metadata owner is the pinned official controller artifact', async () => {
   const source = await readFile(alpha2RuntimeFile, 'utf8')
   assert.equal(createHash('sha256').update(source).digest('hex').toUpperCase(), ALPHA2_HOST_SHA256)
   await assert.rejects(access(retiredRuntimeFile), { code: 'ENOENT' })
@@ -49,7 +50,7 @@ function extractFunction(source, name) {
   throw new Error(`unterminated native function ${name}`)
 }
 
-test('alpha.2 executes native sessionListMetadata/header-only summary semantics and proves bounded batching', async () => {
+alpha2Audit('alpha.2 executes native sessionListMetadata/header-only summary semantics and proves bounded batching', async () => {
   const source = await readFile(alpha2RuntimeFile, 'utf8')
   assert.equal(createHash('sha256').update(source).digest('hex').toUpperCase(), ALPHA2_HOST_SHA256)
   const applySource = extractFunction(source, 'applySessionListMetadata')

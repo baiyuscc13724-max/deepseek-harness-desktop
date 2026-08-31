@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
+const { createHash } = require('node:crypto')
 const { mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const { Readable } = require('node:stream')
 const { pathToFileURL } = require('node:url')
@@ -53,6 +54,26 @@ async function startTeam(tools, args, execution) {
   return tools.get('team_start').execute({ candidate_workstreams: 2, ...args }, execution)
 }
 
+let taskCommandSequence = 0
+async function fixedRootTaskUpdate(tools, teamId, taskId, action, execution, extra = {}) {
+  const [{ tasks }, status] = await Promise.all([
+    tools.get('team_task_list').execute({ team_id: teamId }, execution),
+    tools.get('team_status').execute({ team_id: teamId }, execution)
+  ])
+  const task = tasks.find(candidate => candidate.id === taskId)
+  assert.ok(task, `missing task ${taskId}`)
+  taskCommandSequence += 1
+  return tools.get('team_task_update').execute({
+    team_id: teamId,
+    task_id: taskId,
+    action,
+    request_id: `runtime-${action}-${taskCommandSequence}`,
+    expected_task_revision: task.revision,
+    expected_pause_epoch: status.team.pauseEpoch,
+    ...extra
+  }, execution)
+}
+
 function assertLosslessJson(value) {
   assert.deepEqual(value, JSON.parse(JSON.stringify(value)))
 }
@@ -92,6 +113,294 @@ test('busy lead relays steer inside the active turn instead of queuing delayed o
   assert.match(source, /if \(lead\.status === "idle"\) lead\.followup\(message\);\s*else lead\.steer\(message\);/u)
   assert.match(source, /relayToLead\(lead, createUserMessage\(\{ content, source: relaySource\(caller\.id\) \}\)\)/u)
   assert.doesNotMatch(source, /await lead\.followup\(createUserMessage/u)
+})
+
+test('apply injects one Host wake scheduler into every project task mutation producer', async () => {
+  const source = await readFile(pluginFile, 'utf8')
+  assert.match(source, /task: \{ bind: \(\{ store, actorResolver, now: clock, wakeScheduler \}\)[\s\S]*?wakeScheduler === undefined/u)
+  assert.match(source, /task: \{ bind: \(\{ store: taskStore, actorResolver, now: clock \}\)[\s\S]*?wakeScheduler: \(signal\) => projectTaskWakeScheduler\(signal\)/u)
+  assert.match(source, /projectTaskWakeScheduler = createProjectTaskWakeScheduler\(ctx, officialCorePorts, ready\)/u)
+  assert.match(source, /createProjectTaskSessionRuntimeResolver\(ctx, projectEntryRegistry, projectTaskWakeScheduler\)/u)
+  assert.match(source, /new ProjectAutomationWebRuntime\(\{ projectEntry, wakeScheduler: projectTaskWakeScheduler \}\)/u)
+  assert.match(source, /new ProjectBusinessSyncRuntime\(\{[\s\S]*?wakeScheduler: projectTaskWakeScheduler/u)
+  assert.match(source, /do \{[\s\S]*?state\.pending = false;[\s\S]*?\} while \(state\.pending\)[\s\S]*?if \(state\.pending\) startDrain\(projectRef, state\)/u)
+  assert.match(source, /state\.timer = setTimer\([\s\S]*?state\.timer\?\.unref\?\.\(\)/u)
+  assert.equal(source.match(/wakeScheduler: projectTaskWakeScheduler/gu)?.length, 3)
+})
+
+test('project task wake scheduler fails closed once when Host readiness rejects', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-ready-failure=${Date.now()}-${Math.random()}`)
+  const warnings = []
+  const ready = Promise.reject(Object.assign(new Error('store unavailable'), { code: 'STORE_UNAVAILABLE' }))
+  const scheduler = mod.createProjectTaskWakeScheduler({ logger: { warn(message) { warnings.push(message) } }, agents: { roots() { throw new Error('must not scan roots') } } }, undefined, ready)
+  scheduler({ projectRef: 'project-ready-failure' })
+  await new Promise(resolve => setImmediate(resolve))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /STORE_UNAVAILABLE/u)
+})
+
+test('durable project task wakes deliver only to the exact live same-project root and ack every lease', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake=${Date.now()}-${Math.random()}`)
+  const projectKey = cwd => {
+    let normalized = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC')
+    if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
+    return createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
+  }
+  const accepted = []
+  const target = { id: 'wake-target', status: 'idle', session: { header: { cwd: 'C:/project-a' } }, async followup(message) { accepted.push(message) } }
+  const failed = { id: 'wake-failed', status: 'running', session: { header: { cwd: 'C:/project-a' } }, async steer() { throw new Error('inbox refused') } }
+  const foreign = { id: 'wake-foreign', status: 'idle', session: { header: { cwd: 'C:/project-b' } }, async followup() { throw new Error('cross-project wake') } }
+  const acknowledgements = []
+  const wake = {
+    claim() {
+      return [
+        { wakeRef: 'wake-target-ref', actorRef: 'actor:wake-target' },
+        { wakeRef: 'wake-missing-ref', actorRef: 'actor:missing' },
+        { wakeRef: 'wake-failed-ref', actorRef: 'actor:wake-failed' }
+      ]
+    },
+    ack(input) { acknowledgements.push(input) }
+  }
+  const result = await mod.dispatchProjectTaskWakeSignals({ agents: { roots: () => [target, failed, foreign] } }, {
+    wake, projectRef: 'project-ref', dispatcherRef: 'dispatcher-ref', canonicalProjectKey: projectKey('C:/project-a'), actorRefForSessionId: id => `actor:${id}`
+  })
+  assert.deepEqual(result, { claimed: 3, delivered: 1, retryable: 1 })
+  assert.match(accepted[0].content[0].text, /wake-target-ref/u)
+  assert.equal(accepted[0].source.summary, 'Project tasks')
+  assert.deepEqual(acknowledgements.map(entry => [entry.wakeRef, entry.outcome]), [
+    ['wake-target-ref', 'delivered'], ['wake-missing-ref', 'not_delivered'], ['wake-failed-ref', 'outcome_unknown']
+  ])
+})
+
+test('durable project task wake delivery deduplicates inbox and session evidence and fences uncertain enqueue', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-dedup=${Date.now()}-${Math.random()}`)
+  const wakeMessage = wakeRef => ({ source: { kind: 'coordinator', summary: 'Project tasks' }, content: [{ type: 'text', text: `[Project task wake ${wakeRef}] already queued` }] })
+  const cwd = 'C:/wake-dedup'
+  let normalized = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC')
+  if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
+  const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
+  const inbox = { id: 'wake-inbox', status: 'idle', session: { header: { cwd }, events: [] }, inbox: { nextTurn: [wakeMessage('wake-inbox-ref')], nextStep: [] }, async followup() { throw new Error('duplicate inbox enqueue') } }
+  const history = { id: 'wake-history', status: 'running', session: { header: { cwd }, events: [{ type: 'user/message', data: { message: wakeMessage('wake-history-ref') } }] }, inbox: { nextTurn: [], nextStep: [] }, async steer() { throw new Error('duplicate history enqueue') } }
+  const raced = { id: 'wake-raced', status: 'idle', session: { header: { cwd }, events: [] }, inbox: { nextTurn: [], nextStep: [] }, async followup(message) { this.inbox.nextTurn.push(message); throw new Error('accepted before error') } }
+  const uncertain = { id: 'wake-uncertain', status: 'idle', session: { header: { cwd }, events: [] }, inbox: { nextTurn: [], nextStep: [] }, async followup() { throw new Error('unknown enqueue outcome') } }
+  const acknowledgements = []
+  const wake = {
+    claim() { return [{ wakeRef: 'wake-inbox-ref', actorRef: 'actor:wake-inbox' }, { wakeRef: 'wake-history-ref', actorRef: 'actor:wake-history' }, { wakeRef: 'wake-raced-ref', actorRef: 'actor:wake-raced' }, { wakeRef: 'wake-uncertain-ref', actorRef: 'actor:wake-uncertain' }] },
+    ack(input) { acknowledgements.push(input) }
+  }
+  const result = await mod.dispatchProjectTaskWakeSignals({ agents: { roots: () => [inbox, history, raced, uncertain] } }, { wake, dispatcherRef: 'dedup-dispatcher', canonicalProjectKey, actorRefForSessionId: id => `actor:${id}` })
+  assert.deepEqual(result, { claimed: 4, delivered: 3, retryable: 0 })
+  assert.deepEqual(acknowledgements.map(entry => [entry.wakeRef, entry.outcome]), [
+    ['wake-inbox-ref', 'delivered'], ['wake-history-ref', 'delivered'], ['wake-raced-ref', 'delivered'], ['wake-uncertain-ref', 'outcome_unknown']
+  ])
+})
+
+test('project task wake pumps are singleflight per canonical project lane', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-singleflight=${Date.now()}-${Math.random()}`)
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  let claims = 0
+  const target = { id: 'singleflight-target', status: 'idle', session: { header: { cwd: 'C:/singleflight' } }, async followup() { await gate } }
+  let normalized = target.session.header.cwd.replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC')
+  if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
+  const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
+  const binding = {
+    canonicalProjectKey, dispatcherRef: 'singleflight-dispatcher', actorRefForSessionId: id => `actor:${id}`,
+    wake: {
+      claim() { claims += 1; return claims === 1 ? [{ wakeRef: 'singleflight-wake', actorRef: 'actor:singleflight-target' }] : [] },
+      ack() {}
+    }
+  }
+  const ctx = { agents: { roots: () => [target] } }
+  const first = mod.dispatchProjectTaskWakeSignals(ctx, binding)
+  await new Promise(resolve => setImmediate(resolve))
+  const second = mod.dispatchProjectTaskWakeSignals(ctx, binding)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(claims, 1)
+  release()
+  await Promise.all([first, second])
+  assert.equal(claims, 2)
+})
+
+test('direct-human activity unpauses and immediately dispatches durable project task wakes', async () => {
+  const source = await readFile(pluginFile, 'utf8')
+  assert.match(source, /scheduleProjectTaskWake\(lead, \{ paused: false, dispatch: true \}\)/u)
+})
+
+test('project task wake scheduler retries not-delivered leases on bounded unref timers without losing trailing mutations', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-retry=${Date.now()}-${Math.random()}`)
+  const timers = []
+  const cleared = []
+  let releaseFirst
+  const firstGate = new Promise(resolve => { releaseFirst = resolve })
+  let pumps = 0
+  const scheduler = mod.createProjectTaskWakeScheduler(
+    { logger: { warn() {} }, agents: { roots() { return [] } } },
+    undefined,
+    Promise.resolve(),
+    {
+      retryBaseMs: 25,
+      retryMaxMs: 100,
+      pump: async () => {
+        pumps += 1
+        if (pumps === 1) await firstGate
+        return { retryable: pumps < 3 ? 1 : 0 }
+      },
+      setTimer(callback, delay) {
+        const timer = { callback, delay, unrefCalled: false, unref() { this.unrefCalled = true } }
+        timers.push(timer)
+        return timer
+      },
+      clearTimer(timer) { cleared.push(timer) }
+    }
+  )
+  scheduler({ projectRef: 'project-retry' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(pumps, 1)
+  scheduler({ projectRef: 'project-retry' })
+  releaseFirst()
+  await new Promise(resolve => setImmediate(resolve))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(pumps, 2, 'mutation arriving during a running pump must drain on the trailing edge')
+  assert.equal(timers.length, 1)
+  assert.equal(timers[0].delay, 25)
+  assert.equal(timers[0].unrefCalled, true)
+  assert.equal(cleared.length, 0)
+  timers[0].callback()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(pumps, 3, 'definitive not-delivered work must retry without another mutation')
+  assert.equal(timers.length, 1, 'successful retry must not retain a polling loop')
+})
+
+test('project task wake scheduler close cancels delayed retries and apply disposes the scheduler', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-close=${Date.now()}-${Math.random()}`)
+  const timers = []
+  const cleared = []
+  let pumps = 0
+  const scheduler = mod.createProjectTaskWakeScheduler(
+    { logger: { warn() {} }, agents: { roots() { return [] } } },
+    undefined,
+    Promise.resolve(),
+    {
+      pump: async () => { pumps += 1; return { retryable: 1 } },
+      setTimer(callback, delay) {
+        const timer = { callback, delay, unref() {} }
+        timers.push(timer)
+        return timer
+      },
+      clearTimer(timer) { cleared.push(timer) }
+    }
+  )
+  scheduler({ projectRef: 'project-close' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(pumps, 1)
+  assert.equal(timers.length, 1)
+  scheduler.close()
+  assert.deepEqual(cleared, [timers[0]])
+  timers[0].callback()
+  scheduler({ projectRef: 'project-close' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(pumps, 1, 'closed scheduler must never pump from stale timers or new mutations')
+  const source = await readFile(pluginFile, 'utf8')
+  assert.match(source, /ctx\.effect\(\(\) => \(\) => projectTaskWakeScheduler\.close\(\)\)/u)
+})
+
+test('explicit Stop removes queued project wakes and fences enqueue resolution before ack', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-stop-race=${Date.now()}-${Math.random()}`)
+  let releaseEnqueue, enqueueStarted
+  const enqueueGate = new Promise(resolve => { releaseEnqueue = resolve })
+  const started = new Promise(resolve => { enqueueStarted = resolve })
+  const session = { id: 'wake-stop-root', header: { cwd: 'C:/wake-stop' }, events: [] }
+  const inbox = {
+    nextTurn: [], nextStep: [],
+    remove(id) {
+      for (const queue of [this.nextTurn, this.nextStep]) {
+        const index = queue.findIndex(message => message.id === id)
+        if (index >= 0) { queue.splice(index, 1); return true }
+      }
+      return false
+    }
+  }
+  const root = {
+    id: session.id, session, status: 'idle', inbox, cancel() {},
+    async followup(message) { inbox.nextTurn.push(message); enqueueStarted(); await enqueueGate }
+  }
+  let normalized = session.header.cwd.replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC')
+  if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
+  const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
+  const acknowledgements = []
+  const handlers = {}
+  const ctx = {
+    on(name, handler) { handlers[name] = handler },
+    agents: { get: id => id === root.id ? root : undefined, roots: () => [root] },
+    logger: { warn() {} }
+  }
+  mod.observeUserStops(ctx, { activeTeamsForRoot: () => [] }, Promise.resolve(), undefined, undefined)
+  const dispatch = mod.dispatchProjectTaskWakeSignals(ctx, {
+    canonicalProjectKey, dispatcherRef: 'stop-race-dispatcher', actorRefForSessionId: id => `actor:${id}`,
+    wake: { claim: () => [{ wakeRef: 'wake-stop-race', actorRef: `actor:${root.id}` }], ack: input => acknowledgements.push(input) }
+  })
+  await started
+  assert.equal(inbox.nextTurn.length, 1)
+  handlers['session/event'](session, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+  assert.equal(inbox.nextTurn.length, 0, 'Stop must remove queued project wake messages')
+  releaseEnqueue()
+  const result = await dispatch
+  assert.deepEqual(result, { claimed: 1, delivered: 0, retryable: 0 })
+  assert.equal(acknowledgements[0].outcome, 'paused')
+})
+
+test('Stop after wake claim but before exact-root lookup acknowledges the claimed lease as paused', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-stop-after-claim=${Date.now()}-${Math.random()}`)
+  const session = { id: 'wake-stop-after-claim-root', header: { cwd: 'C:/wake-stop-after-claim' }, events: [] }
+  const root = { id: session.id, session, status: 'idle', inbox: { nextTurn: [], nextStep: [], remove() { return false } }, cancel() {}, async followup() { assert.fail('stopped root must not enqueue') } }
+  let normalized = session.header.cwd.replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC')
+  if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
+  const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
+  const handlers = {}
+  const acknowledgements = []
+  const ctx = {
+    on(name, handler) { handlers[name] = handler },
+    agents: { get: id => id === root.id ? root : undefined, roots: () => [root] },
+    logger: { warn() {} }
+  }
+  mod.observeUserStops(ctx, { activeTeamsForRoot: () => [] }, Promise.resolve(), undefined, undefined)
+  const result = await mod.dispatchProjectTaskWakeSignals(ctx, {
+    canonicalProjectKey, dispatcherRef: 'stop-after-claim-dispatcher', actorRefForSessionId: id => `actor:${id}`,
+    wake: {
+      claim() {
+        handlers['session/event'](session, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+        return [{ wakeRef: 'wake-stop-after-claim', actorRef: `actor:${root.id}` }]
+      },
+      ack(input) { acknowledgements.push(input) }
+    }
+  })
+  assert.deepEqual(result, { claimed: 1, delivered: 0, retryable: 0 })
+  assert.equal(acknowledgements[0].outcome, 'paused')
+})
+
+test('project task wake session evidence scan is bounded to a recent tail window', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-tail=${Date.now()}-${Math.random()}`)
+  const wakeRef = 'wake-old-history'
+  const wakeMessage = { source: { kind: 'coordinator', summary: 'Project tasks' }, content: [{ type: 'text', text: `[Project task wake ${wakeRef}] old` }] }
+  const cwd = 'C:/wake-tail'
+  let normalized = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC')
+  if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
+  const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
+  let enqueues = 0
+  const root = {
+    id: 'wake-tail-root', status: 'idle', inbox: { nextTurn: [], nextStep: [] },
+    session: { header: { cwd }, events: [{ type: 'user/message', data: { message: wakeMessage } }, ...Array.from({ length: 512 }, () => ({ type: 'assistant/message', data: {} }))] },
+    async followup() { enqueues += 1 }
+  }
+  const acknowledgements = []
+  await mod.dispatchProjectTaskWakeSignals({ agents: { roots: () => [root] } }, {
+    canonicalProjectKey, dispatcherRef: 'tail-dispatcher', actorRefForSessionId: id => `actor:${id}`,
+    wake: { claim: () => [{ wakeRef, actorRef: `actor:${root.id}` }], ack: input => acknowledgements.push(input) }
+  })
+  assert.equal(enqueues, 1)
+  assert.equal(acknowledgements[0].outcome, 'delivered')
 })
 
 test('team worker admission is globally bounded, exact-root fair, and run-id precise', async () => {
@@ -417,10 +726,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
             const result = await rawSpawnTool.execute(args, execution)
             try {
               for (const taskId of args.task_ids) {
-                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'unassign' }, execution)
+                await fixedRootTaskUpdate(tools, result.teamId, taskId, 'unassign', execution)
                 const claim = await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'claim' }, execution)
                 await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch }, execution)
-                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'accept' }, execution)
+                await fixedRootTaskUpdate(tools, result.teamId, taskId, 'accept', execution)
               }
             } catch {}
             return result
@@ -432,10 +741,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
         try {
           const result = await rawSpawnTool.execute({ ...args, team_id: created.teamId, task_ids: [created.task.id] }, execution)
           try {
-            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'unassign' }, execution)
+            await fixedRootTaskUpdate(tools, result.teamId, created.task.id, 'unassign', execution)
             const claim = await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'claim' }, execution)
             await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch }, execution)
-            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'accept' }, execution)
+            await fixedRootTaskUpdate(tools, result.teamId, created.task.id, 'accept', execution)
           } catch {}
           return result
         } catch (error) { error.message += ` [spawn=${args.name}]`; throw error }
@@ -943,7 +1252,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
       submittedBy: rootAgent.id,
       source: 'explicit_complete'
     })
-    const projectedAcceptance = await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'accept' }, { agent: rootAgent, signal: new AbortController().signal })
+    const projectedAcceptance = await fixedRootTaskUpdate(tools, started.team.id, projectedTask.task.id, 'accept', { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(projectedAcceptance.task.acceptance.acceptedBy, rootAgent.id)
     const unblockedPeer = await tools.get('team_task_update').execute({ team_id: sibling.id, task_id: peerTask.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal })
     assertLosslessJson(unblockedPeer)
@@ -1371,12 +1680,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
         title: 'Must not bind failed assignee',
         assignee_session_id: memberGracefulFailureWorker.sessionId
       }, { agent: rootAgent, signal: new AbortController().signal }),
-      tools.get('team_task_update').execute({
-        team_id: memberGracefulFailureTeam.id,
-        task_id: failedAssigneeTask.id,
-        action: 'assign',
+      fixedRootTaskUpdate(tools, memberGracefulFailureTeam.id, failedAssigneeTask.id, 'assign', { agent: rootAgent, signal: new AbortController().signal }, {
         assignee_session_id: memberGracefulFailureWorker.sessionId
-      }, { agent: rootAgent, signal: new AbortController().signal })
+      })
     ]) {
      await assert.rejects(operation, error => {
         assert.equal(error?.code, 'AGENT_TEAMS_ASSIGNEE_UNAVAILABLE')

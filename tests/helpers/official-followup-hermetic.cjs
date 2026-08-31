@@ -26,9 +26,9 @@ const ACCEPTED = Object.freeze({
   'tests/official-alpha2-static-release-contract.test.cjs': '1e1e85e9470409cf07272517e0bd3b678ab3a6b491db8c3b2bd908d1bb97668b',
   'tests/official-alpha2-runtime-migration.test.cjs': 'd8cd7c703ea90ea67a7fbd16a43d7ff19bc9ac05aea12e9b2aa64896f5d96d26',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',
-  'README.md': '643ff56668dc25333bbc04916736cdf7fab2714e8de0c4677ce13955809e4ef6',
-  'CHANGELOG.md': 'bde005ed6ea22fe74b30afeb934c2e450c994b00da928fec2667e5751357aa5d',
-  'release-notes.md': 'e6341b8c421db1dfb6d93b9396fa9e1604ed37782539a577fa7d60458d024a79'
+  'README.md': 'bd7a0b1b73fd23d82aae60d282efe53b66998245951851f2170798334a134ac6',
+  'CHANGELOG.md': '0dffb30e13f16eed7f49fb721b6830fee4af6548221097d5146e7336956b4597',
+  'release-notes.md': '228d2da623aecae9267390efb338468efa7b4472587354fc5d5df9c2820df71a'
 })
 const ACCEPTED_MIGRATION_FILES = Object.freeze({
   'candidate-summary.json': '76cce10f2aeb698528f61ddb54fcd94bc274409a89554c45cdc2643eefe2ae15',

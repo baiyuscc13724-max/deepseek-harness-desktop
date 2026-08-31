@@ -266,15 +266,16 @@ function projectTaskWebError(error) {
 }
 
 class ProjectTaskWebRuntime {
-  constructor({ projectEntry, legacySummaryProvider = () => false, now = Date.now, randomBytesImpl = randomBytes } = {}) {
+  constructor({ projectEntry, legacySummaryProvider = () => false, now = Date.now, randomBytesImpl = randomBytes, wakeScheduler = () => undefined } = {}) {
     if (typeof projectEntry?.localProjectTaskContext !== "function") throw new TypeError("projectEntry must provide localProjectTaskContext");
     if (typeof legacySummaryProvider !== "function") throw new TypeError("legacySummaryProvider must be a function");
-    if (typeof now !== "function" || typeof randomBytesImpl !== "function") throw new TypeError("runtime functions are invalid");
+    if (typeof now !== "function" || typeof randomBytesImpl !== "function" || typeof wakeScheduler !== "function") throw new TypeError("runtime functions are invalid");
     const cursorKey = randomBytesImpl(32);
     if ((!Buffer.isBuffer(cursorKey) && !(cursorKey instanceof Uint8Array)) || cursorKey.byteLength !== 32) throw new TypeError("randomBytesImpl must return 32 bytes");
     this.projectEntry = projectEntry;
     this.legacySummaryProvider = legacySummaryProvider;
     this.now = now;
+    this.wakeScheduler = wakeScheduler;
     this.cursorKey = Buffer.from(cursorKey);
     this.binding = undefined;
     this.collaborationCache = new Map();
@@ -434,7 +435,7 @@ class ProjectTaskWebRuntime {
     const store = new ProjectTaskStore({ filePath: context.databasePath, keyProvider: context.keyProvider });
     try {
       store.initialize();
-      const service = new ProjectTaskCommandService({ store, actorResolver: context.actorResolver, now: this.now });
+      const service = new ProjectTaskCommandService({ store, actorResolver: context.actorResolver, now: this.now, wakeScheduler: this.wakeScheduler });
       const collaborationService = new ProjectCollaborationService({ store, actorResolver: context.actorResolver, now: this.now });
       context.actorResolver(context.execution, context.projectRef);
       this.binding = { context, store, service, collaborationService };

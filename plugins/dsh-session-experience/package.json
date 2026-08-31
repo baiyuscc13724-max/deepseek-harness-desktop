@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-experience",
-  "version": "1.0.55",
+  "version": "1.0.56",
   "description": "会话与附件体验：跨会话完成通知、归档历史入口、会话 ID 复制/快速定位，以及输入框回形针附件入口。",
   "type": "module",
   "main": "lib/index.js",
@@ -13,7 +13,6 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-input-trigger",
         "@deepseek-ai/dsh-client-ui-layout"

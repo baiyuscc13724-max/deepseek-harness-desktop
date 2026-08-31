@@ -157,6 +157,7 @@ public final class MainActivity extends AppCompatActivity {
     private int nativeP2pSocksPort;
     private String routeStatus = "尚未验证可用线路";
     private boolean backDispatchPending;
+    private boolean imeVisible;
     private OnBackPressedCallback legacyBackCallback;
     private Api33BackDispatcher api33BackDispatcher;
     private ConnectivityManager connectivityManager;
@@ -417,11 +418,6 @@ public final class MainActivity extends AppCompatActivity {
         webView.onResume();
         webView.resumeTimers();
         mobileUiAdapter.inject(webView);
-        // WebView may install its own same-priority callback while resuming;
-        // re-register last so the native runtime gets the real edge-back event.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null) {
-            api33BackDispatcher.refreshRegistration();
-        }
     }
 
     private void checkMobileAppUpdate() {
@@ -474,14 +470,18 @@ public final class MainActivity extends AppCompatActivity {
                 WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout()
             );
             Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
-            boolean imeVisible = windowInsets.isVisible(WindowInsetsCompat.Type.ime());
+            boolean nextImeVisible = windowInsets.isVisible(WindowInsetsCompat.Type.ime());
+            imeVisible = nextImeVisible;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null) {
+                api33BackDispatcher.setImeVisible(nextImeVisible);
+            }
             view.setPadding(
                 left + systemBars.left,
                 top + systemBars.top,
                 right + systemBars.right,
                 bottom + systemBars.bottom
             );
-            publishImeInsets(imeVisible, Math.max(0, ime.bottom - systemBars.bottom));
+            publishImeInsets(nextImeVisible, Math.max(0, ime.bottom - systemBars.bottom));
             return windowInsets;
         });
         ViewCompat.requestApplyInsets(root);
@@ -647,11 +647,6 @@ public final class MainActivity extends AppCompatActivity {
 
             @Override public void onPageCommitVisible(WebView view, String url) {
                 mobileUiAdapter.inject(view);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null) {
-                    // Page attachment is when WebView can add its own back callback;
-                    // refresh after it so this callback remains the last DEFAULT one.
-                    api33BackDispatcher.refreshRegistration();
-                }
                 if (!mainFrameLoadFailed) revealWorkbench();
             }
 
@@ -1636,9 +1631,11 @@ public final class MainActivity extends AppCompatActivity {
         };
         getOnBackPressedDispatcher().addCallback(this, legacyBackCallback);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Registration is lifecycle-owned by onStart; page callbacks refresh
-            // ordering after WebView has attached its own back handling.
+            // Registration is lifecycle-owned by onStart. The dispatcher yields
+            // completely while the IME is visible, then uses OVERLAY priority to
+            // beat WebView's DEFAULT callback on ordinary workbench pages.
             api33BackDispatcher = new Api33BackDispatcher(this, this::handleWorkbenchBack);
+            api33BackDispatcher.setImeVisible(imeVisible);
         }
     }
 
@@ -1673,8 +1670,15 @@ public final class MainActivity extends AppCompatActivity {
      */
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private static final class Api33BackDispatcher {
+        // WebView registers its own callback at PRIORITY_DEFAULT once a page is
+        // attached, so the app callback needs OVERLAY priority to receive edge
+        // gestures. While the IME is visible it is deliberately unregistered,
+        // leaving the first back gesture to dismiss the keyboard.
+        private static final int WORKBENCH_PRIORITY = OnBackInvokedDispatcher.PRIORITY_OVERLAY;
         private final OnBackInvokedDispatcher dispatcher;
         private final OnBackInvokedCallback callback;
+        private boolean started;
+        private boolean imeVisible;
         private boolean registered;
 
         Api33BackDispatcher(Activity activity, Runnable listener) {
@@ -1683,21 +1687,30 @@ public final class MainActivity extends AppCompatActivity {
         }
 
         void register() {
-            if (registered) return;
-            dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback);
-            registered = true;
+            started = true;
+            updateRegistration();
         }
 
         void unregister() {
-            if (!registered) return;
-            dispatcher.unregisterOnBackInvokedCallback(callback);
-            registered = false;
+            started = false;
+            updateRegistration();
         }
 
-        void refreshRegistration() {
-            if (!registered) return;
-            unregister();
-            register();
+        void setImeVisible(boolean visible) {
+            if (imeVisible == visible) return;
+            imeVisible = visible;
+            updateRegistration();
+        }
+
+        private void updateRegistration() {
+            boolean shouldRegister = started && !imeVisible;
+            if (registered == shouldRegister) return;
+            if (shouldRegister) {
+                dispatcher.registerOnBackInvokedCallback(WORKBENCH_PRIORITY, callback);
+            } else {
+                dispatcher.unregisterOnBackInvokedCallback(callback);
+            }
+            registered = shouldRegister;
         }
     }
 

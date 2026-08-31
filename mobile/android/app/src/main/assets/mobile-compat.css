@@ -5053,7 +5053,7 @@
   margin: 0 auto !important;
   padding: 16px !important;
   display: grid !important;
-  grid-template-rows: auto auto auto minmax(0, 1fr) !important;
+  grid-template-rows: auto auto 44px minmax(0, 1fr) !important;
   gap: 12px !important;
   overflow: hidden !important;
   border: 1px solid var(--hm-color-border, #dfe3e8) !important;
@@ -5146,16 +5146,34 @@
 }
 
 [data-harness-mobile-model-sheet] [role="tablist"] {
+  box-sizing: border-box !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  max-height: 44px !important;
   display: grid !important;
   grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  align-items: stretch !important;
   gap: 8px !important;
+  overflow: hidden !important;
 }
 
-[data-harness-mobile-model-tab] {
+[data-harness-mobile-model-sheet] [role="tablist"] > [data-harness-mobile-model-tab] {
+  box-sizing: border-box !important;
+  width: auto !important;
+  height: 44px !important;
   min-height: 44px !important;
+  max-height: 44px !important;
+  margin: 0 !important;
+  padding: 0 12px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  align-self: stretch !important;
+  overflow: hidden !important;
   border: 1px solid var(--hm-color-border, #dfe3e8) !important;
   border-radius: 13px !important;
   background: transparent !important;
+  line-height: 20px !important;
   touch-action: manipulation !important;
 }
 
@@ -5633,4 +5651,95 @@ html[data-harness-mobile="true"] #harness-mobile-presentation-root > #harness-mo
     grid-row: 3 !important;
     align-self: end !important;
   }
+}
+
+/* The attachment package renders original-image preview as a body portal.
+   Keep its viewport geometry and dismissal control independent from generic
+   settings/sheet rules, and place it above the mobile presentation root. */
+html[data-harness-mobile="true"] [data-harness-mobile-image-lightbox="true"] {
+  box-sizing: border-box !important;
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 1200 !important;
+  width: 100vw !important;
+  min-width: 100vw !important;
+  max-width: 100vw !important;
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)) !important;
+  display: grid !important;
+  place-items: center !important;
+  overflow: visible !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  isolation: isolate !important;
+  pointer-events: auto !important;
+}
+
+html[data-harness-mobile="true"] [data-harness-mobile-image-lightbox="true"] > div[aria-hidden="true"] {
+  box-sizing: border-box !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 0 !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  display: block !important;
+  overflow: visible !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: var(--dsw-alias-bg-mask-1, rgba(8, 16, 28, .78)) !important;
+  backdrop-filter: var(--dsw-mask-blur, blur(12px)) !important;
+  -webkit-backdrop-filter: var(--dsw-mask-blur, blur(12px)) !important;
+  pointer-events: auto !important;
+}
+
+html[data-harness-mobile="true"] [data-harness-mobile-image-lightbox="true"] > img {
+  box-sizing: border-box !important;
+  position: relative !important;
+  z-index: 1 !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: calc(100vw - 32px) !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: calc(100dvh - 40px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+  margin: 0 !important;
+  object-fit: contain !important;
+  overflow: visible !important;
+  border-radius: 12px !important;
+  pointer-events: auto !important;
+}
+
+html[data-harness-mobile="true"] [data-harness-mobile-image-lightbox="true"] > button[data-harness-mobile-image-lightbox-close="true"] {
+  box-sizing: border-box !important;
+  position: fixed !important;
+  top: max(12px, env(safe-area-inset-top)) !important;
+  right: max(12px, env(safe-area-inset-right)) !important;
+  z-index: 2 !important;
+  width: 48px !important;
+  min-width: 48px !important;
+  max-width: 48px !important;
+  height: 48px !important;
+  min-height: 48px !important;
+  max-height: 48px !important;
+  margin: 0 !important;
+  padding: 12px !important;
+  display: grid !important;
+  place-items: center !important;
+  overflow: visible !important;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent) !important;
+  border-radius: 999px !important;
+  color: var(--dsw-alias-label-primary, #171719) !important;
+  background: var(--dsw-specific-input-major, var(--dsw-alias-bg-elevated, #fff)) !important;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .2) !important;
+  pointer-events: auto !important;
+  touch-action: manipulation !important;
 }

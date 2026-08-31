@@ -1,74 +1,62 @@
-# Harness Desktop 1.0.55
+# Harness Desktop 1.0.56
 
-v1.0.55 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥可用性、Android 配对可靠性和长会话响应速度的正式更新。它修复了普通项目内续作反复要求用户发送“继续”的问题，恢复了环境密钥场景下直接输入安全覆盖的能力，并修复 v1.0.53 Android 正式 APK 扫码配对后由 WebRTC JNI 混淆触发的原生闪退，同时保留真实外部副作用和不可逆操作的硬门禁。
+v1.0.56 是一次整合官方 Harness `0.1.2-alpha.3`、Agent Teams 可靠性、Mobile 导航与附件体验，以及定时任务实现收敛的正式更新。本版把当前维护树中已完成的多会话修复统一纳入同一个不可变版本，并继续保留 Stop、跨项目、真实外部副作用、结果未知、敏感输入和发布签名的硬门禁。
 
 本版本不会静默替用户安装。桌面端只有在用户于更新中心明确点击更新/安装后才会切换版本；Android 仍必须由用户手动安装长期证书签名的 APK。
 
-## 官方 Harness alpha.2 维护迁移（发布前硬门禁）
+## 官方 Harness alpha.3 维护迁移
 
-- 官方运行时维护依赖已从历史 `0.1.1-rc.2` 原子迁移到精确 `0.1.2-alpha.2`：20 个直接 DSH roots、861 个 lock locations、216 个 DSH locations / 215 个唯一包名。执行时重新查询的官方 tag 为 `dsh-v0.1.2-alpha.2`，ref 为 `0a53fb55bea101816fa226bb964ae2bed71c343b`；npm 的 `alpha` dist-tag 同样指向 `0.1.2-alpha.2`，而 `latest`/`next` 仍是 `0.1.1-rc.2`，因此产品始终使用精确 pin，不以浮动 tag 取代它。
-- alpha.2 已移除 `@deepseek-ai/dsh-client-runtime` 和 `@deepseek-ai/dsh-host-apiproxy`。旧补丁入口已退休；New Session、SessionManager/list baseline 与 workspace force-new 已按公开 Session Controller、native session-list 和 `startSession` owners 重基。首次 patch 精确改变 25 个文件，第二次为 0 差异、0 byte delta。
-- **RPC wire 合同**：桌面、Mobile 与桌宠生产客户端只发出固定 `workspace/...` / `session/...` slash endpoints 和 descriptor-shaped 参数；Workspace 只消费 `workspace/follow` baseline frames，Session 只消费 snapshot/cursor projection frames；generated strict descriptor 或 codec 漂移一律 fail closed。
-- 自研 Project/Team、canonical-project 隔离、submission acceptance ledger、routing receipts、locks、recovery、cursors 与 evidence 继续是唯一 authoritative 数据面。官方 experimental Team 不接管，也不进行 schema 或状态双写。
-- 历史 rc.2/NO-GO/`runtimeEquivalent=false` 审计仍可追溯，但已被当前维护迁移证据取代，不能作为本版运行时或发布状态的描述。尚未执行的 hermetic 终验、完整矩阵和 Root fresh-review ACK 仍是发布前硬门禁；本说明不把它们写成已通过，也不声明未产生的最终计数。
+- 所有直接官方 DSH 依赖统一精确固定为 `0.1.2-alpha.3`，lockfile 保留精确 resolved/integrity；移除包不得重新进入直接依赖图，意外新增 root 或版本漂移一律 fail closed。
+- 此前的官方 `0.1.2-alpha.2` 证据仅作为 superseded 历史迁移基线保留，不再描述当前运行时、门禁或发布状态。
+- 原生接入 Session Controller 的长历史 `loadThrough`、轮次导航与 `turnOutline` projection、附件队列缩略图、手动断线重连、Schedule catalog，以及 Gateway/Remotes stream 能力。
+- 关键 alpha.3 capability artifacts 同时校验精确 SHA-256 和预期语义片段，避免“版本号相同但运行能力漂移”被误判为兼容。
+- Session Experience 不再依赖已退休的 `@deepseek-ai/dsh-client-runtime`；append surface 只接受明确的 user/assistant/tool result 事件类型。
+- 自研 Project/Team、canonical project 隔离、任务/租约/验收账本、路由回执、恢复和证据仍是唯一权威数据面；官方 experimental Team 不接管，也不进行状态双写。
 
-## Agent Teams 自动驾驶不再反复打断
+## Agent Teams 任务、租约与恢复修复
 
-- 同一 exact live root、同一 canonical project、团队 active 且未暂停，且 capability 已验证、文件无冲突、外部 effect 全为 `none` 时，修复、复测、checkpoint、reclaim、reopen 和无歧义重规划可沿既定目标自动继续。
-- 默认 AI 选择的 main/subagent 路由属于普通授权范围，不会因为 main-tier 成员或全员已退休而额外索要“继续”。
-- 新运行以成功发布后的 `publishedAt` 保留持续授权；旧团队只接受与 member session、claimId、leaseEpoch 精确绑定的历史执行收据，retired/failed 占位本身不能伪造授权。
-- 新建团队、显式 Stop 后 Resume、handoff/adopt/recover、未知能力、文件冲突、跨项目或所有权扩张、真实外部副作用、`outcome_unknown`、不可逆风险和目标歧义仍然硬性停止。
-- 持续授权保持 `human_attested`，绝不会被模型升级成 `host_verified`。
+- `leaseEpoch=0` 不再被 UI 当作缺失值；任务认领、提交、复核和释放继续精确绑定 claimId、leaseEpoch 与当前 revision。
+- 修复显式 Stop 与迟到 submission 的竞态：暂停先于 replay 生效，迟到结果不能越过 pause epoch，停止后的任务可安全回到 pending。
+- 强制成员退休会清理活动 claim、追加释放账本并恢复可认领任务，不再留下僵尸租约或长期阻塞。
+- Root 的破坏性项目任务命令（含 `release`）统一使用 revision/CAS 和持久 request receipt；no-op replay、retired target replay、state-only 伪造及 stale revision 均有明确拒绝或幂等语义。
+- 外部 effect 状态变化会推进 revision；`outcome_unknown` 仍须精确 Host 授权，不能因重试、恢复或 UI 重放而绕过。
+- 顶层协作会话的排队启动状态写入 schema v13 waiter/outbox；Host wake scheduler 可在重启后恢复未完成投递，已确认投递不会重复创建。
+- 顶层子会话启动前执行精确 workspace 预检，并把已验证的工作目录持久传递给子进程；错误目录或不可用 workspace 直接失败。
+- 新增完整使用缺陷审计与 OCC 回归，覆盖自动路由、计划、任务板、Stop、恢复、会话启动和跨重启场景。
 
-## Agent Teams P1 安全与持久化整改
+## Mobile 导航、设置与附件体验
 
-- accepted-completed 团队接管继续把 acceptance 绑定到原负责人 epoch；adopt 不篡改 `acceptedBy`，旧 claim/lease 在新 pause epoch 下失效。
-- `resolve_unknown` 改用 Host 发行、短时效、单用途授权，绑定 root、turn、team/task/effect、attempt、outcome、pauseEpoch、team revision 和规范化参数摘要；替换参数、过期、跨回合、跨工具与重放全部拒绝。
-- 项目设备、E2EE 与 LAN 私钥通过 Host secret capability 和系统安全存储桥接；profile 只保留不敏感引用，迁移、篡改、能力不可用和落盘泄露都有动态门禁。
-- 安全信道 receipt 具备持久化、重启和容量语义；same-dedupe 的检查与 Inbox 追加进入同一串行 mutation，双实例竞态不再依赖调用方自行规避。
-- 打包版首次启动从真实的版本化 runtime cache复制 Agent Teams 依赖，避免对 `app.asar` 虚拟目录递归复制；修复 Windows 在 `preparing-runtime` 阶段退出、APP 无法打开的问题。
+- Android 与 iOS 共享资源继续保持字节一致；四域导航固定为“对话 / 代理团队 / 定时任务 / 我的”，并优先绑定权威 Agent Teams 画布和正式任务视图。
+- “我的”直接复用官方 Settings 页面，不再创建重复占位表面；设置页挂载、异步打开、返回、页面隔离和加载/失败状态均按语义控件处理。
+- 展开项目不会误关侧栏或抢占输入框焦点；对话详情状态滞后时，系统返回键可依据可见 composer 恢复正确层级。
+- 附件图片预览按结构识别为全屏 lightbox，不再套用通用 bottom-sheet 几何；图片保持 viewport 内完整缩放，48px 关闭按钮可触摸，系统返回优先关闭预览且不依赖中英文按钮文本。
+- 原生输入、附件选择/上传和 tool-result 图片交付继续接受有界数据与明确 MIME/来源，敏感输入及权限边界不变。
 
-## 环境密钥可直接输入安全覆盖
+## 定时任务实现收敛
 
-- 启动环境中的 Provider secret 仍不可读取、显示或回写；设置和审计层只保存 credential ref，不保存原始密钥。
-- 原密码字段现在可直接键入或粘贴。输入第一个字符即创建隔离的 `HARNESS_DESKTOP_<PROVIDER>_API_KEY` 覆盖，不需要额外开启“自定义密钥”。
-- 支持覆盖的新增、修改、删除和“恢复环境来源”；恢复失败会按最新 settings revision 补偿重绑仍存在的覆盖，避免普通单故障留下孤儿引用。
-- 删除自定义 Provider 会清理页面托管的普通或 `HARNESS_DESKTOP_*` 凭据引用，但不会把环境引用误当作可删除 secret。
-- 字段使用原生 label、稳定 id、密码掩码、`autocomplete=new-password`、持续帮助文本和不小于 44px 的输入/恢复/删除/确认目标；没有粘贴拦截。
+- 桌面启动时删除已退休的 `dsh-desktop-schedules` profile 副本和 patch 项，只保留一个官方 `@deepseek-ai/dsh-schedule` 入口。
+- 清理过程保持原有第三方 patch 行、可重复执行，并把官方 replacement 状态显式返回给 Host。
+- 既有 session-local schedule 工具合同继续可观察；普通创建、删除、列举和到期交付不因 UI 实现收敛而改变。
 
-## Android 扫码配对不再触发原生闪退
+## 发布前门禁
 
-- 修复 v1.0.53 正式 APK 在 R8 混淆后改名 WebRTC / jni_zero JNI 绑定，导致扫码启动 P2P 时 `libjingle_peerconnection_so.so` 于 `JNI_OnLoad` 触发 `SIGTRAP` 的问题。
-- Release shrinker 现在保持 `org.webrtc.**`、`org.jni_zero.**` 及其注解元数据；正式 `assembleRelease` 额外解析 R8 mapping，若 `PeerConnectionFactory.initialize`、`NativeLibrary.initialize` 或 `JniInit` 被改名会直接阻断构建。
-- 覆盖安装修正版即可继续使用原有加密配对配置，不要求清除 App 数据或重新读取二维码中的敏感字段。
+正式发布必须在干净、已提交的精确 source revision 上重新完成：
 
-## 长会话与工作区性能门禁
+- 全仓 `npm run verify` 与 `npm run verify:release`；
+- 官方 alpha.3 dependency、capability artifact、patch composition、remote seam 和 hermetic acceptance；
+- Agent Teams / Project 的任务、OCC、恢复、Stop、会话启动和 UI 契约；
+- Android JVM 单元测试、iPhone/iPad 模拟器验证及 Android/iOS 共享资源一致性；
+- `git diff --check`、版本身份、安全声明和发布合同。
 
-- 大型消息树投影基准由约 150.828 ms 降至 1.128 ms；折叠的 4,000 步对话不再急切渲染全部前缀，首批固定为 64 项，并优先保证深层已选调用可达。
-- 会话字段投影基准由约 113.540 ms 降至 0.436 ms；160 个会话制品由约 2,457.747 ms 降至 279.330 ms。
-- 会话列表、会话持久化、Conversation Work Tree、Session Experience 生命周期、renderer observer 和右侧工作区进入同一双层门禁。
-- 最终合成 Electron 场景覆盖 8 个会话、每个 1,200 条逻辑消息、180 次切换和 120 次滚动：switch p95 9.5 ms、最长 long task 91 ms、无保留堆增长、listener cleanup 回到 0。该结果表示预算通过，不把不同场景的时序差异包装成绝对性能承诺。
-- 会话性能补丁与 tool-result owner/session 补丁精确支持 raw、flat 及 `workTreeItems + renderedNodeKeys` 组合；完整组合幂等，任一半补丁继续 fail closed。
-
-## 验证与发布前硬门禁
-
-当前维护迁移已具备独立的 alpha.2 dependency/patch receipts，但最终 hermetic 终验尚未执行；因此不会复用历史 rc.2/候选报告中的 `6/6`、旧摘要或测试总数来宣称当前发布通过。发布前必须重新在干净、隔离的来源与依赖快照上完成并记录：
-
-- 20 个精确 alpha.2 roots、861 个 lock locations、216 / 215 DSH locations/unique names，以及 removed-package=0、resolved/integrity drift=0；
-- detached install、patch 首次 25 文件 / 第二次 0 差异的可重跑证据；
-- submission/acceptance、routing、canonical project/Team isolation、locks/recovery/cursors/evidence 与官方 seam 的完整 hermetic 矩阵；
-- 相关静态、发布说明和链接合同，以及 `git diff --check`；
-- Root 对完整 evidence、源摘要与计数的 fresh-review ACK。
-
-通过上述硬门禁后，正式发布仍只能由仓库唯一的 resumable publisher 从精确 main 提交执行全平台 GitHub Actions 构建、iPhone/iPad 模拟器验证、Windows 安装/卸载与打包自检、Android 长期证书签名、生产组件签名、精确 18 项资产清单、GitHub→CNB 云到云镜像，并在所有不可变资产就绪后才提升三个 stable feed。
+正式制品仍只能由仓库唯一的 resumable publisher 从精确候选提交触发 GitHub Actions 云构建。发布器负责不可变 `v1.0.56` Tag、Windows/macOS/Linux 制品、签名 Android、签名生产组件、精确 18 项资产清单、GitHub→CNB 云到云镜像，并在两端验证完成后最后提升三个 stable feed；不得用本地打包或手工上传绕过任一阶段。
 
 ## 版本身份
 
-- 桌面根包、lockfile 和 14 个随包插件：`1.0.55`
-- Android：`versionName=1.0.55`、`versionCode=1005400`
-- iOS/iPadOS 源码：`MARKETING_VERSION=1.0.55`、build `10054`
-- 正式不可变 Tag：`v1.0.55`
-- 已发布 `v1.0.53` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变
+- 桌面根包、lockfile 和 14 个随包插件：`1.0.56`
+- Android：`versionName=1.0.56`、`versionCode=1005600`
+- iOS/iPadOS 源码：`MARKETING_VERSION=1.0.56`、build `10056`
+- 正式不可变 Tag：`v1.0.56`
+- 已发布 `v1.0.55` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变
 
 ## 获取更新
 
@@ -78,7 +66,7 @@ v1.0.55 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥�
 
 ### Android
 
-下载 `Harness-Mobile-1.0.55-android-universal.apk` 及其 `.sha256`，核对摘要后由用户手动安装。若 Android 提示签名冲突，请不要强行覆盖来源不明的旧包。
+下载 `Harness-Mobile-1.0.56-android-universal.apk` 及其 `.sha256`，核对摘要后由用户手动安装。若 Android 提示签名冲突，请不要强行覆盖来源不明的旧包。
 
 ### macOS 与 iPhone/iPad
 
@@ -86,9 +74,9 @@ macOS 提供 Intel 和 Apple Silicon 的 DMG/ZIP 预览包，当前仍采用明�
 
 ## 下载与完整性
 
-- GitHub Release：[v1.0.55](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.55)
+- GitHub Release：[v1.0.56](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.56)
 - 永久最新版入口：[GitHub Releases / latest](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)
-- 桌面摘要：[SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/SHA256SUMS.txt)
-- 组件摘要：[COMPONENT-SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/COMPONENT-SHA256SUMS.txt)
+- 桌面摘要：[SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.56/SHA256SUMS.txt)
+- 组件摘要：[COMPONENT-SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.56/COMPONENT-SHA256SUMS.txt)
 
-如果 GitHub 下载受限，可把同一文件名中的下载前缀换为 `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.55/`。GitHub 与 CNB 文件应具有相同大小和 SHA-256；不一致时不要运行该文件。
+如果 GitHub 下载受限，可把同一文件名中的下载前缀换为 `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.56/`。GitHub 与 CNB 文件应具有相同大小和 SHA-256；不一致时不要运行该文件。

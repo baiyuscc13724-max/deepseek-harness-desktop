@@ -842,7 +842,7 @@
   }
 
   const officialSettingsSurface = () => {
-    const dialog = document.querySelector('[data-harness-mobile-settings-dialog="true"]')
+    const dialog = document.querySelector?.('[data-harness-mobile-settings-dialog="true"]')
     if (dialog) return dialog
     const selectors = [
       '[data-slot="settings.page"]',
@@ -869,6 +869,7 @@
     }
     // MuMu and newer desktop builds expose settings as a page, not a modal.
     surface.dataset.harnessMobileSettingsDialog = 'true'
+    root.dataset.harnessMobileSettingsOpen = 'true'
     decorateSettingsDialog(surface, nav, content)
     return surface
   }
@@ -949,45 +950,9 @@
   }
 
   const navigateMobileDomain = (domain, shell) => {
-    const navigationRevision = (mobileNavigationState.navigationRevision || 0) + 1
-    mobileNavigationState.navigationRevision = navigationRevision
-    if (domain.id === 'me') {
-      releaseComposerFocus()
-      mobileNavigationState.pendingDomain = 'me'
-      mobileNavigationState.activeDomain = 'me'
-      root.dataset.harnessMobileMyOpening = 'true'
-      delete root.dataset.harnessMobileMyDetail
-      const myStatus = shell?.querySelector?.('[data-harness-mobile-my-status]')
-      if (myStatus) myStatus.textContent = '正在打开桌面设置…'
-      clearNavigationNotice(shell)
-      syncMobileAppShell()
-      const stillOpeningMy = () => mobileNavigationState.activeDomain === 'me' && mobileNavigationState.navigationRevision === navigationRevision
-      return Promise.resolve(waitForOfficialSettings(shell, stillOpeningMy)).then(opened => {
-        if (!stillOpeningMy()) return false
-        if (opened) {
-          root.dataset.harnessMobileMyDetail = 'official'
-          if (myStatus) myStatus.textContent = ''
-          return true
-        }
-        delete root.dataset.harnessMobileMyDetail
-        if (myStatus) myStatus.textContent = '桌面设置暂未就绪；“我的”页面仍可继续使用。'
-        return false
-      }).catch(() => {
-        if (stillOpeningMy()) {
-          delete root.dataset.harnessMobileMyDetail
-          if (myStatus) myStatus.textContent = '桌面设置暂未就绪；“我的”页面仍可继续使用。'
-        }
-        return false
-      }).finally(() => {
-        if (!stillOpeningMy()) return
-        delete root.dataset.harnessMobileMyOpening
-        if (mobileNavigationState.pendingDomain === 'me') mobileNavigationState.pendingDomain = ''
-        syncMobileAppShell()
-      })
-    }
     delete root.dataset.harnessMobileMyOpening
     delete root.dataset.harnessMobileMyDetail
-    if (root.dataset.harnessMobileSettingsOpen === 'true') {
+    if (domain.id !== 'me' && root.dataset.harnessMobileSettingsOpen === 'true') {
       const dialog = document.querySelector('[data-harness-mobile-settings-dialog="true"]')
       findNativeSettingsClose(dialog)?.click()
     }
@@ -1260,6 +1225,7 @@
     }
     let shell = document.getElementById('harness-mobile-app-shell')
     if (shell) {
+      shell.querySelector('[data-harness-mobile-my-surface]')?.remove()
       if (shell.parentElement !== presentationRoot) presentationRoot.appendChild(shell)
       return shell
     }
@@ -1267,6 +1233,9 @@
     shell.id = 'harness-mobile-app-shell'
     const navigationItems = mobileDomains.map(domain => `<button type="button" role="tab" data-harness-mobile-domain="${domain.id}" data-mobile-route="${domain.route}"><span data-harness-mobile-domain-icon>${appIcon(domain.id)}</span><span data-harness-mobile-domain-label>${domain.label}</span></button>`).join('')
     shell.innerHTML = `<header data-harness-mobile-appbar="true"><button type="button" data-harness-mobile-action="menu" data-harness-mobile-home-text="true" aria-label="首页"><span>首页</span></button><div data-harness-mobile-heading><strong>新对话</strong><span>Harness Mobile</span></div><button type="button" data-harness-mobile-action="new" aria-label="新建会话">${appIcon('new')}</button></header><button type="button" data-harness-mobile-conversation-search-proxy aria-label="搜索项目和对话"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>搜索项目和对话</span></button><div data-harness-mobile-conversation-search-box hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" enterkeyhint="search" aria-label="搜索项目和对话" placeholder="搜索项目和对话"><button type="button" aria-label="清除搜索">×</button></div><div data-harness-mobile-conversation-list-title><div><strong>项目与对话</strong><span data-harness-mobile-conversation-count>0 个项目 · 0 个对话</span></div><button type="button" data-harness-mobile-project-details>项目详情</button></div><main data-harness-mobile-my-surface hidden aria-labelledby="harness-mobile-my-title"><section data-harness-mobile-my-intro><span>账户与设置</span><h1 id="harness-mobile-my-title">我的</h1><p>在手机上快速进入常用设置；详细配置仍与桌面端保持一致。</p></section><section data-harness-mobile-my-group aria-labelledby="harness-mobile-my-basics"><h2 id="harness-mobile-my-basics">基础与外观</h2><button type="button" data-harness-mobile-settings-entry="general"><span data-harness-mobile-my-entry-icon aria-hidden="true">${appIcon('me')}</span><span><strong>通用设置</strong><small>语言、外观与会话默认项</small></span><span aria-hidden="true">›</span></button></section><section data-harness-mobile-my-group aria-labelledby="harness-mobile-my-ai"><h2 id="harness-mobile-my-ai">AI 与代理</h2><button type="button" data-harness-mobile-settings-entry="models"><span data-harness-mobile-my-entry-icon aria-hidden="true">${appIcon('agents')}</span><span><strong>模型路由</strong><small>主模型、子代理与提供方目录</small></span><span aria-hidden="true">›</span></button></section><section data-harness-mobile-my-group aria-labelledby="harness-mobile-my-capabilities"><h2 id="harness-mobile-my-capabilities">插件与能力</h2><button type="button" data-harness-mobile-settings-entry="plugins"><span data-harness-mobile-my-entry-icon aria-hidden="true">${appIcon('tasks')}</span><span><strong>插件</strong><small>管理已安装插件与配置</small></span><span aria-hidden="true">›</span></button><button type="button" data-harness-mobile-settings-entry="mobile"><span data-harness-mobile-my-entry-icon aria-hidden="true">${appIcon('conversations')}</span><span><strong>电脑与移动端</strong><small>配对设备、远程线路与连接状态</small></span><span aria-hidden="true">›</span></button></section><p data-harness-mobile-my-status role="status" aria-live="polite"></p></main><button type="button" data-harness-mobile-drawer-scrim aria-label="关闭会话历史"></button><nav data-harness-mobile-navigation role="tablist" aria-label="主要导航">${navigationItems}</nav><p data-harness-mobile-navigation-status role="status" aria-live="polite" aria-atomic="true"></p><div data-harness-mobile-app-menu hidden aria-label="会话功能"></div>`
+    // The authoritative desktop settings surface is the only “我的” page.
+    // Remove the former mobile fallback before the shell can paint it.
+    shell.querySelector('[data-harness-mobile-my-surface]')?.remove()
     const searchProxy = shell.querySelector('[data-harness-mobile-conversation-search-proxy]')
     const searchBox = shell.querySelector('[data-harness-mobile-conversation-search-box]')
     const searchInput = searchBox.querySelector('input')
@@ -1384,10 +1353,29 @@
     return Boolean(conversation?.querySelector?.('[data-composer-card]') && visible(conversation))
   }
 
+  const mobileImageLightboxParts = dialog => {
+    if (!dialog?.matches?.('[role="dialog"][aria-modal="true"]')) return null
+    const mask = dialog.querySelector?.(':scope > div[aria-hidden="true"]')
+    const image = dialog.querySelector?.(':scope > img')
+    const close = dialog.querySelector?.(':scope > button')
+    return mask && image && close ? { mask, image, close } : null
+  }
+
+  const dismissMobileImageLightbox = dialog => {
+    const parts = mobileImageLightboxParts(dialog)
+    if (!parts) return false
+    parts.close.click?.()
+    return true
+  }
+
   const installMobileBackHandler = () => {
     window.__harnessMobileHandleBack = () => {
       const shell = document.getElementById('harness-mobile-app-shell')
       if (!shell) return false
+
+      const imageLightbox = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')]
+        .find(dialog => visible(dialog) && mobileImageLightboxParts(dialog))
+      if (imageLightbox) return dismissMobileImageLightbox(imageLightbox)
 
       const projectSheet = document.querySelector('[data-harness-mobile-project-sheet]')
       if (projectSheet) {
@@ -1489,9 +1477,8 @@
     if (heading?.lastElementChild && heading.lastElementChild.textContent !== subtitle) heading.lastElementChild.textContent = subtitle
     const menuButton = shell.querySelector('[data-harness-mobile-action="menu"]')
     const actionButton = shell.querySelector('[data-harness-mobile-action="new"]')
-    const mySurface = shell.querySelector('[data-harness-mobile-my-surface]')
+    shell.querySelector('[data-harness-mobile-my-surface]')?.remove()
     const conversationsDomain = activeDomain?.id === 'conversations'
-    if (mySurface) mySurface.hidden = activeDomain?.id !== 'me' || root.dataset.harnessMobileMyDetail === 'official'
     actionButton.hidden = !conversationsDomain
     if (!conversationsDomain) shell.querySelector('[data-harness-mobile-app-menu]').hidden = true
     const nonConversationDomain = activeDomain?.id && activeDomain.id !== 'conversations'
@@ -1994,7 +1981,22 @@
       toolbar.dataset.harnessMobileSettingsToolbar = 'true'
       toolbar.innerHTML = `<button type="button" data-harness-mobile-settings-back="true" aria-label="返回设置分类"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button><h2 data-harness-mobile-settings-title="true">设置</h2><button type="button" data-harness-mobile-settings-close="true" aria-label="关闭设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
       toolbar.querySelector('[data-harness-mobile-settings-back="true"]').addEventListener('click', () => setSettingsView(dialog, 'list', true))
-      toolbar.querySelector('[data-harness-mobile-settings-close="true"]').addEventListener('click', () => findNativeSettingsClose(dialog)?.click())
+      toolbar.querySelector('[data-harness-mobile-settings-close="true"]').addEventListener('click', () => {
+        const nativeClose = findNativeSettingsClose(dialog)
+        if (nativeClose) {
+          nativeClose.click()
+          setTimeout(() => {
+            mobileNavigationState.activeDomain = 'conversations'
+            mobileNavigationState.pendingDomain = ''
+            setSidebarExpanded(true)
+            syncMobileAppShell()
+          }, 0)
+          return
+        }
+        const conversations = mobileDomains.find(domain => domain.id === 'conversations')
+        const shell = document.getElementById('harness-mobile-app-shell')
+        if (conversations && shell) navigateMobileDomain(conversations, shell)
+      })
       dialog.insertBefore(toolbar, nav)
     }
 
@@ -2067,6 +2069,16 @@
     const modalDialogs = []
     for (const dialog of document.querySelectorAll('[role="dialog"][aria-modal="true"], dialog')) {
       if (dialog.getAttribute('aria-modal') === 'true' || dialog.matches?.('dialog[open]')) modalDialogs.push(dialog)
+      const imageLightbox = mobileImageLightboxParts(dialog)
+      if (imageLightbox) {
+        dialog.dataset.harnessMobileImageLightbox = 'true'
+        imageLightbox.close.dataset.harnessMobileImageLightboxClose = 'true'
+        delete dialog.dataset.harnessMobileSheet
+        delete dialog.dataset.harnessMobileSettingsDialog
+        delete dialog.dataset.harnessMobileRiskConfirmation
+        continue
+      }
+      delete dialog.dataset.harnessMobileImageLightbox
       const nav = dialog.querySelector(':scope > nav')
       const content = nav?.nextElementSibling
       const buttons = [...(nav?.querySelectorAll?.('button') || [])]
@@ -2086,6 +2098,16 @@
         )
         if (riskConfirmation) dialog.dataset.harnessMobileRiskConfirmation = 'true'
         else delete dialog.dataset.harnessMobileRiskConfirmation
+      }
+    }
+    if (!settingsOpen) {
+      const page = officialSettingsSurface()
+      const nav = page?.querySelector?.(':scope > nav') || page?.querySelector?.('nav')
+      const content = nav?.nextElementSibling
+      const pageButtons = [...(nav?.querySelectorAll?.('button') || [])]
+      if (page && page.getAttribute?.('role') !== 'dialog' && visibleOfficialSettingsDialog(page) && content && pageButtons.length >= 3) {
+        settingsOpen = true
+        decorateSettingsDialog(page, nav, content)
       }
     }
     if (settingsOpen) root.dataset.harnessMobileSettingsOpen = 'true'
@@ -2561,6 +2583,7 @@
   // accessibility, and make the native textarea the only visible text layer.
   const syncMobilePresentationIsolation = (domain, shell) => {
     const settingsVisible = domain === 'me' || root.dataset.harnessMobileMyDetail === 'official'
+    const settingsSurface = document.querySelector('[data-harness-mobile-settings-dialog="true"]')
     const surfaces = [...document.querySelectorAll('.dat-shell, [data-slot="workspace"], [data-slot="agent-teams.workspace"]')]
       .filter(node => !shell?.contains?.(node))
     for (const surface of surfaces) {
@@ -2568,7 +2591,10 @@
         surface.dataset.harnessMobilePresentationSurface = 'true'
         surface.dataset.harnessMobilePreviousHidden = surface.hidden ? 'true' : 'false'
       }
-      const isolate = settingsVisible && !surface.closest?.('[data-harness-mobile-settings-dialog="true"]')
+      const hostsSettings = Boolean(settingsSurface && (
+        surface === settingsSurface || surface.contains?.(settingsSurface) || settingsSurface.contains?.(surface)
+      ))
+      const isolate = settingsVisible && !hostsSettings
       surface.inert = isolate
       surface.setAttribute('aria-hidden', isolate ? 'true' : 'false')
       surface.hidden = isolate

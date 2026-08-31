@@ -40,7 +40,9 @@ test('phone themes keep core surfaces opaque and composer lifts only for an acti
   assert.match(runtime, /const lifted = focused && \(nativeImeOpen \|\| viewportCovered\)/u)
   assert.match(runtime, /root\.dataset\.harnessMobileComposerLifted = String\(lifted\)/u)
   assert.match(activity, /bottom \+ systemBars\.bottom/u)
-  assert.match(activity, /publishImeInsets\(imeVisible, Math\.max\(0, ime\.bottom - systemBars\.bottom\)\)/u)
+  assert.match(activity, /boolean nextImeVisible = windowInsets\.isVisible\(WindowInsetsCompat\.Type\.ime\(\)\)/u)
+  assert.match(activity, /api33BackDispatcher\.setImeVisible\(nextImeVisible\)/u)
+  assert.match(activity, /publishImeInsets\(nextImeVisible, Math\.max\(0, ime\.bottom - systemBars\.bottom\)\)/u)
   assert.doesNotMatch(manifest, /android\.permission\.RECORD_AUDIO/u)
 })
 

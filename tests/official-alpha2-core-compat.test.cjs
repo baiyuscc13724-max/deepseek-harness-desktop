@@ -8,6 +8,8 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
+// Alpha.2 bundle bytes remain auditable on demand; current smoke is guarded by alpha.3 contracts.
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 const ROOT = path.resolve(__dirname, '..')
 const ALPHA_ROOT = process.env.DSH_ALPHA2_CANDIDATE_ROOT || ROOT
 const SCOPE = path.join(ALPHA_ROOT, 'node_modules', '@deepseek-ai')
@@ -212,7 +214,7 @@ async function stageUiPackages(t) {
   return scope
 }
 
-test('all six alpha.2 UI decisions are positive, idempotent, and compose in one package graph', async t => {
+alpha2Audit('all six alpha.2 UI decisions are positive, idempotent, and compose in one package graph', async t => {
   const patch = await import('../scripts/patch-official-runtime.mjs')
   const scope = await stageUiPackages(t)
   for (const [label, pkg, relative, installer, expectedChanged] of UI_CASES) {
@@ -256,7 +258,7 @@ test('all six alpha.2 UI decisions are positive, idempotent, and compose in one 
   }
 })
 
-test('alpha.2 UI source drift and forged partial evidence fail closed', async t => {
+alpha2Audit('alpha.2 UI source drift and forged partial evidence fail closed', async t => {
   const patch = await import('../scripts/patch-official-runtime.mjs')
   const scope = await stageUiPackages(t)
   for (const [pkg, installer] of [

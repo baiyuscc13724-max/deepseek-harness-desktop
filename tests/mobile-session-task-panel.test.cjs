@@ -2,6 +2,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
 const root = path.resolve(__dirname, '..')
 const read = (...segments) => fs.readFileSync(path.join(root, ...segments), 'utf8')
@@ -34,7 +35,7 @@ test('mobile decorates the existing official TodoDock and QueueDock without crea
   assert.match(runtime, /const structuralSelector = '[^']*\[data-testid="todo-panel"\][^']*\[data-queue-dock\][^']*'/u)
 })
 
-test('official QueueDock remains authoritative for count, edit, delete and immediate send', () => {
+alpha2Audit('official QueueDock remains authoritative for count, edit, delete and immediate send', () => {
   const queueDock = section(official, 'function QueueDock({ useSession, updateQueue, notify, t })', 'const queueDockEntry = {')
   assertContainsAll(queueDock, [
     'const inbox = useSession((s) => s.queue)',

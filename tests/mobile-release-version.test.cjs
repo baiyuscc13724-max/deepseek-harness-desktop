@@ -20,17 +20,18 @@ test('Android revision versions remain monotonic across the next integration pat
   assert.equal(encodeAndroidVersionCode('1.0.53'), 1_005_300)
   assert.equal(encodeAndroidVersionCode('1.0.54'), 1_005_400)
   assert.equal(encodeAndroidVersionCode('1.0.55'), 1_005_500)
+  assert.equal(encodeAndroidVersionCode('1.0.56'), 1_005_600)
 })
 
-test('checked-in Android mobile version has the unified 1.0.55 release identity', () => {
+test('checked-in Android mobile version has the unified 1.0.56 release identity', () => {
   const version = readAndroidMobileVersion(root)
   assert.deepEqual(version, {
-    integrationVersion: '1.0.55',
-    versionName: '1.0.55',
-    versionCode: 1_005_500,
-    tag: 'android-v1.0.55',
-    assetName: 'Harness-Mobile-1.0.55-android-universal.apk',
-    checksumName: 'Harness-Mobile-1.0.55-android-universal.apk.sha256'
+    integrationVersion: '1.0.56',
+    versionName: '1.0.56',
+    versionCode: 1_005_600,
+    tag: 'android-v1.0.56',
+    assetName: 'Harness-Mobile-1.0.56-android-universal.apk',
+    checksumName: 'Harness-Mobile-1.0.56-android-universal.apk.sha256'
   })
 })
 

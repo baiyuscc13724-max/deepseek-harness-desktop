@@ -66,6 +66,7 @@ required.push(
   'docs/SECURITY-REVIEW-v1.0.53.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.54.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.55.zh-CN.md',
+  'docs/SECURITY-REVIEW-v1.0.56.zh-CN.md',
   'electron/bridge/native-p2p-host.cjs',
   'electron/bridge/sync-transports/native-p2p-adapter.cjs',
   'renderer/native-p2p.html',
@@ -509,8 +510,8 @@ for (const contract of [
 ]) {
   if (!readme.includes(contract)) throw new Error(`README release and discovery content is stale or incomplete: ${contract}`)
 }
-const OFFICIAL_ALPHA2_VERSION = '0.1.2-alpha.2'
-const OFFICIAL_ALPHA2_DIRECT_ROOTS = Object.freeze([
+const OFFICIAL_ALPHA3_VERSION = '0.1.2-alpha.3'
+const OFFICIAL_ALPHA3_DEPENDENCY_ROOTS = Object.freeze([
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-anonymous-user-id', '@deepseek-ai/dsh-atomic-write', '@deepseek-ai/dsh-bash-local',
   '@deepseek-ai/dsh-code-runtime', '@deepseek-ai/dsh-compaction', '@deepseek-ai/dsh-compaction-basic',
@@ -520,40 +521,43 @@ const OFFICIAL_ALPHA2_DIRECT_ROOTS = Object.freeze([
   '@deepseek-ai/dsh-subagent-in-process-driver', '@deepseek-ai/dsh-subprocess',
   '@deepseek-ai/dsh-timeout', '@deepseek-ai/dsh-workflow'
 ])
+const OFFICIAL_ALPHA3_OPTIONAL_ROOTS = Object.freeze([
+  '@deepseek-ai/dsh-attachment', '@deepseek-ai/dsh-jobs', '@deepseek-ai/dsh-session-persistence',
+  '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-settings', '@deepseek-ai/dsh-util-time'
+])
 const REMOVED_DSH_ROOTS = new Set([
   '@deepseek-ai/dsh-client-runtime',
-  '@deepseek-ai/dsh-host-apiproxy'
+  '@deepseek-ai/dsh-host-apiproxy',
+  '@deepseek-ai/dsh-session-persistence-sqlite'
 ])
 
-export function assertOfficialAlpha2ReleaseContract(pkg) {
+export function assertOfficialAlpha3ReleaseContract(pkg) {
   const dependencies = pkg?.dependencies
-  if (!dependencies || Array.isArray(dependencies) || typeof dependencies !== 'object') {
-    throw new Error('Official alpha.2 release dependencies must be an object.')
+  const optionalDependencies = pkg?.optionalDependencies
+  if (!dependencies || Array.isArray(dependencies) || typeof dependencies !== 'object' || !optionalDependencies || Array.isArray(optionalDependencies) || typeof optionalDependencies !== 'object') {
+    throw new Error('Official alpha.3 release dependencies and optionalDependencies must be objects.')
   }
-  const acceptedRoots = new Set(OFFICIAL_ALPHA2_DIRECT_ROOTS)
-  if (acceptedRoots.size !== 20 || OFFICIAL_ALPHA2_DIRECT_ROOTS.length !== 20) {
-    throw new Error('Official alpha.2 release root allowlist must contain exactly 20 unique roots.')
+  const acceptedRoots = new Set([...OFFICIAL_ALPHA3_DEPENDENCY_ROOTS, ...OFFICIAL_ALPHA3_OPTIONAL_ROOTS])
+  if (acceptedRoots.size !== 26 || OFFICIAL_ALPHA3_DEPENDENCY_ROOTS.length !== 20 || OFFICIAL_ALPHA3_OPTIONAL_ROOTS.length !== 6) {
+    throw new Error('Official alpha.3 release root allowlist must contain exactly 26 unique roots.')
   }
-  for (const root of OFFICIAL_ALPHA2_DIRECT_ROOTS) {
-    if (dependencies[root] !== OFFICIAL_ALPHA2_VERSION) {
-      throw new Error(`Official alpha.2 DSH root must be pinned exactly: ${root}`)
-    }
+  for (const root of OFFICIAL_ALPHA3_DEPENDENCY_ROOTS) {
+    if (dependencies[root] !== OFFICIAL_ALPHA3_VERSION) throw new Error(`Official alpha.3 DSH dependency root must be pinned exactly: ${root}`)
   }
-  for (const [name, version] of Object.entries(dependencies)) {
-    if (!name.startsWith('@deepseek-ai/dsh')) continue
-    if (REMOVED_DSH_ROOTS.has(name)) {
-      throw new Error(`Removed DSH root must not re-enter the release graph: ${name}`)
-    }
-    if (!acceptedRoots.has(name)) {
-      throw new Error(`Unexpected direct DSH root in the alpha.2 release graph: ${name}`)
-    }
-    if (version !== OFFICIAL_ALPHA2_VERSION) {
-      throw new Error(`Official alpha.2 DSH root must use an exact version: ${name}`)
+  for (const root of OFFICIAL_ALPHA3_OPTIONAL_ROOTS) {
+    if (optionalDependencies[root] !== OFFICIAL_ALPHA3_VERSION) throw new Error(`Official alpha.3 DSH optional root must be pinned exactly: ${root}`)
+  }
+  for (const [section, entries] of [['dependencies', dependencies], ['optionalDependencies', optionalDependencies]]) {
+    for (const [name, version] of Object.entries(entries)) {
+      if (!name.startsWith('@deepseek-ai/dsh')) continue
+      if (REMOVED_DSH_ROOTS.has(name)) throw new Error(`Removed DSH root must not re-enter the release graph: ${name}`)
+      if (!acceptedRoots.has(name)) throw new Error(`Unexpected direct DSH root in the alpha.3 ${section} graph: ${name}`)
+      if (version !== OFFICIAL_ALPHA3_VERSION) throw new Error(`Official alpha.3 DSH root must use an exact version: ${name}`)
     }
   }
 }
 
-assertOfficialAlpha2ReleaseContract(pkg)
+assertOfficialAlpha3ReleaseContract(pkg)
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')

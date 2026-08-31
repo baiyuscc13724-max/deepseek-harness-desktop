@@ -41,7 +41,7 @@ public final class MainActivityTest {
     @Test public void android13UsesPlatformBackOnceAndLegacyDispatcherOnlyBeforeApi33() throws Exception {
         String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
             "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
-        assertTrue(source.contains("OnBackInvokedDispatcher.PRIORITY_DEFAULT"));
+        assertTrue(source.contains("WORKBENCH_PRIORITY = OnBackInvokedDispatcher.PRIORITY_OVERLAY"));
         assertTrue(source.contains("registerOnBackInvokedCallback"));
         assertTrue(source.contains("unregisterOnBackInvokedCallback"));
         assertTrue(source.contains("Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU"));
@@ -51,17 +51,21 @@ public final class MainActivityTest {
         assertTrue(source.contains("if (backDispatchPending || webView == null) return;"));
     }
 
-    @Test public void webViewAttachmentRefreshesLastRegistrationIdempotently() throws Exception {
+    @Test public void workbenchBackOutranksWebViewAndYieldsWhileImeIsVisible() throws Exception {
         String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
             "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
-        int configure = source.indexOf("private void configureBackNavigation()");
-        int configureEnd = source.indexOf("private void handleWorkbenchBack()", configure);
-        String configureBody = source.substring(configure, configureEnd);
-        assertFalse("initial configuration must not beat WebView registration", configureBody.contains("api33BackDispatcher.register();"));
-        assertTrue(source.contains("api33BackDispatcher.refreshRegistration();"));
-        assertTrue(source.contains("void refreshRegistration()"));
-        assertTrue(source.contains("if (!registered) return;"));
-        assertTrue(source.contains("void refreshRegistration()"));
+        int dispatcher = source.indexOf("private static final class Api33BackDispatcher");
+        int screenCapture = source.indexOf("private static final class ScreenCaptureObserver", dispatcher);
+        String dispatcherBody = source.substring(dispatcher, screenCapture);
+        assertTrue(dispatcherBody.contains(
+            "WORKBENCH_PRIORITY = OnBackInvokedDispatcher.PRIORITY_OVERLAY"));
+        assertTrue(dispatcherBody.contains(
+            "registerOnBackInvokedCallback(WORKBENCH_PRIORITY, callback)"));
+        assertTrue(dispatcherBody.contains("boolean shouldRegister = started && !imeVisible"));
+        assertTrue(source.contains("api33BackDispatcher.setImeVisible(nextImeVisible)"));
+        assertTrue(source.contains("api33BackDispatcher.setImeVisible(imeVisible)"));
+        assertFalse("priority makes page-attachment reordering unnecessary",
+            source.contains("refreshRegistration()"));
     }
 
     @Test public void platformBackRegistrationFollowsVisibleActivityLifecycle() throws Exception {

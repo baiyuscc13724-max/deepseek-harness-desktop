@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isProxy } from "node:util/types";
@@ -57,6 +58,7 @@ const MAX_BOOTSTRAP_ITEMS = 4;
 const MAX_TASK_ATTEMPT_HISTORY = 24;
 const MAX_TASK_INTERRUPTION_HISTORY = 24;
 const MAX_TASK_LIFECYCLE_EVENTS = 256;
+const MAX_TASK_COMMAND_RECEIPTS = 2_048;
 const MAX_ROUTING_RECEIPTS = 2_048;
 const MAX_OWNERSHIP_HISTORY = 24;
 const MAX_MEMBER_RECOVERY_RECEIPTS = 24;
@@ -78,6 +80,7 @@ const MODEL_ID = /^\S{1,256}$/u;
 const TASK_STATES = Object.freeze(["pending", "in_progress", "submitted", "completed", "cancelled"]);
 const MUTABLE_TASK_STATES = Object.freeze(["pending", "in_progress", "submitted", "completed"]);
 const TERMINAL_TASK_STATES = new Set(["completed", "cancelled"]);
+const FIXED_ROOT_TASK_COMMANDS = new Set(["release", "accept", "reject", "cancel", "reopen", "assign", "unassign"]);
 const TASK_LIFECYCLE_KINDS = Object.freeze(["claim", "submission", "acceptance", "reopen", "reject", "cancel", "release", "migration"]);
 const ROUTING_LEVELS = Object.freeze(["level1", "level2", "level3"]);
 const ROUTING_REASON_CATEGORIES = Object.freeze(["simple_or_tightly_coupled", "single_auxiliary_executor", "independent_sustained_workstreams", "explicit_user_team_request"]);
@@ -97,9 +100,15 @@ const GRACEFUL_LIFECYCLE_WAITERS = new Map();
 const USER_PAUSED_TEAMS = new Set();
 const USER_PAUSE_RECONCILIATIONS = new Map();
 const USER_PAUSE_EPOCHS = new Map();
+const PROJECT_TASK_STOPPED_ROOTS = new Set();
+const PROJECT_TASK_WAKE_CHAINS = new Map();
+const PROJECT_TASK_WAKE_EVENT_TAIL = 256;
+const PROJECT_TASK_WAKE_RETRY_BASE_MS = 250;
+const PROJECT_TASK_WAKE_RETRY_MAX_MS = 30_000;
 const STOPPABLE_MEMBER_STATES = new Set(["provisioning", "running", "idle", "ready", "shutting_down"]);
 const STORE_INSTANCES = new Map();
-const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap", "plan", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory", "closure", "memberRecoveries"]);
+const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap", "plan", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory", "closure", "memberRecoveries", "taskCommandReceipts"]);
+const TASK_COMMAND_RECEIPT_KEYS = new Set(["requestId", "inputHash", "taskId", "action", "taskRevisionBefore", "taskRevisionAfter", "pauseEpoch", "createdAt"]);
 const MEMBER_RECOVERY_KEYS = new Set(["requestId", "inputHash", "action", "status", "phase", "memberId", "sessionId", "taskIds", "activeTaskIds", "activeClaims", "createdAt", "updatedAt", "pauseEpoch", "teamRevision", "replacementMemberId", "replacementSessionId", "errorCode", "errorStage", "errorMessage", "reconciledAt", "reconciledBy", "resolution"]);
 const HANDOFF_KEYS = new Set(["tokenHash", "sourceRootSessionId", "targetRootSessionId", "projectKey", "createdAt", "expiresAt"]);
 const OWNERSHIP_HISTORY_KEYS = new Set(["kind", "sourceRootSessionId", "targetRootSessionId", "projectKey", "tokenHash", "at", "pauseEpoch"]);
@@ -110,7 +119,7 @@ const RESUME_NODE_KEYS = new Set(["memberId", "status", "reason"]);
 const BOOTSTRAP_KEYS = new Set(["requestId", "inputHash", "phase", "taskRefs", "memberRefs", "createdAt", "updatedAt"]);
 const BOOTSTRAP_TASK_REF_KEYS = new Set(["key", "taskId"]);
 const BOOTSTRAP_MEMBER_REF_KEYS = new Set(["key", "name", "status", "memberId", "sessionId", "errorCode", "errorStage"]);
-const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason", "result", "submission", "acceptance", "attempt", "claimId", "leaseEpoch", "attemptHistory", "interruptionHistory", "lifecycleLedger", "checkpoint", "nextStep", "capabilities", "externalEffects"]);
+const TASK_KEYS = new Set(["id", "title", "description", "state", "revision", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason", "result", "submission", "acceptance", "attempt", "claimId", "leaseEpoch", "attemptHistory", "interruptionHistory", "lifecycleLedger", "checkpoint", "nextStep", "capabilities", "externalEffects"]);
 const TASK_RESULT_KEYS = new Set(["text", "reportedAt", "truncated", "taskId", "claimId", "leaseEpoch", "reportedBy"]);
 const TASK_LIFECYCLE_EVENT_KEYS = new Set(["kind", "sequence", "at", "attempt", "claimId", "leaseEpoch", "actorId", "ownerEpoch", "reason"]);
 const ROUTING_RECEIPT_KEYS = new Set(["id", "rootSessionId", "turnKey", "projectKey", "level", "reasonCategory", "explicitUserTeamRequest", "candidateWorkstreams", "creationPath", "outcome", "teamId", "decisionAuthority", "createdAt", "finalizedAt"]);
@@ -722,6 +731,7 @@ function validateTask(task) {
   nonEmptyString(task.title, "task.title", 500);
   optionalString(task.description, "task.description", 32_768);
   assertEnum(task.state, TASK_STATES, "task.state");
+  positiveInteger(task.revision, "task.revision");
   assertStringArray(task.dependsOn, "task.dependsOn");
   if (task.crossTeamDependsOn !== undefined) {
     if (!Array.isArray(task.crossTeamDependsOn)) throw new TypeError("task.crossTeamDependsOn must be an array");
@@ -876,6 +886,22 @@ function validateBootstrap(bootstrap) {
   return bootstrap;
 }
 
+function validateTaskCommandReceipt(receipt, index) {
+  const field = `team.taskCommandReceipts[${index}]`;
+  if (!isRecord(receipt)) throw new TypeError(`${field} must be an object`);
+  assertAllowedKeys(receipt, TASK_COMMAND_RECEIPT_KEYS, field);
+  nonEmptyString(receipt.requestId, `${field}.requestId`, 256);
+  if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(receipt.inputHash, `${field}.inputHash`, 64))) throw new TypeError(`${field}.inputHash is invalid`);
+  nonEmptyString(receipt.taskId, `${field}.taskId`, 256);
+  assertEnum(receipt.action, [...FIXED_ROOT_TASK_COMMANDS], `${field}.action`);
+  positiveInteger(receipt.taskRevisionBefore, `${field}.taskRevisionBefore`);
+  positiveInteger(receipt.taskRevisionAfter, `${field}.taskRevisionAfter`);
+  if (![receipt.taskRevisionBefore, receipt.taskRevisionBefore + 1].includes(receipt.taskRevisionAfter)) throw new TypeError(`${field} must preserve or advance exactly one task revision`);
+  positiveInteger(receipt.pauseEpoch, `${field}.pauseEpoch`, { allowZero: true });
+  assertIsoDate(receipt.createdAt, `${field}.createdAt`);
+  return receipt;
+}
+
 function validateMemberRecovery(receipt, index) {
   if (!isRecord(receipt)) throw new TypeError(`team.memberRecoveries[${index}] must be an object`);
   assertAllowedKeys(receipt, MEMBER_RECOVERY_KEYS, `team.memberRecoveries[${index}]`);
@@ -1024,6 +1050,10 @@ function validateTeam(team) {
     throw new TypeError("team members, tasks, and messages must be arrays");
   }
   if (team.bootstrap !== undefined) validateBootstrap(team.bootstrap);
+  const taskCommandReceipts = team.taskCommandReceipts ?? [];
+  if (!Array.isArray(taskCommandReceipts) || taskCommandReceipts.length > MAX_TASK_COMMAND_RECEIPTS) throw new TypeError("team.taskCommandReceipts is invalid");
+  taskCommandReceipts.forEach(validateTaskCommandReceipt);
+  if (new Set(taskCommandReceipts.map((receipt) => receipt.requestId)).size !== taskCommandReceipts.length) throw new TypeError("team.taskCommandReceipts requestIds must be unique");
   const memberRecoveries = team.memberRecoveries ?? [];
   if (!Array.isArray(memberRecoveries) || memberRecoveries.length > MAX_MEMBER_RECOVERY_RECEIPTS) throw new TypeError("team.memberRecoveries is invalid");
   memberRecoveries.forEach(validateMemberRecovery);
@@ -1039,6 +1069,7 @@ function validateTeam(team) {
   if (team.members.filter(workerConsumesMemberSlot).length > HARD_MAX_MEMBERS) throw new TypeError(`team exceeds the hard limit of ${HARD_MAX_MEMBERS} active teammates`);
   const taskIds = new Set(team.tasks.map((task) => task.id));
   if (taskIds.size !== team.tasks.length) throw new TypeError("team task ids must be unique");
+  if (taskCommandReceipts.some((receipt) => !taskIds.has(receipt.taskId))) throw new TypeError("team.taskCommandReceipts references an unknown task");
   if (team.bootstrap !== undefined && team.bootstrap.taskRefs.some((ref) => !taskIds.has(ref.taskId))) throw new TypeError("team.bootstrap references an unknown task");
   const tasksById = new Map(team.tasks.map((task) => [task.id, task]));
   for (const task of team.tasks) {
@@ -1107,6 +1138,7 @@ function migrateStoreDocument(document) {
   for (const team of document.teams) {
     team.pauseEpoch ??= 0;
     team.ownershipHistory ??= [];
+    team.taskCommandReceipts ??= [];
     if (team.resume !== undefined) team.resume.requestId ??= `migrated:${team.resume.previewId}`;
     if (typeof team.handoff?.projectScope === "string") {
       const legacyScope = team.handoff.projectScope;
@@ -1116,6 +1148,7 @@ function migrateStoreDocument(document) {
     }
     if (typeof team.handoff?.projectKey === "string") team.projectKey ??= team.handoff.projectKey;
     for (const task of team.tasks ?? []) {
+      task.revision ??= 1;
       task.attempt ??= task.state === "in_progress" ? 1 : 0;
       task.leaseEpoch ??= team.pauseEpoch;
       task.attemptHistory ??= [];
@@ -1416,6 +1449,7 @@ function projectTeam(team, nameTeams = []) {
   const projectedTeam = clone(team);
   delete projectedTeam.projectKey;
   delete projectedTeam.handoff;
+  delete projectedTeam.taskCommandReceipts;
   projectedTeam.ownershipHistory = (team.ownershipHistory ?? []).map((entry) => ({
     kind: entry.kind,
     sourceRootSessionId: entry.sourceRootSessionId,
@@ -2189,7 +2223,8 @@ class AgentTeamsStore {
     let migrated = false;
     try {
       const persisted = JSON.parse(await readFile(this.filePath, "utf8"));
-      migrated = LEGACY_STORE_VERSIONS.has(persisted?.version);
+      migrated = LEGACY_STORE_VERSIONS.has(persisted?.version)
+        || persisted?.teams?.some((team) => !Array.isArray(team?.taskCommandReceipts) || team?.tasks?.some((task) => task?.revision === undefined));
       this.document = validateStoreDocument(persisted);
       this.fileStamp = await this.#currentFileStamp();
     } catch (error) {
@@ -2227,6 +2262,7 @@ class AgentTeamsStore {
         if (placeholder === undefined || placeholder.state !== "failed") continue;
         task.assigneeSessionId = undefined;
         task.updatedAt = now();
+        bumpTaskRevision(task);
         boundedPush(task.interruptionHistory, { kind: "host_restart_during_provisioning", at: task.updatedAt, attempt: task.attempt ?? 0, leaseEpoch: task.leaseEpoch ?? 0 }, MAX_TASK_INTERRUPTION_HISTORY);
         teamChanged = true;
       }
@@ -2577,6 +2613,80 @@ function relayToLead(lead, message) {
   if (lead.status === "idle") lead.followup(message);
   else lead.steer(message);
 }
+function projectTaskWakeMessage(root, wakeRef) {
+  return createUserMessage({
+    content: textContent(`[Project task wake ${wakeRef}] Project work is eligible again. Resume the durable project loop: read targeted collaboration requests, then call project_task claim_next with a new request_id. Do not replay work already claimed or completed.`),
+    source: { kind: "coordinator", form: "notice", senderSessionId: root.id, summary: "Project tasks" },
+  });
+}
+function projectTaskWakeRefFromMessage(candidate) {
+  const message = candidate?.data?.message ?? candidate;
+  if (message?.source?.kind !== "coordinator" || message.source.summary !== "Project tasks") return undefined;
+  const text = message.content?.[0]?.type === "text" ? message.content[0].text : "";
+  return /^\[Project task wake ([A-Za-z0-9_-]{1,256})\]/u.exec(text)?.[1];
+}
+function rootHasProjectTaskWake(root, wakeRef) {
+  const pending = [...(root.inbox?.nextTurn ?? []), ...(root.inbox?.nextStep ?? [])];
+  if (pending.some((message) => projectTaskWakeRefFromMessage(message) === wakeRef)) return true;
+  const events = root.session?.events ?? [];
+  return events.slice(-PROJECT_TASK_WAKE_EVENT_TAIL).some((event) => event?.type === "user/message" && projectTaskWakeRefFromMessage(event) === wakeRef);
+}
+function clearQueuedProjectTaskWakes(root) {
+  if (!root?.inbox || typeof root.inbox.remove !== "function") return 0;
+  const pending = [...(root.inbox.nextTurn ?? []), ...(root.inbox.nextStep ?? [])];
+  let removed = 0;
+  for (const message of pending) {
+    if (projectTaskWakeRefFromMessage(message) === undefined || typeof message?.id !== "string") continue;
+    if (root.inbox.remove(message.id)) removed += 1;
+  }
+  return removed;
+}
+async function dispatchProjectTaskWakeSignalsNow(ctx, binding, { limit = 16 } = {}) {
+  const dispatcherRef = binding.dispatcherRef;
+  const claimed = binding.wake.claim({ dispatcherRef, limit });
+  let delivered = 0, retryable = 0;
+  for (const signal of claimed) {
+    const root = ctx.agents.roots().find((candidate) => ["idle", "running"].includes(candidate.status)
+      && optionalProjectKeyForRoot(candidate) === binding.canonicalProjectKey
+      && binding.actorRefForSessionId(candidate.id) === signal.actorRef);
+    let outcome = "not_delivered";
+    if (root !== undefined && PROJECT_TASK_STOPPED_ROOTS.has(root.id)) {
+      clearQueuedProjectTaskWakes(root);
+      outcome = "paused";
+    } else if (root !== undefined) {
+      try {
+        if (!rootHasProjectTaskWake(root, signal.wakeRef)) {
+          const accepted = root.status === "idle" ? root.followup(projectTaskWakeMessage(root, signal.wakeRef)) : root.steer(projectTaskWakeMessage(root, signal.wakeRef));
+          await accepted;
+        }
+        if (PROJECT_TASK_STOPPED_ROOTS.has(root.id)) {
+          clearQueuedProjectTaskWakes(root);
+          outcome = "paused";
+        } else {
+          outcome = "delivered";
+          delivered += 1;
+        }
+      } catch {
+        try {
+          if (PROJECT_TASK_STOPPED_ROOTS.has(root.id)) { clearQueuedProjectTaskWakes(root); outcome = "paused"; }
+          else if (rootHasProjectTaskWake(root, signal.wakeRef)) { outcome = "delivered"; delivered += 1; }
+          else outcome = "outcome_unknown";
+        } catch { outcome = "outcome_unknown"; }
+      }
+    }
+    if (outcome === "not_delivered") retryable += 1;
+    binding.wake.ack({ wakeRef: signal.wakeRef, dispatcherRef, outcome });
+  }
+  return { claimed: claimed.length, delivered, retryable };
+}
+function dispatchProjectTaskWakeSignals(ctx, binding, options) {
+  const key = binding.canonicalProjectKey;
+  const previous = PROJECT_TASK_WAKE_CHAINS.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(() => dispatchProjectTaskWakeSignalsNow(ctx, binding, options));
+  const settled = run.finally(() => { if (PROJECT_TASK_WAKE_CHAINS.get(key) === settled) PROJECT_TASK_WAKE_CHAINS.delete(key); });
+  PROJECT_TASK_WAKE_CHAINS.set(key, settled);
+  return run;
+}
 function queuedTeamRelayId(message) {
   if (message?.source?.kind !== "coordinator" || message.source.summary !== "Agent Teams") return undefined;
   const text = message.content?.[0]?.type === "text" ? message.content[0].text : "";
@@ -2678,7 +2788,8 @@ function terminalizeTeamTasks(team, timestamp = now(), reason = "team closed bef
     task.acceptance = undefined;
     task.cancelledAt = timestamp;
     task.cancellationReason = reason;
-        task.updatedAt = timestamp;
+    task.updatedAt = timestamp;
+    bumpTaskRevision(task);
     cancelledTaskIds.push(task.id);
   }
   return cancelledTaskIds;
@@ -2875,6 +2986,7 @@ async function createTeam(store, lead, input) {
       pauseEpoch: 0,
       ...(optionalProjectKeyForRoot(lead) === undefined ? {} : { projectKey: optionalProjectKeyForRoot(lead) }),
       ownershipHistory: [],
+      taskCommandReceipts: [],
       createdAt: timestamp,
       updatedAt: timestamp,
       members: [{
@@ -3108,6 +3220,7 @@ async function adoptTeamHandoff(ctx, store, target, input) {
         task.releasedAt = timestamp;
         task.releaseReason = "released during same-project ownership adoption; prior parent lease revoked";
         task.updatedAt = timestamp;
+        bumpTaskRevision(task);
       }
     }
     const selection = { modelTier: "main", inheritsMain: false, routeSource: "live-lead", ...(optionalProvider(target.options) === undefined ? {} : { provider: optionalProvider(target.options) }), ...(optionalString(target.options?.model, "target model", 256) === undefined ? {} : { model: target.options.model.trim() }) };
@@ -3124,6 +3237,30 @@ async function adoptTeamHandoff(ctx, store, target, input) {
   }));
 }
 
+function taskWorkspaceAnchors(tasks) {
+  const anchors = new Set();
+  for (const task of tasks) for (const file of task.files ?? []) {
+    const boundary = normalizeExpansionBoundary(file, `task ${task.id} file scope`, { file: true });
+    if (/^(?:[A-Za-z]:\/|\/)/u.test(boundary)) reject(`task ${task.id} file scope must be relative to the Host workspace`, "AGENT_TEAMS_WORKSPACE_SCOPE_INVALID");
+    const prefix = expansionGlobPrefix(boundary).prefix;
+    const anchor = prefix.split("/").find((segment) => segment.length > 0);
+    if (anchor !== undefined) anchors.add(anchor);
+  }
+  return [...anchors];
+}
+function assertSpawnWorkspacePreflight(team, lead, tasks) {
+  if (team.projectKey === undefined) return;
+  if (projectKeyForRoot(lead) !== team.projectKey) reject("team canonical project identity no longer matches the spawning root workspace", "AGENT_TEAMS_CROSS_PROJECT_FORBIDDEN");
+  const workspace = projectScopeForRoot(lead);
+  let children;
+  try { children = readdirSync(workspace, { withFileTypes: true }); }
+  catch { reject("Host workspace cannot be inspected for task file-scope binding", "AGENT_TEAMS_PROJECT_SCOPE_UNKNOWN"); }
+  for (const anchor of taskWorkspaceAnchors(tasks)) {
+    if (existsSync(join(workspace, anchor))) continue;
+    const siblingMatches = children.filter((entry) => entry.isDirectory() && existsSync(join(workspace, entry.name, anchor)));
+    if (siblingMatches.length > 0) reject(`task file scope anchor ${JSON.stringify(anchor)} exists only below ${siblingMatches.length} child workspace candidate(s); select one exact workspace before spawning`, "AGENT_TEAMS_WORKSPACE_SCOPE_AMBIGUOUS");
+  }
+}
 function assertTaskExecutionPreflight(team, tasks) {
   if (!["committed", "active"].includes(team.plan?.phase) || team.plan.hash !== teamPlanHash(team) || team.plan.authorization?.confirmedPlanHash !== team.plan.hash) reject("team plan is draft or materially changed; commit the current plan before claiming or spawning", "AGENT_TEAMS_PLAN_NOT_ACTIVE");
   if (team.plan.migrationState !== "ready") reject("legacy team must pass the current plan migration gate before new claim or spawn", "AGENT_TEAMS_PLAN_MIGRATION_REQUIRED");
@@ -3227,9 +3364,9 @@ async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
     const timestamp = now(), teamId = randomUUID();
     const taskIds = new Map(plan.tasks.map((task) => [task.key, randomUUID()]));
     const team = {
-      id: teamId, rootLeadSessionId: lead.id, name: plan.name ?? plan.objective.slice(0, 500), objective: plan.objective, state: "active", pauseEpoch: 0, ...(optionalProjectKeyForRoot(lead) === undefined ? {} : { projectKey: optionalProjectKeyForRoot(lead) }), ownershipHistory: [], createdAt: timestamp, updatedAt: timestamp,
+      id: teamId, rootLeadSessionId: lead.id, name: plan.name ?? plan.objective.slice(0, 500), objective: plan.objective, state: "active", pauseEpoch: 0, ...(optionalProjectKeyForRoot(lead) === undefined ? {} : { projectKey: optionalProjectKeyForRoot(lead) }), ownershipHistory: [], taskCommandReceipts: [], createdAt: timestamp, updatedAt: timestamp,
       members: [{ id: `lead:${lead.id}`, sessionId: lead.id, name: plan.leadName, role: "root lead and coordinator", ...mainSelection, kind: "lead", state: "running", createdAt: timestamp, updatedAt: timestamp }],
-      tasks: plan.tasks.map((task) => ({ id: taskIds.get(task.key), title: task.title, ...(task.description === undefined ? {} : { description: task.description }), state: "pending", dependsOn: task.dependsOn.map((key) => taskIds.get(key)), files: task.files, attempt: 0, leaseEpoch: 0, attemptHistory: [], interruptionHistory: [], lifecycleLedger: [], capabilities: [], externalEffects: [], createdAt: timestamp, updatedAt: timestamp })),
+      tasks: plan.tasks.map((task) => ({ id: taskIds.get(task.key), title: task.title, ...(task.description === undefined ? {} : { description: task.description }), state: "pending", revision: 1, dependsOn: task.dependsOn.map((key) => taskIds.get(key)), files: task.files, attempt: 0, leaseEpoch: 0, attemptHistory: [], interruptionHistory: [], lifecycleLedger: [], capabilities: [], externalEffects: [], createdAt: timestamp, updatedAt: timestamp })),
       messages: [],
       bootstrap: { requestId: plan.requestId, inputHash: plan.inputHash, phase: "prepared", taskRefs: plan.tasks.map((task) => ({ key: task.key, taskId: taskIds.get(task.key) })), memberRefs: plan.members.map((member) => ({ key: member.key, name: member.name, status: "pending" })), createdAt: timestamp, updatedAt: timestamp },
     };
@@ -3318,6 +3455,7 @@ async function settleSpawnedChildFailure(ctx, store, lead, cleanup) {
     for (const task of team.tasks) if (task.state === "pending" && (task.assigneeSessionId === cleanup.childId || task.assigneeSessionId === `provisioning:${cleanup.memberId}`)) {
       task.assigneeSessionId = undefined;
       task.updatedAt = record.updatedAt;
+      bumpTaskRevision(task);
       boundedPush(task.interruptionHistory, { kind: "member_start_failed", at: record.updatedAt, attempt: task.attempt ?? 0, leaseEpoch: task.leaseEpoch ?? 0, reason: cleanup.phase }, MAX_TASK_INTERRUPTION_HISTORY);
     }
     const failure = cleanup.phase === "publication" ? "publication failed after child creation" : "initial work followup failed after child became live";
@@ -3355,6 +3493,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
       return task;
     });
     assertTaskExecutionPreflight(team, tasks);
+    assertSpawnWorkspacePreflight(team, lead, tasks);
     if (!["host_verified", "human_attested"].includes(team.plan.authorization?.cost)) reject("member route cost is unknown; recommit the exact plan hash", "AGENT_TEAMS_COST_UNKNOWN");
     const timestamp = now();
     const memberId = randomUUID();
@@ -3365,6 +3504,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
       task.assigneeSessionId = placeholderSessionId;
       task.leaseEpoch = team.pauseEpoch ?? 0;
       task.updatedAt = timestamp;
+      bumpTaskRevision(task);
     }
     team.updatedAt = timestamp;
     return reservation;
@@ -3379,6 +3519,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
         for (const task of team.tasks) if (task.state === "pending" && task.assigneeSessionId === reservation.placeholderSessionId) {
           task.assigneeSessionId = undefined;
           task.updatedAt = record.updatedAt;
+          bumpTaskRevision(task);
           boundedPush(task.interruptionHistory, { kind: "stop_before_provisioning", at: record.updatedAt, attempt: task.attempt ?? 0, leaseEpoch: task.leaseEpoch ?? 0 }, MAX_TASK_INTERRUPTION_HISTORY);
         }
         team.updatedAt = record.updatedAt;
@@ -3411,6 +3552,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
         for (const task of team.tasks) if (task.assigneeSessionId === reservation.placeholderSessionId && task.state === "pending") {
           task.assigneeSessionId = undefined;
           task.updatedAt = timestamp;
+          bumpTaskRevision(task);
           boundedPush(task.interruptionHistory, { kind: "provisioning_failed", at: timestamp, attempt: task.attempt ?? 0, leaseEpoch: task.leaseEpoch ?? 0, reason: "member provisioning failed before publication" }, MAX_TASK_INTERRUPTION_HISTORY);
         }
         team.updatedAt = timestamp;
@@ -3453,6 +3595,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
           task.assigneeSessionId = started.childId;
           task.leaseEpoch = team.pauseEpoch ?? 0;
           task.updatedAt = record.updatedAt;
+          bumpTaskRevision(task);
         }
         team.updatedAt = record.updatedAt;
         return { duplicateChildId: false, member: clone(record) };
@@ -3572,7 +3715,7 @@ function rollbackUnstartedReplacement(team, receipt, timestamp) {
   if (replacement !== undefined) team.members = team.members.filter((member) => member.id !== replacement.id);
   for (const taskId of receipt.taskIds) {
     const task = team.tasks.find((candidate) => candidate.id === taskId);
-    if (task !== undefined && task.state === "pending") { task.assigneeSessionId = original?.sessionId; task.updatedAt = timestamp; }
+    if (task !== undefined && task.state === "pending") { task.assigneeSessionId = original?.sessionId; task.updatedAt = timestamp; bumpTaskRevision(task); }
   }
 }
 async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
@@ -3615,7 +3758,7 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
         member.state = "retired"; member.runId = undefined; member.updatedAt = timestamp; member.error = member.error ?? "failed member replaced by direct-human recovery";
         for (const task of tasks) {
           boundedPush(task.interruptionHistory, { kind: "member_replaced", at: timestamp, attempt: task.attempt ?? 0, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? 0, reason: `recovery request ${requestId}` }, MAX_TASK_INTERRUPTION_HISTORY);
-          task.state = "pending"; task.assigneeSessionId = placeholderSessionId; task.claimedAt = undefined; task.claimId = undefined; clearTaskTerminalMetadata(task); task.releasedAt = timestamp; task.releaseReason = "failed member replaced by explicit direct-human recovery; prior claim and lease revoked"; task.updatedAt = timestamp;
+          task.state = "pending"; task.assigneeSessionId = placeholderSessionId; task.claimedAt = undefined; task.claimId = undefined; clearTaskTerminalMetadata(task); task.releasedAt = timestamp; task.releaseReason = "failed member replaced by explicit direct-human recovery; prior claim and lease revoked"; task.updatedAt = timestamp; bumpTaskRevision(task);
         }
         team.members.push(replacement);
       }
@@ -3672,7 +3815,7 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
         const published = await store.runOperation(() => store.mutate((current) => {
           const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId), replacement = liveTeam.members.find((candidate) => candidate.id === liveReceipt.replacementMemberId);
           if (liveReceipt.status !== "outcome_unknown" || !["provisioning", "running", "ready", "idle", "failed"].includes(replacement?.state) || (liveTeam.pauseEpoch ?? 0) !== liveReceipt.pauseEpoch) reject(`team changed during replacement publication (status=${liveReceipt.status}, phase=${liveReceipt.phase}, member=${replacement?.state ?? "missing"}, pause=${liveTeam.pauseEpoch ?? 0}/${liveReceipt.pauseEpoch})`, "AGENT_TEAMS_STALE_LEASE");
-          if (["provisioning", "ready", "idle", "failed"].includes(replacement.state)) { replacement.sessionId = startedId; replacement.state = "running"; replacement.publishedAt = now(); replacement.updatedAt = replacement.publishedAt; for (const taskId of liveReceipt.taskIds) { const task = liveTeam.tasks.find((candidate) => candidate.id === taskId); if (task?.state !== "pending" || ![startedId, `provisioning:${replacement.id}`, undefined].includes(task.assigneeSessionId)) reject("replacement task pre-binding changed", "AGENT_TEAMS_TASK_CONFLICT"); task.assigneeSessionId = startedId; task.leaseEpoch = liveReceipt.pauseEpoch; task.updatedAt = replacement.updatedAt; } }
+          if (["provisioning", "ready", "idle", "failed"].includes(replacement.state)) { replacement.sessionId = startedId; replacement.state = "running"; replacement.publishedAt = now(); replacement.updatedAt = replacement.publishedAt; for (const taskId of liveReceipt.taskIds) { const task = liveTeam.tasks.find((candidate) => candidate.id === taskId); if (task?.state !== "pending" || ![startedId, `provisioning:${replacement.id}`, undefined].includes(task.assigneeSessionId)) reject("replacement task pre-binding changed", "AGENT_TEAMS_TASK_CONFLICT"); task.assigneeSessionId = startedId; task.leaseEpoch = liveReceipt.pauseEpoch; task.updatedAt = replacement.updatedAt; bumpTaskRevision(task); } }
           if (["start_dispatched", "child_started"].includes(liveReceipt.phase)) liveReceipt.phase = "published"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; return { team: clone(liveTeam), receipt: clone(liveReceipt) };
         }));
         team = published.team; receipt = published.receipt;
@@ -3713,7 +3856,7 @@ async function reconcileMemberRecovery(ctx, store, lead, input) {
         const liveTeam = findTeam(current, teamId); requireLiveRootLead(ctx, liveTeam, lead); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId), replacement = liveTeam.members.find((candidate) => candidate.id === liveReceipt.replacementMemberId);
         if (liveReceipt.status !== "outcome_unknown" || replacement === undefined) reject("replacement recovery receipt changed before reconciliation", "AGENT_TEAMS_CONFLICT");
         const placeholder = `provisioning:${replacement.id}`, childId = liveReceipt.replacementSessionId;
-        for (const taskId of liveReceipt.taskIds) { const task = liveTeam.tasks.find((candidate) => candidate.id === taskId); if (task?.state !== "pending" || ![undefined, placeholder, childId].includes(task.assigneeSessionId)) reject("replacement task changed before not-delivered reconciliation", "AGENT_TEAMS_TASK_CONFLICT"); if (task.assigneeSessionId === undefined) { task.assigneeSessionId = childId ?? placeholder; task.updatedAt = now(); } }
+        for (const taskId of liveReceipt.taskIds) { const task = liveTeam.tasks.find((candidate) => candidate.id === taskId); if (task?.state !== "pending" || ![undefined, placeholder, childId].includes(task.assigneeSessionId)) reject("replacement task changed before not-delivered reconciliation", "AGENT_TEAMS_TASK_CONFLICT"); if (task.assigneeSessionId === undefined) { task.assigneeSessionId = childId ?? placeholder; task.updatedAt = now(); bumpTaskRevision(task); } }
         liveTeam.updatedAt = now(); return { childId, placeholder };
       }));
       if (binding.childId !== undefined && ctx.agents.get(binding.childId) !== undefined) await ctx.subagents.drainContinuableChildren(lead, [binding.childId]);
@@ -3929,6 +4072,7 @@ async function createTask(store, caller, input) {
       title: nonEmptyString(input.title, "title", 500),
       ...(optionalString(input.description, "description", 32_768) === undefined ? {} : { description: input.description.trim() }),
       state: "pending",
+      revision: 1,
       dependsOn: [...new Set(dependsOn)],
       ...(crossTeamDependsOn.length === 0 ? {} : { crossTeamDependsOn }),
       files: [...new Set(files.map((file) => nonEmptyString(file, "files item", 1_024)))],
@@ -4033,25 +4177,89 @@ async function updateTaskExternalEffect(store, caller, input) {
     }
     effect.updatedAt = now();
     task.updatedAt = effect.updatedAt;
+    bumpTaskRevision(task);
     team.updatedAt = effect.updatedAt;
     return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), effect: clone(effect), deliveryGuarantee: "host_effect_key_available_no_exactly_once_claim" };
   });
+}
+
+function bumpTaskRevision(task) {
+  const current = task.revision === undefined ? 1 : positiveInteger(task.revision, "task.revision");
+  task.revision = current + 1;
+  return task.revision;
+}
+function normalizedFixedRootTaskCommand(team, task, action, requestedState, input) {
+  const requestId = nonEmptyString(input.requestId, "requestId", 256);
+  const expectedTaskRevision = positiveInteger(input.expectedTaskRevision, "expectedTaskRevision");
+  const expectedPauseEpoch = positiveInteger(input.expectedPauseEpoch, "expectedPauseEpoch", { allowZero: true });
+  const assigneeSelector = action === "assign" ? nonEmptyString(input.assigneeSessionId, "assigneeSessionId", 256) : undefined;
+  const canonical = {
+    teamId: team.id,
+    taskId: task.id,
+    action,
+    expectedTaskRevision,
+    expectedPauseEpoch,
+    ...(requestedState === undefined ? {} : { state: requestedState }),
+    ...(assigneeSelector === undefined ? {} : { assigneeSessionId: assigneeSelector }),
+  };
+  return { requestId, expectedTaskRevision, expectedPauseEpoch, assigneeSelector, inputHash: createHash("sha256").update(JSON.stringify(canonical)).digest("hex") };
+}
+function prepareFixedRootTaskCommand(team, task, action, requestedState, input, document, required) {
+  if (!required) return undefined;
+  const command = normalizedFixedRootTaskCommand(team, task, action, requestedState, input);
+  const replay = (team.taskCommandReceipts ?? []).find((receipt) => receipt.requestId === command.requestId);
+  if (replay !== undefined) {
+    if (replay.inputHash !== command.inputHash) reject("task command request_id was reused with different canonical input", "AGENT_TEAMS_TASK_COMMAND_REPLAY_CONFLICT");
+    return { replay: { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), reused: true, operation: clone(replay) } };
+  }
+  return command;
+}
+function validateNewFixedRootTaskCommand(team, task, action, command) {
+  if (command === undefined) return undefined;
+  if (command.expectedPauseEpoch !== (team.pauseEpoch ?? 0)) reject("expected_pause_epoch is missing or stale", "AGENT_TEAMS_STALE_LEASE");
+  if (command.expectedTaskRevision !== task.revision) reject("expected_task_revision is missing or stale", "AGENT_TEAMS_STALE_TASK_REVISION");
+  if ((team.taskCommandReceipts ?? []).length >= MAX_TASK_COMMAND_RECEIPTS) reject("task command receipt limit reached; archive the team before issuing another destructive command", "AGENT_TEAMS_TASK_COMMAND_RECEIPT_LIMIT");
+  if (action === "assign") return { ...command, assigneeSessionId: requireAssignableMember(resolveMember(team, command.assigneeSelector)).sessionId };
+  return command;
+}
+function recordFixedRootTaskCommand(team, task, action, command, createdAt) {
+  if (command === undefined) return undefined;
+  const receipt = {
+    requestId: command.requestId,
+    inputHash: command.inputHash,
+    taskId: task.id,
+    action,
+    taskRevisionBefore: command.expectedTaskRevision,
+    taskRevisionAfter: task.revision,
+    pauseEpoch: command.expectedPauseEpoch,
+    createdAt,
+  };
+  team.taskCommandReceipts ??= [];
+  team.taskCommandReceipts.push(receipt);
+  return receipt;
 }
 
 async function updateTask(store, caller, input) {
   return store.mutate((document) => {
     assertEnabled(document);
     const team = resolveTeamForCaller(document, optionalString(input.teamId, "teamId", 256), caller.id);
-    requireActiveTeam(team);
     const task = team.tasks.find((candidate) => candidate.id === nonEmptyString(input.taskId, "taskId", 256));
     if (task === undefined) reject("unknown team task", "AGENT_TEAMS_NOT_FOUND");
+    const isLead = caller.id === team.rootLeadSessionId;
     const requestedState = optionalString(input.state, "state", 32);
     if (requestedState !== undefined) assertEnum(requestedState, MUTABLE_TASK_STATES, "state");
+    if (input.requireFixedRootCommand === true && isLead && input.action === undefined) reject("public fixed-root task updates require an explicit action", "AGENT_TEAMS_INVALID_TASK");
     if (input.action === undefined && requestedState === undefined) reject("task update requires action or state", "AGENT_TEAMS_INVALID_TASK");
     const action = input.action ?? (requestedState === "in_progress" ? "claim" : requestedState === "completed" ? "complete" : taskIsTerminal(task) ? "reopen" : "release");
     assertEnum(action, ["claim", "release", "complete", "accept", "reject", "cancel", "reopen", "assign", "unassign"], "action");
+    if (input.requireFixedRootCommand === true && FIXED_ROOT_TASK_COMMANDS.has(action) && action !== "release" && !isLead) reject("fixed-root task commands require the team root lead", "AGENT_TEAMS_UNAUTHORIZED");
+    const fixedRootCommandRequired = input.requireFixedRootCommand === true && FIXED_ROOT_TASK_COMMANDS.has(action) && (action !== "release" || isLead);
+    let fixedRootCommand = prepareFixedRootTaskCommand(team, task, action, requestedState, input, document, fixedRootCommandRequired);
+    if (fixedRootCommand?.replay !== undefined) return fixedRootCommand.replay;
+    requireActiveTeam(team);
+    fixedRootCommand = validateNewFixedRootTaskCommand(team, task, action, fixedRootCommand);
     const blockedBy = deriveTaskAcrossTeams(task, team, document.teams).blockedBy;
-    const isLead = caller.id === team.rootLeadSessionId;
+    let fixedRootNoOp = false;
     if (action === "claim") {
       if (task.state === "in_progress" && task.assigneeSessionId === caller.id) {
         // A retried claim by the same claimant is a safe idempotent no-op: the caller
@@ -4100,13 +4308,17 @@ async function updateTask(store, caller, input) {
       task.cancellationReason = undefined;
           } else if (action === "accept") {
       if (!isLead) reject("only the fixed root lead may accept a submitted task", "AGENT_TEAMS_UNAUTHORIZED");
-      if (task.state === "completed" && taskAcceptanceMatches(task)) return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), reused: true };
-      if (task.state !== "submitted" || !taskSubmissionMatches(task)) reject("acceptance requires a current submitted task-scoped delivery", "AGENT_TEAMS_DELIVERY_REQUIRED");
-      const acceptedAt = now();
-      task.state = "completed";
-      task.completedAt = acceptedAt;
-      task.acceptance = { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt, acceptedBy: caller.id, ownerEpoch: team.pauseEpoch ?? 0 };
-      appendTaskLifecycleEvent(task, { kind: "acceptance", at: acceptedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch, actorId: caller.id, ownerEpoch: team.pauseEpoch ?? 0 });
+      if (task.state === "completed" && taskAcceptanceMatches(task)) {
+        if (fixedRootCommand === undefined) return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), reused: true };
+        fixedRootNoOp = true;
+      } else {
+        if (task.state !== "submitted" || !taskSubmissionMatches(task)) reject("acceptance requires a current submitted task-scoped delivery", "AGENT_TEAMS_DELIVERY_REQUIRED");
+        const acceptedAt = now();
+        task.state = "completed";
+        task.completedAt = acceptedAt;
+        task.acceptance = { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt, acceptedBy: caller.id, ownerEpoch: team.pauseEpoch ?? 0 };
+        appendTaskLifecycleEvent(task, { kind: "acceptance", at: acceptedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch, actorId: caller.id, ownerEpoch: team.pauseEpoch ?? 0 });
+      }
     } else if (action === "reject") {
       if (!isLead) reject("only the fixed root lead may reject a submitted task", "AGENT_TEAMS_UNAUTHORIZED");
       if (task.state !== "submitted" || !taskSubmissionMatches(task)) reject("rejection requires a current submitted task-scoped delivery", "AGENT_TEAMS_DELIVERY_REQUIRED");
@@ -4159,22 +4371,29 @@ async function updateTask(store, caller, input) {
       clearTaskTerminalMetadata(task);
           } else if (action === "assign") {
       if (!isLead) reject("only the team lead can assign a task", "AGENT_TEAMS_UNAUTHORIZED");
-      const assignee = requireAssignableMember(resolveMember(team, input.assigneeSessionId)).sessionId;
+      const assignee = fixedRootCommand?.assigneeSessionId ?? requireAssignableMember(resolveMember(team, input.assigneeSessionId)).sessionId;
       if (task.assigneeSessionId === assignee && (task.state === "pending" || task.state === "in_progress")) {
-        // Re-assigning the current holder (a pending pre-assignment or an in-progress
-        // claimant) is a safe idempotent no-op; a retried assign never switches holders.
-        return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams) };
+        // Internal legacy callers keep the old no-op behavior. Public fixed-root commands
+        // persist a durable request receipt without fabricating a task revision.
+        if (fixedRootCommand === undefined) return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams) };
+        fixedRootNoOp = true;
+      } else {
+        if (task.state !== "pending") reject(`only a pending task can be assigned (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
+        task.assigneeSessionId = assignee;
       }
-      if (task.state !== "pending") reject(`only a pending task can be assigned (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
-      task.assigneeSessionId = assignee;
           } else {
       if (!isLead) reject("only the team lead can unassign a task", "AGENT_TEAMS_UNAUTHORIZED");
       if (task.state !== "pending") reject(`only a pending task can be unassigned (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       task.assigneeSessionId = undefined;
     }
-    task.updatedAt = now();
-    team.updatedAt = task.updatedAt;
-    return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams) };
+    const commandAt = now();
+    if (!fixedRootNoOp) {
+      task.updatedAt = commandAt;
+      bumpTaskRevision(task);
+    }
+    const operation = recordFixedRootTaskCommand(team, task, action, fixedRootCommand, commandAt);
+    team.updatedAt = commandAt;
+    return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), ...(operation === undefined ? {} : { operation: clone(operation) }) };
   });
 }
 
@@ -4198,20 +4417,24 @@ function releaseRetiredMemberTasks(team, sessionId, timestamp = now(), reason = 
   const releasedTaskIds = [];
   for (const task of team.tasks) {
     if (task.assigneeSessionId !== sessionId || taskIsTerminal(task)) continue;
+    if (typeof task.claimId === "string") appendTaskLifecycleEvent(task, { kind: "release", at: timestamp, attempt: task.attempt ?? 0, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? team.pauseEpoch ?? 0, actorId: team.rootLeadSessionId, reason });
     task.state = "pending";
     task.assigneeSessionId = undefined;
     task.claimedAt = undefined;
+    task.claimId = undefined;
     clearTaskTerminalMetadata(task);
     task.releasedAt = timestamp;
     task.releaseReason = reason;
     task.updatedAt = timestamp;
+    bumpTaskRevision(task);
     releasedTaskIds.push(task.id);
   }
   return releasedTaskIds;
 }
 function resetTaskStoppedAfter(task, stoppedAt, pauseEpoch) {
+  const submittedAfterStop = task.state === "submitted" && typeof task.submission?.submittedAt === "string" && task.submission.submittedAt >= stoppedAt;
   const completedAfterStop = task.state === "completed" && typeof task.completedAt === "string" && task.completedAt >= stoppedAt;
-  if (task.state !== "in_progress" && !completedAfterStop) return;
+  if (task.state !== "in_progress" && !submittedAfterStop && !completedAfterStop) return;
   boundedPush(task.interruptionHistory, { kind: "user_stop", at: stoppedAt, attempt: task.attempt ?? 0, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? 0, reason: `pause epoch ${pauseEpoch}` }, MAX_TASK_INTERRUPTION_HISTORY);
   task.state = "pending";
   task.claimedAt = undefined;
@@ -4224,6 +4447,7 @@ function resetTaskStoppedAfter(task, stoppedAt, pauseEpoch) {
   // checkpoint/next step so a human can inspect recovery context after interruption.
   task.leaseEpoch = pauseEpoch;
   task.updatedAt = stoppedAt;
+  bumpTaskRevision(task);
 }
 async function pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt) {
   const selectedChildren = new Map(selections.map((entry) => [entry.teamId, new Set(entry.childIds)]));
@@ -5129,7 +5353,7 @@ function officialCorePortsForProjectEntry(projectEntry) {
       },
       webEntry: () => projectEntry,
     },
-    task: { bind: ({ store, actorResolver, now: clock }) => new ProjectTaskCommandService({ store, actorResolver, ...(clock === undefined ? {} : { now: clock }) }) },
+    task: { bind: ({ store, actorResolver, now: clock, wakeScheduler }) => new ProjectTaskCommandService({ store, actorResolver, ...(clock === undefined ? {} : { now: clock }), ...(wakeScheduler === undefined ? {} : { wakeScheduler }) }) },
     collaboration: { bind: ({ store, actorResolver, earlyResolutionAuthorizer, rootFailureResolver }) => new ProjectCollaborationService({ store, actorResolver, earlyResolutionAuthorizer, rootFailureResolver }) },
     projection: { createWebRuntime: (options) => new ProjectTaskWebRuntime(options) },
     recovery: { continueRoot: ({ operation }) => operation(), recoverMember: ({ operation }) => operation(), reconcileMember: ({ operation }) => operation() },
@@ -5153,7 +5377,8 @@ async function withProjectCollaborationContext(projectEntry, execution, operatio
         return createHmac("sha256", key).update(domain).update("\0").update(context.projectRef).update("\0").update(JSON.stringify(parts)).digest("base64url");
       } finally { key?.fill(0); }
     };
-    const actorRef = `actor_${deriveProjectHmac("dsh-agent-teams/project-root-actor/v1", execution.agent.id)}`;
+    const actorRefForSessionId = (sessionId) => `actor_${deriveProjectHmac("dsh-agent-teams/project-root-actor/v1", sessionId)}`;
+    const actorRef = actorRefForSessionId(execution.agent.id);
     const actorResolver = (candidate, requestedProjectRef) => {
       if (candidate !== execution) reject("project collaboration execution is invalid, stale, or belongs to another tool call", "PROJECT_COLLABORATION_CONTEXT_INVALID");
       context.actorResolver(context.execution, requestedProjectRef);
@@ -5163,10 +5388,123 @@ async function withProjectCollaborationContext(projectEntry, execution, operatio
     };
     const collaboration = officialCorePorts.collaboration.bind({ store, actorResolver, earlyResolutionAuthorizer, rootFailureResolver });
     const tasks = officialCorePorts.task.bind({ store, actorResolver });
-    return await operation({ projectRef: context.projectRef, actorRef, collaboration, tasks, isBoardAvailable: () => store.hasCollaborationBoard(context.projectRef), deriveOpaque: (kind, ...parts) => `${kind}_${deriveProjectHmac(`dsh-agent-teams/project-${kind}/v1`, ...parts)}` });
+    const wake = Object.freeze({
+      claim: (input) => tasks.claimTaskWakeSignals(execution, { projectRef: context.projectRef, ...input }),
+      ack: (input) => tasks.ackTaskWakeSignal(execution, { projectRef: context.projectRef, ...input }),
+      setPaused: (paused) => tasks.setTaskWakePaused(execution, { projectRef: context.projectRef, paused }),
+    });
+    return await operation({
+      projectRef: context.projectRef, actorRef, collaboration, tasks, wake, actorRefForSessionId, canonicalProjectKey,
+      dispatcherRef: `dispatcher_${deriveProjectHmac("dsh-agent-teams/project-task-wake-dispatcher/v1")}`,
+      isBoardAvailable: () => store.hasCollaborationBoard(context.projectRef),
+      deriveOpaque: (kind, ...parts) => `${kind}_${deriveProjectHmac(`dsh-agent-teams/project-${kind}/v1`, ...parts)}`,
+    });
   } finally {
     try { store?.close(); } finally { context.dispose(); }
   }
+}
+async function reconcileProjectTaskWakeRoot(ctx, projectEntry, root, { paused, dispatch = false } = {}) {
+  if (ctx.agents.get(root.id) !== root || !ctx.agents.roots().includes(root)) return;
+  const execution = Object.freeze({ agent: root });
+  await withProjectCollaborationContext(projectEntry, execution, async (binding) => {
+    if (!binding.isBoardAvailable()) return;
+    if (typeof paused === "boolean") binding.wake.setPaused(paused);
+    if (dispatch) await dispatchProjectTaskWakeSignals(ctx, binding);
+  });
+}
+function observeProjectTaskWakeLifecycle(ctx, projectEntry, ready) {
+  void ready.then(async () => {
+    const seen = new Set();
+    const roots = ctx.agents.roots().filter((root) => ["idle", "running"].includes(root.status));
+    for (const root of roots) {
+      const key = optionalProjectKeyForRoot(root);
+      if (key === undefined || seen.has(key)) continue;
+      seen.add(key);
+      await reconcileProjectTaskWakeRoot(ctx, projectEntry, root, { dispatch: true });
+    }
+  }).catch((error) => ctx.logger.warn(`project task wake restart recovery failed: ${String(error?.code ?? "unavailable")}`));
+}
+function createProjectTaskWakeScheduler(ctx, projectEntry, ready, options = {}) {
+  const retryBaseMs = options.retryBaseMs ?? PROJECT_TASK_WAKE_RETRY_BASE_MS;
+  const retryMaxMs = options.retryMaxMs ?? PROJECT_TASK_WAKE_RETRY_MAX_MS;
+  const setTimer = options.setTimer ?? setTimeout;
+  const clearTimer = options.clearTimer ?? clearTimeout;
+  const states = new Map();
+  let closed = false;
+  const pump = options.pump ?? (async (projectRef) => {
+    const seen = new Set();
+    const roots = ctx.agents.roots().filter((root) => ["idle", "running"].includes(root.status));
+    for (const root of roots) {
+      const key = optionalProjectKeyForRoot(root);
+      if (key === undefined || seen.has(key)) continue;
+      seen.add(key);
+      const execution = Object.freeze({ agent: root });
+      let matched = false, result;
+      await withProjectCollaborationContext(projectEntry, execution, async (binding) => {
+        if (binding.projectRef !== projectRef || !binding.isBoardAvailable()) return;
+        matched = true;
+        result = await dispatchProjectTaskWakeSignals(ctx, binding);
+      });
+      if (matched) return result ?? { retryable: 0 };
+    }
+    return { retryable: 1 };
+  });
+  const startDrain = (projectRef, state) => {
+    if (closed || state.running) return;
+    state.running = true;
+    const drain = async () => {
+      let retryable = 0;
+      try {
+        await ready;
+        do {
+          state.pending = false;
+          try { retryable = Math.max(0, Number((await pump(projectRef))?.retryable) || 0); }
+          catch (error) { retryable = 1; ctx.logger.warn(`project task wake scheduling failed: ${String(error?.code ?? "unavailable")}`); }
+        } while (state.pending);
+      } catch (error) {
+        state.pending = false;
+        ctx.logger.warn(`project task wake initialization failed: ${String(error?.code ?? "unavailable")}`);
+      } finally {
+        state.running = false;
+        if (closed) {
+          state.pending = false;
+          if (states.get(projectRef) === state) states.delete(projectRef);
+        } else if (state.pending) startDrain(projectRef, state);
+        else if (retryable > 0) {
+          const delay = Math.min(retryMaxMs, retryBaseMs * (2 ** Math.min(state.retryAttempt, 16)));
+          state.retryAttempt += 1;
+          state.timer = setTimer(() => {
+            state.timer = undefined;
+            if (closed) return;
+            state.pending = true;
+            startDrain(projectRef, state);
+          }, delay);
+          state.timer?.unref?.();
+        } else if (states.get(projectRef) === state) states.delete(projectRef);
+      }
+    };
+    void drain();
+  };
+  const schedule = ({ projectRef } = {}) => {
+    if (closed || typeof projectRef !== "string" || projectRef.length === 0) return;
+    let state = states.get(projectRef);
+    if (state === undefined) { state = { pending: false, running: false, timer: undefined, retryAttempt: 0 }; states.set(projectRef, state); }
+    state.retryAttempt = 0;
+    if (state.timer !== undefined) { clearTimer(state.timer); state.timer = undefined; }
+    state.pending = true;
+    startDrain(projectRef, state);
+  };
+  schedule.close = () => {
+    if (closed) return;
+    closed = true;
+    for (const state of states.values()) {
+      state.pending = false;
+      if (state.timer !== undefined) clearTimer(state.timer);
+      state.timer = undefined;
+    }
+    states.clear();
+  };
+  return schedule;
 }
 function requireProjectRootCaller(ctx, exec) {
   const execution = toolExecution(ctx, exec);
@@ -5196,7 +5534,7 @@ async function continueProjectRootRecovery(projectSessionLaunch,execution,bindin
 }
 function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaunch, ready = Promise.resolve()) {
   const officialCorePorts = officialCorePortsForProjectEntry(projectEntry);
-  ctx.systemPrompt.section({ name: "tool:project-collaboration", order: 114, text: () => "Only exact top-level roots may call project_collaboration and project_task. A newly launched root must first adopt_slot, then at adoption and every project-task boundary call read_requests and respond to rows with targetedToMe=true before taking unrelated work. Request kinds are dependency_unblock, release, handoff, and takeover; target responses are accept, reject, or release. Respect respondByAt: audit_resolve_request is eligible only when escalationEligible=true, including an early deadline only when the current root turn carries explicit direct-user authorization verified by the Host. Requests are durable and no-wake: never poll or wake a stopped root. Read the assigned project task, work it, explicitly submit project status/evidence, and call project_task claim_next with a new stable request_id. Repeat one task at a time until all_terminal, or blocked with every remaining blocker represented by one durable request; never stop after one completion or temporarily_empty. A root's private Agent Team may receive only bounded context for the current claimed project task; members retain team_task_* only and never call project tools. The root must reconcile Team deliverables into explicit project task status and evidence—Team reports or completion are not project evidence. For project_task add_dependency/remove_dependency, task_ref is the blocked dependent and payload.blockerTaskRef is the prerequisite; the Host persists blockerTaskRef -> task_ref. The Host derives project/actor identity; model outputs may expose mine, targetedToMe, and escalationEligible but never actor refs, raw session, workspace, filesystem, or project identities." });
+  ctx.systemPrompt.section({ name: "tool:project-collaboration", order: 114, text: () => "Only exact top-level roots may call project_collaboration and project_task. A newly launched root must first adopt_slot, then at adoption and every project-task boundary call read_requests and respond to rows with targetedToMe=true before taking unrelated work. Request kinds are dependency_unblock, release, handoff, and takeover; target responses are accept, reject, or release. Respect respondByAt: audit_resolve_request is eligible only when escalationEligible=true, including an early deadline only when the current root turn carries explicit direct-user authorization verified by the Host. Requests are durable and no-wake: never poll or wake a stopped root. Read the assigned project task, work it, explicitly submit project status/evidence, and call project_task claim_next with a new stable request_id. Repeat one task at a time until all_terminal, or blocked with every remaining blocker represented by one durable request. A temporarily_empty claim durably arms one deduplicated Host wake, so end the turn without polling; when that exact wake arrives, resume with read_requests and a fresh claim_next request_id. A root's private Agent Team may receive only bounded context for the current claimed project task; members retain team_task_* only and never call project tools. The root must reconcile Team deliverables into explicit project task status and evidence—Team reports or completion are not project evidence. For project_task add_dependency/remove_dependency, task_ref is the blocked dependent and payload.blockerTaskRef is the prerequisite; the Host persists blockerTaskRef -> task_ref. The Host derives project/actor identity; model outputs may expose mine, targetedToMe, and escalationEligible but never actor refs, raw session, workspace, filesystem, or project identities." });
   ctx.tools.register(defineTool({
     name: "project_collaboration",
     description: "Read or mutate the current canonical project's collaboration board using the invoking root's Host-derived seat. bind_legacy is a distinct one-time recovery action restricted to the exact current top-level direct-human root; ordinary initialize never claims legacy data. A newly launched root adopts its reserved seat with adopt_slot and only the opaque assigned slot_ref; the Host uses this routing ref to validate the exact ready child and privately redeem the one-time capability, which never enters tool arguments or model-visible data. Also supports board initialization, own-seat updates, resource locks, two-phase handoff, and delivery evidence. No raw actor/session/project/path identities are accepted; evidence paths and resource scopes are project-relative.",
@@ -5245,6 +5583,11 @@ function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaun
           rootFailureResolver: ({execution:candidate,failureRef,mode}) => candidate===execution&&failureRef===recoveryInput?.failure_ref&&mode===recoveryInput?.mode?rootFailureEvidence:undefined,
           bindLegacy: args.action === "bind_legacy",
         });
+        if (!new Set(["read", "read_requests"]).has(args.action)) {
+          await withProjectCollaborationContext(projectEntry, execution, async (binding) => {
+            if (binding.isBoardAvailable()) await dispatchProjectTaskWakeSignals(ctx, binding);
+          });
+        }
         return publicResult(requestAction ? projectRequestModelResult(value) : projectCollaborationModelResult(value));
       } catch (error) { return projectToolFailure(error); }
     }, presentCall: (args) => present("Project collaboration", args.action),
@@ -5257,20 +5600,28 @@ function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaun
       try {
         await ready;
         const execution = requireProjectRootCaller(ctx, exec);
-        const value = await withProjectCollaborationContext(projectEntry, execution, ({ projectRef, collaboration, tasks, isBoardAvailable, deriveOpaque }) => {
+        const value = await withProjectCollaborationContext(projectEntry, execution, async (binding) => {
+          const { projectRef, collaboration, tasks, isBoardAvailable, deriveOpaque } = binding;
           if (args.action === "list") { const input = projectToolPayload(args.payload, new Set(["history_limit", "before_revision", "task_limit"])); return collaboration.snapshot(execution, { projectRef, historyLimit: input.history_limit, beforeRevision: input.before_revision, taskLimit: input.task_limit }); }
           if (!isBoardAvailable()) reject("initialize the project collaboration board before mutating project tasks", "PROJECT_COLLABORATION_NOT_INITIALIZED");
           if (args.action === "receipt") return tasks.getCommandReceipt(execution, { projectRef, commandId: deriveOpaque("command", args.request_id) });
-          if (args.action === "claim_next") { projectToolPayload(args.payload, new Set()); return collaboration.claimNextTask(execution, { projectRef, requestId: deriveOpaque("claim-next", args.request_id) }); }
-          const types = { create: "create", claim: "claim", edit: "edit_requirements", add_dependency: "dependency.add", remove_dependency: "dependency.remove", start_attempt: "attempt.start", submit_attempt: "attempt.submit", review: "review", transition: "transition", comment: "comment" };
-          const allowed = {
-            create: new Set(["title", "requirements", "fileScope", "priority"]), edit: new Set(["title", "requirements", "fileScope", "priority"]), claim: new Set(), add_dependency: new Set(["blockerTaskRef"]), remove_dependency: new Set(["blockerTaskRef"]), start_attempt: new Set(["attemptRef"]), submit_attempt: new Set(["attemptRef"]), review: new Set(["reviewRef", "attemptRef", "verdict", "body"]), transition: new Set(["to", "blockReason", "attemptRef", "reviewRef"]), comment: new Set(["commentRef", "kind", "body"]),
-          }[args.action];
-          const inputPayload = projectToolPayload(args.payload, allowed ?? new Set());
-          const payload = args.action === "add_dependency" ? { ...inputPayload, relationRef: deriveOpaque("relation", args.request_id) } : inputPayload;
-          const commandId = deriveOpaque("command", args.request_id), eventRef = deriveOpaque("event", args.request_id);
-          const taskRef = args.action === "create" ? deriveOpaque("task", args.request_id) : args.task_ref;
-          return tasks.executeCommand(execution, { projectRef, taskRef, commandId, eventRef, type: types[args.action], expectedRevision: args.action === "create" ? 0 : args.expected_revision, payload });
+          let result;
+          if (args.action === "claim_next") {
+            projectToolPayload(args.payload, new Set());
+            result = collaboration.claimNextTask(execution, { projectRef, requestId: deriveOpaque("claim-next", args.request_id) });
+          } else {
+            const types = { create: "create", claim: "claim", edit: "edit_requirements", add_dependency: "dependency.add", remove_dependency: "dependency.remove", start_attempt: "attempt.start", submit_attempt: "attempt.submit", review: "review", transition: "transition", comment: "comment" };
+            const allowed = {
+              create: new Set(["title", "requirements", "fileScope", "priority"]), edit: new Set(["title", "requirements", "fileScope", "priority"]), claim: new Set(), add_dependency: new Set(["blockerTaskRef"]), remove_dependency: new Set(["blockerTaskRef"]), start_attempt: new Set(["attemptRef"]), submit_attempt: new Set(["attemptRef"]), review: new Set(["reviewRef", "attemptRef", "verdict", "body"]), transition: new Set(["to", "blockReason", "attemptRef", "reviewRef"]), comment: new Set(["commentRef", "kind", "body"]),
+            }[args.action];
+            const inputPayload = projectToolPayload(args.payload, allowed ?? new Set());
+            const payload = args.action === "add_dependency" ? { ...inputPayload, relationRef: deriveOpaque("relation", args.request_id) } : inputPayload;
+            const commandId = deriveOpaque("command", args.request_id), eventRef = deriveOpaque("event", args.request_id);
+            const taskRef = args.action === "create" ? deriveOpaque("task", args.request_id) : args.task_ref;
+            result = tasks.executeCommand(execution, { projectRef, taskRef, commandId, eventRef, type: types[args.action], expectedRevision: args.action === "create" ? 0 : args.expected_revision, payload });
+          }
+          await dispatchProjectTaskWakeSignals(ctx, binding);
+          return result;
         });
         return publicResult(args.action === "list" ? projectCollaborationModelResult(value) : projectTaskModelResult(value));
       } catch (error) { return projectToolFailure(error); }
@@ -5587,9 +5938,9 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     })), presentCall: () => present("List team tasks"),
   }));
   ctx.tools.register(defineTool({
-    name: "team_task_update", description: "Atomically claim, release, submit completion for review, independently accept or reject, cancel, reopen, assign, or unassign a team task. Only the exact claimant may submit with its claimId/leaseEpoch. Submission remains non-authoritative until the fixed root accepts it; only acceptance marks completed and unlocks dependencies. Lifecycle history is append-only and survives reopen.",
-    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", enum: ["claim", "release", "complete", "accept", "reject", "cancel", "reopen", "assign", "unassign"], description: "requested transition; repeated claim, exact submission replay, acceptance, and lead assign of the current assignee are safe no-ops" }, state: { type: "string", enum: MUTABLE_TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" }, claim_id: { type: "string", description: "Required for non-lead release/complete; exact claimId returned by claim." }, lease_epoch: { type: "number", description: "Required for non-lead release/complete; exact leaseEpoch returned by claim." } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution) => publicResult(await updateTask(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, action: args.action, state: args.state, assigneeSessionId: args.assignee_session_id, claimId: args.claim_id, leaseEpoch: args.lease_epoch }))),
+    name: "team_task_update", description: "Atomically claim, release, submit completion for review, independently accept or reject, cancel, reopen, assign, or unassign a team task. An explicit action is always required. Fixed-root destructive commands (release/accept/reject/cancel/reopen/assign/unassign) require request_id, expected_task_revision, and expected_pause_epoch; member release instead requires the current claim_id and lease_epoch. Exact durable replays are idempotent and stale commands fail closed. Only the exact claimant may submit with its claimId/leaseEpoch. Submission remains non-authoritative until the fixed root accepts it; only acceptance marks completed and unlocks dependencies. Lifecycle history is append-only and survives reopen.",
+    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", required: true, enum: ["claim", "release", "complete", "accept", "reject", "cancel", "reopen", "assign", "unassign"], description: "Explicit requested transition; repeated claim and exact submission replay are safe no-ops" }, state: { type: "string", enum: MUTABLE_TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" }, claim_id: { type: "string", description: "Required for non-lead release/complete; exact claimId returned by claim." }, lease_epoch: { type: "number", description: "Required for non-lead release/complete; exact leaseEpoch returned by claim." }, request_id: { type: "string", description: "Required stable idempotency key for fixed-root destructive commands." }, expected_task_revision: { type: "number", description: "Required current task revision for fixed-root destructive commands." }, expected_pause_epoch: { type: "number", description: "Required current team pause epoch for fixed-root destructive commands." } }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution) => publicResult(await updateTask(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, action: args.action, state: args.state, assigneeSessionId: args.assignee_session_id, claimId: args.claim_id, leaseEpoch: args.lease_epoch, requestId: args.request_id, expectedTaskRevision: args.expected_task_revision, expectedPauseEpoch: args.expected_pause_epoch, requireFixedRootCommand: true }))),
     presentCall: (args) => present("Update team task", `${args.action}: ${args.task_id}`),
   }));
   ctx.tools.register(defineTool({
@@ -6483,11 +6834,24 @@ function observeProjectRootFailures(ctx,projectEntry,projectSessionLaunch,ready=
   });
 }
 
-function observeUserStops(ctx, store, ready, admission, projectSessionLaunch) {
+function observeUserStops(ctx, store, ready, admission, projectSessionLaunch, projectEntry) {
+  const scheduleProjectTaskWake = (root, options) => {
+    if (projectEntry === undefined || !ctx.agents.roots().includes(root)) return;
+    void ready.then(() => reconcileProjectTaskWakeRoot(ctx, projectEntry, root, options))
+      .catch((error) => ctx.logger.warn(`project task wake lifecycle reconciliation failed: ${String(error?.code ?? "unavailable")}`));
+  };
   ctx.on("session/event", (session, event) => {
-    if (event.type !== "turn/end" || event.data?.reason?.kind !== "aborted" || event.data.reason.reason?.kind !== "user") return;
     const lead = ctx.agents.get(session.id);
     if (lead === undefined || lead.session !== session) return;
+    if (event.type === "user/message" && event.data?.source?.kind === "user") {
+      PROJECT_TASK_STOPPED_ROOTS.delete(lead.id);
+      scheduleProjectTaskWake(lead, { paused: false, dispatch: true });
+      return;
+    }
+    if (event.type !== "turn/end" || event.data?.reason?.kind !== "aborted" || event.data.reason.reason?.kind !== "user") return;
+    PROJECT_TASK_STOPPED_ROOTS.add(lead.id);
+    clearQueuedProjectTaskWakes(lead);
+    scheduleProjectTaskWake(lead, { paused: true });
     const selections = store.activeTeamsForRoot(lead.id);
     if (selections.length === 0) return;
     const stoppedAt = now();
@@ -6601,8 +6965,9 @@ function resolveAgentTeamsAuthorizationProvider(ctx) {
   return desktop;
 }
 
-function createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry) {
+function createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry, wakeScheduler = () => undefined) {
   if (typeof projectEntryRegistry?.localProjectCollaborationContext !== "function") throw new TypeError("projectEntryRegistry must provide canonical project contexts");
+  if (typeof wakeScheduler !== "function") throw new TypeError("wakeScheduler must be a function");
   const runtimes = new Map();
   let closed = false;
   const resolve = (sessionId) => {
@@ -6617,7 +6982,7 @@ function createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry) {
       localProjectCollaborationContext: () => projectEntryRegistry.localProjectCollaborationContext({ canonicalProjectKey }),
       localProjectTaskContext: () => projectEntryRegistry.localProjectTaskContext({ canonicalProjectKey }),
     });
-    runtime = new ProjectTaskWebRuntime({ projectEntry, legacySummaryProvider: async () => false });
+    runtime = new ProjectTaskWebRuntime({ projectEntry, legacySummaryProvider: async () => false, wakeScheduler });
     runtimes.set(canonicalProjectKey, runtime);
     return runtime;
   };
@@ -6686,6 +7051,7 @@ function apply(ctx, config = {}) {
       } catch { return undefined; }
     },
   });
+  let projectTaskWakeScheduler = () => undefined;
   const officialCorePorts = createOfficialCorePorts({ providers: [createCustomOfficialCoreProvider({
     projectIdentity: {
       open: ({ canonicalProjectKey, bindLegacy }) => bindLegacy
@@ -6693,7 +7059,7 @@ function apply(ctx, config = {}) {
         : projectEntryRegistry.localProjectCollaborationContext({ canonicalProjectKey }),
       webEntry: () => projectEntry,
     },
-    task: { bind: ({ store: taskStore, actorResolver, now: clock }) => new ProjectTaskCommandService({ store: taskStore, actorResolver, ...(clock === undefined ? {} : { now: clock }) }) },
+    task: { bind: ({ store: taskStore, actorResolver, now: clock }) => new ProjectTaskCommandService({ store: taskStore, actorResolver, ...(clock === undefined ? {} : { now: clock }), wakeScheduler: (signal) => projectTaskWakeScheduler(signal) }) },
     collaboration: { bind: ({ store: taskStore, actorResolver, now: clock, earlyResolutionAuthorizer, rootFailureResolver }) => new ProjectCollaborationService({ store: taskStore, actorResolver, ...(clock === undefined ? {} : { now: clock }), ...(earlyResolutionAuthorizer === undefined ? {} : { earlyResolutionAuthorizer }), ...(rootFailureResolver === undefined ? {} : { rootFailureResolver }) }) },
     projection: { createWebRuntime: (options) => new ProjectTaskWebRuntime(options) },
     recovery: {
@@ -6703,6 +7069,8 @@ function apply(ctx, config = {}) {
     },
   })] });
   const ready = Promise.all([store.init(), projectSessionLaunch.init()]).then(([document]) => document);
+  projectTaskWakeScheduler = createProjectTaskWakeScheduler(ctx, officialCorePorts, ready);
+  ctx.effect(() => () => projectTaskWakeScheduler.close());
   const legacySummaryProvider = async () => {
     await ready;
     return store.read((document) => ({ detected: document.teams.some((team) => team.tasks.length > 0) }));
@@ -6710,13 +7078,15 @@ function apply(ctx, config = {}) {
   const projectTasks = officialCorePorts.projection.createWebRuntime({
     projectEntry: officialCorePorts.projectIdentity.webEntry(),
     legacySummaryProvider,
+    wakeScheduler: projectTaskWakeScheduler,
   });
-  const projectTaskRuntimeForSession = createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry);
-  const projectAutomations = new ProjectAutomationWebRuntime({ projectEntry });
+  const projectTaskRuntimeForSession = createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry, projectTaskWakeScheduler);
+  const projectAutomations = new ProjectAutomationWebRuntime({ projectEntry, wakeScheduler: projectTaskWakeScheduler });
   const projectBusiness = new ProjectBusinessSyncRuntime({
     projectEntry,
     taskDelegate: { state: () => projectTasks.state(), action: (input) => projectTasks.action(input) },
     automationDelegate: { state: () => projectAutomations.state(), action: (input) => projectAutomations.action(input) },
+    wakeScheduler: projectTaskWakeScheduler,
   });
   const projectFoundations = createProjectFoundationManager(ctx, store, projectEntry, desktopGitCapability, resolveProjectFoundationHostOptions(ctx));
   ready.catch((error) => ctx.logger.error(`agent-teams store initialization failed: ${String(error)}`));
@@ -6754,7 +7124,8 @@ function apply(ctx, config = {}) {
   registerProjectTaskApi(ctx, projectTaskRuntimeForSession, projectBusiness);
   registerProjectAutomationApi(ctx, projectAutomations, projectBusiness);
   observeSubagents(ctx, store, ready, admission);
-  observeUserStops(ctx, store, ready, admission, projectSessionLaunch);
+  observeUserStops(ctx, store, ready, admission, projectSessionLaunch, officialCorePorts);
+  observeProjectTaskWakeLifecycle(ctx, officialCorePorts, ready);
   observeProjectRootFailures(ctx,projectEntryRegistry,projectSessionLaunch,ready);
 }
 
@@ -6793,9 +7164,11 @@ export {
   createProjectFoundationManager,
   createProjectTaskSseBridge,
   createProjectTaskSessionRuntimeResolver,
+  createProjectTaskWakeScheduler,
   createResolveUnknownAuthorizationGate,
   createSseBroadcaster,
   createSubagentEventReconciler,
+  dispatchProjectTaskWakeSignals,
   createTeamTurnAdmission,
   fileBoundaryOverlap,
   hasExactGoalRoundRootAuthority,

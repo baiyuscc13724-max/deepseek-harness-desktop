@@ -260,6 +260,7 @@ test('unknown capabilities and uncertain external outcomes block automatic execu
 test('unverified checkpoints reject Host-authority and sensitive-field injection', async () => {
   const mod = await loadPlugin('checkpoint-boundary')
   const base = legacyTask('checkpointed', 'pending', {
+    revision: 1,
     attempt: 1,
     leaseEpoch: 2,
     attemptHistory: [],
@@ -926,6 +927,81 @@ test('resolve_unknown consumes a short-lived Host receipt bound to exact turn, e
         effectName: 'publish-once', attemptId, outcome: 'not_started', pauseEpoch: 1, teamRevision: store.snapshot().teams[0].revision - 1
       }
     )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('spawn rejects a parent workspace whose task scope exists only inside sibling worktrees', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-workspace-binding-'))
+  const mod = await loadPlugin('workspace-binding')
+  const store = new mod.AgentTeamsStore(path.join(root, 'storages', 'agent_teams.json'), { enabled: true, maxMembers: 4, maxActiveTurns: 4 })
+  const lead = { id: 'workspace-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: root } } }
+  let starts = 0
+  const ctx = {
+    agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+    subagents: {
+      async startContinuable({ childId }) { starts += 1; return { childId } },
+      async followup() {},
+      async drainContinuableChildren() {}
+    }
+  }
+  const admission = { async run(_lead, _childId, _signal, work) { return work() }, abandon() {} }
+  try {
+    await Promise.all([
+      mkdir(path.join(root, 'maintained', 'plugins', 'dsh-agent-teams', 'lib'), { recursive: true }),
+      mkdir(path.join(root, 'legacy', 'plugins', 'dsh-agent-teams', 'lib'), { recursive: true })
+    ])
+    await store.init()
+    const team = await mod.createTeam(store, lead, { objective: 'Bind execution to one exact checkout' })
+    const task = await mod.createTask(store, lead, {
+      teamId: team.id, title: 'Edit the maintained plugin', files: ['plugins/dsh-agent-teams/lib/index.js']
+    })
+    const plan = store.snapshot().teams[0].plan
+    await mod.commitTeamPlan(ctx, store, lead, { teamId: team.id, expectedRevision: plan.revision, confirmedPlanHash: plan.hash, costVerified: true })
+
+    await assert.rejects(
+      mod.spawnMember(ctx, store, admission, lead, {
+        teamId: team.id, name: 'Code', role: 'edit the assigned checkout', prompt: 'Implement the change', taskIds: [task.task.id]
+      }, new AbortController().signal),
+      error => error?.code === 'AGENT_TEAMS_WORKSPACE_SCOPE_AMBIGUOUS'
+    )
+    assert.equal(starts, 0, 'Host must reject an ambiguous parent workspace before creating a child')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('spawn accepts an exact parent workspace that owns the task file-scope anchor', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-exact-workspace-'))
+  const mod = await loadPlugin('exact-workspace')
+  const store = new mod.AgentTeamsStore(path.join(root, 'storages', 'agent_teams.json'), { enabled: true, maxMembers: 4, maxActiveTurns: 4 })
+  const lead = { id: 'exact-workspace-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: root } } }
+  let starts = 0
+  const ctx = {
+    agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+    subagents: {
+      async startContinuable({ childId }) { starts += 1; return { childId } },
+      async followup() {},
+      async drainContinuableChildren() {}
+    }
+  }
+  const admission = { async run(_lead, _childId, _signal, work) { return work() }, abandon() {} }
+  try {
+    await mkdir(path.join(root, 'plugins', 'dsh-agent-teams', 'lib'), { recursive: true })
+    await store.init()
+    const team = await mod.createTeam(store, lead, { objective: 'Use one exact checkout' })
+    const task = await mod.createTask(store, lead, {
+      teamId: team.id, title: 'Edit the bound plugin', files: ['plugins/dsh-agent-teams/lib/index.js']
+    })
+    const plan = store.snapshot().teams[0].plan
+    await mod.commitTeamPlan(ctx, store, lead, { teamId: team.id, expectedRevision: plan.revision, confirmedPlanHash: plan.hash, costVerified: true })
+
+    const spawned = await mod.spawnMember(ctx, store, admission, lead, {
+      teamId: team.id, name: 'Code', role: 'edit the assigned checkout', prompt: 'Implement the change', taskIds: [task.task.id]
+    }, new AbortController().signal)
+    assert.equal(spawned.member.state, 'running')
+    assert.equal(starts, 1)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

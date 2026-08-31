@@ -71,18 +71,64 @@ function normalizeCommand(input) {
 }
 
 class ProjectTaskCommandService {
-  constructor({ store, actorResolver, now = Date.now } = {}) {
+  constructor({ store, actorResolver, now = Date.now, wakeScheduler = () => undefined } = {}) {
     if (!(store instanceof ProjectTaskStore)) throw new TypeError("store must be a ProjectTaskStore");
     if (typeof now !== "function") throw new TypeError("now must be a function");
+    if (typeof wakeScheduler !== "function") throw new TypeError("wakeScheduler must be a function");
     this.store = store;
     this.actors = new TrustedProjectActorResolver(actorResolver);
     this.now = now;
+    this.wakeScheduler = wakeScheduler;
   }
 
   execute(execution, input, context = {}) { return this.executeCommand(execution, input, context); }
 
+  listTaskWakeProjects(execution, input = {}) {
+    const actor = this.actors.resolve(execution, input.projectRef);
+    return this.store.listTaskWakeProjects({
+      updatedAt: this.now(),
+      ...(input.afterProjectRef === undefined ? {} : { afterProjectRef: input.afterProjectRef }),
+      ...(input.limit === undefined ? {} : { limit: input.limit }),
+    }).filter((projectRef) => projectRef === actor.projectRef);
+  }
+
+  claimTaskWakeSignals(execution, input = {}) {
+    const actor = this.actors.resolve(execution, input.projectRef);
+    return this.store.claimTaskWakeSignals({
+      projectRef: actor.projectRef,
+      dispatcherRef: input.dispatcherRef,
+      updatedAt: this.now(),
+      ...(input.limit === undefined ? {} : { limit: input.limit }),
+      ...(input.leaseMs === undefined ? {} : { leaseMs: input.leaseMs }),
+    });
+  }
+
+  ackTaskWakeSignal(execution, input = {}) {
+    const actor = this.actors.resolve(execution, input.projectRef);
+    return this.store.ackTaskWakeSignal({
+      projectRef: actor.projectRef,
+      wakeRef: input.wakeRef,
+      dispatcherRef: input.dispatcherRef,
+      outcome: input.outcome,
+      updatedAt: this.now(),
+    });
+  }
+
+  setTaskWakePaused(execution, input = {}) {
+    const actor = this.actors.resolve(execution, input.projectRef);
+    return this.store.setTaskWakePaused({ projectRef: actor.projectRef, actorRef: actor.actorRef, paused: input.paused, updatedAt: this.now() });
+  }
+
   executeCommand(execution, input, context = {}) {
     const command = normalizeCommand(input);
+    const result = this.#executeNormalizedCommand(execution, command, context);
+    if (result.duplicate !== true) {
+      try { this.wakeScheduler(Object.freeze({ projectRef: command.projectRef })); } catch { /* restart discovery remains the durable fallback */ }
+    }
+    return result;
+  }
+
+  #executeNormalizedCommand(execution, command, context = {}) {
     const actor = projectToolActor(this.actors.resolve(execution, command.projectRef), this.store);
     const target = command.type === "assign" ? projectToolActor(this.actors.resolve(context.targetExecution, command.projectRef), this.store) : undefined;
     const digest = requestDigest(command, actor, target);

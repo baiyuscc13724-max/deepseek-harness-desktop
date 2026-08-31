@@ -93,9 +93,10 @@ async function fixture({ taskCount = 1, automationRun = false, pumpLimit = 100 }
   const authorityEntry = new FakeEntry({ network, deviceRef: authorityDeviceRef, context: () => syncContext({ root, mode: 'authority', localDeviceRef: authorityDeviceRef, peerDeviceRef: collaboratorDeviceRef, key: authoritySyncKey }), taskContext, automationContext })
   const collaboratorEntry = new FakeEntry({ network, deviceRef: collaboratorDeviceRef, context: () => syncContext({ root, mode: 'collaborator', localDeviceRef: collaboratorDeviceRef, peerDeviceRef: authorityDeviceRef, key: collaboratorSyncKey, contextProjectRef: collaboratorProjectRef, peerAvailable: () => collaboratorPeerAvailable }) })
   let currentTime = atMs
-  const runtimeOptions = { clock: () => currentTime, pumpLimit, refreshMs: 60_000, scheduler(callback, delay) { const timer = setTimeout(callback, delay); timer.unref(); return timer } }
+  const wakeSignals = []
+  const runtimeOptions = { clock: () => currentTime, pumpLimit, refreshMs: 60_000, wakeScheduler: signal => wakeSignals.push(signal), scheduler(callback, delay) { const timer = setTimeout(callback, delay); timer.unref(); return timer } }
   const authority = new ProjectBusinessSyncRuntime({ projectEntry: authorityEntry, ...runtimeOptions }), collaborator = new ProjectBusinessSyncRuntime({ projectEntry: collaboratorEntry, ...runtimeOptions })
-  return { root, network, authority, collaborator, seededRun, rejectedRun, keys: [taskKey, automationKey, authoritySyncKey, collaboratorSyncKey], advance(milliseconds) { currentTime += milliseconds }, setCollaboratorProjectRef(value) { collaboratorProjectRef = value }, setCollaboratorPeerAvailable(value) { collaboratorPeerAvailable = value }, async restartCollaborator() { await this.collaborator.close(); this.collaborator = new ProjectBusinessSyncRuntime({ projectEntry: collaboratorEntry, ...runtimeOptions }); return this.collaborator }, async taskRevision() { const context = taskContext(), store = new ProjectTaskStore({ filePath: taskFile, keyProvider: context.keyProvider }); store.initialize(); try { return store.getProjectRevision(projectRef) } finally { store.close(); context.dispose() } }, async close() { await Promise.allSettled([this.collaborator.close(), this.authority.close()]); for (const key of this.keys) key.fill(0); await rm(root, { recursive: true, force: true }) } }
+  return { root, network, authority, collaborator, seededRun, rejectedRun, wakeSignals, keys: [taskKey, automationKey, authoritySyncKey, collaboratorSyncKey], advance(milliseconds) { currentTime += milliseconds }, setCollaboratorProjectRef(value) { collaboratorProjectRef = value }, setCollaboratorPeerAvailable(value) { collaboratorPeerAvailable = value }, async restartCollaborator() { await this.collaborator.close(); this.collaborator = new ProjectBusinessSyncRuntime({ projectEntry: collaboratorEntry, ...runtimeOptions }); return this.collaborator }, async taskRevision() { const context = taskContext(), store = new ProjectTaskStore({ filePath: taskFile, keyProvider: context.keyProvider }); store.initialize(); try { return store.getProjectRevision(projectRef) } finally { store.close(); context.dispose() } }, async close() { await Promise.allSettled([this.collaborator.close(), this.authority.close()]); for (const key of this.keys) key.fill(0); await rm(root, { recursive: true, force: true }) } }
 }
 
 async function synchronize(fx, taskCount = 1) {
@@ -124,6 +125,7 @@ test('runtime bootstraps multi-page cache, retains offline outbox, and executes 
   fx.network.connected = true
   await fx.collaborator.recover()
   await waitFor(() => fx.network.sent.some(item => item.message.type === 'task.receipt'), 'authority did not execute remote claim')
+  assert.deepEqual(fx.wakeSignals, [{ projectRef }], 'remote Business task mutation reaches the shared Host wake scheduler exactly once')
   assert.equal(signals.every(signal => JSON.stringify(signal) === '{"type":"refetch"}'), true)
   assert.equal(unsubscribe(), true); assert.equal(unsubscribe(), false)
   await fx.collaborator.close(); await fx.authority.close()

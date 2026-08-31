@@ -22,7 +22,7 @@ test('Agent Teams plugin installs an explicitly marked artifact fixture into the
     const second = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot, allowArtifactFixture: true, requireArtifact: true })
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.version, '1.0.55')
+    assert.equal(first.version, '1.0.56')
 
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-agent-teams/g) || []).length, 1)
@@ -134,7 +134,7 @@ test('default desktop startup mode still installs from a source checkout while g
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-source-startup-'))
   try {
     const installed = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot: repositoryPluginRoot })
-    assert.equal(installed.version, '1.0.55')
+    assert.equal(installed.version, '1.0.56')
     assert.equal(await readFile(path.join(installed.destination, 'package.json'), 'utf8').then(JSON.parse).then(value => value.name), 'dsh-agent-teams')
     await assert.rejects(ensureAgentTeamsPlugin({ dshHome: root, bundledRoot: repositoryPluginRoot, requireArtifact: true }), error => error?.code === 'AGENT_TEAMS_ARTIFACT_REQUIRED')
   } finally { await rm(root, { recursive: true, force: true }) }

@@ -2098,7 +2098,7 @@ window.__ModuleLoader__.load({
 
     function taskBoardLeaseEpoch(task) {
       var value = Number(task && task.leaseEpoch);
-      return Number.isSafeInteger(value) && value > 0 ? value : null;
+      return Number.isSafeInteger(value) && value >= 0 ? value : null;
     }
 
     function taskBoardCapabilitySummary(task) {

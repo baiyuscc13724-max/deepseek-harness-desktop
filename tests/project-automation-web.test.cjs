@@ -10,7 +10,7 @@ const load = relative => import(pathToFileURL(path.join(ROOT, relative)).href)
 const PROJECT = 'project_automation_web_fixture'
 const TASK = 'task_automation_web_fixture'
 
-async function fixture() {
+async function fixture(options = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'dsh-automation-web-'))
   const [web, taskStoreMod, taskServiceMod] = await Promise.all([
     load('plugins/dsh-agent-teams/lib/project-automation-web.js'),
@@ -38,8 +38,8 @@ async function fixture() {
     contexts.push({ kind, disposed }); return Object.freeze(value)
   }
   const entry = { localProjectAutomationContext: async () => context('automation'), localProjectTaskContext: async () => context('task'), status: async () => ({ project: created ? { role } : undefined }) }
-  const scheduled = [], runtime = new web.ProjectAutomationWebRuntime({ projectEntry: entry, now: () => Date.parse('2026-01-02T03:04:05Z'), schedule: callback => scheduled.push(callback) })
-  return { web, runtime, scheduled, contexts, setEpoch: value => { epoch = value }, setRole: value => { role = value }, setCreated: value => { created = value }, async cleanup() { await runtime.close(); taskKey.fill(0); automationKey.fill(0); await rm(directory, { recursive: true, force: true }) } }
+  const scheduled = [], wakeSignals = [], runtime = new web.ProjectAutomationWebRuntime({ projectEntry: entry, now: () => Date.parse('2026-01-02T03:04:05Z'), schedule: callback => scheduled.push(callback), wakeScheduler: options.wakeScheduler ?? (signal => wakeSignals.push(signal)) })
+  return { web, runtime, scheduled, wakeSignals, contexts, setEpoch: value => { epoch = value }, setRole: value => { role = value }, setCreated: value => { created = value }, async cleanup() { await runtime.close(); taskKey.fill(0); automationKey.fill(0); await rm(directory, { recursive: true, force: true }) } }
 }
 
 async function settlePump(fx) {
@@ -95,6 +95,7 @@ test('real stores create, toggle, manual-run, approve queue, and independently e
     const approved = await fx.runtime.action({ commandId: 'approve-1', type: 'approve', runRef: manual.run.runRef, expectedRevision: 1, payload: {} }); assert.equal(approved.run.status, 'queued', 'action must not await task effect')
     const queued = await fx.runtime.state(); assert.equal(queued.runs[0].status, 'queued')
     const finished = await settlePump(fx); assert.equal(finished.runs[0].status, 'succeeded')
+    assert.deepEqual(fx.wakeSignals, [{ projectRef: PROJECT }], 'Automation runner task mutation reaches the shared Host wake scheduler')
     const replayedCreate = await fx.runtime.action({ commandId: 'create-1', type: 'definition.create', expectedRevision: 0, payload: { name: 'Move forward', taskRef: TASK, targetStatus: 'in_progress' } }); assert.equal(replayedCreate.duplicate, true)
     const replayedManual = await fx.runtime.action({ commandId: 'run-1', type: 'manual_run', definitionRef, expectedRevision: 3, payload: { taskRevision: 1 } }); assert.equal(replayedManual.duplicate, true)
     assert.equal(finished.taskChoices[0].revision, 2); assert.ok(finished.recentLedger.length > 0)
