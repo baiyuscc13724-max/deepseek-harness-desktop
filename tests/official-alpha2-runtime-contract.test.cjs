@@ -36,6 +36,14 @@ const DIRECT_ALPHA2 = Object.freeze([
   ['@deepseek-ai/dsh-timeout', 'packages/util/timeout/package.json', 'sha512-8q5cd55aMoOvrPaqSws/3xiyzHhs1bfjdtAs4YHWimQgMd+yMrDnlu8i+zFOkWoSc0A2wPkXcCYR8xogl4gerA=='],
   ['@deepseek-ai/dsh-workflow', 'packages/workflow/workflow/package.json', 'sha512-U2nGVCOZ3hGoPP6XtPWUFL++l6K8S7XRQV2hvFrSQ4WBGbwdkY6h1cyzGvJXzae1s3AbAu5tdt//AIBNHOtYaA==']
 ])
+const PACKAGED_ALPHA2_PEERS = Object.freeze([
+  '@deepseek-ai/dsh-attachment',
+  '@deepseek-ai/dsh-jobs',
+  '@deepseek-ai/dsh-session-persistence',
+  '@deepseek-ai/dsh-session-query',
+  '@deepseek-ai/dsh-settings',
+  '@deepseek-ai/dsh-util-time'
+])
 
 const PATCH_TARGETS = Object.freeze([
   '@deepseek-ai/dsh-client-runtime',
@@ -273,6 +281,13 @@ test('the maintained product pins and classifies the complete accepted alpha.2 g
   assert.equal(pkg.devDependencies.electron, '43.2.0')
   assert.equal(pkg.scripts.postinstall, 'node scripts/patch-official-runtime.mjs && electron-builder install-app-deps')
   assert.deepEqual(lock.packages[''].dependencies, pkg.dependencies)
+  assert.deepEqual(lock.packages[''].optionalDependencies, pkg.optionalDependencies)
+  assert.deepEqual(Object.keys(pkg.optionalDependencies).filter(name => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')).sort(), [...PACKAGED_ALPHA2_PEERS].sort())
+  for (const name of PACKAGED_ALPHA2_PEERS) {
+    assert.equal(pkg.optionalDependencies[name], TARGET_VERSION, name)
+    assert.equal(lock.packages[`node_modules/${name}`].version, TARGET_VERSION, name)
+    assert.notEqual(lock.packages[`node_modules/${name}`].peer, true, `${name} must be packable instead of peer-only`)
+  }
   for (const name of expectedNames) {
     assert.equal(pkg.dependencies[name], TARGET_VERSION, name)
     assert.equal(lock.packages[`node_modules/${name}`].version, TARGET_VERSION, name)
@@ -530,6 +545,12 @@ test('canonical alpha.2 graph rejects every root, location, owner, version and a
     smuggledLock.packages[''][section] = { ...(smuggledLock.packages[''][section] || {}), '@deepseek-ai/dsh-smuggled': TARGET_VERSION }
     assert.throws(() => classifyOfficialRuntimeGraph(smuggledPkg, smuggledLock, installedCore), /exact root graph changed/, section)
   }
+
+  const packagingPeerVersionPkg = structuredClone(pkg)
+  const packagingPeerVersionLock = structuredClone(lock)
+  packagingPeerVersionPkg.optionalDependencies['@deepseek-ai/dsh-jobs'] = LOCAL_VERSION
+  packagingPeerVersionLock.packages[''].optionalDependencies['@deepseek-ai/dsh-jobs'] = LOCAL_VERSION
+  assert.throws(() => classifyOfficialRuntimeGraph(packagingPeerVersionPkg, packagingPeerVersionLock, installedCore), /mixed or unproved/)
 
   const selectedVersion = structuredClone(lock)
   selectedVersion.packages['node_modules/@deepseek-ai/dsh'].version = LOCAL_VERSION

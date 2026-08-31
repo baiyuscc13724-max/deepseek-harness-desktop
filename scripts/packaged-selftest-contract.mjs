@@ -8,12 +8,19 @@ const workflow = await readFile(path.join(root, '.github/workflows/release.yml')
 const service = await readFile(path.join(root, 'electron/bridge/self-test-service.cjs'), 'utf8')
 const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'))
-const packagedAlpha2Peers = ['@deepseek-ai/dsh-attachment', '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-util-time']
+const packagedAlpha2Peers = [
+  '@deepseek-ai/dsh-attachment',
+  '@deepseek-ai/dsh-jobs',
+  '@deepseek-ai/dsh-session-persistence',
+  '@deepseek-ai/dsh-session-query',
+  '@deepseek-ai/dsh-settings',
+  '@deepseek-ai/dsh-util-time'
+]
 
 for (const packageName of packagedAlpha2Peers) {
-  const pattern = `node_modules/${packageName}/**/*`
-  if (!manifest.build?.files?.includes(pattern)) throw new Error(`Packaged alpha.2 runtime peer is missing from build.files: ${packageName}`)
-  if (lock.packages?.[`node_modules/${packageName}`]?.version !== '0.1.2-alpha.2') throw new Error(`Packaged alpha.2 runtime peer is not locked exactly: ${packageName}`)
+  if (manifest.optionalDependencies?.[packageName] !== '0.1.2-alpha.2') throw new Error(`Packaged alpha.2 runtime peer is not an exact optional root: ${packageName}`)
+  const locked = lock.packages?.[`node_modules/${packageName}`]
+  if (locked?.version !== '0.1.2-alpha.2' || locked.peer === true) throw new Error(`Packaged alpha.2 runtime peer is not locked as a packable root: ${packageName}`)
 }
 
 for (const contract of ['--self-test', 'runPackagedSelfTest', 'HARNESS_DESKTOP_SELFTEST']) {

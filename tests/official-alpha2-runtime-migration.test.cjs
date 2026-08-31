@@ -14,7 +14,7 @@ const ALPHA2 = '0.1.2-alpha.2'
 
 const ACCEPTED = Object.freeze({
   'docs/OFFICIAL-ALPHA2-RUNTIME-MIGRATION-PLAN.zh-CN.md': '6A173AC8A7CC0E0190A28A58AD72358650DC77A912EC276FDFD5AE4F59AA6892',
-  'tests/official-alpha2-runtime-contract.test.cjs': 'C344D02855E7E5CC5888B51EB8A9C52A8AF3DCCFC576D80C4259A22308E49E45',
+  'tests/official-alpha2-runtime-contract.test.cjs': 'E6FB9D9DE2DEA59605FB4E83AED37B705FAFD04704CEE4C0B36EB468267FCFA2',
   'docs/OFFICIAL-ALPHA2-UI-PATCH-REBASE.zh-CN.md': '289093B896AB8FA3CA869B70FF634B9B400391DC605078CD15DB008CF646A16C',
   'tests/official-alpha2-ui-seam-contract.test.cjs': '9B66509766245BDF1905FB67E1818D10A2D5746845629C4B0F3DADC4C6A92946',
   'docs/OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md': '6BE8D38F4510733357BD7E7C008B573CD5D887815923371E330BAB76D7A3E8A0',
@@ -184,8 +184,8 @@ test('maintained package and lock are the accepted complete canonical alpha.2 ru
   const lockSource = read('package-lock.json')
   const pkg = JSON.parse(packageSource)
   const lock = JSON.parse(lockSource)
-  assert.equal(sha256CanonicalText(packageSource), '6566762DF4C0BC8B3F36EA2B14C96556A69572D610BAEBC1A33EA0E15B706070')
-  assert.equal(sha256CanonicalText(lockSource), '3DCD39D8A07C2EA394722B7059B01C89531DB97486E67818E349C991CB552875')
+  assert.equal(sha256CanonicalText(packageSource), '9E881AC085B9DD3A9E02C06E41073A7B506E91C6439F171F204CBBC7C39BAF7D')
+  assert.equal(sha256CanonicalText(lockSource), 'A42C8F145309D00124F2975EB808512FE42BE85E2F2D6758603A2D14CC67B0A9')
   assert.equal(Object.keys(lock.packages).length, 861)
   assertAcceptedAlpha2Graph(pkg, lock, read('docs/OFFICIAL-ALPHA2-UI-PATCH-REBASE.zh-CN.md'), read('docs/OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md'))
   assert.equal(pkg.dependencies['@deepseek-ai/cordis-plugin-group'], '1.0.1')
@@ -309,7 +309,7 @@ test('two npm-ls extraneous optionals are a reproducible integrity-locked platfo
   const lockPath = path.join(AUDIT_ROOT, 'package-lock.json')
   const lockSource = fs.readFileSync(lockPath, 'utf8')
   const lock = JSON.parse(lockSource)
-  assert.equal(sha256CanonicalText(lockSource), '3DCD39D8A07C2EA394722B7059B01C89531DB97486E67818E349C991CB552875')
+  assert.equal(sha256CanonicalText(lockSource), 'A42C8F145309D00124F2975EB808512FE42BE85E2F2D6758603A2D14CC67B0A9')
 
   const wasm = lock.packages['node_modules/@img/sharp-wasm32']
   const emnapi = lock.packages['node_modules/@emnapi/runtime']

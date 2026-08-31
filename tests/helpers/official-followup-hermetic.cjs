@@ -19,12 +19,12 @@ const FRESH_INSTALL_BASELINE = Object.freeze({ digest: 'B3D892DCB6CD2CC8D5BA062F
 const ACCEPTED_HISTORICAL_BASELINE = Object.freeze({ digest: '17D85E217EC8FA2B73B5879C618BA4760A8233E6893252E3F88AF3A6C51A44E0', fileCount: 42879, totalBytes: 369552648 })
 const REJECTED_RUN_ROOT_TOKENS = Object.freeze(['160456', '162000', '164000', '165000', '170000'])
 const ACCEPTED = Object.freeze({
-  'package.json': '6566762df4c0bc8b3f36ea2b14c96556a69572d610baebc1a33ea0e15b706070',
-  'package-lock.json': '3dcd39d8a07c2ea394722b7059b01c89531db97486e67818e349c991cb552875',
-  'scripts/patch-official-runtime.mjs': 'd1f58b8adcf519fab59f5cfc6a2cb2603631630ff9f4c32145102ba4eb97f8ef',
+  'package.json': '9e881ac085b9dd3a9e02c06e41073a7b506e91c6439f171f204cbbc7c39baf7d',
+  'package-lock.json': 'a42c8f145309d00124f2975eb808512fe42be85e2f2d6758603a2d14cc67b0a9',
+  'scripts/patch-official-runtime.mjs': 'aea05404163096165e154dc20b1c60a4fc0cafc5af80c92e79527484260cfb27',
   'scripts/verify-static.mjs': '7ac1cb86f709c7bf19cd250261bbb52cff4754807938929abbf8afca7da7c5bb',
   'tests/official-alpha2-static-release-contract.test.cjs': '1e1e85e9470409cf07272517e0bd3b678ab3a6b491db8c3b2bd908d1bb97668b',
-  'tests/official-alpha2-runtime-migration.test.cjs': 'a2a4e4efc5109ac8489acf31410737b524bf0760c0e06007ae9e53c07631b859',
+  'tests/official-alpha2-runtime-migration.test.cjs': 'd8cd7c703ea90ea67a7fbd16a43d7ff19bc9ac05aea12e9b2aa64896f5d96d26',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',
   'README.md': '643ff56668dc25333bbc04916736cdf7fab2714e8de0c4677ce13955809e4ef6',
   'CHANGELOG.md': 'bde005ed6ea22fe74b30afeb934c2e450c994b00da928fec2667e5751357aa5d',

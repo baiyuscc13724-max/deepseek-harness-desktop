@@ -2050,6 +2050,14 @@ export async function patchInstalledWebApp(file = webAppRuntime) {
 }
 
 const OFFICIAL_GRAPH_SECTIONS = Object.freeze(['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'])
+const OFFICIAL_ALPHA2_PACKAGING_PEERS = new Set([
+  '@deepseek-ai/dsh-attachment',
+  '@deepseek-ai/dsh-jobs',
+  '@deepseek-ai/dsh-session-persistence',
+  '@deepseek-ai/dsh-session-query',
+  '@deepseek-ai/dsh-settings',
+  '@deepseek-ai/dsh-util-time'
+])
 const OFFICIAL_GRAPH_PROOFS = Object.freeze({
   alpha2: Object.freeze({ version: OFFICIAL_ALPHA2_VERSION, selectedCount: 216, selectedNames: 215, selectedBytes: 62384, selectedSha256: '2fe4b564bd064447752eac205304dd39130a717236e85e8d5aaed822530c770c', rootCount: 20, rootBytes: 1111, rootSha256: '90e7639317bff29214acb13396966ba0b8cf22a9ef7c8d2a2f5a0a2bcbeda064' }),
   rc2: Object.freeze({ version: OFFICIAL_RC2_VERSION, selectedCount: 188, selectedNames: 188, selectedBytes: 53868, selectedSha256: '86190efb1c721e2ad2318f6ecbeeab2a17ec8ca79d44efcd60e2c2af4647c7ba', rootCount: 20, rootBytes: 1051, rootSha256: '458670543f54b6293508410d98302bd6f1ba1af2dcd595b98b4fcac2ccfe48d4' })
@@ -2095,6 +2103,7 @@ function officialRootRecords(source, label) {
       if (!isOfficialDshPackage(name)) continue
       assertOfficialGraphField(name, `${label} root name`)
       assertOfficialGraphField(version, `${label} root version`)
+      if (section === 'optionalDependencies' && version === OFFICIAL_ALPHA2_VERSION && OFFICIAL_ALPHA2_PACKAGING_PEERS.has(name)) continue
       records.push(`${section}\0${name}\0${version}\n`)
     }
   }

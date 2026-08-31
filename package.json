@@ -96,9 +96,6 @@
     "files": [
       "electron/**/*",
       "renderer/**/*",
-      "node_modules/@deepseek-ai/dsh-attachment/**/*",
-      "node_modules/@deepseek-ai/dsh-session-query/**/*",
-      "node_modules/@deepseek-ai/dsh-util-time/**/*",
       "plugins/dsh-mobile-control/**/*",
       "plugins/dsh-desktop-directory-picker/**/*",
       "plugins/dsh-desktop-browser-tools/**/*",
@@ -256,6 +253,12 @@
     "url": "https://github.com/baiyuscc13724-max/deepseek-harness-desktop/issues"
   },
   "optionalDependencies": {
+    "@deepseek-ai/dsh-attachment": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-jobs": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-session-persistence": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-session-query": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-settings": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-util-time": "0.1.2-alpha.2",
     "node-pty": "1.2.0-beta.15"
   }
 }
