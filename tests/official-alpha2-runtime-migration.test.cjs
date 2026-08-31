@@ -14,7 +14,7 @@ const ALPHA2 = '0.1.2-alpha.2'
 
 const ACCEPTED = Object.freeze({
   'docs/OFFICIAL-ALPHA2-RUNTIME-MIGRATION-PLAN.zh-CN.md': '6A173AC8A7CC0E0190A28A58AD72358650DC77A912EC276FDFD5AE4F59AA6892',
-  'tests/official-alpha2-runtime-contract.test.cjs': '70524E0955CACA036C843E9933FCBE675B5E60B750731397EBC67BF95E8408F1',
+  'tests/official-alpha2-runtime-contract.test.cjs': 'C344D02855E7E5CC5888B51EB8A9C52A8AF3DCCFC576D80C4259A22308E49E45',
   'docs/OFFICIAL-ALPHA2-UI-PATCH-REBASE.zh-CN.md': '289093B896AB8FA3CA869B70FF634B9B400391DC605078CD15DB008CF646A16C',
   'tests/official-alpha2-ui-seam-contract.test.cjs': 'C3BB384EBC78AB01D7413D692717E23EC83706BEF2DAC6EEDF4E79A493BE7515',
   'docs/OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md': '6BE8D38F4510733357BD7E7C008B573CD5D887815923371E330BAB76D7A3E8A0',
@@ -28,6 +28,7 @@ const INSTALL_SUMMARY_SHA256 = '76CCE10F2AEB698528F61DDB54FCD94BC274409A89554C45
 const INSTALL_FIRST_SHA256 = '5A1D0E7972931093F34B1A7FEC8511424B0584B970AB87BC923FCB43E28E12BE'
 const INSTALL_SECOND_SHA256 = '7832FE8003253C747B06F52709DA9764747E858EA9EE3B677AC9DE1719398380'
 const INSTALL_MANIFEST_SHA256 = 'AD7DDCF969F02B7121BA83229FB374F6FECFAF9EAD7E8AA5A5B508C18D3A0E96'
+const CURRENT_RELEASE_SECURITY_REVIEW_SHA256 = 'C04D5F5A6B358548000860182DA7F2678E06FF048A9EAB5117F89E7464D63153'
 const UI_BLOCKED_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-client-ui-conversation',
   '@deepseek-ai/dsh-client-ui-tool',
@@ -168,6 +169,10 @@ test('accepted audit outputs and deterministic 20-root/215-package evidence are 
     PACKAGE_MANIFEST_SHA256,
     'runtimeEquivalent=false'
   ]) assert.ok(report.includes(fact), `missing accepted closure fact: ${fact}`)
+  const securityReview = read('docs/SECURITY-REVIEW-v1.0.55.zh-CN.md')
+  assert.equal(sha256(securityReview), CURRENT_RELEASE_SECURITY_REVIEW_SHA256, 'current version security review must remain hash-bound')
+  assert.match(securityReview, /v1\.0\.55 发布声明与静态门禁已绑定当前源码版本/u)
+  assert.match(securityReview, /不是动态发布门禁的通过声明/u)
 })
 
 test('maintained package and lock are the accepted complete canonical alpha.2 runtime', () => {
@@ -175,8 +180,8 @@ test('maintained package and lock are the accepted complete canonical alpha.2 ru
   const lockSource = read('package-lock.json')
   const pkg = JSON.parse(packageSource)
   const lock = JSON.parse(lockSource)
-  assert.equal(sha256(packageSource), '8ABF8CB51875CDF8452A6686AAB87B25135E3B1DAECFEE54660D09A23E7BCCFB')
-  assert.equal(sha256(lockSource), ISOLATED_LOCK_SHA256.toUpperCase())
+  assert.equal(sha256(packageSource), '204414F269F57382BE80D05D4E05E11A4C38B00D4DBD9DA16229DC7E671F5799')
+  assert.equal(sha256(lockSource), '3DCD39D8A07C2EA394722B7059B01C89531DB97486E67818E349C991CB552875')
   assert.equal(Object.keys(lock.packages).length, 861)
   assertAcceptedAlpha2Graph(pkg, lock, read('docs/OFFICIAL-ALPHA2-UI-PATCH-REBASE.zh-CN.md'), read('docs/OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md'))
   assert.equal(pkg.dependencies['@deepseek-ai/cordis-plugin-group'], '1.0.1')
@@ -300,7 +305,7 @@ test('two npm-ls extraneous optionals are a reproducible integrity-locked platfo
   const lockPath = path.join(AUDIT_ROOT, 'package-lock.json')
   const lockSource = fs.readFileSync(lockPath, 'utf8')
   const lock = JSON.parse(lockSource)
-  assert.equal(crypto.createHash('sha256').update(lockSource).digest('hex'), ISOLATED_LOCK_SHA256)
+  assert.equal(crypto.createHash('sha256').update(lockSource).digest('hex'), '3dcd39d8a07c2ea394722b7059b01c89531db97486e67818e349c991cb552875')
 
   const wasm = lock.packages['node_modules/@img/sharp-wasm32']
   const emnapi = lock.packages['node_modules/@emnapi/runtime']

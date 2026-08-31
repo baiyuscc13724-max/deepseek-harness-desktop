@@ -3,7 +3,7 @@
 > Durable task：`f1d7d865-9e41-429c-b6bf-82ccb971e370`  
 > 维护树：`D:\DeepSeek-Harness-Desktop\release-v1.0.28-worktree`  
 > 当前阶段：**Phase A / CONTRACT ONLY**  
-> 当前判定：**等待 Root 对一个全新、未使用 run root 的精确 ACK；尚未执行 helper、npm 安装或终验矩阵。**
+> 当前判定：**v1.0.55 已将本合同及其 hash-bound 输入绑定到当前源码；仍等待 Root 对一个全新、未使用 run root 的精确 ACK。尚未执行 helper、npm 安装或终验矩阵，因此本文不声明动态门禁通过。**
 
 ## 1. 两阶段控制与禁区
 

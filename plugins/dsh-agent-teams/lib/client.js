@@ -1042,7 +1042,11 @@ window.__ModuleLoader__.load({
       return Object.freeze({ available: source.available === true, reason: typeof source.reason === "string" ? source.reason.slice(0, 120) : "", projectRevision: Number.isSafeInteger(source.projectRevision) && source.projectRevision >= 0 ? source.projectRevision : 0, totalExact: source.totalExact === true, totalTasks: Number.isSafeInteger(source.totalTasks) && source.totalTasks >= 0 ? source.totalTasks : tasks.length, groupTotals: Object.freeze(groupTotals), page: page, capability: capability, tasks: Object.freeze(tasks), projectCollaboration: normalizeProjectCollaboration(source.projectCollaboration) });
     }
 
-    function useProjectTasksState() {
+    function projectTaskSessionQuery(sessionId) {
+      return typeof sessionId === "string" && sessionId ? "?sessionId=" + encodeURIComponent(sessionId) : "";
+    }
+
+    function useProjectTasksState(sessionId) {
       var statePair = useState(null), state = statePair[0], setState = statePair[1];
       var loadingPair = useState(true), loading = loadingPair[0], setLoading = loadingPair[1];
       var errorPair = useState(null), error = errorPair[0], setError = errorPair[1];
@@ -1053,7 +1057,7 @@ window.__ModuleLoader__.load({
           if (inFlight) { refetchPending = true; return inFlight; }
           var generation = ++requestGeneration;
           if (!silent) setLoading(true);
-          inFlight = fetch("/api/agent-teams/project/tasks/state", { method: "GET", cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json" } }).then(function (response) {
+          inFlight = fetch("/api/agent-teams/project/tasks/state" + projectTaskSessionQuery(sessionId), { method: "GET", cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json" } }).then(function (response) {
             return response.json().catch(function () { return {}; }).then(function (body) { if (!response.ok) throw projectTaskResponseError(response, body); return body; });
           }).then(function (next) { var safe = normalizeProjectTasksState(next); if (alive && generation === requestGeneration) { setState(safe); setError(null); } return safe; }).catch(function (cause) { if (alive && generation === requestGeneration && !silent) setError(cause); throw cause; }).finally(function () { if (generation === requestGeneration) { inFlight = null; if (alive) setLoading(false); if (alive && refetchPending) { refetchPending = false; load(true).catch(function () {}); } } });
           return inFlight;
@@ -1062,7 +1066,7 @@ window.__ModuleLoader__.load({
         load(false).catch(function () {});
         if (typeof EventSource === "function") {
           try {
-            source = new EventSource("/api/agent-teams/project/tasks/stream");
+            source = new EventSource("/api/agent-teams/project/tasks/stream" + projectTaskSessionQuery(sessionId));
             var refetch = function () {
               if (!alive || refetchTimer !== null) return;
               refetchTimer = setTimeout(function () { refetchTimer = null; if (!alive) return; if (inFlight) { refetchPending = true; return; } reloadRef.current(true).catch(function () {}); }, 80);
@@ -1079,13 +1083,14 @@ window.__ModuleLoader__.load({
           if (refetchTimer !== null) clearTimeout(refetchTimer);
           if (source && typeof source.close === "function") source.close();
         };
-      }, []);
+      }, [sessionId]);
       return { state: state, loading: loading, error: error, reload: function () { return reloadRef.current(false); } };
     }
 
-    function fetchProjectCollaborationPage(cursor) {
+    function fetchProjectCollaborationPage(sessionId, cursor) {
       if (typeof cursor !== "string" || !cursor) return Promise.reject(new TypeError("collaboration cursor is required"));
-      return fetch("/api/agent-teams/project/tasks/page?cursor=" + encodeURIComponent(cursor), { method: "GET", cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", "x-harness-agent-teams": "1" } }).then(function (response) {
+      var query = projectTaskSessionQuery(sessionId); query += (query ? "&" : "?") + "cursor=" + encodeURIComponent(cursor);
+      return fetch("/api/agent-teams/project/tasks/page" + query, { method: "GET", cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", "x-harness-agent-teams": "1" } }).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (body) { if (!response.ok) throw projectTaskResponseError(response, body); return normalizeProjectCollaboration(body.projectCollaboration); });
       });
     }
@@ -1095,11 +1100,11 @@ window.__ModuleLoader__.load({
       return "project-task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
     }
 
-    function postProjectTaskAction(body) {
+    function postProjectTaskAction(sessionId, body) {
       if (!body || !Object.keys(body).every(function (key) { return ["commandId", "type", "taskRef", "expectedRevision", "payload"].indexOf(key) >= 0; })) throw new TypeError("unsupported project task action fields");
       var encoded = JSON.stringify(body);
       function request() {
-        return fetch("/api/agent-teams/project/tasks/action", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", Accept: "application/json", "x-harness-agent-teams": "1" }, body: encoded }).then(function (response) {
+        return fetch("/api/agent-teams/project/tasks/action" + projectTaskSessionQuery(sessionId), { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", Accept: "application/json", "x-harness-agent-teams": "1" }, body: encoded }).then(function (response) {
           return response.json().catch(function () { return {}; }).then(function (result) { if (!response.ok) throw projectTaskResponseError(response, result); return result; });
         });
       }
@@ -2427,7 +2432,7 @@ window.__ModuleLoader__.load({
     }
 
     function ProjectTasksWorkspace(props) {
-      var t = props.t, tasks = useProjectTasksState();
+      var t = props.t, tasks = useProjectTasksState(props.sessionId);
       var titlePair = useState(""), title = titlePair[0], setTitle = titlePair[1];
       var busyPair = useState({}), busyKeys = busyPair[0], setBusyKeys = busyPair[1];
       var actionErrorPair = useState(null), actionError = actionErrorPair[0], setActionError = actionErrorPair[1];
@@ -2451,7 +2456,8 @@ window.__ModuleLoader__.load({
         if (!canPage || !effectivePage.nextCursor || pageLoading || !tasks.state) return;
         var requestedCursor = effectivePage.nextCursor, requestedKey = resetKey, epoch = pageRequestEpoch.current;
         setPageLoading(true); setPageErrorKey("");
-        fetch("/api/agent-teams/project/tasks/page?cursor=" + encodeURIComponent(requestedCursor), { method: "GET", cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", "x-harness-agent-teams": "1" } }).then(function (response) {
+        var query = projectTaskSessionQuery(props.sessionId); query += (query ? "&" : "?") + "cursor=" + encodeURIComponent(requestedCursor);
+        fetch("/api/agent-teams/project/tasks/page" + query, { method: "GET", cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", "x-harness-agent-teams": "1" } }).then(function (response) {
           return response.json().catch(function () { return {}; }).then(function (result) { if (!response.ok) throw projectTaskResponseError(response, result); return result && result.projectTasks ? result.projectTasks : result; });
         }).then(function (input) {
           if (epoch !== pageRequestEpoch.current || requestedKey !== resetKey) return;
@@ -2469,7 +2475,7 @@ window.__ModuleLoader__.load({
       function perform(actionKey, body, afterSuccess) {
         if (busyKeys[actionKey] === true) return Promise.resolve();
         setBusyKey(actionKey); setActionError(null);
-        return postProjectTaskAction(body).then(function (result) { setPendingReceipts(function (current) { var next = Object.assign({}, current); if (result && result.queued === true) next[actionKey] = true; else delete next[actionKey]; return next; }); if (typeof afterSuccess === "function") afterSuccess(); return tasks.reload(); }).catch(function (error) { setActionError(error); }).finally(function () { setBusyKey(actionKey, false); });
+        return postProjectTaskAction(props.sessionId, body).then(function (result) { setPendingReceipts(function (current) { var next = Object.assign({}, current); if (result && result.queued === true) next[actionKey] = true; else delete next[actionKey]; return next; }); if (typeof afterSuccess === "function") afterSuccess(); return tasks.reload(); }).catch(function (error) { setActionError(error); }).finally(function () { setBusyKey(actionKey, false); });
       }
       function createTask(event) {
         event.preventDefault();
@@ -2634,7 +2640,7 @@ window.__ModuleLoader__.load({
     }
 
     function ProjectCollaborationWorkspace(props) {
-      var t = props.t, projectState = useProjectTasksState(), collaboration = projectState.state && projectState.state.projectCollaboration ? projectState.state.projectCollaboration : normalizeProjectCollaboration(null);
+      var t = props.t, projectState = useProjectTasksState(props.sessionId), collaboration = projectState.state && projectState.state.projectCollaboration ? projectState.state.projectCollaboration : normalizeProjectCollaboration(null);
       var sectionNames = ["seats", "tasks", "locks", "handoffs", "recoveries", "evidence", "history", "requests"], sectionStatePair = useState({ revision: -1, values: {}, pages: {}, loading: "", error: "", notice: "" }), sectionState = sectionStatePair[0], setSectionState = sectionStatePair[1], sectionEpoch = useRef(0);
       var sectionCurrent = sectionState.revision === collaboration.revision ? sectionState : { revision: collaboration.revision, values: {}, pages: {}, loading: "", error: "", notice: "" };
       function sectionValues(name) { return Array.isArray(sectionCurrent.values[name]) ? sectionCurrent.values[name] : Array.isArray(collaboration[name]) ? collaboration[name] : []; }
@@ -2644,7 +2650,7 @@ window.__ModuleLoader__.load({
         if (!cursor || sectionCurrent.loading) return;
         var epoch = ++sectionEpoch.current;
         setSectionState(Object.assign({}, sectionCurrent, { loading: name, error: "", notice: "" }));
-        fetchProjectCollaborationPage(cursor).then(function (next) {
+        fetchProjectCollaborationPage(props.sessionId, cursor).then(function (next) {
           if (epoch !== sectionEpoch.current || next.revision !== collaboration.revision) return;
           var incoming = projectCollaborationPageItems(name, next[name]);
           var values = Object.assign({}, sectionCurrent.values), pages = Object.assign({}, sectionCurrent.pages); values[name] = incoming; pages[name] = next.sectionPages[name];
@@ -3151,7 +3157,7 @@ window.__ModuleLoader__.load({
       var projectTeamTaskCount = snapshot && snapshot.projectTeamBoard && snapshot.projectTeamBoard.available === true ? projectTeamBoardCount(snapshot.projectTeamBoard.stats && snapshot.projectTeamBoard.stats.totalTasks) : undefined;
       var workspaceContent = null;
       if (workspaceView === "projectTasks" || workspaceView === "flow") {
-        workspaceContent = h(ProjectCollaborationWorkspace, { t: t, setWorkspaceView: setWorkspaceView, projectTeamBoard: snapshot && snapshot.projectTeamBoard, onRecover: recoverProjectMember, onReconcile: reconcileProjectMember, onRootRecovery: recoverProjectRoot });
+        workspaceContent = h(ProjectCollaborationWorkspace, { t: t, sessionId: props.sessionId, setWorkspaceView: setWorkspaceView, projectTeamBoard: snapshot && snapshot.projectTeamBoard, onRecover: recoverProjectMember, onReconcile: reconcileProjectMember, onRootRecovery: recoverProjectRoot });
       } else if (!snapshot && !live.error) {
         workspaceContent = h("div", { className: "dat-panel dat-empty", role: "status" }, t("loading"));
       } else if (snapshot && !snapshot.enabled) {

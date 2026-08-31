@@ -2,12 +2,12 @@
 
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
-const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
 const ROOT = path.resolve(__dirname, '..')
 const CONVERSATION_FILE = path.join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
+const CHAT_FILE = path.join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat', 'lib', 'client.js')
 
 const OWNER_PAIRS = Object.freeze({
   seat: [
@@ -106,6 +106,16 @@ const LABEL_PAIRS = Object.freeze([
   ]
 ])
 
+const ALPHA2_QUEUE_PAIR = Object.freeze([
+  'const queue = (0, react.useMemo)(() => inbox.filter((row) => row.placement === "queued"), [inbox]);',
+  'const queue = (0, react.useMemo)(() => inbox.filter((row) => row.placement === "queued" && !String(row.text ?? row.preview ?? "").startsWith("[Agent team message ")), [inbox]);'
+])
+
+const ALPHA2_USAGE_PAIR = Object.freeze([
+  'const usage = useProjection("tokenUsage");\n\t\t\tconst projected = useProjection("sessionStats");',
+  'const usage = useProjection("tokenUsage");\n\t\t\tconst cacheDetail = useProjection("tokenUsageDetail");\n\t\t\tconst projected = useProjection("sessionStats");'
+])
+
 function replaceOnce(source, original, replacement, label) {
   const first = source.indexOf(original)
   assert.ok(first >= 0, `missing fixture anchor: ${label}`)
@@ -113,16 +123,20 @@ function replaceOnce(source, original, replacement, label) {
   return source.slice(0, first) + replacement + source.slice(first + original.length)
 }
 
-function rawOwnerFixture() {
+function ownerFixture(index) {
   return [
-    OWNER_PAIRS.seat[0],
-    OWNER_PAIRS.owner[0],
-    OWNER_PAIRS.dependency[0],
-    OWNER_PAIRS.group[0],
-    OWNER_PAIRS.rootNode[0],
-    OWNER_PAIRS.rawList[0],
-    OWNER_PAIRS.rawNested[0]
+    OWNER_PAIRS.seat[index],
+    OWNER_PAIRS.owner[index],
+    OWNER_PAIRS.dependency[index],
+    OWNER_PAIRS.group[index],
+    OWNER_PAIRS.rootNode[index],
+    OWNER_PAIRS.rawList[index],
+    OWNER_PAIRS.rawNested[index]
   ].join('\n/* exact pinned separator */\n')
+}
+
+function rawOwnerFixture() {
+  return ownerFixture(0)
 }
 
 function flatOwnerFixture() {
@@ -149,22 +163,13 @@ function cacheFirstOwnerFixture() {
   return source
 }
 
-function preCompositionFixture(installed) {
-  let source = installed
-  for (const key of ['seat', 'owner', 'dependency', 'rootNode', 'renderedNested']) {
-    const [original, patched] = OWNER_PAIRS[key]
-    source = replaceOnce(source, patched, original, `owner ${key}`)
-  }
-  for (const [original, patched] of LABEL_PAIRS) source = replaceOnce(source, patched, original, `locale ${original}`)
-  return source
-}
-
-async function withTempConversation(t, source) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-conversation-composition-'))
-  const file = path.join(directory, 'client.js')
-  fs.writeFileSync(file, source, 'utf8')
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
-  return file
+function alpha2CompositionFixture() {
+  const installedConversation = fs.readFileSync(CONVERSATION_FILE, 'utf8')
+  const installedChat = fs.readFileSync(CHAT_FILE, 'utf8')
+  let conversationSource = replaceOnce(installedConversation, ALPHA2_QUEUE_PAIR[1], ALPHA2_QUEUE_PAIR[0], 'alpha.2 queue')
+  for (const [original, patched] of LABEL_PAIRS) conversationSource = replaceOnce(conversationSource, patched, original, `locale ${original}`)
+  const chatSource = replaceOnce(installedChat, ALPHA2_USAGE_PAIR[1], ALPHA2_USAGE_PAIR[0], 'alpha.2 cache projection consumer')
+  return { installedConversation, installedChat, conversationSource, chatSource }
 }
 
 test('owner patch accepts raw grouped source and remains idempotent', async () => {
@@ -249,34 +254,42 @@ test('raw-list session forwarding is not accepted as the cache work-tree interme
   assert.throws(() => patchToolResultOwnerSource(malicious), /owner patch is incomplete/u)
 })
 
-test('all three conversation transforms compose before one write and the second pass is idempotent', async t => {
-  const { patchConversationSource, patchInstalledConversation } = await import('../scripts/patch-official-runtime.mjs')
-  const installed = fs.readFileSync(CONVERSATION_FILE, 'utf8')
-  const before = preCompositionFixture(installed)
-  const composed = patchConversationSource(before)
+test('alpha.2 shell, attachment-label and chat-cache transforms compose across native owners and remain idempotent', async () => {
+  const { patchAlpha2ConversationSources } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = alpha2CompositionFixture()
+  const composed = patchAlpha2ConversationSources(fixture.conversationSource, fixture.chatSource)
   assert.equal(composed.changed, true)
-  assert.equal(composed.source, installed)
-  assert.equal(patchConversationSource(composed.source).changed, false)
+  assert.equal(composed.conversationSource, fixture.installedConversation)
+  assert.equal(composed.chatSource, fixture.installedChat)
 
-  const file = await withTempConversation(t, before)
-  assert.equal(await patchInstalledConversation(file), true)
-  assert.equal(fs.readFileSync(file, 'utf8'), installed)
-  assert.equal(await patchInstalledConversation(file), false)
-  assert.equal(fs.readFileSync(file, 'utf8'), installed)
+  const second = patchAlpha2ConversationSources(composed.conversationSource, composed.chatSource)
+  assert.equal(second.changed, false)
+  assert.equal(second.conversationSource, fixture.installedConversation)
+  assert.equal(second.chatSource, fixture.installedChat)
 })
 
 for (const [label, drift] of [
-  ['cache anchor', source => replaceOnce(source, 'const cacheDetail = useProjection("tokenUsageDetail");', 'const cacheDetail = useProjection("tokenUsageDetail-drift");', 'cache detail')],
-  ['owner anchor', source => replaceOnce(source, OWNER_PAIRS.seat[0], OWNER_PAIRS.seat[0].replace('selectedCallId,', 'selectedCallId /* drift */,'), 'owner seat')],
-  ['attachment-label anchor', source => replaceOnce(source, LABEL_PAIRS[0][0], LABEL_PAIRS[0][0].replace('移除图片', '恶意漂移'), 'Chinese attachment label')]
+  ['cache anchor', fixture => ({
+    ...fixture,
+    chatSource: replaceOnce(fixture.chatSource, ALPHA2_USAGE_PAIR[0], ALPHA2_USAGE_PAIR[0].replace('tokenUsage', 'tokenUsage-drift'), 'cache projection consumer')
+  })],
+  ['queue anchor', fixture => ({
+    ...fixture,
+    conversationSource: replaceOnce(fixture.conversationSource, ALPHA2_QUEUE_PAIR[0], ALPHA2_QUEUE_PAIR[0].replace('placement === "queued"', 'placement === "queued-drift"'), 'queue owner')
+  })],
+  ['attachment-label anchor', fixture => ({
+    ...fixture,
+    conversationSource: replaceOnce(fixture.conversationSource, LABEL_PAIRS[0][0], LABEL_PAIRS[0][0].replace('移除图片', '恶意漂移'), 'Chinese attachment label')
+  })]
 ]) {
-  test(`${label} drift fails closed without writing conversation`, async t => {
-    const { patchInstalledConversation } = await import('../scripts/patch-official-runtime.mjs')
-    const installed = fs.readFileSync(CONVERSATION_FILE, 'utf8')
-    const malicious = drift(preCompositionFixture(installed))
-    const file = await withTempConversation(t, malicious)
-    await assert.rejects(patchInstalledConversation(file), /Pinned DSH|incomplete/u)
-    assert.equal(fs.readFileSync(file, 'utf8'), malicious)
+  test(`alpha.2 ${label} drift fails closed without mutating either native owner`, async () => {
+    const { patchAlpha2ConversationSources } = await import('../scripts/patch-official-runtime.mjs')
+    const malicious = drift(alpha2CompositionFixture())
+    const conversationBefore = malicious.conversationSource
+    const chatBefore = malicious.chatSource
+    assert.throws(() => patchAlpha2ConversationSources(malicious.conversationSource, malicious.chatSource), /Pinned DSH alpha\.2|Pinned DSH/u)
+    assert.equal(malicious.conversationSource, conversationBefore)
+    assert.equal(malicious.chatSource, chatBefore)
   })
 }
 

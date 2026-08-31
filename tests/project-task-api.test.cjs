@@ -154,9 +154,9 @@ test('exact project task routes expose honest no-project capability and nested s
     assert.equal(JSON.stringify(empty.data).includes('projectRef'), false)
 
     const forgedQuery = await invoke(state.routes, statePath, 'GET', `${statePath}?sessionId=forged`)
-    assert.equal(forgedQuery.res.status, 400)
+    assert.equal(forgedQuery.res.status, 403)
     assert.equal(forgedQuery.data.ok, false)
-    assert.equal(forgedQuery.data.error.code, 'PROJECT_TASK_WEB_INVALID_REQUEST')
+    assert.equal(forgedQuery.data.error.code, 'PROJECT_TASK_WEB_FORBIDDEN')
     assert.equal(typeof forgedQuery.data.error.nextAction, 'string')
     assert.deepEqual(forgedQuery.data.error.safeDetails, {})
 

@@ -71,7 +71,7 @@ test('M4 collaborator workspaces explain safe sync, offline receipts, and permis
   assert.equal(source.includes('当前版本只能在项目所有者所在电脑管理项目任务'), false)
   assert.equal(source.includes('Collaborator desktops can currently view connection status only'), false)
   const taskStart = source.indexOf('    function normalizeProjectTasksState(input)')
-  const taskEnd = source.indexOf('    function useProjectTasksState()', taskStart)
+  const taskEnd = source.indexOf('    function useProjectTasksState(sessionId)', taskStart)
   const automationStart = source.indexOf('    function normalizeProjectAutomationsState(input)')
   const automationEnd = source.indexOf('    function projectAutomationActionBody(', automationStart)
   const projections = source.slice(taskStart, taskEnd) + source.slice(automationStart, automationEnd)

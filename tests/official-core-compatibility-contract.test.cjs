@@ -197,7 +197,7 @@ test('Host routes, model tools, and the sole UI workspace converge on the same b
   for (const route of ['state', 'page', 'events', 'stream', 'action']) {
     assert.match(host, new RegExp(`/api/agent-teams/project/tasks/${route}`, 'u'))
   }
-  assert.match(host, /registerProjectTaskApi\(ctx, projectTasks, projectBusiness\)/u)
+  assert.match(host, /registerProjectTaskApi\(ctx, projectTaskRuntimeForSession, projectBusiness\)/u)
   assert.match(host, /name: "project_collaboration"/u)
   assert.match(host, /name: "project_task"/u)
   assert.match(host, /withProjectCollaborationContext\(projectEntry, execution/u)
@@ -205,7 +205,7 @@ test('Host routes, model tools, and the sole UI workspace converge on the same b
   assert.match(client, /function ProjectCollaborationWorkspace\(props\)/u)
   assert.match(client, /workspaceContent = h\(ProjectCollaborationWorkspace,/u)
   assert.match(client, /fetch\("\/api\/agent-teams\/project\/tasks\/state"/u)
-  assert.match(client, /new EventSource\("\/api\/agent-teams\/project\/tasks\/stream"\)/u)
+  assert.match(client, /new EventSource\("\/api\/agent-teams\/project\/tasks\/stream" \+ projectTaskSessionQuery\(sessionId\)\)/u)
   const start = client.indexOf('function ProjectCollaborationWorkspace(props)')
   const end = client.indexOf('function LegacyProjectTeamBoardWorkspace(props)', start)
   assert.ok(start >= 0 && end > start)

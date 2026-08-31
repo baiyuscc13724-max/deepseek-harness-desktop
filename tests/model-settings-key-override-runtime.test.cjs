@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict')
 const test = require('node:test')
+const { createHash } = require('node:crypto')
 const { readFileSync } = require('node:fs')
 const path = require('node:path')
 const { createCredentialHarness } = require('./fixtures/model-settings-key-override-runtime.cjs')
@@ -92,14 +93,18 @@ test('unset plus compensation failure is surfaced and records the extreme residu
   assert.equal(result.audit.filter((entry) => entry.operation === 'settings.mutate').length, 2)
 })
 
-test('generated runtime provider deletion selects the real managed override ref and calls credential unset', async () => {
-  const { managedProviderCredentialRef, patchModelSettingsKeyOverrideSource } = await moduleUnderTest()
+test('native alpha.2 provider deletion selects only its writable managed ref and removes it before settings', async () => {
+  const { managedProviderCredentialRef } = await moduleUnderTest()
   const overrideRef = 'HARNESS_DESKTOP_CUSTOM_GATEWAY_API_KEY'
   assert.equal(managedProviderCredentialRef('custom-gateway', overrideRef, { configured: true, writable: true }), overrideRef)
   assert.equal(managedProviderCredentialRef('custom-gateway', 'ENV_CUSTOM_GATEWAY_API_KEY', { configured: true, writable: false }), undefined)
-  const patched = patchModelSettingsKeyOverrideSource(readFileSync(runtimeFile, 'utf8')).source
-  assert.match(patched, /const credentialRef = modelSettingsManagedCredentialRef\(row\.entry\.provider, row\.apiKeyEnv, row\.credential\)/u)
-  assert.match(patched, /if \(target\.credentialRef !== void 0\) \{\s+const credential = await api\.credentials\.unset\(\{ ref: target\.credentialRef \}\)/um)
+
+  const runtime = readFileSync(runtimeFile, 'utf8')
+  assert.match(runtime, /const credentialRef = row\.apiKeyEnv === managedRef && row\.credential\?\.configured === true && row\.credential\.writable \? managedRef : void 0;/u)
+  const removeAt = runtime.indexOf('const credential = await operations.removeCredential(target.credentialRef);')
+  const settingsAt = runtime.indexOf('const written = await operations.writeSettings(target.settingsNs, [{', removeAt)
+  assert.ok(removeAt > 0)
+  assert.ok(settingsAt > removeAt, 'credential removal must land before the provider settings unset')
 })
 
 test('writable custom pi-ai credentials retain the normal ref and unavailable gates have no write path', async () => {
@@ -117,14 +122,17 @@ test('writable custom pi-ai credentials retain the normal ref and unavailable ga
   assert.equal(plan.credential.ref, 'CUSTOM_GATEWAY_API_KEY')
 })
 
-test('patched runtime has no environment-secret read API, is executable, masked and accessible', async () => {
-  const { patchModelSettingsKeyOverrideSource } = await moduleUnderTest()
-  const patched = patchModelSettingsKeyOverrideSource(readFileSync(runtimeFile, 'utf8')).source
-  assert.doesNotThrow(() => new Function(patched))
-  assert.match(patched, /type: "password"/u)
-  assert.match(patched, /htmlFor: credentialInputId/u)
-  assert.match(patched, /autoComplete: "new-password"/u)
-  assert.match(patched, /"aria-describedby": credentialMode === "override"/u)
-  assert.doesNotMatch(patched, /process\.env|Deno\.env|Bun\.env|credentials\.(?:get|read|reveal)\(/u)
-  assert.doesNotMatch(patched, /typed-override-sentinel|environment-secret-must-not-be-read|first-secret-sentinel|second-secret-sentinel|custom-credential-sentinel/u)
+test('native alpha.2 runtime is exact, executable, write-only, masked and accessible', () => {
+  const runtime = readFileSync(runtimeFile, 'utf8')
+  assert.equal(createHash('sha256').update(runtime).digest('hex').toUpperCase(), '70DE8C4CE48D9C133005B1F95F8E9E9FE114F3BB2D08A9206C2283469831D74D')
+  assert.doesNotThrow(() => new Function(runtime))
+  assert.match(runtime, /type: "password"/u)
+  assert.match(runtime, /autoComplete: "off"/u)
+  assert.match(runtime, /"aria-label": t\("keyInput"\)/u)
+  assert.match(runtime, /disabled: disabled \|\| keyLocked/u)
+  assert.match(runtime, /ctx\.remote\.credentials\.describe\(\[ref\]\)/u)
+  assert.match(runtime, /ctx\.remote\.credentials\.set\(ref, value\)/u)
+  assert.match(runtime, /ctx\.remote\.credentials\.unset\(ref\)/u)
+  assert.doesNotMatch(runtime, /process\.env|Deno\.env|Bun\.env|credentials\.(?:get|read|reveal)\(/u)
+  assert.doesNotMatch(runtime, /typed-override-sentinel|environment-secret-must-not-be-read|first-secret-sentinel|second-secret-sentinel|custom-credential-sentinel/u)
 })

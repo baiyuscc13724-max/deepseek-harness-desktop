@@ -91,7 +91,7 @@ test('the sole routed project collaboration workspace is a read projection while
 
   assert.match(pageRoute, /req\.method !== "GET"/u)
   assert.doesNotMatch(pageRoute, /createTask\(|updateTask\(|taskDelegate\.action/u)
-  assert.match(collaboration, /useProjectTasksState\(\)/u)
+  assert.match(collaboration, /useProjectTasksState\(props\.sessionId\)/u)
   assert.match(collaboration, /projectCollaboration/u)
   assert.doesNotMatch(collaboration, /fetch\(|method: "POST"|postAction\(|postProjectTaskAction|inputActions\.(?:submit|send)|createTask\(|updateTask\(/u)
   assert.match(client, /workspaceContent = h\(ProjectCollaborationWorkspace,/u)
@@ -99,7 +99,7 @@ test('the sole routed project collaboration workspace is a read projection while
 
   // Lower-level browser APIs and model-facing collaboration tools are separate data
   // planes, not a second routed navigation workspace.
-  assert.match(host, /registerProjectTaskApi\(ctx, projectTasks, projectBusiness\)/u)
+  assert.match(host, /registerProjectTaskApi\(ctx, projectTaskRuntimeForSession, projectBusiness\)/u)
   assert.match(host, /name: "project_collaboration"/u)
   assert.match(host, /name: "project_task"/u)
   assert.match(host, /"claim_next"/u)

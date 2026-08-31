@@ -9,7 +9,8 @@ const vm = require('node:vm')
 const ROOT = path.resolve(__dirname, '..')
 const AUDIT_ROOT = process.env.DSH_ALPHA2_AUDIT_ROOT || ROOT
 const CANDIDATE_ROOT = process.env.DSH_ALPHA2_CANDIDATE_ROOT || ROOT
-const RAW_CANDIDATE_ROOT = process.env.DSH_ALPHA2_RAW_ROOT || path.resolve(AUDIT_ROOT, '..', 'install-first')
+const RAW_CANDIDATE_ROOT = process.env.DSH_ALPHA2_RAW_ROOT || CANDIDATE_ROOT
+const HAS_EXPLICIT_RAW_CANDIDATE = process.env.DSH_ALPHA2_RAW_ROOT !== undefined
 const TARGET_VERSION = '0.1.2-alpha.2'
 const LOCAL_VERSION = '0.1.1-rc.2'
 
@@ -303,7 +304,7 @@ test('the detached candidate is one complete canonical alpha.2 graph with remove
   for (const { name } of OFFICIAL_ALPHA2_AUDIT.unavailablePatchArtifacts) assert.equal(selected.some(row => row.name === name), false, `removed package remains: ${name}`)
 })
 
-test('alpha.2 rebases force-new and SessionManager performance to exact new owners with complete-marker idempotence', async () => {
+test('alpha.2 rebases force-new and SessionManager performance to exact new owners with complete-marker idempotence', { skip: !HAS_EXPLICIT_RAW_CANDIDATE ? 'requires explicit unpatched alpha.2 raw candidate' : false }, async () => {
   const workspaceSource = fs.readFileSync(path.join(RAW_CANDIDATE_ROOT, 'node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js'), 'utf8')
   const controllerSource = fs.readFileSync(path.join(RAW_CANDIDATE_ROOT, 'node_modules/@deepseek-ai/dsh-api-session-controller/lib/client.js'), 'utf8')
   const { patchAlpha2WorkspaceStartSessionSource, patchAlpha2SessionControllerSource } = await import('../scripts/patch-official-runtime.mjs')

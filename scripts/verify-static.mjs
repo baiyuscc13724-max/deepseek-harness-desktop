@@ -65,6 +65,7 @@ required.push(
   'docs/SECURITY-REVIEW-v1.0.52.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.53.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.54.zh-CN.md',
+  'docs/SECURITY-REVIEW-v1.0.55.zh-CN.md',
   'electron/bridge/native-p2p-host.cjs',
   'electron/bridge/sync-transports/native-p2p-adapter.cjs',
   'renderer/native-p2p.html',

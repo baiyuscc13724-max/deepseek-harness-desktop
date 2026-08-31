@@ -19,16 +19,16 @@ const FRESH_INSTALL_BASELINE = Object.freeze({ digest: 'B3D892DCB6CD2CC8D5BA062F
 const ACCEPTED_HISTORICAL_BASELINE = Object.freeze({ digest: '17D85E217EC8FA2B73B5879C618BA4760A8233E6893252E3F88AF3A6C51A44E0', fileCount: 42879, totalBytes: 369552648 })
 const REJECTED_RUN_ROOT_TOKENS = Object.freeze(['160456', '162000', '164000', '165000', '170000'])
 const ACCEPTED = Object.freeze({
-  'package.json': '8abf8cb51875cdf8452a6686aab87b25135e3b1daecfee54660d09a23e7bccfb',
-  'package-lock.json': 'e61a561bacaeb2c6caa52df8132fd53962cff407913a1a3c1c850d88af928821',
+  'package.json': '204414f269f57382be80d05d4e05e11a4c38b00d4dbd9da16229dc7e671f5799',
+  'package-lock.json': '3dcd39d8a07c2ea394722b7059b01c89531db97486e67818e349c991cb552875',
   'scripts/patch-official-runtime.mjs': '2f851459dd31e4608ee769b1d98aca2d0f3c99ac92a4b49b40f8f8b35a5ab276',
-  'scripts/verify-static.mjs': '96adaceb855baed0ece523ddb7793f3cceeed85447eac3fef2267475feb58c10',
+  'scripts/verify-static.mjs': '6ef688957018dbffea85b56436e0b27856ce60a21431fc078b4db9fe236019b3',
   'tests/official-alpha2-static-release-contract.test.cjs': '1e1e85e9470409cf07272517e0bd3b678ab3a6b491db8c3b2bd908d1bb97668b',
-  'tests/official-alpha2-runtime-migration.test.cjs': '2dce09048041a45bb72a1de8ec20e375fab7c58e3b61eec9e38e37567fe4ab03',
+  'tests/official-alpha2-runtime-migration.test.cjs': '7aa564f248b32b88a6eb83bc2eb5139ab3e95bbdaf99325a467afc910f849c4e',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',
-  'README.md': 'cc5f070911217046739539429bcc5b26eaffb99674eec21d3ec961b5585c3d93',
-  'CHANGELOG.md': 'd3cc02346aacf2a79040c8ba4427dae339da729887136156b47d3d2e0f79f439',
-  'release-notes.md': '63e03cc2779e2e1bcf626bcee4a580f76ef2bf4ea1d3da4e1995d61661506bb2'
+  'README.md': '72e939b9a2da219aac203481444324a6183daede313578356183a8620c8624ae',
+  'CHANGELOG.md': '20ed75f13be17d7f9d81089568b88f8f205e461b46661cecd2b00e30cf0ecd51',
+  'release-notes.md': 'e6341b8c421db1dfb6d93b9396fa9e1604ed37782539a577fa7d60458d024a79'
 })
 const ACCEPTED_MIGRATION_FILES = Object.freeze({
   'candidate-summary.json': '76cce10f2aeb698528f61ddb54fcd94bc274409a89554c45cdc2643eefe2ae15',

@@ -11,6 +11,7 @@ const indexUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-age
 const registryUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-entry-registry.js')).href
 const launchUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-session-launch.js')).href
 const storeUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-store.js')).href
+const webUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-web.js')).href
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const canonicalFor = root => { const normalized = root.session.header.cwd.trim().replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC'); return createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', process.platform === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized])).digest('hex') }
 
@@ -39,13 +40,14 @@ function rootAgent(index, cwd) {
 test('registered project tools isolate 16 canonical roots with identical model ids and independent slow/fast SQLite lanes', async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'canonical-project-tools-'))
   const base = baseProjectEntry(temporary)
-  const [{ ProjectEntryRegistry }, mod] = await Promise.all([import(`${registryUrl}?lanes=${Date.now()}`), import(`${indexUrl}?lanes=${Date.now()}`)])
+  const [{ ProjectEntryRegistry }, mod, { ProjectTaskWebRuntime }] = await Promise.all([import(`${registryUrl}?lanes=${Date.now()}`), import(`${indexUrl}?lanes=${Date.now()}`), import(webUrl)])
   const registry = new ProjectEntryRegistry({ projectEntry: base, dshHome: temporary })
   const roots = Array.from({ length: 16 }, (_, index) => rootAgent(index, path.join(temporary, `workspace-${index}`)))
   const tools = new Map(); let current = roots[0]
   const ctx = { agents: { roots: () => roots, get: id => roots.find(root => root.id === id), currentInitiator: () => current }, tools: { register: tool => { tools.set(tool.name, tool) } }, systemPrompt: { section: () => {} } }
   mod.registerProjectCollaborationTools(ctx, registry, { redeemAdoption: async () => { throw new Error('unused') } })
   const invoke = (root, name, args) => { current = root; return tools.get(name).execute(args, { agent: root }) }
+  let fallbackRuntime, sessionRuntimeResolver
   try {
     const initialized = []
     for (const root of roots) initialized.push(await invoke(root, 'project_collaboration', { action: 'initialize', payload: { title: 'Same title' } }))
@@ -55,6 +57,19 @@ test('registered project tools isolate 16 canonical roots with identical model i
     assert.ok(created.every(result => result.ok === true))
     const taskRefs = created.map(result => result.task.taskRef)
     assert.equal(new Set(taskRefs).size, 16)
+
+    fallbackRuntime = new ProjectTaskWebRuntime({ projectEntry: base })
+    sessionRuntimeResolver = mod.createProjectTaskSessionRuntimeResolver(ctx, registry, fallbackRuntime, async () => false)
+    assert.equal((await fallbackRuntime.state()).projectCollaboration.available, false, 'the device-global legacy store must not satisfy a canonical project panel')
+    const scopedRuntime = sessionRuntimeResolver(roots[0].id)
+    const scopedBeforeGit = await scopedRuntime.state()
+    assert.equal(scopedBeforeGit.projectCollaboration.available, true)
+    assert.equal(scopedBeforeGit.projectCollaboration.sections.tasks.some(task => task.taskRef === taskRefs[0]), true)
+    const keyBeforeGit = canonicalFor(roots[0])
+    await mkdir(path.join(roots[0].session.header.cwd, '.git'), { recursive: true })
+    assert.equal(canonicalFor(roots[0]), keyBeforeGit, 'creating .git must not change the canonical workspace lane')
+    assert.equal(sessionRuntimeResolver(roots[0].id), scopedRuntime)
+    assert.equal((await sessionRuntimeResolver(roots[0].id).state()).projectCollaboration.available, true)
 
     const original = registry.localProjectCollaborationContext.bind(registry)
     const slowKey = canonicalFor(roots[0])
@@ -74,7 +89,7 @@ test('registered project tools isolate 16 canonical roots with identical model i
       assert.equal(serializedResults.includes(canonical), false)
       assert.equal(serializedResults.includes(root.session.header.cwd), false)
     }
-  } finally { base.key.fill(0); await registry.close(); await rm(temporary, { recursive: true, force: true }) }
+  } finally { base.key.fill(0); await sessionRuntimeResolver?.close(); await fallbackRuntime?.close(); await registry.close(); await rm(temporary, { recursive: true, force: true }) }
 })
 
 test('legacy WAL snapshot binds only lane A, lane B stays independent, and copying-phase crash resumes atomically', async () => {

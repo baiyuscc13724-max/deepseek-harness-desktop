@@ -6062,8 +6062,17 @@ function projectTaskQueryInteger(parameters, key, fallback, minimum, maximum) {
 function encodedProjectTaskSse(event, data, id) {
   return `${id === undefined ? "" : `id: ${id}\n`}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
+function projectTaskRuntimeResolver(runtime) {
+  if (runtime instanceof ProjectTaskWebRuntime) return () => runtime;
+  if (typeof runtime !== "function") throw new TypeError("runtime must be a ProjectTaskWebRuntime or session runtime resolver");
+  return (sessionId) => {
+    const selected = runtime(sessionId);
+    if (!(selected instanceof ProjectTaskWebRuntime)) throw new TypeError("session runtime resolver must return a ProjectTaskWebRuntime");
+    return selected;
+  };
+}
 function createProjectTaskSseBridge(runtime, { keepaliveMs = PROJECT_TASK_SSE_KEEPALIVE_MS } = {}) {
-  if (!(runtime instanceof ProjectTaskWebRuntime)) throw new TypeError("runtime must be a ProjectTaskWebRuntime");
+  const resolveRuntime = projectTaskRuntimeResolver(runtime);
   if (!Number.isSafeInteger(keepaliveMs) || keepaliveMs < 1) throw new TypeError("keepaliveMs must be a positive safe integer");
   const clients = new Set();
   let closed = false;
@@ -6076,6 +6085,7 @@ function createProjectTaskSseBridge(runtime, { keepaliveMs = PROJECT_TASK_SSE_KE
     client.request.off?.("aborted", client.onClose);
     client.response.off?.("close", client.onClose);
     client.response.off?.("error", client.onClose);
+    try { client.unsubscribe?.(); } catch {}
     if (end) {
       try { client.response.end(); } catch {}
     }
@@ -6088,16 +6098,15 @@ function createProjectTaskSseBridge(runtime, { keepaliveMs = PROJECT_TASK_SSE_KE
     remove(client, true);
     return false;
   };
-  const broadcast = (update) => {
-    if (closed || update?.type !== "project-task" || !isRecord(update.event)) return;
-    const payload = encodedProjectTaskSse("task", update.event, update.event.projectRevision);
-    for (const client of [...clients]) write(client, payload);
-  };
-  const unsubscribe = runtime.subscribe(broadcast);
-  const add = (request, response) => {
+  const add = (request, response, sessionId) => {
     if (closed) throw new Error("project task SSE bridge is closed");
-    const client = { request, response, closed: false, keepalive: undefined, onClose: undefined };
+    const selectedRuntime = resolveRuntime(sessionId);
+    const client = { request, response, closed: false, keepalive: undefined, onClose: undefined, unsubscribe: undefined };
     client.onClose = () => remove(client);
+    client.unsubscribe = selectedRuntime.subscribe((update) => {
+      if (closed || update?.type !== "project-task" || !isRecord(update.event)) return;
+      write(client, encodedProjectTaskSse("task", update.event, update.event.projectRevision));
+    });
     request.once?.("close", client.onClose);
     request.once?.("aborted", client.onClose);
     response.once?.("close", client.onClose);
@@ -6116,13 +6125,18 @@ function createProjectTaskSseBridge(runtime, { keepaliveMs = PROJECT_TASK_SSE_KE
   const close = () => {
     if (closed) return;
     closed = true;
-    unsubscribe();
     for (const client of [...clients]) remove(client, true);
   };
   return { add, clients, close, remove, reset };
 }
 function registerProjectTaskApi(ctx, runtime, businessRuntime) {
-  const bridge = createProjectTaskSseBridge(runtime);
+  const resolveRuntime = projectTaskRuntimeResolver(runtime);
+  const bridge = createProjectTaskSseBridge(resolveRuntime);
+  const scopedRuntime = (parameters) => {
+    const rawSessionId = parameters.get("sessionId");
+    const sessionId = rawSessionId === null ? undefined : nonEmptyString(rawSessionId, "sessionId", 256);
+    return { sessionId, runtime: resolveRuntime(sessionId) };
+  };
   const unsubscribeBusiness = businessRuntime === undefined ? undefined : businessRuntime.subscribe(() => bridge.reset());
   ctx.effect(() => () => { unsubscribeBusiness?.(); bridge.close(); }, "agent-teams project task SSE subscription");
   const checkGet = (req, res) => {
@@ -6140,15 +6154,15 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
     kind: "exact", path: "/api/agent-teams/project/tasks/state", handler: async (req, res) => {
       if (!checkGet(req, res)) return;
       try {
-        projectTaskQuery(req, new Set());
-        if (businessRuntime === undefined) return json(res, 200, await runtime.state());
+        const { runtime: selectedRuntime } = scopedRuntime(projectTaskQuery(req, new Set(["sessionId"])));
+        if (businessRuntime === undefined) return json(res, 200, await selectedRuntime.state());
         try {
           const businessStatus = await businessRuntime.initialize();
-          if (businessStatus.mode !== "collaborator") return json(res, 200, await runtime.state());
+          if (businessStatus.mode !== "collaborator") return json(res, 200, await selectedRuntime.state());
           const preview = await businessRuntime.taskState();
           const includedTasks = Array.isArray(preview.tasks) ? preview.tasks.length : 0;
           return json(res, 200, { ...preview, totalTasks: includedTasks, totalExact: false, page: { includedTasks, hasMore: false, nextCursor: null, available: false, reason: "authority_required", nextAction: "open_authority_project" }, pagination: { available: false, reason: "authority_required", nextAction: "open_authority_project" } });
-        } catch (error) { if (error?.code === "PROJECT_ENTRY_NOT_CREATED") return json(res, 200, await runtime.state()); throw error; }
+        } catch (error) { if (error?.code === "PROJECT_ENTRY_NOT_CREATED") return json(res, 200, await selectedRuntime.state()); throw error; }
       } catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
     },
   }), "agent-teams project task state route");
@@ -6156,14 +6170,15 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
     kind: "exact", path: "/api/agent-teams/project/tasks/page", handler: async (req, res) => {
       if (!checkGet(req, res)) return;
       try {
-        const parameters = projectTaskQuery(req, new Set(["cursor"]));
+        const parameters = projectTaskQuery(req, new Set(["sessionId", "cursor"]));
+        const { runtime: selectedRuntime } = scopedRuntime(parameters);
         const cursor = nonEmptyString(parameters.get("cursor"), "cursor", 2_048);
-        if (businessRuntime === undefined) return json(res, 200, await runtime.page(cursor));
+        if (businessRuntime === undefined) return json(res, 200, await selectedRuntime.page(cursor));
         try {
           const businessStatus = await businessRuntime.initialize();
           if (businessStatus.mode === "collaborator") return projectTaskApiFailure(res, 409, "PROJECT_TASK_PAGE_AUTHORITY_REQUIRED", "Complete project task pagination is available only on the authority project device.", "open_authority_project");
-          return json(res, 200, await runtime.page(cursor));
-        } catch (error) { if (error?.code === "PROJECT_ENTRY_NOT_CREATED") return json(res, 200, await runtime.page(cursor)); throw error; }
+          return json(res, 200, await selectedRuntime.page(cursor));
+        } catch (error) { if (error?.code === "PROJECT_ENTRY_NOT_CREATED") return json(res, 200, await selectedRuntime.page(cursor)); throw error; }
       } catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
     },
   }), "agent-teams project task page route");
@@ -6171,20 +6186,22 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
     kind: "exact", path: "/api/agent-teams/project/tasks/events", handler: async (req, res) => {
       if (!checkGet(req, res)) return;
       try {
-        const parameters = projectTaskQuery(req, new Set(["afterRevision", "limit"]));
+        const parameters = projectTaskQuery(req, new Set(["sessionId", "afterRevision", "limit"]));
+        const { runtime: selectedRuntime } = scopedRuntime(parameters);
         const afterRevision = projectTaskQueryInteger(parameters, "afterRevision", 0, 0, Number.MAX_SAFE_INTEGER);
         const limit = projectTaskQueryInteger(parameters, "limit", 100, 1, 100);
         if (businessRuntime !== undefined && (await businessRuntime.initialize()).mode === "collaborator") {
           return json(res, 200, { ok: true, fromRevision: afterRevision, currentRevision: afterRevision, events: [], hasMore: false, reset: true, nextAfterRevision: afterRevision });
         }
-        return json(res, 200, await runtime.events({ afterRevision, limit }));
+        return json(res, 200, await selectedRuntime.events({ afterRevision, limit }));
       } catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
     },
   }), "agent-teams project task events route");
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/project/tasks/stream", handler: async (req, res) => {
       if (!checkGet(req, res)) return;
-      try { projectTaskQuery(req, new Set()); }
+      let sessionId;
+      try { ({ sessionId } = scopedRuntime(projectTaskQuery(req, new Set(["sessionId"])))); }
       catch (error) { return mappedProjectTaskFailure(res, error); }
       res.writeHead(200, {
         "content-type": "text/event-stream; charset=utf-8",
@@ -6194,7 +6211,7 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
         "x-content-type-options": "nosniff",
       });
       res.flushHeaders?.();
-      try { bridge.add(req, res); }
+      try { bridge.add(req, res, sessionId); }
       catch { try { res.end(); } catch {} }
     },
   }), "agent-teams project task stream route");
@@ -6202,7 +6219,8 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
     kind: "exact", path: "/api/agent-teams/project/tasks/action", handler: async (req, res) => {
       if (req.method !== "POST") return projectTaskApiFailure(res, 405, "PROJECT_TASK_WEB_METHOD_NOT_ALLOWED", "Method not allowed.", "use_supported_method");
       if (!trustedRequest(req) || req.headers["x-harness-agent-teams"] !== "1") return projectTaskApiFailure(res, 403, "PROJECT_TASK_WEB_FORBIDDEN", "Request origin is not trusted.", "open_local_task_board");
-      try { projectTaskQuery(req, new Set()); }
+      let selectedRuntime;
+      try { ({ runtime: selectedRuntime } = scopedRuntime(projectTaskQuery(req, new Set(["sessionId"])))); }
       catch (error) { return mappedProjectTaskFailure(res, error); }
       let body;
       try { body = await readJsonBody(req); }
@@ -6210,8 +6228,10 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
         if (error?.status === 413) error.code = "PROJECT_TASK_WEB_BODY_TOO_LARGE";
         return mappedProjectTaskFailure(res, error);
       }
-      try { return json(res, 200, await (businessRuntime === undefined ? runtime.action(body) : businessRuntime.taskAction(body))); }
-      catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
+      try {
+        if (businessRuntime !== undefined && (await businessRuntime.initialize()).mode === "collaborator") return json(res, 200, await businessRuntime.taskAction(body));
+        return json(res, 200, await selectedRuntime.action(body));
+      } catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
     },
   }), "agent-teams project task action route");
   return bridge;
@@ -6556,6 +6576,39 @@ function resolveAgentTeamsAuthorizationProvider(ctx) {
   return desktop;
 }
 
+function createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry, fallbackRuntime, legacySummaryProvider) {
+  if (!(fallbackRuntime instanceof ProjectTaskWebRuntime)) throw new TypeError("fallbackRuntime must be a ProjectTaskWebRuntime");
+  if (typeof projectEntryRegistry?.localProjectCollaborationContext !== "function") throw new TypeError("projectEntryRegistry must provide canonical project contexts");
+  if (typeof legacySummaryProvider !== "function") throw new TypeError("legacySummaryProvider must be a function");
+  const runtimes = new Map();
+  let closed = false;
+  const resolve = (sessionId) => {
+    if (closed) reject("project task session runtime registry is closed", "PROJECT_TASK_WEB_CLOSED");
+    if (sessionId === undefined) return fallbackRuntime;
+    const root = ctx.agents.get(sessionId);
+    if (root === undefined || !ctx.agents.roots().includes(root)) reject("project task panel requires an exact top-level root session", "PROJECT_TASK_WEB_FORBIDDEN");
+    const canonicalProjectKey = projectKeyForRoot(root);
+    let runtime = runtimes.get(canonicalProjectKey);
+    if (runtime !== undefined) return runtime;
+    const projectEntry = Object.freeze({
+      localProjectCollaborationContext: () => projectEntryRegistry.localProjectCollaborationContext({ canonicalProjectKey }),
+      localProjectTaskContext: () => projectEntryRegistry.localProjectTaskContext({ canonicalProjectKey }),
+    });
+    runtime = new ProjectTaskWebRuntime({ projectEntry, legacySummaryProvider });
+    runtimes.set(canonicalProjectKey, runtime);
+    return runtime;
+  };
+  resolve.close = async () => {
+    if (closed) return;
+    closed = true;
+    const pending = [...runtimes.values()].map((runtime) => runtime.close());
+    runtimes.clear();
+    await Promise.allSettled(pending);
+  };
+  resolve.size = () => runtimes.size;
+  return resolve;
+}
+
 function apply(ctx, config = {}) {
   const defaults = resolveConfig(config);
   const dshHome = process.env.DSH_HOME;
@@ -6627,13 +6680,15 @@ function apply(ctx, config = {}) {
     },
   })] });
   const ready = Promise.all([store.init(), projectSessionLaunch.init()]).then(([document]) => document);
+  const legacySummaryProvider = async () => {
+    await ready;
+    return store.read((document) => ({ detected: document.teams.some((team) => team.tasks.length > 0) }));
+  };
   const projectTasks = officialCorePorts.projection.createWebRuntime({
     projectEntry: officialCorePorts.projectIdentity.webEntry(),
-    legacySummaryProvider: async () => {
-      await ready;
-      return store.read((document) => ({ detected: document.teams.some((team) => team.tasks.length > 0) }));
-    },
+    legacySummaryProvider,
   });
+  const projectTaskRuntimeForSession = createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry, projectTasks, legacySummaryProvider);
   const projectAutomations = new ProjectAutomationWebRuntime({ projectEntry });
   const projectBusiness = new ProjectBusinessSyncRuntime({
     projectEntry,
@@ -6657,6 +6712,7 @@ function apply(ctx, config = {}) {
         projectFoundations.close(),
         projectBusiness.close(),
         projectAutomations.close(),
+        projectTaskRuntimeForSession.close(),
         projectTasks.close(),
         collaboration.close(),
         projectEntryRegistry.close(),
@@ -6672,7 +6728,7 @@ function apply(ctx, config = {}) {
   registerProjectFoundationsApi(ctx, projectFoundations, ready);
   registerWebApi(ctx, store, ready, admission, officialCorePorts, projectSessionLaunch);
   registerProjectEntryApi(ctx, projectEntry);
-  registerProjectTaskApi(ctx, projectTasks, projectBusiness);
+  registerProjectTaskApi(ctx, projectTaskRuntimeForSession, projectBusiness);
   registerProjectAutomationApi(ctx, projectAutomations, projectBusiness);
   observeSubagents(ctx, store, ready, admission);
   observeUserStops(ctx, store, ready, admission, projectSessionLaunch);
@@ -6713,6 +6769,7 @@ export {
   projectTeamBoardPage,
   createProjectFoundationManager,
   createProjectTaskSseBridge,
+  createProjectTaskSessionRuntimeResolver,
   createResolveUnknownAuthorizationGate,
   createSseBroadcaster,
   createSubagentEventReconciler,
