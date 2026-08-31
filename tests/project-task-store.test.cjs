@@ -57,7 +57,9 @@ test('field cipher uses an external 32-byte key, binds AAD, and fails closed on 
   assert.deepEqual(cipher.open(projectRef, 'tasks/task_A/title', sealed), { title: 'classified' })
   assert.throws(() => cipher.open(projectRef, 'tasks/task_A/requirements', sealed), error => error.code === 'PROJECT_TASK_CIPHERTEXT_INVALID')
   const envelope = JSON.parse(sealed)
-  envelope.ciphertext = `${envelope.ciphertext.slice(0, -2)}AA`
+  const tamperedCiphertext = Buffer.from(envelope.ciphertext, 'base64url')
+  tamperedCiphertext[0] ^= 1
+  envelope.ciphertext = tamperedCiphertext.toString('base64url')
   assert.throws(() => cipher.open(projectRef, 'tasks/task_A/title', JSON.stringify(envelope)), error => error.code === 'PROJECT_TASK_CIPHERTEXT_INVALID')
   const wrong = new mod.ProjectTaskFieldCipher({ keyProvider: () => randomBytes(32) })
   assert.throws(() => wrong.open(projectRef, 'tasks/task_A/title', sealed), error => error.code === 'PROJECT_TASK_CIPHERTEXT_INVALID')
