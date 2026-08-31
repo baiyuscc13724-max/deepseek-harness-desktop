@@ -6,7 +6,7 @@ const path = require('node:path')
 const test = require('node:test')
 
 const ROOT = path.resolve(__dirname, '..')
-const CANDIDATE = process.env.DSH_ALPHA2_CANDIDATE_ROOT || path.resolve(ROOT, '..', '.alpha2-core-candidate', '20260831-022604')
+const CANDIDATE = process.env.DSH_ALPHA2_CANDIDATE_ROOT || ROOT
 const alpha = (...parts) => fs.readFileSync(path.join(CANDIDATE, 'node_modules', '@deepseek-ai', ...parts), 'utf8')
 const source = relative => fs.readFileSync(path.join(ROOT, relative), 'utf8')
 

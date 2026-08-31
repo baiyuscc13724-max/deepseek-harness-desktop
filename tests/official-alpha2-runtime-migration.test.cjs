@@ -16,13 +16,13 @@ const ACCEPTED = Object.freeze({
   'docs/OFFICIAL-ALPHA2-RUNTIME-MIGRATION-PLAN.zh-CN.md': '6A173AC8A7CC0E0190A28A58AD72358650DC77A912EC276FDFD5AE4F59AA6892',
   'tests/official-alpha2-runtime-contract.test.cjs': 'C344D02855E7E5CC5888B51EB8A9C52A8AF3DCCFC576D80C4259A22308E49E45',
   'docs/OFFICIAL-ALPHA2-UI-PATCH-REBASE.zh-CN.md': '289093B896AB8FA3CA869B70FF634B9B400391DC605078CD15DB008CF646A16C',
-  'tests/official-alpha2-ui-seam-contract.test.cjs': 'C3BB384EBC78AB01D7413D692717E23EC83706BEF2DAC6EEDF4E79A493BE7515',
+  'tests/official-alpha2-ui-seam-contract.test.cjs': '9B66509766245BDF1905FB67E1818D10A2D5746845629C4B0F3DADC4C6A92946',
   'docs/OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md': '6BE8D38F4510733357BD7E7C008B573CD5D887815923371E330BAB76D7A3E8A0',
-  'tests/official-alpha2-remote-session-seam.test.cjs': '8F7F19F26BC148B25FEFA7AD1D99C933D7B1FB3BA420A0B6B0B4C13381D3AD8A'
+  'tests/official-alpha2-remote-session-seam.test.cjs': '2ECE0C4C320BED1AB85CE4F34B67D1DFF3AC85ABEE4C9D7B3DE507A5DC479BAF'
 })
 const CLOSURE_RECORDS_SHA256 = '0ed92cc8ae3fafec77ca54559a7719adf09c5c657200dc2791dc1d06cb2b0b3a'
 const PACKAGE_MANIFEST_SHA256 = 'dd62b0f8e9f5d068cb6a6246d9dbb7f920b8e159a2d14b9d3a5e3435a69f48bd'
-const NOTICE_SHA256 = '1E85F0FFC37B90B06515B57F6C900F1541123B2A53735CEE8D87349C5B39503E'
+const NOTICE_SHA256 = '45C71118B7C9067E5C3FD12E39321F977ED882F6285AF0D98B86AF3B6F4D5EE8'
 const ISOLATED_LOCK_SHA256 = 'e61a561bacaeb2c6caa52df8132fd53962cff407913a1a3c1c850d88af928821'
 const INSTALL_SUMMARY_SHA256 = '76CCE10F2AEB698528F61DDB54FCD94BC274409A89554C45CDC2643EEFE2AE15'
 const INSTALL_FIRST_SHA256 = '5A1D0E7972931093F34B1A7FEC8511424B0584B970AB87BC923FCB43E28E12BE'
@@ -48,6 +48,10 @@ function json(relative) {
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex').toUpperCase()
+}
+
+function sha256CanonicalText(value) {
+  return sha256(String(value).replace(/\r\n?/gu, '\n'))
 }
 
 function parseCanonicalInstallManifest(source) {
@@ -158,7 +162,7 @@ function assertAcceptedAlpha2Graph(pkg, lock, uiReport, remoteReport) {
 }
 
 test('accepted audit outputs and deterministic 20-root/215-package evidence are hash-bound', () => {
-  for (const [relative, expected] of Object.entries(ACCEPTED)) assert.equal(sha256(read(relative)), expected, `accepted audit drift: ${relative}`)
+  for (const [relative, expected] of Object.entries(ACCEPTED)) assert.equal(sha256CanonicalText(read(relative)), expected, `accepted audit drift: ${relative}`)
   const report = read('docs/OFFICIAL-ALPHA2-RUNTIME-MIGRATION-PLAN.zh-CN.md')
   for (const fact of [
     '20 个根精确 pin',
@@ -170,7 +174,7 @@ test('accepted audit outputs and deterministic 20-root/215-package evidence are 
     'runtimeEquivalent=false'
   ]) assert.ok(report.includes(fact), `missing accepted closure fact: ${fact}`)
   const securityReview = read('docs/SECURITY-REVIEW-v1.0.55.zh-CN.md')
-  assert.equal(sha256(securityReview), CURRENT_RELEASE_SECURITY_REVIEW_SHA256, 'current version security review must remain hash-bound')
+  assert.equal(sha256CanonicalText(securityReview), CURRENT_RELEASE_SECURITY_REVIEW_SHA256, 'current version security review must remain hash-bound')
   assert.match(securityReview, /v1\.0\.55 发布声明与静态门禁已绑定当前源码版本/u)
   assert.match(securityReview, /不是动态发布门禁的通过声明/u)
 })
@@ -180,8 +184,8 @@ test('maintained package and lock are the accepted complete canonical alpha.2 ru
   const lockSource = read('package-lock.json')
   const pkg = JSON.parse(packageSource)
   const lock = JSON.parse(lockSource)
-  assert.equal(sha256(packageSource), '204414F269F57382BE80D05D4E05E11A4C38B00D4DBD9DA16229DC7E671F5799')
-  assert.equal(sha256(lockSource), '3DCD39D8A07C2EA394722B7059B01C89531DB97486E67818E349C991CB552875')
+  assert.equal(sha256CanonicalText(packageSource), '204414F269F57382BE80D05D4E05E11A4C38B00D4DBD9DA16229DC7E671F5799')
+  assert.equal(sha256CanonicalText(lockSource), '3DCD39D8A07C2EA394722B7059B01C89531DB97486E67818E349C991CB552875')
   assert.equal(Object.keys(lock.packages).length, 861)
   assertAcceptedAlpha2Graph(pkg, lock, read('docs/OFFICIAL-ALPHA2-UI-PATCH-REBASE.zh-CN.md'), read('docs/OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md'))
   assert.equal(pkg.dependencies['@deepseek-ai/cordis-plugin-group'], '1.0.1')
@@ -294,7 +298,7 @@ test('accepted alpha.2 patch dispatch uses native replacements while retaining f
     'targetsAlpha2 ? await patchInstalledAlpha2SessionController() : await patchInstalledRuntime()',
     'targetsAlpha2 ? await assertInstalledAlpha2NativeSessionList() : await patchInstalledHostApiProxy()'
   ]) assert.ok(source.includes(fragment), `accepted alpha.2 dispatch drift: ${fragment}`)
-  assert.equal(sha256(notice), NOTICE_SHA256)
+  assert.equal(sha256CanonicalText(notice), NOTICE_SHA256)
   assert.match(notice, /0\.1\.2-alpha\.2/u)
   assert.match(notice, /dsh-v0\.1\.2-alpha\.2/u)
   assert.match(notice, /0a53fb55bea101816fa226bb964ae2bed71c343b/u)

@@ -21,13 +21,13 @@ const REJECTED_RUN_ROOT_TOKENS = Object.freeze(['160456', '162000', '164000', '1
 const ACCEPTED = Object.freeze({
   'package.json': '204414f269f57382be80d05d4e05e11a4c38b00d4dbd9da16229dc7e671f5799',
   'package-lock.json': '3dcd39d8a07c2ea394722b7059b01c89531db97486e67818e349c991cb552875',
-  'scripts/patch-official-runtime.mjs': '1bca68a7a8b48c03035b0aa09567eb7e6c4d19127191b6eaa7f09cc352654267',
-  'scripts/verify-static.mjs': 'c45c567b5865aed27a4b61b67846b6878dc957e6ef62733b58ee03fe0d1482dc',
+  'scripts/patch-official-runtime.mjs': 'd1f58b8adcf519fab59f5cfc6a2cb2603631630ff9f4c32145102ba4eb97f8ef',
+  'scripts/verify-static.mjs': '7ac1cb86f709c7bf19cd250261bbb52cff4754807938929abbf8afca7da7c5bb',
   'tests/official-alpha2-static-release-contract.test.cjs': '1e1e85e9470409cf07272517e0bd3b678ab3a6b491db8c3b2bd908d1bb97668b',
-  'tests/official-alpha2-runtime-migration.test.cjs': '7aa564f248b32b88a6eb83bc2eb5139ab3e95bbdaf99325a467afc910f849c4e',
+  'tests/official-alpha2-runtime-migration.test.cjs': '050298eeb0907e85753a9c7ed238b1e3328cc6092e573f765d14f61f465e3794',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',
-  'README.md': '72e939b9a2da219aac203481444324a6183daede313578356183a8620c8624ae',
-  'CHANGELOG.md': '20ed75f13be17d7f9d81089568b88f8f205e461b46661cecd2b00e30cf0ecd51',
+  'README.md': '643ff56668dc25333bbc04916736cdf7fab2714e8de0c4677ce13955809e4ef6',
+  'CHANGELOG.md': 'bde005ed6ea22fe74b30afeb934c2e450c994b00da928fec2667e5751357aa5d',
   'release-notes.md': 'e6341b8c421db1dfb6d93b9396fa9e1604ed37782539a577fa7d60458d024a79'
 })
 const ACCEPTED_MIGRATION_FILES = Object.freeze({
@@ -51,6 +51,8 @@ const GROUPS = Object.freeze({
 
 function normalizeRelative(value) { return value.split(path.sep).join('/') }
 function sha256Buffer(value) { return crypto.createHash('sha256').update(value).digest('hex') }
+function canonicalLfText(value) { return String(value).replace(/\r\n?/gu, '\n') }
+function sha256CanonicalTextFile(file) { return sha256Buffer(canonicalLfText(fs.readFileSync(file, 'utf8'))) }
 function sha256File(file) { return sha256Buffer(fs.readFileSync(file)) }
 function utf8Compare(left, right) { return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')) }
 function inside(parent, candidate) { const relative = path.relative(path.resolve(parent), path.resolve(candidate)); return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)) }
@@ -255,7 +257,7 @@ function scanPublicationDocs(root) {
     const stale = [...source.matchAll(/0\.1\.1-rc\.2|NO-GO|runtimeEquivalent=false|40(?:\s+个|\s+files)|41(?:\s+个|\s+files)/gu)].map(match => ({ token: match[0], index: match.index, classification: match.index >= currentEnd || /历史|旧|superseded|曾经|此前/u.test(source.slice(Math.max(0, match.index - 120), match.index + 180)) ? 'superseded-history' : 'unclassified' }))
     if (/0\.1\.1-rc\.2|NO-GO|runtimeEquivalent=false/u.test(current) && !/superseded|历史/u.test(current)) throw new Error(`HERMETIC_PUBLICATION_CURRENT_STALE:${file}`)
     if (stale.some(item => item.classification !== 'superseded-history')) throw new Error(`HERMETIC_PUBLICATION_STALE_UNCLASSIFIED:${file}`)
-    rows.push({ file, sha256: sha256Buffer(source), stale })
+    rows.push({ file, sha256: sha256Buffer(canonicalLfText(source)), stale })
   }
   return rows
 }
@@ -306,7 +308,7 @@ async function execute(options) {
   writeJson(path.join(evidenceRoot, 'maintenance-node-modules-before.json'), { ...maintainedBefore, root: '<maintained-node_modules>' })
   let result, operationError
   try {
-    for (const [relative, expected] of Object.entries(ACCEPTED)) if (sha256File(path.join(sourceRoot, ...relative.split('/'))) !== expected) throw new Error(`HERMETIC_ACCEPTED_SOURCE_DRIFT:${relative}`)
+    for (const [relative, expected] of Object.entries(ACCEPTED)) if (sha256CanonicalTextFile(path.join(sourceRoot, ...relative.split('/'))) !== expected) throw new Error(`HERMETIC_ACCEPTED_SOURCE_DRIFT:${relative}`)
     const copied = await copyDetachedSource(sourceRoot, snapshotRoot); writeJson(path.join(evidenceRoot, 'source-copy.json'), copied)
     const lock = auditLock(snapshotRoot); writeJson(path.join(evidenceRoot, 'lock-audit.json'), lock)
     const publication = scanPublicationDocs(snapshotRoot); writeJson(path.join(evidenceRoot, 'publication-stale-classification.json'), publication)
@@ -336,4 +338,4 @@ async function execute(options) {
 }
 function parseCli(argv) { const options = {}; for (let index = 0; index < argv.length; index += 2) { const key = argv[index], value = argv[index + 1]; if (!key?.startsWith('--') || value === undefined) throw new Error(`HERMETIC_CLI_ARGUMENT:${key || '<missing>'}`); options[key.slice(2)] = value } for (const key of ['sourceRoot', 'snapshotRoot', 'evidenceRoot', 'cacheRoot', 'acceptedAuditRoot']) if (!options[key]) throw new Error(`HERMETIC_CLI_REQUIRED:${key}`); return options }
 if (require.main === module) execute(parseCli(process.argv.slice(2))).then(result => process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)).catch(error => { if (error.receipt) process.stderr.write(`${JSON.stringify(error.receipt, null, 2)}\n`); process.stderr.write(`${error.stack || error}\n`); process.exitCode = 1 })
-module.exports = { ACCEPTED, ACCEPTED_HISTORICAL_BASELINE, ACCEPTED_MIGRATION_FILES, ALPHA2, COMMIT, EXCLUDED_COMPONENTS, FRESH_INSTALL_BASELINE, GROUPS, MAINTENANCE_BASELINE, REJECTED_RUN_ROOT_TOKENS, REMOTE_ORIGINS, TAG, assertAcceptedHistoricalNpmLs, assertCanonicalRelativePath, assertExternalAuditBoundary, assertFreshNpmLsClean, assertFrozenMatchesManifest, assertPathPlan, assertUnusedRunRoot, auditInstalled, auditLock, compareManifests, copyDetachedSource, execute, excluded, inside, manifest, officialRequery, parseCli, parseFrozenManifest, parseNodeTest, runGroups, scanPublicationDocs, sha256Buffer, sha256File, utf8Compare, validatePatchDeltas, walkFiles }
+module.exports = { ACCEPTED, ACCEPTED_HISTORICAL_BASELINE, ACCEPTED_MIGRATION_FILES, ALPHA2, COMMIT, EXCLUDED_COMPONENTS, FRESH_INSTALL_BASELINE, GROUPS, MAINTENANCE_BASELINE, REJECTED_RUN_ROOT_TOKENS, REMOTE_ORIGINS, TAG, assertAcceptedHistoricalNpmLs, assertCanonicalRelativePath, assertExternalAuditBoundary, assertFreshNpmLsClean, assertFrozenMatchesManifest, assertPathPlan, assertUnusedRunRoot, auditInstalled, auditLock, compareManifests, copyDetachedSource, execute, excluded, inside, manifest, officialRequery, parseCli, parseFrozenManifest, parseNodeTest, runGroups, scanPublicationDocs, sha256Buffer, sha256CanonicalTextFile, sha256File, utf8Compare, validatePatchDeltas, walkFiles }

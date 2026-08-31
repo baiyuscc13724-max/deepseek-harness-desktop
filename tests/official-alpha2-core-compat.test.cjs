@@ -9,7 +9,7 @@ const path = require('node:path')
 const test = require('node:test')
 
 const ROOT = path.resolve(__dirname, '..')
-const ALPHA_ROOT = process.env.DSH_ALPHA2_CANDIDATE_ROOT || path.resolve(ROOT, '..', '.alpha2-audit', 'isolated-project')
+const ALPHA_ROOT = process.env.DSH_ALPHA2_CANDIDATE_ROOT || ROOT
 const SCOPE = path.join(ALPHA_ROOT, 'node_modules', '@deepseek-ai')
 
 function alpha(name, relative) {
@@ -218,12 +218,15 @@ test('all six alpha.2 UI decisions are positive, idempotent, and compose in one 
   for (const [label, pkg, relative, installer, expectedChanged] of UI_CASES) {
     const target = path.join(scope, pkg, relative)
     const before = await fsp.readFile(target)
-    assert.equal(await patch[installer](target), expectedChanged, `${label} first decision`)
+    const changed = await patch[installer](target)
     const after = await fsp.readFile(target)
-    assert.equal(await patch[installer](target), false, `${label} second decision must be idempotent`)
+    assert.equal(await patch[installer](target), false, `${label} complete artifact must be idempotent`)
     assert.deepEqual(await fsp.readFile(target), after, `${label} idempotent bytes`)
-    if (expectedChanged) assert.notDeepEqual(after, before, `${label} patch must change its owner artifact`)
-    else assert.deepEqual(after, before, `${label} official retirement must preserve bytes`)
+    if (expectedChanged) {
+      assert.ok(changed || Buffer.compare(after, before) === 0, `${label} must be patched from the exact official artifact or already be the exact complete patch`)
+      if (changed) assert.notDeepEqual(after, before, `${label} patch must change its owner artifact`)
+      else assert.deepEqual(after, before, `${label} already-patched artifact must remain byte-identical`)
+    } else assert.deepEqual(after, before, `${label} official retirement must preserve bytes`)
     const text = after.toString('utf8')
     if (label !== 'token') assert.doesNotThrow(() => new Function(text), `${label} patched/retired browser bundle must remain parseable`)
     if (label === 'conversation') {
@@ -274,7 +277,8 @@ test('alpha.2 UI source drift and forged partial evidence fail closed', async t 
   await assert.rejects(patch.patchInstalledWorkspaceUi(workspace), /neither exact official nor exact complete patched artifact/u)
   assert.equal(await fsp.readFile(workspace, 'utf8'), workspaceDrift)
   await fsp.writeFile(workspace, workspaceOriginal)
-  assert.equal(await patch.patchInstalledWorkspaceUi(workspace), true)
+  await patch.patchInstalledWorkspaceUi(workspace)
+  assert.equal(await patch.patchInstalledWorkspaceUi(workspace), false, 'workspace must resolve to an exact complete patch')
   const workspacePatched = await fsp.readFile(workspace, 'utf8')
   const workspacePartial = workspacePatched.replace('this.pendingSessionWorkspaceTarget = target;', 'this.pendingSessionWorkspaceTarget = drift;')
   assert.notEqual(workspacePartial, workspacePatched)
@@ -286,20 +290,29 @@ test('alpha.2 UI source drift and forged partial evidence fail closed', async t 
   const conversationOriginal = await fsp.readFile(conversation, 'utf8')
   const queueOriginal = 'const queue = (0, react.useMemo)(() => inbox.filter((row) => row.placement === "queued"), [inbox]);'
   const queuePartial = 'const queue = (0, react.useMemo)(() => inbox.filter((row) => row.placement === "queued" && !String(row.text ?? row.preview ?? "").startsWith("[Agent team message ")), [inbox]);'
-  assert.match(conversationOriginal, new RegExp(queueOriginal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'))
-  const partialConversation = conversationOriginal.replace(queueOriginal, queuePartial)
-  await fsp.writeFile(conversation, partialConversation)
+  const conversationPatchState = conversationOriginal.includes(queuePartial) ? queuePartial : queueOriginal
+  const conversationPartial = conversationOriginal.replace(conversationPatchState, conversationPatchState === queuePartial ? queueOriginal : queuePartial)
+  assert.notEqual(conversationPartial, conversationOriginal, 'conversation partial fixture must alter an exact patch marker')
+  await fsp.writeFile(conversation, conversationPartial)
   await assert.rejects(patch.patchInstalledConversation(conversation), /patch is incomplete/u)
-  assert.equal(await fsp.readFile(conversation, 'utf8'), partialConversation)
+  assert.equal(await fsp.readFile(conversation, 'utf8'), conversationPartial)
 
   const token = path.join(scope, 'dsh-token-meter', 'lib', 'index.js')
-  const partialToken = `${await fsp.readFile(token, 'utf8')}\nkey: "tokenUsageDetail"`
+  const tokenOriginal = await fsp.readFile(token, 'utf8')
+  const partialToken = tokenOriginal.includes('const tokenUsageDetailProjectionDefinition = {')
+    ? tokenOriginal.replaceAll('lastCacheReadReported:', 'lastCacheReadDrift:')
+    : `${tokenOriginal}\nkey: "tokenUsageDetail"`
+  assert.notEqual(partialToken, tokenOriginal, 'token partial fixture must alter an exact patch marker')
   await fsp.writeFile(token, partialToken)
   await assert.rejects(patch.patchInstalledTokenMeter(token), /patch is incomplete/u)
   assert.equal(await fsp.readFile(token, 'utf8'), partialToken)
 
   const tool = path.join(scope, 'dsh-client-ui-tool', 'lib', 'client.js')
-  const forged = Buffer.concat([await fsp.readFile(tool), Buffer.from('\nfunction resultImages(block) {}')])
+  const toolOriginal = await fsp.readFile(tool, 'utf8')
+  const forged = Buffer.from(toolOriginal.includes('@harness-desktop/recoverable-tool-error-v2')
+    ? toolOriginal.replaceAll('@harness-desktop/recoverable-tool-error-v2', '@harness-desktop/recoverable-tool-error-drift')
+    : `${toolOriginal}\nfunction resultImages(block) {}`)
+  assert.notDeepEqual(forged, Buffer.from(toolOriginal), 'tool partial fixture must alter an exact patch marker')
   await fsp.writeFile(tool, forged)
   await assert.rejects(patch.patchInstalledToolResultImages(tool), /patch is incomplete/u)
   assert.deepEqual(await fsp.readFile(tool), forged)

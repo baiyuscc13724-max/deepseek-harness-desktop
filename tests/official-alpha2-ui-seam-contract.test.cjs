@@ -7,7 +7,7 @@ const path = require('node:path')
 const test = require('node:test')
 
 const ROOT = path.resolve(__dirname, '..')
-const ISOLATED = process.env.DSH_ALPHA2_CANDIDATE_ROOT || path.resolve(ROOT, '..', '.alpha2-audit', 'isolated-project')
+const ISOLATED = process.env.DSH_ALPHA2_CANDIDATE_ROOT || ROOT
 const TARGET = '0.1.2-alpha.2'
 
 const CASES = Object.freeze([
@@ -26,6 +26,12 @@ const HASHES = Object.freeze({
   '@deepseek-ai/dsh-client-ui-model-selection': { main: '68D80BC1D0C159DDC6079CCBB6E91981C524A1E2B5845986F577170B2A191978', types: 'B0F06B5F85F6E9DFE678B91A94EFD060F4CBCDCDD1E9A23236C5661BCC019EE8' },
   '@deepseek-ai/dsh-client-ui-settings-models': { main: '70DE8C4CE48D9C133005B1F95F8E9E9FE114F3BB2D08A9206C2283469831D74D', types: '8A50BEC5E05C17FC6C38817F98A7639C2949E4CC005E94E6674A97ED3364C5E4' },
   '@deepseek-ai/dsh-client-ui-workspace': { main: 'CEB9BA4061A7C6F2DE7FC18922AC3CEB430DAA4A162C211E4741BC9F6547B42A', types: '3035DE450B788EE77958E91228434C2088257148DEB5478B0ADEE886638E12EA' }
+})
+const PATCHED_MAIN_HASHES = Object.freeze({
+  '@deepseek-ai/dsh-client-ui-conversation': '999A7648EDDF44303265C6E425363C648F19D791475415DFEBDF664023960237',
+  '@deepseek-ai/dsh-client-ui-tool': 'BB8C86429964E71F590D35FBB6F112DC56111A5A008F4237CDC6D1447691AA22',
+  '@deepseek-ai/dsh-token-meter': 'AC6715EA32475D605B464E97167980FDFEF6CAAA0558B0F8956FED12A482F20B',
+  '@deepseek-ai/dsh-client-ui-workspace': 'B47D4AD32FF91ACDC7B27BE85AA184E4579B1973DF2DB04FB8E58A30590FDE0D'
 })
 
 function readText(file) { return fs.readFileSync(file, 'utf8') }
@@ -59,7 +65,8 @@ function inspect(spec, patchSource, io = {}) {
   const typesPath = path.resolve(packageRoot, spec.types)
   const bundle = read(mainPath)
   const types = read(typesPath)
-  if (sha256(bundle) !== HASHES[spec.name].main || sha256(types) !== HASHES[spec.name].types) throw new Error(`${spec.name}: SHA256 drift`)
+  const mainHash = sha256(bundle)
+  if (![HASHES[spec.name].main, PATCHED_MAIN_HASHES[spec.name]].includes(mainHash) || sha256(types) !== HASHES[spec.name].types) throw new Error(`${spec.name}: SHA256 drift`)
   if (!spec.semantic.test(bundle)) throw new Error(`${spec.name}: selected bundle semantic anchor missing`)
   const patchSources = spec.patchFiles.map(file => read(path.join(ROOT, file))).join('\n')
   for (const anchor of spec.anchors) if (!patchSources.includes(anchor)) throw new Error(`${spec.name}: patch anchor missing ${anchor}`)

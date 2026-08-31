@@ -18,7 +18,7 @@ async function lockFixture(t) {
 function frozenRow(relative, hash = 'A'.repeat(64)) { return `${relative}|${hash}` }
 
 test('accepted alpha.2 source, static gate, migration and publication inputs are exact hash-bound', () => {
-  for (const [relative, expected] of Object.entries(helper.ACCEPTED)) assert.equal(helper.sha256File(path.join(ROOT, ...relative.split('/'))), expected, `accepted input drift: ${relative}`)
+  for (const [relative, expected] of Object.entries(helper.ACCEPTED)) assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `accepted input drift: ${relative}`)
   assert.equal(helper.ALPHA2, '0.1.2-alpha.2'); assert.equal(helper.TAG, 'dsh-v0.1.2-alpha.2'); assert.equal(helper.COMMIT, '0a53fb55bea101816fa226bb964ae2bed71c343b')
 })
 

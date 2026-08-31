@@ -6,7 +6,7 @@ const path = require('node:path')
 const test = require('node:test')
 
 const repoRoot = path.resolve(__dirname, '..')
-const auditRoot = process.env.DSH_ALPHA2_AUDIT_ROOT || path.resolve(repoRoot, '..', '.alpha2-audit', 'isolated-project')
+const auditRoot = process.env.DSH_ALPHA2_AUDIT_ROOT || repoRoot
 const scopedRoot = path.join(auditRoot, 'node_modules', '@deepseek-ai')
 const officialTag = 'dsh-v0.1.2-alpha.2'
 const officialCommit = '0a53fb55bea101816fa226bb964ae2bed71c343b'
