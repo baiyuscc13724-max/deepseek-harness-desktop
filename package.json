@@ -96,6 +96,9 @@
     "files": [
       "electron/**/*",
       "renderer/**/*",
+      "node_modules/@deepseek-ai/dsh-attachment/**/*",
+      "node_modules/@deepseek-ai/dsh-session-query/**/*",
+      "node_modules/@deepseek-ai/dsh-util-time/**/*",
       "plugins/dsh-mobile-control/**/*",
       "plugins/dsh-desktop-directory-picker/**/*",
       "plugins/dsh-desktop-browser-tools/**/*",

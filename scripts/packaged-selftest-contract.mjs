@@ -6,6 +6,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const main = await readFile(path.join(root, 'electron/main.cjs'), 'utf8')
 const workflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8')
 const service = await readFile(path.join(root, 'electron/bridge/self-test-service.cjs'), 'utf8')
+const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'))
+const packagedAlpha2Peers = ['@deepseek-ai/dsh-attachment', '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-util-time']
+
+for (const packageName of packagedAlpha2Peers) {
+  const pattern = `node_modules/${packageName}/**/*`
+  if (!manifest.build?.files?.includes(pattern)) throw new Error(`Packaged alpha.2 runtime peer is missing from build.files: ${packageName}`)
+  if (lock.packages?.[`node_modules/${packageName}`]?.version !== '0.1.2-alpha.2') throw new Error(`Packaged alpha.2 runtime peer is not locked exactly: ${packageName}`)
+}
 
 for (const contract of ['--self-test', 'runPackagedSelfTest', 'HARNESS_DESKTOP_SELFTEST']) {
   if (!main.includes(contract)) throw new Error(`Packaged self-test main-process contract missing: ${contract}`)
