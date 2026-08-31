@@ -62,6 +62,14 @@ async function recoverBoth(authority, collaborator, rounds = 12) {
     await new Promise(resolve => setTimeout(resolve, 5))
   }
 }
+async function waitFor(predicate, message, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  do {
+    const value = await predicate()
+    if (value) return value
+  } while (Date.now() < deadline)
+  assert.fail(message)
+}
 
 async function fixture() {
   const [entryMod, taskWebMod, automationWebMod, businessMod, indexMod] = await Promise.all([
@@ -152,12 +160,18 @@ test('M4 collaborator API exposes safe cache, exact remote writes, fixed denials
     try { fx.collaboratorEntry.lanClient = { canSend: () => false }; queued = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, claimInput); exactRetry = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, claimInput); drift = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, { ...claimInput, type: 'transition', payload: { to: 'in_progress' } }) }
     finally { fx.collaboratorEntry.lanClient = liveLan }
     assert.equal(queued.res.status, 200); assert.deepEqual(queued.data, { queued: true, commandId: 'remote_api_claim', resource: 'task' }); assert.deepEqual(exactRetry.data, queued.data, 'an offline exact retry reuses the durable command'); assert.equal(drift.res.status, 409); assert.equal(drift.data.error.code, 'PROJECT_BUSINESS_SYNC_REPLAY_CONFLICT')
-    let completed
-    for (let attempt = 0; attempt < 12; attempt += 1) { await recoverBoth(fx.authorityBusiness, fx.collaboratorBusiness, 2); completed = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, claimInput); if (completed.res.status === 200 && completed.data.queued === false) break }
+    const completed = await waitFor(async () => {
+      await recoverBoth(fx.authorityBusiness, fx.collaboratorBusiness, 2)
+      const result = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, claimInput)
+      return result.res.status === 200 && result.data.queued === false ? result : undefined
+    }, 'remote API claim did not reach its terminal receipt')
     assert.equal(completed.res.status, 200); assert.equal(completed.data.queued, false); assert.equal(completed.data.result.outcome, 'accepted'); assert.equal(completed.data.result.task.taskRef, fx.firstTask.taskRef)
     for (const hidden of ['messageRef', 'requestDigest', 'actorRef', 'deviceRef']) assert.equal(JSON.stringify(completed.data).includes(hidden), false)
-    let claimedState
-    for (let attempt = 0; attempt < 12; attempt += 1) { await recoverBoth(fx.authorityBusiness, fx.collaboratorBusiness, 2); claimedState = await invoke(fx.routes, taskStatePath); if (claimedState.data.tasks.find(task => task.taskRef === fx.firstTask.taskRef).hasAssignee) break }
+    const claimedState = await waitFor(async () => {
+      await recoverBoth(fx.authorityBusiness, fx.collaboratorBusiness, 2)
+      const result = await invoke(fx.routes, taskStatePath)
+      return result.data.tasks.find(task => task.taskRef === fx.firstTask.taskRef).hasAssignee ? result : undefined
+    }, 'remote claim did not reach the collaborator task cache')
     assert.equal(claimedState.data.tasks.find(task => task.taskRef === fx.firstTask.taskRef).hasAssignee, true)
 
     const stale = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, { commandId: 'stale_revision', type: 'claim', taskRef: fx.firstTask.taskRef, expectedRevision: fx.firstTask.revision + 1, payload: {} })
