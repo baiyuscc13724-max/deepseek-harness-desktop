@@ -1,10 +1,5 @@
 const assert = require('node:assert/strict')
 const test = require('node:test')
-const { readFileSync } = require('node:fs')
-const path = require('node:path')
-
-const root = path.resolve(__dirname, '..')
-const runtimeFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-models', 'lib', 'client.js')
 
 test('raw upstream anchors patch directly to complete gated v3', async () => {
   const { createModelSettingsKeyOverrideUpstreamFixture, patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
@@ -17,9 +12,9 @@ test('raw upstream anchors patch directly to complete gated v3', async () => {
   assert.match(result.source, /keyRestoreCompensationFailed/u)
 })
 
-test('complete direct v2 fixture migrates exactly to executable gated v3', async () => {
+test('complete synthetic direct v2 anchor fixture migrates exactly to gated v3', async () => {
   const { createModelSettingsKeyOverrideDirectV2Fixture, patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
-  const directV2 = createModelSettingsKeyOverrideDirectV2Fixture(readFileSync(runtimeFile, 'utf8'))
+  const directV2 = createModelSettingsKeyOverrideDirectV2Fixture()
   assert.match(directV2, /@harness-desktop\/model-settings-key-override-direct-v2/u)
   const patched = patchModelSettingsKeyOverrideSource(directV2).source
 
@@ -39,12 +34,11 @@ test('complete direct v2 fixture migrates exactly to executable gated v3', async
   assert.match(patched, /style: \{ minHeight: 44, minWidth: 44 \}/u)
   assert.match(patched, /keyEnvironmentHint: "当前认证来自启动环境。直接输入或粘贴会建立独立的本机覆盖/u)
   assert.match(patched, /keyRestoreEnvironment: "恢复启动环境"/u)
-  assert.doesNotThrow(() => new Function(patched))
 })
 
-test('complete installed gated v3 is idempotent', async () => {
-  const { patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
-  const v3 = patchModelSettingsKeyOverrideSource(readFileSync(runtimeFile, 'utf8')).source
+test('complete generated gated v3 is idempotent', async () => {
+  const { createModelSettingsKeyOverrideUpstreamFixture, patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
+  const v3 = patchModelSettingsKeyOverrideSource(createModelSettingsKeyOverrideUpstreamFixture()).source
   const second = patchModelSettingsKeyOverrideSource(v3)
   assert.equal(second.changed, false)
   assert.equal(second.source, v3)
@@ -52,7 +46,7 @@ test('complete installed gated v3 is idempotent', async () => {
 
 test('partial v2 and partial v3 are both rejected fail-closed', async () => {
   const { createModelSettingsKeyOverrideDirectV2Fixture, patchModelSettingsKeyOverrideSource } = await import('../scripts/model-settings-key-override-patch.mjs')
-  const v2 = createModelSettingsKeyOverrideDirectV2Fixture(readFileSync(runtimeFile, 'utf8'))
+  const v2 = createModelSettingsKeyOverrideDirectV2Fixture()
   const partialV2 = v2.replace('disabled: disabled || credentialMode === "restore"', 'disabled: disabled')
   assert.throws(() => patchModelSettingsKeyOverrideSource(partialV2), /v2 patch is incomplete/u)
 

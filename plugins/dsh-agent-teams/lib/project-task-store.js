@@ -20,7 +20,8 @@ const COLLABORATION_REQUEST_ACTIONS = new Set(["accept", "reject", "release"]);
 const MAX_TASKS_PER_QUERY = 500;
 const MAX_COLLABORATION_HISTORY_PER_QUERY = 500;
 const COLLABORATION_SNAPSHOT_SECTION_LIMIT = 120;
-const DOMAIN_RECORD_KINDS = new Set(["comment", "relation", "attempt", "review"]);
+const DOMAIN_RECORD_KINDS = new Set(["comment", "relation", "relation.remove", "attempt", "review"]);
+const ORDERING_RELATION_TYPES = new Set(["parent", "blocks"]);
 const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/u;
 const PATCH_KEYS = new Set(["status", "priority", "title", "requirements", "fileScope", "ownerActorRef", "assigneeActorRef", "requirementsChanged"]);
 
@@ -939,6 +940,15 @@ class ProjectTaskStore {
     }));
   }
 
+  hasTaskRelation({ projectRef: inputProjectRef, sourceTaskRef: inputSourceTaskRef, targetTaskRef: inputTargetTaskRef, type: inputType } = {}) {
+    this.#requireReady();
+    const projectRef = normalizeProjectRef(inputProjectRef);
+    const sourceTaskRef = nonEmptyString(inputSourceTaskRef, "sourceTaskRef", 256);
+    const targetTaskRef = nonEmptyString(inputTargetTaskRef, "targetTaskRef", 256);
+    const type = nonEmptyString(inputType, "type", 64);
+    return this.database.prepare("SELECT 1 FROM project_task_relations WHERE project_ref = ? AND source_task_ref = ? AND target_task_ref = ? AND type = ? LIMIT 1").get(projectRef, sourceTaskRef, targetTaskRef, type) !== undefined;
+  }
+
   listRelations({ projectRef: inputProjectRef } = {}) {
     this.#requireReady();
     const projectRef = normalizeProjectRef(inputProjectRef);
@@ -1625,8 +1635,27 @@ class ProjectTaskStore {
       return;
     }
     if (record.kind === "relation") {
+      const sourceTaskRef = record.sourceTaskRef === undefined ? taskRef : nonEmptyString(record.sourceTaskRef, "sourceTaskRef", 256);
+      const targetTaskRef = nonEmptyString(record.targetTaskRef, "targetTaskRef", 256);
+      const relationType = nonEmptyString(record.relationType, "relationType", 64);
+      if (ORDERING_RELATION_TYPES.has(relationType)) {
+        const cycle = this.database.prepare(`WITH RECURSIVE reachable(task_ref) AS (
+          SELECT ? UNION SELECT relation.target_task_ref FROM project_task_relations relation
+          JOIN reachable ON reachable.task_ref = relation.source_task_ref
+          WHERE relation.project_ref = ? AND relation.type IN ('parent', 'blocks')
+        ) SELECT 1 FROM reachable WHERE task_ref = ? LIMIT 1`).get(targetTaskRef, projectRef, sourceTaskRef);
+        if (cycle !== undefined) throw storeError("task relation graph contains a cycle", "PROJECT_TASK_RELATION_CYCLE");
+      }
       this.database.prepare(`INSERT INTO project_task_relations(project_ref, relation_ref, source_task_ref, target_task_ref, type, created_by_actor_ref, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(projectRef, nonEmptyString(record.relationRef, "relationRef", 256), taskRef, nonEmptyString(record.targetTaskRef, "targetTaskRef", 256), nonEmptyString(record.relationType, "relationType", 64), nonEmptyString(record.createdByActorRef, "createdByActorRef", 256), createdAt);
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(projectRef, nonEmptyString(record.relationRef, "relationRef", 256), sourceTaskRef, targetTaskRef, relationType, nonEmptyString(record.createdByActorRef, "createdByActorRef", 256), createdAt);
+      return;
+    }
+    if (record.kind === "relation.remove") {
+      const sourceTaskRef = nonEmptyString(record.sourceTaskRef, "sourceTaskRef", 256);
+      const targetTaskRef = nonEmptyString(record.targetTaskRef, "targetTaskRef", 256);
+      const relationType = nonEmptyString(record.relationType, "relationType", 64);
+      const removed = this.database.prepare("DELETE FROM project_task_relations WHERE project_ref = ? AND source_task_ref = ? AND target_task_ref = ? AND type = ?").run(projectRef, sourceTaskRef, targetTaskRef, relationType);
+      if (Number(removed.changes) !== 1) throw storeError("blocking dependency does not exist", "PROJECT_TASK_RELATION_NOT_FOUND");
       return;
     }
     if (record.kind === "attempt") {

@@ -134,7 +134,8 @@ test('state and action expose only safe task fields while legacy tasks remain a 
   assert.equal(writes.legacy, 0)
   const encoded = JSON.stringify({ created, snapshot })
   for (const secret of [projectRef, 'secret acceptance', 'private/source/file.js', `actor_${'O'.repeat(24)}`, '"requirements":', '"fileScope":', 'ownerActorRef', 'assigneeActorRef']) assert.equal(encoded.includes(secret), false, secret)
-  assert.deepEqual(Object.keys(snapshot.tasks[0]).sort(), ['allowedTransitions', 'createdAt', 'hasAssignee', 'hasFileScope', 'requirementsRevision', 'revision', 'status', 'statusGroup', 'taskRef', 'title', 'updatedAt'].sort())
+  assert.deepEqual(Object.keys(snapshot.tasks[0]).sort(), ['allowedTransitions', 'blockedByCount', 'createdAt', 'hasAssignee', 'hasFileScope', 'requirementsRevision', 'revision', 'status', 'statusGroup', 'taskRef', 'title', 'updatedAt'].sort())
+  assert.equal(snapshot.tasks[0].blockedByCount, 0)
   assert.deepEqual(snapshot.groupTotals, { in_progress: 0, in_review: 0, blocked: 0, pending: 1, completed: 0, canceled: 0 })
 }))
 

@@ -174,7 +174,7 @@ test('command normalization is allowlisted, bounded, and never accepts identity 
   assert.throws(() => mod.normalizeTaskCommand({ commandId: 'command_AAAAAAAAAAAAAAAAAAAA', type: 'transition', taskRef: 'task_AAAAAAAAAAAAAAAAAAAAAAAA', expectedRevision: 4, actorRef: 'forged', payload: {} }), /unsupported fields/u)
   assert.throws(() => mod.normalizeTaskCommand({ commandId: 'command_AAAAAAAAAAAAAAAAAAAA', type: 'transition', taskRef: 'task_AAAAAAAAAAAAAAAAAAAAAAAA', expectedRevision: 4, payload: { sessionId: 'forged' } }), /forbidden identity field/u)
   assert.throws(() => mod.normalizeTaskCommand({ commandId: 'command_AAAAAAAAAAAAAAAAAAAA', type: 'transition', taskRef: 'task_AAAAAAAAAAAAAAAAAAAAAAAA', expectedRevision: 4, payload: { authorities: ['project_lead'] } }), /forbidden identity field/u)
-  for (const type of ['create', 'edit_requirements', 'assign', 'claim', 'transition', 'comment', 'relation.add', 'attempt.start', 'attempt.submit', 'review']) assert.equal(mod.COMMAND_TYPES.includes(type), true, type)
+  for (const type of ['create', 'edit_requirements', 'assign', 'claim', 'transition', 'comment', 'relation.add', 'dependency.add', 'dependency.remove', 'attempt.start', 'attempt.submit', 'review']) assert.equal(mod.COMMAND_TYPES.includes(type), true, type)
   let nested = { value: true }
   for (let index = 0; index < 20; index += 1) nested = { nested }
   assert.throws(() => mod.normalizeTaskCommand({ commandId: 'command_deep', type: 'comment', taskRef: 'task_deep', expectedRevision: 1, payload: nested }), /depth/u)

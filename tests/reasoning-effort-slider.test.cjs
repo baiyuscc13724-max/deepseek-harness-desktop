@@ -6,64 +6,31 @@ const path = require('node:path')
 const root = path.resolve(__dirname, '..')
 const runtimeFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
 
-test('official model selection is patched into an accessible metadata-driven effort slider', async () => {
-  const { patchReasoningEffortSliderSource } = await import('../scripts/patch-official-runtime.mjs')
-  const fixture = readFileSync(runtimeFile, 'utf8')
-  const first = patchReasoningEffortSliderSource(fixture)
-  const source = first.source
+test('official alpha.2 model selection owns an accessible metadata-driven effort menu', async () => {
+  const { patchInstalledModelSelection } = await import('../scripts/patch-official-runtime.mjs')
+  const source = readFileSync(runtimeFile, 'utf8')
 
-  assert.match(source, /dataPluginCss = "@harness-desktop\/reasoning-effort-slider-v2"/)
-  assert.match(source, /type: "range"/)
-  assert.match(source, /max: Math\.max\(0, effortChoices\.length - 1\)/)
-  assert.match(source, /reasoning\.efforts\.map\(\(effort\)/)
-  assert.match(source, /key: "provider-default"/)
-  assert.match(source, /effort: void 0/)
-  assert.match(source, /onPointerUp: \(event\) => chooseEffort/)
-  assert.match(source, /\["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"\]/)
-  assert.match(source, /"aria-valuetext": currentEffortChoice\?\.label/)
-  assert.match(source, /"aria-describedby": id \+ "-effort-description"/)
-  assert.match(source, /"aria-pressed": index === effortIndex/)
-  assert.match(source, /hd-effort-slider-visually-hidden/)
-  assert.match(source, /@media\(prefers-reduced-motion:reduce\)/)
-  assert.match(source, /select\(selection\)\.then\(settleSelection\)/)
-  assert.match(source, /const resetEffortPreview = \(\) => \{\s*const selectedIndex = effortChoices\.findIndex\(\(level\) => level\.effort === effectiveEffort\);\s*setEffortIndex\(selectedIndex < 0 \? 0 : selectedIndex\);\s*\}/)
-  assert.match(source, /if \(!accepted\) resetEffortPreview\(\)/)
-  assert.match(source, /effort\.providerDefaultLevelDescription/)
-  assert.doesNotMatch(source, /\[\s*["']low["']\s*,\s*["']medium["']\s*,\s*["']high["']/i)
+  assert.equal(await patchInstalledModelSelection(runtimeFile), false)
+  assert.match(source, /const reasoning = currentChoice\?\.model\.reasoning/u)
+  assert.match(source, /reasoning\.efforts\.map\(\(effort\)/u)
+  assert.match(source, /key: `effort:\$\{effort\.id\}`/u)
+  assert.match(source, /role: "menuitemradio"/u)
+  assert.match(source, /"aria-checked": effectiveEffort === level\.effort/u)
+  assert.match(source, /disabled: busy/u)
+  assert.match(source, /chooseEffort\(level\.effort\)/u)
+  assert.match(source, /reasoningEffort: effort/u)
+  assert.match(source, /select\(selection\)\.then\(settleSelection\)/u)
+  assert.doesNotMatch(source, /\[\s*["']low["']\s*,\s*["']medium["']\s*,\s*["']high["']/iu)
   assert.doesNotThrow(() => new Function(source))
-  assert.equal(patchReasoningEffortSliderSource(source).changed, false)
 })
 
-test('legacy slider marker migrates missing rejection rollback once and becomes idempotent', async () => {
-  const { patchReasoningEffortSliderSource } = await import('../scripts/patch-official-runtime.mjs')
-  const current = patchReasoningEffortSliderSource(readFileSync(runtimeFile, 'utf8')).source
-  const syncV2 = `\t\t\tconst resetEffortPreview = () => {
-\t\t\t\tconst selectedIndex = effortChoices.findIndex((level) => level.effort === effectiveEffort);
-\t\t\t\tsetEffortIndex(selectedIndex < 0 ? 0 : selectedIndex);
-\t\t\t};
-\t\t\t(0, react.useEffect)(resetEffortPreview, [effortChoices, effectiveEffort, pane]);`
-  const syncV1 = `\t\t\t(0, react.useEffect)(() => {
-\t\t\t\tconst selectedIndex = effortChoices.findIndex((level) => level.effort === effectiveEffort);
-\t\t\t\tsetEffortIndex(selectedIndex < 0 ? 0 : selectedIndex);
-\t\t\t}, [effortChoices, effectiveEffort, pane]);`
-  const settlementV2 = `\t\t\t\tselect(selection).then((accepted) => {
-\t\t\t\t\tif (!accepted) resetEffortPreview();
-\t\t\t\t\tsettleSelection(accepted);
-\t\t\t\t});`
-  const legacy = current
-    .replace('dataPluginCss = "@harness-desktop/reasoning-effort-slider-v2"', 'dataPluginCss = "@harness-desktop/reasoning-effort-slider"')
-    .replace(syncV2, syncV1)
-    .replace(settlementV2, '\t\t\t\tselect(selection).then(settleSelection);')
-  assert.notEqual(legacy, current)
-  assert.doesNotMatch(legacy, /resetEffortPreview/)
-
-  const migrated = patchReasoningEffortSliderSource(legacy)
-  assert.equal(migrated.changed, true)
-  assert.match(migrated.source, /reasoning-effort-slider-v2/)
-  assert.match(migrated.source, /const resetEffortPreview =/)
-  assert.match(migrated.source, /if \(!accepted\) resetEffortPreview\(\)/)
-  assert.equal(patchReasoningEffortSliderSource(migrated.source).changed, false)
-  assert.doesNotThrow(() => new Function(migrated.source))
+test('native effort selection preserves the prior choice when the Host rejects an update', () => {
+  const source = readFileSync(runtimeFile, 'utf8')
+  assert.match(source, /const settleSelection = \(accepted\) => \{[\s\S]*if \(accepted\) \{[\s\S]*close\(true\)/u)
+  assert.match(source, /const message = directory\.getSnapshot\(\)\.error/u)
+  assert.match(source, /setToast\(\{\s*seq: toastSeq\.current,\s*text: t\("error\.action", \{ message \}\)/u)
+  assert.match(source, /const chooseEffort = \(effort\) => \{[\s\S]*if \(effectiveEffort === effort\) \{[\s\S]*select\(selection\)\.then\(settleSelection\)/u)
+  assert.doesNotMatch(source, /setEffortIndex|resetEffortPreview/u)
 })
 
 test('effort metadata maps arbitrary 1, 3, and 5 level catalogs without a client vocabulary', async () => {

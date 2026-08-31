@@ -6,6 +6,7 @@ const AUTO_COMPLETE_PATCH_MARKER = 'conversationWorkTreeAutoCompleteMarker = "@h
 const PERFORMANCE_PATCH_MARKER = 'conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6"'
 const SNAPSHOT_PRIORITY_PATCH_MARKER = 'conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7"'
 const PERSISTENCE_PATCH_MARKER = 'conversationWorkTreePersistenceMarker = "@harness-desktop/conversation-work-tree-persistence-v8"'
+const READER_RESTORE_PATCH_MARKER = 'conversationWorkTreeReaderRestoreMarker = "@harness-desktop/conversation-work-tree-reader-restore-v9"'
 
 const WORK_TREE_CSS = ".hd-work-tree{min-width:0;border-radius:10px}.hd-work-tree-toggle{box-sizing:border-box;width:100%;min-height:44px;border:0;border-radius:9px;padding:0 10px;color:var(--dsw-alias-label-secondary);background:transparent;align-items:center;gap:8px;font:inherit;text-align:left;cursor:pointer;display:flex;transition:color .14s ease,background-color .14s ease}.hd-work-tree-toggle:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.hd-work-tree-toggle:focus-visible{outline:2px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 68%,transparent);outline-offset:2px}.hd-work-tree-chevron{width:16px;height:16px;flex:none;place-items:center;display:grid}.hd-work-tree-title{color:var(--dsw-alias-label-primary-dimmed);font-size:14px;font-weight:600;line-height:20px}.hd-work-tree-count{min-width:0;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;overflow:hidden}.hd-work-tree-status{color:var(--dsw-alias-label-tertiary);white-space:nowrap;align-items:center;gap:6px;margin-left:auto;font-size:12px;line-height:18px;display:inline-flex}.hd-work-tree-status:before{content:\"\";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}.hd-work-tree[data-state=running] .hd-work-tree-toggle{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 5%,transparent)}.hd-work-tree[data-state=running] .hd-work-tree-status{color:var(--dsw-alias-brand-primary)}.hd-work-tree[data-state=error] .hd-work-tree-status{color:var(--dsw-alias-state-error-primary)}.hd-work-tree[data-state=stopped] .hd-work-tree-status{color:var(--dsw-alias-state-warning-primary)}.hd-work-tree-body{position:relative;flex-direction:column;gap:8px;margin:2px 0 6px 20px;padding:0 0 4px 18px;display:flex}.hd-work-tree-body:before{content:\"\";position:absolute;top:0;bottom:8px;left:0;width:1px;background:var(--dsw-alias-border-l2)}.hd-work-tree-body[hidden]{display:none}.hd-work-tree-body>[data-chat-flow-key]{position:relative}.hd-work-tree-body>[data-chat-flow-key]:before{content:\"\";position:absolute;top:12px;left:-18px;width:10px;height:1px;background:var(--dsw-alias-border-l2)}@media(max-width:620px){.hd-work-tree-toggle{padding-inline:6px}.hd-work-tree-body{margin-left:16px;padding-left:14px}.hd-work-tree-body>[data-chat-flow-key]:before{left:-14px;width:8px}}.hd-work-tree[data-open] .hd-work-tree-toggle{position:sticky;top:8px;z-index:5;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 82%,transparent);background:color-mix(in srgb,var(--dsw-alias-bg-base) 92%,transparent);box-shadow:0 6px 18px color-mix(in srgb,#000 12%,transparent);-webkit-backdrop-filter:blur(14px) saturate(1.06);backdrop-filter:blur(14px) saturate(1.06)}.hd-work-tree[data-open] .hd-work-tree-body>[data-chat-flow-key]{scroll-margin-top:64px}@media(max-width:620px){.hd-work-tree[data-open] .hd-work-tree-toggle{top:6px}}@media(prefers-reduced-motion:reduce){.hd-work-tree-toggle{transition:none}}"
 
@@ -19,6 +20,7 @@ const STYLE_PATCH = `\t\tconst conversationWorkTreeCss = ${JSON.stringify(WORK_T
 \t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";
 \t\tconst conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7";
 \t\tconst conversationWorkTreePersistenceMarker = "@harness-desktop/conversation-work-tree-persistence-v8";
+\t\tconst conversationWorkTreeReaderRestoreMarker = "@harness-desktop/conversation-work-tree-reader-restore-v9";
 \t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";
 \t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(conversationWorkTreeMarker) + "]") === null) {
 \t\t\tconst conversationWorkTreeTag = document.createElement("style");
@@ -105,7 +107,7 @@ function conversationIsWorkNode(node, nodeKey, finalReplyByTurn) {
   return node?.kind === 'context' || node?.kind === 'compaction' || node?.kind === 'manual-compaction' || node?.kind === 'model-retry' || node?.kind === 'unknown'
 }
 
-export function reduceConversationWorkTreeDisclosure(state, event) {
+function preReaderRestoreReduceConversationWorkTreeDisclosure(state, event) {
   const current = state ?? { open: false, automatic: false, userControlled: false, active: false }
   if (event?.type === 'toggle') {
     return { ...current, open: !current.open, automatic: false, userControlled: true }
@@ -119,6 +121,23 @@ export function reduceConversationWorkTreeDisclosure(state, event) {
     else if (current.automatic) next = { ...next, open: selected, automatic: false }
   }
   if (selected) next = { ...next, open: true }
+  return next
+}
+
+export function reduceConversationWorkTreeDisclosure(state, event) {
+  const current = state ?? { open: false, automatic: false, userControlled: false, active: false }
+  if (event?.type === 'toggle') {
+    return { ...current, open: !current.open, automatic: false, userControlled: true }
+  }
+  if (event?.type !== 'activity') return current
+  const active = event.active === true
+  const selected = event.selected === true
+  let next = { ...current, active }
+  if (active !== current.active && !current.userControlled) {
+    if (active) next = { ...next, open: true, automatic: true }
+    else if (current.automatic) next = { ...next, open: selected, automatic: false }
+  }
+  if (selected && !next.userControlled) next = { ...next, open: true }
   return next
 }
 
@@ -156,9 +175,22 @@ export function writeConversationWorkTreeDisclosure(storage, sessionId, itemKey,
   }
 }
 
-export function createConversationWorkTreeDisclosureState(persistedOpen, active, selected) {
+function preReaderRestoreCreateConversationWorkTreeDisclosureState(persistedOpen, active, selected) {
   if (typeof persistedOpen === 'boolean') return { open: persistedOpen || selected === true, automatic: false, userControlled: true, active: active === true }
   return { open: active === true || selected === true, automatic: active === true && selected !== true, userControlled: false, active: active === true }
+}
+
+export function createConversationWorkTreeDisclosureState(persistedOpen, active, selected) {
+  if (typeof persistedOpen === 'boolean') return { open: persistedOpen, automatic: false, userControlled: true, active: active === true }
+  return { open: active === true || selected === true, automatic: active === true && selected !== true, userControlled: false, active: active === true }
+}
+
+export function conversationWorkTreeRestoreNodeKey(nodeKeys, callNodeKeys, anchorKey) {
+  if (!Array.isArray(nodeKeys) || typeof anchorKey !== 'string' || !anchorKey) return undefined
+  if (nodeKeys.includes(anchorKey)) return anchorKey
+  if (!anchorKey.startsWith('call:') || !(callNodeKeys instanceof Map)) return undefined
+  const nodeKey = callNodeKeys.get(anchorKey.slice(5))
+  return typeof nodeKey === 'string' && nodeKeys.includes(nodeKey) ? nodeKey : undefined
 }
 
 export function reduceConversationWorkTreeRenderCount(count, event) {
@@ -169,7 +201,7 @@ export function reduceConversationWorkTreeRenderCount(count, event) {
   return Math.min(total, current + 64)
 }
 
-export function conversationWorkTreeRenderKeys(nodeKeys, renderedCount, selectedNodeKey) {
+function preReaderRestoreConversationWorkTreeRenderKeys(nodeKeys, renderedCount, selectedNodeKey) {
   const total = Array.isArray(nodeKeys) ? nodeKeys.length : 0
   const prefixEnd = Number.isSafeInteger(renderedCount) && renderedCount > 0 ? Math.min(renderedCount, total) : 0
   const selectedIndex = typeof selectedNodeKey === 'string' ? nodeKeys.indexOf(selectedNodeKey) : -1
@@ -177,6 +209,23 @@ export function conversationWorkTreeRenderKeys(nodeKeys, renderedCount, selected
   const priorityStart = Math.max(prefixEnd, Math.min(selectedIndex - 32, total - 64))
   const priorityEnd = Math.min(total, Math.max(selectedIndex + 1, priorityStart + 64))
   return nodeKeys.slice(0, prefixEnd).concat(nodeKeys.slice(priorityStart, priorityEnd))
+}
+
+export function conversationWorkTreeRenderKeys(nodeKeys, renderedCount, selectedNodeKey, restoreNodeKey) {
+  const total = Array.isArray(nodeKeys) ? nodeKeys.length : 0
+  const prefixEnd = Number.isSafeInteger(renderedCount) && renderedCount > 0 ? Math.min(renderedCount, total) : 0
+  const indexes = new Set(Array.from({ length: prefixEnd }, (_, index) => index))
+  const priorityIndexes = [...new Set([selectedNodeKey, restoreNodeKey]
+    .filter(nodeKey => typeof nodeKey === 'string')
+    .map(nodeKey => nodeKeys.indexOf(nodeKey))
+    .filter(index => index >= prefixEnd))]
+    .sort((left, right) => left - right)
+  for (const priorityIndex of priorityIndexes) {
+    const priorityStart = Math.max(prefixEnd, Math.min(priorityIndex - 32, total - 64))
+    const priorityEnd = Math.min(total, Math.max(priorityIndex + 1, priorityStart + 64))
+    for (let index = priorityStart; index < priorityEnd; index += 1) indexes.add(index)
+  }
+  return [...indexes].sort((left, right) => left - right).map(index => nodeKeys[index])
 }
 
 function preFlowBuildConversationWorkTreeItems(order, nodeStore) {
@@ -362,15 +411,21 @@ const WORK_TREE_ITEMS_SOURCE = bundleFunctionSource(buildConversationWorkTreeIte
 const PRE_PRIORITY_WORK_TREE_ITEMS_SOURCE = WORK_TREE_ITEMS_SOURCE
   .replace('\n\t\t        callIds: [],\n\t\t        callNodeKeys: new Map()', '\n\t\t        callIds: []')
   .replace('\n\t\t    for (const callId of stats.callIds) group.callNodeKeys.set(callId, nodeKey)', '')
-const DISCLOSURE_REDUCER_SOURCE = bundleFunctionSource(reduceConversationWorkTreeDisclosure)
+const PRE_READER_RESTORE_DISCLOSURE_REDUCER_SOURCE = bundleFunctionSource(preReaderRestoreReduceConversationWorkTreeDisclosure).replace('function preReaderRestoreReduceConversationWorkTreeDisclosure', 'function reduceConversationWorkTreeDisclosure')
+const DISCLOSURE_REDUCER_SOURCE = PRE_READER_RESTORE_DISCLOSURE_REDUCER_SOURCE
+const FINAL_DISCLOSURE_REDUCER_SOURCE = bundleFunctionSource(reduceConversationWorkTreeDisclosure)
+const PRE_READER_RESTORE_CREATE_STATE_SOURCE = bundleFunctionSource(preReaderRestoreCreateConversationWorkTreeDisclosureState).replace('function preReaderRestoreCreateConversationWorkTreeDisclosureState', 'function createConversationWorkTreeDisclosureState')
+const CREATE_STATE_SOURCE = bundleFunctionSource(createConversationWorkTreeDisclosureState)
 const DISCLOSURE_PERSISTENCE_HELPERS_SOURCE = [
   conversationWorkTreeStorage,
   readConversationWorkTreeDisclosure,
-  writeConversationWorkTreeDisclosure,
-  createConversationWorkTreeDisclosureState
-].map(bundleFunctionSource).join('\n')
+  writeConversationWorkTreeDisclosure
+].map(bundleFunctionSource).concat(PRE_READER_RESTORE_CREATE_STATE_SOURCE).join('\n')
+const RESTORE_NODE_KEY_SOURCE = bundleFunctionSource(conversationWorkTreeRestoreNodeKey)
 const RENDER_COUNT_REDUCER_SOURCE = bundleFunctionSource(reduceConversationWorkTreeRenderCount)
-const RENDER_KEYS_SOURCE = bundleFunctionSource(conversationWorkTreeRenderKeys)
+const PRE_READER_RESTORE_RENDER_KEYS_SOURCE = bundleFunctionSource(preReaderRestoreConversationWorkTreeRenderKeys).replace('function preReaderRestoreConversationWorkTreeRenderKeys', 'function conversationWorkTreeRenderKeys')
+const RENDER_KEYS_SOURCE = PRE_READER_RESTORE_RENDER_KEYS_SOURCE
+const FINAL_RENDER_KEYS_SOURCE = bundleFunctionSource(conversationWorkTreeRenderKeys)
 const PRE_RECOVERABLE_TOOL_STATS_SOURCE = bundleFunctionSource(preRecoverableConversationToolRootStats).replaceAll('preRecoverableConversationToolRootStats', 'conversationToolRootStats')
 const RECOVERABLE_TOOL_STATS_SOURCE = bundleFunctionSource(conversationToolRootStats)
 
@@ -385,6 +440,7 @@ const WORK_TREE_HELPERS = [
   readConversationWorkTreeDisclosure,
   writeConversationWorkTreeDisclosure,
   createConversationWorkTreeDisclosureState,
+  conversationWorkTreeRestoreNodeKey,
   reduceConversationWorkTreeRenderCount,
   conversationWorkTreeRenderKeys,
   buildConversationWorkTreeItems
@@ -392,9 +448,10 @@ const WORK_TREE_HELPERS = [
 
 const COMPONENT_ANCHOR = '\t\tfunction ChatView({ useSession, useSessions, useStore, renderSlot, sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, forkAt, fileMentions, t }) {'
 const COMPONENT_PATCH = `${WORK_TREE_HELPERS}
-\t\tconst ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, sessionId, useSession, selectedCallId, cwd, openFile, inspectCall, forkAt, renderMessageImages, fileMentions, renderSlot, t }) {
+\t\tconst ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, sessionId, savedScrollAnchorKey, useSession, selectedCallId, cwd, openFile, inspectCall, forkAt, renderMessageImages, fileMentions, renderSlot, t }) {
 \t\t\tconst selectedNodeKey = selectedCallId === void 0 ? void 0 : item.callNodeKeys.get(selectedCallId);
 \t\t\tconst selected = selectedNodeKey !== void 0;
+\t\t\tconst restoreNodeKey = conversationWorkTreeRestoreNodeKey(item.nodeKeys, item.callNodeKeys, savedScrollAnchorKey);
 \t\t\tconst disclosureStorage = conversationWorkTreeStorage();
 \t\t\tconst readPersistedDisclosure = () => readConversationWorkTreeDisclosure(disclosureStorage, sessionId, item.key);
 \t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => createConversationWorkTreeDisclosureState(readPersistedDisclosure(), item.active, selected));
@@ -405,7 +462,7 @@ const COMPONENT_PATCH = `${WORK_TREE_HELPERS}
 \t\t\t\tsetDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "activity", active: item.active, selected }));
 \t\t\t}, [item.active, selected]);
 \t\t\tconst open = disclosure.open;
-\t\t\tconst [renderedCount, setRenderedCount] = (0, react.useState)(0);
+\t\t\tconst [renderedCount, setRenderedCount] = (0, react.useState)(() => reduceConversationWorkTreeRenderCount(0, { type: "sync", open, total: item.nodeKeys.length }));
 \t\t\t(0, react.useEffect)(() => {
 \t\t\t\tsetRenderedCount((value) => reduceConversationWorkTreeRenderCount(value, { type: "sync", open, total: item.nodeKeys.length }));
 \t\t\t}, [open, item.nodeKeys.length]);
@@ -423,7 +480,7 @@ const COMPONENT_PATCH = `${WORK_TREE_HELPERS}
 \t\t\t\t\telse globalThis.clearTimeout(handle);
 \t\t\t\t};
 \t\t\t}, [open, renderedCount, item.nodeKeys.length]);
-\t\t\tconst renderedNodeKeys = open ? conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey) : [];
+\t\t\tconst renderedNodeKeys = open ? conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey, restoreNodeKey) : [];
 \t\t\tconst state = item.active ? "running" : item.failed ? "error" : item.stopped ? "stopped" : "done";
 \t\t\tconst status = t(\`workTree.status.\${state}\`);
 \t\t\tconst count = t("workTree.steps", { count: item.count });
@@ -490,9 +547,12 @@ const WORK_TREE_MEMO_ANCHOR = '\t\t\tconst pendingSteering = (0, react.useMemo)(
 const WORK_TREE_MEMO_V6 = `${WORK_TREE_MEMO_ANCHOR}
 \t\t\t/* DSH_DESKTOP_MEMOIZED_WORK_TREE: unrelated view state must not refold the full transcript. */
 \t\t\tconst workTreeItems = (0, react.useMemo)(() => buildConversationWorkTreeItems(order, nodeStore), [order, nodeStore]);`
-const WORK_TREE_MEMO_PATCHED = `${WORK_TREE_MEMO_ANCHOR}
+const WORK_TREE_MEMO_V8 = `${WORK_TREE_MEMO_ANCHOR}
 \t\t\t/* DSH_DESKTOP_MEMOIZED_WORK_TREE: values() changes for content upserts; unrelated view state reuses it. */
 \t\t\tconst workTreeItems = (0, react.useMemo)(() => buildConversationWorkTreeItems(order, nodeStore), [order, nodeSnapshot]);`
+const WORK_TREE_MEMO_PATCHED = `${WORK_TREE_MEMO_V8}
+\t\t\t/* Capture the returning reader anchor before child layout effects can normalize it. */
+\t\t\tconst savedScrollAnchorKey = chatScroll.read()?.anchorKey;`
 
 const RENDER_ORIGINAL = `\t\t\t\t\t\t\torder.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
 \t\t\t\t\t\t\t\tnodeKey,
@@ -511,6 +571,7 @@ const RENDER_ORIGINAL = `\t\t\t\t\t\t\torder.map((nodeKey) => (0, react_jsx_runt
 const RENDER_PATCHED = `\t\t\t\t\t\t\tworkTreeItems.map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
 \t\t\t\t\t\t\t\titem,
 \t\t\t\t\t\t\t\tsessionId,
+\t\t\t\t\t\t\t\tsavedScrollAnchorKey,
 \t\t\t\t\t\t\t\tuseSession,
 \t\t\t\t\t\t\t\tselectedCallId,
 \t\t\t\t\t\t\t\tcwd,
@@ -521,7 +582,7 @@ const RENDER_PATCHED = `\t\t\t\t\t\t\tworkTreeItems.map((item) => item.kind === 
 \t\t\t\t\t\t\t\tfileMentions,
 \t\t\t\t\t\t\t\trenderSlot,
 \t\t\t\t\t\t\t\tt
-\t\t\t\t\t\t\t}, item.key) : (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
+\t\t\t\t\t\t\t}, \`\${sessionId}:\${item.key}\`) : (0, react_jsx_runtime.jsx)(ChatNodeSeat, {
 \t\t\t\t\t\t\t\tnodeKey: item.nodeKey,
 \t\t\t\t\t\t\t\tuseSession,
 \t\t\t\t\t\t\t\tselectedCallId,
@@ -576,18 +637,24 @@ const AUTO_COMPLETE_MARKER_SEXT = '\t\tconst conversationWorkTreeStickyMarker = 
 const PERFORMANCE_MARKER_SEPT = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
 const SNAPSHOT_PRIORITY_MARKER_OCT = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";\n\t\tconst conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
 const PERSISTENCE_MARKER_NONET = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";\n\t\tconst conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7";\n\t\tconst conversationWorkTreePersistenceMarker = "@harness-desktop/conversation-work-tree-persistence-v8";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
+const READER_RESTORE_MARKER_DECET = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";\n\t\tconst conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7";\n\t\tconst conversationWorkTreePersistenceMarker = "@harness-desktop/conversation-work-tree-persistence-v8";\n\t\tconst conversationWorkTreeReaderRestoreMarker = "@harness-desktop/conversation-work-tree-reader-restore-v9";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
 const WORK_TREE_COMPONENT_PREFIX = '\t\tconst ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({'
 const WORK_TREE_COMPONENT_PROPS_V7 = 'function ConversationWorkTreeGroup({ item, useSession,'
 const WORK_TREE_COMPONENT_PROPS_V8 = 'function ConversationWorkTreeGroup({ item, sessionId, useSession,'
+const WORK_TREE_COMPONENT_PROPS_V9 = 'function ConversationWorkTreeGroup({ item, sessionId, savedScrollAnchorKey, useSession,'
 const WORK_TREE_RENDER_PROPS_V7 = '\t\t\t\t\t\t\t\titem,\n\t\t\t\t\t\t\t\tuseSession,'
 const WORK_TREE_RENDER_PROPS_V8 = '\t\t\t\t\t\t\t\titem,\n\t\t\t\t\t\t\t\tsessionId,\n\t\t\t\t\t\t\t\tuseSession,'
+const WORK_TREE_RENDER_PROPS_V9 = '\t\t\t\t\t\t\t\titem,\n\t\t\t\t\t\t\t\tsessionId,\n\t\t\t\t\t\t\t\tsavedScrollAnchorKey,\n\t\t\t\t\t\t\t\tuseSession,'
 const SELECTED_CALL_V6 = '\t\t\tconst selected = selectedCallId !== void 0 && item.callIds.includes(selectedCallId);'
 const SELECTED_CALL_V7 = '\t\t\tconst selectedNodeKey = selectedCallId === void 0 ? void 0 : item.callNodeKeys.get(selectedCallId);\n\t\t\tconst selected = selectedNodeKey !== void 0;'
+const READER_RESTORE_NODE_LOOKUP = `${SELECTED_CALL_V7}\n\t\t\tconst restoreNodeKey = conversationWorkTreeRestoreNodeKey(item.nodeKeys, item.callNodeKeys, savedScrollAnchorKey);`
 const AUTO_TOGGLE_STATE_BLOCK = '\t\t\tconst [open, setOpen] = (0, react.useState)(item.active || selected);\n\t\t\tconst wasActive = (0, react.useRef)(item.active);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (item.active === wasActive.current) return;\n\t\t\t\twasActive.current = item.active;\n\t\t\t\tsetOpen(item.active);\n\t\t\t}, [item.active]);'
 const MANUAL_STATE_BLOCK = '\t\t\tconst [open, setOpen] = (0, react.useState)(item.active || selected);'
 const PRE_AUTO_COMPLETE_STATE_BLOCK = `${MANUAL_STATE_BLOCK}\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (selected) setOpen(true);\n\t\t\t}, [selected]);`
 const AUTO_COMPLETE_STATE_BLOCK = '\t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => ({ open: item.active || selected, automatic: item.active && !selected, userControlled: false, active: item.active }));\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tsetDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "activity", active: item.active, selected }));\n\t\t\t}, [item.active, selected]);\n\t\t\tconst open = disclosure.open;'
 const PERSISTED_STATE_BLOCK = '\t\t\tconst disclosureStorage = conversationWorkTreeStorage();\n\t\t\tconst readPersistedDisclosure = () => readConversationWorkTreeDisclosure(disclosureStorage, sessionId, item.key);\n\t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => createConversationWorkTreeDisclosureState(readPersistedDisclosure(), item.active, selected));\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tsetDisclosure(createConversationWorkTreeDisclosureState(readPersistedDisclosure(), item.active, selected));\n\t\t\t}, [sessionId, item.key]);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tsetDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "activity", active: item.active, selected }));\n\t\t\t}, [item.active, selected]);\n\t\t\tconst open = disclosure.open;'
+const INITIAL_RENDER_COUNT_V8 = '\t\t\tconst [renderedCount, setRenderedCount] = (0, react.useState)(0);'
+const INITIAL_RENDER_COUNT_V9 = '\t\t\tconst [renderedCount, setRenderedCount] = (0, react.useState)(() => reduceConversationWorkTreeRenderCount(0, { type: "sync", open, total: item.nodeKeys.length }));'
 const PERFORMANCE_STATE_BLOCK = `${AUTO_COMPLETE_STATE_BLOCK}
 \t\t\tconst [renderedCount, setRenderedCount] = (0, react.useState)(0);
 \t\t\t(0, react.useEffect)(() => {
@@ -618,6 +685,27 @@ const BATCHED_WORK_TREE_CHILDREN_END = '\t\t\t\t\t}, nodeKey)) : null\n\t\t\t\t}
 const PRIORITY_WORK_TREE_CHILDREN_END = '\t\t\t\t\t}, nodeKey))\n\t\t\t\t})]'
 const RENDER_KEYS_ANCHOR = '\t\t\t}, [open, renderedCount, item.nodeKeys.length]);\n\t\t\tconst state = item.active ? "running"'
 const RENDER_KEYS_PATCHED = '\t\t\t}, [open, renderedCount, item.nodeKeys.length]);\n\t\t\tconst renderedNodeKeys = open ? conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey) : [];\n\t\t\tconst state = item.active ? "running"'
+const RENDER_KEYS_READER_RESTORE = '\t\t\t}, [open, renderedCount, item.nodeKeys.length]);\n\t\t\tconst renderedNodeKeys = open ? conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey, restoreNodeKey) : [];\n\t\t\tconst state = item.active ? "running"'
+const WORK_TREE_REACT_KEY_V8 = '}, item.key) : (0, react_jsx_runtime.jsx)(ChatNodeSeat, {'
+const WORK_TREE_REACT_KEY_V9 = '}, `${sessionId}:${item.key}`) : (0, react_jsx_runtime.jsx)(ChatNodeSeat, {'
+const FORCED_SESSION_REENTRY_BLOCK = `\t\t\t\t\t// Re-entering a conversation always starts at the latest message. A saved
+\t\t\t\t\t// semantic anchor can point into a previously expanded work tree whose
+\t\t\t\t\t// height has since changed, which otherwise restores the reader mid-flow.
+\t\t\t\t\ttoBottom(el);`
+const SAVED_SESSION_REENTRY_BLOCK = `\t\t\t\t\tconst saved = chatScroll.read();
+\t\t\t\t\tif (saved === null) toBottom(el);
+\t\t\t\t\telse {
+\t\t\t\t\t\tel.scrollTop = saved.scrollTop;
+\t\t\t\t\t\tconst row = anchorElement(local, saved.anchorKey);
+\t\t\t\t\t\tif (row !== null) el.scrollTop += flowTop(row, el) - saved.anchorTop;
+\t\t\t\t\t\tobservedTopRef.current = el.scrollTop;
+\t\t\t\t\t\tconst isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 25;
+\t\t\t\t\t\tatBottomRef.current = isAtBottom;
+\t\t\t\t\t\tsetAtBottom(isAtBottom);
+\t\t\t\t\t\tconst normalized = isAtBottom ? null : scrollPosition(local, el);
+\t\t\t\t\t\tif (isAtBottom) chatScroll.save(null);
+\t\t\t\t\t\telse if (normalized !== null) chatScroll.save(normalized);
+\t\t\t\t\t}`
 const EAGER_WORK_TREE_RENDER = '\t\t\t\t\t\t\tbuildConversationWorkTreeItems(order, nodeStore).map((item) =>'
 const MEMOIZED_WORK_TREE_RENDER = '\t\t\t\t\t\t\tworkTreeItems.map((item) =>'
 
@@ -640,6 +728,7 @@ function assertComplete(source) {
     '@harness-desktop/conversation-work-tree-performance-v6',
     '@harness-desktop/conversation-work-tree-snapshot-priority-v7',
     '@harness-desktop/conversation-work-tree-persistence-v8',
+    '@harness-desktop/conversation-work-tree-reader-restore-v9',
     'FS_EDIT_NOT_FOUND',
     'work-tree:flow:',
     'position:sticky',
@@ -650,6 +739,7 @@ function assertComplete(source) {
     'function readConversationWorkTreeDisclosure',
     'function writeConversationWorkTreeDisclosure',
     'function createConversationWorkTreeDisclosureState',
+    'function conversationWorkTreeRestoreNodeKey',
     'harness.desktop.work-tree-disclosure.v1:',
     'function reduceConversationWorkTreeRenderCount',
     'function conversationWorkTreeRenderKeys',
@@ -668,7 +758,11 @@ function assertComplete(source) {
     '[order, nodeSnapshot]',
     'workTreeItems.map',
     'item.callNodeKeys.get(selectedCallId)',
-    'conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey)',
+    'savedScrollAnchorKey = chatScroll.read()?.anchorKey',
+    'conversationWorkTreeRestoreNodeKey(item.nodeKeys, item.callNodeKeys, savedScrollAnchorKey)',
+    'conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey, restoreNodeKey)',
+    '`${sessionId}:${item.key}`',
+    'const saved = chatScroll.read();',
     'requestIdleCallback'
   ]) {
     if (!source.includes(required)) throw new Error('Installed conversation work-tree patch is incomplete; refusing to continue.')
@@ -678,6 +772,9 @@ function assertComplete(source) {
   }
   if (source.includes(AUTO_COMPLETE_STATE_BLOCK) || source.includes(AUTO_COMPLETE_TOGGLE_HANDLER) || source.includes(WORK_TREE_COMPONENT_PROPS_V7) || source.includes(WORK_TREE_RENDER_PROPS_V7)) {
     throw new Error('Installed conversation work-tree does not persist disclosure independently for each session and work group.')
+  }
+  if (source.includes(PRE_READER_RESTORE_DISCLOSURE_REDUCER_SOURCE) || source.includes(PRE_READER_RESTORE_CREATE_STATE_SOURCE) || source.includes(PRE_READER_RESTORE_RENDER_KEYS_SOURCE) || source.includes(WORK_TREE_COMPONENT_PROPS_V8) || source.includes(WORK_TREE_RENDER_PROPS_V8) || source.includes(INITIAL_RENDER_COUNT_V8) || source.includes(WORK_TREE_REACT_KEY_V8) || source.includes(FORCED_SESSION_REENTRY_BLOCK)) {
+    throw new Error('Installed conversation work-tree can still override the reader disclosure or lose the saved work anchor.')
   }
   if (source.includes(EAGER_WORK_TREE_CHILDREN_START) || source.includes(EAGER_WORK_TREE_RENDER)) {
     throw new Error('Installed conversation work-tree still performs eager long-session render work.')
@@ -784,6 +881,66 @@ export function patchConversationWorkTreeSource(source) {
         throw new Error('Pinned DSH work-tree render props changed; refusing an unsafe session persistence migration.')
       }
       migrated = replaceExactlyOnce(migrated, SNAPSHOT_PRIORITY_MARKER_OCT, PERSISTENCE_MARKER_NONET, 'session disclosure persistence marker')
+      changed = true
+    }
+    if (!migrated.includes(READER_RESTORE_PATCH_MARKER)) {
+      if (migrated.includes(PRE_READER_RESTORE_DISCLOSURE_REDUCER_SOURCE)) {
+        migrated = replaceExactlyOnce(migrated, PRE_READER_RESTORE_DISCLOSURE_REDUCER_SOURCE, FINAL_DISCLOSURE_REDUCER_SOURCE, 'reader-controlled disclosure reducer')
+      } else if (!migrated.includes(FINAL_DISCLOSURE_REDUCER_SOURCE)) {
+        throw new Error('Pinned DSH work-tree disclosure reducer changed; refusing an unsafe reader restoration migration.')
+      }
+      if (migrated.includes(PRE_READER_RESTORE_CREATE_STATE_SOURCE)) {
+        migrated = replaceExactlyOnce(migrated, PRE_READER_RESTORE_CREATE_STATE_SOURCE, CREATE_STATE_SOURCE, 'persisted disclosure precedence')
+      } else if (!migrated.includes(CREATE_STATE_SOURCE)) {
+        throw new Error('Pinned DSH work-tree persisted state helper changed; refusing an unsafe reader restoration migration.')
+      }
+      if (!migrated.includes(RESTORE_NODE_KEY_SOURCE)) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_COMPONENT_PREFIX, `${RESTORE_NODE_KEY_SOURCE}\n${WORK_TREE_COMPONENT_PREFIX}`, 'saved reader anchor node lookup')
+      }
+      if (migrated.includes(PRE_READER_RESTORE_RENDER_KEYS_SOURCE)) {
+        migrated = replaceExactlyOnce(migrated, PRE_READER_RESTORE_RENDER_KEYS_SOURCE, FINAL_RENDER_KEYS_SOURCE, 'saved reader anchor priority window')
+      } else if (!migrated.includes(FINAL_RENDER_KEYS_SOURCE)) {
+        throw new Error('Pinned DSH work-tree priority window helper changed; refusing an unsafe reader restoration migration.')
+      }
+      if (migrated.includes(WORK_TREE_COMPONENT_PROPS_V8)) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_COMPONENT_PROPS_V8, WORK_TREE_COMPONENT_PROPS_V9, 'saved reader anchor component prop')
+      } else if (!migrated.includes(WORK_TREE_COMPONENT_PROPS_V9)) {
+        throw new Error('Pinned DSH work-tree component props changed; refusing an unsafe reader restoration migration.')
+      }
+      if (migrated.includes(SELECTED_CALL_V7) && !migrated.includes(READER_RESTORE_NODE_LOOKUP)) {
+        migrated = replaceExactlyOnce(migrated, SELECTED_CALL_V7, READER_RESTORE_NODE_LOOKUP, 'saved reader anchor ownership lookup')
+      } else if (!migrated.includes(READER_RESTORE_NODE_LOOKUP)) {
+        throw new Error('Pinned DSH selected-call lookup changed; refusing an unsafe reader restoration migration.')
+      }
+      if (migrated.includes(INITIAL_RENDER_COUNT_V8)) {
+        migrated = replaceExactlyOnce(migrated, INITIAL_RENDER_COUNT_V8, INITIAL_RENDER_COUNT_V9, 'synchronous initial work-tree render window')
+      } else if (!migrated.includes(INITIAL_RENDER_COUNT_V9)) {
+        throw new Error('Pinned DSH initial work-tree render state changed; refusing an unsafe reader restoration migration.')
+      }
+      if (migrated.includes(RENDER_KEYS_PATCHED)) {
+        migrated = replaceExactlyOnce(migrated, RENDER_KEYS_PATCHED, RENDER_KEYS_READER_RESTORE, 'saved reader anchor render keys')
+      } else if (!migrated.includes(RENDER_KEYS_READER_RESTORE)) {
+        throw new Error('Pinned DSH rendered work-tree keys changed; refusing an unsafe reader restoration migration.')
+      }
+      if (!migrated.includes(WORK_TREE_MEMO_PATCHED)) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_MEMO_V8, WORK_TREE_MEMO_PATCHED, 'saved reader anchor snapshot')
+      }
+      if (migrated.includes(WORK_TREE_RENDER_PROPS_V8)) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_RENDER_PROPS_V8, WORK_TREE_RENDER_PROPS_V9, 'saved reader anchor render prop')
+      } else if (!migrated.includes(WORK_TREE_RENDER_PROPS_V9)) {
+        throw new Error('Pinned DSH work-tree render props changed; refusing an unsafe reader restoration migration.')
+      }
+      if (migrated.includes(WORK_TREE_REACT_KEY_V8)) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_REACT_KEY_V8, WORK_TREE_REACT_KEY_V9, 'session-scoped work-tree React key')
+      } else if (!migrated.includes(WORK_TREE_REACT_KEY_V9)) {
+        throw new Error('Pinned DSH work-tree React key changed; refusing an unsafe reader restoration migration.')
+      }
+      if (migrated.includes(FORCED_SESSION_REENTRY_BLOCK)) {
+        migrated = replaceExactlyOnce(migrated, FORCED_SESSION_REENTRY_BLOCK, SAVED_SESSION_REENTRY_BLOCK, 'semantic session reader restoration')
+      } else if (!migrated.includes(SAVED_SESSION_REENTRY_BLOCK)) {
+        throw new Error('Pinned DSH session reader restoration changed; refusing an unsafe work-tree migration.')
+      }
+      migrated = replaceExactlyOnce(migrated, PERSISTENCE_MARKER_NONET, READER_RESTORE_MARKER_DECET, 'reader restoration marker')
       changed = true
     }
     if (!migrated.includes('"row.retry":')) {

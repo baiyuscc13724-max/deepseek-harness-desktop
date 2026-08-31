@@ -24,7 +24,7 @@ import { ProjectTaskStore } from "./project-task-store.js";
 
 /** Host-only agent-team coordinator. A future client bundle is advertised by package metadata. */
 const name = "agent-teams";
-const inject = ["agents", "subagents", "tools", "systemPrompt", "webServer"];
+const inject = ["agents", "goals", "subagents", "tools", "systemPrompt", "webServer"];
 const STORE_VERSION = 7;
 const LEGACY_STORE_VERSIONS = new Set([1, 2, 3, 4, 5, 6]);
 const MAX_BODY_BYTES = 256 * 1024;
@@ -2390,6 +2390,26 @@ function hasDirectHumanRootAuthority(ctx, execution) {
   return ctx.agents.roots().includes(execution.agent)
     && events.some((event) => event.type === "user/message" && event.data?.source?.kind === "user");
 }
+function hasExactGoalRoundRootAuthority(ctx, execution) {
+  if (!ctx.agents.roots().includes(execution.agent) || typeof ctx.goals?.get !== "function") return false;
+  const goal = ctx.goals.get(execution.agent);
+  if (goal === undefined || goal.phase !== "active" || goal.activation !== "armed" || !Number.isSafeInteger(goal.roundsStarted) || goal.roundsStarted < 1) return false;
+  const events = Array.isArray(execution.events) ? execution.events : openTurn(execution.agent);
+  return events.some((event) => event.type === "user/message"
+    && event.data?.source?.kind === "goal"
+    && event.data.source.goalId === goal.id
+    && event.data.source.revision === goal.revision
+    && event.data.source.round === goal.roundsStarted);
+}
+function hasTeamCreationRootAuthority(ctx, execution) {
+  return hasDirectHumanRootAuthority(ctx, execution) || hasExactGoalRoundRootAuthority(ctx, execution);
+}
+function requireTeamCreationRoot(ctx, execution) {
+  if (!ctx.agents.roots().includes(execution.agent)) reject("team creation requires a top-level root agent");
+  if (!hasTeamCreationRootAuthority(ctx, execution)) {
+    reject("team creation requires direct host-attested human input or the exact current admitted goal continuation on the top-level root");
+  }
+}
 function requireDirectHumanRoot(ctx, execution) {
   if (!ctx.agents.roots().includes(execution.agent)) reject("team_start requires a top-level root agent");
   if (!hasDirectHumanRootAuthority(ctx, execution)) {
@@ -4637,13 +4657,13 @@ function teamSystemPrompt(store) {
   }
   return [
     "Agent Teams automatic-team mode is ENABLED.",
-    "Before substantive work on every ordinary direct-human root turn, apply the three-level gate below and persist exactly one Host-scoped routing decision for that root/turn/project: all three levels call team_route_goal first; for Level 3, team_start/team_bootstrap then finalize that same immutable decision with the creation outcome and Host-validated team. Decision content is model-declared; the receipt is an audit record only, does not force or prove model-route selection, and model input cannot choose another root, project, turn, or team scope. When Level 3 conditions are met, choose exactly one creation path in that same turn: use team_bootstrap when the complete bounded task/member plan is already known; otherwise use team_start and then the existing task/spawn tools. Never call both team_start and team_bootstrap for the same team, and never replace the required visible managed members with multiple hidden ordinary subagents.",
+    "Before substantive work on every ordinary direct-human root turn, and before first creating an Agent Team during an exact admitted continuation of that root's active, armed goal, apply the three-level gate below and persist exactly one Host-scoped routing decision for that root/turn/project: all three levels call team_route_goal first; for Level 3, team_start/team_bootstrap then finalize that same immutable decision with the creation outcome and Host-validated team. Decision content is model-declared; the receipt is an audit record only, does not force or prove model-route selection, and model input cannot choose another root, project, turn, or team scope. When Level 3 conditions are met, choose exactly one creation path in that same authorized turn: use team_bootstrap when the complete bounded task/member plan is already known; otherwise use team_start and then the existing task/spawn tools. Never ask the user to send “continue” merely to cross from an admitted automatic goal round into safe internal team creation. Never call both team_start and team_bootstrap for the same team, and never replace the required visible managed members with multiple hidden ordinary subagents.",
     "Keep durable team task state synchronized at every handoff: members must explicitly complete finished tasks before their final report, and the root lead must reconcile every task before retiring members or closing the team. A report or successful subagent turn is not completion evidence. Graceful retirement and shutdown require no unfinished owned work; force shutdown records unfinished work as cancelled rather than leaving permanent pending tasks.",
     "Once an Agent Team is established for the current goal, the root lead defaults to coordination only: decompose the user's objective into substantive outcomes, persist and assign durable tasks, coordinate dependencies and handoffs, monitor and reconcile task state, review and accept member deliverables, then perform final integration and user-facing synthesis. The root lead must not personally implement, research, design, test, or otherwise substitute for a core professional deliverable that is assigned or should be assigned to a member role. If substantive coverage is missing, create or restructure the relevant durable task and assign or expand the visible team instead of absorbing that work; the root may make only minimal glue changes required to integrate accepted member outputs.",
     "A team's durable tasks and member roles must collectively cover the substantive outputs required to satisfy the user's goal, each with a real deliverable and observable acceptance criteria. Never create decorative, token, or review-only members while leaving the core professional output to the root lead; if the work does not justify delegating its substantive production, do not create a team.",
     "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively choose one Agent Team creation path only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
-    "When a new team already has a complete bounded plan of one through four durable tasks and one through four visible peers, call team_bootstrap directly with a stable request_id and do not call team_start first. Otherwise team_start creates a draft: persist tasks, then use team_plan_commit with the exact plan revision and confirmed_plan_hash before any team_spawn. Without durable successful worker-publication history that CAS persists phase committed; the first fully successful spawn records publication and activates it, while later recommit persists active even after every published worker gracefully retires. Provisioning or initial publication/work-followup failure never establishes this history. Upgraded retired workers without the new marker qualify only through a task submission/result or checkpoint bound to their exact historical claim; retired state alone and former-root adoption history do not qualify. Both committed and active pass new claim/spawn execution gates. A new team or bootstrap still requires the current direct-human root turn. After that direct-human establishment and one successful worker publication, the same exact live root may recommit a later draft during an automatic goal round without another user message only while the team remains active and unpaused in the same canonical project, every capability is individually verified, file scopes are conflict-free, cost stays within the direct user's ordinary default AI-routing grant, every effect policy is none, and no outcome is unknown. Public spawn always requires non-empty persisted task_ids, and the Host atomically pre-binds those tasks with the member placeholder before child creation. Bootstrap persists all tasks before starting members, and exact replay reuses its plan. Neither path may bypass capacity checks, file-scope separation, capability preflight, or explicit review of partial/uncertain starts.",
-    "An ordinary internal team that the direct user explicitly requested needs no redundant confirmation for a dynamically safe automatic-round recommit. Plan authority remains explicitly host_verified, human_attested, or unknown: a continuing/default grant stays human_attested and never becomes Host proof. Tool/model booleans can create only human_attested facts, never host_verified facts, and can never bulk-upgrade unknown capability records. Any material change to task scope, file ownership, capability/permission facts, model-cost class, or external effects returns the plan to draft and requires a fresh exact-hash CAS commit. New team creation, bootstrap, Stop recovery/resume, handoff/adopt/recover, resolve_unknown, cross-project scope, unknown/unavailable or separately billed capabilities, conflicting files, and confirm_each/idempotent/forbidden effects remain behind their direct-human or Host gates. An already active main-tier worker does not itself create a new cost grant or block safe continuation.",
+    "When a new team already has a complete bounded plan of one through four durable tasks and one through four visible peers, call team_bootstrap directly with a stable request_id and do not call team_start first. Otherwise team_start creates a draft: persist tasks, then use team_plan_commit with the exact plan revision and confirmed_plan_hash before any team_spawn. Without durable successful worker-publication history that CAS persists phase committed; the first fully successful spawn records publication and activates it, while later recommit persists active even after every published worker gracefully retires. Provisioning or initial publication/work-followup failure never establishes this history. Upgraded retired workers without the new marker qualify only through a task submission/result or checkpoint bound to their exact historical claim; retired state alone and former-root adoption history do not qualify. Both committed and active pass new claim/spawn execution gates. New team creation and bootstrap require either the current direct-human root turn or the exact admitted automatic continuation of the same root's active, armed goal; every other non-human turn remains forbidden. After that authorized establishment and one successful worker publication, the same exact live root may recommit a later draft during an automatic goal round without another user message only while the team remains active and unpaused in the same canonical project, every capability is individually verified, file scopes are conflict-free, cost stays within the direct user's ordinary default AI-routing grant, every effect policy is none, and no outcome is unknown. Public spawn always requires non-empty persisted task_ids, and the Host atomically pre-binds those tasks with the member placeholder before child creation. Bootstrap persists all tasks before starting members, and exact replay reuses its plan. Neither path may bypass capacity checks, file-scope separation, capability preflight, or explicit review of partial/uncertain starts.",
+    "An ordinary internal team that the direct user explicitly requested needs no redundant confirmation for a dynamically safe automatic-round recommit. Plan authority remains explicitly host_verified, human_attested, or unknown: a continuing/default grant stays human_attested and never becomes Host proof. Tool/model booleans can create only human_attested facts, never host_verified facts, and can never bulk-upgrade unknown capability records. Any material change to task scope, file ownership, capability/permission facts, model-cost class, or external effects returns the plan to draft and requires a fresh exact-hash CAS commit. New team creation and bootstrap remain behind the direct-human-or-exact-admitted-goal-round gate. Stop recovery/resume, handoff/adopt/recover, resolve_unknown, cross-project scope, unknown/unavailable or separately billed capabilities, conflicting files, and confirm_each/idempotent/forbidden effects remain behind their stricter direct-human or Host gates. An already active main-tier worker does not itself create a new cost grant or block safe continuation.",
     "A task claim returns claimId and leaseEpoch. Members must echo both for checkpoint, submission, or release; stale attempts are rejected and only an exact submission replay is a no-op. Worker complete moves the task only to submitted/in-review and appends an immutable claim-bound submission event. It does not complete the task, unlock dependencies, or permit graceful retirement. Only a later fixed-root accept of the current submission moves it to authoritative completed and appends acceptance; reject/reopen/cancel never erase older lifecycle events. Member checkpoints and next steps are unverified annotations separate from the five task states (pending, in_progress, submitted, completed, cancelled). External effect keys are Host-derived from stable team/task/effect identity. Only participating idempotency protocols can claim exactly-once; outcome_unknown blocks retry until an exact direct-human root resolves it.",
     "Team ownership may move only through team_handoff then team_adopt: both require direct-human root turns, the team must be durably paused, source and target must be exact live roots with the same canonical projectKey, and adoption must present the short-lived single-use token. Adoption increments pauseEpoch, revokes every old claim/lease, retires old-parent workers for bounded audit history, safely releases unfinished work to pending, and never wakes anyone automatically. Unknown scope and cross-project adoption fail closed.",
     "For every team_expansion_request, the fixed root lead approves only when the remaining outcomes are genuinely parallel and independent, inputs and acceptance criteria are explicit, file/external-resource ownership does not conflict, the handoff context is small, critical-path reduction or independent-review value materially exceeds coordination cost, and current member/turn/task budget is sufficient. The Host compares proposed file scopes with other in-progress task files and checks proposal-internal resource hierarchy, but existing external-resource ownership is not persisted and must be verified by the root. If a broad source task is split, first release/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn for visible same-level peers. If rejected, explain the reason to the requester. Never invent a leader→group-leader→hidden-worker hierarchy.",
@@ -4939,6 +4959,7 @@ function projectModelTask(task) {
     ...(projectModelString(task.title, 500, 2 * 1024) === undefined ? {} : { title: projectModelString(task.title, 500, 2 * 1024) }),
     requirements: boundedProjectRequirements(task.requirements),
     assigned: typeof task.assigneeActorRef === "string" && task.assigneeActorRef.length > 0,
+    blockedBy: (Array.isArray(task.blockedBy) ? task.blockedBy : []).slice(0, PROJECT_MODEL_COLLECTION_LIMIT).map((ref) => projectModelRef(ref, "taskRef")).filter(Boolean),
   };
 }
 function projectModelBoard(board) {
@@ -5175,7 +5196,7 @@ async function continueProjectRootRecovery(projectSessionLaunch,execution,bindin
 }
 function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaunch, ready = Promise.resolve()) {
   const officialCorePorts = officialCorePortsForProjectEntry(projectEntry);
-  ctx.systemPrompt.section({ name: "tool:project-collaboration", order: 114, text: () => "Only exact top-level roots may call project_collaboration and project_task. A newly launched root must first adopt_slot, then at adoption and every project-task boundary call read_requests and respond to rows with targetedToMe=true before taking unrelated work. Request kinds are dependency_unblock, release, handoff, and takeover; target responses are accept, reject, or release. Respect respondByAt: audit_resolve_request is eligible only when escalationEligible=true, including an early deadline only when the current root turn carries explicit direct-user authorization verified by the Host. Requests are durable and no-wake: never poll or wake a stopped root. Read the assigned project task, work it, explicitly submit project status/evidence, and call project_task claim_next with a new stable request_id. Repeat one task at a time until all_terminal, or blocked with every remaining blocker represented by one durable request; never stop after one completion or temporarily_empty. A root's private Agent Team may receive only bounded context for the current claimed project task; members retain team_task_* only and never call project tools. The root must reconcile Team deliverables into explicit project task status and evidence—Team reports or completion are not project evidence. The Host derives project/actor identity; model outputs may expose mine, targetedToMe, and escalationEligible but never actor refs, raw session, workspace, filesystem, or project identities." });
+  ctx.systemPrompt.section({ name: "tool:project-collaboration", order: 114, text: () => "Only exact top-level roots may call project_collaboration and project_task. A newly launched root must first adopt_slot, then at adoption and every project-task boundary call read_requests and respond to rows with targetedToMe=true before taking unrelated work. Request kinds are dependency_unblock, release, handoff, and takeover; target responses are accept, reject, or release. Respect respondByAt: audit_resolve_request is eligible only when escalationEligible=true, including an early deadline only when the current root turn carries explicit direct-user authorization verified by the Host. Requests are durable and no-wake: never poll or wake a stopped root. Read the assigned project task, work it, explicitly submit project status/evidence, and call project_task claim_next with a new stable request_id. Repeat one task at a time until all_terminal, or blocked with every remaining blocker represented by one durable request; never stop after one completion or temporarily_empty. A root's private Agent Team may receive only bounded context for the current claimed project task; members retain team_task_* only and never call project tools. The root must reconcile Team deliverables into explicit project task status and evidence—Team reports or completion are not project evidence. For project_task add_dependency/remove_dependency, task_ref is the blocked dependent and payload.blockerTaskRef is the prerequisite; the Host persists blockerTaskRef -> task_ref. The Host derives project/actor identity; model outputs may expose mine, targetedToMe, and escalationEligible but never actor refs, raw session, workspace, filesystem, or project identities." });
   ctx.tools.register(defineTool({
     name: "project_collaboration",
     description: "Read or mutate the current canonical project's collaboration board using the invoking root's Host-derived seat. bind_legacy is a distinct one-time recovery action restricted to the exact current top-level direct-human root; ordinary initialize never claims legacy data. A newly launched root adopts its reserved seat with adopt_slot and only the opaque assigned slot_ref; the Host uses this routing ref to validate the exact ready child and privately redeem the one-time capability, which never enters tool arguments or model-visible data. Also supports board initialization, own-seat updates, resource locks, two-phase handoff, and delivery evidence. No raw actor/session/project/path identities are accepted; evidence paths and resource scopes are project-relative.",
@@ -5230,8 +5251,8 @@ function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaun
   }));
   ctx.tools.register(defineTool({
     name: "project_task",
-    description: "Create, list, claim, atomically claim_next one eligible item, update, submit, review, transition, comment on, or add dependencies to current-project tasks. create and edit accept an optional integer priority from 0 through 1000000; edit priority null clears it. request_id is stable and Host-derives refs. claim_next enforces one in_progress item per root and returns all_terminal, temporarily_empty, or blocked when nothing is eligible. The current canonical project and invoking root actor are Host-derived.",
-    parameters: { action: { type: "string", required: true, enum: ["list", "create", "claim", "claim_next", "edit", "add_dependency", "start_attempt", "submit_attempt", "review", "transition", "comment", "receipt"] }, request_id: { type: "string" }, task_ref: { type: "string" }, expected_revision: { type: "number" }, payload: { type: "object", additionalProperties: true } }, output: TOOL_OUTPUT,
+    description: "Create, list, claim, atomically claim_next one eligible item, update, submit, review, transition, comment on, or edit current-project task dependencies. list returns each task's current prerequisite refs in blockedBy. For add_dependency/remove_dependency, task_ref is always the BLOCKED dependent task and payload.blockerTaskRef is always its prerequisite; the Host stores blockerTaskRef -> task_ref and derives the relation reference. create and edit accept an optional integer priority from 0 through 1000000; edit priority null clears it. request_id is stable and Host-derives refs. claim_next enforces one in_progress item per root and returns all_terminal, temporarily_empty, or blocked when nothing is eligible. The current canonical project and invoking root actor are Host-derived.",
+    parameters: { action: { type: "string", required: true, enum: ["list", "create", "claim", "claim_next", "edit", "add_dependency", "remove_dependency", "start_attempt", "submit_attempt", "review", "transition", "comment", "receipt"] }, request_id: { type: "string" }, task_ref: { type: "string" }, expected_revision: { type: "number" }, payload: { type: "object", additionalProperties: true } }, output: TOOL_OUTPUT,
     execute: async (args, exec) => {
       try {
         await ready;
@@ -5241,11 +5262,12 @@ function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaun
           if (!isBoardAvailable()) reject("initialize the project collaboration board before mutating project tasks", "PROJECT_COLLABORATION_NOT_INITIALIZED");
           if (args.action === "receipt") return tasks.getCommandReceipt(execution, { projectRef, commandId: deriveOpaque("command", args.request_id) });
           if (args.action === "claim_next") { projectToolPayload(args.payload, new Set()); return collaboration.claimNextTask(execution, { projectRef, requestId: deriveOpaque("claim-next", args.request_id) }); }
-          const types = { create: "create", claim: "claim", edit: "edit_requirements", add_dependency: "relation.add", start_attempt: "attempt.start", submit_attempt: "attempt.submit", review: "review", transition: "transition", comment: "comment" };
+          const types = { create: "create", claim: "claim", edit: "edit_requirements", add_dependency: "dependency.add", remove_dependency: "dependency.remove", start_attempt: "attempt.start", submit_attempt: "attempt.submit", review: "review", transition: "transition", comment: "comment" };
           const allowed = {
-            create: new Set(["title", "requirements", "fileScope", "priority"]), edit: new Set(["title", "requirements", "fileScope", "priority"]), claim: new Set(), add_dependency: new Set(["relationRef", "targetTaskRef", "relationType"]), start_attempt: new Set(["attemptRef"]), submit_attempt: new Set(["attemptRef"]), review: new Set(["reviewRef", "attemptRef", "verdict", "body"]), transition: new Set(["to", "blockReason", "attemptRef", "reviewRef"]), comment: new Set(["commentRef", "kind", "body"]),
+            create: new Set(["title", "requirements", "fileScope", "priority"]), edit: new Set(["title", "requirements", "fileScope", "priority"]), claim: new Set(), add_dependency: new Set(["blockerTaskRef"]), remove_dependency: new Set(["blockerTaskRef"]), start_attempt: new Set(["attemptRef"]), submit_attempt: new Set(["attemptRef"]), review: new Set(["reviewRef", "attemptRef", "verdict", "body"]), transition: new Set(["to", "blockReason", "attemptRef", "reviewRef"]), comment: new Set(["commentRef", "kind", "body"]),
           }[args.action];
-          const payload = projectToolPayload(args.payload, allowed ?? new Set());
+          const inputPayload = projectToolPayload(args.payload, allowed ?? new Set());
+          const payload = args.action === "add_dependency" ? { ...inputPayload, relationRef: deriveOpaque("relation", args.request_id) } : inputPayload;
           const commandId = deriveOpaque("command", args.request_id), eventRef = deriveOpaque("event", args.request_id);
           const taskRef = args.action === "create" ? deriveOpaque("task", args.request_id) : args.task_ref;
           return tasks.executeCommand(execution, { projectRef, taskRef, commandId, eventRef, type: types[args.action], expectedRevision: args.action === "create" ? 0 : args.expected_revision, payload });
@@ -5368,7 +5390,7 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
   };
   ctx.tools.register(defineTool({
     name: "team_route_goal",
-    description: "Persist the Host-scoped Level 1, Level 2, or initial Level 3 routing decision for this ordinary direct-human goal before substantive work. A later team_start/team_bootstrap finalizes the same immutable Level 3 decision with its Host-validated team and outcome. Decision fields are model-declared; identity, canonical project, open turn, and final team scope are Host-derived. This receipt does not force or prove model routing.",
+    description: "Persist the Host-scoped Level 1, Level 2, or initial Level 3 routing decision for this direct-human goal turn or its exact admitted automatic continuation before substantive work. A later team_start/team_bootstrap finalizes the same immutable Level 3 decision with its Host-validated team and outcome. Decision fields are model-declared; identity, canonical project, open turn, and final team scope are Host-derived. This receipt does not force or prove model routing.",
     parameters: {
       level: { type: "string", required: true, enum: ROUTING_LEVELS },
       reason_category: { type: "string", required: true, enum: ROUTING_REASON_CATEGORIES },
@@ -5377,14 +5399,14 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
       creation_path: { type: "string", required: true, enum: ROUTING_CREATION_PATHS },
     }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => {
-      requireDirectHumanRoot(ctx, execution);
+      requireTeamCreationRoot(ctx, execution);
       return publicResult(await recordRoutingReceipt(store, execution, { level: args.level, reasonCategory: args.reason_category, explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: args.creation_path, outcome: "recorded" }));
     }),
     presentCall: (args) => present("Record goal routing decision", args.level),
   }));
   ctx.tools.register(defineTool({
     name: "team_start",
-    description: "Start a durable peer team owned by this fixed top-level root lead. Use this manual creation path only when a complete bounded team_bootstrap plan is not ready; never call team_start before team_bootstrap for the same team. Call this in the current direct-human root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination; do not substitute multiple ordinary subagents. Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count, and one continuable helper should use ordinary subagent instead. An explicit user team request may override this automatic threshold. At most 8 teams may remain unclosed, and all peers share maxActiveTurns. Requires direct-human root authority in the current open turn.",
+    description: "Start a durable peer team owned by this fixed top-level root lead. Use this manual creation path only when a complete bounded team_bootstrap plan is not ready; never call team_start before team_bootstrap for the same team. Call this in the current authorized root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination; do not substitute multiple ordinary subagents. An exact admitted automatic continuation of the root's active, armed goal carries creation authority without another user message. Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count, and one continuable helper should use ordinary subagent instead. An explicit user team request may override this automatic threshold. At most 8 teams may remain unclosed, and all peers share maxActiveTurns. Requires either direct-human root authority or the exact current admitted goal continuation in the open turn.",
     parameters: {
       objective: { type: "string", required: true, description: "Concrete objective shared by the team." },
       name: { type: "string", description: "Optional short team display name." },
@@ -5393,7 +5415,7 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
       candidate_workstreams: { type: "number", required: true, description: "Model-declared number of sustained independent workstreams identified by the routing gate." },
     }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => {
-      requireDirectHumanRoot(ctx, execution);
+      requireTeamCreationRoot(ctx, execution);
       const routingDecision = { level: "level3", reasonCategory: args.explicit_user_team_request === true ? "explicit_user_team_request" : "independent_sustained_workstreams", explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: "team_start" };
       await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded" });
       try {
@@ -5424,7 +5446,7 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
   }));
   ctx.tools.register(defineTool({
     name: "team_bootstrap",
-    description: "Create one bounded team plan, persist all tasks before work starts, and provision up to four visible peers. Use this directly instead of team_start when the complete plan is ready; never call both for the same team. Different members must have non-overlapping file scopes. Requires the exact direct-human root turn. request_id makes exact replays reuse the same durable plan; uncertain partial starts fail closed and never duplicate a visible member automatically.",
+    description: "Create one bounded team plan, persist all tasks before work starts, and provision up to four visible peers. Use this directly instead of team_start when the complete plan is ready; never call both for the same team. Different members must have non-overlapping file scopes. Requires either the exact direct-human root turn or the exact admitted automatic continuation of that root's active, armed goal. request_id makes exact replays reuse the same durable plan; uncertain partial starts fail closed and never duplicate a visible member automatically.",
     parameters: {
       request_id: { type: "string", required: true }, objective: { type: "string", required: true }, name: { type: "string" }, lead_name: { type: "string" },
       explicit_user_team_request: { type: "boolean", description: "Model-declared true only when the direct user explicitly requested a team; this is audited but is not Host proof." },
@@ -5433,7 +5455,7 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
       members: { type: "array", required: true, items: { type: "object", additionalProperties: false, properties: { key: { type: "string", required: true }, name: { type: "string", required: true }, role: { type: "string", required: true }, prompt: { type: "string", required: true }, model_tier: { type: "string", enum: MODEL_TIERS }, model: { type: "string" } } } },
     }, output: TOOL_OUTPUT,
     execute: run(async (args, execution, signal) => {
-      requireDirectHumanRoot(ctx, execution);
+      requireTeamCreationRoot(ctx, execution);
       const routingDecision = { level: "level3", reasonCategory: args.explicit_user_team_request === true ? "explicit_user_team_request" : "independent_sustained_workstreams", explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: "team_bootstrap" };
       await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded" });
       try {
@@ -6041,7 +6063,7 @@ function projectBusinessApiError(error, resource) {
   return { status, body: { ok: false, error: { code, action: nextAction, retryable } } };
 }
 function mappedProjectBusinessFailure(res, error, resource, fallback) {
-  const mapped = projectBusinessApiError(error, resource) ?? fallback(error);
+  const mapped = projectBusinessApiError(error, resource) ?? (typeof error?.code === "string" && error.code.startsWith("PROJECT_TASK_") ? projectTaskWebError(error) : fallback(error));
   return json(res, mapped.status, mapped.body);
 }
 function projectTaskQuery(req, allowedKeys) {
@@ -6102,16 +6124,18 @@ function createProjectTaskSseBridge(runtime, { keepaliveMs = PROJECT_TASK_SSE_KE
     if (closed) throw new Error("project task SSE bridge is closed");
     const selectedRuntime = resolveRuntime(sessionId);
     const client = { request, response, closed: false, keepalive: undefined, onClose: undefined, unsubscribe: undefined };
+    const scopeStillValid = () => { try { return resolveRuntime(sessionId) === selectedRuntime; } catch { return false; } };
     client.onClose = () => remove(client);
     client.unsubscribe = selectedRuntime.subscribe((update) => {
       if (closed || update?.type !== "project-task" || !isRecord(update.event)) return;
+      if (!scopeStillValid()) { remove(client, true); return; }
       write(client, encodedProjectTaskSse("task", update.event, update.event.projectRevision));
     });
     request.once?.("close", client.onClose);
     request.once?.("aborted", client.onClose);
     response.once?.("close", client.onClose);
     response.once?.("error", client.onClose);
-    client.keepalive = setInterval(() => write(client, ": keepalive\n\n"), keepaliveMs);
+    client.keepalive = setInterval(() => { if (!scopeStillValid()) { remove(client, true); return; } write(client, ": keepalive\n\n"); }, keepaliveMs);
     client.keepalive.unref?.();
     clients.add(client);
     write(client, encodedProjectTaskSse("reset", { nextAction: "refetch_project_tasks" }));
@@ -6130,6 +6154,7 @@ function createProjectTaskSseBridge(runtime, { keepaliveMs = PROJECT_TASK_SSE_KE
   return { add, clients, close, remove, reset };
 }
 function registerProjectTaskApi(ctx, runtime, businessRuntime) {
+  const sessionScoped = typeof runtime === "function";
   const resolveRuntime = projectTaskRuntimeResolver(runtime);
   const bridge = createProjectTaskSseBridge(resolveRuntime);
   const scopedRuntime = (parameters) => {
@@ -6137,7 +6162,7 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
     const sessionId = rawSessionId === null ? undefined : nonEmptyString(rawSessionId, "sessionId", 256);
     return { sessionId, runtime: resolveRuntime(sessionId) };
   };
-  const unsubscribeBusiness = businessRuntime === undefined ? undefined : businessRuntime.subscribe(() => bridge.reset());
+  const unsubscribeBusiness = businessRuntime === undefined || sessionScoped ? undefined : businessRuntime.subscribe(() => bridge.reset());
   ctx.effect(() => () => { unsubscribeBusiness?.(); bridge.close(); }, "agent-teams project task SSE subscription");
   const checkGet = (req, res) => {
     if (req.method !== "GET") {
@@ -6155,7 +6180,7 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
       if (!checkGet(req, res)) return;
       try {
         const { runtime: selectedRuntime } = scopedRuntime(projectTaskQuery(req, new Set(["sessionId"])));
-        if (businessRuntime === undefined) return json(res, 200, await selectedRuntime.state());
+        if (businessRuntime === undefined || sessionScoped) return json(res, 200, await selectedRuntime.state());
         try {
           const businessStatus = await businessRuntime.initialize();
           if (businessStatus.mode !== "collaborator") return json(res, 200, await selectedRuntime.state());
@@ -6173,7 +6198,7 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
         const parameters = projectTaskQuery(req, new Set(["sessionId", "cursor"]));
         const { runtime: selectedRuntime } = scopedRuntime(parameters);
         const cursor = nonEmptyString(parameters.get("cursor"), "cursor", 2_048);
-        if (businessRuntime === undefined) return json(res, 200, await selectedRuntime.page(cursor));
+        if (businessRuntime === undefined || sessionScoped) return json(res, 200, await selectedRuntime.page(cursor));
         try {
           const businessStatus = await businessRuntime.initialize();
           if (businessStatus.mode === "collaborator") return projectTaskApiFailure(res, 409, "PROJECT_TASK_PAGE_AUTHORITY_REQUIRED", "Complete project task pagination is available only on the authority project device.", "open_authority_project");
@@ -6190,7 +6215,7 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
         const { runtime: selectedRuntime } = scopedRuntime(parameters);
         const afterRevision = projectTaskQueryInteger(parameters, "afterRevision", 0, 0, Number.MAX_SAFE_INTEGER);
         const limit = projectTaskQueryInteger(parameters, "limit", 100, 1, 100);
-        if (businessRuntime !== undefined && (await businessRuntime.initialize()).mode === "collaborator") {
+        if (!sessionScoped && businessRuntime !== undefined && (await businessRuntime.initialize()).mode === "collaborator") {
           return json(res, 200, { ok: true, fromRevision: afterRevision, currentRevision: afterRevision, events: [], hasMore: false, reset: true, nextAfterRevision: afterRevision });
         }
         return json(res, 200, await selectedRuntime.events({ afterRevision, limit }));
@@ -6229,7 +6254,7 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
         return mappedProjectTaskFailure(res, error);
       }
       try {
-        if (businessRuntime !== undefined && (await businessRuntime.initialize()).mode === "collaborator") return json(res, 200, await businessRuntime.taskAction(body));
+        if (!sessionScoped && businessRuntime !== undefined && (await businessRuntime.initialize()).mode === "collaborator") return json(res, 200, await businessRuntime.taskAction(body));
         return json(res, 200, await selectedRuntime.action(body));
       } catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
     },
@@ -6576,15 +6601,13 @@ function resolveAgentTeamsAuthorizationProvider(ctx) {
   return desktop;
 }
 
-function createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry, fallbackRuntime, legacySummaryProvider) {
-  if (!(fallbackRuntime instanceof ProjectTaskWebRuntime)) throw new TypeError("fallbackRuntime must be a ProjectTaskWebRuntime");
+function createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry) {
   if (typeof projectEntryRegistry?.localProjectCollaborationContext !== "function") throw new TypeError("projectEntryRegistry must provide canonical project contexts");
-  if (typeof legacySummaryProvider !== "function") throw new TypeError("legacySummaryProvider must be a function");
   const runtimes = new Map();
   let closed = false;
   const resolve = (sessionId) => {
     if (closed) reject("project task session runtime registry is closed", "PROJECT_TASK_WEB_CLOSED");
-    if (sessionId === undefined) return fallbackRuntime;
+    if (sessionId === undefined) reject("project task panel requires an exact top-level root session", "PROJECT_TASK_WEB_FORBIDDEN");
     const root = ctx.agents.get(sessionId);
     if (root === undefined || !ctx.agents.roots().includes(root)) reject("project task panel requires an exact top-level root session", "PROJECT_TASK_WEB_FORBIDDEN");
     const canonicalProjectKey = projectKeyForRoot(root);
@@ -6594,7 +6617,7 @@ function createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry, fall
       localProjectCollaborationContext: () => projectEntryRegistry.localProjectCollaborationContext({ canonicalProjectKey }),
       localProjectTaskContext: () => projectEntryRegistry.localProjectTaskContext({ canonicalProjectKey }),
     });
-    runtime = new ProjectTaskWebRuntime({ projectEntry, legacySummaryProvider });
+    runtime = new ProjectTaskWebRuntime({ projectEntry, legacySummaryProvider: async () => false });
     runtimes.set(canonicalProjectKey, runtime);
     return runtime;
   };
@@ -6688,7 +6711,7 @@ function apply(ctx, config = {}) {
     projectEntry: officialCorePorts.projectIdentity.webEntry(),
     legacySummaryProvider,
   });
-  const projectTaskRuntimeForSession = createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry, projectTasks, legacySummaryProvider);
+  const projectTaskRuntimeForSession = createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry);
   const projectAutomations = new ProjectAutomationWebRuntime({ projectEntry });
   const projectBusiness = new ProjectBusinessSyncRuntime({
     projectEntry,
@@ -6775,6 +6798,8 @@ export {
   createSubagentEventReconciler,
   createTeamTurnAdmission,
   fileBoundaryOverlap,
+  hasExactGoalRoundRootAuthority,
+  hasTeamCreationRootAuthority,
   normalizeExpansionRequest,
   resourceBoundaryOverlap,
   pauseTeamsForUserStop,

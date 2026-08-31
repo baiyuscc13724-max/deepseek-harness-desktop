@@ -2,103 +2,36 @@
 
 const assert = require('node:assert/strict')
 const { createHash } = require('node:crypto')
-const { mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
+const { access, mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
 const root = path.resolve(__dirname, '..')
 const candidateRoot = process.env.DSH_ALPHA2_CANDIDATE_ROOT || root
-const runtimeFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'index.js')
+const retiredRuntimeFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'index.js')
 const alpha2RuntimeFile = path.join(candidateRoot, 'node_modules', '@deepseek-ai', 'dsh-api-session-controller', 'lib', 'index.js')
 const ALPHA2_HOST_SHA256 = 'A28FA9A5FFAD5D2E7AF427C0410E973A5E14A36BC070EECF8735B77B95A17CEA'
 
-async function patcher() {
-  return import('../scripts/session-list-metadata-performance-patch.mjs')
-}
-
-function compiledSummarize(source) {
-  const start = source.indexOf('const sessionListFieldsCache = /* @__PURE__ */ new WeakMap();')
-  const end = source.indexOf('\n}\n/**', start)
-  assert.notEqual(start, -1)
-  assert.notEqual(end, -1)
-  const functionSource = source.slice(start, end + 2)
-  let folds = 0
-  let fieldFolds = 0
-  const sessionListMetadata = events => {
-    folds += 1
-    let state = { blank: true, lastPromptAt: null }
-    for (const event of events) {
-      state = {
-        blank: state.blank && event.type !== 'turn/start',
-        lastPromptAt: event.type === 'user/message' && event.data.source.kind === 'user' ? event.time : state.lastPromptAt
-      }
-    }
-    return state
-  }
-  const summarize = new Function(
-    'sessionListMetadata',
-    'sessionListUpdatedAt',
-    'sessionListFields',
-    `${functionSource}\nreturn summarize;`
-  )(
-    sessionListMetadata,
-    (header, metadata) => Math.max(header.createdAt, metadata?.lastPromptAt ?? 0),
-    (header, events) => {
-      fieldFolds += 1
-      return { cwd: header.cwd, eventCount: events.length }
-    }
-  )
-  return { summarize, folds: () => folds, fieldFolds: () => fieldFolds }
-}
-
-test('host session-list metadata patch is pinned, idempotent, and drift-safe', async () => {
-  const source = await readFile(runtimeFile, 'utf8')
-  const { patchHostSessionListingSource } = await patcher()
-  const first = patchHostSessionListingSource(source)
-  assert.equal(first.changed, !source.includes('DSH_DESKTOP_MEMOIZED_SESSION_LIST_FIELDS'))
-  assert.match(first.source, /projectedMetadata \?\? sessionListMetadata\(session\.events\)/u)
-  assert.match(first.source, /DSH_DESKTOP_MEMOIZED_SESSION_LIST_FIELDS/u)
-  assert.match(first.source, /new WeakMap\(\)/u)
-  assert.match(first.source, /projections\?\.values\.sessionListMetadata/u)
-  const second = patchHostSessionListingSource(first.source)
-  assert.equal(second.changed, false)
-  assert.equal(second.source, first.source)
-
-  const drifted = source.includes('DSH_DESKTOP_PROJECTED_SESSION_LIST_METADATA')
-    ? source.replace('projectedMetadata ?? sessionListMetadata(session.events)', 'projectedMetadata || sessionListMetadata(session.events)')
-    : source.replace('function summarize(session, running) {', 'function summarize(session, running, drift) {')
-  assert.throws(() => patchHostSessionListingSource(drifted), /path changed/u)
+test('alpha.2 session-list metadata owner is the pinned official controller artifact', async () => {
+  const source = await readFile(alpha2RuntimeFile, 'utf8')
+  assert.equal(createHash('sha256').update(source).digest('hex').toUpperCase(), ALPHA2_HOST_SHA256)
+  await assert.rejects(access(retiredRuntimeFile), { code: 'ENOENT' })
+  const { assertInstalledAlpha2NativeSessionList } = await import('../scripts/patch-official-runtime.mjs')
+  assert.equal(await assertInstalledAlpha2NativeSessionList(alpha2RuntimeFile), false)
 })
 
-test('attached rc.2 summaries reuse the exact projection fold and retain the fallback', async () => {
-  const source = await readFile(runtimeFile, 'utf8')
-  const { patchHostSessionListingSource } = await patcher()
-  const patched = patchHostSessionListingSource(source).source
-  const { summarize, folds, fieldFolds } = compiledSummarize(patched)
-  const session = {
-    id: 'session-a',
-    header: { createdAt: 2, cwd: 'C:\\workspace' },
-    events: [
-      { type: 'turn/start', time: 3, data: {} },
-      { type: 'user/message', time: 7, data: { source: { kind: 'user' } } },
-      { type: 'assistant/message', time: 9, data: {} }
-    ]
-  }
-  const fallback = summarize(session, true)
-  assert.equal(folds(), 1)
-  const projected = summarize(session, true, { blank: false, lastPromptAt: 7 })
-  assert.equal(folds(), 1, 'an exact live projection must avoid a redundant full metadata fold')
-  assert.equal(fieldFolds(), 1, 'unchanged event storage must reuse list fields instead of rescanning the transcript')
-  assert.deepEqual(projected, fallback)
-  assert.deepEqual(projected, {
-    sessionId: 'session-a',
-    updatedAt: 7,
-    running: true,
-    blank: false,
-    cwd: 'C:\\workspace',
-    eventCount: 3
-  })
+test('alpha.2 attached summaries consume the live projection without rescanning transcript events', async () => {
+  const source = await readFile(alpha2RuntimeFile, 'utf8')
+  const start = source.indexOf('\tsummaryFor(session) {')
+  const end = source.indexOf('\n\t/**', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  const summaryFor = source.slice(start, end)
+  assert.match(summaryFor, /const metadata = projections\?\.values\.sessionListMetadata;/u)
+  assert.match(summaryFor, /updatedAt\(session\.header, metadata\)/u)
+  assert.match(summaryFor, /\.\.\.listFields\(session\.header\)/u)
+  assert.doesNotMatch(summaryFor, /session\.events/u)
 })
 
 function extractFunction(source, name) {

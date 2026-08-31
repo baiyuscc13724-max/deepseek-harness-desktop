@@ -364,19 +364,18 @@ test('client keeps session id copy in archive and sidebar paths without a top-ri
   assert.match(source, /exports\.inject = \["slots", "locale", "sessions", "workspaces", "inputTriggers"\]/u)
 })
 
-test('official workspace sidebar receives the persistent Codex-style session menu', async () => {
+test('official alpha.2 workspace sidebar owns the accessible session action menu', async () => {
   const source = await readFile(path.join(root, 'node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js'), 'utf8')
   for (const marker of [
-    'harness.desktop.session-menu.v1', '置顶', '标记为未读', '复制会话 ID',
-    '在新窗口中打开', 'open-session-window', 'moveSession', 'react_dom.createPortal',
-    'id.length > 256', 'window.innerWidth - 228', 'hd-session-menu-dismiss',
-    'document.addEventListener("scroll", close, true)', 'HD_SESSION_MENU_ICONS',
-    'hd-session-menu-icon-slot', 'icon: "rename"', 'icon: "newWindow"',
-    'syncDesktopSessionMenuState', 'bridge.setSessionMenuFlag',
-    'strokeWidth: "1.35"', 'shape-rendering:geometricPrecision'
-  ]) assert.ok(source.includes(marker), `missing sidebar session menu marker: ${marker}`)
-  assert.doesNotMatch(source, /id: "fork"/u)
-  assert.doesNotMatch(source, /glyph:\s*"[⌃✎◉▣▱▢↗]"/u)
+    'function SessionNodeItem(', 'const sessionMenuItems = [', 'id: "rename"', 'id: "fork"',
+    'id: "archive"', 'IconEditOutline16', 'IconBranchOutline16', 'IconArchiveOutline20',
+    'items: sessionMenuItems', 'portal: true', 'closeOnPointerLeave: true',
+    '"aria-label": t("actions.session.aria", { name: title })',
+    'if (id === "rename") onRename(node.id, row.title)',
+    'if (id === "fork") onFork(node.id)', 'if (id === "archive") onArchive(node.id)',
+    'function deriveGroups(', 'function deriveFlat(', 'insertSessionBefore(activeDrag.accountKey'
+  ]) assert.ok(source.includes(marker), `missing native sidebar session-menu contract: ${marker}`)
+  assert.doesNotMatch(source, /harness\.desktop\.session-menu\.v1|syncDesktopSessionMenuState|bridge\.setSessionMenuFlag/u)
   assert.doesNotThrow(() => new Function(source))
 })
 

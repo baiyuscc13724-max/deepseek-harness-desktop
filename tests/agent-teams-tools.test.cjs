@@ -91,7 +91,7 @@ test('the sole routed project collaboration workspace is a read projection while
 
   assert.match(pageRoute, /req\.method !== "GET"/u)
   assert.doesNotMatch(pageRoute, /createTask\(|updateTask\(|taskDelegate\.action/u)
-  assert.match(collaboration, /useProjectTasksState\(props\.sessionId\)/u)
+  assert.match(collaboration, /useProjectTasksState\(props\.projectScope\)/u)
   assert.match(collaboration, /projectCollaboration/u)
   assert.doesNotMatch(collaboration, /fetch\(|method: "POST"|postAction\(|postProjectTaskAction|inputActions\.(?:submit|send)|createTask\(|updateTask\(/u)
   assert.match(client, /workspaceContent = h\(ProjectCollaborationWorkspace,/u)
@@ -356,7 +356,7 @@ test('project collaboration model projections exclude raw core sentinels and ide
 test('registered direct-human root recovery route reaches Host evidence, durable takeover, launch, and ready', async () => {
   const mod=await import(`${pathToFileURL(hostFile).href}?recovery-route=${Date.now()}`),fx=await registeredProjectToolsFixture(mod,'recovery-route')
   const derive=(domain,...parts)=>createHmac('sha256',fx.projectKey).update(domain).update('\0').update(fx.projectRef).update('\0').update(JSON.stringify(parts)).digest('base64url')
-  try {const [lead,target,requester]=fx.roots;assert.equal((await fx.invoke('project_collaboration',lead,{action:'initialize',payload:{title:'Recovery'}})).ok,true);for(const [root,duty] of [[lead,'Lead'],[target,'Failed'],[requester,'Requester']])assert.equal((await fx.invoke('project_collaboration',root,{action:'update_own_seat',payload:{expected_revision:0,state:'active',duty,resource_scope:['src/recovery'],phase:'work',next_step:'continue'}})).ok,true);const blocked=await fx.invoke('project_task',lead,{action:'create',request_id:'blocked',payload:{title:'Blocked'}}),claimedBlocked=await fx.invoke('project_task',requester,{action:'claim',request_id:'claim-blocked',task_ref:blocked.task.taskRef,expected_revision:blocked.task.revision,payload:{}}),blockedState=await fx.invoke('project_task',requester,{action:'transition',request_id:'block-owned',task_ref:blocked.task.taskRef,expected_revision:claimedBlocked.task.revision,payload:{to:'blocked',blockReason:'waiting for dependency'}}),dependency=await fx.invoke('project_task',lead,{action:'create',request_id:'dependency',payload:{title:'Dependency'}}),claimed=await fx.invoke('project_task',target,{action:'claim',request_id:'claim-dependency',task_ref:dependency.task.taskRef,expected_revision:dependency.task.revision,payload:{}});await fx.invoke('project_task',lead,{action:'add_dependency',request_id:'relation',task_ref:dependency.task.taskRef,expected_revision:claimed.task.revision,payload:{relationRef:'recovery-relation',targetTaskRef:blocked.task.taskRef,relationType:'blocks'}});const opened=await fx.invoke('project_collaboration',requester,{action:'create_request',request_id:'takeover',payload:{kind:'takeover',task_ref:blocked.task.taskRef,dependency_task_ref:dependency.task.taskRef,reason:'failed root',respond_by_at:Date.now()+60000}}),row=(await fx.invoke('project_collaboration',target,{action:'read_requests',payload:{limit:20}})).requests.find(value=>value.requestRef===opened.requests[0].requestRef);const released=await fx.invoke('project_collaboration',target,{action:'respond_request',payload:{request_ref:row.requestRef,expected_revision:row.revision,response:'release',resolution:'owner release'}});assert.equal(released.requests[0].state,'resolved');fx.failures.set('failure-route',{failedActorRef:`actor_${derive('dsh-agent-teams/project-root-actor/v1',target.id)}`,taskRef:dependency.task.taskRef,operationRef:'operation_failed',batchRef:'batch_failed',failureCode:'HOST_SESSION_FAILED',failureEvidence:'durable Host failure',role:'Failed',resources:['src/recovery'],task:'Continue dependency'});const recovered=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'recover-route',payload:{failure_ref:'failure-route',mode:'takeover',collaboration_request_ref:row.requestRef}});assert.equal(recovered.ok,true,JSON.stringify(recovered));assert.equal(fx.launchCalls.length,1);assert.equal(recovered.recoveries[0].state,'ready');const replay=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'recover-route',payload:{failure_ref:'failure-route',mode:'takeover',collaboration_request_ref:row.requestRef}});assert.equal(replay.recoveries[0].state,'ready');const missing=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'missing',payload:{failure_ref:'missing',mode:'takeover',collaboration_request_ref:row.requestRef}});assert.equal(missing.ok,false)}finally{await fx.cleanup()}
+  try {const [lead,target,requester]=fx.roots;assert.equal((await fx.invoke('project_collaboration',lead,{action:'initialize',payload:{title:'Recovery'}})).ok,true);for(const [root,duty] of [[lead,'Lead'],[target,'Failed'],[requester,'Requester']])assert.equal((await fx.invoke('project_collaboration',root,{action:'update_own_seat',payload:{expected_revision:0,state:'active',duty,resource_scope:['src/recovery'],phase:'work',next_step:'continue'}})).ok,true);const blocked=await fx.invoke('project_task',lead,{action:'create',request_id:'blocked',payload:{title:'Blocked'}}),claimedBlocked=await fx.invoke('project_task',requester,{action:'claim',request_id:'claim-blocked',task_ref:blocked.task.taskRef,expected_revision:blocked.task.revision,payload:{}}),blockedState=await fx.invoke('project_task',requester,{action:'transition',request_id:'block-owned',task_ref:blocked.task.taskRef,expected_revision:claimedBlocked.task.revision,payload:{to:'blocked',blockReason:'waiting for dependency'}}),dependency=await fx.invoke('project_task',lead,{action:'create',request_id:'dependency',payload:{title:'Dependency'}}),claimed=await fx.invoke('project_task',target,{action:'claim',request_id:'claim-dependency',task_ref:dependency.task.taskRef,expected_revision:dependency.task.revision,payload:{}});await fx.invoke('project_task',lead,{action:'add_dependency',request_id:'relation',task_ref:blocked.task.taskRef,expected_revision:blockedState.task.revision,payload:{blockerTaskRef:dependency.task.taskRef}});const opened=await fx.invoke('project_collaboration',requester,{action:'create_request',request_id:'takeover',payload:{kind:'takeover',task_ref:blocked.task.taskRef,dependency_task_ref:dependency.task.taskRef,reason:'failed root',respond_by_at:Date.now()+60000}}),row=(await fx.invoke('project_collaboration',target,{action:'read_requests',payload:{limit:20}})).requests.find(value=>value.requestRef===opened.requests[0].requestRef);const released=await fx.invoke('project_collaboration',target,{action:'respond_request',payload:{request_ref:row.requestRef,expected_revision:row.revision,response:'release',resolution:'owner release'}});assert.equal(released.requests[0].state,'resolved');fx.failures.set('failure-route',{failedActorRef:`actor_${derive('dsh-agent-teams/project-root-actor/v1',target.id)}`,taskRef:dependency.task.taskRef,operationRef:'operation_failed',batchRef:'batch_failed',failureCode:'HOST_SESSION_FAILED',failureEvidence:'durable Host failure',role:'Failed',resources:['src/recovery'],task:'Continue dependency'});const recovered=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'recover-route',payload:{failure_ref:'failure-route',mode:'takeover',collaboration_request_ref:row.requestRef}});assert.equal(recovered.ok,true,JSON.stringify(recovered));assert.equal(fx.launchCalls.length,1);assert.equal(recovered.recoveries[0].state,'ready');const replay=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'recover-route',payload:{failure_ref:'failure-route',mode:'takeover',collaboration_request_ref:row.requestRef}});assert.equal(replay.recoveries[0].state,'ready');const missing=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'missing',payload:{failure_ref:'missing',mode:'takeover',collaboration_request_ref:row.requestRef}});assert.equal(missing.ok,false)}finally{await fx.cleanup()}
 })
 
 test('retry recovery is initiated by the exact original launch owner rather than the unborn child slot', async () => {
@@ -389,6 +389,32 @@ test('registered authenticated Web route enforces confirmation, header, exact ro
   } finally { await fx.cleanup() }
 })
 
+test('explicit blocker contract leaves only the EP02 head claimable in an EP02 to EP05 chain', async () => {
+  const mod = await import(`${pathToFileURL(hostFile).href}?dependency-direction=${Date.now()}`), fx = await registeredProjectToolsFixture(mod, 'dependency-direction')
+  try {
+    const [lead, firstWorker, tailWorker] = fx.roots
+    assert.equal((await fx.invoke('project_collaboration', lead, { action: 'initialize', payload: { title: 'Dependency direction' } })).ok, true)
+    const episodes = []
+    for (const [index, name] of ['EP02', 'EP03', 'EP04', 'EP05'].entries()) episodes.push(await fx.invoke('project_task', lead, { action: 'create', request_id: `direction-${name}`, payload: { title: name, priority: 100 - index * 10 } }))
+    for (let index = 1; index < episodes.length; index += 1) {
+      const linked = await fx.invoke('project_task', lead, { action: 'add_dependency', request_id: `direction-link-${index}`, task_ref: episodes[index].task.taskRef, expected_revision: episodes[index].task.revision, payload: { blockerTaskRef: episodes[index - 1].task.taskRef } })
+      assert.equal(linked.ok, true, JSON.stringify(linked))
+      episodes[index] = linked
+    }
+    const listed = await fx.invoke('project_task', lead, { action: 'list', payload: { task_limit: 120 } }), byTitle = Object.fromEntries(listed.tasks.map(task => [task.title, task]))
+    assert.deepEqual(byTitle.EP02.blockedBy, [])
+    assert.deepEqual(byTitle.EP03.blockedBy, [episodes[0].task.taskRef])
+    assert.deepEqual(byTitle.EP04.blockedBy, [episodes[1].task.taskRef])
+    assert.deepEqual(byTitle.EP05.blockedBy, [episodes[2].task.taskRef])
+    const head = await fx.invoke('project_task', firstWorker, { action: 'claim_next', request_id: 'direction-claim-head', payload: {} })
+    assert.equal(head.status, 'claimed')
+    assert.equal(head.task.taskRef, episodes[0].task.taskRef)
+    const tail = await fx.invoke('project_task', tailWorker, { action: 'claim', request_id: 'direction-claim-tail', task_ref: episodes[3].task.taskRef, expected_revision: episodes[3].task.revision, payload: {} })
+    assert.equal(tail.ok, false)
+    assert.equal(tail.error.code, 'PROJECT_TASK_DEPENDENCY_BLOCKED')
+  } finally { await fx.cleanup() }
+})
+
 test('registered project tools execute request lifecycle, per-project HMAC refs, task actions, and same-root claim races', async () => {
   const mod = await import(`${pathToFileURL(hostFile).href}?registered-tools=${Date.now()}`)
   const storeMod = await import(pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-store.js')).href)
@@ -401,8 +427,10 @@ test('registered project tools execute request lifecycle, per-project HMAC refs,
     assert.equal(blocked.ok && dependency.ok, true)
     const claimedDependency = await fx.invoke('project_task', target, { action: 'claim', request_id: 'claim-dependency', task_ref: dependency.task.taskRef, expected_revision: dependency.task.revision, payload: {} })
     assert.equal(claimedDependency.task.status, 'in_progress')
-    const related = await fx.invoke('project_task', lead, { action: 'add_dependency', request_id: 'block-requester', task_ref: dependency.task.taskRef, expected_revision: claimedDependency.task.revision, payload: { relationRef: 'relation_registered_block', targetTaskRef: blocked.task.taskRef, relationType: 'blocks' } })
+    const related = await fx.invoke('project_task', lead, { action: 'add_dependency', request_id: 'block-requester', task_ref: blocked.task.taskRef, expected_revision: blocked.task.revision, payload: { blockerTaskRef: dependency.task.taskRef } })
     assert.equal(related.ok, true)
+    const ambiguousDirection = await fx.invoke('project_task', lead, { action: 'add_dependency', request_id: 'ambiguous-reverse-rejected', task_ref: dependency.task.taskRef, expected_revision: claimedDependency.task.revision, payload: { targetTaskRef: blocked.task.taskRef, relationType: 'blocks' } })
+    assert.equal(ambiguousDirection.ok, false, 'legacy source/target dependency fields must fail instead of silently reversing the chain')
     const requestPayload = { kind: 'dependency_unblock', task_ref: blocked.task.taskRef, dependency_task_ref: dependency.task.taskRef, reason: 'registered dependency wait', respond_by_at: Date.now() + 60_000 }
     if (verifyInvalidIds) {
       for (const args of [{ action: 'create_request', payload: requestPayload }, { action: 'create_request', request_id: '   ', payload: requestPayload }]) {
@@ -415,7 +443,7 @@ test('registered project tools execute request lifecycle, per-project HMAC refs,
     assert.equal(opened.ok, true, JSON.stringify(opened))
     assert.deepEqual({ mine: opened.requests[0].mine, targetedToMe: opened.requests[0].targetedToMe, escalationEligible: opened.requests[0].escalationEligible }, { mine: true, targetedToMe: false, escalationEligible: true })
     assert.doesNotMatch(JSON.stringify(opened), /actorRef|requesterActorRef|targetActorRef/u)
-    return { blocked, dependency, opened }
+    return { blocked, dependency, opened, related }
   }
   try {
     const first = await setupRequest(fixtures[0], 'same-raw-request-id', true)
@@ -478,6 +506,13 @@ test('registered project tools execute request lifecycle, per-project HMAC refs,
     const audited = await fx.invoke('project_collaboration', lead, { action: 'audit_resolve_request', payload: { request_ref: auditCandidate.requests[0].requestRef, expected_revision: auditCandidate.requests[0].revision, resolution: 'direct user authorized early' } })
     assert.equal(audited.requests[0].state, 'escalated')
     assert.equal(audited.requests[0].escalationEligible, false)
+    const removedDependency = await fx.invoke('project_task', lead, { action: 'remove_dependency', request_id: 'unblock-requester', task_ref: first.blocked.task.taskRef, expected_revision: first.related.task.revision, payload: { blockerTaskRef: first.dependency.task.taskRef } })
+    assert.equal(removedDependency.ok, true, JSON.stringify(removedDependency))
+    const unblockedClaim = await fx.invoke('project_task', worker, { action: 'claim', request_id: 'claim-unblocked-requester', task_ref: first.blocked.task.taskRef, expected_revision: removedDependency.task.revision, payload: {} })
+    assert.equal(unblockedClaim.ok, true, JSON.stringify(unblockedClaim))
+    assert.equal(unblockedClaim.task.status, 'in_progress')
+    const returnedUnblocked = await fx.invoke('project_task', worker, { action: 'transition', request_id: 'return-unblocked-requester', task_ref: unblockedClaim.task.taskRef, expected_revision: unblockedClaim.task.revision, payload: { to: 'todo' } })
+    assert.equal(returnedUnblocked.task.status, 'todo')
 
     const raceTasks = await Promise.all(['a', 'b'].map(suffix => fx.invoke('project_task', lead, { action: 'create', request_id: `race-create-${suffix}`, payload: { title: `Race ${suffix}` } })))
     raceTasks[0] = await fx.invoke('project_task', lead, { action: 'edit', request_id: 'race-edit-a', task_ref: raceTasks[0].task.taskRef, expected_revision: raceTasks[0].task.revision, payload: { title: 'Edited race A' } })

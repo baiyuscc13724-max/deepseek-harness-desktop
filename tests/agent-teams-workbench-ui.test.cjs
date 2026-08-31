@@ -185,6 +185,7 @@ test('Project Tasks is an independent safe workspace with direct state, action, 
   const errorSummary = componentSource(source, ['projectTaskErrorSummary'])
   const hook = componentSource(source, ['useProjectTasksState'])
   const workspace = componentSource(source, ['ProjectTasksWorkspace'])
+  const query = componentSource(source, ['projectTaskSessionQuery'])
   const action = componentSource(source, ['postProjectTaskAction'])
   const remoteTargetsSource = componentSource(source, ['collaboratorTaskTargets'])
   const normalize = Function(`${projection}\nreturn normalizeProjectTasksState`)()
@@ -251,8 +252,11 @@ test('Project Tasks is an independent safe workspace with direct state, action, 
   assert.match(errorSummary, /FORBIDDEN|PERMISSION/u)
   assert.match(errorSummary, /BLOCKED|DEPENDENCY/u)
   assert.match(errorSummary, /UNAVAILABLE|NOT_CREATED/u)
-  assert.match(hook, /fetch\("\/api\/agent-teams\/project\/tasks\/state"/u)
-  assert.match(hook, /new EventSource\("\/api\/agent-teams\/project\/tasks\/stream"\)/u)
+  assert.match(hook, /fetch\("\/api\/agent-teams\/project\/tasks\/state" \+ projectTaskSessionQuery\(projectScope\)/u)
+  assert.match(hook, /new EventSource\("\/api\/agent-teams\/project\/tasks\/stream" \+ projectTaskSessionQuery\(projectScope\)\)/u)
+  assert.match(hook, /stateScope === projectScope/u)
+  assert.match(hook, /state: bound \? state : null/u)
+  assert.match(workspace, /!tasks\.bound \|\| tasks\.scope !== props\.projectScope/u)
   for (const eventName of ['reset', 'capability', 'task']) assert.match(hook, new RegExp(`addEventListener\\("${eventName}", refetch\\)`, 'u'))
   assert.match(hook, /reloadRef\.current\(true\)/u)
   assert.doesNotMatch(hook, /JSON\.parse\(event\.data\)|setState\([^\n]*event/u)
@@ -267,12 +271,12 @@ test('Project Tasks is an independent safe workspace with direct state, action, 
   global.fetch = async () => { actionRequests += 1; throw new TypeError('offline') }
   global.projectTaskResponseError = (response, input) => Object.assign(new Error(input.error.message), input.error, { status: response.status })
   try {
-    const post = Function(`${action}\nreturn postProjectTaskAction`)()
-    await assert.rejects(() => post({ commandId: 'same-command', type: 'claim', taskRef: 'task_safe', expectedRevision: 2, payload: {} }), /offline/u)
+    const post = Function(`${query}\n${action}\nreturn postProjectTaskAction`)()
+    await assert.rejects(() => post('root-route', { commandId: 'same-command', type: 'claim', taskRef: 'task_safe', expectedRevision: 2, payload: {} }), /offline/u)
     assert.equal(actionRequests, 1, 'transport failures require an explicit user retry')
     actionRequests = 0
     global.fetch = async () => { actionRequests += 1; return { ok: false, status: 403, json: async () => ({ error: { code: 'PROJECT_BUSINESS_SYNC_FORBIDDEN', message: 'revoked', nextAction: 'refresh', retryable: false } }) } }
-    await assert.rejects(() => post({ commandId: 'revoked-command', type: 'claim', taskRef: 'task_safe', expectedRevision: 2, payload: {} }), (error) => error.code === 'PROJECT_BUSINESS_SYNC_FORBIDDEN')
+    await assert.rejects(() => post('root-route', { commandId: 'revoked-command', type: 'claim', taskRef: 'task_safe', expectedRevision: 2, payload: {} }), (error) => error.code === 'PROJECT_BUSINESS_SYNC_FORBIDDEN')
     assert.equal(actionRequests, 1)
   } finally { global.fetch = originalTaskFetch; global.projectTaskResponseError = originalTaskParser }
   assert.match(workspace, /type: "create"[\s\S]*expectedRevision: 0[\s\S]*payload: \{ title: title\.trim\(\) \}/u)
@@ -296,7 +300,7 @@ test('Project Tasks is an independent safe workspace with direct state, action, 
   assert.match(workspace, /var canCreate = capability && capability\.canCreate === true, canWrite = collaborator && capability\.available === true && capability\.writable === true/u)
   assert.match(workspace, /if \(!canCreate \|\| !title\.trim\(\)/u)
   assert.match(workspace, /canCreate \? h\("form"[\s\S]*projectTasksCreateUnavailable/u)
-  assert.match(workspace, /fetch\("\/api\/agent-teams\/project\/tasks\/page\?cursor=" \+ encodeURIComponent\(requestedCursor\), \{ method: "GET"/u)
+  assert.match(workspace, /projectTaskSessionQuery\(props\.projectScope\)[\s\S]*"cursor=" \+ encodeURIComponent\(requestedCursor\)[\s\S]*fetch\("\/api\/agent-teams\/project\/tasks\/page" \+ query, \{ method: "GET"/u)
   assert.match(workspace, /onClick: loadMoreProjectTasks/u)
   assert.match(workspace, /loaded: loadedTasks, total: totalTasks, remaining: remainingTasks/u)
   assert.match(workspace, /collaborator \? t\("projectTasksPreviewCount"/u)
@@ -325,7 +329,7 @@ test('paged clients preserve stable ids, replace bounded collaboration windows, 
   assert.deepEqual(loadedCounts(mergedTeams), { teams: 2, tasks: 3 })
 
   assert.match(taskWorkspace, /useEffect\(function \(\) \{[\s\S]*pageRequestEpoch\.current \+= 1;[\s\S]*setPageState\(basePageState\)[\s\S]*\}, \[resetKey\]\)/u)
-  assert.match(teamWorkspace, /useProjectTasksState\(\)/u)
+  assert.match(teamWorkspace, /useProjectTasksState\(props\.projectScope\)/u)
   assert.match(teamWorkspace, /projectCollaboration/u)
   assert.match(teamWorkspace, /requests\.slice\(0, 120\)/u)
   assert.match(teamWorkspace, /sectionPage\(name\)[\s\S]*nextCursor/u)
@@ -1006,4 +1010,30 @@ test('team-state lifecycle cleanup closes the stream and cancels every queued ca
   await drainPromises()
   assert.equal(harness.stateSlots[0].value, null, 'callbacks from a disposed hook must not mutate React state')
   assert.equal(harness.fetchCalls.length, 0)
+})
+
+test('cross-session workspace renders the project identity and safe seat master-detail UI', async () => {
+  const source = await clientSource()
+  const projectTitleSource = componentSource(source, ['workspaceProjectTitle'])
+  const workspace = componentSource(source, ['ProjectCollaborationWorkspace'])
+  const projectTitle = Function(`${projectTitleSource}\nreturn workspaceProjectTitle`)()
+  const workspaces = { list: { getSnapshot: () => ({ items: [
+    { title: 'DeepSeek-Harness-Desktop', sessionIds: ['root-one'] },
+    { title: 'Other project', sessionIds: ['root-two'] }
+  ] }) } }
+
+  assert.equal(projectTitle(workspaces, 'root-one', 'fallback'), 'DeepSeek-Harness-Desktop')
+  assert.equal(projectTitle(workspaces, 'missing', 'fallback'), 'fallback')
+  assert.match(workspace, /useWorkspaceProjectName\(props\.workspaces, props\.projectScope/u)
+  assert.match(workspace, /dat-collaboration-project-title/u)
+  assert.match(workspace, /collaborationSeatsCount/u)
+  assert.match(workspace, /collaborationSeatSearch/u)
+  assert.match(workspace, /collaborationViewDetails/u)
+  assert.match(workspace, /dat-collaboration-seat-inspector/u)
+  assert.match(workspace, /selectedSeat\.hasResourceScope/u)
+  assert.match(workspace, /selectedSeat\.hasNextStep/u)
+  assert.doesNotMatch(workspace, /seat\s*&&\s*seat\.(?:resourceScope|nextStep)|selectedSeat\.(?:resourceScope|nextStep)/u)
+  assert.match(source, /dat-collaboration-seat-layout\[data-detail-open=true\]/u)
+  assert.match(source, /sessions: ctx\.sessions, workspaces: ctx\.workspaces/u)
+  assert.match(source, /exports\.inject = \["slots", "locale", "sessions", "workspaces"\]/u)
 })

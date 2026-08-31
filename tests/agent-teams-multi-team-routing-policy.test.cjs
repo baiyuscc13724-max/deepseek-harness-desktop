@@ -32,10 +32,49 @@ test('active turns are shared across every unclosed team of a root', () => {
   assert.match(source, /root lead active-turn limit reached across its teams/u)
 })
 
-test('direct-human top-level root authority is enforced for creation', () => {
+test('top-level creation authority is limited to direct human input or the exact admitted goal round', () => {
+  assert.match(source, /function hasExactGoalRoundRootAuthority/u)
   assert.match(source, /ctx\.agents\.roots\(\)\.includes\(execution\.agent\)/u)
   assert.match(source, /event\.type === "user\/message" && event\.data\?\.source\?\.kind === "user"/u)
-  assert.match(source, /team_start requires direct host-attested human input in the current root turn/u)
+  assert.match(source, /event\.data\?\.source\?\.kind === "goal"/u)
+  assert.match(source, /event\.data\.source\.goalId === goal\.id/u)
+  assert.match(source, /event\.data\.source\.revision === goal\.revision/u)
+  assert.match(source, /event\.data\.source\.round === goal\.roundsStarted/u)
+  assert.match(source, /goal\.phase !== "active" \|\| goal\.activation !== "armed"/u)
+  assert.match(source, /team creation requires direct host-attested human input or the exact current admitted goal continuation/u)
+  assert.equal((source.match(/\n      requireTeamCreationRoot\(ctx, execution\);/gu) || []).length, 3)
+})
+
+test('goal-round creation authority rejects stale, inactive, disarmed, and non-root callers', async () => {
+  const mod = await import(`${pathToFileURL(sourcePath).href}?goal-round-creation-authority=${Date.now()}`)
+  const root = { id: 'goal-root' }
+  const worker = { id: 'goal-worker' }
+  let goal
+  const ctx = {
+    agents: { roots: () => [root] },
+    goals: { get(agent) { assert.equal(agent, root); return goal } }
+  }
+  const execution = (agent, source) => ({ agent, events: [{ type: 'user/message', data: { source } }] })
+  assert.equal(mod.hasTeamCreationRootAuthority(ctx, execution(root, { kind: 'user' })), true)
+
+  goal = { id: 'goal-1', revision: 3, phase: 'active', activation: 'armed', roundsStarted: 7 }
+  const exact = { kind: 'goal', goalId: goal.id, revision: goal.revision, round: goal.roundsStarted }
+  assert.equal(mod.hasExactGoalRoundRootAuthority(ctx, execution(root, exact)), true)
+  assert.equal(mod.hasTeamCreationRootAuthority(ctx, execution(root, exact)), true)
+  for (const source of [
+    { ...exact, goalId: 'other-goal' },
+    { ...exact, revision: goal.revision + 1 },
+    { ...exact, round: goal.roundsStarted - 1 },
+    { kind: 'coordinator', goalId: goal.id, revision: goal.revision, round: goal.roundsStarted }
+  ]) assert.equal(mod.hasTeamCreationRootAuthority(ctx, execution(root, source)), false)
+
+  goal = { ...goal, phase: 'paused' }
+  assert.equal(mod.hasTeamCreationRootAuthority(ctx, execution(root, exact)), false)
+  goal = { ...goal, phase: 'active', activation: 'disarmed' }
+  assert.equal(mod.hasTeamCreationRootAuthority(ctx, execution(root, exact)), false)
+  goal = { ...goal, activation: 'armed' }
+  assert.equal(mod.hasTeamCreationRootAuthority(ctx, execution(worker, exact)), false)
+  assert.equal(mod.inject.includes('goals'), true)
 })
 
 test('bootstrap and team_start are mutually exclusive creation paths', () => {

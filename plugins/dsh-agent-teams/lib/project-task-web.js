@@ -685,6 +685,7 @@ class ProjectTaskWebRuntime {
       updatedAt: task.updatedAt,
       hasAssignee: typeof task.assigneeActorRef === "string",
       hasFileScope: Array.isArray(task.fileScope) && task.fileScope.length > 0,
+      blockedByCount: blockedBy.length,
       allowedTransitions,
     });
   }

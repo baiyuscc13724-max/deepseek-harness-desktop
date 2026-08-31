@@ -518,8 +518,8 @@ const V2_MIGRATIONS = [
 			keyRestoreCompensationFailed: "本机覆盖删除及自动重新绑定均失败。请保持此编辑器打开并重试“恢复启动环境”。",`]
 ]
 
-/** Exact historical direct-v2 fixture reconstructed from the complete pinned installed runtime, whether it began at v2 or v3. */
-export function createModelSettingsKeyOverrideDirectV2Fixture(source) {
+/** Exact historical direct-v2 fixture reconstructed from the pinned legacy upstream shape, not the current alpha runtime. */
+export function createModelSettingsKeyOverrideDirectV2Fixture(source = createModelSettingsKeyOverrideUpstreamFixture()) {
   let output = patchModelSettingsKeyOverrideSource(source).source
   for (const [direct, gated] of [...V2_MIGRATIONS].reverse()) {
     if (!output.includes(gated)) throw new Error('Pinned DSH model-settings key override v3 fixture is incomplete; refusing an unsafe v2 reconstruction.')

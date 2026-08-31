@@ -88,6 +88,7 @@ public final class MainActivity extends AppCompatActivity {
     static final String SAVED_SESSION = "saved_session";
     private static final String SAVED_SYNC_IDENTITY_PREFIX = "sync_cache_identity_";
     private static final String SYNC_MANIFEST_PATH = "/__harness_mobile__/sync/manifest";
+    private static final String SYNC_CACHE_ACTION_HEADER = "X-Harness-Mobile-Cache-Action";
     private static final long[] WORKBENCH_RETRY_DELAYS_MS = { 800L, 1500L, 2500L, 4000L, 5000L };
     private static final long[] OFFLINE_SYNC_RETRY_DELAYS_MS = { 1_000L, 2_000L, 4_000L, 8_000L, 15_000L, 30_000L };
     private static final long MOBILE_UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1_000L;
@@ -141,6 +142,7 @@ public final class MainActivity extends AppCompatActivity {
     private final AtomicBoolean offlineSyncInFlight = new AtomicBoolean();
     private int offlineSyncRetryAttempt;
     private final Runnable offlineSyncRetry = () -> requestOfflineSync(pairingProfile);
+    private volatile boolean pairingInProgress;
     private String retryableMainFrameUrl;
     private boolean mainFrameLoadFailed;
     private MainFrameState mainFrameState = MainFrameState.IDLE;
@@ -669,6 +671,11 @@ public final class MainActivity extends AppCompatActivity {
                 mobileUiAdapter.inject(view);
                 publishOfflineState(view);
                 if (!mainFrameLoadFailed) {
+                    // The pair redirect has now committed its Set-Cookie in WebView.
+                    // Do not let a transport-ready callback race a cookie-less native
+                    // sync request ahead of this point and erase a valid new pairing.
+                    pairingInProgress = false;
+                    CookieManager.getInstance().flush();
                     revealWorkbench();
                     requestOfflineSync(pairingProfile);
                 } else beginWorkbenchReadyCheck();
@@ -779,6 +786,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         pairingError.setText("");
         pairingError.setVisibility(View.GONE);
+        pairingInProgress = true;
         pairingProfile = nextProfile;
         prepareOfflineState(nextProfile);
         if (hasActiveSystemVpn()) {
@@ -830,7 +838,8 @@ public final class MainActivity extends AppCompatActivity {
 
     private void requestOfflineSync(PairingProfile profile) {
         if (profile == null || profile != pairingProfile || localGatewayPort <= 0 || activeCacheIdentity.isEmpty()
-            || !networkReconnectPolicy.hasUsableNetwork() || !offlineSyncInFlight.compareAndSet(false, true)) return;
+            || pairingInProgress || !networkReconnectPolicy.hasUsableNetwork()
+            || !offlineSyncInFlight.compareAndSet(false, true)) return;
         mainHandler.removeCallbacks(offlineSyncRetry);
         final int generation = offlineSyncGeneration;
         final String pairingIdentity = activeCacheIdentity;
@@ -859,10 +868,17 @@ public final class MainActivity extends AppCompatActivity {
                 connection.setRequestProperty("Host", PairingProfile.STABLE_HOST + ":" + localGatewayPort);
                 String stableOrigin = profile.stableOrigin(localGatewayPort);
                 String cookie = CookieManager.getInstance().getCookie(stableOrigin);
-                if (cookie != null && !cookie.trim().isEmpty()) connection.setRequestProperty("Cookie", cookie);
+                // WebView persists Set-Cookie asynchronously. A missing cookie is a
+                // propagation delay, not proof that the just-claimed pair token was
+                // revoked; retry instead of sending an unauthenticated manifest call.
+                if (cookie == null || cookie.trim().isEmpty()) return;
+                connection.setRequestProperty("Cookie", cookie);
                 int status = connection.getResponseCode();
                 if (status == 401 || status == 403 || status == 410) {
-                    mainHandler.post(() -> clearRevokedPairing(pairingIdentity, generation));
+                    if (shouldClearPairingFromSyncAuthFailure(
+                        status, cookie, connection.getHeaderField(SYNC_CACHE_ACTION_HEADER))) {
+                        mainHandler.post(() -> clearRevokedPairing(pairingIdentity, generation));
+                    }
                     return;
                 }
                 if (status != HttpURLConnection.HTTP_OK
@@ -923,6 +939,12 @@ public final class MainActivity extends AppCompatActivity {
             .remove(SAVED_SYNC_IDENTITY_PREFIX + pairingIdentity).apply();
         disconnect();
         showPairingError(getString(R.string.pairing_expired_status));
+    }
+
+    static boolean shouldClearPairingFromSyncAuthFailure(int status, String cookie, String cacheAction) {
+        if (status != 401 && status != 403 && status != 410) return false;
+        if (cookie == null || cookie.trim().isEmpty()) return false;
+        return "clear".equalsIgnoreCase(cacheAction == null ? "" : cacheAction.trim());
     }
 
     private static boolean isServerCacheIdentity(String value) {
@@ -1065,11 +1087,10 @@ public final class MainActivity extends AppCompatActivity {
 
         boolean hasRemoteRoute = profile.nativeP2p != null || profile.relay != null || profile.easyTier != null;
         if (transition.switched()) {
-            // Keep proven LAN/P2P/WSS paths and their pinned streams alive. New
-            // proxy connections race against the newly stable default network;
-            // a transport is replaced only after its own failure/ready callbacks.
-            applyReadyRoutes(profile);
-            routeStatus = "网络切换已稳定；现有会话保留，新连接正在验证线路";
+            // OkHttp/WebRTC sockets stay pinned to the previous default network.
+            // Rebind them after the debounced switch while keeping the paired
+            // identity, WebView document, and cookies intact.
+            restartRemoteTransportsAfterNetworkSwitch(profile);
             return;
         }
 
@@ -1088,6 +1109,32 @@ public final class MainActivity extends AppCompatActivity {
             else if (profile.relay != null) startWssRelay(profile);
             else if (profile.easyTier != null) startEasyTier(profile);
         } else {
+            retryWorkbenchNow();
+        }
+    }
+
+    private void restartRemoteTransportsAfterNetworkSwitch(PairingProfile profile) {
+        updateRoutesBeforeRemoteReady(profile);
+        mainHandler.removeCallbacks(remoteReconnect);
+        mainHandler.removeCallbacks(nativeReconnect);
+        if (easyTierClient != null) easyTierClient.stop();
+        if (wssRelayClient != null) wssRelayClient.stop();
+        if (nativeP2pClient != null) nativeP2pClient.stop();
+        easyTierSocksPort = 0;
+        wssRelaySocksPort = 0;
+        nativeP2pSocksPort = 0;
+        remoteReconnectAttempt = 0;
+        nativeReconnectAttempt = 0;
+
+        if (profile.nativeP2p != null || profile.relay != null || profile.easyTier != null) {
+            remoteReconnectProfile = profile;
+            routeStatus = "网络切换已稳定；正在新网络上重连 P2P/WSS";
+            if (profile.nativeP2p != null) startNativeP2p(profile);
+            else if (profile.relay != null) startWssRelay(profile);
+            else startEasyTier(profile);
+        } else {
+            remoteReconnectProfile = null;
+            routeStatus = "网络切换已稳定；正在验证局域网线路";
             retryWorkbenchNow();
         }
     }
@@ -1157,6 +1204,7 @@ public final class MainActivity extends AppCompatActivity {
         preferences.apply();
         activeCacheIdentity = "";
         activeOfflineSnapshot = null;
+        pairingInProgress = false;
         if (pairingProfileStore != null) pairingProfileStore.clear();
         pairingProfile = null;
         remoteReconnectProfile = null;

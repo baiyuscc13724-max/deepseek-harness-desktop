@@ -1787,6 +1787,15 @@ export async function patchInstalledConversation(file = conversationRuntime) {
     if (chatPackage === null) throw new Error('Pinned DSH alpha.2 chat companion is missing; refusing an unsafe conversation patch.')
     const source = await readFile(file, 'utf8')
     const chatSource = await readFile(chatFile, 'utf8')
+    for (const anchor of [
+      'function MessageIconActions({ text, time, clock, onBranch, branchUnavailable = false, className, extraActions, usageAction, t })',
+      'function storedTurnProcessEntry(state, turn)',
+      'setTurnProcessOpen: (draft, turn, generation, open) =>',
+      'element.setAttribute("hidden", "until-found")',
+      'var MutableChatNodeStore = class'
+    ]) {
+      if (!chatSource.includes(anchor)) throw new Error('Pinned DSH alpha.2 native Chat disclosure/copy contract changed; refusing an unsafe conversation patch.')
+    }
     const markers = [
       source.includes(CONVERSATION_QUEUE_PATCHED),
       source.includes('"image.copy": "复制图片 {name}"'),

@@ -326,16 +326,53 @@ public final class MainActivityTest {
         assertEquals(0L, jitter.generation());
     }
 
-    @Test public void stableNetworkSwitchKeepsTheWebViewAndVerifiedTransportsAlive() throws Exception {
+    @Test public void stableNetworkSwitchRebindsRemoteTransportsWithoutClearingPairing() throws Exception {
         String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
             "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
         int switched = source.indexOf("if (transition.switched())");
         int recovery = source.indexOf("updateRoutesBeforeRemoteReady(profile);", switched);
         String stableSwitch = source.substring(switched, recovery);
-        assertTrue(stableSwitch.contains("applyReadyRoutes(profile);"));
+        assertTrue(stableSwitch.contains("restartRemoteTransportsAfterNetworkSwitch(profile);"));
         assertFalse(stableSwitch.contains("webView.stopLoading()"));
-        assertFalse(stableSwitch.contains("nativeP2pClient.stop()"));
-        assertFalse(stableSwitch.contains("wssRelayClient.stop()"));
+
+        int restart = source.indexOf("private void restartRemoteTransportsAfterNetworkSwitch");
+        int unregister = source.indexOf("private void unregisterNetworkMonitoring", restart);
+        String restartFlow = source.substring(restart, unregister);
+        assertTrue(restartFlow.contains("nativeP2pClient.stop()"));
+        assertTrue(restartFlow.contains("wssRelayClient.stop()"));
+        assertTrue(restartFlow.contains("startNativeP2p(profile)"));
+        assertTrue(restartFlow.contains("startWssRelay(profile)"));
+        assertFalse(restartFlow.contains("disconnect()"));
+        assertFalse(restartFlow.contains("pairingProfileStore.clear()"));
+    }
+
+    @Test public void nativeSyncWaitsForThePairCookieAndClearsOnlyExplicitRevocation() throws Exception {
+        assertFalse(MainActivity.shouldClearPairingFromSyncAuthFailure(401, null, "clear"));
+        assertFalse(MainActivity.shouldClearPairingFromSyncAuthFailure(401, "", "clear"));
+        assertFalse(MainActivity.shouldClearPairingFromSyncAuthFailure(401, "harness_mobile_auth=device.secret", null));
+        assertFalse(MainActivity.shouldClearPairingFromSyncAuthFailure(503, "harness_mobile_auth=device.secret", "clear"));
+        assertTrue(MainActivity.shouldClearPairingFromSyncAuthFailure(
+            401, "harness_mobile_auth=device.secret", "clear"));
+
+        String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+            "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
+        int connect = source.indexOf("private void connect(String value)");
+        int pairingError = source.indexOf("private void showPairingError", connect);
+        assertTrue(source.substring(connect, pairingError).contains("pairingInProgress = true;"));
+
+        int pageFinished = source.indexOf("onPageFinished(WebView view, String url)");
+        int receivedError = source.indexOf("onReceivedError(WebView view", pageFinished);
+        String pageFinishedFlow = source.substring(pageFinished, receivedError);
+        assertTrue(pageFinishedFlow.contains("pairingInProgress = false;"));
+        assertTrue(pageFinishedFlow.indexOf("CookieManager.getInstance().flush();")
+            < pageFinishedFlow.indexOf("requestOfflineSync(pairingProfile);"));
+
+        int sync = source.indexOf("private void requestOfflineSync");
+        int retry = source.indexOf("private void scheduleOfflineSyncRetry", sync);
+        String syncFlow = source.substring(sync, retry);
+        assertTrue(syncFlow.contains("|| pairingInProgress ||"));
+        assertTrue(syncFlow.contains("if (cookie == null || cookie.trim().isEmpty()) return;"));
+        assertTrue(syncFlow.contains("getHeaderField(SYNC_CACHE_ACTION_HEADER)"));
     }
 
     @Test public void incompleteNativeSnapshotRefreshRetriesWithoutDiscardingTheLastCompleteSnapshot() throws Exception {

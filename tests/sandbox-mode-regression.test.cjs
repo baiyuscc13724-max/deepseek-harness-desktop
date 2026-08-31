@@ -215,7 +215,10 @@ test('desktop postinstall patch remains idempotent for sandbox and PowerShell fi
   const toolPwshSource = readFileSync(runtimeFile('dsh-tool-pwsh', 'lib', 'index.js'), 'utf8')
   const pwshSandboxSource = readFileSync(runtimeFile('dsh-pwsh-sandbox', 'lib', 'index.js'), 'utf8')
   const bashSandboxSource = readFileSync(runtimeFile('dsh-bash-sandbox', 'lib', 'index.js'), 'utf8')
-  const windowsAclSource = readFileSync(runtimeFile('dsh-sandbox-windows-acl', 'lib', 'types-CNjZgO4h.js'), 'utf8')
+  const windowsAclIndex = readFileSync(runtimeFile('dsh-sandbox-windows-acl', 'lib', 'index.js'), 'utf8')
+  const windowsAclChunk = /from "\.\/(types-[^"]+\.js)"/u.exec(windowsAclIndex)?.[1]
+  assert.ok(windowsAclChunk, 'installed Windows ACL entry must name its emitted implementation chunk')
+  const windowsAclSource = readFileSync(runtimeFile('dsh-sandbox-windows-acl', 'lib', windowsAclChunk), 'utf8')
 
   assert.equal(patcher.patchSandboxEscalationSource(sandboxSource).changed, false)
   assert.equal(patcher.patchPwshLocalSource(pwshLocalSource).changed, false)

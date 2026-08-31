@@ -322,6 +322,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
       ] }
     }
     let activeInitiator = rootAgent
+    let currentGoal
     const ctx = {
       logger: { info() {}, warn() {}, error() {} },
       get: () => undefined,
@@ -335,6 +336,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
         roots() { return [...(leadAvailable ? [rootAgent] : []), recoveryAgent] },
         currentInitiator() { return activeInitiator }
       },
+      goals: { get(agent) { return agent === rootAgent ? currentGoal : undefined } },
       subagents: {
         async startContinuable(spec) {
           starts.push(spec)
@@ -452,8 +454,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(settings.status, 200)
     const enabledPrompt = teamsPrompt.text({})
     assert.match(enabledPrompt, /automatic-team mode is ENABLED/u)
-    assert.match(enabledPrompt, /Before substantive work on every ordinary direct-human root turn, apply the three-level gate below/u)
-    assert.match(enabledPrompt, /When Level 3 conditions are met, choose exactly one creation path in that same turn/u)
+    assert.match(enabledPrompt, /Before substantive work on every ordinary direct-human root turn, and before first creating an Agent Team during an exact admitted continuation/u)
+    assert.match(enabledPrompt, /When Level 3 conditions are met, choose exactly one creation path in that same authorized turn/u)
+    assert.match(enabledPrompt, /Never ask the user to send “continue” merely to cross from an admitted automatic goal round into safe internal team creation/u)
     assert.match(enabledPrompt, /Never call both team_start and team_bootstrap for the same team/u)
     assert.match(enabledPrompt, /Keep durable team task state synchronized at every handoff/u)
     assert.match(enabledPrompt, /members must explicitly complete finished tasks before their final report/u)
@@ -490,7 +493,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(enabledPrompt, /every capability is individually verified, file scopes are conflict-free, cost stays within the direct user's ordinary default AI-routing grant, every effect policy is none/u)
     assert.match(enabledPrompt, /already active main-tier worker does not itself create a new cost grant or block safe continuation/u)
     assert.match(enabledPrompt, /continuing\/default grant stays human_attested and never becomes Host proof/u)
-    assert.match(enabledPrompt, /New team creation, bootstrap, Stop recovery\/resume, handoff\/adopt\/recover, resolve_unknown, cross-project scope/u)
+    assert.match(enabledPrompt, /New team creation and bootstrap remain behind the direct-human-or-exact-admitted-goal-round gate/u)
+    assert.match(enabledPrompt, /Stop recovery\/resume, handoff\/adopt\/recover, resolve_unknown, cross-project scope/u)
     assert.match(tools.get('team_plan_commit').description, /later automatic goal round may recommit without a new user message only for the same exact live root and canonical project/u)
     assert.match(tools.get('team_plan_commit').description, /Continuing\/default authority remains human_attested, never host_verified/u)
     assert.match(enabledPrompt, /Never invent a leader→group-leader→hidden-worker hierarchy/u)
@@ -499,7 +503,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(tools.get('team_spawn').description, /existing members retain their creation route/u)
     assert.match(tools.get('team_start').description, /never call team_start before team_bootstrap for the same team/u)
     assert.match(tools.get('team_bootstrap').description, /Use this directly instead of team_start when the complete plan is ready; never call both for the same team/u)
-    assert.match(tools.get('team_start').description, /Call this in the current direct-human root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination/u)
+    assert.match(tools.get('team_route_goal').description, /direct-human goal turn or its exact admitted automatic continuation/u)
+    assert.match(tools.get('team_start').description, /Call this in the current authorized root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination/u)
+    assert.match(tools.get('team_start').description, /exact admitted automatic continuation of the root's active, armed goal carries creation authority without another user message/u)
+    assert.match(tools.get('team_bootstrap').description, /exact admitted automatic continuation of that root's active, armed goal/u)
     assert.match(tools.get('team_start').description, /do not substitute multiple ordinary subagents/u)
     assert.match(tools.get('team_start').description, /Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count/u)
     assert.match(tools.get('team_start').description, /one continuable helper should use ordinary subagent instead/u)
@@ -1632,6 +1639,46 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(orphanRecovery.recovered[0].closure.outcome, 'succeeded')
     leadAvailable = true
     activeInitiator = rootAgent
+
+    currentGoal = { id: 'goal-autopilot-team', revision: 4, phase: 'active', activation: 'armed', roundsStarted: 2 }
+    rootAgent.session.events.push(
+      { type: 'turn/end', data: {} },
+      { type: 'turn/start', data: {} },
+      { type: 'user/message', data: { source: { kind: 'goal', goalId: currentGoal.id, revision: currentGoal.revision, round: currentGoal.roundsStarted } } }
+    )
+    const automaticRoute = await tools.get('team_route_goal').execute({
+      level: 'level3', reason_category: 'independent_sustained_workstreams', candidate_workstreams: 2, creation_path: 'team_start'
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(automaticRoute.receipt.outcome, 'recorded')
+    const automaticStarted = await tools.get('team_start').execute({
+      objective: 'Create a safe team without asking the user to continue', candidate_workstreams: 2
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(automaticStarted.routing.receipt.outcome, 'created')
+    assert.equal(automaticStarted.team.rootLeadSessionId, rootAgent.id)
+    await tools.get('team_shutdown').execute({ team_id: automaticStarted.team.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
+
+    currentGoal = { ...currentGoal, roundsStarted: 3 }
+    rootAgent.session.events.push(
+      { type: 'turn/end', data: {} },
+      { type: 'turn/start', data: {} },
+      { type: 'user/message', data: { source: { kind: 'goal', goalId: currentGoal.id, revision: currentGoal.revision, round: currentGoal.roundsStarted } } }
+    )
+    const automaticBootstrap = await tools.get('team_bootstrap').execute({
+      request_id: 'goal-autopilot-bootstrap', objective: 'Bootstrap isolated implementation and test work automatically', candidate_workstreams: 2,
+      tasks: [
+        { key: 'code', title: 'Implement isolated change', member_key: 'code', files: ['src/autopilot-code.js'] },
+        { key: 'test', title: 'Verify isolated behavior', member_key: 'test', files: ['tests/autopilot-test.js'] }
+      ],
+      members: [
+        { key: 'code', name: 'Code', role: 'implementation', prompt: 'Implement the isolated automatic continuation change.' },
+        { key: 'test', name: 'Test', role: 'verification', prompt: 'Verify the isolated automatic continuation behavior.' }
+      ]
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(automaticBootstrap.routing.receipt.outcome, 'created')
+    assert.equal(automaticBootstrap.operation.phase, 'complete')
+    assert.equal(automaticBootstrap.team.members.filter(member => member.kind === 'worker').length, 2)
+    await tools.get('team_shutdown').execute({ team_id: automaticBootstrap.team.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
+    currentGoal = undefined
   } finally {
     for (const cleanup of effectCleanups.reverse()) await cleanup()
     if (previousHome === undefined) delete process.env.DSH_HOME

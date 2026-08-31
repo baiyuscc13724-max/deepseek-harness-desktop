@@ -9,7 +9,7 @@ const vm = require('node:vm')
 const { readFileSync } = require('node:fs')
 const { ROUTING_PRESET_ID, ensureModelRouting, getModelRouting, saveModelRouting } = require('../electron/bridge/model-routing-service.cjs')
 
-const shippedPresetRoot = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh', 'config', 'agent-presets')
+const shippedPresetRoot = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-agent-presets', 'presets')
 const rendererRoutingSource = readFileSync(path.resolve(__dirname, '..', 'renderer', 'model-routing-integration.js'), 'utf8')
 const rendererRoutingSandbox = { window: {} }
 vm.runInNewContext(rendererRoutingSource, rendererRoutingSandbox)

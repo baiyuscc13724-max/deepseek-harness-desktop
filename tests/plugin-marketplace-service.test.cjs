@@ -10,6 +10,7 @@ const YAML = require('yaml')
 const { MARKETPLACE_RUNTIME_FILES, ensurePluginMarketplace } = require('../electron/bridge/plugin-marketplace-service.cjs')
 
 const bundledRoot = path.resolve(__dirname, '..', 'node_modules', 'dsh-plugin-marketplace')
+const appBootFile = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-app-boot', 'lib', 'index.js')
 const execFileAsync = promisify(execFile)
 const yamlJsTag = { tag: 'tag:yaml.org,2002:js', resolve: value => value }
 
@@ -17,8 +18,8 @@ test('marketplace owns one persistent profile patch across repeated boots', asyn
   const dshHome = await mkdtemp(path.join(os.tmpdir(), 'harness-marketplace-'))
   t.after(() => rm(dshHome, { recursive: true, force: true }))
   const profileRoot = path.join(dshHome, 'profiles', 'web')
-  const { initProfile, loadProfile, PROFILE_TEMPLATES } = await import('@deepseek-ai/dsh-app-boot')
-  initProfile(profileRoot, PROFILE_TEMPLATES.web)
+  const { initProfile, loadProfile, PROFILE_TEMPLATES } = await import(pathToFileURL(appBootFile).href)
+  initProfile(profileRoot, PROFILE_TEMPLATES.web.bundles, PROFILE_TEMPLATES.web.patchReload)
   const first = await ensurePluginMarketplace({ dshHome, bundledRoot })
   assert.equal(first.action, 'installed')
   assert.equal(first.patchChanged, true)
@@ -45,7 +46,7 @@ test('marketplace owns one persistent profile patch across repeated boots', asyn
   const firstBoot = loadProfile('marketplace-test', 'web', installAnchor, dshHome)
   const secondBoot = loadProfile('marketplace-test', 'web', installAnchor, dshHome)
   for (const boot of [firstBoot, secondBoot]) {
-    assert.deepEqual(boot.layers.map(layer => layer.packageName), PROFILE_TEMPLATES.web)
+    assert.deepEqual(boot.layers.map(layer => layer.packageName), PROFILE_TEMPLATES.web.bundles)
     assert.equal(boot.patches.flatMap(row => row.insert || []).filter(row => row.name === 'dsh-plugin-marketplace').length, 1)
   }
 })

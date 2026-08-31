@@ -6,7 +6,7 @@ const { pathToFileURL } = require('node:url')
 
 const root = path.resolve(__dirname, '..')
 const patchModule = path.join(root, 'scripts', 'conversation-work-tree-patch.mjs')
-const conversationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
+const conversationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat', 'lib', 'client.js')
 
 function location(turn, status = 'closed', step = 1) {
   return { kind: 'step', turn: { turn, status }, step: { step } }
@@ -102,6 +102,8 @@ test('completed work trees collapse only when they were opened automatically', a
   closedByUser = reduceConversationWorkTreeDisclosure(closedByUser, { type: 'toggle' })
   closedByUser = reduceConversationWorkTreeDisclosure(closedByUser, { type: 'activity', active: false, selected: false })
   assert.equal(closedByUser.open, false, 'a panel closed by the user is not reopened by completion')
+  closedByUser = reduceConversationWorkTreeDisclosure(closedByUser, { type: 'activity', active: false, selected: true })
+  assert.equal(closedByUser.open, false, 'a stale selected tool must not override the reader\'s manual collapse')
 })
 
 test('work-tree disclosure persists independently across session switches and remounts', async () => {
@@ -133,7 +135,7 @@ test('work-tree disclosure persists independently across session switches and re
   )
   assert.deepEqual(closedAfterReturn, { open: false, automatic: false, userControlled: true, active: true })
   assert.deepEqual(openAfterReturn, { open: true, automatic: false, userControlled: true, active: false })
-  assert.equal(createConversationWorkTreeDisclosureState(false, false, true).open, true, 'a selected call remains discoverable without overwriting the stored preference')
+  assert.equal(createConversationWorkTreeDisclosureState(false, false, true).open, false, 'a stored closed preference remains authoritative while selected-call priority rendering keeps the call discoverable')
 
   storage.setItem('harness.desktop.work-tree-disclosure.v1:broken', '{bad json')
   assert.equal(readConversationWorkTreeDisclosure(storage, 'broken', 'work-tree:flow:1'), undefined)
@@ -155,8 +157,12 @@ test('work-tree bodies render in bounded cancelable batches', async () => {
   assert.equal(rendered, 0, 'closing cancels and releases the progressive render window')
 })
 
-test('a deeply selected nested call is immediately rendered in one bounded priority window', async () => {
-  const { buildConversationWorkTreeItems, conversationWorkTreeRenderKeys } = await import(pathToFileURL(patchModule).href)
+test('selected and saved reader anchors are immediately rendered in bounded priority windows', async () => {
+  const {
+    buildConversationWorkTreeItems,
+    conversationWorkTreeRenderKeys,
+    conversationWorkTreeRestoreNodeKey
+  } = await import(pathToFileURL(patchModule).href)
   const entries = []
   for (let step = 0; step < 4000; step += 1) {
     entries.push(tool(`tool:deep:${step}`, 9, {
@@ -168,17 +174,21 @@ test('a deeply selected nested call is immediately rendered in one bounded prior
   }
   const group = buildConversationWorkTreeItems(entries.map(([key]) => key), new Map(entries))[0]
   const selectedNodeKey = group.callNodeKeys.get('nested:3999')
+  const restoreNodeKey = conversationWorkTreeRestoreNodeKey(group.nodeKeys, group.callNodeKeys, 'call:nested:2000')
   const immediate = conversationWorkTreeRenderKeys(group.nodeKeys, 0, selectedNodeKey)
-  const withPrefix = conversationWorkTreeRenderKeys(group.nodeKeys, 64, selectedNodeKey)
+  const withPrefixAndRestore = conversationWorkTreeRenderKeys(group.nodeKeys, 64, selectedNodeKey, restoreNodeKey)
 
   assert.equal(selectedNodeKey, 'tool:deep:3999')
+  assert.equal(restoreNodeKey, 'tool:deep:2000')
+  assert.equal(conversationWorkTreeRestoreNodeKey(group.nodeKeys, group.callNodeKeys, 'tool:deep:1999'), 'tool:deep:1999')
   assert.equal(immediate.length, 64)
   assert.ok(immediate.includes(selectedNodeKey), 'the selected node must exist on the first open render')
   assert.ok(!immediate.includes('tool:deep:0'), 'priority rendering must not materialize the whole prefix')
-  assert.ok(withPrefix.length <= 128)
-  assert.ok(withPrefix.includes('tool:deep:0'))
-  assert.ok(withPrefix.includes(selectedNodeKey))
-  assert.equal(new Set(withPrefix).size, withPrefix.length)
+  assert.ok(withPrefixAndRestore.length <= 192)
+  assert.ok(withPrefixAndRestore.includes('tool:deep:0'))
+  assert.ok(withPrefixAndRestore.includes(selectedNodeKey))
+  assert.ok(withPrefixAndRestore.includes(restoreNodeKey), 'the saved scroll anchor must exist before parent layout restoration runs')
+  assert.equal(new Set(withPrefixAndRestore).size, withPrefixAndRestore.length)
 })
 
 test('recoverable edit no-ops do not leave the completed work tree in a permanent failure state', async () => {
@@ -234,8 +244,7 @@ test('thousand-turn transcripts and large tool groups keep collapsed render work
   assert.equal(reduceConversationWorkTreeRenderCount(0, { type: 'sync', open: true, total: 4000 }), 64)
 })
 
-test('memo dependency follows the upstream mutable node-store content snapshot contract', async () => {
-  const { patchConversationWorkTreeSource } = await import(pathToFileURL(patchModule).href)
+test('native alpha.2 chat publishes mutable node-store content snapshots without structural churn', async () => {
   const source = await readFile(conversationRuntime, 'utf8')
   assert.match(source, /var MutableChatNodeStore = class \{[\s\S]*values\(\) \{[\s\S]*if \(this\.valuesDirty\)[\s\S]*this\.valuesCache = \[\.\.\.this\.byKey\.values\(\)\]/u)
   assert.match(source, /upsert\(nodes\) \{[\s\S]*this\.byKey\.set\(node\.key, node\)[\s\S]*if \(changed\) this\.valuesDirty = true/u)
@@ -256,61 +265,28 @@ test('memo dependency follows the upstream mutable node-store content snapshot c
   assert.deepEqual(order, ['node:1'], 'content-only upserts keep the structural order reference valid')
   assert.notEqual(secondSnapshot, firstSnapshot, 'values() publishes a new cached content snapshot after an in-place upsert')
   assert.equal(secondSnapshot[0].data.status, 'settled')
-
-  const patched = patchConversationWorkTreeSource(source).source
-  assert.match(patched, /const nodeSnapshot = useSession\(\(s\) => s\.chat\.nodes\.values\(\)\)/u)
-  assert.match(patched, /buildConversationWorkTreeItems\(order, nodeStore\), \[order, nodeSnapshot\]/u)
-  assert.doesNotMatch(patched, /buildConversationWorkTreeItems\(order, nodeStore\), \[order, nodeStore\]/u)
 })
 
-test('guarded runtime patch is idempotent and includes disclosure, locale, and scroll-anchor contracts', async () => {
-  const { patchConversationWorkTreeSource } = await import(pathToFileURL(patchModule).href)
+test('native alpha.2 turn-process disclosure is session-scoped, searchable, and generation-safe', async () => {
   const source = await readFile(conversationRuntime, 'utf8')
-  const once = patchConversationWorkTreeSource(source)
-  const twice = patchConversationWorkTreeSource(once.source)
-
-  assert.equal(twice.changed, false)
-  assert.equal(twice.source, once.source)
   for (const contract of [
-    '@harness-desktop/conversation-work-tree-v1',
-    '@harness-desktop/conversation-work-tree-sticky-v1',
-    '@harness-desktop/conversation-work-tree-flow-v2',
-    '@harness-desktop/conversation-work-tree-manual-v3',
-    '@harness-desktop/conversation-work-tree-recoverable-v4',
-    '@harness-desktop/conversation-work-tree-auto-complete-v5',
-    '@harness-desktop/conversation-work-tree-performance-v6',
-    '@harness-desktop/conversation-work-tree-snapshot-priority-v7',
-    '@harness-desktop/conversation-work-tree-persistence-v8',
-    'reduceConversationWorkTreeDisclosure',
-    'readConversationWorkTreeDisclosure',
-    'writeConversationWorkTreeDisclosure',
-    'createConversationWorkTreeDisclosureState',
-    'harness.desktop.work-tree-disclosure.v1:',
-    'sessionId, item.key',
-    'reduceConversationWorkTreeRenderCount',
-    'conversationWorkTreeRenderKeys',
-    'userControlled: false',
-    'type: "toggle"',
-    'FS_EDIT_NOT_FOUND',
-    '"row.retry": "未应用，需要重新定位"',
-    '"row.retry": "Not applied; target needs to be located again"',
-    'work-tree:flow:',
-    'position:sticky',
-    'scroll-margin-top:64px',
-    'DSH_DESKTOP_MEMOIZED_WORK_TREE',
-    'const nodeSnapshot = useSession((s) => s.chat.nodes.values())',
-    '[order, nodeSnapshot]',
-    'workTreeItems.map',
-    'item.callNodeKeys.get(selectedCallId)',
-    'conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey)',
-    'requestIdleCallback',
+    'function turnProcessGeneration(spec)',
+    'function encodeTurnProcess(spec)',
+    'function decodeTurnProcess(signature)',
+    'function storedTurnProcessEntry(state, turn)',
+    'turnProcesses: []',
+    'setTurnProcessOpen: (draft, turn, generation, open)',
+    'if (!open)',
+    'draft.turnProcesses.splice(index, 1)',
+    'storedEntry?.generation === processGeneration',
+    'actions.setTurnProcessOpen(processSpec.turn, processGeneration, open)',
+    'function useSearchableHidden(hidden, reveal)',
+    'element.setAttribute("hidden", "until-found")',
+    'element.addEventListener("beforematch", reveal)',
+    'const TurnProcessNodeView',
     '"aria-expanded": open',
-    'hidden: !open',
-    '"data-chat-anchor-key": item.key',
-    '"aria-live": "polite"',
-    '"workTree.title": "工作过程"',
-    '"workTree.title": "Work activity"',
-    '@media(prefers-reduced-motion:reduce)'
-  ]) assert.match(once.source, new RegExp(contract.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'))
-  assert.doesNotMatch(once.source, /wasActive\.current|setOpen\(item\.active\)|children: item\.nodeKeys\.map|item\.nodeKeys\.slice\(0, renderedCount\)|buildConversationWorkTreeItems\(order, nodeStore\)\.map|\[order, nodeStore\]/u)
+    'turnProcess.setOpen(!open)',
+    'var MutableChatNodeStore = class'
+  ]) assert.match(source, new RegExp(contract.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'))
+  assert.doesNotThrow(() => new Function(source))
 })

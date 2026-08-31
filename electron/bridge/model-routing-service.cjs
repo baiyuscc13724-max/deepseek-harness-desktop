@@ -202,9 +202,15 @@ function visitRows(rows, pathParts, document, route) {
 }
 
 async function resolvePresetSource(paths, presetId) {
-  const shipped = path.join(paths.shippedPresetRoot, presetId)
-  const shippedComposition = await readText(path.join(shipped, 'agent.cordis.yml'))
-  if (shippedComposition) return shipped
+  const shippedRoots = [
+    paths.shippedPresetRoot,
+    path.resolve(paths.shippedPresetRoot, '..', '..', '..', 'dsh-agent-presets', 'presets')
+  ]
+  for (const root of new Set(shippedRoots)) {
+    const shipped = path.join(root, presetId)
+    const shippedComposition = await readText(path.join(shipped, 'agent.cordis.yml'))
+    if (shippedComposition) return shipped
+  }
   const user = path.join(paths.userPresetRoot, presetId)
   const userComposition = await readText(path.join(user, 'agent.cordis.yml'))
   if (userComposition && path.resolve(user) !== path.resolve(paths.managedPreset)) return user

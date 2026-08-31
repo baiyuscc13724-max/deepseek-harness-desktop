@@ -22,6 +22,8 @@ const PAYLOAD_KEYS = Object.freeze({
   transition: new Set(["to", "blockReason", "attemptRef", "reviewRef"]),
   comment: new Set(["commentRef", "kind", "body"]),
   "relation.add": new Set(["relationRef", "targetTaskRef", "relationType"]),
+  "dependency.add": new Set(["relationRef", "blockerTaskRef"]),
+  "dependency.remove": new Set(["blockerTaskRef"]),
   "attempt.start": new Set(["attemptRef"]),
   "attempt.submit": new Set(["attemptRef"]),
   review: new Set(["reviewRef", "attemptRef", "verdict", "body"]),
@@ -128,10 +130,26 @@ class ProjectTaskCommandService {
       const targetTaskRef = nonEmptyString(command.payload.targetTaskRef, "targetTaskRef", 256);
       if (this.store.getTask({ projectRef: command.projectRef, taskRef: targetTaskRef }) === undefined) throw serviceError("relation target task does not exist", "PROJECT_TASK_NOT_FOUND");
       const relation = { sourceTaskRef: task.taskRef, targetTaskRef, type: nonEmptyString(command.payload.relationType, "relationType", 64) };
-      assertAcyclicTaskRelations([...this.store.listRelations({ projectRef: command.projectRef }), relation]);
+      assertAcyclicTaskRelations([relation]);
       const relationRef = nonEmptyString(command.payload.relationRef, "relationRef", 256);
       this.#saveActor(command.projectRef, actor, timestamp);
       return this.store.mutateTask({ ...base, type: "task.relation_added", patch: { requirementsChanged: ["parent", "blocks"].includes(relation.type) }, records: [{ kind: "relation", relationRef, targetTaskRef, relationType: relation.type, createdByActorRef: actor.actorRef }], eventPayload: { relationRef, targetTaskRef, relationType: relation.type } });
+    }
+    if (command.type === "dependency.add" || command.type === "dependency.remove") {
+      assertActorCan(actor, "edit_requirements", task);
+      const blockerTaskRef = nonEmptyString(command.payload.blockerTaskRef, "blockerTaskRef", 256);
+      if (this.store.getTask({ projectRef: command.projectRef, taskRef: blockerTaskRef }) === undefined) throw serviceError("dependency blocker task does not exist", "PROJECT_TASK_NOT_FOUND");
+      const relation = { sourceTaskRef: blockerTaskRef, targetTaskRef: task.taskRef, type: "blocks" };
+      const existing = this.store.hasTaskRelation({ projectRef: command.projectRef, ...relation });
+      if (command.type === "dependency.add") {
+        if (existing) throw serviceError("blocking dependency already exists", "PROJECT_TASK_RELATION_EXISTS");
+        const relationRef = nonEmptyString(command.payload.relationRef, "relationRef", 256);
+        this.#saveActor(command.projectRef, actor, timestamp);
+        return this.store.mutateTask({ ...base, type: "task.dependency_added", patch: { requirementsChanged: true }, records: [{ kind: "relation", relationRef, sourceTaskRef: blockerTaskRef, targetTaskRef: task.taskRef, relationType: "blocks", createdByActorRef: actor.actorRef }], eventPayload: { relationRef, blockerTaskRef, blockedTaskRef: task.taskRef } });
+      }
+      if (!existing) throw serviceError("blocking dependency does not exist", "PROJECT_TASK_RELATION_NOT_FOUND");
+      this.#saveActor(command.projectRef, actor, timestamp);
+      return this.store.mutateTask({ ...base, type: "task.dependency_removed", patch: { requirementsChanged: true }, records: [{ kind: "relation.remove", sourceTaskRef: blockerTaskRef, targetTaskRef: task.taskRef, relationType: "blocks" }], eventPayload: { blockerTaskRef, blockedTaskRef: task.taskRef } });
     }
     if (command.type === "attempt.start") {
       assertActorCan(actor, "submit_review", task);
@@ -243,7 +261,7 @@ class ProjectCollaborationService {
     const collaboration = this.store.readCollaborationSnapshot({ projectRef, ...(historyLimit === undefined ? {} : { historyLimit }), ...(beforeRevision === undefined ? {} : { beforeRevision }) });
     if (collaboration === undefined) return { available: false, writable: coordinator(actor), projectRevision: this.store.getProjectRevision(projectRef) };
     const taskPage = this.store.readTaskWindow({ projectRef, limit: taskLimit, ...(taskBoundary ?? {}) });
-    const tasks = taskPage.tasks.map((task) => ({ ...task, collaborationStatus: collaborationTaskStatus(task) }));
+    const tasks = taskPage.tasks.map((task) => ({ ...task, collaborationStatus: collaborationTaskStatus(task), blockedBy: this.store.getBlockingTaskRefs({ projectRef, taskRef: task.taskRef }) }));
     const totals = { ...collaboration.totals, tasks: taskPage.totalTasks, unclaimed: 0, claimed: 0, inProgress: 0, inReview: 0, done: 0, blocked: 0 };
     for (const task of tasks) {
       const key = { unclaimed: "unclaimed", claimed: "claimed", in_progress: "inProgress", in_review: "inReview", done: "done", blocked: "blocked" }[task.collaborationStatus];
@@ -256,7 +274,7 @@ class ProjectCollaborationService {
     const actor = this.#actor(execution, input.projectRef);
     const window = this.store.readCollaborationSectionWindow({ ...input, projectRef: actor.projectRef });
     let items = window.items;
-    if (input.section === "tasks") items = items.map((task) => ({ ...task, collaborationStatus: collaborationTaskStatus(task) }));
+    if (input.section === "tasks") items = items.map((task) => ({ ...task, collaborationStatus: collaborationTaskStatus(task), blockedBy: this.store.getBlockingTaskRefs({ projectRef: actor.projectRef, taskRef: task.taskRef }) }));
     if (input.section === "requests") items = items.map((request) => ({
       ...request,
       mine: request.requesterActorRef === actor.actorRef,

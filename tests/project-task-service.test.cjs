@@ -259,26 +259,43 @@ test('a later requirement change invalidates submitted attempts and supersedes e
   assert.throws(() => fx.service.execute(fx.ownerExecution, command('transition', 8, { to: 'done', attemptRef: 'attempt_reviewed', reviewRef: 'review_then_stale' })), error => error.code === 'PROJECT_TASK_ATTEMPT_INVALID' || error.code === 'PROJECT_TASK_REQUIREMENTS_STALE')
 }))
 
-test('claim and transition to in_progress derive blockers from persisted block relations', async () => usingFixture(async fx => {
+test('explicit blocker dependencies use blocked-task revisions and can be removed with an audited command', async () => usingFixture(async fx => {
   const blockedTaskRef = `task_${'B'.repeat(24)}`
   fx.service.executeCommand(fx.ownerExecution, command('create', 0, { title: 'Blocker' }))
   fx.service.executeCommand(fx.ownerExecution, command('create', 0, { title: 'Blocked' }, { taskRef: blockedTaskRef, commandId: 'command_create_blocked', eventRef: 'event_create_blocked' }))
-  fx.service.executeCommand(fx.ownerExecution, command('relation.add', 1, { relationRef: 'relation_blocks', targetTaskRef: blockedTaskRef, relationType: 'blocks' }))
-  const assignBlocked = command('assign', 1, {}, { taskRef: blockedTaskRef, commandId: 'command_assign_blocked', eventRef: 'event_assign_blocked' })
+  fx.store.listRelations = () => assert.fail('dependency commands must not materialize the complete relation graph')
+  const added = fx.service.executeCommand(fx.ownerExecution, command('dependency.add', 1, { relationRef: 'relation_blocks', blockerTaskRef: taskRef }, { taskRef: blockedTaskRef, commandId: 'command_add_blocker', eventRef: 'event_add_blocker' }))
+  assert.equal(added.task.taskRef, blockedTaskRef)
+  assert.deepEqual(fx.store.getBlockingTaskRefs({ projectRef, taskRef: blockedTaskRef }), [taskRef])
+  assert.deepEqual(fx.store.getBlockingTaskRefs({ projectRef, taskRef }), [])
+  const assignBlocked = command('assign', 2, {}, { taskRef: blockedTaskRef, commandId: 'command_assign_blocked', eventRef: 'event_assign_blocked' })
   fx.service.executeCommand(fx.ownerExecution, assignBlocked, { targetExecution: fx.agentExecution })
-  assert.throws(() => fx.service.executeCommand(fx.agentExecution, command('claim', 2, {}, { taskRef: blockedTaskRef, commandId: 'command_claim_blocked', eventRef: 'event_claim_blocked' })), error => error.code === 'PROJECT_TASK_DEPENDENCY_BLOCKED' && error.blockedBy.includes(taskRef))
-  assert.throws(() => fx.service.executeCommand(fx.ownerExecution, command('transition', 2, { to: 'in_progress' }, { taskRef: blockedTaskRef, commandId: 'command_transition_blocked', eventRef: 'event_transition_blocked' })), error => error.code === 'PROJECT_TASK_DEPENDENCY_BLOCKED' && error.blockedBy.includes(taskRef))
-  assert.throws(() => fx.service.executeCommand(fx.ownerExecution, command('transition', 2, { to: 'in_progress', blockedBy: [] }, { taskRef: blockedTaskRef, commandId: 'command_payload_blockers', eventRef: 'event_payload_blockers' })), /unsupported fields/u)
+  assert.throws(() => fx.service.executeCommand(fx.agentExecution, command('claim', 3, {}, { taskRef: blockedTaskRef, commandId: 'command_claim_blocked', eventRef: 'event_claim_blocked' })), error => error.code === 'PROJECT_TASK_DEPENDENCY_BLOCKED' && error.blockedBy.includes(taskRef))
+  assert.throws(() => fx.service.executeCommand(fx.ownerExecution, command('transition', 3, { to: 'in_progress' }, { taskRef: blockedTaskRef, commandId: 'command_transition_blocked', eventRef: 'event_transition_blocked' })), error => error.code === 'PROJECT_TASK_DEPENDENCY_BLOCKED' && error.blockedBy.includes(taskRef))
+  assert.throws(() => fx.service.executeCommand(fx.ownerExecution, command('transition', 3, { to: 'in_progress', blockedBy: [] }, { taskRef: blockedTaskRef, commandId: 'command_payload_blockers', eventRef: 'event_payload_blockers' })), /unsupported fields/u)
+  const removeCommand = command('dependency.remove', 3, { blockerTaskRef: taskRef }, { taskRef: blockedTaskRef, commandId: 'command_remove_blocker', eventRef: 'event_remove_blocker' })
+  const removed = fx.service.executeCommand(fx.ownerExecution, removeCommand)
+  assert.equal(removed.task.revision, 4)
+  assert.deepEqual(fx.store.getBlockingTaskRefs({ projectRef, taskRef: blockedTaskRef }), [])
+  assert.equal(fx.service.executeCommand(fx.ownerExecution, removeCommand).duplicate, true)
+  assert.equal(fx.service.executeCommand(fx.agentExecution, command('claim', 4, {}, { taskRef: blockedTaskRef, commandId: 'command_claim_unblocked', eventRef: 'event_claim_unblocked' })).task.status, 'in_progress')
 }))
 
-test('relations are persisted atomically and ordering cycles are rejected', async () => usingFixture(async fx => {
+test('legacy directional relations can be audited, removed, and replaced while ordering cycles stay rejected', async () => usingFixture(async fx => {
   fx.service.execute(fx.ownerExecution, command('create', 0, { title: 'First' }))
   const secondTaskRef = `task_${'U'.repeat(24)}`
   fx.service.execute(fx.ownerExecution, command('create', 0, { title: 'Second' }, { taskRef: secondTaskRef, commandId: 'command_create_second', eventRef: 'event_create_second' }))
-  fx.service.execute(fx.ownerExecution, command('relation.add', 1, { relationRef: 'relation_first', targetTaskRef: secondTaskRef, relationType: 'blocks' }))
-  assert.equal(fx.store.listRelations({ projectRef }).length, 1)
-  assert.throws(() => fx.service.execute(fx.ownerExecution, command('relation.add', 1, { relationRef: 'relation_cycle', targetTaskRef: taskRef, relationType: 'blocks' }, { taskRef: secondTaskRef, commandId: 'command_cycle', eventRef: 'event_cycle' })), error => error.code === 'PROJECT_TASK_RELATION_CYCLE')
-  assert.equal(fx.store.listRelations({ projectRef }).length, 1)
+  const listRelations = fx.store.listRelations.bind(fx.store)
+  fx.store.listRelations = () => assert.fail('relation commands must not materialize the complete relation graph')
+  fx.service.execute(fx.ownerExecution, command('relation.add', 1, { relationRef: 'legacy_directional_relation', targetTaskRef: secondTaskRef, relationType: 'blocks' }))
+  assert.equal(listRelations({ projectRef }).length, 1)
+  const removed = fx.service.execute(fx.ownerExecution, command('dependency.remove', 1, { blockerTaskRef: taskRef }, { taskRef: secondTaskRef, commandId: 'command_remove_legacy_direction', eventRef: 'event_remove_legacy_direction' }))
+  assert.equal(removed.task.revision, 2)
+  assert.equal(listRelations({ projectRef }).length, 0)
+  fx.service.execute(fx.ownerExecution, command('dependency.add', 2, { relationRef: 'replacement_relation', blockerTaskRef: taskRef }, { taskRef: secondTaskRef, commandId: 'command_replace_direction', eventRef: 'event_replace_direction' }))
+  assert.equal(listRelations({ projectRef }).length, 1)
+  assert.throws(() => fx.service.execute(fx.ownerExecution, command('dependency.add', 2, { relationRef: 'relation_cycle', blockerTaskRef: secondTaskRef }, { taskRef, commandId: 'command_cycle', eventRef: 'event_cycle' })), error => error.code === 'PROJECT_TASK_RELATION_CYCLE')
+  assert.equal(listRelations({ projectRef }).length, 1)
 }))
 
 test('collaboration service enforces coordinator, owning-root member scope, handoff target, and safe task workflow projection', async () => usingFixture(async fx => {

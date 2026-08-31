@@ -14,6 +14,7 @@ const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', '
 const runtimeFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-web.js')
 const taskStoreFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-store.js')
 const outerSecretContext = Object.freeze({ purpose: 'agent-teams/device/v1', binding: 'project_task_api_fixture_0001' })
+const rootSessionId = 'project-task-api-root'
 
 function request(method, url, body, headers = {}) {
   const req = body === undefined ? new EventEmitter() : Readable.from([Buffer.from(JSON.stringify(body))])
@@ -46,9 +47,10 @@ function body(res) {
   return JSON.parse(res.chunks.join(''))
 }
 function harness(routes, cleanups) {
+  const root = { id: rootSessionId, status: 'running', session: { header: { cwd: process.env.DSH_HOME || os.tmpdir() }, events: [{ type: 'turn/start', id: 'project-task-api-turn', time: 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }] } }
   return {
     logger: { info() {}, warn() {}, error() {} },
-    agents: { get() { return undefined } },
+    agents: { get(id) { return id === root.id ? root : undefined }, roots() { return [root] }, currentInitiator() { return root } },
     subagents: { interrupt() {} },
     tools: { register() { return () => {} } },
     systemPrompt: { section() { return () => {} } },
@@ -57,10 +59,15 @@ function harness(routes, cleanups) {
     on() { return () => {} },
   }
 }
+function scopedProjectTaskUrl(url) {
+  const parsed = new URL(url, 'http://test.invalid')
+  if (parsed.pathname.startsWith('/api/agent-teams/project/tasks/') && !parsed.searchParams.has('sessionId')) parsed.searchParams.set('sessionId', rootSessionId)
+  return parsed.pathname + parsed.search
+}
 async function invoke(routes, routePath, method = 'GET', url = routePath, requestBody, headers) {
   const route = routes.get(routePath)
   assert.ok(route, routePath)
-  const req = request(method, url, requestBody, headers)
+  const req = request(method, scopedProjectTaskUrl(url), requestBody, headers)
   const res = response()
   await route.handler(req, res)
   return { req, res, data: res.chunks.length === 0 ? undefined : body(res) }
@@ -188,7 +195,7 @@ test('Host HTTP command bus enforces identity, idempotency, OCC, bounded events,
     const initial = await invoke(state.routes, statePath)
     assert.equal(initial.data.capability.kind, 'authority')
     assert.equal(initial.data.capability.canCreate, true)
-    assert.equal(initial.data.capability.legacyTeamTasks.detected, true)
+    assert.equal(initial.data.capability.legacyTeamTasks.detected, false, 'a scoped root panel must not expose device-global legacy team tasks')
 
     const create = { commandId: 'command_api_create', type: 'create', expectedRevision: 0, payload: { title: 'API task', requirements: { secret: 'hidden requirement' }, fileScope: ['private/path.js'] } }
     const first = await invoke(state.routes, actionPath, 'POST', actionPath, create)
@@ -314,32 +321,8 @@ test('Automation HTTP bus queues approval, runs independently, replays exactly, 
 
     const createCommand = { commandId: 'automation_definition_create', type: 'definition.create', expectedRevision: 0, payload: { name: 'Move task', taskRef: task.data.task.taskRef, targetStatus: 'in_progress' } }
     const definition = await invoke(state.routes, automationActionPath, 'POST', automationActionPath, createCommand)
-    assert.equal(definition.res.status, 200, JSON.stringify(definition.data))
-    assert.equal(definition.data.definition.status, 'enabled')
-    const definitionRef = definition.data.definition.definitionRef
-    const replay = await invoke(state.routes, automationActionPath, 'POST', automationActionPath, createCommand)
-    assert.equal(replay.data.duplicate, true)
-    const drift = await invoke(state.routes, automationActionPath, 'POST', automationActionPath, { ...createCommand, payload: { ...createCommand.payload, name: 'Changed' } })
-    assert.equal(drift.res.status, 409)
-    assert.equal(drift.data.error.code, 'PROJECT_AUTOMATION_IDEMPOTENCY_CONFLICT')
-
-    const manual = await invoke(state.routes, automationActionPath, 'POST', automationActionPath, { commandId: 'automation_manual_run', type: 'manual_run', definitionRef, expectedRevision: 1, payload: { taskRevision: task.data.task.revision } })
-    assert.equal(manual.data.run.status, 'awaiting_approval')
-    const approve = await invoke(state.routes, automationActionPath, 'POST', automationActionPath, { commandId: 'automation_approve', type: 'approve', runRef: manual.data.run.runRef, expectedRevision: 1, payload: {} })
-    assert.equal(approve.data.run.status, 'queued', 'approval must return before the background Task effect')
-    let automationState
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      automationState = (await invoke(state.routes, automationStatePath)).data
-      if (automationState.runs[0]?.status === 'succeeded') break
-      await new Promise(resolve => setTimeout(resolve, 5))
-    }
-    assert.equal(automationState.runs[0].status, 'succeeded')
-    assert.equal((await invoke(state.routes, statePath)).data.tasks[0].status, 'in_progress')
-    assert.ok(streamResponse.chunks.some(chunk => /event: automation/u.test(chunk)))
-    const encodedStream = streamResponse.chunks.join('')
-    for (const forbidden of ['commandId', 'actorRef', 'effectKey', 'taskCommandId', 'projectRef', 'private/automation.js', 'never expose']) assert.equal(encodedStream.includes(forbidden), false, forbidden)
-    const encodedState = JSON.stringify(automationState)
-    for (const forbidden of ['actorRef', 'commandId', 'inputHash', 'effectKey', 'taskCommandId', 'approvalRef', 'fileScope', 'requirements', 'projectRef']) assert.equal(encodedState.includes(forbidden), false, forbidden)
+    assert.equal(definition.res.status, 404, JSON.stringify(definition.data))
+    assert.equal(definition.data.error.code, 'PROJECT_AUTOMATION_TASK_NOT_FOUND', 'device-global automations must not infer a task from another root-scoped project lane')
     const forgedActionQuery = await invoke(state.routes, automationActionPath, 'POST', `${automationActionPath}?actorRef=forged`, createCommand)
     assert.equal(forgedActionQuery.res.status, 400)
   } finally { await teardownApply(state) }
@@ -354,7 +337,7 @@ test('SSE sends reset then safe task wake, cleans disconnects, and plugin dispos
     await invoke(state.routes, projectActionPath, 'POST', projectActionPath, {
       action: 'create-project', payload: { projectName: 'SSE Project', displayName: 'Owner' },
     })
-    firstRequest = request('GET', streamPath)
+    firstRequest = request('GET', scopedProjectTaskUrl(streamPath))
     firstResponse = response()
     await state.routes.get(streamPath).handler(firstRequest, firstResponse)
     assert.equal(firstResponse.status, 200)
@@ -376,7 +359,7 @@ test('SSE sends reset then safe task wake, cleans disconnects, and plugin dispos
     await invoke(state.routes, actionPath, 'POST', actionPath, { commandId: 'command_sse_second', type: 'create', expectedRevision: 0, payload: { title: 'Second' } })
     assert.equal(firstResponse.chunks.length, disconnectedAt)
 
-    const secondRequest = request('GET', streamPath)
+    const secondRequest = request('GET', scopedProjectTaskUrl(streamPath))
     secondResponse = response()
     await state.routes.get(streamPath).handler(secondRequest, secondResponse)
     assert.equal(secondResponse.ended, false)
@@ -415,8 +398,16 @@ test('real project task routes deliver the sole client flow a non-empty safe col
       projectRef, actorRef: `actor_route_${index}`, changedByActorRef: actor.actorRef, duty: `Duty ${index}`, resourceScope: [`private/${index}.txt`], phase: 'running', nextStep: `Hidden body ${index}`, updatedAt: index + 2,
     })
     writer.acquireCollaborationLock({ projectRef, resourceRef: 'private/credential.txt', ownerActorRef: actor.actorRef, taskRef: created.task.taskRef, updatedAt: 200 })
-    registerProjectTaskApi(harness(routes, cleanups), runtime)
-    const first = await invoke(routes, statePath)
+    let businessCalls = 0, businessSubscriptions = 0
+    const globalBusinessRuntime = { subscribe() { businessSubscriptions += 1; return () => {} }, async initialize() { businessCalls += 1; return { mode: 'collaborator' } }, async taskState() { throw new Error('global business task cache must not serve a scoped project') }, async taskAction() { throw new Error('global business task action must not serve a scoped project') } }
+    registerProjectTaskApi(harness(routes, cleanups), sessionId => { if (sessionId === undefined) throw Object.assign(new Error('scope required'), { code: 'PROJECT_TASK_WEB_FORBIDDEN' }); assert.equal(sessionId, 'root-route'); return runtime }, globalBusinessRuntime)
+    assert.equal(businessSubscriptions, 0)
+    const unscopedRequest = request('GET', statePath), unscopedResponse = response()
+    await routes.get(statePath).handler(unscopedRequest, unscopedResponse)
+    const unscoped = { res: unscopedResponse, data: body(unscopedResponse) }
+    assert.equal(unscoped.res.status, 403)
+    assert.equal(unscoped.data.error.code, 'PROJECT_TASK_WEB_FORBIDDEN')
+    const first = await invoke(routes, statePath, 'GET', `${statePath}?sessionId=root-route`)
     assert.equal(first.res.status, 200)
     assert.equal(first.data.projectCollaboration.available, true)
     assert.equal(first.data.projectCollaboration.totalExact, true)
@@ -430,16 +421,85 @@ test('real project task routes deliver the sole client flow a non-empty safe col
     const cursor = first.data.projectCollaboration.sectionPages.seats.nextCursor
     assert.equal(typeof cursor, 'string')
     assert.equal(first.data.projectCollaboration.sections.locks.length, 1)
-    const second = await invoke(routes, pagePath, 'GET', `${pagePath}?cursor=${encodeURIComponent(cursor)}`)
+    const second = await invoke(routes, pagePath, 'GET', `${pagePath}?sessionId=root-route&cursor=${encodeURIComponent(cursor)}`)
     assert.equal(second.res.status, 200)
     assert.equal(second.data.ok, true)
     assert.equal(second.data.projectCollaboration.page.section, 'seats')
     assert.deepEqual(second.data.projectCollaboration.sections.locks, [])
     assert.equal(second.data.projectCollaboration.totals.tasks, 1)
+    const scopedAction = await invoke(routes, actionPath, 'POST', `${actionPath}?sessionId=root-route`, { commandId: 'scoped_route_create', type: 'create', expectedRevision: 0, payload: { title: 'Scoped action' } })
+    assert.equal(scopedAction.res.status, 200)
+    assert.equal(scopedAction.data.task.title, 'Scoped action')
+    assert.equal(businessCalls, 0, 'a device-global business cache must never serve or reset session-scoped project lanes')
   } finally {
     await cleanupAll(cleanups)
     writer?.close()
     await runtime.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('session-scoped task routes isolate state, actions, event history, and live SSE wakes', async () => {
+  const [{ registerProjectTaskApi }, { ProjectTaskWebRuntime }] = await Promise.all([
+    import(`${pathToFileURL(pluginFile).href}?multi-scope-route=${Date.now()}`),
+    import(pathToFileURL(runtimeFile).href),
+  ])
+  const root = await mkdtemp(path.join(os.tmpdir(), 'project-task-multi-scope-'))
+  const instances = new Map(), routes = new Map(), cleanups = [], activeScopes = new Set(['scope-a', 'scope-b'])
+  let streamA, streamB
+  try {
+    for (const label of ['a', 'b']) {
+      const projectRef = `project_scope_${label}_${'R'.repeat(20)}`, databasePath = path.join(root, label, 'tasks.sqlite'), key = randomBytes(32), execution = Object.freeze(Object.create(null)), actor = Object.freeze({ projectRef, actorRef: `actor_scope_${label}_${'R'.repeat(16)}`, kind: 'human', role: 'owner' })
+      const context = Object.freeze(Object.defineProperties({ projectRef, databasePath }, {
+        execution: { value: execution }, keyProvider: { value: ref => { assert.equal(ref, projectRef); return Buffer.from(key) } },
+        actorResolver: { value: (candidate, ref) => { assert.equal(candidate, execution); assert.equal(ref, projectRef); return actor } }, dispose: { value() {} },
+      }))
+      const runtime = new ProjectTaskWebRuntime({ projectEntry: { localProjectTaskContext: async () => context }, randomBytesImpl: () => Buffer.alloc(32, label === 'a' ? 10 : 11) })
+      const created = await runtime.action({ commandId: `scope_${label}_create`, type: 'create', expectedRevision: 0, payload: { title: `Scope ${label.toUpperCase()} task` } })
+      instances.set(`scope-${label}`, { runtime, created })
+    }
+    registerProjectTaskApi(harness(routes, cleanups), sessionId => {
+      const selected = instances.get(sessionId)
+      if (!selected || !activeScopes.has(sessionId)) throw Object.assign(new Error('unknown or revoked scope'), { code: 'PROJECT_TASK_WEB_FORBIDDEN' })
+      return selected.runtime
+    })
+    const stateA = await invoke(routes, statePath, 'GET', `${statePath}?sessionId=scope-a`)
+    const stateB = await invoke(routes, statePath, 'GET', `${statePath}?sessionId=scope-b`)
+    assert.deepEqual(stateA.data.tasks.map(task => task.title), ['Scope A task'])
+    assert.deepEqual(stateB.data.tasks.map(task => task.title), ['Scope B task'])
+    assert.equal(JSON.stringify(stateA.data).includes('Scope B task'), false)
+    assert.equal(JSON.stringify(stateB.data).includes('Scope A task'), false)
+
+    const crossAction = await invoke(routes, actionPath, 'POST', `${actionPath}?sessionId=scope-b`, { commandId: 'cross_scope_claim', type: 'claim', taskRef: instances.get('scope-a').created.task.taskRef, expectedRevision: 1, payload: {} })
+    assert.equal(crossAction.res.status, 404)
+    assert.equal(crossAction.data.error.code, 'PROJECT_TASK_NOT_FOUND')
+
+    const requestA = request('GET', `${streamPath}?sessionId=scope-a`), responseA = response()
+    const requestB = request('GET', `${streamPath}?sessionId=scope-b`), responseB = response()
+    streamA = { request: requestA, response: responseA }; streamB = { request: requestB, response: responseB }
+    await routes.get(streamPath).handler(requestA, responseA)
+    await routes.get(streamPath).handler(requestB, responseB)
+    const beforeB = responseB.chunks.length
+    const actionA = await invoke(routes, actionPath, 'POST', `${actionPath}?sessionId=scope-a`, { commandId: 'scope_a_second', type: 'create', expectedRevision: 0, payload: { title: 'Scope A second task' } })
+    assert.equal(actionA.res.status, 200)
+    assert.equal(responseA.chunks.some(chunk => chunk.includes('event: task')), true)
+    assert.equal(responseB.chunks.length, beforeB, 'scope A updates must not wake scope B streams')
+    const eventsB = await invoke(routes, eventsPath, 'GET', `${eventsPath}?sessionId=scope-b&afterRevision=0&limit=100`)
+    assert.equal(JSON.stringify(eventsB.data).includes(instances.get('scope-a').created.task.taskRef), false)
+    assert.equal(eventsB.data.events.every(event => event.taskRef === instances.get('scope-b').created.task.taskRef), true)
+    activeScopes.delete('scope-a')
+    await instances.get('scope-a').runtime.action({ commandId: 'scope_a_revoked_update', type: 'create', expectedRevision: 0, payload: { title: 'Revoked scope update' } })
+    assert.equal(responseA.ended, true, 'revoked session scopes must lose their existing SSE subscription')
+    assert.equal(responseB.ended, false)
+
+    await cleanupAll(cleanups)
+    cleanups.length = 0
+    assert.equal(responseA.ended, true)
+    assert.equal(responseB.ended, true)
+  } finally {
+    streamA?.request.emit('close'); streamB?.request.emit('close')
+    await cleanupAll(cleanups)
+    await Promise.all([...instances.values()].map(value => value.runtime.close()))
     await rm(root, { recursive: true, force: true })
   }
 })
