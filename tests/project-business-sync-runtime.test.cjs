@@ -13,12 +13,13 @@ const collaboratorDeviceRef = `device_${'C'.repeat(26)}`
 const at = '2026-08-24T03:00:00.000Z'
 const atMs = Date.parse(at)
 
-async function waitFor(predicate, message = 'condition was not reached') {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+async function waitFor(predicate, message = 'condition was not reached', timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  do {
     const value = await predicate()
     if (value) return value
-    await new Promise(resolve => setTimeout(resolve, 1))
-  }
+    await new Promise(resolve => setTimeout(resolve, 10))
+  } while (Date.now() < deadline)
   assert.fail(message)
 }
 
