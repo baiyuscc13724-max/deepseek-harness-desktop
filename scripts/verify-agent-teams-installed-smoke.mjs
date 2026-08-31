@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
@@ -168,7 +168,10 @@ export async function verifyRuntimeApi(url, workspacePath, sessionId, sessionCoo
   }
   const workspace = await rpc('workspace/create', { path: workspacePath })
   const workspaceId = workspace?.workspace?.workspaceId
-  if (typeof workspaceId !== 'string' || workspaceId.length === 0 || workspace?.workspace?.path !== workspacePath) throw new Error(`DSH workspace/create fail-closed: unexpected workspace result: ${JSON.stringify(workspace)}`)
+  const returnedWorkspacePath = workspace?.workspace?.path
+  const sameWorkspace = typeof returnedWorkspacePath === 'string' && returnedWorkspacePath.length > 0
+    && await realpath(returnedWorkspacePath) === await realpath(workspacePath)
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0 || !sameWorkspace) throw new Error(`DSH workspace/create fail-closed: unexpected workspace result: ${JSON.stringify(workspace)}`)
   const created = await rpc('session/create', { workspaceId, sessionId })
   if (created?.sessionId !== sessionId) throw new Error(`DSH session/create fail-closed: unexpected session result: ${JSON.stringify(created)}`)
   const title = 'Installed artifact DOM smoke'
