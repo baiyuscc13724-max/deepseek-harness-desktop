@@ -21,8 +21,8 @@ const REJECTED_RUN_ROOT_TOKENS = Object.freeze(['160456', '162000', '164000', '1
 const ACCEPTED = Object.freeze({
   'package.json': '204414f269f57382be80d05d4e05e11a4c38b00d4dbd9da16229dc7e671f5799',
   'package-lock.json': '3dcd39d8a07c2ea394722b7059b01c89531db97486e67818e349c991cb552875',
-  'scripts/patch-official-runtime.mjs': '2f851459dd31e4608ee769b1d98aca2d0f3c99ac92a4b49b40f8f8b35a5ab276',
-  'scripts/verify-static.mjs': '6ef688957018dbffea85b56436e0b27856ce60a21431fc078b4db9fe236019b3',
+  'scripts/patch-official-runtime.mjs': '1bca68a7a8b48c03035b0aa09567eb7e6c4d19127191b6eaa7f09cc352654267',
+  'scripts/verify-static.mjs': 'c45c567b5865aed27a4b61b67846b6878dc957e6ef62733b58ee03fe0d1482dc',
   'tests/official-alpha2-static-release-contract.test.cjs': '1e1e85e9470409cf07272517e0bd3b678ab3a6b491db8c3b2bd908d1bb97668b',
   'tests/official-alpha2-runtime-migration.test.cjs': '7aa564f248b32b88a6eb83bc2eb5139ab3e95bbdaf99325a467afc910f849c4e',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',

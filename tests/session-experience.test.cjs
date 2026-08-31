@@ -364,6 +364,41 @@ test('client keeps session id copy in archive and sidebar paths without a top-ri
   assert.match(source, /exports\.inject = \["slots", "locale", "sessions", "workspaces", "inputTriggers"\]/u)
 })
 
+test('official alpha.2 native artifacts retain the session experience seams at their current owners', async () => {
+  const [chat, conversation, sessionController] = await Promise.all([
+    readFile(path.join(root, 'node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js'), 'utf8'),
+    readFile(path.join(root, 'node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js'), 'utf8'),
+    readFile(path.join(root, 'node_modules/@deepseek-ai/dsh-api-session-controller/lib/client.js'), 'utf8')
+  ])
+
+  const chatStore = chat.slice(chat.indexOf('function createChatStore()'))
+  assert.match(chatStore, /return \(0, _deepseek_ai_dsh_client_store\.defineStore\)\(\{\s*init: \(\) => \(\{\s*selection: null,\s*turnProcesses: \[\]/u,
+    'chat selection state must remain a scope-local store, not the removed draft persistence seam')
+  assert.match(chatStore, /setTurnProcessOpen: \(draft, turn, generation, open\) => \{/u,
+    'chat store must retain the turn-process disclosure action')
+
+  assert.match(conversation, /const promptError = useSession\(\(s\) => s\.promptError\) \?\? null/u,
+    'composer must select the controller prompt error')
+  assert.match(conversation, /showToast\(error\.code === "session\/attachment-invalid"[\s\S]{0,280}: `\$\{error\.message\} \(\$\{error\.code\}\)`\)/u,
+    'composer must expose an actionable message and code for ordinary prompt failures')
+
+  const anchored = chat.slice(chat.indexOf('const loadOlderAnchored = () =>'))
+  assert.match(anchored, /const row = pagingAnchor\(local, el\);[\s\S]{0,260}anchorRef\.current = \{\s*key: row\.dataset\.chatAnchorKey,\s*top: flowTop\(row, el\)\s*\}/u,
+    'chat paging must capture a stable key/top anchor before prepending history')
+  assert.match(anchored, /\}\s*loadOlder\(\);/u, 'anchored paging must invoke the session load operation')
+
+  assert.match(chat, /const label = active \? t\("message\.retry\.active"\) : node\.retryState === "cancelled" \? t\("message\.retry\.cancelled"\) : node\.retryState === "started" \? t\("message\.retry\.started"\) : t\("message\.retry\.scheduled"\);/u,
+    'retry rows must distinguish active, cancelled, started, and scheduled states')
+  assert.match(chat, /role: "status",\s*children: t\("message\.retry\.status", \{/u,
+    'retry progress must remain available to assistive technology')
+  assert.match(chat, /children: t\("message\.retry\.failure"\)/u, 'retry details must retain the failure label')
+
+  assert.match(sessionController, /this\.selection = \(0, _deepseek_ai_dsh_client_store\.createSnapshotStore\)\(\{\}, \{ persist: \{ name: "dsh\.sessions\.current" \} \}\);/u,
+    'session controller must persist the active selection under the native key')
+  assert.match(sessionController, /const restored = this\.selection\.getSnapshot\(\);\s*this\.manager = new SessionManager\(remote, restored\.sessionId, restored\.subagentAddress\);/u,
+    'session controller must restore both real-session and subagent selection addresses')
+})
+
 test('official alpha.2 workspace sidebar owns the accessible session action menu', async () => {
   const source = await readFile(path.join(root, 'node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js'), 'utf8')
   for (const marker of [
