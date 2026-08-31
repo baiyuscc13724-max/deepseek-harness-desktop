@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -11,16 +11,22 @@ import { AgentCollaborationService } from "./collaboration-service.js";
 import { consumeDesktopAuthorizationCapability } from "./desktop-authorization-capability.js";
 import { consumeDesktopGitCapability } from "./desktop-git-capability.js";
 import { ProjectEntryService } from "./project-entry-service.js";
+import { ProjectEntryRegistry } from "./project-entry-registry.js";
+import { createCustomOfficialCoreProvider, createOfficialCorePorts, isOfficialCorePorts } from "./official-core-ports.js";
 import { ProjectFoundationsRuntime } from "./project-foundations-runtime.js";
+import { ProjectSessionLaunchRegistry, ProjectSessionLaunchRuntime, resolveProjectSessionLaunchProvider } from "./project-session-launch.js";
 import { ProjectAutomationWebRuntime, projectAutomationWebError } from "./project-automation-web.js";
 import { ProjectBusinessSyncRuntime } from "./project-business-sync-runtime.js";
+import { createProjectTeamBoard, createProjectTeamBoardPage, decorateProjectTeamBoardRecovery, paginatePreparedProjectTeamBoard, prepareProjectTeamBoard, UI_PROJECT_TEAM_BOARD_MAX_BYTES, UI_PROJECT_TEAM_BOARD_MAX_TASKS, UI_PROJECT_TEAM_BOARD_MAX_TEAMS } from "./project-team-board.js";
 import { ProjectTaskWebRuntime, projectTaskWebError } from "./project-task-web.js";
+import { ProjectCollaborationService, ProjectTaskCommandService } from "./project-task-service.js";
+import { ProjectTaskStore } from "./project-task-store.js";
 
 /** Host-only agent-team coordinator. A future client bundle is advertised by package metadata. */
 const name = "agent-teams";
 const inject = ["agents", "subagents", "tools", "systemPrompt", "webServer"];
-const STORE_VERSION = 6;
-const LEGACY_STORE_VERSIONS = new Set([1, 2, 3, 4, 5]);
+const STORE_VERSION = 7;
+const LEGACY_STORE_VERSIONS = new Set([1, 2, 3, 4, 5, 6]);
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_TEAM_MESSAGES = 500;
 const MAX_TEAM_TASKS = 1_000;
@@ -35,6 +41,7 @@ const UI_TASK_RESULT_CHARS = 12_000;
 const SSE_COALESCE_MS = 50;
 const TEAM_SSE_KEEPALIVE_MS = 15_000;
 const PROJECT_TASK_SSE_KEEPALIVE_MS = 15_000;
+const UI_PROJECT_TEAM_BOARD_CACHE_MAX_PROJECTS = 16;
 const SUBAGENT_RECONCILE_MS = 20;
 const GRACEFUL_LIFECYCLE_TIMEOUT_MS = 120_000;
 const GLOBAL_TEAM_ACTIVE_ACTIVATIONS = 8;
@@ -49,7 +56,13 @@ const MAX_EXPANSION_REQUEST_CHARS = 24_000;
 const MAX_BOOTSTRAP_ITEMS = 4;
 const MAX_TASK_ATTEMPT_HISTORY = 24;
 const MAX_TASK_INTERRUPTION_HISTORY = 24;
+const MAX_TASK_LIFECYCLE_EVENTS = 256;
+const MAX_ROUTING_RECEIPTS = 2_048;
 const MAX_OWNERSHIP_HISTORY = 24;
+const MAX_MEMBER_RECOVERY_RECEIPTS = 24;
+const MEMBER_RECOVERY_ACTIONS = Object.freeze(["retry", "replace"]);
+const MEMBER_RECOVERY_STATES = Object.freeze(["prepared", "delivered", "failed", "outcome_unknown"]);
+const MEMBER_RECOVERY_PHASES = Object.freeze(["prepared", "retry_dispatching", "drain_started", "start_dispatched", "child_started", "published", "followup_dispatching", "followup_returned", "reconciled"]);
 const PLAN_PHASES = Object.freeze(["draft", "committed", "active"]);
 const PLAN_AUTHORIZATION_STATES = Object.freeze(["host_verified", "human_attested", "unknown"]);
 const PLAN_MIGRATION_STATES = Object.freeze(["ready", "legacy_unplanned", "legacy_active_gate"]);
@@ -62,9 +75,14 @@ const MODEL_TIERS = Object.freeze(["main", "subagent"]);
 const MANAGED_MEMBER_DENIED_TOOLS = Object.freeze(["subagent", "subagent_fork", "workflow", "ralph"]);
 const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u;
 const MODEL_ID = /^\S{1,256}$/u;
-const TASK_STATES = Object.freeze(["pending", "in_progress", "completed", "cancelled"]);
-const MUTABLE_TASK_STATES = Object.freeze(["pending", "in_progress", "completed"]);
+const TASK_STATES = Object.freeze(["pending", "in_progress", "submitted", "completed", "cancelled"]);
+const MUTABLE_TASK_STATES = Object.freeze(["pending", "in_progress", "submitted", "completed"]);
 const TERMINAL_TASK_STATES = new Set(["completed", "cancelled"]);
+const TASK_LIFECYCLE_KINDS = Object.freeze(["claim", "submission", "acceptance", "reopen", "reject", "cancel", "release", "migration"]);
+const ROUTING_LEVELS = Object.freeze(["level1", "level2", "level3"]);
+const ROUTING_REASON_CATEGORIES = Object.freeze(["simple_or_tightly_coupled", "single_auxiliary_executor", "independent_sustained_workstreams", "explicit_user_team_request"]);
+const ROUTING_CREATION_PATHS = Object.freeze(["none", "subagent", "team_start", "team_bootstrap"]);
+const ROUTING_OUTCOMES = Object.freeze(["recorded", "created", "reused", "failed"]);
 const TASK_WORKFLOW_EVENT_TYPES = new Set(["turn/start", "turn/end", "step/start", "step/end", "tool/call", "tool/result", "todo/write", "assistant/message", "llm/retry"]);
 const MEMBER_STATES = Object.freeze([
   "provisioning", "running", "idle", "ready", "failed", "shutting_down", "retired",
@@ -81,7 +99,8 @@ const USER_PAUSE_RECONCILIATIONS = new Map();
 const USER_PAUSE_EPOCHS = new Map();
 const STOPPABLE_MEMBER_STATES = new Set(["provisioning", "running", "idle", "ready", "shutting_down"]);
 const STORE_INSTANCES = new Map();
-const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap", "plan", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory", "closure"]);
+const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap", "plan", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory", "closure", "memberRecoveries"]);
+const MEMBER_RECOVERY_KEYS = new Set(["requestId", "inputHash", "action", "status", "phase", "memberId", "sessionId", "taskIds", "activeTaskIds", "activeClaims", "createdAt", "updatedAt", "pauseEpoch", "teamRevision", "replacementMemberId", "replacementSessionId", "errorCode", "errorStage", "errorMessage", "reconciledAt", "reconciledBy", "resolution"]);
 const HANDOFF_KEYS = new Set(["tokenHash", "sourceRootSessionId", "targetRootSessionId", "projectKey", "createdAt", "expiresAt"]);
 const OWNERSHIP_HISTORY_KEYS = new Set(["kind", "sourceRootSessionId", "targetRootSessionId", "projectKey", "tokenHash", "at", "pauseEpoch"]);
 const PLAN_KEYS = new Set(["phase", "revision", "hash", "committedAt", "activatedAt", "authorization", "migrationState"]);
@@ -91,8 +110,11 @@ const RESUME_NODE_KEYS = new Set(["memberId", "status", "reason"]);
 const BOOTSTRAP_KEYS = new Set(["requestId", "inputHash", "phase", "taskRefs", "memberRefs", "createdAt", "updatedAt"]);
 const BOOTSTRAP_TASK_REF_KEYS = new Set(["key", "taskId"]);
 const BOOTSTRAP_MEMBER_REF_KEYS = new Set(["key", "name", "status", "memberId", "sessionId", "errorCode", "errorStage"]);
-const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason", "result", "submission", "acceptance", "attempt", "claimId", "leaseEpoch", "attemptHistory", "interruptionHistory", "checkpoint", "nextStep", "capabilities", "externalEffects"]);
+const TASK_KEYS = new Set(["id", "title", "description", "state", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason", "result", "submission", "acceptance", "attempt", "claimId", "leaseEpoch", "attemptHistory", "interruptionHistory", "lifecycleLedger", "checkpoint", "nextStep", "capabilities", "externalEffects"]);
 const TASK_RESULT_KEYS = new Set(["text", "reportedAt", "truncated", "taskId", "claimId", "leaseEpoch", "reportedBy"]);
+const TASK_LIFECYCLE_EVENT_KEYS = new Set(["kind", "sequence", "at", "attempt", "claimId", "leaseEpoch", "actorId", "ownerEpoch", "reason"]);
+const ROUTING_RECEIPT_KEYS = new Set(["id", "rootSessionId", "turnKey", "projectKey", "level", "reasonCategory", "explicitUserTeamRequest", "candidateWorkstreams", "creationPath", "outcome", "teamId", "decisionAuthority", "createdAt", "finalizedAt"]);
+const ROUTING_RECEIPT_ARCHIVE_KEYS = new Set(["version", "count", "chainHash", "lastReceiptId", "lastArchivedAt"]);
 const TASK_SUBMISSION_KEYS = new Set(["taskId", "claimId", "leaseEpoch", "submittedAt", "submittedBy", "source"]);
 const TASK_ACCEPTANCE_KEYS = new Set(["taskId", "claimId", "leaseEpoch", "acceptedAt", "acceptedBy", "ownerEpoch"]);
 const RESOLVE_UNKNOWN_AUTHORIZATION_TOOL = "team_task_external_effect";
@@ -297,6 +319,82 @@ function positiveInteger(value, field, { allowZero = false } = {}) {
 function boundedPush(list, value, limit) {
   list.push(value);
   if (list.length > limit) list.splice(0, list.length - limit);
+}
+function appendTaskLifecycleEvent(task, event) {
+  task.lifecycleLedger ??= [];
+  // Preserve enough immutable slots for the shortest successful continuation.
+  // claim -> submission -> acceptance, submission -> acceptance, and a
+  // retry-producing transition -> claim -> submission -> acceptance. Terminal
+  // acceptance/cancel may consume the final slot. No historical entry is
+  // deleted, compacted, renumbered, or replaced.
+  const requiredAfter = ({ claim: 2, submission: 1, release: 3, reopen: 3, reject: 3 })[event.kind] ?? 0;
+  if (task.lifecycleLedger.length + 1 + requiredAfter > MAX_TASK_LIFECYCLE_EVENTS) {
+    reject("task lifecycle ledger has no safe capacity for this transition and its terminal continuation; accept or cancel the current work instead", "AGENT_TEAMS_TASK_LEDGER_FULL");
+  }
+  const entry = {
+    ...event,
+    sequence: task.lifecycleLedger.length + 1,
+    at: event.at ?? now(),
+    attempt: event.attempt ?? task.attempt ?? 0,
+  };
+  task.lifecycleLedger.push(entry);
+  return entry;
+}
+function validateTaskLifecycleLedger(task) {
+  const ledger = task.lifecycleLedger ?? [];
+  if (!Array.isArray(ledger) || ledger.length > MAX_TASK_LIFECYCLE_EVENTS) throw new TypeError("task.lifecycleLedger is invalid");
+  if (ledger.length === MAX_TASK_LIFECYCLE_EVENTS && !["completed", "cancelled"].includes(task.state)) throw new TypeError("a saturated task lifecycle ledger must already have an authoritative terminal outcome");
+  let previousTime = -Infinity;
+  for (const [index, entry] of ledger.entries()) {
+    const field = `task.lifecycleLedger[${index}]`;
+    if (!isRecord(entry)) throw new TypeError(`${field} must be an object`);
+    assertAllowedKeys(entry, TASK_LIFECYCLE_EVENT_KEYS, field);
+    assertEnum(entry.kind, TASK_LIFECYCLE_KINDS, `${field}.kind`);
+    if (entry.sequence !== index + 1) throw new TypeError("task lifecycle ledger sequence must be contiguous and append-only");
+    assertIsoDate(entry.at, `${field}.at`);
+    const timestamp = Date.parse(entry.at);
+    if (timestamp < previousTime) throw new TypeError("task lifecycle ledger timestamps must be ordered");
+    previousTime = timestamp;
+    positiveInteger(entry.attempt, `${field}.attempt`, { allowZero: true });
+    optionalString(entry.claimId, `${field}.claimId`, 256);
+    if (entry.leaseEpoch !== undefined) positiveInteger(entry.leaseEpoch, `${field}.leaseEpoch`, { allowZero: true });
+    optionalString(entry.actorId, `${field}.actorId`, 256);
+    if (entry.ownerEpoch !== undefined) positiveInteger(entry.ownerEpoch, `${field}.ownerEpoch`, { allowZero: true });
+    optionalString(entry.reason, `${field}.reason`, 1_000);
+    if (["claim", "submission", "acceptance", "release"].includes(entry.kind) && (entry.claimId === undefined || entry.leaseEpoch === undefined || entry.actorId === undefined)) throw new TypeError(`${field} requires claim, lease, and actor identity`);
+    if (["reopen", "reject", "cancel"].includes(entry.kind) && entry.actorId === undefined) throw new TypeError(`${field} requires actor identity`);
+    if (entry.kind === "acceptance" && entry.ownerEpoch === undefined) throw new TypeError(`${field} requires ownerEpoch`);
+    if (entry.kind === "migration" && entry.reason === undefined) throw new TypeError(`${field} requires a bounded migration reason`);
+  }
+}
+function validateRoutingReceipt(receipt, index) {
+  const field = `routingReceipts[${index}]`;
+  if (!isRecord(receipt)) throw new TypeError(`${field} must be an object`);
+  assertAllowedKeys(receipt, ROUTING_RECEIPT_KEYS, field);
+  nonEmptyString(receipt.id, `${field}.id`, 256);
+  nonEmptyString(receipt.rootSessionId, `${field}.rootSessionId`, 256);
+  nonEmptyString(receipt.turnKey, `${field}.turnKey`, 256);
+  if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(receipt.projectKey, `${field}.projectKey`, 64))) throw new TypeError(`${field}.projectKey is invalid`);
+  assertEnum(receipt.level, ROUTING_LEVELS, `${field}.level`);
+  assertEnum(receipt.reasonCategory, ROUTING_REASON_CATEGORIES, `${field}.reasonCategory`);
+  if (typeof receipt.explicitUserTeamRequest !== "boolean") throw new TypeError(`${field}.explicitUserTeamRequest must be boolean`);
+  positiveInteger(receipt.candidateWorkstreams, `${field}.candidateWorkstreams`, { allowZero: true });
+  assertEnum(receipt.creationPath, ROUTING_CREATION_PATHS, `${field}.creationPath`);
+  assertEnum(receipt.outcome, ROUTING_OUTCOMES, `${field}.outcome`);
+  optionalString(receipt.teamId, `${field}.teamId`, 256);
+  assertEnum(receipt.decisionAuthority, ["model_declared"], `${field}.decisionAuthority`);
+  assertIsoDate(receipt.createdAt, `${field}.createdAt`);
+  if (receipt.finalizedAt !== undefined) assertIsoDate(receipt.finalizedAt, `${field}.finalizedAt`);
+  if (receipt.level !== "level3" && receipt.outcome !== "recorded") throw new TypeError(`${field} Level 1 and Level 2 routing decisions must remain recorded`);
+  if (receipt.level !== "level3" && receipt.teamId !== undefined) throw new TypeError(`${field} may bind a team only for Level 3`);
+  if (receipt.outcome === "recorded" && (receipt.teamId !== undefined || receipt.finalizedAt !== undefined)) throw new TypeError(`${field} recorded phase cannot claim a team or finalization`);
+  if (["created", "reused"].includes(receipt.outcome) && (receipt.level !== "level3" || receipt.teamId === undefined || receipt.finalizedAt === undefined)) throw new TypeError(`${field} successful terminal creation requires a finalized Level 3 team binding`);
+  if (receipt.outcome === "failed" && (receipt.finalizedAt === undefined || receipt.teamId !== undefined)) throw new TypeError(`${field} failed routing finalization cannot bind a team and requires finalizedAt`);
+  if (receipt.level === "level3" && !receipt.explicitUserTeamRequest && receipt.candidateWorkstreams < 2) throw new TypeError(`${field} Level 3 requires at least two candidate workstreams unless explicitly user-requested`);
+  if (receipt.level === "level1" && receipt.creationPath !== "none") throw new TypeError(`${field} Level 1 cannot claim a delegated creation path`);
+  if (receipt.level === "level2" && receipt.creationPath !== "subagent") throw new TypeError(`${field} Level 2 requires the single-subagent path`);
+  if (receipt.level === "level3" && !["team_start", "team_bootstrap"].includes(receipt.creationPath)) throw new TypeError(`${field} Level 3 requires an Agent Team creation path`);
+  return receipt;
 }
 function validateCapability(capability, field) {
   if (!isRecord(capability)) throw new TypeError(`${field} must be an object`);
@@ -576,6 +674,9 @@ function taskAcceptanceMatches(task) {
   return isRecord(acceptance) && taskSubmissionMatches(task) && acceptance.taskId === task.id
     && acceptance.claimId === task.claimId && acceptance.leaseEpoch === (task.leaseEpoch ?? 0);
 }
+function taskAwaitsAcceptance(task) {
+  return task?.state === "submitted" && taskSubmissionMatches(task) && task.acceptance === undefined;
+}
 function taskSatisfiesDependency(task) {
   return task?.state === "completed" && taskAcceptanceMatches(task);
 }
@@ -664,7 +765,7 @@ function validateTask(task) {
     nonEmptyString(task.result.claimId, "task.result.claimId", 256);
     positiveInteger(task.result.leaseEpoch, "task.result.leaseEpoch", { allowZero: true });
     nonEmptyString(task.result.reportedBy, "task.result.reportedBy", 256);
-    if (task.state !== "completed" || !taskSubmissionMatches(task) || task.result.taskId !== task.id || task.result.claimId !== task.claimId || task.result.leaseEpoch !== (task.leaseEpoch ?? 0) || task.result.reportedBy !== task.assigneeSessionId) throw new TypeError("task.result must bind the current task claimant, claim, lease, and submission");
+    if (!["submitted", "completed"].includes(task.state) || !taskSubmissionMatches(task) || task.result.taskId !== task.id || task.result.claimId !== task.claimId || task.result.leaseEpoch !== (task.leaseEpoch ?? 0) || task.result.reportedBy !== task.assigneeSessionId) throw new TypeError("task.result must bind the current task claimant, claim, lease, and submission");
   }
   if (task.submission !== undefined) {
     if (!isRecord(task.submission)) throw new TypeError("task.submission must be an object");
@@ -675,7 +776,7 @@ function validateTask(task) {
     assertIsoDate(task.submission.submittedAt, "task.submission.submittedAt");
     nonEmptyString(task.submission.submittedBy, "task.submission.submittedBy", 256);
     assertEnum(task.submission.source, ["explicit_complete", "legacy_migration"], "task.submission.source");
-    if (!taskSubmissionMatches(task) || task.state !== "completed") throw new TypeError("task.submission must bind the completed task claimant and current lease");
+    if (!taskSubmissionMatches(task) || !["submitted", "completed"].includes(task.state)) throw new TypeError("task.submission must bind the submitted or accepted task claimant and current lease");
   }
   if (task.acceptance !== undefined) {
     if (!isRecord(task.acceptance)) throw new TypeError("task.acceptance must be an object");
@@ -688,6 +789,12 @@ function validateTask(task) {
     positiveInteger(task.acceptance.ownerEpoch, "task.acceptance.ownerEpoch", { allowZero: true });
     if (!taskAcceptanceMatches(task) || task.state !== "completed") throw new TypeError("task.acceptance must bind the submitted task claim and current lease");
   }
+  if (task.state === "submitted" && !taskSubmissionMatches(task)) throw new TypeError("submitted state requires a current task-scoped submission");
+  if (task.state === "completed" && !taskAcceptanceMatches(task)) throw new TypeError("completed state requires current fixed-root acceptance");
+  if (!["submitted", "completed"].includes(task.state) && (task.submission !== undefined || task.acceptance !== undefined || task.result !== undefined)) throw new TypeError("non-review task states cannot retain current submission, acceptance, or result projections");
+  if (task.state === "completed" && task.completedAt === undefined) throw new TypeError("completed state requires completedAt");
+  if (task.state !== "completed" && task.completedAt !== undefined) throw new TypeError("completedAt requires authoritative completed state");
+  validateTaskLifecycleLedger(task);
   positiveInteger(task.attempt ?? 0, "task.attempt", { allowZero: true });
   optionalString(task.claimId, "task.claimId", 256);
   positiveInteger(task.leaseEpoch ?? 0, "task.leaseEpoch", { allowZero: true });
@@ -769,15 +876,76 @@ function validateBootstrap(bootstrap) {
   return bootstrap;
 }
 
-function acceptanceOwnerMatchesTeam(team, acceptance) {
-  const ownerEpoch = acceptance.ownerEpoch;
+function validateMemberRecovery(receipt, index) {
+  if (!isRecord(receipt)) throw new TypeError(`team.memberRecoveries[${index}] must be an object`);
+  assertAllowedKeys(receipt, MEMBER_RECOVERY_KEYS, `team.memberRecoveries[${index}]`);
+  nonEmptyString(receipt.requestId, `team.memberRecoveries[${index}].requestId`, 256);
+  if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(receipt.inputHash, `team.memberRecoveries[${index}].inputHash`, 64))) throw new TypeError("member recovery inputHash is invalid");
+  assertEnum(receipt.action, MEMBER_RECOVERY_ACTIONS, `team.memberRecoveries[${index}].action`);
+  assertEnum(receipt.status, MEMBER_RECOVERY_STATES, `team.memberRecoveries[${index}].status`);
+  assertEnum(receipt.phase, MEMBER_RECOVERY_PHASES, `team.memberRecoveries[${index}].phase`);
+  nonEmptyString(receipt.memberId, `team.memberRecoveries[${index}].memberId`, 256);
+  nonEmptyString(receipt.sessionId, `team.memberRecoveries[${index}].sessionId`, 256);
+  assertStringArray(receipt.taskIds, `team.memberRecoveries[${index}].taskIds`);
+  assertStringArray(receipt.activeTaskIds, `team.memberRecoveries[${index}].activeTaskIds`);
+  if (!Array.isArray(receipt.activeClaims) || receipt.activeClaims.length !== receipt.activeTaskIds.length) throw new TypeError(`team.memberRecoveries[${index}].activeClaims is invalid`);
+  for (const claim of receipt.activeClaims) {
+    if (!isRecord(claim)) throw new TypeError(`team.memberRecoveries[${index}].activeClaims must contain objects`);
+    assertAllowedKeys(claim, new Set(["taskId", "claimId", "leaseEpoch"]), `team.memberRecoveries[${index}].activeClaims`);
+    nonEmptyString(claim.taskId, `team.memberRecoveries[${index}].activeClaims taskId`, 256);
+    nonEmptyString(claim.claimId, `team.memberRecoveries[${index}].activeClaims claimId`, 256);
+    positiveInteger(claim.leaseEpoch, `team.memberRecoveries[${index}].activeClaims leaseEpoch`, { allowZero: true });
+  }
+  assertIsoDate(receipt.createdAt, `team.memberRecoveries[${index}].createdAt`);
+  assertIsoDate(receipt.updatedAt, `team.memberRecoveries[${index}].updatedAt`);
+  positiveInteger(receipt.pauseEpoch, `team.memberRecoveries[${index}].pauseEpoch`, { allowZero: true });
+  positiveInteger(receipt.teamRevision, `team.memberRecoveries[${index}].teamRevision`);
+  optionalString(receipt.replacementMemberId, `team.memberRecoveries[${index}].replacementMemberId`, 256);
+  optionalString(receipt.replacementSessionId, `team.memberRecoveries[${index}].replacementSessionId`, 256);
+  optionalString(receipt.errorCode, `team.memberRecoveries[${index}].errorCode`, 128);
+  optionalString(receipt.errorStage, `team.memberRecoveries[${index}].errorStage`, 64);
+  optionalString(receipt.errorMessage, `team.memberRecoveries[${index}].errorMessage`, 4_096);
+  if (receipt.reconciledAt !== undefined) assertIsoDate(receipt.reconciledAt, `team.memberRecoveries[${index}].reconciledAt`);
+  optionalString(receipt.reconciledBy, `team.memberRecoveries[${index}].reconciledBy`, 256);
+  if (receipt.resolution !== undefined) assertEnum(receipt.resolution, ["delivered", "not_delivered"], `team.memberRecoveries[${index}].resolution`);
+  return receipt;
+}
+
+function fixedRootAtOwnershipEpoch(team, ownerEpoch) {
   const currentEpoch = team.pauseEpoch ?? 0;
-  if (ownerEpoch > currentEpoch) return false;
-  if (ownerEpoch === currentEpoch) return acceptance.acceptedBy === team.rootLeadSessionId;
-  const adoption = (team.ownershipHistory ?? []).find((entry) => entry.kind === "handoff_adopted" && entry.pauseEpoch === ownerEpoch + 1);
-  if (adoption !== undefined) return adoption.sourceRootSessionId === acceptance.acceptedBy;
-  const retainedOwner = team.members.find((member) => member.sessionId === acceptance.acceptedBy);
-  return retainedOwner?.kind === "worker" && retainedOwner.state === "retired" && retainedOwner.role === "former root lead retained for durable audit references";
+  if (!Number.isSafeInteger(ownerEpoch) || ownerEpoch < 0 || ownerEpoch > currentEpoch) return undefined;
+  let fixedRoot = team.rootLeadSessionId;
+  let upperEpoch = currentEpoch + 1;
+  const adoptions = (team.ownershipHistory ?? [])
+    .filter((entry) => entry.kind === "handoff_adopted")
+    .sort((left, right) => right.pauseEpoch - left.pauseEpoch);
+  for (const adoption of adoptions) {
+    if (adoption.pauseEpoch >= upperEpoch || adoption.pauseEpoch < 1
+      || team.projectKey === undefined || adoption.projectKey !== team.projectKey
+      || adoption.targetRootSessionId !== fixedRoot) return undefined;
+    if (ownerEpoch >= adoption.pauseEpoch) return fixedRoot;
+    fixedRoot = adoption.sourceRootSessionId;
+    upperEpoch = adoption.pauseEpoch;
+  }
+  return fixedRoot;
+}
+
+function acceptanceOwnerMatchesTeam(team, acceptance) {
+  return fixedRootAtOwnershipEpoch(team, acceptance.ownerEpoch) === acceptance.acceptedBy;
+}
+
+function inferLegacyAcceptanceOwnerEpoch(team, task) {
+  const acceptance = task.acceptance;
+  const leaseEpoch = acceptance?.leaseEpoch;
+  const currentEpoch = team.pauseEpoch ?? 0;
+  const hasOwnershipAmbiguity = team.handoff !== undefined || (team.ownershipHistory ?? []).length > 0;
+  if (acceptance === undefined || acceptance.ownerEpoch !== undefined || hasOwnershipAmbiguity
+    || !/^[a-f0-9]{64}$/u.test(team.projectKey ?? "")
+    || acceptance.acceptedBy !== team.rootLeadSessionId
+    || acceptance.taskId !== task.id || acceptance.claimId !== task.claimId
+    || leaseEpoch !== task.leaseEpoch || !Number.isSafeInteger(leaseEpoch)
+    || leaseEpoch < 0 || leaseEpoch > currentEpoch) return undefined;
+  return leaseEpoch;
 }
 
 /** Validate one team and all cross-record references. */
@@ -856,6 +1024,10 @@ function validateTeam(team) {
     throw new TypeError("team members, tasks, and messages must be arrays");
   }
   if (team.bootstrap !== undefined) validateBootstrap(team.bootstrap);
+  const memberRecoveries = team.memberRecoveries ?? [];
+  if (!Array.isArray(memberRecoveries) || memberRecoveries.length > MAX_MEMBER_RECOVERY_RECEIPTS) throw new TypeError("team.memberRecoveries is invalid");
+  memberRecoveries.forEach(validateMemberRecovery);
+  if (new Set(memberRecoveries.map((receipt) => receipt.requestId)).size !== memberRecoveries.length) throw new TypeError("team.memberRecoveries requestIds must be unique");
   team.members.forEach(validateMember);
   team.tasks.forEach(validateTask);
   team.messages.forEach(validateMessage);
@@ -913,9 +1085,25 @@ function parseCrossTaskReference(reference) {
     taskId: nonEmptyString(value.slice(separator + 1), "dependency taskId", 256),
   };
 }
+function migrateTaskLifecycleLedger(task, team, sourceVersion) {
+  if (Array.isArray(task.lifecycleLedger)) return;
+  const candidates = [{ kind: "migration", at: task.createdAt ?? team.createdAt, attempt: 0, reason: `migrated task projection from store v${sourceVersion}` }];
+  if (task.claimId !== undefined && task.assigneeSessionId !== undefined) candidates.push({ kind: "claim", at: task.claimedAt ?? task.updatedAt, attempt: task.attempt ?? 0, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? team.pauseEpoch ?? 0, actorId: task.assigneeSessionId });
+  if (task.submission !== undefined) candidates.push({ kind: "submission", at: task.submission.submittedAt, attempt: task.attempt ?? 0, claimId: task.submission.claimId, leaseEpoch: task.submission.leaseEpoch, actorId: task.submission.submittedBy });
+  if (task.acceptance !== undefined) candidates.push({ kind: "acceptance", at: task.acceptance.acceptedAt, attempt: task.attempt ?? 0, claimId: task.acceptance.claimId, leaseEpoch: task.acceptance.leaseEpoch, actorId: task.acceptance.acceptedBy, ownerEpoch: task.acceptance.ownerEpoch ?? task.acceptance.leaseEpoch });
+  candidates.sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+  task.lifecycleLedger = candidates.map((entry, index) => ({ ...entry, sequence: index + 1 }));
+}
 
 function migrateStoreDocument(document) {
-  const legacy = LEGACY_STORE_VERSIONS.has(document.version);
+  const sourceVersion = document.version;
+  const legacy = LEGACY_STORE_VERSIONS.has(sourceVersion);
+  document.routingReceipts ??= [];
+  document.routingReceiptArchive ??= { version: 1, count: 0, chainHash: "0".repeat(64) };
+  for (const receipt of document.routingReceipts) {
+    receipt.decisionAuthority ??= "model_declared";
+    if (receipt.outcome !== "recorded") receipt.finalizedAt ??= receipt.createdAt;
+  }
   for (const team of document.teams) {
     team.pauseEpoch ??= 0;
     team.ownershipHistory ??= [];
@@ -935,33 +1123,42 @@ function migrateStoreDocument(document) {
       task.capabilities ??= [];
       task.externalEffects ??= [];
       for (const effect of task.externalEffects) effect.idempotencyKey = hostExternalEffectKey(team.id, task.id, effect.name);
-      if (task.acceptance !== undefined && task.acceptance.ownerEpoch === undefined) {
-        const adoption = team.ownershipHistory.find((entry) => entry.kind === "handoff_adopted" && entry.sourceRootSessionId === task.acceptance.acceptedBy);
-        task.acceptance.ownerEpoch = task.acceptance.acceptedBy === team.rootLeadSessionId ? team.pauseEpoch : adoption === undefined ? team.pauseEpoch : adoption.pauseEpoch - 1;
-      }
       if (["in_progress", "completed"].includes(task.state) && task.claimId === undefined) {
         task.claimId = `migrated:${task.id}:${task.attempt}`;
         if (task.state === "in_progress") boundedPush(task.attemptHistory, { kind: "migrated_claim", at: task.claimedAt ?? task.updatedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch }, MAX_TASK_ATTEMPT_HISTORY);
+      }
+      if (task.acceptance !== undefined && task.acceptance.ownerEpoch === undefined) {
+        const inferredOwnerEpoch = inferLegacyAcceptanceOwnerEpoch(team, task);
+        if (inferredOwnerEpoch !== undefined) task.acceptance.ownerEpoch = inferredOwnerEpoch;
       }
       if (legacy && task.state === "completed") {
         task.assigneeSessionId ??= team.rootLeadSessionId;
         const completedAt = task.completedAt ?? task.updatedAt;
         task.submission ??= taskSubmission(task, task.assigneeSessionId, completedAt, "legacy_migration");
-        task.acceptance ??= { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: completedAt, acceptedBy: team.rootLeadSessionId, ownerEpoch: team.pauseEpoch };
         if (task.result !== undefined) Object.assign(task.result, { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, reportedBy: task.result.reportedBy ?? task.assigneeSessionId });
-      } else if (legacy && task.state !== "completed") {
+      } else if (legacy && !["completed", "submitted"].includes(task.state)) {
         task.result = undefined;
         task.submission = undefined;
         task.acceptance = undefined;
       }
+      migrateTaskLifecycleLedger(task, team, sourceVersion);
+      if (legacy && task.state === "completed" && task.submission !== undefined && task.acceptance === undefined) {
+        task.state = "submitted";
+        task.completedAt = undefined;
+      }
     }
     const timestamp = team.updatedAt ?? team.createdAt ?? now();
     if (legacy && team.state === "closed") {
-      terminalizeTeamTasks(team, timestamp, "legacy closed team contained unfinished work");
+      const hasUnverifiedCompletion = team.tasks.some((task) => task.state === "submitted" && task.submission !== undefined && task.acceptance === undefined);
+      terminalizeTeamTasks(team, timestamp, "legacy closed team contained unfinished or unaccepted work");
       const cancelledTaskIds = teamCancelledTaskIds(team);
       team.closure = {
-        outcome: cancelledTaskIds.length > 0 || team.tasks.length === 0 ? "cancelled" : "succeeded",
-        closedAt: timestamp, attemptedAt: timestamp, reason: "legacy closed team migrated to a consistent closure receipt", forced: false,
+        outcome: hasUnverifiedCompletion ? "forced" : cancelledTaskIds.length > 0 || team.tasks.length === 0 ? "cancelled" : "succeeded",
+        closedAt: timestamp, attemptedAt: timestamp,
+        reason: hasUnverifiedCompletion
+          ? "legacy closed team migrated with unverified legacy completion and no invented acceptance"
+          : "legacy closed team migrated to a consistent closure receipt",
+        forced: hasUnverifiedCompletion,
         cancelledTaskIds, failures: [],
       };
     }
@@ -1001,9 +1198,27 @@ function validateStoreDocument(document) {
   document.settings.enabled = Boolean(document.settings.enabled);
   document.settings.maxMembers = safeLimit(document.settings.maxMembers, "settings.maxMembers", 4);
   document.settings.maxActiveTurns = safeLimit(document.settings.maxActiveTurns, "settings.maxActiveTurns", 4);
+  if (!Array.isArray(document.routingReceipts) || document.routingReceipts.length > MAX_ROUTING_RECEIPTS) throw new TypeError("routingReceipts is invalid");
+  document.routingReceipts.forEach(validateRoutingReceipt);
+  const archive = document.routingReceiptArchive;
+  if (!isRecord(archive)) throw new TypeError("routingReceiptArchive must be an object");
+  assertAllowedKeys(archive, ROUTING_RECEIPT_ARCHIVE_KEYS, "routingReceiptArchive");
+  if (archive.version !== 1) throw new TypeError("routingReceiptArchive.version must be 1");
+  positiveInteger(archive.count, "routingReceiptArchive.count", { allowZero: true });
+  if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(archive.chainHash, "routingReceiptArchive.chainHash", 64))) throw new TypeError("routingReceiptArchive.chainHash is invalid");
+  optionalString(archive.lastReceiptId, "routingReceiptArchive.lastReceiptId", 256);
+  if (archive.lastArchivedAt !== undefined) assertIsoDate(archive.lastArchivedAt, "routingReceiptArchive.lastArchivedAt");
+  if ((archive.count === 0) !== (archive.lastReceiptId === undefined || archive.lastArchivedAt === undefined)) throw new TypeError("routingReceiptArchive empty and last-entry markers are inconsistent");
+  if (new Set(document.routingReceipts.map((receipt) => receipt.id)).size !== document.routingReceipts.length) throw new TypeError("routing receipt ids must be unique");
+  const routingScopeKeys = document.routingReceipts.map((receipt) => `${receipt.rootSessionId}\u0000${receipt.turnKey}`);
+  if (new Set(routingScopeKeys).size !== routingScopeKeys.length) throw new TypeError("only one routing receipt may exist per Host-derived root turn");
   document.teams.forEach(validateTeam);
   const teamsById = new Map(document.teams.map((team) => [team.id, team]));
   if (teamsById.size !== document.teams.length) throw new TypeError("team ids must be unique");
+  for (const receipt of document.routingReceipts) if (receipt.teamId !== undefined) {
+    const team = teamsById.get(receipt.teamId);
+    if (team === undefined || team.rootLeadSessionId !== receipt.rootSessionId || team.projectKey !== receipt.projectKey) throw new TypeError("routing receipt team scope must be Host-derived from the same root and project");
+  }
   const rootLeadSessions = new Set(document.teams.map((team) => team.rootLeadSessionId));
   const openTeamCounts = new Map();
   for (const team of document.teams) {
@@ -1645,6 +1860,8 @@ function defaultDocument(settings = {}) {
       maxActiveTurns: safeLimit(settings.maxActiveTurns, "maxActiveTurns", DEFAULT_SETTINGS.maxActiveTurns),
     },
     teams: [],
+    routingReceipts: [],
+    routingReceiptArchive: { version: 1, count: 0, chainHash: "0".repeat(64) },
   };
 }
 
@@ -2169,14 +2386,87 @@ function toolExecution(ctx, exec) {
   return { agent, events: openTurn(agent), turnKey: currentTurnKey(agent) };
 }
 function hasDirectHumanRootAuthority(ctx, execution) {
+  const events = Array.isArray(execution.events) ? execution.events : openTurn(execution.agent);
   return ctx.agents.roots().includes(execution.agent)
-    && execution.events.some((event) => event.type === "user/message" && event.data?.source?.kind === "user");
+    && events.some((event) => event.type === "user/message" && event.data?.source?.kind === "user");
 }
 function requireDirectHumanRoot(ctx, execution) {
   if (!ctx.agents.roots().includes(execution.agent)) reject("team_start requires a top-level root agent");
   if (!hasDirectHumanRootAuthority(ctx, execution)) {
     reject("team_start requires direct host-attested human input in the current root turn");
   }
+}
+function routingReceiptMaterial(execution, input) {
+  const level = input.level;
+  assertEnum(level, ROUTING_LEVELS, "level");
+  const explicitUserTeamRequest = input.explicitUserTeamRequest === true;
+  const candidateWorkstreams = positiveInteger(input.candidateWorkstreams ?? 0, "candidateWorkstreams", { allowZero: true });
+  const creationPath = input.creationPath;
+  const reasonCategory = input.reasonCategory;
+  assertEnum(reasonCategory, ROUTING_REASON_CATEGORIES, "reasonCategory");
+  assertEnum(creationPath, ROUTING_CREATION_PATHS, "creationPath");
+  const material = {
+    rootSessionId: execution.agent.id,
+    turnKey: execution.turnKey,
+    projectKey: projectKeyForRoot(execution.agent),
+    level,
+    reasonCategory,
+    explicitUserTeamRequest,
+    candidateWorkstreams,
+    creationPath,
+    outcome: input.outcome ?? "recorded",
+    ...(input.teamId === undefined ? {} : { teamId: nonEmptyString(input.teamId, "teamId", 256) }),
+    decisionAuthority: "model_declared",
+  };
+  const validationTime = now();
+  validateRoutingReceipt({ id: "pending", ...material, createdAt: validationTime, ...(material.outcome === "recorded" ? {} : { finalizedAt: validationTime }) }, 0);
+  return material;
+}
+function routingDecisionComparable(receipt) {
+  const { id, createdAt, finalizedAt, outcome, teamId, ...decision } = receipt;
+  return decision;
+}
+function routingReceiptIsPending(receipt) {
+  return receipt.level === "level3" && receipt.outcome === "recorded";
+}
+function archiveRoutingReceipt(document, receipt) {
+  const archive = document.routingReceiptArchive;
+  archive.chainHash = createHash("sha256").update(JSON.stringify(["agent-teams-routing-archive-v1", archive.chainHash, receipt])).digest("hex");
+  archive.count += 1;
+  archive.lastReceiptId = receipt.id;
+  archive.lastArchivedAt = now();
+}
+async function recordRoutingReceipt(store, execution, input) {
+  const material = routingReceiptMaterial(execution, input);
+  return store.mutate((document) => {
+    assertEnabled(document);
+    const existing = document.routingReceipts.find((receipt) => receipt.rootSessionId === material.rootSessionId && receipt.turnKey === material.turnKey);
+    if (existing !== undefined) {
+      if (JSON.stringify(routingDecisionComparable(existing)) !== JSON.stringify(routingDecisionComparable(material))) reject("current root turn already has a different routing decision", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
+      if (routingReceiptIsPending(existing)) {
+        if (material.outcome === "recorded") return { receipt: clone(existing), reused: true };
+        if (!["created", "reused", "failed"].includes(material.outcome)) reject("pending routing decision has an invalid terminal outcome", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
+        existing.outcome = material.outcome;
+        existing.teamId = material.teamId;
+        existing.finalizedAt = now();
+        validateRoutingReceipt(existing, 0);
+        return { receipt: clone(existing), reused: false, finalized: true, capabilityBoundary: "routing receipt decisions are model-declared; only root, turn, project, and team scope are Host-derived, and the receipt does not force model routing" };
+      }
+      if (existing.outcome !== material.outcome || existing.teamId !== material.teamId) reject("terminal routing receipt replay must match its exact outcome and team binding", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
+      return { receipt: clone(existing), reused: true };
+    }
+    if (material.outcome !== "recorded") reject("terminal Level 3 routing outcome requires an existing matching recorded decision", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
+    while (document.routingReceipts.length >= MAX_ROUTING_RECEIPTS) {
+      const archiveIndex = document.routingReceipts.findIndex((receipt) => !routingReceiptIsPending(receipt));
+      if (archiveIndex < 0) reject("routing receipt capacity is occupied by unfinalized Level 3 decisions", "AGENT_TEAMS_ROUTING_RECEIPT_LIMIT");
+      const [archived] = document.routingReceipts.splice(archiveIndex, 1);
+      archiveRoutingReceipt(document, archived);
+    }
+    const timestamp = now();
+    const receipt = { id: randomUUID(), ...material, createdAt: timestamp, ...(material.outcome === "recorded" ? {} : { finalizedAt: timestamp }) };
+    document.routingReceipts.push(receipt);
+    return { receipt: clone(receipt), reused: false, capabilityBoundary: "routing receipt decisions are model-declared; only root, turn, project, and team scope are Host-derived, and the receipt does not force model routing" };
+  });
 }
 function canonicalResolveUnknownArguments(input) {
   return {
@@ -2358,6 +2648,7 @@ function terminalizeTeamTasks(team, timestamp = now(), reason = "team closed bef
   const cancelledTaskIds = [];
   for (const task of team.tasks) {
     if (taskIsTerminal(task)) continue;
+    appendTaskLifecycleEvent(task, { kind: "cancel", at: timestamp, attempt: task.attempt ?? 0, ...(task.claimId === undefined ? {} : { claimId: task.claimId }), leaseEpoch: task.leaseEpoch ?? team.pauseEpoch ?? 0, actorId: team.rootLeadSessionId, reason });
     task.state = "cancelled";
     task.assigneeSessionId = undefined;
     task.claimedAt = undefined;
@@ -2376,8 +2667,8 @@ function closeTeamRecord(team, reason = "team closed before delivery acknowledge
   const timestamp = now();
   if (failures.length > 0) reject("a failed shutdown attempt cannot be persisted as a closed team", "AGENT_TEAMS_INVALID_CLOSURE");
   if (!forced) {
-    const unacceptedTaskIds = team.tasks.filter((task) => task.state === "completed" && !taskAcceptanceMatches(task)).map((task) => task.id);
-    if (unacceptedTaskIds.length > 0) reject(`non-forced closure has unaccepted completed tasks: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
+    const unacceptedTaskIds = team.tasks.filter(taskAwaitsAcceptance).map((task) => task.id);
+    if (unacceptedTaskIds.length > 0) reject(`non-forced closure has submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
   }
   for (const message of team.messages) {
     if (message.status !== "pending") continue;
@@ -2918,7 +3209,7 @@ async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
     const team = {
       id: teamId, rootLeadSessionId: lead.id, name: plan.name ?? plan.objective.slice(0, 500), objective: plan.objective, state: "active", pauseEpoch: 0, ...(optionalProjectKeyForRoot(lead) === undefined ? {} : { projectKey: optionalProjectKeyForRoot(lead) }), ownershipHistory: [], createdAt: timestamp, updatedAt: timestamp,
       members: [{ id: `lead:${lead.id}`, sessionId: lead.id, name: plan.leadName, role: "root lead and coordinator", ...mainSelection, kind: "lead", state: "running", createdAt: timestamp, updatedAt: timestamp }],
-      tasks: plan.tasks.map((task) => ({ id: taskIds.get(task.key), title: task.title, ...(task.description === undefined ? {} : { description: task.description }), state: "pending", dependsOn: task.dependsOn.map((key) => taskIds.get(key)), files: task.files, attempt: 0, leaseEpoch: 0, attemptHistory: [], interruptionHistory: [], capabilities: [], externalEffects: [], createdAt: timestamp, updatedAt: timestamp })),
+      tasks: plan.tasks.map((task) => ({ id: taskIds.get(task.key), title: task.title, ...(task.description === undefined ? {} : { description: task.description }), state: "pending", dependsOn: task.dependsOn.map((key) => taskIds.get(key)), files: task.files, attempt: 0, leaseEpoch: 0, attemptHistory: [], interruptionHistory: [], lifecycleLedger: [], capabilities: [], externalEffects: [], createdAt: timestamp, updatedAt: timestamp })),
       messages: [],
       bootstrap: { requestId: plan.requestId, inputHash: plan.inputHash, phase: "prepared", taskRefs: plan.tasks.map((task) => ({ key: task.key, taskId: taskIds.get(task.key) })), memberRefs: plan.members.map((member) => ({ key: member.key, name: member.name, status: "pending" })), createdAt: timestamp, updatedAt: timestamp },
     };
@@ -3182,6 +3473,260 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
   });
 }
 
+function memberRecoveryInputHash(input) {
+  return createHash("sha256").update(JSON.stringify({
+    action: input.action,
+    teamId: input.teamId,
+    memberId: input.memberId,
+    expectedRevision: input.expectedRevision,
+  })).digest("hex");
+}
+function memberRecoveryPrompt(team, member, tasks, action) {
+  const taskLines = tasks.map((task) => {
+    const checkpoint = task.checkpoint?.text ?? task.nextStep?.text;
+    return `- ${task.id}: ${task.title}${checkpoint === undefined ? "" : `\n  Recovery context (unverified): ${checkpoint.slice(0, 1_200)}`}`;
+  }).join("\n");
+  return [
+    `Direct-human member recovery (${action}) for Agent Team ${team.id}.`,
+    `Continue only the durable tasks listed below. Inspect their current Host state before writing.`,
+    taskLines,
+    `Do not create hidden subagents or a nested team. Preserve claimId/leaseEpoch for retry; replacement must claim each pending task before work.`,
+    `When the deliverable is finished, explicitly complete the durable task with its current claimId and leaseEpoch before reporting.`,
+  ].join("\n").slice(0, 16_384);
+}
+function replacementMemberName(team, original) {
+  const basePoints = [...canonicalMemberName(original.name)].slice(0, 7).join("");
+  for (let suffix = 1; suffix <= 99; suffix += 1) {
+    const candidate = normalizeWorkerName(`${basePoints}${suffix === 1 ? "续作" : `续作${suffix}`}`);
+    if ([...candidate].length < 2 || [...candidate].length > 12) continue;
+    if (!team.members.some((member) => memberNameKey(member.name) === memberNameKey(candidate))) return candidate;
+  }
+  reject("unable to allocate a unique replacement duty name", "AGENT_TEAMS_MEMBER_LIMIT");
+}
+function memberRecoveryFailureCode(error) {
+  return typeof error?.code === "string" ? error.code : "AGENT_TEAMS_MEMBER_RECOVERY_FAILED";
+}
+function memberRecoveryPublic(team, receipt, teams) {
+  return { teamId: team.id, recovery: clone(receipt), team: projectTeam(team, teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId || candidate.id === team.id)) };
+}
+function compactMemberRecoveryReceipts(team) {
+  team.memberRecoveries ??= [];
+  while (team.memberRecoveries.length >= MAX_MEMBER_RECOVERY_RECEIPTS) {
+    const index = team.memberRecoveries.findIndex((receipt) => receipt.status === "delivered" || receipt.status === "failed");
+    if (index < 0) reject("member recovery receipt capacity is occupied by unresolved attempts; reconcile an exact receipt first", "AGENT_TEAMS_RECOVERY_RECEIPT_LIMIT");
+    team.memberRecoveries.splice(index, 1);
+  }
+}
+function memberRecoveryDeliveryProof(team, receipt, sessionId) {
+  const expectedClaims = receipt.action === "retry" ? new Map(receipt.activeClaims.map((claim) => [claim.taskId, claim])) : new Map();
+  const tasks = [];
+  for (const taskId of receipt.taskIds) {
+    const task = team.tasks.find((candidate) => candidate.id === taskId), expected = expectedClaims.get(taskId);
+    if (task === undefined || task.assigneeSessionId !== sessionId) return undefined;
+    if (task.state === "pending") {
+      if (expected !== undefined || task.claimId !== undefined || task.submission !== undefined) return undefined;
+    } else if (task.state === "in_progress") {
+      if (typeof task.claimId !== "string" || task.leaseEpoch !== receipt.pauseEpoch || expected !== undefined && (task.claimId !== expected.claimId || task.leaseEpoch !== expected.leaseEpoch)) return undefined;
+    } else if (["submitted", "completed"].includes(task.state)) {
+      if (task.submission?.source !== "explicit_complete" || !taskSubmissionMatches(task) || task.leaseEpoch !== receipt.pauseEpoch || expected !== undefined && (task.claimId !== expected.claimId || task.leaseEpoch !== expected.leaseEpoch)) return undefined;
+    } else return undefined;
+    tasks.push(task);
+  }
+  return { tasks, memberState: tasks.some((task) => task.state === "in_progress") ? "running" : tasks.some((task) => task.state === "pending") ? "ready" : "idle" };
+}
+function finalizeMemberRecoveryDelivery(document, team, receipt) {
+  requireActiveTeam(team);
+  if (receipt.status !== "outcome_unknown" || receipt.phase !== "followup_returned" || (team.pauseEpoch ?? 0) !== receipt.pauseEpoch) reject("member recovery delivery cannot be finalized from this durable phase", "AGENT_TEAMS_STALE_LEASE");
+  const timestamp = now(), sessionId = receipt.action === "retry" ? receipt.sessionId : receipt.replacementSessionId, proof = memberRecoveryDeliveryProof(team, receipt, sessionId);
+  if (proof === undefined) reject("member recovery tasks no longer prove delivery by the exact session, claim, and lease", "AGENT_TEAMS_TASK_CONFLICT");
+  const member = team.members.find((candidate) => candidate.id === (receipt.action === "retry" ? receipt.memberId : receipt.replacementMemberId));
+  if (member?.sessionId !== sessionId || !["failed", "running", "ready", "idle"].includes(member.state)) reject("member recovery publication changed after delivery", "AGENT_TEAMS_STALE_LEASE");
+  member.state = proof.memberState; member.error = undefined; member.updatedAt = timestamp;
+  receipt.status = "delivered"; receipt.updatedAt = timestamp; team.updatedAt = timestamp;
+  return memberRecoveryPublic(team, receipt, document.teams);
+}
+function rollbackUnstartedReplacement(team, receipt, timestamp) {
+  const original = team.members.find((member) => member.id === receipt.memberId);
+  const replacement = team.members.find((member) => member.id === receipt.replacementMemberId);
+  if (original !== undefined) { original.state = "failed"; original.updatedAt = timestamp; }
+  if (replacement !== undefined) team.members = team.members.filter((member) => member.id !== replacement.id);
+  for (const taskId of receipt.taskIds) {
+    const task = team.tasks.find((candidate) => candidate.id === taskId);
+    if (task !== undefined && task.state === "pending") { task.assigneeSessionId = original?.sessionId; task.updatedAt = timestamp; }
+  }
+}
+async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
+  const action = assertEnum(input.action, MEMBER_RECOVERY_ACTIONS, "action") ?? input.action;
+  const requestId = nonEmptyString(input.requestId, "requestId", 256), teamId = nonEmptyString(input.teamId, "teamId", 256), memberId = nonEmptyString(input.memberId, "memberId", 256);
+  const expectedRevision = positiveInteger(input.expectedRevision, "expectedRevision");
+  const inputHash = memberRecoveryInputHash({ action, teamId, memberId, expectedRevision });
+  return queueTeamOperation(store.filePath, teamId, async () => {
+    const prepared = await store.runOperation(() => store.mutate((document) => {
+      assertEnabled(document);
+      const team = findTeam(document, teamId); requireLiveRootLead(ctx, team, lead); requireActiveTeam(team);
+      team.memberRecoveries ??= [];
+      const replay = team.memberRecoveries.find((receipt) => receipt.requestId === requestId);
+      if (replay !== undefined) {
+        if (replay.inputHash !== inputHash) reject("member recovery request_id was reused with different input", "AGENT_TEAMS_RECOVERY_REPLAY_CONFLICT");
+        return { replay: true, receipt: clone(replay) };
+      }
+      if (team.memberRecoveries.some((receipt) => receipt.memberId === memberId && ["prepared", "outcome_unknown"].includes(receipt.status))) reject("a prior member recovery is unresolved; reconcile the exact receipt before another attempt", "AGENT_TEAMS_RECOVERY_OUTCOME_UNKNOWN");
+      if (team.revision !== expectedRevision) reject("team changed before member recovery; refresh and confirm again", "AGENT_TEAMS_STALE_TEAM");
+      const member = team.members.find((candidate) => candidate.id === memberId);
+      if (member?.kind !== "worker" || member.state !== "failed") reject("only an exact failed worker may be recovered", "AGENT_TEAMS_MEMBER_NOT_FAILED");
+      const tasks = team.tasks.filter((task) => task.assigneeSessionId === member.sessionId && !taskIsTerminal(task));
+      if (tasks.length === 0) reject("failed member has no unfinished durable task to recover", "AGENT_TEAMS_TASK_BINDING_REQUIRED");
+      const activeTasks = tasks.filter((task) => task.state === "in_progress");
+      if (team.tasks.some((task) => (task.externalEffects ?? []).some((effect) => effect.outcome === "outcome_unknown"))) reject("team recovery is blocked by an external effect with outcome_unknown", "AGENT_TEAMS_OUTCOME_UNKNOWN");
+      const otherActiveTasks = team.tasks.filter((task) => task.state === "in_progress" && task.assigneeSessionId !== member.sessionId);
+      for (const task of tasks) for (const file of task.files ?? []) for (const other of otherActiveTasks) for (const otherFile of other.files ?? []) if (fileBoundaryOverlap(file, otherFile)) reject(`member recovery file scope conflicts with active task ${other.id}`, "AGENT_TEAMS_FILE_CONFLICT");
+      assertTaskExecutionPreflight(team, tasks);
+      if (!["host_verified", "human_attested"].includes(team.plan.authorization?.cost)) reject("member route cost is unknown; recommit the exact plan hash", "AGENT_TEAMS_COST_UNKNOWN");
+      if (action === "retry" && activeTasks.length !== 1) reject("same-session retry requires exactly one unchanged active claim; pending assigned tasks are preserved", "AGENT_TEAMS_STALE_CLAIM");
+      for (const task of activeTasks) if (typeof task.claimId !== "string" || task.leaseEpoch !== (team.pauseEpoch ?? 0)) reject("failed member task claim is stale or malformed", "AGENT_TEAMS_STALE_CLAIM");
+      if (activeWorkerTurnsForLead(document, team.rootLeadSessionId) >= document.settings.maxActiveTurns) reject("root lead active-turn limit reached across its teams", "AGENT_TEAMS_ACTIVE_TURN_LIMIT");
+      if (action === "replace" && team.members.filter(workerConsumesMemberSlot).length > document.settings.maxMembers) reject("team teammate limit is not safely known", "AGENT_TEAMS_MEMBER_LIMIT");
+      const timestamp = now();
+      const receipt = { requestId, inputHash, action, status: "prepared", phase: "prepared", memberId: member.id, sessionId: member.sessionId, taskIds: tasks.map((task) => task.id), activeTaskIds: activeTasks.map((task) => task.id), activeClaims: activeTasks.map((task) => ({ taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch })), createdAt: timestamp, updatedAt: timestamp, pauseEpoch: team.pauseEpoch ?? 0, teamRevision: team.revision };
+      if (action === "replace") {
+        const replacementMemberId = randomUUID(), childId = randomUUID(), placeholderSessionId = `provisioning:${replacementMemberId}`, name = replacementMemberName(team, member);
+        const replacement = { id: replacementMemberId, sessionId: placeholderSessionId, name, role: member.role, ...(member.model === undefined ? {} : { model: member.model }), ...(member.provider === undefined ? {} : { provider: member.provider }), modelTier: member.modelTier ?? "subagent", inheritsMain: member.inheritsMain === true, routeSource: member.routeSource ?? "recovery-inherited", kind: "worker", state: "provisioning", createdAt: timestamp, updatedAt: timestamp };
+        receipt.replacementMemberId = replacementMemberId; receipt.replacementSessionId = childId;
+        member.state = "retired"; member.runId = undefined; member.updatedAt = timestamp; member.error = member.error ?? "failed member replaced by direct-human recovery";
+        for (const task of tasks) {
+          boundedPush(task.interruptionHistory, { kind: "member_replaced", at: timestamp, attempt: task.attempt ?? 0, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? 0, reason: `recovery request ${requestId}` }, MAX_TASK_INTERRUPTION_HISTORY);
+          task.state = "pending"; task.assigneeSessionId = placeholderSessionId; task.claimedAt = undefined; task.claimId = undefined; clearTaskTerminalMetadata(task); task.releasedAt = timestamp; task.releaseReason = "failed member replaced by explicit direct-human recovery; prior claim and lease revoked"; task.updatedAt = timestamp;
+        }
+        team.members.push(replacement);
+      }
+      compactMemberRecoveryReceipts(team); team.memberRecoveries.push(receipt); team.updatedAt = timestamp;
+      return { replay: false, receipt: clone(receipt) };
+    }));
+    if (prepared.replay && ["delivered", "failed"].includes(prepared.receipt.status)) {
+      const document = await store.read((current) => current), team = findTeam(document, teamId);
+      return memberRecoveryPublic(team, team.memberRecoveries.find((receipt) => receipt.requestId === requestId), document.teams);
+    }
+    if (prepared.replay && prepared.receipt.status === "outcome_unknown") {
+      if (prepared.receipt.action === "retry" && prepared.receipt.phase === "followup_returned") return store.runOperation(() => store.mutate((document) => { const team = findTeam(document, teamId), receipt = team.memberRecoveries.find((candidate) => candidate.requestId === requestId); return finalizeMemberRecoveryDelivery(document, team, receipt); }));
+      const child = prepared.receipt.action === "replace" ? ctx.agents.get(prepared.receipt.replacementSessionId) : undefined;
+      const resumable = prepared.receipt.action === "replace" && (["drain_started"].includes(prepared.receipt.phase) || (["start_dispatched", "child_started", "published", "followup_returned"].includes(prepared.receipt.phase) && child !== undefined));
+      if (!resumable) {
+        const document = await store.read((current) => current), team = findTeam(document, teamId);
+        return memberRecoveryPublic(team, team.memberRecoveries.find((receipt) => receipt.requestId === requestId), document.teams);
+      }
+    }
+    try {
+      if (action === "retry") {
+        const marked = await store.runOperation(() => store.mutate((document) => {
+          const team = findTeam(document, teamId); requireActiveTeam(team);
+          const receipt = team.memberRecoveries.find((candidate) => candidate.requestId === requestId);
+          if (receipt.status === "prepared") { receipt.status = "outcome_unknown"; receipt.phase = "retry_dispatching"; receipt.updatedAt = now(); team.updatedAt = receipt.updatedAt; }
+          return clone(receipt);
+        }));
+        if (marked.phase !== "retry_dispatching") return memberRecoveryPublic(findTeam(await store.read((current) => current), teamId), marked, (await store.read((current) => current)).teams);
+        const document = await store.read((current) => current), team = findTeam(document, teamId), member = team.members.find((candidate) => candidate.id === memberId), tasks = marked.taskIds.map((taskId) => team.tasks.find((task) => task.id === taskId)).filter(Boolean);
+        await admission.run(lead, marked.sessionId, signal, async () => { requireExactRootAgent(ctx, lead); return ctx.subagents.followup(lead, marked.sessionId, textContent(memberRecoveryPrompt(team, member, tasks, action)), { source: relaySource(lead.id), signal }); });
+        await store.runOperation(() => store.mutate((current) => {
+          const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam);
+          const receipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId), liveMember = liveTeam.members.find((candidate) => candidate.id === memberId);
+          if (receipt.status !== "outcome_unknown" || receipt.phase !== "retry_dispatching" || liveMember?.sessionId !== receipt.sessionId || !["failed", "running", "ready", "idle"].includes(liveMember.state) || (liveTeam.pauseEpoch ?? 0) !== receipt.pauseEpoch || memberRecoveryDeliveryProof(liveTeam, receipt, receipt.sessionId) === undefined) reject("exact retry session, task claim, or lease changed after delivery", "AGENT_TEAMS_STALE_LEASE");
+          receipt.phase = "followup_returned"; receipt.updatedAt = now(); liveTeam.updatedAt = receipt.updatedAt;
+        }));
+        return store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId), receipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); return finalizeMemberRecoveryDelivery(current, liveTeam, receipt); }));
+      }
+      let document = await store.read((current) => current), team = findTeam(document, teamId), receipt = team.memberRecoveries.find((candidate) => candidate.requestId === requestId), started = ctx.agents.get(receipt.replacementSessionId);
+      if (["prepared", "drain_started"].includes(receipt.phase)) {
+        await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); liveReceipt.status = "outcome_unknown"; liveReceipt.phase = "drain_started"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
+        await ctx.subagents.drainContinuableChildren(lead, [receipt.sessionId]);
+        await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); liveReceipt.phase = "start_dispatched"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
+        document = await store.read((current) => current); team = findTeam(document, teamId); receipt = team.memberRecoveries.find((candidate) => candidate.requestId === requestId); started = ctx.agents.get(receipt.replacementSessionId);
+      }
+      if (started === undefined && receipt.phase === "start_dispatched") {
+        started = await admission.run(lead, receipt.replacementSessionId, signal, async () => { requireExactRootAgent(ctx, lead); const replacement = team.members.find((candidate) => candidate.id === receipt.replacementMemberId); return ctx.subagents.startContinuable({ childId: receipt.replacementSessionId, provider: "spawn", label: replacement.name, request: { parent: lead, prompt: textContent(registrationPrompt(team.id, replacement.name, replacement.role)), toolFilter: { deny: [...MANAGED_MEMBER_DENIED_TOOLS] }, ...(replacement.provider === undefined && replacement.model === undefined ? {} : { agentOptions: { ...(replacement.provider === undefined ? {} : { provider: replacement.provider }), ...(replacement.model === undefined ? {} : { model: replacement.model }) } }) }, signal }); });
+      }
+      if (started === undefined) return memberRecoveryPublic(team, receipt, document.teams);
+      const startedId = started.childId ?? started.id;
+      if (startedId !== receipt.replacementSessionId) reject("replacement provider returned a different child id", "AGENT_TEAMS_CONFLICT");
+      if (["start_dispatched", "child_started", "published", "followup_returned"].includes(receipt.phase)) {
+        await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); if (liveReceipt.phase === "start_dispatched") { liveReceipt.phase = "child_started"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; } }));
+        const published = await store.runOperation(() => store.mutate((current) => {
+          const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId), replacement = liveTeam.members.find((candidate) => candidate.id === liveReceipt.replacementMemberId);
+          if (liveReceipt.status !== "outcome_unknown" || !["provisioning", "running", "ready", "idle", "failed"].includes(replacement?.state) || (liveTeam.pauseEpoch ?? 0) !== liveReceipt.pauseEpoch) reject(`team changed during replacement publication (status=${liveReceipt.status}, phase=${liveReceipt.phase}, member=${replacement?.state ?? "missing"}, pause=${liveTeam.pauseEpoch ?? 0}/${liveReceipt.pauseEpoch})`, "AGENT_TEAMS_STALE_LEASE");
+          if (["provisioning", "ready", "idle", "failed"].includes(replacement.state)) { replacement.sessionId = startedId; replacement.state = "running"; replacement.publishedAt = now(); replacement.updatedAt = replacement.publishedAt; for (const taskId of liveReceipt.taskIds) { const task = liveTeam.tasks.find((candidate) => candidate.id === taskId); if (task?.state !== "pending" || ![startedId, `provisioning:${replacement.id}`, undefined].includes(task.assigneeSessionId)) reject("replacement task pre-binding changed", "AGENT_TEAMS_TASK_CONFLICT"); task.assigneeSessionId = startedId; task.leaseEpoch = liveReceipt.pauseEpoch; task.updatedAt = replacement.updatedAt; } }
+          if (["start_dispatched", "child_started"].includes(liveReceipt.phase)) liveReceipt.phase = "published"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; return { team: clone(liveTeam), receipt: clone(liveReceipt) };
+        }));
+        team = published.team; receipt = published.receipt;
+      }
+      if (receipt.phase === "followup_returned") return store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId), liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); return finalizeMemberRecoveryDelivery(current, liveTeam, liveReceipt); }));
+      if (receipt.phase === "published") {
+        await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); liveReceipt.phase = "followup_dispatching"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
+        const replacement = team.members.find((candidate) => candidate.id === receipt.replacementMemberId), tasks = receipt.taskIds.map((taskId) => team.tasks.find((task) => task.id === taskId)).filter(Boolean);
+        await admission.run(lead, startedId, signal, async () => ctx.subagents.followup(lead, startedId, textContent(memberRecoveryPrompt(team, replacement, tasks, action)), { source: relaySource(lead.id), signal }));
+        await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); if (liveReceipt.status !== "outcome_unknown" || liveReceipt.phase !== "followup_dispatching" || (liveTeam.pauseEpoch ?? 0) !== liveReceipt.pauseEpoch) reject("team changed during replacement followup", "AGENT_TEAMS_STALE_LEASE"); liveReceipt.phase = "followup_returned"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
+        return store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId), liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); return finalizeMemberRecoveryDelivery(current, liveTeam, liveReceipt); }));
+      }
+      document = await store.read((current) => current); team = findTeam(document, teamId); return memberRecoveryPublic(team, team.memberRecoveries.find((candidate) => candidate.requestId === requestId), document.teams);
+    } catch (error) {
+      await store.runOperation(() => store.mutate((document) => {
+        const team = findTeam(document, teamId), receipt = team.memberRecoveries?.find((candidate) => candidate.requestId === requestId); if (receipt === undefined || receipt.status !== "outcome_unknown") return;
+        receipt.errorCode = memberRecoveryFailureCode(error); receipt.errorStage = receipt.phase; receipt.errorMessage = String(error).slice(0, 4_096); receipt.updatedAt = now();
+        const childExists = action === "replace" && receipt.replacementSessionId !== undefined && ctx.agents.get(receipt.replacementSessionId) !== undefined;
+        if (action === "replace" && !childExists && receipt.phase === "drain_started") { receipt.status = "failed"; receipt.phase = "reconciled"; rollbackUnstartedReplacement(team, receipt, receipt.updatedAt); }
+        team.updatedAt = receipt.updatedAt;
+      }));
+      throw error;
+    }
+  });
+}
+
+async function reconcileMemberRecovery(ctx, store, lead, input) {
+  const teamId = nonEmptyString(input.teamId, "teamId", 256), requestId = nonEmptyString(input.requestId, "requestId", 256), resolution = assertEnum(input.resolution, ["delivered", "not_delivered"], "resolution") ?? input.resolution;
+  const expectedRevision = positiveInteger(input.expectedRevision, "expectedRevision");
+  return queueTeamOperation(store.filePath, teamId, async () => {
+    let document = await store.read((current) => current), team = findTeam(document, teamId); requireLiveRootLead(ctx, team, lead); if (team.state === "closed" || team.state === "closing") reject("closed team recovery cannot be reconciled", "AGENT_TEAMS_NOT_FOUND");
+    let receipt = team.memberRecoveries?.find((candidate) => candidate.requestId === requestId); if (receipt === undefined) reject("member recovery receipt is unavailable", "AGENT_TEAMS_NOT_FOUND");
+    if (receipt.status !== "outcome_unknown") return memberRecoveryPublic(team, receipt, document.teams);
+    if (team.revision !== expectedRevision) reject("team changed before recovery reconciliation; refresh the durable receipt", "AGENT_TEAMS_STALE_TEAM");
+    if (team.state === "paused" && resolution !== "not_delivered") reject("paused recovery can only be reconciled as not delivered", "AGENT_TEAMS_PAUSED");
+    if (receipt.action === "replace" && resolution === "not_delivered") {
+      const binding = await store.runOperation(() => store.mutate((current) => {
+        const liveTeam = findTeam(current, teamId); requireLiveRootLead(ctx, liveTeam, lead); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId), replacement = liveTeam.members.find((candidate) => candidate.id === liveReceipt.replacementMemberId);
+        if (liveReceipt.status !== "outcome_unknown" || replacement === undefined) reject("replacement recovery receipt changed before reconciliation", "AGENT_TEAMS_CONFLICT");
+        const placeholder = `provisioning:${replacement.id}`, childId = liveReceipt.replacementSessionId;
+        for (const taskId of liveReceipt.taskIds) { const task = liveTeam.tasks.find((candidate) => candidate.id === taskId); if (task?.state !== "pending" || ![undefined, placeholder, childId].includes(task.assigneeSessionId)) reject("replacement task changed before not-delivered reconciliation", "AGENT_TEAMS_TASK_CONFLICT"); if (task.assigneeSessionId === undefined) { task.assigneeSessionId = childId ?? placeholder; task.updatedAt = now(); } }
+        liveTeam.updatedAt = now(); return { childId, placeholder };
+      }));
+      if (binding.childId !== undefined && ctx.agents.get(binding.childId) !== undefined) await ctx.subagents.drainContinuableChildren(lead, [binding.childId]);
+    }
+    return store.runOperation(() => store.mutate((current) => {
+      const liveTeam = findTeam(current, teamId); requireLiveRootLead(ctx, liveTeam, lead); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId);
+      if (liveReceipt.status !== "outcome_unknown") return memberRecoveryPublic(liveTeam, liveReceipt, current.teams);
+      const timestamp = now();
+      if (resolution === "delivered") {
+        requireActiveTeam(liveTeam);
+        const sessionId = liveReceipt.action === "retry" ? liveReceipt.sessionId : liveReceipt.replacementSessionId, member = liveTeam.members.find((candidate) => candidate.id === (liveReceipt.action === "retry" ? liveReceipt.memberId : liveReceipt.replacementMemberId));
+        if (liveReceipt.action === "replace") {
+          const childExists = sessionId !== undefined && ctx.agents.get(sessionId) !== undefined;
+          if (!childExists || !["followup_dispatching", "followup_returned"].includes(liveReceipt.phase)) reject("replacement delivery cannot be proven from the durable published child", "AGENT_TEAMS_RECOVERY_UNPROVEN");
+        }
+        const proof = memberRecoveryDeliveryProof(liveTeam, liveReceipt, sessionId);
+        if (member?.sessionId !== sessionId || !["failed", "running", "ready", "idle"].includes(member?.state) || proof === undefined) reject("delivery cannot be reconciled because the exact session, claim, lease, or submission changed", "AGENT_TEAMS_STALE_CLAIM");
+        member.state = proof.memberState; member.error = undefined; member.updatedAt = timestamp;
+        liveReceipt.status = "delivered";
+      } else {
+        if (liveReceipt.action === "replace") {
+          const replacement = liveTeam.members.find((candidate) => candidate.id === liveReceipt.replacementMemberId); if (replacement === undefined) reject("replacement disappeared before not-delivered reconciliation", "AGENT_TEAMS_CONFLICT"); const placeholder = `provisioning:${replacement.id}`;
+          for (const taskId of liveReceipt.taskIds) { const task = liveTeam.tasks.find((candidate) => candidate.id === taskId); if (task?.state !== "pending" || ![placeholder, liveReceipt.replacementSessionId].includes(task.assigneeSessionId)) reject("replacement task changed after drain; recovery remains unresolved", "AGENT_TEAMS_TASK_CONFLICT"); }
+          rollbackUnstartedReplacement(liveTeam, liveReceipt, timestamp);
+        } else { const member = liveTeam.members.find((candidate) => candidate.id === liveReceipt.memberId); if (member !== undefined) { member.state = "failed"; member.updatedAt = timestamp; } }
+        liveReceipt.status = "failed";
+      }
+      liveReceipt.phase = "reconciled"; liveReceipt.resolution = resolution; liveReceipt.reconciledAt = timestamp; liveReceipt.reconciledBy = lead.id; liveReceipt.updatedAt = timestamp; liveTeam.updatedAt = timestamp;
+      return memberRecoveryPublic(liveTeam, liveReceipt, current.teams);
+    }));
+  });
+}
+
 async function sendTeamMessage(ctx, store, admission, caller, input, signal) {
   const teamIds = await store.read((document) => {
     const sourceTeam = resolveTeamForCaller(document, optionalString(input.teamId, "teamId", 256), caller.id);
@@ -3372,6 +3917,7 @@ async function createTask(store, caller, input) {
       leaseEpoch: team.pauseEpoch ?? 0,
       attemptHistory: [],
       interruptionHistory: [],
+      lifecycleLedger: [],
       capabilities: normalizeCapabilityInputs(input.capabilities),
       externalEffects: normalizeExternalEffectInputs(input.externalEffects),
       createdAt: timestamp,
@@ -3483,7 +4029,7 @@ async function updateTask(store, caller, input) {
     if (requestedState !== undefined) assertEnum(requestedState, MUTABLE_TASK_STATES, "state");
     if (input.action === undefined && requestedState === undefined) reject("task update requires action or state", "AGENT_TEAMS_INVALID_TASK");
     const action = input.action ?? (requestedState === "in_progress" ? "claim" : requestedState === "completed" ? "complete" : taskIsTerminal(task) ? "reopen" : "release");
-    assertEnum(action, ["claim", "release", "complete", "accept", "cancel", "reopen", "assign", "unassign"], "action");
+    assertEnum(action, ["claim", "release", "complete", "accept", "reject", "cancel", "reopen", "assign", "unassign"], "action");
     const blockedBy = deriveTaskAcrossTeams(task, team, document.teams).blockedBy;
     const isLead = caller.id === team.rootLeadSessionId;
     if (action === "claim") {
@@ -3504,6 +4050,7 @@ async function updateTask(store, caller, input) {
       task.claimId = randomUUID();
       task.leaseEpoch = team.pauseEpoch ?? 0;
       boundedPush(task.attemptHistory, { kind: "claimed", at: claimedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch }, MAX_TASK_ATTEMPT_HISTORY);
+      appendTaskLifecycleEvent(task, { kind: "claim", at: claimedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch, actorId: caller.id });
       if (team.plan?.phase === "committed") {
         team.plan.phase = "active";
         team.plan.activatedAt = claimedAt;
@@ -3512,38 +4059,53 @@ async function updateTask(store, caller, input) {
       // until this claimant replaces it; fencing metadata keeps its origin visible.
       clearTaskTerminalMetadata(task);
           } else if (action === "complete") {
-      if (task.state === "completed") {
-        if (task.assigneeSessionId !== caller.id) reject("only the original claimant may replay task completion; the lead must use accept", "AGENT_TEAMS_UNAUTHORIZED");
+      if (["submitted", "completed"].includes(task.state)) {
+        if (task.assigneeSessionId !== caller.id) reject("only the original claimant may replay task submission; the lead must use accept", "AGENT_TEAMS_UNAUTHORIZED");
         assertCurrentTaskLease(team, task, caller, input, { leadMayOverride: false });
-        if (!taskSubmissionMatches(task)) reject("completed task has no current task-scoped submission fact", "AGENT_TEAMS_DELIVERY_REQUIRED");
+        if (!taskSubmissionMatches(task)) reject("submitted task has no current task-scoped submission fact", "AGENT_TEAMS_DELIVERY_REQUIRED");
         return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), reused: true };
       }
-      if (task.state !== "in_progress") reject(`only an in-progress task can be completed (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
-      if (task.assigneeSessionId !== caller.id) reject("only the task claimant or team lead acting as that same claimant may submit completion; the lead cannot complete a foreign claim", "AGENT_TEAMS_UNAUTHORIZED");
-      assertCurrentTaskLease(team, task, caller, input, { leadMayOverride: isLead });
+      if (task.state !== "in_progress") reject(`only an in-progress task can submit completion (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
+      if (task.assigneeSessionId !== caller.id) reject("only the exact task claimant may submit completion; the lead cannot complete a foreign claim", "AGENT_TEAMS_UNAUTHORIZED");
+      assertCurrentTaskLease(team, task, caller, input, { leadMayOverride: false });
       if ((task.externalEffects ?? []).some((effect) => effect.outcome === "outcome_unknown")) reject("task is blocked by an unknown external side-effect outcome", "AGENT_TEAMS_OUTCOME_UNKNOWN");
       if (blockedBy.length > 0) reject(`task is blocked by: ${blockedBy.join(", ")}`, "AGENT_TEAMS_TASK_BLOCKED");
-      const completedAt = now();
-      task.state = "completed";
-      task.completedAt = completedAt;
-      task.submission = taskSubmission(task, caller.id, completedAt);
-      task.acceptance = isLead ? { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: completedAt, acceptedBy: caller.id, ownerEpoch: team.pauseEpoch ?? 0 } : undefined;
+      const submittedAt = now();
+      task.state = "submitted";
+      task.completedAt = undefined;
+      task.submission = taskSubmission(task, caller.id, submittedAt);
+      task.acceptance = undefined;
+      appendTaskLifecycleEvent(task, { kind: "submission", at: submittedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch, actorId: caller.id });
       task.cancelledAt = undefined;
       task.cancellationReason = undefined;
           } else if (action === "accept") {
       if (!isLead) reject("only the fixed root lead may accept a submitted task", "AGENT_TEAMS_UNAUTHORIZED");
-      if (task.state !== "completed" || !taskSubmissionMatches(task)) reject("acceptance requires a task-scoped completion submission from the current claimant", "AGENT_TEAMS_DELIVERY_REQUIRED");
-      if (task.acceptance !== undefined) {
-        if (!taskAcceptanceMatches(task)) reject("task acceptance is stale or malformed", "AGENT_TEAMS_STALE_CLAIM");
-        return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), reused: true };
-      }
-      task.acceptance = { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt: now(), acceptedBy: caller.id, ownerEpoch: team.pauseEpoch ?? 0 };
+      if (task.state === "completed" && taskAcceptanceMatches(task)) return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), reused: true };
+      if (task.state !== "submitted" || !taskSubmissionMatches(task)) reject("acceptance requires a current submitted task-scoped delivery", "AGENT_TEAMS_DELIVERY_REQUIRED");
+      const acceptedAt = now();
+      task.state = "completed";
+      task.completedAt = acceptedAt;
+      task.acceptance = { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, acceptedAt, acceptedBy: caller.id, ownerEpoch: team.pauseEpoch ?? 0 };
+      appendTaskLifecycleEvent(task, { kind: "acceptance", at: acceptedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch, actorId: caller.id, ownerEpoch: team.pauseEpoch ?? 0 });
+    } else if (action === "reject") {
+      if (!isLead) reject("only the fixed root lead may reject a submitted task", "AGENT_TEAMS_UNAUTHORIZED");
+      if (task.state !== "submitted" || !taskSubmissionMatches(task)) reject("rejection requires a current submitted task-scoped delivery", "AGENT_TEAMS_DELIVERY_REQUIRED");
+      const rejectedAt = now();
+      appendTaskLifecycleEvent(task, { kind: "reject", at: rejectedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch, actorId: caller.id, reason: "rejected by the fixed root lead for another attempt" });
+      task.state = "pending";
+      task.assigneeSessionId = undefined;
+      task.claimedAt = undefined;
+      task.claimId = undefined;
+      clearTaskTerminalMetadata(task);
+      task.releasedAt = rejectedAt;
+      task.releaseReason = "submitted delivery rejected by the fixed root lead";
     } else if (action === "release") {
       if (task.state !== "in_progress") reject(`only an in-progress task can be released (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       if (!isLead && task.assigneeSessionId !== caller.id) reject("only the task claimant or team lead can release it", "AGENT_TEAMS_UNAUTHORIZED");
       assertCurrentTaskLease(team, task, caller, input);
       const releasedAt = now();
       boundedPush(task.interruptionHistory, { kind: "released", at: releasedAt, attempt: task.attempt ?? 0, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? 0 }, MAX_TASK_INTERRUPTION_HISTORY);
+      appendTaskLifecycleEvent(task, { kind: "release", at: releasedAt, attempt: task.attempt, claimId: task.claimId, leaseEpoch: task.leaseEpoch, actorId: caller.id });
       task.state = "pending";
       task.assigneeSessionId = undefined;
       task.claimedAt = undefined;
@@ -3556,17 +4118,21 @@ async function updateTask(store, caller, input) {
     } else if (action === "cancel") {
       if (!isLead) reject("only the team lead can cancel a task", "AGENT_TEAMS_UNAUTHORIZED");
       if (taskIsTerminal(task)) reject(`only a pending or in-progress task can be cancelled (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
+      const cancelledAt = now();
+      appendTaskLifecycleEvent(task, { kind: "cancel", at: cancelledAt, attempt: task.attempt ?? 0, ...(task.claimId === undefined ? {} : { claimId: task.claimId }), leaseEpoch: task.leaseEpoch ?? 0, actorId: caller.id, reason: "cancelled explicitly by the team lead" });
+      clearTaskTerminalMetadata(task);
       task.state = "cancelled";
       task.assigneeSessionId = undefined;
       task.claimedAt = undefined;
       task.completedAt = undefined;
-      task.cancelledAt = now();
+      task.cancelledAt = cancelledAt;
       task.cancellationReason = "cancelled explicitly by the team lead";
           } else if (action === "reopen") {
       if (!isLead) reject("only the team lead can reopen a task", "AGENT_TEAMS_UNAUTHORIZED");
       if (!taskIsTerminal(task)) reject(`only a completed or cancelled task can be reopened (current state: ${task.state})`, "AGENT_TEAMS_TASK_CONFLICT");
       const progressed = progressedDependents(document, team.id, task.id);
       if (progressed.length > 0) reject(`cannot reopen a prerequisite used by progressed tasks: ${progressed.join(", ")}`, "AGENT_TEAMS_TASK_CONFLICT");
+      appendTaskLifecycleEvent(task, { kind: "reopen", at: now(), attempt: task.attempt ?? 0, ...(task.claimId === undefined ? {} : { claimId: task.claimId }), leaseEpoch: task.leaseEpoch ?? 0, actorId: caller.id, reason: `reopened authoritative ${task.state} projection` });
       task.state = "pending";
       task.assigneeSessionId = undefined;
       task.claimedAt = undefined;
@@ -3789,9 +4355,9 @@ async function retireMember(ctx, store, admission, lead, input, signal) {
     requireOpenTeam(team);
     const member = resolveMember(team, input.memberSessionId);
     if (member.kind !== "worker") reject("unknown worker member", "AGENT_TEAMS_NOT_FOUND");
-    const unfinishedTaskIds = team.tasks.filter((task) => task.assigneeSessionId === member.sessionId && !taskIsTerminal(task)).map((task) => task.id);
-    if (!force && unfinishedTaskIds.length > 0) reject(`member owns unfinished tasks; complete or release them before graceful retirement: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
-    const invalidSubmissionTaskIds = team.tasks.filter((task) => task.assigneeSessionId === member.sessionId && task.state === "completed" && !taskSubmissionMatches(task)).map((task) => task.id);
+    const unfinishedTaskIds = team.tasks.filter((task) => task.assigneeSessionId === member.sessionId && !taskSatisfiesDependency(task)).map((task) => task.id);
+    if (!force && unfinishedTaskIds.length > 0) reject(`member owns work that is not independently accepted; submit and await root acceptance or release it before graceful retirement: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
+    const invalidSubmissionTaskIds = team.tasks.filter((task) => task.assigneeSessionId === member.sessionId && ["submitted", "completed"].includes(task.state) && !taskSubmissionMatches(task)).map((task) => task.id);
     if (!force && invalidSubmissionTaskIds.length > 0) reject(`member completed tasks without a current task-scoped submission fact: ${invalidSubmissionTaskIds.join(", ")}`, "AGENT_TEAMS_DELIVERY_REQUIRED");
     if (member.state === "retired") return { teamId: team.id, member: clone(member), releasedTaskIds: [], noop: true };
     markMemberShuttingDown(member, force);
@@ -3854,10 +4420,10 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
     const team = findTeam(document, teamId);
     requireLiveRootLead(ctx, team, lead);
     if (team.state !== "closing") requireActiveTeam(team);
+    const unacceptedTaskIds = team.tasks.filter(taskAwaitsAcceptance).map((task) => task.id);
+    if (!force && unacceptedTaskIds.length > 0) reject(`team has submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
     const unfinishedTaskIds = team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => task.id);
     if (!force && unfinishedTaskIds.length > 0) reject(`team has unfinished tasks; complete or cancel them before graceful shutdown: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
-    const unacceptedTaskIds = team.tasks.filter((task) => task.state === "completed" && !taskAcceptanceMatches(task)).map((task) => task.id);
-    if (!force && unacceptedTaskIds.length > 0) reject(`team has submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
     team.state = "closing";
     const workers = team.members.filter((member) => member.kind === "worker" && member.state !== "retired");
     for (const member of workers) markMemberShuttingDown(member, force);
@@ -3960,8 +4526,8 @@ async function recoverOrphanTeams(ctx, store, caller, input) {
         if (requestedId !== undefined) reject(shutdownUnconfirmed ? "orphan recovery is blocked by an unconfirmed shutdown" : "orphan recovery requires all workers to be inactive", shutdownUnconfirmed ? "AGENT_TEAMS_SHUTDOWN_UNCONFIRMED" : "AGENT_TEAMS_CONFLICT");
         continue;
       }
-      const unacceptedTaskIds = team.tasks.filter((task) => task.state === "completed" && !taskAcceptanceMatches(task)).map((task) => task.id);
-      if (unacceptedTaskIds.length > 0) reject(`orphan recovery cannot certify unaccepted completed tasks: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
+      const unacceptedTaskIds = team.tasks.filter(taskAwaitsAcceptance).map((task) => task.id);
+      if (unacceptedTaskIds.length > 0) reject(`orphan recovery cannot certify submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
       for (const member of team.members) if (member.kind === "worker") confirmMemberRetired(member);
       closeTeamRecord(team, "orphaned team closed by an explicit direct-human recovery");
       recovered.push(projectTeam(team));
@@ -3970,8 +4536,67 @@ async function recoverOrphanTeams(ctx, store, caller, input) {
   }));
 }
 
+const TEAM_SNAPSHOT_INDEXES = new WeakMap();
+function teamSnapshotIndex(document) {
+  let index = TEAM_SNAPSHOT_INDEXES.get(document);
+  if (index !== undefined) return index;
+  const bySession = new Map(), byRoot = new Map(), byProject = new Map();
+  for (const team of document.teams) {
+    const rootTeams = byRoot.get(team.rootLeadSessionId) ?? [];
+    rootTeams.push(team);
+    byRoot.set(team.rootLeadSessionId, rootTeams);
+    if (typeof team.projectKey === "string" && /^[a-f0-9]{64}$/u.test(team.projectKey)) {
+      const projectTeams = byProject.get(team.projectKey) ?? [];
+      projectTeams.push(team);
+      byProject.set(team.projectKey, projectTeams);
+    }
+    for (const member of team.members) {
+      const related = bySession.get(member.sessionId) ?? [];
+      related.push(team);
+      bySession.set(member.sessionId, related);
+    }
+  }
+  index = { bySession, byRoot, byProject, boards: new Map() };
+  TEAM_SNAPSHOT_INDEXES.set(document, index);
+  return index;
+}
+function cachedProjectTeamBoardEntry(index, projectKey) {
+  const projectTeams = index.byProject.get(projectKey) ?? [];
+  const signature = JSON.stringify(projectTeams.map((team) => [team.id, team.revision ?? 1, effectiveTeamState(team), team.updatedAt]));
+  const cached = index.boards.get(projectKey);
+  if (cached?.signature === signature) {
+    index.boards.delete(projectKey);
+    index.boards.set(projectKey, cached);
+    return cached;
+  }
+  const prepared = prepareProjectTeamBoard(projectKey, projectTeams, { teamState: effectiveTeamState, satisfiesDependency: taskSatisfiesDependency });
+  const entry = { signature, prepared, firstPage: undefined };
+  index.boards.delete(projectKey);
+  index.boards.set(projectKey, entry);
+  while (index.boards.size > UI_PROJECT_TEAM_BOARD_CACHE_MAX_PROJECTS) index.boards.delete(index.boards.keys().next().value);
+  return entry;
+}
+function cachedProjectTeamBoard(index, projectKey, cursor) {
+  if (projectKey === undefined) return createProjectTeamBoard(undefined, []);
+  const entry = cachedProjectTeamBoardEntry(index, projectKey);
+  if (cursor !== undefined) return paginatePreparedProjectTeamBoard(entry.prepared, { cursor });
+  if (entry.firstPage === undefined) entry.firstPage = paginatePreparedProjectTeamBoard(entry.prepared);
+  return entry.firstPage;
+}
+function projectTeamBoardCacheSize(document) {
+  return teamSnapshotIndex(document).boards.size;
+}
+function projectTeamBoardPage(document, sessionId, selectedTeamId, cursor) {
+  const index = teamSnapshotIndex(document);
+  const selected = (index.bySession.get(sessionId) ?? []).find((team) => team.id === selectedTeamId);
+  if (selected === undefined) reject("the calling session does not belong to the selected team", "AGENT_TEAMS_PROJECT_BOARD_FORBIDDEN");
+  if (typeof selected.projectKey !== "string" || !/^[a-f0-9]{64}$/u.test(selected.projectKey)) reject("the selected team has no canonical project", "AGENT_TEAMS_NOT_FOUND");
+  const projectTeams = index.byProject.get(selected.projectKey) ?? [];
+  return decorateProjectTeamBoardRecovery(cachedProjectTeamBoard(index, selected.projectKey, cursor), projectTeams, sessionId, { teamState: effectiveTeamState });
+}
 function teamSnapshot(document, sessionId, selectedTeamId) {
-  const related = sessionId === "settings" ? [] : document.teams.filter((candidate) => memberOf(candidate, sessionId));
+  const index = teamSnapshotIndex(document);
+  const related = sessionId === "settings" ? [] : index.bySession.get(sessionId) ?? [];
   const ordered = [...related].sort((left, right) => {
     const leftClosed = left.state === "closed";
     const rightClosed = right.state === "closed";
@@ -3979,7 +4604,9 @@ function teamSnapshot(document, sessionId, selectedTeamId) {
     return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
   });
   const selected = ordered.find((team) => team.id === selectedTeamId) ?? ordered[0];
-  const peerTeams = selected === undefined ? [] : document.teams.filter((candidate) => candidate.rootLeadSessionId === selected.rootLeadSessionId);
+  const peerTeams = selected === undefined ? [] : index.byRoot.get(selected.rootLeadSessionId) ?? [];
+  const projectTeams = selected?.projectKey === undefined ? [] : index.byProject.get(selected.projectKey) ?? [];
+  const projectTeamBoard = decorateProjectTeamBoardRecovery(cachedProjectTeamBoard(index, selected?.projectKey), projectTeams, sessionId, { teamState: effectiveTeamState });
   const config = clone(document.settings);
   const teams = ordered.map(projectTeamUiSummary);
   const team = selected === undefined ? null : projectTeamForUi(selected, peerTeams);
@@ -3988,6 +4615,7 @@ function teamSnapshot(document, sessionId, selectedTeamId) {
     config.maxMembers,
     config.maxActiveTurns,
     selected?.id ?? null,
+    projectTeamBoard.cursor,
     ...ordered.map((candidate) => [candidate.id, candidate.revision ?? 1, effectiveTeamState(candidate)]),
   ]);
   return {
@@ -3998,6 +4626,7 @@ function teamSnapshot(document, sessionId, selectedTeamId) {
     activeTeamId: selected?.id ?? null,
     teams,
     team,
+    projectTeamBoard,
     crossTeamEvents: projectCrossTeamEvents(peerTeams),
   };
 }
@@ -4008,14 +4637,14 @@ function teamSystemPrompt(store) {
   }
   return [
     "Agent Teams automatic-team mode is ENABLED.",
-    "Before substantive work on every ordinary direct-human root turn, apply the three-level gate below. When the Level 3 conditions are met, choose exactly one creation path in that same turn: use team_bootstrap when the complete bounded task/member plan is already known; otherwise use team_start and then the existing task/spawn tools. Never call both team_start and team_bootstrap for the same team, and never replace the required visible managed members with multiple hidden ordinary subagents.",
+    "Before substantive work on every ordinary direct-human root turn, apply the three-level gate below and persist exactly one Host-scoped routing decision for that root/turn/project: all three levels call team_route_goal first; for Level 3, team_start/team_bootstrap then finalize that same immutable decision with the creation outcome and Host-validated team. Decision content is model-declared; the receipt is an audit record only, does not force or prove model-route selection, and model input cannot choose another root, project, turn, or team scope. When Level 3 conditions are met, choose exactly one creation path in that same turn: use team_bootstrap when the complete bounded task/member plan is already known; otherwise use team_start and then the existing task/spawn tools. Never call both team_start and team_bootstrap for the same team, and never replace the required visible managed members with multiple hidden ordinary subagents.",
     "Keep durable team task state synchronized at every handoff: members must explicitly complete finished tasks before their final report, and the root lead must reconcile every task before retiring members or closing the team. A report or successful subagent turn is not completion evidence. Graceful retirement and shutdown require no unfinished owned work; force shutdown records unfinished work as cancelled rather than leaving permanent pending tasks.",
     "Once an Agent Team is established for the current goal, the root lead defaults to coordination only: decompose the user's objective into substantive outcomes, persist and assign durable tasks, coordinate dependencies and handoffs, monitor and reconcile task state, review and accept member deliverables, then perform final integration and user-facing synthesis. The root lead must not personally implement, research, design, test, or otherwise substitute for a core professional deliverable that is assigned or should be assigned to a member role. If substantive coverage is missing, create or restructure the relevant durable task and assign or expand the visible team instead of absorbing that work; the root may make only minimal glue changes required to integrate accepted member outputs.",
     "A team's durable tasks and member roles must collectively cover the substantive outputs required to satisfy the user's goal, each with a real deliverable and observable acceptance criteria. Never create decorative, token, or review-only members while leaving the core professional output to the root lead; if the work does not justify delegating its substantive production, do not create a team.",
     "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively choose one Agent Team creation path only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
     "When a new team already has a complete bounded plan of one through four durable tasks and one through four visible peers, call team_bootstrap directly with a stable request_id and do not call team_start first. Otherwise team_start creates a draft: persist tasks, then use team_plan_commit with the exact plan revision and confirmed_plan_hash before any team_spawn. Without durable successful worker-publication history that CAS persists phase committed; the first fully successful spawn records publication and activates it, while later recommit persists active even after every published worker gracefully retires. Provisioning or initial publication/work-followup failure never establishes this history. Upgraded retired workers without the new marker qualify only through a task submission/result or checkpoint bound to their exact historical claim; retired state alone and former-root adoption history do not qualify. Both committed and active pass new claim/spawn execution gates. A new team or bootstrap still requires the current direct-human root turn. After that direct-human establishment and one successful worker publication, the same exact live root may recommit a later draft during an automatic goal round without another user message only while the team remains active and unpaused in the same canonical project, every capability is individually verified, file scopes are conflict-free, cost stays within the direct user's ordinary default AI-routing grant, every effect policy is none, and no outcome is unknown. Public spawn always requires non-empty persisted task_ids, and the Host atomically pre-binds those tasks with the member placeholder before child creation. Bootstrap persists all tasks before starting members, and exact replay reuses its plan. Neither path may bypass capacity checks, file-scope separation, capability preflight, or explicit review of partial/uncertain starts.",
     "An ordinary internal team that the direct user explicitly requested needs no redundant confirmation for a dynamically safe automatic-round recommit. Plan authority remains explicitly host_verified, human_attested, or unknown: a continuing/default grant stays human_attested and never becomes Host proof. Tool/model booleans can create only human_attested facts, never host_verified facts, and can never bulk-upgrade unknown capability records. Any material change to task scope, file ownership, capability/permission facts, model-cost class, or external effects returns the plan to draft and requires a fresh exact-hash CAS commit. New team creation, bootstrap, Stop recovery/resume, handoff/adopt/recover, resolve_unknown, cross-project scope, unknown/unavailable or separately billed capabilities, conflicting files, and confirm_each/idempotent/forbidden effects remain behind their direct-human or Host gates. An already active main-tier worker does not itself create a new cost grant or block safe continuation.",
-    "A task claim returns claimId and leaseEpoch. Members must echo both for checkpoint, completion, or release; stale attempts are rejected and only an exact completion replay is a no-op. Member checkpoints and next steps are unverified annotations separate from the four authoritative task states (pending, in_progress, completed, cancelled). External effect keys are Host-derived from stable team/task/effect identity. Only participating idempotency protocols can claim exactly-once; outcome_unknown blocks retry until an exact direct-human root resolves it.",
+    "A task claim returns claimId and leaseEpoch. Members must echo both for checkpoint, submission, or release; stale attempts are rejected and only an exact submission replay is a no-op. Worker complete moves the task only to submitted/in-review and appends an immutable claim-bound submission event. It does not complete the task, unlock dependencies, or permit graceful retirement. Only a later fixed-root accept of the current submission moves it to authoritative completed and appends acceptance; reject/reopen/cancel never erase older lifecycle events. Member checkpoints and next steps are unverified annotations separate from the five task states (pending, in_progress, submitted, completed, cancelled). External effect keys are Host-derived from stable team/task/effect identity. Only participating idempotency protocols can claim exactly-once; outcome_unknown blocks retry until an exact direct-human root resolves it.",
     "Team ownership may move only through team_handoff then team_adopt: both require direct-human root turns, the team must be durably paused, source and target must be exact live roots with the same canonical projectKey, and adoption must present the short-lived single-use token. Adoption increments pauseEpoch, revokes every old claim/lease, retires old-parent workers for bounded audit history, safely releases unfinished work to pending, and never wakes anyone automatically. Unknown scope and cross-project adoption fail closed.",
     "For every team_expansion_request, the fixed root lead approves only when the remaining outcomes are genuinely parallel and independent, inputs and acceptance criteria are explicit, file/external-resource ownership does not conflict, the handoff context is small, critical-path reduction or independent-review value materially exceeds coordination cost, and current member/turn/task budget is sufficient. The Host compares proposed file scopes with other in-progress task files and checks proposal-internal resource hierarchy, but existing external-resource ownership is not persisted and must be verified by the root. If a broad source task is split, first release/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn for visible same-level peers. If rejected, explain the reason to the requester. Never invent a leader→group-leader→hidden-worker hierarchy.",
     "The fixed root lead/brain always uses the main model route. The AI autonomously chooses each spawned member's model_tier: default to subagent to reduce cost; use main only for high-complexity reasoning, architecture, security-critical work, or repeated failures. Users do not choose member tiers. Every new member re-reads the latest route for its chosen tier; changing the subagent route never changes main-tier members, and already-created continuable members keep their creation route.",
@@ -4243,6 +4872,487 @@ function registerProjectFoundationsApi(ctx, manager, ready = Promise.resolve()) 
   }), "agent-teams project foundations state route");
 }
 
+function projectToolFailure(error) { return { ok: false, error: { code: typeof error?.code === "string" ? error.code : "PROJECT_COLLABORATION_FAILED", retryable: false } }; }
+function projectToolRef(prefix, requestId) { return `${prefix}_${createHash("sha256").update(nonEmptyString(requestId, "request_id", 256)).digest("base64url")}`; }
+function projectToolPayload(value, allowed) {
+  if (value === undefined) return {};
+  if (value === null || typeof value !== "object" || Array.isArray(value)) reject("payload must be an object", "PROJECT_COLLABORATION_INVALID");
+  const extras = Object.keys(value).filter((key) => !allowed.has(key));
+  if (extras.length > 0) reject(`payload contains unsupported or identity-bearing fields: ${extras.join(", ")}`, "PROJECT_COLLABORATION_INVALID");
+  return value;
+}
+const PROJECT_MODEL_TASK_LIMIT = 120;
+const PROJECT_MODEL_COLLECTION_LIMIT = 120;
+const PROJECT_MODEL_MAX_BYTES = 128 * 1024;
+const PROJECT_MODEL_REQUIREMENTS_BYTES = 8 * 1024;
+const PROJECT_MODEL_TOTAL_KEYS = Object.freeze(["seats", "locks", "handoffs", "evidence", "history", "tasks", "unclaimed", "claimed", "inProgress", "inReview", "done", "blocked"]);
+function projectModelRef(value) { return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : undefined; }
+function projectModelString(value, maxChars, maxBytes) {
+  if (typeof value !== "string") return undefined;
+  let result = "", bytes = 0, chars = 0;
+  for (const character of value) { const size = Buffer.byteLength(character, "utf8"); if (chars >= maxChars || bytes + size > maxBytes) break; result += character; chars += 1; bytes += size; }
+  return result;
+}
+function projectModelRequirements(value, depth = 0) {
+  if (depth > 8) return "[truncated]";
+  if (value === null || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return value;
+  if (typeof value === "string") return projectModelString(value, 1_000, 4 * 1024);
+  if (Array.isArray(value)) return value.slice(0, 32).map((entry) => projectModelRequirements(entry, depth + 1));
+  if (!isRecord(value)) return undefined;
+  const result = {};
+  for (const [key, entry] of Object.entries(value).slice(0, 32)) { const safeKey = projectModelString(key, 128, 512); if (safeKey) result[safeKey] = projectModelRequirements(entry, depth + 1); }
+  return result;
+}
+function boundedProjectRequirements(value) {
+  const projected = projectModelRequirements(value ?? {});
+  return Buffer.byteLength(JSON.stringify(projected), "utf8") <= PROJECT_MODEL_REQUIREMENTS_BYTES ? projected : { truncated: true };
+}
+function finalizeProjectModelResult(result) {
+  let bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+  while (bytes > PROJECT_MODEL_MAX_BYTES && Array.isArray(result.tasks) && result.tasks.length > 0) { result.tasks.pop(); result.taskPage = { ...(result.taskPage ?? {}), hasMore: true }; bytes = Buffer.byteLength(JSON.stringify(result), "utf8"); }
+  while (bytes > PROJECT_MODEL_MAX_BYTES && Array.isArray(result.requests) && result.requests.length > 0) { result.requests.pop(); result.hasMore = true; bytes = Buffer.byteLength(JSON.stringify(result), "utf8"); }
+  for (const key of ["history", "evidence", "handoffs", "locks", "seats"]) while (bytes > PROJECT_MODEL_MAX_BYTES && Array.isArray(result.board?.[key]) && result.board[key].length > 0) { result.board[key].pop(); bytes = Buffer.byteLength(JSON.stringify(result), "utf8"); }
+  if (bytes > PROJECT_MODEL_MAX_BYTES) reject("project model projection exceeds the bounded output budget", "PROJECT_COLLABORATION_OUTPUT_TOO_LARGE");
+  return result;
+}
+function projectModelInteger(value) { return Number.isSafeInteger(value) && value >= 0 ? value : undefined; }
+function projectModelTotals(value) {
+  if (!isRecord(value)) return {};
+  const totals = {};
+  for (const key of PROJECT_MODEL_TOTAL_KEYS) {
+    const count = projectModelInteger(value[key]);
+    if (count !== undefined) totals[key] = count;
+  }
+  return totals;
+}
+function projectModelTask(task) {
+  if (!isRecord(task)) return undefined;
+  const taskRef = projectModelRef(task.taskRef, "taskRef");
+  if (taskRef === undefined) return undefined;
+  return {
+    taskRef,
+    ...(typeof task.status === "string" ? { status: task.status } : {}),
+    ...(typeof task.collaborationStatus === "string" ? { collaborationStatus: task.collaborationStatus } : {}),
+    ...(projectModelInteger(task.revision) === undefined ? {} : { revision: task.revision }),
+    ...(projectModelInteger(task.requirementsRevision) === undefined ? {} : { requirementsRevision: task.requirementsRevision }),
+    ...(projectModelInteger(task.priority) === undefined || task.priority > 1_000_000 ? {} : { priority: task.priority }),
+    ...(projectModelString(task.title, 500, 2 * 1024) === undefined ? {} : { title: projectModelString(task.title, 500, 2 * 1024) }),
+    requirements: boundedProjectRequirements(task.requirements),
+    assigned: typeof task.assigneeActorRef === "string" && task.assigneeActorRef.length > 0,
+  };
+}
+function projectModelBoard(board) {
+  if (!isRecord(board)) return undefined;
+  const project = {
+    ...(projectModelInteger(board.revision) === undefined ? {} : { revision: board.revision }),
+    ...(projectModelInteger(board.projectRevision) === undefined ? {} : { projectRevision: board.projectRevision }),
+    ...(typeof board.status === "string" ? { status: board.status } : {}),
+    totals: projectModelTotals(board.totals),
+    seats: (Array.isArray(board.seats) ? board.seats : []).filter((seat) => seat?.state !== "reserved").slice(0, PROJECT_MODEL_COLLECTION_LIMIT).map((seat) => ({
+      ...(projectModelRef(seat.actorRef) === undefined ? {} : { seatRef: seat.actorRef }),
+      ...(projectModelRef(seat.parentActorRef) === undefined ? {} : { parentSeatRef: seat.parentActorRef }),
+      ...(typeof seat.kind === "string" ? { kind: seat.kind } : {}),
+      ...(typeof seat.state === "string" ? { state: seat.state } : {}),
+      ...(projectModelInteger(seat.revision) === undefined ? {} : { revision: seat.revision }),
+    })),
+    locks: (Array.isArray(board.locks) ? board.locks : []).slice(0, PROJECT_MODEL_COLLECTION_LIMIT).map((lock) => ({
+      ...(projectModelRef(lock.taskRef) === undefined ? {} : { taskRef: lock.taskRef }),
+      ...(typeof lock.state === "string" ? { state: lock.state } : {}),
+      ...(projectModelInteger(lock.revision) === undefined ? {} : { revision: lock.revision }),
+    })),
+    handoffs: (Array.isArray(board.handoffs) ? board.handoffs : []).slice(0, PROJECT_MODEL_COLLECTION_LIMIT).map((handoff) => ({
+      ...(projectModelRef(handoff.handoffRef) === undefined ? {} : { handoffRef: handoff.handoffRef }),
+      ...(projectModelRef(handoff.taskRef) === undefined ? {} : { taskRef: handoff.taskRef }),
+      ...(projectModelRef(handoff.sourceActorRef) === undefined ? {} : { sourceSeatRef: handoff.sourceActorRef }),
+      ...(projectModelRef(handoff.targetActorRef) === undefined ? {} : { targetSeatRef: handoff.targetActorRef }),
+      ...(typeof handoff.state === "string" ? { state: handoff.state } : {}),
+      ...(projectModelInteger(handoff.revision) === undefined ? {} : { revision: handoff.revision }),
+    })),
+    evidence: (Array.isArray(board.evidence) ? board.evidence : []).slice(0, PROJECT_MODEL_COLLECTION_LIMIT).map((evidence) => ({
+      ...(projectModelRef(evidence.evidenceRef) === undefined ? {} : { evidenceRef: evidence.evidenceRef }),
+      ...(projectModelRef(evidence.taskRef) === undefined ? {} : { taskRef: evidence.taskRef }),
+      ...(projectModelRef(evidence.actorRef) === undefined ? {} : { seatRef: evidence.actorRef }),
+    })),
+    history: (Array.isArray(board.history) ? board.history : []).slice(0, PROJECT_MODEL_COLLECTION_LIMIT).map((event) => ({
+      ...(projectModelInteger(event.revision) === undefined ? {} : { revision: event.revision }),
+      ...(typeof event.kind === "string" ? { kind: event.kind } : {}),
+    })),
+  };
+  if (isRecord(board.page)) project.page = {
+    ...(projectModelInteger(board.page.includedHistory) === undefined ? {} : { includedHistory: board.page.includedHistory }),
+    hasMoreHistory: board.page.hasMoreHistory === true,
+    ...(projectModelInteger(board.page.nextBeforeRevision) === undefined ? {} : { nextBeforeRevision: board.page.nextBeforeRevision }),
+  };
+  return project;
+}
+function projectCollaborationModelResult(value) {
+  if (!isRecord(value)) return { available: false };
+  if (Object.hasOwn(value, "available")) {
+    const result = {
+      available: value.available === true,
+      ...(value.writable === true ? { writable: true } : {}),
+      ...(projectModelInteger(value.projectRevision) === undefined ? {} : { projectRevision: value.projectRevision }),
+    };
+    const board = projectModelBoard(value.collaboration);
+    if (board !== undefined) result.board = board;
+    result.recoveries=(Array.isArray(value.collaboration?.recoveries)?value.collaboration.recoveries:[]).slice(0,PROJECT_MODEL_COLLECTION_LIMIT).map(item=>({recoveryRef:projectModelRef(item.recoveryRef),mode:typeof item.mode==="string"?item.mode:undefined,state:typeof item.state==="string"?item.state:undefined,revision:projectModelInteger(item.revision),failureCode:typeof item.failureCode==="string"?item.failureCode:undefined})).filter(item=>item.recoveryRef);
+    result.tasks = (Array.isArray(value.tasks) ? value.tasks : []).slice(0, PROJECT_MODEL_TASK_LIMIT).map(projectModelTask).filter(Boolean);
+    result.totals = projectModelTotals(value.totals);
+    if (isRecord(value.taskPage)) result.taskPage = { hasMore: value.taskPage.hasMore === true };
+    if (isRecord(value.permissions)) result.permissions = {
+      canCreate: value.permissions.canCreate === true, canAssign: value.permissions.canAssign === true,
+      canReview: value.permissions.canReview === true, canResolveConflict: value.permissions.canResolveConflict === true,
+      canUpdateOwnSeat: value.permissions.canUpdateOwnSeat === true, canClaim: value.permissions.canClaim === true, canSubmit: value.permissions.canSubmit === true,
+    };
+    return finalizeProjectModelResult(result);
+  }
+  return finalizeProjectModelResult({ board: projectModelBoard(value) ?? { totals: {} } });
+}
+function projectTaskModelResult(value) {
+  if (value === undefined) return { found: false };
+  if (isRecord(value) && Object.hasOwn(value, "available")) return projectCollaborationModelResult(value);
+  if (!isRecord(value)) return { found: false };
+  const task = projectModelTask(value.task);
+  return finalizeProjectModelResult({
+    found: task !== undefined,
+    ...(value.duplicate === true ? { duplicate: true } : {}),
+    ...(typeof value.status === "string" ? { status: value.status } : {}),
+    ...(Array.isArray(value.blockers) ? { blockerRefs: value.blockers.slice(0, PROJECT_MODEL_COLLECTION_LIMIT).map(projectModelRef).filter(Boolean) } : {}),
+    ...(projectModelInteger(value.projectRevision) === undefined ? {} : { projectRevision: value.projectRevision }),
+    ...(task === undefined ? {} : { task }),
+  });
+}
+function projectRequestModelRow(request) {
+  if (!isRecord(request)) return undefined;
+  const requestRef = projectModelRef(request.requestRef), taskRef = projectModelRef(request.taskRef);
+  if (requestRef === undefined || taskRef === undefined) return undefined;
+  return {
+    requestRef, taskRef,
+    ...(projectModelRef(request.dependencyTaskRef) === undefined ? {} : { dependencyTaskRef: request.dependencyTaskRef }),
+    ...(typeof request.kind === "string" ? { kind: request.kind } : {}),
+    ...(typeof request.state === "string" ? { state: request.state } : {}),
+    ...(projectModelInteger(request.revision) === undefined ? {} : { revision: request.revision }),
+    ...(projectModelInteger(request.respondByAt) === undefined ? {} : { respondByAt: request.respondByAt }),
+    mine: request.mine === true,
+    targetedToMe: request.targetedToMe === true,
+    escalationEligible: request.escalationEligible === true,
+    ...(projectModelString(request.reason, 2_000, 4 * 1024) === undefined ? {} : { reason: projectModelString(request.reason, 2_000, 4 * 1024) }),
+    ...(projectModelString(request.resolution, 2_000, 4 * 1024) === undefined ? {} : { resolution: projectModelString(request.resolution, 2_000, 4 * 1024) }),
+  };
+}
+function projectRequestModelResult(value) {
+  if (!isRecord(value)) return { requests: [], totals: {} };
+  const rows = Array.isArray(value.requests) ? value.requests : value.request ? [value.request] : [];
+  const totals = {};
+  for (const key of ["total", "open", "accepted", "rejected", "cancelled", "escalated", "resolved"]) if (projectModelInteger(value.totals?.[key]) !== undefined) totals[key] = value.totals[key];
+  const boundary = isRecord(value.nextBoundary) && projectModelInteger(value.nextBoundary.updatedAt) !== undefined && projectModelRef(value.nextBoundary.requestRef) !== undefined ? { updatedAt: value.nextBoundary.updatedAt, requestRef: value.nextBoundary.requestRef } : undefined;
+  return finalizeProjectModelResult({
+    ...(value.duplicate === true ? { duplicate: true } : {}),
+    ...(projectModelInteger(value.projectRevision) === undefined ? {} : { projectRevision: value.projectRevision }),
+    totals,
+    requests: rows.slice(0, PROJECT_MODEL_COLLECTION_LIMIT).map(projectRequestModelRow).filter(Boolean),
+    ...(value.hasMore === true ? { hasMore: true } : {}),
+    ...(boundary === undefined ? {} : { nextBoundary: boundary }),
+  });
+}
+const OFFICIAL_CORE_PORTS_BY_ENTRY = new WeakMap();
+function officialCompatibleRawProjectContext(rawContext) {
+  if (rawContext === null || typeof rawContext !== "object" || Array.isArray(rawContext)) reject("project task context is invalid", "PROJECT_ENTRY_TASK_CONTEXT_INVALID");
+  const own = (field) => {
+    const descriptor = Object.getOwnPropertyDescriptor(rawContext, field);
+    if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined || !("value" in descriptor)) reject(`project task context field ${field} must be an own data property`, "PROJECT_ENTRY_TASK_CONTEXT_INVALID");
+    return descriptor.value;
+  };
+  const disposeDescriptor = Object.getOwnPropertyDescriptor(rawContext, "dispose");
+  const disposeRaw = disposeDescriptor !== undefined && disposeDescriptor.get === undefined && disposeDescriptor.set === undefined && typeof disposeDescriptor.value === "function" ? disposeDescriptor.value : undefined;
+  let values;
+  try {
+    values = Object.fromEntries(["projectRef", "databasePath", "execution", "actorResolver", "keyProvider", "dispose"].map((field) => [field, own(field)]));
+    if (typeof values.actorResolver !== "function" || typeof values.keyProvider !== "function" || typeof values.dispose !== "function") reject("project task context capability is invalid", "PROJECT_ENTRY_TASK_CONTEXT_INVALID");
+  } catch (error) {
+    try { disposeRaw?.call(rawContext); } catch {}
+    throw error;
+  }
+  const execution = Object.freeze(Object.create(null));
+  let disposed = false;
+  const dispose = () => { if (disposed) return; disposed = true; values.dispose.call(rawContext); };
+  const context = Object.create(null);
+  Object.defineProperties(context, {
+    projectRef: { value: values.projectRef },
+    databasePath: { value: values.databasePath },
+    execution: { value: execution },
+    actorResolver: { value: (candidate, projectRef) => { if (candidate !== execution) reject("project task execution context is invalid or stale", "PROJECT_ENTRY_TASK_CONTEXT_INVALID"); return values.actorResolver.call(rawContext, values.execution, projectRef); } },
+    keyProvider: { value: (projectRef) => values.keyProvider.call(rawContext, projectRef) },
+    dispose: { value: dispose },
+  });
+  return Object.freeze(context);
+}
+function officialCorePortsForProjectEntry(projectEntry) {
+  if (isOfficialCorePorts(projectEntry)) return projectEntry;
+  if ((typeof projectEntry !== "object" && typeof projectEntry !== "function") || projectEntry === null) reject("official-compatible project entry is unavailable", "OFFICIAL_CORE_PRIMARY_REQUIRED");
+  const cached = OFFICIAL_CORE_PORTS_BY_ENTRY.get(projectEntry);
+  if (cached !== undefined) return cached;
+  const ports = createOfficialCorePorts({ providers: [createCustomOfficialCoreProvider({
+    projectIdentity: {
+      open: async ({ canonicalProjectKey, bindLegacy }) => {
+        let rawContext;
+        if (bindLegacy) {
+          if (typeof projectEntry.bindLegacyProjectCollaborationContext !== "function") reject("legacy project binding is unavailable", "PROJECT_ENTRY_LEGACY_BINDING_REQUIRED");
+          rawContext = await projectEntry.bindLegacyProjectCollaborationContext({ canonicalProjectKey });
+        } else {
+          const contextFactory = projectEntry.localProjectCollaborationContext ?? projectEntry.localProjectTaskContext;
+          if (typeof contextFactory !== "function") reject("project task context is unavailable", "PROJECT_ENTRY_TASK_CONTEXT_INVALID");
+          rawContext = await (projectEntry.requiresCanonicalProjectKey === true ? contextFactory.call(projectEntry, { canonicalProjectKey }) : contextFactory.call(projectEntry));
+        }
+        return officialCompatibleRawProjectContext(rawContext);
+      },
+      webEntry: () => projectEntry,
+    },
+    task: { bind: ({ store, actorResolver, now: clock }) => new ProjectTaskCommandService({ store, actorResolver, ...(clock === undefined ? {} : { now: clock }) }) },
+    collaboration: { bind: ({ store, actorResolver, earlyResolutionAuthorizer, rootFailureResolver }) => new ProjectCollaborationService({ store, actorResolver, earlyResolutionAuthorizer, rootFailureResolver }) },
+    projection: { createWebRuntime: (options) => new ProjectTaskWebRuntime(options) },
+    recovery: { continueRoot: ({ operation }) => operation(), recoverMember: ({ operation }) => operation(), reconcileMember: ({ operation }) => operation() },
+  })] });
+  OFFICIAL_CORE_PORTS_BY_ENTRY.set(projectEntry, ports);
+  return ports;
+}
+async function withProjectCollaborationContext(projectEntry, execution, operation, { earlyResolutionAuthorizer = () => false, rootFailureResolver = () => undefined, bindLegacy = false } = {}) {
+  const officialCorePorts = officialCorePortsForProjectEntry(projectEntry);
+  const canonicalProjectKey = isOfficialCorePorts(projectEntry) || projectEntry?.requiresCanonicalProjectKey === true ? projectKeyForRoot(execution.agent) : "0".repeat(64);
+  const context = await officialCorePorts.projectIdentity.open({ canonicalProjectKey, bindLegacy });
+  let store;
+  try {
+    store = new ProjectTaskStore({ filePath: context.databasePath, keyProvider: context.keyProvider });
+    context.actorResolver(context.execution, context.projectRef);
+    store.initialize();
+    const deriveProjectHmac = (domain, ...parts) => {
+      let key;
+      try {
+        key = context.keyProvider(context.projectRef);
+        return createHmac("sha256", key).update(domain).update("\0").update(context.projectRef).update("\0").update(JSON.stringify(parts)).digest("base64url");
+      } finally { key?.fill(0); }
+    };
+    const actorRef = `actor_${deriveProjectHmac("dsh-agent-teams/project-root-actor/v1", execution.agent.id)}`;
+    const actorResolver = (candidate, requestedProjectRef) => {
+      if (candidate !== execution) reject("project collaboration execution is invalid, stale, or belongs to another tool call", "PROJECT_COLLABORATION_CONTEXT_INVALID");
+      context.actorResolver(context.execution, requestedProjectRef);
+      const coordinatorActorRef = store.getCollaborationCoordinatorActorRef(requestedProjectRef);
+      const authorities = coordinatorActorRef === undefined || coordinatorActorRef === actorRef ? ["project_lead"] : [];
+      return Object.freeze({ projectRef: requestedProjectRef, actorRef, kind: "agent", authorities });
+    };
+    const collaboration = officialCorePorts.collaboration.bind({ store, actorResolver, earlyResolutionAuthorizer, rootFailureResolver });
+    const tasks = officialCorePorts.task.bind({ store, actorResolver });
+    return await operation({ projectRef: context.projectRef, actorRef, collaboration, tasks, isBoardAvailable: () => store.hasCollaborationBoard(context.projectRef), deriveOpaque: (kind, ...parts) => `${kind}_${deriveProjectHmac(`dsh-agent-teams/project-${kind}/v1`, ...parts)}` });
+  } finally {
+    try { store?.close(); } finally { context.dispose(); }
+  }
+}
+function requireProjectRootCaller(ctx, exec) {
+  const execution = toolExecution(ctx, exec);
+  if (!ctx.agents.roots().includes(execution.agent)) reject("project collaboration tools require the exact top-level root; Agent Team members and subagents are forbidden", "PROJECT_COLLABORATION_ROOT_REQUIRED");
+  return exec;
+}
+async function activateReservedRootRecovery(projectSessionLaunch,execution,binding,current){
+  const reservation=await projectSessionLaunch.recoveryReservation(execution,{batchRef:current.launchRef,projectBinding:binding});
+  return projectSessionLaunch.activatePreparedBatch(execution,{batchRef:current.launchRef,reservations:[{slotActorRef:current.replacementSlotActorRef,taskRef:current.replacementTaskRef,slotRef:reservation.slotRef,operationRef:reservation.operationRef}],projectBinding:binding});
+}
+async function continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,recoveryRef,expectedRevision){
+  let current=collaboration.getRootRecovery(execution,{projectRef,recoveryRef}),launch,retried=false;
+  if(expectedRevision!==undefined&&current.revision!==expectedRevision) reject("root recovery revision changed","PROJECT_ROOT_RECOVERY_CONFLICT");
+  if(["ready","cancelled"].includes(current.state)) return collaboration.snapshot(execution,{projectRef,historyLimit:20,taskLimit:100});
+  if(current.mode==="retry"&&["reserved","failed"].includes(current.state)){launch=await projectSessionLaunch.retryFailedSlot(execution,{slotRef:current.launchRef,projectBinding:binding});retried=true;}
+  else if(current.mode==="takeover"&&current.state==="reserved") launch=await activateReservedRootRecovery(projectSessionLaunch,execution,binding,current);
+  else launch=current.mode==="retry"?await projectSessionLaunch.slotStatus(execution,{slotRef:current.launchRef,projectBinding:binding}):await projectSessionLaunch.status(execution,{batchRef:current.launchRef,projectBinding:binding});
+  const slot=current.mode==="retry"?launch.slots.find(candidate=>candidate.slotRef===current.launchRef):launch.slots[0],launchState=slot?.state;
+  if((current.state==="reserved"||current.state==="failed"&&retried)&&!["failed","outcome_unknown"].includes(launchState)) current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:"activated"}).recovery;
+  const desired=launchState==="ready"?"ready":launchState==="failed"?"failed":launchState==="outcome_unknown"?"outcome_unknown":undefined;
+  if(desired!==undefined&&current.state!==desired) {
+    if(current.state==="failed"&&desired==="ready") current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:"activated"}).recovery;
+    if(current.state==="reserved"&&desired==="ready") current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:"activated"}).recovery;
+    if(current.state!==desired) current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:desired}).recovery;
+  }
+  return collaboration.snapshot(execution,{projectRef,historyLimit:20,taskLimit:100});
+}
+function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaunch, ready = Promise.resolve()) {
+  const officialCorePorts = officialCorePortsForProjectEntry(projectEntry);
+  ctx.systemPrompt.section({ name: "tool:project-collaboration", order: 114, text: () => "Only exact top-level roots may call project_collaboration and project_task. A newly launched root must first adopt_slot, then at adoption and every project-task boundary call read_requests and respond to rows with targetedToMe=true before taking unrelated work. Request kinds are dependency_unblock, release, handoff, and takeover; target responses are accept, reject, or release. Respect respondByAt: audit_resolve_request is eligible only when escalationEligible=true, including an early deadline only when the current root turn carries explicit direct-user authorization verified by the Host. Requests are durable and no-wake: never poll or wake a stopped root. Read the assigned project task, work it, explicitly submit project status/evidence, and call project_task claim_next with a new stable request_id. Repeat one task at a time until all_terminal, or blocked with every remaining blocker represented by one durable request; never stop after one completion or temporarily_empty. A root's private Agent Team may receive only bounded context for the current claimed project task; members retain team_task_* only and never call project tools. The root must reconcile Team deliverables into explicit project task status and evidence—Team reports or completion are not project evidence. The Host derives project/actor identity; model outputs may expose mine, targetedToMe, and escalationEligible but never actor refs, raw session, workspace, filesystem, or project identities." });
+  ctx.tools.register(defineTool({
+    name: "project_collaboration",
+    description: "Read or mutate the current canonical project's collaboration board using the invoking root's Host-derived seat. bind_legacy is a distinct one-time recovery action restricted to the exact current top-level direct-human root; ordinary initialize never claims legacy data. A newly launched root adopts its reserved seat with adopt_slot and only the opaque assigned slot_ref; the Host uses this routing ref to validate the exact ready child and privately redeem the one-time capability, which never enters tool arguments or model-visible data. Also supports board initialization, own-seat updates, resource locks, two-phase handoff, and delivery evidence. No raw actor/session/project/path identities are accepted; evidence paths and resource scopes are project-relative.",
+    parameters: { action: { type: "string", required: true, enum: ["read", "initialize", "bind_legacy", "adopt_slot", "recover_root", "continue_root_recovery", "update_own_seat", "acquire_lock", "release_lock", "prepare_handoff", "commit_handoff", "add_evidence", "read_requests", "create_request", "respond_request", "cancel_request", "audit_resolve_request"] }, request_id: { type: "string" }, payload: { type: "object", additionalProperties: true } }, output: TOOL_OUTPUT,
+    execute: async (args, exec) => {
+      try {
+        await ready;
+        const execution = requireProjectRootCaller(ctx, exec);
+        if (args.action === "bind_legacy" && !hasDirectHumanRootAuthority(ctx, execution)) reject("legacy project binding requires the exact current top-level direct-human root", "PROJECT_COLLABORATION_FORBIDDEN");
+        let recoveryInput,rootFailureEvidence;
+        if(args.action==="continue_root_recovery") requireDirectHumanRoot(ctx,execution);
+        if(args.action==="recover_root") { requireDirectHumanRoot(ctx,execution); recoveryInput=projectToolPayload(args.payload,new Set(["failure_ref","mode","collaboration_request_ref"])); if(!["retry","takeover"].includes(recoveryInput.mode)) reject("root recovery mode is invalid","PROJECT_COLLABORATION_INVALID"); rootFailureEvidence=await projectSessionLaunch.rootFailureEvidence(execution,{failureRef:recoveryInput.failure_ref,projectBinding:{canonicalProjectKey:projectKeyForRoot(execution.agent),workspacePath:projectScopeForRoot(execution.agent),callerRootId:execution.agent.id}}); }
+        const requestAction = ["read_requests", "create_request", "respond_request", "cancel_request", "audit_resolve_request"].includes(args.action);
+        const value = await withProjectCollaborationContext(projectEntry, execution, async ({ projectRef, collaboration, deriveOpaque }) => {
+          if (args.action === "read") { const input = projectToolPayload(args.payload, new Set(["history_limit", "before_revision", "task_limit"])); return collaboration.snapshot(execution, { projectRef, historyLimit: input.history_limit, beforeRevision: input.before_revision, taskLimit: input.task_limit }); }
+          if (args.action === "initialize" || args.action === "bind_legacy") { const input = projectToolPayload(args.payload, new Set(["title"])); return collaboration.createBoard(execution, { projectRef, title: input.title }); }
+          if (args.action === "adopt_slot") { const input = projectToolPayload(args.payload, new Set(["slot_ref"])); return adoptProjectLaunchSlot(projectSessionLaunch, execution, { canonicalProjectKey: projectKeyForRoot(execution.agent), workspacePath: projectScopeForRoot(execution.agent), callerRootId: execution.agent.id }, projectRef, collaboration, input.slot_ref); }
+          if(args.action==="continue_root_recovery") {
+            const input=projectToolPayload(args.payload,new Set(["recovery_ref"])),binding={canonicalProjectKey:projectKeyForRoot(execution.agent),workspacePath:projectScopeForRoot(execution.agent),callerRootId:execution.agent.id},current=collaboration.getRootRecovery(execution,{projectRef,recoveryRef:input.recovery_ref});
+            return officialCorePorts.recovery.continueRoot({ confirm: true, expectedRevision: current.revision, operation: () => continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,input.recovery_ref,current.revision) });
+          }
+          if(args.action==="recover_root") {
+            const requestId=nonEmptyString(args.request_id,"request_id",256),binding={canonicalProjectKey:projectKeyForRoot(execution.agent),workspacePath:projectScopeForRoot(execution.agent),callerRootId:execution.agent.id},recoveryRef=deriveOpaque("root-recovery",requestId);
+            let current=collaboration.prepareRootRecovery(execution,{projectRef,recoveryRef,requestId:deriveOpaque("root-recovery-request",requestId),mode:recoveryInput.mode,failureRef:recoveryInput.failure_ref,collaborationRequestRef:recoveryInput.collaboration_request_ref}).recovery;
+            if(current.state==="prepared"&&recoveryInput.mode==="retry") current=collaboration.reserveRootRecovery(execution,{projectRef,recoveryRef,launchRef:recoveryInput.failure_ref}).recovery;
+            if(current.state==="prepared"&&recoveryInput.mode==="takeover") {
+              const batch=await projectSessionLaunch.prepareStart(execution,{requestId:`recovery:${requestId}`,totalSessions:2,slots:[{title:"Replacement root",role:rootFailureEvidence.role,resources:rootFailureEvidence.resources,task:rootFailureEvidence.task}],projectBinding:binding}),adoptions=await projectSessionLaunch.prepareAdoptions(execution,{batchRef:batch.batchRef,projectBinding:binding}),adoption=adoptions.prepared[0],slotActorRef=deriveOpaque("slot-actor",adoption.slotRef);
+              current=collaboration.reserveRootRecovery(execution,{projectRef,recoveryRef,replacementSlotActorRef:slotActorRef,slotCapability:adoption.adoptionCapability,launchRef:batch.batchRef}).recovery;
+            }
+            return officialCorePorts.recovery.continueRoot({ confirm: true, expectedRevision: current.revision, operation: () => continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,recoveryRef,current.revision) });
+          }
+          if (args.action === "update_own_seat") { const input = projectToolPayload(args.payload, new Set(["expected_revision", "state", "duty", "resource_scope", "phase", "next_step"])); return collaboration.upsertSeat(execution, { projectRef, expectedRevision: input.expected_revision, kind: "root", state: input.state, duty: input.duty, resourceScope: input.resource_scope, phase: input.phase, nextStep: input.next_step }); }
+          if (args.action === "acquire_lock") { const input = projectToolPayload(args.payload, new Set(["resource_ref", "task_ref"])); return collaboration.acquireLock(execution, { projectRef, resourceRef: input.resource_ref, taskRef: input.task_ref }); }
+          if (args.action === "release_lock") { const input = projectToolPayload(args.payload, new Set(["resource_ref", "force"])); return collaboration.releaseLock(execution, { projectRef, resourceRef: input.resource_ref, force: input.force }); }
+          if (args.action === "prepare_handoff") { const input = projectToolPayload(args.payload, new Set(["handoff_ref", "task_ref", "target_actor_ref", "summary"])); return collaboration.prepareHandoff(execution, { projectRef, handoffRef: input.handoff_ref, taskRef: input.task_ref, targetActorRef: input.target_actor_ref, summary: input.summary }); }
+          if (args.action === "commit_handoff") { const input = projectToolPayload(args.payload, new Set(["handoff_ref"])); return collaboration.commitHandoff(execution, { projectRef, handoffRef: input.handoff_ref }); }
+          if (args.action === "add_evidence") { const input = projectToolPayload(args.payload, new Set(["evidence_ref", "task_ref", "path", "digest", "summary"])); return collaboration.addEvidence(execution, { projectRef, evidenceRef: input.evidence_ref, taskRef: input.task_ref, path: input.path, digest: input.digest, summary: input.summary }); }
+          if (args.action === "read_requests") { const input = projectToolPayload(args.payload, new Set(["limit", "after_updated_at", "after_request_ref"])); return collaboration.collaborationRequestWindow(execution, { projectRef, limit: input.limit, afterUpdatedAt: input.after_updated_at, afterRequestRef: input.after_request_ref }); }
+          if (args.action === "create_request") { const requestId = nonEmptyString(args.request_id, "request_id", 256); const input = projectToolPayload(args.payload, new Set(["kind", "task_ref", "dependency_task_ref", "reason", "respond_by_at"])); return collaboration.requestCollaboration(execution, { projectRef, requestRef: deriveOpaque("request", requestId), requestId: deriveOpaque("request-id", requestId), kind: input.kind, taskRef: input.task_ref, dependencyTaskRef: input.dependency_task_ref, reason: input.reason, respondByAt: input.respond_by_at }); }
+          if (args.action === "respond_request") { const input = projectToolPayload(args.payload, new Set(["request_ref", "expected_revision", "response", "resolution"])); return collaboration.respondCollaborationRequest(execution, { projectRef, requestRef: input.request_ref, expectedRevision: input.expected_revision, action: input.response, resolution: input.resolution }); }
+          if (args.action === "cancel_request") { const input = projectToolPayload(args.payload, new Set(["request_ref", "expected_revision", "resolution"])); return collaboration.cancelCollaborationRequest(execution, { projectRef, requestRef: input.request_ref, expectedRevision: input.expected_revision, resolution: input.resolution }); }
+          if (args.action === "audit_resolve_request") { const input = projectToolPayload(args.payload, new Set(["request_ref", "expected_revision", "resolution"])); return collaboration.resolveCollaborationRequest(execution, { projectRef, requestRef: input.request_ref, expectedRevision: input.expected_revision, resolution: input.resolution }); }
+          reject("unsupported project collaboration action", "PROJECT_COLLABORATION_INVALID");
+        }, {
+          earlyResolutionAuthorizer: ({ execution: candidate }) => candidate === execution && hasDirectHumanRootAuthority(ctx, execution),
+          rootFailureResolver: ({execution:candidate,failureRef,mode}) => candidate===execution&&failureRef===recoveryInput?.failure_ref&&mode===recoveryInput?.mode?rootFailureEvidence:undefined,
+          bindLegacy: args.action === "bind_legacy",
+        });
+        return publicResult(requestAction ? projectRequestModelResult(value) : projectCollaborationModelResult(value));
+      } catch (error) { return projectToolFailure(error); }
+    }, presentCall: (args) => present("Project collaboration", args.action),
+  }));
+  ctx.tools.register(defineTool({
+    name: "project_task",
+    description: "Create, list, claim, atomically claim_next one eligible item, update, submit, review, transition, comment on, or add dependencies to current-project tasks. create and edit accept an optional integer priority from 0 through 1000000; edit priority null clears it. request_id is stable and Host-derives refs. claim_next enforces one in_progress item per root and returns all_terminal, temporarily_empty, or blocked when nothing is eligible. The current canonical project and invoking root actor are Host-derived.",
+    parameters: { action: { type: "string", required: true, enum: ["list", "create", "claim", "claim_next", "edit", "add_dependency", "start_attempt", "submit_attempt", "review", "transition", "comment", "receipt"] }, request_id: { type: "string" }, task_ref: { type: "string" }, expected_revision: { type: "number" }, payload: { type: "object", additionalProperties: true } }, output: TOOL_OUTPUT,
+    execute: async (args, exec) => {
+      try {
+        await ready;
+        const execution = requireProjectRootCaller(ctx, exec);
+        const value = await withProjectCollaborationContext(projectEntry, execution, ({ projectRef, collaboration, tasks, isBoardAvailable, deriveOpaque }) => {
+          if (args.action === "list") { const input = projectToolPayload(args.payload, new Set(["history_limit", "before_revision", "task_limit"])); return collaboration.snapshot(execution, { projectRef, historyLimit: input.history_limit, beforeRevision: input.before_revision, taskLimit: input.task_limit }); }
+          if (!isBoardAvailable()) reject("initialize the project collaboration board before mutating project tasks", "PROJECT_COLLABORATION_NOT_INITIALIZED");
+          if (args.action === "receipt") return tasks.getCommandReceipt(execution, { projectRef, commandId: deriveOpaque("command", args.request_id) });
+          if (args.action === "claim_next") { projectToolPayload(args.payload, new Set()); return collaboration.claimNextTask(execution, { projectRef, requestId: deriveOpaque("claim-next", args.request_id) }); }
+          const types = { create: "create", claim: "claim", edit: "edit_requirements", add_dependency: "relation.add", start_attempt: "attempt.start", submit_attempt: "attempt.submit", review: "review", transition: "transition", comment: "comment" };
+          const allowed = {
+            create: new Set(["title", "requirements", "fileScope", "priority"]), edit: new Set(["title", "requirements", "fileScope", "priority"]), claim: new Set(), add_dependency: new Set(["relationRef", "targetTaskRef", "relationType"]), start_attempt: new Set(["attemptRef"]), submit_attempt: new Set(["attemptRef"]), review: new Set(["reviewRef", "attemptRef", "verdict", "body"]), transition: new Set(["to", "blockReason", "attemptRef", "reviewRef"]), comment: new Set(["commentRef", "kind", "body"]),
+          }[args.action];
+          const payload = projectToolPayload(args.payload, allowed ?? new Set());
+          const commandId = deriveOpaque("command", args.request_id), eventRef = deriveOpaque("event", args.request_id);
+          const taskRef = args.action === "create" ? deriveOpaque("task", args.request_id) : args.task_ref;
+          return tasks.executeCommand(execution, { projectRef, taskRef, commandId, eventRef, type: types[args.action], expectedRevision: args.action === "create" ? 0 : args.expected_revision, payload });
+        });
+        return publicResult(args.action === "list" ? projectCollaborationModelResult(value) : projectTaskModelResult(value));
+      } catch (error) { return projectToolFailure(error); }
+    }, presentCall: (args) => present("Project task", args.task_ref ?? args.request_id),
+  }));
+}
+
+async function adoptProjectLaunchSlot(projectSessionLaunch, execution, projectBinding, projectRef, collaboration, slotRef) {
+  const redemption = await projectSessionLaunch.redeemAdoption(execution, { slotRef, projectBinding });
+  try {
+    // Project Entry and the Host launch service intentionally use independent
+    // authority domains for their opaque project refs. Exact canonical-lane
+    // equality was already enforced inside redeemAdoption from Host-derived data.
+    const adopted=collaboration.adoptRootSeat(execution, { projectRef, slotActorRef: redemption.slotActorRef, slotCapability: redemption.slotCapability });
+    await projectSessionLaunch.recordAdoption(execution,{slotRef,adoptedActorRef:adopted.seat.actorRef,projectBinding});
+    return adopted;
+  } finally { redemption.slotCapability = undefined; }
+}
+async function ensureProjectLaunchBoard(projectEntry, execution) {
+  return withProjectCollaborationContext(projectEntry, execution, ({ projectRef, collaboration }) => {
+    let snapshot = collaboration.snapshot(execution, { projectRef, historyLimit: 1, taskLimit: 1 });
+    if (!snapshot.available) {
+      if (snapshot.writable !== true) reject("only a project_lead coordinator may initialize the collaboration board", "PROJECT_COLLABORATION_FORBIDDEN");
+      collaboration.createBoard(execution, { projectRef, title: "Project collaboration" });
+      snapshot = collaboration.snapshot(execution, { projectRef, historyLimit: 1, taskLimit: 1 });
+    }
+    if (!snapshot.available || snapshot.permissions?.canCreate !== true) reject("only the project_lead coordinator may launch project sessions", "PROJECT_COLLABORATION_FORBIDDEN");
+    return { projectRef };
+  });
+}
+async function reserveProjectLaunchSlots(projectEntry, execution, args) {
+  return withProjectCollaborationContext(projectEntry, execution, async ({ projectRef, collaboration, deriveOpaque }) => {
+    const snapshot = collaboration.snapshot(execution, { projectRef, historyLimit: 1, taskLimit: 1 });
+    if (!snapshot.available || snapshot.permissions?.canCreate !== true) reject("only the project_lead coordinator may launch project sessions", "PROJECT_COLLABORATION_FORBIDDEN");
+    const intentRef = deriveOpaque("launch-intent", args.request_id), reservations = [], publicSlots = [];
+    for (let index = 0; index < args.slots.length; index += 1) {
+      const slot = args.slots[index], adoption = args.prepared[index], slotActorRef = deriveOpaque("slot-actor", adoption.slotRef), taskRef = deriveOpaque("task", "session-launch", args.request_id, index), requestId = deriveOpaque("reservation", args.request_id, index);
+      try {
+        const result = collaboration.reserveRootSeat(execution, { projectRef, requestId, slotActorRef, slotCapability: adoption.adoptionCapability, duty: slot.role, resourceScope: slot.resources, phase: "queued", nextStep: "Adopt this reserved root seat before project work", task: { taskRef, title: slot.role, requirements: slot.task, fileScope: slot.resources } });
+        reservations.push({ slotActorRef, taskRef, slotRef: adoption.slotRef, operationRef: adoption.operationRef });
+        publicSlots.push({ seatRef: slotActorRef, taskRef, state: "reserved", duplicate: result.duplicate === true, projectRevision: result.projectRevision });
+      } catch (error) {
+        publicSlots.push({ seatRef: slotActorRef, taskRef, state: "reservation_failed", errorCode: typeof error?.code === "string" ? error.code : "PROJECT_SESSION_LAUNCH_RESERVATION_FAILED" });
+        for (let pending = index + 1; pending < args.slots.length; pending += 1) publicSlots.push({ seatRef: deriveOpaque("slot-actor", args.prepared[pending].slotRef), taskRef: deriveOpaque("task", "session-launch", args.request_id, pending), state: "pending" });
+        return { complete: false, intentRef, reservations, failedIndex: index, slots: publicSlots };
+      }
+    }
+    return { complete: true, intentRef, reservations, slots: publicSlots };
+  });
+}
+function projectSessionLaunchFailure(error) {
+  return { ok: false, error: { code: typeof error?.code === "string" ? error.code : "PROJECT_SESSION_LAUNCH_FAILED", action: error?.code === "PROJECT_SESSION_LAUNCH_HOST_UNAVAILABLE" ? "install_or_enable_host_project_session_launch_capability" : error?.code === "PROJECT_SESSION_LAUNCH_CAPACITY" ? "ask_for_a_feasible_total" : error?.code === "PROJECT_SESSION_LAUNCH_OUTCOME_UNKNOWN" ? "inspect_batch_status_without_retrying" : "inspect_or_fix_request", retryable: false } };
+}
+function registerProjectSessionLaunchTool(ctx, projectEntry, runtime, ready = Promise.resolve()) {
+  ctx.systemPrompt.section({
+    name: "tool:project-session-launch",
+    order: 115,
+    text: () => [
+      "When the direct user explicitly requests multiple real top-level sessions for project collaboration, ask once for the TOTAL session count and say that it includes the current root session. Do not call project_session_launch until the current user has answered with that total.",
+      "Persist one role, resource scope, and initial task for each of the N-1 new roots. Never use team_spawn, hidden subagents, or represent these roots as one Agent Team. Each created root may later create its own independent Agent Team.",
+      "Use one stable request_id. A repeated request_id is status-safe only for byte-equivalent input; never blindly retry outcome_unknown. Use action=status to reconcile. Only an explicit direct-user action=retry_failed may retry the exact definitively failed slot with its existing Host operation; action=stop follows an explicit Stop/cancel request.",
+    ].join("\n"),
+  });
+  ctx.tools.register(defineTool({
+    name: "project_session_launch",
+    description: "After the current direct user confirms the TOTAL top-level session count (including this root), durably persist N-1 project-board slots/tasks and queue creation of N-1 real same-project top-level sessions through the Host capability. Never uses Agent Teams members or hidden subagents. Stable request_id is idempotent; status reconciles unknown outcomes; stop cancels queued work.",
+    parameters: {
+      action: { type: "string", required: true, enum: ["start", "status", "resolve_unknown", "retry_failed", "stop"] },
+      request_id: { type: "string", description: "Stable idempotency key required for start and resolve_unknown." },
+      total_sessions: { type: "number", description: "Confirmed total including the current root; required for start." },
+      batch_ref: { type: "string", description: "Opaque batch reference required for status/stop." },
+      slot_ref: { type: "string", description: "Exact slot required for resolve_unknown/retry_failed." },
+      decision: { type: "string", enum: ["delivered", "not_delivered"], description: "Host-authorized prompt outcome required for resolve_unknown." },
+      expected_revision: { type: "number", description: "Exact Host operation revision required for resolve_unknown OCC." },
+      slots: { type: "array", items: { type: "object", additionalProperties: false, properties: { title: { type: "string", required: true }, role: { type: "string", required: true }, resources: { type: "array", required: true, items: { type: "string" } }, task: { type: "string", required: true } } }, description: "Exactly total_sessions-1 new-root slots; persisted before any session effect." },
+    }, output: TOOL_OUTPUT,
+    execute: async (args, exec) => {
+      try {
+        await ready;
+        const execution = toolExecution(ctx, exec);
+        if (!ctx.agents.roots().includes(execution.agent)) reject("project_session_launch requires a top-level root", "PROJECT_SESSION_LAUNCH_FORBIDDEN");
+        const projectBinding = { canonicalProjectKey: projectKeyForRoot(execution.agent), workspacePath: projectScopeForRoot(execution.agent), callerRootId: execution.agent.id };
+        if (args.action === "start") {
+          requireDirectHumanRoot(ctx, execution);
+          const slots = runtime.validateSlots(args.total_sessions, args.slots);
+          await ensureProjectLaunchBoard(projectEntry, exec);
+          const preparedBatch = await runtime.prepareStart(exec, { requestId: args.request_id, totalSessions: args.total_sessions, slots, projectBinding });
+          if (preparedBatch.noHostEffects !== true) return publicResult(await runtime.start(exec, { batchRef: preparedBatch.batchRef, projectBinding }));
+          const adoptions = await runtime.prepareAdoptions(exec, { batchRef: preparedBatch.batchRef, projectBinding });
+          const reservation = await reserveProjectLaunchSlots(projectEntry, exec, { request_id: args.request_id, slots, prepared: adoptions.prepared });
+          if (!reservation.complete) return publicResult(await runtime.recordReservationFailure(exec, { batchRef: preparedBatch.batchRef, reservations: reservation.reservations, failedIndex: reservation.failedIndex, errorCode: reservation.slots[reservation.failedIndex]?.errorCode, projectBinding }));
+          return publicResult(await runtime.activatePreparedBatch(exec, { batchRef: preparedBatch.batchRef, reservations: reservation.reservations, projectBinding }));
+        }
+        if (args.action === "status") return publicResult(await runtime.status(exec, { batchRef: args.batch_ref, projectBinding }));
+        if (args.action === "resolve_unknown") { requireDirectHumanRoot(ctx, execution); return publicResult(await runtime.resolveUnknownSlot(exec,{slotRef:args.slot_ref,requestId:args.request_id,decision:args.decision,expectedRevision:args.expected_revision,projectBinding})); }
+        if (args.action === "retry_failed") { requireDirectHumanRoot(ctx, execution); return publicResult(await runtime.retryFailedSlot(exec,{slotRef:args.slot_ref,projectBinding})); }
+        if (args.action === "stop") return publicResult(await runtime.stop(exec, { batchRef: args.batch_ref, projectBinding }));
+        reject("unsupported project session launch action", "PROJECT_SESSION_LAUNCH_INVALID");
+      } catch (error) { return projectSessionLaunchFailure(error); }
+    },
+    presentCall: (args) => present(`${args.action === "start" ? "Launch" : args.action === "stop" ? "Stop" : args.action === "resolve_unknown" ? "Reconcile" : "Inspect"} top-level project sessions`, args.batch_ref ?? args.request_id),
+  }));
+}
+
 function registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization) {
   ctx.systemPrompt.section({
     name: "tool:agent-teams",
@@ -4257,14 +5367,44 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     return { document, team };
   };
   ctx.tools.register(defineTool({
+    name: "team_route_goal",
+    description: "Persist the Host-scoped Level 1, Level 2, or initial Level 3 routing decision for this ordinary direct-human goal before substantive work. A later team_start/team_bootstrap finalizes the same immutable Level 3 decision with its Host-validated team and outcome. Decision fields are model-declared; identity, canonical project, open turn, and final team scope are Host-derived. This receipt does not force or prove model routing.",
+    parameters: {
+      level: { type: "string", required: true, enum: ROUTING_LEVELS },
+      reason_category: { type: "string", required: true, enum: ROUTING_REASON_CATEGORIES },
+      explicit_user_team_request: { type: "boolean" },
+      candidate_workstreams: { type: "number", required: true },
+      creation_path: { type: "string", required: true, enum: ROUTING_CREATION_PATHS },
+    }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution) => {
+      requireDirectHumanRoot(ctx, execution);
+      return publicResult(await recordRoutingReceipt(store, execution, { level: args.level, reasonCategory: args.reason_category, explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: args.creation_path, outcome: "recorded" }));
+    }),
+    presentCall: (args) => present("Record goal routing decision", args.level),
+  }));
+  ctx.tools.register(defineTool({
     name: "team_start",
     description: "Start a durable peer team owned by this fixed top-level root lead. Use this manual creation path only when a complete bounded team_bootstrap plan is not ready; never call team_start before team_bootstrap for the same team. Call this in the current direct-human root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination; do not substitute multiple ordinary subagents. Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count, and one continuable helper should use ordinary subagent instead. An explicit user team request may override this automatic threshold. At most 8 teams may remain unclosed, and all peers share maxActiveTurns. Requires direct-human root authority in the current open turn.",
     parameters: {
       objective: { type: "string", required: true, description: "Concrete objective shared by the team." },
       name: { type: "string", description: "Optional short team display name." },
       lead_name: { type: "string", description: "Optional display name for the root lead." },
+      explicit_user_team_request: { type: "boolean", description: "Model-declared true only when the direct user explicitly requested a team; this is audited but is not Host proof." },
+      candidate_workstreams: { type: "number", required: true, description: "Model-declared number of sustained independent workstreams identified by the routing gate." },
     }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution) => { requireDirectHumanRoot(ctx, execution); return publicResult({ team: await createTeam(store, execution.agent, { objective: args.objective, name: args.name, leadName: args.lead_name }) }); }),
+    execute: run(async (args, execution) => {
+      requireDirectHumanRoot(ctx, execution);
+      const routingDecision = { level: "level3", reasonCategory: args.explicit_user_team_request === true ? "explicit_user_team_request" : "independent_sustained_workstreams", explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: "team_start" };
+      await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded" });
+      try {
+        const team = await createTeam(store, execution.agent, { objective: args.objective, name: args.name, leadName: args.lead_name });
+        const routing = await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "created", teamId: team.id });
+        return publicResult({ team, routing });
+      } catch (error) {
+        try { await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "failed" }); } catch {}
+        throw error;
+      }
+    }),
     presentCall: (args) => present("Start agent team", args.name ?? args.objective),
   }));
   ctx.tools.register(defineTool({
@@ -4287,10 +5427,24 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     description: "Create one bounded team plan, persist all tasks before work starts, and provision up to four visible peers. Use this directly instead of team_start when the complete plan is ready; never call both for the same team. Different members must have non-overlapping file scopes. Requires the exact direct-human root turn. request_id makes exact replays reuse the same durable plan; uncertain partial starts fail closed and never duplicate a visible member automatically.",
     parameters: {
       request_id: { type: "string", required: true }, objective: { type: "string", required: true }, name: { type: "string" }, lead_name: { type: "string" },
+      explicit_user_team_request: { type: "boolean", description: "Model-declared true only when the direct user explicitly requested a team; this is audited but is not Host proof." },
+      candidate_workstreams: { type: "number", required: true, description: "Model-declared number of sustained independent workstreams identified by the routing gate." },
       tasks: { type: "array", required: true, items: { type: "object", additionalProperties: false, properties: { key: { type: "string", required: true }, title: { type: "string", required: true }, description: { type: "string" }, member_key: { type: "string", required: true }, depends_on: { type: "array", items: { type: "string" } }, files: { type: "array", items: { type: "string" } } } } },
       members: { type: "array", required: true, items: { type: "object", additionalProperties: false, properties: { key: { type: "string", required: true }, name: { type: "string", required: true }, role: { type: "string", required: true }, prompt: { type: "string", required: true }, model_tier: { type: "string", enum: MODEL_TIERS }, model: { type: "string" } } } },
     }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => { requireDirectHumanRoot(ctx, execution); return publicResult(await bootstrapTeam(ctx, store, admission, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, tasks: (args.tasks ?? []).map((task) => ({ key: task.key, title: task.title, description: task.description, memberKey: task.member_key, dependsOn: task.depends_on, files: task.files })), members: (args.members ?? []).map((member) => ({ key: member.key, name: member.name, role: member.role, prompt: member.prompt, modelTier: member.model_tier, model: member.model })) }, signal)); }),
+    execute: run(async (args, execution, signal) => {
+      requireDirectHumanRoot(ctx, execution);
+      const routingDecision = { level: "level3", reasonCategory: args.explicit_user_team_request === true ? "explicit_user_team_request" : "independent_sustained_workstreams", explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: "team_bootstrap" };
+      await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded" });
+      try {
+        const result = await bootstrapTeam(ctx, store, admission, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, tasks: (args.tasks ?? []).map((task) => ({ key: task.key, title: task.title, description: task.description, memberKey: task.member_key, dependsOn: task.depends_on, files: task.files })), members: (args.members ?? []).map((member) => ({ key: member.key, name: member.name, role: member.role, prompt: member.prompt, modelTier: member.model_tier, model: member.model })) }, signal);
+        const routing = await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: result.operation.reused ? "reused" : "created", teamId: result.team.id });
+        return publicResult({ ...result, routing });
+      } catch (error) {
+        try { await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "failed" }); } catch {}
+        throw error;
+      }
+    }),
     presentCall: (args) => present("Bootstrap agent team", args.name ?? args.objective),
   }));
   ctx.tools.register(defineTool({
@@ -4305,6 +5459,20 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     }, output: TOOL_OUTPUT,
     execute: run(async (args, execution, signal) => publicResult(await spawnMember(ctx, store, admission, execution.agent, { teamId: args.team_id, name: args.name, role: args.role, prompt: args.prompt, taskIds: args.task_ids, modelTier: args.model_tier, model: args.model }, signal))),
     presentCall: (args) => present("Spawn team member", args.name),
+  }));
+  ctx.tools.register(defineTool({
+    name: "team_member_recover",
+    description: "Explicitly retry an exact failed continuable member or replace it with one visible same-level member. Requires the current direct-human root turn, a stable request_id, and exact team revision. Retry preserves task claims and leases. Replace durably revokes prior claims, preserves audit/checkpoint evidence, and pre-binds the same tasks before starting the replacement. Replays never duplicate a model turn or member.",
+    parameters: { team_id: { type: "string", required: true }, member_id: { type: "string", required: true }, action: { type: "string", required: true, enum: MEMBER_RECOVERY_ACTIONS }, request_id: { type: "string", required: true }, expected_revision: { type: "number", required: true } }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution, signal) => { requireDirectHumanRoot(ctx, execution); return publicResult(await recoverFailedMember(ctx, store, admission, execution.agent, { teamId: args.team_id, memberId: args.member_id, action: args.action, requestId: args.request_id, expectedRevision: args.expected_revision }, signal)); }),
+    presentCall: (args) => present(args.action === "replace" ? "Replace failed team member" : "Retry failed team member", args.member_id),
+  }));
+  ctx.tools.register(defineTool({
+    name: "team_member_reconcile",
+    description: "Direct-human reconciliation for one exact outcome_unknown member-recovery receipt. Reuses the durable request_id and never starts or redelivers a model turn.",
+    parameters: { team_id: { type: "string", required: true }, request_id: { type: "string", required: true }, resolution: { type: "string", required: true, enum: ["delivered", "not_delivered"] }, expected_revision: { type: "number", required: true } }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution) => { requireDirectHumanRoot(ctx, execution); return publicResult(await reconcileMemberRecovery(ctx, store, execution.agent, { teamId: args.team_id, requestId: args.request_id, resolution: args.resolution, expectedRevision: args.expected_revision })); }),
+    presentCall: (args) => present("Reconcile member recovery", args.request_id),
   }));
   ctx.tools.register(defineTool({
     name: "team_status", description: "Read one authenticated team in detail. If team_id is omitted while several are active, return only safe team summaries so the caller can choose explicitly.",
@@ -4397,8 +5565,8 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     })), presentCall: () => present("List team tasks"),
   }));
   ctx.tools.register(defineTool({
-    name: "team_task_update", description: "Atomically claim, release, submit completion, independently accept, cancel, reopen, assign, or unassign a team task. Only the exact claimant may complete with its claimId/leaseEpoch; that call persists a task-scoped submission fact. The fixed root uses accept as a separate fact and cannot complete a worker's foreign claim. A report or successful member turn never completes the durable task.",
-    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", enum: ["claim", "release", "complete", "accept", "cancel", "reopen", "assign", "unassign"], description: "requested transition; repeated claim, exact completion replay, acceptance, and lead assign of the current assignee are safe no-ops" }, state: { type: "string", enum: MUTABLE_TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" }, claim_id: { type: "string", description: "Required for non-lead release/complete; exact claimId returned by claim." }, lease_epoch: { type: "number", description: "Required for non-lead release/complete; exact leaseEpoch returned by claim." } }, output: TOOL_OUTPUT,
+    name: "team_task_update", description: "Atomically claim, release, submit completion for review, independently accept or reject, cancel, reopen, assign, or unassign a team task. Only the exact claimant may submit with its claimId/leaseEpoch. Submission remains non-authoritative until the fixed root accepts it; only acceptance marks completed and unlocks dependencies. Lifecycle history is append-only and survives reopen.",
+    parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", enum: ["claim", "release", "complete", "accept", "reject", "cancel", "reopen", "assign", "unassign"], description: "requested transition; repeated claim, exact submission replay, acceptance, and lead assign of the current assignee are safe no-ops" }, state: { type: "string", enum: MUTABLE_TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" }, claim_id: { type: "string", description: "Required for non-lead release/complete; exact claimId returned by claim." }, lease_epoch: { type: "number", description: "Required for non-lead release/complete; exact leaseEpoch returned by claim." } }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => publicResult(await updateTask(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, action: args.action, state: args.state, assigneeSessionId: args.assignee_session_id, claimId: args.claim_id, leaseEpoch: args.lease_epoch }))),
     presentCall: (args) => present("Update team task", `${args.action}: ${args.task_id}`),
   }));
@@ -4661,7 +5829,8 @@ function createSseBroadcaster({ delayMs = SSE_COALESCE_MS, keepaliveMs = TEAM_SS
   return { add, clients, close, flush, remove, schedule, send };
 }
 
-function registerWebApi(ctx, store, ready) {
+function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessionLaunch) {
+  const officialCorePorts = officialCorePortsForProjectEntry(projectEntry);
   const broadcaster = createSseBroadcaster();
   const detailSnapshot = (document, sessionId, selectedTeamId, selectedTaskId) => projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId)
     ?? { unavailable: true, taskId: selectedTaskId ?? null };
@@ -4685,6 +5854,25 @@ function registerWebApi(ctx, store, ready) {
       } catch (error) { return json(res, 400, errorPayload(error)); }
     },
   }), "agent-teams state route");
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/team-board/page", handler: async (req, res) => {
+      if (req.method !== "GET") return json(res, 405, { ok: false, error: { code: "AGENT_TEAMS_METHOD_NOT_ALLOWED", action: "use_get", retryable: false } });
+      if (!trustedRequest(req)) return json(res, 403, { ok: false, error: { code: "AGENT_TEAMS_FORBIDDEN", action: "use_same_origin_local_request", retryable: false } });
+      try {
+        await ready;
+        const parameters = projectTaskQuery(req, new Set(["sessionId", "teamId", "cursor"]));
+        const sessionId = nonEmptyString(parameters.get("sessionId"), "sessionId", 256);
+        const selectedTeamId = nonEmptyString(parameters.get("teamId"), "teamId", 256);
+        const cursor = nonEmptyString(parameters.get("cursor"), "cursor", 2_048);
+        const projectTeamBoard = await store.read((document) => projectTeamBoardPage(document, sessionId, selectedTeamId, cursor));
+        return json(res, 200, { ok: true, projectTeamBoard });
+      } catch (error) {
+        if (error?.code === "AGENT_TEAMS_PROJECT_BOARD_CURSOR_STALE") return json(res, 409, { ok: false, stale: true, error: { code: error.code, action: "refresh_first_page", retryable: false } });
+        const status = error?.code === "AGENT_TEAMS_PROJECT_BOARD_FORBIDDEN" ? 403 : error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : error?.code === "AGENT_TEAMS_PROJECT_BOARD_PAGE_TOO_LARGE" ? 413 : 400;
+        return json(res, status, { ok: false, error: { code: typeof error?.code === "string" ? error.code : "AGENT_TEAMS_INVALID_REQUEST", action: status === 403 ? "select_a_team_owned_by_the_session" : status === 404 ? "refresh_team_state" : "refresh_first_page", retryable: false } });
+      }
+    },
+  }), "agent-teams project team board page route");
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/task-detail", handler: async (req, res) => {
       if (req.method !== "GET") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
@@ -4749,17 +5937,35 @@ function registerWebApi(ctx, store, ready) {
         await ready;
         const action = nonEmptyString(body.action, "action", 64);
         const sessionId = nonEmptyString(body.sessionId, "sessionId", 256);
-        if (action !== "settings") reject("team mutations are available only through authenticated model tools; use the lead conversation or open a member conversation", "AGENT_TEAMS_UNAUTHORIZED");
-        const result = await store.mutate((document) => {
-          if (body.enabled === false && document.teams.some((team) => team.state !== "closed")) reject("close the active team before disabling Agent Teams", "AGENT_TEAMS_CONFLICT");
-          document.settings = {
-            enabled: body.enabled === undefined ? document.settings.enabled : Boolean(body.enabled),
-            maxMembers: safeLimit(body.maxMembers, "maxMembers", document.settings.maxMembers),
-            maxActiveTurns: safeLimit(body.maxActiveTurns, "maxActiveTurns", document.settings.maxActiveTurns),
-          };
-          return { settings: document.settings };
-        });
-        const state = await store.read((document) => teamSnapshot(document, sessionId));
+        let result;
+        if (action === "settings") {
+          result = await store.mutate((document) => {
+            if (body.enabled === false && document.teams.some((team) => team.state !== "closed")) reject("close the active team before disabling Agent Teams", "AGENT_TEAMS_CONFLICT");
+            document.settings = {
+              enabled: body.enabled === undefined ? document.settings.enabled : Boolean(body.enabled),
+              maxMembers: safeLimit(body.maxMembers, "maxMembers", document.settings.maxMembers),
+              maxActiveTurns: safeLimit(body.maxActiveTurns, "maxActiveTurns", document.settings.maxActiveTurns),
+            };
+            return { settings: document.settings };
+          });
+        } else if (action === "root-recovery-continue") {
+          if (body.confirm !== true) reject("root recovery requires explicit direct-human confirmation", "AGENT_TEAMS_RECOVERY_CONFIRMATION_REQUIRED");
+          const lead=ctx.agents.get(sessionId);
+          if(lead===undefined||!ctx.agents.roots().includes(lead)) reject("root recovery requires the exact top-level root session","AGENT_TEAMS_UNAUTHORIZED");
+          const recoveryRef=nonEmptyString(body.recoveryRef,"recoveryRef",256),expectedRevision=positiveInteger(body.expectedRevision,"expectedRevision"),execution=Object.freeze({agent:lead}),binding={canonicalProjectKey:projectKeyForRoot(lead),workspacePath:projectScopeForRoot(lead),callerRootId:lead.id};
+          result=await officialCorePorts.recovery.continueRoot({confirm:true,expectedRevision,operation:()=>withProjectCollaborationContext(officialCorePorts,execution,({projectRef,collaboration})=>continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,recoveryRef,expectedRevision))});
+        } else if (action === "member-retry" || action === "member-replace") {
+          if (body.confirm !== true) reject("member recovery requires explicit direct-human confirmation", "AGENT_TEAMS_RECOVERY_CONFIRMATION_REQUIRED");
+          const lead = ctx.agents.get(sessionId);
+          if (lead === undefined || !ctx.agents.roots().includes(lead)) reject("member recovery requires the exact fixed root session", "AGENT_TEAMS_UNAUTHORIZED");
+          result = await officialCorePorts.recovery.recoverMember({ confirm: true, expectedRevision: body.expectedRevision, operation: () => recoverFailedMember(ctx, store, admission, lead, { teamId: body.teamId, memberId: body.memberId, action: action === "member-retry" ? "retry" : "replace", requestId: body.requestId, expectedRevision: body.expectedRevision }, req.signal ?? new AbortController().signal) });
+        } else if (action === "member-reconcile") {
+          if (body.confirm !== true) reject("member recovery reconciliation requires explicit direct-human confirmation", "AGENT_TEAMS_RECOVERY_CONFIRMATION_REQUIRED");
+          const lead = ctx.agents.get(sessionId);
+          if (lead === undefined || !ctx.agents.roots().includes(lead)) reject("member recovery reconciliation requires the exact fixed root session", "AGENT_TEAMS_UNAUTHORIZED");
+          result = await officialCorePorts.recovery.reconcileMember({ confirm: true, expectedRevision: body.expectedRevision, resolution: body.resolution, operation: () => reconcileMemberRecovery(ctx, store, lead, { teamId: body.teamId, requestId: body.requestId, resolution: body.resolution, expectedRevision: body.expectedRevision }) });
+        } else reject("team mutations are available only through authenticated model tools; use the lead conversation or open a member conversation", "AGENT_TEAMS_UNAUTHORIZED");
+        const state = await store.read((document) => teamSnapshot(document, sessionId, body.teamId));
         return json(res, 200, publicResult({ result, state }));
       } catch (error) {
         const status = error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : error?.code === "AGENT_TEAMS_UNAUTHORIZED" ? 403 : error?.code?.includes("CONFLICT") || error?.code?.includes("LIMIT") ? 409 : 400;
@@ -4936,11 +6142,31 @@ function registerProjectTaskApi(ctx, runtime, businessRuntime) {
       try {
         projectTaskQuery(req, new Set());
         if (businessRuntime === undefined) return json(res, 200, await runtime.state());
-        try { return json(res, 200, await businessRuntime.taskState()); }
-        catch (error) { if (error?.code === "PROJECT_ENTRY_NOT_CREATED") return json(res, 200, await runtime.state()); throw error; }
+        try {
+          const businessStatus = await businessRuntime.initialize();
+          if (businessStatus.mode !== "collaborator") return json(res, 200, await runtime.state());
+          const preview = await businessRuntime.taskState();
+          const includedTasks = Array.isArray(preview.tasks) ? preview.tasks.length : 0;
+          return json(res, 200, { ...preview, totalTasks: includedTasks, totalExact: false, page: { includedTasks, hasMore: false, nextCursor: null, available: false, reason: "authority_required", nextAction: "open_authority_project" }, pagination: { available: false, reason: "authority_required", nextAction: "open_authority_project" } });
+        } catch (error) { if (error?.code === "PROJECT_ENTRY_NOT_CREATED") return json(res, 200, await runtime.state()); throw error; }
       } catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
     },
   }), "agent-teams project task state route");
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact", path: "/api/agent-teams/project/tasks/page", handler: async (req, res) => {
+      if (!checkGet(req, res)) return;
+      try {
+        const parameters = projectTaskQuery(req, new Set(["cursor"]));
+        const cursor = nonEmptyString(parameters.get("cursor"), "cursor", 2_048);
+        if (businessRuntime === undefined) return json(res, 200, await runtime.page(cursor));
+        try {
+          const businessStatus = await businessRuntime.initialize();
+          if (businessStatus.mode === "collaborator") return projectTaskApiFailure(res, 409, "PROJECT_TASK_PAGE_AUTHORITY_REQUIRED", "Complete project task pagination is available only on the authority project device.", "open_authority_project");
+          return json(res, 200, await runtime.page(cursor));
+        } catch (error) { if (error?.code === "PROJECT_ENTRY_NOT_CREATED") return json(res, 200, await runtime.page(cursor)); throw error; }
+      } catch (error) { return mappedProjectBusinessFailure(res, error, "tasks", projectTaskWebError); }
+    },
+  }), "agent-teams project task page route");
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/project/tasks/events", handler: async (req, res) => {
       if (!checkGet(req, res)) return;
@@ -5081,9 +6307,9 @@ function attachCompletedTaskResults(team, member, info, reportedAt) {
   const runStartedAt = Date.parse(member.updatedAt ?? "");
   if (!Number.isFinite(runStartedAt)) return 0;
   const eligible = (team.tasks ?? []).filter((task) => {
-    if (task.assigneeSessionId !== member.sessionId || task.state !== "completed" || task.result !== undefined || !taskSubmissionMatches(task)) return false;
-    const completedAt = Date.parse(task.completedAt ?? "");
-    return Number.isFinite(completedAt) && completedAt >= runStartedAt;
+    if (task.assigneeSessionId !== member.sessionId || task.state !== "submitted" || task.result !== undefined || !taskSubmissionMatches(task)) return false;
+    const submittedAt = Date.parse(task.submission?.submittedAt ?? "");
+    return Number.isFinite(submittedAt) && submittedAt >= runStartedAt;
   });
   // A turn-level assistant message is not task-scoped evidence. It can only enrich
   // one unambiguous explicit submission; never clone it across several tasks.
@@ -5201,7 +6427,18 @@ function observeSubagents(ctx, store, ready, admission) {
   });
 }
 
-function observeUserStops(ctx, store, ready, admission) {
+function observeProjectRootFailures(ctx,projectEntry,projectSessionLaunch,ready=Promise.resolve()) {
+  ctx.on("agent/error",({agent})=>{
+    if(agent===undefined||ctx.agents.get(agent.id)!==agent||!ctx.agents.roots().includes(agent)) return;
+    void ready.then(async()=>{
+      const execution=Object.freeze({agent}),projectBinding={canonicalProjectKey:projectKeyForRoot(agent),workspacePath:projectScopeForRoot(agent),callerRootId:agent.id};
+      const adoptedActorRef=await withProjectCollaborationContext(projectEntry,execution,({actorRef})=>actorRef);
+      await projectSessionLaunch.recordAdoptedActorFailure(execution,{adoptedActorRef,projectBinding});
+    }).catch((error)=>{if(error?.code!=="PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED") ctx.logger.warn("project root failure observer rejected Host lifecycle evidence [PROJECT_ROOT_FAILURE_OBSERVER_REJECTED]");});
+  });
+}
+
+function observeUserStops(ctx, store, ready, admission, projectSessionLaunch) {
   ctx.on("session/event", (session, event) => {
     if (event.type !== "turn/end" || event.data?.reason?.kind !== "aborted" || event.data.reason.reason?.kind !== "user") return;
     const lead = ctx.agents.get(session.id);
@@ -5216,6 +6453,8 @@ function observeUserStops(ctx, store, ready, admission) {
     const reconciliation = ready.then(() => pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt));
     for (const selection of selections) USER_PAUSE_RECONCILIATIONS.set(selection.teamId, reconciliation);
     store.notify?.();
+    const projectBinding = { canonicalProjectKey: projectKeyForRoot(lead), workspacePath: projectScopeForRoot(lead), callerRootId: lead.id };
+    void projectSessionLaunch?.stopForRoot?.(lead.id, projectBinding).catch((error) => ctx.logger.warn(`project session launch Stop reconciliation failed: ${String(error)}`));
     admission?.cancelRoot?.(lead, admissionCancellation());
     // The stock UI cancellation preserves queued inbox work. For a team-owning root,
     // clear it at the durable turn-end boundary so member reports cannot auto-restart.
@@ -5351,9 +6590,45 @@ function apply(ctx, config = {}) {
       }
     },
   });
-  const ready = store.init();
-  const projectTasks = new ProjectTaskWebRuntime({
+  const projectSessionLaunchProvider = resolveProjectSessionLaunchProvider(ctx);
+  const projectSessionLaunch = new ProjectSessionLaunchRegistry({
+    rootPath: join(dshHome, "storages", "project_session_launch_lanes"),
+    legacyFilePath: join(dshHome, "storages", "project_session_launch.json"),
+    provider: projectSessionLaunchProvider,
+    maxConcurrent: Math.min(2, defaults.maxActiveTurns),
+    maxConcurrentPerProject: 1,
+    maxSessionsPerProject: HARD_MAX_MEMBERS,
+  });
+  const projectEntryRegistry = new ProjectEntryRegistry({
     projectEntry,
+    dshHome,
+    legacyEvidenceProvider: async () => {
+      try {
+        const document = JSON.parse(await readFile(join(dshHome, "storages", "project_session_launch.json"), "utf8"));
+        const keys = [...new Set((document?.batches ?? []).map((batch) => batch?.canonicalProjectKey).filter((value) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value)))];
+        return keys.length === 1 ? keys[0] : undefined;
+      } catch { return undefined; }
+    },
+  });
+  const officialCorePorts = createOfficialCorePorts({ providers: [createCustomOfficialCoreProvider({
+    projectIdentity: {
+      open: ({ canonicalProjectKey, bindLegacy }) => bindLegacy
+        ? projectEntryRegistry.bindLegacyProjectCollaborationContext({ canonicalProjectKey })
+        : projectEntryRegistry.localProjectCollaborationContext({ canonicalProjectKey }),
+      webEntry: () => projectEntry,
+    },
+    task: { bind: ({ store: taskStore, actorResolver, now: clock }) => new ProjectTaskCommandService({ store: taskStore, actorResolver, ...(clock === undefined ? {} : { now: clock }) }) },
+    collaboration: { bind: ({ store: taskStore, actorResolver, now: clock, earlyResolutionAuthorizer, rootFailureResolver }) => new ProjectCollaborationService({ store: taskStore, actorResolver, ...(clock === undefined ? {} : { now: clock }), ...(earlyResolutionAuthorizer === undefined ? {} : { earlyResolutionAuthorizer }), ...(rootFailureResolver === undefined ? {} : { rootFailureResolver }) }) },
+    projection: { createWebRuntime: (options) => new ProjectTaskWebRuntime(options) },
+    recovery: {
+      continueRoot: ({ operation }) => operation(),
+      recoverMember: ({ operation }) => operation(),
+      reconcileMember: ({ operation }) => operation(),
+    },
+  })] });
+  const ready = Promise.all([store.init(), projectSessionLaunch.init()]).then(([document]) => document);
+  const projectTasks = officialCorePorts.projection.createWebRuntime({
+    projectEntry: officialCorePorts.projectIdentity.webEntry(),
     legacySummaryProvider: async () => {
       await ready;
       return store.read((document) => ({ detected: document.teams.some((team) => team.tasks.length > 0) }));
@@ -5377,34 +6652,31 @@ function apply(ctx, config = {}) {
     });
     return async () => {
       unsubscribe();
-      try { await projectFoundations.close(); }
-      finally {
-        try { await projectBusiness.close(); }
-        finally {
-          try { await projectAutomations.close(); }
-          finally {
-            try { await projectTasks.close(); }
-            finally {
-              try { await collaboration.close(); }
-              finally {
-                try { await projectEntry.close(); }
-                finally { store.close(); }
-              }
-            }
-          }
-        }
-      }
+      await Promise.allSettled([
+        projectSessionLaunch.close(),
+        projectFoundations.close(),
+        projectBusiness.close(),
+        projectAutomations.close(),
+        projectTasks.close(),
+        collaboration.close(),
+        projectEntryRegistry.close(),
+        projectEntry.close(),
+      ]);
+      store.close();
     };
   }, "agent-teams collaboration presence");
   registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization);
+  registerProjectCollaborationTools(ctx, officialCorePorts, projectSessionLaunch, ready);
+  registerProjectSessionLaunchTool(ctx, officialCorePorts, projectSessionLaunch, ready);
   registerProjectFoundationTools(ctx, projectFoundations, ready);
   registerProjectFoundationsApi(ctx, projectFoundations, ready);
-  registerWebApi(ctx, store, ready);
+  registerWebApi(ctx, store, ready, admission, officialCorePorts, projectSessionLaunch);
   registerProjectEntryApi(ctx, projectEntry);
   registerProjectTaskApi(ctx, projectTasks, projectBusiness);
   registerProjectAutomationApi(ctx, projectAutomations, projectBusiness);
   observeSubagents(ctx, store, ready, admission);
-  observeUserStops(ctx, store, ready, admission);
+  observeUserStops(ctx, store, ready, admission, projectSessionLaunch);
+  observeProjectRootFailures(ctx,projectEntryRegistry,projectSessionLaunch,ready);
 }
 
 export {
@@ -5419,13 +6691,26 @@ export {
   MAX_TEAM_ADMISSION_QUEUE,
   MAX_TEAM_ADMISSION_QUEUE_PER_ROOT,
   PROJECT_TASK_SSE_KEEPALIVE_MS,
+  ProjectSessionLaunchRegistry,
+  ProjectSessionLaunchRuntime,
   SSE_COALESCE_MS,
   SUBAGENT_RECONCILE_MS,
   TEAM_ADMISSION_TIMEOUT_MS,
   UI_MAX_EVENTS_PER_TEAM,
   UI_MAX_TASKS_PER_TEAM,
   UI_MAX_TASK_WORKFLOW_EVENTS,
+  UI_PROJECT_TEAM_BOARD_CACHE_MAX_PROJECTS,
+  UI_PROJECT_TEAM_BOARD_MAX_BYTES,
+  UI_PROJECT_TEAM_BOARD_MAX_TASKS,
+  UI_PROJECT_TEAM_BOARD_MAX_TEAMS,
   createProjectAutomationSseBridge,
+  createProjectTeamBoard,
+  createProjectTeamBoardPage,
+  decorateProjectTeamBoardRecovery,
+  paginatePreparedProjectTeamBoard,
+  prepareProjectTeamBoard,
+  projectTeamBoardCacheSize,
+  projectTeamBoardPage,
   createProjectFoundationManager,
   createProjectTaskSseBridge,
   createResolveUnknownAuthorizationGate,
@@ -5438,6 +6723,7 @@ export {
   pauseTeamsForUserStop,
   resumePausedTeam,
   observeUserStops,
+  observeProjectRootFailures,
   MEMBER_STATES,
   TASK_STATES,
   apply,
@@ -5445,6 +6731,7 @@ export {
   bootstrapTeam,
   buildResumePlan,
   commitTeamPlan,
+  continueProjectRootRecovery,
   createTask,
   createTeam,
   adoptTeamHandoff,
@@ -5454,18 +6741,32 @@ export {
   inject,
   name,
   readModelRouting,
+  requireProjectRootCaller,
+  registerProjectCollaborationTools,
+  registerWebApi,
   registerProjectAutomationApi,
   registerProjectFoundationsApi,
   registerProjectFoundationTools,
   resolveProjectFoundationHostOptions,
+  resolveProjectSessionLaunchProvider,
   projectFoundationsBrowserState,
   projectTaskDetailForUi,
+  adoptProjectLaunchSlot,
+  ensureProjectLaunchBoard,
+  projectCollaborationModelResult,
+  projectRequestModelResult,
+  projectTaskModelResult,
+  reserveProjectLaunchSlots,
+  withProjectCollaborationContext,
   registerProjectTaskApi,
   releaseRetiredMemberTasks,
   resolveAgentTeamsAuthorizationProvider,
   resolveConfig,
   resolveModelSelection,
   resolveUniqueLeadTeam,
+  recoverFailedMember,
+  reconcileMemberRecovery,
+  recordRoutingReceipt,
   shutdownTeam,
   spawnMember,
   teamSnapshot,

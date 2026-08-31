@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.54
+## 1.0.55
 
 ### Agent Teams 自动续作与安全边界
 
@@ -10,6 +10,14 @@
 - accepted-completed 接管继续绑定原 owner epoch；`resolve_unknown` 改用 Host 发行、短时效、单用途且绑定完整参数摘要的授权，替换参数、过期、跨回合/工具和重放均拒绝。
 - 项目设备/E2EE/LAN 私钥通过 Host secret capability 与系统安全存储托管；secure-channel receipt 持久化，collaboration same-dedupe 的检查与 Inbox 追加进入同一串行 mutation，覆盖重启、容量和双实例竞态。
 - 打包版首次启动从已展开的版本化 runtime cache复制 Agent Teams 的运行依赖，不再对 `app.asar` 虚拟目录执行递归 `fs.cp`；Windows packaged self-test 与普通启动因此不会在 `preparing-runtime` 阶段退出。
+
+### 官方 Harness alpha.2 维护迁移
+
+- 官方核心维护依赖已从历史 `0.1.1-rc.2` 原子迁移到精确 `0.1.2-alpha.2`：20 个直接 roots、861 个 lock locations、216 个 DSH locations / 215 个唯一 DSH package names；官方 tag `dsh-v0.1.2-alpha.2` 固定到 `0a53fb55bea101816fa226bb964ae2bed71c343b`。此前 rc.2/NO-GO 报告仅保留为历史审计，不再描述当前维护依赖状态。
+- alpha.2 已移除 `dsh-client-runtime` 和 `dsh-host-apiproxy`；旧私有补丁入口已退休，New Session、SessionManager/list baseline 与 workspace force-new 迁至公开的 Session Controller、native session-list 和 `startSession` owners。首次 patch 精确改变 25 个文件；第二次为 0 差异、0 byte delta。
+- **RPC wire 合同**：桌面、Mobile 与桌宠生产客户端只发出固定 `workspace/...` / `session/...` slash endpoints 和 descriptor-shaped 参数；Workspace 只消费 `workspace/follow` baseline frames，Session 只消费 snapshot/cursor projection frames；generated strict descriptor 或 codec 漂移一律 fail closed。
+- 自研 Project/Team、canonical-project 隔离、submission acceptance ledger、routing receipts、locks、recovery、cursors 与 evidence 继续是唯一 authoritative 数据面；官方 experimental Team 不接管且不双写。
+- alpha.2 维护迁移不等同于最终发布验收：hermetic 终验、完整矩阵与 Root fresh-review ACK 仍是发布前硬门禁，未在此写入尚未产生的终验通过结论或最终计数。
 
 ### 模型密钥编辑与无障碍
 
@@ -33,10 +41,10 @@
 ### 验证与发布身份
 
 - 新增 [`docs/SECURITY-REVIEW-v1.0.54.zh-CN.md`](docs/SECURITY-REVIEW-v1.0.54.zh-CN.md) 与 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)，记录自动驾驶授权、secret custody、密钥覆盖和性能证据边界。
-- 全仓 `npm run verify` 最终 1717 通过/0 失败/5 跳过；Agent Teams 160 通过/0 失败/2 跳过；模型密钥 28/28；安装后 artifact-fixture smoke 2/2；P1 release-blocking 矩阵 11/11；Android unit test、release R8 与 JNI mapping 门禁通过；`npm run verify:release` 与 `git diff --check` 通过。
+- 以下为 alpha.2 维护迁移前记录的 v1.0.54 历史验证（全仓 `npm run verify` 1717 通过/0 失败/5 跳过；Agent Teams 160 通过/0 失败/2 跳过；模型密钥 28/28；artifact-fixture smoke 2/2；P1 矩阵 11/11；Android、`verify:release` 与 `git diff --check` 通过），不构成 alpha.2 的最终或发布验证。它已由本节“官方 Harness alpha.2 维护迁移”的新发布前硬门禁取代；终验须产生新的独立证据与计数后才能声明通过。
 - macOS Host IPC endpoint 增加 100 UTF-8 bytes 硬上限及长 `TMPDIR` 回退，Windows 命名管道前缀保持兼容；安装后 workbench smoke 同步真实 Stop/continue 文案；Windows 云端冷启动使用独立 350 ms 上限但不放宽稳态性能与泄漏门禁。
-- 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由和移动更新示例统一到 `1.0.54`；Android `versionCode=1005400`，iOS build code 为 `10054`。
-- 正式发布只走仓库 resumable publisher：精确 main SHA、不可变 `v1.0.54`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。
+- 桌面根包、lockfile、14 个随包插件、Android、iOS/iPadOS、桌面移动路由和移动更新示例统一到 `1.0.55`；Android `versionCode=1005500`，iOS build code 为 `10055`。
+- 正式发布只走仓库 resumable publisher：精确 main SHA、不可变 `v1.0.55`、GitHub Actions 全平台构建与签名、精确 18 项资产、GitHub→CNB 云到云镜像，最后才提升三个签名 stable feed。
 - 已发布 `v1.0.53` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变，不移动、不覆盖、不复用。
 
 ## 1.0.53

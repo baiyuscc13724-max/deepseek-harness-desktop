@@ -19,7 +19,7 @@ window.__ModuleLoader__.load({
       research: "调研与核验", researchBody: "研究员收集资料，分析员交叉验证，负责人汇总结论。", build: "开发与审查", buildBody: "开发负责改动，审查负责风险，测试负责验证。", incident: "问题诊断", incidentBody: "诊断、修复与回归验证并行推进。", custom: "自定义团队", customBody: "只填写目标，由 AI 自动设计成员、职责、任务边界和协作方式。",
       active: "协作进行中", paused: "已由用户停止", pausedBody: "团队已停止，不会在后台继续。要恢复，请生成继续请求并在底部输入框中确认发送。", continueTeam: "生成继续请求", failedNext: "有成员未能完成工作。请打开成员列表查看详情，再让负责人处理未完成任务。", closed: "团队已关闭", closedBody: "该团队不再接受成员协作；历史成员、任务和事件仍可查看。", unknown: "未知", status: "状态", objective: "团队目标", connection: "连接", live: "已更新", polling: "正在保持更新", stale: "信息可能不是最新", disconnected: "正在重新连接", workspaceIntro: "默认只展示现在需要关注的工作；完成内容和协作细节按需查看。",
       members: "成员", tasks: "任务", events: "协作事件", noMembers: "暂无成员", noTasks: "暂无任务", noEvents: "暂无协作事件", lead: "负责人", leadRole: "统筹目标和结果", openConversation: "查看实时工作", currentTask: "当前任务：{value}", model: "模型", mainModel: "主模型", subagentModel: "成员模型", inheritsMain: "与负责人相同", currentWork: "当前工作", listView: "列表", canvasView: "画布", canvasLabel: "团队实时画布", canvasHint: "选择成员可打开统一代理目录；连线表示分配、依赖、阻塞或文件冲突。", assignedRelation: "分配", dependsRelation: "依赖", blockedRelation: "阻塞", conflictRelation: "冲突", completedSummary: "已完成 {count} 项", noActiveTasks: "当前没有待处理或进行中的任务。", completedTasks: "已完成", taskHistory: "任务历史", historyHint: "完成的任务会自动移到这里，不再占用当前工作区。", openHistory: "查看历史 {count}", hideHistory: "收起历史", openMembers: "代理目录 {count}", openActivity: "动态 {count}", memberPanel: "团队成员", activityPanel: "协作动态", closePanel: "关闭侧栏", activeMembers: "当前成员", pastMembers: "过往成员", moreActions: "更多操作", fewerActions: "收起操作", workspaceSettings: "团队设置", archive: "历史", archivedTeams: "历史团队", activeTeamList: "进行中的团队", noArchivedTeams: "暂无历史团队", recentActivity: "最近动态", showMore: "再显示 {count} 条",
-      pending: "待处理", in_progress: "进行中", completed: "已完成", cancelled: "已取消", blocked: "受阻", ready: "等待任务", running: "工作中", idle: "本轮工作已完成", provisioning: "正在启动", shutting_down: "正在停止", closing: "正在关闭", retired: "已结束协作", failed: "失败", delivered: "已送达", closedStatus: "已关闭",
+      pending: "待处理", in_progress: "进行中", submitted: "待负责人验收", completed: "已验收完成", cancelled: "已取消", blocked: "受阻", ready: "等待任务", running: "工作中", idle: "本轮工作已完成", provisioning: "正在启动", shutting_down: "正在停止", closing: "正在关闭", retired: "已结束协作", failed: "失败", delivered: "已送达", closedStatus: "已关闭",
       assignee: "执行成员", unassigned: "未分配", blockedBy: "正在等待：{value}", failedBy: "失败的前置任务：{value}", dependencySources: "还需其他团队完成：{value}", conflicts: "文件范围可能冲突：{value}", files: "文件：{value}", filesHidden: "为保护工作区信息，此页面不显示文件路径；需要时请让负责人核对。", taskFallback: "任务 {id}", lastActivity: "最后活动：{value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}", taskDetail: "任务详情", taskDetailUnavailable: "此任务已结束或当前无法读取。请返回任务板选择其他任务，或查看任务历史。", taskSelectionExpired: "任务信息刚刚更新，原详情已关闭。请从当前任务列表重新选择。", blockedTaskReason: "受阻原因", blockedTaskUnknown: "暂未提供具体阻塞原因。", blockedTaskNext: "下一步：等待列出的依赖完成；如果信息已过期，请让负责人刷新依赖或重新协调任务。", taskDependencies: "依赖任务", taskEvents: "相关实时事件", taskRef: "任务编号", taskBackToBoard: "返回任务板", taskWorkflow: "实时工作流", taskWorkflowHint: "状态和动态会随团队实时更新；没有可靠记录的环节不会猜测。", taskOverview: "任务概览", taskLiveEvents: "实时动态", taskLiveEventsHint: "这里只显示与当前任务有关的最新协作记录。", taskLiveConnected: "详情会随团队状态自动更新。", taskBlockedBranch: "当前阻塞", taskBlockedClear: "当前没有阻塞", taskBlockedBranchHint: "阻塞不是必经阶段；只有任务实时报告受阻时才会点亮。", taskStageCurrent: "当前阶段", taskStageReached: "已有记录", taskStageUpcoming: "尚未到达", taskStageUnknown: "暂无可靠记录", taskCreatedAt: "进入待处理", taskStartedAt: "开始执行", taskCompletedAt: "完成时间", taskResult: "成员成果", taskResultPreview: "已提交成果", taskResultTruncated: "成果较长，已显示安全截断版本。", taskNextStep: "当前下一步", taskNextPending: "等待负责人或成员认领；存在依赖时先完成依赖。", taskNextProgress: "执行成员正在推进；下方动态会持续更新。", taskNextCompleted: "任务已经完成，可在实时动态中回看相关协作。", taskTimelineLimited: "仅显示最新 {count} 条相关动态。",
       quickActions: "快捷提示", addMember: "添加成员", newPeerTeam: "评估是否需要新团队", createTask: "创建任务", coordinate: "协调团队", summarize: "汇总进展", closeTeam: "请求关闭", newTeam: "创建新团队", draftOnly: "操作会写入下方输入框，不会自动发送。", draftSet: "已放入底部输入框。请检查内容并点击发送；系统不会自动发送。", creationSent: "创建请求已发送，正在返回对话。", creationSentFallback: "创建请求已发送。请使用上方“对话”标签查看响应。",
       teamsOverview: "团队总览", teamCount: "共 {count} 个团队", activeTeams: "活跃 {count}", closedTeams: "已关闭 {count}", switchTeam: "切换到团队：{name}", crossTeam: "跨团队动态", noCrossTeam: "暂无跨团队动态", backgroundHint: "切换团队或页面不会停止后台成员。", teamTasks: "{active} 进行中 · {done} 已完成", lastUpdated: "更新于 {value}",
@@ -32,12 +32,18 @@ window.__ModuleLoader__.load({
       research: "Research & verify", researchBody: "A researcher gathers evidence, an analyst cross-checks it, and the lead synthesizes findings.", build: "Build & review", buildBody: "Development makes changes, Review checks risk, and Test verifies the result.", incident: "Diagnose an issue", incidentBody: "Diagnosis, remediation, and regression verification move in parallel.", custom: "Custom team", customBody: "Enter only the objective; AI designs the members, responsibilities, task boundaries, and collaboration pattern.",
       active: "Collaboration active", paused: "Stopped by user", pausedBody: "This team is stopped and will not continue in the background. To resume, prepare a continue request and confirm Send in the composer below.", continueTeam: "Prepare continue request", failedNext: "A member could not finish its work. Open the member list for details, then ask the lead to handle unfinished tasks.", closed: "Team closed", closedBody: "This team no longer accepts member collaboration. Its members, tasks, and events remain available.", unknown: "Unknown", status: "Status", objective: "Team objective", connection: "Connection", live: "Up to date", polling: "Keeping up to date", stale: "Information may be out of date", disconnected: "Reconnecting", workspaceIntro: "Only work that needs attention is shown by default. Completed work and collaboration details stay available on demand.",
       members: "Members", tasks: "Tasks", events: "Collaboration events", noMembers: "No members", noTasks: "No tasks", noEvents: "No collaboration events", lead: "Lead", leadRole: "Plans the goal and owns the result", openConversation: "View live work", currentTask: "Current task: {value}", model: "Model", mainModel: "Main model", subagentModel: "Member model", inheritsMain: "Same as lead", currentWork: "Current work", listView: "List", canvasView: "Canvas", canvasLabel: "Live team canvas", canvasHint: "Select a member to open the unified agent catalog. Lines show assignment, dependency, blocking, or file conflicts.", assignedRelation: "Assigned", dependsRelation: "Depends on", blockedRelation: "Blocked by", conflictRelation: "Conflict", completedSummary: "{count} completed", noActiveTasks: "No pending or in-progress tasks.", completedTasks: "Completed", taskHistory: "Task history", historyHint: "Completed tasks move here automatically instead of filling the current workspace.", openHistory: "View history {count}", hideHistory: "Hide history", openMembers: "Agents {count}", openActivity: "Activity {count}", memberPanel: "Team members", activityPanel: "Collaboration activity", closePanel: "Close sidebar", activeMembers: "Current members", pastMembers: "Past members", moreActions: "More actions", fewerActions: "Hide actions", workspaceSettings: "Team settings", archive: "History", archivedTeams: "Team history", activeTeamList: "Active teams", noArchivedTeams: "No archived teams", recentActivity: "Recent activity", showMore: "Show {count} more",
-      pending: "Pending", in_progress: "In progress", completed: "Completed", cancelled: "Cancelled", blocked: "Blocked", ready: "Waiting for work", running: "Working", idle: "Finished this turn", provisioning: "Starting", shutting_down: "Stopping", closing: "Closing", retired: "No longer active", failed: "Failed", delivered: "Delivered", closedStatus: "Closed",
+      pending: "Pending", in_progress: "In progress", submitted: "Awaiting lead acceptance", completed: "Accepted and completed", cancelled: "Cancelled", blocked: "Blocked", ready: "Waiting for work", running: "Working", idle: "Finished this turn", provisioning: "Starting", shutting_down: "Stopping", closing: "Closing", retired: "No longer active", failed: "Failed", delivered: "Delivered", closedStatus: "Closed",
       assignee: "Assignee", unassigned: "Unassigned", blockedBy: "Waiting for: {value}", failedBy: "Failed prerequisites: {value}", dependencySources: "Waiting for another team: {value}", conflicts: "File boundaries may conflict: {value}", files: "Files: {value}", filesHidden: "File paths are hidden here to protect workspace information. Ask the lead to verify them when needed.", taskFallback: "Task {id}", lastActivity: "Last activity: {value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}", taskDetail: "Task detail", taskDetailUnavailable: "This task has finished or cannot be read right now. Return to the task board or review task history.", taskSelectionExpired: "Task information just changed, so the old detail was closed. Select it again from the current task list.", blockedTaskReason: "Why this task is blocked", blockedTaskUnknown: "No specific blocking reason is available yet.", blockedTaskNext: "Next: wait for the listed dependencies. If this information is stale, ask the lead to refresh dependencies or coordinate the task again.", taskDependencies: "Dependencies", taskEvents: "Related live events", taskRef: "Task ID", taskBackToBoard: "Back to task board", taskWorkflow: "Live workflow", taskWorkflowHint: "Status and activity update with the team. Stages without reliable evidence are never guessed.", taskOverview: "Task overview", taskLiveEvents: "Live activity", taskLiveEventsHint: "Only the latest collaboration records related to this task are shown here.", taskLiveConnected: "This detail updates with the team state.", taskBlockedBranch: "Current blocker", taskBlockedClear: "No current blocker", taskBlockedBranchHint: "Blocking is not a required stage. It lights up only when the task reports a live blocker.", taskStageCurrent: "Current stage", taskStageReached: "Recorded", taskStageUpcoming: "Not reached", taskStageUnknown: "No reliable record", taskCreatedAt: "Entered pending", taskStartedAt: "Work started", taskCompletedAt: "Completed at", taskResult: "Member result", taskResultPreview: "Result delivered", taskResultTruncated: "This result was long, so a safely truncated version is shown.", taskNextStep: "Current next step", taskNextPending: "Waiting for the lead or a member to claim it; prerequisites finish first.", taskNextProgress: "The assigned member is working; live activity below will keep updating.", taskNextCompleted: "The task is complete. Review related collaboration in the live activity.", taskTimelineLimited: "Showing only the latest {count} related updates.",
       quickActions: "Prompt shortcuts", addMember: "Add member", newPeerTeam: "Check whether another team is needed", createTask: "Create task", coordinate: "Coordinate team", summarize: "Summarize progress", closeTeam: "Request shutdown", newTeam: "Create another team", draftOnly: "Actions write to the composer and never send automatically.", draftSet: "Added to the composer below. Review it and select Send; it will not be sent automatically.", creationSent: "Creation request sent; returning to Chat.", creationSentFallback: "Creation request sent. Use the Chat tab above to view the response.",
       teamsOverview: "Team overview", teamCount: "{count} teams", activeTeams: "{count} active", closedTeams: "{count} closed", switchTeam: "Switch to team: {name}", crossTeam: "Cross-team activity", noCrossTeam: "No cross-team activity", backgroundHint: "Switching teams or views never stops background members.", teamTasks: "{active} active · {done} done", lastUpdated: "Updated {value}",
       currentSession: "Current session", revision: "Status version {value}", settingsTitle: "Agent Teams", settingsDescription: "After enabling, describe goals normally and AI decides whether to use a team; simple work stays solo. Higher values usually use more model quota and may cost more; keep the recommended values if unsure.", settingsEnabled: "Enable automatic teams", settingsMaxMembers: "Member limit per team", settingsMaxActiveTurns: "Members working at once (all teams combined)", settingsSave: "Save settings", settingsSaving: "Saving…", settingsSaved: "Settings saved", settingsRange: "Enter a whole number from 1 to 8 for both settings.", settingsCloseTeamsFirst: "Close every active team from its lead conversation before disabling Agent Teams."
     };
+    Object.assign(zh, {
+      recoveryTitle: "恢复失败成员", recoveryBody: "选择重试会继续同一成员并保留任务 claim/lease；替换会撤销旧 claim、保留 checkpoint 与失败审计，再创建一个可见同级成员。不会自动执行。", recoveryRetry: "重试成员", recoveryReplace: "替换成员", recoveryConfirmRetry: "确认重试 {name}？这会向同一成员发送一次有界恢复提示，并继续使用原任务 claim/lease。", recoveryConfirmReplace: "确认替换 {name}？这会产生一次新的成员模型启动成本，撤销旧 claim/lease，并把同一任务预绑定给可见替代成员。", recoveryConfirm: "确认并继续", recoveryCancel: "取消", recoveryWorkingRetry: "正在重试成员…", recoveryWorkingReplace: "正在替换成员…", recoverySuccessRetry: "恢复提示已送达同一成员；原任务 claim/lease 保持不变。", recoverySuccessReplace: "替代成员已创建并接手同一批任务；旧 claim/lease 已撤销并保留审计。", recoveryError: "恢复没有完成：{error}。请刷新团队状态，按页面提示处理后再明确重试；不要连续点击。", recoveryUnknownTitle: "恢复结果待核对", recoveryUnknownBody: "请求 {request} 已停在 {phase}。系统不会重复启动成员或重复发送工作提示；请核对可审计记录后明确标记结果。", recoveryMarkDelivered: "确认已送达", recoveryMarkNotDelivered: "确认未送达", recoveryReconcileConfirmDelivered: "确认这次恢复已送达？只会结算原 request，不会再次发送。", recoveryReconcileConfirmNotDelivered: "确认这次恢复未送达？系统会安全收束原 attempt，之后才允许新的明确恢复。", recoveryReconcileSuccess: "原恢复 request 已完成核对。", recoveryReconcileWorking: "正在核对…",
+    });
+    Object.assign(en, {
+      recoveryTitle: "Recover failed member", recoveryBody: "Retry continues the exact member and preserves task claim/lease. Replace revokes the old claim, preserves checkpoint and failure audit, then creates one visible same-level member. Nothing runs automatically.", recoveryRetry: "Retry member", recoveryReplace: "Replace member", recoveryConfirmRetry: "Retry {name}? This sends one bounded recovery prompt to the same member and keeps the original task claim/lease.", recoveryConfirmReplace: "Replace {name}? This incurs one new member-model start, revokes the old claim/lease, and pre-binds the same tasks to a visible replacement.", recoveryConfirm: "Confirm and continue", recoveryCancel: "Cancel", recoveryWorkingRetry: "Retrying member…", recoveryWorkingReplace: "Replacing member…", recoverySuccessRetry: "The recovery prompt was delivered to the same member. The original task claim/lease remains unchanged.", recoverySuccessReplace: "A visible replacement was created for the same tasks. The old claim/lease was revoked and retained in audit history.", recoveryError: "Recovery did not finish: {error}. Refresh team status, follow the next step shown here, then explicitly try again. Do not click repeatedly.", recoveryUnknownTitle: "Recovery outcome needs review", recoveryUnknownBody: "Request {request} stopped at {phase}. The system will not start another member or resend work; review the audit record, then explicitly mark the outcome.", recoveryMarkDelivered: "Confirm delivered", recoveryMarkNotDelivered: "Confirm not delivered", recoveryReconcileConfirmDelivered: "Confirm that this recovery was delivered? This settles the original request and never sends it again.", recoveryReconcileConfirmNotDelivered: "Confirm that this recovery was not delivered? The original attempt is safely closed before another explicit recovery is allowed.", recoveryReconcileSuccess: "The original recovery request was reconciled.", recoveryReconcileWorking: "Reconciling…",
+    });
     Object.assign(zh, {
       projectEntryTitle: "多人连接（预览）", projectEntryIntro: "本机成员可以执行团队任务；其他电脑目前只能安全配对、建立加密连接并查看在线状态。", projectCreate: "创建安全连接空间", projectCreating: "正在创建…", projectName: "项目名称", projectNamePlaceholder: "例如：产品发布协作", projectOwner: "你的显示名称", projectOwnerPlaceholder: "例如：负责人", projectNotCreated: "尚未创建连接空间", projectReady: "安全连接配置已就绪", projectPreviewBadge: "仅连接预览", projectRef: "项目 ID", projectMembers: "成员 {count}", projectRevision: "权限版本 {value}", projectLocalMode: "本机智能团队", projectLocalModeHint: "AI 自动判断并组建必要的代理团队。", projectLanMode: "同一局域网", projectLanReady: "已可建立安全的局域网连接", projectLanWaiting: "尚未启动局域网连接", projectLanDiscovery: "局域网配对", projectLanPending: "不会广播扫描其他设备；一次性批准信息会安全携带固定入口和设备凭据。", projectLanEndpoint: "连接地址 {host}:{port}", projectRefresh: "刷新状态", projectRemoteMode: "不在同一网络", projectRemoteHint: "通过中转服务建立端到端加密连接；中转服务只能转发加密数据，不能读取内容。", projectInviteName: "受邀成员显示名称", projectInviteNamePlaceholder: "例如：评审", projectInviteRole: "成员角色", projectCreateInvite: "生成远程邀请", projectInviteCode: "一次性邀请信息", projectCopy: "复制", projectCopied: "已复制", projectRelayUrl: "远程连接地址", projectRelayPlaceholder: "wss://relay.example.com", projectSaveRelay: "保存连接地址", projectConnectRemote: "建立远程连接", projectDisconnectRemote: "断开远程连接", projectRemoteConnected: "远程连接已建立", projectRemoteDisconnected: "远程连接未建立", projectChannelPending: "还差一步：双方完成密钥交换后才能连接。", projectHypoMux: "本功能不会使用下载加速通道同步协作内容。", projectAdvanced: "局域网与远程连接", projectUnavailable: "暂时无法读取多人连接状态：{error}。请重试；如果仍失败，请检查连接信息。", owner: "所有者", maintainer: "维护者", contributor: "贡献者", reviewer: "评审", observer: "观察者"
     });
@@ -54,8 +60,8 @@ window.__ModuleLoader__.load({
       workspaceNavigation: "代理团队工作台",
       workspaceBoard: "任务板",
       workspaceCanvas: "团队画布",
-      workspaceFlow: "团队工作流程",
-      workspaceAutomation: "定时与自动化",
+       workspaceFlow: "跨会话任务",
+            workspaceAutomation: "定时与自动化",
       workspaceParticipants: "参与者",
       workspaceInbox: "协调记录",
       boardTitle: "当前团队任务板",
@@ -92,21 +98,48 @@ window.__ModuleLoader__.load({
       planLifecycleTitle: "计划生命周期", planLifecycleHint: "阶段、授权和交接均来自 Host 持久记录；未完成或未知的事实不会被推测。", planDraft: "草案", planCommitted: "已提交", planActive: "已激活", planRevision: "计划修订 {value}", planPauseEpoch: "暂停代次 {value}", planAuthorization: "计划预检", planAuthorizationSource: "授权依据：{value}", planAuthorizationHumanAttestedHint: "启用自动团队后，安全范围内的普通计划持续使用此默认授权；这是用户授权记录，不是 Host 验证证明。", planAuthHostVerified: "Host 已验证", planAuthHumanAttested: "自动驾驶默认授权", planAuthUnknown: "需关注 · 尚未验证", planPreflightPermissions: "权限", planPreflightFiles: "文件边界", planPreflightCost: "模型成本", planPreflightEffects: "外部副作用", planLegacyUnplanned: "这是迁移保留的旧团队，尚无完整计划记录。", planLegacyActiveGate: "旧团队的进行中工作已保留；新认领和新成员仍受当前计划门禁约束。", handoffTitle: "负责人交接", handoffNone: "当前没有待接管的交接。", handoffPending: "交接已准备，正在等待目标负责人接管。", handoffPreparedAt: "准备于 {value}", handoffExpiresAt: "有效期至 {value}", handoffHistory: "最近交接记录", handoffPrepared: "已准备交接", handoffAdopted: "已完成接管", handoffHistoryMore: "仅显示最近 {count} 条安全记录。",
       boardLeaseEpoch: "租约代次 {value}", boardCapabilities: "能力已验证 {verified}/{total}", taskAssuranceTitle: "执行安全与历史", taskAssuranceHint: "租约代次与尝试记录由 Host 持久化；成员 checkpoint 仍然是未验证陈述。", taskCurrentAttempt: "当前尝试", taskCurrentLease: "当前租约代次", taskAttemptHistory: "尝试与中断记录", taskHistoryEmpty: "尚无尝试或中断记录。", taskCapabilities: "能力预检", taskCapabilitiesEmpty: "此任务未声明额外能力要求。", taskCapabilityVerified: "已验证", taskCapabilityUnknown: "未知", taskCapabilityUnavailable: "不可用", taskCapabilityChecked: "核验于 {value}", taskEffects: "外部副作用", taskEffectsEmpty: "此任务未声明外部副作用。", taskMemberReports: "成员报告（未验证）", taskHistoryClaimed: "任务已认领", taskHistoryMigratedClaim: "迁移了既有认领", taskHistoryReleased: "任务已释放", taskHistoryRestarted: "启动期间发生 Host 重启", taskHistoryOwnershipAdopted: "团队交接后租约失效", taskHistoryMemberStartFailed: "成员启动失败", taskHistoryStoppedBeforeStart: "启动前被停止", taskHistoryProvisioningFailed: "成员创建失败", taskHistoryUserStop: "用户停止团队", taskHistoryOther: "执行记录：{value}", effectPolicyNone: "无外部副作用", effectPolicyIdempotent: "幂等协议", effectPolicyConfirmEach: "每次确认", effectPolicyForbidden: "禁止", effectOutcomeNotStarted: "未开始", effectOutcomeSucceeded: "已成功", effectOutcomeFailed: "已失败", effectOutcomeUnknown: "结果未知",
       boardOpenCanvas: "查看团队关系",
-      flowTitle: "团队执行流程",
-      flowIntro: "此页说明团队当前如何工作；现阶段仅供查看，暂不能编辑流程。",
-      flowReadOnly: "工作方式说明 · 仅查看",
-      flowGoal: "说明目标",
-      flowGoalBody: "你向负责人说明想要完成的结果",
-      flowPlan: "负责人判断",
-      flowPlanBody: "确认是否值得并行，以及成本和边界",
-      flowTasks: "可追踪任务",
-      flowTasksBody: "先记录任务、先后关系和文件范围",
-      flowMembers: "必要成员",
-      flowMembersBody: "按任务加入必要成员",
-      flowCoordinate: "协调记录",
-      flowCoordinateBody: "处理交接、阻塞与跨团队投递",
-      flowResult: "汇总结果",
-      flowResultBody: "负责人验收并向人交付",
+      projectTeamBoardTitle: "项目协作工作区",
+      projectTeamBoardIntro: "仅展示当前 canonical project 的安全协作摘要；包括顶层会话、项目任务、依赖移交、资源锁、待决策、交付证据与变更历史。",
+      projectTeamBoardReadOnly: "项目聚合 · 常规只读",
+      projectTeamBoardUnavailableTitle: "无法确认当前项目范围",
+      projectTeamBoardUnavailableBody: "为避免混入其他项目的团队，当前不会猜测项目归属。请回到已绑定项目的团队会话，或让负责人刷新项目状态。",
+      projectTeamBoardEmptyTitle: "当前项目还没有团队任务",
+      projectTeamBoardEmptyBody: "这里不会生成示例任务。其他会话在同一项目中建立团队后，真实任务会自动出现。",
+      projectTeamBoardFilterLabel: "筛选跨会话任务",
+      projectTeamBoardFilterAll: "全部",
+      projectTeamBoardFilterPending: "待开始",
+      projectTeamBoardFilterProgress: "进行中",
+      projectTeamBoardFilterAttention: "需关注",
+      projectTeamBoardFilterCompleted: "已完成",
+      projectTeamBoardNoMatch: "当前筛选下没有任务",
+      projectTeamBoardTeams: "团队",
+      projectTeamBoardTasks: "任务",
+      projectTeamBoardPending: "待开始",
+      projectTeamBoardProgress: "进行中",
+      projectTeamBoardAttention: "需关注",
+      projectTeamBoardCompleted: "已完成",
+      projectTeamBoardCancelled: "已取消",
+      projectTeamBoardBlocked: "被依赖阻塞",
+      projectTeamBoardMembers: "成员 {count}",
+      projectTeamBoardPlan: "计划 {value}",
+      projectTeamBoardOwner: "负责：{value}",
+      projectTeamBoardUnassigned: "尚未分配",
+      projectTeamBoardUpdated: "更新于 {value}",
+      projectTeamBoardTeamAttention: "团队需要关注",
+      projectTeamBoardTeamEmpty: "此团队在当前页没有任务",
+      projectTeamBoardLive: "实时快照",
+      projectTeamBoardStale: "连接可能已过期，请刷新状态后再判断。",
+      projectTeamBoardTruncated: "项目数据按页传输；以下 totals 保持完整，当前只展示已加载页面。",
+      projectTeamBoardPageTeams: "团队：本页 {page} · 已加载 {loaded}/{total} · 剩余 {remaining}",
+      projectTeamBoardPageTasks: "任务：本页 {page} · 已加载 {loaded}/{total} · 剩余 {remaining}",
+      projectTeamBoardLoadMore: "加载更多",
+      projectTeamBoardLoadingMore: "正在加载…",
+      projectTeamBoardRefresh: "刷新状态",
+      projectTeamBoardLoadError: "未能加载下一页。当前已加载内容仍可查看；请刷新状态后再试。",
+      projectTeamBoardNoMore: "已加载当前项目的全部页面",
+      projectTeamBoardPrompt: "请核对当前项目的跨会话任务，优先处理需关注和被阻塞的任务；先说明建议，不要自动发送消息、审批或修改任务。",
+      projectTeamBoardPrepare: "准备协调请求",
+      projectTeamBoardBoundary: "看板常规只读；唯一窄写入口是固定负责人对真实 failed 成员明确确认的重试/替换。其他协调下一步只会写入输入框，不会自动审批、分配或改写任务。",
       automationTitle: "定时任务与自动化",
       automationIntro: "左侧是当前会话提醒，右侧是可审批、可追踪的项目自动化；两者互不触发、互不合并记录。",
       projectAutomation: "项目自动化",
@@ -167,8 +200,8 @@ window.__ModuleLoader__.load({
       workspaceNavigation: "Agent Teams workbench",
       workspaceBoard: "Task board",
       workspaceCanvas: "Team canvas",
-      workspaceFlow: "How teams work",
-      workspaceAutomation: "Schedules & automation",
+       workspaceFlow: "Cross-session tasks",
+            workspaceAutomation: "Schedules & automation",
       workspaceParticipants: "Participants",
       workspaceInbox: "Coordination activity",
       boardTitle: "Current team task board",
@@ -205,21 +238,48 @@ window.__ModuleLoader__.load({
       planLifecycleTitle: "Plan lifecycle", planLifecycleHint: "Phases, authorization, and handoff status come from durable Host records. Incomplete or unknown facts are never inferred.", planDraft: "Draft", planCommitted: "Committed", planActive: "Active", planRevision: "Plan revision {value}", planPauseEpoch: "Pause epoch {value}", planAuthorization: "Plan preflight", planAuthorizationSource: "Authorization basis: {value}", planAuthorizationHumanAttestedHint: "After Agent Teams is enabled, ordinary plans within the safe scope keep using this default authorization. It is a user authorization record, not Host-verified proof.", planAuthHostVerified: "Host verified", planAuthHumanAttested: "Autopilot default authorization", planAuthUnknown: "Attention · not verified", planPreflightPermissions: "Permissions", planPreflightFiles: "File boundaries", planPreflightCost: "Model cost", planPreflightEffects: "External side effects", planLegacyUnplanned: "This migrated legacy team does not yet have a complete planning record.", planLegacyActiveGate: "Existing legacy work remains active; new claims and members are still gated by the current plan.", handoffTitle: "Lead handoff", handoffNone: "No handoff is awaiting adoption.", handoffPending: "A handoff is prepared and waiting for the target lead to adopt it.", handoffPreparedAt: "Prepared {value}", handoffExpiresAt: "Expires {value}", handoffHistory: "Recent handoff records", handoffPrepared: "Handoff prepared", handoffAdopted: "Ownership adopted", handoffHistoryMore: "Only the latest {count} safe records are shown.",
       boardLeaseEpoch: "Lease epoch {value}", boardCapabilities: "Capabilities verified {verified}/{total}", taskAssuranceTitle: "Execution safety and history", taskAssuranceHint: "Lease epochs and attempts are durable Host facts. Member checkpoints remain unverified statements.", taskCurrentAttempt: "Current attempt", taskCurrentLease: "Current lease epoch", taskAttemptHistory: "Attempt and interruption history", taskHistoryEmpty: "No attempt or interruption has been recorded.", taskCapabilities: "Capability preflight", taskCapabilitiesEmpty: "This task declares no additional capability requirements.", taskCapabilityVerified: "Verified", taskCapabilityUnknown: "Unknown", taskCapabilityUnavailable: "Unavailable", taskCapabilityChecked: "Checked {value}", taskEffects: "External side effects", taskEffectsEmpty: "This task declares no external side effects.", taskMemberReports: "Member reports (unverified)", taskHistoryClaimed: "Task claimed", taskHistoryMigratedClaim: "Existing claim migrated", taskHistoryReleased: "Task released", taskHistoryRestarted: "Host restarted during startup", taskHistoryOwnershipAdopted: "Lease revoked after team handoff", taskHistoryMemberStartFailed: "Member start failed", taskHistoryStoppedBeforeStart: "Stopped before startup", taskHistoryProvisioningFailed: "Member provisioning failed", taskHistoryUserStop: "User stopped the team", taskHistoryOther: "Execution record: {value}", effectPolicyNone: "No external effect", effectPolicyIdempotent: "Idempotent protocol", effectPolicyConfirmEach: "Confirm each time", effectPolicyForbidden: "Forbidden", effectOutcomeNotStarted: "Not started", effectOutcomeSucceeded: "Succeeded", effectOutcomeFailed: "Failed", effectOutcomeUnknown: "Outcome unknown",
       boardOpenCanvas: "View team relationships",
-      flowTitle: "Team execution flow",
-      flowIntro: "This page explains how teams work today. It is view only and cannot edit the flow yet.",
-      flowReadOnly: "How teams work · view only",
-      flowGoal: "State the goal",
-      flowGoalBody: "You tell the lead what outcome you need",
-      flowPlan: "Lead decision",
-      flowPlanBody: "Check whether parallel work is worthwhile, with clear cost and boundaries",
-      flowTasks: "Tracked tasks",
-      flowTasksBody: "Record tasks, prerequisites, and file boundaries first",
-      flowMembers: "Necessary members",
-      flowMembersBody: "Add only the members each task needs",
-      flowCoordinate: "Coordination activity",
-      flowCoordinateBody: "Handle handoffs, blocks, and cross-team delivery",
-      flowResult: "Result delivery",
-      flowResultBody: "The lead verifies and reports to the person",
+      projectTeamBoardTitle: "Project collaboration workspace",
+      projectTeamBoardIntro: "Shows the current canonical project's safe collaboration summary: top-level sessions, project tasks, dependencies, handoffs, locks, decisions, evidence, and history.",
+      projectTeamBoardReadOnly: "Project aggregate · read-only by default",
+      projectTeamBoardUnavailableTitle: "The current project scope cannot be confirmed",
+      projectTeamBoardUnavailableBody: "To avoid mixing teams from another project, this view never guesses project ownership. Return to a team session bound to the project, or ask the lead to refresh project state.",
+      projectTeamBoardEmptyTitle: "No team tasks in this project yet",
+      projectTeamBoardEmptyBody: "No sample tasks are generated. Real tasks appear when another session creates a team in the same project.",
+      projectTeamBoardFilterLabel: "Filter cross-session tasks",
+      projectTeamBoardFilterAll: "All",
+      projectTeamBoardFilterPending: "Pending",
+      projectTeamBoardFilterProgress: "In progress",
+      projectTeamBoardFilterAttention: "Attention",
+      projectTeamBoardFilterCompleted: "Completed",
+      projectTeamBoardNoMatch: "No tasks match this filter",
+      projectTeamBoardTeams: "Teams",
+      projectTeamBoardTasks: "Tasks",
+      projectTeamBoardPending: "Pending",
+      projectTeamBoardProgress: "In progress",
+      projectTeamBoardAttention: "Attention",
+      projectTeamBoardCompleted: "Completed",
+      projectTeamBoardCancelled: "Cancelled",
+      projectTeamBoardBlocked: "Dependency blocked",
+      projectTeamBoardMembers: "{count} members",
+      projectTeamBoardPlan: "Plan {value}",
+      projectTeamBoardOwner: "Owner: {value}",
+      projectTeamBoardUnassigned: "Unassigned",
+      projectTeamBoardUpdated: "Updated {value}",
+      projectTeamBoardTeamAttention: "Team needs attention",
+      projectTeamBoardTeamEmpty: "This team has no tasks on the current page",
+      projectTeamBoardLive: "Live snapshot",
+      projectTeamBoardStale: "The connection may be stale. Refresh state before making a decision.",
+      projectTeamBoardTruncated: "Project data is transported in pages. Totals remain complete while only loaded pages are rendered below.",
+      projectTeamBoardPageTeams: "Teams: {page} this page · {loaded}/{total} loaded · {remaining} remaining",
+      projectTeamBoardPageTasks: "Tasks: {page} this page · {loaded}/{total} loaded · {remaining} remaining",
+      projectTeamBoardLoadMore: "Load more",
+      projectTeamBoardLoadingMore: "Loading…",
+      projectTeamBoardRefresh: "Refresh state",
+      projectTeamBoardLoadError: "The next page could not be loaded. Current content remains available; refresh state before trying again.",
+      projectTeamBoardNoMore: "All pages for this project are loaded",
+      projectTeamBoardPrompt: "Review cross-session tasks for the current project and prioritize tasks that need attention or are blocked. Explain the recommendation first; do not automatically message, approve, or modify tasks.",
+      projectTeamBoardPrepare: "Prepare coordination request",
+      projectTeamBoardBoundary: "This board is read-only by default. Its only narrow write is an exact root's confirmed retry/replace for a genuinely failed member. Other coordination steps only write to the composer; nothing is auto-approved, assigned, or rewritten.",
       automationTitle: "Schedules and automation",
       automationIntro: "Session reminders stay on the left; reviewable project automation stays on the right. They never trigger each other or merge their history.",
       projectAutomation: "Project automation",
@@ -278,14 +338,24 @@ window.__ModuleLoader__.load({
     });
     Object.assign(zh, {
       foundationTitle: "项目基础状态", foundationRefresh: "刷新状态", foundationUnavailableTitle: "尚未使用", foundationUnavailableBody: "系统尚未接管项目工作区与质量门禁。请先完成本机项目配置，再由负责人启动。", foundationInitializingTitle: "正在准备", foundationInitializingBody: "系统正在验证源目录并恢复持久状态。请稍候刷新，不要重复初始化。", foundationReadyTitle: "可以安全落地", foundationReadyBody: "系统已确认工作区、合并队列和质量门禁满足当前落地条件。负责人可继续按现有任务推进。", foundationInvalidTitle: "源目录不可用", foundationInvalidBody: "系统已停止创建工作区，避免写入错误位置。请让负责人从真实 Git 根目录重新打开项目。", foundationDirtyTitle: "源目录需要整理", foundationDirtyBody: "系统检测到未提交或冲突改动并暂停自动推进。请由负责人先核对并整理源目录。", foundationMergeTitle: "等待合并", foundationMergeBody: "系统已保存成员改动并放入合并队列。负责人下一步是核对质量状态并继续合并。", foundationConflictTitle: "合并冲突需要处理", foundationConflictBody: "系统已保留冲突的合并组并阻止落地，没有覆盖任何成员改动。请由负责人解决冲突后重新发布或继续合并。", foundationQualityWaitTitle: "等待可信质量运行器", foundationQualityWaitBody: "系统已保留待检内容，但不会使用未经信任的结果。请由负责人接通可信运行器。", foundationQualityRunTitle: "质量检查进行中", foundationQualityRunBody: "系统已排队或正在运行质量检查。请等待最终结果，不要根据中间状态落地。", foundationDefectTitle: "质量问题待处理", foundationDefectBody: "系统已把失败或本地缺陷记录下来并阻止落地。请由负责人先修复，再重新运行质量门禁。", foundationConnectorTitle: "外部缺陷连接未启用", foundationConnectorBody: "本地缺陷仍会安全保留。需要外部同步时，请由负责人配置可信连接；协作者无需处理凭据。", foundationOutboxTitle: "缺陷同步待发送", foundationOutboxBody: "系统已持久保存待发送记录。请由负责人恢复外部连接，避免重复提交。", foundationCollaboratorTitle: "由主设备负责", foundationCollaboratorBody: "项目工作区、合并和质量门禁由主设备统一管理；此电脑只显示安全状态，不提供操作按钮。", foundationCounts: "工作区 {workspaces} · 资源声明 {claims} · 待合并 {changes} · 质量队列 {queued} · 运行中 {running} · 本地缺陷 {defects}",
-      workspaceProjectTasks: "项目任务",
-      projectTasksTitle: "项目任务",
-      projectTasksIntro: "独立于当前代理团队，按项目长期保存。这里只显示安全的任务摘要。",
+      workspaceProjectTasks: "跨会话任务",
+      projectTasksTitle: "同项目·跨会话任务",
+      projectTasksIntro: "独立于当前代理团队，按项目跨会话长期保存。这里只显示安全的任务摘要。",
+       collaborationRoster: "项目会话席位",
+       collaborationRosterHint: "仅显示当前 canonical project 的顶层会话安全摘要；每个 root 独占一个席位并私下管理自己的 Agent Team。看板不显示成员、聊天或完整团队任务上下文；Team 完成需 root 显式提交 evidence/status。",
+       collaborationResponsibilities: "责任与进度",
+       collaborationScope: "资源范围",
+       collaborationPhase: "当前阶段",
+       collaborationNextStep: "下一步",
+       collaborationEvidence: "最近交付与变更历史",
+       collaborationDependencies: "跨会话依赖与移交",
+       collaborationLocks: "冲突、资源锁与待决策",
+       collaborationSummaryEmpty: "当前项目暂无可显示的协作摘要。", collaborationRequests: "待协作请求", collaborationRequestEmpty: "当前没有待协作请求。", collaborationRequestHint: "目标 root 下次运行会看到；不会自动唤醒或接管。", collaborationRequestMore: "还有 {count} 项请求未显示；请刷新。", collaborationRequestDeadline: "响应期限：{value}", collaborationRequestState: "状态：{value}", collaborationMore: "还有 {count} 项未显示；请刷新以读取后续投影。", collaborationShowing: "显示 {shown}/{total}", collaborationRecovery: "顶层会话恢复", collaborationRecoveryHint: "再次点击将直接提交已确认的精确恢复操作；未知结果不会自动重试、唤醒或接管。", collaborationRecoveryRetry: "重试根会话", collaborationRecoveryTakeover: "启动替代会话", collaborationRecoveryConfirm: "再次点击以确认提交", collaborationRecoveryBusy: "正在提交恢复…", collaborationRecoveryError: "恢复操作未能提交或完成。请刷新权威状态，检查错误后再重试。", collaborationRecoverySuccess: "恢复操作已提交并读取最新权威状态。", collaborationRecoveryState: "恢复状态：{value}",
       projectTasksLoading: "正在读取项目任务…",
       projectTasksRefresh: "刷新任务",
       projectTasksNoProject: "尚未创建项目。请先到“参与者”中的多人连接设置创建本机项目。",
       projectTasksOpenSettings: "打开项目设置",
-      projectTasksCollaboratorUnavailable: "已从主设备安全同步项目任务；当前缓存可继续只读查看。",
+      projectTasksCollaboratorUnavailable: "当前为本机同步预览；这里只显示已安全同步的任务。请在项目 authority 设备查看完整任务并分页。",
       projectTasksSynced: "已从主设备安全同步。这里只显示允许共享的任务摘要。",
       projectTasksWritable: "主设备允许这台电脑提交下方明确列出的安全操作。",
       projectTasksReadOnly: "当前为安全只读。主设备离线、同步重置中或权限已撤销时，请保持本页打开并稍后刷新；已有缓存不会丢失。",
@@ -300,7 +370,12 @@ window.__ModuleLoader__.load({
       projectTasksCreateUnavailable: "当前项目任务只可查看，不能在这台电脑创建。",
       projectTasksExplicitOnly: "只执行你明确点击的创建或状态变更；不会自动审批、发送消息或改写冲突。",
       projectTasksEmpty: "暂无项目任务",
-      projectTasksHasMore: "仅显示最近 500 项。请先整理现有任务；后续版本将提供分页。",
+      projectTasksPage: "本页 {page} · 已加载 {loaded}/{total} · 剩余 {remaining}",
+      projectTasksPreviewCount: "本机已安全同步 {loaded} 项 · 完整列表与分页请在项目 authority 设备查看",
+      projectTasksLoadMore: "加载更多",
+      projectTasksLoadingMore: "正在加载…",
+      projectTasksLoadError: "未能加载下一页。当前内容仍可查看；请刷新任务状态后再试。",
+      projectTasksAllLoaded: "已加载当前项目的全部任务",
       projectTasksChangedError: "任务状态已经变化。请刷新后核对最新版本，再明确选择操作。",
       projectTasksIntentConflictError: "这次操作与先前使用同一命令编号的意图不同。系统没有重复执行，请重新明确点击一次。",
       projectTasksPermissionError: "当前设备没有执行此项目任务操作的权限。请在项目所有者所在电脑处理。",
@@ -321,6 +396,14 @@ window.__ModuleLoader__.load({
       projectTaskBlocked: "已阻塞",
       projectTaskDone: "已完成",
       projectTaskCanceled: "已取消",
+      projectTaskGroupInProgress: "进行中",
+      projectTaskGroupInReview: "待评审",
+      projectTaskGroupBlocked: "需处理",
+      projectTaskGroupPending: "待开始",
+      projectTaskGroupCompleted: "已完成",
+      projectTaskGroupCanceled: "已取消",
+      projectTaskPriority: "优先级 {value}",
+      projectTaskUpdated: "最近更新 {value}",
       projectTaskColumnPlanned: "计划中",
       projectTaskColumnActive: "执行与评审",
       projectTaskColumnBlocked: "已阻塞",
@@ -332,14 +415,15 @@ window.__ModuleLoader__.load({
     });
     Object.assign(en, {
       foundationTitle: "Project foundation status", foundationRefresh: "Refresh status", foundationUnavailableTitle: "Not in use", foundationUnavailableBody: "The system is not managing project workspaces or quality gates yet. Finish local project setup, then have the lead start it.", foundationInitializingTitle: "Preparing", foundationInitializingBody: "The system is validating the source and recovering durable state. Wait and refresh instead of initializing again.", foundationReadyTitle: "Ready to land safely", foundationReadyBody: "The system confirms that workspaces, merge state, and quality gates meet the current landing conditions. The lead can continue through the existing tasks.", foundationInvalidTitle: "Source unavailable", foundationInvalidBody: "The system stopped before creating a workspace to avoid writing in the wrong place. Have the lead reopen the project from its real Git root.", foundationDirtyTitle: "Source needs attention", foundationDirtyBody: "The system found uncommitted or conflicting source changes and paused automatic progress. The lead should review and clean up the source first.", foundationMergeTitle: "Waiting to merge", foundationMergeBody: "Member changes are stored durably and queued for merge. The lead should review quality status and continue the merge.", foundationConflictTitle: "Merge conflicts need attention", foundationConflictBody: "The conflicted merge group is preserved and landing is blocked without overwriting member work. The lead should resolve the conflicts, then republish or continue the merge.", foundationQualityWaitTitle: "Waiting for a trusted quality runner", foundationQualityWaitBody: "Pending work is preserved, but untrusted results are never accepted. The lead must connect a trusted runner.", foundationQualityRunTitle: "Quality checks in progress", foundationQualityRunBody: "Quality checks are queued or running. Wait for the final result instead of landing from an intermediate state.", foundationDefectTitle: "Quality issues need work", foundationDefectBody: "Failures or local defects are recorded and landing is blocked. The lead should fix them and run the quality gate again.", foundationConnectorTitle: "External defect connection is off", foundationConnectorBody: "Local defects remain safely stored. The lead can configure a trusted connection if external sync is needed; collaborators never handle credentials.", foundationOutboxTitle: "Defect sync is pending", foundationOutboxBody: "Pending records are stored durably. The lead should restore the external connection instead of submitting them again.", foundationCollaboratorTitle: "Managed by the primary desktop", foundationCollaboratorBody: "The primary desktop manages project workspaces, merges, and quality gates. This computer shows safe status only and has no action buttons.", foundationCounts: "Workspaces {workspaces} · Claims {claims} · Pending merges {changes} · Quality queue {queued} · Running {running} · Local defects {defects}",
-      workspaceProjectTasks: "Project tasks",
-      projectTasksTitle: "Project tasks",
-      projectTasksIntro: "Stored with the project independently of the current Agent Team. Only safe task summaries are shown here.",
+      workspaceProjectTasks: "Cross-session tasks",
+      projectTasksTitle: "Same-project · cross-session tasks",
+      projectTasksIntro: "Stored across sessions with the project, independently of the current Agent Team. Only safe task summaries are shown here.", collaborationRoster: "Project session seats", collaborationRosterHint: "Only safe summaries for top-level sessions in the current canonical project are shown; each root owns one seat and privately manages its Agent Team. Members, chats, and full team task context stay hidden; Team completion requires explicit evidence/status from the root.", collaborationResponsibilities: "Responsibility and progress", collaborationScope: "Resource scope", collaborationPhase: "Current phase", collaborationNextStep: "Next step", collaborationEvidence: "Recent delivery and change history", collaborationDependencies: "Cross-session dependencies and handoffs", collaborationLocks: "Conflicts, resource locks, and decisions", collaborationSummaryEmpty: "No collaboration summary is available for this project yet.", collaborationRequests: "Collaboration requests", collaborationRequestEmpty: "No collaboration requests are pending.", collaborationRequestHint: "The target root will see this on its next run; nothing wakes or takes over automatically.", collaborationRequestMore: "{count} more requests are not shown; refresh to load them.", collaborationRequestDeadline: "Response deadline: {value}", collaborationRequestState: "State: {value}", collaborationMore: "{count} more are not shown; refresh to load the next projection.", collaborationShowing: "Showing {shown}/{total}", collaborationRecovery: "Top-level session recovery", collaborationRecoveryHint: "Click again to directly submit the confirmed exact recovery action; unknown outcomes never retry, wake, or take over automatically.", collaborationRecoveryRetry: "Retry root session", collaborationRecoveryTakeover: "Start replacement session", collaborationRecoveryConfirm: "Click again to confirm submission", collaborationRecoveryBusy: "Submitting recovery…", collaborationRecoveryError: "Recovery did not finish. Refresh authoritative state before deciding again.", collaborationRecoveryState: "Recovery state: {value}",
+      collaborationRecoverySuccess: "Recovery was submitted and the latest authoritative state was loaded.",
       projectTasksLoading: "Loading project tasks…",
       projectTasksRefresh: "Refresh tasks",
       projectTasksNoProject: "No project exists yet. Open the connection settings under Participants to create a local project first.",
       projectTasksOpenSettings: "Open project settings",
-      projectTasksCollaboratorUnavailable: "Project tasks were synced securely from the primary desktop. The current cache remains available to read.",
+      projectTasksCollaboratorUnavailable: "This is a local sync preview showing only safely synced tasks. Use the project authority desktop to view and page through the complete task list.",
       projectTasksSynced: "Securely synced from the primary desktop. Only task summaries approved for sharing are shown.",
       projectTasksWritable: "The primary desktop allows this computer to submit only the safe actions listed below.",
       projectTasksReadOnly: "This view is safely read only. If the primary desktop is offline, sync is resetting, or access was revoked, keep this page open and refresh later; the existing cache is retained.",
@@ -354,7 +438,12 @@ window.__ModuleLoader__.load({
       projectTasksCreateUnavailable: "Project tasks are read only on this desktop, so a task cannot be created here.",
       projectTasksExplicitOnly: "Only the create or status change you explicitly select is run. Nothing is auto-approved, messaged, or rewritten after a conflict.",
       projectTasksEmpty: "No project tasks",
-      projectTasksHasMore: "Only the latest 500 tasks are shown. Organize existing tasks first; pagination will be added later.",
+      projectTasksPage: "{page} this page · {loaded}/{total} loaded · {remaining} remaining",
+      projectTasksPreviewCount: "{loaded} safely synced on this desktop · use the project authority desktop for the complete list and pagination",
+      projectTasksLoadMore: "Load more",
+      projectTasksLoadingMore: "Loading…",
+      projectTasksLoadError: "The next page could not be loaded. Current content remains available; refresh task state before trying again.",
+      projectTasksAllLoaded: "All tasks in this project are loaded",
       projectTasksChangedError: "The task state changed. Refresh and review the latest revision before explicitly choosing an action.",
       projectTasksIntentConflictError: "This action differs from the earlier intent that used the same command identifier. Nothing was run twice; explicitly select the action again.",
       projectTasksPermissionError: "This desktop is not allowed to perform that project task action. Use the project owner's desktop.",
@@ -375,6 +464,14 @@ window.__ModuleLoader__.load({
       projectTaskBlocked: "Blocked",
       projectTaskDone: "Done",
       projectTaskCanceled: "Canceled",
+      projectTaskGroupInProgress: "In progress",
+      projectTaskGroupInReview: "In review",
+      projectTaskGroupBlocked: "Needs attention",
+      projectTaskGroupPending: "Not started",
+      projectTaskGroupCompleted: "Completed",
+      projectTaskGroupCanceled: "Canceled",
+      projectTaskPriority: "Priority {value}",
+      projectTaskUpdated: "Updated {value}",
       projectTaskColumnPlanned: "Planned",
       projectTaskColumnActive: "Active and review",
       projectTaskColumnBlocked: "Blocked",
@@ -460,6 +557,9 @@ window.__ModuleLoader__.load({
       legacyResultPreview: "旧结果文本（未经当前证明）",
       taskCancelled: "任务已取消；这不是成功完成",
       responsibilityFacts: "责任事实",
+      lifecycleHistory: "不可变生命周期历史",
+      lifecycleHistoryHint: "历史提交、验收与重开记录不会被当前投影覆盖。",
+      lifecycleEvent: "{kind} · 第 {attempt} 次",
       taskReleased: "任务曾被释放；这是已记录的责任变更",
       releaseReasonLabel: "释放原因",
       releasedAtLabel: "释放时间",
@@ -558,6 +658,9 @@ window.__ModuleLoader__.load({
       legacyResultPreview: "Legacy result text (not currently proven)",
       taskCancelled: "Task cancelled; this is not successful completion",
       responsibilityFacts: "Responsibility facts",
+      lifecycleHistory: "Immutable lifecycle history",
+      lifecycleHistoryHint: "Historical submissions, acceptances, and reopens are not overwritten by the current projection.",
+      lifecycleEvent: "{kind} · attempt {attempt}",
       taskReleased: "Task was released; this is a recorded responsibility change",
       releaseReasonLabel: "Release reason",
       releasedAtLabel: "Released at",
@@ -626,22 +729,22 @@ window.__ModuleLoader__.load({
         ".dat-task-focus{min-height:clamp(460px,62vh,760px);padding:0;overflow:hidden}.dat-task-focus-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dat-task-focus-head-copy{display:flex;align-items:center;gap:10px;min-width:0}.dat-task-focus-head-copy h2{margin:0;font-size:14px}.dat-task-focus-body{padding:16px}.dat-task-focus-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.dat-task-focus-title{max-width:820px;margin:3px 0 0;font-size:21px;line-height:1.35;overflow-wrap:anywhere}.dat-task-workflow{margin-top:15px;padding:14px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2)}.dat-task-workflow-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.dat-task-workflow-head h3,.dat-task-focus-surface>h3,.dat-task-live-head h3{margin:0;font-size:13px}.dat-task-workflow-head p{margin:4px 0 0}.dat-task-stage-track{display:grid;grid-template-columns:minmax(0,1fr) 28px minmax(0,1fr) 28px minmax(0,1fr);align-items:stretch;gap:0;margin-top:13px}.dat-task-stage{min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-task-stage[data-state=current]{border-color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 8%,var(--dsw-alias-bg-layer-1))}.dat-task-stage[data-state=reached]{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 45%,var(--dsw-alias-border-l2))}.dat-task-stage[data-state=upcoming],.dat-task-stage[data-state=unknown]{opacity:.72}.dat-task-stage-top{display:flex;align-items:center;gap:7px;min-width:0}.dat-task-stage-top strong{font-size:12px;overflow-wrap:anywhere}.dat-task-stage-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-label-tertiary)}.dat-task-stage[data-state=current] .dat-task-stage-dot{background:var(--dsw-alias-brand-primary)}.dat-task-stage[data-state=reached] .dat-task-stage-dot{background:var(--dsw-alias-state-success-primary)}.dat-task-stage>.dat-meta{margin-top:5px}.dat-task-stage>time{display:block;margin-top:4px}.dat-task-stage-arrow{display:grid;place-items:center;color:var(--dsw-alias-label-tertiary)}.dat-task-block-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:28px;margin-top:10px}.dat-task-block-branch{grid-column:2;min-width:0;padding:9px 10px;border:1px dashed var(--dsw-alias-border-l3);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-task-block-branch[data-active=true]{border-style:solid;border-color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,var(--dsw-alias-bg-layer-1))}.dat-task-block-branch[data-active=true] .dat-task-stage-dot{background:var(--dsw-alias-state-warn-primary)}.dat-task-block-branch>.dat-meta{margin-top:5px}.dat-task-block-branch>time,.dat-task-block-branch>p{display:block;margin:4px 0 0}.dat-task-focus-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;margin-top:12px;align-items:start}.dat-task-focus-main{display:grid;gap:12px;min-width:0}.dat-task-focus-surface{box-sizing:border-box;min-width:0;padding:13px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-2)}.dat-task-focus-surface>.dat-meta{margin:7px 0 0}.dat-task-next{border-left:3px solid var(--dsw-alias-brand-primary)}.dat-task-next[data-state=blocked]{border-left-color:var(--dsw-alias-state-warn-primary)}.dat-task-next[data-state=completed]{border-left-color:var(--dsw-alias-state-success-primary)}.dat-task-live{min-width:0}.dat-task-live-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.dat-task-live>.dat-note{margin:5px 0 9px}.dat-task-live-list{display:grid;gap:7px;max-height:clamp(280px,46vh,560px);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:3px}.dat-task-live-list .dat-card{background:var(--dsw-alias-bg-layer-1)}.dat-task-live-empty{padding:22px 8px;text-align:center}.dat-task-live-last{padding-top:9px;border-top:1px solid var(--dsw-alias-border-l2)}",
         ".dat-task-progress{display:grid;gap:7px;margin-top:13px}.dat-task-progress-copy{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px}.dat-task-progress-copy span{color:var(--dsw-alias-label-secondary);text-align:right}.dat-task-progress-track{position:relative;height:7px;overflow:visible;clip-path:inset(-18px 0 -18px 0 round 999px);border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 5%,var(--dsw-alias-bg-layer-1));box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)}.dat-task-progress-fill{display:block;height:100%;min-width:0;border-radius:inherit;background:var(--dsw-alias-brand-primary);transition:width .2s ease}.dat-task-progress-fill.is-indeterminate{position:absolute;top:50%;left:0;width:9px;height:9px;overflow:visible;background:var(--dat-pulse-c7);box-shadow:0 0 0 2px color-mix(in srgb,var(--dat-pulse-c7) 28%,transparent),0 0 10px var(--dat-pulse-c7),0 0 24px color-mix(in srgb,var(--dat-pulse-c6) 72%,transparent);transform:translate(-50%,-50%);animation:dat-task-progress-flow 1.8s cubic-bezier(.35,0,.16,1) infinite}.dat-task-progress-fill.is-indeterminate::before{content:\"\";position:absolute;top:50%;right:45%;width:96px;height:4px;border-radius:999px;background:linear-gradient(90deg,transparent 0%,var(--dat-pulse-c1) 14%,var(--dat-pulse-c2) 28%,var(--dat-pulse-c3) 42%,var(--dat-pulse-c4) 56%,var(--dat-pulse-c5) 70%,var(--dat-pulse-c6) 84%,var(--dat-pulse-c7) 100%);filter:blur(.35px) saturate(1.35);opacity:.9;transform:translateY(-50%)}.dat-task-progress-fill.is-indeterminate::after{content:\"\";position:absolute;inset:-6px;border:1px solid color-mix(in srgb,var(--dat-pulse-c7) 72%,transparent);border-radius:50%;animation:dat-task-progress-aura .72s ease-out infinite}@keyframes dat-task-progress-flow{0%{left:0;opacity:0;transform:translate(-50%,-50%) scale(.62)}8%{opacity:1}48%{transform:translate(-50%,-50%) scale(1)}88%{opacity:1}100%{left:100%;opacity:0;transform:translate(-50%,-50%) scale(1.18)}}@keyframes dat-task-progress-aura{0%{opacity:.9;transform:scale(.45)}100%{opacity:0;transform:scale(1.35)}}@media (prefers-reduced-motion:reduce){.dat-task-progress-fill{transition:none}.dat-task-progress-fill.is-indeterminate{left:50%;animation:none}.dat-task-progress-fill.is-indeterminate::after{animation:none;opacity:.45}}.dat-task-workflow-runtime{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:12px}.dat-task-runtime-pane{min-width:0;padding:11px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-task-runtime-head{display:flex;align-items:flex-start;justify-content:space-between;gap:9px;margin-bottom:8px}.dat-task-runtime-head h4{margin:0;font-size:12px}.dat-task-runtime-head p{margin:3px 0 0}.dat-task-plan{display:grid;gap:7px;max-height:330px;margin:0;padding:0;overflow:auto;list-style:none}.dat-task-plan li{display:grid;grid-template-columns:17px minmax(0,1fr);gap:6px;align-items:start;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}.dat-task-plan li[data-state=completed]{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}.dat-task-plan li[data-state=in_progress]{color:var(--dsw-alias-label-primary);font-weight:600}.dat-task-plan-mark{color:var(--dsw-alias-label-tertiary);text-align:center}.dat-task-plan li[data-state=completed] .dat-task-plan-mark{color:var(--dsw-alias-state-success-primary)}.dat-task-plan li[data-state=in_progress] .dat-task-plan-mark{color:var(--dsw-alias-brand-primary)}.dat-task-runtime-list{display:grid;gap:0;max-height:360px;overflow:auto;border-top:1px solid var(--dsw-alias-border-l2)}.dat-task-runtime-event{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:start;padding:9px 2px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dat-task-runtime-dot{width:8px;height:8px;margin-top:4px;border-radius:50%;background:var(--dsw-alias-label-tertiary)}.dat-task-runtime-event[data-status=running] .dat-task-runtime-dot{background:var(--dsw-alias-brand-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-brand-primary) 15%,transparent)}.dat-task-runtime-event[data-status=completed] .dat-task-runtime-dot{background:var(--dsw-alias-state-success-primary)}.dat-task-runtime-event[data-status=failed] .dat-task-runtime-dot{background:var(--dsw-alias-state-error-primary)}.dat-task-runtime-event[data-status=blocked] .dat-task-runtime-dot{background:var(--dsw-alias-state-warn-primary)}.dat-task-runtime-copy{min-width:0}.dat-task-runtime-copy strong,.dat-task-runtime-copy span{display:block;overflow-wrap:anywhere}.dat-task-runtime-copy strong{font-size:12px}.dat-task-runtime-copy span{margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-task-runtime-event time{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}.dat-task-runtime-empty{margin:10px 0}.dat-task-runtime-limit{margin:8px 0 0}.dat-task-copy-section{display:grid;gap:10px;margin:11px 0 14px}.dat-task-copy-block{padding:10px 11px;border-left:3px solid var(--dsw-alias-border-l3);border-radius:0 9px 9px 0;background:var(--dsw-alias-bg-layer-2)}.dat-task-copy-block:first-child{border-left-color:var(--dsw-alias-brand-primary)}.dat-task-copy-block h4{margin:0 0 5px;color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:650}.dat-task-copy-block p{margin:0;font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}.dat-task-focus-facts{padding-top:11px;border-top:1px solid var(--dsw-alias-border-l2)}@container dat-workspace (min-width:760px){.dat-task-workflow-runtime{grid-template-columns:minmax(220px,.72fr) minmax(0,1.45fr)}.dat-task-focus-facts{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20px}}",
         ".dat-workspace{container-type:inline-size;container-name:dat-workspace;min-width:0}.dat-workspace-main{min-width:0}.dat-workspace-nav{position:sticky;top:0;z-index:12;display:flex;align-items:center;gap:5px;box-sizing:border-box;width:100%;max-width:100%;margin:0 0 14px;padding:4px;overflow-x:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 96%,transparent);box-shadow:0 6px 18px rgba(35,72,80,.08);backdrop-filter:blur(12px);scrollbar-width:thin;overscroll-behavior-inline:contain}.dat-workspace-nav button{display:flex;flex:1 0 auto;align-items:center;justify-content:space-between;gap:8px;min-width:max-content;border:0;border-radius:8px;padding:8px 10px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;text-align:left;white-space:nowrap}.dat-workspace-nav button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dat-workspace-nav button[aria-current=page]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font-weight:650}.dat-workspace-nav small{color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-workspace-view{min-width:0}.dat-workspace-view-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:0 0 12px}.dat-workspace-view-head h2{margin:0;font-size:18px}.dat-workspace-view-head p{max-width:760px;margin:4px 0 0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.5}.dat-workspace-view-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}",
-        ".dat-board-shell{min-width:0}.dat-board-shell.dat-inspector-open{min-width:0}.dat-board-main{container-type:inline-size;container-name:dat-board-main;min-width:0}.dat-board-toolbar{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap;margin:0 0 10px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-board-note{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 24%,var(--dsw-alias-border-l2));border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}.dat-task-board{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-items:start}.dat-board-column{display:flex;flex-direction:column;box-sizing:border-box;height:clamp(360px,56vh,640px);min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}.dat-board-column[data-column=blocked]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 30%,var(--dsw-alias-border-l2))}.dat-board-column-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;margin-bottom:9px;padding:0 2px}.dat-board-column-heading{display:flex;align-items:center;gap:7px;min-width:0}.dat-board-column-heading h3{margin:0;font-size:13px}.dat-board-status-dot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-label-tertiary);flex:none}.dat-board-column[data-column=in_progress] .dat-board-status-dot{background:var(--dsw-alias-brand-primary)}.dat-board-column[data-column=blocked] .dat-board-status-dot{background:var(--dsw-alias-state-warn-primary)}.dat-board-column[data-column=completed] .dat-board-status-dot{background:var(--dsw-alias-state-success-primary)}.dat-board-column-list{display:grid;grid-auto-rows:max-content;align-content:start;gap:8px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:2px}.dat-board-card{display:grid;align-self:start;gap:7px;width:100%;min-width:0;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:10px;background:var(--dsw-alias-bg-layer-2);color:inherit;font:inherit;text-align:left;cursor:pointer;content-visibility:auto;contain-intrinsic-size:auto 108px}.dat-board-card:hover{border-color:var(--dsw-alias-border-l3);background:var(--dsw-alias-interactive-bg-hover)}.dat-board-card:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-board-card-top,.dat-board-card-bottom{display:flex;align-items:center;justify-content:space-between;gap:7px;min-width:0}.dat-board-card-id{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.dat-board-card-title{display:-webkit-box;overflow:hidden;font-size:13px;font-weight:650;line-height:1.45;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:3}.dat-board-card-owner{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dat-board-card-flags{display:flex;gap:5px;flex-wrap:wrap}.dat-board-card-flag{border-radius:999px;padding:2px 6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-board-card-flag.is-warning{color:var(--dsw-alias-state-warn-primary)}.dat-board-empty{padding:22px 8px;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:12px}.dat-board-overflow{padding:7px 2px 1px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-board-shell .dat-scrim{display:block;position:fixed;inset:0;z-index:39;border:0;background:rgba(0,0,0,.28)}.dat-board-shell .dat-inspector{position:fixed;z-index:40;top:0;right:0;bottom:0;width:min(390px,92vw);max-height:none;border-radius:12px 0 0 12px}.dat-board-shell .dat-inspector-body{max-height:calc(100vh - 60px)}",
+        ".dat-member-recovery{display:grid;gap:9px;margin:0 0 10px;padding:12px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 35%,var(--dsw-alias-border-l2));border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-1))}.dat-member-recovery-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.dat-member-recovery-head h3{margin:0;font-size:13px}.dat-member-recovery-head p{margin:4px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}.dat-member-recovery-actions{display:flex;gap:8px;flex-wrap:wrap}.dat-member-recovery-actions .dat-btn{min-height:44px}.dat-member-recovery-confirm{padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-2);font-size:12px;line-height:1.5}.dat-member-recovery-confirm p{margin:0 0 9px}.dat-member-recovery-status{margin:0;font-size:12px;line-height:1.5}.dat-board-shell{min-width:0}.dat-board-shell.dat-inspector-open{min-width:0}.dat-board-main{container-type:inline-size;container-name:dat-board-main;min-width:0}.dat-board-toolbar{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap;margin:0 0 10px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-board-note{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 24%,var(--dsw-alias-border-l2));border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}.dat-task-board{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-items:start}.dat-board-column{display:flex;flex-direction:column;box-sizing:border-box;height:clamp(360px,56vh,640px);min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}.dat-board-column[data-column=blocked]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 30%,var(--dsw-alias-border-l2))}.dat-board-column-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;margin-bottom:9px;padding:0 2px}.dat-board-column-heading{display:flex;align-items:center;gap:7px;min-width:0}.dat-board-column-heading h3{margin:0;font-size:13px}.dat-board-status-dot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-label-tertiary);flex:none}.dat-board-column[data-column=in_progress] .dat-board-status-dot{background:var(--dsw-alias-brand-primary)}.dat-board-column[data-column=blocked] .dat-board-status-dot{background:var(--dsw-alias-state-warn-primary)}.dat-board-column[data-column=completed] .dat-board-status-dot{background:var(--dsw-alias-state-success-primary)}.dat-board-column-list{display:grid;grid-auto-rows:max-content;align-content:start;gap:8px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:2px}.dat-board-card{display:grid;align-self:start;gap:7px;width:100%;min-width:0;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:10px;background:var(--dsw-alias-bg-layer-2);color:inherit;font:inherit;text-align:left;cursor:pointer;content-visibility:auto;contain-intrinsic-size:auto 108px}.dat-board-card:hover{border-color:var(--dsw-alias-border-l3);background:var(--dsw-alias-interactive-bg-hover)}.dat-board-card:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-board-card-top,.dat-board-card-bottom{display:flex;align-items:center;justify-content:space-between;gap:7px;min-width:0}.dat-board-card-id{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.dat-board-card-title{display:-webkit-box;overflow:hidden;font-size:13px;font-weight:650;line-height:1.45;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:3}.dat-board-card-owner{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dat-board-card-flags{display:flex;gap:5px;flex-wrap:wrap}.dat-board-card-flag{border-radius:999px;padding:2px 6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-board-card-flag.is-warning{color:var(--dsw-alias-state-warn-primary)}.dat-board-empty{padding:22px 8px;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:12px}.dat-board-overflow{padding:7px 2px 1px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-board-shell .dat-scrim{display:block;position:fixed;inset:0;z-index:39;border:0;background:rgba(0,0,0,.28)}.dat-board-shell .dat-inspector{position:fixed;z-index:40;top:0;right:0;bottom:0;width:min(390px,92vw);max-height:none;border-radius:12px 0 0 12px}.dat-board-shell .dat-inspector-body{max-height:calc(100vh - 60px)}",
         ".dat-board-column[data-column=attention]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 38%,var(--dsw-alias-border-l2))}.dat-board-column[data-column=running] .dat-board-status-dot{background:var(--dsw-alias-brand-primary)}.dat-board-column[data-column=attention] .dat-board-status-dot{background:var(--dsw-alias-state-warn-primary)}.dat-board-column[data-column=done] .dat-board-status-dot{background:var(--dsw-alias-state-success-primary)}.dat-board-card{min-height:44px;scroll-margin-block:72px}.dat-board-card:focus-visible,.dat-board-history>summary:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-board-card-facts{display:grid;gap:3px;margin-top:8px;padding:8px;border-left:3px solid var(--dsw-alias-state-warn-primary);border-radius:6px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45}.dat-board-card-facts strong{color:var(--dsw-alias-label-primary)}.dat-board-card-time{color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-board-card-next{margin-top:8px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45}.dat-board-history{margin-top:12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-board-history>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:650}.dat-board-history-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:8px;margin-top:8px}.dat-board-card-result{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}.dat-board-card-result strong{color:var(--dsw-alias-label-secondary)}",
         ".dat-plan-lifecycle{display:grid;gap:13px;margin:0 0 12px;padding:14px}.dat-plan-lifecycle-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.dat-plan-lifecycle-head h3,.dat-plan-subsection h4,.dat-task-assurance h3,.dat-assurance-section h4{margin:0;font-size:13px}.dat-plan-lifecycle-head p,.dat-plan-subsection>p,.dat-task-assurance>p{margin:4px 0 0}.dat-plan-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;list-style:none;margin:0;padding:0}.dat-plan-step{display:flex;align-items:center;gap:8px;min-width:0;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:12px}.dat-plan-step::before{content:\"\";width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-label-tertiary)}.dat-plan-step>span{display:grid;gap:2px;min-width:0}.dat-plan-step strong{font-size:12px}.dat-plan-step time{color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-plan-step[data-state=current]{border-color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 8%,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-label-primary);font-weight:650}.dat-plan-step[data-state=current]::before{background:var(--dsw-alias-brand-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)}.dat-plan-step[data-state=complete]::before{background:var(--dsw-alias-state-success-primary)}.dat-plan-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(260px,.85fr);gap:10px}.dat-plan-subsection{min-width:0;padding:11px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.dat-preflight-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:9px}.dat-preflight-item{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:center;gap:8px;min-width:0;padding:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;font-size:12px}.dat-preflight-item span:first-child{min-width:0;overflow-wrap:anywhere}.dat-status-chip{display:inline-flex;align-items:center;justify-content:center;min-width:0;max-width:min(100%,210px);border:1px solid var(--dsw-alias-border-l3);border-radius:999px;padding:3px 8px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.35;text-align:center;overflow-wrap:anywhere}.dat-status-chip[data-status=host_verified],.dat-status-chip[data-status=verified],.dat-status-chip[data-status=succeeded]{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 46%,var(--dsw-alias-border-l3));color:var(--dsw-alias-state-success-primary)}.dat-status-chip[data-status=autopilot]{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 30%,var(--dsw-alias-border-l3));background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-primary)}.dat-status-chip[data-status=attention],.dat-status-chip[data-status=unknown],.dat-status-chip[data-status=outcome_unknown],.dat-status-chip[data-status=confirm_each]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 50%,var(--dsw-alias-border-l3));color:var(--dsw-alias-state-warn-primary)}.dat-status-chip[data-status=unavailable],.dat-status-chip[data-status=failed],.dat-status-chip[data-status=forbidden]{border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 50%,var(--dsw-alias-border-l3));color:var(--dsw-alias-state-error-primary)}.dat-handoff-state{margin-top:9px;padding:9px;border-left:3px solid var(--dsw-alias-border-l3);border-radius:7px;background:var(--dsw-alias-bg-layer-1);font-size:12px;line-height:1.5}.dat-handoff-state[data-pending=true]{border-left-color:var(--dsw-alias-state-warn-primary)}.dat-handoff-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-handoff-history{margin-top:9px}.dat-handoff-history>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px}.dat-handoff-history>summary:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-handoff-list,.dat-assurance-list{display:grid;gap:6px;list-style:none;margin:8px 0 0;padding:0}.dat-handoff-list li,.dat-assurance-list li{min-width:0;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);font-size:12px;line-height:1.4}.dat-handoff-list time,.dat-assurance-list time{display:block;margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-plan-migration{margin:0;padding:9px 10px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 35%,var(--dsw-alias-border-l2));border-radius:9px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}",
         ".dat-task-assurance{margin-top:14px;padding:13px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2)}.dat-assurance-current{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.dat-assurance-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:10px}.dat-assurance-section{min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1)}.dat-assurance-section-wide{grid-column:1/-1}.dat-assurance-item-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;min-width:0}.dat-assurance-item-head strong{min-width:0;font-size:12px;overflow-wrap:anywhere}.dat-assurance-item-meta{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.4}.dat-history-entry{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start}.dat-history-entry-copy{min-width:0}.dat-history-entry-copy strong{display:block;font-size:12px}.dat-history-entry-copy span{display:block;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;overflow-wrap:anywhere}.dat-history-entry time{white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px}",
-        ".dat-flow-blueprint{display:grid;gap:10px}.dat-flow-chain{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background-color:var(--dsw-alias-bg-layer-1);background-image:radial-gradient(circle,var(--dsw-alias-border-l2) 1px,transparent 1px);background-size:18px 18px}.dat-flow-step{display:grid;gap:5px;min-width:0;padding:11px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.dat-flow-step strong{font-size:13px}.dat-flow-step span{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}.dat-flow-arrow{display:grid;place-items:center;color:var(--dsw-alias-label-tertiary)}.dat-flow-boundary{margin:0;padding:10px;border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}",
+        ".dat-project-team-board{display:grid;gap:10px}.dat-project-team-board .dat-btn{min-height:44px}.dat-project-team-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px}.dat-project-team-stat{display:grid;gap:3px;min-width:0;padding:10px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dat-project-team-stat strong{font-size:18px;font-variant-numeric:tabular-nums}.dat-project-team-stat span{color:var(--dsw-alias-label-secondary);font-size:11px}.dat-project-team-filter{display:flex;gap:6px;max-width:100%;overflow-x:auto;padding:3px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);scrollbar-width:thin}.dat-project-team-filter .dat-btn{min-height:44px;flex:0 0 auto;border-color:transparent;white-space:nowrap}.dat-project-team-filter .dat-btn[aria-pressed=true]{border-color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-interactive-bg-hover);font-weight:650}.dat-legacy-team-groups{display:grid;gap:10px}.dat-project-team-group{min-width:0;padding:0;overflow:hidden;content-visibility:auto;contain-intrinsic-size:auto 220px}.dat-project-team-group-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:12px 13px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dat-project-team-group-head h3{margin:0;font-size:14px;overflow-wrap:anywhere}.dat-project-team-group-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px}.dat-project-team-group-counts{flex:none;text-align:right}.dat-project-team-task-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:8px;padding:10px}.dat-project-team-task{display:grid;gap:8px;min-height:44px}.dat-project-team-task h4{margin:0;font-size:13px;line-height:1.4;overflow-wrap:anywhere}.dat-project-team-task[data-attention=true]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 45%,var(--dsw-alias-border-l2));background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 6%,var(--dsw-alias-bg-layer-2))}.dat-project-team-task-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.dat-project-team-page{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:11px 12px}.dat-project-team-page-copy{display:grid;gap:3px;color:var(--dsw-alias-label-secondary);font-size:12px;font-variant-numeric:tabular-nums}.dat-project-team-boundary{margin:0;padding:10px 12px;border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}@media(prefers-reduced-motion:reduce){.dat-project-team-filter .dat-btn{scroll-behavior:auto}}@media(max-width:620px){.dat-project-team-group-head{display:block}.dat-project-team-group-counts{text-align:left;margin-top:8px}.dat-project-team-task-list{grid-template-columns:1fr}.dat-project-team-page{align-items:stretch;flex-direction:column}.dat-project-team-page .dat-btn{width:100%}}",
         ".dat-automation-grid{display:grid;gap:12px}.dat-automation-panel{padding:14px}.dat-automation-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px}.dat-automation-panel-head h3{margin:0;font-size:14px}.dat-automation-list{display:grid;gap:0}.dat-schedule-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--dsw-alias-border-l2)}.dat-schedule-row:first-child{border-top:0}.dat-schedule-copy{min-width:0}.dat-schedule-copy strong{display:block;font-size:13px;overflow-wrap:anywhere}.dat-schedule-copy span{display:block;margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:11px;overflow-wrap:anywhere}.dat-schedule-history{margin-top:12px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2)}.dat-schedule-history h4{margin:0 0 7px;font-size:12px}.dat-schedule-boundary{padding:10px;border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}",
-        ".dat-project-tasks-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin-bottom:12px}.dat-project-tasks-form .dat-label{margin-top:0}.dat-project-task-card{display:grid;gap:8px}.dat-project-task-card h4{margin:0;font-size:13px;overflow-wrap:anywhere}.dat-project-task-card .dat-actions{margin:0}.dat-project-task-columns{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}.dat-project-task-column{min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-1)}.dat-project-task-column h3{margin:0;font-size:13px}.dat-project-task-list{display:grid;gap:8px;margin-top:9px}",
+        ".dat-project-tasks-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin-bottom:12px}.dat-project-tasks-form .dat-label{margin-top:0}.dat-project-task-card{display:grid;gap:8px;content-visibility:auto;contain-intrinsic-size:auto 132px}.dat-project-task-card h4{margin:0;font-size:13px;overflow-wrap:anywhere}.dat-project-task-card .dat-actions{margin:0}.dat-project-task-columns{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}.dat-project-task-column{min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-1)}.dat-project-task-column h3{margin:0;font-size:13px}.dat-project-task-list{display:grid;gap:8px;margin-top:9px}.dat-collaboration-task-groups{display:grid;gap:10px;margin-top:10px}.dat-collaboration-task-group{min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);content-visibility:auto;contain-intrinsic-size:auto 128px}.dat-collaboration-task-group[data-group=blocked]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 48%,var(--dsw-alias-border-l2))}.dat-collaboration-task-group[data-group=completed]{border-style:dashed;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 82%,var(--dsw-alias-bg-base))}.dat-collaboration-task-group[data-group=canceled]{border-style:dashed;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 68%,var(--dsw-alias-bg-base));margin-top:4px}.dat-collaboration-task-group-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.dat-collaboration-task-group-head h4{margin:0;font-size:13px}.dat-collaboration-task-list{display:grid;gap:7px;list-style:none;margin:9px 0 0;padding:0}.dat-collaboration-task-item{display:grid;gap:6px;box-sizing:border-box;min-height:44px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-2);content-visibility:auto;contain-intrinsic-size:auto 72px}.dat-collaboration-task-item strong{font-size:13px;line-height:1.45;overflow-wrap:anywhere}.dat-collaboration-task-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.dat-collaboration-task-meta .dat-badge{color:var(--dsw-alias-label-secondary)}.dat-collaboration-task-empty{min-height:44px;display:flex;align-items:center;margin:6px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px}.dat-project-tasks-page{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px}.dat-project-tasks-page .dat-btn{min-height:44px}@media(max-width:620px){.dat-project-tasks-page{align-items:stretch;flex-direction:column}.dat-project-tasks-page .dat-btn{width:100%}}",
         ".dat-participant-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}.dat-participant-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--dsw-alias-border-l2)}.dat-participant-row:first-child{border-top:0}.dat-participant-copy{display:flex;align-items:center;gap:9px;min-width:0}.dat-participant-avatar{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;flex:none;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-brand-primary);font-size:12px;font-weight:650}.dat-participant-copy>span{min-width:0}.dat-participant-copy strong,.dat-participant-copy small{display:block;overflow-wrap:anywhere}.dat-participant-copy small{margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dat-participant-state{text-align:right}.dat-inbox-boundary{margin-bottom:10px}.dat-inbox-list{display:grid;gap:8px}",
         ".dat-empty-workbench{margin-bottom:12px}.dat-empty-workbench .dat-task-board{opacity:.96}.dat-empty-workbench .dat-board-column{height:clamp(250px,40vh,420px)}.dat-empty-workbench .dat-board-empty{padding:28px 8px}.dat-onboarding-slot{margin-top:12px}.dat-team-mode{padding:10px 12px}.dat-team-mode-bar{display:flex;align-items:center;justify-content:space-between;gap:12px}.dat-team-mode-copy{min-width:0;flex:1 1 420px}.dat-team-mode-title{display:flex;align-items:center;gap:7px}.dat-team-mode-title h2{margin:0;font-size:14px}.dat-team-mode-copy p{margin:3px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}.dat-team-mode-actions{display:flex;align-items:center;justify-content:flex-end;gap:9px;flex-wrap:wrap}.dat-team-mode-switch{display:inline-flex;align-items:center;gap:7px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}.dat-team-mode-switch input{position:relative;box-sizing:border-box;width:34px;height:20px;margin:0;border:1px solid var(--dsw-alias-border-l3);border-radius:999px;appearance:none;background:var(--dsw-alias-bg-layer-2);cursor:pointer;transition:background .16s ease,border-color .16s ease}.dat-team-mode-switch input::after{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-label-tertiary);content:\"\";transition:transform .16s ease,background .16s ease}.dat-team-mode-switch input:checked{border-color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 20%,var(--dsw-alias-bg-layer-2))}.dat-team-mode-switch input:checked::after{transform:translateX(14px);background:var(--dsw-alias-state-success-primary)}.dat-team-mode-switch input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-team-mode-switch input:disabled{opacity:.5;cursor:wait}.dat-onboarding-details{margin-top:9px;border-top:1px solid var(--dsw-alias-border-l2);padding-top:8px}.dat-onboarding-details>summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px}.dat-onboarding-details[open]>summary{margin-bottom:10px}.dat-onboarding-fields{padding:0 2px}.dat-empty-canvas-panel{overflow:hidden;padding:14px}.dat-empty-canvas-route{display:flex;align-items:stretch;gap:8px;min-width:0;overflow-x:auto;padding:2px 1px 8px;scrollbar-width:thin}.dat-empty-canvas-node{display:flex;flex:1 0 170px;min-width:170px;max-width:240px;flex-direction:column;gap:5px;padding:14px;border:1px dashed var(--dsw-alias-border-l3);border-radius:11px;background:var(--dsw-alias-bg-layer-2)}.dat-empty-canvas-node strong{font-size:13px}.dat-empty-canvas-node span{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45}.dat-empty-canvas-arrow{display:grid;place-items:center;flex:0 0 24px;color:var(--dsw-alias-brand-primary);font-size:18px}.dat-empty-canvas-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:4px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2)}",
-        "@container dat-workspace (min-width:680px){.dat-flow-chain{grid-template-columns:repeat(3,minmax(0,1fr))}.dat-flow-arrow{transform:rotate(-90deg)}.dat-participant-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dat-project-task-columns{grid-template-columns:repeat(2,minmax(0,1fr))}.dat-automation-grid{grid-template-columns:minmax(0,1fr) minmax(260px,.72fr)}}",
+        "@container dat-workspace (min-width:680px){.dat-participant-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dat-project-task-columns{grid-template-columns:repeat(2,minmax(0,1fr))}.dat-automation-grid{grid-template-columns:minmax(0,1fr) minmax(260px,.72fr)}}",
         "@container dat-board-main (min-width:680px){.dat-task-board{grid-template-columns:repeat(2,minmax(0,1fr))}}",
         "@container dat-board-main (min-width:900px){.dat-task-board{grid-template-columns:repeat(4,minmax(0,1fr))}}",
         "@container dat-workspace (min-width:900px){.dat-project-task-columns{grid-template-columns:repeat(4,minmax(0,1fr))}.dat-task-focus-grid{grid-template-columns:minmax(0,1.55fr) minmax(280px,.72fr)}}",
         "@container dat-workspace (max-width:900px){.dat-active-shell.dat-inspector-open{display:block}.dat-active-shell .dat-scrim{display:block;position:fixed;inset:0;z-index:39;border:0;background:rgba(0,0,0,.28)}.dat-active-shell .dat-inspector{position:fixed;z-index:40;top:0;right:0;bottom:0;width:min(390px,92vw);max-height:none;border-radius:12px 0 0 12px}.dat-active-shell .dat-inspector-body{max-height:calc(100vh - 60px)}}",
         "@media(max-width:760px){.dat-plan-grid,.dat-assurance-grid{grid-template-columns:1fr}.dat-assurance-section-wide{grid-column:auto}}",
-        "@media(max-width:620px){.dat-workspace-nav{overflow-x:auto;border-radius:10px}.dat-btn{min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere}.dat-workspace-nav button{box-sizing:border-box;min-height:44px;max-width:calc(100vw - 28px)}.dat-plan-lifecycle-head{display:block}.dat-plan-lifecycle-head>.dat-row{margin-top:8px}.dat-plan-steps,.dat-preflight-grid{grid-template-columns:1fr}.dat-project-tasks-form{grid-template-columns:1fr}.dat-workspace-view-head{display:block}.dat-workspace-view-actions{justify-content:flex-start;margin-top:9px}.dat-schedule-row,.dat-participant-row{grid-template-columns:minmax(0,1fr)}.dat-participant-state{text-align:left}.dat-team-mode-bar{align-items:flex-start;flex-direction:column}.dat-team-mode-actions{width:100%;justify-content:space-between}.dat-active-shell .dat-inspector{width:100%;border-radius:0}.dat-task-focus-head{align-items:flex-start}.dat-task-focus-head-copy{align-items:flex-start;flex-direction:column}.dat-task-focus-head>.dat-row{align-self:flex-start}.dat-task-focus-body{padding:12px}.dat-task-focus-hero{display:block}.dat-task-focus-hero>.dat-badge{margin-top:8px}.dat-task-stage-track{grid-template-columns:1fr;gap:6px}.dat-task-stage-arrow{transform:rotate(90deg)}.dat-task-block-row{grid-template-columns:1fr;margin-top:7px}.dat-task-block-branch{grid-column:auto}}",
+        "@media(max-width:620px){.dat-workspace-nav{overflow-x:auto;border-radius:10px}.dat-btn{min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere}.dat-workspace-nav button{box-sizing:border-box;min-height:44px;max-width:calc(100vw - 28px)}.dat-plan-lifecycle-head{display:block}.dat-plan-lifecycle-head>.dat-row{margin-top:8px}.dat-plan-steps,.dat-preflight-grid{grid-template-columns:1fr}.dat-project-tasks-form{grid-template-columns:1fr}.dat-workspace-view-head{display:block}.dat-workspace-view-actions{justify-content:flex-start;margin-top:9px}.dat-schedule-row,.dat-participant-row{grid-template-columns:minmax(0,1fr)}.dat-participant-state{text-align:left}.dat-team-mode-bar{align-items:flex-start;flex-direction:column}.dat-team-mode-actions{width:100%;justify-content:space-between}.dat-member-recovery-head{display:block}.dat-member-recovery-actions{display:grid;grid-template-columns:1fr}.dat-member-recovery-actions .dat-btn{width:100%}.dat-active-shell .dat-inspector{width:100%;border-radius:0}.dat-task-focus-head{align-items:flex-start}.dat-task-focus-head-copy{align-items:flex-start;flex-direction:column}.dat-task-focus-head>.dat-row{align-self:flex-start}.dat-task-focus-body{padding:12px}.dat-task-focus-hero{display:block}.dat-task-focus-hero>.dat-badge{margin-top:8px}.dat-task-stage-track{grid-template-columns:1fr;gap:6px}.dat-task-stage-arrow{transform:rotate(90deg)}.dat-task-block-row{grid-template-columns:1fr;margin-top:7px}.dat-task-block-branch{grid-column:auto}}",
       ].join("\n");
       document.head.appendChild(style);
     }
@@ -906,6 +1009,18 @@ window.__ModuleLoader__.load({
       return t("projectTasksGenericError");
     }
 
+    function normalizeProjectCollaboration(input) {
+      var source = input && typeof input === "object" && !Array.isArray(input) ? input : {}, sections = source.sections && typeof source.sections === "object" ? source.sections : {}, totals = source.totals && typeof source.totals === "object" ? source.totals : {}, rawTaskGroupTotals = source.taskGroupTotals && typeof source.taskGroupTotals === "object" ? source.taskGroupTotals : {}, page = source.page && typeof source.page === "object" ? source.page : {}, rawSectionPages = source.sectionPages && typeof source.sectionPages === "object" ? source.sectionPages : {};
+      var sectionNames = ["seats", "tasks", "locks", "handoffs", "recoveries", "evidence", "history", "requests"];
+      function list(name) { return Object.freeze((Array.isArray(sections[name]) ? sections[name] : []).filter(function (item) { return item && typeof item === "object" && !Array.isArray(item); }).slice(0, 120).map(function (item) { return Object.freeze(item); })); }
+      function count(name, length) { return Number.isSafeInteger(totals[name]) && totals[name] >= 0 ? totals[name] : length; }
+      var lists = {}, sectionPages = {};
+      sectionNames.forEach(function (name) { var raw = rawSectionPages[name] && typeof rawSectionPages[name] === "object" ? rawSectionPages[name] : {}; lists[name] = list(name); sectionPages[name] = Object.freeze({ includedItems: Number.isSafeInteger(raw.includedItems) && raw.includedItems >= 0 ? raw.includedItems : lists[name].length, hasMore: raw.hasMore === true, nextCursor: raw.hasMore === true && typeof raw.nextCursor === "string" && raw.nextCursor ? raw.nextCursor : null }); });
+      var taskGroups = {};
+      ["in_progress", "in_review", "blocked", "pending", "completed", "canceled"].forEach(function (name) { taskGroups[name] = Number.isSafeInteger(rawTaskGroupTotals[name]) && rawTaskGroupTotals[name] >= 0 ? rawTaskGroupTotals[name] : 0; });
+      return Object.freeze({ available: source.available === true, mode: source.mode === "current-project" ? source.mode : "", revision: Number.isSafeInteger(source.revision) && source.revision >= 0 ? source.revision : 0, status: typeof source.status === "string" ? source.status.slice(0, 80) : "", totalExact: source.totalExact === true, seats: lists.seats, tasks: lists.tasks, locks: lists.locks, handoffs: lists.handoffs, recoveries: lists.recoveries, evidence: lists.evidence, history: lists.history, requests: lists.requests, totals: Object.freeze({ seats: count("seats", lists.seats.length), tasks: count("tasks", lists.tasks.length), locks: count("locks", lists.locks.length), handoffs: count("handoffs", lists.handoffs.length), recoveries: count("recoveries", lists.recoveries.length), evidence: count("evidence", lists.evidence.length), history: count("history", lists.history.length), requests: count("requests", lists.requests.length) }), taskGroupTotals: Object.freeze(taskGroups), sectionPages: Object.freeze(sectionPages), page: Object.freeze({ section: typeof page.section === "string" ? page.section : "", includedItems: Number.isSafeInteger(page.includedItems) && page.includedItems >= 0 ? page.includedItems : 0, hasMore: page.hasMore === true, nextCursor: typeof page.nextCursor === "string" && page.nextCursor ? page.nextCursor : null }) });
+    }
+
     function normalizeProjectTasksState(input) {
       var source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
       var rawCapability = source.capability && typeof source.capability === "object" && !Array.isArray(source.capability) ? source.capability : {};
@@ -914,12 +1029,17 @@ window.__ModuleLoader__.load({
       var available = rawCapability.available === true, writable = available && (capabilityKind === "authority" || capabilityKind === "collaborator" && rawCapability.writable === true);
       function taskCommands(value) { return Object.freeze(Array.isArray(value) ? value.filter(function (action, index, all) { return ["claim", "transition"].indexOf(action) >= 0 && all.indexOf(action) === index; }) : []); }
       var capability = Object.freeze({ available: available, writable: writable, canCreate: capabilityKind === "authority" && rawCapability.canCreate === true, kind: capabilityKind, reason: typeof rawCapability.reason === "string" ? rawCapability.reason.slice(0, 120) : "", taskCommands: taskCommands(rawCapability.taskCommands) });
-      var allowedStates = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "canceled"];
-      var tasks = Array.isArray(source.tasks) ? source.tasks.slice(0, 500).map(function (task) {
-        var item = task && typeof task === "object" && !Array.isArray(task) ? task : {};
-        return Object.freeze({ taskRef: typeof item.taskRef === "string" ? item.taskRef.slice(0, 256) : "", title: typeof item.title === "string" ? item.title.slice(0, 500) : "", status: allowedStates.indexOf(item.status) >= 0 ? item.status : "backlog", revision: Number.isSafeInteger(item.revision) && item.revision > 0 ? item.revision : 0, hasAssignee: item.hasAssignee === true, blockedByCount: Number.isSafeInteger(item.blockedByCount) && item.blockedByCount >= 0 ? Math.min(item.blockedByCount, 500) : 0, allowedActions: taskCommands(item.allowedActions), allowedTransitions: Object.freeze(capabilityKind === "authority" && Array.isArray(item.allowedTransitions) ? item.allowedTransitions.filter(function (value, index, values) { return allowedStates.indexOf(value) >= 0 && values.indexOf(value) === index; }).slice(0, 7) : []) });
+      var allowedStates = ["backlog", "todo", "assigned", "queued", "pending", "in_progress", "working", "in_review", "review", "awaiting_review", "blocked", "done", "completed", "canceled", "cancelled"], allowedGroups = ["in_progress", "in_review", "blocked", "pending", "completed", "canceled"];
+      function statusGroup(value) { if (["in_progress", "working"].indexOf(value) >= 0) return "in_progress"; if (["in_review", "review", "awaiting_review"].indexOf(value) >= 0) return "in_review"; if (value === "blocked") return "blocked"; if (["done", "completed"].indexOf(value) >= 0) return "completed"; if (["canceled", "cancelled"].indexOf(value) >= 0) return "canceled"; return "pending"; }
+      var tasks = Array.isArray(source.tasks) ? source.tasks.map(function (task) {
+        var item = task && typeof task === "object" && !Array.isArray(task) ? task : {}, safeStatus = allowedStates.indexOf(item.status) >= 0 ? item.status : "backlog", safeGroup = allowedGroups.indexOf(item.statusGroup) >= 0 ? item.statusGroup : statusGroup(safeStatus);
+        return Object.freeze({ taskRef: typeof item.taskRef === "string" ? item.taskRef.slice(0, 256) : "", title: typeof item.title === "string" ? item.title.slice(0, 500) : "", status: safeStatus, statusGroup: safeGroup, ...(Number.isSafeInteger(item.priority) && item.priority >= 0 && item.priority <= 1000000 ? { priority: item.priority } : {}), revision: Number.isSafeInteger(item.revision) && item.revision > 0 ? item.revision : 0, createdAt: Number.isSafeInteger(item.createdAt) && item.createdAt >= 0 ? item.createdAt : 0, updatedAt: Number.isSafeInteger(item.updatedAt) && item.updatedAt >= 0 ? item.updatedAt : 0, hasAssignee: item.hasAssignee === true, blockedByCount: Number.isSafeInteger(item.blockedByCount) && item.blockedByCount >= 0 ? Math.min(item.blockedByCount, 500) : 0, allowedActions: taskCommands(item.allowedActions), allowedTransitions: Object.freeze(capabilityKind === "authority" && Array.isArray(item.allowedTransitions) ? item.allowedTransitions.filter(function (value, index, values) { return allowedStates.indexOf(value) >= 0 && values.indexOf(value) === index; }).slice(0, 7) : []) });
       }).filter(function (task) { return task.taskRef && task.revision > 0; }) : [];
-      return Object.freeze({ available: source.available === true, reason: typeof source.reason === "string" ? source.reason.slice(0, 120) : "", hasMore: source.hasMore === true, capability: capability, tasks: Object.freeze(tasks) });
+      var rawPage = source.page && typeof source.page === "object" && !Array.isArray(source.page) ? source.page : {}, rawGroupTotals = source.groupTotals && typeof source.groupTotals === "object" && !Array.isArray(source.groupTotals) ? source.groupTotals : {}, groupTotals = {};
+      allowedGroups.forEach(function (name) { groupTotals[name] = Number.isSafeInteger(rawGroupTotals[name]) && rawGroupTotals[name] >= 0 ? rawGroupTotals[name] : 0; });
+      var hasMore = rawPage.hasMore === true || source.hasMore === true, nextCursor = typeof rawPage.nextCursor === "string" && rawPage.nextCursor ? rawPage.nextCursor : null;
+      var page = Object.freeze({ includedTasks: Number.isSafeInteger(rawPage.includedTasks) && rawPage.includedTasks >= 0 ? rawPage.includedTasks : tasks.length, hasMore: hasMore, nextCursor: hasMore ? nextCursor : null });
+      return Object.freeze({ available: source.available === true, reason: typeof source.reason === "string" ? source.reason.slice(0, 120) : "", projectRevision: Number.isSafeInteger(source.projectRevision) && source.projectRevision >= 0 ? source.projectRevision : 0, totalExact: source.totalExact === true, totalTasks: Number.isSafeInteger(source.totalTasks) && source.totalTasks >= 0 ? source.totalTasks : tasks.length, groupTotals: Object.freeze(groupTotals), page: page, capability: capability, tasks: Object.freeze(tasks), projectCollaboration: normalizeProjectCollaboration(source.projectCollaboration) });
     }
 
     function useProjectTasksState() {
@@ -963,6 +1083,13 @@ window.__ModuleLoader__.load({
       return { state: state, loading: loading, error: error, reload: function () { return reloadRef.current(false); } };
     }
 
+    function fetchProjectCollaborationPage(cursor) {
+      if (typeof cursor !== "string" || !cursor) return Promise.reject(new TypeError("collaboration cursor is required"));
+      return fetch("/api/agent-teams/project/tasks/page?cursor=" + encodeURIComponent(cursor), { method: "GET", cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", "x-harness-agent-teams": "1" } }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (body) { if (!response.ok) throw projectTaskResponseError(response, body); return normalizeProjectCollaboration(body.projectCollaboration); });
+      });
+    }
+
     function newProjectTaskCommandId() {
       if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return "project-task-" + crypto.randomUUID();
       return "project-task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
@@ -976,7 +1103,7 @@ window.__ModuleLoader__.load({
           return response.json().catch(function () { return {}; }).then(function (result) { if (!response.ok) throw projectTaskResponseError(response, result); return result; });
         });
       }
-      return request().catch(function (error) { if (error && error.status) throw error; return request(); });
+      return request();
     }
 
     function Button(props) {
@@ -1053,6 +1180,7 @@ window.__ModuleLoader__.load({
     }
     function teamStatusLabel(t, value) { var normalized = String(value || "unknown").toLowerCase(); return normalized === "active" ? t("active") : normalized === "closed" ? t("closedStatus") : normalized === "closing" ? t("closing") : statusLabel(t, normalized); }
     function formatTime(value) { if (!value) return ""; try { return new Date(value).toLocaleString(); } catch (_) { return String(value); } }
+    function isoTime(value) { try { var date = new Date(value); return Number.isNaN(date.getTime()) ? undefined : date.toISOString(); } catch (_) { return undefined; } }
     function teamId(team) { return team && (team.id || team.teamId || team.name || team.objective); }
     function teamName(team, t) { return team && (team.name || team.objective || teamId(team)) || t("unknown"); }
     function eventIdentity(event, fallbackTeamId) {
@@ -1299,6 +1427,7 @@ window.__ModuleLoader__.load({
       var executorName = truth.executorId ? responsibilityName(members, truth.executorId, props.leadSessionId, t, t("actualExecutorUnknown")) : t(truth.legacy ? "actualExecutorLegacy" : "actualExecutorUnknown");
       var acceptedBy = !truth.legacy && truth.acceptance && truth.acceptance.acceptedBy ? responsibilityName(members, truth.acceptance.acceptedBy, props.leadSessionId, t, t("unknown")) : "";
       var currentState = normalizeState(task.status || task.state || "pending"), releaseNeedsAttention = !!truth.release && currentState === "pending" && !truth.assignedId;
+      var ledger = Array.isArray(task.lifecycleLedger) ? task.lifecycleLedger.filter(function (event) { return event && typeof event.kind === "string" && typeof event.at === "string"; }).slice(-12) : [];
       var state = truth.legacy ? "legacy" : truth.cancelled || releaseNeedsAttention || truth.deliveryKind === "missing_completed" || truth.acceptanceKind === "missing_completed" ? "attention" : truth.acceptanceKind === "accepted" ? "accepted" : "pending";
       return h("section", { className: "dat-responsibility", "data-status": state, "aria-labelledby": props.labelId || "dat-responsibility-title" },
         h("div", { className: "dat-responsibility-head" }, h("div", null, h("h3", { id: props.labelId || "dat-responsibility-title" }, t("responsibilityTitle")), h("p", { className: "dat-note" }, t("responsibilityHint"))), h("span", { className: "dat-status-chip", "data-status": state }, truth.cancelled ? t("cancelled") : acceptanceLabel(t, truth.acceptanceKind))),
@@ -1315,6 +1444,11 @@ window.__ModuleLoader__.load({
           h("h4", null, t("responsibilityFacts")),
           truth.release ? h("article", { className: "dat-responsibility-event", "data-kind": "released" }, h("strong", null, t("taskReleased")), h("span", null, t("releaseReasonLabel") + ": " + (truth.release.reason || t("reasonUnavailable"))), truth.release.at ? h("time", { dateTime: String(truth.release.at) }, t("releasedAtLabel") + ": " + formatTime(truth.release.at)) : null) : null,
           truth.cancellation ? h("article", { className: "dat-responsibility-event", "data-kind": "cancelled" }, h("strong", null, t("taskCancellation")), h("span", null, t("cancellationReasonLabel") + ": " + (truth.cancellation.reason || t("reasonUnavailable"))), truth.cancellation.at ? h("time", { dateTime: String(truth.cancellation.at) }, t("cancelledAtLabel") + ": " + formatTime(truth.cancellation.at)) : null) : null
+        ) : null,
+        ledger.length ? h("details", { className: "dat-lifecycle-history" },
+          h("summary", null, t("lifecycleHistory")),
+          h("p", { className: "dat-note" }, t("lifecycleHistoryHint")),
+          h("ol", null, ledger.map(function (event) { return h("li", { key: String(event.sequence || "") + ":" + event.kind }, h("span", null, t("lifecycleEvent", { kind: event.kind, attempt: event.attempt || 0 })), h("time", { dateTime: event.at }, formatTime(event.at))); }))
         ) : null,
         truth.cancelled ? h("p", { className: "dat-responsibility-alert", role: "note" }, t("taskCancelled")) : null
       );
@@ -1848,9 +1982,9 @@ window.__ModuleLoader__.load({
       var t = props.t, counts = props.counts || {};
       var items = [
         { id: "board", label: t("workspaceBoard"), count: counts.tasks },
-        { id: "projectTasks", label: t("workspaceProjectTasks") },
+
         { id: "canvas", label: t("workspaceCanvas"), count: counts.members },
-        { id: "flow", label: t("workspaceFlow") },
+        { id: "flow", label: t("workspaceFlow"), count: counts.projectTeamTasks },
         { id: "automation", label: t("workspaceAutomation"), count: counts.schedules },
         { id: "participants", label: t("workspaceParticipants"), count: counts.members },
         { id: "inbox", label: t("workspaceInbox"), count: counts.events }
@@ -2128,6 +2262,7 @@ window.__ModuleLoader__.load({
       }
       events.sort(function (left, right) { return Date.parse(right.createdAt || right.timestamp || right.at || 0) - Date.parse(left.createdAt || left.timestamp || left.at || 0); });
       var selectedTaskEvents = selectedTask ? events.filter(function (event) { return eventRelatesToTask(event, selectedTask); }) : [];
+      var failedMembers = members.filter(function (member) { return memberStateKind(member) === "failed" && !(member.isLead || member.kind === "lead"); });
       function closeTaskDetail() { restoreFocusRef.current = true; setSelectedTaskId(""); }
       function openTaskDetail(event, task) { if (!task || !taskId(task)) return; triggerRef.current = event && event.currentTarget; restoreFocusRef.current = false; setSelectionNotice(""); setSelectedTaskId(taskId(task)); }
       useEffect(function () { restoreFocusRef.current = false; setSelectedTaskId(""); setSelectionNotice(""); }, [team && teamId(team)]);
@@ -2156,6 +2291,7 @@ window.__ModuleLoader__.load({
         h("div", { className: "dat-board-toolbar" }, h("div", null, h("strong", null, teamName(team, t)), h("div", { className: "dat-note", style: { marginTop: 2 } }, team.objective || t("unknown"))), h("div", { className: "dat-row" }, h("span", { className: "dat-badge" }, t("boardScope")), h("span", { className: "dat-badge" }, t("revision", { value: team.revision || "–" })) )),
         h(PlanLifecyclePanel, { t: t, team: team }),
         h("div", { className: "dat-board-note", role: "note" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, t("boardReadOnlyHint"), " ", t("boardBlockedDerived"), " ", t("boardFactLegend"))),
+        failedMembers.length && props.canRecover ? h(MemberRecoveryPanel, { t: t, members: failedMembers, onRecover: props.onRecover }) : null,
         projectionLimited ? h("div", { className: "dat-board-note dat-board-projection-note", role: "note" }, h("span", { "aria-hidden": "true" }, "⚠"), h("span", null, t("boardProjectionLimited", { shown: tasks.length, total: totalTaskCount }))) : null,
         selectionNotice ? h("div", { className: "dat-board-note", role: "status" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, selectionNotice)) : null,
         h("div", { className: "dat-board-shell" + (selectedTaskId ? " dat-task-focus-open" : "") },
@@ -2231,8 +2367,18 @@ window.__ModuleLoader__.load({
     }
 
     function projectTaskStatusLabel(t, status) {
-      var labels = { backlog: "projectTaskBacklog", todo: "projectTaskTodo", in_progress: "projectTaskInProgress", in_review: "projectTaskInReview", blocked: "projectTaskBlocked", done: "projectTaskDone", canceled: "projectTaskCanceled" };
+      var labels = { backlog: "projectTaskBacklog", todo: "projectTaskTodo", assigned: "projectTaskTodo", queued: "projectTaskTodo", pending: "projectTaskTodo", in_progress: "projectTaskInProgress", working: "projectTaskInProgress", in_review: "projectTaskInReview", review: "projectTaskInReview", awaiting_review: "projectTaskInReview", blocked: "projectTaskBlocked", done: "projectTaskDone", completed: "projectTaskDone", canceled: "projectTaskCanceled", cancelled: "projectTaskCanceled" };
       return t(labels[String(status || "").toLowerCase()] || "unknown");
+    }
+
+    function projectTaskGroup(status) {
+      var value = String(status || "").toLowerCase();
+      if (value === "in_progress" || value === "working") return "in_progress";
+      if (value === "in_review" || value === "review" || value === "awaiting_review") return "in_review";
+      if (value === "blocked") return "blocked";
+      if (value === "done" || value === "completed") return "completed";
+      if (value === "canceled" || value === "cancelled") return "canceled";
+      return "pending";
     }
 
     function collaboratorTaskTargets(status) {
@@ -2256,15 +2402,67 @@ window.__ModuleLoader__.load({
       return t("projectTasksGenericHint");
     }
 
+    function projectTaskCapabilitySignature(state) {
+      var capability = state && state.capability && typeof state.capability === "object" ? state.capability : {};
+      return [state && state.available === true ? "1" : "0", state && state.reason || "", capability.kind || "", capability.available === true ? "1" : "0", capability.writable === true ? "1" : "0", capability.canCreate === true ? "1" : "0", capability.reason || "", Array.isArray(capability.taskCommands) ? capability.taskCommands.join(",") : ""].join("|");
+    }
+
+    function projectTasksFirstPageKey(state) {
+      if (!state) return "project_tasks_unavailable";
+      var page = state.page && typeof state.page === "object" ? state.page : {}, facts = [state.projectRevision, state.totalExact === true ? "1" : "0", state.totalTasks, projectTaskCapabilitySignature(state), page.includedTasks, page.hasMore === true ? "1" : "0", page.nextCursor || ""];
+      (Array.isArray(state.tasks) ? state.tasks : []).forEach(function (task) { facts.push(task.taskRef, task.revision, task.status, task.hasAssignee === true ? "1" : "0", task.allowedActions.join(","), task.allowedTransitions.join(",")); });
+      return facts.join("\u0000");
+    }
+
+    function mergeProjectTasks(currentTasks, incomingTasks) {
+      var merged = Array.isArray(currentTasks) ? currentTasks.slice() : [], indexes = new Map();
+      merged.forEach(function (task, index) { if (task && typeof task.taskRef === "string") indexes.set(task.taskRef, index); });
+      (Array.isArray(incomingTasks) ? incomingTasks : []).forEach(function (task) {
+        if (!task || typeof task.taskRef !== "string") return;
+        var index = indexes.get(task.taskRef);
+        if (index === undefined) { indexes.set(task.taskRef, merged.length); merged.push(task); }
+        else merged[index] = task;
+      });
+      return merged;
+    }
+
     function ProjectTasksWorkspace(props) {
       var t = props.t, tasks = useProjectTasksState();
       var titlePair = useState(""), title = titlePair[0], setTitle = titlePair[1];
       var busyPair = useState({}), busyKeys = busyPair[0], setBusyKeys = busyPair[1];
       var actionErrorPair = useState(null), actionError = actionErrorPair[0], setActionError = actionErrorPair[1];
       var pendingPair = useState({}), pendingReceipts = pendingPair[0], setPendingReceipts = pendingPair[1];
+      var pagePair = useState({ resetKey: "", tasks: [], hasMore: false, nextCursor: null, pageTasks: 0 }), pageState = pagePair[0], setPageState = pagePair[1];
+      var pageLoadingPair = useState(false), pageLoading = pageLoadingPair[0], setPageLoading = pageLoadingPair[1];
+      var pageErrorPair = useState(""), pageErrorKey = pageErrorPair[0], setPageErrorKey = pageErrorPair[1], pageRequestEpoch = useRef(0);
       var capabilityKind = projectTaskCapabilityKind(tasks.state), capability = tasks.state && tasks.state.capability, collaborator = capabilityKind === "collaborator";
-      var canCreate = capability && capability.canCreate === true, canWrite = collaborator && capability.available === true && capability.writable === true;
-      var safeTasks = (capabilityKind === "ready" || collaborator) && tasks.state && Array.isArray(tasks.state.tasks) ? tasks.state.tasks : null;
+      var canCreate = capability && capability.canCreate === true, canWrite = collaborator && capability.available === true && capability.writable === true, canPage = capabilityKind === "ready" && tasks.state && tasks.state.totalExact === true;
+      var resetKey = projectTasksFirstPageKey(tasks.state), firstPage = tasks.state && tasks.state.page || {}, firstTasks = tasks.state && Array.isArray(tasks.state.tasks) ? tasks.state.tasks : [];
+      var basePageState = { resetKey: resetKey, tasks: firstTasks, hasMore: canPage && firstPage.hasMore === true, nextCursor: canPage && firstPage.hasMore === true ? firstPage.nextCursor : null, pageTasks: Number.isSafeInteger(firstPage.includedTasks) ? firstPage.includedTasks : firstTasks.length };
+      var effectivePage = pageState.resetKey === resetKey ? pageState : basePageState;
+      var safeTasks = (capabilityKind === "ready" || collaborator) && tasks.state ? effectivePage.tasks : null;
+      useEffect(function () {
+        pageRequestEpoch.current += 1;
+        setPageState(basePageState);
+        setPageLoading(false);
+        setPageErrorKey("");
+      }, [resetKey]);
+      function loadMoreProjectTasks() {
+        if (!canPage || !effectivePage.nextCursor || pageLoading || !tasks.state) return;
+        var requestedCursor = effectivePage.nextCursor, requestedKey = resetKey, epoch = pageRequestEpoch.current;
+        setPageLoading(true); setPageErrorKey("");
+        fetch("/api/agent-teams/project/tasks/page?cursor=" + encodeURIComponent(requestedCursor), { method: "GET", cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", "x-harness-agent-teams": "1" } }).then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (result) { if (!response.ok) throw projectTaskResponseError(response, result); return result && result.projectTasks ? result.projectTasks : result; });
+        }).then(function (input) {
+          if (epoch !== pageRequestEpoch.current || requestedKey !== resetKey) return;
+          var next = normalizeProjectTasksState(input);
+          if (next.totalExact !== true || next.projectRevision !== tasks.state.projectRevision || projectTaskCapabilitySignature(next) !== projectTaskCapabilitySignature(tasks.state)) throw new Error("stale project task page");
+          setPageState(function (current) {
+            var source = current.resetKey === requestedKey ? current : basePageState;
+            return { resetKey: requestedKey, tasks: mergeProjectTasks(source.tasks, next.tasks), hasMore: next.page.hasMore === true, nextCursor: next.page.hasMore === true ? next.page.nextCursor : null, pageTasks: next.page.includedTasks };
+          });
+        }).catch(function () { if (epoch === pageRequestEpoch.current && requestedKey === resetKey) setPageErrorKey(requestedKey); }).finally(function () { if (epoch === pageRequestEpoch.current && requestedKey === resetKey) setPageLoading(false); });
+      }
       function setBusyKey(actionKey, value) {
         setBusyKeys(function (current) { var next = Object.assign({}, current); if (value === false) delete next[actionKey]; else next[actionKey] = true; return next; });
       }
@@ -2299,6 +2497,7 @@ window.__ModuleLoader__.load({
         { id: "blocked", label: t("projectTaskColumnBlocked") },
         { id: "finished", label: t("projectTaskColumnFinished") }
       ];
+      var totalTasks = Number.isSafeInteger(tasks.state.totalTasks) ? tasks.state.totalTasks : safeTasks.length, loadedTasks = safeTasks.length, remainingTasks = Math.max(0, totalTasks - loadedTasks);
       return h("section", { className: "dat-workspace-view", "data-mobile-slot": "tasks.workspace", "data-harness-mobile-project-bound": "true", "aria-labelledby": "dat-project-tasks-title" }, head,
         tasks.error ? h("div", { className: "dat-error", role: "alert" }, projectTaskErrorSummary(tasks.error, t), " ", projectTaskNextAction(tasks.error, t)) : null,
         actionError ? h("div", { className: "dat-error", role: "alert" }, projectTaskErrorSummary(actionError, t), " ", projectTaskNextAction(actionError, t)) : null,
@@ -2306,7 +2505,6 @@ window.__ModuleLoader__.load({
         Object.keys(pendingReceipts).length ? h("div", { className: "dat-board-note", role: "status" }, h("span", { "aria-hidden": "true" }, "⌛"), h("span", null, t("projectTasksPendingReceipt"))) : null,
         canCreate ? h("form", { className: "dat-panel dat-project-tasks-form", onSubmit: createTask }, h("label", { className: "dat-label" }, t("projectTasksTitleLabel"), h("input", { className: "dat-field", value: title, maxLength: 500, disabled: busyKeys.create === true, placeholder: t("projectTasksTitlePlaceholder"), onChange: function (event) { setTitle(event.target.value); } })), h(Button, { type: "submit", primary: true, disabled: busyKeys.create === true || !title.trim() }, busyKeys.create === true ? t("projectTasksCreating") : t("projectTasksCreate"))) : h("div", { className: "dat-panel dat-empty", role: "note" }, h("p", null, t("projectTasksCreateUnavailable"))),
         h("div", { className: "dat-board-note", role: "note" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, t("projectTasksExplicitOnly"))),
-        tasks.state.hasMore ? h("div", { className: "dat-board-note", role: "note" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, t("projectTasksHasMore"))) : null,
         safeTasks.length ? h("div", { className: "dat-project-task-columns" }, columns.map(function (column) {
           var columnTasks = safeTasks.filter(function (safeTask) { return projectTaskColumn(safeTask.status) === column.id; });
           return h("section", { key: column.id, className: "dat-project-task-column", "data-column": column.id },
@@ -2324,7 +2522,9 @@ window.__ModuleLoader__.load({
               );
             }) : h("div", { className: "dat-board-empty" }, t("boardEmpty")))
           );
-        })) : h("div", { className: "dat-panel dat-empty" }, h("p", null, t("projectTasksEmpty")))
+        })) : h("div", { className: "dat-panel dat-empty" }, h("p", null, t("projectTasksEmpty"))),
+        h("div", { className: "dat-panel dat-project-tasks-page", "aria-live": "polite" }, canPage ? h(React.Fragment, null, h("span", { className: "dat-note" }, t("projectTasksPage", { page: effectivePage.pageTasks, loaded: loadedTasks, total: totalTasks, remaining: remainingTasks })), effectivePage.nextCursor ? h(Button, { primary: true, disabled: pageLoading, onClick: loadMoreProjectTasks }, pageLoading ? t("projectTasksLoadingMore") : t("projectTasksLoadMore")) : h("span", { className: "dat-note" }, effectivePage.hasMore ? t("projectTasksLoadError") : t("projectTasksAllLoaded"))) : h("span", { className: "dat-note" }, collaborator ? t("projectTasksPreviewCount", { loaded: loadedTasks }) : t("projectTasksLoadError"))),
+        canPage && pageErrorKey === resetKey ? h("div", { className: "dat-error", role: "alert" }, t("projectTasksLoadError"), h("div", { className: "dat-actions" }, h(Button, { small: true, onClick: tasks.reload }, t("projectTasksRefresh")))) : null
       );
     }
 
@@ -2365,17 +2565,191 @@ window.__ModuleLoader__.load({
       return h("section", { className: "dat-panel dat-foundation-status", "aria-labelledby": "dat-foundation-title", "aria-live": "polite" }, h("div", { className: "dat-column-head" }, h("div", null, h("h3", { id: "dat-foundation-title" }, t("foundationTitle")), h("strong", null, t(copy[0]))), state && state.mode === "authority" ? h(Button, { small: true, disabled: live.loading, onClick: function () { live.reload().catch(function () {}); } }, t("foundationRefresh")) : null), h("p", { className: "dat-meta" }, t(copy[1])), state ? h("p", { className: "dat-note", style: { marginBottom: 0 } }, t("foundationCounts", { workspaces: state.workspaceCount, claims: state.claimCount, changes: state.queuedChangeSetCount, queued: state.queuedJobCount, running: state.runningJobCount, defects: state.defectCount })) : null);
     }
 
-    function FlowWorkspace(props) {
-      var t = props.t, foundations = useProjectFoundationsState();
-      var steps = [
-        ["flowGoal", "flowGoalBody"], ["flowPlan", "flowPlanBody"], ["flowTasks", "flowTasksBody"],
-        ["flowMembers", "flowMembersBody"], ["flowCoordinate", "flowCoordinateBody"], ["flowResult", "flowResultBody"]
+    function projectTeamBoardCount(value) {
+      return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+    }
+
+    function projectTeamBoardPayloadCounts(board) {
+      var teams = board && Array.isArray(board.teams) ? board.teams : [], tasks = 0, page = board && board.page && typeof board.page === "object" ? board.page : {};
+      teams.forEach(function (team) { tasks += Array.isArray(team && team.tasks) ? team.tasks.length : 0; });
+      return { teams: Number.isSafeInteger(page.includedTeams) ? page.includedTeams : teams.length, tasks: Number.isSafeInteger(page.includedTasks) ? page.includedTasks : tasks };
+    }
+
+    function projectTeamBoardNextCursor(board) {
+      var page = board && board.page && typeof board.page === "object" ? board.page : null;
+      return page && page.hasMore === true && typeof page.nextCursor === "string" && page.nextCursor ? page.nextCursor : null;
+    }
+
+    function mergeProjectTeamBoardTeams(currentTeams, incomingTeams) {
+      var merged = Array.isArray(currentTeams) ? currentTeams.slice() : [], teamIndexes = new Map();
+      merged.forEach(function (team, index) { if (team && typeof team.id === "string") teamIndexes.set(team.id, index); });
+      (Array.isArray(incomingTeams) ? incomingTeams : []).forEach(function (incoming) {
+        if (!incoming || typeof incoming.id !== "string") return;
+        var teamIndex = teamIndexes.get(incoming.id);
+        if (teamIndex === undefined) { teamIndexes.set(incoming.id, merged.length); merged.push(incoming); return; }
+        var current = merged[teamIndex] || {}, tasks = Array.isArray(current.tasks) ? current.tasks.slice() : [], taskIndexes = new Map();
+        tasks.forEach(function (task, index) { if (task && typeof task.id === "string") taskIndexes.set(task.id, index); });
+        (Array.isArray(incoming.tasks) ? incoming.tasks : []).forEach(function (task) {
+          if (!task || typeof task.id !== "string") return;
+          var taskIndex = taskIndexes.get(task.id);
+          if (taskIndex === undefined) { taskIndexes.set(task.id, tasks.length); tasks.push(task); }
+          else tasks[taskIndex] = task;
+        });
+        merged[teamIndex] = Object.assign({}, current, incoming, { tasks: tasks });
+      });
+      return merged;
+    }
+
+    function projectTeamBoardLoadedCounts(teams) {
+      var teamCount = 0, taskCount = 0, taskKeys = new Set();
+      (Array.isArray(teams) ? teams : []).forEach(function (team) {
+        if (!team || typeof team.id !== "string") return;
+        teamCount += 1;
+        (Array.isArray(team.tasks) ? team.tasks : []).forEach(function (task) {
+          if (!task || typeof task.id !== "string") return;
+          var key = team.id + "\u0000" + task.id;
+          if (!taskKeys.has(key)) { taskKeys.add(key); taskCount += 1; }
+        });
+      });
+      return { teams: teamCount, tasks: taskCount };
+    }
+
+    function projectTeamBoardPlanLabel(t, value) {
+      var labels = { draft: "planDraft", committed: "planCommitted", active: "planActive" };
+      return labels[value] ? t(labels[value]) : String(value || t("unknown"));
+    }
+
+    function projectTeamBoardTaskMatches(task, filter) {
+      if (filter === "all") return true;
+      if (filter === "attention") return task && task.attention === true;
+      if (filter === "pending") return task && task.status === "pending";
+      if (filter === "in_progress") return task && task.status === "in_progress";
+      return task && task.status === "completed";
+    }
+
+    function projectCollaborationPageItems(name, incoming) {
+      var keys = { seats: "actorRef", tasks: "taskRef", locks: "lockRef", handoffs: "handoffRef", recoveries: "recoveryRef", evidence: "evidenceRef", history: "historyRef", requests: "requestRef" }, keyName = keys[name], page = [], seen = new Set();
+      (Array.isArray(incoming) ? incoming : []).forEach(function (item) { var key = item && keyName && item[keyName]; if (typeof key !== "string" || !key || seen.has(key) || page.length >= 120) return; seen.add(key); page.push(item); });
+      return page;
+    }
+
+    function ProjectCollaborationWorkspace(props) {
+      var t = props.t, projectState = useProjectTasksState(), collaboration = projectState.state && projectState.state.projectCollaboration ? projectState.state.projectCollaboration : normalizeProjectCollaboration(null);
+      var sectionNames = ["seats", "tasks", "locks", "handoffs", "recoveries", "evidence", "history", "requests"], sectionStatePair = useState({ revision: -1, values: {}, pages: {}, loading: "", error: "", notice: "" }), sectionState = sectionStatePair[0], setSectionState = sectionStatePair[1], sectionEpoch = useRef(0);
+      var sectionCurrent = sectionState.revision === collaboration.revision ? sectionState : { revision: collaboration.revision, values: {}, pages: {}, loading: "", error: "", notice: "" };
+      function sectionValues(name) { return Array.isArray(sectionCurrent.values[name]) ? sectionCurrent.values[name] : Array.isArray(collaboration[name]) ? collaboration[name] : []; }
+      function sectionPage(name) { return sectionCurrent.pages[name] || collaboration.sectionPages && collaboration.sectionPages[name] || { hasMore: false, nextCursor: null }; }
+      function loadMoreSection(name) {
+        var page = sectionPage(name), cursor = page && page.nextCursor;
+        if (!cursor || sectionCurrent.loading) return;
+        var epoch = ++sectionEpoch.current;
+        setSectionState(Object.assign({}, sectionCurrent, { loading: name, error: "", notice: "" }));
+        fetchProjectCollaborationPage(cursor).then(function (next) {
+          if (epoch !== sectionEpoch.current || next.revision !== collaboration.revision) return;
+          var incoming = projectCollaborationPageItems(name, next[name]);
+          var values = Object.assign({}, sectionCurrent.values), pages = Object.assign({}, sectionCurrent.pages); values[name] = incoming; pages[name] = next.sectionPages[name];
+          setSectionState({ revision: collaboration.revision, values: values, pages: pages, loading: "", error: "", notice: name });
+        }).catch(function () { if (epoch === sectionEpoch.current) setSectionState(Object.assign({}, sectionCurrent, { loading: "", error: name, notice: "" })); });
+      }
+      useEffect(function () { sectionEpoch.current += 1; setSectionState({ revision: collaboration.revision, values: {}, pages: {}, loading: "", error: "", notice: "" }); }, [collaboration.revision]);
+      var seats = sectionValues("seats"), tasks = sectionValues("tasks"), requests = sectionValues("requests"), dependencies = [], handoffs = sectionValues("handoffs"), locks = sectionValues("locks"), decisions = [], recoveries = sectionValues("recoveries"), evidence = sectionValues("evidence"), history = sectionValues("history"), taskGroupTotals = collaboration.taskGroupTotals || {};
+      var rootRecoveryPair=useState({confirm:"",busy:"",error:"",success:""}),rootRecoveryState=rootRecoveryPair[0],setRootRecoveryState=rootRecoveryPair[1];
+      function runRootRecovery(item,action){var key=String(item.recoveryRef||"")+":"+action;if(rootRecoveryState.busy)return;if(rootRecoveryState.confirm!==key){setRootRecoveryState({confirm:key,busy:"",error:"",success:""});return;}if(typeof props.onRootRecovery!=="function")return;setRootRecoveryState({confirm:"",busy:key,error:"",success:""});Promise.resolve(props.onRootRecovery(item,action)).then(function(result){if(result&&result.drafted===true){setRootRecoveryState({confirm:"",busy:"",error:"",success:key});setTimeout(function(){setRootRecoveryState(function(current){return current.success===key?{confirm:"",busy:"",error:"",success:""}:current;});},4000);return result;}setRootRecoveryState({confirm:"",busy:"",error:"",success:key});return projectState.reload();}).catch(function(){setRootRecoveryState({confirm:key,busy:"",error:key,success:""});});}
+      var recoveryTeams = typeof props.onRecover === "function" && props.projectTeamBoard && Array.isArray(props.projectTeamBoard.teams) ? props.projectTeamBoard.teams.filter(function (team) { return team && team.memberRecovery && (Array.isArray(team.memberRecovery.members) && team.memberRecovery.members.length || Array.isArray(team.memberRecovery.unresolved) && team.memberRecovery.unresolved.length); }) : [];
+      function text(value, fallback) { return typeof value === "string" && value ? value : fallback; }
+      function seatLabel(seat) { return text(seat && (seat.duty || seat.dutyName || seat.role), t("unknown")); }
+       var totals = collaboration.totals && typeof collaboration.totals === "object" ? collaboration.totals : {};
+       function totalFor(key, values) { var keys = { dependencies: ["dependencies", "handoffs"], locks: ["locks", "decisions"], evidence: ["evidence", "history"] }[key], total = keys ? keys.reduce(function (sum, name) { return sum + (Number.isSafeInteger(totals[name]) && totals[name] >= 0 ? totals[name] : 0); }, 0) : totals[key]; return Number.isSafeInteger(total) && total >= 0 ? total : values.length; }
+       function bounded(values, key) { var total = totalFor(key, values), visible = values.slice(0, 120); return { values: visible, total: total, remaining: Math.max(0, total - visible.length) }; }
+       var sectionTitles = { seats: t("collaborationRoster"), tasks: t("projectTasksTitle"), locks: t("collaborationLocks"), handoffs: t("collaborationDependencies"), recoveries: t("collaborationRecovery"), evidence: t("collaborationEvidence"), history: t("taskHistory"), requests: t("collaborationRequests") }, activeSection = sectionCurrent.loading || sectionCurrent.error || sectionCurrent.notice, activeSectionTitle = sectionTitles[activeSection] || "", activeSectionValues = activeSection ? sectionValues(activeSection) : [], activeSectionLoaded = activeSectionValues.length, activeSectionTotal = activeSection ? totalFor(activeSection, activeSectionValues) : 0, activeSectionCount = activeSectionLoaded + "/" + activeSectionTotal;
+      function moreControl(name, title) { var page = sectionPage(name), busy = sectionCurrent.loading === name, failed = sectionCurrent.error === name, label = t("projectTeamBoardLoadMore") + " · " + title; return h("div", { className: "dat-collaboration-page" }, page && page.nextCursor ? h(Button, { primary: true, disabled: busy, onClick: function () { loadMoreSection(name); }, style: { minHeight: 44, minWidth: 44 }, ariaLabel: label }, busy ? t("projectTeamBoardLoadingMore") : t("projectTeamBoardLoadMore")) : null, failed ? h("p", { className: "dat-error" }, t("projectTeamBoardLoadError")) : null); }
+      function summary(label, value) { return h("div", { className: "dat-panel dat-collaboration-summary", key: label }, h("h3", null, label), h("p", { className: "dat-meta" }, value)); }
+      function listSection(title, values, key, empty, pageName) { var page = bounded(values, key); return h("section", { className: "dat-panel dat-collaboration-section", "aria-label": title, "aria-busy": pageName && sectionCurrent.loading === pageName ? "true" : "false" }, h("h3", null, title + " · " + page.values.length + "/" + page.total), page.values.length ? h("ul", { className: "dat-collaboration-list" }, page.values.map(function (item) { var itemKey = item && (item.id || item.ref || item.taskRef || item.handoffRef || item.evidenceRef || item.historyRef || item.lockRef); if (!itemKey) return null; var label = text(item && (item.title || item.summary || item.name || item.status || item.kind), empty); return h("li", { key: String(itemKey) }, label); })) : h("p", { className: "dat-note" }, empty), page.remaining ? h("p", { className: "dat-note" }, t("collaborationMore", { count: page.remaining })) : null, pageName ? moreControl(pageName, title) : null); }
+      var taskGroups = [["in_progress", "projectTaskGroupInProgress"], ["in_review", "projectTaskGroupInReview"], ["blocked", "projectTaskGroupBlocked"], ["pending", "projectTaskGroupPending"], ["completed", "projectTaskGroupCompleted"], ["canceled", "projectTaskGroupCanceled"]];
+      function taskGroupSection(group) { var id = group[0], label = t(group[1]), groupTasks = tasks.filter(function (task) { return (task && task.statusGroup || projectTaskGroup(task && task.status)) === id; }), total = Number.isSafeInteger(taskGroupTotals[id]) && taskGroupTotals[id] >= 0 ? taskGroupTotals[id] : groupTasks.length, headingId = "dat-collaboration-task-group-" + id; return h("section", { key: id, className: "dat-collaboration-task-group", "data-group": id, "aria-labelledby": headingId }, h("div", { className: "dat-collaboration-task-group-head" }, h("h4", { id: headingId }, label), h("span", { className: "dat-badge", "aria-label": label + " " + total }, groupTasks.length + "/" + total)), groupTasks.length ? h("ul", { className: "dat-collaboration-task-list" }, groupTasks.map(function (task) { var taskKey = task && (task.taskRef || task.id); if (!taskKey) return null; return h("li", { key: String(taskKey), className: "dat-collaboration-task-item" }, h("strong", null, text(task.title, t("unknown"))), h("div", { className: "dat-collaboration-task-meta" }, h("span", { className: "dat-badge" }, projectTaskStatusLabel(t, task.status)), Number.isSafeInteger(task.priority) ? h("span", { className: "dat-badge" }, t("projectTaskPriority", { value: task.priority })) : null, task.updatedAt ? h("time", { className: "dat-badge", dateTime: isoTime(task.updatedAt) }, t("projectTaskUpdated", { value: formatTime(task.updatedAt) })) : null)); })) : h("p", { className: "dat-collaboration-task-empty" }, t("boardEmpty"))); }
+      return h("section", { className: "dat-workspace-view dat-project-collaboration", "data-mobile-slot": "tasks.workspace", "data-harness-mobile-project-bound": "true", "aria-labelledby": "dat-project-collaboration-title" },
+        h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-project-collaboration-title" }, t("workspaceProjectTasks")), h("p", null, t("projectTasksIntro"))), h("span", { className: "dat-badge" }, t("projectTasksReadOnly"))),
+        h("p", { className: "dat-note dat-collaboration-page-status", role: "status", "aria-live": "polite", "aria-atomic": "true" }, sectionCurrent.loading ? activeSectionTitle + " · " + t("projectTeamBoardLoadingMore") + " · " + activeSectionCount : sectionCurrent.error ? activeSectionTitle + " · " + t("projectTeamBoardLoadError") + " · " + activeSectionCount : sectionCurrent.notice ? activeSectionTitle + " · " + t("collaborationShowing", { shown: activeSectionLoaded, total: activeSectionTotal }) : ""),
+        recoveryTeams.map(function (team) { return h("div", { key: team.id }, Array.isArray(team.memberRecovery.unresolved) && team.memberRecovery.unresolved.length ? h(MemberRecoveryReconcilePanel, { t: t, panelId: team.id, paused: team.memberRecovery.paused === true, receipts: team.memberRecovery.unresolved, onReconcile: function (receipt, resolution) { return props.onReconcile(team.memberRecovery, receipt, resolution); } }) : null, Array.isArray(team.memberRecovery.members) && team.memberRecovery.members.length ? h(MemberRecoveryPanel, { t: t, panelId: team.id, members: team.memberRecovery.members, onRecover: function (member, action, requestId) { return props.onRecover(team.memberRecovery, member, action, requestId); } }) : null); }),
+        h("section", { className: "dat-panel dat-collaboration-roster", "aria-labelledby": "dat-collaboration-roster-title", "aria-busy": sectionCurrent.loading === "seats" ? "true" : "false" }, h("h3", { id: "dat-collaboration-roster-title" }, t("collaborationRoster") + " · " + seats.slice(0, 50).length + "/" + totalFor("seats", seats)), h("p", { className: "dat-note" }, t("collaborationRosterHint")), seats.length ? h("div", { className: "dat-collaboration-seat-list" }, seats.slice(0, 120).map(function (seat) { var seatKey = seat && (seat.actorRef || seat.opaqueActor || seat.dutyName); if (!seatKey) return null; return h("article", { className: "dat-card dat-collaboration-seat", key: String(seatKey) }, h("h4", null, seatLabel(seat)), h("p", { className: "dat-meta" }, t("collaborationResponsibilities") + ": " + text(seat && (seat.responsibility || seat.phase), t("unknown"))), h("p", { className: "dat-meta" }, t("collaborationScope") + ": " + text(seat && seat.resourceScope, t("unknown"))), h("p", { className: "dat-meta" }, t("collaborationNextStep") + ": " + text(seat && seat.nextStep, t("unknown"))), h("p", { className: "dat-note" }, text(seat && seat.updatedAt, ""))); })) : h("p", { className: "dat-note" }, t("collaborationSummaryEmpty")), moreControl("seats", t("collaborationRoster"))),
+        h("div", { className: "dat-project-collaboration-summary-grid" }, summary(t("projectTasksPage", { page: 1, loaded: tasks.length, total: Number.isSafeInteger(collaboration.totalTasks) ? collaboration.totalTasks : tasks.length, remaining: 0 }), text(collaboration.phase, t("unknown"))), summary(t("collaborationPhase"), text(collaboration.phase, t("unknown"))), summary(t("collaborationNextStep"), text(collaboration.nextStep, t("unknown")))),
+        h("section", { className: "dat-panel dat-project-collaboration-tasks", "aria-labelledby": "dat-collaboration-tasks-title", "aria-busy": sectionCurrent.loading === "tasks" ? "true" : "false" }, h("h3", { id: "dat-collaboration-tasks-title" }, t("projectTasksTitle") + " · " + t("collaborationShowing", { shown: tasks.length, total: totalFor("tasks", tasks) })), h("div", { className: "dat-collaboration-task-groups" }, taskGroups.map(taskGroupSection)), totalFor("tasks", tasks) > tasks.length ? h("p", { className: "dat-note" }, t("collaborationMore", { count: totalFor("tasks", tasks) - tasks.length })) : null, moreControl("tasks", t("projectTasksTitle"))),
+        h("section", { className: "dat-panel dat-collaboration-requests", "aria-labelledby": "dat-collaboration-requests-title", "aria-busy": sectionCurrent.loading === "requests" ? "true" : "false" }, h("h3", { id: "dat-collaboration-requests-title" }, t("collaborationRequests") + " · " + requests.length + "/" + totalFor("requests", requests)), h("p", { className: "dat-note" }, t("collaborationRequestHint")), requests.slice(0, 120).map(function (item) { var key = item && item.requestRef; if (!key) return null; var state = text(item.state, t("unknown")); return h("article", { className: "dat-card", key: key }, h("strong", null, h("span", { className: "dat-status-icon", "aria-hidden": "true" }, state === "open" ? "◷" : state === "accepted" ? "✓" : state === "escalated" ? "↗" : "•"), " ", text(item.kind, t("unknown"))), h("p", { className: "dat-meta" }, t("collaborationRequestState", { value: state })), item.respondByAt ? h("p", { className: "dat-meta" }, t("collaborationRequestDeadline", { value: item.respondByAt })) : null); }), totalFor("requests", requests) > requests.length ? h("p", { className: "dat-note" }, t("collaborationRequestMore", { count: totalFor("requests", requests) - requests.length })) : null, moreControl("requests", t("collaborationRequests"))),
+         h("section",{className:"dat-panel dat-collaboration-recoveries","aria-labelledby":"dat-collaboration-recovery-title","aria-busy":rootRecoveryState.busy||sectionCurrent.loading==="recoveries"?"true":"false"},h("h3",{id:"dat-collaboration-recovery-title"},t("collaborationRecovery")+" · "+recoveries.length+"/"+totalFor("recoveries",recoveries)),h("p",{className:"dat-note"},t("collaborationRecoveryHint")),recoveries.slice(0,50).map(function(item){var retry=item.canRetry===true,takeover=item.canRequestTakeover===true,action=retry?"retry":"takeover",key=String(item.recoveryRef||"")+":"+action,busy=rootRecoveryState.busy===key,confirm=rootRecoveryState.confirm===key,error=rootRecoveryState.error===key,success=rootRecoveryState.success===key;return h("article",{className:"dat-card",key:String(item.recoveryRef),role:"group","aria-label":t("collaborationRecoveryState",{value:text(item.state,t("unknown"))})},h("strong",null,text(item.failureCode,t("unknown"))),h("p",{className:"dat-meta"},t("collaborationRecoveryState",{value:text(item.state,t("unknown"))})),retry||takeover?h(Button,{disabled:busy||typeof props.onRootRecovery!=="function",onClick:function(){runRootRecovery(item,action);},style:{minHeight:44,minWidth:44},"aria-describedby":"dat-collaboration-recovery-help"},busy?t("collaborationRecoveryBusy"):confirm?t("collaborationRecoveryConfirm"):retry?t("collaborationRecoveryRetry"):t("collaborationRecoveryTakeover")):null,error?h("p",{className:"dat-error",role:"alert","aria-live":"assertive"},t("collaborationRecoveryError")):null,success?h("p",{className:"dat-note",role:"status","aria-live":"polite"},t("collaborationRecoverySuccess")):null);}),h("span",{id:"dat-collaboration-recovery-help",style:{position:"absolute",width:1,height:1,padding:0,margin:-1,overflow:"hidden",clip:"rect(0,0,0,0)",whiteSpace:"nowrap",border:0}},t("collaborationRecoveryHint")),moreControl("recoveries",t("collaborationRecovery"))),
+         h("div", { className: "dat-project-collaboration-detail-grid" }, listSection(t("collaborationDependencies"), handoffs, "dependencies", t("collaborationSummaryEmpty"), "handoffs"), listSection(t("collaborationLocks"), locks, "locks", t("collaborationSummaryEmpty"), "locks"), listSection(t("collaborationEvidence"), evidence, "evidence", t("collaborationSummaryEmpty"), "evidence"), listSection(t("taskHistory"), history, "history", t("collaborationSummaryEmpty"), "history"))
+      );
+    }
+
+    function LegacyProjectTeamBoardWorkspace(props) {
+      var t = props.t, board = props.board && typeof props.board === "object" ? props.board : null;
+      var filterPair = useState("all"), filter = filterPair[0], setFilter = filterPair[1];
+      var pagePair = useState({ resetKey: "", teams: [], nextCursor: null, pageTeams: 0, pageTasks: 0 }), pageState = pagePair[0], setPageState = pagePair[1];
+      var loadingPair = useState(false), loadingMore = loadingPair[0], setLoadingMore = loadingPair[1];
+      var errorPair = useState(""), pageErrorKey = errorPair[0], setPageErrorKey = errorPair[1];
+      var requestEpoch = useRef(0), stats = board && board.stats && typeof board.stats === "object" ? board.stats : {}, projection = board && board.projection && typeof board.projection === "object" ? board.projection : {};
+      var resetKey = [props.sessionId || "", props.selectedTeamId || "", board && board.cursor || ""].join("|");
+      var baseCounts = projectTeamBoardPayloadCounts(board), baseState = { resetKey: resetKey, teams: board && Array.isArray(board.teams) ? board.teams : [], nextCursor: projectTeamBoardNextCursor(board), pageTeams: baseCounts.teams, pageTasks: baseCounts.tasks };
+      var effective = pageState.resetKey === resetKey ? pageState : baseState;
+      useEffect(function () {
+        requestEpoch.current += 1;
+        setPageState(baseState);
+        setLoadingMore(false);
+        setPageErrorKey("");
+      }, [resetKey]);
+      if (!board || board.available !== true) return h("section", { className: "dat-workspace-view dat-project-team-board", "aria-labelledby": "dat-project-team-board-title" },
+        h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-project-team-board-title" }, t("projectTeamBoardTitle")), h("p", null, t("projectTeamBoardIntro"))), h("span", { className: "dat-badge" }, t("projectTeamBoardReadOnly"))),
+        h("div", { className: "dat-panel dat-empty", role: "status" }, h("h2", null, t("projectTeamBoardUnavailableTitle")), h("p", null, t("projectTeamBoardUnavailableBody")))
+      );
+      var loadedCounts = projectTeamBoardLoadedCounts(effective.teams), totalTeams = projectTeamBoardCount(stats.totalTeams), totalTasks = projectTeamBoardCount(stats.totalTasks);
+      var filters = [["all", "projectTeamBoardFilterAll"], ["pending", "projectTeamBoardFilterPending"], ["in_progress", "projectTeamBoardFilterProgress"], ["attention", "projectTeamBoardFilterAttention"], ["completed", "projectTeamBoardFilterCompleted"]];
+      var groups = [];
+      effective.teams.forEach(function (team) {
+        if (!team || typeof team.id !== "string") return;
+        var matching = [];
+        (Array.isArray(team.tasks) ? team.tasks : []).forEach(function (task) { if (projectTeamBoardTaskMatches(task, filter)) matching.push(task); });
+        if (filter === "all" || matching.length) groups.push({ team: team, tasks: matching });
+      });
+      function loadMore() {
+        if (!effective.nextCursor || loadingMore) return;
+        var requestedCursor = effective.nextCursor, epoch = requestEpoch.current, requestedKey = resetKey;
+        setLoadingMore(true); setPageErrorKey("");
+        var url = "/api/agent-teams/project/team-board/page?sessionId=" + encodeURIComponent(props.sessionId || "") + "&teamId=" + encodeURIComponent(props.selectedTeamId || "") + "&cursor=" + encodeURIComponent(requestedCursor);
+        fetch(url, { method: "GET", cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", "x-harness-agent-teams": "1" } }).then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (result) { if (!response.ok) throw new Error("HTTP " + response.status); return result && result.projectTeamBoard; });
+        }).then(function (nextBoard) {
+          if (epoch !== requestEpoch.current || requestedKey !== resetKey) return;
+          if (!nextBoard || nextBoard.available !== true || nextBoard.cursor !== board.cursor || !Array.isArray(nextBoard.teams)) throw new Error("stale project team board page");
+          var pageCounts = projectTeamBoardPayloadCounts(nextBoard);
+          setPageState(function (current) {
+            var source = current.resetKey === requestedKey ? current : baseState;
+            return { resetKey: requestedKey, teams: mergeProjectTeamBoardTeams(source.teams, nextBoard.teams), nextCursor: projectTeamBoardNextCursor(nextBoard), pageTeams: pageCounts.teams, pageTasks: pageCounts.tasks };
+          });
+        }).catch(function () { if (epoch === requestEpoch.current && requestedKey === resetKey) setPageErrorKey(requestedKey); }).finally(function () { if (epoch === requestEpoch.current && requestedKey === resetKey) setLoadingMore(false); });
+      }
+      var statCards = [
+        ["projectTeamBoardTeams", totalTeams], ["projectTeamBoardTasks", totalTasks], ["projectTeamBoardPending", projectTeamBoardCount(stats.pendingTasks)],
+        ["projectTeamBoardProgress", projectTeamBoardCount(stats.inProgressTasks)], ["projectTeamBoardAttention", projectTeamBoardCount(stats.attentionTasks)], ["projectTeamBoardCompleted", projectTeamBoardCount(stats.completedTasks)]
       ];
-      return h("section", { className: "dat-workspace-view dat-flow-blueprint", "aria-labelledby": "dat-flow-title", "aria-readonly": "true" },
-        h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-flow-title" }, t("flowTitle")), h("p", null, t("flowIntro"))), h("span", { className: "dat-badge" }, t("flowReadOnly"))),
-        h("div", { className: "dat-flow-chain" }, steps.map(function (step, index) { return h("article", { key: step[0], className: "dat-flow-step" }, h("strong", null, (index + 1) + ". " + t(step[0])), h("span", null, t(step[1]))); })),
-        h(ProjectFoundationStatusCard, { t: t, live: foundations }),
-        h("p", { className: "dat-flow-boundary" }, t("projectAutomationPending"))
+      var teamRemaining = Math.max(0, totalTeams - loadedCounts.teams), taskRemaining = Math.max(0, totalTasks - loadedCounts.tasks), paged = projection.teamsTruncated === true || projection.tasksTruncated === true || projection.payloadTruncated === true || !!effective.nextCursor;
+      return h("section", { className: "dat-workspace-view dat-project-team-board", "aria-labelledby": "dat-project-team-board-title" },
+        h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-project-team-board-title" }, t("projectTeamBoardTitle")), h("p", null, t("projectTeamBoardIntro"))), h("div", { className: "dat-workspace-view-actions" }, h("span", { className: "dat-badge" }, t("projectTeamBoardReadOnly")), h("span", { className: "dat-badge" }, t("projectTeamBoardLive")), h(Button, { small: true, onClick: function () { props.setDraft(t("projectTeamBoardPrompt")); } }, t("projectTeamBoardPrepare")))),
+        props.connection === "stale" || props.connection === "disconnected" ? h("div", { className: "dat-board-note", role: "status" }, h("span", null, t("projectTeamBoardStale")), props.onRefresh ? h(Button, { small: true, onClick: props.onRefresh }, t("projectTeamBoardRefresh")) : null) : null,
+        h("div", { className: "dat-project-team-stats", "aria-label": t("projectTeamBoardTitle") }, statCards.map(function (item) { return h("div", { key: item[0], className: "dat-project-team-stat" }, h("strong", null, item[1]), h("span", null, t(item[0]))); })),
+        h("div", { className: "dat-row" }, h("span", { className: "dat-badge" }, t("projectTeamBoardCancelled") + " " + projectTeamBoardCount(stats.cancelledTasks)), h("span", { className: "dat-badge" }, t("projectTeamBoardBlocked") + " " + projectTeamBoardCount(stats.blockedTasks)), h("span", { className: "dat-badge" }, t("projectTeamBoardAttention") + " · " + t("projectTeamBoardTeams") + " " + projectTeamBoardCount(stats.attentionTeams))),
+        h("div", { className: "dat-project-team-filter", role: "group", "aria-label": t("projectTeamBoardFilterLabel") }, filters.map(function (item) { return h(Button, { key: item[0], small: true, ariaPressed: filter === item[0], onClick: function () { setFilter(item[0]); } }, t(item[1])); })),
+        paged ? h("div", { className: "dat-board-note", role: "note" }, t("projectTeamBoardTruncated")) : null,
+        totalTasks === 0 && totalTeams === 0 ? h("div", { className: "dat-panel dat-empty" }, h("h2", null, t("projectTeamBoardEmptyTitle")), h("p", null, t("projectTeamBoardEmptyBody"))) : groups.length ? h("div", { className: "dat-legacy-team-groups" }, groups.map(function (group) {
+          var team = group.team, teamStats = team.taskStats && typeof team.taskStats === "object" ? team.taskStats : {};
+          return h("article", { key: team.id, className: "dat-panel dat-project-team-group", "data-attention": team.attention && team.attention.required === true ? "true" : "false" },
+            h("header", { className: "dat-project-team-group-head" }, h("div", null, h("h3", null, team.name || team.id), h("div", { className: "dat-project-team-group-meta" }, h("span", { className: "dat-badge" }, teamStatusLabel(t, team.status)), h("span", { className: "dat-badge" }, t("projectTeamBoardPlan", { value: projectTeamBoardPlanLabel(t, team.planPhase) })), h("span", { className: "dat-badge" }, t("projectTeamBoardMembers", { count: projectTeamBoardCount(team.memberCount) })), team.attention && team.attention.required === true ? h("span", { className: "dat-badge dat-warn-text" }, t("projectTeamBoardTeamAttention")) : null)), h("div", { className: "dat-project-team-group-counts dat-note" }, t("projectTeamBoardTasks") + " " + projectTeamBoardCount(teamStats.total), team.updatedAt ? h("div", null, t("projectTeamBoardUpdated", { value: formatTime(team.updatedAt) })) : null)),
+            team.memberRecovery && Array.isArray(team.memberRecovery.unresolved) && team.memberRecovery.unresolved.length && typeof props.onReconcile === "function" ? h(MemberRecoveryReconcilePanel, { t: t, panelId: team.id, paused: team.memberRecovery.paused === true, receipts: team.memberRecovery.unresolved, onReconcile: function (receipt, resolution) { return props.onReconcile(team.memberRecovery, receipt, resolution); } }) : null,
+            team.memberRecovery && Array.isArray(team.memberRecovery.members) && team.memberRecovery.members.length && typeof props.onRecover === "function" ? h(MemberRecoveryPanel, { t: t, panelId: team.id, members: team.memberRecovery.members, onRecover: function (member, action, requestId) { return props.onRecover(team.memberRecovery, member, action, requestId); } }) : null,
+            group.tasks.length ? h("div", { className: "dat-project-team-task-list" }, group.tasks.map(function (task) { return h("section", { key: task.id, className: "dat-card dat-project-team-task", "data-attention": task.attention === true ? "true" : "false" }, h("h4", null, task.title || task.id), h("div", { className: "dat-project-team-task-meta" }, h("span", { className: "dat-badge" }, statusLabel(t, task.status)), task.blocked === true ? h("span", { className: "dat-badge dat-warn-text" }, t("projectTeamBoardBlocked")) : null, task.attention === true ? h("span", { className: "dat-badge dat-warn-text" }, t("projectTeamBoardAttention")) : null), h("div", { className: "dat-meta" }, task.ownerDutyName ? t("projectTeamBoardOwner", { value: task.ownerDutyName }) : t("projectTeamBoardUnassigned")), task.updatedAt ? h("time", { className: "dat-board-card-time", dateTime: task.updatedAt }, t("projectTeamBoardUpdated", { value: formatTime(task.updatedAt) })) : null); })) : h("div", { className: "dat-board-empty" }, t("projectTeamBoardTeamEmpty"))
+          );
+        })) : h("div", { className: "dat-panel dat-empty" }, h("p", null, t("projectTeamBoardNoMatch"))),
+        h("div", { className: "dat-panel dat-project-team-page", "aria-live": "polite" }, h("div", { className: "dat-project-team-page-copy" }, h("span", null, t("projectTeamBoardPageTeams", { page: effective.pageTeams, loaded: loadedCounts.teams, total: totalTeams, remaining: teamRemaining })), h("span", null, t("projectTeamBoardPageTasks", { page: effective.pageTasks, loaded: loadedCounts.tasks, total: totalTasks, remaining: taskRemaining }))), effective.nextCursor ? h(Button, { primary: true, disabled: loadingMore, onClick: loadMore }, loadingMore ? t("projectTeamBoardLoadingMore") : t("projectTeamBoardLoadMore")) : h("span", { className: "dat-note" }, t("projectTeamBoardNoMore"))),
+        pageErrorKey === resetKey ? h("div", { className: "dat-error", role: "alert" }, t("projectTeamBoardLoadError"), props.onRefresh ? h("div", { className: "dat-actions" }, h(Button, { small: true, onClick: props.onRefresh }, t("projectTeamBoardRefresh"))) : null) : null,
+        h("p", { className: "dat-project-team-boundary" }, t("projectTeamBoardBoundary"))
       );
     }
 
@@ -2518,6 +2892,54 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function newMemberRecoveryRequestId() {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return "member-recovery-" + crypto.randomUUID();
+      return "member-recovery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    }
+
+    function MemberRecoveryPanel(props) {
+      var t = props.t;
+      var confirmPair = useState(null), confirmation = confirmPair[0], setConfirmation = confirmPair[1];
+      var busyPair = useState(false), busy = busyPair[0], setBusy = busyPair[1];
+      var noticePair = useState(""), notice = noticePair[0], setNotice = noticePair[1];
+      var errorPair = useState(""), error = errorPair[0], setError = errorPair[1];
+      var requestRef = useRef(null), confirmButtonRef = useRef(null);
+      var panelId = "dat-member-recovery-" + String(props.panelId || props.members[0] && memberId(props.members[0]) || "panel").replace(/[^A-Za-z0-9_-]/g, "-");
+      useEffect(function () {
+        if (!confirmation) return;
+        confirmButtonRef.current && confirmButtonRef.current.focus && confirmButtonRef.current.focus();
+        var onKey = function (event) { if (event.key === "Escape" && !busy) { event.preventDefault(); setConfirmation(null); } };
+        document.addEventListener("keydown", onKey);
+        return function () { document.removeEventListener("keydown", onKey); };
+      }, [confirmation, busy]);
+      function choose(member, action) { if (busy) return; setError(""); setNotice(""); setConfirmation({ member: member, action: action }); }
+      function cancel() { if (!busy) setConfirmation(null); }
+      function submit() {
+        if (!confirmation || busy || requestRef.current) return;
+        var requestId = newMemberRecoveryRequestId();
+        requestRef.current = requestId; setBusy(true); setError(""); setNotice("");
+        props.onRecover(confirmation.member, confirmation.action, requestId).then(function () {
+          setNotice(t(confirmation.action === "replace" ? "recoverySuccessReplace" : "recoverySuccessRetry"));
+          setConfirmation(null);
+        }).catch(function (cause) { setError(t("recoveryError", { error: errorText(cause) })); }).finally(function () { requestRef.current = null; setBusy(false); });
+      }
+      return h("section", { className: "dat-member-recovery", "aria-labelledby": panelId + "-title" },
+        h("div", { className: "dat-member-recovery-head" }, h("div", null, h("h3", { id: panelId + "-title" }, t("recoveryTitle")), h("p", null, t("recoveryBody")))),
+        props.members.map(function (member) { var name = simpleMemberName(member, false, t); return h("div", { key: memberId(member), className: "dat-member-recovery-actions", role: "group", "aria-label": name }, h("span", { className: "dat-badge" }, name), h(Button, { disabled: busy, onClick: function () { choose(member, "retry"); } }, t("recoveryRetry")), h(Button, { danger: true, disabled: busy, onClick: function () { choose(member, "replace"); } }, t("recoveryReplace"))); }),
+        confirmation ? h("div", { className: "dat-member-recovery-confirm", role: "alertdialog", "aria-modal": "false", "aria-labelledby": panelId + "-confirm-copy" }, h("p", { id: panelId + "-confirm-copy" }, t(confirmation.action === "replace" ? "recoveryConfirmReplace" : "recoveryConfirmRetry", { name: simpleMemberName(confirmation.member, false, t) })), h("div", { className: "dat-member-recovery-actions" }, h(Button, { primary: true, buttonRef: confirmButtonRef, disabled: busy, onClick: submit }, busy ? t(confirmation.action === "replace" ? "recoveryWorkingReplace" : "recoveryWorkingRetry") : t("recoveryConfirm")), h(Button, { disabled: busy, onClick: cancel }, t("recoveryCancel")))) : null,
+        notice ? h("p", { className: "dat-member-recovery-status", role: "status", "aria-live": "polite" }, notice) : null,
+        error ? h("p", { className: "dat-error dat-member-recovery-status", role: "alert" }, error) : null
+      );
+    }
+
+    function MemberRecoveryReconcilePanel(props) {
+      var t = props.t, confirmPair = useState(null), confirmation = confirmPair[0], setConfirmation = confirmPair[1], busyPair = useState(false), busy = busyPair[0], setBusy = busyPair[1], noticePair = useState(""), notice = noticePair[0], setNotice = noticePair[1], errorPair = useState(""), error = errorPair[0], setError = errorPair[1], confirmRef = useRef(null);
+      var panelId = "dat-member-reconcile-" + String(props.panelId || "panel").replace(/[^A-Za-z0-9_-]/g, "-");
+      useEffect(function () { if (!confirmation) return; confirmRef.current && confirmRef.current.focus && confirmRef.current.focus(); var onKey = function (event) { if (event.key === "Escape" && !busy) { event.preventDefault(); setConfirmation(null); } }; document.addEventListener("keydown", onKey); return function () { document.removeEventListener("keydown", onKey); }; }, [confirmation, busy]);
+      function submit() { if (!confirmation || busy) return; setBusy(true); setError(""); props.onReconcile(confirmation.receipt, confirmation.resolution).then(function () { setNotice(t("recoveryReconcileSuccess")); setConfirmation(null); }).catch(function (cause) { setError(t("recoveryError", { error: errorText(cause) })); }).finally(function () { setBusy(false); }); }
+      return h("section", { className: "dat-member-recovery", "aria-labelledby": panelId + "-title" }, h("h3", { id: panelId + "-title" }, t("recoveryUnknownTitle")), props.receipts.map(function (receipt) { return h("div", { key: receipt.requestId, className: "dat-member-recovery-unknown" }, h("p", null, t("recoveryUnknownBody", { request: receipt.requestId, phase: receipt.phase })), h("div", { className: "dat-member-recovery-actions", role: "group", "aria-label": simpleMemberName(receipt.member, false, t) }, h("span", { className: "dat-badge" }, simpleMemberName(receipt.member, false, t)), props.paused ? null : h(Button, { disabled: busy, onClick: function () { setConfirmation({ receipt: receipt, resolution: "delivered" }); } }, t("recoveryMarkDelivered")), h(Button, { danger: true, disabled: busy, onClick: function () { setConfirmation({ receipt: receipt, resolution: "not_delivered" }); } }, t("recoveryMarkNotDelivered")))); }), confirmation ? h("div", { className: "dat-member-recovery-confirm", role: "alertdialog", "aria-modal": "false", "aria-labelledby": panelId + "-confirm" }, h("p", { id: panelId + "-confirm" }, t(confirmation.resolution === "delivered" ? "recoveryReconcileConfirmDelivered" : "recoveryReconcileConfirmNotDelivered")), h("div", { className: "dat-member-recovery-actions" }, h(Button, { primary: true, buttonRef: confirmRef, disabled: busy, onClick: submit }, busy ? t("recoveryReconcileWorking") : t("recoveryConfirm")), h(Button, { disabled: busy, onClick: function () { setConfirmation(null); } }, t("recoveryCancel")))) : null, notice ? h("p", { role: "status", "aria-live": "polite" }, notice) : null, error ? h("p", { className: "dat-error", role: "alert" }, error) : null);
+    }
+
     function ActiveTeam(props) {
       var t = props.t, team = props.team, members = team.members || [], tasks = team.tasks || [];
       var totalTaskCount = Number.isFinite(team.taskCount) ? team.taskCount : tasks.length;
@@ -2557,7 +2979,8 @@ window.__ModuleLoader__.load({
       var activeTasks = tasks.filter(function (task) { return String(task.status || task.state || "pending").toLowerCase() !== "completed"; }).sort(function (left, right) { return String(left.status || left.state) === "in_progress" ? -1 : String(right.status || right.state) === "in_progress" ? 1 : 0; });
       var completedTasks = tasks.filter(function (task) { return String(task.status || task.state || "").toLowerCase() === "completed"; }).sort(function (left, right) { return Date.parse(right.updatedAt || right.completedAt || 0) - Date.parse(left.updatedAt || left.completedAt || 0); });
       var currentMembers = sortMembersByActivity(members.filter(function (member) { return String(member.state || member.status || "").toLowerCase() !== "retired"; }));
-      var hasFailedMember = currentMembers.some(function (member) { return memberStateKind(member) === "failed"; });
+      var failedMembers = currentMembers.filter(function (member) { return memberStateKind(member) === "failed" && !(member.isLead || member.kind === "lead"); });
+      var hasFailedMember = failedMembers.length > 0;
       var agentCount = currentMembers.filter(function (member) { return !(member.isLead || member.kind === "lead" || memberSession(member) === team.leadSessionId); }).length;
       function nameFor(id) { var found = members.filter(function (member) { return memberId(member) === id || memberSession(member) === id; })[0]; return found && (found.displayName || found.name || memberId(found)); }
       function modelFor(id) { var found = members.filter(function (member) { return memberId(member) === id || memberSession(member) === id; })[0]; return found ? memberModelText(found, t) : ""; }
@@ -2619,7 +3042,7 @@ window.__ModuleLoader__.load({
           h("header", { className: "dat-command-bar" }, h("div", { className: "dat-command-title" }, h("h2", { className: "dat-title" }, teamName(team, t)), h("p", { className: "dat-subtitle" }, objective), h("div", { className: "dat-row", style: { marginTop: 6 } }, h("span", { className: "dat-badge" }, teamStatusLabel(t, team.status)), h("span", { className: "dat-badge" }, t("revision", { value: team.revision || "–" })))), h("div", { className: "dat-row" }, h(Button, { small: true, disabled: !team.leadSessionId || !props.sessions || typeof props.sessions.setSubagentCatalogOpen !== "function", onClick: openAgentCatalog }, t("openMembers", { count: agentCount })), h(Button, { small: true, ariaPressed: drawerOpen, onClick: openActivityPanel }, t("openActivity", { count: events.length })), completedTasks.length ? h(Button, { small: true, ariaPressed: historyOpen, onClick: function () { setHistoryOpen(!historyOpen); } }, historyOpen ? t("hideHistory") : t("openHistory", { count: completedTasks.length })) : null, !props.closed && !props.paused ? h(Button, { small: true, ariaPressed: actionsOpen, onClick: function () { setActionsOpen(!actionsOpen); } }, actionsOpen ? t("fewerActions") : t("moreActions")) : null)),
           projectionLimited ? h("div", { className: "dat-board-note dat-board-projection-note", role: "note" }, h("span", { "aria-hidden": "true" }, "⚠"), h("span", null, t("boardProjectionLimited", { shown: tasks.length, total: totalTaskCount }))) : null,
           taskSelectionNotice ? h("div", { className: "dat-board-note", role: "status" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, taskSelectionNotice)) : null,
-          hasFailedMember ? h("div", { className: "dat-board-note", role: "alert" }, h("span", { "aria-hidden": "true" }, "⚠"), h("span", null, t("failedNext")), h(Button, { small: true, disabled: !team.leadSessionId || !props.sessions || typeof props.sessions.setSubagentCatalogOpen !== "function", onClick: openAgentCatalog }, t("openMembers", { count: agentCount }))) : null,
+          hasFailedMember && props.canRecover ? h(MemberRecoveryPanel, { t: t, members: failedMembers, onRecover: props.onRecover }) : hasFailedMember ? h("div", { className: "dat-board-note", role: "alert" }, h("span", { "aria-hidden": "true" }, "⚠"), h("span", null, t("failedNext")), h(Button, { small: true, disabled: !team.leadSessionId || !props.sessions || typeof props.sessions.setSubagentCatalogOpen !== "function", onClick: openAgentCatalog }, t("openMembers", { count: agentCount }))) : null,
           h("div", { className: "dat-row", style: { justifyContent: "flex-end", marginBottom: 10 } }, h("div", { className: "dat-view-toggle", role: "group", "aria-label": t("currentWork") }, h(Button, { small: true, ariaPressed: workMode === "canvas", onClick: function () { setWorkMode("canvas"); } }, t("canvasView")), h(Button, { small: true, ariaPressed: workMode === "list", onClick: function () { setWorkMode("list"); } }, t("listView")))),
           actionsOpen && !props.closed && !props.paused ? h("section", { className: "dat-panel dat-actions-panel", "aria-labelledby": "dat-quick-actions" }, h("h2", { id: "dat-quick-actions", className: "dat-section-title" }, t("quickActions")), h("div", { className: "dat-actions" }, prompts.map(function (item) { return h(Button, { key: item.key, small: true, onClick: function () { prompt(item.text, { creation: item.creation, includeTeams: item.includeTeams }); } }, t(item.key)); })), h("div", { className: "dat-note" }, t("draftOnly"))) : null,
           workMode === "canvas" ? h(TeamCanvas, { t: t, members: currentMembers, tasks: tasks, leadSessionId: team.leadSessionId, openMembers: openAgentCatalog, connection: props.connection, paused: props.paused, updatedAt: team.lastActivityAt, openTask: openTaskDetail }) : h("section", { className: "dat-panel dat-work-panel", "aria-labelledby": "dat-current-work" }, h("div", { className: "dat-column-head" }, h("h2", { id: "dat-current-work" }, t("currentWork")), h("span", { className: "dat-badge" }, activeTasks.length)), h("div", { className: "dat-work-list" }, activeTasks.length ? activeTasks.map(function (task) { return h(TaskCard, { key: taskId(task), task: task, compact: true, t: t, memberName: nameFor, memberModel: modelFor, onOpen: openTaskDetail }); }) : h("div", { className: "dat-meta dat-work-empty" }, t("noActiveTasks")))),
@@ -2697,6 +3120,27 @@ window.__ModuleLoader__.load({
           return fetchState(props.sessionId).then(function (state) { live.setState(state); }).catch(function () {});
         }).finally(function () { setBusy(false); });
       }
+      function postMemberRecovery(targetTeamId, expectedRevision, member, recoveryAction, requestId) {
+        return postAction(props.sessionId, recoveryAction === "replace" ? "member-replace" : "member-retry", { teamId: targetTeamId, memberId: memberId(member), expectedRevision: expectedRevision, requestId: requestId, confirm: true }).then(function (result) {
+          if (!applyActionState(result)) return fetchState(props.sessionId, targetTeamId).then(function (state) { live.setState(state); return result; });
+          return result;
+        }).catch(function (cause) {
+          return fetchState(props.sessionId, targetTeamId).then(function (state) { live.setState(state); }, function () {}).then(function () { throw cause; });
+        });
+      }
+      function recoverMember(member, recoveryAction, requestId) {
+        if (!team || props.sessionId !== team.leadSessionId) return Promise.reject(new Error("exact fixed root required"));
+        return postMemberRecovery(teamId(team), team.revision, member, recoveryAction, requestId);
+      }
+      function recoverProjectMember(recovery, member, recoveryAction, requestId) {
+        if (!recovery || typeof recovery.teamId !== "string" || !Number.isSafeInteger(recovery.expectedRevision)) return Promise.reject(new Error("trusted recovery projection unavailable"));
+        return postMemberRecovery(recovery.teamId, recovery.expectedRevision, member, recoveryAction, requestId);
+      }
+      function reconcileProjectMember(recovery, receipt, resolution) {
+        if (!recovery || typeof recovery.teamId !== "string" || !Number.isSafeInteger(recovery.expectedRevision) || !receipt || typeof receipt.requestId !== "string") return Promise.reject(new Error("trusted recovery receipt unavailable"));
+        return postAction(props.sessionId, "member-reconcile", { teamId: recovery.teamId, requestId: receipt.requestId, resolution: resolution, expectedRevision: recovery.expectedRevision, confirm: true }).then(function (result) { if (!applyActionState(result)) return fetchState(props.sessionId, recovery.teamId).then(function (state) { live.setState(state); return result; }); return result; }).catch(function (cause) { return fetchState(props.sessionId, recovery.teamId).then(function (state) { live.setState(state); }, function () {}).then(function () { throw cause; }); });
+      }
+      function recoverProjectRoot(recovery,action){if(!recovery||typeof recovery.recoveryRef!=="string"||!Number.isSafeInteger(recovery.revision))return Promise.reject(new Error("trusted root recovery projection unavailable"));return postAction(props.sessionId,"root-recovery-continue",{recoveryRef:recovery.recoveryRef,expectedRevision:recovery.revision,recoveryAction:action,confirm:true});}
       var connectionKey = live.connection === "live" ? "live" : live.connection === "polling" ? "polling" : live.connection === "stale" ? "stale" : "disconnected";
       var closed = !!(team && String(team.status || team.state || "").toLowerCase() === "closed");
       var paused = !!(team && String(team.status || team.state || "").toLowerCase() === "paused");
@@ -2704,9 +3148,10 @@ window.__ModuleLoader__.load({
       var taskCount = team ? (Number.isFinite(team.taskCount) ? team.taskCount : Array.isArray(team.tasks) ? team.tasks.length : 0) : 0;
       var memberCount = team && Array.isArray(team.members) ? team.members.length : 0;
       var eventCount = team ? (team.events || team.messages || []).length + (team.inboundEvents || []).length : 0;
+      var projectTeamTaskCount = snapshot && snapshot.projectTeamBoard && snapshot.projectTeamBoard.available === true ? projectTeamBoardCount(snapshot.projectTeamBoard.stats && snapshot.projectTeamBoard.stats.totalTasks) : undefined;
       var workspaceContent = null;
-      if (workspaceView === "projectTasks") {
-        workspaceContent = h(ProjectTasksWorkspace, { t: t, setWorkspaceView: setWorkspaceView });
+      if (workspaceView === "projectTasks" || workspaceView === "flow") {
+        workspaceContent = h(ProjectCollaborationWorkspace, { t: t, setWorkspaceView: setWorkspaceView, projectTeamBoard: snapshot && snapshot.projectTeamBoard, onRecover: recoverProjectMember, onReconcile: reconcileProjectMember, onRootRecovery: recoverProjectRoot });
       } else if (!snapshot && !live.error) {
         workspaceContent = h("div", { className: "dat-panel dat-empty", role: "status" }, t("loading"));
       } else if (snapshot && !snapshot.enabled) {
@@ -2715,8 +3160,6 @@ window.__ModuleLoader__.load({
         workspaceContent = h(React.Fragment, null, teams.length > 1 ? h(TeamOverview, { t: t, teams: teams, selectedId: team && teamId(team), select: setSelectedId }) : null, h(ParticipantsWorkspace, { t: t, team: team, teams: teams, sessions: props.sessions }));
       } else if (workspaceView === "automation") {
         workspaceContent = h(AutomationWorkspace, { t: t, sessionId: props.sessionId, setView: props.setView, setWorkspaceView: setWorkspaceView });
-      } else if (workspaceView === "flow") {
-        workspaceContent = h(FlowWorkspace, { t: t, team: team });
       } else if (snapshot && snapshot.enabled && teams.length === 0) {
         workspaceContent = workspaceView === "canvas"
           ? h(EmptyTeamCanvasWorkspace, { t: t, setView: props.setView })
@@ -2727,15 +3170,15 @@ window.__ModuleLoader__.load({
         workspaceContent = h(React.Fragment, null,
           h(TeamOverview, { t: t, teams: teams, selectedId: team && teamId(team), select: setSelectedId }),
           workspaceView === "canvas"
-            ? h(ActiveTeam, { t: t, team: team, teams: teams, closed: closed, paused: paused, setDraft: setDraft, sessions: props.sessions, connection: live.connection })
+            ? h(ActiveTeam, { t: t, team: team, teams: teams, closed: closed, paused: paused, setDraft: setDraft, sessions: props.sessions, connection: live.connection, canRecover: !closed && !paused && props.sessionId === team.leadSessionId, onRecover: recoverMember })
             : workspaceView === "inbox"
               ? h(CoordinationInboxWorkspace, { t: t, team: team, teams: teams, setWorkspaceView: setWorkspaceView })
-              : h(TaskBoardWorkspace, { t: t, sessionId: props.sessionId, team: team, teams: teams, connection: live.connection, setWorkspaceView: setWorkspaceView }),
+              : h(TaskBoardWorkspace, { t: t, sessionId: props.sessionId, team: team, teams: teams, connection: live.connection, setWorkspaceView: setWorkspaceView, canRecover: !closed && !paused && props.sessionId === team.leadSessionId, onRecover: recoverMember }),
           h("details", { className: "dat-disclosure dat-settings-disclosure" }, h("summary", null, t("workspaceSettings")), h(DisableAutomaticTeams, { t: t, labelId: "dat-disable-teams", disable: disable, busy: busy, hasActive: hasActiveTeams }))
         );
       }
       return h("main", { className: "dat-view", "data-mobile-slot": "agent-teams.workspace", "data-harness-mobile-session-id": String(props.sessionId || ""), "data-harness-mobile-team-id": team ? String(teamId(team)) : undefined, "aria-labelledby": "dat-view-title" }, h("div", { className: "dat-shell" },
-        h(WorkspaceNav, { t: t, value: workspaceView, onChange: setWorkspaceView, counts: { tasks: taskCount, members: memberCount, events: eventCount } }),
+        h(WorkspaceNav, { t: t, value: workspaceView, onChange: setWorkspaceView, counts: { tasks: taskCount, projectTeamTasks: projectTeamTaskCount, members: memberCount, events: eventCount } }),
         h("div", { className: "dat-head" }, h("div", null, h("h1", { id: "dat-view-title", className: "dat-title" }, t("title")), h("p", { className: "dat-subtitle" }, t("workspaceIntro"))), h("span", { className: "dat-badge", "data-mobile-slot": "agent-teams.context", "data-harness-mobile-session-id": String(props.sessionId || ""), title: t("connection") + " · " + props.sessionId }, h("span", { className: "dat-dot", style: live.connection === "live" ? null : { background: "var(--dsw-alias-state-warn-primary)" } }), t(connectionKey) + " · " + String(props.sessionId || "").slice(-8))),
         live.error ? h("div", { className: "dat-error", role: "alert" }, t("loadError", { error: live.error }), " ", h(Button, { small: true, onClick: live.reload }, t("retry"))) : null,
         actionError ? h("div", { className: "dat-error", role: "alert" }, t("actionError", { error: actionError })) : null,

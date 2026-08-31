@@ -4,7 +4,7 @@ const { existsSync, mkdtempSync, readFileSync, writeFileSync } = require('node:f
 const os = require('node:os')
 const path = require('node:path')
 
-const { MobileSyncStore, normalizeState, DEFAULT_SERVICE_ADDRESS, STATE_SCHEMA_VERSION } = require('../electron/store/mobile-sync-store.cjs')
+const { MobileSyncStore, normalizeState, DEFAULT_SERVICE_ADDRESS, STATE_SCHEMA_VERSION, SYNC_PROTOCOL_VERSION } = require('../electron/store/mobile-sync-store.cjs')
 
 function secretAdapter() {
   const transform = value => Buffer.from(value).map(byte => byte ^ 0xa5)
@@ -206,4 +206,108 @@ test('normalizeState drops malformed secrets and invalid ports', () => {
   assert.equal(state.devices[0].appVersion, null)
   assert.equal(state.remoteEnabled, true)
   assert.equal(state.transportPreference, 'auto')
+})
+
+test('workspace manifest persists only bounded non-sensitive project, session, and read metadata', () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'harness-mobile-manifest-'))
+  const file = path.join(directory, 'mobile-sync.json')
+  const store = new MobileSyncStore(file, secretAdapter())
+  const committed = store.commitSyncManifest({
+    complete: true,
+    operationId: 'initial-authoritative-snapshot',
+    observedAt: '2026-08-30T12:00:00.000Z',
+    workspaces: [{ workspaceId: 'workspace-one', title: 'Project One', path: 'D:\\Private\\project', token: 'WORKSPACE_TOKEN' }],
+    sessions: [{ sessionId: 'session-one', workspaceId: 'workspace-one', title: 'Session One', status: 'idle', transcript: 'PRIVATE_BODY', credential: 'SESSION_TOKEN' }],
+    readMessages: [{ sessionId: 'session-one', messageId: 'message-one', readAt: '2026-08-30T11:59:00.000Z', body: 'PRIVATE_BODY' }]
+  })
+  assert.equal(committed.schemaVersion, SYNC_PROTOCOL_VERSION)
+  assert.equal(Number.isSafeInteger(committed.snapshotEpoch), true)
+  assert.ok(committed.snapshotEpoch >= 0)
+  assert.equal(committed.revision, 1)
+  assert.match(committed.cursor, /^[A-Za-z0-9_-]{16,128}$/)
+  assert.equal(committed.complete, true)
+  assert.deepEqual(committed.snapshot.workspaces, [{ workspaceId: 'workspace-one', title: 'Project One' }])
+  assert.deepEqual(committed.snapshot.sessions, [{ sessionId: 'session-one', workspaceId: 'workspace-one', title: 'Session One', status: 'idle' }])
+  assert.deepEqual(committed.snapshot.readMessages, [{ sessionId: 'session-one', messageId: 'message-one', readAt: '2026-08-30T11:59:00.000Z' }])
+  const serialized = readFileSync(file, 'utf8')
+  for (const forbidden of ['D:\\Private', 'WORKSPACE_TOKEN', 'SESSION_TOKEN', 'PRIVATE_BODY', 'credential', 'transcript']) assert.equal(serialized.includes(forbidden), false)
+
+  const reopened = new MobileSyncStore(file, secretAdapter()).readSyncChanges()
+  assert.equal(reopened.snapshotEpoch, committed.snapshotEpoch)
+  assert.equal(reopened.revision, committed.revision)
+  assert.equal(reopened.cursor, committed.cursor)
+  assert.deepEqual(reopened.snapshot, committed.snapshot)
+})
+
+test('temporary empty results cannot replace a valid manifest and deletion requires an explicit tombstone', () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'harness-mobile-empty-guard-'))
+  const file = path.join(directory, 'mobile-sync.json')
+  const store = new MobileSyncStore(file, secretAdapter())
+  const first = store.commitSyncManifest({
+    complete: true,
+    operationId: 'snapshot-one',
+    workspaces: [{ workspaceId: 'workspace-one', title: 'Project' }],
+    sessions: [{ sessionId: 'session-one', workspaceId: 'workspace-one', title: 'Session' }]
+  })
+  const diskBefore = readFileSync(file, 'utf8')
+  const guarded = store.commitSyncManifest({ complete: true, operationId: 'transient-empty', workspaces: [{ workspaceId: 'workspace-one', title: 'Project' }], sessions: [] })
+  assert.equal(guarded.protected, true)
+  assert.equal(guarded.complete, false)
+  assert.equal(guarded.revision, first.revision)
+  assert.equal(guarded.cursor, first.cursor)
+  assert.equal(readFileSync(file, 'utf8'), diskBefore, 'incomplete observations never touch durable state')
+  assert.equal(store.readSyncChanges().snapshot.sessions.length, 1)
+
+  const deleted = store.commitSyncManifest({
+    complete: true,
+    operationId: 'explicit-session-delete',
+    workspaces: [{ workspaceId: 'workspace-one', title: 'Project' }],
+    sessions: [],
+    tombstones: [{ kind: 'session', id: 'session-one' }]
+  })
+  assert.equal(deleted.protected, false)
+  assert.equal(deleted.revision, first.revision + 1)
+  assert.deepEqual(store.readSyncChanges().snapshot.sessions, [])
+  assert.deepEqual(store.readSyncChanges().snapshot.tombstones.map(({ kind, id }) => ({ kind, id })), [{ kind: 'session', id: 'session-one' }])
+})
+
+test('same-epoch incremental cursors are resumable and operation ids are short-term idempotency keys', () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'harness-mobile-cursor-'))
+  const store = new MobileSyncStore(path.join(directory, 'mobile-sync.json'), secretAdapter())
+  const first = store.commitSyncManifest({ complete: true, operationId: 'base', workspaces: [], sessions: [] })
+  const secondInput = {
+    complete: false,
+    operationId: 'increment-one',
+    snapshotEpoch: first.snapshotEpoch,
+    revision: first.revision + 1,
+    sessions: [{ sessionId: 'session-two', title: 'Second' }]
+  }
+  const second = store.commitSyncManifest(secondInput)
+  assert.equal(second.revision, first.revision + 1)
+  const resumed = store.readSyncChanges({ snapshotEpoch: first.snapshotEpoch, cursor: first.cursor })
+  assert.equal(resumed.resetRequired, false)
+  assert.equal(resumed.snapshot, null)
+  assert.equal(resumed.changes.length, 1)
+  assert.equal(resumed.changes[0].revision, second.revision)
+  assert.equal(resumed.changes[0].sessions[0].sessionId, 'session-two')
+
+  const duplicate = store.commitSyncManifest(secondInput)
+  assert.equal(duplicate.applied, false)
+  assert.equal(duplicate.duplicate, true)
+  assert.equal(store.readSyncChanges().revision, second.revision)
+  assert.throws(() => store.commitSyncManifest({ ...secondInput, sessions: [{ sessionId: 'different' }] }), error => error.code === 'MOBILE_SYNC_OPERATION_CONFLICT')
+  assert.throws(() => store.commitSyncManifest({ complete: false, operationId: 'wrong-epoch', snapshotEpoch: first.snapshotEpoch + 1, revision: second.revision + 1, sessions: [{ sessionId: 'third' }] }), error => error.code === 'MOBILE_SYNC_EPOCH_CONFLICT')
+  const stale = store.readSyncChanges({ snapshotEpoch: first.snapshotEpoch + 1, cursor: first.cursor })
+  assert.equal(stale.resetRequired, true)
+  assert.ok(stale.snapshot)
+  for (const request of [
+    { snapshotEpoch: first.snapshotEpoch },
+    { cursor: first.cursor },
+    { snapshotEpoch: first.snapshotEpoch, cursor: 'A'.repeat(24) }
+  ]) {
+    const reset = store.readSyncChanges(request)
+    assert.equal(reset.resetRequired, true)
+    assert.ok(reset.snapshot)
+    assert.deepEqual(reset.changes, [])
+  }
 })

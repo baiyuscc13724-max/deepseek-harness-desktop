@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { access, readFile, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchAssistantCopySource } from './assistant-copy-patch.mjs'
@@ -7,13 +8,15 @@ import { createChatStopFollowState, reduceChatStopFollowState } from './chat-sto
 import { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 import { patchWorkspaceSessionMenuSource } from './workspace-session-menu-patch.mjs'
 import { patchCodexParityRuntime } from './codex-parity-runtime-patch.mjs'
-import { patchToolResultImageSource, patchToolResultOwnerSource } from './tool-result-image-patch.mjs'
+import { patchAlpha2ToolResultImageSource, patchToolResultImageSource, patchToolResultOwnerSource } from './tool-result-image-patch.mjs'
 import { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.mjs'
 import { patchConversationWorkTreeSource } from './conversation-work-tree-patch.mjs'
 import { patchSessionPersistenceListingSource } from './session-persistence-performance-patch.mjs'
 import { patchHostSessionListingSource } from './session-list-metadata-performance-patch.mjs'
 import { patchTimelineReferenceActionSource } from './timeline-reference-patch.mjs'
 import { patchModelSettingsKeyOverrideSource } from './model-settings-key-override-patch.mjs'
+import { patchModelSettingsCredentialValidationSource } from './model-settings-credential-validation-patch.mjs'
+import { patchDeepSeekModelDiscoverySource } from './deepseek-model-discovery-patch.mjs'
 
 export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
 export { patchAttachmentInputConversationSource, patchAttachmentInputSource } from './attachment-input-patch.mjs'
@@ -26,6 +29,8 @@ export { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.
 export { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 export { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
 export { patchModelSettingsKeyOverrideSource } from './model-settings-key-override-patch.mjs'
+export { patchModelSettingsCredentialValidationSource } from './model-settings-credential-validation-patch.mjs'
+export { patchDeepSeekModelDiscoverySource } from './deepseek-model-discovery-patch.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runtimeClient = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js')
@@ -43,7 +48,10 @@ const bashSandboxRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-
 const windowsAclRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-sandbox-windows-acl', 'lib', 'types-CNjZgO4h.js')
 const modelSelectionRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
 const modelSettingsRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-models', 'lib', 'client.js')
+const deepSeekLlmRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js')
 const workspaceUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js')
+const sessionControllerClientRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-api-session-controller', 'lib', 'client.js')
+const sessionControllerHostRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-api-session-controller', 'lib', 'index.js')
 const sessionPersistenceRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session-persistence-jsonl', 'lib', 'index.js')
 const hostApiProxyRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'index.js')
 const agentLoopRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-loop', 'lib', 'index.js')
@@ -144,6 +152,60 @@ const PATCHED = dedentOne(`\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\t});
 \t\t\t\t}`)
 
+const ALPHA2_WORKSPACE_START_SESSION_ORIGINAL = dedentOne(`				startSession(workspaceId) {
+					const workspace = this.workspaces.list.getSnapshot();
+					const sessions = this.sessions.list.getSnapshot();
+					const current = sessions.current;
+					const currentWorkspaceId = current === void 0 ? void 0 : workspace.items.find((item) => item.sessionIds.includes(current))?.workspaceId;
+					const recent = workspace.phase === "ready" && sessions.phase === "ready" ? recentWorkspace(workspace.items, sessions.byId) : void 0;
+					const target = workspaceId ?? currentWorkspaceId ?? recent;
+					if (target === void 0) {
+						this.sessions.clear();
+						return;
+					}
+					this.connectWorkspace(target).then((sessionId) => {
+						this.sessions.open(sessionId);
+					}, (reason) => {
+						console.warn("new session failed:", reason);
+					});
+				}`)
+
+const ALPHA2_WORKSPACE_START_SESSION_PATCHED = dedentOne(`				startSession(workspaceId) {
+					const workspace = this.workspaces.list.getSnapshot();
+					const sessions = this.sessions.list.getSnapshot();
+					const current = sessions.current;
+					const currentSummary = current === void 0 ? void 0 : sessions.byId[current];
+					const currentWorkspaceId = current === void 0 ? void 0 : workspace.items.find((item) => item.sessionIds.includes(current) || currentSummary?.cwd !== void 0 && item.path === currentSummary.cwd)?.workspaceId;
+					const hintedWorkspaceId = current !== void 0 && this.sessionWorkspaceHint?.sessionId === current ? this.sessionWorkspaceHint.workspaceId : void 0;
+					const recent = workspace.phase === "ready" && sessions.phase === "ready" ? recentWorkspace(workspace.items, sessions.byId) : void 0;
+					const target = workspaceId ?? currentWorkspaceId ?? this.pendingSessionWorkspaceTarget ?? hintedWorkspaceId ?? recent;
+					const generation = (this.sessionStartGeneration ?? 0) + 1;
+					this.sessionStartGeneration = generation;
+					if (target === void 0) {
+						this.pendingSessionWorkspaceTarget = void 0;
+						this.pendingSessionOriginalSession = void 0;
+						this.sessions.clear();
+						return;
+					}
+					if (current !== void 0 && this.pendingSessionOriginalSession === void 0) this.pendingSessionOriginalSession = current;
+					this.pendingSessionWorkspaceTarget = target;
+					this.sessions.clear();
+					this.sessions.create({ workspaceId: target }).then((sessionId) => {
+						if (generation !== this.sessionStartGeneration) return;
+						this.sessionWorkspaceHint = { sessionId, workspaceId: target };
+						this.pendingSessionWorkspaceTarget = void 0;
+						this.pendingSessionOriginalSession = void 0;
+						this.sessions.open(sessionId);
+					}, (reason) => {
+						if (generation !== this.sessionStartGeneration) return;
+						const previous = this.pendingSessionOriginalSession;
+						this.pendingSessionWorkspaceTarget = void 0;
+						this.pendingSessionOriginalSession = void 0;
+						if (previous !== void 0) this.sessions.open(previous);
+						console.warn("new session failed:", reason);
+					});
+				}`)
+
 const SESSION_PROJECTION_SUBSCRIPTION_ORIGINAL = dedentOne(`\t\t\t\t\t\tstore = new ProjectionValueStore();
 \t\t\t\t\t\tstore.subscribeAny(() => {
 \t\t\t\t\t\t\tthis.notifier.markDirty();
@@ -173,6 +235,18 @@ const SESSION_PROJECTION_FRAME_PATCHED = dedentOne(`\t\t\t\t\tif (frame.type ===
 \t\t\t\t\t\tif ((frame.key === "tokenUsage" || frame.key === "subagentTiming") && this.openCatalogs.size > 0) this.notifier.markDirty();
 \t\t\t\t\t\treturn;
 \t\t\t\t\t}`)
+
+const ALPHA2_SESSION_PROJECTION_FRAME_ORIGINAL = dedentOne(`					if (frame.type === "projection") {
+						this.projectionStore(frame.sessionId).apply(frame.key, frame.value, frame.seq);
+						this.notifier.markDirty();
+						return;
+					}`)
+const ALPHA2_SESSION_PROJECTION_FRAME_PATCHED = dedentOne(`					if (frame.type === "projection") {
+						this.projectionStore(frame.sessionId).apply(frame.key, frame.value, frame.seq);
+						// Catalog metrics are list-facing only while a catalog is visibly consuming them.
+						if ((frame.key === "tokenUsage" || frame.key === "subagentTiming") && this.openCatalogs.size > 0) this.notifier.markDirty();
+						return;
+					}`)
 
 const SESSION_ENTRY_CACHE_ORIGINAL = '\t\t\t\tfor (const id of this.entryCache.keys()) if (!items.some((e) => e.sessionId === id)) this.entryCache.delete(id);'
 const SESSION_ENTRY_CACHE_PATCHED = dedentOne(`\t\t\t\tconst retainedEntryIds = new Set(items.map((entry) => entry.sessionId));
@@ -343,6 +417,13 @@ const CONVERSATION_MENTIONS_PATCHED = dedentOne(`						fileMentions: (owner) => 
 						} },`)
 
 const TOKEN_USAGE_DETAIL_MARKER = 'key: "tokenUsageDetail"'
+const TOKEN_USAGE_DETAIL_COMPLETE_MARKERS = [
+  TOKEN_USAGE_DETAIL_MARKER,
+  'const tokenUsageDetailProjectionDefinition = {',
+  'activeRouteKey: null',
+  'previousPromptTokens:',
+  'lastCacheReadReported:'
+]
 const TOKEN_USAGE_DETAIL_ANCHOR = 'const contextPressureProjectionDefinition = {'
 const TOKEN_USAGE_DETAIL_PATCH = dedentOne(`	const tokenUsageDetailSchema = z$1.object({
 		totals: projectionSchema,
@@ -452,6 +533,8 @@ const TOKEN_USAGE_DETAIL_PATCH_STATE_WIRE = TOKEN_USAGE_DETAIL_PATCH
 
 const TOKEN_USAGE_REGISTER_ORIGINAL = 'projectionCtx.sessionProjections.register(tokenUsageProjectionDefinition);\n\t\t\tprojectionCtx.sessionProjections.register(contextPressureProjectionDefinition);'
 const TOKEN_USAGE_REGISTER_PATCHED = 'projectionCtx.sessionProjections.register(tokenUsageProjectionDefinition);\n\t\t\tprojectionCtx.sessionProjections.register(tokenUsageDetailProjectionDefinition);\n\t\t\tprojectionCtx.sessionProjections.register(contextPressureProjectionDefinition);'
+const TOKEN_USAGE_REGISTER_ALPHA2_ORIGINAL = 'ctx.sessionProjections.register(tokenUsageProjectionDefinition);\n\t\tctx.sessionProjections.register(contextPressureProjectionDefinition);\n\t\tctx.sessionProjections.register(contextBreakdownProjectionDefinition);'
+const TOKEN_USAGE_REGISTER_ALPHA2_PATCHED = 'ctx.sessionProjections.register(tokenUsageProjectionDefinition);\n\t\tctx.sessionProjections.register(tokenUsageDetailProjectionDefinition);\n\t\tctx.sessionProjections.register(contextPressureProjectionDefinition);\n\t\tctx.sessionProjections.register(contextBreakdownProjectionDefinition);'
 
 const CONVERSATION_USAGE_ORIGINAL = 'const usage = useProjection("tokenUsage");\n\t\t\tconst projected = useProjection("sessionStats");'
 const CONVERSATION_USAGE_PATCHED = 'const usage = useProjection("tokenUsage");\n\t\t\tconst cacheDetail = useProjection("tokenUsageDetail");\n\t\t\tconst projected = useProjection("sessionStats");'
@@ -490,6 +573,12 @@ const CONVERSATION_CACHE_PATCHED = `			const cacheDetails = [];
 			const line = groups.join(" | ");
 			const tooltipLine = [...groups, ...cacheDetails.filter((item) => !groups.includes(item))].join(" | ");`
 
+const CONVERSATION_CACHE_ALPHA2_ORIGINAL = CONVERSATION_CACHE_ORIGINAL
+  .replace('formatTokens(billedInputTokens(usage))', 'formatTokens(billedInputTokens(usage), t)')
+  .replace('formatTokens(usage.outputTokens)', 'formatTokens(usage.outputTokens, t)')
+const CONVERSATION_CACHE_ALPHA2_PATCHED = CONVERSATION_CACHE_PATCHED
+  .replace('formatTokens(billedInputTokens(usage))', 'formatTokens(billedInputTokens(usage), t)')
+  .replace('formatTokens(usage.outputTokens)', 'formatTokens(usage.outputTokens, t)')
 const CONVERSATION_TOOLTIP_ORIGINAL = 'label: line,\n\t\t\t\tside: "top",\n\t\t\t\tdelayMs: 500,\n\t\t\t\tdisabled: !truncated,'
 const CONVERSATION_TOOLTIP_PATCHED = 'label: tooltipLine,\n\t\t\t\tside: "top",\n\t\t\t\tdelayMs: 500,\n\t\t\t\tdisabled: !truncated && tooltipLine === line,'
 const CONVERSATION_STATS_CSS_ORIGINAL = 'const css$20 = ".FJxK0a_root{text-align:center;max-width:var(--dsh-chat-content-width);box-sizing:border-box;width:100%;padding:4px calc(var(--dsh-composer-side-clearance) + 16px) 0px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;margin:0 auto;font-size:12px;line-height:20px;display:block;overflow:hidden}.FJxK0a_sep{color:var(--dsw-alias-separator-primary);margin:0 10px}";'
@@ -1143,6 +1232,34 @@ export function patchRuntimeSource(source) {
   return { source: output, changed }
 }
 
+export function patchAlpha2WorkspaceStartSessionSource(source) {
+  if (source.includes(ALPHA2_WORKSPACE_START_SESSION_PATCHED)) return { source, changed: false }
+  if (!source.includes(ALPHA2_WORKSPACE_START_SESSION_ORIGINAL)) {
+    throw new Error('Pinned DSH alpha.2 UiWorkspaceService.startSession changed; refusing an unsafe force-new patch.')
+  }
+  return { source: source.replace(ALPHA2_WORKSPACE_START_SESSION_ORIGINAL, ALPHA2_WORKSPACE_START_SESSION_PATCHED), changed: true }
+}
+
+export function patchAlpha2SessionControllerSource(source) {
+  const replacements = [
+    [SESSION_PROJECTION_SUBSCRIPTION_ORIGINAL, SESSION_PROJECTION_SUBSCRIPTION_PATCHED, 'projection subscription'],
+    [ALPHA2_SESSION_PROJECTION_FRAME_ORIGINAL, ALPHA2_SESSION_PROJECTION_FRAME_PATCHED, 'projection frame invalidation'],
+    [SESSION_ENTRY_CACHE_ORIGINAL, SESSION_ENTRY_CACHE_PATCHED, 'entry-cache cleanup'],
+    [NOTIFIER_FRAME_SCHEDULE_ORIGINAL, NOTIFIER_FRAME_SCHEDULE_PATCHED, 'notifier scheduler']
+  ]
+  const complete = replacements.every(([, patched]) => source.includes(patched))
+  if (complete) return { source, changed: false }
+  if (replacements.some(([, patched]) => source.includes(patched))) {
+    throw new Error('Pinned DSH alpha.2 SessionManager performance markers are partial; refusing an unsafe patch.')
+  }
+  let output = source
+  for (const [original, patched, label] of replacements) {
+    if (!output.includes(original)) throw new Error(`Pinned DSH alpha.2 SessionManager ${label} changed; refusing an unsafe patch.`)
+    output = output.replace(original, patched)
+  }
+  return { source: output, changed: true }
+}
+
 export function patchAttachmentProfileSource(source) {
   if (source.includes(ATTACHMENT_PROFILE_PATCHED)) return { source, changed: false }
   if (!source.includes(ATTACHMENT_PROFILE_ORIGINAL)) {
@@ -1181,6 +1298,50 @@ export function patchWebAppSource(source) {
     throw new Error('Pinned DSH browser launcher implementation changed; refusing an unsafe console-hide patch.')
   }
   return { source: source.replace(WEB_APP_BROWSER_LAUNCH_ORIGINAL, WEB_APP_BROWSER_LAUNCH_PATCHED), changed: true }
+}
+
+export function patchAlpha2ConversationSources(conversationSource, chatSource) {
+  for (const [source, anchors, label] of [
+    [conversationSource, ['data-conversation-scroll', 'function ConversationRoot', 'openView: actions.openView'], 'conversation shell'],
+    [chatSource, ['followSigRef', 'const TurnProcessNodeView', 'useProjection("tokenUsage")'], 'chat owner']
+  ]) {
+    for (const anchor of anchors) if (!source.includes(anchor) && !(label === 'conversation shell' && anchor === CONVERSATION_VIEW_OWNER_ORIGINAL && source.includes(CONVERSATION_VIEW_OWNER_PATCHED))) {
+      throw new Error(`Pinned DSH alpha.2 ${label} semantic anchor changed; refusing an unsafe desktop runtime patch.`)
+    }
+  }
+  let conversation = conversationSource
+  let conversationChanged = false
+  for (const [original, patched, label] of [
+    [CONVERSATION_QUEUE_ORIGINAL, CONVERSATION_QUEUE_PATCHED, 'internal team queue filtering']
+  ]) {
+    if (conversation.includes(patched)) continue
+    if (!conversation.includes(original)) throw new Error(`Pinned DSH alpha.2 ${label} changed; refusing an unsafe desktop runtime patch.`)
+    conversation = conversation.replace(original, patched)
+    conversationChanged = true
+  }
+  const labels = patchAttachmentInputConversationSource(conversation)
+  conversation = labels.source
+  conversationChanged ||= labels.changed
+
+  let chat = chatSource
+  let chatChanged = false
+  const alphaTimelineOriginal = 'const timeline = useChat((s) => s.timeline);'
+  const alphaTimelinePatched = 'const runningTurnStart = useChat((s) => runningTurnStartTime(s.timeline));'
+  for (const [original, patched, label] of [
+    [CONVERSATION_USAGE_ORIGINAL, CONVERSATION_USAGE_PATCHED, 'token projection consumer'],
+    [CONVERSATION_CACHE_ALPHA2_ORIGINAL, CONVERSATION_CACHE_ALPHA2_PATCHED, 'cache summary'],
+    [CONVERSATION_TOOLTIP_ORIGINAL, CONVERSATION_TOOLTIP_PATCHED, 'cache detail tooltip'],
+    [CONVERSATION_CACHE_ZH_ORIGINAL, CONVERSATION_CACHE_ZH_PATCHED, 'Chinese cache labels'],
+    [CONVERSATION_CACHE_EN_ORIGINAL, CONVERSATION_CACHE_EN_PATCHED, 'English cache labels'],
+    [alphaTimelineOriginal, alphaTimelinePatched, 'chat timeline selector'],
+    [CONVERSATION_RUNNING_TURN_ORIGINAL, CONVERSATION_RUNNING_TURN_PATCHED, 'chat running-turn scalar']
+  ]) {
+    if (chat.includes(patched)) continue
+    if (!chat.includes(original)) throw new Error(`Pinned DSH alpha.2 ${label} changed; refusing an unsafe desktop runtime patch.`)
+    chat = chat.replace(original, patched)
+    chatChanged = true
+  }
+  return { conversationSource: conversation, chatSource: chat, changed: conversationChanged || chatChanged }
 }
 
 export function patchConversationCacheSource(source) {
@@ -1265,15 +1426,24 @@ export function patchConversationCacheSource(source) {
 export function patchTokenMeterSource(source) {
   let output = source
   let changed = false
+  const detailMarkerCount = TOKEN_USAGE_DETAIL_COMPLETE_MARKERS.filter(marker => output.includes(marker)).length
+  const registrationPatched = output.includes(TOKEN_USAGE_REGISTER_PATCHED) || output.includes(TOKEN_USAGE_REGISTER_ALPHA2_PATCHED)
+  if ((detailMarkerCount > 0 && detailMarkerCount < TOKEN_USAGE_DETAIL_COMPLETE_MARKERS.length) || (detailMarkerCount === TOKEN_USAGE_DETAIL_COMPLETE_MARKERS.length) !== registrationPatched) {
+    throw new Error('Pinned DSH token usage detail patch is incomplete; refusing an unsafe repair.')
+  }
   if (!output.includes(TOKEN_USAGE_DETAIL_MARKER)) {
     if (!output.includes(TOKEN_USAGE_DETAIL_ANCHOR)) throw new Error('Pinned DSH token usage projection changed; refusing an unsafe cache-metrics patch.')
     const detailPatch = output.includes('stateSchema: contextPressureStateSchema') ? TOKEN_USAGE_DETAIL_PATCH_STATE_WIRE : TOKEN_USAGE_DETAIL_PATCH
     output = output.replace(TOKEN_USAGE_DETAIL_ANCHOR, `${detailPatch}${TOKEN_USAGE_DETAIL_ANCHOR}`)
     changed = true
   }
-  if (!output.includes(TOKEN_USAGE_REGISTER_PATCHED)) {
-    if (!output.includes(TOKEN_USAGE_REGISTER_ORIGINAL)) throw new Error('Pinned DSH token projection registration changed; refusing an unsafe cache-metrics patch.')
-    output = output.replace(TOKEN_USAGE_REGISTER_ORIGINAL, TOKEN_USAGE_REGISTER_PATCHED)
+  if (!output.includes(TOKEN_USAGE_REGISTER_PATCHED) && !output.includes(TOKEN_USAGE_REGISTER_ALPHA2_PATCHED)) {
+    const registrations = [
+      [TOKEN_USAGE_REGISTER_ORIGINAL, TOKEN_USAGE_REGISTER_PATCHED],
+      [TOKEN_USAGE_REGISTER_ALPHA2_ORIGINAL, TOKEN_USAGE_REGISTER_ALPHA2_PATCHED]
+    ].filter(([original]) => output.includes(original))
+    if (registrations.length !== 1) throw new Error('Pinned DSH token projection registration changed; refusing an unsafe cache-metrics patch.')
+    output = output.replace(registrations[0][0], registrations[0][1])
     changed = true
   }
   return { source: output, changed }
@@ -1539,6 +1709,45 @@ export function patchFsEditSource(source) {
   return { source: output, changed }
 }
 
+const OFFICIAL_RC2_VERSION = '0.1.1-rc.2'
+const OFFICIAL_ALPHA2_VERSION = '0.1.2-alpha.2'
+const OFFICIAL_ALPHA2_SESSION_CONTROLLER_CLIENT_HASH = 'D309F8E61F958A0D751A6D4A7C2E94F5C5A54E1313B3FCB2988A988C703F239C'
+const OFFICIAL_ALPHA2_SESSION_CONTROLLER_HOST_HASH = 'A28FA9A5FFAD5D2E7AF427C0410E973A5E14A36BC070EECF8735B77B95A17CEA'
+const OFFICIAL_ALPHA2_WORKSPACE_PATCHED_HASH = 'B47D4AD32FF91ACDC7B27BE85AA184E4579B1973DF2DB04FB8E58A30590FDE0D'
+const OFFICIAL_ALPHA2_SESSION_CONTROLLER_PATCHED_HASH = 'BADF08E05B7885EF1554E997B7FD39B5BBE6607E9FA9AFC927F135DE1DE8F5CF'
+const OFFICIAL_ALPHA2_HASHES = Object.freeze({
+  '@deepseek-ai/dsh-client-ui-conversation': '49185108A396BC5991ED15399FB622D8A00EFE634135CC28DA08EF429FCCD9A5',
+  '@deepseek-ai/dsh-client-ui-chat': '1AF416E18DD1A4DC0AB98665129D65B860EE654310F11DC152B242153D1773DD',
+  '@deepseek-ai/dsh-client-ui-tool': 'DCFF7D94129FD8B8AF247D480195599D9DB0189133A3A69F7F948E69F2C307B9',
+  '@deepseek-ai/dsh-token-meter': 'A96011805EA7477551F3161FF922DF6C1DE5C5E639995E4AA9395AE6BA816A13',
+  '@deepseek-ai/dsh-client-ui-model-selection': '68D80BC1D0C159DDC6079CCBB6E91981C524A1E2B5845986F577170B2A191978',
+  '@deepseek-ai/dsh-client-ui-settings-models': '70DE8C4CE48D9C133005B1F95F8E9E9FE114F3BB2D08A9206C2283469831D74D',
+  '@deepseek-ai/dsh-client-ui-workspace': 'CEB9BA4061A7C6F2DE7FC18922AC3CEB430DAA4A162C211E4741BC9F6547B42A'
+})
+
+function sourceSha256(source) {
+  return createHash('sha256').update(source).digest('hex').toUpperCase()
+}
+
+async function officialAlpha2Package(file, expectedName) {
+  const packageRoot = path.resolve(path.dirname(file), '..')
+  let manifest
+  try {
+    manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+  if (manifest.name !== expectedName) throw new Error(`Pinned DSH package identity changed for ${expectedName}; refusing an unsafe alpha.2 UI decision.`)
+  return manifest.version === OFFICIAL_ALPHA2_VERSION ? { packageRoot, manifest } : null
+}
+
+function assertOfficialAlpha2Artifact(source, packageName, anchors) {
+  const expected = OFFICIAL_ALPHA2_HASHES[packageName]
+  if (sourceSha256(source) !== expected) throw new Error(`Pinned DSH ${packageName}@${OFFICIAL_ALPHA2_VERSION} source hash changed; refusing an unsafe alpha.2 UI decision.`)
+  for (const anchor of anchors) if (!source.includes(anchor)) throw new Error(`Pinned DSH ${packageName}@${OFFICIAL_ALPHA2_VERSION} semantic anchor changed; refusing an unsafe alpha.2 UI decision.`)
+}
+
 export async function patchInstalledRuntime(file = runtimeClient) {
   const source = await readFile(file, 'utf8')
   const patched = patchRuntimeSource(source)
@@ -1560,13 +1769,53 @@ export async function patchInstalledDirectoryPicker(file = directoryPickerRuntim
   return patched.changed
 }
 
-export async function patchInstalledConversation(file = conversationRuntime) {
-  const source = await readFile(file, 'utf8')
+export function patchConversationSource(source) {
   const cache = patchConversationCacheSource(source)
   const deliveryOwner = patchToolResultOwnerSource(cache.source)
   const inputLabels = patchAttachmentInputConversationSource(deliveryOwner.source)
-  if (cache.changed || deliveryOwner.changed || inputLabels.changed) await writeFile(file, inputLabels.source, 'utf8')
-  return cache.changed || deliveryOwner.changed || inputLabels.changed
+  return {
+    source: inputLabels.source,
+    changed: cache.changed || deliveryOwner.changed || inputLabels.changed
+  }
+}
+
+export async function patchInstalledConversation(file = conversationRuntime) {
+  const alpha2 = await officialAlpha2Package(file, '@deepseek-ai/dsh-client-ui-conversation')
+  if (alpha2 !== null) {
+    const chatFile = path.join(path.dirname(alpha2.packageRoot), 'dsh-client-ui-chat', 'lib', 'client.js')
+    const chatPackage = await officialAlpha2Package(chatFile, '@deepseek-ai/dsh-client-ui-chat')
+    if (chatPackage === null) throw new Error('Pinned DSH alpha.2 chat companion is missing; refusing an unsafe conversation patch.')
+    const source = await readFile(file, 'utf8')
+    const chatSource = await readFile(chatFile, 'utf8')
+    const markers = [
+      source.includes(CONVERSATION_QUEUE_PATCHED),
+      source.includes('"image.copy": "复制图片 {name}"'),
+      source.includes('"image.cut": "Cut image {name}"'),
+      chatSource.includes(CONVERSATION_USAGE_PATCHED),
+      chatSource.includes(CONVERSATION_CACHE_ALPHA2_PATCHED),
+      chatSource.includes(CONVERSATION_TOOLTIP_PATCHED),
+      chatSource.includes(CONVERSATION_CACHE_ZH_PATCHED),
+      chatSource.includes(CONVERSATION_CACHE_EN_PATCHED),
+      chatSource.includes('const runningTurnStart = useChat((s) => runningTurnStartTime(s.timeline));'),
+      chatSource.includes(CONVERSATION_RUNNING_TURN_PATCHED)
+    ]
+    const patchedCount = markers.filter(Boolean).length
+    if (patchedCount !== 0 && patchedCount !== markers.length) throw new Error('Pinned DSH alpha.2 conversation patch is incomplete; refusing an unsafe repair.')
+    if (patchedCount === 0) {
+      assertOfficialAlpha2Artifact(source, '@deepseek-ai/dsh-client-ui-conversation', ['data-conversation-scroll', 'function ConversationRoot'])
+      assertOfficialAlpha2Artifact(chatSource, '@deepseek-ai/dsh-client-ui-chat', ['followSigRef', 'const TurnProcessNodeView', 'useProjection("tokenUsage")'])
+    }
+    const patched = patchAlpha2ConversationSources(source, chatSource)
+    if (patched.changed) {
+      await writeFile(file, patched.conversationSource, 'utf8')
+      await writeFile(chatFile, patched.chatSource, 'utf8')
+    }
+    return patched.changed
+  }
+  const source = await readFile(file, 'utf8')
+  const patched = patchConversationSource(source)
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
 }
 
 export async function patchInstalledAttachmentInput(file = attachmentUiRuntime) {
@@ -1578,6 +1827,17 @@ export async function patchInstalledAttachmentInput(file = attachmentUiRuntime) 
 
 export async function patchInstalledToolResultImages(file = toolUiRuntime) {
   const source = await readFile(file, 'utf8')
+  const alpha2 = await officialAlpha2Package(file, '@deepseek-ai/dsh-client-ui-tool')
+  if (alpha2 !== null) {
+    const highLevelMarkers = [source.includes('function resultImages(block)'), source.includes('@harness-desktop/recoverable-tool-error-v2')]
+    const markerCount = highLevelMarkers.filter(Boolean).length
+    if (markerCount !== 0 && markerCount !== highLevelMarkers.length) throw new Error('Pinned DSH alpha.2 tool UI patch is incomplete; refusing an unsafe repair.')
+    if (markerCount === 0) assertOfficialAlpha2Artifact(source, '@deepseek-ai/dsh-client-ui-tool', ['function resultText(node)', 'function ToolCallTree', 'function ToolDetails'])
+    const images = patchAlpha2ToolResultImageSource(source)
+    const recoverable = patchRecoverableToolErrorSource(images.source)
+    if (images.changed || recoverable.changed) await writeFile(file, recoverable.source, 'utf8')
+    return images.changed || recoverable.changed
+  }
   const images = patchToolResultImageSource(source)
   const recoverable = patchRecoverableToolErrorSource(images.source)
   if (images.changed || recoverable.changed) await writeFile(file, recoverable.source, 'utf8')
@@ -1586,6 +1846,10 @@ export async function patchInstalledToolResultImages(file = toolUiRuntime) {
 
 export async function patchInstalledTokenMeter(file = tokenMeterRuntime) {
   const source = await readFile(file, 'utf8')
+  const alpha2 = await officialAlpha2Package(file, '@deepseek-ai/dsh-token-meter')
+  if (alpha2 !== null && !source.includes(TOKEN_USAGE_DETAIL_MARKER)) {
+    assertOfficialAlpha2Artifact(source, '@deepseek-ai/dsh-token-meter', ['stateVersion: 2', 'cacheReadTokens', 'llm/retry-started', TOKEN_USAGE_REGISTER_ALPHA2_ORIGINAL])
+  }
   const patched = patchTokenMeterSource(source)
   if (patched.changed) await writeFile(file, patched.source, 'utf8')
   return patched.changed
@@ -1657,6 +1921,10 @@ export async function patchInstalledWindowsAcl(file = windowsAclRuntime) {
 
 export async function patchInstalledModelSelection(file = modelSelectionRuntime) {
   const source = await readFile(file, 'utf8')
+  if (await officialAlpha2Package(file, '@deepseek-ai/dsh-client-ui-model-selection') !== null) {
+    assertOfficialAlpha2Artifact(source, '@deepseek-ai/dsh-client-ui-model-selection', ['model.reasoning?.defaultEffort', 'state.current?.reasoningEffort ?? reasoning?.defaultEffort', 'const chooseEffort = (effort) =>', 'reasoningEffort: effort'])
+    return false
+  }
   const patched = patchReasoningEffortSliderSource(source)
   if (patched.changed) await writeFile(file, patched.source, 'utf8')
   return patched.changed
@@ -1664,16 +1932,70 @@ export async function patchInstalledModelSelection(file = modelSelectionRuntime)
 
 export async function patchInstalledModelSettings(file = modelSettingsRuntime) {
   const source = await readFile(file, 'utf8')
-  const patched = patchModelSettingsKeyOverrideSource(source)
+  if (await officialAlpha2Package(file, '@deepseek-ai/dsh-client-ui-settings-models') !== null) {
+    assertOfficialAlpha2Artifact(source, '@deepseek-ai/dsh-client-ui-settings-models', ['function deriveKeyRef(provider)', 'ctx.remote.credentials.describe([ref])', 'ctx.remote.credentials.set(ref, value)', 'ctx.remote.credentials.unset(ref)', 'reason: "credential-read-only"'])
+    return false
+  }
+  const keyOverride = patchModelSettingsKeyOverrideSource(source)
+  const validation = patchModelSettingsCredentialValidationSource(keyOverride.source)
+  if (keyOverride.changed || validation.changed) await writeFile(file, validation.source, 'utf8')
+  return keyOverride.changed || validation.changed
+}
+
+export async function patchInstalledDeepSeekModelDiscovery(file = deepSeekLlmRuntime) {
+  const source = await readFile(file, 'utf8')
+  const patched = patchDeepSeekModelDiscoverySource(source)
   if (patched.changed) await writeFile(file, patched.source, 'utf8')
   return patched.changed
 }
 
 export async function patchInstalledWorkspaceUi(file = workspaceUiRuntime) {
   const source = await readFile(file, 'utf8')
+  if (await officialAlpha2Package(file, '@deepseek-ai/dsh-client-ui-workspace') !== null) {
+    for (const anchor of ['function sessionVisible(session, current, archived)', 'session.origin !== "subagent"', 'function deriveGroups(', 'function deriveFlat(', 'insertSessionBefore(activeDrag.accountKey']) {
+      if (!source.includes(anchor)) throw new Error('Pinned DSH alpha.2 native workspace session-menu semantics changed; refusing an unsafe patch.')
+    }
+    const sourceHash = sourceSha256(source)
+    if (![OFFICIAL_ALPHA2_HASHES['@deepseek-ai/dsh-client-ui-workspace'], OFFICIAL_ALPHA2_WORKSPACE_PATCHED_HASH].includes(sourceHash)) {
+      throw new Error('Pinned DSH alpha.2 workspace source is neither exact official nor exact complete patched artifact; refusing an unsafe patch.')
+    }
+    const patched = patchAlpha2WorkspaceStartSessionSource(source)
+    if (sourceSha256(patched.source) !== OFFICIAL_ALPHA2_WORKSPACE_PATCHED_HASH) throw new Error('Pinned DSH alpha.2 workspace patch output hash changed; refusing an unsafe patch.')
+    if (patched.changed) await writeFile(file, patched.source, 'utf8')
+    return patched.changed
+  }
   const patched = patchWorkspaceSessionMenuSource(source)
   if (patched.changed) await writeFile(file, patched.source, 'utf8')
   return patched.changed
+}
+
+export async function patchInstalledAlpha2SessionController(file = sessionControllerClientRuntime) {
+  const source = await readFile(file, 'utf8')
+  if (await officialAlpha2Package(file, '@deepseek-ai/dsh-api-session-controller') === null) {
+    throw new Error('Exact alpha.2 graph selected but Session Controller client package is not alpha.2; refusing an unsafe patch.')
+  }
+  const sourceHash = sourceSha256(source)
+  if (![OFFICIAL_ALPHA2_SESSION_CONTROLLER_CLIENT_HASH, OFFICIAL_ALPHA2_SESSION_CONTROLLER_PATCHED_HASH].includes(sourceHash)) {
+    throw new Error('Pinned DSH alpha.2 Session Controller client is neither exact official nor exact complete patched artifact; refusing an unsafe patch.')
+  }
+  const patched = patchAlpha2SessionControllerSource(source)
+  if (sourceSha256(patched.source) !== OFFICIAL_ALPHA2_SESSION_CONTROLLER_PATCHED_HASH) throw new Error('Pinned DSH alpha.2 Session Controller patch output hash changed; refusing an unsafe patch.')
+  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  return patched.changed
+}
+
+export async function assertInstalledAlpha2NativeSessionList(file = sessionControllerHostRuntime) {
+  const source = await readFile(file, 'utf8')
+  if (await officialAlpha2Package(file, '@deepseek-ai/dsh-api-session-controller') === null) {
+    throw new Error('Exact alpha.2 graph selected but Session Controller host package is not alpha.2; refusing host-list retirement.')
+  }
+  if (sourceSha256(source) !== OFFICIAL_ALPHA2_SESSION_CONTROLLER_HOST_HASH) {
+    throw new Error('Pinned DSH alpha.2 Session Controller host source hash changed; refusing host-list retirement.')
+  }
+  for (const anchor of ['const COLD_SUMMARY_BATCH_SIZE = 16;', 'key: "sessionListMetadata"', 'const metadata = projections?.values.sessionListMetadata;', '...listFields(session.header)', 'cold.slice(offset, offset + COLD_SUMMARY_BATCH_SIZE)', 'function listFields(header)']) {
+    if (!source.includes(anchor)) throw new Error(`Pinned DSH alpha.2 native Session list proof changed (${anchor}); refusing host-list retirement.`)
+  }
+  return false
 }
 
 export async function patchInstalledSessionPersistence(file = sessionPersistenceRuntime) {
@@ -1718,8 +2040,140 @@ export async function patchInstalledWebApp(file = webAppRuntime) {
   return patched.changed
 }
 
+const OFFICIAL_GRAPH_SECTIONS = Object.freeze(['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'])
+const OFFICIAL_GRAPH_PROOFS = Object.freeze({
+  alpha2: Object.freeze({ version: OFFICIAL_ALPHA2_VERSION, selectedCount: 216, selectedNames: 215, selectedBytes: 62384, selectedSha256: '2fe4b564bd064447752eac205304dd39130a717236e85e8d5aaed822530c770c', rootCount: 20, rootBytes: 1111, rootSha256: '90e7639317bff29214acb13396966ba0b8cf22a9ef7c8d2a2f5a0a2bcbeda064' }),
+  rc2: Object.freeze({ version: OFFICIAL_RC2_VERSION, selectedCount: 188, selectedNames: 188, selectedBytes: 53868, selectedSha256: '86190efb1c721e2ad2318f6ecbeeab2a17ec8ca79d44efcd60e2c2af4647c7ba', rootCount: 20, rootBytes: 1051, rootSha256: '458670543f54b6293508410d98302bd6f1ba1af2dcd595b98b4fcac2ccfe48d4' })
+})
+
+function assertOfficialGraphField(value, label) {
+  if (typeof value !== 'string' || value.length === 0 || /[\0\r\n\\\uD800-\uDFFF]/u.test(value)) {
+    throw new Error(`Official DSH ${label} is malformed; refusing an unsafe runtime patch.`)
+  }
+  return value
+}
+
+function officialDshPackageName(location, entry) {
+  const canonicalLocation = assertOfficialGraphField(location, 'lock location')
+  if (canonicalLocation.startsWith('/') || canonicalLocation.endsWith('/') || canonicalLocation.includes('//') || canonicalLocation.split('/').includes('..') || !canonicalLocation.includes('node_modules/')) {
+    throw new Error(`Official DSH lock location is not canonical: ${location}; refusing an unsafe runtime patch.`)
+  }
+  const tail = canonicalLocation.slice(canonicalLocation.lastIndexOf('node_modules/') + 'node_modules/'.length)
+  const parts = tail.split('/')
+  const inferred = parts[0]?.startsWith('@') ? `${parts[0]}/${parts[1]}` : parts[0]
+  if (typeof entry?.name === 'string' && entry.name !== inferred) throw new Error(`Official DSH lock name/location mismatch: ${location}; refusing an unsafe runtime patch.`)
+  return entry?.name ?? inferred
+}
+
+function isOfficialDshPackage(name) {
+  return typeof name === 'string' && (name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'))
+}
+
+function officialGraphDigest(records) {
+  const buffers = records.map(record => Buffer.from(record, 'utf8')).sort(Buffer.compare)
+  const bytes = buffers.reduce((sum, record) => sum + record.length, 0)
+  return { count: buffers.length, bytes, sha256: createHash('sha256').update(Buffer.concat(buffers, bytes)).digest('hex') }
+}
+
+function officialRootRecords(source, label) {
+  if (source === null || typeof source !== 'object' || Array.isArray(source)) throw new Error(`Official DSH ${label} root graph is missing; refusing an unsafe runtime patch.`)
+  const records = []
+  for (const section of OFFICIAL_GRAPH_SECTIONS) {
+    const dependencies = source[section]
+    if (dependencies === undefined) continue
+    if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)) throw new Error(`Official DSH ${label} ${section} is malformed; refusing an unsafe runtime patch.`)
+    for (const [name, version] of Object.entries(dependencies)) {
+      if (!isOfficialDshPackage(name)) continue
+      assertOfficialGraphField(name, `${label} root name`)
+      assertOfficialGraphField(version, `${label} root version`)
+      records.push(`${section}\0${name}\0${version}\n`)
+    }
+  }
+  return records
+}
+
+export function classifyOfficialRuntimeGraph(manifest, lock, installedCoreManifest) {
+  const packages = lock?.packages
+  const lockManifest = packages?.['']
+  if (!packages || !lockManifest) throw new Error('Official DSH package-lock graph is missing; refusing an unsafe runtime patch.')
+  const manifestRootRecords = officialRootRecords(manifest, 'package')
+  const lockRootRecords = officialRootRecords(lockManifest, 'lock')
+  const manifestRoot = officialGraphDigest(manifestRootRecords)
+  const lockRoot = officialGraphDigest(lockRootRecords)
+  if (manifestRoot.count !== lockRoot.count || manifestRoot.bytes !== lockRoot.bytes || manifestRoot.sha256 !== lockRoot.sha256) {
+    throw new Error('Official DSH package and lock root graphs differ; refusing an unsafe runtime patch.')
+  }
+  const rootVersions = new Set(manifestRootRecords.map(record => record.slice(record.lastIndexOf('\0') + 1, -1)))
+  if (rootVersions.size !== 1 || ![OFFICIAL_RC2_VERSION, OFFICIAL_ALPHA2_VERSION].includes([...rootVersions][0])) throw new Error('Official DSH direct roots are mixed or unproved; refusing an unsafe runtime patch.')
+  const version = [...rootVersions][0]
+  const mode = version === OFFICIAL_ALPHA2_VERSION ? 'alpha2' : 'rc2'
+  const proof = OFFICIAL_GRAPH_PROOFS[mode]
+  if (manifestRoot.count !== proof.rootCount || manifestRoot.bytes !== proof.rootBytes || manifestRoot.sha256 !== proof.rootSha256) throw new Error('Official DSH exact root graph changed; refusing an unsafe runtime patch.')
+  if (installedCoreManifest?.name !== '@deepseek-ai/dsh' || installedCoreManifest?.version !== version) throw new Error('Installed @deepseek-ai/dsh identity/version does not match the exact root graph; refusing an unsafe runtime patch.')
+
+  const selected = Object.entries(packages)
+    .filter(([location]) => location !== '')
+    .map(([location, entry]) => ({ location, entry, name: officialDshPackageName(location, entry) }))
+    .filter(row => isOfficialDshPackage(row.name))
+  const selectedRecords = []
+  for (const { location, entry, name } of selected) {
+    assertOfficialGraphField(name, 'selected name')
+    const selectedVersion = assertOfficialGraphField(entry?.version, 'selected version')
+    const resolved = assertOfficialGraphField(entry?.resolved, 'selected resolved URL')
+    const integrity = assertOfficialGraphField(entry?.integrity, 'selected integrity')
+    if (selectedVersion !== version) throw new Error(`Official DSH selected lock version mismatch: ${location}; refusing an unsafe runtime patch.`)
+    const knownRegistry = ['https://registry.npmjs.org/@deepseek-ai/', 'https://registry.npmmirror.com/@deepseek-ai/'].some(prefix => resolved.startsWith(prefix))
+    if (!knownRegistry || !/^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(integrity)) throw new Error(`Official DSH selected lock artifact is not canonical: ${location}; refusing an unsafe runtime patch.`)
+    selectedRecords.push(`${location}\0${name}\0${selectedVersion}\0${resolved}\0${integrity}\n`)
+  }
+  const selectedDigest = officialGraphDigest(selectedRecords)
+  const selectedNames = new Set(selected.map(row => row.name)).size
+  if (selectedDigest.count !== proof.selectedCount || selectedNames !== proof.selectedNames || selectedDigest.bytes !== proof.selectedBytes || selectedDigest.sha256 !== proof.selectedSha256) throw new Error('Official DSH selected lock graph changed; refusing an unsafe runtime patch.')
+  const removed = new Set(selected.filter(row => ['@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-host-apiproxy'].includes(row.name)).map(row => row.name))
+  if (mode === 'alpha2' && removed.size !== 0) throw new Error('Removed alpha.2 compatibility package remains in the selected graph; refusing an unsafe runtime patch.')
+  if (mode === 'rc2' && removed.size !== 2) throw new Error('Required rc.2 compatibility packages are missing; refusing an unsafe runtime patch.')
+  return { mode, version, directRootCount: manifestRoot.count, selectedPackageCount: selectedDigest.count }
+}
+
+async function cliOfficialRuntimeGraph() {
+  const [manifest, lock, installedCoreManifest] = await Promise.all([
+    readFile(path.join(root, 'package.json'), 'utf8').then(JSON.parse),
+    readFile(path.join(root, 'package-lock.json'), 'utf8').then(JSON.parse),
+    readFile(path.join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8').then(JSON.parse)
+  ])
+  return classifyOfficialRuntimeGraph(manifest, lock, installedCoreManifest)
+}
+
+async function resolveInstalledWindowsAclRuntime() {
+  try {
+    await access(windowsAclRuntime)
+    return windowsAclRuntime
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+  const indexFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-sandbox-windows-acl', 'lib', 'index.js')
+  const indexSource = await readFile(indexFile, 'utf8')
+  const matches = [...indexSource.matchAll(/from "\.\/(types-[A-Za-z0-9_-]+\.js)"/gu)]
+  if (matches.length !== 1) throw new Error('Pinned DSH Windows ACL bundle reference changed; refusing an unsafe token-intersection patch.')
+  return path.join(path.dirname(indexFile), matches[0][1])
+}
+
+async function assertOfficialAlpha2RemovedArtifactsAbsent() {
+  for (const file of [runtimeClient, hostApiProxyRuntime]) {
+    try {
+      await access(file)
+      throw new Error(`Removed alpha.2 compatibility artifact is unexpectedly installed: ${file}`)
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const sessionChanged = await patchInstalledRuntime()
+  const officialGraph = await cliOfficialRuntimeGraph()
+  const targetsAlpha2 = officialGraph.mode === 'alpha2'
+  if (targetsAlpha2) await assertOfficialAlpha2RemovedArtifactsAbsent()
+  const sessionChanged = targetsAlpha2 ? await patchInstalledAlpha2SessionController() : await patchInstalledRuntime()
   const attachmentProfileChanged = await patchInstalledAttachmentProfile()
   const pickerChanged = await patchInstalledDirectoryPicker()
   const conversationChanged = await patchInstalledConversation()
@@ -1734,18 +2188,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const toolPwshChanged = await patchInstalledToolPwsh()
   const pwshSandboxChanged = await patchInstalledPwshSandbox()
   const bashSandboxChanged = await patchInstalledBashSandbox()
-  const windowsAclChanged = await patchInstalledWindowsAcl()
+  const windowsAclChanged = await patchInstalledWindowsAcl(await resolveInstalledWindowsAclRuntime())
   const modelSelectionChanged = await patchInstalledModelSelection()
   const modelSettingsChanged = await patchInstalledModelSettings()
+  const deepSeekDiscoveryChanged = await patchInstalledDeepSeekModelDiscovery()
   const workspaceUiChanged = await patchInstalledWorkspaceUi()
   const sessionPersistenceChanged = await patchInstalledSessionPersistence()
-  const hostApiProxyChanged = await patchInstalledHostApiProxy()
+  const hostApiProxyChanged = targetsAlpha2 ? await assertInstalledAlpha2NativeSessionList() : await patchInstalledHostApiProxy()
   const fsSearchChanged = await patchInstalledFsSearch()
   const toolFsChanged = await patchInstalledToolFs()
   const subprocessChanged = await patchInstalledSubprocess()
   const webAppChanged = await patchInstalledWebApp()
   const codexParityChanged = await patchCodexParityRuntime(path.join(root, 'node_modules'))
-  process.stdout.write(sessionChanged ? 'Patched desktop New Session behavior.\n' : 'Desktop New Session patch already applied.\n')
+  process.stdout.write(targetsAlpha2 ? (sessionChanged ? 'Patched alpha.2 SessionManager rendering performance.\n' : 'Alpha.2 SessionManager rendering performance patch already applied.\n') : (sessionChanged ? 'Patched desktop New Session behavior and SessionManager rendering performance.\n' : 'Desktop New Session and SessionManager rendering performance patches already applied.\n'))
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
   process.stdout.write(conversationChanged ? 'Patched conversation telemetry, view navigation, labels, and sticky response copy.\n' : 'Conversation telemetry, view navigation, labels, and sticky response copy already patched.\n')
@@ -1761,10 +2216,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(pwshSandboxChanged || bashSandboxChanged ? 'Patched confined nested-pipe denial classification.\n' : 'Confined nested-pipe denial classification already applied.\n')
   process.stdout.write(windowsAclChanged ? 'Patched Windows ACL token-default DACL intersection.\n' : 'Windows ACL token-default DACL intersection already applied.\n')
   process.stdout.write(modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
-  process.stdout.write(modelSettingsChanged ? 'Patched safe model API-key overrides.\n' : 'Safe model API-key overrides already applied.\n')
-  process.stdout.write(workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n')
+  process.stdout.write(modelSettingsChanged ? 'Patched safe model API-key overrides and provider validation.\n' : 'Safe model API-key overrides and provider validation already applied.\n')
+  process.stdout.write(deepSeekDiscoveryChanged ? 'Patched DeepSeek credential validation discovery.\n' : 'DeepSeek credential validation discovery already applied.\n')
+  process.stdout.write(targetsAlpha2 ? (workspaceUiChanged ? 'Patched alpha.2 force-new workspace session behavior; native session menus retained.\n' : 'Alpha.2 force-new workspace session patch already applied; native session menus retained.\n') : (workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n'))
   process.stdout.write(sessionPersistenceChanged ? 'Patched bounded concurrent session metadata listing.\n' : 'Bounded concurrent session metadata listing already applied.\n')
-  process.stdout.write(hostApiProxyChanged ? 'Patched live session-list metadata projection reuse.\n' : 'Live session-list metadata projection reuse already applied.\n')
+  process.stdout.write(targetsAlpha2 ? 'Verified native alpha.2 Session list metadata and bounded cold-summary batching.\n' : (hostApiProxyChanged ? 'Patched live session-list metadata projection reuse.\n' : 'Live session-list metadata projection reuse already applied.\n'))
   process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
   process.stdout.write(toolFsChanged ? 'Patched literal edit not-found recovery guidance.\n' : 'Literal edit not-found recovery guidance already applied.\n')
   process.stdout.write(subprocessChanged ? 'Patched hidden Windows command and cleanup processes.\n' : 'Hidden Windows command and cleanup process patch already applied.\n')

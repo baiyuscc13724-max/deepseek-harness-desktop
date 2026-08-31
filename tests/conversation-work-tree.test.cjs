@@ -104,6 +104,41 @@ test('completed work trees collapse only when they were opened automatically', a
   assert.equal(closedByUser.open, false, 'a panel closed by the user is not reopened by completion')
 })
 
+test('work-tree disclosure persists independently across session switches and remounts', async () => {
+  const {
+    createConversationWorkTreeDisclosureState,
+    readConversationWorkTreeDisclosure,
+    writeConversationWorkTreeDisclosure
+  } = await import(pathToFileURL(patchModule).href)
+  const values = new Map()
+  const storage = {
+    getItem(key) { return values.get(key) ?? null },
+    setItem(key, value) { values.set(key, value) }
+  }
+
+  assert.equal(writeConversationWorkTreeDisclosure(storage, 'session-a', 'work-tree:flow:1', false), true)
+  assert.equal(writeConversationWorkTreeDisclosure(storage, 'session-b', 'work-tree:flow:1', true), true)
+  assert.equal(readConversationWorkTreeDisclosure(storage, 'session-a', 'work-tree:flow:1'), false)
+  assert.equal(readConversationWorkTreeDisclosure(storage, 'session-b', 'work-tree:flow:1'), true)
+
+  const closedAfterReturn = createConversationWorkTreeDisclosureState(
+    readConversationWorkTreeDisclosure(storage, 'session-a', 'work-tree:flow:1'),
+    true,
+    false
+  )
+  const openAfterReturn = createConversationWorkTreeDisclosureState(
+    readConversationWorkTreeDisclosure(storage, 'session-b', 'work-tree:flow:1'),
+    false,
+    false
+  )
+  assert.deepEqual(closedAfterReturn, { open: false, automatic: false, userControlled: true, active: true })
+  assert.deepEqual(openAfterReturn, { open: true, automatic: false, userControlled: true, active: false })
+  assert.equal(createConversationWorkTreeDisclosureState(false, false, true).open, true, 'a selected call remains discoverable without overwriting the stored preference')
+
+  storage.setItem('harness.desktop.work-tree-disclosure.v1:broken', '{bad json')
+  assert.equal(readConversationWorkTreeDisclosure(storage, 'broken', 'work-tree:flow:1'), undefined)
+})
+
 test('work-tree bodies render in bounded cancelable batches', async () => {
   const { reduceConversationWorkTreeRenderCount } = await import(pathToFileURL(patchModule).href)
   let rendered = reduceConversationWorkTreeRenderCount(0, { type: 'sync', open: false, total: 4096 })
@@ -245,7 +280,13 @@ test('guarded runtime patch is idempotent and includes disclosure, locale, and s
     '@harness-desktop/conversation-work-tree-auto-complete-v5',
     '@harness-desktop/conversation-work-tree-performance-v6',
     '@harness-desktop/conversation-work-tree-snapshot-priority-v7',
+    '@harness-desktop/conversation-work-tree-persistence-v8',
     'reduceConversationWorkTreeDisclosure',
+    'readConversationWorkTreeDisclosure',
+    'writeConversationWorkTreeDisclosure',
+    'createConversationWorkTreeDisclosureState',
+    'harness.desktop.work-tree-disclosure.v1:',
+    'sessionId, item.key',
     'reduceConversationWorkTreeRenderCount',
     'conversationWorkTreeRenderKeys',
     'userControlled: false',

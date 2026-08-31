@@ -241,11 +241,11 @@ for (const contract of ['harness-desktop-version-button', 'harness-desktop-updat
 for (const contract of ['dataset.hdSettingsLayout', 'dataset.hdSettingsContent', 'dataset.hdSettingsOptions', 'width:min(1120px']) {
   if (!rendererScript.includes(contract)) throw new Error(`The functional settings dialog layout enhancement is missing: ${contract}`)
 }
-for (const contract of ['harness-desktop-mobile-sync-entry', 'mountMobileEntry', 'host.insertBefore(entry, settingsTrigger)', 'watchMobileEntryLayout(host, settingsTrigger)', 'settingsTrigger?.textContent?.trim()', 'grid-template-columns:minmax(0,1fr) 42px', 'activateMobileEntry', "open('open-mobile-sync')"]) {
-  if (!rendererScript.includes(contract)) throw new Error(`The mobile sync quick entry beside Settings is missing: ${contract}`)
+for (const contract of ['harness-desktop-mobile-sync-entry', 'mountMobileEntry', 'entry.parentElement !== document.body', 'watchMobileEntryLayout(host, settingsTrigger)', 'settingsTrigger.textContent?.trim()', 'mobileEntryPortalPlacement', 'position:fixed; z-index:18', 'activateMobileEntry', 'open = openMobileSync', "entry.addEventListener('click', activateMobileEntry, true)"]) {
+  if (!rendererScript.includes(contract)) throw new Error(`The renderer-owned mobile sync portal beside Settings is missing: ${contract}`)
 }
-if (rendererScript.includes("row.id = 'harness-desktop-mobile-sync-row'") || rendererScript.includes('mountMobile(section)')) {
-  throw new Error('Mobile sync must not remain embedded in the General settings section.')
+if (rendererScript.includes("row.id = 'harness-desktop-mobile-sync-row'") || rendererScript.includes('mountMobile(section)') || rendererScript.includes('host.insertBefore(entry, settingsTrigger)') || rendererScript.includes("open('open-mobile-sync')")) {
+  throw new Error('Mobile sync must not remain embedded in the official Settings event tree or depend on the custom URL bridge.')
 }
 if (!rendererScript.includes('element.textContent !== value') || !rendererScript.includes('mountScheduled') || !rendererScript.includes('officialSettingsMutationTouchesUi') || !rendererScript.includes('if (officialSettingsMutationTouchesUi(records)) scheduleMount()') || !rendererScript.includes('list.dataset.signature !== itemsSignature')) {
   throw new Error('Official settings and unified update integration must prevent MutationObserver self-trigger loops.')
@@ -508,18 +508,52 @@ for (const contract of [
 ]) {
   if (!readme.includes(contract)) throw new Error(`README release and discovery content is stale or incomplete: ${contract}`)
 }
-if (pkg.dependencies?.['@deepseek-ai/dsh'] !== '0.1.1-rc.2') throw new Error('Official DeepSeek Harness runtime must remain pinned.')
-if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
-for (const dependency of [
-  'dsh-anonymous-user-id', 'dsh-atomic-write', 'dsh-bash-local', 'dsh-code-runtime',
-  'dsh-compaction', 'dsh-fs', 'dsh-invariants', 'dsh-output-retention', 'dsh-sandbox',
-  'dsh-scope', 'dsh-session-telemetry', 'dsh-session-title-llm', 'dsh-shell', 'dsh-spill',
-  'dsh-subagent-in-process-driver', 'dsh-subprocess', 'dsh-timeout', 'dsh-workflow'
-]) {
-  if (pkg.dependencies?.[`@deepseek-ai/${dependency}`] !== '0.1.1-rc.2') {
-    throw new Error(`The DSH Web runtime peer dependency must be pinned explicitly: ${dependency}`)
+const OFFICIAL_ALPHA2_VERSION = '0.1.2-alpha.2'
+const OFFICIAL_ALPHA2_DIRECT_ROOTS = Object.freeze([
+  '@deepseek-ai/dsh',
+  '@deepseek-ai/dsh-anonymous-user-id', '@deepseek-ai/dsh-atomic-write', '@deepseek-ai/dsh-bash-local',
+  '@deepseek-ai/dsh-code-runtime', '@deepseek-ai/dsh-compaction', '@deepseek-ai/dsh-compaction-basic',
+  '@deepseek-ai/dsh-fs', '@deepseek-ai/dsh-invariants', '@deepseek-ai/dsh-output-retention',
+  '@deepseek-ai/dsh-sandbox', '@deepseek-ai/dsh-scope', '@deepseek-ai/dsh-session-telemetry',
+  '@deepseek-ai/dsh-session-title-llm', '@deepseek-ai/dsh-shell', '@deepseek-ai/dsh-spill',
+  '@deepseek-ai/dsh-subagent-in-process-driver', '@deepseek-ai/dsh-subprocess',
+  '@deepseek-ai/dsh-timeout', '@deepseek-ai/dsh-workflow'
+])
+const REMOVED_DSH_ROOTS = new Set([
+  '@deepseek-ai/dsh-client-runtime',
+  '@deepseek-ai/dsh-host-apiproxy'
+])
+
+export function assertOfficialAlpha2ReleaseContract(pkg) {
+  const dependencies = pkg?.dependencies
+  if (!dependencies || Array.isArray(dependencies) || typeof dependencies !== 'object') {
+    throw new Error('Official alpha.2 release dependencies must be an object.')
+  }
+  const acceptedRoots = new Set(OFFICIAL_ALPHA2_DIRECT_ROOTS)
+  if (acceptedRoots.size !== 20 || OFFICIAL_ALPHA2_DIRECT_ROOTS.length !== 20) {
+    throw new Error('Official alpha.2 release root allowlist must contain exactly 20 unique roots.')
+  }
+  for (const root of OFFICIAL_ALPHA2_DIRECT_ROOTS) {
+    if (dependencies[root] !== OFFICIAL_ALPHA2_VERSION) {
+      throw new Error(`Official alpha.2 DSH root must be pinned exactly: ${root}`)
+    }
+  }
+  for (const [name, version] of Object.entries(dependencies)) {
+    if (!name.startsWith('@deepseek-ai/dsh')) continue
+    if (REMOVED_DSH_ROOTS.has(name)) {
+      throw new Error(`Removed DSH root must not re-enter the release graph: ${name}`)
+    }
+    if (!acceptedRoots.has(name)) {
+      throw new Error(`Unexpected direct DSH root in the alpha.2 release graph: ${name}`)
+    }
+    if (version !== OFFICIAL_ALPHA2_VERSION) {
+      throw new Error(`Official alpha.2 DSH root must use an exact version: ${name}`)
+    }
   }
 }
+
+assertOfficialAlpha2ReleaseContract(pkg)
+if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
 if (pkg.dependencies?.['dsh-plugin-marketplace'] !== 'https://codeload.github.com/bradeGithub/DSH-Plugins-Marketplace/tar.gz/dfe32cb8620658b55441787725f7f03e0491d15e') {
@@ -819,7 +853,7 @@ for (const contract of ['@harness-desktop/model-settings-key-override-gated-v3',
   if (!modelSettingsKeyOverridePatch.includes(contract)) throw new Error(`Safe model API-key override patch is missing: ${contract}`)
 }
 const conversationWorkTreePatch = await readFile(path.join(root, 'scripts/conversation-work-tree-patch.mjs'), 'utf8')
-for (const contract of ['@harness-desktop/conversation-work-tree-v1', '@harness-desktop/conversation-work-tree-sticky-v1', '@harness-desktop/conversation-work-tree-flow-v2', '@harness-desktop/conversation-work-tree-manual-v3', '@harness-desktop/conversation-work-tree-recoverable-v4', '@harness-desktop/conversation-work-tree-auto-complete-v5', 'reduceConversationWorkTreeDisclosure', 'userControlled: false', 'type: "toggle"', 'FS_EDIT_NOT_FOUND', 'work-tree:flow:', 'position:sticky', 'scroll-margin-top:64px', 'buildConversationWorkTreeItems', 'ConversationWorkTreeGroup', '"aria-expanded": open', 'hidden: !open', 'workTree.status.error']) {
+for (const contract of ['@harness-desktop/conversation-work-tree-v1', '@harness-desktop/conversation-work-tree-sticky-v1', '@harness-desktop/conversation-work-tree-flow-v2', '@harness-desktop/conversation-work-tree-manual-v3', '@harness-desktop/conversation-work-tree-recoverable-v4', '@harness-desktop/conversation-work-tree-auto-complete-v5', '@harness-desktop/conversation-work-tree-performance-v6', '@harness-desktop/conversation-work-tree-snapshot-priority-v7', '@harness-desktop/conversation-work-tree-persistence-v8', 'reduceConversationWorkTreeDisclosure', 'readConversationWorkTreeDisclosure', 'writeConversationWorkTreeDisclosure', 'createConversationWorkTreeDisclosureState', 'harness.desktop.work-tree-disclosure.v1:', 'sessionId, item.key', 'userControlled: false', 'type: "toggle"', 'FS_EDIT_NOT_FOUND', 'work-tree:flow:', 'position:sticky', 'scroll-margin-top:64px', 'buildConversationWorkTreeItems', 'ConversationWorkTreeGroup', '"aria-expanded": open', 'hidden: !open', 'workTree.status.error']) {
   if (!conversationWorkTreePatch.includes(contract)) throw new Error(`Conversation work-tree patch is missing: ${contract}`)
 }
 const recoverableToolErrorPatch = await readFile(path.join(root, 'scripts/tool-recoverable-error-patch.mjs'), 'utf8')

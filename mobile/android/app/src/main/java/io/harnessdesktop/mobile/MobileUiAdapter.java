@@ -3,6 +3,7 @@ package io.harnessdesktop.mobile;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.View;
 import android.webkit.WebView;
 
 import org.json.JSONObject;
@@ -14,6 +15,8 @@ import java.nio.charset.StandardCharsets;
 
 final class MobileUiAdapter {
     private static final String STYLE_ID = "harness-mobile-compat";
+    static final String RUNTIME_MARKER = "__harnessMobileRuntimeInstalled";
+    private static final String RUNTIME_READY = "ready";
     private static final long[] INJECTION_DELAYS_MS = { 0L, 250L, 900L };
 
     /**
@@ -79,19 +82,36 @@ final class MobileUiAdapter {
     MobileUiAdapter(Context context) {
         String css = readAsset(context, "mobile-compat.css");
         String runtime = readAsset(context, "mobile-runtime.js");
-        injectionScript = "(() => {" +
+        injectionScript = buildInjectionScript(css, runtime);
+    }
+
+    static String buildInjectionScript(String css, String runtime) {
+        return "(() => {" +
             "const id=" + JSONObject.quote(STYLE_ID) + ";" +
+            "const runtimeMarker=" + JSONObject.quote(RUNTIME_MARKER) + ";" +
             "let style=document.getElementById(id);" +
             "if(!style){style=document.createElement('style');style.id=id;(document.head||document.documentElement).appendChild(style);}" +
             "if(style.textContent!==" + JSONObject.quote(css) + ")style.textContent=" + JSONObject.quote(css) + ";" +
-            "document.documentElement.dataset.harnessMobile='true';" +
+            "const root=document.documentElement;const body=document.body;" +
+            "if(!root||!body){delete window[runtimeMarker];return false;}" +
+            "root.dataset.harnessMobile='true';" +
+            "if(window[runtimeMarker]!==" + JSONObject.quote(RUNTIME_READY) + "){try{" +
             runtime + ";" +
+            "if(window.__harnessMobileUiObserver&&document.getElementById('harness-mobile-app-shell'))window[runtimeMarker]=" + JSONObject.quote(RUNTIME_READY) + ";" +
+            "else delete window[runtimeMarker];" +
+            "}catch(error){delete window[runtimeMarker];throw error;}}" +
             FILE_ENTRY_JS + ";" +
-            "return true;})()";
+            "return window[runtimeMarker]===" + JSONObject.quote(RUNTIME_READY) + ";})()";
     }
 
     void inject(WebView webView) {
         if (webView == null) return;
+        // Chromium exposes its virtual DOM accessibility descendants only when the
+        // host WebView participates in Android accessibility. Keep this on the
+        // adapter boundary so every idempotent injection path has the same contract.
+        webView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
         for (long delay : INJECTION_DELAYS_MS) {
             handler.postDelayed(() -> {
                 if (webView.getHandler() != null) webView.evaluateJavascript(injectionScript, null);

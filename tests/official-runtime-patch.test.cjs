@@ -1,8 +1,13 @@
 const assert = require('node:assert/strict')
 const test = require('node:test')
-const { readFileSync } = require('node:fs')
+const { createHash } = require('node:crypto')
+const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
+const vm = require('node:vm')
+
+const alpha2CandidateRoot = process.env.DSH_ALPHA2_CANDIDATE_ROOT || path.resolve(__dirname, '..')
 
 const originalSource = `\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\tconst workspace = this.list.getSnapshot();
@@ -29,6 +34,29 @@ test('all desktop New Session entry points force a new session and remain idempo
   assert.match(first.source, /this\.sessions\.clear\(\);\s*this\.sessions\.create/)
   assert.match(first.source, /this\.sessionWorkspaceHints \?\?= new Map\(\)/)
   assert.equal(patchRuntimeSource(first.source).changed, false)
+})
+
+test('alpha.2 installed workspace wrapper enforces the exact transformed output guard', async () => {
+  const source = readFileSync(path.join(alpha2CandidateRoot, 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js'), 'utf8')
+  const temporary = mkdtempSync(path.join(os.tmpdir(), 'alpha2-workspace-wrapper-'))
+  const file = path.join(temporary, 'lib', 'client.js')
+  try {
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(path.join(temporary, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-ui-workspace', version: '0.1.2-alpha.2' }))
+    writeFileSync(file, source)
+    const { patchInstalledWorkspaceUi } = await import('../scripts/patch-official-runtime.mjs')
+    const changed = await patchInstalledWorkspaceUi(file)
+    const output = readFileSync(file, 'utf8')
+    assert.equal(changed, !source.includes('this.pendingSessionWorkspaceTarget = target;'))
+    assert.equal(createHash('sha256').update(output).digest('hex').toUpperCase(), 'B47D4AD32FF91ACDC7B27BE85AA184E4579B1973DF2DB04FB8E58A30590FDE0D')
+    assert.equal(await patchInstalledWorkspaceUi(file), false)
+    const drifted = output.replace('this.pendingSessionWorkspaceTarget = target;', 'this.pendingSessionWorkspaceTarget = target /* drift */;')
+    assert.notEqual(drifted, output)
+    writeFileSync(file, drifted)
+    await assert.rejects(() => patchInstalledWorkspaceUi(file), /neither exact official nor exact complete patched artifact/)
+  } finally {
+    rmSync(temporary, { recursive: true, force: true })
+  }
 })
 
 test('session projection streams do not invalidate the global list or run quadratic cache cleanup', async () => {
@@ -101,6 +129,95 @@ test('session projection streams do not invalidate the global list or run quadra
   assert.throws(() => patchSessionRenderingSource(drifted), /Pinned DSH session projection list subscription changed/)
   const schedulerDrift = first.source.replace('globalThis.setTimeout(publish, 50);', 'globalThis.setTimeout(publish, 51);')
   assert.throws(() => patchSessionRenderingSource(schedulerDrift), /Pinned DSH stream notification frame scheduler changed/)
+})
+
+test('alpha.2 Session Controller real bundle enforces keyed dirtiness, bounded scheduling and linear cache cleanup', async () => {
+  const alpha2File = path.join(alpha2CandidateRoot, 'node_modules', '@deepseek-ai', 'dsh-api-session-controller', 'lib', 'client.js')
+  const source = readFileSync(alpha2File, 'utf8')
+  const { patchAlpha2SessionControllerSource } = await import('../scripts/patch-official-runtime.mjs')
+  const patched = patchAlpha2SessionControllerSource(source).source
+
+  const managerStart = patched.indexOf('var SessionManager = class {')
+  assert.notEqual(managerStart, -1)
+  const extractBlock = (signature, from = 0) => {
+    const start = patched.indexOf(signature, from)
+    assert.notEqual(start, -1, `missing real-bundle block: ${signature}`)
+    const body = patched.indexOf('{', start)
+    let depth = 0
+    for (let index = body; index < patched.length; index += 1) {
+      if (patched[index] === '{') depth += 1
+      else if (patched[index] === '}' && --depth === 0) return patched.slice(start, index + 1)
+    }
+    assert.fail(`unterminated real-bundle block: ${signature}`)
+  }
+
+  class ControlledProjectionValueStore {
+    constructor() { this.listeners = new Map() }
+    faceOf(key) {
+      return { subscribe: listener => {
+        const listeners = this.listeners.get(key) || []
+        listeners.push(listener)
+        this.listeners.set(key, listeners)
+        return () => {}
+      } }
+    }
+    apply(key) { for (const listener of this.listeners.get(key) || []) listener() }
+  }
+  const projectionStoreMethod = extractBlock('projectionStore(sessionId) {', managerStart)
+  const controlFrameMethod = extractBlock('handleControlFrame(frame) {', managerStart)
+  const ControlledSessionManager = vm.runInNewContext(`(class ControlledSessionManager {
+    constructor(notifier) { this.projectionStores = new Map(); this.openCatalogs = new Set(); this.notifier = notifier; this.jobsBySession = new Map(); this.queues = new Map(); this.sessions = new Map(); }
+    ${projectionStoreMethod}
+    ${controlFrameMethod}
+  })`, { Map, Set, ControlledProjectionValueStore, ProjectionValueStore: ControlledProjectionValueStore })
+  let dirty = 0
+  const manager = new ControlledSessionManager({ markDirty: () => { dirty += 1 } })
+  manager.handleControlFrame({ type: 'projection', sessionId: 'hidden', key: 'tokenUsage', value: {}, seq: 1 })
+  manager.handleControlFrame({ type: 'projection', sessionId: 'hidden', key: 'subagentTiming', value: {}, seq: 2 })
+  assert.equal(dirty, 0, 'hidden token/timing projections must not dirty the list')
+  manager.handleControlFrame({ type: 'projection', sessionId: 'hidden', key: 'title', value: 'Title', seq: 3 })
+  assert.equal(dirty, 1, 'title projection must dirty exactly once')
+  manager.openCatalogs.add('visible')
+  manager.handleControlFrame({ type: 'projection', sessionId: 'visible', key: 'tokenUsage', value: {}, seq: 4 })
+  assert.equal(dirty, 2, 'visible token projection must dirty exactly once')
+  manager.handleControlFrame({ type: 'projection', sessionId: 'visible', key: 'subagentTiming', value: {}, seq: 5 })
+  assert.equal(dirty, 3, 'visible timing projection must dirty exactly once')
+
+  const notifierStart = patched.indexOf('var Notifier = class {')
+  const notifierEnd = patched.indexOf('\n\t\t//#endregion', notifierStart)
+  assert.ok(notifierStart >= 0 && notifierEnd > notifierStart)
+  const timers = []
+  let rafCalls = 0
+  const context = {
+    queueMicrotask,
+    setTimeout: (fn, delay) => { timers.push({ fn, delay }) },
+    requestAnimationFrame: () => { rafCalls += 1; throw new Error('requestAnimationFrame must not be used') },
+    _deepseek_ai_dsh_client_store: { notifySubscribers: listeners => { for (const listener of listeners) listener() } }
+  }
+  context.globalThis = context
+  const Notifier = vm.runInNewContext(`(()=>{${patched.slice(notifierStart, notifierEnd)};return Notifier})()`, context)
+  let rebuilds = 0
+  let notices = 0
+  const notifier = new Notifier(() => { rebuilds += 1 })
+  notifier.subscribe(() => { notices += 1 })
+  notifier.markFrameDirty()
+  notifier.markFrameDirty()
+  notifier.markFrameDirty()
+  assert.equal(rafCalls, 0)
+  assert.equal(timers.length, 1)
+  assert.equal(timers[0].delay, 50)
+  timers[0].fn()
+  assert.deepEqual({ rebuilds, notices }, { rebuilds: 1, notices: 1 })
+
+  const cleanupStart = patched.indexOf('const retainedEntryIds = new Set(items.map((entry) => entry.sessionId));')
+  const cleanupEnd = patched.indexOf('\n', patched.indexOf('this.entryCache.delete(id);', cleanupStart))
+  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart)
+  const cleanup = vm.runInNewContext(`(function(items){${patched.slice(cleanupStart, cleanupEnd)}})`, { Set })
+  const items = [{ sessionId: 'keep-a' }, { sessionId: 'keep-b' }]
+  items.some = () => { throw new Error('quadratic items.some cleanup executed') }
+  const entryCache = new Map([['keep-a', {}], ['drop-a', {}], ['drop-b', {}]])
+  cleanup.call({ entryCache }, items)
+  assert.deepEqual([...entryCache.keys()], ['keep-a'])
 })
 
 test('Windows directory selection avoids the crashing Koffi dialog worker', async () => {

@@ -21,18 +21,18 @@
 
 ## 下载
 
-目标稳定版：**v1.0.54** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.54)
+目标稳定版：**v1.0.55** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.55)
 
-> 已发布的 `v1.0.53`、其精确 18 项资产、组件、签名 Android APK 与 stable feed 全部保持不可变；更早版本与候选 Tag 也不会移动、重建或复用。新的统一 `v1.0.54` 让同项目、无副作用的 Agent Teams 修复与复测持续自动推进，同时保留 Stop、接管、跨项目、真实副作用与结果未知的硬门禁；环境密钥仍不可观察，但原密码字段可直接输入安全覆盖并支持修改、删除和恢复。长会话消息树、会话投影、生命周期清理和右侧工作区也进入双层性能门禁。正式发布仍绑定精确 main SHA，经全平台云构建、Android 长期证书签名、组件签名、精确 18 项清单和 GitHub→CNB 云镜像后才提升 stable feed；完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
+> 已发布的 `v1.0.53`、其精确 18 项资产、组件、签名 Android APK 与 stable feed 全部保持不可变；更早版本与候选 Tag 也不会移动、重建或复用。新的统一 `v1.0.55` 让同项目、无副作用的 Agent Teams 修复与复测持续自动推进，同时保留 Stop、接管、跨项目、真实副作用与结果未知的硬门禁；环境密钥仍不可观察，但原密码字段可直接输入安全覆盖并支持修改、删除和恢复。长会话消息树、会话投影、生命周期清理和右侧工作区也进入双层性能门禁。正式发布仍绑定精确 main SHA，经全平台云构建、Android 长期证书签名、组件签名、精确 18 项清单和 GitHub→CNB 云镜像后才提升 stable feed；完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/Harness-Desktop-1.0.54-win-x64.exe) |
-| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/Harness-Desktop-1.0.54-portable-x64.exe) |
-| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/Harness-Desktop-1.0.54-mac-arm64.dmg) |
-| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/Harness-Desktop-1.0.54-mac-x64.dmg) |
-| Android 手机端 1.0.54 | 扫码配对、四域工作台、原生输入、受限文档上传与固定手机控制 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/Harness-Mobile-1.0.54-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/Harness-Mobile-1.0.54-android-universal.apk.sha256) |
-| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/Harness-Desktop-1.0.55-win-x64.exe) |
+| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/Harness-Desktop-1.0.55-portable-x64.exe) |
+| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/Harness-Desktop-1.0.55-mac-arm64.dmg) |
+| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/Harness-Desktop-1.0.55-mac-x64.dmg) |
+| Android 手机端 1.0.55 | 扫码配对、四域工作台、原生输入、受限文档上传与固定手机控制 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/Harness-Mobile-1.0.55-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/Harness-Mobile-1.0.55-android-universal.apk.sha256) |
+| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 
@@ -49,7 +49,7 @@ scoop install harness-desktop/harness-desktop
 
 | 功能 | 使用方式 |
 | --- | --- |
-| 官方 Harness 工作台 | 固定使用官方 `0.1.1-rc.2` 原生 Web UI；视觉模型、Files API 图片复用与预处理、文件/会话 `@` 引用、Claude Code/Codex Profile Bundle 和持久 PowerShell 均直接采用官方实现 |
+| 官方 Harness 工作台 | 维护依赖已原子迁移为官方 `0.1.2-alpha.2`（20 roots；Git tag `dsh-v0.1.2-alpha.2` / ref `0a53fb55bea101816fa226bb964ae2bed71c343b`）；已按公开的 Session Controller、native session-list 与 workspace `startSession` owner 重基 New Session、SessionManager/list 基线与补丁。`dsh-client-runtime`、`dsh-host-apiproxy` 已随 alpha.2 架构移除并完成补丁退休。自研 Project/Team、canonical-project 隔离、submission acceptance ledger、routing receipts、locks/recovery/cursors/evidence 仍是唯一权威；官方 experimental Team 不接管也不双写。首次 patch 25 个文件、第二次 0 差异；当前发布仍受后续 hermetic 终验硬门禁约束 |
 | 女仆鲸桌宠 | 感知结构化任务节奏并主动提醒，记录本地默契、每日进度与连续完成；支持 TOK、抚摸、拖动、屏幕边缘及窗口互动，不读取对话正文或屏幕 |
 | 外观皮肤 | 从顶部快捷入口切换桌面配色和背景；手机端拥有独立皮肤设置与不透明核心表面，不会读取或套用电脑壁纸文件 |
 | DSH 插件与 Skills | 在应用内发现、安装和更新；随包受管 Skills 支持 Codex 风格 `$` 触发，`@` 继续用于文件引用；英文简介自动生成中文摘要并保留原文 |

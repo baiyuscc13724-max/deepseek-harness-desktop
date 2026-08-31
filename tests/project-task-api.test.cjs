@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
 const { EventEmitter } = require('node:events')
+const { randomBytes } = require('node:crypto')
 const { Readable } = require('node:stream')
 const { mkdtemp, rm } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
@@ -11,6 +12,7 @@ const { createProjectSecretCapability } = require('./fixtures/project-secret-cap
 
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
 const runtimeFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-web.js')
+const taskStoreFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-store.js')
 const outerSecretContext = Object.freeze({ purpose: 'agent-teams/device/v1', binding: 'project_task_api_fixture_0001' })
 
 function request(method, url, body, headers = {}) {
@@ -120,6 +122,7 @@ async function teardownApply(state) {
 }
 
 const statePath = '/api/agent-teams/project/tasks/state'
+const pagePath = '/api/agent-teams/project/tasks/page'
 const eventsPath = '/api/agent-teams/project/tasks/events'
 const streamPath = '/api/agent-teams/project/tasks/stream'
 const actionPath = '/api/agent-teams/project/tasks/action'
@@ -248,6 +251,52 @@ test('Host HTTP command bus enforces identity, idempotency, OCC, bounded events,
   } finally { await teardownApply(state) }
 })
 
+test('Project Task page route is click-style GET, strict, byte bounded, and rejects stale cursors', async () => {
+  const state = await setupApply()
+  try {
+    assert.ok(state.routes.has(pagePath))
+    await invoke(state.routes, projectActionPath, 'POST', projectActionPath, { action: 'create-project', payload: { projectName: 'Paged API', displayName: 'Owner' } })
+    for (let index = 0; index < 121; index += 1) {
+      const created = await invoke(state.routes, actionPath, 'POST', actionPath, { commandId: `page_api_${index}`, type: 'create', expectedRevision: 0, payload: { title: `Paged ${index}` } })
+      assert.equal(created.res.status, 200)
+    }
+    const first = await invoke(state.routes, statePath)
+    assert.equal(first.data.totalExact, true)
+    assert.equal(first.data.totalTasks, 121)
+    assert.equal(first.data.page.includedTasks, 120)
+    assert.equal(first.data.page.hasMore, true)
+    assert.equal(Buffer.byteLength(JSON.stringify(first.data)) <= 128 * 1024, true)
+    const cursor = first.data.page.nextCursor
+    assert.equal(cursor.includes('project_'), false)
+
+    const next = await invoke(state.routes, pagePath, 'GET', `${pagePath}?cursor=${encodeURIComponent(cursor)}`)
+    assert.equal(next.res.status, 200)
+    assert.equal(next.data.totalTasks, 121)
+    assert.equal(next.data.page.includedTasks, 1)
+    assert.equal(next.data.page.hasMore, false)
+    assert.equal(Buffer.byteLength(JSON.stringify(next.data)) <= 128 * 1024, true)
+
+    const extra = await invoke(state.routes, pagePath, 'GET', `${pagePath}?cursor=${encodeURIComponent(cursor)}&projectRef=forged`)
+    assert.equal(extra.res.status, 400)
+    const duplicate = await invoke(state.routes, pagePath, 'GET', `${pagePath}?cursor=${encodeURIComponent(cursor)}&cursor=${encodeURIComponent(cursor)}`)
+    assert.equal(duplicate.res.status, 400)
+    const post = await invoke(state.routes, pagePath, 'POST', pagePath, {})
+    assert.equal(post.res.status, 405)
+
+    await invoke(state.routes, actionPath, 'POST', actionPath, { commandId: 'page_api_stale', type: 'create', expectedRevision: 0, payload: { title: 'revision change' } })
+    const stale = await invoke(state.routes, pagePath, 'GET', `${pagePath}?cursor=${encodeURIComponent(cursor)}`)
+    assert.equal(stale.res.status, 409)
+    assert.equal(stale.data.error.code, 'PROJECT_TASK_WEB_CURSOR_STALE')
+    assert.equal(JSON.stringify(stale.data).includes('projectRef'), false)
+  } finally { await teardownApply(state) }
+})
+
+test('collaborator task projection remains an inexact preview and pagination route fails closed by contract', async () => {
+  const source = await require('node:fs/promises').readFile(pluginFile, 'utf8')
+  assert.match(source, /return json\(res, 200, \{ \.\.\.preview, totalTasks: includedTasks, totalExact: false, page: \{ includedTasks, hasMore: false, nextCursor: null, available: false, reason: "authority_required", nextAction: "open_authority_project" \}, pagination: \{ available: false, reason: "authority_required", nextAction: "open_authority_project" \} \}\)/u)
+  assert.match(source, /mode === "collaborator"\) return projectTaskApiFailure\(res, 409, "PROJECT_TASK_PAGE_AUTHORITY_REQUIRED"/u)
+})
+
 test('Automation HTTP bus queues approval, runs independently, replays exactly, and streams refetch-only wakes', async () => {
   const state = await setupApply()
   let streamRequest
@@ -336,6 +385,63 @@ test('SSE sends reset then safe task wake, cleans disconnects, and plugin dispos
     assert.equal(secondResponse.ended, true)
     assert.equal(state.routes.has(streamPath), false)
   } finally { await teardownApply(state) }
+})
+
+test('real project task routes deliver the sole client flow a non-empty safe collaboration page and continuation', async () => {
+  const [{ registerProjectTaskApi }, { ProjectTaskWebRuntime }, { ProjectTaskStore }] = await Promise.all([
+    import(`${pathToFileURL(pluginFile).href}?collaboration-route=${Date.now()}`),
+    import(pathToFileURL(runtimeFile).href),
+    import(pathToFileURL(taskStoreFile).href),
+  ])
+  const root = await mkdtemp(path.join(os.tmpdir(), 'project-collaboration-route-'))
+  const databasePath = path.join(root, 'tasks.sqlite')
+  const projectRef = `project_${'R'.repeat(24)}`
+  const key = randomBytes(32)
+  const execution = Object.freeze(Object.create(null))
+  const actor = Object.freeze({ projectRef, actorRef: `actor_${'R'.repeat(24)}`, kind: 'human', role: 'owner' })
+  const context = Object.freeze(Object.defineProperties({ projectRef, databasePath }, {
+    execution: { value: execution }, keyProvider: { value: ref => { assert.equal(ref, projectRef); return Buffer.from(key) } },
+    actorResolver: { value: (candidate, ref) => { assert.equal(candidate, execution); assert.equal(ref, projectRef); return actor } }, dispose: { value() {} },
+  }))
+  const runtime = new ProjectTaskWebRuntime({ projectEntry: { localProjectTaskContext: async () => context }, randomBytesImpl: () => Buffer.alloc(32, 9) })
+  const routes = new Map(), cleanups = []
+  let writer
+  try {
+    const created = await runtime.action({ commandId: 'route_create', type: 'create', expectedRevision: 0, payload: { title: 'Routed task' } })
+    writer = new ProjectTaskStore({ filePath: databasePath, keyProvider: context.keyProvider })
+    writer.initialize()
+    writer.createCollaborationBoard({ projectRef, coordinatorActorRef: actor.actorRef, title: 'Hidden board body', createdAt: 1 })
+    for (let index = 0; index < 119; index += 1) writer.upsertCollaborationSeat({
+      projectRef, actorRef: `actor_route_${index}`, changedByActorRef: actor.actorRef, duty: `Duty ${index}`, resourceScope: [`private/${index}.txt`], phase: 'running', nextStep: `Hidden body ${index}`, updatedAt: index + 2,
+    })
+    writer.acquireCollaborationLock({ projectRef, resourceRef: 'private/credential.txt', ownerActorRef: actor.actorRef, taskRef: created.task.taskRef, updatedAt: 200 })
+    registerProjectTaskApi(harness(routes, cleanups), runtime)
+    const first = await invoke(routes, statePath)
+    assert.equal(first.res.status, 200)
+    assert.equal(first.data.projectCollaboration.available, true)
+    assert.equal(first.data.projectCollaboration.totalExact, true)
+    assert.equal(first.data.projectCollaboration.totals.seats, 119)
+    assert.equal(first.data.projectCollaboration.totals.tasks, 1)
+    assert.equal(first.data.projectCollaboration.sections.seats.length > 0, true)
+    assert.equal(first.data.projectCollaboration.sections.tasks.some(task => task.title === 'Routed task'), true)
+    assert.equal(JSON.stringify(first.data).includes(projectRef), false)
+    assert.equal(JSON.stringify(first.data).includes('private/credential.txt'), false)
+    assert.equal(Buffer.byteLength(JSON.stringify(first.data)) <= 128 * 1024, true)
+    const cursor = first.data.projectCollaboration.sectionPages.seats.nextCursor
+    assert.equal(typeof cursor, 'string')
+    assert.equal(first.data.projectCollaboration.sections.locks.length, 1)
+    const second = await invoke(routes, pagePath, 'GET', `${pagePath}?cursor=${encodeURIComponent(cursor)}`)
+    assert.equal(second.res.status, 200)
+    assert.equal(second.data.ok, true)
+    assert.equal(second.data.projectCollaboration.page.section, 'seats')
+    assert.deepEqual(second.data.projectCollaboration.sections.locks, [])
+    assert.equal(second.data.projectCollaboration.totals.tasks, 1)
+  } finally {
+    await cleanupAll(cleanups)
+    writer?.close()
+    await runtime.close()
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('SSE keepalive is bounded and bridge close clears timers and listeners', async () => {

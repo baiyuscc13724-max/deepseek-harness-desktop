@@ -1,7 +1,7 @@
 # 代理团队任务看板与统一协作设计稿
 
 > 状态：方案已批准并进入第一阶段实现；长期任务域、全局准入和跨设备数据面仍按阶段演进。
-> 记录日期：2026-08-23。
+> 记录日期：2026-08-23；实现快照更新：2026-08-29。
 > 目的：持久保存产品讨论，防止会话压缩后丢失已经确认的方向。
 
 ## 1. 已确认的产品方向
@@ -306,7 +306,15 @@ AI 开始执行后，如果人修改目标、描述、验收标准或文件边�
 - 依赖长期未解除：进入 Blocked 并按策略提醒、过期或取消；
 - 所有降级都必须可见、可解释、可恢复，不能在后台静默改变任务目标。
 
-### 14.5 12:51–13:42：外部 Issue 和反馈进入同一任务入口
+### 14.5 失败 root 不能变成永久占位或隐式替身
+
+“负责人离线进入无唤醒 Inbox”还必须覆盖真实顶层会话创建/运行失败。失败 evidence 只能由 Host 绑定到 exact top-level operation；不能让模型把 Team member、hidden subagent 或新 prompt 声称为 root。
+
+恢复有且只有两条显式路径：Host batch 绑定的原 launch owner 对同一 continuable root/operation 做幂等 retry（发起者与真实失败/受益 actor 分离）；或先完成 durable takeover request 的响应/期限审计，由 coordinator 发起、从 exact requester 事务派生受益者，再 `prepare → 一次 reserve 全部 seat/task → activate → ready → 私有 adoption` 建立 replacement real root。所有阶段跨重启稳定重放；双击不增加模型成本；`outcome_unknown`、第三方锁、权限/容量不足、Stop、旧 session 迟到和 adoption 失败均 fail closed。Task owner/assignee 与旧 owner/assignee locks 同事务迁移，第三方 locks 不迁移；`claim_next` 因此可让其他健康 root 继续消费任务，而不是被一个失败席位全局卡住。
+
+看板把 recovery 作为同一 Project Task 缺陷的安全审计切面，而不是第二套 Team task：仅展示固定状态、opaque ref 和权限派生动作。交互先确认、再 loading、失败后刷新权威状态；44px、键盘/ARIA 与窄屏边界和其他 Project Task 控件一致。
+
+### 14.6 12:51–13:42：外部 Issue 和反馈进入同一任务入口
 
 作者展示了 GitHub Issue 同步和 Bug 修复应用：定期从 GitHub 获取 Issue；群聊中的 Bug 反馈通过问卷进入飞书多维表格；Codex 再定期读取反馈并送入任务看板。
 
@@ -881,7 +889,7 @@ MemoryPolicy {
 代理团队
 ├─ 任务板
 ├─ 团队画布
-├─ 流程画布
+├─ 跨会话任务
 ├─ 定时与自动化
 ├─ 参与者
 └─ 协调收件箱
@@ -891,9 +899,10 @@ MemoryPolicy {
 
 其中边界必须如实描述：
 
-- 任务板是**所选团队安全投影的只读视图**，尚不是可拖拽写入的项目级总看板；
-- 流程画布当前是只读蓝图，尚不是可执行的通用编排器；
-- “定时与自动化”当前嵌入已有 session-local Scheduler 状态，并提供原完整入口，没有创建第二个调度器；
+- “任务板”仍是**所选团队安全投影的只读视图**，不会把团队运行时任务写入独立 Project Tasks；
+- “跨会话任务”是唯一的项目协作工作区，只订阅当前 canonical `projectKey`，展示真实顶层会话席位、项目所有任务、依赖/移交、资源锁/冲突/待决策以及交付证据/变更历史；任务不按 Agent Team 分组，Team 仅作为会话的有界执行摘要。每个 root 独占其 seat 的项目板代表，私有 Team 只服务当前已领取任务并只获得有界任务上下文；成员、聊天和完整团队任务上下文不投影，Team 报告/完成不是项目证据，必须由 root 核对后显式提交 evidence/status。root 在采用席位和每个任务边界读取并响应定向请求；kind 固定为 `dependency_unblock/release/handoff/takeover`，响应固定为 `accept/reject/release`，遵守 `respondByAt`、no-wake 和 Host 验证的显式提前用户授权。随后通过原子 `claim_next` 一次领取一个 eligible 项并持续工作，手工 claim 和所有进入 `in_progress` 的 transition 共享事务内单活约束；阻塞时只创建一次持久请求后转取其他任务，直到全部终态或所有剩余 blocker 已记录；
+- 独立七态 Project Task 与 Project Automation 的底层能力继续保留并作为安全数据面来源，但不再提供重复的一级产品入口，也没有 `project_task_*` 重复工具；
+- “定时与自动化”同时保持 session-local Scheduler 与独立 Project Automation 的边界，没有创建第二套提醒历史；
 - “参与者”保留已有项目协作入口，但当前跨设备业务数据同步能力以 21.4 的真实边界为准；
 - 协调 Inbox 只展示安全元数据，不扩大消息正文投影。
 
@@ -945,6 +954,24 @@ MemoryPolicy {
 4. 原团队运行、Broker、Scheduler、Memory 和项目协作回归测试不减少；
 5. 所有未接通能力继续写成“计划/预览”，不得由页面布局暗示已经具备。
 
+### 19.6 已实现：唯一跨会话看板的全局稳定排序、精确总数与项目隔离
+
+唯一“跨会话任务”工作区使用“同一 canonical 项目”这一用户上下文；底层 Project Tasks 与 Collaboration 数据面保留独立事实源、游标和写能力：
+
+| 工作区 | 事实源与权限 | 首屏/后续页 | 完整性语义 |
+| --- | --- | --- | --- |
+| 跨会话任务 | 独立 Project Tasks/Collaboration 安全投影，展示席位、按状态秩/priority/时间稳定分组的任务、锁、移交、失败根恢复、证据、历史与请求 | 每区原生 keyset window + exact `COUNT(*)`/group totals；AES-GCM opaque cursor 绑定项目/revision/section/完整复合 boundary；按实际 UTF-8 预算推进 | 任务属于项目而非团队；24/120/128 KiB 只是页预算；Agent Team 只作为会话摘要 |
+
+Remote collaborator 的业务同步 Store 有现存 16 MiB 明文序列化防御预算；它保护包含 task/automation 安全缓存、游标、receipt 与 outbox 的加密持久状态，不是 Project Task authority 页预算，也不是完整任务列表容量。任何内部条目防御限制都不能被宣传为系统任务容量。
+
+每个 canonical `projectKey` 独立拥有会话席位、项目任务、依赖移交、资源锁、失败根恢复、证据、历史与协作请求；项目切换清理旧列表 DOM，不共享游标、缓存、SSE debounce、队列或锁。八个 section 各自按确定性 keyset 边界和精确 COUNT 查询，后续页绝不先读完整表再 slice，也不扫描其他项目。
+
+项目任务的数据库查询与 cursor 共同使用固定复合键：`statusRank ASC, explicitPriority DESC, updatedAt DESC, createdAt DESC, taskRef ASC`。状态秩固定为 `in_progress/working`、`in_review/review`、`blocked`、`todo/assigned/queued/pending/backlog`、`done/completed`、`canceled/cancelled`；未知兼容值只能落入待开始组，不能越过执行中。cursor 的 AEAD AAD 绑定 canonical project，密文内同时保存 project revision 与完整末项边界；任何 revision 变化都拒绝续页，避免 SSE 移组后跳序、重复或漏项。精确 `taskGroupTotals` 在同一 read transaction 内按当前项目计算，priority 和 statusGroup 只通过固定安全投影暴露。
+
+Client 收到 SSE 新首屏、project/capability/revision 变化、页元数据或首屏任务事实变化时，都会回到新首屏。每个 section 的“加载更多”以服务端 next keyset 页替换该区当前窗口，其他区不变；只有当前页完成渲染后才暴露其 next cursor。这样所有项目记录都能逐页到达而不会被 120 项 DOM 上限静默越过，React DOM 和内存也始终有界。任务按六个固定语义组显示精确计数、状态徽标和空态；完成组视觉弱化，取消组独立置底，但文字对比、键盘焦点、44 px 触控、ARIA 标题、375–1440 px 重排、reduced-motion 和 `content-visibility` 不降级。页面不预取、不为分页轮询、不自动重试；一个 `role=status aria-atomic=true` 的上下文状态统一宣告加载结果，各 section 用 `aria-busy` 和带区名的 accessible name。
+
+所有看板动作继续遵守安全边界：“跨会话任务”只有只读筛选/翻页/刷新与写入官方 composer 的负责人草稿；真正的 `team_task_*` 团队变更必须由经过鉴权的 durable team tools 完成。独立 Project Tasks/Automation 基础设施不从此看板暴露重复写入口。任何工作区都不能绕过 Host 权限，自动创建成员、发送、审批、合并或执行基础设施操作。
+
 ## 20. 10+ 会话 × 200+ 任务的容量与模型准入设计
 
 ### 20.1 当前硬边界和真实风险
@@ -955,6 +982,10 @@ MemoryPolicy {
 | --- | --- | --- | --- |
 | 一个团队的持久任务 | 最多 1,000 | 写入校验 | Team Store 是单个 `agent_teams.json`，每次小变更仍可能校验、复制并重写大文档 |
 | 所选团队 UI 任务投影 | 最多 200 | 活跃任务优先、较新完成任务补位，明确显示截断 | 不能从当前看板直接浏览较早的第 201–1,000 项；未来需分页/查询而不是扩大首屏 DOM |
+| 本机 authority Project Tasks | 每页最多 120 项且 128 KiB | 精确 total、AES-GCM keyset cursor、用户点击后续页、revision stale 刷新 | 单页预算不是项目任务容量；大条目按最后实际发送项续页 |
+| Remote collaborator Project Tasks | 现有加密 safeCache 连接预览；同步 Store 16 MiB 防御预算 | `totalExact:false`、无完整分页、authority 设备引导 | 本机已同步数不是完整 total；内部防御限制不是系统任务容量 |
+| 跨会话任务八区 | 每区后续页最多 24 项、首屏最多 120 项且响应 128 KiB | 每区精确 total；任务另有精确 group totals；AES-GCM revision/section/复合 boundary cursor；每项目独立 | 页预算不是项目容量；Client 用下一页替换该区当前窗口，使全量可遍历且每次 DOM 至多 120 项 |
+| Prepared project board LRU | 最近使用 16 个项目 | 每项目缓存 prepared 投影和首屏，项目 revision 变化重建 | 16 是进程内缓存预算，不是项目容量 |
 | 一个团队持久消息 | 最多 500 | 有界存储 | 消息正文、关系、文件数组和团队总字节仍需更细的新写入预算 |
 | UI 事件投影 | 每团队最多 50 | 新事件优先 | 高频事件仍会导致服务器为订阅者重复构造快照 |
 | 一个根负责人的未关闭同级团队 | 最多 8 | Host 硬限制 | 团队数量仍会放大存储和 UI 投影压力，但不再能绕过下方 Team worker 进程级槽位 |
@@ -972,13 +1003,14 @@ MemoryPolicy {
 
 ### 20.2 UI 承载策略：只渲染窗口，不搬运整个事实库
 
-当前和目标策略分三层：
+当前和目标策略分四层：
 
-1. **服务端有界投影**：首屏只返回所选团队最多 200 个任务和 50 个事件；未选团队只返回摘要。SSE 在 50 ms 窗口内合并更新，慢客户端只保留最新快照；
-2. **当前浏览器降载**：容器响应式列数、独立列滚动、`content-visibility`、画布自动换行、transform 平移缩放、关系线限额；
-3. **Project Task Service 目标态**：任务、评论和事件使用分页/游标查询；每列采用真正 windowing/virtual list，只挂载可见行与小幅 overscan；搜索、筛选、计数在服务端执行，详情按需加载。
+1. **旧团队所选视图的有界投影**：首屏只返回所选团队最多 200 个任务和 50 个事件；未选团队只返回摘要。SSE 在 50 ms 窗口内合并更新，慢客户端只保留最新快照；
+2. **已实现的 Project Tasks authority 分页**：每页最多 120 项/128 KiB，返回精确 total，并用 AES-GCM keyset cursor 在用户点击后继续；remote collaborator 保持 `totalExact:false` 的加密 safeCache 预览，不复用 authority 分页；
+3. **已实现的跨会话任务分页**：每个 canonical 项目独立计算完整统计；每页最多 24 团队/120 任务/128 KiB，16 项 prepared 首屏 LRU，后续页按需且不缓存；
+4. **浏览器降载与仍待完成部分**：容器响应式列数、独立列滚动、`content-visibility`、画布自动换行、transform 平移缩放和关系线限额已完成；每列真正 windowing/virtual list、评论/事件查询和详情全量按需加载仍是后续目标。
 
-`content-visibility` 只是跳过离屏绘制，并不会减少 React 元素数量、事件对象或安全投影 JSON 大小，不能把它写成“已经完成全虚拟化”。当可查询任务超过当前 200 条投影后，必须使用稳定游标，例如 `(status, sortKey, taskId)`，不得把上限从 200 粗暴扩大到 1,000。
+`content-visibility` 只是跳过离屏绘制，并不会减少 React 元素数量、事件对象或安全投影 JSON 大小，不能把它写成“已经完成全虚拟化”。单页页预算必须配合稳定、不透明、完整性保护且 revision-aware 的游标，不能靠把首屏上限粗暴扩大来冒充容量。
 
 隐藏页降载已完成第一步：页面隐藏时关闭团队 SSE 和轮询，恢复可见时重新订阅并补拉一次最新快照；尚未完成的是服务器侧每会话/每进程连接上限、心跳和过期订阅清理。
 
@@ -1149,14 +1181,14 @@ priority = background（除非用户明确提升）
 
 ### 阶段 A：工作台止乱（当前已实现）
 
-- 在原代理团队页内提供任务板、团队画布、流程蓝图、定时、参与者和 Inbox 导航；
+- 在原代理团队页内提供所选团队任务板、团队画布、唯一“跨会话任务”聚合、定时与自动化、参与者和 Inbox 导航；
 - 大任务板独立滚动和响应式 1/2/4 列；
 - 自动团队紧凑开关与默认折叠模板；
 - 团队画布 10%–200% 缩放、Fit、平移、自动换行和关系限额；
-- 200 任务安全投影、真实总数提示、任务相关事件过滤；
+- 200 任务旧团队安全投影、Project Tasks authority 精确分页，以及按 canonical 项目聚合的“跨会话任务”分页；
 - 保留原 Team Runtime、Broker、Scheduler、Memory 和多人项目入口。
 
-发布声明只能写“统一只读工作台和高任务量 UI 已升级”，不能写“七状态项目任务管理、全局 API 调度或多电脑任务同步已经完成”。
+发布声明可以如实写“七态 Project Tasks 已提供本机 authority 的窄写入口和完整按需分页”“跨会话任务已提供同项目只读聚合分页”；同时必须明确 remote collaborator 只是现有加密 safeCache 的 `totalExact:false` 连接预览、没有完整分页，且任何看板都不会绕过 Host 权限或自动执行基础设施操作。仍不能声称全局 API 调度、完整可写团队总看板或多电脑完整任务分页已经完成。
 
 ### 阶段 B：单机容量与准入加固（已部分实现）
 
@@ -1169,13 +1201,14 @@ priority = background（除非用户明确提升）
 
 这一阶段可继续使用现有 Team Store，但不得把全量 JSON 写回性能当作长期架构。阶段 A 可以在如实标注边界的前提下独立发布；在阶段 B 完成并通过压力门禁前，不得宣称适合“10+ 会话长期满负载无人值守运行”。
 
-### 阶段 C：Project Task 权威域和可写任务流
+### 阶段 C：Project Task 权威域和可写任务流（已部分实现）
 
-- 二次开发上游七状态、revision/409、评论、附件、关系、列表/详情和拖拽交互；
-- 建立 typed CommandBus、RBAC、requirementsRevision、Execution Attempt、Review 和 Artifact；
-- 旧 `team_task_*` 通过 adapter 访问同一事实源，禁止双写；
-- 存储迁移到分区 SQLite/WAL 或等价事件日志，SSE 使用增量事件和游标；
-- 超过 200 条任务通过服务端查询、分页和真正虚拟列表访问。
+- 已建立独立七态 Project Task SQLite/WAL、revision/OCC、RBAC、`requirementsRevision`、Execution Attempt、Review、关系、评论和事件领域；
+- 已按 exact execution 的 canonical 项目建立 Host HMAC lane registry：Project Entry/OS secret 仍为单例，而每个 lane 独占 opaque projectRef、Store key、SQLite/WAL、启动 ledger/queue；相同 raw request/batch id 跨 lane 不冲突，持久化不含 raw canonical key/workspace path；旧任务库仅凭唯一证据自动绑定，否则只允许 exact 当前 top-level direct-human root 通过独立 `bind_legacy` 非破坏绑定，普通 `initialize`、Agent/Team member 或模型布尔字段不能抢占；旧启动 ledger 不实体迁移，继续原位承担 exact-binding 的 status/stop/redeem fallback；
+- 已提供本机 authority 的安全摘要、明确 create/allowed transition、精确 totals 与 120 项/128 KiB 的 AES-GCM keyset 分页；remote collaborator 继续使用加密 safeCache 预览而非 authority 分页；
+- 当前 Client 只暴露窄写按钮和分页列表；完整需求编辑、评论、附件、详情、拖拽、Attempt/Review/Artifact 交互仍待接通；
+- 旧 `team_task_*` 与 Project Tasks 仍是两个明确事实域，不迁移、复制或双写；未来若统一必须通过显式 adapter/迁移，而不是静默合并；
+- 真正虚拟列表、服务端搜索/筛选、评论与事件分页仍是后续容量工作。
 
 ### 阶段 D：真实多人、多电脑任务事件流
 

@@ -1,8 +1,16 @@
-# Harness Desktop 1.0.54
+# Harness Desktop 1.0.55
 
-v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥可用性、Android 配对可靠性和长会话响应速度的正式更新。它修复了普通项目内续作反复要求用户发送“继续”的问题，恢复了环境密钥场景下直接输入安全覆盖的能力，并修复 v1.0.53 Android 正式 APK 扫码配对后由 WebRTC JNI 混淆触发的原生闪退，同时保留真实外部副作用和不可逆操作的硬门禁。
+v1.0.55 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥可用性、Android 配对可靠性和长会话响应速度的正式更新。它修复了普通项目内续作反复要求用户发送“继续”的问题，恢复了环境密钥场景下直接输入安全覆盖的能力，并修复 v1.0.53 Android 正式 APK 扫码配对后由 WebRTC JNI 混淆触发的原生闪退，同时保留真实外部副作用和不可逆操作的硬门禁。
 
 本版本不会静默替用户安装。桌面端只有在用户于更新中心明确点击更新/安装后才会切换版本；Android 仍必须由用户手动安装长期证书签名的 APK。
+
+## 官方 Harness alpha.2 维护迁移（发布前硬门禁）
+
+- 官方运行时维护依赖已从历史 `0.1.1-rc.2` 原子迁移到精确 `0.1.2-alpha.2`：20 个直接 DSH roots、861 个 lock locations、216 个 DSH locations / 215 个唯一包名。执行时重新查询的官方 tag 为 `dsh-v0.1.2-alpha.2`，ref 为 `0a53fb55bea101816fa226bb964ae2bed71c343b`；npm 的 `alpha` dist-tag 同样指向 `0.1.2-alpha.2`，而 `latest`/`next` 仍是 `0.1.1-rc.2`，因此产品始终使用精确 pin，不以浮动 tag 取代它。
+- alpha.2 已移除 `@deepseek-ai/dsh-client-runtime` 和 `@deepseek-ai/dsh-host-apiproxy`。旧补丁入口已退休；New Session、SessionManager/list baseline 与 workspace force-new 已按公开 Session Controller、native session-list 和 `startSession` owners 重基。首次 patch 精确改变 25 个文件，第二次为 0 差异、0 byte delta。
+- **RPC wire 合同**：桌面、Mobile 与桌宠生产客户端只发出固定 `workspace/...` / `session/...` slash endpoints 和 descriptor-shaped 参数；Workspace 只消费 `workspace/follow` baseline frames，Session 只消费 snapshot/cursor projection frames；generated strict descriptor 或 codec 漂移一律 fail closed。
+- 自研 Project/Team、canonical-project 隔离、submission acceptance ledger、routing receipts、locks、recovery、cursors 与 evidence 继续是唯一 authoritative 数据面。官方 experimental Team 不接管，也不进行 schema 或状态双写。
+- 历史 rc.2/NO-GO/`runtimeEquivalent=false` 审计仍可追溯，但已被当前维护迁移证据取代，不能作为本版运行时或发布状态的描述。尚未执行的 hermetic 终验、完整矩阵和 Root fresh-review ACK 仍是发布前硬门禁；本说明不把它们写成已通过，也不声明未产生的最终计数。
 
 ## Agent Teams 自动驾驶不再反复打断
 
@@ -42,28 +50,24 @@ v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥�
 - 最终合成 Electron 场景覆盖 8 个会话、每个 1,200 条逻辑消息、180 次切换和 120 次滚动：switch p95 9.5 ms、最长 long task 91 ms、无保留堆增长、listener cleanup 回到 0。该结果表示预算通过，不把不同场景的时序差异包装成绝对性能承诺。
 - 会话性能补丁与 tool-result owner/session 补丁精确支持 raw、flat 及 `workTreeItems + renderedNodeKeys` 组合；完整组合幂等，任一半补丁继续 fail closed。
 
-## 验证
+## 验证与发布前硬门禁
 
-发布候选在提交前完成：
+当前维护迁移已具备独立的 alpha.2 dependency/patch receipts，但最终 hermetic 终验尚未执行；因此不会复用历史 rc.2/候选报告中的 `6/6`、旧摘要或测试总数来宣称当前发布通过。发布前必须重新在干净、隔离的来源与依赖快照上完成并记录：
 
-- 全仓 `npm run verify`：1717 通过、0 失败、5 个平台/环境条件跳过（1722 总计）；
-- Agent Teams 专项：160 通过、0 失败、2 个环境门禁跳过；
-- 模型密钥行为、迁移、泄露与官方 runtime：28/28；
-- Agent Teams 安装后 artifact-fixture 工作区 smoke：2/2；
-- P1 release-blocking 安全/持久化矩阵：11/11；
-- 长会话双层门禁：synthetic 3/3 + production 31/31；Windows 云端只对一次性冷启动使用 350 ms 有界上限，switch、scroll、泄漏、listener 与 long-task-rate 门禁不放宽；
-- macOS Host IPC endpoint 以 100 UTF-8 bytes 为硬上限并覆盖长 `TMPDIR` 回退；Windows 命名管道协议保持兼容；
-- Android `testDebugUnitTest`、`minifyReleaseWithR8` 与 `verifyReleaseWebRtcJniSymbols`：通过；
-- `npm run verify:release` 与 `git diff --check`：通过。
+- 20 个精确 alpha.2 roots、861 个 lock locations、216 / 215 DSH locations/unique names，以及 removed-package=0、resolved/integrity drift=0；
+- detached install、patch 首次 25 文件 / 第二次 0 差异的可重跑证据；
+- submission/acceptance、routing、canonical project/Team isolation、locks/recovery/cursors/evidence 与官方 seam 的完整 hermetic 矩阵；
+- 相关静态、发布说明和链接合同，以及 `git diff --check`；
+- Root 对完整 evidence、源摘要与计数的 fresh-review ACK。
 
-正式发布继续由仓库唯一的 resumable publisher 从精确 main 提交执行全平台 GitHub Actions 构建、iPhone/iPad 模拟器验证、Windows 安装/卸载与打包自检、Android 长期证书签名、生产组件签名、精确 18 项资产清单、GitHub→CNB 云到云镜像，并在所有不可变资产就绪后才提升三个 stable feed。
+通过上述硬门禁后，正式发布仍只能由仓库唯一的 resumable publisher 从精确 main 提交执行全平台 GitHub Actions 构建、iPhone/iPad 模拟器验证、Windows 安装/卸载与打包自检、Android 长期证书签名、生产组件签名、精确 18 项资产清单、GitHub→CNB 云到云镜像，并在所有不可变资产就绪后才提升三个 stable feed。
 
 ## 版本身份
 
-- 桌面根包、lockfile 和 14 个随包插件：`1.0.54`
-- Android：`versionName=1.0.54`、`versionCode=1005400`
-- iOS/iPadOS 源码：`MARKETING_VERSION=1.0.54`、build `10054`
-- 正式不可变 Tag：`v1.0.54`
+- 桌面根包、lockfile 和 14 个随包插件：`1.0.55`
+- Android：`versionName=1.0.55`、`versionCode=1005400`
+- iOS/iPadOS 源码：`MARKETING_VERSION=1.0.55`、build `10054`
+- 正式不可变 Tag：`v1.0.55`
 - 已发布 `v1.0.53` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变
 
 ## 获取更新
@@ -74,7 +78,7 @@ v1.0.54 是一次面向 Agent Teams 自动驾驶、安全授权、模型密钥�
 
 ### Android
 
-下载 `Harness-Mobile-1.0.54-android-universal.apk` 及其 `.sha256`，核对摘要后由用户手动安装。若 Android 提示签名冲突，请不要强行覆盖来源不明的旧包。
+下载 `Harness-Mobile-1.0.55-android-universal.apk` 及其 `.sha256`，核对摘要后由用户手动安装。若 Android 提示签名冲突，请不要强行覆盖来源不明的旧包。
 
 ### macOS 与 iPhone/iPad
 
@@ -82,9 +86,9 @@ macOS 提供 Intel 和 Apple Silicon 的 DMG/ZIP 预览包，当前仍采用明�
 
 ## 下载与完整性
 
-- GitHub Release：[v1.0.54](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.54)
+- GitHub Release：[v1.0.55](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.55)
 - 永久最新版入口：[GitHub Releases / latest](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)
-- 桌面摘要：[SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/SHA256SUMS.txt)
-- 组件摘要：[COMPONENT-SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.54/COMPONENT-SHA256SUMS.txt)
+- 桌面摘要：[SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/SHA256SUMS.txt)
+- 组件摘要：[COMPONENT-SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.55/COMPONENT-SHA256SUMS.txt)
 
-如果 GitHub 下载受限，可把同一文件名中的下载前缀换为 `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.54/`。GitHub 与 CNB 文件应具有相同大小和 SHA-256；不一致时不要运行该文件。
+如果 GitHub 下载受限，可把同一文件名中的下载前缀换为 `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.55/`。GitHub 与 CNB 文件应具有相同大小和 SHA-256；不一致时不要运行该文件。

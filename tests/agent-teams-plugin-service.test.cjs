@@ -22,7 +22,7 @@ test('Agent Teams plugin installs an explicitly marked artifact fixture into the
     const second = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot, allowArtifactFixture: true, requireArtifact: true })
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.version, '1.0.54')
+    assert.equal(first.version, '1.0.55')
 
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-agent-teams/g) || []).length, 1)
@@ -134,7 +134,7 @@ test('default desktop startup mode still installs from a source checkout while g
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-source-startup-'))
   try {
     const installed = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot: repositoryPluginRoot })
-    assert.equal(installed.version, '1.0.54')
+    assert.equal(installed.version, '1.0.55')
     assert.equal(await readFile(path.join(installed.destination, 'package.json'), 'utf8').then(JSON.parse).then(value => value.name), 'dsh-agent-teams')
     await assert.rejects(ensureAgentTeamsPlugin({ dshHome: root, bundledRoot: repositoryPluginRoot, requireArtifact: true }), error => error?.code === 'AGENT_TEAMS_ARTIFACT_REQUIRED')
   } finally { await rm(root, { recursive: true, force: true }) }
@@ -156,6 +156,12 @@ test('desktop startup installs Agent Teams without patching the official runtime
   const pkg = JSON.parse(await readFile(path.resolve(__dirname, '..', 'package.json'), 'utf8'))
   assert.match(main, /ensureAgentTeamsPlugin\(agentTeamsPluginOptions\(\)\)/u)
   assert.match(main, /dependencyRoot:\s*bundledNodeModulesRoot\(\)/u)
+  assert.match(main, /ensureAgentTeamsSessionLaunchService\(\)/u)
+  assert.match(main, /sessionLaunchService\.runtimeEnvironment\(authorizedRuntimeEnv\)/u)
+  assert.match(main, /delete runtimeEnv\.DSH_AGENT_TEAMS_SESSION_LAUNCH_CALLER_SALT/u)
+  assert.doesNotMatch(main, /getProjectBinding:\s*\(\)\s*=>\s*\(\{\s*workspacePath:/u)
+  assert.match(main, /agentTeamsSessionLaunchService\?\.close\(\)/u)
+  assert.ok(main.indexOf('ensureAgentTeamsSessionLaunchService()') < main.indexOf("spawnCommand(resolved.command, [...resolved.argsPrefix, 'web'"), 'Host capability starts before Runtime spawn')
   assert.ok(pkg.build.files.includes('plugins/dsh-agent-teams/**/*'))
   assert.ok(pkg.build.asarUnpack.includes('plugins/dsh-agent-teams/**/*'))
 })

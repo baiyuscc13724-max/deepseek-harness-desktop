@@ -127,8 +127,10 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     'showPermissionRecovery()',
     'Settings.ACTION_APPLICATION_DETAILS_SETTINGS',
     'decodeSingle',
-    'super.onBackPressed()'
+    'getOnBackPressedDispatcher().addCallback',
+    'cancelAndFinish()'
   ], 'Android scanner permission ownership')
+  assert.doesNotMatch(scannerActivity, /public void onBackPressed\(/u, 'scanner back must use the predictive-back dispatcher')
   assert.doesNotMatch(scannerActivity, /extends CaptureActivity/, 'ZXing must not own the camera permission denial dialog')
   assertContainsAll(dimensions, ['48dp', '16dp'], 'Android touch and spacing tokens')
   assertContainsAll(colors, ['harness_background', 'harness_text', 'harness_error', 'harness_success'], 'Android light semantic colors')
@@ -177,7 +179,14 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     "document.querySelector('[data-slot=\\\"sidebar\\\"]') ||"
   ], 'Android native file chooser and shell readiness')
   const resumeSource = mainActivity.slice(mainActivity.indexOf('protected void onResume()'), mainActivity.indexOf('private void checkMobileAppUpdate()'))
-  assert.doesNotMatch(resumeSource, /dispatchEvent\(new Event\('(online|focus)'\)\)|\.reload\(\)|\.loadUrl\(|mobileUiAdapter\.inject/u, 'foreground resume must preserve the live WebView without reconnect signals or runtime reinjection')
+  assert.doesNotMatch(resumeSource, /dispatchEvent\(new Event\('(online|focus)'\)\)|\.reload\(\)|\.loadUrl\(/u, 'foreground resume must preserve the live WebView without fabricated reconnect signals or navigation')
+  assertContainsAll(adapter, [
+    'static final String RUNTIME_MARKER = "__harnessMobileRuntimeInstalled";',
+    'if(window[runtimeMarker]!==" + JSONObject.quote(RUNTIME_READY) + "){try{',
+    'window[runtimeMarker]=" + JSONObject.quote(RUNTIME_READY) + ";',
+    '}catch(error){delete window[runtimeMarker];throw error;}}'
+  ], 'Android per-document idempotent bootstrap and failed-bootstrap retry')
+  assert.doesNotMatch(adapter, /window\[runtimeMarker\]\s*=\s*[^;]+;\s*try\{/u, 'runtime readiness must only be committed after bootstrap succeeds')
   assert.doesNotMatch(mainActivity, /\.isBlank\(|List\.of\(|(?<!Collectors)\.toList\(/u, 'minSdk 26 production code must not use newer un-desugared Java collection/string APIs')
   assert.doesNotMatch(mainActivity, /new ActivityResultContracts\.PickVisualMedia\(\)/u, 'the gallery path must not regress to a single-photo picker')
   assert.match(manifest, /android:windowSoftInputMode="stateAlwaysHidden\|adjustResize"/u, 'pairing and reconnect surfaces must not summon the IME')
@@ -299,7 +308,8 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
     '返回设置分类',
     'data-harness-mobile-settings-close',
     "root.dataset.harnessMobileSettingsOpen = 'true'",
-    "composer.parentElement.dataset.harnessMobileComposerFrame = 'true'",
+    "composerFrame.dataset.harnessMobileComposerFrame = 'true'",
+    "composerFrame.dataset.harnessMobileComposerSeat = 'true'",
     "composer.dataset.harnessMobileComposer = 'orbit'",
     "input.placeholder = '发消息…'",
     'decorateConversationWorkflow',
@@ -341,6 +351,9 @@ test('Android native shell keeps touch, state, dark-mode, and attachment contrac
   assert.doesNotMatch(`${compat}\n${runtime}`, /qianwen/i, 'mobile presentation must use the original Orbit design language instead of a competitor-named imitation')
   assert.match(compat, /--hm-color-primary:\s*#4968e8/u, 'Orbit brand tokens must remain explicit and testable')
   assert.match(compat, /\[data-harness-mobile-conversation="true"\]\s*\{[^}]*height:\s*100%\s*!important/s, 'conversation follows the resized WebView instead of the layout viewport')
+  assert.match(compat, /data-harness-mobile-composer-input="true"[\s\S]*?max-height:\s*min\(168px, 30dvh\)/u, 'long text input has a bounded growth ceiling')
+  assert.match(compat, /data-input-mirror[\s\S]*?white-space:\s*pre-wrap !important;/u, 'Chinese multiline mirror preserves line breaks')
+  assert.match(compat, /data-harness-mobile-composer-lifted="true"[\s\S]*?scroll-padding-bottom:\s*calc\(196px \+ var\(--harness-mobile-ime-overlay, 0px\)\)/u, 'IME lift reserves the visual viewport overlay')
 })
 
 test('mobile product specification includes real interaction and privacy release gates', async () => {

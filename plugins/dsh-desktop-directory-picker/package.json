@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-directory-picker",
-  "version": "1.0.54",
+  "version": "1.0.55",
   "type": "module",
   "description": "Harness Desktop owned native workspace directory picker",
   "license": "MIT",

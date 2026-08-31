@@ -18,6 +18,8 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +36,60 @@ public final class MainActivityTest {
         assertFalse(MainActivity.mobileBackDeclined("true"));
         assertFalse(MainActivity.mobileBackDeclined("null"));
         assertFalse(MainActivity.mobileBackDeclined(null));
+    }
+
+    @Test public void android13UsesPlatformBackOnceAndLegacyDispatcherOnlyBeforeApi33() throws Exception {
+        String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+            "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
+        assertTrue(source.contains("OnBackInvokedDispatcher.PRIORITY_DEFAULT"));
+        assertTrue(source.contains("registerOnBackInvokedCallback"));
+        assertTrue(source.contains("unregisterOnBackInvokedCallback"));
+        assertTrue(source.contains("Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU"));
+        assertTrue(source.contains("Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null"));
+        assertTrue(source.contains("api33BackDispatcher.register();"));
+        assertTrue(source.contains("api33BackDispatcher.unregister();"));
+        assertTrue(source.contains("if (backDispatchPending || webView == null) return;"));
+    }
+
+    @Test public void webViewAttachmentRefreshesLastRegistrationIdempotently() throws Exception {
+        String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+            "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
+        int configure = source.indexOf("private void configureBackNavigation()");
+        int configureEnd = source.indexOf("private void handleWorkbenchBack()", configure);
+        String configureBody = source.substring(configure, configureEnd);
+        assertFalse("initial configuration must not beat WebView registration", configureBody.contains("api33BackDispatcher.register();"));
+        assertTrue(source.contains("api33BackDispatcher.refreshRegistration();"));
+        assertTrue(source.contains("void refreshRegistration()"));
+        assertTrue(source.contains("if (!registered) return;"));
+        assertTrue(source.contains("void refreshRegistration()"));
+    }
+
+    @Test public void platformBackRegistrationFollowsVisibleActivityLifecycle() throws Exception {
+        String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+            "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
+        int onStart = source.indexOf("protected void onStart()");
+        int onStop = source.indexOf("protected void onStop()");
+        int register = source.indexOf("api33BackDispatcher.register();", onStart);
+        int unregister = source.indexOf("api33BackDispatcher.unregister();", onStop);
+        assertTrue("back callback registers after activity becomes visible", onStart >= 0 && register > onStart);
+        assertTrue("back callback unregisters when activity is hidden", onStop >= 0 && unregister > onStop);
+        assertTrue("visibility unregister precedes the next lifecycle callback", unregister < source.indexOf("super.onStop();", onStop));
+    }
+
+    @Test public void mobileRuntimeBootstrapIsPerDocumentIdempotentAndRetryable() {
+        String runtime = "window.__mobileRuntimeProbe=(window.__mobileRuntimeProbe||0)+1";
+        String script = MobileUiAdapter.buildInjectionScript("html{color:red}", runtime);
+        int runtimeIndex = script.indexOf(runtime);
+        int readyIndex = script.indexOf("window[runtimeMarker]=\"ready\"");
+
+        assertTrue(script.contains("const runtimeMarker=\"" + MobileUiAdapter.RUNTIME_MARKER + "\""));
+        assertTrue(script.contains("if(window[runtimeMarker]!==\"ready\"){try{"));
+        assertTrue(runtimeIndex >= 0);
+        assertTrue("the document is marked ready only after the runtime completes", readyIndex > runtimeIndex);
+        assertTrue("a failed first install must remain retryable",
+            script.contains("catch(error){delete window[runtimeMarker];throw error;}"));
+        assertTrue("the delayed composer entry keeps its independent idempotency guard",
+            script.contains("if(window.__harnessMobileInputEntryInstalled)return;"));
     }
 
     @Test public void acceptsOnlyPrivateLanPairingLinks() {
@@ -237,14 +293,77 @@ public final class MainActivityTest {
         catch (java.security.GeneralSecurityException expected) { assertTrue(expected.getMessage().contains("replay")); }
     }
 
-    @Test public void reconnectPolicyDebouncesDuplicateNetworkCallbacks() {
+    @Test public void reconnectPolicyDebouncesAndCommitsStableLogicalGenerations() {
         NetworkReconnectPolicy policy = new NetworkReconnectPolicy();
         policy.seed(10L, true);
         assertFalse(policy.available(10L, true));
         assertTrue(policy.available(11L, true));
-        assertFalse(policy.lost(10L));
+        assertEquals(NetworkReconnectPolicy.SWITCH_HOLDOFF_MS, policy.pendingDelayMillis());
+        assertFalse("the superseded default must not erase its announced successor", policy.lost(10L));
+        assertTrue("the old logical connection remains usable through holdoff", policy.hasUsableNetwork());
+
+        NetworkReconnectPolicy.Transition switched = policy.commitPending();
+        assertTrue(switched.switched());
+        assertEquals(1L, switched.generation);
+        assertTrue(policy.hasUsableNetwork());
         assertTrue(policy.lost(11L));
+        assertEquals(NetworkReconnectPolicy.LOSS_HOLDOFF_MS, policy.pendingDelayMillis());
+        assertTrue("loss remains pending until the grace window commits", policy.hasUsableNetwork());
+        assertTrue(policy.commitPending().disconnected());
         assertFalse(policy.hasUsableNetwork());
+
+        assertTrue(policy.available(12L, true));
+        assertEquals(NetworkReconnectPolicy.RECOVERY_HOLDOFF_MS, policy.pendingDelayMillis());
+        assertTrue(policy.commitPending().recovered());
+        assertEquals(3L, policy.generation());
+
+        NetworkReconnectPolicy jitter = new NetworkReconnectPolicy();
+        jitter.seed(20L, true);
+        assertTrue(jitter.available(21L, true));
+        assertTrue(jitter.available(20L, true));
+        assertFalse("a switch that flaps back during holdoff must not create a generation",
+            jitter.commitPending() != null);
+        assertEquals(0L, jitter.generation());
+    }
+
+    @Test public void stableNetworkSwitchKeepsTheWebViewAndVerifiedTransportsAlive() throws Exception {
+        String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+            "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
+        int switched = source.indexOf("if (transition.switched())");
+        int recovery = source.indexOf("updateRoutesBeforeRemoteReady(profile);", switched);
+        String stableSwitch = source.substring(switched, recovery);
+        assertTrue(stableSwitch.contains("applyReadyRoutes(profile);"));
+        assertFalse(stableSwitch.contains("webView.stopLoading()"));
+        assertFalse(stableSwitch.contains("nativeP2pClient.stop()"));
+        assertFalse(stableSwitch.contains("wssRelayClient.stop()"));
+    }
+
+    @Test public void incompleteNativeSnapshotRefreshRetriesWithoutDiscardingTheLastCompleteSnapshot() throws Exception {
+        String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+            "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
+        assertTrue(source.contains("OFFLINE_SYNC_RETRY_DELAYS_MS = { 1_000L, 2_000L, 4_000L, 8_000L, 15_000L, 30_000L }"));
+        int refresh = source.indexOf("private void requestOfflineSync");
+        int revoked = source.indexOf("private void clearRevokedPairing", refresh);
+        String refreshFlow = source.substring(refresh, revoked);
+        assertTrue(refreshFlow.contains("A failed/incomplete refresh never replaces the last complete snapshot."));
+        assertTrue(refreshFlow.contains("scheduleOfflineSyncRetry(profile, generation);"));
+        assertTrue(refreshFlow.contains("generation != offlineSyncGeneration"));
+        assertTrue(refreshFlow.contains("profile != pairingProfile"));
+        assertTrue(refreshFlow.contains("!pairingIdentity.equals(activeCacheIdentity)"));
+        assertTrue(refreshFlow.indexOf("offlineSyncInFlight.set(false)")
+            < refreshFlow.indexOf("scheduleOfflineSyncRetry(profile, generation);"));
+    }
+
+    @Test public void routeScoringAndConnectionStateAreExplicitAndDeterministic() {
+        assertEquals(0, HarnessWebProxy.routeKindRank("lan"));
+        assertEquals(1, HarnessWebProxy.routeKindRank("native-p2p"));
+        assertEquals(2, HarnessWebProxy.routeKindRank("wss-relay"));
+        assertEquals(3, HarnessWebProxy.routeKindRank("easytier"));
+        HarnessWebProxy.ConnectionState state = new HarnessWebProxy.ConnectionState(
+            7L, 2, HarnessWebProxy.ResponseState.INCOMPLETE, "wss-relay|127.0.0.1");
+        assertEquals(7L, state.generation());
+        assertEquals(2, state.recoveryCursor());
+        assertEquals(HarnessWebProxy.ResponseState.INCOMPLETE, state.responseState());
     }
 
     @Test public void webProxyPrefersTheLastGoodReadyRouteAndDefersCoolingRoutes() {
@@ -261,6 +380,40 @@ public final class MainActivityTest {
         assertEquals(relay.key(), prioritized.get(0).key());
         assertEquals(remote.key(), prioritized.get(1).key());
         assertEquals(lan.key(), prioritized.get(2).key());
+    }
+
+    @Test public void webProxyColdRouteRaceUsesTheFirstSuccessfulAuthenticatedCandidate() throws Exception {
+        PairingProfile.Route slowLan = new PairingProfile.Route("lan", "192.168.1.5", 3081);
+        PairingProfile.Route fastRelay = new PairingProfile.Route("wss-relay", "10.253.77.254", 3081, "127.0.0.1", 4100);
+        Socket slowSocket = new Socket();
+        Socket fastSocket = new Socket();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch releaseSlowLan = new CountDownLatch(1);
+        try {
+            HarnessWebProxy.ConnectedRoute winner = HarnessWebProxy.raceRoutes(
+                List.of(slowLan, fastRelay),
+                route -> {
+                    if ("lan".equals(route.id)) {
+                        try { releaseSlowLan.await(2, TimeUnit.SECONDS); }
+                        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new java.io.IOException(interrupted); }
+                        return slowSocket;
+                    }
+                    return fastSocket;
+                },
+                executor,
+                500L,
+                (route, error) -> fail("both simulated authenticated candidates should connect")
+            );
+            assertEquals(120L, HarnessWebProxy.ROUTE_RACE_STAGGER_MS);
+            assertEquals(fastRelay.key(), winner.route().key());
+            assertFalse("the winning socket remains owned by the proxy", fastSocket.isClosed());
+        } finally {
+            releaseSlowLan.countDown();
+            executor.shutdown();
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+            fastSocket.close();
+        }
+        assertTrue("a late successful loser must be closed", slowSocket.isClosed());
     }
 
     @Test public void webProxyRewritesStableHostToTheDesktopRoute() {
@@ -478,6 +631,22 @@ public final class MainActivityTest {
         assertFalse(direct.accepts(NativeP2pClient.StreamPath.RELAY));
         assertTrue(relay.accepts(NativeP2pClient.StreamPath.RELAY));
         assertFalse(relay.accepts(NativeP2pClient.StreamPath.DIRECT));
+    }
+
+    @Test public void nativeP2pAnswerDoesNotDropRelayStreamsBeforeDirectValidation() throws Exception {
+        String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+            "src/main/java/io/harnessdesktop/mobile/NativeP2pClient.java")), StandardCharsets.UTF_8);
+        int answer = source.indexOf("sendSignal(new JSONObject().put(\"kind\", \"answer\")");
+        int answerEnd = source.indexOf("private void sendIce", answer);
+        String answerCommit = source.substring(answer, answerEnd);
+        assertTrue(answerCommit.contains("promoteDirectIfValidated(activeGeneration)"));
+        assertFalse(answerCommit.contains("closeStreamsForPath(StreamPath.RELAY)"));
+
+        int promotion = source.indexOf("private synchronized void promoteDirectIfValidated");
+        int promotionEnd = source.indexOf("private synchronized void openSocksServer", promotion);
+        String validatedPromotion = source.substring(promotion, promotionEnd);
+        assertTrue(validatedPromotion.indexOf("DataChannel.State.OPEN")
+            < validatedPromotion.indexOf("closeStreamsForPath(StreamPath.RELAY)"));
     }
 
     private static void expectSecurityFailure(SecurityRunnable action) throws Exception {

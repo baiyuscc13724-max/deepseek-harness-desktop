@@ -1,15 +1,29 @@
 const { randomUUID } = require('node:crypto')
 const WebSocket = require('ws')
 
+const PET_UNARY_ENDPOINTS = new Set(['$events/result', 'session/list', 'session/modelCatalog'])
+const PET_EVENT_ALLOWLIST = new Set([
+  'api-session/activity',
+  'api-session/added',
+  'api-session/error',
+  'api-session/removed',
+  'api-session/status',
+  'approval/request',
+  'user-questions/request'
+])
+
 function normalizeRuntimeUrl(value) {
   const target = new URL(value)
-  if (target.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(target.hostname)) {
-    throw new Error('宠物事件适配器只允许连接本机 Harness runtime。')
-  }
+  if (target.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(target.hostname)) throw new Error('宠物事件适配器只允许连接本机 Harness runtime。')
   target.pathname = '/'
   target.search = ''
   target.hash = ''
   return target
+}
+
+function selectedModel(item, fallback = '') {
+  const projection = item?.projections?.values?.modelSelection
+  return projection?.next?.model || projection?.lastUsed?.model || fallback
 }
 
 class PetEventAdapter {
@@ -19,13 +33,17 @@ class PetEventAdapter {
     this.onEvent = onEvent
     this.onDiagnostic = onDiagnostic
     this.baseUrl = null
-    this.sockets = new Set()
+    this.socket = null
     this.reconnectTimer = null
     this.stopped = true
     this.defaultModel = ''
+    this.eventClientId = ''
+    this.eventStreamId = ''
+    this.controlStreamId = ''
   }
 
-  async call(method, payload = {}) {
+  async call(method, payload) {
+    if (!PET_UNARY_ENDPOINTS.has(method)) throw new Error('宠物事件适配器拒绝未知 runtime endpoint。')
     const rpcId = randomUUID()
     const response = await this.fetchImpl(new URL(`/api/${method}`, this.baseUrl), {
       method: 'POST',
@@ -34,7 +52,7 @@ class PetEventAdapter {
     })
     if (!response.ok) throw new Error(`${method} HTTP ${response.status}`)
     const envelope = await response.json()
-    if (envelope.rpcId !== rpcId) throw new Error(`${method} rpcId 不匹配`)
+    if (envelope?.type !== 'server-response' || envelope.rpcId !== rpcId) throw new Error(`${method} rpcId 不匹配`)
     if (!envelope.result?.ok) throw new Error(envelope.result?.error?.message || `${method} 调用失败`)
     return envelope.result.value
   }
@@ -50,12 +68,13 @@ class PetEventAdapter {
   }
 
   async refreshBaseline() {
-    const [description, sessions] = await Promise.all([
-      this.call('host.describe').catch(() => ({})),
-      this.call('session.list')
+    const [catalog, sessions] = await Promise.all([
+      this.call('session/modelCatalog', { args: {} }),
+      this.call('session/list', { args: { _request: {} } })
     ])
-    this.defaultModel = description.model || ''
-    for (const item of sessions.items || []) {
+    this.defaultModel = catalog?.default?.model || ''
+    if (!Array.isArray(sessions?.items)) throw new Error('session/list baseline invalid')
+    for (const item of sessions.items) {
       this.onEvent({
         type: 'baseline',
         sessionId: item.sessionId,
@@ -63,109 +82,86 @@ class PetEventAdapter {
         running: item.running,
         updatedAt: item.updatedAt,
         tokenUsage: item.projections?.values?.tokenUsage,
-        model: this.defaultModel
+        model: selectedModel(item, this.defaultModel)
       })
     }
   }
 
   openStreams() {
     if (this.stopped) return
-    this.openStream('/api/events.host', frame => this.handleHostFrame(frame))
-    this.openStream('/api/events.mux', frame => this.handleMuxFrame(frame))
+    const url = new URL('/api/remote.mux', this.baseUrl)
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+    const socket = new this.WebSocketImpl(url.toString())
+    this.socket = socket
+    this.eventClientId = ''
+    this.eventStreamId = `events-${randomUUID()}`
+    this.controlStreamId = `control-${randomUUID()}`
+    socket.on('open', () => {
+      socket.send(JSON.stringify({ type: 'open', streamId: this.eventStreamId, endpoint: '$events', payload: { args: {} } }))
+      socket.send(JSON.stringify({ type: 'open', streamId: this.controlStreamId, endpoint: 'session/control', payload: { args: {} } }))
+    })
+    socket.on('message', raw => this.handleStreamMessage(raw))
+    socket.on('error', error => this.onDiagnostic(`/api/remote.mux 连接错误：${error.message}`))
+    socket.on('close', () => { if (this.socket === socket) this.socket = null; this.scheduleReconnect() })
   }
 
-  openStream(pathname, listener) {
-    const url = new URL(pathname, this.baseUrl)
-    url.protocol = 'ws:'
-    const socket = new this.WebSocketImpl(url.toString())
-    this.sockets.add(socket)
-    socket.on('message', raw => {
-      try {
-        const envelope = JSON.parse(String(raw))
-        if (envelope?.payload) listener(envelope.payload)
-      } catch (error) {
-        this.onDiagnostic(`丢弃无法解析的 ${pathname} 事件：${error.message}`)
-      }
-    })
-    socket.on('error', error => this.onDiagnostic(`${pathname} 连接错误：${error.message}`))
-    socket.on('close', () => {
-      this.sockets.delete(socket)
-      this.scheduleReconnect()
-    })
+  handleStreamMessage(raw) {
+    let frame
+    try { frame = JSON.parse(String(raw)) } catch (error) { this.onDiagnostic(`丢弃无法解析的 /api/remote.mux 事件：${error.message}`); return }
+    if (frame?.type !== 'item' || typeof frame.streamId !== 'string') return
+    if (frame.streamId === this.eventStreamId) this.handleRemoteEvent(frame.value)
+    else if (frame.streamId === this.controlStreamId) this.handleControlFrame(frame.value)
+  }
+
+  handleRemoteEvent(frame) {
+    if (frame?.type === 'ready' && typeof frame.clientId === 'string' && frame.clientId) { this.eventClientId = frame.clientId; return }
+    if (!PET_EVENT_ALLOWLIST.has(frame?.event)) return
+    if (frame.type === 'waterfall') {
+      this.onEvent({ type: 'needs-input', sessionId: frame.agentId })
+      if (this.eventClientId && typeof frame.eventId === 'string' && frame.eventId) void this.call('$events/result', { args: { clientId: this.eventClientId, eventId: frame.eventId, outcome: { kind: 'next' } } }).catch(error => this.onDiagnostic(`waterfall 旁路失败：${error.message}`))
+      return
+    }
+    if (frame.type !== 'emit' || !Array.isArray(frame.args)) return
+    const value = frame.args[0] || {}
+    if (frame.event === 'api-session/added') this.onEvent({ type: 'session-added', sessionId: value.sessionId })
+    else if (frame.event === 'api-session/removed') this.onEvent({ type: 'session-removed', sessionId: value.sessionId })
+    else if (frame.event === 'api-session/status') this.onEvent({ type: 'session-status', sessionId: value.sessionId, running: value.running })
+    else if (frame.event === 'api-session/error') this.onEvent({ type: 'agent-error', sessionId: value.sessionId })
+  }
+
+  handleControlFrame(frame) {
+    if (frame?.type === 'baseline') {
+      for (const [sessionId, projection] of Object.entries(frame.value?.projections || {})) this.emitProjection(sessionId, 'modelSelection', projection?.values?.modelSelection)
+      return
+    }
+    if (frame?.type === 'projection') this.emitProjection(frame.sessionId, frame.key, frame.value)
+  }
+
+  emitProjection(sessionId, key, value) {
+    if (key === 'tokenUsage') this.onEvent({ type: 'token-usage', sessionId, value })
+    else if (key === 'modelSelection') this.onEvent({ type: 'model', sessionId, model: value?.next?.model || value?.lastUsed?.model || this.defaultModel })
   }
 
   scheduleReconnect() {
     if (this.stopped || this.reconnectTimer) return
-    for (const socket of this.sockets) socket.close()
-    this.sockets.clear()
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null
       if (this.stopped) return
-      try {
-        await this.refreshBaseline()
-        this.openStreams()
-      } catch (error) {
-        this.onDiagnostic(`宠物事件重新连接失败：${error.message}`)
-        this.scheduleReconnect()
-      }
+      try { await this.refreshBaseline(); this.openStreams() }
+      catch (error) { this.onDiagnostic(`宠物事件重新连接失败：${error.message}`); this.scheduleReconnect() }
     }, 1500)
     this.reconnectTimer.unref?.()
-  }
-
-  handleHostFrame(frame) {
-    if (frame.type === 'host/session-added') {
-      this.onEvent({ ...frame, type: 'session-added' })
-    } else if (frame.type === 'host/session-removed') {
-      this.onEvent({ type: 'session-removed', sessionId: frame.sessionId })
-    } else if (frame.type === 'host/session-status') {
-      this.onEvent({ type: 'session-status', sessionId: frame.sessionId, running: frame.running })
-      if (frame.running) this.readSessionModel(frame.sessionId)
-    } else if (frame.type === 'host/agent-error') {
-      this.onEvent({ type: 'agent-error', sessionId: frame.sessionId })
-    }
-  }
-
-  handleMuxFrame(frame) {
-    if (frame.type === 'approval/requested' || frame.type === 'question/requested') {
-      this.onEvent({ type: 'needs-input', sessionId: frame.sessionId })
-      return
-    }
-    if (frame.type === 'approval/resolved' || frame.type === 'question/resolved') {
-      this.onEvent({ type: 'input-resolved', sessionId: frame.sessionId })
-      return
-    }
-    if (frame.type === 'session/projection' && frame.key === 'tokenUsage') {
-      this.onEvent({ type: 'token-usage', sessionId: frame.sessionId, value: frame.value })
-      return
-    }
-    if (frame.type !== 'session/event') return
-    const event = frame.event
-    const usage = event?.data?.usage || (event?.data?.chunk?.type === 'usage' ? event.data.chunk.usage : null)
-    if (usage) this.onEvent({ type: 'token-usage', sessionId: frame.sessionId, value: usage })
-    if (event?.data?.chunk?.type === 'finish') {
-      this.onEvent({ type: 'finish', sessionId: frame.sessionId, kind: event.data.chunk.reason })
-    }
-  }
-
-  async readSessionModel(sessionId) {
-    try {
-      const models = await this.call('session.models', { sessionId })
-      this.onEvent({ type: 'model', sessionId, model: models.current?.model || this.defaultModel })
-    } catch {
-      if (this.defaultModel) this.onEvent({ type: 'model', sessionId, model: this.defaultModel })
-    }
   }
 
   stop() {
     this.stopped = true
     clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
-    for (const socket of this.sockets) {
-      socket.removeAllListeners?.()
-      socket.close()
-    }
-    this.sockets.clear()
+    const socket = this.socket
+    this.socket = null
+    socket?.removeAllListeners?.()
+    socket?.close()
   }
 }
 
-module.exports = { PetEventAdapter, normalizeRuntimeUrl }
+module.exports = { PET_EVENT_ALLOWLIST, PetEventAdapter, normalizeRuntimeUrl, selectedModel }

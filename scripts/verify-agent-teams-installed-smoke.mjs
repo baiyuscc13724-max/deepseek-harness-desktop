@@ -272,6 +272,12 @@ export async function runInstalledSmoke(options) {
     const artifact = await validateAgentTeamsArtifactRoot(options.artifactRoot, { allowArtifactFixture: options.artifactFixture === true })
     const installed = await ensureAgentTeamsPlugin({ dshHome, bundledRoot: artifact.source, allowArtifactFixture: options.artifactFixture === true, requireArtifact: true })
     await access(path.join(installed.destination, 'lib', 'desktop-authorization-capability.js'))
+    const installedLaunchPath = path.join(installed.destination, 'lib', 'project-session-launch.js')
+    await access(installedLaunchPath)
+    const installedHost = await readFile(path.join(installed.destination, 'lib', 'index.js'), 'utf8')
+    const installedLaunch = await readFile(installedLaunchPath, 'utf8')
+    if (!installedHost.includes('name: "project_session_launch"') || !installedHost.includes('resolveProjectSessionLaunchProvider(ctx)') || !installedHost.includes('runtime.prepareStart(exec') || !installedHost.includes('runtime.activatePreparedBatch(exec') || !installedHost.includes('reserveProjectLaunchSlots(projectEntry') || !installedHost.includes('adoptProjectLaunchSlot(projectSessionLaunch')) throw new Error('Installed Host is missing the two-phase reserve-before-launch project session plane.')
+    for (const marker of ['reserveAdoption', 'redeemAdoption', 'DSH_AGENT_TEAMS_SESSION_LAUNCH_CALLER_SALT']) if (!installedLaunch.includes(marker)) throw new Error(`Installed project session launch provider is missing the private adoption marker: ${marker}`)
     const installedClient = await readFile(path.join(installed.destination, 'lib', 'client.js'), 'utf8')
     for (const marker of ['代理目录', '已由用户停止', '生成继续请求', 'aria-live', 'tabIndex']) {
       if (!installedClient.includes(marker)) throw new Error(`Installed client is missing the required workbench contract marker: ${marker}`)

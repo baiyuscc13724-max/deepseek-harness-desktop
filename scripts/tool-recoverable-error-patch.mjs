@@ -2,12 +2,15 @@ const LEGACY_PATCH_MARKER = 'recoverableToolErrorMarker = "@harness-desktop/reco
 const PATCH_MARKER = 'recoverableToolErrorMarker = "@harness-desktop/recoverable-tool-error-v2"'
 
 const REQUIRE_ANCHOR = '\t\tlet _deepseek_ai_dsh_client_runtime_client = require("@deepseek-ai/dsh-client-runtime/client");'
-const REQUIRE_PATCHED = `${REQUIRE_ANCHOR}
+const REQUIRE_ANCHOR_ALPHA2 = '\t\tlet _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");'
+const recoverableHelpers = anchor => `${anchor}
 \t\tconst recoverableToolErrorMarker = "@harness-desktop/recoverable-tool-error-v2";
 \t\tconst recoverableEditErrorCodes = new Set(["FS_EDIT_NOT_FOUND", "FS_STALE_VERSION", "FS_NOT_OBSERVED"]);
 \t\tfunction isRecoverableEditError(toolName, block) {
 \t\t\treturn toolName === "edit" && "kind" in block && block.isError === true && recoverableEditErrorCodes.has(block.error?.code);
 \t\t}`
+const REQUIRE_PATCHED = recoverableHelpers(REQUIRE_ANCHOR)
+const REQUIRE_PATCHED_ALPHA2 = recoverableHelpers(REQUIRE_ANCHOR_ALPHA2)
 
 const STATE_ORIGINAL = '\t\t\tconst state = !done ? "running" : block.error?.code === "interrupted" ? "stopped" : block.isError ? "error" : "ok";'
 const STATE_PATCHED = '\t\t\tconst state = !done ? "running" : block.error?.code === "interrupted" ? "stopped" : isRecoverableEditError(toolName, block) ? "retry" : block.isError ? "error" : "ok";'
@@ -54,7 +57,12 @@ export function patchRecoverableToolErrorSource(source) {
     assertComplete(migrated)
     return { source: migrated, changed: true }
   }
-  let output = replaceExactlyOnce(source, REQUIRE_ANCHOR, REQUIRE_PATCHED, 'tool UI runtime anchor')
+  const runtimeAnchors = [
+    [REQUIRE_ANCHOR, REQUIRE_PATCHED],
+    [REQUIRE_ANCHOR_ALPHA2, REQUIRE_PATCHED_ALPHA2]
+  ].filter(([anchor]) => source.includes(anchor))
+  if (runtimeAnchors.length !== 1) throw new Error('Pinned DSH tool UI runtime anchor changed; refusing an unsafe recoverable-tool-error patch.')
+  let output = replaceExactlyOnce(source, runtimeAnchors[0][0], runtimeAnchors[0][1], 'tool UI runtime anchor')
   output = replaceExactlyOnce(output, STATE_ORIGINAL, STATE_PATCHED, 'tool row state derivation')
   output = replaceExactlyOnce(output, SUMMARY_ORIGINAL, SUMMARY_PATCHED, 'tool row attention summary')
   output = replaceExactlyOnce(output, LEADING_ORIGINAL, LEADING_PATCHED, 'tool row leading state')

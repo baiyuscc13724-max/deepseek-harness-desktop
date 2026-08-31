@@ -56,8 +56,8 @@ test('composer decoration preserves the official permission control as an intera
     querySelectorAll: () => []
   }
   const document = { querySelector: () => conversation }
-  const decorate = new Function('document', 'window', 'decorateConversationWorkflow', 'accessibleButtonText', `${source}\nreturn decorateConversation`) // eslint-disable-line no-new-func
-    (document, {}, () => {}, button => String(button.getAttribute('aria-label') || button.title || button.textContent || '').trim())
+  const decorate = new Function('document', 'window', 'decorateConversationWorkflow', 'accessibleButtonText', 'ensureMobileComposerModelControl', 'normalizeMobileComposerLayers', `${source}\nreturn decorateConversation`) // eslint-disable-line no-new-func
+    (document, {}, () => {}, button => String(button.getAttribute('aria-label') || button.title || button.textContent || '').trim(), () => {}, () => {})
   decorate()
   assert.equal(permission.dataset.harnessMobilePermissionTrigger, 'true')
   assert.equal(permission.dataset.harnessMobileComposerTool, undefined)
@@ -82,6 +82,8 @@ test('permission trigger is touch safe and Android/iOS resources stay identical'
   assert.match(androidCss, /\[data-harness-mobile-permission-trigger="true"\][^{]*\{[^}]*min-width:\s*44px !important;[^}]*min-height:\s*44px !important;[^}]*display:\s*inline-flex !important;/su)
   assert.match(androidCss, /\[data-harness-mobile-permission-trigger="true"\]\s*>\s*span:not\(\[aria-hidden="true"\]\)[^{]*\{[^}]*display:\s*inline !important;/su, 'mobile must override the official narrow-container rule that hides the access-mode label')
   assert.match(androidCss, /\[data-harness-mobile-permission-context="true"\][^{]*\{[^}]*overflow:\s*visible !important;/su, 'official permission menu ancestors must not clip the expanded choices')
+  assert.match(androidCss, /\[data-harness-mobile-composer-toolbar-left="true"\][^{]*\{[^}]*overflow:\s*visible !important;/su, 'the shared access/model toolbar seat must let the official permission menu escape')
+  assert.doesNotMatch(androidCss, /\[data-harness-mobile-composer-toolbar-left="true"\][^{]*\{[^}]*overflow:\s*hidden !important;/su, 'the model toolbar layout must never reintroduce permission-menu clipping')
   assert.match(androidCss, /data-harness-mobile-chat-detail="open"\]\s+\[role="menu"\]:not\(#harness-mobile-input-menu\)[^{]*\{[^}]*z-index:\s*980 !important;/su, 'official portal menus must stay above the mobile composer and navigation layers')
   assert.doesNotMatch(androidCss, /data-harness-mobile-chat-detail="open"\]\s+\[role="menu"\]\s*\{/su, 'the mobile plus menu keeps its own higher stacking contract')
   assert.match(androidCss, /\[data-harness-mobile-composer-tool="true"\][^{]*\{[^}]*display:\s*none !important;/su)

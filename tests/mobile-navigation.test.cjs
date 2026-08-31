@@ -6,7 +6,10 @@ const test = require('node:test')
 const root = path.resolve(__dirname, '..')
 const runtime = fs.readFileSync(path.join(root, 'mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-runtime.js'), 'utf8')
 const compat = fs.readFileSync(path.join(root, 'mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-compat.css'), 'utf8')
+const iosRuntime = fs.readFileSync(path.join(root, 'mobile', 'ios', 'HarnessMobile', 'Resources', 'mobile-runtime.js'), 'utf8')
+const iosCompat = fs.readFileSync(path.join(root, 'mobile', 'ios', 'HarnessMobile', 'Resources', 'mobile-compat.css'), 'utf8')
 const officialTeams = fs.readFileSync(path.join(root, 'plugins', 'dsh-agent-teams', 'lib', 'client.js'), 'utf8')
+const officialSchedules = fs.readFileSync(path.join(root, 'plugins', 'dsh-desktop-schedules', 'lib', 'client.js'), 'utf8')
 const officialSessionExperience = fs.readFileSync(path.join(root, 'plugins', 'dsh-session-experience', 'lib', 'client.js'), 'utf8')
 
 function sourceIndex(fragment) {
@@ -34,6 +37,11 @@ test('mobile navigation exposes the stable four-domain order and routes', () => 
   assert.match(runtime, /button\.setAttribute\('aria-current', 'page'\)/u)
 })
 
+test('Android and iOS mobile navigation resources remain byte-identical', () => {
+  assert.equal(iosRuntime, runtime)
+  assert.equal(iosCompat, compat)
+})
+
 test('mobile navigation only delegates to the versioned bridge or official semantic controls', () => {
   assert.match(runtime, /const bridge = window\.HarnessMobileNavigation/u)
   assert.match(runtime, /bridge && bridge\.version != null && typeof bridge\.navigate === 'function'/u)
@@ -43,53 +51,200 @@ test('mobile navigation only delegates to the versioned bridge or official seman
   assert.match(runtime, /harness-mobile-navigation-change/u)
   assert.match(runtime, /const detailComposer = visibleConversation\?\.querySelector\?\.\('\[data-composer-card\]'\)[^]*domain\.id !== 'conversations' && root\.dataset\.harnessMobileChatDetail === 'open' && detailComposer && visible\(visibleConversation\)[^]*event\.preventDefault\(\)[^]*event\.stopPropagation\(\)/u, 'a transient hidden footer must never steal touches from an open conversation detail')
   assert.match(runtime, /root\.dataset\.harnessMobileChatDetail === 'open'/u, 'a mounted composer behind the home drawer must not block the other three domains')
-  assert.match(runtime, /\[data-mobile-slot="\$\{domain\.slot\}"\]/u)
+  assert.match(runtime, /const mobileSlotNames = domain => \[domain\.slot, \.\.\.\(mobileSlotAliases\[domain\.id\] \|\| \[\]\)\]/u)
+  assert.match(runtime, /for \(const slot of mobileSlotNames\(domain\)\)/u, 'the primary slot must be queried before DOM-ordered aliases')
+  assert.match(runtime, /agents: Object\.freeze\(\['navigation\.agents'\]\)/u)
+  assert.match(runtime, /tasks: Object\.freeze\(\['navigation\.tasks'\]\)/u)
   assert.match(runtime, /\[data-slot="agent-teams\.trigger"\] button, button\[data-slot="agent-teams\.trigger"\]/u)
   assert.match(runtime, /\[data-slot="settings\.trigger"\] button, button\[data-slot="settings\.trigger"\]/u)
+  assert.match(runtime, /const scheduledTaskLabel[^]*已安排的任务\|Scheduled tasks\|定时任务/u)
+  assert.match(runtime, /const officialScheduledTaskTarget[^]*\.hd-conversation-more-action/u)
+  assert.match(runtime, /\[data-conversation-view="desktop-schedules"\]/u)
   assert.doesNotMatch(runtime, /(?:空间|任务|我的)(?:首页|页面).*createElement|data-harness-mobile-domain-placeholder/u)
 })
 
-test('mobile domains bind the official Agent Teams canvas and automation slots', () => {
-  assert.match(officialTeams, /"data-mobile-slot": item\.id === "projectTasks" \? "navigation\.tasks" : item\.id === "board" \? "navigation\.agents" : "agent-teams\.view\." \+ item\.id/u)
-  assert.match(runtime, /id: 'agents'[^\n]*slot: 'agent-teams\.view\.canvas'/u)
-  assert.match(runtime, /id: 'tasks'[^\n]*slot: 'agent-teams\.view\.automation'/u)
+test('back derives an existing conversation detail from visible composer when state marker lags', () => {
+  assert.match(runtime, /const isMobileConversationDetailOpen = \(\) => \{/u)
+  assert.match(runtime, /if \(root\.dataset\.harnessMobileChatDetail === 'open'\) return true/u)
+  assert.match(runtime, /mobileNavigationState\.activeDomain !== 'conversations' \|\| sidebarExpanded\(\)/u)
+  assert.match(runtime, /conversation\?\.querySelector\?\.\('\[data-composer-card\]'\) && visible\(conversation\)/u)
+  assert.match(runtime, /if \(isMobileConversationDetailOpen\(\)\) \{/u)
+  assert.equal(iosRuntime, runtime, 'Android and iOS must apply the same stale-state back fallback')
 })
 
-test('mobile helpers wait for non-empty official canvas and automation content', async () => {
-  const start = runtime.indexOf('  const officialWorkspaceContent = (workbench, domain) => {')
-  const end = runtime.indexOf('  const activateOfficialDomain = (domain, shell) => {', start)
+test('expanding a project never closes the sidebar or focuses the conversation composer', () => {
+  const start = runtime.indexOf('  const installSidebarAutoClose = () => {')
+  const end = runtime.indexOf('  const appIcon = name => {', start)
   assert.ok(start >= 0 && end > start)
-  const source = runtime.slice(start, end)
+  const listeners = {}
+  const timers = []
+  const closed = []
+  const chatClicks = []
+  let released = 0
+  const window = { __harnessMobileSidebarAutoClose: false, matchMedia: () => ({ matches: true }) }
+  const document = { addEventListener: (name, listener) => { listeners[name] = listener } }
+  const install = new Function('window', 'document', 'setTimeout', 'sidebarExpanded', 'setSidebarExpanded', 'officialChatTarget', 'releaseComposerFocus', `${runtime.slice(start, end)}\nreturn installSidebarAutoClose`) // eslint-disable-line no-new-func
+    (window, document, callback => { timers.push(callback) }, () => true, value => closed.push(value), () => ({ disabled: false, getAttribute: () => null, click: () => chatClicks.push('chat') }), () => { released += 1 })
+  install()
+  const sidebar = {}
+  const projectRow = { dataset: { harnessMobileProjectRow: 'true' }, hasAttribute: name => name === 'aria-expanded', closest: selector => selector === '[data-slot="sidebar"]' ? sidebar : null }
+  const projectTarget = {
+    closest(selector) {
+      if (selector.includes('harness-mobile-session-row')) return projectRow
+      if (selector.includes('button,a,input')) return null
+      if (selector.includes('harness-mobile-project-row')) return projectRow
+      return null
+    }
+  }
+  listeners.click({ target: projectTarget })
+  assert.equal(released, 1)
+  assert.deepEqual(timers, [])
+  assert.deepEqual(closed, [])
+  assert.deepEqual(chatClicks, [])
+})
+
+test('mobile domains bind the official Agent Teams canvas and desktop scheduled-tasks view', () => {
+  assert.match(officialTeams, /"data-mobile-slot": item\.id === "projectTasks" \? "navigation\.tasks" : item\.id === "board" \? "navigation\.agents" : "agent-teams\.view\." \+ item\.id/u)
+  assert.match(officialSchedules, /id: "desktop-schedules"/u)
+  assert.match(officialSchedules, /className: "dds-view", "aria-labelledby": "dds-title"/u)
+  assert.match(runtime, /id: 'agents'[^\n]*slot: 'agent-teams\.view\.canvas'/u)
+  assert.match(runtime, /const officialScheduledTasksContent = \(\) =>/u)
+})
+
+test('Agent Teams prefers the canvas slot over earlier DOM-ordered legacy tabs', async () => {
+  const selectorStart = runtime.indexOf('  const mobileSlotAliases = Object.freeze({')
+  const selectorEnd = runtime.indexOf('  const bridgeNavigationState = bridge => {', selectorStart)
+  const workspaceStart = runtime.indexOf('  const officialWorkspaceContent = (workbench, domain) => {')
+  const workspaceEnd = runtime.indexOf('  const activateOfficialDomain = (domain, shell) => {', workspaceStart)
+  assert.ok(selectorStart >= 0 && selectorEnd > selectorStart && workspaceStart >= 0 && workspaceEnd > workspaceStart)
+  const source = `${runtime.slice(selectorStart, selectorEnd)}\n${runtime.slice(workspaceStart, workspaceEnd)}`
   const clicks = []
-  const controls = Object.fromEntries(['canvas', 'automation'].map(id => [id, {
-    disabled: false,
-    textContent: id,
-    getAttribute: () => null,
-    click: () => clicks.push(id)
-  }]))
-  const content = { childElementCount: 1, textContent: '权威内容' }
+  let canvasSelected = false
+  const primaryCanvas = { disabled: false, textContent: '团队画布', matches: () => true, getAttribute: name => name === 'aria-current' && canvasSelected ? 'page' : null, click: () => { canvasSelected = true; clicks.push('canvas') } }
+  const legacyBoard = { disabled: false, textContent: '任务板', matches: () => true, getAttribute: () => 'page', click: () => clicks.push('board') }
+  const content = { childElementCount: 1, textContent: '权威画布内容' }
   const workbench = {
     textContent: 'Agent Teams 权威工作区',
     querySelector(selector) {
-      if (selector.includes('agent-teams.view.canvas')) return controls.canvas
-      if (selector.includes('agent-teams.view.automation')) return controls.automation
-      if (selector.includes('dat-automation-title') || selector.includes('agent-teams.canvas')) return content
+      if (selector === '[data-mobile-slot="agent-teams.view.canvas"]') return primaryCanvas
+      if (selector === '[data-mobile-slot="navigation.agents"]') return legacyBoard
+      if (selector.includes('agent-teams.canvas')) return content
       return null
     },
     querySelectorAll: () => [],
     scrollTo() {}
   }
-  const document = { querySelector: selector => selector.includes('agent-teams.workspace') ? workbench : null }
+  const document = {
+    querySelector: selector => selector.includes('agent-teams.workspace') ? workbench : null,
+    querySelectorAll: () => []
+  }
   const root = { dataset: {} }
-  const mobileDomains = [
-    { id: 'agents', slot: 'agent-teams.view.canvas' },
-    { id: 'tasks', slot: 'agent-teams.view.automation' }
-  ]
-  const api = new Function('document', 'root', 'setTimeout', 'Promise', 'mobileDomains', 'decorateAgentTeamsWorkbench', 'clearNavigationNotice', 'announceNavigationUnavailable', 'accessibleButtonText', `${source}\nreturn { openOfficialAgentCanvas, openOfficialScheduledTasks }`) // eslint-disable-line no-new-func
+  const mobileDomains = [{ id: 'agents', slot: 'agent-teams.view.canvas' }]
+  const open = new Function('document', 'root', 'setTimeout', 'Promise', 'mobileDomains', 'decorateAgentTeamsWorkbench', 'clearNavigationNotice', 'announceNavigationUnavailable', 'accessibleButtonText', `${source}\nreturn openOfficialAgentCanvas`) // eslint-disable-line no-new-func
     (document, root, callback => callback(), Promise, mobileDomains, () => {}, () => {}, () => {}, node => node.textContent || '')
-  assert.equal(await api.openOfficialAgentCanvas({}), true)
-  assert.equal(await api.openOfficialScheduledTasks({}), true)
-  assert.deepEqual(clicks, ['canvas', 'automation'])
+  assert.equal(await open({}), true)
+  assert.deepEqual(clicks, ['canvas'])
+  assert.equal(root.dataset.harnessMobileAgentDetailOpen, 'true')
+})
+
+test('scheduled tasks opens the official secondary view and waits for real content', async () => {
+  const selectorStart = runtime.indexOf('  const mobileSlotAliases = Object.freeze({')
+  const selectorEnd = runtime.indexOf('  const bridgeNavigationState = bridge => {', selectorStart)
+  const workspaceStart = runtime.indexOf('  const officialWorkspaceContent = (workbench, domain) => {')
+  const workspaceEnd = runtime.indexOf('  const activateOfficialDomain = (domain, shell) => {', workspaceStart)
+  const source = `${runtime.slice(selectorStart, selectorEnd)}\n${runtime.slice(workspaceStart, workspaceEnd)}`
+  const clicks = []
+  let menuOpen = false
+  let viewOpen = false
+  const more = { disabled: false, textContent: '•••', getAttribute: name => name === 'aria-label' ? '更多视图' : null, click: () => { clicks.push('more'); menuOpen = true } }
+  const scheduled = { disabled: false, textContent: '已安排的任务', getAttribute: () => null, click: () => { clicks.push('tasks'); viewOpen = true } }
+  const content = { textContent: '已安排的任务 暂无定时任务' }
+  const view = { querySelector: () => content }
+  const document = {
+    querySelector(selector) {
+      if (selector.includes('data-conversation-view="desktop-schedules"')) return viewOpen ? view : null
+      return null
+    },
+    querySelectorAll(selector) {
+      if (selector.includes('hd-conversation-more-action')) return menuOpen ? [scheduled] : []
+      if (selector.includes('header button')) return [more]
+      return []
+    }
+  }
+  const mobileDomains = [{ id: 'tasks', slot: 'agent-teams.view.automation' }]
+  const open = new Function('document', 'root', 'setTimeout', 'Promise', 'mobileDomains', 'decorateAgentTeamsWorkbench', 'clearNavigationNotice', 'announceNavigationUnavailable', 'accessibleButtonText', `${source}\nreturn openOfficialScheduledTasks`) // eslint-disable-line no-new-func
+    (document, { dataset: {} }, callback => callback(), Promise, mobileDomains, () => {}, () => {}, () => {}, node => node.textContent || '')
+  assert.equal(await open({}), true)
+  assert.deepEqual(clicks, ['more', 'tasks'])
+})
+
+test('Agent Teams navigation waits for a delayed official opener instead of failing immediately', async () => {
+  const selectorStart = runtime.indexOf('  const mobileSlotAliases = Object.freeze({')
+  const selectorEnd = runtime.indexOf('  const bridgeNavigationState = bridge => {', selectorStart)
+  const workspaceStart = runtime.indexOf('  const officialWorkspaceContent = (workbench, domain) => {')
+  const workspaceEnd = runtime.indexOf('  const activateOfficialDomain = (domain, shell) => {', workspaceStart)
+  const source = `${runtime.slice(selectorStart, selectorEnd)}\n${runtime.slice(workspaceStart, workspaceEnd)}`
+  let triggerChecks = 0
+  let opened = false
+  let selected = 0
+  const opener = { disabled: false, getAttribute: () => null, click: () => { opened = true } }
+  const control = { disabled: false, textContent: '代理团队', matches: () => true, getAttribute: name => name === 'aria-current' && selected > 0 ? 'page' : null, click: () => { selected += 1 } }
+  const content = { childElementCount: 1, textContent: '真实代理团队内容' }
+  const workbench = {
+    textContent: 'Agent Teams 权威工作区',
+    querySelector(selector) {
+      if (selector.includes('navigation.agents')) return control
+      if (selector.includes('agent-teams.canvas')) return content
+      return null
+    },
+    querySelectorAll: () => [],
+    scrollTo() {}
+  }
+  const document = {
+    querySelector(selector) {
+      if (selector.includes('agent-teams.workspace')) return opened ? workbench : null
+      if (selector.includes('agent-teams.trigger')) return ++triggerChecks >= 3 ? opener : null
+      return null
+    },
+    querySelectorAll: () => []
+  }
+  const root = { dataset: {} }
+  const mobileDomains = [{ id: 'agents', slot: 'agent-teams.view.canvas' }]
+  const open = new Function('document', 'root', 'setTimeout', 'Promise', 'mobileDomains', 'decorateAgentTeamsWorkbench', 'clearNavigationNotice', 'announceNavigationUnavailable', 'accessibleButtonText', `${source}\nreturn openOfficialAgentCanvas`) // eslint-disable-line no-new-func
+    (document, root, callback => callback(), Promise, mobileDomains, () => {}, () => {}, () => {}, node => node.textContent || '')
+  assert.equal(await open({}), true)
+  assert.equal(triggerChecks, 3)
+  assert.equal(selected, 1)
+})
+
+test('Agent Teams accepts an authoritative mounted loading or reconnecting workspace', async () => {
+  const selectorStart = runtime.indexOf('  const mobileSlotAliases = Object.freeze({')
+  const selectorEnd = runtime.indexOf('  const bridgeNavigationState = bridge => {', selectorStart)
+  const workspaceStart = runtime.indexOf('  const officialWorkspaceContent = (workbench, domain) => {')
+  const workspaceEnd = runtime.indexOf('  const activateOfficialDomain = (domain, shell) => {', workspaceStart)
+  const source = `${runtime.slice(selectorStart, selectorEnd)}\n${runtime.slice(workspaceStart, workspaceEnd)}`
+  const control = { disabled: false, textContent: '团队画布', matches: () => true, getAttribute: name => name === 'aria-current' ? 'page' : null }
+  const workspace = { childElementCount: 0, textContent: '' }
+  const heading = { textContent: '代理团队 正在重新连接' }
+  const workbench = {
+    textContent: '代理团队 正在重新连接',
+    querySelector(selector) {
+      if (selector === '[data-mobile-slot="agent-teams.view.canvas"]') return control
+      if (selector === '.dat-workspace-main') return workspace
+      if (selector === '.dat-head, #dat-view-title') return heading
+      return null
+    },
+    querySelectorAll: () => [],
+    scrollTo() {}
+  }
+  const document = { querySelector: selector => selector.includes('agent-teams.workspace') ? workbench : null, querySelectorAll: () => [] }
+  const root = { dataset: {} }
+  const unavailable = []
+  const mobileDomains = [{ id: 'agents', slot: 'agent-teams.view.canvas' }]
+  const open = new Function('document', 'root', 'setTimeout', 'Promise', 'mobileDomains', 'decorateAgentTeamsWorkbench', 'clearNavigationNotice', 'announceNavigationUnavailable', 'accessibleButtonText', `${source}\nreturn openOfficialAgentCanvas`) // eslint-disable-line no-new-func
+    (document, root, callback => callback(), Promise, mobileDomains, () => {}, () => {}, (_shell, domain) => unavailable.push(domain.id), node => node.textContent || '')
+  assert.equal(await open({}), true)
+  assert.deepEqual(unavailable, [])
   assert.equal(root.dataset.harnessMobileAgentDetailOpen, 'true')
 })
 
@@ -101,8 +256,8 @@ test('failed guarded activation keeps the previous domain and exposes a visible 
   const state = { activeDomain: 'conversations', pendingDomain: '' }
   const notices = []
   const errors = []
-  const settle = new Function('mobileNavigationState', 'Promise', 'clearNavigationNotice', 'announceNavigationLoading', 'announceNavigationUnavailable', 'syncMobileAppShell', `${source}\nreturn settleMobileDomain`) // eslint-disable-line no-new-func
-    (state, Promise, () => {}, (_shell, domain) => notices.push(`loading:${domain.id}`), (_shell, domain) => errors.push(domain.id), () => {})
+  const settle = new Function('mobileNavigationState', 'Promise', 'clearNavigationNotice', 'announceNavigationLoading', 'announceNavigationUnavailable', 'syncMobileAppShell', 'guardedMobileDomain', `${source}\nreturn settleMobileDomain`) // eslint-disable-line no-new-func
+    (state, Promise, () => {}, (_shell, domain) => notices.push(`loading:${domain.id}`), (_shell, domain) => errors.push(domain.id), () => {}, domain => ['agents', 'tasks', 'me'].includes(domain.id))
   settle({ id: 'tasks' }, {}, false)
   await Promise.resolve()
   await Promise.resolve()
@@ -112,24 +267,105 @@ test('failed guarded activation keeps the previous domain and exposes a visible 
   assert.match(compat, /\[data-harness-mobile-navigation-status\]\[data-visible="true"\][^{]*\{[^}]*z-index:\s*960 !important/su)
 })
 
-test('我的 waits for the non-empty official settings dialog before committing', async () => {
-  const start = runtime.indexOf('  const officialSettingsDialog = () => {')
+test('我的 resolves the semantic settings slot before generic sidebar dialogs', () => {
+  const start = runtime.indexOf('  const mobileSlotAliases = Object.freeze({')
+  const end = runtime.indexOf('  const bridgeNavigationState = bridge => {', start)
+  assert.ok(start >= 0 && end > start)
+  const source = runtime.slice(start, end)
+  const trigger = { getAttribute: name => name === 'aria-haspopup' ? 'dialog' : null }
+  const slot = { matches: () => false, querySelector: () => trigger, closest: () => null }
+  const generic = { getAttribute: name => name === 'aria-haspopup' ? 'dialog' : null }
+  let genericQueries = 0
+  const sidebar = { querySelectorAll: () => [generic] }
+  const document = {
+    querySelector: selector => selector === '[data-slot="settings.trigger"] button, button[data-slot="settings.trigger"]' ? trigger : selector.includes('settings.trigger') ? slot : null,
+    querySelectorAll: () => []
+  }
+  const target = new Function('document', 'sidebarNode', 'accessibleButtonText', `${source}\nreturn officialMobileTarget`)
+    (document, () => { genericQueries += 1; return sidebar }, () => '')
+  assert.equal(target({ id: 'me', slot: 'navigation.me' }), trigger)
+  assert.equal(genericQueries, 0, 'My must resolve the semantic settings slot before generic sidebar dialogs')
+})
+
+test('我的 immediately opens official settings and preserves its mobile fallback', async () => {
+  const start = runtime.indexOf('  const navigateMobileDomain = (domain, shell) => {')
+  const end = runtime.indexOf('  const syncMobileNavigation = shell => {', start)
+  assert.ok(start >= 0 && end > start)
+  const source = runtime.slice(start, end)
+  const state = { activeDomain: 'conversations', pendingDomain: 'tasks' }
+  const root = { dataset: { harnessMobileSettingsOpen: 'true' } }
+  const status = { textContent: '' }
+  const shell = { querySelector: selector => selector === '[data-harness-mobile-my-status]' ? status : null }
+  let focusReleased = 0
+  let noticesCleared = 0
+  let syncs = 0
+  let continuation
+  const navigate = new Function('root', 'mobileNavigationState', 'releaseComposerFocus', 'clearNavigationNotice', 'syncMobileAppShell', 'waitForOfficialSettings', `${source}\nreturn navigateMobileDomain`) // eslint-disable-line no-new-func
+    (root, state, () => { focusReleased += 1 }, () => { noticesCleared += 1 }, () => { syncs += 1 }, (_shell, shouldContinue) => {
+      continuation = shouldContinue
+      return Promise.resolve(true)
+    })
+  const opening = navigate({ id: 'me', route: 'settings' }, shell)
+  assert.equal(state.activeDomain, 'me')
+  assert.equal(state.pendingDomain, 'me')
+  assert.equal(status.textContent, '正在打开桌面设置…')
+  assert.equal(focusReleased, 1)
+  assert.equal(noticesCleared, 1)
+  assert.equal(syncs, 1)
+  assert.equal(continuation(), true)
+  assert.equal(await opening, true)
+  assert.equal(state.pendingDomain, '')
+  assert.equal(root.dataset.harnessMobileMyOpening, undefined)
+  assert.equal(root.dataset.harnessMobileMyDetail, 'official')
+  assert.equal(status.textContent, '')
+  assert.equal(syncs, 2)
+  assert.equal(source.indexOf("if (domain.id === 'me')") < source.indexOf('const bridge = mobileNavigationBridge()'), true)
+  assert.match(runtime, /<main data-harness-mobile-my-surface hidden[^>]*>[\s\S]*通用设置[\s\S]*模型路由[\s\S]*电脑与移动端/u)
+  assert.match(runtime, /mobileNavigationState\.activeDomain === 'conversations' && !shell\.dataset\.harnessMobileConversationHomeOpened/u)
+  assert.match(runtime, /if \(mySurface\) mySurface\.hidden = activeDomain\?\.id !== 'me'/u)
+  assert.match(compat, /\[data-harness-mobile-my-surface\]\s*\{[^}]*position:\s*absolute;[^}]*pointer-events:\s*auto;[^}]*background:/su)
+  assert.match(compat, /\[data-harness-mobile-settings-entry\]\s*\{[^}]*min-height:\s*72px;/su)
+})
+
+test('我的 waits for an unobscured official settings dialog before committing', async () => {
+  const start = runtime.indexOf('  const visibleOfficialSettingsDialog = dialog => {')
   const end = runtime.indexOf('  const activateOfficialDomain = (domain, shell) => {', start)
   assert.ok(start >= 0 && end > start)
   const source = runtime.slice(start, end)
   let clicked = 0
-  let drawerOpened = false
+  let targetChecks = 0
+  let hit = {}
   const target = { disabled: false, getAttribute: () => null, click: () => { clicked += 1 } }
   const nav = { nextElementSibling: {}, querySelectorAll: () => [{}, {}, {}] }
-  const dialog = { textContent: '设置 通用设置 模型路由', querySelector: selector => selector === ':scope > nav' ? nav : null }
-  const document = { querySelector: selector => selector.includes('settings-dialog') && clicked ? dialog : null }
+  const child = {}
+  const dialog = {
+    textContent: '设置 通用设置 模型路由',
+    querySelector: selector => selector === ':scope > nav' ? nav : null,
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 360, bottom: 640, width: 360, height: 640 }),
+    contains: node => node === child
+  }
+  const document = {
+    documentElement: { clientWidth: 360, clientHeight: 640 },
+    querySelector: selector => selector.includes('settings-dialog') && clicked ? dialog : null,
+    elementFromPoint: () => hit
+  }
   const mobileDomains = [{ id: 'me' }]
-  const waitForSettings = new Function('document', 'decorateDialogs', 'clearNavigationNotice', 'mobileDomains', 'officialMobileTarget', 'setSidebarExpanded', 'setTimeout', 'Promise', 'announceNavigationUnavailable', `${source}\nreturn waitForOfficialSettings`) // eslint-disable-line no-new-func
-    (document, () => {}, () => {}, mobileDomains, () => target, value => { drawerOpened = value }, callback => callback(), Promise, () => {})
+  const style = { opacity: '1', pointerEvents: 'auto' }
+  const visibility = new Function('visible', 'getComputedStyle', 'window', 'document', `${source}\nreturn visibleOfficialSettingsDialog`) // eslint-disable-line no-new-func
+    (() => true, () => style, { innerWidth: 360, innerHeight: 640 }, document)
+  assert.equal(visibility(dialog), false, 'covered DOM must not count as visible settings')
+  hit = child
+  assert.equal(visibility(dialog), true)
+  const waitForSettings = new Function('document', 'decorateDialogs', 'clearNavigationNotice', 'mobileDomains', 'officialMobileTarget', 'visible', 'getComputedStyle', 'window', 'setTimeout', 'Promise', 'announceNavigationUnavailable', `${source}\nreturn waitForOfficialSettings`) // eslint-disable-line no-new-func
+    (document, () => {}, () => {}, mobileDomains, () => ++targetChecks >= 3 ? target : null, () => true, () => style, { innerWidth: 360, innerHeight: 640 }, callback => callback(), Promise, () => {})
   assert.equal(await waitForSettings({}), true)
+  assert.equal(targetChecks, 3)
   assert.equal(clicked, 1)
-  assert.equal(drawerOpened, true)
+  assert.doesNotMatch(source, /setSidebarExpanded/u)
   assert.match(source, /attempts < 160/u)
+  assert.match(compat, /data-harness-mobile-settings-open="true"[^}]*_sidebarCol[^}]*z-index:\s*600 !important/su)
+  assert.match(compat, /data-harness-mobile-settings-open="true"\]\[data-harness-mobile-drawer\][^}]*sidebar\.settings[^}]*display:\s*block !important/su)
+  assert.doesNotMatch(compat, /data-harness-mobile-settings-open="true"\]\s+#harness-mobile-app-shell\s*\{[^}]*display:\s*none/su)
 })
 
 test('settings is reachable only through 我的, never the conversation action menu', () => {
@@ -138,13 +374,14 @@ test('settings is reachable only through 我的, never the conversation action m
   assert.match(runtime, /id: 'me', label: '我的', route: '\/m\/me', slot: 'navigation\.me'/u)
 })
 
-test('missing domain handlers are disabled and explained instead of opening placeholders', () => {
+test('guarded domains stay actionable while delayed handlers mount and never report false success', () => {
+  assert.match(runtime, /const guardedMobileDomain = domain => domain\.id === 'agents' \|\| domain\.id === 'tasks' \|\| domain\.id === 'me'/u)
+  assert.match(runtime, /const available = guardedMobileDomain\(domain\) \|\| bridgeSupportsDomain\(bridge, state, domain\) \|\| officialDomainAvailable\(domain\)/u)
   assert.match(runtime, /button\.disabled = !available/u)
   assert.match(runtime, /button\.setAttribute\('aria-disabled', available \? 'false' : 'true'\)/u)
-  assert.match(runtime, /当前工作台未提供此入口/u)
   assert.match(runtime, /暂时无法打开：桌面工作台尚未提供完整内容/u)
   assert.match(runtime, /role="status" aria-live="polite" aria-atomic="true"/u)
-  assert.match(runtime, /const guarded = domain\.id === 'agents' \|\| domain\.id === 'tasks' \|\| domain\.id === 'me'/u)
+  assert.match(runtime, /const guarded = guardedMobileDomain\(domain\)/u)
   assert.match(runtime, /mobileNavigationState\.pendingDomain = domain\.id[^]*announceNavigationLoading\(shell, domain\)/u)
   assert.match(runtime, /if \(success\) \{[^]*mobileNavigationState\.activeDomain = domain\.id/u)
   assert.match(runtime, /attempts < 160/u)
@@ -183,4 +420,55 @@ test('Orbit navigation is thumb-safe, selected without color alone, and IME-awar
   assert.match(compat, /padding-bottom:\s*var\(--harness-mobile-nav-height\)\s*!important/u)
   assert.match(compat, /data-harness-mobile-composer-lifted="true"\] \[data-harness-mobile-navigation\][^{]*\{[^}]*visibility:\s*hidden\s*!important/su)
   assert.match(compat, /prefers-reduced-motion:\s*reduce/u)
+})
+
+test('drawer accessibility leaves the visible bottom navigation actionable', () => {
+  const start = runtime.indexOf('  const syncDrawerAccessibility = (shell, expanded) => {')
+  const end = runtime.indexOf('  const installSidebarAutoClose = () => {', start)
+  assert.ok(start >= 0 && end > start)
+  const source = runtime.slice(start, end)
+  assert.match(source, /if \(appbar\) \{[^]*appbar\.inert = expanded/su)
+  assert.match(source, /if \(navigation\) \{[^]*navigation\.inert = false[^]*removeAttribute\('inert'\)[^]*aria-hidden', 'false'/su)
+  assert.doesNotMatch(source, /for \(const region of \[appbar, navigation\]\)/u)
+  assert.equal(iosRuntime, runtime)
+})
+
+test('official navigation opens the real header menu before selecting unmounted domains', () => {
+  const start = runtime.indexOf('  const mobileSlotAliases = Object.freeze({')
+  const end = runtime.indexOf('  const bridgeNavigationState = bridge => {', start)
+  assert.ok(start >= 0 && end > start)
+  const source = runtime.slice(start, end)
+  let menuOpen = false
+  let menuClicks = 0
+  const more = {
+    title: '',
+    getAttribute: name => name === 'aria-haspopup' ? 'menu' : null,
+    closest: () => null,
+    click: () => { menuOpen = true; menuClicks += 1 }
+  }
+  const agent = { textContent: '代理团队', getAttribute: () => null, click: () => {} }
+  const document = {
+    querySelector: () => null,
+    querySelectorAll: selector => {
+      if (selector.includes('[role="menu"]')) return menuOpen ? [agent] : []
+      if (selector.includes('header button')) return [more]
+      return []
+    }
+  }
+  const target = new Function('document', 'sidebarNode', 'accessibleButtonText', `${source}\nreturn officialMobileTarget`)
+    (document, () => null, node => node.textContent || '')
+  const domain = { id: 'agents', slot: 'agent-teams.view.canvas' }
+  assert.equal(target(domain), more)
+  more.click()
+  assert.equal(target(domain), agent)
+  assert.equal(menuClicks, 1)
+})
+
+test('settings activation accepts the real page surface when no dialog is mounted', () => {
+  assert.match(runtime, /const officialSettingsSurface = \(\) => \{/u)
+  assert.match(runtime, /\[data-slot="settings\.page"\]/u)
+  assert.match(runtime, /\[data-slot="settings"\]/u)
+  assert.match(runtime, /MuMu and newer desktop builds expose settings as a page/u)
+  assert.match(runtime, /surface\.dataset\.harnessMobileSettingsDialog = 'true'/u)
+  assert.equal(iosRuntime, runtime)
 })

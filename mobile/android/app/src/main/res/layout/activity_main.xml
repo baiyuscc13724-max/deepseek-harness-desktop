@@ -19,6 +19,7 @@
         android:paddingBottom="24dp">
 
         <ScrollView
+            android:id="@+id/pairing_scroll"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
@@ -27,7 +28,7 @@
 
             <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
+                android:layout_height="wrap_content"
                 android:gravity="center_horizontal"
                 android:orientation="vertical">
 
@@ -154,11 +155,6 @@
                     android:gravity="center"
                     android:visibility="gone" />
 
-                <View
-                    android:layout_width="1dp"
-                    android:layout_height="0dp"
-                    android:layout_weight="1" />
-
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -211,6 +207,7 @@
             android:text="@string/connecting_title" />
 
         <ProgressBar
+            android:id="@+id/connection_spinner"
             android:layout_width="32dp"
             android:layout_height="32dp"
             android:layout_marginTop="@dimen/harness_space_xl"
@@ -225,6 +222,31 @@
             android:accessibilityLiveRegion="polite"
             android:gravity="center"
             android:text="@string/connecting_default_status" />
+
+        <LinearLayout
+            android:id="@+id/terminal_error_actions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/harness_space_xl"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/terminal_retry_button"
+                style="@style/Widget.Harness.Button.Primary"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/harness_button_height"
+                android:text="@string/action_retry_load" />
+
+            <Button
+                android:id="@+id/terminal_rescan_button"
+                style="@style/Widget.Harness.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/harness_button_height_compact"
+                android:layout_marginTop="10dp"
+                android:text="@string/action_rescan" />
+        </LinearLayout>
     </LinearLayout>
 
     <ProgressBar
@@ -233,6 +255,8 @@
         android:layout_width="match_parent"
         android:layout_height="3dp"
         android:layout_gravity="top"
+        android:accessibilityLiveRegion="polite"
+        android:contentDescription="@string/page_loading_progress"
         android:indeterminateTint="@color/harness_primary"
         android:visibility="gone" />
 

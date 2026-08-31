@@ -6,19 +6,22 @@ const os = require('node:os')
 const path = require('node:path')
 const httpProxy = require('http-proxy')
 const QRCode = require('qrcode')
+const WebSocket = require('ws')
 const { CONTROL_PROTOCOL_VERSION, MobileControlBroker, isLoopbackAddress } = require('./mobile-control-broker.cjs')
+const { SYNC_PROTOCOL_VERSION } = require('../store/mobile-sync-store.cjs')
 
 const BRIDGE_API_VERSION = 2
 const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
   platformNeutral: true,
   capabilityNegotiation: true,
+  workspaceManifestVersion: SYNC_PROTOCOL_VERSION,
   protocolClientPlatforms: Object.freeze(['android', 'ios']),
   implementedClients: Object.freeze(['android'])
 })
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.54'
+const CURRENT_MOBILE_VERSION = '1.0.55'
 const CURRENT_MOBILE_RELEASE_TAG = CURRENT_MOBILE_VERSION.split('.').length === 4
   ? `android-v${CURRENT_MOBILE_VERSION}`
   : `v${CURRENT_MOBILE_VERSION}`
@@ -45,6 +48,26 @@ const MOBILE_DOCUMENT_UPLOAD_CONTRACT = Object.freeze({
   intentHeader: Object.freeze({ name: 'X-Harness-Mobile-Request', value: MOBILE_DOCUMENT_UPLOAD_INTENT }),
   maxBytes: MOBILE_DOCUMENT_MAX_BYTES,
   responseSchemaVersion: 1
+})
+const MOBILE_SYNC_MANIFEST_PATH = '/__harness_mobile__/sync/manifest'
+const MOBILE_SYNC_RESPONSE_MAX_BYTES = 2 * 1024 * 1024
+const MOBILE_SYNC_REFRESH_TIMEOUT_MS = 8 * 1000
+const MOBILE_SYNC_MANIFEST_CONTRACT = Object.freeze({
+  schemaVersion: SYNC_PROTOCOL_VERSION,
+  path: MOBILE_SYNC_MANIFEST_PATH,
+  method: 'GET',
+  cacheIdentityQuery: 'cacheIdentity',
+  snapshotEpochQuery: 'snapshotEpoch',
+  cursorQuery: 'cursor',
+  refreshQuery: 'refresh',
+  completeRequiredForReplacement: true,
+  deletionRequiresTombstone: true,
+  cursorOpaque: true,
+  payload: Object.freeze({
+    workspace: Object.freeze(['workspaceId', 'title', 'createdAt', 'updatedAt']),
+    session: Object.freeze(['sessionId', 'workspaceId', 'title', 'status', 'archived', 'createdAt', 'updatedAt', 'lastActivityAt']),
+    readMessage: Object.freeze(['sessionId', 'messageId', 'readAt'])
+  })
 })
 
 function safeMobileModelText(value, limit) {
@@ -168,6 +191,14 @@ function mobilePluginsDto(value) {
 
 function sha256(value) {
   return createHash('sha256').update(String(value)).digest('hex')
+}
+
+function mobileSyncCacheIdentity(device) {
+  if (!/^[a-f0-9]{64}$/.test(device?.secretHash || '')) return ''
+  return createHash('sha256')
+    .update('harness-mobile-sync-cache-identity:v1\0', 'utf8')
+    .update(device.secretHash, 'hex')
+    .digest('base64url')
 }
 
 function constantTimeHexEqual(left, right) {
@@ -479,7 +510,8 @@ class MobileSyncService extends EventEmitter {
     controlBroker = null,
     desktopControlStateFile = null,
     relayConfigStore = null,
-    fetchImpl = globalThis.fetch
+    fetchImpl = globalThis.fetch,
+    WebSocketImpl = WebSocket
   }) {
     super()
     if (!store) throw new Error('MobileSyncService requires a store.')
@@ -507,7 +539,9 @@ class MobileSyncService extends EventEmitter {
     this.controlBroker = controlBroker || new MobileControlBroker({ now })
     this.relayConfigStore = relayConfigStore
     if (typeof fetchImpl !== 'function') throw new Error('MobileSyncService requires fetchImpl for document uploads.')
+    if (typeof WebSocketImpl !== 'function') throw new Error('MobileSyncService requires WebSocketImpl for official runtime streams.')
     this.fetchImpl = fetchImpl
+    this.WebSocketImpl = WebSocketImpl
     this.desktopControlStateFile = desktopControlStateFile || path.join(path.dirname(this.store.file || this.stateDir), DESKTOP_CONTROL_STATE_FILE)
     this.desktopControlAuth = null
     this.server = null
@@ -531,6 +565,98 @@ class MobileSyncService extends EventEmitter {
     } catch {
       return null
     }
+  }
+
+  async #fetchSessionIndex(target, signal) {
+    const method = 'session/list'
+    const rpcId = `mobile-sync-${randomBytes(12).toString('base64url')}`
+    const response = await this.fetchImpl(new URL(`/api/${method}`, `${target}/`), {
+      method: 'POST',
+      redirect: 'error',
+      cache: 'no-store',
+      signal,
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args: { _request: {} } } })
+    })
+    if (!response.ok) throw new Error('Runtime Session index is unavailable.')
+    const payload = await boundedJsonResponse(response, MOBILE_SYNC_RESPONSE_MAX_BYTES)
+    if (payload?.type !== 'server-response' || payload.rpcId !== rpcId || payload?.result?.ok !== true || !Array.isArray(payload?.result?.value?.items)) throw new Error('Runtime Session index response is invalid.')
+    return payload.result.value.items
+  }
+
+  async #fetchWorkspaceBaseline(target, signal) {
+    const url = new URL('/api/remote.mux', `${target}/`)
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+    const streamId = `workspace-${randomBytes(12).toString('base64url')}`
+    return new Promise((resolve, reject) => {
+      const socket = new this.WebSocketImpl(url.toString())
+      let settled = false
+      const finish = (error, items) => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener?.('abort', aborted)
+        socket.removeAllListeners?.()
+        socket.close()
+        if (error) reject(error)
+        else resolve(items)
+      }
+      const aborted = () => finish(signal.reason instanceof Error ? signal.reason : new Error('Runtime Workspace stream aborted.'))
+      signal?.addEventListener?.('abort', aborted, { once: true })
+      socket.once('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'workspace/follow', payload: { args: {} } })))
+      socket.on('message', raw => {
+        let frame
+        try { frame = JSON.parse(String(raw)) } catch { finish(new Error('Runtime Workspace stream frame is invalid.')); return }
+        if (frame?.streamId !== streamId) return
+        if (frame.type === 'error' || frame.type === 'end') { finish(new Error('Runtime Workspace stream ended before its baseline.')); return }
+        if (frame.type !== 'item' || frame.value?.type !== 'baseline' || !Array.isArray(frame.value?.value?.items)) { finish(new Error('Runtime Workspace baseline is invalid.')); return }
+        finish(null, frame.value.value.items)
+      })
+      socket.once('error', error => finish(error))
+      socket.once('close', () => finish(new Error('Runtime Workspace stream closed before its baseline.')))
+    })
+  }
+
+  async refreshWorkspaceManifest({ operationId = null } = {}) {
+    const target = this.runtimeTarget()
+    if (!target) return { ...this.store.readSyncChanges(), complete: false, applied: false, protected: true, refreshState: 'unavailable' }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), MOBILE_SYNC_REFRESH_TIMEOUT_MS)
+    timer.unref?.()
+    try {
+      const [workspaces, sessions] = await Promise.all([
+        this.#fetchWorkspaceBaseline(target, controller.signal),
+        this.#fetchSessionIndex(target, controller.signal)
+      ])
+      const readMessages = this.store.readSyncChanges().snapshot?.readMessages || []
+      const committed = this.store.commitSyncManifest({
+        complete: true,
+        workspaces,
+        sessions,
+        readMessages,
+        operationId: operationId || `runtime-${randomBytes(16).toString('hex')}`,
+        observedAt: new Date(this.now()).toISOString()
+      })
+      return { ...committed, refreshState: committed.protected ? 'protected' : 'authoritative' }
+    } catch {
+      return { ...this.store.readSyncChanges(), complete: false, applied: false, protected: true, refreshState: 'unavailable' }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async workspaceManifest({ device, cacheIdentity = null, snapshotEpoch = null, cursor = null, refresh = true } = {}) {
+    const refreshed = refresh ? await this.refreshWorkspaceManifest() : null
+    const expectedCacheIdentity = mobileSyncCacheIdentity(device)
+    const resumeRequested = cacheIdentity != null || snapshotEpoch != null || cursor != null
+    const resumeTupleMatches = cacheIdentity === expectedCacheIdentity && snapshotEpoch != null && cursor != null
+    const current = this.store.readSyncChanges(resumeTupleMatches ? { snapshotEpoch, cursor } : {})
+    const identityBound = {
+      ...current,
+      cacheIdentity: expectedCacheIdentity,
+      resetRequired: resumeRequested && (!resumeTupleMatches || current.resetRequired)
+    }
+    if (refreshed?.protected) return { ...identityBound, complete: false, protected: true, refreshState: refreshed.refreshState }
+    return { ...identityBound, protected: false, refreshState: refresh ? 'authoritative' : 'cached' }
   }
 
   origins() {
@@ -988,11 +1114,52 @@ class MobileSyncService extends EventEmitter {
     }
     const device = this.#deviceFromRequest(request)
     if (!device) {
-      writeResponse(response, 401, pairingErrorPage('请在电脑端打开“手机同步”，扫描新的配对二维码。'))
+      if (requestUrl.pathname === MOBILE_SYNC_MANIFEST_PATH) {
+        writeResponse(response, 401, JSON.stringify({ ok: false, code: 'PAIRING_REVOKED', cacheAction: 'clear' }), {
+          'Cache-Control': 'no-store',
+          'Content-Type': 'application/json; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+          'X-Harness-Mobile-Cache-Action': 'clear'
+        })
+      } else {
+        writeResponse(response, 401, pairingErrorPage('请在电脑端打开“手机同步”，扫描新的配对二维码。'))
+      }
       return
     }
     if (requestUrl.pathname === MOBILE_DOCUMENT_UPLOAD_PATH) {
       await this.#uploadDocument(request, response, requestUrl)
+      return
+    }
+    if (requestUrl.pathname === MOBILE_SYNC_MANIFEST_PATH) {
+      if (request.method !== 'GET') {
+        writeResponse(response, 405, JSON.stringify({ ok: false, error: 'Workspace sync manifest is read-only.' }), { 'Allow': 'GET', 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      const rawCacheIdentity = requestUrl.searchParams.get('cacheIdentity')
+      const rawEpoch = requestUrl.searchParams.get('snapshotEpoch')
+      const rawCursor = requestUrl.searchParams.get('cursor')
+      const rawRefresh = requestUrl.searchParams.get('refresh')
+      if ((rawCacheIdentity != null && !/^[A-Za-z0-9_-]{16,128}$/.test(rawCacheIdentity)) ||
+          (rawEpoch != null && (!/^\d{1,16}$/.test(rawEpoch) || !Number.isSafeInteger(Number(rawEpoch)))) ||
+          (rawCursor != null && !/^[A-Za-z0-9_-]{16,128}$/.test(rawCursor)) ||
+          (rawRefresh != null && !['0', '1'].includes(rawRefresh))) {
+        writeResponse(response, 400, JSON.stringify({ ok: false, error: 'Workspace sync cursor is invalid.' }), { 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      const manifest = await this.workspaceManifest({
+        device,
+        cacheIdentity: rawCacheIdentity,
+        snapshotEpoch: rawEpoch == null ? null : Number(rawEpoch),
+        cursor: rawCursor,
+        refresh: rawRefresh !== '0'
+      })
+      response.writeHead(200, {
+        'Cache-Control': 'no-store',
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Harness-Mobile-Sync-Complete': manifest.complete ? '1' : '0'
+      })
+      response.end(JSON.stringify({ ok: true, ...manifest }))
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/model-routing') {
@@ -1097,7 +1264,7 @@ class MobileSyncService extends EventEmitter {
     }
     if (requestUrl.pathname === '/__harness_mobile__/meta') {
       response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
-      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, protocol: MOBILE_PROTOCOL_DESCRIPTOR, documents: MOBILE_DOCUMENT_UPLOAD_CONTRACT, deviceId: device.id, platform: device.platform, deviceClass: device.deviceClass, appVersion: device.appVersion, targetReady: Boolean(this.runtimeTarget()) }))
+      response.end(JSON.stringify({ ok: true, bridgeApiVersion: BRIDGE_API_VERSION, controlProtocolVersion: CONTROL_PROTOCOL_VERSION, protocol: MOBILE_PROTOCOL_DESCRIPTOR, documents: MOBILE_DOCUMENT_UPLOAD_CONTRACT, workspaceSync: MOBILE_SYNC_MANIFEST_CONTRACT, deviceId: device.id, platform: device.platform, deviceClass: device.deviceClass, appVersion: device.appVersion, targetReady: Boolean(this.runtimeTarget()) }))
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/theme.js' && request.method === 'GET') {
@@ -1213,6 +1380,8 @@ module.exports = {
   MOBILE_PROTOCOL_DESCRIPTOR,
   MOBILE_DOCUMENT_MAX_BYTES,
   MOBILE_DOCUMENT_UPLOAD_CONTRACT,
+  MOBILE_SYNC_MANIFEST_CONTRACT,
+  MOBILE_SYNC_MANIFEST_PATH,
   COOKIE_NAME,
   PAIRING_TTL_MS,
   BROWSER_FORBIDDEN_PORTS,

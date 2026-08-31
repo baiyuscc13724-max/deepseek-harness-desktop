@@ -1,12 +1,13 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { existsSync, mkdtempSync, readFileSync, statSync } = require('node:fs')
+const { EventEmitter } = require('node:events')
 const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
 const { WebSocket, WebSocketServer } = require('ws')
 
-const { BROWSER_FORBIDDEN_PORTS, MOBILE_DOCUMENT_MAX_BYTES, MOBILE_DOCUMENT_UPLOAD_CONTRACT, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, mobilePluginsDto, mobileProviderMetersDto, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
+const { BROWSER_FORBIDDEN_PORTS, MOBILE_DOCUMENT_MAX_BYTES, MOBILE_DOCUMENT_UPLOAD_CONTRACT, MOBILE_SYNC_MANIFEST_CONTRACT, MOBILE_SYNC_MANIFEST_PATH, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, mobilePluginsDto, mobileProviderMetersDto, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
 const { MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
 const electronMainSource = readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
@@ -38,6 +39,20 @@ function secretAdapter() {
 function createStore() {
   const directory = mkdtempSync(path.join(os.tmpdir(), 'harness-mobile-service-'))
   return new MobileSyncStore(path.join(directory, 'mobile-sync.json'), secretAdapter())
+}
+
+function workspaceStream(readItems, observed = []) {
+  return class RuntimeStream extends EventEmitter {
+    constructor(url) { super(); this.url = url; queueMicrotask(() => this.emit('open')) }
+    send(raw) {
+      const request = JSON.parse(raw)
+      observed.push(request)
+      const items = readItems()
+      if (items instanceof Error) { queueMicrotask(() => this.emit('error', items)); return }
+      queueMicrotask(() => this.emit('message', JSON.stringify({ type: 'item', streamId: request.streamId, value: { type: 'baseline', value: { items, archivedSessionIds: [] } } })))
+    }
+    close() { queueMicrotask(() => this.emit('close')) }
+  }
 }
 
 function desktopControlCredentials(service) {
@@ -956,4 +971,164 @@ test('desktop mobile state projections never expose mesh or relay secrets', () =
   assert.equal(projected.includes(relayRoomId), false)
   assert.equal(projected.includes(relayTunnelKey), false)
   assert.equal(projected.includes('mesh'), false)
+})
+
+test('paired clients consume a versioned same-epoch manifest without forwarding credentials or private fields', async t => {
+  let mode = 'ready'
+  const observed = [], streamObserved = []
+  const runtime = http.createServer(async (request, response) => {
+    const chunks = []
+    for await (const chunk of request) chunks.push(Buffer.from(chunk))
+    let envelope = {}
+    try { envelope = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch {}
+    observed.push({ url: request.url, headers: request.headers, envelope })
+    if (mode === 'failure') {
+      response.writeHead(503, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ ok: false }))
+      return
+    }
+    const items = envelope.method === 'session/list'
+      ? (mode === 'empty' ? [] : [{ sessionId: 'session-one', workspaceId: 'workspace-one', title: 'Session One', status: 'idle', transcript: 'PRIVATE_BODY', credential: 'SESSION_TOKEN' }])
+      : null
+    if (!items) { response.writeHead(404).end(); return }
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+    response.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { items } } }))
+  })
+  await new Promise(resolve => runtime.listen(0, '127.0.0.1', resolve))
+  const runtimeUrl = `http://127.0.0.1:${runtime.address().port}`
+  const store = createStore()
+  const service = new MobileSyncService({ store, getRuntimeTarget: () => runtimeUrl, host: '127.0.0.1', port: 0, qrFactory: async () => 'qr', WebSocketImpl: workspaceStream(() => [{ workspaceId: 'workspace-one', title: 'Project One', path: 'D:\\Private\\workspace', token: 'WORKSPACE_TOKEN' }], streamObserved) })
+  t.after(async () => {
+    await service.stop()
+    await new Promise(resolve => runtime.close(resolve))
+  })
+  await service.start()
+  const origin = service.state().origins[0]
+  const unpaired = await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}`)
+  assert.equal(unpaired.status, 401)
+  assert.equal(unpaired.headers.get('x-harness-mobile-cache-action'), 'clear')
+  assert.deepEqual(await unpaired.json(), { ok: false, code: 'PAIRING_REVOKED', cacheAction: 'clear' })
+  const paired = await pair(service)
+  const headers = { Cookie: paired.cookie }
+  assert.equal((await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}`, { method: 'POST', headers })).status, 405)
+  assert.equal((await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}?cursor=not-valid`, { headers })).status, 400)
+  assert.equal((await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}?cacheIdentity=bad`, { headers })).status, 400)
+
+  const response = await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}`, { headers })
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  assert.equal(response.headers.get('x-harness-mobile-sync-complete'), '1')
+  const manifest = await response.json()
+  assert.equal(manifest.ok, true)
+  assert.equal(manifest.schemaVersion, MOBILE_SYNC_MANIFEST_CONTRACT.schemaVersion)
+  assert.match(manifest.cacheIdentity, /^[A-Za-z0-9_-]{43}$/)
+  assert.equal(Number.isSafeInteger(manifest.snapshotEpoch), true)
+  assert.equal(manifest.revision, 1)
+  assert.match(manifest.cursor, /^[A-Za-z0-9_-]{16,128}$/)
+  assert.equal(manifest.complete, true)
+  assert.deepEqual(manifest.snapshot.workspaces, [{ workspaceId: 'workspace-one', title: 'Project One' }])
+  assert.deepEqual(manifest.snapshot.sessions, [{ sessionId: 'session-one', workspaceId: 'workspace-one', title: 'Session One', status: 'idle' }])
+  assert.deepEqual(Object.keys(manifest).sort(), ['cacheIdentity', 'changes', 'complete', 'cursor', 'ok', 'protected', 'refreshState', 'resetRequired', 'revision', 'schemaVersion', 'snapshot', 'snapshotEpoch', 'updatedAt'].sort())
+  const serialized = JSON.stringify(manifest)
+  const [deviceId, deviceSecret] = decodeURIComponent(paired.cookie.split('=')[1]).split('.')
+  const secretHash = store.get().devices.find(device => device.id === deviceId).secretHash
+  for (const forbidden of ['D:\\Private', 'WORKSPACE_TOKEN', 'SESSION_TOKEN', 'PRIVATE_BODY', 'credential', 'transcript', 'generation', deviceId, deviceSecret, secretHash]) assert.equal(serialized.includes(forbidden), false)
+  assert.equal(observed.length, 1)
+  assert.deepEqual(observed.map(entry => [entry.url, entry.envelope.method, entry.envelope.payload]), [['/api/session/list', 'session/list', { args: { _request: {} } }]])
+  assert.deepEqual(streamObserved.map(entry => [entry.endpoint, entry.payload]), [['workspace/follow', { args: {} }]])
+  assert.equal(observed.every(entry => entry.headers.cookie === undefined && entry.headers.authorization === undefined), true)
+  const unchanged = await (await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}`, { headers })).json()
+  assert.equal(unchanged.cacheIdentity, manifest.cacheIdentity, 'cache identity is stable for one pairing')
+  assert.equal(unchanged.revision, manifest.revision, 'unchanged authoritative indexes do not manufacture revisions')
+  assert.equal(unchanged.cursor, manifest.cursor)
+  const reopenedStore = new MobileSyncStore(store.file, secretAdapter())
+  const restartedService = new MobileSyncService({ store: reopenedStore, getRuntimeTarget: () => null })
+  const afterRestart = await restartedService.workspaceManifest({ device: reopenedStore.get().devices.find(device => device.id === deviceId), refresh: false })
+  assert.equal(afterRestart.cacheIdentity, manifest.cacheIdentity, 'cache identity survives service and store restart')
+
+  const resumeQuery = `refresh=0&cacheIdentity=${encodeURIComponent(manifest.cacheIdentity)}&snapshotEpoch=${manifest.snapshotEpoch}&cursor=${encodeURIComponent(manifest.cursor)}`
+  const resumePayload = await (await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}?${resumeQuery}`, { headers })).json()
+  assert.equal(resumePayload.resetRequired, false)
+  assert.equal(resumePayload.snapshot, null)
+  assert.deepEqual(resumePayload.changes, [])
+
+  store.commitSyncManifest({
+    complete: false,
+    operationId: 'service-read-message',
+    snapshotEpoch: manifest.snapshotEpoch,
+    revision: manifest.revision + 1,
+    readMessages: [{ sessionId: 'session-one', messageId: 'message-one', readAt: '2026-08-30T13:00:00.000Z' }]
+  })
+  const incremental = await (await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}?${resumeQuery}`, { headers })).json()
+  assert.equal(incremental.resetRequired, false)
+  assert.equal(incremental.snapshot, null)
+  assert.deepEqual(incremental.changes[0].readMessages, [{ sessionId: 'session-one', messageId: 'message-one', readAt: '2026-08-30T13:00:00.000Z' }])
+
+  for (const query of [
+    `refresh=0&snapshotEpoch=${manifest.snapshotEpoch}&cursor=${encodeURIComponent(manifest.cursor)}`,
+    `refresh=0&cacheIdentity=${'A'.repeat(43)}&snapshotEpoch=${manifest.snapshotEpoch}&cursor=${encodeURIComponent(manifest.cursor)}`,
+    `refresh=0&cacheIdentity=${encodeURIComponent(manifest.cacheIdentity)}&snapshotEpoch=${manifest.snapshotEpoch + 1}&cursor=${encodeURIComponent(manifest.cursor)}`,
+    `refresh=0&cacheIdentity=${encodeURIComponent(manifest.cacheIdentity)}&snapshotEpoch=${manifest.snapshotEpoch}&cursor=${'B'.repeat(24)}`
+  ]) {
+    const reset = await (await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}?${query}`, { headers })).json()
+    assert.equal(reset.resetRequired, true)
+    assert.ok(reset.snapshot)
+    assert.deepEqual(reset.changes, [])
+  }
+
+  const secondPairing = await pair(service)
+  const secondManifest = await (await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}?refresh=0`, { headers: { Cookie: secondPairing.cookie } })).json()
+  assert.notEqual(secondManifest.cacheIdentity, manifest.cacheIdentity, 'different pairings use isolated cache identities')
+
+  service.revokeDevice(deviceId)
+  const revoked = await fetch(`${origin}${MOBILE_SYNC_MANIFEST_PATH}`, { headers })
+  assert.equal(revoked.status, 401)
+  assert.equal(revoked.headers.get('cache-control'), 'no-store')
+  assert.equal(revoked.headers.get('x-harness-mobile-cache-action'), 'clear')
+  assert.deepEqual(await revoked.json(), { ok: false, code: 'PAIRING_REVOKED', cacheAction: 'clear' })
+  const meta = await fetch(`${origin}/__harness_mobile__/meta`, { headers: { Cookie: secondPairing.cookie } })
+  assert.deepEqual((await meta.json()).workspaceSync, MOBILE_SYNC_MANIFEST_CONTRACT)
+})
+
+test('transient empty and aborted runtime indexes return incomplete recovery without replacing durable sessions', async t => {
+  let mode = 'ready'
+  const runtime = http.createServer(async (request, response) => {
+    const chunks = []
+    for await (const chunk of request) chunks.push(Buffer.from(chunk))
+    const envelope = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+    if (mode === 'failure') { request.socket.destroy(); return }
+    const items = envelope.method === 'session/list' && mode !== 'empty' ? [{ sessionId: 'session-one', workspaceId: 'workspace-one', title: 'Session' }] : []
+    response.writeHead(200, { 'Content-Type': 'application/json' })
+    response.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { items } } }))
+  })
+  await new Promise(resolve => runtime.listen(0, '127.0.0.1', resolve))
+  const runtimeUrl = `http://127.0.0.1:${runtime.address().port}`
+  const store = createStore()
+  const service = new MobileSyncService({ store, getRuntimeTarget: () => runtimeUrl, host: '127.0.0.1', port: 0, qrFactory: async () => 'qr', WebSocketImpl: workspaceStream(() => mode === 'failure' ? new Error('aborted') : [{ workspaceId: 'workspace-one', title: 'Project' }]) })
+  t.after(async () => { await service.stop(); await new Promise(resolve => runtime.close(resolve)) })
+  await service.start()
+  const paired = await pair(service)
+  const endpoint = `${service.state().origins[0]}${MOBILE_SYNC_MANIFEST_PATH}`
+  const headers = { Cookie: paired.cookie }
+  const first = await (await fetch(endpoint, { headers })).json()
+  const diskBefore = readFileSync(store.file, 'utf8')
+
+  mode = 'empty'
+  const guardedResponse = await fetch(endpoint, { headers })
+  const guarded = await guardedResponse.json()
+  assert.equal(guarded.complete, false)
+  assert.equal(guarded.protected, true)
+  assert.equal(guarded.revision, first.revision)
+  assert.equal(guarded.cursor, first.cursor)
+  assert.equal(guarded.snapshot.sessions[0].sessionId, 'session-one')
+  assert.equal(guardedResponse.headers.get('x-harness-mobile-sync-complete'), '0')
+  assert.equal(readFileSync(store.file, 'utf8'), diskBefore)
+
+  mode = 'failure'
+  const unavailable = await (await fetch(endpoint, { headers })).json()
+  assert.equal(unavailable.complete, false)
+  assert.equal(unavailable.protected, true)
+  assert.equal(unavailable.refreshState, 'unavailable')
+  assert.equal(unavailable.snapshot.sessions[0].sessionId, 'session-one')
+  assert.equal(readFileSync(store.file, 'utf8'), diskBefore)
 })

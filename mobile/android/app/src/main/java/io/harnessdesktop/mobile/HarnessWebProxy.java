@@ -22,9 +22,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 
 final class HarnessWebProxy implements AutoCloseable {
     private static final String TAG = "HarnessWebProxy";
@@ -35,19 +41,31 @@ final class HarnessWebProxy implements AutoCloseable {
     private static final long REMOTE_RETRY_DELAY_MS = 15_000;
 
     private static final int MAX_ACTIVE_CONNECTIONS = 24;
+    private static final int MAX_PARALLEL_ROUTE_ATTEMPTS = 4;
+    static final long ROUTE_RACE_STAGGER_MS = 120L;
+    static final long ROUTE_RACE_BUDGET_MS = REMOTE_CONNECT_TIMEOUT_MS + 250L;
 
     private final ExecutorService acceptExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService connectionExecutor = Executors.newFixedThreadPool(MAX_ACTIVE_CONNECTIONS);
     private final ExecutorService pipeExecutor = Executors.newFixedThreadPool(MAX_ACTIVE_CONNECTIONS);
+    private final ExecutorService routeExecutor = Executors.newFixedThreadPool(MAX_PARALLEL_ROUTE_ATTEMPTS);
     private final ConnectivityManager connectivityManager;
     private final Map<String, Long> retryAfter = new ConcurrentHashMap<>();
     private final AtomicReference<RoutePreference> lastGoodRoute = new AtomicReference<>();
+    private final AtomicLong logicalConnectionGeneration = new AtomicLong();
+    private final AtomicInteger recoveryCursor = new AtomicInteger();
+    private final AtomicReference<ResponseState> responseState = new AtomicReference<>(ResponseState.IDLE);
     private volatile List<PairingProfile.Route> routes = Collections.emptyList();
     private volatile boolean closed;
     private ServerSocket server;
 
+    enum ResponseState { IDLE, IN_FLIGHT, COMPLETE, INCOMPLETE }
     private record RoutePreference(String key) {}
-    private record ConnectedRoute(Socket socket, PairingProfile.Route route) {}
+    record ConnectionState(long generation, int recoveryCursor, ResponseState responseState, String lastGoodRouteKey) {}
+    record ConnectedRoute(Socket socket, PairingProfile.Route route) {}
+    interface RouteConnector {
+        Socket connect(PairingProfile.Route route) throws IOException;
+    }
 
     HarnessWebProxy(Context context) {
         connectivityManager = context.getSystemService(ConnectivityManager.class);
@@ -95,8 +113,10 @@ final class HarnessWebProxy implements AutoCloseable {
             ConnectedRoute connected = connectRoute();
             if (connected == null) {
                 sendUnavailable(clientOutput);
+                responseState.set(ResponseState.COMPLETE);
                 return;
             }
+            responseState.set(ResponseState.IN_FLIGHT);
             Socket upstream = connected.socket();
             try (upstream) {
                 upstream.setTcpNoDelay(true);
@@ -105,6 +125,7 @@ final class HarnessWebProxy implements AutoCloseable {
                     clientOutput.flush();
                     pipeExecutor.execute(() -> copy(client, upstream));
                     copy(upstream, client);
+                    responseState.set(ResponseState.COMPLETE);
                     return;
                 }
 
@@ -121,32 +142,131 @@ final class HarnessWebProxy implements AutoCloseable {
                 } else {
                     forwardSingleHttpResponse(upstream.getInputStream(), clientOutput, requestMethod(header), eventStreamRequest);
                 }
+                responseState.set(ResponseState.COMPLETE);
             }
         } catch (IOException error) {
+            responseState.set(ResponseState.INCOMPLETE);
             Log.w(TAG, "Proxy request failed: " + error.getClass().getSimpleName() + ": " + error.getMessage());
         }
     }
 
-    private ConnectedRoute connectRoute() {
+    private synchronized ConnectedRoute connectRoute() {
+        long startedNanos = System.nanoTime();
         long now = System.currentTimeMillis();
         RoutePreference preferred = lastGoodRoute.get();
         List<PairingProfile.Route> candidates = prioritizeRoutes(routes, retryAfter, preferred == null ? null : preferred.key(), now);
         boolean hasReadyRoute = candidates.stream().anyMatch(route -> retryAfter.getOrDefault(route.key(), 0L) <= now);
-        for (PairingProfile.Route route : candidates) {
-            if (hasReadyRoute && retryAfter.getOrDefault(route.key(), 0L) > now) continue;
+        if (hasReadyRoute) candidates.removeIf(route -> retryAfter.getOrDefault(route.key(), 0L) > now);
+
+        // Once a route has succeeded, keep the hot path to one socket attempt.
+        // Cold start and post-network-change paths have no preference and race the
+        // existing authenticated candidates within one bounded timeout budget.
+        if (preferred != null && !candidates.isEmpty() && preferred.key().equals(candidates.get(0).key())) {
+            PairingProfile.Route route = candidates.remove(0);
             try {
-                Socket socket = connect(route);
-                retryAfter.remove(route.key());
-                lastGoodRoute.set(new RoutePreference(route.key()));
-                Log.i(TAG, "Route " + route.id + " connected to " + route.host + ":" + route.port);
-                return new ConnectedRoute(socket, route);
+                return recordRouteSuccess(connect(route), route, startedNanos, false);
             } catch (IOException error) {
-                if (preferred != null && route.key().equals(preferred.key())) lastGoodRoute.compareAndSet(preferred, null);
-                retryAfter.put(route.key(), now + ("lan".equals(route.id) ? LAN_RETRY_DELAY_MS : REMOTE_RETRY_DELAY_MS));
-                Log.w(TAG, "Route " + route.id + " failed for " + route.host + ":" + route.port + ": " + error.getMessage());
+                recordRouteFailure(route, error);
+                lastGoodRoute.compareAndSet(preferred, null);
             }
         }
-        return null;
+
+        ConnectedRoute connected = raceRoutes(
+            candidates,
+            this::connect,
+            routeExecutor,
+            ROUTE_RACE_BUDGET_MS,
+            this::recordRouteFailure
+        );
+        if (connected == null) {
+            Log.w(TAG, "Route race exhausted in " + elapsedMillis(startedNanos) + " ms across " + candidates.size() + " candidates");
+            return null;
+        }
+        return recordRouteSuccess(connected.socket(), connected.route(), startedNanos, true);
+    }
+
+    void resetRoutePreference(long generation) {
+        logicalConnectionGeneration.accumulateAndGet(generation, Math::max);
+        recoveryCursor.set(0);
+        lastGoodRoute.set(null);
+        retryAfter.clear();
+    }
+
+    ConnectionState connectionState() {
+        RoutePreference preferred = lastGoodRoute.get();
+        return new ConnectionState(
+            logicalConnectionGeneration.get(), recoveryCursor.get(), responseState.get(),
+            preferred == null ? null : preferred.key());
+    }
+
+    private ConnectedRoute recordRouteSuccess(Socket socket, PairingProfile.Route route, long startedNanos, boolean raced) {
+        retryAfter.remove(route.key());
+        recoveryCursor.set(0);
+        lastGoodRoute.set(new RoutePreference(route.key()));
+        Log.i(TAG, "Route " + route.id + " connected in " + elapsedMillis(startedNanos)
+            + " ms (mode=" + (raced ? "race" : "warm") + ", target=" + route.host + ":" + route.port + ")");
+        return new ConnectedRoute(socket, route);
+    }
+
+    private void recordRouteFailure(PairingProfile.Route route, IOException error) {
+        long delay = "lan".equals(route.id) ? LAN_RETRY_DELAY_MS : REMOTE_RETRY_DELAY_MS;
+        retryAfter.put(route.key(), System.currentTimeMillis() + delay);
+        recoveryCursor.incrementAndGet();
+        Log.w(TAG, "Route " + route.id + " failed for " + route.host + ":" + route.port + ": " + error.getMessage());
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
+    }
+
+    static ConnectedRoute raceRoutes(
+        List<PairingProfile.Route> candidates,
+        RouteConnector connector,
+        ExecutorService executor,
+        long budgetMs,
+        BiConsumer<PairingProfile.Route, IOException> failure
+    ) {
+        if (candidates == null || candidates.isEmpty()) return null;
+        AtomicReference<ConnectedRoute> winner = new AtomicReference<>();
+        AtomicBoolean accepting = new AtomicBoolean(true);
+        AtomicInteger remaining = new AtomicInteger(candidates.size());
+        CountDownLatch settled = new CountDownLatch(1);
+        for (int index = 0; index < candidates.size(); index++) {
+            PairingProfile.Route route = candidates.get(index);
+            long staggerMs = index * ROUTE_RACE_STAGGER_MS;
+            executor.execute(() -> {
+                Socket socket = null;
+                try {
+                    if (staggerMs > 0L) Thread.sleep(staggerMs);
+                    if (!accepting.get()) return;
+                    socket = connector.connect(route);
+                    ConnectedRoute result = new ConnectedRoute(socket, route);
+                    if (accepting.get() && winner.compareAndSet(null, result)) {
+                        socket = null;
+                        settled.countDown();
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                } catch (IOException error) {
+                    if (accepting.get() && winner.get() == null) failure.accept(route, error);
+                } finally {
+                    closeQuietly(socket);
+                    if (remaining.decrementAndGet() == 0) settled.countDown();
+                }
+            });
+        }
+        try {
+            settled.await(Math.max(1L, budgetMs), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } finally {
+            accepting.set(false);
+        }
+        return winner.get();
+    }
+
+    private static void closeQuietly(Socket socket) {
+        if (socket != null) try { socket.close(); } catch (IOException ignored) {}
     }
 
     static List<PairingProfile.Route> prioritizeRoutes(
@@ -159,9 +279,19 @@ final class HarnessWebProxy implements AutoCloseable {
         candidates.sort(
             Comparator.<PairingProfile.Route>comparingInt(route -> retryAfter.getOrDefault(route.key(), 0L) <= now ? 0 : 1)
                 .thenComparingInt(route -> route.key().equals(lastGoodRouteKey) ? 0 : 1)
+                .thenComparingInt(route -> routeKindRank(route.id))
                 .thenComparingLong(route -> retryAfter.getOrDefault(route.key(), 0L))
+                .thenComparing(PairingProfile.Route::key)
         );
         return candidates;
+    }
+
+    static int routeKindRank(String id) {
+        if ("lan".equals(id)) return 0;
+        if ("native-p2p".equals(id)) return 1;
+        if ("wss-relay".equals(id)) return 2;
+        if ("easytier".equals(id)) return 3;
+        return 4;
     }
 
     private Socket connect(PairingProfile.Route route) throws IOException {
@@ -505,5 +635,6 @@ final class HarnessWebProxy implements AutoCloseable {
         acceptExecutor.shutdownNow();
         connectionExecutor.shutdownNow();
         pipeExecutor.shutdownNow();
+        routeExecutor.shutdownNow();
     }
 }

@@ -5,6 +5,7 @@ const RECOVERABLE_PATCH_MARKER = 'conversationWorkTreeRecoverableMarker = "@harn
 const AUTO_COMPLETE_PATCH_MARKER = 'conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5"'
 const PERFORMANCE_PATCH_MARKER = 'conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6"'
 const SNAPSHOT_PRIORITY_PATCH_MARKER = 'conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7"'
+const PERSISTENCE_PATCH_MARKER = 'conversationWorkTreePersistenceMarker = "@harness-desktop/conversation-work-tree-persistence-v8"'
 
 const WORK_TREE_CSS = ".hd-work-tree{min-width:0;border-radius:10px}.hd-work-tree-toggle{box-sizing:border-box;width:100%;min-height:44px;border:0;border-radius:9px;padding:0 10px;color:var(--dsw-alias-label-secondary);background:transparent;align-items:center;gap:8px;font:inherit;text-align:left;cursor:pointer;display:flex;transition:color .14s ease,background-color .14s ease}.hd-work-tree-toggle:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.hd-work-tree-toggle:focus-visible{outline:2px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 68%,transparent);outline-offset:2px}.hd-work-tree-chevron{width:16px;height:16px;flex:none;place-items:center;display:grid}.hd-work-tree-title{color:var(--dsw-alias-label-primary-dimmed);font-size:14px;font-weight:600;line-height:20px}.hd-work-tree-count{min-width:0;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;overflow:hidden}.hd-work-tree-status{color:var(--dsw-alias-label-tertiary);white-space:nowrap;align-items:center;gap:6px;margin-left:auto;font-size:12px;line-height:18px;display:inline-flex}.hd-work-tree-status:before{content:\"\";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}.hd-work-tree[data-state=running] .hd-work-tree-toggle{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 5%,transparent)}.hd-work-tree[data-state=running] .hd-work-tree-status{color:var(--dsw-alias-brand-primary)}.hd-work-tree[data-state=error] .hd-work-tree-status{color:var(--dsw-alias-state-error-primary)}.hd-work-tree[data-state=stopped] .hd-work-tree-status{color:var(--dsw-alias-state-warning-primary)}.hd-work-tree-body{position:relative;flex-direction:column;gap:8px;margin:2px 0 6px 20px;padding:0 0 4px 18px;display:flex}.hd-work-tree-body:before{content:\"\";position:absolute;top:0;bottom:8px;left:0;width:1px;background:var(--dsw-alias-border-l2)}.hd-work-tree-body[hidden]{display:none}.hd-work-tree-body>[data-chat-flow-key]{position:relative}.hd-work-tree-body>[data-chat-flow-key]:before{content:\"\";position:absolute;top:12px;left:-18px;width:10px;height:1px;background:var(--dsw-alias-border-l2)}@media(max-width:620px){.hd-work-tree-toggle{padding-inline:6px}.hd-work-tree-body{margin-left:16px;padding-left:14px}.hd-work-tree-body>[data-chat-flow-key]:before{left:-14px;width:8px}}.hd-work-tree[data-open] .hd-work-tree-toggle{position:sticky;top:8px;z-index:5;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 82%,transparent);background:color-mix(in srgb,var(--dsw-alias-bg-base) 92%,transparent);box-shadow:0 6px 18px color-mix(in srgb,#000 12%,transparent);-webkit-backdrop-filter:blur(14px) saturate(1.06);backdrop-filter:blur(14px) saturate(1.06)}.hd-work-tree[data-open] .hd-work-tree-body>[data-chat-flow-key]{scroll-margin-top:64px}@media(max-width:620px){.hd-work-tree[data-open] .hd-work-tree-toggle{top:6px}}@media(prefers-reduced-motion:reduce){.hd-work-tree-toggle{transition:none}}"
 
@@ -17,6 +18,7 @@ const STYLE_PATCH = `\t\tconst conversationWorkTreeCss = ${JSON.stringify(WORK_T
 \t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";
 \t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";
 \t\tconst conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7";
+\t\tconst conversationWorkTreePersistenceMarker = "@harness-desktop/conversation-work-tree-persistence-v8";
 \t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";
 \t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(conversationWorkTreeMarker) + "]") === null) {
 \t\t\tconst conversationWorkTreeTag = document.createElement("style");
@@ -118,6 +120,45 @@ export function reduceConversationWorkTreeDisclosure(state, event) {
   }
   if (selected) next = { ...next, open: true }
   return next
+}
+
+export function conversationWorkTreeStorage() {
+  try {
+    return globalThis.localStorage
+  } catch {
+    return undefined
+  }
+}
+
+export function readConversationWorkTreeDisclosure(storage, sessionId, itemKey) {
+  if (!storage || typeof storage.getItem !== 'function' || typeof sessionId !== 'string' || !sessionId || typeof itemKey !== 'string' || !itemKey) return undefined
+  try {
+    const value = JSON.parse(storage.getItem(`harness.desktop.work-tree-disclosure.v1:${sessionId}`) || '{}')
+    return typeof value?.[itemKey] === 'boolean' ? value[itemKey] : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function writeConversationWorkTreeDisclosure(storage, sessionId, itemKey, open) {
+  if (!storage || typeof storage.getItem !== 'function' || typeof storage.setItem !== 'function' || typeof sessionId !== 'string' || !sessionId || typeof itemKey !== 'string' || !itemKey || typeof open !== 'boolean') return false
+  try {
+    const parsed = JSON.parse(storage.getItem(`harness.desktop.work-tree-disclosure.v1:${sessionId}`) || '{}')
+    const entries = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? Object.entries(parsed).filter(([key, value]) => typeof key === 'string' && typeof value === 'boolean' && key !== itemKey).slice(-255)
+      : []
+    const value = Object.fromEntries(entries)
+    value[itemKey] = open
+    storage.setItem(`harness.desktop.work-tree-disclosure.v1:${sessionId}`, JSON.stringify(value))
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function createConversationWorkTreeDisclosureState(persistedOpen, active, selected) {
+  if (typeof persistedOpen === 'boolean') return { open: persistedOpen || selected === true, automatic: false, userControlled: true, active: active === true }
+  return { open: active === true || selected === true, automatic: active === true && selected !== true, userControlled: false, active: active === true }
 }
 
 export function reduceConversationWorkTreeRenderCount(count, event) {
@@ -322,6 +363,12 @@ const PRE_PRIORITY_WORK_TREE_ITEMS_SOURCE = WORK_TREE_ITEMS_SOURCE
   .replace('\n\t\t        callIds: [],\n\t\t        callNodeKeys: new Map()', '\n\t\t        callIds: []')
   .replace('\n\t\t    for (const callId of stats.callIds) group.callNodeKeys.set(callId, nodeKey)', '')
 const DISCLOSURE_REDUCER_SOURCE = bundleFunctionSource(reduceConversationWorkTreeDisclosure)
+const DISCLOSURE_PERSISTENCE_HELPERS_SOURCE = [
+  conversationWorkTreeStorage,
+  readConversationWorkTreeDisclosure,
+  writeConversationWorkTreeDisclosure,
+  createConversationWorkTreeDisclosureState
+].map(bundleFunctionSource).join('\n')
 const RENDER_COUNT_REDUCER_SOURCE = bundleFunctionSource(reduceConversationWorkTreeRenderCount)
 const RENDER_KEYS_SOURCE = bundleFunctionSource(conversationWorkTreeRenderKeys)
 const PRE_RECOVERABLE_TOOL_STATS_SOURCE = bundleFunctionSource(preRecoverableConversationToolRootStats).replaceAll('preRecoverableConversationToolRootStats', 'conversationToolRootStats')
@@ -334,6 +381,10 @@ const WORK_TREE_HELPERS = [
   conversationWorkNodeStats,
   conversationIsWorkNode,
   reduceConversationWorkTreeDisclosure,
+  conversationWorkTreeStorage,
+  readConversationWorkTreeDisclosure,
+  writeConversationWorkTreeDisclosure,
+  createConversationWorkTreeDisclosureState,
   reduceConversationWorkTreeRenderCount,
   conversationWorkTreeRenderKeys,
   buildConversationWorkTreeItems
@@ -341,10 +392,15 @@ const WORK_TREE_HELPERS = [
 
 const COMPONENT_ANCHOR = '\t\tfunction ChatView({ useSession, useSessions, useStore, renderSlot, sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, forkAt, fileMentions, t }) {'
 const COMPONENT_PATCH = `${WORK_TREE_HELPERS}
-\t\tconst ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, useSession, selectedCallId, cwd, openFile, inspectCall, forkAt, renderMessageImages, fileMentions, renderSlot, t }) {
+\t\tconst ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, sessionId, useSession, selectedCallId, cwd, openFile, inspectCall, forkAt, renderMessageImages, fileMentions, renderSlot, t }) {
 \t\t\tconst selectedNodeKey = selectedCallId === void 0 ? void 0 : item.callNodeKeys.get(selectedCallId);
 \t\t\tconst selected = selectedNodeKey !== void 0;
-\t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => ({ open: item.active || selected, automatic: item.active && !selected, userControlled: false, active: item.active }));
+\t\t\tconst disclosureStorage = conversationWorkTreeStorage();
+\t\t\tconst readPersistedDisclosure = () => readConversationWorkTreeDisclosure(disclosureStorage, sessionId, item.key);
+\t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => createConversationWorkTreeDisclosureState(readPersistedDisclosure(), item.active, selected));
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tsetDisclosure(createConversationWorkTreeDisclosureState(readPersistedDisclosure(), item.active, selected));
+\t\t\t}, [sessionId, item.key]);
 \t\t\t(0, react.useEffect)(() => {
 \t\t\t\tsetDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "activity", active: item.active, selected }));
 \t\t\t}, [item.active, selected]);
@@ -384,7 +440,11 @@ const COMPONENT_PATCH = `${WORK_TREE_HELPERS}
 \t\t\t\t\tclassName: "hd-work-tree-toggle",
 \t\t\t\t\t"aria-expanded": open,
 \t\t\t\t\t"aria-label": \`\${action} · \${status} · \${count}\`,
-\t\t\t\t\tonClick: () => setDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "toggle" })),
+\t\t\t\t\tonClick: () => setDisclosure((value) => {
+\t\t\t\t\t\tconst next = reduceConversationWorkTreeDisclosure(value, { type: "toggle" });
+\t\t\t\t\t\twriteConversationWorkTreeDisclosure(disclosureStorage, sessionId, item.key, next.open);
+\t\t\t\t\t\treturn next;
+\t\t\t\t\t}),
 \t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {
 \t\t\t\t\t\tclassName: "hd-work-tree-chevron",
 \t\t\t\t\t\t"aria-hidden": true,
@@ -450,6 +510,7 @@ const RENDER_ORIGINAL = `\t\t\t\t\t\t\torder.map((nodeKey) => (0, react_jsx_runt
 
 const RENDER_PATCHED = `\t\t\t\t\t\t\tworkTreeItems.map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, {
 \t\t\t\t\t\t\t\titem,
+\t\t\t\t\t\t\t\tsessionId,
 \t\t\t\t\t\t\t\tuseSession,
 \t\t\t\t\t\t\t\tselectedCallId,
 \t\t\t\t\t\t\t\tcwd,
@@ -514,13 +575,19 @@ const RECOVERABLE_MARKER_QUINT = '\t\tconst conversationWorkTreeStickyMarker = "
 const AUTO_COMPLETE_MARKER_SEXT = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
 const PERFORMANCE_MARKER_SEPT = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
 const SNAPSHOT_PRIORITY_MARKER_OCT = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";\n\t\tconst conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
+const PERSISTENCE_MARKER_NONET = '\t\tconst conversationWorkTreeStickyMarker = "@harness-desktop/conversation-work-tree-sticky-v1";\n\t\tconst conversationWorkTreeFlowMarker = "@harness-desktop/conversation-work-tree-flow-v2";\n\t\tconst conversationWorkTreeManualMarker = "@harness-desktop/conversation-work-tree-manual-v3";\n\t\tconst conversationWorkTreeRecoverableMarker = "@harness-desktop/conversation-work-tree-recoverable-v4";\n\t\tconst conversationWorkTreeAutoCompleteMarker = "@harness-desktop/conversation-work-tree-auto-complete-v5";\n\t\tconst conversationWorkTreePerformanceMarker = "@harness-desktop/conversation-work-tree-performance-v6";\n\t\tconst conversationWorkTreeSnapshotPriorityMarker = "@harness-desktop/conversation-work-tree-snapshot-priority-v7";\n\t\tconst conversationWorkTreePersistenceMarker = "@harness-desktop/conversation-work-tree-persistence-v8";\n\t\tconst conversationWorkTreeMarker = "@harness-desktop/conversation-work-tree-v1";'
 const WORK_TREE_COMPONENT_PREFIX = '\t\tconst ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({'
+const WORK_TREE_COMPONENT_PROPS_V7 = 'function ConversationWorkTreeGroup({ item, useSession,'
+const WORK_TREE_COMPONENT_PROPS_V8 = 'function ConversationWorkTreeGroup({ item, sessionId, useSession,'
+const WORK_TREE_RENDER_PROPS_V7 = '\t\t\t\t\t\t\t\titem,\n\t\t\t\t\t\t\t\tuseSession,'
+const WORK_TREE_RENDER_PROPS_V8 = '\t\t\t\t\t\t\t\titem,\n\t\t\t\t\t\t\t\tsessionId,\n\t\t\t\t\t\t\t\tuseSession,'
 const SELECTED_CALL_V6 = '\t\t\tconst selected = selectedCallId !== void 0 && item.callIds.includes(selectedCallId);'
 const SELECTED_CALL_V7 = '\t\t\tconst selectedNodeKey = selectedCallId === void 0 ? void 0 : item.callNodeKeys.get(selectedCallId);\n\t\t\tconst selected = selectedNodeKey !== void 0;'
 const AUTO_TOGGLE_STATE_BLOCK = '\t\t\tconst [open, setOpen] = (0, react.useState)(item.active || selected);\n\t\t\tconst wasActive = (0, react.useRef)(item.active);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (item.active === wasActive.current) return;\n\t\t\t\twasActive.current = item.active;\n\t\t\t\tsetOpen(item.active);\n\t\t\t}, [item.active]);'
 const MANUAL_STATE_BLOCK = '\t\t\tconst [open, setOpen] = (0, react.useState)(item.active || selected);'
 const PRE_AUTO_COMPLETE_STATE_BLOCK = `${MANUAL_STATE_BLOCK}\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (selected) setOpen(true);\n\t\t\t}, [selected]);`
 const AUTO_COMPLETE_STATE_BLOCK = '\t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => ({ open: item.active || selected, automatic: item.active && !selected, userControlled: false, active: item.active }));\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tsetDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "activity", active: item.active, selected }));\n\t\t\t}, [item.active, selected]);\n\t\t\tconst open = disclosure.open;'
+const PERSISTED_STATE_BLOCK = '\t\t\tconst disclosureStorage = conversationWorkTreeStorage();\n\t\t\tconst readPersistedDisclosure = () => readConversationWorkTreeDisclosure(disclosureStorage, sessionId, item.key);\n\t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => createConversationWorkTreeDisclosureState(readPersistedDisclosure(), item.active, selected));\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tsetDisclosure(createConversationWorkTreeDisclosureState(readPersistedDisclosure(), item.active, selected));\n\t\t\t}, [sessionId, item.key]);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tsetDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "activity", active: item.active, selected }));\n\t\t\t}, [item.active, selected]);\n\t\t\tconst open = disclosure.open;'
 const PERFORMANCE_STATE_BLOCK = `${AUTO_COMPLETE_STATE_BLOCK}
 \t\t\tconst [renderedCount, setRenderedCount] = (0, react.useState)(0);
 \t\t\t(0, react.useEffect)(() => {
@@ -542,6 +609,7 @@ const PERFORMANCE_STATE_BLOCK = `${AUTO_COMPLETE_STATE_BLOCK}
 \t\t\t}, [open, renderedCount, item.nodeKeys.length]);`
 const MANUAL_TOGGLE_HANDLER = '\t\t\t\t\tonClick: () => setOpen((value) => !value),'
 const AUTO_COMPLETE_TOGGLE_HANDLER = '\t\t\t\t\tonClick: () => setDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "toggle" })),'
+const PERSISTED_TOGGLE_HANDLER = '\t\t\t\t\tonClick: () => setDisclosure((value) => {\n\t\t\t\t\t\tconst next = reduceConversationWorkTreeDisclosure(value, { type: "toggle" });\n\t\t\t\t\t\twriteConversationWorkTreeDisclosure(disclosureStorage, sessionId, item.key, next.open);\n\t\t\t\t\t\treturn next;\n\t\t\t\t\t}),'
 const EAGER_WORK_TREE_CHILDREN_START = '\t\t\t\t\thidden: !open,\n\t\t\t\t\tchildren: item.nodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {'
 const BATCHED_WORK_TREE_CHILDREN_START = '\t\t\t\t\thidden: !open,\n\t\t\t\t\t"aria-busy": open && renderedCount < item.nodeKeys.length || void 0,\n\t\t\t\t\tchildren: open ? item.nodeKeys.slice(0, renderedCount).map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {'
 const PRIORITY_WORK_TREE_CHILDREN_START = '\t\t\t\t\thidden: !open,\n\t\t\t\t\t"aria-busy": open && renderedCount < item.nodeKeys.length || void 0,\n\t\t\t\t\tchildren: renderedNodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {'
@@ -571,6 +639,7 @@ function assertComplete(source) {
     '@harness-desktop/conversation-work-tree-auto-complete-v5',
     '@harness-desktop/conversation-work-tree-performance-v6',
     '@harness-desktop/conversation-work-tree-snapshot-priority-v7',
+    '@harness-desktop/conversation-work-tree-persistence-v8',
     'FS_EDIT_NOT_FOUND',
     'work-tree:flow:',
     'position:sticky',
@@ -578,6 +647,10 @@ function assertComplete(source) {
     'const conversationUnscopedWorkTrees = true',
     'function buildConversationWorkTreeItems',
     'function reduceConversationWorkTreeDisclosure',
+    'function readConversationWorkTreeDisclosure',
+    'function writeConversationWorkTreeDisclosure',
+    'function createConversationWorkTreeDisclosureState',
+    'harness.desktop.work-tree-disclosure.v1:',
     'function reduceConversationWorkTreeRenderCount',
     'function conversationWorkTreeRenderKeys',
     'const ConversationWorkTreeGroup',
@@ -602,6 +675,9 @@ function assertComplete(source) {
   }
   if (source.includes(AUTO_TOGGLE_STATE_BLOCK) || source.includes(PRE_AUTO_COMPLETE_STATE_BLOCK) || source.includes(MANUAL_TOGGLE_HANDLER)) {
     throw new Error('Installed conversation work-tree does not preserve the automatic-versus-user disclosure state.')
+  }
+  if (source.includes(AUTO_COMPLETE_STATE_BLOCK) || source.includes(AUTO_COMPLETE_TOGGLE_HANDLER) || source.includes(WORK_TREE_COMPONENT_PROPS_V7) || source.includes(WORK_TREE_RENDER_PROPS_V7)) {
+    throw new Error('Installed conversation work-tree does not persist disclosure independently for each session and work group.')
   }
   if (source.includes(EAGER_WORK_TREE_CHILDREN_START) || source.includes(EAGER_WORK_TREE_RENDER)) {
     throw new Error('Installed conversation work-tree still performs eager long-session render work.')
@@ -689,6 +765,25 @@ export function patchConversationWorkTreeSource(source) {
         throw new Error('Pinned DSH memoized work-tree projection changed; refusing an unsafe mutable-store migration.')
       }
       migrated = replaceExactlyOnce(migrated, PERFORMANCE_MARKER_SEPT, SNAPSHOT_PRIORITY_MARKER_OCT, 'snapshot-safe selected-call priority marker')
+      changed = true
+    }
+    if (!migrated.includes(PERSISTENCE_PATCH_MARKER)) {
+      if (!migrated.includes('function readConversationWorkTreeDisclosure')) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_COMPONENT_PREFIX, `${DISCLOSURE_PERSISTENCE_HELPERS_SOURCE}\n${WORK_TREE_COMPONENT_PREFIX}`, 'session disclosure persistence helpers')
+      }
+      if (migrated.includes(WORK_TREE_COMPONENT_PROPS_V7)) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_COMPONENT_PROPS_V7, WORK_TREE_COMPONENT_PROPS_V8, 'session-aware work-tree component props')
+      } else if (!migrated.includes(WORK_TREE_COMPONENT_PROPS_V8)) {
+        throw new Error('Pinned DSH work-tree component props changed; refusing an unsafe session persistence migration.')
+      }
+      migrated = replaceExactlyOnce(migrated, AUTO_COMPLETE_STATE_BLOCK, PERSISTED_STATE_BLOCK, 'session disclosure state restoration')
+      migrated = replaceExactlyOnce(migrated, AUTO_COMPLETE_TOGGLE_HANDLER, PERSISTED_TOGGLE_HANDLER, 'session disclosure state persistence')
+      if (migrated.includes(WORK_TREE_RENDER_PROPS_V7)) {
+        migrated = replaceExactlyOnce(migrated, WORK_TREE_RENDER_PROPS_V7, WORK_TREE_RENDER_PROPS_V8, 'session id work-tree render prop')
+      } else if (!migrated.includes(WORK_TREE_RENDER_PROPS_V8)) {
+        throw new Error('Pinned DSH work-tree render props changed; refusing an unsafe session persistence migration.')
+      }
+      migrated = replaceExactlyOnce(migrated, SNAPSHOT_PRIORITY_MARKER_OCT, PERSISTENCE_MARKER_NONET, 'session disclosure persistence marker')
       changed = true
     }
     if (!migrated.includes('"row.retry":')) {

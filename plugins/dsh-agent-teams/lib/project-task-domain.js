@@ -21,6 +21,7 @@ const HUMAN_PERMISSIONS = Object.freeze({
   observer: new Set(["read"]),
 });
 const EXECUTOR_PERMISSIONS = new Set(["read", "claim", "transition", "comment", "attach", "submit_review"]);
+const PROJECT_LEAD_PERMISSIONS = new Set(TASK_ACTIONS);
 const NON_HUMAN_REVIEW_AUTHORITIES = new Set(["project_lead", "reviewer"]);
 const SYSTEM_PERMISSIONS = new Set(["read", "create", "assign", "transition", "comment", "attach", "submit_review", "cancel"]);
 const RELATION_TYPES = Object.freeze(["parent", "blocks", "related", "duplicates"]);
@@ -126,7 +127,8 @@ function canActorPerform(actor, action, task) {
   try { assertActorShape(actor); assertAction(action); if (task !== undefined) assertTaskShape(task); } catch { return false; }
   if (actor.kind === "human") return HUMAN_PERMISSIONS[actor.role].has(action);
   if (actor.kind === "system") return SYSTEM_PERMISSIONS.has(action);
-  if (["read", "approve_review"].includes(action) && (actor.authorities ?? []).some((authority) => NON_HUMAN_REVIEW_AUTHORITIES.has(authority))) return true;
+  if (actor.kind === "agent" && (actor.authorities ?? []).includes("project_lead")) return PROJECT_LEAD_PERMISSIONS.has(action);
+  if (["read", "approve_review"].includes(action) && (actor.authorities ?? []).includes("reviewer")) return true;
   if (!EXECUTOR_PERMISSIONS.has(action)) return false;
   if (task === undefined) return action === "read";
   if (action === "claim") return task.assigneeActorRef === undefined || sameRef(task.assigneeActorRef, actor.actorRef);

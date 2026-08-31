@@ -703,10 +703,6 @@
     pointer-events: none;
   }
 
-  html[data-harness-mobile-settings-open="true"] #harness-mobile-app-shell {
-    display: none !important;
-  }
-
   [data-harness-mobile-navigation] {
     box-sizing: border-box;
     position: absolute;
@@ -903,6 +899,142 @@
     stroke-width: 1.8;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+
+  [data-harness-mobile-my-surface] {
+    box-sizing: border-box;
+    position: absolute;
+    inset: var(--harness-mobile-appbar-height) 0 var(--harness-mobile-nav-height) 0;
+    z-index: 205;
+    padding: 24px max(16px, env(safe-area-inset-right)) 32px max(16px, env(safe-area-inset-left));
+    overflow-x: hidden;
+    overflow-y: auto;
+    pointer-events: auto;
+    overscroll-behavior: contain;
+    color: var(--hm-color-text, #172133);
+    background: var(--hm-color-bg, #f5f7fb);
+  }
+
+  [data-harness-mobile-my-surface][hidden] {
+    display: none !important;
+  }
+
+  [data-harness-mobile-my-intro] {
+    margin: 0 0 24px;
+  }
+
+  [data-harness-mobile-my-intro] > span,
+  [data-harness-mobile-my-group] > h2 {
+    color: var(--hm-color-text-secondary, #667085);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+
+  [data-harness-mobile-my-intro] h1 {
+    margin: 6px 0 8px;
+    font-size: 28px;
+    line-height: 1.2;
+  }
+
+  [data-harness-mobile-my-intro] p {
+    margin: 0;
+    color: var(--hm-color-text-secondary, #667085);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  [data-harness-mobile-my-group] {
+    margin: 0 0 24px;
+    display: grid;
+    gap: 8px;
+  }
+
+  [data-harness-mobile-my-group] > h2 {
+    margin: 0 0 4px;
+  }
+
+  [data-harness-mobile-settings-entry] {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 72px;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 20px;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid var(--hm-color-border, #e3e7ef);
+    border-radius: 18px;
+    color: var(--hm-color-text, #172133);
+    background: var(--hm-color-surface, #fff);
+    box-shadow: 0 4px 14px rgba(23, 33, 51, .04);
+    text-align: left;
+    touch-action: manipulation;
+  }
+
+  [data-harness-mobile-settings-entry] > span:nth-child(2) {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+  }
+
+  [data-harness-mobile-settings-entry] strong {
+    font-size: 16px;
+    line-height: 22px;
+  }
+
+  [data-harness-mobile-settings-entry] small {
+    color: var(--hm-color-text-secondary, #667085);
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  [data-harness-mobile-settings-entry] > span:last-child {
+    color: var(--hm-color-text-tertiary, #98a2b3);
+    font-size: 28px;
+    line-height: 1;
+    text-align: right;
+  }
+
+  [data-harness-mobile-my-entry-icon] {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border-radius: 14px;
+    color: var(--hm-color-primary, #4968e8);
+    background: var(--hm-color-primary-soft, #eef3ff);
+  }
+
+  [data-harness-mobile-my-entry-icon] svg {
+    width: 24px;
+    height: 24px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  [data-harness-mobile-settings-entry]:active {
+    border-color: var(--hm-color-primary, #4968e8);
+    background: var(--hm-color-surface-active, #eaf0ff);
+    transform: scale(.99);
+  }
+
+  [data-harness-mobile-my-status] {
+    min-height: 20px;
+    margin: 0;
+    color: var(--hm-color-text-secondary, #667085);
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  :root[data-harness-mobile-domain="me"] [data-harness-mobile-conversation-search-proxy],
+  :root[data-harness-mobile-domain="me"] [data-harness-mobile-conversation-search-box],
+  :root[data-harness-mobile-domain="me"] [data-harness-mobile-conversation-list-title],
+  :root[data-harness-mobile-domain="me"] [data-harness-mobile-drawer-scrim] {
+    display: none !important;
   }
 
   [data-harness-mobile-conversation-search-proxy] {
@@ -1151,6 +1283,13 @@
     height: 0 !important;
     overflow: visible !important;
     pointer-events: none !important;
+  }
+
+  :root[data-harness-mobile-drawer="open"] [class*="_sidebarCol"] {
+    inset: var(--harness-mobile-appbar-height) 0 var(--harness-mobile-nav-height) 0 !important;
+    width: 100vw !important;
+    height: auto !important;
+    pointer-events: auto !important;
   }
 
   [class*="_sidebarCol"] [data-slot="sidebar"],
@@ -1857,7 +1996,10 @@
     grid-template-rows: minmax(116px, 1fr) auto auto auto !important;
     align-items: end !important;
     gap: 10px !important;
-    overflow: hidden !important;
+    /* The grid's flexible hero row can be shorter than a fully grown draft.
+       Let the bounded composer card paint its toolbar below that row; the outer
+       conversation viewport still clips decorative overflow at the screen. */
+    overflow: visible !important;
   }
 
   [data-phase="hero"] [class*="_heroGlow"] {
@@ -2261,6 +2403,25 @@
 
   html[data-harness-mobile="true"] [data-harness-mobile-settings-content="true"][data-harness-mobile-model-routing="true"] > :not(#harness-mobile-model-routing) {
     display: none !important;
+  }
+
+  #harness-mobile-model-routing > #harness-desktop-model-routing {
+    display: block !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+  }
+
+  #harness-mobile-model-routing > #harness-desktop-model-routing .hd-route-grid,
+  #harness-mobile-model-routing > #harness-desktop-model-routing .hd-meter-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  #harness-mobile-model-routing > #harness-desktop-model-routing select,
+  #harness-mobile-model-routing > #harness-desktop-model-routing [data-hd-sub-mode],
+  #harness-mobile-model-routing > #harness-desktop-model-routing [data-hd-route-save],
+  #harness-mobile-model-routing > #harness-desktop-model-routing [data-hd-meter-refresh] {
+    min-height: 44px !important;
   }
 
   #harness-mobile-model-routing {
@@ -2779,7 +2940,7 @@
     scroll-padding-bottom: min(226px, 34dvh) !important;
   }
 
-  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-conversation="true"] > [data-conversation-scroll] > [data-composer-seat] {
+  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-composer-seat="true"] {
     position: fixed !important;
     inset: auto 0 var(--harness-mobile-ime-overlay, 0px) 0 !important;
     z-index: 950 !important;
@@ -3230,6 +3391,63 @@
     display: block !important;
   }
 
+  /* The official settings dialog is portaled beneath the collapsed sidebar.
+     Remove transition containing blocks and hidden ancestors while it is open
+     so the real dialog can cover the current conversation/task view. */
+  html[data-harness-mobile-settings-open="true"] [class*="_sidebarCol"] {
+    z-index: 600 !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    overflow: visible !important;
+    visibility: visible !important;
+    pointer-events: none !important;
+    transform: none !important;
+    translate: none !important;
+    scale: none !important;
+    rotate: none !important;
+    filter: none !important;
+    contain: none !important;
+  }
+
+  html[data-harness-mobile-settings-open="true"] [data-slot="sidebar"],
+  html[data-harness-mobile-settings-open="true"] [data-slot="sidebar"] > div[class*="_collapsed"],
+  html[data-harness-mobile-settings-open="true"] [data-slot="sidebar.settings"] {
+    overflow: visible !important;
+    visibility: visible !important;
+    transform: none !important;
+    translate: none !important;
+    scale: none !important;
+    rotate: none !important;
+    filter: none !important;
+    contain: none !important;
+  }
+
+  html[data-harness-mobile-settings-open="true"][data-harness-mobile-drawer] [data-slot="sidebar.settings"] {
+    display: block !important;
+  }
+
+  html[data-harness-mobile-settings-open="true"] [data-slot="sidebar"] > div:not([class*="_collapsed"]) {
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+
+  html[data-harness-mobile-domain="me"] [data-harness-mobile-conversation-list-title],
+  html[data-harness-mobile-domain="me"] [data-harness-mobile-conversation-search-proxy],
+  html[data-harness-mobile-domain="me"] [data-harness-mobile-conversation-search-box] {
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+
+  html[data-harness-mobile-settings-open="true"] [data-harness-mobile-settings-dialog="true"][role="dialog"][aria-modal="true"] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    transform: none !important;
+    translate: none !important;
+    scale: none !important;
+    rotate: none !important;
+  }
+
   :root[data-harness-mobile-domain="me"] [data-harness-mobile-appbar="true"] {
     grid-template-columns: minmax(0, 1fr) !important;
     padding-inline: 16px !important;
@@ -3351,6 +3569,10 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+  [data-harness-mobile-model-sheet] > [role="dialog"] {
+    transition: none !important;
+    transform: none !important;
   }
 }
 
@@ -4697,15 +4919,351 @@
   box-shadow: none !important;
 }
 
+:root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-composer-toolbar="true"] {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 44px !important;
+  margin-top: auto !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 4px !important;
+}
+
+:root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-composer-toolbar-left="true"],
+:root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-composer-toolbar-trailing="true"] {
+  min-width: 0 !important;
+  margin: 0 !important;
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  gap: 4px !important;
+}
+
+:root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-composer-toolbar-left="true"] {
+  /* PermissionSelect renders its official menu inside this shared left seat.
+     Keep the row compact with child widths, but never clip the menu. */
+  overflow: visible !important;
+}
+
+:root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-composer-toolbar-trailing="true"] {
+  justify-content: flex-end !important;
+}
+
 :root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-permission-trigger="true"] {
+  max-width: 76px !important;
+  padding-inline: 6px !important;
   border-color: transparent !important;
   border-radius: 10px !important;
   background: transparent !important;
 }
 
+:root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-model-seat="true"] {
+  box-sizing: border-box !important;
+  width: 82px !important;
+  min-width: 72px !important;
+  max-width: 88px !important;
+  flex: 0 1 82px !important;
+}
+
+:root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-model-source-trigger="true"] {
+  display: none !important;
+}
+
+:root[data-harness-mobile-chat-detail="open"] #harness-mobile-model-button {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  min-width: 72px !important;
+  max-width: 88px !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 14px !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 5px 8px !important;
+  border: 1px solid color-mix(in srgb, var(--hm-color-border, #dfe3e8) 84%, transparent) !important;
+  border-radius: 10px !important;
+  color: var(--hm-color-text, #17211f) !important;
+  background: var(--hm-color-surface-subtle, #f4f6f7) !important;
+  touch-action: manipulation !important;
+  overflow: hidden !important;
+}
+
+:root[data-harness-mobile-chat-detail="open"] #harness-mobile-model-button > span:first-child {
+  min-width: 0 !important;
+  display: grid !important;
+  gap: 1px !important;
+  text-align: left !important;
+}
+
+:root[data-harness-mobile-chat-detail="open"] #harness-mobile-model-button strong,
+:root[data-harness-mobile-chat-detail="open"] #harness-mobile-model-button small {
+  display: block !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+}
+
+:root[data-harness-mobile-chat-detail="open"] #harness-mobile-model-button strong {
+  font-size: 12px !important;
+  font-weight: 650 !important;
+  line-height: 16px !important;
+}
+
+:root[data-harness-mobile-chat-detail="open"] #harness-mobile-model-button small {
+  color: var(--hm-color-text-secondary, #66726f) !important;
+  font-size: 10px !important;
+  line-height: 13px !important;
+}
+
+[data-harness-mobile-model-sheet][hidden] {
+  display: none !important;
+}
+
+[data-harness-mobile-model-sheet] {
+  position: fixed !important;
+  z-index: 1120 !important;
+  inset: 0 !important;
+  box-sizing: border-box !important;
+  display: grid !important;
+  align-items: end !important;
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)) !important;
+}
+
+[data-harness-mobile-model-backdrop] {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border: 0 !important;
+  background: rgba(13, 25, 31, .46) !important;
+  backdrop-filter: blur(3px) !important;
+}
+
+[data-harness-mobile-model-sheet] > [role="dialog"] {
+  position: relative !important;
+  z-index: 1 !important;
+  box-sizing: border-box !important;
+  width: min(100%, 520px) !important;
+  height: min(76dvh, 680px) !important;
+  max-height: min(76dvh, 680px) !important;
+  margin: 0 auto !important;
+  padding: 16px !important;
+  display: grid !important;
+  grid-template-rows: auto auto auto minmax(0, 1fr) !important;
+  gap: 12px !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hm-color-border, #dfe3e8) !important;
+  border-radius: 22px !important;
+  color: var(--hm-color-text, #17211f) !important;
+  background: var(--hm-color-surface, #fff) !important;
+  box-shadow: 0 24px 64px rgba(13, 25, 31, .24) !important;
+  transform: translateY(var(--harness-mobile-model-drag-offset, 0px)) !important;
+  transition: transform 220ms cubic-bezier(.22, .8, .24, 1), height 220ms cubic-bezier(.22, .8, .24, 1), max-height 220ms cubic-bezier(.22, .8, .24, 1) !important;
+  will-change: transform, height !important;
+}
+
+[data-harness-mobile-model-sheet][data-harness-mobile-model-dragging="true"] > [role="dialog"] {
+  transition: none !important;
+}
+
+[data-harness-mobile-model-sheet] > [role="dialog"][data-harness-mobile-model-expanded="true"] {
+  height: min(92dvh, 900px) !important;
+  max-height: min(92dvh, 900px) !important;
+}
+
+[data-harness-mobile-model-handle="true"] {
+  width: 44px !important;
+  height: 5px !important;
+  margin: -4px auto 4px !important;
+  border-radius: 999px !important;
+  background: var(--hm-color-text-tertiary, #a5acb6) !important;
+}
+
+[data-harness-mobile-model-sheet] header {
+  min-width: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+[data-harness-mobile-model-sheet] header span,
+[data-harness-mobile-model-summary] span {
+  color: var(--hm-color-text-secondary, #66726f) !important;
+  font-size: 12px !important;
+  line-height: 16px !important;
+}
+
+[data-harness-mobile-model-sheet] h2 {
+  margin: 2px 0 0 !important;
+  font-size: 20px !important;
+  line-height: 26px !important;
+}
+
+[data-harness-mobile-model-close] {
+  width: 44px !important;
+  min-width: 44px !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  border-radius: 14px !important;
+  font-size: 24px !important;
+}
+
+[data-harness-mobile-model-summary] {
+  box-sizing: border-box !important;
+  min-width: 0 !important;
+  min-height: 44px !important;
+  padding: 0 12px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  overflow: hidden !important;
+  border-radius: 13px !important;
+  background: var(--hm-color-surface-subtle, #f4f6f7) !important;
+}
+
+[data-harness-mobile-model-summary] strong {
+  min-width: 0 !important;
+  display: block !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  font-size: 13px !important;
+  line-height: 20px !important;
+}
+
+[data-harness-mobile-model-current="model"] {
+  flex: 1 1 auto !important;
+}
+
+[data-harness-mobile-model-current="effort"] {
+  max-width: 34% !important;
+  flex: 0 1 auto !important;
+}
+
+[data-harness-mobile-model-sheet] [role="tablist"] {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+[data-harness-mobile-model-tab] {
+  min-height: 44px !important;
+  border: 1px solid var(--hm-color-border, #dfe3e8) !important;
+  border-radius: 13px !important;
+  background: transparent !important;
+  touch-action: manipulation !important;
+}
+
+[data-harness-mobile-model-tab][aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--hm-color-primary, #278b81) 56%, var(--hm-color-border, #dfe3e8)) !important;
+  color: var(--hm-color-primary, #278b81) !important;
+  background: color-mix(in srgb, var(--hm-color-primary, #278b81) 11%, transparent) !important;
+  font-weight: 650 !important;
+}
+
+[data-harness-mobile-model-content] {
+  min-height: 132px !important;
+  overflow: auto !important;
+  overscroll-behavior: contain !important;
+  scrollbar-width: thin;
+}
+
+[data-harness-mobile-model-choices] {
+  display: grid !important;
+  gap: 8px !important;
+}
+
+[data-harness-mobile-model-provider-group] {
+  display: grid !important;
+  gap: 8px !important;
+}
+
+[data-harness-mobile-model-provider-heading] {
+  margin: 8px 4px 0 !important;
+  color: var(--hm-color-text-secondary, #66726f) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 18px !important;
+}
+
+[data-harness-mobile-model-choice] {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  min-height: 52px !important;
+  padding: 9px 12px !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 24px !important;
+  align-items: center !important;
+  gap: 10px !important;
+  border: 1px solid var(--hm-color-border, #dfe3e8) !important;
+  border-radius: 14px !important;
+  color: inherit !important;
+  background: transparent !important;
+  text-align: left !important;
+  touch-action: manipulation !important;
+}
+
+[data-harness-mobile-model-choice][data-selected="true"] {
+  border-color: color-mix(in srgb, var(--hm-color-primary, #278b81) 58%, var(--hm-color-border, #dfe3e8)) !important;
+  background: color-mix(in srgb, var(--hm-color-primary, #278b81) 9%, transparent) !important;
+}
+
+[data-harness-mobile-model-choice] > span:first-child {
+  min-width: 0 !important;
+  display: grid !important;
+  gap: 2px !important;
+}
+
+[data-harness-mobile-model-choice] strong {
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  font-size: 14px !important;
+  line-height: 19px !important;
+}
+
+[data-harness-mobile-model-choice] small {
+  color: var(--hm-color-text-secondary, #66726f) !important;
+  font-size: 11px !important;
+  line-height: 16px !important;
+}
+
+[data-harness-mobile-model-choice-mark] {
+  color: var(--hm-color-primary, #278b81) !important;
+  text-align: center !important;
+  font-size: 16px !important;
+}
+
+[data-harness-mobile-model-status] {
+  margin: 0 !important;
+  padding: 24px 16px !important;
+  border-radius: 14px !important;
+  color: var(--hm-color-text-secondary, #66726f) !important;
+  background: var(--hm-color-surface-subtle, #f4f6f7) !important;
+  text-align: center !important;
+  line-height: 22px !important;
+}
+
+[data-harness-mobile-model-status="error"] {
+  color: var(--hm-color-danger, #b42318) !important;
+}
+
+:root[data-harness-mobile-model-sheet-open="true"] [data-harness-mobile-model-source-menu="true"] {
+  position: fixed !important;
+  left: -200vw !important;
+  top: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 :root[data-harness-mobile-chat-detail="open"] [data-harness-mobile-composer-action="true"] {
-  width: 54px !important;
-  min-width: 54px !important;
+  width: 44px !important;
+  min-width: 44px !important;
   border-radius: 10px !important;
 }
 
@@ -4801,4 +5359,278 @@
 [data-harness-mobile-document-reference="true"]:focus-visible {
   outline: 2px solid var(--hm-color-primary, #4968e8);
   outline-offset: 2px;
+}
+
+/* Composer stability contract: one sizing owner for long text and IME lift.
+   Keep the mirror and textarea in the same scroll box; toolbar controls never
+   participate in the text area's height calculation. */
+@media (max-width: 700px) {
+  [data-harness-mobile-composer-input="true"] {
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: min(168px, 30dvh) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+    overflow-anchor: none !important;
+  }
+
+  [data-harness-mobile-composer-input="true"] [data-input-backdrop],
+  [data-harness-mobile-composer-input="true"] [data-input-mirror],
+  [data-harness-mobile-composer-input="true"] textarea[data-harness-mobile-composer-textarea="true"] {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 60px !important;
+    height: auto !important;
+    max-height: min(168px, 30dvh) !important;
+    overflow-wrap: anywhere !important;
+    white-space: pre-wrap !important;
+    line-height: 22px !important;
+  }
+
+  [data-harness-mobile-composer-input="true"] [data-input-mirror] {
+    position: relative !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+
+  [data-harness-mobile-composer-input="true"] textarea[data-harness-mobile-composer-textarea="true"] {
+    position: absolute !important;
+    inset: 0 !important;
+    resize: none !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  [data-harness-mobile-composer-toolbar="true"] {
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+    flex: 0 0 44px !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: center !important;
+    overflow: visible !important;
+  }
+
+  [data-harness-mobile-composer-toolbar-left="true"],
+  [data-harness-mobile-composer-toolbar-trailing="true"] {
+    min-width: 0 !important;
+    flex-wrap: nowrap !important;
+    overflow: visible !important;
+  }
+
+  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-composer-input="true"] {
+    max-height: min(120px, 26dvh) !important;
+  }
+
+  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-composer-input="true"] textarea[data-harness-mobile-composer-textarea="true"] {
+    max-height: min(120px, 26dvh) !important;
+    scroll-padding-block: 12px 24px !important;
+  }
+
+  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-conversation="true"] > [data-conversation-scroll] {
+    scroll-padding-bottom: calc(196px + var(--harness-mobile-ime-overlay, 0px)) !important;
+  }
+}
+
+/* Accessibility hit-target contract. The outer interactive box owns 48 CSS px;
+   compact glyphs and labels remain visually small inside it. State selectors
+   only change paint, never width, height, padding or margins. */
+@media (max-width: 700px) {
+  [data-harness-mobile-appbar="true"] > button,
+  [data-harness-mobile-navigation] > button,
+  [data-harness-mobile-conversation-search-proxy],
+  [data-harness-mobile-conversation-search-box] > button,
+  [data-harness-mobile-project-details],
+  [data-harness-mobile-my-surface] button,
+  [data-harness-mobile-session-row="true"],
+  [data-harness-mobile-settings-category="true"],
+  [data-harness-mobile-settings-toolbar="true"] > button,
+  [data-harness-mobile-task-hub-head] > button,
+  [data-harness-mobile-project-task-toggle],
+  [data-harness-mobile-agent-detail-toggle],
+  [data-harness-mobile-switch-context],
+  [data-harness-mobile-subagents="true"],
+  [data-harness-mobile-session-log="true"],
+  [data-harness-mobile-permission-trigger="true"],
+  [data-harness-mobile-composer-action="true"],
+  #harness-mobile-input-button,
+  #harness-mobile-model-button,
+  [data-harness-mobile-model-close],
+  [data-harness-mobile-model-tab],
+  [data-harness-mobile-document-reference="true"] {
+    box-sizing: border-box !important;
+    min-width: 48px !important;
+    min-height: 48px !important;
+  }
+
+  [data-harness-mobile-session-log="true"],
+  [data-harness-mobile-settings-toolbar="true"] > button,
+  [data-harness-mobile-composer-action="true"],
+  #harness-mobile-input-button,
+  [data-harness-mobile-model-close] {
+    width: 48px !important;
+    height: 48px !important;
+  }
+
+  html[data-harness-mobile="true"]:root [data-harness-mobile-composer-action="true"] {
+    width: 48px !important;
+    min-width: 48px !important;
+    height: 48px !important;
+    min-height: 48px !important;
+  }
+
+  [data-harness-mobile-appbar="true"] > button[data-harness-mobile-icon="brand"] {
+    width: 48px !important;
+    min-width: 48px !important;
+    height: 48px !important;
+    min-height: 48px !important;
+    margin: 0 !important;
+    padding: 7px !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  [data-harness-mobile-appbar="true"] > button[data-harness-mobile-icon="brand"] svg {
+    box-sizing: border-box !important;
+    width: 34px !important;
+    height: 34px !important;
+    padding: 5px !important;
+    border-radius: 12px !important;
+    color: #fff !important;
+    background: var(--hm-color-primary) !important;
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--hm-color-primary) 24%, transparent) !important;
+  }
+
+  [data-harness-mobile-composer-toolbar="true"] {
+    min-height: 48px !important;
+    flex-basis: 48px !important;
+  }
+
+  [data-harness-mobile-model-choice] {
+    min-height: 52px !important;
+  }
+}
+
+/* Keep the drawer summary in the shell flow so its action cannot detach from
+   the heading or cover counts while the index is being restored. */
+:root[data-harness-mobile-drawer="open"] [data-harness-mobile-conversation-list-title] {
+  box-sizing: border-box !important;
+  position: static !important;
+  inset: auto !important;
+  z-index: auto !important;
+  width: auto !important;
+  /* Search occupies appbar + 14px..60px; start below it with an 8px gap. */
+  margin: calc(var(--harness-mobile-appbar-height) + 14px + 46px + 8px) var(--harness-mobile-page-gutter) 8px !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) !important;
+  align-items: start !important;
+  gap: 8px !important;
+  pointer-events: none !important;
+}
+
+:root[data-harness-mobile-drawer="open"] [class*="_sidebarCol"] [data-slot="sidebar"] > div:not([class*="_collapsed"]) {
+  /* Reserve one compact gap after the flowing summary before drawer rows. */
+  padding-top: 48px !important;
+}
+
+[data-harness-mobile-conversation-list-title] > div {
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
+[data-harness-mobile-conversation-list-title] strong,
+[data-harness-mobile-conversation-list-title] span {
+  max-width: 100% !important;
+  overflow-wrap: anywhere !important;
+  white-space: normal !important;
+}
+
+[data-harness-mobile-conversation-list-title] [data-harness-mobile-project-details] {
+  box-sizing: border-box !important;
+  min-width: 0 !important;
+  max-width: min(40vw, 132px) !important;
+  margin-left: 0 !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+/* Presentation root isolation: settings owns the phone viewport; the desktop
+   workbench leaves both layout and the accessibility tree while it is hidden. */
+html[data-harness-mobile="true"] [data-harness-mobile-presentation-surface="true"][hidden] {
+  display: none !important;
+}
+
+/* The textarea is the sole visible text layer. Decoration layers are retained
+   only for official measurement hooks and can never paint or receive input. */
+@media (max-width: 700px) {
+  [data-harness-mobile-composer-input="true"] {
+    isolation: isolate !important;
+  }
+  [data-harness-mobile-composer-decoration="true"] {
+    z-index: 0 !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    -webkit-text-fill-color: transparent !important;
+    user-select: none !important;
+  }
+  textarea[data-harness-mobile-composer-textarea="true"] {
+    z-index: 2 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    color: var(--hm-color-text, #172133) !important;
+    -webkit-text-fill-color: var(--hm-color-text, #172133) !important;
+    background: transparent !important;
+    text-shadow: none !important;
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    caret-color: var(--hm-color-primary, #4968e8) !important;
+  }
+}
+
+/* A dedicated mobile-owned presentation root prevents desktop workspace titles
+   from painting or remaining accessible through the settings layer. */
+html[data-harness-mobile="true"] #harness-mobile-presentation-root {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 1050 !important;
+  pointer-events: none !important;
+  contain: layout paint style !important;
+}
+
+html[data-harness-mobile="true"] #harness-mobile-presentation-root > #harness-mobile-app-shell {
+  pointer-events: none !important;
+}
+
+@media (max-width: 700px) {
+  html[data-harness-mobile="true"] [data-phase="active"] [data-harness-mobile-composer="orbit"] {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(60px, auto) 48px !important;
+    align-content: end !important;
+  }
+
+  [data-harness-mobile-composer-attachments="true"] {
+    grid-row: 1 !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    max-height: 96px !important;
+    overflow: auto hidden !important;
+    overscroll-behavior-inline: contain !important;
+  }
+
+  [data-harness-mobile-composer-input="true"] {
+    grid-row: 2 !important;
+    overflow: hidden !important;
+  }
+
+  [data-harness-mobile-composer-toolbar="true"] {
+    grid-row: 3 !important;
+    align-self: end !important;
+  }
 }

@@ -209,7 +209,10 @@ final class NativeP2pClient implements AutoCloseable {
                     .createInitializationOptions()
             );
         }
-        factory = PeerConnectionFactory.builder().createPeerConnectionFactory();
+        // The factory is process-local infrastructure, not authenticated session
+        // state. Reuse it across weak-network reconnects; peer/data channels and
+        // every room/session codec are still rebuilt below for each generation.
+        if (factory == null) factory = PeerConnectionFactory.builder().createPeerConnectionFactory();
     }
 
     private void handleControl(long activeGeneration, String text) {
@@ -399,14 +402,10 @@ final class NativeP2pClient implements AutoCloseable {
                         try {
                             sendSignal(new JSONObject().put("kind", "answer").put("mobileNonce", mobileNonce)
                                 .put("description", new JSONObject().put("type", "answer").put("sdp", answer.description)));
-                            closeStreamsForPath(StreamPath.RELAY);
-                            sessionReady = true;
+                            // The answer authenticates a candidate session, but WSS
+                            // stays authoritative until the DataChannel is actually open.
                             openSocksServer(activeGeneration);
-                            DataChannel active = dataChannel;
-                            if (active != null && active.state() == DataChannel.State.OPEN) {
-                                directUsable = true;
-                                reportDirectReady(activeGeneration);
-                            }
+                            promoteDirectIfValidated(activeGeneration);
                         } catch (Exception error) {
                             fail(activeGeneration, error);
                         }
@@ -477,19 +476,27 @@ final class NativeP2pClient implements AutoCloseable {
         channel.registerObserver(new DataChannel.Observer() {
             @Override public void onBufferedAmountChange(long previousAmount) {}
             @Override public void onStateChange() {
-                if (channel.state() == DataChannel.State.OPEN && sessionReady) {
-                    directUsable = true;
-                    reportDirectReady(activeGeneration);
+                if (channel.state() == DataChannel.State.OPEN) {
+                    promoteDirectIfValidated(activeGeneration);
                 } else if (channel.state() == DataChannel.State.CLOSED) {
                     disableDirect(activeGeneration, "P2P DataChannel 已关闭，继续使用 WSS/443");
                 }
             }
             @Override public void onMessage(DataChannel.Buffer buffer) { handleDirectPacket(activeGeneration, buffer); }
         });
-        if (channel.state() == DataChannel.State.OPEN && sessionReady) {
-            directUsable = true;
-            reportDirectReady(activeGeneration);
-        }
+        promoteDirectIfValidated(activeGeneration);
+    }
+
+    private synchronized void promoteDirectIfValidated(long activeGeneration) {
+        DataChannel active = dataChannel;
+        if (generation != activeGeneration || stopping || sessionCodec == null || active == null
+            || active.state() != DataChannel.State.OPEN || sessionReady) return;
+        // Only now is the candidate path validated. Retire v1 relay streams after
+        // this point; the WSS control socket remains available as the v2 fallback.
+        closeStreamsForPath(StreamPath.RELAY);
+        sessionReady = true;
+        directUsable = true;
+        reportDirectReady(activeGeneration);
     }
 
     private synchronized void openSocksServer(long activeGeneration) throws IOException {
@@ -737,8 +744,6 @@ final class NativeP2pClient implements AutoCloseable {
         dataChannel = null;
         if (peerConnection != null) { peerConnection.close(); peerConnection.dispose(); }
         peerConnection = null;
-        if (factory != null) factory.dispose();
-        factory = null;
         roomCodec = null;
         sessionCodec = null;
         config = null;
@@ -769,6 +774,8 @@ final class NativeP2pClient implements AutoCloseable {
 
     @Override public synchronized void close() {
         stop();
+        if (factory != null) factory.dispose();
+        factory = null;
         acceptor.shutdownNow();
         workers.shutdownNow();
         timer.shutdownNow();

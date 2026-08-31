@@ -91,6 +91,7 @@ const modelRoutingMeters = document.querySelector('#modelRoutingMeters')
 const modelRoutingStatus = document.querySelector('#modelRoutingStatus')
 const modelRoutingSave = document.querySelector('#modelRoutingSave')
 const mobileSyncOverlay = document.querySelector('#mobileSyncOverlay')
+const mobileSyncQuickButton = document.querySelector('#mobileSyncQuickButton')
 const closeMobileSyncButton = document.querySelector('#closeMobileSync')
 const mobileSyncToggle = document.querySelector('#mobileSyncToggle')
 const mobileSyncHeadline = document.querySelector('#mobileSyncHeadline')
@@ -1094,6 +1095,12 @@ function renderMobileSync(next = mobileSyncState) {
   mobileSyncState = { ...mobileSyncState, ...(next || {}) }
   const running = mobileSyncState.enabled && mobileSyncState.running
   const remote = mobileSyncState.remote || {}
+  const connected = running && ((Array.isArray(mobileSyncState.devices) && mobileSyncState.devices.length > 0) || remote.status === 'connected')
+  if (mobileSyncQuickButton) {
+    mobileSyncQuickButton.dataset.state = connected ? 'connected' : running ? 'waiting' : 'off'
+    mobileSyncQuickButton.title = connected ? '手机与远程同步：已连接' : running ? '手机与远程同步：等待手机连接' : '手机与远程同步：未开启'
+    mobileSyncQuickButton.setAttribute('aria-label', mobileSyncQuickButton.title)
+  }
   mobileSyncHeadline.textContent = running ? '手机同步已开启' : '手机同步未开启'
   mobileSyncDetail.textContent = running
     ? mobileSyncState.targetReady ? '电脑工作台已就绪，已配对手机会自动连接。' : '同步服务已开启，正在等待电脑工作台就绪。'
@@ -1528,21 +1535,19 @@ function officialSettingsBootstrap() {
     .hd-update-progress-detail { margin:0; color:var(--dsw-alias-label-secondary,#667085); font-size:10px; line-height:1.45; overflow-wrap:anywhere; }
     @media (max-width:640px) { #harness-desktop-version-button { right:5px; bottom:1px; } #harness-desktop-update-center { padding:10px; } .hd-update-center-dialog { width:100%; max-height:100%; border-radius:14px; } .hd-update-center-head, .hd-update-center-toolbar, .hd-update-items { padding-left:14px; padding-right:14px; } .hd-update-item-head { flex-direction:column; } .hd-update-item-badges { justify-content:flex-start; } }
     @media (prefers-reduced-motion:reduce) { #harness-desktop-version-button, #harness-desktop-update-center { transition:none; } }
-    [data-hd-mobile-entry-host="true"] { align-items:center; gap:4px; min-width:0; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] { display:grid!important; grid-template-columns:minmax(0,1fr) 42px; justify-content:stretch!important; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] > button:not(#harness-desktop-mobile-sync-entry) { grid-column:1; grid-row:1; width:100%!important; min-width:0; margin-left:0; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="false"] > #harness-desktop-mobile-sync-entry { grid-column:2; grid-row:1; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="true"] { display:flex!important; flex-direction:column!important; gap:0; }
-    #harness-desktop-mobile-sync-entry { position:relative; box-sizing:border-box; display:inline-flex; flex:none; align-items:center; justify-content:center; width:42px!important; min-width:42px; height:42px!important; min-height:42px; margin:4px 0 4px 4px!important; border:0; border-radius:12px!important; padding:0!important; color:var(--dsw-alias-label-secondary,#667085); background:transparent; font:inherit; cursor:pointer; }
+    #harness-desktop-mobile-sync-entry { position:fixed; z-index:18; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:flex-start; gap:8px; width:112px!important; min-width:112px; height:42px!important; min-height:42px; margin:0!important; border:0; border-radius:12px!important; padding:0 12px!important; color:var(--dsw-alias-label-secondary,#667085); background:transparent; font:inherit; font-size:13px; font-weight:500; white-space:nowrap; cursor:pointer; pointer-events:auto; touch-action:manipulation; app-region:no-drag; -webkit-app-region:no-drag; }
+    #harness-desktop-mobile-sync-entry[hidden] { display:none!important; }
     #harness-desktop-mobile-sync-entry:hover { color:var(--dsw-alias-label-primary,#20242b); background:var(--dsw-alias-interactive-bg-hover,#eef1f5); }
     #harness-desktop-mobile-sync-entry:focus-visible { outline:2px solid var(--dsw-alias-brand-primary,#315efb); outline-offset:2px; }
-    #harness-desktop-mobile-sync-entry svg { width:18px; height:18px; flex:none; }
-    #harness-desktop-mobile-sync-entry .hd-mobile-entry-dot { position:absolute; right:7px; top:7px; box-sizing:border-box; width:7px; height:7px; border:2px solid var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-layer-1,#fff)); border-radius:50%; background:var(--dsw-alias-label-tertiary,#98a2b3); }
+    #harness-desktop-mobile-sync-entry svg { width:18px; height:18px; flex:none; pointer-events:none; }
+    #harness-desktop-mobile-sync-entry .hd-mobile-entry-label { overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
+    #harness-desktop-mobile-sync-entry .hd-mobile-entry-dot { position:absolute; right:7px; top:7px; box-sizing:border-box; width:7px; height:7px; border:2px solid var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-layer-1,#fff)); border-radius:50%; background:var(--dsw-alias-label-tertiary,#98a2b3); pointer-events:none; }
     #harness-desktop-mobile-sync-entry[data-state="waiting"] .hd-mobile-entry-dot { background:#e98a15; }
     #harness-desktop-mobile-sync-entry[data-state="connected"] .hd-mobile-entry-dot { background:#16a36a; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="true"] #harness-desktop-mobile-sync-entry { width:36px!important; min-width:36px; height:36px!important; min-height:36px; margin:0!important; border-radius:50%!important; }
-    [data-hd-mobile-entry-host="true"][data-hd-mobile-compact="true"] #harness-desktop-mobile-sync-entry .hd-mobile-entry-dot { right:4px; top:4px; }
-    #harness-desktop-mobile-sync-tooltip { position:fixed; z-index:9997; box-sizing:border-box; width:max-content; max-width:min(260px,calc(100vw - 20px)); border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:10px; padding:9px 11px; color:var(--dsw-alias-label-primary,#20242b); background:var(--dsw-alias-bg-layer-1,#fff); box-shadow:0 10px 28px rgba(0,0,0,.2); pointer-events:none; }
+    #harness-desktop-mobile-sync-entry[data-hd-mobile-compact="true"] { justify-content:center; gap:0; width:36px!important; min-width:36px; height:36px!important; min-height:36px; border-radius:50%!important; padding:0!important; }
+    #harness-desktop-mobile-sync-entry[data-hd-mobile-compact="true"] .hd-mobile-entry-label { display:none; }
+    #harness-desktop-mobile-sync-entry[data-hd-mobile-compact="true"] .hd-mobile-entry-dot { right:4px; top:4px; }
+    #harness-desktop-mobile-sync-tooltip { position:fixed; z-index:19; box-sizing:border-box; width:max-content; max-width:min(260px,calc(100vw - 20px)); border:1px solid var(--dsw-alias-border-l2,#d5d9df); border-radius:10px; padding:9px 11px; color:var(--dsw-alias-label-primary,#20242b); background:var(--dsw-alias-bg-layer-1,#fff); box-shadow:0 10px 28px rgba(0,0,0,.2); pointer-events:none; }
     #harness-desktop-mobile-sync-tooltip[hidden] { display:none; }
     #harness-desktop-mobile-sync-tooltip strong, #harness-desktop-mobile-sync-tooltip span { display:block; }
     #harness-desktop-mobile-sync-tooltip strong { font-size:12px; font-weight:600; line-height:18px; }
@@ -2256,22 +2261,47 @@ function officialSettingsBootstrap() {
   }
 
   const mobileEntryCompactForWidth = (width, settingsLabelVisible = false) => !settingsLabelVisible && Number.isFinite(width) && width > 0 && width <= 72
-  let mobileEntryLayoutWidth = 0
-  const syncMobileEntryLayout = (host, settingsTrigger = null, observedWidth) => {
-    const width = Number.isFinite(observedWidth)
-      ? observedWidth
-      : typeof host?.getBoundingClientRect === 'function' ? host.getBoundingClientRect().width : 0
-    mobileEntryLayoutWidth = width
-    const settingsLabelVisible = Boolean(settingsTrigger?.textContent?.trim())
-    if (width <= 0 && !settingsLabelVisible) return
-    const compact = String(mobileEntryCompactForWidth(width, settingsLabelVisible))
-    if (host.dataset.hdMobileCompact !== compact) host.dataset.hdMobileCompact = compact
+  const mobileEntryPortalPlacement = (hostRect, triggerRect, viewportWidth, settingsLabelVisible = false) => {
+    const hostWidth = Number(hostRect?.width) || 0
+    const compact = mobileEntryCompactForWidth(hostWidth, settingsLabelVisible)
+    const size = compact ? 36 : 112
+    const controlHeight = compact ? 36 : 42
+    const safeViewportWidth = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : Number(hostRect?.right) || size + 8
+    const preferredLeft = compact
+      ? (Number(hostRect?.left) || 0) + Math.max(0, (hostWidth - size) / 2)
+      : (Number(hostRect?.right) || size) - size
+    const left = Math.max(8, Math.min(safeViewportWidth - size - 8, Math.round(preferredLeft)))
+    const triggerTop = Number(triggerRect?.top) || 0
+    const triggerHeight = Number(triggerRect?.height) || controlHeight
+    const top = Math.max(8, Math.round(triggerTop + (triggerHeight - controlHeight) / 2))
+    return { compact, left, top, size }
   }
+  let mobileEntryLayoutWidth = 0
   let mobileEntryLayoutHost = null
   let mobileEntryLayoutTrigger = null
   let mobileEntryResizeObserver = null
+  const syncMobileEntryLayout = (host = mobileEntryLayoutHost, settingsTrigger = mobileEntryLayoutTrigger, observedWidth) => {
+    const entry = document.querySelector('#harness-desktop-mobile-sync-entry')
+    if (!entry || !host || !settingsTrigger || typeof host.getBoundingClientRect !== 'function' || typeof settingsTrigger.getBoundingClientRect !== 'function') return
+    const hostRect = host.getBoundingClientRect()
+    const triggerRect = settingsTrigger.getBoundingClientRect()
+    const width = Number.isFinite(observedWidth) ? observedWidth : hostRect.width
+    mobileEntryLayoutWidth = width
+    if (width <= 0 || triggerRect.width <= 0 || triggerRect.height <= 0) {
+      entry.hidden = true
+      return
+    }
+    const placement = mobileEntryPortalPlacement({ left: hostRect.left, right: hostRect.right, width }, triggerRect, window.innerWidth, Boolean(settingsTrigger.textContent?.trim()))
+    entry.dataset.hdMobileCompact = String(placement.compact)
+    entry.style.left = `${placement.left}px`
+    entry.style.top = `${placement.top}px`
+    entry.hidden = false
+  }
   const watchMobileEntryLayout = (host, settingsTrigger) => {
-    if (mobileEntryLayoutHost === host && mobileEntryLayoutTrigger === settingsTrigger) return
+    if (mobileEntryLayoutHost === host && mobileEntryLayoutTrigger === settingsTrigger) {
+      syncMobileEntryLayout(host, settingsTrigger)
+      return
+    }
     mobileEntryResizeObserver?.disconnect()
     mobileEntryLayoutHost = host
     mobileEntryLayoutTrigger = settingsTrigger
@@ -2287,30 +2317,30 @@ function officialSettingsBootstrap() {
     mobileEntryResizeObserver?.observe(settingsTrigger)
     syncMobileEntryLayout(host, settingsTrigger)
   }
-  const activateMobileEntry = (event, open = request) => {
+  window.addEventListener('resize', () => syncMobileEntryLayout())
+  document.addEventListener('scroll', () => syncMobileEntryLayout(), true)
+  const activateMobileEntry = (event, open = openMobileSync) => {
     event?.preventDefault?.()
+    event?.stopImmediatePropagation?.()
     event?.stopPropagation?.()
-    open('open-mobile-sync')
+    const tooltip = document.querySelector('#harness-desktop-mobile-sync-tooltip')
+    if (tooltip) tooltip.hidden = true
+    open()
   }
 
   const mountMobileEntry = () => {
     document.querySelector('#harness-desktop-mobile-sync-row')?.remove()
-    const settingsTrigger = findSettingsTrigger()
-    const host = settingsTrigger?.parentElement
-    if (!settingsTrigger || !host || typeof document.body?.append !== 'function') {
-      paintMobile()
-      return
-    }
+    if (typeof document.body?.append !== 'function') return
     let entry = document.querySelector('#harness-desktop-mobile-sync-entry')
     if (!entry) {
       entry = document.createElement('button')
       entry.id = 'harness-desktop-mobile-sync-entry'
       entry.type = 'button'
       entry.setAttribute('aria-haspopup', 'dialog')
+      entry.setAttribute('aria-controls', 'mobileSyncOverlay')
       entry.setAttribute('aria-describedby', 'harness-desktop-mobile-sync-tooltip')
-      entry.innerHTML = '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="5" y="2.5" width="10" height="15" rx="2.2" stroke="currentColor" stroke-width="1.45"/><path d="M8.2 5.1h3.6M9.2 14.9h1.6" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/></svg><span class="hd-mobile-entry-dot" aria-hidden="true"></span>'
-      entry.addEventListener('pointerdown', event => event.stopPropagation())
-      entry.addEventListener('click', activateMobileEntry)
+      entry.innerHTML = '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="5" y="2.5" width="10" height="15" rx="2.2" stroke="currentColor" stroke-width="1.45"/><path d="M8.2 5.1h3.6M9.2 14.9h1.6" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/></svg><span class="hd-mobile-entry-label">手机同步</span><span class="hd-mobile-entry-dot" aria-hidden="true"></span>'
+      entry.addEventListener('click', activateMobileEntry, true)
       const showTooltip = () => {
         const tooltip = document.querySelector('#harness-desktop-mobile-sync-tooltip')
         if (!tooltip || typeof entry.getBoundingClientRect !== 'function') return
@@ -2330,6 +2360,7 @@ function officialSettingsBootstrap() {
       entry.addEventListener('focus', showTooltip)
       entry.addEventListener('blur', hideTooltip)
     }
+    if (entry.parentElement !== document.body) document.body.append(entry)
     let tooltip = document.querySelector('#harness-desktop-mobile-sync-tooltip')
     if (!tooltip) {
       tooltip = document.createElement('div')
@@ -2339,13 +2370,18 @@ function officialSettingsBootstrap() {
       tooltip.innerHTML = '<strong>手机与远程同步</strong><span data-hd-mobile-entry-status>正在检查连接状态…</span>'
       document.body.append(tooltip)
     }
-    const previousHost = entry.parentElement
-    if (previousHost && previousHost !== host) {
-      delete previousHost.dataset.hdMobileEntryHost
-      delete previousHost.dataset.hdMobileCompact
+    const settingsTrigger = findSettingsTrigger()
+    const host = settingsTrigger?.parentElement
+    if (!settingsTrigger || !host) {
+      entry.dataset.hdMobileCompact = 'false'
+      entry.style.left = '104px'
+      entry.style.top = 'auto'
+      entry.style.bottom = '10px'
+      entry.hidden = false
+      paintMobile()
+      return
     }
-    if (entry.parentElement !== host || entry.nextSibling !== settingsTrigger) host.insertBefore(entry, settingsTrigger)
-    host.dataset.hdMobileEntryHost = 'true'
+    entry.style.bottom = ''
     watchMobileEntryLayout(host, settingsTrigger)
     paintMobile()
   }
@@ -2907,7 +2943,7 @@ async function installUpdate({ kind = '', id = '' } = {}) {
 }
 
 runtimeView.addEventListener('dom-ready', async () => {
-  await runtimeView.executeJavaScript(`(${officialSettingsBootstrap.toString()})()`, true).catch(() => {})
+  await runtimeView.executeJavaScript(`(${officialSettingsBootstrap.toString()})()`, true).catch(error => console.error('Unable to inject official settings enhancements:', error))
   await runtimeView.executeJavaScript(`(${officialSubagentEnhancementsBootstrap.toString()})()`, true).catch(() => {})
   await themeIntegration.install(runtimeView).catch(() => {})
   await modelRoutingIntegration.install(runtimeView).catch(() => {})
@@ -3143,6 +3179,7 @@ skinLowPerformance.addEventListener('change', async () => {
   await publishAppearanceState()
   renderUiModePicker()
 })
+mobileSyncQuickButton?.addEventListener('click', openMobileSync)
 closeMobileSyncButton.addEventListener('click', closeMobileSync)
 mobileSyncOverlay.addEventListener('click', event => {
   if (event.target === mobileSyncOverlay) closeMobileSync()

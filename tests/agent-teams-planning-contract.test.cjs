@@ -83,9 +83,10 @@ test('v4 migration preserves empty and active teams while adding conservative pl
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
 
-    assert.equal(migrated.version, 6)
+    assert.equal(migrated.version, 7)
     assert.deepEqual(migrated.teams.map(team => team.id), ['empty', 'active'])
-    assert.deepEqual(migrated.teams[1].tasks.map(task => [task.id, task.state]), originalTasks.map(task => [task.id, task.state]))
+    assert.deepEqual(migrated.teams[1].tasks.map(task => [task.id, task.state]), [['pending', 'pending'], ['running', 'in_progress'], ['done', 'submitted'], ['cancelled', 'cancelled']])
+    assert.equal(migrated.teams[1].tasks[2].lifecycleLedger.some(event => event.kind === 'submission'), true)
     for (const team of migrated.teams) {
       assert.equal(team.pauseEpoch, 0)
       assert.equal(team.plan.revision, 1)
@@ -215,8 +216,11 @@ test('claim and lease fencing reject stale worker completion while current token
       mod.updateTask(store, worker, { teamId: team.id, taskId: created.task.id, action: 'complete', claimId: claimed.claimId, leaseEpoch: claimed.leaseEpoch + 1 }),
       error => error?.code === 'AGENT_TEAMS_STALE_LEASE'
     )
-    const completed = (await mod.updateTask(store, worker, { teamId: team.id, taskId: created.task.id, action: 'complete', claimId: claimed.claimId, leaseEpoch: claimed.leaseEpoch })).task
-    assert.equal(completed.state, 'completed')
+    const submitted = (await mod.updateTask(store, worker, { teamId: team.id, taskId: created.task.id, action: 'complete', claimId: claimed.claimId, leaseEpoch: claimed.leaseEpoch })).task
+    assert.equal(submitted.state, 'submitted')
+    assert.equal(submitted.acceptance, undefined)
+    const accepted = (await mod.updateTask(store, lead, { teamId: team.id, taskId: created.task.id, action: 'accept' })).task
+    assert.equal(accepted.state, 'completed')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -396,6 +400,7 @@ test('ordinary internal plans default to human-attested authorization without re
     await mod.updateTask(store, lead, { teamId: team.id, taskId: created.task.id, action: 'release', claimId: claimed.task.claimId, leaseEpoch: claimed.task.leaseEpoch })
     const reassigned = await mod.updateTask(store, lead, { teamId: team.id, taskId: created.task.id, action: 'claim' })
     await mod.updateTask(store, lead, { teamId: team.id, taskId: created.task.id, action: 'complete', claimId: reassigned.task.claimId, leaseEpoch: reassigned.task.leaseEpoch })
+    await mod.updateTask(store, lead, { teamId: team.id, taskId: created.task.id, action: 'accept' })
     await mod.updateTask(store, lead, { teamId: team.id, taskId: created.task.id, action: 'reopen' })
     assert.deepEqual(clonePlanIdentity(store.snapshot().teams[0].plan), activePlanIdentity, 'release/reassign/complete/reopen recovery must keep the plan active without recommit')
     const source = await readFile(pluginFile, 'utf8')
@@ -776,6 +781,7 @@ test('accepted completed tasks retain the accepting owner epoch across same-proj
     })
     const claim = (await mod.updateTask(store, sourceLead, { teamId: team.id, taskId: created.task.id, action: 'claim' })).task
     await mod.updateTask(store, sourceLead, { teamId: team.id, taskId: created.task.id, action: 'complete', claimId: claim.claimId, leaseEpoch: claim.leaseEpoch })
+    await mod.updateTask(store, sourceLead, { teamId: team.id, taskId: created.task.id, action: 'accept' })
     const acceptedBefore = structuredClone(store.snapshot().teams[0].tasks[0].acceptance)
     assert.equal(acceptedBefore.acceptedBy, sourceLead.id)
     assert.equal(acceptedBefore.ownerEpoch, 0)

@@ -57,6 +57,7 @@ class SyncTransportManager extends EventEmitter {
 
   state() {
     const saved = this.store.get()
+    const sync = this.store.readSyncChanges?.() || null
     return {
       enabled: saved.remoteEnabled,
       preference: saved.transportPreference,
@@ -65,6 +66,13 @@ class SyncTransportManager extends EventEmitter {
       startedAt: this.startedAt ? new Date(this.startedAt).toISOString() : null,
       error: this.error,
       reconnectAt: this.reconnectAt ? new Date(this.reconnectAt).toISOString() : null,
+      recovery: sync ? {
+        schemaVersion: sync.schemaVersion,
+        snapshotEpoch: sync.snapshotEpoch,
+        revision: sync.revision,
+        cursor: sync.cursor,
+        complete: sync.complete
+      } : null,
       adapters: this.orderedAdapterIds().map(id => {
         const adapter = this.adapters.get(id)
         return adapter?.state?.() || { id, available: false, status: 'unavailable', detail: '组件尚未准备' }

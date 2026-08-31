@@ -10,6 +10,7 @@ import android.provider.Settings;
 import android.view.View;
 import android.widget.Button;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
@@ -55,6 +56,11 @@ public final class HarnessCaptureActivity extends AppCompatActivity {
         backButton.setOnClickListener(view -> cancelAndFinish());
         retryButton.setOnClickListener(view -> requestCameraPermission());
         settingsButton.setOnClickListener(view -> openAppSettings());
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() {
+                cancelAndFinish();
+            }
+        });
 
         if (hasCameraPermission()) startScanner();
         else requestCameraPermission();
@@ -71,12 +77,6 @@ public final class HarnessCaptureActivity extends AppCompatActivity {
         if (barcodeView != null && scannerRunning) barcodeView.pause();
         scannerRunning = false;
         super.onPause();
-    }
-
-    @Override
-    public void onBackPressed() {
-        setResult(Activity.RESULT_CANCELED);
-        super.onBackPressed();
     }
 
     private boolean hasCameraPermission() {

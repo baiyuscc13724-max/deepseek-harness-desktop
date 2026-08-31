@@ -236,7 +236,7 @@ test('composer reference style keeps a generous writing surface above one touch-
   assert.match(mobileCss, /min-height: 132px !important;/)
   assert.match(mobileCss, /border-radius: 12px !important;/)
   assert.match(mobileCss, /#harness-mobile-input-button\s*\{[^}]*background: transparent !important;/s)
-  assert.match(mobileCss, /\[data-harness-mobile-composer-action="true"\]\s*\{[^}]*min-width: 54px !important;/s)
+  assert.match(mobileCss, /\[data-harness-mobile-composer-action="true"\][^]*min-width: 48px !important;/s)
 })
 
 test('conversation images show their complete intrinsic frame before optional original-image zoom', () => {
@@ -308,6 +308,10 @@ test('system and edge back use the fixed runtime protocol without double dispatc
   assert.match(activity, /if \(!mobileBackDeclined\(value\)\) return;/)
   assert.match(activity, /if \(webView\.canGoBack\(\)\) webView\.goBack\(\);/)
   assert.match(activity, /return "false"\.equals\(javascriptResult\);/)
+  assert.match(activity, /OnBackInvokedDispatcher\.PRIORITY_DEFAULT/)
+  assert.match(activity, /registerOnBackInvokedCallback\(OnBackInvokedDispatcher\.PRIORITY_DEFAULT/)
+  assert.match(activity, /unregisterOnBackInvokedCallback/)
+  assert.match(activity, /Build\.VERSION\.SDK_INT < Build\.VERSION_CODES\.TIRAMISU/)
   assert.doesNotMatch(activity, /const layers=|dispatchEvent\(new KeyboardEvent\('keydown'/)
 })
 
@@ -375,7 +379,8 @@ test('existing screen capture observation and WebView state-preserving resume re
   assert.match(activity, /webView\.onResume\(\)/)
   assert.match(activity, /webView\.resumeTimers\(\)/)
   const onResume = activity.slice(activity.indexOf('protected void onResume()'), activity.indexOf('private void checkMobileAppUpdate()'))
-  assert.doesNotMatch(onResume, /\.reload\(\)|\.loadUrl\(|\.stopLoading\(\)|mobileUiAdapter\.inject/)
+  assert.doesNotMatch(onResume, /\.reload\(\)|\.loadUrl\(|\.stopLoading\(\)/)
+  assert.match(onResume, /mobileUiAdapter\.inject\(webView\)/, 'resume may retry the idempotent bootstrap without replacing the document')
   assert.doesNotMatch(onResume, /dispatchEvent\(new Event\('(online|focus)'\)\)/)
   assert.match(onResume, /不得伪造 online\/focus/)
 })

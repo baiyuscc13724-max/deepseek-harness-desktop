@@ -34,6 +34,7 @@ const { ensureModelAdmissionPlugin } = require('./bridge/model-admission-plugin-
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
 const { createAgentTeamsAuthorizationService, startAgentTeamsAuthorizationService } = require('./bridge/agent-teams-authorization-service.cjs')
 const { createAgentTeamsSecretService, startAgentTeamsSecretService } = require('./bridge/agent-teams-secret-service.cjs')
+const { createAgentTeamsSessionLaunchService, startAgentTeamsSessionLaunchService } = require('./bridge/agent-teams-session-launch-service.cjs')
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
 const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
 const { SCREENSHOT_COORDINATE_SPACE, mapComputerUseScreenshotPoint } = require('./bridge/computer-use-coordinate-space.cjs')
@@ -140,6 +141,7 @@ let terminalManager = null
 let gitRuntimeService = null
 let agentTeamsAuthorizationService = null
 let agentTeamsSecretService = null
+let agentTeamsSessionLaunchService = null
 let gitPreparationPromise = null
 const CACHE_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000
 let cacheMaintenanceTimer = null
@@ -2576,6 +2578,19 @@ async function ensureAgentTeamsAuthorizationService() {
   return service
 }
 
+async function ensureAgentTeamsSessionLaunchService() {
+  if (agentTeamsSessionLaunchService) return agentTeamsSessionLaunchService
+  const service = await startAgentTeamsSessionLaunchService({
+    createService: () => createAgentTeamsSessionLaunchService({
+      stateFile: path.join(app.getPath('userData'), 'agent-teams-session-launch.json'),
+      callRuntimeRpc,
+      inspectRuntimePrompt
+    })
+  })
+  if (service) agentTeamsSessionLaunchService = service
+  return service
+}
+
 function ensureMobileSyncService() {
   if (mobileSyncService) return mobileSyncService
   const userData = app.getPath('userData')
@@ -3662,6 +3677,9 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
     const secretService = await ensureAgentTeamsSecretService()
     const authorizationService = await ensureAgentTeamsAuthorizationService()
     const runtimePaths = desktopRuntimePaths()
+    // This capability endpoint must exist before Runtime starts, but it defers
+    // every Runtime RPC until a launch/reconcile request arrives after ready.
+    const sessionLaunchService = await ensureAgentTeamsSessionLaunchService()
     const runtimeEnv = ensureGitRuntimeService().runtimeEnvironment({
       ...process.env,
       ...runtimeProxyEnv,
@@ -3675,14 +3693,18 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
     delete runtimeEnv.HARNESS_DESKTOP_SECRET_TOKEN
     delete runtimeEnv.HARNESS_DESKTOP_AUTHORIZATION_ENDPOINT
     delete runtimeEnv.HARNESS_DESKTOP_AUTHORIZATION_TOKEN
+    delete runtimeEnv.HARNESS_DESKTOP_SESSION_LAUNCH_ENDPOINT
+    delete runtimeEnv.HARNESS_DESKTOP_SESSION_LAUNCH_TOKEN
+    delete runtimeEnv.DSH_AGENT_TEAMS_SESSION_LAUNCH_CALLER_SALT
     const securedRuntimeEnv = secretService ? secretService.runtimeEnvironment(runtimeEnv) : runtimeEnv
     const authorizedRuntimeEnv = authorizationService ? authorizationService.runtimeEnvironment(securedRuntimeEnv) : securedRuntimeEnv
+    const sessionLaunchRuntimeEnv = sessionLaunchService ? sessionLaunchService.runtimeEnvironment(authorizedRuntimeEnv) : authorizedRuntimeEnv
     child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0', '--no-open'], {
       cwd: runtimePaths.workspace,
       windowsHide: true,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: desktopRuntimeEnvironment(authorizedRuntimeEnv, runtimePaths)
+      env: desktopRuntimeEnvironment(sessionLaunchRuntimeEnv, runtimePaths)
     })
   } catch (error) {
     setRuntimeState({ status: 'error', url: null, detail: error.message })
@@ -3847,7 +3869,20 @@ async function getProviderMeters(force = false) {
   return registry.readAll({ dshHome: desktopDshHome(), force, fetchImpl: net.fetch, spawnImpl: spawn })
 }
 
+const OFFICIAL_RUNTIME_RPC_ENDPOINTS = new Set([
+  'pluginInventory/list',
+  'settings/describe',
+  'session/create',
+  'session/list',
+  'session/modelCatalog',
+  'session/page',
+  'session/prompt',
+  'session/rename',
+  'workspace/create'
+])
+
 async function callRuntimeRpc(endpoint, payload) {
+  if (!OFFICIAL_RUNTIME_RPC_ENDPOINTS.has(endpoint)) throw new Error('Harness runtime RPC endpoint is not allowed.')
   if (runtimeState.status !== 'ready' || !runtimeState.url) throw new Error('Harness runtime is unavailable.')
   const rpcId = randomUUID()
   const response = await net.fetch(new URL(`/api/${endpoint}`, runtimeState.url).toString(), {
@@ -3862,6 +3897,51 @@ async function callRuntimeRpc(endpoint, payload) {
     throw new Error('Harness runtime RPC returned an unavailable result.')
   }
   return result.result.value
+}
+
+async function inspectRuntimePrompt({ sessionId, requestId }) {
+  if (runtimeState.status !== 'ready' || !runtimeState.url || typeof sessionId !== 'string' || !sessionId || typeof requestId !== 'string' || !requestId) return null
+  const target = new URL('/api/remote.mux', runtimeState.url)
+  target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:'
+  const controlId = `control-${randomUUID()}`
+  const followId = `follow-${randomUUID()}`
+  return new Promise(resolve => {
+    const socket = new WebSocket(target.toString())
+    let settled = false, controlReady = false, followReady = false
+    const finish = evidence => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      socket.removeAllListeners()
+      socket.close()
+      resolve(evidence)
+    }
+    const timer = setTimeout(() => finish(null), 5000)
+    timer.unref?.()
+    socket.once('open', () => {
+      socket.send(JSON.stringify({ type: 'open', streamId: controlId, endpoint: 'session/control', payload: { args: {} } }))
+      socket.send(JSON.stringify({ type: 'open', streamId: followId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId }, maxMessages: 64 } } } }))
+    })
+    socket.on('message', raw => {
+      let frame
+      try { frame = JSON.parse(String(raw)) } catch { finish(null); return }
+      if (frame?.type !== 'item' || ![controlId, followId].includes(frame.streamId)) return
+      if (frame.streamId === controlId) {
+        if (frame.value?.type !== 'baseline') { finish(null); return }
+        controlReady = true
+        const queue = frame.value.value?.queues?.[sessionId]
+        if (Array.isArray(queue) && queue.some(item => item?.rpcId === requestId)) { finish({ delivered: true, source: 'session/control', rpcId: requestId }); return }
+      } else {
+        if (frame.value?.type !== 'snapshot') { finish(null); return }
+        followReady = true
+        const delivered = Array.isArray(frame.value.records) && frame.value.records.some(record => record?.type === 'event' && record.event?.type === 'user/message' && record.event?.data?.source?.rpcId === requestId)
+        if (delivered) { finish({ delivered: true, source: 'session/follow', rpcId: requestId }); return }
+      }
+      if (controlReady && followReady) finish({ delivered: false, source: 'session/follow', rpcId: requestId })
+    })
+    socket.once('error', () => finish(null))
+    socket.once('close', () => finish(null))
+  })
 }
 
 async function installedPluginPackage(moduleName) {
@@ -3899,7 +3979,7 @@ function pluginUnavailableReason(entry) {
 async function getInstalledPlugins() {
   const [inventory, settings] = await Promise.all([
     callRuntimeRpc('pluginInventory/list', { args: {} }),
-    callRuntimeRpc('settings.describe', {})
+    callRuntimeRpc('settings/describe', { args: {} })
   ])
   if (!Array.isArray(inventory?.entries) || !Array.isArray(settings?.namespaces)) {
     throw new Error('Harness runtime plugin inventory is unavailable.')
@@ -5616,6 +5696,8 @@ app.on('before-quit', event => {
   agentTeamsAuthorizationService = null
   agentTeamsSecretService?.close().catch(() => {})
   agentTeamsSecretService = null
+  agentTeamsSessionLaunchService?.close().catch(() => {})
+  agentTeamsSessionLaunchService = null
   computerUseIndicator?.dispose()
   computerUseIndicator = null
   computerUseEnabled = false

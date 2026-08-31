@@ -454,6 +454,26 @@ export class ProjectEntryService {
   }
 
   /**
+   * Bind the collaboration projection to the same fenced, current canonical
+   * project capability as the task store. Keep routing, paths, identity and keys
+   * non-enumerable so this Host-only object is safe against accidental JSON
+   * serialization. Disposal releases the underlying project key immediately.
+   */
+  async localProjectCollaborationContext() {
+    const taskContext = await this.localProjectTaskContext();
+    const context = Object.create(null);
+    Object.defineProperties(context, {
+      projectRef: { value: taskContext.projectRef, enumerable: false },
+      databasePath: { value: taskContext.databasePath, enumerable: false },
+      execution: { value: taskContext.execution, enumerable: false },
+      actorResolver: { value: taskContext.actorResolver, enumerable: false },
+      keyProvider: { value: taskContext.keyProvider, enumerable: false },
+      dispose: { value: taskContext.dispose, enumerable: false },
+    });
+    return Object.freeze(context);
+  }
+
+  /**
    * Derive a Host-only Automation capability from the already-authoritative task
    * context. This intentionally runs outside #queue: localProjectTaskContext owns
    * the queued authority check, while the second resolver check closes the race

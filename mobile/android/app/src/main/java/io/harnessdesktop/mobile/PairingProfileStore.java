@@ -6,7 +6,9 @@ import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
+import java.security.MessageDigest;
 import java.util.Base64;
+import java.util.Locale;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
@@ -42,6 +44,23 @@ final class PairingProfileStore {
 
     void clear() {
         preferences.edit().remove(SECURE_PROFILE).remove(MainActivity.SAVED_PROFILE).apply();
+    }
+
+    /**
+     * Returns a non-reversible namespace for offline state. The pairing URL includes
+     * the desktop-issued pairing identity, so re-pairing cannot see a previous
+     * profile's cache; only its digest is ever written outside encrypted storage.
+     */
+    static String cacheIdentity(PairingProfile profile) {
+        if (profile == null || profile.pairUrl == null || profile.pairUrl.isEmpty()) return "";
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(profile.pairUrl.getBytes(StandardCharsets.UTF_8));
+            StringBuilder output = new StringBuilder(digest.length * 2);
+            for (byte item : digest) output.append(String.format(Locale.ROOT, "%02x", item & 0xff));
+            return output.toString();
+        } catch (Exception error) {
+            throw new IllegalStateException(error);
+        }
     }
 
     private String encrypt(String value) throws Exception {

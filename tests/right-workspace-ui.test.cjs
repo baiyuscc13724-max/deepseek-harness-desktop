@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { readFile } = require('node:fs/promises')
+const vm = require('node:vm')
 const path = require('node:path')
 
 const root = path.resolve(__dirname, '..')
@@ -331,9 +332,60 @@ test('desktop shell coalesces resize work and pauses hidden workspace refreshes'
   assert.match(integration, /previous\.browserContentVisible !== browserContentVisible/u)
   assert.match(integration, /if \(!controller\.isOpen\(\)\) return[\s\S]{0,120}loadFiles\(\)/u)
 
-  // Re-running the settings mount against the same sidebar no longer forces a
-  // layout read. ResizeObserver supplies contentRect and dataset writes dedupe.
-  assert.match(app, /if \(mobileEntryLayoutHost === host && mobileEntryLayoutTrigger === settingsTrigger\) return/u)
+  // The guard is source-format independent: same host/trigger reuses the observer,
+  // while callbacks verify that stale hosts cannot mutate the current entry.
+  assert.match(app, /mobileEntryLayoutHost === host && mobileEntryLayoutTrigger === settingsTrigger/u)
+  assert.match(app, /mobileEntryResizeObserver\?\.disconnect\(\)/u)
+  assert.match(app, /mobileEntryLayoutHost !== host \|\| mobileEntryLayoutTrigger !== settingsTrigger/u)
   assert.match(app, /hostEntry\?\.contentRect\?\.width \?\? mobileEntryLayoutWidth/u)
-  assert.match(app, /if \(host\.dataset\.hdMobileCompact !== compact\) host\.dataset\.hdMobileCompact = compact/u)
+  assert.match(app, /entry\.dataset\.hdMobileCompact = String\(placement\.compact\)/u)
+})
+
+test('mobile entry layout watch is idempotent and switches host and trigger behaviorally', async () => {
+  const app = await source('renderer/app.js')
+  const start = app.indexOf('  const mobileEntryCompactForWidth =')
+  const end = app.indexOf('  const activateMobileEntry =', start)
+  assert.ok(start >= 0 && end > start, 'mobile layout watch source must remain present')
+  const watchSource = app.slice(start, end)
+  const context = {
+    window: { innerWidth: 800, addEventListener() { this.resizeListeners = (this.resizeListeners || 0) + 1 } },
+    document: {
+      addEventListener() { this.scrollListeners = (this.scrollListeners || 0) + 1 },
+      querySelector() { return this.entry }
+    },
+    ResizeObserver: class {
+      constructor(callback) { this.callback = callback; this.observeCalls = []; this.disconnectCalls = 0; context.observers.push(this) }
+      observe(target) { this.observeCalls.push(target) }
+      disconnect() { this.disconnectCalls += 1 }
+    },
+    observers: [],
+    entry: { hidden: true, dataset: {}, style: {} }
+  }
+  context.document.entry = context.entry
+  vm.runInNewContext(`${watchSource}\n globalThis.watchMobileEntryLayout = watchMobileEntryLayout`, context)
+  const rect = (left, top, width, height) => ({ left, right: left + width, top, width, height })
+  const hostA = { getBoundingClientRect: () => rect(10, 100, 220, 42) }
+  const triggerA = { textContent: '设置', getBoundingClientRect: () => rect(10, 100, 220, 42) }
+  context.watchMobileEntryLayout(hostA, triggerA)
+  assert.equal(context.observers.length, 1)
+  assert.deepEqual(context.observers[0].observeCalls, [hostA, triggerA])
+  const firstPlacement = { left: context.entry.style.left, top: context.entry.style.top, hidden: context.entry.hidden }
+
+  // Repeating the exact pair must not add observers or observe/listener registrations.
+  context.watchMobileEntryLayout(hostA, triggerA)
+  assert.equal(context.observers.length, 1)
+  assert.deepEqual(context.observers[0].observeCalls, [hostA, triggerA])
+  assert.deepEqual({ left: context.entry.style.left, top: context.entry.style.top, hidden: context.entry.hidden }, firstPlacement)
+
+  const hostB = { getBoundingClientRect: () => rect(400, 200, 72, 42) }
+  const triggerB = { textContent: '', getBoundingClientRect: () => rect(400, 200, 72, 42) }
+  context.watchMobileEntryLayout(hostB, triggerB)
+  assert.equal(context.observers[0].disconnectCalls, 1)
+  assert.equal(context.observers.length, 2)
+  assert.deepEqual(context.observers[1].observeCalls, [hostB, triggerB])
+  const switched = { left: context.entry.style.left, top: context.entry.style.top, hidden: context.entry.hidden }
+  assert.notDeepEqual(switched, firstPlacement)
+  assert.equal(switched.hidden, false)
+  context.observers[0].callback([{ target: hostA, contentRect: { width: 1 } }])
+  assert.deepEqual({ left: context.entry.style.left, top: context.entry.style.top, hidden: context.entry.hidden }, switched)
 })

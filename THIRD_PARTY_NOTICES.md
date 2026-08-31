@@ -8,7 +8,7 @@ Source: `deepseek-ai/deepseek-harness`
 License: MIT
 Copyright (c) 2026 DeepSeek
 
-The application launches and redistributes the pinned `@deepseek-ai/dsh` runtime. The upstream copyright and license notices must be retained where required.
+The application launches and redistributes the 20 directly pinned `@deepseek-ai/dsh*` roots and their canonical dependency closure at version `0.1.2-alpha.2`, sourced from the official `deepseek-ai/deepseek-harness` release/tag `dsh-v0.1.2-alpha.2` at commit `0a53fb55bea101816fa226bb964ae2bed71c343b`. The upstream packages are published under the MIT License; source and license provenance are available at https://github.com/deepseek-ai/deepseek-harness/tree/dsh-v0.1.2-alpha.2. The upstream copyright and license notices must be retained where required.
 
 ## DeepSeek brand assets
 

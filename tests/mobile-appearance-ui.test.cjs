@@ -43,3 +43,21 @@ test('phone themes keep core surfaces opaque and composer lifts only for an acti
   assert.match(activity, /publishImeInsets\(imeVisible, Math\.max\(0, ime\.bottom - systemBars\.bottom\)\)/u)
   assert.doesNotMatch(manifest, /android\.permission\.RECORD_AUDIO/u)
 })
+
+test('drawer summary keeps details action and recovery counts in normal responsive flow', async () => {
+  const [android, ios] = await Promise.all([
+    read('mobile/android/app/src/main/assets/mobile-compat.css'),
+    read('mobile/ios/HarnessMobile/Resources/mobile-compat.css')
+  ])
+
+  assert.equal(android, ios, 'Android and iOS mobile CSS must stay byte-identical')
+  assert.match(android, /data-harness-mobile-drawer="open"[^{}]*data-harness-mobile-conversation-list-title[\s\S]*?position:\s*static\s*!important/u)
+  assert.match(android, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, auto\)\s*!important/u)
+  assert.match(android, /data-harness-mobile-conversation-list-title\] > div[\s\S]*?min-width:\s*0\s*!important[\s\S]*?overflow:\s*hidden\s*!important/u)
+  assert.match(android, /data-harness-mobile-conversation-list-title\] \[data-harness-mobile-project-details\][\s\S]*?max-width:\s*min\(40vw, 132px\)\s*!important/u)
+  assert.match(android, /data-harness-mobile-conversation-list-title\] strong,[\s\S]*?overflow-wrap:\s*anywhere\s*!important[\s\S]*?white-space:\s*normal\s*!important/u)
+  assert.match(android, /data-harness-mobile-drawer="open"[^{}]*\[class\*="_sidebarCol"\][\s\S]*?padding-top:\s*48px\s*!important/u)
+  assert.doesNotMatch(android, /padding-top:\s*(?:84|148)px\s*!important/u, 'drawer must not double-reserve summary space')
+  assert.match(android, /data-harness-mobile-conversation-search-box\][\s\S]*?top:\s*calc\(var\(--harness-mobile-appbar-height\) \+ 14px\)[\s\S]*?min-height:\s*46px/u)
+  assert.match(android, /data-harness-mobile-conversation-list-title\][\s\S]*?margin:\s*calc\(var\(--harness-mobile-appbar-height\) \+ 14px \+ 46px \+ 8px\)/u)
+})

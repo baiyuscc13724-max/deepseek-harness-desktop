@@ -40,8 +40,11 @@ test('Project Task mutations expose only explicit create and allowed transition 
   assert.ok(source.includes('projectTasksExplicitOnly: "只执行你明确点击的创建或状态变更；不会自动审批、发送消息或改写冲突。"'))
   assert.ok(source.includes('projectTasksExplicitOnly: "Only the create or status change you explicitly select is run. Nothing is auto-approved, messaged, or rewritten after a conflict."'))
   assert.ok(source.includes('projectTasksCreateUnavailable: "当前项目任务只可查看，不能在这台电脑创建。"'))
-  assert.ok(source.includes('projectTasksHasMore: "仅显示最近 500 项。请先整理现有任务；后续版本将提供分页。"'))
-  assert.ok(source.includes('projectTasksHasMore: "Only the latest 500 tasks are shown. Organize existing tasks first; pagination will be added later."'))
+  assert.ok(source.includes('projectTasksPage: "本页 {page} · 已加载 {loaded}/{total} · 剩余 {remaining}"'))
+  assert.ok(source.includes('projectTasksPage: "{page} this page · {loaded}/{total} loaded · {remaining} remaining"'))
+  assert.ok(source.includes('projectTasksLoadMore: "加载更多"'))
+  assert.ok(source.includes('projectTasksLoadMore: "Load more"'))
+  assert.doesNotMatch(source, /projectTasksHasMore|latest 500|最近 500/u)
   assert.ok(source.includes('projectTasksChangedError: "任务状态已经变化。请刷新后核对最新版本，再明确选择操作。"'))
   assert.doesNotMatch(source, /projectTaskErrorSummary[^]*return error\.message/u)
 })
@@ -58,10 +61,10 @@ test('Project Automation stays manual, reviewable, and separate from session rem
 test('M4 collaborator workspaces explain safe sync, offline receipts, and permission loss without private fields', async () => {
   const source = await clientSource()
   for (const text of [
-    '已从主设备安全同步项目任务；当前缓存可继续只读查看。',
-    'Project tasks were synced securely from the primary desktop. The current cache remains available to read.',
-    '操作已安全保存，正在等待主设备回执。离线时无需重复点击；恢复连接后会自动重试同一请求。',
-    'The action is stored safely and is awaiting a receipt from the primary desktop. Do not click again while offline; the identical request retries automatically after reconnecting.',
+    '已从主设备安全同步。这里只显示允许共享的任务摘要。',
+    'Securely synced from the primary desktop. Only task summaries approved for sharing are shown.',
+    '本机已安全同步 {loaded} 项 · 完整列表与分页请在项目 authority 设备查看',
+    '{loaded} safely synced on this desktop · use the project authority desktop for the complete list and pagination',
     '已从主设备安全同步自动化摘要。这里只显示允许共享的数据。',
     'Automation summaries were synced securely from the primary desktop. Only approved shared data is shown.'
   ]) assert.ok(source.includes(text), `missing collaborator guidance: ${text}`)
@@ -80,7 +83,7 @@ test('M5 foundation status uses human next steps and never exposes implementatio
   const source = await clientSource()
   for (const text of ['项目基础状态', 'Project foundation status', '可以安全落地', 'Ready to land safely', '由主设备负责', 'Managed by the primary desktop', '源目录不可用', 'Source unavailable', '合并冲突需要处理', 'Merge conflicts need attention', '等待可信质量运行器', 'Waiting for a trusted quality runner']) assert.ok(source.includes(text), `missing M5 copy: ${text}`)
   const start = source.indexOf('    function normalizeProjectFoundationsState(input)')
-  const end = source.indexOf('    function FlowWorkspace(props)', start)
+  const end = source.indexOf('    function ProjectFoundationStatusCard(props)', start)
   const foundationSource = source.slice(start, end)
   for (const privateName of ['commit', 'digest', 'messageRef', 'taskRef', 'fileScope', 'actorRef', 'runnerKey', 'evidence', 'credential']) assert.equal(foundationSource.includes(`state.${privateName}`), false, `foundation card renders private field: ${privateName}`)
   assert.match(foundationSource, /attentionTokens = \["connector_credentials_unavailable", "connector_disabled", "git_unavailable", "merge_conflict", "merge_queue_empty", "root_unavailable", "runner_unavailable", "source_dirty", "source_invalid", "status_unavailable"\]/u)
@@ -168,7 +171,7 @@ test('human-readable notices provide a safe next step without bypassing the comp
   assert.match(source, /continueTeam: "Prepare continue request"/u)
   assert.match(source, /failedNext: "有成员未能完成工作。请打开成员列表查看详情，再让负责人处理未完成任务。"/u)
   assert.match(source, /failedNext: "A member could not finish its work. Open the member list for details, then ask the lead to handle unfinished tasks."/u)
-  assert.match(source, /currentMembers\.some\(function \(member\) \{ return memberStateKind\(member\) === "failed"; \}\)/u)
+  assert.match(source, /failedMembers = currentMembers\.filter\(function \(member\) \{ return memberStateKind\(member\) === "failed"/u)
   assert.match(source, /prompt\(isChinese\(\) \? "请恢复这个团队。恢复后请先检查未完成任务和成员状态，再继续工作。"/u)
   assert.match(source, /notice \? h\("div", \{ className: "dat-board-note", role: "status", "aria-live": "polite" \}/u)
   assert.match(source, /操作没有完成。请按页面提示处理后重试/u)
@@ -370,13 +373,46 @@ test('Agent Teams workspace exposes tasks, events, and one unified agent catalog
   }
   assert.match(source, /props\.sessions\.setSubagentCatalogOpen\(team\.leadSessionId, true\)/u)
   assert.match(source, /new window\.CustomEvent\(SUBAGENT_CATALOG_EVENT, \{ detail: \{ parentSessionId: team\.leadSessionId \} \}\)/u)
-  assert.match(source, /h\(ActiveTeam, \{ t: t, team: team, teams: teams, closed: closed, paused: paused, setDraft: setDraft, sessions: props\.sessions, connection: live\.connection \}\)/u)
+  assert.match(source, /h\(ActiveTeam, \{ t: t, team: team, teams: teams, closed: closed, paused: paused, setDraft: setDraft, sessions: props\.sessions, connection: live\.connection, canRecover:/u)
   assert.match(source, /paused: "已由用户停止"|paused: "Stopped by user"/u)
   assert.doesNotMatch(source, /function MemberCard|drawerTab|setDrawerTab|sessions\.openSubagent|openSubagent\(address\)/u)
   assert.match(source, /aria-live/u)
   assert.match(source, /h\("h2", \{ className: "dat-title" \}/u)
   assert.match(source, /@media\(max-width:900px\)/u)
   assert.match(source, /@media\(max-width:620px\)/u)
+})
+
+test('failed-member recovery is explicit, root-only, accessible, responsive, and never shown for normal members', async () => {
+  const source = await clientSource()
+  assert.match(source, /function MemberRecoveryPanel\(props\)/u)
+  assert.match(source, /function MemberRecoveryReconcilePanel\(props\)/u)
+  assert.match(source, /recoveryRetry: "重试成员"/u)
+  assert.match(source, /recoveryReplace: "替换成员"/u)
+  assert.match(source, /recoveryConfirmReplace: "确认替换 \{name\}？/u)
+  assert.match(source, /recoveryConfirmReplace: "Replace \{name\}\?/u)
+  assert.match(source, /props\.sessionId === team\.leadSessionId/u)
+  assert.match(source, /memberStateKind\(member\) === "failed"/u)
+  assert.match(source, /role: "alertdialog"/u)
+  assert.match(source, /confirmButtonRef\.current\.focus/u)
+  assert.match(source, /event\.key === "Escape" && !busy/u)
+  assert.match(source, /role: "status", "aria-live": "polite"/u)
+  assert.match(source, /\.dat-member-recovery-actions \.dat-btn\{min-height:44px\}/u)
+  assert.match(source, /\.dat-member-recovery-actions\{display:grid;grid-template-columns:1fr\}/u)
+  assert.match(source, /if \(!confirmation \|\| busy \|\| requestRef\.current\) return/u)
+  assert.match(source, /requestRef\.current = requestId; setBusy\(true\)/u)
+  assert.match(source, /member-replace" : "member-retry"/u)
+  assert.match(source, /recoveryTeams = typeof props\.onRecover === "function"/u)
+  assert.match(source, /projectTeamBoard: snapshot && snapshot\.projectTeamBoard, onRecover: recoverProjectMember, onReconcile: reconcileProjectMember/u)
+  assert.match(source, /team\.memberRecovery\.members/u)
+  assert.match(source, /team\.memberRecovery\.unresolved/u)
+  assert.match(source, /paused: team\.memberRecovery\.paused === true/u)
+  assert.match(source, /props\.paused \? null : h\(Button/u)
+  assert.match(source, /"member-reconcile"/u)
+  assert.match(source, /requestId: receipt\.requestId/u)
+  assert.match(source, /recoveryMarkDelivered: "确认已送达"/u)
+  assert.match(source, /recoveryMarkNotDelivered: "Confirm not delivered"/u)
+  assert.match(source, /confirm: true/u)
+  assert.doesNotMatch(source, /memberStateKind\(member\) === "(?:running|idle|ready|retired|completed)"[^]*?h\(MemberRecoveryPanel/u)
 })
 
 test('task board keeps cancellation in history and exposes only four truthful active columns', async () => {
@@ -644,25 +680,44 @@ test('legacy storage migration reaches the client without inventing an executor 
     const mod = await import(`${pathToFileURL(pluginFile).href}?legacy-ui=${Date.now()}-${Math.random()}`)
     const store = new mod.AgentTeamsStore(file)
     await store.init()
-    const migratedTask = store.snapshot().teams[0].tasks[0]
-    assert.equal(migratedTask.submission.source, 'legacy_migration')
-    assert.equal(migratedTask.submission.submittedBy, 'legacy-worker')
-    assert.equal(migratedTask.acceptance.acceptedBy, 'legacy-lead')
+    const snapshot = store.snapshot()
+    const migratedTeam = snapshot.teams[0]
+    const migratedTask = migratedTeam.tasks[0]
+    assert.equal(migratedTask.state, 'cancelled')
+    assert.equal(migratedTask.submission, undefined, 'closed projection does not masquerade as accepted delivery')
+    assert.equal(migratedTask.acceptance, undefined, 'migration must not invent Host acceptance')
+    assert.equal(migratedTask.lifecycleLedger.some(event => event.kind === 'submission' && event.actorId === 'legacy-worker'), true)
+    assert.equal(migratedTeam.closure.outcome, 'forced')
+    assert.equal(migratedTeam.closure.forced, true)
+    assert.match(migratedTeam.closure.reason, /unverified legacy completion/u)
+    assert.deepEqual(migratedTeam.closure.cancelledTaskIds, ['legacy-ui-task'])
+    assert.deepEqual(migratedTeam.closure.failures, [])
 
-    const hostProjectedTask = mod.teamSnapshot(store.snapshot(), 'legacy-lead', 'legacy-ui-team').team.tasks[0]
-    assert.equal(hostProjectedTask.submission.source, 'legacy_migration')
+    const hostProjectedTask = mod.teamSnapshot(snapshot, 'legacy-lead', 'legacy-ui-team').team.tasks[0]
+    assert.equal(hostProjectedTask.lifecycleLedger.some(event => event.kind === 'submission'), true)
     const source = await clientSource()
     const helperStart = source.indexOf('    function taskResponsibilityProjection(task)')
     const helperEnd = source.indexOf('    function TaskCard(props)', helperStart)
     const helpers = Function(`function normalizeState(value) { return String(value || '').toLowerCase().replace(/-/g, '_'); }\nfunction visibleTaskResult(task) { var result = task && task.result; return result && typeof result.text === 'string' && result.text.trim() ? result : null; }\n${source.slice(helperStart, helperEnd)}\nreturn { taskResponsibilityProjection };`)()
     const truth = helpers.taskResponsibilityProjection(hostProjectedTask)
-    assert.equal(truth.legacy, true)
-    assert.equal(truth.assignedId, 'legacy-worker', 'historical assignment remains visible only as history')
+    assert.equal(truth.legacy, false)
+    assert.equal(truth.assignedId, '', 'terminal cancellation projection does not retain a current claimant')
     assert.equal(truth.executorId, '', 'migrated assignee is not actual executor evidence')
     assert.equal(truth.takeover, false)
-    assert.equal(truth.deliveryKind, 'legacy')
-    assert.equal(truth.acceptanceKind, 'legacy', 'synthesized migration acceptance is not current lead review')
+    assert.equal(truth.deliveryKind, 'missing')
+    assert.equal(truth.acceptance, null, 'client projection must not expose acceptance or review proof')
+    assert.equal(truth.acceptanceKind, 'not_applicable')
+    assert.equal(truth.cancelled, true)
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('submitted and immutable lifecycle history are accessible in task detail', async () => {
+  const source = await clientSource()
+  assert.match(source, /submitted: "Awaiting lead acceptance"/u)
+  assert.match(source, /lifecycleHistory: "Immutable lifecycle history"/u)
+  assert.match(source, /Array\.isArray\(task\.lifecycleLedger\)/u)
+  assert.match(source, /h\("details", \{ className: "dat-lifecycle-history" \}/u)
+  assert.match(source, /h\("time", \{ dateTime: event\.at \}/u)
 })
 
 test('real cancel and release transitions survive Host projection and drive client responsibility truth', async () => {

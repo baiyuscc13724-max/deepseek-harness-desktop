@@ -1,6 +1,6 @@
 {
   "name": "dsh-codex-image-bridge",
-  "version": "1.0.54",
+  "version": "1.0.55",
   "description": "Least-privilege DeepSeek Harness bridge to Codex image generation",
   "type": "module",
   "main": "src/index.js",

@@ -39,6 +39,14 @@
     <string name="easytier_failed_status">远程线路暂未接通，正在自动重试；局域网连接仍然可用…</string>
     <string name="workbench_loading_status">已连接电脑，工作台功能仍在加载…</string>
     <string name="workbench_slow_status">工作台加载时间较长。可以点右上角连接按钮立即重试。</string>
+    <string name="terminal_http_status">电脑返回了无法继续加载的响应（%1$d）。配对信息仍已保留，请重试；若电脑端已重置，再重新扫码。</string>
+    <string name="terminal_web_status">工作台加载失败：%1$s。配对信息仍已保留，请重试；若电脑端已重置，再重新扫码。</string>
+    <string name="terminal_ssl_status">无法验证电脑连接的安全证书。为保护配对身份，已停止加载；请检查电脑时间或证书后重试。</string>
+    <string name="action_retry_load">重试加载</string>
+    <string name="action_rescan">重新扫码</string>
+    <string name="page_loading_progress">页面加载进度</string>
+    <string name="page_loading_started">页面开始加载</string>
+    <string name="page_loading_finished">页面加载完成</string>
     <string name="vpn_notice">已检测到系统 VPN。Harness 仅代理本应用流量，不会关闭或替换现有 VPN。</string>
     <string name="no_app_to_open">没有可打开此链接的应用</string>
     <string name="reconnect_description">连接设置</string>

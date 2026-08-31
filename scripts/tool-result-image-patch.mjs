@@ -19,6 +19,19 @@ const RESULT_TEXT_LEGACY = `		function resultText(node) {
 			return block.content.filter((item) => item.type === "image").map(({ attachment }) => ({ attachment }));
 		}`
 
+const RESULT_TEXT_ALPHA2_PATCHED = `		function resultText(node) {
+			const parts = [];
+			for (const block of node.content) if (block.type === "text") parts.push(block.text);
+			else if (block.type !== "image") parts.push(JSON.stringify(block, null, 2));
+			if (parts.length === 0 && node.error !== void 0) parts.push(\`${'${node.error.name}'}: ${'${node.error.code}'}\`);
+			return parts.join("\\n");
+		}
+		/** Preserve only complete core durable image blocks in the alpha.2 Chat image seat. */
+		function resultImages(block) {
+			if (!("kind" in block)) return [];
+			return block.content.filter((item) => item?.type === "image" && item.attachment !== void 0).map(({ attachment }) => ({ attachment }));
+		}`
+
 const RESULT_DELIVERABLES_LEGACY = `		/** Render same-origin media and attachment-only downloads; never invoke local files. */
 		function ResultDeliverables({ files, sessionId }) {
 			if (files.length === 0 || typeof sessionId !== "string" || sessionId === "") return null;
@@ -274,6 +287,43 @@ export function patchToolResultImageSource(source) {
   return { source: output, changed: true }
 }
 
+const ALPHA2_FINAL_MARKERS = [
+  RESULT_TEXT_ALPHA2_PATCHED,
+  TOOL_CALL_SIGNATURE_LEGACY,
+  TOOL_CALL_IMAGES_LEGACY,
+  TOOL_CALL_CHILDREN_LEGACY,
+  ...PROP_REPLACEMENTS.filter((_, index) => index % 2 === 1).map(([legacy]) => legacy),
+  ...FORWARDING_REPLACEMENTS.filter((_, index) => index % 2 === 1).map(([legacy]) => legacy)
+]
+
+/**
+ * Alpha.2 already owns produced-file delivery in ui-deliverables and threads
+ * renderMessageImages through the Chat slot owner. Add only durable result
+ * images here: no duplicate file row and no synthetic Session ownership.
+ */
+export function patchAlpha2ToolResultImageSource(source) {
+  const present = ALPHA2_FINAL_MARKERS.filter(marker => source.includes(marker))
+  if (present.length > 0 && present.length < ALPHA2_FINAL_MARKERS.length) {
+    throw new Error('Pinned DSH alpha.2 tool-result image patch is incomplete; refusing an unsafe repair.')
+  }
+  if (present.length === ALPHA2_FINAL_MARKERS.length) return { source, changed: false }
+  let output = replaceOneOf(source, [RESULT_TEXT_ORIGINAL], RESULT_TEXT_ALPHA2_PATCHED, 'alpha.2 result content projection')
+  output = replaceOneOf(output, [TOOL_CALL_SIGNATURE_ORIGINAL], TOOL_CALL_SIGNATURE_LEGACY, 'alpha.2 tool call image input')
+  output = replaceOneOf(output, [TOOL_CALL_IMAGES_ORIGINAL], TOOL_CALL_IMAGES_LEGACY, 'alpha.2 tool result image collection')
+  output = replaceOneOf(output, [TOOL_CALL_CHILDREN_ORIGINAL], TOOL_CALL_CHILDREN_LEGACY, 'alpha.2 tool result image rendering')
+  for (let index = 0; index < PROP_REPLACEMENTS.length; index += 2) {
+    const [original, , label] = PROP_REPLACEMENTS[index]
+    const [legacy] = PROP_REPLACEMENTS[index + 1]
+    output = replaceOneOf(output, [original], legacy, `alpha.2 ${label}`)
+  }
+  for (let index = 0; index < FORWARDING_REPLACEMENTS.length; index += 2) {
+    const [original, , label] = FORWARDING_REPLACEMENTS[index]
+    const [legacy] = FORWARDING_REPLACEMENTS[index + 1]
+    output = replaceOneOf(output, [original], legacy, `alpha.2 ${label}`)
+  }
+  return { source: output, changed: true }
+}
+
 const COMMON_OWNER_REPLACEMENTS = [
   ['const ChatNodeSeat = (0, react.memo)(function ChatNodeSeat({ nodeKey, selectedCallId,', 'const ChatNodeSeat = (0, react.memo)(function ChatNodeSeat({ nodeKey, sessionId, selectedCallId,', 'chat node session input'],
   [`			const owner = (0, react.useMemo)(() => node === void 0 ? null : {
@@ -351,24 +401,64 @@ export function patchToolResultOwnerSource(source) {
   const groupedListPresent = countPresent(GROUPED_LIST_OWNER_MARKERS)
   const groupedNodePresent = countPresent(GROUPED_NODE_OWNER_MARKERS)
   const flatPresent = countPresent(FLAT_OWNER_MARKERS)
+  const groupedVariantStates = GROUPED_LIST_OWNER_VARIANTS.map(([listOriginal, listPatched], index) => {
+    const [nodeOriginal, nodePatched] = GROUPED_NODE_OWNER_VARIANTS[index]
+    return {
+      index,
+      listOriginal: source.includes(listOriginal),
+      listPatched: source.includes(listPatched),
+      nodeOriginal: source.includes(nodeOriginal),
+      nodePatched: source.includes(nodePatched)
+    }
+  })
+  const groupedSource = [...GROUPED_OWNER_SHARED_REPLACEMENTS, ...GROUPED_LIST_OWNER_VARIANTS, ...GROUPED_NODE_OWNER_VARIANTS]
+    .some(([original, patched]) => source.includes(original) || source.includes(patched))
+  const flatSource = FLAT_OWNER_REPLACEMENTS.some(([original, patched]) => source.includes(original) || source.includes(patched))
   const commonComplete = commonPresent === COMMON_OWNER_MARKERS.length
-  const groupedComplete = groupedSharedPresent === GROUPED_OWNER_SHARED_MARKERS.length && groupedListPresent === 1 && groupedNodePresent === 1
-  const flatComplete = flatPresent === FLAT_OWNER_MARKERS.length
+  const groupedComplete = groupedSharedPresent === GROUPED_OWNER_SHARED_MARKERS.length &&
+    groupedListPresent === 1 && groupedNodePresent === 1 && flatPresent === 0 && !flatSource &&
+    groupedVariantStates.some(state => state.listPatched && state.nodePatched)
+  const flatComplete = flatPresent === FLAT_OWNER_MARKERS.length &&
+    groupedSharedPresent === 0 && groupedListPresent === 0 && groupedNodePresent === 0 && !groupedSource
   if (commonComplete && (groupedComplete || flatComplete)) return { source, changed: false }
-  if (commonPresent + groupedSharedPresent + groupedListPresent + groupedNodePresent + flatPresent > 0) throw new Error('Pinned DSH tool-result owner patch is incomplete; refusing an unsafe repair.')
+
+  // The conversation work-tree transform owns exactly the rendered group/list
+  // session plumbing below. It runs in the cache transform before this owner
+  // transform, so accept only rendered variant index 1 with its matching
+  // unpatched rendered node; every other partial owner marker remains unsafe.
+  const renderedIntermediate = groupedVariantStates[1]
+  const workTreeIntermediate = commonPresent === 0 &&
+    groupedSharedPresent === 1 && source.includes(GROUPED_OWNER_SHARED_MARKERS[0]) &&
+    groupedListPresent === 1 && renderedIntermediate.listPatched &&
+    groupedNodePresent === 0 && renderedIntermediate.nodeOriginal && flatPresent === 0
+  if (!workTreeIntermediate && commonPresent + groupedSharedPresent + groupedListPresent + groupedNodePresent + flatPresent > 0) {
+    throw new Error('Pinned DSH tool-result owner patch is incomplete; refusing an unsafe repair.')
+  }
+
+  if (groupedSource && flatSource) {
+    throw new Error('Pinned DSH owner shape families are mixed; refusing an unsafe tool-result owner patch.')
+  }
+  let groupedVariantIndex = -1
+  if (groupedSource) {
+    const listForms = groupedVariantStates.reduce((count, state) => count + Number(state.listOriginal) + Number(state.listPatched), 0)
+    const nodeForms = groupedVariantStates.reduce((count, state) => count + Number(state.nodeOriginal) + Number(state.nodePatched), 0)
+    const coherent = groupedVariantStates.filter(state =>
+      (state.listOriginal || state.listPatched) && (state.nodeOriginal || state.nodePatched))
+    if (listForms !== 1 || nodeForms !== 1 || coherent.length !== 1) {
+      throw new Error('Pinned DSH grouped chat-tree variant pairing changed; refusing an unsafe tool-result owner patch.')
+    }
+    groupedVariantIndex = coherent[0].index
+  }
 
   let output = source
   for (const [original, patched, label] of COMMON_OWNER_REPLACEMENTS) output = replaceOneOf(output, [original], patched, label)
-  const groupedSource = [...GROUPED_OWNER_SHARED_REPLACEMENTS, ...GROUPED_LIST_OWNER_VARIANTS, ...GROUPED_NODE_OWNER_VARIANTS]
-    .some(([original, patched]) => source.includes(original) || source.includes(patched))
   if (groupedSource) {
     for (const [original, patched, label] of GROUPED_OWNER_SHARED_REPLACEMENTS) output = replaceOneOf(output, [original], patched, label)
-    const listVariants = GROUPED_LIST_OWNER_VARIANTS.filter(([original]) => source.includes(original))
-    const nodeVariants = GROUPED_NODE_OWNER_VARIANTS.filter(([original]) => source.includes(original))
-    if (listVariants.length !== 1 || nodeVariants.length !== 1) throw new Error('Pinned DSH grouped chat-tree variant changed; refusing an unsafe tool-result owner patch.')
-    for (const [original, patched, label] of [listVariants[0], nodeVariants[0]]) output = replaceOneOf(output, [original], patched, label)
+    for (const [original, patched, label] of [GROUPED_LIST_OWNER_VARIANTS[groupedVariantIndex], GROUPED_NODE_OWNER_VARIANTS[groupedVariantIndex]]) {
+      output = replaceOneOf(output, [original], patched, label)
+    }
   } else {
     for (const [original, patched, label] of FLAT_OWNER_REPLACEMENTS) output = replaceOneOf(output, [original], patched, label)
   }
-  return { source: output, changed: true }
+  return { source: output, changed: output !== source }
 }

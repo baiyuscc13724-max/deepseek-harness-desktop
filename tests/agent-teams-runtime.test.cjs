@@ -38,6 +38,21 @@ async function invoke(route, req) {
   return res.done
 }
 
+function openDirectHumanTurn(agent) {
+  const events = agent?.session?.events
+  if (!Array.isArray(events)) throw new Error('test fixture agent must expose session events')
+  events.push(
+    { type: 'turn/end', data: {} },
+    { type: 'turn/start', data: {} },
+    { type: 'user/message', data: { source: { kind: 'user' } } }
+  )
+}
+
+async function startTeam(tools, args, execution) {
+  openDirectHumanTurn(execution.agent)
+  return tools.get('team_start').execute({ candidate_workstreams: 2, ...args }, execution)
+}
+
 function assertLosslessJson(value) {
   assert.deepEqual(value, JSON.parse(JSON.stringify(value)))
 }
@@ -301,7 +316,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }
     const recoveryAgent = {
       id: 'recovery-session', status: 'running', options: { provider: 'test-provider', model: 'test-model' },
-      session: { events: [
+      session: { header: { cwd: root }, events: [
         { type: 'turn/start', data: {} },
         { type: 'user/message', data: { source: { kind: 'user' } } }
       ] }
@@ -403,6 +418,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
                 await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'unassign' }, execution)
                 const claim = await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'claim' }, execution)
                 await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch }, execution)
+                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'accept' }, execution)
               }
             } catch {}
             return result
@@ -417,6 +433,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
             await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'unassign' }, execution)
             const claim = await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'claim' }, execution)
             await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch }, execution)
+            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'accept' }, execution)
           } catch {}
           return result
         } catch (error) { error.message += ` [spawn=${args.name}]`; throw error }
@@ -436,7 +453,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const enabledPrompt = teamsPrompt.text({})
     assert.match(enabledPrompt, /automatic-team mode is ENABLED/u)
     assert.match(enabledPrompt, /Before substantive work on every ordinary direct-human root turn, apply the three-level gate below/u)
-    assert.match(enabledPrompt, /When the Level 3 conditions are met, choose exactly one creation path in that same turn/u)
+    assert.match(enabledPrompt, /When Level 3 conditions are met, choose exactly one creation path in that same turn/u)
     assert.match(enabledPrompt, /Never call both team_start and team_bootstrap for the same team/u)
     assert.match(enabledPrompt, /Keep durable team task state synchronized at every handoff/u)
     assert.match(enabledPrompt, /members must explicitly complete finished tasks before their final report/u)
@@ -489,11 +506,11 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(tools.get('team_start').description, /explicit user team request may override this automatic threshold/u)
     assert.match(tools.get('team_expansion_request').description, /never spawns, creates tasks, or grants delegation authority/u)
     assert.match(tools.get('team_expansion_request').description, /existing external-resource ownership remains a root approval check/u)
-    assert.match(tools.get('team_task_update').description, /report or successful member turn never completes the durable task/u)
+    assert.match(tools.get('team_task_update').description, /Submission remains non-authoritative until the fixed root accepts it/u)
     assert.match(tools.get('team_shutdown').description, /Graceful member retirement rejects unfinished owned tasks/u)
     assert.match(tools.get('team_shutdown').description, /force team shutdown records unfinished tasks as cancelled/u)
 
-    const started = await tools.get('team_start').execute({ objective: 'Implement and verify collaboration' }, { agent: rootAgent, signal: new AbortController().signal })
+    const started = await startTeam(tools, { objective: 'Implement and verify collaboration' }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(started.ok, true)
     assert.equal(started.team.objective, 'Implement and verify collaboration')
     assert.equal(started.team.members[0].modelTier, 'main')
@@ -563,15 +580,15 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(crossProjectTask.task.status, 'pending')
 
     for (const [toolName, args] of [
-      ['team_start', { objective: 'Must still require a direct user' }],
-      ['team_bootstrap', { request_id: 'automatic-bootstrap-denied', objective: 'Denied', tasks: [], members: [] }],
+      ['team_start', { objective: 'Must still require a direct user', candidate_workstreams: 2 }],
+      ['team_bootstrap', { request_id: 'automatic-bootstrap-denied', objective: 'Denied', candidate_workstreams: 2, tasks: [], members: [] }],
       ['team_resume', { team_id: started.team.id }],
       ['team_handoff', { team_id: started.team.id, target_root_session_id: recoveryAgent.id }],
       ['team_adopt', { team_id: started.team.id, handoff_token: 'not-authorized' }],
       ['team_recover', { team_id: started.team.id, confirm: true }],
       ['team_task_external_effect', { team_id: started.team.id, task_id: automaticTask.task.id, effect_name: 'none', action: 'resolve_unknown', attempt_id: 'none', outcome: 'not_started', authorization_id: 'none' }]
     ]) {
-      await assert.rejects(
+     await assert.rejects(
         tools.get(toolName).execute(args, { agent: rootAgent, signal: new AbortController().signal }),
         /direct host-attested human input/u,
         `${toolName} must not inherit the automatic plan recommit allowance`
@@ -616,7 +633,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
       error => error && error.code === 'AGENT_TEAMS_DUPLICATE_MEMBER_NAME'
     )
     for (const invalidName of ['A', 'ThisWorkerDutyNameIsFarTooLong', 'Subagent', 'Ｓｕｂａｇｅｎｔ', '协调器', 'UI/Docs']) {
-      await assert.rejects(
+     await assert.rejects(
         tools.get('team_spawn').execute({ team_id: started.team.id, task_ids: [durableTask.task.id], name: invalidName, role: 'invalid name', prompt: 'Must not start' }, { agent: rootAgent, signal: new AbortController().signal }),
         error => error && error.code === 'AGENT_TEAMS_INVALID_MEMBER_NAME'
       )
@@ -845,7 +862,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(expansionPersisted, new RegExp(expansion.expansionRequest.id, 'u'))
     assert.match(expansionPersisted, /Structured agent-team expansion request/u)
 
-    const sibling = (await tools.get('team_start').execute({ objective: 'Coordinate peer team' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const sibling = (await startTeam(tools, { objective: 'Coordinate peer team' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const peerSpawn = await tools.get('team_spawn').execute({
       team_id: sibling.id, name: 'PeerWorker', role: 'peer collaboration', prompt: 'High-complexity architecture and security review', model_tier: 'main'
     }, { agent: rootAgent, signal: new AbortController().signal })
@@ -859,7 +876,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
       sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 2
     }))
     assert.equal(lowerSharedTurnLimit.status, 200)
-    const costBoundTeam = (await tools.get('team_start').execute({ objective: 'Shared turn ceiling' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const costBoundTeam = (await startTeam(tools, { objective: 'Shared turn ceiling' }, { agent: rootAgent, signal: new AbortController().signal })).team
     await assert.rejects(
       tools.get('team_spawn').execute({ team_id: costBoundTeam.id, name: 'CostBound', role: 'cost guard', prompt: 'Must not exceed shared turns' }, { agent: rootAgent, signal: new AbortController().signal }),
       error => error && error.code === 'AGENT_TEAMS_ACTIVE_TURN_LIMIT'
@@ -919,7 +936,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
       submittedBy: rootAgent.id,
       source: 'explicit_complete'
     })
-    assert.equal(projectedCompletion.task.acceptance.acceptedBy, rootAgent.id)
+    const projectedAcceptance = await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'accept' }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(projectedAcceptance.task.acceptance.acceptedBy, rootAgent.id)
     const unblockedPeer = await tools.get('team_task_update').execute({ team_id: sibling.id, task_id: peerTask.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal })
     assertLosslessJson(unblockedPeer)
     const acceptedTaskUpdate = await crossRealDshJsonOutputBoundary(unblockedPeer)
@@ -970,7 +988,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.deepEqual(targetWorkerState.team.inboundEvents[0], inboundEvent)
 
     activeInitiator = recoveryAgent
-    const foreign = (await tools.get('team_start').execute({ objective: 'Different root isolation' }, { agent: recoveryAgent, signal: new AbortController().signal })).team
+    const foreign = (await startTeam(tools, { objective: 'Different root isolation' }, { agent: recoveryAgent, signal: new AbortController().signal })).team
     const foreignTask = (await tools.get('team_task_create').execute({ team_id: foreign.id, title: 'Foreign root task' }, { agent: recoveryAgent, signal: new AbortController().signal })).task
     activeInitiator = rootAgent
     await assert.rejects(
@@ -992,7 +1010,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     let racingMessageSettled = false
     const racingMessage = tools.get('team_message').execute({ team_id: started.team.id, target_team_id: sibling.id, recipient_session_id: peerSpawn.member.sessionId, message: 'Race with shutdown' }, { agent: rootAgent, signal: new AbortController().signal }).then(value => { racingMessageSettled = true; return value })
     await enteredRelay
-    const unrelatedRelayTeam = (await tools.get('team_start').execute({ objective: 'Unrelated relay concurrency' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const unrelatedRelayTeam = (await startTeam(tools, { objective: 'Unrelated relay concurrency' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const unrelatedRelayWorker = await tools.get('team_spawn').execute({ team_id: unrelatedRelayTeam.id, name: 'FreeWorker', role: 'unrelated concurrency', prompt: 'Complete outside relay locks' }, { agent: rootAgent, signal: new AbortController().signal })
     const unrelatedRelayShutdown = await tools.get('team_shutdown').execute({ team_id: unrelatedRelayTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(unrelatedRelayWorker.member.state, 'running')
@@ -1020,7 +1038,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
       error => error && error.code === 'AGENT_TEAMS_CLOSING'
     )
 
-    const readQueueRaceTeam = (await tools.get('team_start').execute({ objective: 'Read queue close race' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const readQueueRaceTeam = (await startTeam(tools, { objective: 'Read queue close race' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const readQueueRaceWorker = (await tools.get('team_spawn').execute({ team_id: readQueueRaceTeam.id, name: 'QueueAudit', role: 'queue race audit', prompt: 'Wait for relay race' }, { agent: rootAgent, signal: new AbortController().signal })).member
     let releaseQueueRelay
     relayGate = new Promise(resolve => { releaseQueueRelay = resolve })
@@ -1041,7 +1059,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     relayEntered = undefined
     assert.equal(followups.some(followup => followup.content?.[0]?.text?.includes('Must not deliver after queued close')), false)
 
-    const memberRetireOrderTeam = (await tools.get('team_start').execute({ objective: 'Member retirement queue ordering' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const memberRetireOrderTeam = (await startTeam(tools, { objective: 'Member retirement queue ordering' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const memberRetireOrderWorker = (await tools.get('team_spawn').execute({ team_id: memberRetireOrderTeam.id, name: 'OrderAudit', role: 'retirement ordering', prompt: 'Wait for ordered retirement' }, { agent: rootAgent, signal: new AbortController().signal })).member
     let releaseMemberOrderRelay
     relayGate = new Promise(resolve => { releaseMemberOrderRelay = resolve })
@@ -1060,7 +1078,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     relayEntered = undefined
     await tools.get('team_shutdown').execute({ team_id: memberRetireOrderTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const secondTeam = (await tools.get('team_start').execute({ objective: 'Spawn shutdown race' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const secondTeam = (await startTeam(tools, { objective: 'Spawn shutdown race' }, { agent: rootAgent, signal: new AbortController().signal })).team
     let releaseSpawn
     spawnGate = new Promise(resolve => { releaseSpawn = resolve })
     const enteredSpawn = new Promise(resolve => { spawnEntered = resolve })
@@ -1093,7 +1111,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
 
     spawnGate = undefined
 
-    const duplicateChildTeam = (await tools.get('team_start').execute({ objective: 'Duplicate child id safety' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const duplicateChildTeam = (await startTeam(tools, { objective: 'Duplicate child id safety' }, { agent: rootAgent, signal: new AbortController().signal })).team
     forcedChildId = spawned.member.sessionId
     const drainsBeforeDuplicate = drains.length
     await assert.rejects(
@@ -1107,7 +1125,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(duplicateChildRecord.members.find(member => member.name === 'IdSafety').error, /existing child was not drained/u)
     await tools.get('team_shutdown').execute({ team_id: duplicateChildTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const publicationFailureTeam = (await tools.get('team_start').execute({ objective: 'Publication rollback drain' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const publicationFailureTeam = (await startTeam(tools, { objective: 'Publication rollback drain' }, { agent: rootAgent, signal: new AbortController().signal })).team
     let releasePublicationStart
     spawnGate = new Promise(resolve => { releasePublicationStart = resolve })
     const enteredPublicationStart = new Promise(resolve => { spawnEntered = resolve })
@@ -1148,7 +1166,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(publicationRetry.member.state, 'running')
     await tools.get('team_shutdown').execute({ team_id: publicationFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const unconfirmedPublicationTeam = (await tools.get('team_start').execute({ objective: 'Unconfirmed publication rollback' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const unconfirmedPublicationTeam = (await startTeam(tools, { objective: 'Unconfirmed publication rollback' }, { agent: rootAgent, signal: new AbortController().signal })).team
     let releaseUnconfirmedPublicationStart
     spawnGate = new Promise(resolve => { releaseUnconfirmedPublicationStart = resolve })
     const enteredUnconfirmedPublicationStart = new Promise(resolve => { spawnEntered = resolve })
@@ -1180,7 +1198,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     activeInitiator = rootAgent
     await tools.get('team_shutdown').execute({ team_id: unconfirmedPublicationTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const workFailureTeam = (await tools.get('team_start').execute({ objective: 'Work followup cleanup' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const workFailureTeam = (await startTeam(tools, { objective: 'Work followup cleanup' }, { agent: rootAgent, signal: new AbortController().signal })).team
     failWorkFollowupIds.add('*')
     await assert.rejects(
       tools.get('team_spawn').execute({ team_id: workFailureTeam.id, name: 'WorkAudit', role: 'work failure audit', prompt: 'Fail the first work followup' }, { agent: rootAgent, signal: new AbortController().signal }),
@@ -1198,7 +1216,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(workFailureMember.error, /initial work followup failed after child became live after confirmed drain/u)
     await tools.get('team_shutdown').execute({ team_id: workFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const unconfirmedWorkFailureTeam = (await tools.get('team_start').execute({ objective: 'Unconfirmed work followup cleanup' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const unconfirmedWorkFailureTeam = (await startTeam(tools, { objective: 'Unconfirmed work followup cleanup' }, { agent: rootAgent, signal: new AbortController().signal })).team
     failWorkFollowupIds.add('*')
     failDrain = true
     await assert.rejects(
@@ -1218,7 +1236,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(workFailureMember.error, /cleanup drain failed: Error: drain failed/u)
     await tools.get('team_shutdown').execute({ team_id: unconfirmedWorkFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const recoverableTeam = (await tools.get('team_start').execute({ objective: 'Recover failed shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const recoverableTeam = (await startTeam(tools, { objective: 'Recover failed shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const operatorSpawn = await tools.get('team_spawn').execute({ team_id: recoverableTeam.id, name: 'Operator', role: 'Operate', prompt: 'Stay controllable' }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(operatorSpawn.member.modelTier, 'subagent')
     assert.equal(operatorSpawn.member.inheritsMain, false)
@@ -1280,7 +1298,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(retriedMember.error, undefined)
     assert.deepEqual(drains.at(-1), { parent: rootAgent, childIds: [operatorSpawn.member.sessionId] })
 
-    const coldTeam = (await tools.get('team_start').execute({ objective: 'Cold child shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const coldTeam = (await startTeam(tools, { objective: 'Cold child shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const coldMember = (await tools.get('team_spawn').execute({ team_id: coldTeam.id, name: 'ColdTester', role: 'cold shutdown test', prompt: 'Become cold before shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).member
     await listeners.get('subagent/start')({ id: coldMember.sessionId, runId: 'cold-member-run' })
     await listeners.get('subagent/end')({ id: coldMember.sessionId, runId: 'cold-member-run', stopReason: 'completed' })
@@ -1292,7 +1310,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(coldShutdown.team.members.find(member => member.sessionId === coldMember.sessionId).state, 'retired')
     assert.deepEqual(drains.at(-1), { parent: rootAgent, childIds: [coldMember.sessionId] })
 
-    const refusalTeam = (await tools.get('team_start').execute({ objective: 'Refusal retirement must fail closed' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const refusalTeam = (await startTeam(tools, { objective: 'Refusal retirement must fail closed' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const refusalWorker = (await tools.get('team_spawn').execute({ team_id: refusalTeam.id, name: 'RefusalAudit', role: 'refusal retirement audit', prompt: 'Exercise refusal handling' }, { agent: rootAgent, signal: new AbortController().signal })).member
     gracefulStopReasons.set(refusalWorker.sessionId, 'refusal')
     await assert.rejects(
@@ -1308,7 +1326,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     gracefulStopReasons.delete(refusalWorker.sessionId)
     await tools.get('team_shutdown').execute({ team_id: refusalTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const fullRefusalTeam = (await tools.get('team_start').execute({ objective: 'Whole-team refusal must persist a failed open closure attempt' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const fullRefusalTeam = (await startTeam(tools, { objective: 'Whole-team refusal must persist a failed open closure attempt' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const fullRefusalWorker = (await tools.get('team_spawn').execute({ team_id: fullRefusalTeam.id, name: 'FullRefusal', role: 'whole-team refusal audit', prompt: 'Refuse graceful retirement for the full-team path' }, { agent: rootAgent, signal: new AbortController().signal })).member
     gracefulStopReasons.set(fullRefusalWorker.sessionId, 'refusal')
     const fullRefusal = await tools.get('team_shutdown').execute({ team_id: fullRefusalTeam.id }, { agent: rootAgent, signal: new AbortController().signal })
@@ -1324,7 +1342,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     gracefulStopReasons.delete(fullRefusalWorker.sessionId)
     await tools.get('team_shutdown').execute({ team_id: fullRefusalTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const memberGracefulFailureTeam = (await tools.get('team_start').execute({ objective: 'Member graceful send failure' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const memberGracefulFailureTeam = (await startTeam(tools, { objective: 'Member graceful send failure' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const memberGracefulFailureWorker = (await tools.get('team_spawn').execute({ team_id: memberGracefulFailureTeam.id, name: 'SendAudit', role: 'send failure audit', prompt: 'Remain available for retirement test' }, { agent: rootAgent, signal: new AbortController().signal })).member
     failGracefulFollowupIds.add(memberGracefulFailureWorker.sessionId)
     await assert.rejects(
@@ -1353,7 +1371,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
         assignee_session_id: memberGracefulFailureWorker.sessionId
       }, { agent: rootAgent, signal: new AbortController().signal })
     ]) {
-      await assert.rejects(operation, error => {
+     await assert.rejects(operation, error => {
         assert.equal(error?.code, 'AGENT_TEAMS_ASSIGNEE_UNAVAILABLE')
         assert.equal(error?.message, 'target assignee is not assignable (current state: failed)')
         assert.doesNotMatch(error.message, /caller|lead-session|SendAudit|shutdownUnconfirmed|stopUnconfirmed/u)
@@ -1407,7 +1425,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(gracefulFailureMember.stopUnconfirmed, undefined)
     await tools.get('team_shutdown').execute({ team_id: memberGracefulFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const coldResumeGracefulTeam = (await tools.get('team_start').execute({ objective: 'Cold resume graceful lifecycle wait' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const coldResumeGracefulTeam = (await startTeam(tools, { objective: 'Cold resume graceful lifecycle wait' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const coldResumeGracefulWorker = (await tools.get('team_spawn').execute({ team_id: coldResumeGracefulTeam.id, name: 'ColdResumeAudit', role: 'cold resume audit', prompt: 'Wait for disposal race test' }, { agent: rootAgent, signal: new AbortController().signal })).member
     await listeners.get('subagent/start')({ id: coldResumeGracefulWorker.sessionId, runId: 'old-resident-run' })
     let releaseColdResumeGraceful
@@ -1430,7 +1448,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     gracefulEntered = undefined
     await tools.get('team_shutdown').execute({ team_id: coldResumeGracefulTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const hotReloadGracefulTeam = (await tools.get('team_start').execute({ objective: 'Hot reload graceful lifecycle wait' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const hotReloadGracefulTeam = (await startTeam(tools, { objective: 'Hot reload graceful lifecycle wait' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const hotReloadGracefulWorker = (await tools.get('team_spawn').execute({ team_id: hotReloadGracefulTeam.id, name: 'LifecycleAudit', role: 'lifecycle wait audit', prompt: 'Wait for graceful lifecycle test' }, { agent: rootAgent, signal: new AbortController().signal })).member
     manualGracefulLifecycleIds.add(hotReloadGracefulWorker.sessionId)
     let gracefulAcceptedResolve
@@ -1451,7 +1469,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     onGracefulAccepted = undefined
     await tools.get('team_shutdown').execute({ team_id: hotReloadGracefulTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const bufferedHotReloadTeam = (await tools.get('team_start').execute({ objective: 'Buffered hot reload end' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const bufferedHotReloadTeam = (await startTeam(tools, { objective: 'Buffered hot reload end' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const bufferedHotReloadWorker = (await tools.get('team_spawn').execute({ team_id: bufferedHotReloadTeam.id, name: 'FastEndAudit', role: 'fast end audit', prompt: 'End immediately after acceptance' }, { agent: rootAgent, signal: new AbortController().signal })).member
     bufferedGracefulEndIds.add(bufferedHotReloadWorker.sessionId)
     const bufferedHotReloadRetirement = await tools.get('team_shutdown').execute({ team_id: bufferedHotReloadTeam.id, member_session_id: bufferedHotReloadWorker.sessionId }, { agent: rootAgent, signal: new AbortController().signal })
@@ -1459,7 +1477,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     bufferedGracefulEndIds.delete(bufferedHotReloadWorker.sessionId)
     await tools.get('team_shutdown').execute({ team_id: bufferedHotReloadTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const unknownColdResumeTeam = (await tools.get('team_start').execute({ objective: 'Unknown active cold resume distinction' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const unknownColdResumeTeam = (await startTeam(tools, { objective: 'Unknown active cold resume distinction' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const unknownColdResumeWorker = (await tools.get('team_spawn').execute({ team_id: unknownColdResumeTeam.id, name: 'UnknownRunAudit', role: 'unknown run audit', prompt: 'Distinguish old end from cold resume' }, { agent: rootAgent, signal: new AbortController().signal })).member
     bufferedColdResumeIds.add(unknownColdResumeWorker.sessionId)
     let unknownColdAcceptedResolve
@@ -1478,7 +1496,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     onGracefulAccepted = undefined
     await tools.get('team_shutdown').execute({ team_id: unknownColdResumeTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const multiGracefulTeam = (await tools.get('team_start').execute({ objective: 'Multi-worker graceful lifecycle wait' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const multiGracefulTeam = (await startTeam(tools, { objective: 'Multi-worker graceful lifecycle wait' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const multiGracefulA = (await tools.get('team_spawn').execute({ team_id: multiGracefulTeam.id, name: 'GracefulA', role: 'first graceful worker', prompt: 'Wait for first lifecycle end' }, { agent: rootAgent, signal: new AbortController().signal })).member
     const multiGracefulB = (await tools.get('team_spawn').execute({ team_id: multiGracefulTeam.id, name: 'GracefulB', role: 'second graceful worker', prompt: 'Wait for second lifecycle end' }, { agent: rootAgent, signal: new AbortController().signal })).member
     manualGracefulLifecycleIds.add(multiGracefulA.sessionId)
@@ -1503,7 +1521,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     manualGracefulLifecycleIds.delete(multiGracefulB.sessionId)
     onGracefulAccepted = undefined
 
-    const wholeGracefulFailureTeam = (await tools.get('team_start').execute({ objective: 'Whole graceful send failure' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const wholeGracefulFailureTeam = (await startTeam(tools, { objective: 'Whole graceful send failure' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const wholeGracefulFailureWorker = (await tools.get('team_spawn').execute({ team_id: wholeGracefulFailureTeam.id, name: 'StopAudit', role: 'stop failure audit', prompt: 'Remain available for whole-team test' }, { agent: rootAgent, signal: new AbortController().signal })).member
     failGracefulFollowupIds.add(wholeGracefulFailureWorker.sessionId)
     const wholeGracefulFailure = await tools.get('team_shutdown').execute({ team_id: wholeGracefulFailureTeam.id }, { agent: rootAgent, signal: new AbortController().signal })
@@ -1517,7 +1535,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     failGracefulFollowupIds.delete(wholeGracefulFailureWorker.sessionId)
     await tools.get('team_shutdown').execute({ team_id: wholeGracefulFailureTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
-    const gracefulTeam = (await tools.get('team_start').execute({ objective: 'Graceful shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const gracefulTeam = (await startTeam(tools, { objective: 'Graceful shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const gracefulMember = (await tools.get('team_spawn').execute({ team_id: gracefulTeam.id, name: 'Closer', role: 'Close', prompt: 'Finish cleanly' }, { agent: rootAgent, signal: new AbortController().signal })).member
     const gracefulShutdown = await tools.get('team_shutdown').execute({ team_id: gracefulTeam.id }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(gracefulShutdown.team.state, 'closed')
@@ -1529,7 +1547,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
       subagent: { inheritMain: true, provider: 'main-provider', model: 'main-model' },
       basePreset: 'standard'
     }, null, 2)}\n`, 'utf8')
-    const inheritedTeam = (await tools.get('team_start').execute({ objective: 'Inherited subagent route' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const inheritedTeam = (await startTeam(tools, { objective: 'Inherited subagent route' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const inheritedSpawn = await tools.get('team_spawn').execute({ team_id: inheritedTeam.id, name: '继承测试', role: 'test inherited route', prompt: 'Verify inherited main projection' }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(inheritedSpawn.member.modelTier, 'subagent')
     assert.equal(inheritedSpawn.member.inheritsMain, true)
@@ -1539,7 +1557,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     await tools.get('team_shutdown').execute({ team_id: inheritedTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
     await rm(path.join(root, 'harness-desktop-model-routing.json'), { force: true })
-    const fallbackTeam = (await tools.get('team_start').execute({ objective: 'Missing route fallback' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const fallbackTeam = (await startTeam(tools, { objective: 'Missing route fallback' }, { agent: rootAgent, signal: new AbortController().signal })).team
     assert.equal(fallbackTeam.members[0].modelTier, 'main')
     assert.equal(fallbackTeam.members[0].inheritsMain, false)
     assert.equal(fallbackTeam.members[0].routeSource, 'live-lead')
@@ -1561,14 +1579,14 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.deepEqual(new Set(drains.at(-1).childIds), new Set([fallbackSpawn.member.sessionId, longButValidName.member.sessionId]))
     for (const start of starts) assert.deepEqual(start.request.toolFilter, { deny: ['subagent', 'subagent_fork', 'workflow', 'ralph'] })
 
-    const emptyShutdownTeam = (await tools.get('team_start').execute({ objective: 'Empty shutdown must not certify success' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const emptyShutdownTeam = (await startTeam(tools, { objective: 'Empty shutdown must not certify success' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const emptyShutdown = await tools.get('team_shutdown').execute({ team_id: emptyShutdownTeam.id }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(emptyShutdown.team.state, 'closed')
     assert.equal(emptyShutdown.team.closure.outcome, 'cancelled')
     assert.notEqual(emptyShutdown.team.closure.outcome, 'succeeded')
 
-    const emptyOrphan = (await tools.get('team_start').execute({ objective: 'Empty orphan must not certify success' }, { agent: rootAgent, signal: new AbortController().signal })).team
-    const orphan = (await tools.get('team_start').execute({ objective: 'Recover orphan' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const emptyOrphan = (await startTeam(tools, { objective: 'Empty orphan must not certify success' }, { agent: rootAgent, signal: new AbortController().signal })).team
+    const orphan = (await startTeam(tools, { objective: 'Recover orphan' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const orphanStoreFile = path.join(root, 'storages', 'agent_teams.json')
     const orphanDocument = JSON.parse(await readFile(orphanStoreFile, 'utf8'))
     const orphanRecord = orphanDocument.teams.find(team => team.id === orphan.id)
@@ -1578,9 +1596,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
       kind: 'worker', state: 'ready', createdAt: orphanTimestamp, updatedAt: orphanTimestamp
     })
     orphanRecord.tasks.push({
-      id: 'orphan-unaccepted', title: 'Unaccepted orphan delivery', state: 'completed', dependsOn: [], crossTeamDependsOn: [], files: [],
+      id: 'orphan-unaccepted', title: 'Unaccepted orphan delivery', state: 'submitted', dependsOn: [], crossTeamDependsOn: [], files: [],
       assigneeSessionId: 'orphan-worker', createdAt: orphanTimestamp, updatedAt: orphanTimestamp, claimedAt: orphanTimestamp,
-      completedAt: orphanTimestamp, attempt: 1, claimId: 'orphan-claim', leaseEpoch: 0,
+      attempt: 1, claimId: 'orphan-claim', leaseEpoch: 0,
       attemptHistory: [], interruptionHistory: [], capabilities: [], externalEffects: [],
       submission: { taskId: 'orphan-unaccepted', claimId: 'orphan-claim', leaseEpoch: 0, submittedAt: orphanTimestamp, submittedBy: 'orphan-worker', source: 'explicit_complete' }
     })
@@ -1604,7 +1622,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(stillOpen.closure, undefined, 'failed orphan recovery cannot persist a succeeded receipt')
     const acceptedDocument = JSON.parse(await readFile(orphanStoreFile, 'utf8'))
     const acceptedTask = acceptedDocument.teams.find(team => team.id === orphan.id).tasks.find(task => task.id === 'orphan-unaccepted')
-    acceptedTask.acceptance = { taskId: acceptedTask.id, claimId: acceptedTask.claimId, leaseEpoch: acceptedTask.leaseEpoch, acceptedAt: new Date().toISOString(), acceptedBy: orphan.rootLeadSessionId }
+    const acceptedAt = new Date().toISOString()
+    acceptedTask.state = 'completed'
+    acceptedTask.completedAt = acceptedAt
+    acceptedTask.acceptance = { taskId: acceptedTask.id, claimId: acceptedTask.claimId, leaseEpoch: acceptedTask.leaseEpoch, acceptedAt, acceptedBy: orphan.rootLeadSessionId, ownerEpoch: orphan.pauseEpoch ?? 0 }
     await writeFile(orphanStoreFile, `${JSON.stringify(acceptedDocument, null, 2)}\n`, 'utf8')
     const orphanRecovery = await tools.get('team_recover').execute({ team_id: orphan.id, confirm: true }, { agent: recoveryAgent, signal: new AbortController().signal })
     assert.equal(orphanRecovery.recovered[0].state, 'closed')
@@ -1654,7 +1675,7 @@ test('explicit user stop cancels queued wakeups and leaves paused work dormant',
     const store = new mod.AgentTeamsStore(file)
     await store.init()
     await store.mutate(document => { document.settings.enabled = true })
-    const leadSession = { id: 'stopped-root' }
+    const leadSession = { id: 'stopped-root', header: { cwd: root } }
     const lead = { id: leadSession.id, session: leadSession, cancelCalls: [], cancel(reason) { this.cancelCalls.push(reason) } }
     const team = await mod.createTeam(store, lead, { objective: 'Remain stopped after explicit cancellation' })
     const timestamp = new Date().toISOString()
@@ -1724,6 +1745,7 @@ test('tool lifecycle stays consistently paused from explicit Stop through status
     const tools = new Map(), routes = new Map(), handlers = new Map()
     const session = {
       id: 'tool-stop-lead',
+      header: { cwd: root },
       events: [
         { type: 'turn/start', data: {} },
         { type: 'user/message', data: { source: { kind: 'user' } } }
@@ -1750,7 +1772,7 @@ test('tool lifecycle stays consistently paused from explicit Stop through status
       sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4
     }))
     assert.equal(enabled.status, 200)
-    const started = await tools.get('team_start').execute({ objective: 'Keep Stop lifecycle consistent' }, { agent: lead, signal: new AbortController().signal })
+    const started = await startTeam(tools, { objective: 'Keep Stop lifecycle consistent' }, { agent: lead, signal: new AbortController().signal })
     const task = (await tools.get('team_task_create').execute({ team_id: started.team.id, title: 'Resume only after explicit confirmation' }, { agent: lead, signal: new AbortController().signal })).task
     const planned = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
     await tools.get('team_plan_commit').execute({ team_id: started.team.id, expected_revision: planned.team.plan.revision, confirmed_plan_hash: planned.team.plan.hash }, { agent: lead, signal: new AbortController().signal })
@@ -1804,7 +1826,7 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     let failWork = false
     const lead = {
       id: 'bootstrap-lead', status: 'running', options: { provider: 'main-provider', model: 'main-model' },
-      session: { events: [{ type: 'turn/start', data: {} }, { type: 'user/message', data: { source: { kind: 'user' } } }] },
+      session: { header: { cwd: root }, events: [{ type: 'turn/start', data: {} }, { type: 'user/message', data: { source: { kind: 'user' } } }] },
       inbox: { nextTurn: [], nextStep: [], remove() { return false } }, followup() {}, steer() {}
     }
     const ctx = {
@@ -1836,8 +1858,9 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     }
     mod.apply(ctx)
     await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', { sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4 }))
+    openDirectHumanTurn(lead)
     const conflictingScopes = {
-      request_id: 'bootstrap-overlap', objective: 'Reject unsafe parallel writes',
+      request_id: 'bootstrap-overlap', objective: 'Reject unsafe parallel writes', candidate_workstreams: 2,
       tasks: [
         { key: 'left-task', title: 'Left', member_key: 'left', files: ['src/shared'] },
         { key: 'right-task', title: 'Right', member_key: 'right', files: ['src/shared/nested.js'] }
@@ -1852,8 +1875,9 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
       error => error?.code === 'AGENT_TEAMS_BOOTSTRAP_SCOPE_CONFLICT'
     )
     assert.equal(starts.length, 0, 'scope conflict must fail before team members start')
+    openDirectHumanTurn(lead)
     const args = {
-      request_id: 'bootstrap-once', objective: 'Build and review safely',
+      request_id: 'bootstrap-once', objective: 'Build and review safely', candidate_workstreams: 2,
       tasks: [
         { key: 'build-task', title: 'Build', member_key: 'build', files: ['src/build'] },
         { key: 'build-detail', title: 'Build detail', member_key: 'build', files: ['src/build/generated.js'] },
@@ -1876,13 +1900,15 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     assert.equal(first.team.attention.required, false)
     assertLosslessJson(first)
 
+    openDirectHumanTurn(lead)
     const replay = await tools.get('team_bootstrap').execute(args, { agent: lead, signal: new AbortController().signal })
-    assert.equal(replay.operation.reused, true)
-    assert.equal(starts.length, 2, 'exact replay must not provision duplicate members')
+    openDirectHumanTurn(lead)
     await assert.rejects(
       tools.get('team_bootstrap').execute({ ...args, objective: 'Different input' }, { agent: lead, signal: new AbortController().signal }),
       error => error?.code === 'AGENT_TEAMS_IDEMPOTENCY_CONFLICT'
     )
+    assert.equal(replay.operation.reused, true)
+    assert.equal(starts.length, 2, 'exact replay must not provision duplicate members')
 
     await assert.rejects(
       tools.get('team_bootstrap').execute({ ...args, request_id: 'not-a-worker-call' }, { agent: { ...lead, id: 'worker' }, signal: new AbortController().signal }),
@@ -1909,13 +1935,15 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     assert.equal(inferredSpawn.teamId, first.team.id)
 
     failWork = true
-    const failed = await tools.get('team_bootstrap').execute({ request_id: 'bootstrap-failure', objective: 'Fail safely', tasks: [{ key: 'one', title: 'One', member_key: 'worker' }], members: [{ key: 'worker', name: 'Test', role: 'test failure', prompt: 'Fail the work followup.' }] }, { agent: lead, signal: new AbortController().signal })
+    openDirectHumanTurn(lead)
+    const failed = await tools.get('team_bootstrap').execute({ request_id: 'bootstrap-failure', objective: 'Fail safely', candidate_workstreams: 2, tasks: [{ key: 'one', title: 'One', member_key: 'worker' }], members: [{ key: 'worker', name: 'Test', role: 'test failure', prompt: 'Fail the work followup.' }] }, { agent: lead, signal: new AbortController().signal })
     assert.equal(failed.operation.phase, 'partial')
     assert.equal(failed.error.stage, 'work-followup')
     assert.equal(failed.error.retryable, false)
     assert.ok(failed.team.attention.codes.includes('failed_member'))
     const failedStartCount = starts.length
-    const failedReplay = await tools.get('team_bootstrap').execute({ request_id: 'bootstrap-failure', objective: 'Fail safely', tasks: [{ key: 'one', title: 'One', member_key: 'worker' }], members: [{ key: 'worker', name: 'Test', role: 'test failure', prompt: 'Fail the work followup.' }] }, { agent: lead, signal: new AbortController().signal })
+    openDirectHumanTurn(lead)
+    const failedReplay = await tools.get('team_bootstrap').execute({ request_id: 'bootstrap-failure', objective: 'Fail safely', candidate_workstreams: 2, tasks: [{ key: 'one', title: 'One', member_key: 'worker' }], members: [{ key: 'worker', name: 'Test', role: 'test failure', prompt: 'Fail the work followup.' }] }, { agent: lead, signal: new AbortController().signal })
     assert.equal(failedReplay.error.retryable, false)
     assert.equal(starts.length, failedStartCount, 'uncertain partial replay must fail closed')
     await assert.rejects(

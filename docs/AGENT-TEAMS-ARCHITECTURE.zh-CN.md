@@ -70,6 +70,16 @@ v1–v5 的已完成历史迁移到 v6 时，会生成成对的兼容 receipt，
 
 Resume 是两阶段协议。预览阶段只返回绑定 request、team revision、pause epoch 和当前任务/成员事实的恢复计划，团队仍保持 `paused`，不唤醒成员、不改任务；提交阶段必须携带该预览的 CAS 前提，并原子保存提交 receipt。完全相同 request 与 CAS 的已提交恢复请求可依据 receipt 幂等返回既有结果；同 request 搭配不同内容、过期 preview、revision 或 epoch 必须拒绝。恢复按节点隔离：健康且前提仍成立的任务可以继续，失败成员、权限未知、无有效 claim、外部副作用 `outcome_unknown` 或其他异常节点保持 Attention，不得因一个异常节点冻结整个团队，也不得被批量误判为可重放。
 
+### 失败成员恢复 saga
+
+失败成员恢复是旧团队 Web 数据面的唯一成员生命周期窄写入口，也是模型工具 `team_member_recover` 的同一 Host 原语。它只接受 exact fixed root、当前 direct-human 显式确认、稳定 `requestId`、精确 team revision 和状态仍为 `failed` 的 worker；自动续轮、普通成员、已完成/运行中/退役成员、paused/closed team、计划或费用授权未知、能力未验证、容量不足、文件范围冲突以及未核对 recovery/external effect 全部 fail closed。界面只在负责人查看 active 团队且确有失败成员时显示操作，替换必须二次确认并明确新的模型成本，不自动唤醒、不后台重试。Project board 只向 exact root 投影 opaque member id/name、当前 revision，以及未决 receipt 的完整 request/action/phase；不投影 session、child、claim 或 receipt 内部字段。恢复 overlay 逐项计算最终 JSON 的 UTF-8 字节并硬守 128 KiB page budget，以 `unresolvedRemaining/unresolvedTruncated` 诚实标记未显示项；requestId 绝不截断，前序 receipt 终结后后续项可渐进进入投影。
+
+`retry` 要求 exact continuable session 仍有且仅有一个未变的 `in_progress` active claim；同一成员的若干 `pending` 已分配任务保持原 assignment，不强迫替换。receipt 固定 active task、`claimId/leaseEpoch` 与所有任务；`prepared` 重放继续同一 attempt，投递前进入 `retry_dispatching` fence。followup observer 即使先把成员置为 running 或让 exact worker 正常推进，只要 pending assignment、in-progress session/claim/lease，或 completed explicit submission 能与 receipt 审计绑定，均可收敛为 delivered，并原样保留 task state/claim/result；成员状态按 active work 推导为 running，否则为 ready/idle。投递抛错或崩溃一律保留 `outcome_unknown`，不凭异常猜测未送达，也不盲重放。
+
+`replace` 在 prepare mutation 中同时保存 receipt、把旧成员转入退役审计、把旧 claim/lease 追加到 interruption history 后撤销、将所属未完成任务置回 pending，并预绑定一个名称严格为 2–12 字符的可见同级 replacement 占位。持久 phase 依次为 `prepared → drain_started → start_dispatched → child_started → published → followup_dispatching → followup_returned`；Host restart 在每个窗口只用 receipt 中预留的 exact child id 修复 publication/assignment 并继续，绝不重复 start 或 work followup。child 可能已经创建后的 Stop、CAS 或 dispatch 失败只能保持 `outcome_unknown`，不能写 failed 后允许新 child。
+
+`team_member_reconcile` 和同源 UI 的明确二次确认是未决 receipt 的人工收敛路径：`delivered` 只结算原 request，并接受 exact replacement/retry worker 已正常 claim 或以 explicit submission 完成的强审计证据；foreign assignee、legacy migration 或冲突 claim 仍 fail closed。`not_delivered` 会先 CAS 验证所有 replacement 任务仍为 pending 且绑定 reserved placeholder/child，再 drain exact child（如有），并在删除 replacement 前再次验证；claimed、terminal 或迁移任务会保持 `outcome_unknown`。两者都不会重新投递。paused 团队仍向 exact root 投影未决 receipt，但只允许 `not_delivered` 安全结算，不允许把成员置回 running。相同 request 重放复用原 receipt。每队最多保留 24 条 recovery receipt；达到上限时只淘汰最旧 terminal (`delivered/failed`) receipt，绝不淘汰 `prepared/outcome_unknown`，也不要求关闭仍有未完成任务的团队。
+
 ### 能力、外部副作用与跨会话接管
 
 能力预检只记录 Host 可验证的事实。当前工具无法证明的权限必须投影为 `unknown`，既不能伪造为允许，也不能把 unknown 当成永久拒绝；执行前需要重新取得可验证能力。外部效果的稳定 effect identity 由 Host 根据团队、任务和已声明效果导出；模型提供的 `idempotencyKey` 只是非权威输入，不能覆盖 Host identity。`prepare` 必须先持久化 `outcome_unknown` 与 attempt fence，再允许调用外部系统；只有持有当前 attempt 的结果或精确 direct-human root 的 `resolve_unknown` 才能解除阻塞。对于参与稳定 command id、receipt 和幂等重放协议的工具，可以在协议边界内收敛为一次逻辑效果；任意外部 UI 点击、未提供 receipt 的系统、网络超时后的第三方动作都**不保证 exactly-once**。
@@ -82,7 +92,7 @@ Resume 是两阶段协议。预览阶段只返回绑定 request、team revision�
 
 团队插件先验证调用者是精确 live agent，且发送者与接收者属于同一活跃团队。队友到队友的消息仍通过固定负责人作为官方 subagent 的直接父级进行投递，从而不绕过官方 lineage 检查。消息使用 `coordinator/relay` 来源并记录真实 `senderSessionId`，永远不获得 `user` 权限。
 
-旧团队运行时工作台的 HTTP/SSE 面只读展示成员、团队任务和消息状态，并从 Web 投影中移除消息正文、任务描述和文件路径；除实验设置外，创建/发信/团队任务变更/成员生命周期仍只走模型工具的精确 live-agent 鉴权，避免客户端伪造会话身份。Project Tasks 的窄写入口是独立例外，只接受本章后述的 create/allowed transition，并由 Project authority、actor resolver、RBAC 与 OCC 重验，不能写旧团队状态。写请求要求同源回环、`x-harness-agent-teams: 1` 头和有界正文。用户可从工作台打开官方成员会话，直接发消息或使用官方中断能力。原负责人不可恢复时，只能由新根会话中的直接用户通过 `team_recover` 预览并显式确认关闭无活动成员的孤儿团队。
+旧团队运行时工作台的 HTTP/SSE 面默认只读展示成员、团队任务和消息状态，并从 Web 投影中移除消息正文、任务描述和文件路径；唯一成员生命周期窄写例外是上一节的失败成员 retry/replace，它要求同源受信请求、exact fixed root、direct-human 确认、稳定 request/OCC 与持久 recovery receipt。除此之外，创建/发信/团队任务变更/成员生命周期仍只走模型工具的精确 live-agent 鉴权，避免客户端伪造会话身份。Project Tasks 的窄写入口是独立例外，只接受本章后述的 create/allowed transition，并由 Project authority、actor resolver、RBAC 与 OCC 重验，不能写旧团队状态。写请求要求同源回环、`x-harness-agent-teams: 1` 头和有界正文。用户可从工作台打开官方成员会话，直接发消息或使用官方中断能力。原负责人不可恢复时，只能由新根会话中的直接用户通过 `team_recover` 预览并显式确认关闭无活动成员的孤儿团队。
 
 ## 团队运行时任务（旧任务板）
 
@@ -118,13 +128,30 @@ Project Tasks 是与团队运行时任务并列的独立域，保存 `backlog`�
 
 Project Tasks 使用独立 Web contract：
 
-- `GET /api/agent-teams/project/tasks/state` 返回 canonical capability、最多最近 500 个 safe task 和 `hasMore`；
+- `GET /api/agent-teams/project/tasks/state` 返回当前 canonical project 的首个安全页；本机 authority 响应包含精确 `projectRevision/totalTasks/totalExact:true` 以及 `page.includedTasks/hasMore/nextCursor`；
+- `GET /api/agent-teams/project/tasks/page?cursor=...` 只允许本机 authority 按用户明确点击读取后续页；remote collaborator 返回 `409 PROJECT_TASK_PAGE_AUTHORITY_REQUIRED`，不提供完整分页；
 - `POST /api/agent-teams/project/tasks/action` authority 接受明确 `create` 与服务器投影的 allowed transition；collaborator 只接受 capability 和条目 `allowedActions` 同时允许的 `claim/transition`；
-- `GET /api/agent-teams/project/tasks/stream` 的 `reset/capability/task` 事件只作为失效通知，Client 合并后重新 GET，不把 SSE payload 当权威结果。
+- `GET /api/agent-teams/project/tasks/stream` 的 `reset/capability/task` 事件只作为首屏失效通知，Client 重新 GET 并清空已追加页面，不把 SSE payload 当权威结果。
 
-请求不接收 `projectRef`、`eventRef`、session 身份、actor、role 或 authority；这些值和 create 所需引用均由 Host 派生。Authority Web task projection 保持原安全摘要；collaborator 只增加 `hasAssignee/blockedByCount/allowedActions`，且 Client 不把内部 taskRef 渲染成文字，不返回 device/message/digest/reset、actor、文件路径、requirements、comment/review body、key 或原始错误栈。远端状态目标排除 `blocked/in_review/done`。POST 顶层限制为 `commandId/type/taskRef?/expectedRevision/payload`；同一网络意图最多用完全相同 body 重试一次，HTTP/OCC/幂等冲突不重试，也不做 optimistic revision 改写。
+Authority 的 state/page 使用同一安全任务投影。每页至多读取 120 项，并在序列化后受 128 KiB UTF-8 传输预算约束；若字节预算先命中，只发送能完整容纳的前缀，并以最后一个实际发送项生成下一边界，避免丢行或重复；只有单条安全投影仍放不下才失败。这两个数字都是**单页预算，不是项目任务容量**。`totalTasks` 是当前项目完整精确总数。后续页采用以 `(updatedAt, taskRef)` 为边界的 keyset 游标；游标绑定项目与 `projectRevision`，并由进程内随机密钥通过 AES-256-GCM 认证加密，边界引用不会出现在 base64 明文中，篡改、跨项目重放、进程重启密钥变化或 revision 过期均 fail closed。Client 只在 authority 且 `totalExact:true` 时显示完整总数、剩余数和“加载更多”；项目/capability/revision、首屏页元数据或 SSE 首屏任务事实变化都会回到首屏。分页不预取、不轮询、不自动重试。
 
-非 2xx 采用 `{ ok:false, error:{ code, message, nextAction, retryable, safeDetails } }`。Client 保留 code/nextAction 做有界人类化提示，不直接展示机器 message。capability 明确区分 `authority`、`collaborator`、`no-project` 与 `unavailable`；只有 `canCreate=true` 显示/执行 Create。`hasMore=true` 必须显示 500 项上限，不能静默截断或以空数组冒充不可用。
+请求不接收 `projectRef`、`eventRef`、session 身份、actor、role 或 authority；这些值和 create 所需引用均由 Host 派生。Authority Web task projection 保持原安全摘要；collaborator 只增加 `hasAssignee/blockedByCount/allowedActions`，且 Client 不把内部 taskRef 渲染成文字，不返回 device/message/digest/reset、actor、文件路径、requirements、comment/review body、key 或原始错误栈。远端状态目标排除 `blocked/in_review/done`。POST 顶层限制为 `commandId/type/taskRef?/expectedRevision/payload`；一次明确用户动作只发送一个浏览器 POST。Transport error 或结果未知会进入现有显式错误路径，绝不隐式重放、改写 revision 或生成新意图；用户必须先显式刷新，再以新的明确动作重新发起。
+
+Remote collaborator 的状态不是 authority 分页的缩小版，而是现有 Project Business Sync 加密 `safeCache` 的连接预览：整个同步 Store 明文序列化有 16 MiB 防御预算，浏览器收到 `totalExact:false` 和 `page.available:false`，只能陈述本机已安全同步的条目数，并引导到 authority 设备查看完整任务和分页。它不能把安全缓存条目数冒充完整总数，也不能把任何内部条目防御限制宣传为系统任务容量。
+
+非 2xx 采用 `{ ok:false, error:{ code, message, nextAction, retryable, safeDetails } }`。Client 保留 code/nextAction 做有界人类化提示，不直接展示机器 message。capability 明确区分 `authority`、`collaborator`、`no-project` 与 `unavailable`；只有 `canCreate=true` 显示/执行 Create。
+
+### 唯一跨会话任务看板与项目隔离
+
+Client 只提供一个**“跨会话任务”**工作区：它订阅当前 canonical `projectKey` 的独立项目协作投影，展示真实顶层会话席位、项目所有任务、责任/资源范围/阶段/下一步，以及依赖、移交、锁冲突、待决策、交付证据和变更历史。任务不按 Agent Team 分组；每个会话的 Agent Team 仅作为执行摘要。独立 Project Tasks API 与 Project Automation 基础设施继续保留，由安全数据面提供分页与能力矩阵；不存在 `project_task_*` 重复工具，浏览器只观察、刷新、分页或写入负责人草稿，不直接执行工具。
+
+每个 canonical `projectKey` 独立准备会话席位、项目任务、依赖移交、资源锁、失败根恢复、证据、历史与协作请求；八个 section 都使用 SQLite `COUNT(*)` 精确 totals 和带确定性 tie-breaker 的独立 keyset 窗口。每区后续页最多读取 24 项，总首屏/序列化受 120 项与 128 KiB 预算保护，这些数字都不是项目总量。任务区把状态优先级写入可索引排序边界，完成项之后不会在后页重新出现更高优先级项。AES-GCM 游标、缓存、SSE debounce、队列和锁均按 canonical 项目隔离。每个真实顶层 root 是其 seat 唯一的项目板代表，并私下管理自己的 Agent Team；私有 Team 只服务当前已领取项目任务，成员只获得有界任务上下文，不能读取项目板。看板只显示有界 Team 摘要，不投影成员、聊天或完整团队任务上下文。Team 报告或完成不是项目证据，也不会自动更新项目板；root 必须核对交付并显式提交 evidence/status。项目板工具仅授予 exact top-level root，成员只能使用 `team_task_*`。项目切换时清理旧项目的列表 DOM。任务页按稳定 opaque taskRef keyset 分页，SSE 只增量合并当前项目投影并去抖，游标或项目 revision 变化时回到最新首屏，不扫描其他项目。
+
+Root 在采用席位时及每个项目任务边界先读取协作请求，并优先响应 `targetedToMe=true` 的请求。请求 kind 固定为 `dependency_unblock`、`release`、`handoff`、`takeover`，目标响应固定为 `accept`、`reject`、`release`；请求持久化、去重、no-wake，禁止轮询或唤醒已停止 root。模型只看到由 execution-derived actor 计算的 `mine`、`targetedToMe`、`escalationEligible`，绝不看到 actor ref。`respondByAt` 到期后协调 root 才可审计解决；若提前处理，必须由 Host 验证当前精确 root 回合中的显式用户授权，模型 payload 不能自报授权。
+
+Root 完成或提交当前项目任务后调用原子 `project_task claim_next`：Store 在当前项目的一次 SQLite `BEGIN IMMEDIATE` transaction 内按 `(updated_at, task_ref)` 公平选取一个无未完成依赖、无外部占用/冲突锁的 backlog/todo，并 CAS 为该 root 的唯一 `in_progress` 项；手工 claim 与所有进入 `in_progress` 的 transition 使用同一事务内单活检查，不用会破坏历史重复数据的唯一索引迁移。稳定 request id 由持久 receipt 幂等重放。无可领任务时只返回 `all_terminal`、`temporarily_empty` 或 `blocked` 及有界 blocker refs。阻塞 root 先创建一个持久请求，再尝试其他 eligible 项；只有全部终态或所有剩余阻塞均已记录才结束。
+
+服务端只对最近使用的 16 个项目保留 prepared-board LRU；每个条目保存 prepared 投影并可缓存其首屏。后续页按游标从 prepared 投影即时计算，**不缓存后续页面**。16 是进程内 prepared 首屏缓存预算，不是可创建、可切换或可分页项目的数量上限；24/120/128 KiB 同样不是团队或任务容量。
 
 这里描述的是当前代码和固定 HTTP/SSE 契约及自动化测试边界，不代表所有打包版本已完成安装后实机验证。
 
@@ -203,7 +230,25 @@ M5 将旧团队任务的文件范围提示扩展为 Host-only 项目基础流水
 
 `GET /api/agent-teams/project/foundations/state` 仅接受可信同源本机 GET 且 query 必须为空。固定响应只有 `{ok,mode,available,ready,sourceStatus,workspaceCount,claimCount,queuedChangeSetCount,campaignCount,queuedJobCount,runningJobCount,defectCount,outboxPendingCount,attention}`；计数有界，`attention` 只含固定安全 token。任何 commit/digest/ref/path/task file/actor/runner key/evidence/credential 都不能进入响应或状态卡。
 
-Client 只在既有“团队工作流程”中显示一张摘要卡，不增加导航。Authority 根据安全状态看到“系统已自动做什么/负责人下一步”；collaborator 的 `sourceStatus=authority_managed`，只显示“由主设备负责工作区、合并和质量门禁”，不渲染按钮。`source_invalid` 明确表示当前真实源不是 Git 根；状态不可用时也不猜测路径或证据。
+Client 不再保留静态“团队工作流程”说明页；该导航位置现为唯一且真实的“跨会话任务”只读聚合看板。Project Foundations 仍只消费安全摘要：Authority 根据安全状态看到“系统已自动做什么/负责人下一步”；collaborator 的 `sourceStatus=authority_managed` 只表达“由主设备负责工作区、合并和质量门禁”，不渲染基础设施操作按钮。浏览器看板、摘要卡或草稿入口都不能触发 worktree、合并、质量或缺陷操作；`source_invalid` 明确表示当前真实源不是 Git 根，状态不可用时也不猜测路径或证据。
+
+## Canonical Project 运行通道隔离
+
+Project Entry 的设备身份、远程邀请、LAN/WSS 与 OS-backed secret capability 仍保持单例，绝不为每个工作目录重复消费秘密能力。只有 Host-only 的本机任务/协作 Context 经 `ProjectEntryRegistry` 分片：exact top-level execution 的规范化工作根由 Host 计算 `canonicalProjectKey`，再在安装/authority 密钥域内 HMAC 成不可逆 `laneRef`、lane 专用 `projectRef` 与 32-byte Store key；模型参数没有选择 lane 的字段。每个 lane 使用独立目录、SQLite/WAL、写锁和 Context epoch，目录名、持久状态与工具输出均不保存原始 canonical key 或 workspace path。
+
+会话启动插件同样为每个 lane 延迟创建独立 ledger、索引、write chain 与队列；同一 lane 的首次打开共享一个 `ready` single-flight，失败只按 entry identity 驱逐，随后可以安全重试。同一个 raw request/batch/slot/operation id 可在不同 lane 安全并存。Desktop Host bridge 保留全局有界公平 admission/backpressure，但以 Host HMAC `laneRef` 建索引，慢项目不会通过共享 pending key 或文件锁串行化其他项目。新 ledger 不持久化 workspace/canonical binding；重启后必须由 exact execution 再次解析 Host binding，跨 lane 的 status/stop/adopt/reconcile 全部 fail closed。旧全局启动 ledger 保持原位且仍是其中记录的唯一 owner；lane 查询未命中时，`status/stop/redeemAdoption` 仅以 exact Host-derived binding 回退旧 runtime。启动账本不做实体复制、不创建 migration marker，也不产生第二 owner。
+
+旧 `agent_project_tasks.sqlite` 永不删除。没有协作看板的空旧库不消费绑定；有数据时只有旧启动账本提供唯一 canonical 证据才自动绑定，否则普通 `initialize` 返回 `PROJECT_ENTRY_LEGACY_BINDING_REQUIRED`，仅 exact 当前 top-level direct-human root 的独立 `bind_legacy` 动作可完成一次性绑定；Agent、Team member 与模型布尔字段均不能选择该路径。绑定 lane 通过异步 SQLite backup 取得包含 WAL 的一致快照，并继续使用旧 `projectRef`/Store key，保证既有分区过滤、AAD、密文与 root actor HMAC 可读。marker 只保存 opaque laneRef，采用 `copying -> complete` 原子状态；崩溃恢复仅替换未完成的目标/临时副本，绝不删除旧库。marker 已绑定 A 后，普通 B 访问创建独立空 lane；只有 B 再次请求显式绑定才返回冲突。已知 lane 走每-lane 快路，不排队等待一次性 legacy 决策或其他 lane 的慢迁移；旧版残留的 lock artifact 不参与判定，也不会阻塞重启。
+
+## 失败顶层会话的显式恢复
+
+Project Collaboration schema v10 使用加密的 `project_collaboration_root_recoveries`，并把 `initiator`、真实失败/受益 actor 明确分栏：审计历史记录发起者，seat/task/lock 只按 Host 证据中的真实失败者、受益者与 replacement 变更。恢复必须来自 Host 对真实 top-level session operation 的确定失败证据，模型或浏览器不能提交任何 actor ref、原始 session、错误正文或所有权身份。`retry` 由 exact Host batch 绑定的 launch owner 发起，受益者仍是失败的 reserved slot 或已收养 root；它复用原 Host `operationRef/sessionId`，按持久 `workspace_dispatched → session_dispatched → session_ready → renamed → prompt_dispatched → prompted` phase observer-first 续作，双击和重启重放不会重建已存在 session、重复 prompt/model cost、seat 或任务。普通 status/reconcile 只观察 `session.list`，绝不 re-enqueue、rename、prompt 或唤醒；`prompt_dispatched` 的 `outcome_unknown` 只能由 exact top-level direct-human root 通过 Host `resolveUnknown` 定案。每次定案带稳定 requestId、exact operation/session observer proof 与 expectedRevision OCC：`delivered` 原子转为 `prompted/ready`，`not_delivered` 转回 `renamed/failed` 后才允许显式 retry；重复确认幂等，stale/foreign/drift 全部拒绝。outer runtime 不允许直接 retry 任意 `outcome_unknown`。
+
+替代 root 先走既有 `takeover request → owner response/deadline escalation`，随后依次 `prepare → reserve → activate → ready`。prepare 只接受 `kind=takeover`、exact targetTaskRef、requester/failed target 以及已经由该 owner response/escalation 原子迁移到 requester 的 owner+assignee；错误 kind、别的任务或 ownership drift 全部拒绝。`reserve` 在一个 SQLite 事务中创建 replacement reserved seat、迁移该请求对应任务的 owner/assignee，以及只属于旧 owner/assignee 的任务锁；第三方锁保持原 owner 并继续造成冲突。每个 root 仍最多一个 `in_progress` Project Task。Host 只有在全部 seat/task reservation 成功后才启动 replacement **真实顶层会话**；ready child 再通过私有一次性 adoption capability 兑换 reserved seat，绝不调用 `team_spawn` 或隐藏 subagent 冒充 root。
+
+可达路径由 exact direct-human root 调用 `project_collaboration recover_root`：插件先从持久 session-launch ledger 以 opaque failureRef 解析 exact caller/project/task/operation 的 Host evidence，再把 resolver 注入 Project Collaboration context；retry 复用原 operation，takeover 则在 adoption capability 已由 Host reserve 后原子 reserve replacement seat+既有任务+旧 owner locks，activate 真实 top-level launch，ready 后由 child 的 `adopt_slot` 私下兑换。UI 确认按钮生成精确的 `continue_root_recovery` 调用，不再只是泛化说明；foreign project、无 evidence 或非直接人类调用均 fail closed。
+
+Recovery 以 requestId、recoveryRef、launchRef、revision 和状态转换做幂等/OCC 审计；`prepared/reserved/activated/ready/failed/outcome_unknown/cancelled` 可跨 Host restart 重建。未收养 child 的 retry 保留原 reserved seat 与私有 capability；ready child 收养成功后，Host 在 exact launch operation 上私下保存 adopted binding。插件只消费官方 scoped `agent/error`：事件中的 exact live top-level root 对象同时派生 canonical project binding 与 Project Entry actor，按该 actor 在对应私有 lane 中唯一定位 adopted operation，再以固定 `HOST_SESSION_LIFECYCLE_FAILED` 落盘；member/subagent、普通未收养 root、跨项目或零/多匹配都不产生恢复证据，原始 error/message 永不进入 ledger 或模型投影。重复事件与 Host restart 重放幂等，后续恢复因此解析到真实 adopted actor/task，而不是已删除 placeholder。takeover 激活从持久 launch ledger 恢复 exact slotRef/operationRef，即使 Host 已启动而 DB 仍停在 reserved 也不会再次 reserve、建 seat/task 或发 prompt；`outcome_unknown` 直接核对为 ready/failed 时同一 recovery row 随之收敛。Stop 只取消尚未产生不确定结果的 operation，旧 session 迟到不能覆盖新 revision；容量、权限、第三方锁、早期 deadline 未获 Host 直接用户授权、adoption 失败或部分 Host effect 都 fail closed。Web 只投影 opaque recoveryRef、固定 failureCode、状态与 Host 派生 `canRetry/canRequestTakeover`；不显示 failure evidence。恢复按钮 44px、键盘可达、先确认再提交，并具备 `aria-busy`、live error；页面不会自动唤醒、接管或重试。
 
 ## 兼容性
 

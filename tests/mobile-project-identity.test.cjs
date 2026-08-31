@@ -18,35 +18,25 @@ function extractProjectFunctions() {
   const end = runtime.indexOf('  const openProjectIdentitySheet = async () => {', start)
   assert.ok(start >= 0 && end > start)
   const source = runtime.slice(start, end)
-  return new Function('fetch', 'navigator', 'document', `${source}\nreturn { readAuthoritativeProjects, copyProjectIdentity }`) // eslint-disable-line no-new-func
+  return new Function('WebSocket', 'navigator', 'document', `${source}\nreturn { readAuthoritativeProjects, copyProjectIdentity }`) // eslint-disable-line no-new-func
 }
 
-test('project details consume the authoritative workspace.list RPC envelope', async () => {
-  let request
-  const fakeFetch = async (url, options) => {
-    request = { url, options, body: JSON.parse(options.body) }
-    return {
-      ok: true,
-      async json() {
-        return {
-          type: 'server-response',
-          rpcId: request.body.rpcId,
-          result: {
-            ok: true,
-            value: {
-              items: [{ workspaceId: 'workspace-official-123', title: '权威项目名', path: 'D:/must-not-render', sessionIds: [] }],
-              archivedSessionIds: []
-            }
-          }
-        }
-      }
+test('project details consume the authoritative workspace/follow baseline', async () => {
+  let url, opened
+  class FakeWebSocket {
+    constructor(value) { url = value; this.listeners = new Map(); queueMicrotask(() => this.emit('open', {})) }
+    addEventListener(type, listener) { this.listeners.set(type, listener) }
+    emit(type, event) { this.listeners.get(type)?.(event) }
+    send(raw) {
+      opened = JSON.parse(raw)
+      queueMicrotask(() => this.emit('message', { data: JSON.stringify({ type: 'item', streamId: opened.streamId, value: { type: 'baseline', value: { items: [{ workspaceId: 'workspace-official-123', title: '权威项目名', path: 'D:/must-not-render', sessionIds: [] }], archivedSessionIds: [] } } }) }))
     }
+    close() {}
   }
-  const api = extractProjectFunctions()(fakeFetch, {}, {})
+  const api = extractProjectFunctions()(FakeWebSocket, {}, {})
   const projects = await api.readAuthoritativeProjects()
-  assert.equal(request.url, '/api/workspace.list')
-  assert.equal(request.options.method, 'POST')
-  assert.deepEqual(request.body, { type: 'client-request', rpcId: request.body.rpcId, method: 'workspace.list', payload: {} })
+  assert.match(url, /^ws:\/\/127\.0\.0\.1\/api\/remote\.mux$/u)
+  assert.deepEqual(opened, { type: 'open', streamId: opened.streamId, endpoint: 'workspace/follow', payload: { args: {} } })
   assert.deepEqual(projects, [{ workspaceId: 'workspace-official-123', title: '权威项目名' }])
   assert.equal('path' in projects[0], false)
 })

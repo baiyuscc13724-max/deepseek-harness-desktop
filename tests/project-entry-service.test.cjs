@@ -202,12 +202,20 @@ test('Host-only project task context binds execution identity, actor resolution,
     store.close()
   }
 
+  const collaboration = await service.localProjectCollaborationContext()
+  assert.deepEqual(Object.keys(collaboration), [])
+  assert.equal(collaboration.projectRef, context.projectRef)
+  assert.equal(collaboration.databasePath, context.databasePath)
+  assert.equal(collaboration.actorResolver(collaboration.execution, collaboration.projectRef).actorRef, actor.actorRef)
   const publicJson = JSON.stringify(await service.status())
   const contextJson = JSON.stringify(context)
+  const collaborationJson = JSON.stringify(collaboration)
   for (const forbidden of ['actorRef', 'execution', 'keyProvider', 'dispose', 'encryptionKey', 'signingPrivateKey', 'encryptionPrivateKey']) {
     assert.equal(publicJson.includes(forbidden), false, `public status leaked ${forbidden}`)
     assert.equal(contextJson.includes(forbidden), false, `serialized Host context leaked ${forbidden}`)
+    assert.equal(collaborationJson.includes(forbidden), false, `serialized collaboration context leaked ${forbidden}`)
   }
+  collaboration.dispose()
 
   const disposable = await service.localProjectTaskContext()
   assert.equal(disposable.keyProvider(disposable.projectRef).length, 32)

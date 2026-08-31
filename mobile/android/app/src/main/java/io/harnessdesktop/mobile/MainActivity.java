@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.net.http.SslError;
 import android.net.Uri;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -25,6 +26,7 @@ import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.SslErrorHandler;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -33,10 +35,14 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -59,11 +65,20 @@ import com.journeyapps.barcodescanner.ScanOptions;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 public final class MainActivity extends AppCompatActivity {
@@ -71,14 +86,28 @@ public final class MainActivity extends AppCompatActivity {
     static final String SAVED_ORIGIN = "saved_origin";
     static final String SAVED_PROFILE = "saved_profile";
     static final String SAVED_SESSION = "saved_session";
+    private static final String SAVED_SYNC_IDENTITY_PREFIX = "sync_cache_identity_";
+    private static final String SYNC_MANIFEST_PATH = "/__harness_mobile__/sync/manifest";
     private static final long[] WORKBENCH_RETRY_DELAYS_MS = { 800L, 1500L, 2500L, 4000L, 5000L };
-    private static final long NETWORK_RECONNECT_DEBOUNCE_MS = 1_500L;
+    private static final long[] OFFLINE_SYNC_RETRY_DELAYS_MS = { 1_000L, 2_000L, 4_000L, 8_000L, 15_000L, 30_000L };
     private static final long MOBILE_UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1_000L;
+    private static final int MAX_SYNC_RESPONSE_BYTES = 2 * 1024 * 1024;
     private static final long MAX_CAPTURE_BYTES = 12L * 1024L * 1024L;
     static final int MAX_PICKED_IMAGES = 20;
     static final String MOBILE_BACK_SCRIPT = "window.__harnessMobileHandleBack()";
 
+    enum MainFrameState {
+        IDLE,
+        LOADING,
+        RETRYING,
+        AUTH_EXPIRED,
+        OFFLINE,
+        TERMINAL_ERROR,
+        READY
+    }
+
     private LinearLayout pairingPanel;
+    private ScrollView pairingScroll;
     private EditText pairingUrl;
     private TextView pairingError;
     private SwipeRefreshLayout swipeRefresh;
@@ -86,7 +115,11 @@ public final class MainActivity extends AppCompatActivity {
     private ProgressBar loading;
     private ImageButton reconnectButton;
     private LinearLayout connectionOverlay;
+    private ProgressBar connectionSpinner;
     private TextView connectionStatus;
+    private LinearLayout terminalErrorActions;
+    private Button terminalRetryButton;
+    private Button terminalRescanButton;
     private HarnessWebProxy localProxy;
     private EasyTierClient easyTierClient;
     private WssRelayClient wssRelayClient;
@@ -99,10 +132,19 @@ public final class MainActivity extends AppCompatActivity {
     private PairingProfile pairingProfile;
     private PairingProfile remoteReconnectProfile;
     private String pendingWorkbenchUrl;
+    private String activeCacheIdentity = "";
+    private MobileAssetCache.OfflineSnapshot activeOfflineSnapshot;
+    private int offlineSyncGeneration;
     private int localGatewayPort;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService offlineSyncExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean offlineSyncInFlight = new AtomicBoolean();
+    private int offlineSyncRetryAttempt;
+    private final Runnable offlineSyncRetry = () -> requestOfflineSync(pairingProfile);
     private String retryableMainFrameUrl;
     private boolean mainFrameLoadFailed;
+    private MainFrameState mainFrameState = MainFrameState.IDLE;
+    private boolean pageLoadingAnnounced;
     private boolean workbenchRetryScheduled;
     private int workbenchRetryAttempt;
     private int workbenchReadyGeneration;
@@ -113,6 +155,8 @@ public final class MainActivity extends AppCompatActivity {
     private int nativeP2pSocksPort;
     private String routeStatus = "尚未验证可用线路";
     private boolean backDispatchPending;
+    private OnBackPressedCallback legacyBackCallback;
+    private Api33BackDispatcher api33BackDispatcher;
     private ConnectivityManager connectivityManager;
     private boolean networkCallbackRegistered;
     private final NetworkReconnectPolicy networkReconnectPolicy = new NetworkReconnectPolicy();
@@ -310,8 +354,13 @@ public final class MainActivity extends AppCompatActivity {
         }
         if (ControlPreferences.isEnabled(this)) ControlForegroundService.start(this);
 
+        // Seed the actual default-network state before a saved profile can start
+        // remote transports. Offline cold starts then render a recoverable state
+        // without launching doomed WSS/P2P handshakes.
+        registerNetworkMonitoring();
         String incomingPairing = getIntent().getDataString();
         pairingProfile = pairingProfileStore.loadAndMigrate();
+        if (pairingProfile != null) prepareOfflineState(pairingProfile);
         String savedOrigin = getSharedPreferences(PREFS, MODE_PRIVATE).getString(SAVED_ORIGIN, "");
         if (incomingPairing != null) connect(incomingPairing);
         else if (pairingProfile != null) {
@@ -320,18 +369,16 @@ public final class MainActivity extends AppCompatActivity {
         } else if (PairingLinkValidator.isSafeHarnessUrl(savedOrigin, false)) openWorkbench(savedOrigin);
         else showPairing();
 
-        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-            @Override public void handleOnBackPressed() {
-                handleWorkbenchBack();
-            }
-        });
-        registerNetworkMonitoring();
+        configureBackNavigation();
         checkMobileAppUpdate();
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null) {
+            api33BackDispatcher.register();
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && screenCaptureObserver != null) {
             screenCaptureObserver.register();
         }
@@ -339,6 +386,9 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onStop() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null) {
+            api33BackDispatcher.unregister();
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && screenCaptureObserver != null) {
             screenCaptureObserver.unregister();
         }
@@ -360,10 +410,16 @@ public final class MainActivity extends AppCompatActivity {
         if (webView == null || swipeRefresh == null || swipeRefresh.getVisibility() != View.VISIBLE) return;
         // Home/Recents、系统照片选择器和 Android Back 后恢复时保留当前
         // WebView 文档、草稿、附件与流式会话。Android 会发送真实的可见性/
-        // 焦点变化；不得伪造 online/focus，也不得重新注入页面运行时，否则
-        // 官方客户端会重连健康会话或重复安装观察器。
+        // 焦点变化；不得伪造 online/focus。幂等 bootstrap 只在首次安装失败时
+        // 重试，成功文档的 runtime/观察器不会重复安装。
         webView.onResume();
         webView.resumeTimers();
+        mobileUiAdapter.inject(webView);
+        // WebView may install its own same-priority callback while resuming;
+        // re-register last so the native runtime gets the real edge-back event.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null) {
+            api33BackDispatcher.refreshRegistration();
+        }
     }
 
     private void checkMobileAppUpdate() {
@@ -444,6 +500,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void bindViews() {
         pairingPanel = findViewById(R.id.pairing_panel);
+        pairingScroll = findViewById(R.id.pairing_scroll);
         pairingUrl = findViewById(R.id.pairing_url);
         pairingError = findViewById(R.id.pairing_error);
         swipeRefresh = findViewById(R.id.swipe_refresh);
@@ -451,13 +508,19 @@ public final class MainActivity extends AppCompatActivity {
         loading = findViewById(R.id.loading);
         reconnectButton = findViewById(R.id.reconnect_button);
         connectionOverlay = findViewById(R.id.connection_overlay);
+        connectionSpinner = findViewById(R.id.connection_spinner);
         connectionStatus = findViewById(R.id.connection_status);
+        terminalErrorActions = findViewById(R.id.terminal_error_actions);
+        terminalRetryButton = findViewById(R.id.terminal_retry_button);
+        terminalRescanButton = findViewById(R.id.terminal_rescan_button);
         Button scanButton = findViewById(R.id.scan_button);
         Button connectButton = findViewById(R.id.connect_button);
 
         scanButton.setOnClickListener(view -> startScanner());
         connectButton.setOnClickListener(view -> connect(pairingUrl.getText().toString()));
         reconnectButton.setOnClickListener(view -> confirmDisconnect());
+        terminalRetryButton.setOnClickListener(view -> retryTerminalFailure());
+        terminalRescanButton.setOnClickListener(view -> confirmForget());
         swipeRefresh.setColorSchemeResources(R.color.harness_primary);
         // WebView pages contain long, independently scrollable conversations.
         // Pull-to-refresh steals ordinary vertical gestures and can reset the
@@ -499,8 +562,7 @@ public final class MainActivity extends AppCompatActivity {
 
         webView.setWebChromeClient(new WebChromeClient() {
             @Override public void onProgressChanged(WebView view, int newProgress) {
-                loading.setProgress(newProgress);
-                loading.setVisibility(newProgress >= 100 ? View.GONE : View.VISIBLE);
+                updateAccessibleLoadingProgress(newProgress);
             }
 
             // HTML <input type="file">/file input 的系统选择器桥：
@@ -572,54 +634,101 @@ public final class MainActivity extends AppCompatActivity {
 
             @Override public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 mainFrameLoadFailed = false;
+                mainFrameState = MainFrameState.LOADING;
+                pageLoadingAnnounced = false;
                 workbenchReadyGeneration++;
+                publishOfflineState(view);
                 mobileUiAdapter.inject(view);
-                loading.setVisibility(View.VISIBLE);
+                publishOfflineState(view);
+                updateAccessibleLoadingProgress(1);
             }
 
             @Override public void onPageCommitVisible(WebView view, String url) {
                 mobileUiAdapter.inject(view);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null) {
+                    // Page attachment is when WebView can add its own back callback;
+                    // refresh after it so this callback remains the last DEFAULT one.
+                    api33BackDispatcher.refreshRegistration();
+                }
                 if (!mainFrameLoadFailed) revealWorkbench();
-                else beginWorkbenchReadyCheck();
             }
 
             @Override public void onPageFinished(WebView view, String url) {
-                boolean retryableFailure = url != null && url.equals(retryableMainFrameUrl);
-                loading.setVisibility(View.GONE);
+                if (mainFrameLoadFailed) hideLoadingIndicator();
+                else updateAccessibleLoadingProgress(100);
                 swipeRefresh.setRefreshing(false);
-                if (retryableFailure) scheduleWorkbenchRetry();
-                else {
-                    cancelWorkbenchRetry(true);
-                    rememberOrigin(url);
-                    mobileUiAdapter.inject(view);
-                    if (!mainFrameLoadFailed) revealWorkbench();
-                    else beginWorkbenchReadyCheck();
+                if (mainFrameState == MainFrameState.RETRYING) {
+                    scheduleWorkbenchRetry();
+                    return;
                 }
+                if (mainFrameState == MainFrameState.AUTH_EXPIRED
+                    || mainFrameState == MainFrameState.OFFLINE
+                    || mainFrameState == MainFrameState.TERMINAL_ERROR) return;
+                cancelWorkbenchRetry(true);
+                rememberOrigin(url);
+                mobileUiAdapter.inject(view);
+                publishOfflineState(view);
+                if (!mainFrameLoadFailed) {
+                    revealWorkbench();
+                    requestOfflineSync(pairingProfile);
+                } else beginWorkbenchReadyCheck();
             }
 
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) mainFrameLoadFailed = true;
-                if (request.isForMainFrame() && isRetryableWebError(error.getErrorCode())) {
-                    retryableMainFrameUrl = request.getUrl().toString();
-                    scheduleWorkbenchRetry();
+                if (request.isForMainFrame()) {
+                    mainFrameLoadFailed = true;
+                    MainFrameState failure = classifyWebFailure(
+                        error.getErrorCode(), networkReconnectPolicy.hasUsableNetwork());
+                    if (failure == MainFrameState.RETRYING) {
+                        mainFrameState = failure;
+                        retryableMainFrameUrl = request.getUrl().toString();
+                        showConnectionOverlay(getString(R.string.retry_waiting_status));
+                        scheduleWorkbenchRetry();
+                    } else if (failure == MainFrameState.OFFLINE) {
+                        enterOfflineState();
+                    } else {
+                        showTerminalMainFrameError(getString(
+                            R.string.terminal_web_status, String.valueOf(error.getDescription())));
+                    }
                 }
                 super.onReceivedError(view, request, error);
             }
 
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
-                if (request.isForMainFrame()) mainFrameLoadFailed = true;
-                if (request.isForMainFrame() && isRetryableHttpStatus(errorResponse.getStatusCode())) {
-                    retryableMainFrameUrl = request.getUrl().toString();
-                    setConnectionStatus(getString(R.string.waiting_desktop_status));
-                    scheduleWorkbenchRetry();
-                } else if (request.isForMainFrame() && isPairingRejectedHttpStatus(errorResponse.getStatusCode())) {
-                    setConnectionStatus(getString(R.string.pairing_expired_status));
-                    mainHandler.post(() -> {
-                        disconnect();
-                        showPairingError(getString(R.string.pairing_expired_status));
-                    });
+                if (request.isForMainFrame()) {
+                    mainFrameLoadFailed = true;
+                    int status = errorResponse.getStatusCode();
+                    MainFrameState failure;
+                    if (isRetryableHttpStatus(errorResponse.getStatusCode())) {
+                        failure = MainFrameState.RETRYING;
+                    } else if (isPairingRejectedHttpStatus(errorResponse.getStatusCode())) {
+                        failure = MainFrameState.AUTH_EXPIRED;
+                    } else {
+                        failure = classifyHttpFailure(status);
+                    }
+                    if (failure == MainFrameState.RETRYING) {
+                        mainFrameState = failure;
+                        retryableMainFrameUrl = request.getUrl().toString();
+                        showConnectionOverlay(getString(R.string.waiting_desktop_status));
+                        scheduleWorkbenchRetry();
+                    } else if (failure == MainFrameState.AUTH_EXPIRED) {
+                        mainFrameState = failure;
+                        setConnectionStatus(getString(R.string.pairing_expired_status));
+                        mainHandler.post(() -> {
+                            disconnect();
+                            showPairingError(getString(R.string.pairing_expired_status));
+                        });
+                    } else {
+                        showTerminalMainFrameError(getString(R.string.terminal_http_status, status));
+                    }
                 }
                 super.onReceivedHttpError(view, request, errorResponse);
+            }
+
+            @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                handler.cancel();
+                mainFrameLoadFailed = true;
+                showTerminalMainFrameError(getString(R.string.terminal_ssl_status));
             }
 
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -671,6 +780,7 @@ public final class MainActivity extends AppCompatActivity {
         pairingError.setText("");
         pairingError.setVisibility(View.GONE);
         pairingProfile = nextProfile;
+        prepareOfflineState(nextProfile);
         if (hasActiveSystemVpn()) {
             Toast.makeText(this, getString(R.string.vpn_notice), Toast.LENGTH_LONG).show();
         }
@@ -679,8 +789,16 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void showPairingError(String message) {
-        pairingError.setText(message);
+        hideSoftKeyboard();
+        boolean changed = pairingError.getVisibility() != View.VISIBLE
+            || !message.contentEquals(pairingError.getText());
+        if (changed) pairingError.setText(message);
         pairingError.setVisibility(View.VISIBLE);
+        pairingError.post(() -> {
+            pairingError.requestRectangleOnScreen(
+                new android.graphics.Rect(0, 0, pairingError.getWidth(), pairingError.getHeight()), true);
+            if (pairingScroll != null) pairingScroll.requestChildFocus(pairingError, pairingError);
+        });
     }
 
     @Override
@@ -688,6 +806,142 @@ public final class MainActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (intent.getDataString() != null) connect(intent.getDataString());
+    }
+
+    private void prepareOfflineState(PairingProfile profile) {
+        offlineSyncGeneration++;
+        offlineSyncRetryAttempt = 0;
+        mainHandler.removeCallbacks(offlineSyncRetry);
+        activeCacheIdentity = PairingProfileStore.cacheIdentity(profile);
+        activeOfflineSnapshot = mobileAssetCache == null || activeCacheIdentity.isEmpty()
+            ? null : mobileAssetCache.loadLatestSnapshot(activeCacheIdentity);
+    }
+
+    private void publishOfflineState(WebView target) {
+        if (target == null || activeCacheIdentity.isEmpty()) return;
+        String snapshot = "null";
+        try {
+            if (activeOfflineSnapshot != null) snapshot = activeOfflineSnapshot.toJson().toString();
+        } catch (Exception ignored) {}
+        String script = "window.HarnessMobileCacheIdentity=" + JSONObject.quote(activeCacheIdentity) + ";"
+            + "window.__harnessMobileApplyNativeSnapshot?.(" + snapshot + ");true;";
+        target.evaluateJavascript(script, null);
+    }
+
+    private void requestOfflineSync(PairingProfile profile) {
+        if (profile == null || profile != pairingProfile || localGatewayPort <= 0 || activeCacheIdentity.isEmpty()
+            || !networkReconnectPolicy.hasUsableNetwork() || !offlineSyncInFlight.compareAndSet(false, true)) return;
+        mainHandler.removeCallbacks(offlineSyncRetry);
+        final int generation = offlineSyncGeneration;
+        final String pairingIdentity = activeCacheIdentity;
+        final MobileAssetCache.OfflineSnapshot resume = activeOfflineSnapshot;
+        offlineSyncExecutor.execute(() -> {
+            HttpURLConnection connection = null;
+            boolean refreshSucceeded = false;
+            try {
+                String serverIdentity = getSharedPreferences(PREFS, MODE_PRIVATE)
+                    .getString(SAVED_SYNC_IDENTITY_PREFIX + pairingIdentity, "");
+                StringBuilder query = new StringBuilder("?refresh=1");
+                if (resume != null && isServerCacheIdentity(serverIdentity)) {
+                    query.append("&cacheIdentity=").append(encodeQuery(serverIdentity));
+                    query.append("&snapshotEpoch=").append(resume.snapshotEpoch);
+                    query.append("&cursor=").append(encodeQuery(resume.cursor));
+                }
+                URL endpoint = new URL("http", "127.0.0.1", localGatewayPort, SYNC_MANIFEST_PATH + query);
+                connection = (HttpURLConnection) endpoint.openConnection();
+                connection.setConnectTimeout(8_000);
+                connection.setReadTimeout(45_000);
+                connection.setUseCaches(false);
+                connection.setInstanceFollowRedirects(false);
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Cache-Control", "no-store");
+                connection.setRequestProperty("Host", PairingProfile.STABLE_HOST + ":" + localGatewayPort);
+                String stableOrigin = profile.stableOrigin(localGatewayPort);
+                String cookie = CookieManager.getInstance().getCookie(stableOrigin);
+                if (cookie != null && !cookie.trim().isEmpty()) connection.setRequestProperty("Cookie", cookie);
+                int status = connection.getResponseCode();
+                if (status == 401 || status == 403 || status == 410) {
+                    mainHandler.post(() -> clearRevokedPairing(pairingIdentity, generation));
+                    return;
+                }
+                if (status != HttpURLConnection.HTTP_OK
+                    || !"1".equals(connection.getHeaderField("X-Harness-Mobile-Sync-Complete"))) return;
+                JSONObject response;
+                try (InputStream input = connection.getInputStream()) {
+                    response = new JSONObject(readBoundedUtf8(input, MAX_SYNC_RESPONSE_BYTES));
+                }
+                if (response.optBoolean("protected", false) || !response.optBoolean("complete", false)) return;
+                String refreshedIdentity = response.optString("cacheIdentity", "");
+                if (!isServerCacheIdentity(refreshedIdentity)
+                    || !mobileAssetCache.applySyncResponse(pairingIdentity, response)) return;
+                MobileAssetCache.OfflineSnapshot refreshed = mobileAssetCache.loadLatestSnapshot(pairingIdentity);
+                if (refreshed == null) return;
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString(SAVED_SYNC_IDENTITY_PREFIX + pairingIdentity, refreshedIdentity).apply();
+                refreshSucceeded = true;
+                mainHandler.post(() -> {
+                    if (generation != offlineSyncGeneration || profile != pairingProfile
+                        || !pairingIdentity.equals(activeCacheIdentity)) return;
+                    activeOfflineSnapshot = refreshed;
+                    publishOfflineState(webView);
+                });
+            } catch (Exception ignored) {
+                // A failed/incomplete refresh never replaces the last complete snapshot.
+            } finally {
+                if (connection != null) connection.disconnect();
+                offlineSyncInFlight.set(false);
+                final boolean completed = refreshSucceeded;
+                mainHandler.post(() -> {
+                    if (generation != offlineSyncGeneration || profile != pairingProfile
+                        || !pairingIdentity.equals(activeCacheIdentity)) return;
+                    if (completed) {
+                        offlineSyncRetryAttempt = 0;
+                        mainHandler.removeCallbacks(offlineSyncRetry);
+                    } else {
+                        scheduleOfflineSyncRetry(profile, generation);
+                    }
+                });
+            }
+        });
+    }
+
+    private void scheduleOfflineSyncRetry(PairingProfile profile, int generation) {
+        if (generation != offlineSyncGeneration || profile == null || profile != pairingProfile
+            || activeCacheIdentity.isEmpty() || !networkReconnectPolicy.hasUsableNetwork()
+            || isFinishing() || isDestroyed()) return;
+        int index = Math.min(offlineSyncRetryAttempt, OFFLINE_SYNC_RETRY_DELAYS_MS.length - 1);
+        offlineSyncRetryAttempt = Math.min(offlineSyncRetryAttempt + 1, OFFLINE_SYNC_RETRY_DELAYS_MS.length - 1);
+        mainHandler.removeCallbacks(offlineSyncRetry);
+        mainHandler.postDelayed(offlineSyncRetry, OFFLINE_SYNC_RETRY_DELAYS_MS[index]);
+    }
+
+    private void clearRevokedPairing(String pairingIdentity, int generation) {
+        if (generation != offlineSyncGeneration || !pairingIdentity.equals(activeCacheIdentity)) return;
+        if (mobileAssetCache != null) mobileAssetCache.clearOfflineSnapshots(pairingIdentity);
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .remove(SAVED_SYNC_IDENTITY_PREFIX + pairingIdentity).apply();
+        disconnect();
+        showPairingError(getString(R.string.pairing_expired_status));
+    }
+
+    private static boolean isServerCacheIdentity(String value) {
+        return value != null && value.matches("[A-Za-z0-9_-]{16,128}");
+    }
+
+    private static String encodeQuery(String value) throws Exception {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
+    }
+
+    private static String readBoundedUtf8(InputStream input, int maximumBytes) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[16 * 1024];
+        int count;
+        while ((count = input.read(buffer)) >= 0) {
+            if (output.size() + count > maximumBytes) throw new IOException("Mobile sync manifest is too large");
+            output.write(buffer, 0, count);
+        }
+        return output.toString(StandardCharsets.UTF_8.name());
     }
 
     private void openWorkbench(String url) {
@@ -733,9 +987,13 @@ public final class MainActivity extends AppCompatActivity {
                 mainHandler.removeCallbacks(remoteReconnect);
             } else {
                 remoteReconnectProfile = profile;
-                if (profile.nativeP2p != null) startNativeP2p(profile);
-                else if (profile.relay != null) startWssRelay(profile);
-                else if (profile.easyTier != null) startEasyTier(profile);
+                if (networkReconnectPolicy.hasUsableNetwork()) {
+                    if (profile.nativeP2p != null) startNativeP2p(profile);
+                    else if (profile.relay != null) startWssRelay(profile);
+                    else if (profile.easyTier != null) startEasyTier(profile);
+                } else {
+                    routeStatus = "网络不可用；已保留配对资料并等待自动恢复";
+                }
             }
             return pairing ? profile.stablePairUrl(localGatewayPort) : profile.stableOrigin(localGatewayPort);
         } catch (Exception error) {
@@ -779,14 +1037,19 @@ public final class MainActivity extends AppCompatActivity {
 
     private void scheduleNetworkChangedReconnect() {
         mainHandler.removeCallbacks(networkChangedReconnect);
-        mainHandler.postDelayed(networkChangedReconnect, NETWORK_RECONNECT_DEBOUNCE_MS);
+        mainHandler.postDelayed(networkChangedReconnect, networkReconnectPolicy.pendingDelayMillis());
     }
 
     private void reconnectAfterNetworkChange() {
+        NetworkReconnectPolicy.Transition transition = networkReconnectPolicy.commitPending();
+        if (transition == null) return;
         PairingProfile profile = pairingProfile;
         if (profile == null || localProxy == null || webView == null || isFinishing() || isDestroyed()) return;
-        updateRoutesBeforeRemoteReady(profile);
-        if (!networkReconnectPolicy.hasUsableNetwork()) {
+        // A committed logical generation invalidates latency evidence, never the
+        // paired identity, authenticated descriptors, or current WebView document.
+        localProxy.resetRoutePreference(transition.generation);
+        if (!transition.usable) {
+            updateRoutesBeforeRemoteReady(profile);
             mainHandler.removeCallbacks(remoteReconnect);
             mainHandler.removeCallbacks(nativeReconnect);
             if (easyTierClient != null) easyTierClient.stop();
@@ -796,15 +1059,27 @@ public final class MainActivity extends AppCompatActivity {
             wssRelaySocksPort = 0;
             nativeP2pSocksPort = 0;
             routeStatus = "网络已断开";
-            showConnectionOverlay(getString(R.string.network_lost_status));
+            enterOfflineState();
             return;
         }
+
         boolean hasRemoteRoute = profile.nativeP2p != null || profile.relay != null || profile.easyTier != null;
+        if (transition.switched()) {
+            // Keep proven LAN/P2P/WSS paths and their pinned streams alive. New
+            // proxy connections race against the newly stable default network;
+            // a transport is replaced only after its own failure/ready callbacks.
+            applyReadyRoutes(profile);
+            routeStatus = "网络切换已稳定；现有会话保留，新连接正在验证线路";
+            return;
+        }
+
+        updateRoutesBeforeRemoteReady(profile);
+        cancelWorkbenchRetry(true);
+        mainFrameState = MainFrameState.RETRYING;
         showConnectionOverlay(hasRemoteRoute
             ? getString(R.string.network_switched_remote_status)
             : getString(R.string.network_switched_local_status));
         retryableMainFrameUrl = null;
-        webView.stopLoading();
         if (hasRemoteRoute) {
             remoteReconnectProfile = profile;
             remoteReconnectAttempt = 0;
@@ -832,6 +1107,8 @@ public final class MainActivity extends AppCompatActivity {
     private void showPairing() {
         cancelWorkbenchRetry(true);
         workbenchReadyGeneration++;
+        mainFrameState = MainFrameState.IDLE;
+        terminalErrorActions.setVisibility(View.GONE);
         connectionOverlay.setVisibility(View.GONE);
         webView.stopLoading();
         swipeRefresh.setVisibility(View.GONE);
@@ -845,9 +1122,12 @@ public final class MainActivity extends AppCompatActivity {
         String details = hasActiveSystemVpn()
             ? getString(R.string.connection_settings_message_vpn)
             : getString(R.string.connection_settings_message);
+        HarnessWebProxy.ConnectionState state = localProxy == null ? null : localProxy.connectionState();
+        String diagnostics = state == null ? "" : "\n连接代数：" + state.generation()
+            + "；恢复游标：" + state.recoveryCursor() + "；响应状态：" + state.responseState().name();
         new AlertDialog.Builder(this)
             .setTitle(getString(R.string.connection_settings_title))
-            .setMessage(details + "\n\n真实线路状态：" + routeStatus)
+            .setMessage(details + "\n\n真实线路状态：" + routeStatus + diagnostics)
             .setNegativeButton(getString(R.string.action_cancel), null)
             .setNeutralButton(getString(R.string.action_forget_computer), (dialog, which) -> confirmForget())
             .setPositiveButton(getString(R.string.action_reconnect_now), (dialog, which) -> webView.reload())
@@ -864,7 +1144,19 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void disconnect() {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(SAVED_ORIGIN).apply();
+        String previousCacheIdentity = activeCacheIdentity;
+        offlineSyncGeneration++;
+        offlineSyncRetryAttempt = 0;
+        mainHandler.removeCallbacks(offlineSyncRetry);
+        if (mobileAssetCache != null && !previousCacheIdentity.isEmpty()) {
+            mobileAssetCache.clearOfflineSnapshots(previousCacheIdentity);
+        }
+        android.content.SharedPreferences.Editor preferences = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .remove(SAVED_ORIGIN).remove(SAVED_SESSION);
+        if (!previousCacheIdentity.isEmpty()) preferences.remove(SAVED_SYNC_IDENTITY_PREFIX + previousCacheIdentity);
+        preferences.apply();
+        activeCacheIdentity = "";
+        activeOfflineSnapshot = null;
         if (pairingProfileStore != null) pairingProfileStore.clear();
         pairingProfile = null;
         remoteReconnectProfile = null;
@@ -912,8 +1204,13 @@ public final class MainActivity extends AppCompatActivity {
     private void scheduleWorkbenchRetry() {
         if (workbenchRetryScheduled || webView == null || swipeRefresh == null
             || swipeRefresh.getVisibility() != View.VISIBLE) return;
-        int delayIndex = Math.min(workbenchRetryAttempt, WORKBENCH_RETRY_DELAYS_MS.length - 1);
-        workbenchRetryAttempt = Math.min(workbenchRetryAttempt + 1, WORKBENCH_RETRY_DELAYS_MS.length - 1);
+        if (workbenchRetryAttempt >= WORKBENCH_RETRY_DELAYS_MS.length) {
+            showTerminalMainFrameError(getString(
+                R.string.terminal_web_status, "多次重试后电脑仍未响应"));
+            return;
+        }
+        int delayIndex = workbenchRetryAttempt++;
+        mainFrameState = MainFrameState.RETRYING;
         workbenchRetryScheduled = true;
         setConnectionStatus(getString(R.string.retry_waiting_status));
         mainHandler.postDelayed(workbenchRetry, WORKBENCH_RETRY_DELAYS_MS[delayIndex]);
@@ -954,7 +1251,10 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void applyReadyRoutes(PairingProfile profile) {
-        if (localProxy != null && pairingProfile == profile) localProxy.updateRoutes(readyRoutes(profile));
+        if (localProxy != null && pairingProfile == profile) {
+            localProxy.updateRoutes(readyRoutes(profile));
+            requestOfflineSync(profile);
+        }
     }
 
     private void openPendingWorkbenchOrRetry() {
@@ -1112,9 +1412,38 @@ public final class MainActivity extends AppCompatActivity {
         if (webView != null) webView.evaluateJavascript("document.activeElement?.blur?.()", null);
     }
 
+    private void updateAccessibleLoadingProgress(int progress) {
+        if (loading == null) return;
+        int bounded = Math.max(0, Math.min(100, progress));
+        loading.setProgress(bounded);
+        if (bounded < 100) {
+            loading.setVisibility(View.VISIBLE);
+            loading.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+            if (!pageLoadingAnnounced) {
+                pageLoadingAnnounced = true;
+                loading.setContentDescription(getString(R.string.page_loading_started));
+                loading.announceForAccessibility(getString(R.string.page_loading_started));
+            }
+            return;
+        }
+        if (pageLoadingAnnounced) {
+            loading.setContentDescription(getString(R.string.page_loading_finished));
+            loading.announceForAccessibility(getString(R.string.page_loading_finished));
+        }
+        hideLoadingIndicator();
+    }
+
+    private void hideLoadingIndicator() {
+        if (loading == null) return;
+        loading.setVisibility(View.GONE);
+        loading.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+    }
+
     private void showConnectionOverlay(String message) {
         hideSoftKeyboard();
         setConnectionStatus(message);
+        connectionSpinner.setVisibility(View.VISIBLE);
+        terminalErrorActions.setVisibility(View.GONE);
         connectionOverlay.setVisibility(View.VISIBLE);
         reconnectButton.setVisibility(View.VISIBLE);
         connectionOverlay.bringToFront();
@@ -1122,8 +1451,42 @@ public final class MainActivity extends AppCompatActivity {
         reconnectButton.bringToFront();
     }
 
+    private void showTerminalMainFrameError(String message) {
+        mainFrameState = MainFrameState.TERMINAL_ERROR;
+        mainFrameLoadFailed = true;
+        workbenchReadyGeneration++;
+        cancelWorkbenchRetry(false);
+        hideLoadingIndicator();
+        showConnectionOverlay(message);
+        connectionSpinner.setVisibility(View.GONE);
+        terminalErrorActions.setVisibility(View.VISIBLE);
+        terminalErrorActions.bringToFront();
+    }
+
+    private void enterOfflineState() {
+        mainFrameState = MainFrameState.OFFLINE;
+        workbenchReadyGeneration++;
+        cancelWorkbenchRetry(false);
+        hideLoadingIndicator();
+        showConnectionOverlay(getString(R.string.network_lost_status));
+    }
+
+    private void retryTerminalFailure() {
+        if (webView == null || mainFrameState != MainFrameState.TERMINAL_ERROR) return;
+        String currentUrl = webView.getUrl();
+        if (currentUrl == null || "about:blank".equals(currentUrl)) return;
+        cancelWorkbenchRetry(true);
+        mainFrameLoadFailed = false;
+        mainFrameState = MainFrameState.RETRYING;
+        showConnectionOverlay(getString(R.string.retry_waiting_status));
+        webView.stopLoading();
+        webView.loadUrl(currentUrl);
+    }
+
     private void revealWorkbench() {
         workbenchReadyGeneration++;
+        mainFrameState = MainFrameState.READY;
+        terminalErrorActions.setVisibility(View.GONE);
         connectionOverlay.setVisibility(View.GONE);
         reconnectButton.setVisibility(View.GONE);
     }
@@ -1157,7 +1520,13 @@ public final class MainActivity extends AppCompatActivity {
             }
             if (attempt == 20) setConnectionStatus(getString(R.string.workbench_loading_status));
             if (attempt == 80) setConnectionStatus(getString(R.string.workbench_slow_status));
-            if (attempt < 120) mainHandler.postDelayed(() -> checkWorkbenchReady(generation, attempt + 1), attempt < 12 ? 250L : 750L);
+            if (attempt < 120) {
+                mainHandler.postDelayed(
+                    () -> checkWorkbenchReady(generation, attempt + 1), attempt < 12 ? 250L : 750L);
+            } else {
+                showTerminalMainFrameError(getString(
+                    R.string.terminal_web_status, "页面已返回，但工作台功能未能完成初始化"));
+            }
         });
     }
 
@@ -1165,16 +1534,28 @@ public final class MainActivity extends AppCompatActivity {
         return statusCode == 502 || statusCode == 503 || statusCode == 504;
     }
 
-    static boolean isPairingRejectedHttpStatus(int statusCode) {
-        return statusCode == 401 || statusCode == 403 || statusCode == 410;
+    static MainFrameState classifyHttpFailure(int statusCode) {
+        if (isPairingRejectedHttpStatus(statusCode)) return MainFrameState.AUTH_EXPIRED;
+        if (isRetryableHttpStatus(statusCode)) return MainFrameState.RETRYING;
+        return MainFrameState.TERMINAL_ERROR;
     }
 
-    private static boolean isRetryableWebError(int errorCode) {
-        return errorCode == WebViewClient.ERROR_CONNECT
+    static MainFrameState classifyWebFailure(int errorCode, boolean usableNetwork) {
+        if (!usableNetwork) return MainFrameState.OFFLINE;
+        if (errorCode == WebViewClient.ERROR_CONNECT
             || errorCode == WebViewClient.ERROR_HOST_LOOKUP
             || errorCode == WebViewClient.ERROR_IO
             || errorCode == WebViewClient.ERROR_PROXY_AUTHENTICATION
-            || errorCode == WebViewClient.ERROR_TIMEOUT;
+            || errorCode == WebViewClient.ERROR_TIMEOUT) return MainFrameState.RETRYING;
+        return MainFrameState.TERMINAL_ERROR;
+    }
+
+    static MainFrameState classifySslFailure() {
+        return MainFrameState.TERMINAL_ERROR;
+    }
+
+    static boolean isPairingRejectedHttpStatus(int statusCode) {
+        return statusCode == 401 || statusCode == 403 || statusCode == 410;
     }
 
     private boolean hasActiveSystemVpn() {
@@ -1199,6 +1580,20 @@ public final class MainActivity extends AppCompatActivity {
         return false;
     }
 
+    private void configureBackNavigation() {
+        legacyBackCallback = new OnBackPressedCallback(Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            @Override public void handleOnBackPressed() {
+                handleWorkbenchBack();
+            }
+        };
+        getOnBackPressedDispatcher().addCallback(this, legacyBackCallback);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Registration is lifecycle-owned by onStart; page callbacks refresh
+            // ordering after WebView has attached its own back handling.
+            api33BackDispatcher = new Api33BackDispatcher(this, this::handleWorkbenchBack);
+        }
+    }
+
     private void handleWorkbenchBack() {
         if (swipeRefresh == null || swipeRefresh.getVisibility() != View.VISIBLE) {
             finish();
@@ -1220,6 +1615,42 @@ public final class MainActivity extends AppCompatActivity {
 
     static boolean mobileBackDeclined(String javascriptResult) {
         return "false".equals(javascriptResult);
+    }
+
+    /**
+     * Isolates API 33 symbols from MainActivity class verification on API 26–32.
+     * A separate platform callback is used on Android 13+ so edge and button back
+     * enter one native consumption path; the AndroidX dispatcher is enabled only
+     * on older releases and therefore cannot consume the same gesture twice.
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private static final class Api33BackDispatcher {
+        private final OnBackInvokedDispatcher dispatcher;
+        private final OnBackInvokedCallback callback;
+        private boolean registered;
+
+        Api33BackDispatcher(Activity activity, Runnable listener) {
+            dispatcher = activity.getOnBackInvokedDispatcher();
+            callback = listener::run;
+        }
+
+        void register() {
+            if (registered) return;
+            dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback);
+            registered = true;
+        }
+
+        void unregister() {
+            if (!registered) return;
+            dispatcher.unregisterOnBackInvokedCallback(callback);
+            registered = false;
+        }
+
+        void refreshRegistration() {
+            if (!registered) return;
+            unregister();
+            register();
+        }
     }
 
     /**
@@ -1289,6 +1720,10 @@ public final class MainActivity extends AppCompatActivity {
             return safeSessionReference(getSharedPreferences(PREFS, MODE_PRIVATE).getString(SAVED_SESSION, ""));
         }
 
+        @JavascriptInterface public String cacheIdentity() {
+            return activeCacheIdentity;
+        }
+
         @JavascriptInterface public String status() {
             return ControlPreferences.isEnabled(MainActivity.this) && HarnessControlAccessibilityService.isConnected() ? "ready" : "disabled";
         }
@@ -1296,6 +1731,9 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null) {
+            api33BackDispatcher.unregister();
+        }
         if (fileChooserCallback != null) {
             fileChooserCallback.onReceiveValue(null);
             fileChooserCallback = null;
@@ -1308,6 +1746,7 @@ public final class MainActivity extends AppCompatActivity {
         remoteReconnectProfile = null;
         mainHandler.removeCallbacks(remoteReconnect);
         mainHandler.removeCallbacks(nativeReconnect);
+        mainHandler.removeCallbacks(offlineSyncRetry);
         unregisterNetworkMonitoring();
         webView.stopLoading();
         webView.setWebChromeClient(null);
@@ -1319,6 +1758,7 @@ public final class MainActivity extends AppCompatActivity {
         if (nativeP2pClient != null) nativeP2pClient.close();
         if (mobileUiAdapter != null) mobileUiAdapter.close();
         if (mobileDocumentViewer != null) mobileDocumentViewer.close();
+        offlineSyncExecutor.shutdownNow();
         mobileAppUpdateChecker.close();
         super.onDestroy();
     }
