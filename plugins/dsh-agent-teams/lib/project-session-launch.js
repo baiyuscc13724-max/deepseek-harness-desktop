@@ -19,7 +19,18 @@ function integer(value, field, min, max) { if (!Number.isSafeInteger(value) || v
 function record(value, field) { if (typeof value !== "object" || value === null || Array.isArray(value)) fail(`${field} must be an object`); return value; }
 function clone(value) { return structuredClone(value); }
 function timestamp(clock) { return new Date(clock()).toISOString(); }
-async function replaceFile(source, destination) { for (let attempt = 0; ; attempt += 1) { try { await rename(source, destination); return; } catch (error) { if (!new Set(["EPERM", "EBUSY", "EACCES"]).has(error?.code) || attempt >= 4) throw error; await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1))); } } }
+async function replaceFile(source, destination) {
+  const deadline = Date.now() + 5_000;
+  let delay = 10;
+  for (;;) {
+    try { await rename(source, destination); return; }
+    catch (error) {
+      if (!new Set(["EPERM", "EBUSY", "EACCES"]).has(error?.code) || Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, 250);
+    }
+  }
+}
 function digest(value) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function opaque(secret, kind, ...parts) { return `${kind}_${createHash("sha256").update(secret).update("\0").update(kind).update("\0").update(JSON.stringify(parts)).digest("base64url").slice(0, 32)}`; }
 function normalizeBoundary(value, field) { const normalized = text(value, field, 256).normalize("NFKC").replace(/\\/gu, "/").replace(/\/{2,}/gu, "/"); if (normalized.split("/").includes("..") || /[\p{Cc}\p{Cf}\p{Cs}]/u.test(normalized)) fail(`${field} is invalid`); return normalized; }
