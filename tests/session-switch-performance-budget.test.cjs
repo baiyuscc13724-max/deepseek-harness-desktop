@@ -78,6 +78,8 @@ test('quick Electron stress fixture stays inside the regression budget', { timeo
   const { QUICK_SCENARIO, runBenchmark } = await import(benchmarkUrl)
   const result = runBenchmark({ quick: true })
   assert.deepEqual(result.scenario, QUICK_SCENARIO)
+  assert.ok(Number.isFinite(result.startupOpenMs))
+  assert.ok(Number.isFinite(result.firstOpenMs))
   assert.equal(result.dom.totalMessages, QUICK_SCENARIO.sessions * QUICK_SCENARIO.messagesPerSession)
   assert.equal(result.dom.renderedMessages, QUICK_SCENARIO.renderedMessages)
   assert.equal(result.budget.pass, true, JSON.stringify(result.budget.checks, null, 2))

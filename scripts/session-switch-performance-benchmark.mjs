@@ -104,12 +104,6 @@ function rendererBenchmarkSource(scenario) {
 
     const longTasks = []
     let longTaskObserver = null
-    if (typeof PerformanceObserver === 'function' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
-      longTaskObserver = new PerformanceObserver(list => {
-        for (const entry of list.getEntries()) longTasks.push(entry.duration)
-      })
-      longTaskObserver.observe({ type: 'longtask', buffered: true })
-    }
 
     const calibrationSamples = []
     for (let sample = 0; sample < 24; sample += 1) {
@@ -163,8 +157,20 @@ function rendererBenchmarkSource(scenario) {
       void flow.lastElementChild?.offsetHeight
     }
 
-    const firstOpenStarted = performance.now()
+    const startupOpenStarted = performance.now()
     renderSession(0)
+    await waitFrame()
+    const startupOpenMs = performance.now() - startupOpenStarted
+
+    if (typeof PerformanceObserver === 'function' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+      longTaskObserver = new PerformanceObserver(list => {
+        for (const entry of list.getEntries()) longTasks.push(entry.duration)
+      })
+      longTaskObserver.observe({ type: 'longtask' })
+    }
+
+    const firstOpenStarted = performance.now()
+    renderSession(1 % sessions.length)
     await waitFrame()
     const firstOpenMs = performance.now() - firstOpenStarted
 
@@ -215,6 +221,7 @@ function rendererBenchmarkSource(scenario) {
     return {
       scenario: config,
       calibration: { p50Ms: rounded(pctl(calibrationSamples, 0.5)), p95Ms: rounded(pctl(calibrationSamples, 0.95)) },
+      startupOpenMs: rounded(startupOpenMs),
       firstOpenMs: rounded(firstOpenMs),
       switch: { medianMs: rounded(pctl(switchSamples, 0.5)), p95Ms: rounded(pctl(switchSamples, 0.95)), maxMs: rounded(Math.max(...switchSamples)) },
       scroll: { medianMs: rounded(pctl(scrollSamples, 0.5)), p95Ms: rounded(pctl(scrollSamples, 0.95)), maxMs: rounded(Math.max(...scrollSamples)) },
@@ -297,7 +304,8 @@ export function runBenchmark({ quick = false } = {}) {
 function printHuman(result) {
   const lines = [
     `Session performance benchmark (${result.scenario.messagesPerSession} messages × ${result.scenario.sessions} sessions)`,
-    `first open: ${result.firstOpenMs} ms`,
+    `startup paint (diagnostic): ${result.startupOpenMs} ms`,
+    `first measured open: ${result.firstOpenMs} ms`,
     `switch: median ${result.switch.medianMs} ms, p95 ${result.switch.p95Ms} ms, max ${result.switch.maxMs} ms`,
     `scroll frame: median ${result.scroll.medianMs} ms, p95 ${result.scroll.p95Ms} ms`,
     `heap: ${result.memory.afterWarmupMiB} → ${result.memory.finalMiB} MiB (growth ${result.memory.growthMiB} MiB, peak ${result.memory.peakMiB} MiB)`,
