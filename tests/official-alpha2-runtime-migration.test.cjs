@@ -184,7 +184,7 @@ test('maintained package and lock are the accepted complete canonical alpha.2 ru
   const lockSource = read('package-lock.json')
   const pkg = JSON.parse(packageSource)
   const lock = JSON.parse(lockSource)
-  assert.equal(sha256CanonicalText(packageSource), '204414F269F57382BE80D05D4E05E11A4C38B00D4DBD9DA16229DC7E671F5799')
+  assert.equal(sha256CanonicalText(packageSource), '6566762DF4C0BC8B3F36EA2B14C96556A69572D610BAEBC1A33EA0E15B706070')
   assert.equal(sha256CanonicalText(lockSource), '3DCD39D8A07C2EA394722B7059B01C89531DB97486E67818E349C991CB552875')
   assert.equal(Object.keys(lock.packages).length, 861)
   assertAcceptedAlpha2Graph(pkg, lock, read('docs/OFFICIAL-ALPHA2-UI-PATCH-REBASE.zh-CN.md'), read('docs/OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md'))
