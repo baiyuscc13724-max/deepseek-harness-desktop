@@ -42,6 +42,40 @@ test('runtime probe uses the isolated prepared DSH home', async () => {
   }
 })
 
+test('runtime probe retries an early process exit within one bounded deadline', async () => {
+  const runtimeHome = await mkdtemp(path.join(os.tmpdir(), 'harness-runtime-probe-retry-'))
+  try {
+    let spawnCount = 0
+    const diagnostics = { attempts: [] }
+    const result = await runtimeWebBootable({ command: 'electron', argsPrefix: ['cli.js'], env: {} }, {
+      runtimeHome,
+      timeoutMs: 1_000,
+      maxAttempts: 3,
+      diagnostics,
+      spawnImpl: () => {
+        spawnCount += 1
+        const child = new EventEmitter()
+        child.stdout = new PassThrough()
+        child.stderr = new PassThrough()
+        child.kill = () => {}
+        process.nextTick(() => {
+          if (spawnCount === 1) child.emit('exit', 1, null)
+          else child.stdout.write('ready at http://127.0.0.1:43124')
+        })
+        return child
+      },
+      probeUrl: async url => url === 'http://127.0.0.1:43124'
+    })
+    assert.equal(result, true)
+    assert.equal(spawnCount, 2)
+    assert.equal(diagnostics.attempts.length, 2)
+    assert.equal(diagnostics.attempts[0].exitCode, 1)
+    assert.equal(diagnostics.attempts[1].candidateUrl, 'http://127.0.0.1:43124')
+  } finally {
+    await rm(runtimeHome, { recursive: true, force: true })
+  }
+})
+
 test('packaged self-test passes with official Web UI runtime assets', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'harness-desktop-selftest-'))
   try {

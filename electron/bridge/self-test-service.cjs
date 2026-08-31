@@ -66,39 +66,53 @@ async function runtimeWebBootable(dsh, options = {}) {
   const probeUrl = options.probeUrl || probeRuntimeUrl
   const ownsRuntimeHome = !options.runtimeHome
   const runtimeHome = options.runtimeHome || await mkdtemp(path.join(os.tmpdir(), 'harness-desktop-runtime-probe-'))
-  let child = null
-  let candidateUrl = null
-  let exited = false
+  const deadline = Date.now() + (options.timeoutMs || 25000)
+  const maxAttempts = Number.isSafeInteger(options.maxAttempts) && options.maxAttempts > 0 ? options.maxAttempts : 3
+  const diagnostics = options.diagnostics && Array.isArray(options.diagnostics.attempts) ? options.diagnostics : null
   try {
-    child = spawnImpl(dsh.command, [...dsh.argsPrefix, 'web', '--port', '0', '--no-open'], {
-      env: { ...process.env, ...(dsh.env || {}), DSH_HOME: runtimeHome, HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER: '1' },
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-    const inspect = chunk => {
-      const match = String(chunk || '').match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/i)
-      if (match) candidateUrl = match[0].replace('localhost', '127.0.0.1')
+    for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt += 1) {
+      let child = null
+      let candidateUrl = null
+      let exited = false
+      let exitCode = null
+      let signal = null
+      let failure = ''
+      let booted = false
+      try {
+        child = spawnImpl(dsh.command, [...dsh.argsPrefix, 'web', '--port', '0', '--no-open'], {
+          env: { ...process.env, ...(dsh.env || {}), DSH_HOME: runtimeHome, HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER: '1' },
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe']
+        })
+        const inspect = chunk => {
+          const match = String(chunk || '').match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/i)
+          if (match) candidateUrl = match[0].replace('localhost', '127.0.0.1')
+        }
+        child.stdout?.on('data', chunk => {
+          inspect(chunk)
+          if (options.logOutput) process.stdout.write(chunk)
+        })
+        child.stderr?.on('data', chunk => {
+          inspect(chunk)
+          if (options.logOutput) process.stderr.write(chunk)
+        })
+        child.once('error', error => { failure = String(error?.message || error || 'spawn error'); exited = true })
+        child.once('exit', (code, receivedSignal) => { exitCode = code; signal = receivedSignal; exited = true })
+        while (Date.now() < deadline && !exited) {
+          if (candidateUrl && await probeUrl(candidateUrl)) { booted = true; break }
+          await wait(150)
+        }
+      } catch (error) {
+        failure = String(error?.message || error)
+      } finally {
+        diagnostics?.attempts.push({ attempt, candidateUrl, exited, exitCode, signal, failure })
+        child?.kill?.()
+      }
+      if (booted) return true
+      if (attempt < maxAttempts && Date.now() < deadline) await wait(150)
     }
-    child.stdout?.on('data', chunk => {
-      inspect(chunk)
-      if (options.logOutput) process.stdout.write(chunk)
-    })
-    child.stderr?.on('data', chunk => {
-      inspect(chunk)
-      if (options.logOutput) process.stderr.write(chunk)
-    })
-    child.once('error', () => { exited = true })
-    child.once('exit', () => { exited = true })
-    const deadline = Date.now() + (options.timeoutMs || 25000)
-    while (Date.now() < deadline && !exited) {
-      if (candidateUrl && await probeUrl(candidateUrl)) return true
-      await wait(150)
-    }
-    return false
-  } catch {
     return false
   } finally {
-    child?.kill?.()
     if (ownsRuntimeHome) await rm(runtimeHome, { recursive: true, force: true }).catch(() => {})
   }
 }
@@ -115,12 +129,14 @@ async function runPackagedSelfTest(options = {}) {
   const gitRuntime = typeof options.gitRuntimeProbe === 'function'
     ? await options.gitRuntimeProbe().catch(() => null)
     : null
+  const runtimeDiagnostics = { attempts: [] }
+  const runtimeWebBoot = options.runtimeProbe
+    ? await options.runtimeProbe(dsh)
+    : await runtimeWebBootable(dsh, { ...options.runtimeProbeOptions, diagnostics: runtimeDiagnostics })
   const checks = {
     rendererEntry: await rendererAvailable(options.rendererEntry),
     bundledHarness: dsh.source === 'bundled' || dsh.source === 'env',
-    runtimeWebBoot: options.runtimeProbe
-      ? await options.runtimeProbe(dsh)
-      : await runtimeWebBootable(dsh, options.runtimeProbeOptions),
+    runtimeWebBoot,
     nodeRuntime: nodeRuntimeSupported(options.nodeVersion),
     userData: options.userDataProbe
       ? await options.userDataProbe(options.userData)
@@ -151,6 +167,7 @@ async function runPackagedSelfTest(options = {}) {
       version: dsh.version || 'unknown',
       detail: dsh.error || ''
     },
+    runtimeProbe: runtimeDiagnostics,
     git: gitRuntime || { git: { available: false, source: null }, gcm: { available: false, source: null }, sshAgent: { available: false, running: false } },
     generatedAt: new Date().toISOString()
   }
