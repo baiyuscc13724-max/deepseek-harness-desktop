@@ -45,9 +45,10 @@ test('six independent team sessions receive only relevant SSE mutations', async 
   process.env.DSH_HOME = root
   const requests = []
   const cleanups = []
+  let store
   try {
     const mod = await import(`${pathToFileURL(pluginFile).href}?concurrency=${Date.now()}`)
-    const store = new mod.AgentTeamsStore(path.join(root, 'storages', 'agent_teams.json'), { enabled: true, maxMembers: 8, maxActiveTurns: 8 })
+    store = new mod.AgentTeamsStore(path.join(root, 'storages', 'agent_teams.json'), { enabled: true, maxMembers: 8, maxActiveTurns: 8 })
     await store.init()
     const leads = Array.from({ length: 6 }, (_, index) => ({
       id: `lead-${index}`,
@@ -82,9 +83,20 @@ test('six independent team sessions receive only relevant SSE mutations', async 
       assert.equal(res.chunks.length, 1, 'unrelated roots are not broadcast an identical snapshot')
     }
   } finally {
+    const cleanupErrors = []
     for (const req of requests) req.emit('close')
-    for (const cleanup of cleanups.reverse()) cleanup()
+    await new Promise(resolve => setImmediate(resolve))
+    for (const cleanup of cleanups.reverse()) {
+      try { await cleanup() } catch (error) { cleanupErrors.push(error) }
+    }
+    try { await store?.close() } catch (error) { cleanupErrors.push(error) }
     process.env.DSH_HOME = previousHome
-    await rm(root, { recursive: true, force: true })
+    try {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    } catch (error) {
+      cleanupErrors.push(error)
+    }
+    if (cleanupErrors.length === 1) throw cleanupErrors[0]
+    if (cleanupErrors.length > 1) throw new AggregateError(cleanupErrors, 'Agent Teams concurrency cleanup failed')
   }
 })

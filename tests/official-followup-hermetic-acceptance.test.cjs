@@ -37,11 +37,13 @@ test('detached copy is byte deterministic, source-stable and inherits neither gi
   await assert.rejects(helper.copyDetachedSource(source, path.join(source, 'nested')), /HERMETIC_SNAPSHOT_MUST_BE_DETACHED/u)
 })
 
-test('walk rejects a junction/reparse escape rather than following it', async t => {
+test('walk accepts a trusted root platform alias but rejects a junction/reparse child escape', async t => {
   const parent = await fsp.mkdtemp(path.join(os.tmpdir(), 'official-alpha2-reparse-')); t.after(() => fsp.rm(parent, { recursive: true, force: true }))
-  const root = path.join(parent, 'root'), outside = path.join(parent, 'outside'); await fsp.mkdir(root); await fsp.mkdir(outside); await fsp.writeFile(path.join(outside, 'secret'), 'secret')
+  const root = path.join(parent, 'root'), rootAlias = path.join(parent, 'root-alias'), outside = path.join(parent, 'outside'); await fsp.mkdir(root); await fsp.mkdir(outside); await fsp.writeFile(path.join(root, 'ordinary'), 'ordinary'); await fsp.writeFile(path.join(outside, 'secret'), 'secret')
+  await fsp.symlink(root, rootAlias, process.platform === 'win32' ? 'junction' : 'dir')
+  assert.deepEqual(helper.manifest(rootAlias).files.map(row => row.path), ['ordinary'])
   await fsp.symlink(outside, path.join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
-  assert.throws(() => helper.manifest(root), /HERMETIC_LINK_OR_REPARSE_FORBIDDEN/u)
+  assert.throws(() => helper.manifest(rootAlias), /HERMETIC_LINK_OR_REPARSE_FORBIDDEN/u)
 })
 
 test('canonical digest uses unsigned UTF-8 bytes, decimal size, lowercase file hash and detects all row drift', async t => {

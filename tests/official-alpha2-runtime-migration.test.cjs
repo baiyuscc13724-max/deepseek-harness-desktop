@@ -309,7 +309,7 @@ test('two npm-ls extraneous optionals are a reproducible integrity-locked platfo
   const lockPath = path.join(AUDIT_ROOT, 'package-lock.json')
   const lockSource = fs.readFileSync(lockPath, 'utf8')
   const lock = JSON.parse(lockSource)
-  assert.equal(crypto.createHash('sha256').update(lockSource).digest('hex'), '3dcd39d8a07c2ea394722b7059b01c89531db97486e67818e349c991cb552875')
+  assert.equal(sha256CanonicalText(lockSource), '3DCD39D8A07C2EA394722B7059B01C89531DB97486E67818E349C991CB552875')
 
   const wasm = lock.packages['node_modules/@img/sharp-wasm32']
   const emnapi = lock.packages['node_modules/@emnapi/runtime']

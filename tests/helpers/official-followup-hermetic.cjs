@@ -24,7 +24,7 @@ const ACCEPTED = Object.freeze({
   'scripts/patch-official-runtime.mjs': 'd1f58b8adcf519fab59f5cfc6a2cb2603631630ff9f4c32145102ba4eb97f8ef',
   'scripts/verify-static.mjs': '7ac1cb86f709c7bf19cd250261bbb52cff4754807938929abbf8afca7da7c5bb',
   'tests/official-alpha2-static-release-contract.test.cjs': '1e1e85e9470409cf07272517e0bd3b678ab3a6b491db8c3b2bd908d1bb97668b',
-  'tests/official-alpha2-runtime-migration.test.cjs': '050298eeb0907e85753a9c7ed238b1e3328cc6092e573f765d14f61f465e3794',
+  'tests/official-alpha2-runtime-migration.test.cjs': 'd14479780c4567844860f002879d32706d876e906197fe26163b564b51aebbf7',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',
   'README.md': '643ff56668dc25333bbc04916736cdf7fab2714e8de0c4677ce13955809e4ef6',
   'CHANGELOG.md': 'bde005ed6ea22fe74b30afeb934c2e450c994b00da928fec2667e5751357aa5d',
@@ -63,23 +63,24 @@ function assertCanonicalRelativePath(value) {
   if (path.posix.isAbsolute(value) || path.posix.normalize(value) !== value || value.split('/').some(part => !part || part === '.' || part === '..')) throw new Error(`HERMETIC_PATH_UNSAFE:${value}`)
   return value
 }
-function assertOrdinaryEntry(root, absolute, relative) {
+function assertOrdinaryEntry(trustedRoot, absolute, relative) {
   const stat = fs.lstatSync(absolute)
   if (stat.isSymbolicLink()) throw new Error(`HERMETIC_LINK_OR_REPARSE_FORBIDDEN:${normalizeRelative(relative)}`)
   const real = fs.realpathSync.native(absolute)
-  if (!inside(root, real)) throw new Error(`HERMETIC_ESCAPE_FORBIDDEN:${normalizeRelative(relative)}`)
+  if (!inside(trustedRoot, real)) throw new Error(`HERMETIC_ESCAPE_FORBIDDEN:${normalizeRelative(relative)}`)
   if (!stat.isDirectory() && !stat.isFile()) throw new Error(`HERMETIC_SPECIAL_ENTRY_FORBIDDEN:${normalizeRelative(relative)}`)
   return stat
 }
 function walkFiles(root, options = {}) {
   const rows = []
+  const trustedRoot = fs.existsSync(root) ? fs.realpathSync.native(path.resolve(root)) : path.resolve(root)
   const visit = (directory, relativeDirectory = '') => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const relative = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
       if (options.excludeSource && excluded(relative)) continue
       assertCanonicalRelativePath(relative)
       const absolute = path.join(directory, entry.name)
-      const stat = assertOrdinaryEntry(root, absolute, relative)
+      const stat = assertOrdinaryEntry(trustedRoot, absolute, relative)
       if (stat.isDirectory()) visit(absolute, relative)
       else rows.push({ path: relative, size: stat.size, sha256: sha256File(absolute) })
     }

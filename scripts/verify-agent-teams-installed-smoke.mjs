@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
@@ -44,6 +44,13 @@ async function seedPausedTeam(dshHome, installedRoot, sessionId) {
   return { teamId, sessionId }
 }
 
+async function materializeArtifactFixture(sourceRoot, temporaryRoot) {
+  const fixtureRoot = path.join(temporaryRoot, 'artifact-fixture', 'dsh-agent-teams')
+  await cp(path.resolve(sourceRoot), fixtureRoot, { recursive: true })
+  await writeFile(path.join(fixtureRoot, '.agent-teams-packaged-artifact-fixture.json'), JSON.stringify({ kind: 'agent-teams-packaged-artifact-fixture', version: 1 }), 'utf8')
+  return fixtureRoot
+}
+
 async function verifyInstalledAuthorizationFailClosed(installedRoot) {
   const moduleUrl = `${pathToFileURL(path.join(installedRoot, 'lib', 'desktop-authorization-capability.js')).href}?installed-smoke=${Date.now()}`
   const { consumeDesktopAuthorizationCapability } = await import(moduleUrl)
@@ -72,7 +79,14 @@ export function parseArguments(argv) {
 }
 
 function inspectUrl(chunk) {
-  return String(chunk || '').match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/iu)?.[0]?.replace('localhost', '127.0.0.1') || null
+  return String(chunk || '').match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+(?:\/\?[^\s)]+)?/iu)?.[0]?.replace('localhost', '127.0.0.1') || null
+}
+
+async function authenticateRuntimeUrl(url) {
+  const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(1_500) })
+  const sessionCookie = response.headers.get('set-cookie')?.split(';', 1)[0]
+  if (response.status !== 303 || typeof sessionCookie !== 'string' || sessionCookie.length === 0) throw new Error(`DSH Web authentication bootstrap failed closed with HTTP ${response.status}.`)
+  return sessionCookie
 }
 
 async function startRuntime(dshHome, timeoutMs = 45_000) {
@@ -97,8 +111,8 @@ async function startRuntime(dshHome, timeoutMs = 45_000) {
   while (Date.now() < deadline) {
     if (url) {
       try {
-        const response = await fetch(url, { signal: AbortSignal.timeout(1_500) })
-        if (response.status < 500) return { child, exitPromise: exited, url, output: () => output }
+        const sessionCookie = await authenticateRuntimeUrl(url)
+        return { child, exitPromise: exited, url, sessionCookie, output: () => output }
       } catch {}
     }
     const ended = await Promise.race([exited, wait(150).then(() => null)])
@@ -133,28 +147,40 @@ async function readSseEvent(reader, timeoutMs = 8_000) {
   throw new Error('Timed out waiting for an Agent Teams SSE event.')
 }
 
-export async function verifyRuntimeApi(url, workspacePath, sessionId) {
-  const rpc = async (method, payload) => {
-    const rpcId = `installed-smoke-${method}-${Date.now()}`
-    const response = await fetch(new URL(`/api/${method}`, url), {
+export async function verifyRuntimeApi(url, workspacePath, sessionId, sessionCookie) {
+  if (typeof sessionCookie !== 'string' || sessionCookie.length === 0) throw new Error('DSH runtime API authentication is unavailable.')
+  const authenticatedHeaders = extra => trustedHeaders(url, { Cookie: sessionCookie, ...extra })
+  const rpc = async (endpoint, request) => {
+    const rpcId = `installed-smoke-${randomUUID()}`
+    const response = await fetch(new URL(`/api/${endpoint}`, url), {
       method: 'POST',
-      headers: trustedHeaders(url, { 'content-type': 'application/json' }),
-      body: JSON.stringify({ type: 'client-request', rpcId, method, payload })
+      headers: authenticatedHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args: { request } } })
     })
-    const envelope = await response.json()
-    if (!response.ok || !envelope.result?.ok) throw new Error(`DSH ${method} failed: ${JSON.stringify(envelope)}`)
+    const responseText = await response.text()
+    let envelope
+    try { envelope = JSON.parse(responseText) } catch {
+      throw new Error(`DSH ${endpoint} fail-closed: HTTP ${response.status} returned non-JSON: ${responseText.slice(0, 512)}`)
+    }
+    if (!response.ok) throw new Error(`DSH ${endpoint} fail-closed: HTTP ${response.status}: ${JSON.stringify(envelope)}`)
+    if (envelope?.type !== 'server-response' || envelope.rpcId !== rpcId || envelope.result?.ok !== true) throw new Error(`DSH ${endpoint} fail-closed: invalid response envelope: ${JSON.stringify(envelope)}`)
     return envelope.result.value
   }
-  const workspace = await rpc('workspace.create', { path: workspacePath })
-  const created = await rpc('session.create', { workspaceId: workspace.workspace.workspaceId, sessionId })
-  if (created?.sessionId !== sessionId) throw new Error(`Unable to create the requested real smoke session: ${JSON.stringify(created)}`)
-  await rpc('session.rename', { sessionId, title: 'Installed artifact DOM smoke' })
-  await rpc('session.prompt', { sessionId, mode: 'queue', content: [{ type: 'text', text: '/help' }] })
+  const workspace = await rpc('workspace/create', { path: workspacePath })
+  const workspaceId = workspace?.workspace?.workspaceId
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0 || workspace?.workspace?.path !== workspacePath) throw new Error(`DSH workspace/create fail-closed: unexpected workspace result: ${JSON.stringify(workspace)}`)
+  const created = await rpc('session/create', { workspaceId, sessionId })
+  if (created?.sessionId !== sessionId) throw new Error(`DSH session/create fail-closed: unexpected session result: ${JSON.stringify(created)}`)
+  const title = 'Installed artifact DOM smoke'
+  const renamed = await rpc('session/rename', { sessionId, title })
+  if (renamed?.title !== title || !Number.isSafeInteger(renamed?.seq) || renamed.seq < 0) throw new Error(`DSH session/rename fail-closed: unexpected rename result: ${JSON.stringify(renamed)}`)
+  const prompted = await rpc('session/prompt', { requestId: `installed-smoke-${randomUUID()}`, sessionId, mode: 'queue', content: [{ type: 'text', text: '/help' }] })
+  if (prompted?.accepted !== true) throw new Error(`DSH session/prompt fail-closed: unexpected prompt result: ${JSON.stringify(prompted)}`)
   const stateUrl = new URL(`/api/agent-teams/state?sessionId=${encodeURIComponent(sessionId)}`, url)
-  const stateResponse = await fetch(stateUrl, { headers: trustedHeaders(url) })
+  const stateResponse = await fetch(stateUrl, { headers: authenticatedHeaders() })
   if (!stateResponse.ok) throw new Error(`Agent Teams /state failed with HTTP ${stateResponse.status}.`)
   const before = await stateResponse.json()
-  const eventsResponse = await fetch(new URL(`/api/agent-teams/events?sessionId=${encodeURIComponent(sessionId)}`, url), { headers: trustedHeaders(url) })
+  const eventsResponse = await fetch(new URL(`/api/agent-teams/events?sessionId=${encodeURIComponent(sessionId)}`, url), { headers: authenticatedHeaders() })
   if (!eventsResponse.ok || !String(eventsResponse.headers.get('content-type')).startsWith('text/event-stream')) throw new Error('Agent Teams /events is not a live SSE endpoint.')
   const reader = eventsResponse.body.getReader()
   const initial = await readSseEvent(reader)
@@ -162,7 +188,7 @@ export async function verifyRuntimeApi(url, workspacePath, sessionId) {
   const changedLimit = currentLimit === 4 ? 5 : 4
   const mutation = await fetch(new URL('/api/agent-teams/action', url), {
     method: 'POST',
-    headers: trustedHeaders(url, { 'content-type': 'application/json', 'x-harness-agent-teams': '1' }),
+    headers: authenticatedHeaders({ 'content-type': 'application/json', 'x-harness-agent-teams': '1' }),
     body: JSON.stringify({ action: 'settings', sessionId, maxMembers: changedLimit })
   })
   if (!mutation.ok) throw new Error(`Agent Teams state mutation failed with HTTP ${mutation.status}: ${await mutation.text()}`)
@@ -269,7 +295,8 @@ export async function runInstalledSmoke(options) {
   const dshHome = path.resolve(options.dshHome || path.join(temporaryRoot, 'dsh-home'))
   let runtime
   try {
-    const artifact = await validateAgentTeamsArtifactRoot(options.artifactRoot, { allowArtifactFixture: options.artifactFixture === true })
+    const artifactRoot = options.artifactFixture === true ? await materializeArtifactFixture(options.artifactRoot, temporaryRoot) : options.artifactRoot
+    const artifact = await validateAgentTeamsArtifactRoot(artifactRoot, { allowArtifactFixture: options.artifactFixture === true })
     const installed = await ensureAgentTeamsPlugin({ dshHome, bundledRoot: artifact.source, allowArtifactFixture: options.artifactFixture === true, requireArtifact: true })
     await access(path.join(installed.destination, 'lib', 'desktop-authorization-capability.js'))
     const installedLaunchPath = path.join(installed.destination, 'lib', 'project-session-launch.js')
@@ -288,7 +315,7 @@ export async function runInstalledSmoke(options) {
     const seeded = await seedPausedTeam(dshHome, installed.destination, sessionId)
     const hostResolveUnknown = await verifyInstalledAuthorizationFailClosed(installed.destination)
     runtime = await startRuntime(dshHome)
-    const api = await verifyRuntimeApi(runtime.url, temporaryRoot, sessionId)
+    const api = await verifyRuntimeApi(runtime.url, temporaryRoot, sessionId, runtime.sessionCookie)
     const dom = options.dom === false ? { skipped: true } : await verifyDesktopDom(runtime.url, temporaryRoot)
     return { ok: true, artifactKind: artifact.kind, installedDestination: installed.destination, freshProfile: ownsHome, profileCreatedByVerifier: ownsHome, runtimeEntry: 'repository-recognized @deepseek-ai/dsh web CLI', runtimeUrl: runtime.url, seededPausedTeamId: seeded.teamId, api, dom, hostResolveUnknown }
   } finally {
