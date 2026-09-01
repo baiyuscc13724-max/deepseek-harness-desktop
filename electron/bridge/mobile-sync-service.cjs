@@ -8,6 +8,7 @@ const httpProxy = require('http-proxy')
 const QRCode = require('qrcode')
 const WebSocket = require('ws')
 const { CONTROL_PROTOCOL_VERSION, MobileControlBroker, isLoopbackAddress } = require('./mobile-control-broker.cjs')
+const { AUTH_COOKIE_PREFIX, validatedRuntimeAuthCookieHeader } = require('./runtime-session-auth.cjs')
 const { SYNC_PROTOCOL_VERSION } = require('../store/mobile-sync-store.cjs')
 
 const BRIDGE_API_VERSION = 2
@@ -21,7 +22,7 @@ const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.56'
+const CURRENT_MOBILE_VERSION = '1.0.57'
 const CURRENT_MOBILE_RELEASE_TAG = CURRENT_MOBILE_VERSION.split('.').length === 4
   ? `android-v${CURRENT_MOBILE_VERSION}`
   : `v${CURRENT_MOBILE_VERSION}`
@@ -221,6 +222,39 @@ function withoutMobileCookie(header = '') {
     .filter(Boolean)
     .filter(part => part.slice(0, part.indexOf('=')).trim() !== COOKIE_NAME)
     .join('; ')
+}
+
+function withoutRuntimeAuthCookies(header = '') {
+  return String(header).split(';')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .filter(part => {
+      const separator = part.indexOf('=')
+      return separator > 0 && !part.slice(0, separator).trim().startsWith(AUTH_COOKIE_PREFIX)
+    })
+    .join('; ')
+}
+
+function upstreamRuntimeCookieHeader(clientHeader = '', runtimeHeader = '') {
+  const clientCookies = withoutRuntimeAuthCookies(withoutMobileCookie(clientHeader))
+  let runtimeCookie = ''
+  try { runtimeCookie = validatedRuntimeAuthCookieHeader(runtimeHeader) }
+  catch {}
+  return [clientCookies, runtimeCookie].filter(Boolean).join('; ')
+}
+
+function withoutRuntimeAuthSetCookies(value) {
+  const entries = (Array.isArray(value) ? value : [value])
+    .filter(item => typeof item === 'string')
+    .filter(item => !item.trimStart().startsWith(AUTH_COOKIE_PREFIX))
+  return entries
+}
+
+function stripRuntimeAuthSetCookies(headers) {
+  if (!headers || typeof headers !== 'object') return
+  const setCookies = withoutRuntimeAuthSetCookies(headers['set-cookie'])
+  if (setCookies.length) headers['set-cookie'] = setCookies
+  else delete headers['set-cookie']
 }
 
 function isPrivateIpv4(address) {
@@ -511,7 +545,8 @@ class MobileSyncService extends EventEmitter {
     desktopControlStateFile = null,
     relayConfigStore = null,
     fetchImpl = globalThis.fetch,
-    WebSocketImpl = WebSocket
+    WebSocketImpl = WebSocket,
+    cookieProvider = () => ''
   }) {
     super()
     if (!store) throw new Error('MobileSyncService requires a store.')
@@ -540,8 +575,10 @@ class MobileSyncService extends EventEmitter {
     this.relayConfigStore = relayConfigStore
     if (typeof fetchImpl !== 'function') throw new Error('MobileSyncService requires fetchImpl for document uploads.')
     if (typeof WebSocketImpl !== 'function') throw new Error('MobileSyncService requires WebSocketImpl for official runtime streams.')
+    if (typeof cookieProvider !== 'function') throw new Error('MobileSyncService requires cookieProvider for official runtime authentication.')
     this.fetchImpl = fetchImpl
     this.WebSocketImpl = WebSocketImpl
+    this.cookieProvider = cookieProvider
     this.desktopControlStateFile = desktopControlStateFile || path.join(path.dirname(this.store.file || this.stateDir), DESKTOP_CONTROL_STATE_FILE)
     this.desktopControlAuth = null
     this.server = null
@@ -552,6 +589,7 @@ class MobileSyncService extends EventEmitter {
     this.sockets = new Set()
     this.deviceSockets = new Map()
     this.lastTouchByDevice = new Map()
+    this.runtimeAuthRefresh = null
     this.transportManager?.on('state', () => this.publish())
   }
 
@@ -744,11 +782,22 @@ class MobileSyncService extends EventEmitter {
     }
     await this.#removeDesktopControlState()
     this.proxy = httpProxy.createProxyServer({ ws: true, changeOrigin: true, xfwd: false, secure: false })
+    this.proxy.on('proxyRes', (proxyResponse, request) => {
+      stripRuntimeAuthSetCookies(proxyResponse.headers)
+      if (proxyResponse.statusCode === 401) this.#refreshRejectedRuntimeAuthentication(request)
+    })
     this.proxy.on('proxyReqWs', (proxyRequest, request) => {
       const deviceId = request.__harnessMobileDeviceId
       if (!deviceId) return
       this.#trackDeviceConnection(deviceId, proxyRequest)
-      proxyRequest.once('upgrade', (_response, upstreamSocket) => this.#trackDeviceConnection(deviceId, upstreamSocket))
+      proxyRequest.once('upgrade', (response, upstreamSocket) => {
+        stripRuntimeAuthSetCookies(response.headers)
+        this.#trackDeviceConnection(deviceId, upstreamSocket)
+      })
+      proxyRequest.once('response', response => {
+        stripRuntimeAuthSetCookies(response.headers)
+        if (response.statusCode === 401) this.#refreshRejectedRuntimeAuthentication(request)
+      })
     })
     this.proxy.on('error', (error, request, responseOrSocket) => {
       if (responseOrSocket && typeof responseOrSocket.writeHead === 'function') {
@@ -773,7 +822,13 @@ class MobileSyncService extends EventEmitter {
       this.sockets.add(socket)
       socket.on('close', () => this.sockets.delete(socket))
     })
-    this.server.on('upgrade', (request, socket, head) => this.#handleUpgrade(request, socket, head))
+    this.server.on('upgrade', (request, socket, head) => {
+      Promise.resolve(this.#handleUpgrade(request, socket, head)).catch(() => {
+        if (socket.destroyed) return
+        socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n')
+        socket.destroy()
+      })
+    })
     const preferredPort = this.requestedPort ?? this.store.get().preferredPort
     const address = await listenBrowserSafe(this.server, preferredPort, this.host)
     this.port = address.port
@@ -1323,11 +1378,15 @@ class MobileSyncService extends EventEmitter {
       writeResponse(response, 503, runtimeUnavailablePage(), { 'Retry-After': '2' })
       return
     }
-    this.#prepareUpstreamHeaders(request, target)
+    try { await this.#prepareUpstreamHeaders(request, target) }
+    catch {
+      writeResponse(response, 503, runtimeUnavailablePage(), { 'Retry-After': '2' })
+      return
+    }
     this.proxy.web(request, response, { target })
   }
 
-  #handleUpgrade(request, socket, head) {
+  async #handleUpgrade(request, socket, head) {
     const device = this.#deviceFromRequest(request)
     if (!device) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
@@ -1341,8 +1400,8 @@ class MobileSyncService extends EventEmitter {
       return
     }
     request.__harnessMobileDeviceId = device.id
+    await this.#prepareUpstreamHeaders(request, target)
     this.#trackDeviceConnection(device.id, socket)
-    this.#prepareUpstreamHeaders(request, target)
     this.proxy.ws(request, socket, head, { target })
   }
 
@@ -1357,8 +1416,21 @@ class MobileSyncService extends EventEmitter {
     })
   }
 
-  #prepareUpstreamHeaders(request, target) {
+  #refreshRejectedRuntimeAuthentication(request) {
+    const origin = request?.__harnessRuntimeTargetOrigin
+    if (!origin || this.runtimeAuthRefresh) return
+    const refresh = Promise.resolve()
+      .then(() => this.cookieProvider(origin, { force: true }))
+      .catch(() => {})
+      .finally(() => {
+        if (this.runtimeAuthRefresh === refresh) this.runtimeAuthRefresh = null
+      })
+    this.runtimeAuthRefresh = refresh
+  }
+
+  async #prepareUpstreamHeaders(request, target) {
     const targetUrl = new URL(target)
+    request.__harnessRuntimeTargetOrigin = targetUrl.origin
     if (request.headers.origin) request.headers.origin = targetUrl.origin
     if (request.headers.referer) {
       try {
@@ -1368,7 +1440,8 @@ class MobileSyncService extends EventEmitter {
         delete request.headers.referer
       }
     }
-    const cookie = withoutMobileCookie(request.headers.cookie || '')
+    const runtimeCookie = await this.cookieProvider(targetUrl.origin, { force: false })
+    const cookie = upstreamRuntimeCookieHeader(request.headers.cookie || '', runtimeCookie)
     if (cookie) request.headers.cookie = cookie
     else delete request.headers.cookie
   }
@@ -1399,6 +1472,9 @@ module.exports = {
   parseCookies,
   safeDeviceName,
   safeIosDownloadUrl,
+  upstreamRuntimeCookieHeader,
   withoutMobileCookie,
+  withoutRuntimeAuthCookies,
+  withoutRuntimeAuthSetCookies,
   sha256
 }

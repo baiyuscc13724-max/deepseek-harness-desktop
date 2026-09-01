@@ -75,6 +75,8 @@ const DEFAULT_SETTINGS = Object.freeze({ enabled: false, maxMembers: 4, maxActiv
 const MODEL_ROUTING_FILE = "harness-desktop-model-routing.json";
 const MODEL_TIERS = Object.freeze(["main", "subagent"]);
 const MANAGED_MEMBER_DENIED_TOOLS = Object.freeze(["subagent", "subagent_fork", "workflow", "ralph"]);
+const MANAGED_MEMBER_DENIED_TOOL_NAMES = new Set(MANAGED_MEMBER_DENIED_TOOLS);
+const PROVISIONING_MEMBER_SESSION_IDS = new Set();
 const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u;
 const MODEL_ID = /^\S{1,256}$/u;
 const TASK_STATES = Object.freeze(["pending", "in_progress", "submitted", "completed", "cancelled"]);
@@ -105,6 +107,14 @@ const PROJECT_TASK_WAKE_CHAINS = new Map();
 const PROJECT_TASK_WAKE_EVENT_TAIL = 256;
 const PROJECT_TASK_WAKE_RETRY_BASE_MS = 250;
 const PROJECT_TASK_WAKE_RETRY_MAX_MS = 30_000;
+const PROJECT_ROOT_RECOVERY_RETRY_BASE_MS = 1_000;
+const PROJECT_ROOT_RECOVERY_RETRY_MAX_MS = 30_000;
+// A recovery starts at revision 1, reserves at revision 2, and every retry
+// effect is fenced by a durable transition to activated.  Stop background
+// effects at revision 10 so even the shortest failed cycle can perform no more
+// than four total launch attempts (the user-initiated attempt plus three
+// automatic attempts).  Extra evidence transitions only reduce that budget.
+const PROJECT_ROOT_RECOVERY_AUTO_EFFECT_REVISION_LIMIT = 10;
 const STOPPABLE_MEMBER_STATES = new Set(["provisioning", "running", "idle", "ready", "shutting_down"]);
 const STORE_INSTANCES = new Map();
 const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap", "plan", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory", "closure", "memberRecoveries", "taskCommandReceipts"]);
@@ -1408,7 +1418,10 @@ function deriveAttention(team, teams = [team]) {
   const activeSessions = new Set(team.members.filter((member) => !["failed", "retired"].includes(member.state)).map((member) => member.sessionId));
   const strandedTasks = team.tasks.filter((task) => !taskIsTerminal(task) && task.assigneeSessionId !== undefined && !activeSessions.has(task.assigneeSessionId)).map((task) => task.id);
   const releasedTasks = team.tasks.filter((task) => task.state === "pending" && task.assigneeSessionId === undefined && task.releaseReason !== undefined).map((task) => task.id);
+  // Delivery attempts have no persisted retry lineage yet. A later success to the
+  // same recipient cannot prove that an older failed payload was superseded.
   const failedDeliveries = team.messages.filter((message) => message.status === "failed").map((message) => message.id);
+  const submittedTasks = team.tasks.filter(taskAwaitsAcceptance).map((task) => task.id);
   const bootstrapIncomplete = team.bootstrap !== undefined && team.bootstrap.phase !== "complete";
   const planDraft = team.plan !== undefined && (!["committed", "active"].includes(team.plan.phase) || team.plan.hash !== teamPlanHash(team));
   const capabilityUnknownTasks = team.tasks.filter((task) => (task.capabilities ?? []).some((capability) => capability.status !== "verified")).map((task) => task.id);
@@ -1419,6 +1432,8 @@ function deriveAttention(team, teams = [team]) {
   if (strandedTasks.length > 0) codes.push("stranded_task");
   if (releasedTasks.length > 0) codes.push("released_task");
   if (failedDeliveries.length > 0) codes.push("failed_delivery");
+  if (submittedTasks.length > 0) codes.push("acceptance_required");
+  if (team.state === "closing") codes.push("closure_incomplete");
   if (bootstrapIncomplete) codes.push("bootstrap_incomplete");
   if (planDraft) codes.push("plan_draft");
   if (capabilityUnknownTasks.length > 0) codes.push("capability_unknown");
@@ -1427,7 +1442,7 @@ function deriveAttention(team, teams = [team]) {
   const blockedTasks = derivedTasks.filter((task) => task.blockedBy.length > 0).map((task) => task.id);
   const failedDependencyTasks = derivedTasks.filter((task) => task.failedBy.length > 0).map((task) => task.id);
   if (failedDependencyTasks.length > 0) codes.push("failed_dependency");
-  return { required: codes.length > 0, codes, failedMembers, unconfirmedMembers, strandedTasks, releasedTasks, failedDeliveries, blockedTasks, failedDependencyTasks, bootstrapIncomplete, planDraft, capabilityUnknownTasks, outcomeUnknownTasks };
+  return { required: codes.length > 0, codes, failedMembers, unconfirmedMembers, strandedTasks, releasedTasks, failedDeliveries, submittedTasks, blockedTasks, failedDependencyTasks, bootstrapIncomplete, planDraft, capabilityUnknownTasks, outcomeUnknownTasks };
 }
 function projectTeam(team, nameTeams = []) {
   const members = team.members.map((member) => {
@@ -2160,6 +2175,52 @@ function registerGracefulLifecycleWaiter(childId) {
   };
   return { promise, accept: waiter.accept, cancel: remove };
 }
+function runWithLifecycleDeadline(operation, { signal, timeoutMs = GRACEFUL_LIFECYCLE_TIMEOUT_MS, label = "team lifecycle operation" } = {}) {
+  if (typeof operation !== "function") throw new TypeError("operation must be a function");
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new TypeError("timeoutMs must be a positive safe integer");
+  return new Promise((resolve, rejectPromise) => {
+    let settled = false;
+    const controller = new AbortController();
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      callback(value);
+    };
+    const onAbort = () => {
+      const reason = signal?.reason ?? new HarnessError(`${label} was cancelled`, "AGENT_TEAMS_CANCELLED");
+      controller.abort(reason);
+      finish(rejectPromise, reason);
+    };
+    const timer = setTimeout(() => {
+      const error = new HarnessError(`${label} did not finish before the lifecycle deadline`, "AGENT_TEAMS_LIFECYCLE_TIMEOUT");
+      controller.abort(error);
+      finish(rejectPromise, error);
+    }, timeoutMs);
+    timer.unref?.();
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve().then(() => {
+      if (controller.signal.aborted) throw controller.signal.reason ?? new HarnessError(`${label} was cancelled`, "AGENT_TEAMS_CANCELLED");
+      return operation(controller.signal);
+    }).then(
+      (value) => finish(resolve, value),
+      (error) => finish(rejectPromise, error),
+    );
+  });
+}
+function drainContinuableChildrenWithDeadline(ctx, lead, childIds, signal, timeoutMs = GRACEFUL_LIFECYCLE_TIMEOUT_MS) {
+  if (!Array.isArray(childIds)) throw new TypeError("childIds must be an array");
+  if (childIds.length === 0) return Promise.resolve();
+  // The installed SubagentRuntime contract accepts only (parent, childIds). The
+  // deadline bounds this caller's queue occupancy; it cannot cancel an in-flight
+  // SDK drain, so every timeout path must retain shutdownUnconfirmed/stopUnconfirmed.
+  return runWithLifecycleDeadline(
+    () => ctx.subagents.drainContinuableChildren(lead, childIds),
+    { signal, timeoutMs, label: "team member drain" },
+  );
+}
 function waitForGracefulLifecycle(waiter, signal, timeoutMs = GRACEFUL_LIFECYCLE_TIMEOUT_MS) {
   return new Promise((resolve, rejectPromise) => {
     let settled = false;
@@ -2243,8 +2304,11 @@ class AgentTeamsStore {
         continue;
       }
       let teamChanged = false;
+      const restartInterruptedWorkerSessions = new Set();
       for (const member of team.members) {
         if (!TRANSIENT_MEMBER_STATES.has(member.state)) continue;
+        const persistedState = member.state;
+        if (member.kind === "worker" && persistedState !== "provisioning") restartInterruptedWorkerSessions.add(member.sessionId);
         if (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true) {
           member.state = "failed";
           member.error = "host restarted before shutdown acknowledgement";
@@ -2254,6 +2318,22 @@ class AgentTeamsStore {
         }
         member.runId = undefined;
         member.updatedAt = now();
+        teamChanged = true;
+      }
+      for (const task of team.tasks) {
+        if (task.state !== "in_progress" || !restartInterruptedWorkerSessions.has(task.assigneeSessionId)) continue;
+        const member = team.members.find((candidate) => candidate.kind === "worker" && candidate.sessionId === task.assigneeSessionId);
+        if (member === undefined) continue;
+        // A persisted claim proves ownership, not that the old process survived. Keep
+        // the exact claim for an explicit retry/replace decision, but never project a
+        // restarted worker as healthy or silently execute the work a second time.
+        member.state = "failed";
+        member.runId = undefined;
+        member.error = "host restarted while this member owned active work; explicit retry or replacement is required";
+        member.updatedAt = now();
+        task.updatedAt = member.updatedAt;
+        boundedPush(task.interruptionHistory, { kind: "host_restart_during_active_task", at: task.updatedAt, attempt: task.attempt ?? 0, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? 0, reason: "execution outcome is unknown; no automatic replay was attempted" }, MAX_TASK_INTERRUPTION_HISTORY);
+        bumpTaskRevision(task);
         teamChanged = true;
       }
       for (const task of team.tasks) {
@@ -2296,7 +2376,7 @@ class AgentTeamsStore {
     return this.document.settings.enabled === true;
   }
   hasManagedMember(sessionId) {
-    return this.document.teams.some((team) => team.state !== "closed" && memberOf(team, sessionId) !== undefined);
+    return this.document.teams.some((team) => team.state !== "closed" && memberOf(team, sessionId)?.kind === "worker");
   }
   memberLifecycleToken(sessionId) {
     const team = this.document.teams.find((candidate) => candidate.state !== "closed" && memberOf(candidate, sessionId) !== undefined);
@@ -2630,6 +2710,17 @@ function rootHasProjectTaskWake(root, wakeRef) {
   if (pending.some((message) => projectTaskWakeRefFromMessage(message) === wakeRef)) return true;
   const events = root.session?.events ?? [];
   return events.slice(-PROJECT_TASK_WAKE_EVENT_TAIL).some((event) => event?.type === "user/message" && projectTaskWakeRefFromMessage(event) === wakeRef);
+}
+function rootProjectTaskWakeEvidence(root, wakeRef) {
+  if (rootHasProjectTaskWake(root, wakeRef)) return "exact_message";
+  const events = root?.session?.events;
+  const nextTurn = root?.inbox?.nextTurn;
+  const nextStep = root?.inbox?.nextStep;
+  // Absence is evidence only when every persisted session event and both live inbox
+  // queues were inspected. A bounded tail that omitted older events is never used
+  // to justify a retry, so an uncertain delivery cannot be replayed blindly.
+  if (Array.isArray(events) && events.length <= PROJECT_TASK_WAKE_EVENT_TAIL && Array.isArray(nextTurn) && Array.isArray(nextStep)) return "complete_history_absence";
+  return "unknown";
 }
 function clearQueuedProjectTaskWakes(root) {
   if (!root?.inbox || typeof root.inbox.remove !== "function") return 0;
@@ -3438,7 +3529,7 @@ async function settleSpawnedChildFailure(ctx, store, lead, cleanup) {
   }
   let drainError;
   try {
-    await ctx.subagents.drainContinuableChildren(lead, [cleanup.childId]);
+    await drainContinuableChildrenWithDeadline(ctx, lead, [cleanup.childId]);
   } catch (error) {
     drainError = error;
   }
@@ -3471,6 +3562,17 @@ async function settleSpawnedChildFailure(ctx, store, lead, cleanup) {
     team.updatedAt = record.updatedAt;
   }));
   return drainError;
+}
+function managedMemberToolGuard(store, execution) {
+  const sessionId = execution?.agent?.id;
+  if (typeof sessionId !== "string" || !MANAGED_MEMBER_DENIED_TOOL_NAMES.has(execution?.name)) return undefined;
+  if (!PROVISIONING_MEMBER_SESSION_IDS.has(sessionId) && !store.hasManagedMember(sessionId)) return undefined;
+  return `managed Agent Team members cannot call ${execution.name}; request a visible peer through team_expansion_request instead`;
+}
+async function withProvisioningMemberSession(sessionId, operation) {
+  PROVISIONING_MEMBER_SESSION_IDS.add(sessionId);
+  try { return await operation(); }
+  finally { PROVISIONING_MEMBER_SESSION_IDS.delete(sessionId); }
 }
 async function spawnMember(ctx, store, admission, lead, input, signal) {
   const modelSelection = await resolveModelSelection(store, input.modelTier ?? "subagent", input.model, lead.options);
@@ -3509,7 +3611,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
     team.updatedAt = timestamp;
     return reservation;
   }));
-  return queueTeamOperation(store.filePath, reservation.teamId, async () => {
+  return queueTeamOperation(store.filePath, reservation.teamId, async () => withProvisioningMemberSession(reservation.childId, async () => {
     const admitted = await store.runOperation(() => store.mutate((document) => {
       const team = findTeam(document, reservation.teamId);
       const record = team.members.find((candidate) => candidate.id === reservation.memberId);
@@ -3538,7 +3640,6 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
           request: {
             parent: lead,
             prompt: textContent(registrationPrompt(reservation.teamId, reservation.name, reservation.role)),
-            toolFilter: { deny: [...MANAGED_MEMBER_DENIED_TOOLS] },
             ...(reservation.provider === undefined && reservation.model === undefined ? {} : { agentOptions: { ...(reservation.provider === undefined ? {} : { provider: reservation.provider }), ...(reservation.model === undefined ? {} : { model: reservation.model }) } }),
           },
           signal,
@@ -3633,7 +3734,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
       }
       return { teamId: team.id, member: clone(current ?? member), plan: clone(team.plan) };
     }));
-  });
+  }));
 }
 
 function memberRecoveryInputHash(input) {
@@ -3765,6 +3866,7 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
       compactMemberRecoveryReceipts(team); team.memberRecoveries.push(receipt); team.updatedAt = timestamp;
       return { replay: false, receipt: clone(receipt) };
     }));
+    let provisioningSessionId;
     if (prepared.replay && ["delivered", "failed"].includes(prepared.receipt.status)) {
       const document = await store.read((current) => current), team = findTeam(document, teamId);
       return memberRecoveryPublic(team, team.memberRecoveries.find((receipt) => receipt.requestId === requestId), document.teams);
@@ -3777,6 +3879,8 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
         const document = await store.read((current) => current), team = findTeam(document, teamId);
         return memberRecoveryPublic(team, team.memberRecoveries.find((receipt) => receipt.requestId === requestId), document.teams);
       }
+      provisioningSessionId = prepared.receipt.replacementSessionId;
+      PROVISIONING_MEMBER_SESSION_IDS.add(provisioningSessionId);
     }
     try {
       if (action === "retry") {
@@ -3788,7 +3892,10 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
         }));
         if (marked.phase !== "retry_dispatching") return memberRecoveryPublic(findTeam(await store.read((current) => current), teamId), marked, (await store.read((current) => current)).teams);
         const document = await store.read((current) => current), team = findTeam(document, teamId), member = team.members.find((candidate) => candidate.id === memberId), tasks = marked.taskIds.map((taskId) => team.tasks.find((task) => task.id === taskId)).filter(Boolean);
-        await admission.run(lead, marked.sessionId, signal, async () => { requireExactRootAgent(ctx, lead); return ctx.subagents.followup(lead, marked.sessionId, textContent(memberRecoveryPrompt(team, member, tasks, action)), { source: relaySource(lead.id), signal }); });
+        await runWithLifecycleDeadline(
+          (lifecycleSignal) => admission.run(lead, marked.sessionId, lifecycleSignal, async () => { requireExactRootAgent(ctx, lead); return ctx.subagents.followup(lead, marked.sessionId, textContent(memberRecoveryPrompt(team, member, tasks, action)), { source: relaySource(lead.id), signal: lifecycleSignal }); }),
+          { signal, label: "failed member retry" },
+        );
         await store.runOperation(() => store.mutate((current) => {
           const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam);
           const receipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId), liveMember = liveTeam.members.find((candidate) => candidate.id === memberId);
@@ -3797,15 +3904,21 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
         }));
         return store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId), receipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); return finalizeMemberRecoveryDelivery(current, liveTeam, receipt); }));
       }
-      let document = await store.read((current) => current), team = findTeam(document, teamId), receipt = team.memberRecoveries.find((candidate) => candidate.requestId === requestId), started = ctx.agents.get(receipt.replacementSessionId);
+      let document = await store.read((current) => current), team = findTeam(document, teamId), receipt = team.memberRecoveries.find((candidate) => candidate.requestId === requestId);
+      provisioningSessionId = receipt.replacementSessionId;
+      PROVISIONING_MEMBER_SESSION_IDS.add(provisioningSessionId);
+      let started = ctx.agents.get(receipt.replacementSessionId);
       if (["prepared", "drain_started"].includes(receipt.phase)) {
         await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); liveReceipt.status = "outcome_unknown"; liveReceipt.phase = "drain_started"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
-        await ctx.subagents.drainContinuableChildren(lead, [receipt.sessionId]);
+        await drainContinuableChildrenWithDeadline(ctx, lead, [receipt.sessionId], signal);
         await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); liveReceipt.phase = "start_dispatched"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
         document = await store.read((current) => current); team = findTeam(document, teamId); receipt = team.memberRecoveries.find((candidate) => candidate.requestId === requestId); started = ctx.agents.get(receipt.replacementSessionId);
       }
       if (started === undefined && receipt.phase === "start_dispatched") {
-        started = await admission.run(lead, receipt.replacementSessionId, signal, async () => { requireExactRootAgent(ctx, lead); const replacement = team.members.find((candidate) => candidate.id === receipt.replacementMemberId); return ctx.subagents.startContinuable({ childId: receipt.replacementSessionId, provider: "spawn", label: replacement.name, request: { parent: lead, prompt: textContent(registrationPrompt(team.id, replacement.name, replacement.role)), toolFilter: { deny: [...MANAGED_MEMBER_DENIED_TOOLS] }, ...(replacement.provider === undefined && replacement.model === undefined ? {} : { agentOptions: { ...(replacement.provider === undefined ? {} : { provider: replacement.provider }), ...(replacement.model === undefined ? {} : { model: replacement.model }) } }) }, signal }); });
+        started = await runWithLifecycleDeadline(
+          (lifecycleSignal) => admission.run(lead, receipt.replacementSessionId, lifecycleSignal, async () => { requireExactRootAgent(ctx, lead); const replacement = team.members.find((candidate) => candidate.id === receipt.replacementMemberId); return ctx.subagents.startContinuable({ childId: receipt.replacementSessionId, provider: "spawn", label: replacement.name, request: { parent: lead, prompt: textContent(registrationPrompt(team.id, replacement.name, replacement.role)), ...(replacement.provider === undefined && replacement.model === undefined ? {} : { agentOptions: { ...(replacement.provider === undefined ? {} : { provider: replacement.provider }), ...(replacement.model === undefined ? {} : { model: replacement.model }) } }) }, signal: lifecycleSignal }); }),
+          { signal, label: "replacement member start" },
+        );
       }
       if (started === undefined) return memberRecoveryPublic(team, receipt, document.teams);
       const startedId = started.childId ?? started.id;
@@ -3824,7 +3937,10 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
       if (receipt.phase === "published") {
         await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); liveReceipt.phase = "followup_dispatching"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
         const replacement = team.members.find((candidate) => candidate.id === receipt.replacementMemberId), tasks = receipt.taskIds.map((taskId) => team.tasks.find((task) => task.id === taskId)).filter(Boolean);
-        await admission.run(lead, startedId, signal, async () => ctx.subagents.followup(lead, startedId, textContent(memberRecoveryPrompt(team, replacement, tasks, action)), { source: relaySource(lead.id), signal }));
+        await runWithLifecycleDeadline(
+          (lifecycleSignal) => admission.run(lead, startedId, lifecycleSignal, async () => ctx.subagents.followup(lead, startedId, textContent(memberRecoveryPrompt(team, replacement, tasks, action)), { source: relaySource(lead.id), signal: lifecycleSignal })),
+          { signal, label: "replacement member followup" },
+        );
         await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); if (liveReceipt.status !== "outcome_unknown" || liveReceipt.phase !== "followup_dispatching" || (liveTeam.pauseEpoch ?? 0) !== liveReceipt.pauseEpoch) reject("team changed during replacement followup", "AGENT_TEAMS_STALE_LEASE"); liveReceipt.phase = "followup_returned"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
         return store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId), liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); return finalizeMemberRecoveryDelivery(current, liveTeam, liveReceipt); }));
       }
@@ -3834,10 +3950,22 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
         const team = findTeam(document, teamId), receipt = team.memberRecoveries?.find((candidate) => candidate.requestId === requestId); if (receipt === undefined || receipt.status !== "outcome_unknown") return;
         receipt.errorCode = memberRecoveryFailureCode(error); receipt.errorStage = receipt.phase; receipt.errorMessage = String(error).slice(0, 4_096); receipt.updatedAt = now();
         const childExists = action === "replace" && receipt.replacementSessionId !== undefined && ctx.agents.get(receipt.replacementSessionId) !== undefined;
-        if (action === "replace" && !childExists && receipt.phase === "drain_started") { receipt.status = "failed"; receipt.phase = "reconciled"; rollbackUnstartedReplacement(team, receipt, receipt.updatedAt); }
+        if (action === "replace" && !childExists && receipt.phase === "drain_started") {
+          receipt.status = "failed"; receipt.phase = "reconciled"; rollbackUnstartedReplacement(team, receipt, receipt.updatedAt);
+          const original = team.members.find((candidate) => candidate.id === receipt.memberId);
+          if (original !== undefined && error?.code === "AGENT_TEAMS_LIFECYCLE_TIMEOUT") {
+            original.state = "failed";
+            original.shutdownUnconfirmed = true;
+            original.stopUnconfirmed = true;
+            original.error = "replacement could not confirm that the previous member stopped before the lifecycle deadline";
+            original.updatedAt = receipt.updatedAt;
+          }
+        }
         team.updatedAt = receipt.updatedAt;
       }));
       throw error;
+    } finally {
+      if (provisioningSessionId !== undefined) PROVISIONING_MEMBER_SESSION_IDS.delete(provisioningSessionId);
     }
   });
 }
@@ -3857,9 +3985,27 @@ async function reconcileMemberRecovery(ctx, store, lead, input) {
         if (liveReceipt.status !== "outcome_unknown" || replacement === undefined) reject("replacement recovery receipt changed before reconciliation", "AGENT_TEAMS_CONFLICT");
         const placeholder = `provisioning:${replacement.id}`, childId = liveReceipt.replacementSessionId;
         for (const taskId of liveReceipt.taskIds) { const task = liveTeam.tasks.find((candidate) => candidate.id === taskId); if (task?.state !== "pending" || ![undefined, placeholder, childId].includes(task.assigneeSessionId)) reject("replacement task changed before not-delivered reconciliation", "AGENT_TEAMS_TASK_CONFLICT"); if (task.assigneeSessionId === undefined) { task.assigneeSessionId = childId ?? placeholder; task.updatedAt = now(); bumpTaskRevision(task); } }
-        liveTeam.updatedAt = now(); return { childId, placeholder };
+        liveTeam.updatedAt = now(); return { childId, placeholder, replacementMemberId: liveReceipt.replacementMemberId };
       }));
-      if (binding.childId !== undefined && ctx.agents.get(binding.childId) !== undefined) await ctx.subagents.drainContinuableChildren(lead, [binding.childId]);
+      if (binding.childId !== undefined && ctx.agents.get(binding.childId) !== undefined) {
+        try { await drainContinuableChildrenWithDeadline(ctx, lead, [binding.childId]); }
+        catch (error) {
+          await store.runOperation(() => store.mutate((current) => {
+            const liveTeam = findTeam(current, teamId), liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId);
+            const replacement = liveTeam.members.find((candidate) => candidate.id === binding.replacementMemberId);
+            if (replacement !== undefined && replacement.state !== "retired") {
+              replacement.state = "failed"; replacement.shutdownUnconfirmed = true; replacement.stopUnconfirmed = true;
+              replacement.error = `replacement reconciliation could not confirm shutdown: ${String(error)}`; replacement.updatedAt = now();
+            }
+            if (liveReceipt?.status === "outcome_unknown") {
+              liveReceipt.errorCode = memberRecoveryFailureCode(error); liveReceipt.errorStage = liveReceipt.phase;
+              liveReceipt.errorMessage = String(error).slice(0, 4_096); liveReceipt.updatedAt = now();
+            }
+            liveTeam.updatedAt = now();
+          }));
+          throw error;
+        }
+      }
     }
     return store.runOperation(() => store.mutate((current) => {
       const liveTeam = findTeam(current, teamId); requireLiveRootLead(ctx, liveTeam, lead); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId);
@@ -4471,7 +4617,7 @@ async function pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt) {
     }
   }));
   let drainError;
-  try { await ctx.subagents.drainContinuableChildren(lead, childIds); }
+  try { await drainContinuableChildrenWithDeadline(ctx, lead, childIds); }
   catch (error) { drainError = error; }
   await store.runOperation(() => store.mutate((document) => {
     for (const team of document.teams) {
@@ -4611,16 +4757,18 @@ async function retireMember(ctx, store, admission, lead, input, signal) {
   if (prepared.noop) return prepared;
   const gracefulWaiter = force ? undefined : registerGracefulLifecycleWaiter(prepared.member.sessionId);
   try {
-    if (force) await ctx.subagents.drainContinuableChildren(lead, [prepared.member.sessionId]);
+    if (force) await drainContinuableChildrenWithDeadline(ctx, lead, [prepared.member.sessionId], signal);
     else {
-      await admission.run(lead, prepared.member.sessionId, signal, async () => {
-        requireExactRootAgent(ctx, lead);
-        return ctx.subagents.followup(lead, prepared.member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
-          source: relaySource(lead.id), signal,
+      await runWithLifecycleDeadline(async (lifecycleSignal) => {
+        await admission.run(lead, prepared.member.sessionId, lifecycleSignal, async () => {
+          requireExactRootAgent(ctx, lead);
+          return ctx.subagents.followup(lead, prepared.member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
+            source: relaySource(lead.id), signal: lifecycleSignal,
+          });
         });
-      });
-      gracefulWaiter.accept();
-      await waitForGracefulLifecycle(gracefulWaiter, signal);
+        gracefulWaiter.accept();
+        await waitForGracefulLifecycle(gracefulWaiter, lifecycleSignal);
+      }, { signal, label: "graceful member retirement" });
     }
   } catch (error) {
     gracefulWaiter?.cancel();
@@ -4679,7 +4827,7 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
   let outcomes = [];
   if (force) {
     try {
-      await ctx.subagents.drainContinuableChildren(lead, prepared.workers.map((member) => member.sessionId));
+      await drainContinuableChildrenWithDeadline(ctx, lead, prepared.workers.map((member) => member.sessionId), signal);
     } catch (error) {
       drainError = error;
     }
@@ -4687,14 +4835,16 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
     const gracefulRequests = prepared.workers.map((member) => ({ member, waiter: registerGracefulLifecycleWaiter(member.sessionId) }));
     outcomes = await Promise.allSettled(gracefulRequests.map(async ({ member, waiter }) => {
       try {
-        await admission.run(lead, member.sessionId, signal, async () => {
-          requireExactRootAgent(ctx, lead);
-          return ctx.subagents.followup(lead, member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
-            source: relaySource(lead.id), signal,
+        await runWithLifecycleDeadline(async (lifecycleSignal) => {
+          await admission.run(lead, member.sessionId, lifecycleSignal, async () => {
+            requireExactRootAgent(ctx, lead);
+            return ctx.subagents.followup(lead, member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
+              source: relaySource(lead.id), signal: lifecycleSignal,
+            });
           });
-        });
-        waiter.accept();
-        await waitForGracefulLifecycle(waiter, signal);
+          waiter.accept();
+          await waitForGracefulLifecycle(waiter, lifecycleSignal);
+        }, { signal, label: `graceful retirement for ${member.sessionId}` });
       } catch (error) {
         waiter.cancel();
         throw error;
@@ -4716,6 +4866,8 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
         }
         if (member.state !== "retired") {
           member.state = "failed";
+          member.shutdownUnconfirmed = true;
+          member.stopUnconfirmed = true;
           member.error = `retirement drain failed: ${String(drainError)}`;
           member.updatedAt = now();
         }
@@ -5391,6 +5543,8 @@ async function withProjectCollaborationContext(projectEntry, execution, operatio
     const wake = Object.freeze({
       claim: (input) => tasks.claimTaskWakeSignals(execution, { projectRef: context.projectRef, ...input }),
       ack: (input) => tasks.ackTaskWakeSignal(execution, { projectRef: context.projectRef, ...input }),
+      inspect: () => tasks.inspectTaskWakeWaiter(execution, { projectRef: context.projectRef }),
+      reconcile: (input) => tasks.reconcileTaskWakeSignal(execution, { projectRef: context.projectRef, ...input }),
       setPaused: (paused) => tasks.setTaskWakePaused(execution, { projectRef: context.projectRef, paused }),
     });
     return await operation({
@@ -5403,24 +5557,40 @@ async function withProjectCollaborationContext(projectEntry, execution, operatio
     try { store?.close(); } finally { context.dispose(); }
   }
 }
-async function reconcileProjectTaskWakeRoot(ctx, projectEntry, root, { paused, dispatch = false } = {}) {
+async function reconcileProjectTaskWakeRoot(ctx, projectEntry, root, { paused, dispatch = false, reconcile = true } = {}) {
   if (ctx.agents.get(root.id) !== root || !ctx.agents.roots().includes(root)) return;
   const execution = Object.freeze({ agent: root });
   await withProjectCollaborationContext(projectEntry, execution, async (binding) => {
     if (!binding.isBoardAvailable()) return;
-    if (typeof paused === "boolean") binding.wake.setPaused(paused);
+    if (paused === true) binding.wake.setPaused(true);
+    else {
+      if (reconcile) {
+        const waiter = binding.wake.inspect();
+        if (waiter.state === "outcome_unknown" && typeof waiter.wakeRef === "string") {
+          const evidence = rootProjectTaskWakeEvidence(root, waiter.wakeRef);
+          if (evidence !== "unknown") binding.wake.reconcile({ wakeRef: waiter.wakeRef, evidence });
+        }
+      }
+      if (paused === false) binding.wake.setPaused(false);
+    }
     if (dispatch) await dispatchProjectTaskWakeSignals(ctx, binding);
   });
 }
-function observeProjectTaskWakeLifecycle(ctx, projectEntry, ready) {
+function observeProjectTaskWakeLifecycle(ctx, projectEntry, ready, { reconcile = reconcileProjectTaskWakeRoot } = {}) {
   void ready.then(async () => {
-    const seen = new Set();
+    const representatives = new Map();
     const roots = ctx.agents.roots().filter((root) => ["idle", "running"].includes(root.status));
     for (const root of roots) {
       const key = optionalProjectKeyForRoot(root);
-      if (key === undefined || seen.has(key)) continue;
-      seen.add(key);
-      await reconcileProjectTaskWakeRoot(ctx, projectEntry, root, { dispatch: true });
+      if (key === undefined) continue;
+      try {
+        await reconcile(ctx, projectEntry, root, { dispatch: false });
+        if (!representatives.has(key)) representatives.set(key, root);
+      } catch (error) { ctx.logger.warn(`project task wake root reconciliation failed: ${String(error?.code ?? "unavailable")}`); }
+    }
+    for (const root of representatives.values()) {
+      try { await reconcile(ctx, projectEntry, root, { dispatch: true, reconcile: false }); }
+      catch (error) { ctx.logger.warn(`project task wake project dispatch failed: ${String(error?.code ?? "unavailable")}`); }
     }
   }).catch((error) => ctx.logger.warn(`project task wake restart recovery failed: ${String(error?.code ?? "unavailable")}`));
 }
@@ -5506,6 +5676,91 @@ function createProjectTaskWakeScheduler(ctx, projectEntry, ready, options = {}) 
   };
   return schedule;
 }
+async function reservePreparedProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,current,deriveOpaque){
+  if(current.state!=="prepared") return current;
+  if(current.mode==="retry") {
+    if(typeof current.launchRef!=="string") reject("retry recovery lost its exact Host failure reference","PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED");
+    return collaboration.reserveRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,launchRef:current.launchRef}).recovery;
+  }
+  const snapshot=collaboration.snapshot(execution,{projectRef,historyLimit:1,taskLimit:120}),seat=snapshot.collaboration?.seats?.find(candidate=>candidate.actorRef===current.failedActorRef),task=snapshot.tasks?.find(candidate=>candidate.taskRef===current.replacementTaskRef);
+  if(seat===undefined||task===undefined) reject("takeover recovery lost its durable seat or task evidence","PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED");
+  const batch=await projectSessionLaunch.prepareStart(execution,{requestId:`root-recovery:${current.recoveryRef}:${current.revision}`,totalSessions:2,slots:[{title:"Replacement root",role:seat.duty,resources:seat.resourceScope,task:seat.nextStep||task.title}],projectBinding:binding});
+  const adoptions=await projectSessionLaunch.prepareAdoptions(execution,{batchRef:batch.batchRef,projectBinding:binding}),adoption=adoptions.prepared[0];
+  if(adoption===undefined) reject("takeover recovery Host reservation is unavailable","PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED");
+  return collaboration.reserveRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,replacementSlotActorRef:deriveOpaque("slot-actor",adoption.slotRef),slotCapability:adoption.adoptionCapability,launchRef:batch.batchRef}).recovery;
+}
+function createProjectRootRecoveryScheduler(ctx,projectEntry,projectSessionLaunch,ready=Promise.resolve(),options={}){
+  const retryBaseMs=options.retryBaseMs??PROJECT_ROOT_RECOVERY_RETRY_BASE_MS,retryMaxMs=options.retryMaxMs??PROJECT_ROOT_RECOVERY_RETRY_MAX_MS,setTimer=options.setTimer??setTimeout,clearTimer=options.clearTimer??clearTimeout,openRecoveryContext=options.openRecoveryContext??((execution,operation)=>withProjectCollaborationContext(projectEntry,execution,operation));
+  if(!Number.isSafeInteger(retryBaseMs)||retryBaseMs<1||!Number.isSafeInteger(retryMaxMs)||retryMaxMs<retryBaseMs||typeof setTimer!=="function"||typeof clearTimer!=="function"||typeof openRecoveryContext!=="function") throw new TypeError("project root recovery scheduler options are invalid");
+  const states=new Map(),activeRuns=new Set(); let closed=false,closePromise;
+  const retryableState=state=>["prepared","reserved","activated","failed","outcome_unknown"].includes(state);
+  const retryableError=error=>!["PROJECT_COLLABORATION_NOT_FOUND","PROJECT_ROOT_RECOVERY_FORBIDDEN","PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED","PROJECT_SESSION_LAUNCH_NOT_FOUND","PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH","PROJECT_COLLABORATION_CONTEXT_INVALID"].includes(error?.code);
+  const pump=options.pump??(async target=>{
+    const root=ctx.agents.get(target.rootId);
+    if(root===undefined||!ctx.agents.roots().includes(root)||PROJECT_TASK_STOPPED_ROOTS.has(root.id)||optionalProjectKeyForRoot(root)!==target.canonicalProjectKey) return {retryable:false};
+    const execution=Object.freeze({agent:root}),binding={canonicalProjectKey:target.canonicalProjectKey,workspacePath:projectScopeForRoot(root),callerRootId:root.id};
+    return openRecoveryContext(execution,async({projectRef,actorRef,collaboration,deriveOpaque})=>{
+      let current=collaboration.getRootRecovery(execution,{projectRef,recoveryRef:target.recoveryRef});
+      if(current.initiatorActorRef!==actorRef||!retryableState(current.state)) return {retryable:false};
+      if(current.state==="prepared") current=await reservePreparedProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,current,deriveOpaque);
+      if(current.state==="failed"&&current.revision>=PROJECT_ROOT_RECOVERY_AUTO_EFFECT_REVISION_LIMIT) return {retryable:false};
+      await continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,current.recoveryRef,current.revision);
+      current=collaboration.getRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef});
+      return {retryable:retryableState(current.state)};
+    });
+  });
+  const start=(key,state)=>{
+    if(closed||state.running||states.get(key)!==state) return;
+    state.running=true;
+    const run=(async()=>{
+      let retryable=false;
+      try { await ready; retryable=(await pump(state.target))?.retryable===true; }
+      catch(error) { retryable=retryableError(error); ctx.logger.warn(`project root recovery scheduling failed: ${String(error?.code??"unavailable")}`); }
+      finally {
+        state.running=false;
+        if(closed||states.get(key)!==state){if(states.get(key)===state) states.delete(key);return;}
+        if(state.pending){state.pending=false;start(key,state);return;}
+        if(retryable){const delay=Math.min(retryMaxMs,retryBaseMs*(2**Math.min(state.retryAttempt,16)));state.retryAttempt+=1;state.timer=setTimer(()=>{state.timer=undefined;start(key,state)},delay);state.timer?.unref?.();}
+        else if(states.get(key)===state) states.delete(key);
+      }
+    })();
+    activeRuns.add(run); void run.finally(()=>activeRuns.delete(run));
+  };
+  const schedule=({rootId,canonicalProjectKey,recoveryRef}={})=>{
+    if(closed||typeof rootId!=="string"||typeof canonicalProjectKey!=="string"||typeof recoveryRef!=="string") return;
+    const key=`${rootId}\0${canonicalProjectKey}\0${recoveryRef}`; let state=states.get(key);
+    if(state===undefined){state={target:{rootId,canonicalProjectKey,recoveryRef},running:false,pending:false,timer:undefined,retryAttempt:0};states.set(key,state);}
+    state.retryAttempt=0;
+    if(state.timer!==undefined){clearTimer(state.timer);state.timer=undefined;}
+    if(state.running){state.pending=true;return;}
+    start(key,state);
+  };
+  schedule.discover=async root=>{
+    if(closed||root===undefined||!ctx.agents.roots().includes(root)||PROJECT_TASK_STOPPED_ROOTS.has(root.id)) return;
+    const canonicalProjectKey=optionalProjectKeyForRoot(root); if(canonicalProjectKey===undefined) return;
+    const execution=Object.freeze({agent:root});
+    await withProjectCollaborationContext(projectEntry,execution,async({projectRef,actorRef,collaboration})=>{
+      let boundary;
+      do {
+        const page=collaboration.sectionWindow(execution,{projectRef,section:"recoveries",limit:100,...(boundary===undefined?{}:{boundary})});
+        for(const recovery of page.items) if(recovery.initiatorActorRef===actorRef&&retryableState(recovery.state)) schedule({rootId:root.id,canonicalProjectKey,recoveryRef:recovery.recoveryRef});
+        boundary=page.hasMore?page.nextBoundary:undefined;
+      } while(boundary!==undefined&&!closed);
+    });
+  };
+  schedule.cancelRoot=rootId=>{for(const [key,state] of states) if(state.target.rootId===rootId){if(state.timer!==undefined) clearTimer(state.timer);states.delete(key);}};
+  schedule.close=()=>{if(closePromise!==undefined)return closePromise;closed=true;for(const state of states.values()) if(state.timer!==undefined) clearTimer(state.timer);states.clear();closePromise=Promise.allSettled([...activeRuns]).then(()=>undefined);return closePromise;};
+  schedule.size=()=>states.size;
+  return schedule;
+}
+function observeProjectRootRecoveryLifecycle(ctx,scheduler,ready=Promise.resolve()){
+  void ready.then(()=>Promise.allSettled(ctx.agents.roots().map(root=>scheduler.discover(root)))).catch(error=>ctx.logger.warn(`project root recovery restart discovery failed: ${String(error?.code??"unavailable")}`));
+  ctx.on("session/event",(session,event)=>{
+    const root=ctx.agents.get(session.id); if(root===undefined||root.session!==session||!ctx.agents.roots().includes(root)) return;
+    if(event.type==="turn/end"&&event.data?.reason?.kind==="aborted"&&event.data.reason.reason?.kind==="user") scheduler.cancelRoot(root.id);
+    else if(event.type==="user/message"&&event.data?.source?.kind==="user") void scheduler.discover(root).catch(error=>ctx.logger.warn(`project root recovery resume discovery failed: ${String(error?.code??"unavailable")}`));
+  });
+}
 function requireProjectRootCaller(ctx, exec) {
   const execution = toolExecution(ctx, exec);
   if (!ctx.agents.roots().includes(execution.agent)) reject("project collaboration tools require the exact top-level root; Agent Team members and subagents are forbidden", "PROJECT_COLLABORATION_ROOT_REQUIRED");
@@ -5519,11 +5774,36 @@ async function continueProjectRootRecovery(projectSessionLaunch,execution,bindin
   let current=collaboration.getRootRecovery(execution,{projectRef,recoveryRef}),launch,retried=false;
   if(expectedRevision!==undefined&&current.revision!==expectedRevision) reject("root recovery revision changed","PROJECT_ROOT_RECOVERY_CONFLICT");
   if(["ready","cancelled"].includes(current.state)) return collaboration.snapshot(execution,{projectRef,historyLimit:20,taskLimit:100});
-  if(current.mode==="retry"&&["reserved","failed"].includes(current.state)){launch=await projectSessionLaunch.retryFailedSlot(execution,{slotRef:current.launchRef,projectBinding:binding});retried=true;}
+  if(current.mode==="retry"&&current.state==="reserved"){
+    // The recovery CAS is the durable effect fence.  A crash after this point
+    // resumes from activated and observes the exact Host slot; a losing caller
+    // never reaches retryFailedSlot.
+    current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:"activated"}).recovery;
+    launch=await projectSessionLaunch.retryFailedSlot(execution,{slotRef:current.launchRef,projectBinding:binding});retried=true;
+  }
+  else if(current.mode==="retry"&&current.state==="failed") {
+    // Fence the durable recovery before the exact Host retry effect. Concurrent
+    // continuations race on this CAS, so only its winner may call retryFailedSlot.
+    current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:"activated"}).recovery;
+    launch=await projectSessionLaunch.retryFailedSlot(execution,{slotRef:current.launchRef,projectBinding:binding});retried=true;
+  }
   else if(current.mode==="takeover"&&current.state==="reserved") launch=await activateReservedRootRecovery(projectSessionLaunch,execution,binding,current);
+  else if(current.mode==="takeover"&&current.state==="failed") {
+    const reservation=await projectSessionLaunch.recoveryReservation(execution,{batchRef:current.launchRef,projectBinding:binding});
+    current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:"activated"}).recovery;
+    launch=await projectSessionLaunch.retryFailedSlot(execution,{slotRef:reservation.slotRef,projectBinding:binding});
+    retried=true;
+  }
   else launch=current.mode==="retry"?await projectSessionLaunch.slotStatus(execution,{slotRef:current.launchRef,projectBinding:binding}):await projectSessionLaunch.status(execution,{batchRef:current.launchRef,projectBinding:binding});
-  const slot=current.mode==="retry"?launch.slots.find(candidate=>candidate.slotRef===current.launchRef):launch.slots[0],launchState=slot?.state;
-  if((current.state==="reserved"||current.state==="failed"&&retried)&&!["failed","outcome_unknown"].includes(launchState)) current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:"activated"}).recovery;
+  let slot=current.mode==="retry"?launch.slots.find(candidate=>candidate.slotRef===current.launchRef):launch.slots[0],launchState=slot?.state;
+  if(retried&&launchState==="outcome_unknown") {
+    // Host reconcile consults the exact persisted prompt request evidence. It may
+    // prove ready/failed here; unavailable evidence remains outcome_unknown and is
+    // observed again by the bounded recovery scheduler without another effect.
+    launch=current.mode==="retry"?await projectSessionLaunch.slotStatus(execution,{slotRef:current.launchRef,projectBinding:binding}):await projectSessionLaunch.status(execution,{batchRef:current.launchRef,projectBinding:binding});
+    slot=current.mode==="retry"?launch.slots.find(candidate=>candidate.slotRef===current.launchRef):launch.slots[0]; launchState=slot?.state;
+  }
+  if(current.state==="reserved"&&!["failed","outcome_unknown"].includes(launchState)) current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:"activated"}).recovery;
   const desired=launchState==="ready"?"ready":launchState==="failed"?"failed":launchState==="outcome_unknown"?"outcome_unknown":undefined;
   if(desired!==undefined&&current.state!==desired) {
     if(current.state==="failed"&&desired==="ready") current=collaboration.updateRootRecovery(execution,{projectRef,recoveryRef:current.recoveryRef,expectedRevision:current.revision,state:"activated"}).recovery;
@@ -5532,7 +5812,7 @@ async function continueProjectRootRecovery(projectSessionLaunch,execution,bindin
   }
   return collaboration.snapshot(execution,{projectRef,historyLimit:20,taskLimit:100});
 }
-function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaunch, ready = Promise.resolve()) {
+function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaunch, ready = Promise.resolve(), projectRootRecoveryScheduler) {
   const officialCorePorts = officialCorePortsForProjectEntry(projectEntry);
   ctx.systemPrompt.section({ name: "tool:project-collaboration", order: 114, text: () => "Only exact top-level roots may call project_collaboration and project_task. A newly launched root must first adopt_slot, then at adoption and every project-task boundary call read_requests and respond to rows with targetedToMe=true before taking unrelated work. Request kinds are dependency_unblock, release, handoff, and takeover; target responses are accept, reject, or release. Respect respondByAt: audit_resolve_request is eligible only when escalationEligible=true, including an early deadline only when the current root turn carries explicit direct-user authorization verified by the Host. Requests are durable and no-wake: never poll or wake a stopped root. Read the assigned project task, work it, explicitly submit project status/evidence, and call project_task claim_next with a new stable request_id. Repeat one task at a time until all_terminal, or blocked with every remaining blocker represented by one durable request. A temporarily_empty claim durably arms one deduplicated Host wake, so end the turn without polling; when that exact wake arrives, resume with read_requests and a fresh claim_next request_id. A root's private Agent Team may receive only bounded context for the current claimed project task; members retain team_task_* only and never call project tools. The root must reconcile Team deliverables into explicit project task status and evidence—Team reports or completion are not project evidence. For project_task add_dependency/remove_dependency, task_ref is the blocked dependent and payload.blockerTaskRef is the prerequisite; the Host persists blockerTaskRef -> task_ref. The Host derives project/actor identity; model outputs may expose mine, targetedToMe, and escalationEligible but never actor refs, raw session, workspace, filesystem, or project identities." });
   ctx.tools.register(defineTool({
@@ -5548,23 +5828,25 @@ function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaun
         if(args.action==="continue_root_recovery") requireDirectHumanRoot(ctx,execution);
         if(args.action==="recover_root") { requireDirectHumanRoot(ctx,execution); recoveryInput=projectToolPayload(args.payload,new Set(["failure_ref","mode","collaboration_request_ref"])); if(!["retry","takeover"].includes(recoveryInput.mode)) reject("root recovery mode is invalid","PROJECT_COLLABORATION_INVALID"); rootFailureEvidence=await projectSessionLaunch.rootFailureEvidence(execution,{failureRef:recoveryInput.failure_ref,projectBinding:{canonicalProjectKey:projectKeyForRoot(execution.agent),workspacePath:projectScopeForRoot(execution.agent),callerRootId:execution.agent.id}}); }
         const requestAction = ["read_requests", "create_request", "respond_request", "cancel_request", "audit_resolve_request"].includes(args.action);
+        let recoverySchedule;
+        try {
         const value = await withProjectCollaborationContext(projectEntry, execution, async ({ projectRef, collaboration, deriveOpaque }) => {
           if (args.action === "read") { const input = projectToolPayload(args.payload, new Set(["history_limit", "before_revision", "task_limit"])); return collaboration.snapshot(execution, { projectRef, historyLimit: input.history_limit, beforeRevision: input.before_revision, taskLimit: input.task_limit }); }
           if (args.action === "initialize" || args.action === "bind_legacy") { const input = projectToolPayload(args.payload, new Set(["title"])); return collaboration.createBoard(execution, { projectRef, title: input.title }); }
           if (args.action === "adopt_slot") { const input = projectToolPayload(args.payload, new Set(["slot_ref"])); return adoptProjectLaunchSlot(projectSessionLaunch, execution, { canonicalProjectKey: projectKeyForRoot(execution.agent), workspacePath: projectScopeForRoot(execution.agent), callerRootId: execution.agent.id }, projectRef, collaboration, input.slot_ref); }
           if(args.action==="continue_root_recovery") {
             const input=projectToolPayload(args.payload,new Set(["recovery_ref"])),binding={canonicalProjectKey:projectKeyForRoot(execution.agent),workspacePath:projectScopeForRoot(execution.agent),callerRootId:execution.agent.id},current=collaboration.getRootRecovery(execution,{projectRef,recoveryRef:input.recovery_ref});
-            return officialCorePorts.recovery.continueRoot({ confirm: true, expectedRevision: current.revision, operation: () => continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,input.recovery_ref,current.revision) });
+            recoverySchedule={rootId:execution.agent.id,canonicalProjectKey:binding.canonicalProjectKey,recoveryRef:input.recovery_ref};
+            const result=await officialCorePorts.recovery.continueRoot({ confirm: true, expectedRevision: current.revision, operation: () => continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,input.recovery_ref,current.revision) });
+            return result;
           }
           if(args.action==="recover_root") {
             const requestId=nonEmptyString(args.request_id,"request_id",256),binding={canonicalProjectKey:projectKeyForRoot(execution.agent),workspacePath:projectScopeForRoot(execution.agent),callerRootId:execution.agent.id},recoveryRef=deriveOpaque("root-recovery",requestId);
             let current=collaboration.prepareRootRecovery(execution,{projectRef,recoveryRef,requestId:deriveOpaque("root-recovery-request",requestId),mode:recoveryInput.mode,failureRef:recoveryInput.failure_ref,collaborationRequestRef:recoveryInput.collaboration_request_ref}).recovery;
-            if(current.state==="prepared"&&recoveryInput.mode==="retry") current=collaboration.reserveRootRecovery(execution,{projectRef,recoveryRef,launchRef:recoveryInput.failure_ref}).recovery;
-            if(current.state==="prepared"&&recoveryInput.mode==="takeover") {
-              const batch=await projectSessionLaunch.prepareStart(execution,{requestId:`recovery:${requestId}`,totalSessions:2,slots:[{title:"Replacement root",role:rootFailureEvidence.role,resources:rootFailureEvidence.resources,task:rootFailureEvidence.task}],projectBinding:binding}),adoptions=await projectSessionLaunch.prepareAdoptions(execution,{batchRef:batch.batchRef,projectBinding:binding}),adoption=adoptions.prepared[0],slotActorRef=deriveOpaque("slot-actor",adoption.slotRef);
-              current=collaboration.reserveRootRecovery(execution,{projectRef,recoveryRef,replacementSlotActorRef:slotActorRef,slotCapability:adoption.adoptionCapability,launchRef:batch.batchRef}).recovery;
-            }
-            return officialCorePorts.recovery.continueRoot({ confirm: true, expectedRevision: current.revision, operation: () => continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,recoveryRef,current.revision) });
+            recoverySchedule={rootId:execution.agent.id,canonicalProjectKey:binding.canonicalProjectKey,recoveryRef};
+            if(current.state==="prepared") current=await reservePreparedProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,current,deriveOpaque);
+            const result=await officialCorePorts.recovery.continueRoot({ confirm: true, expectedRevision: current.revision, operation: () => continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,recoveryRef,current.revision) });
+            return result;
           }
           if (args.action === "update_own_seat") { const input = projectToolPayload(args.payload, new Set(["expected_revision", "state", "duty", "resource_scope", "phase", "next_step"])); return collaboration.upsertSeat(execution, { projectRef, expectedRevision: input.expected_revision, kind: "root", state: input.state, duty: input.duty, resourceScope: input.resource_scope, phase: input.phase, nextStep: input.next_step }); }
           if (args.action === "acquire_lock") { const input = projectToolPayload(args.payload, new Set(["resource_ref", "task_ref"])); return collaboration.acquireLock(execution, { projectRef, resourceRef: input.resource_ref, taskRef: input.task_ref }); }
@@ -5589,6 +5871,7 @@ function registerProjectCollaborationTools(ctx, projectEntry, projectSessionLaun
           });
         }
         return publicResult(requestAction ? projectRequestModelResult(value) : projectCollaborationModelResult(value));
+        } finally { if(recoverySchedule!==undefined) projectRootRecoveryScheduler?.(recoverySchedule); }
       } catch (error) { return projectToolFailure(error); }
     }, presentCall: (args) => present("Project collaboration", args.action),
   }));
@@ -6202,7 +6485,7 @@ function createSseBroadcaster({ delayMs = SSE_COALESCE_MS, keepaliveMs = TEAM_SS
   return { add, clients, close, flush, remove, schedule, send };
 }
 
-function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessionLaunch) {
+function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessionLaunch, projectTaskRuntimeForSession, projectRootRecoveryScheduler) {
   const officialCorePorts = officialCorePortsForProjectEntry(projectEntry);
   const broadcaster = createSseBroadcaster();
   const detailSnapshot = (document, sessionId, selectedTeamId, selectedTaskId) => projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId)
@@ -6325,8 +6608,19 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
           if (body.confirm !== true) reject("root recovery requires explicit direct-human confirmation", "AGENT_TEAMS_RECOVERY_CONFIRMATION_REQUIRED");
           const lead=ctx.agents.get(sessionId);
           if(lead===undefined||!ctx.agents.roots().includes(lead)) reject("root recovery requires the exact top-level root session","AGENT_TEAMS_UNAUTHORIZED");
-          const recoveryRef=nonEmptyString(body.recoveryRef,"recoveryRef",256),expectedRevision=positiveInteger(body.expectedRevision,"expectedRevision"),execution=Object.freeze({agent:lead}),binding={canonicalProjectKey:projectKeyForRoot(lead),workspacePath:projectScopeForRoot(lead),callerRootId:lead.id};
-          result=await officialCorePorts.recovery.continueRoot({confirm:true,expectedRevision,operation:()=>withProjectCollaborationContext(officialCorePorts,execution,({projectRef,collaboration})=>continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,recoveryRef,expectedRevision))});
+          if(typeof projectTaskRuntimeForSession!=="function") reject("root recovery capability runtime is unavailable","AGENT_TEAMS_UNAUTHORIZED");
+          const recoveryAction=nonEmptyString(body.recoveryAction,"recoveryAction",32),expectedRevision=positiveInteger(body.expectedRevision,"expectedRevision"),capability=nonEmptyString(body.recoveryCapability,"recoveryCapability",16_384);
+          if(!["retry","takeover"].includes(recoveryAction)) reject("root recovery action is invalid","AGENT_TEAMS_UNAUTHORIZED");
+          const authorized=await projectTaskRuntimeForSession(sessionId).resolveRootRecoveryCapability({capability,action:recoveryAction,expectedRevision});
+          const execution=Object.freeze({agent:lead}),binding={canonicalProjectKey:projectKeyForRoot(lead),workspacePath:projectScopeForRoot(lead),callerRootId:lead.id};
+          try {
+            result=await officialCorePorts.recovery.continueRoot({confirm:true,expectedRevision,operation:()=>withProjectCollaborationContext(officialCorePorts,execution,async({projectRef,collaboration,deriveOpaque})=>{
+              let current=collaboration.getRootRecovery(execution,{projectRef,recoveryRef:authorized.recoveryRef});
+              if(current.revision!==expectedRevision||current.mode!==recoveryAction) reject("root recovery capability no longer matches durable state","PROJECT_ROOT_RECOVERY_CONFLICT");
+              if(current.state==="prepared") current=await reservePreparedProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,current,deriveOpaque);
+              return continueProjectRootRecovery(projectSessionLaunch,execution,binding,projectRef,collaboration,current.recoveryRef,current.revision);
+            })});
+          } finally { projectRootRecoveryScheduler?.({rootId:lead.id,canonicalProjectKey:binding.canonicalProjectKey,recoveryRef:authorized.recoveryRef}); }
         } else if (action === "member-retry" || action === "member-replace") {
           if (body.confirm !== true) reject("member recovery requires explicit direct-human confirmation", "AGENT_TEAMS_RECOVERY_CONFIRMATION_REQUIRED");
           const lead = ctx.agents.get(sessionId);
@@ -6341,7 +6635,7 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
         const state = await store.read((document) => teamSnapshot(document, sessionId, body.teamId));
         return json(res, 200, publicResult({ result, state }));
       } catch (error) {
-        const status = error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : error?.code === "AGENT_TEAMS_UNAUTHORIZED" ? 403 : error?.code?.includes("CONFLICT") || error?.code?.includes("LIMIT") ? 409 : 400;
+        const status = error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : ["AGENT_TEAMS_UNAUTHORIZED", "PROJECT_TASK_WEB_FORBIDDEN"].includes(error?.code) ? 403 : error?.code?.includes("CONFLICT") || error?.code?.includes("LIMIT") ? 409 : 400;
         return json(res, status, errorPayload(error));
       }
     },
@@ -6852,6 +7146,9 @@ function observeUserStops(ctx, store, ready, admission, projectSessionLaunch, pr
     PROJECT_TASK_STOPPED_ROOTS.add(lead.id);
     clearQueuedProjectTaskWakes(lead);
     scheduleProjectTaskWake(lead, { paused: true });
+    const projectBinding = { canonicalProjectKey: projectKeyForRoot(lead), workspacePath: projectScopeForRoot(lead), callerRootId: lead.id };
+    void Promise.resolve(projectSessionLaunch?.stopForRoot?.(lead.id, projectBinding)).catch((error) => ctx.logger.warn(`project session launch Stop reconciliation failed: ${String(error)}`));
+    admission?.cancelRoot?.(lead, admissionCancellation());
     const selections = store.activeTeamsForRoot(lead.id);
     if (selections.length === 0) return;
     const stoppedAt = now();
@@ -6862,9 +7159,6 @@ function observeUserStops(ctx, store, ready, admission, projectSessionLaunch, pr
     const reconciliation = ready.then(() => pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt));
     for (const selection of selections) USER_PAUSE_RECONCILIATIONS.set(selection.teamId, reconciliation);
     store.notify?.();
-    const projectBinding = { canonicalProjectKey: projectKeyForRoot(lead), workspacePath: projectScopeForRoot(lead), callerRootId: lead.id };
-    void projectSessionLaunch?.stopForRoot?.(lead.id, projectBinding).catch((error) => ctx.logger.warn(`project session launch Stop reconciliation failed: ${String(error)}`));
-    admission?.cancelRoot?.(lead, admissionCancellation());
     // The stock UI cancellation preserves queued inbox work. For a team-owning root,
     // clear it at the durable turn-end boundary so member reports cannot auto-restart.
     lead.cancel({ kind: "user" });
@@ -6976,14 +7270,28 @@ function createProjectTaskSessionRuntimeResolver(ctx, projectEntryRegistry, wake
     const root = ctx.agents.get(sessionId);
     if (root === undefined || !ctx.agents.roots().includes(root)) reject("project task panel requires an exact top-level root session", "PROJECT_TASK_WEB_FORBIDDEN");
     const canonicalProjectKey = projectKeyForRoot(root);
-    let runtime = runtimes.get(canonicalProjectKey);
+    const runtimeKey = `${root.id}\0${canonicalProjectKey}`;
+    let runtime = runtimes.get(runtimeKey);
     if (runtime !== undefined) return runtime;
     const projectEntry = Object.freeze({
       localProjectCollaborationContext: () => projectEntryRegistry.localProjectCollaborationContext({ canonicalProjectKey }),
       localProjectTaskContext: () => projectEntryRegistry.localProjectTaskContext({ canonicalProjectKey }),
     });
-    runtime = new ProjectTaskWebRuntime({ projectEntry, legacySummaryProvider: async () => false, wakeScheduler });
-    runtimes.set(canonicalProjectKey, runtime);
+    runtime = new ProjectTaskWebRuntime({
+      projectEntry,
+      legacySummaryProvider: async () => false,
+      wakeScheduler,
+      rootRecoveryAuthorityProvider: ({ context, store }) => {
+        let key;
+        try {
+          key = context.keyProvider(context.projectRef);
+          const actorRef = `actor_${createHmac("sha256", key).update("dsh-agent-teams/project-root-actor/v1").update("\0").update(context.projectRef).update("\0").update(JSON.stringify([root.id])).digest("base64url")}`;
+          const coordinatorActorRef = store.getCollaborationCoordinatorActorRef(context.projectRef);
+          return { actorRef, isCoordinator: coordinatorActorRef === undefined || coordinatorActorRef === actorRef };
+        } finally { key?.fill(0); }
+      },
+    });
+    runtimes.set(runtimeKey, runtime);
     return runtime;
   };
   resolve.close = async () => {
@@ -7006,6 +7314,10 @@ function apply(ctx, config = {}) {
   const desktopGitCapability = consumeDesktopGitCapability().then((value) => value, (error) => Promise.reject(error));
   desktopGitCapability.catch(() => undefined);
   const store = new AgentTeamsStore(join(dshHome, "storages", "agent_teams.json"), defaults);
+  // Managed workers may inherit delegation tools from an agent-local preset. Those
+  // names are deliberately not valid inputs to tools.restrict(), so enforce the
+  // no-fan-out boundary at execution time instead of filtering child composition.
+  ctx.tools.guard((execution) => managedMemberToolGuard(store, execution));
   const collaboration = new AgentCollaborationService(join(dshHome, "storages", "agent_collaboration.json"));
   // This process-local gate covers only Agent Teams-managed continuable workers.
   // Root turns, ordinary subagents, Schedule root wakeups, and provider retries remain
@@ -7071,6 +7383,8 @@ function apply(ctx, config = {}) {
   const ready = Promise.all([store.init(), projectSessionLaunch.init()]).then(([document]) => document);
   projectTaskWakeScheduler = createProjectTaskWakeScheduler(ctx, officialCorePorts, ready);
   ctx.effect(() => () => projectTaskWakeScheduler.close());
+  const projectRootRecoveryScheduler = createProjectRootRecoveryScheduler(ctx, officialCorePorts, projectSessionLaunch, ready);
+  ctx.effect(() => () => projectRootRecoveryScheduler.close());
   const legacySummaryProvider = async () => {
     await ready;
     return store.read((document) => ({ detected: document.teams.some((team) => team.tasks.length > 0) }));
@@ -7115,15 +7429,16 @@ function apply(ctx, config = {}) {
     };
   }, "agent-teams collaboration presence");
   registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization);
-  registerProjectCollaborationTools(ctx, officialCorePorts, projectSessionLaunch, ready);
+  registerProjectCollaborationTools(ctx, officialCorePorts, projectSessionLaunch, ready, projectRootRecoveryScheduler);
   registerProjectSessionLaunchTool(ctx, officialCorePorts, projectSessionLaunch, ready);
   registerProjectFoundationTools(ctx, projectFoundations, ready);
   registerProjectFoundationsApi(ctx, projectFoundations, ready);
-  registerWebApi(ctx, store, ready, admission, officialCorePorts, projectSessionLaunch);
+  registerWebApi(ctx, store, ready, admission, officialCorePorts, projectSessionLaunch, projectTaskRuntimeForSession, projectRootRecoveryScheduler);
   registerProjectEntryApi(ctx, projectEntry);
   registerProjectTaskApi(ctx, projectTaskRuntimeForSession, projectBusiness);
   registerProjectAutomationApi(ctx, projectAutomations, projectBusiness);
   observeSubagents(ctx, store, ready, admission);
+  observeProjectRootRecoveryLifecycle(ctx, projectRootRecoveryScheduler, ready);
   observeUserStops(ctx, store, ready, admission, projectSessionLaunch, officialCorePorts);
   observeProjectTaskWakeLifecycle(ctx, officialCorePorts, ready);
   observeProjectRootFailures(ctx,projectEntryRegistry,projectSessionLaunch,ready);
@@ -7165,9 +7480,15 @@ export {
   createProjectTaskSseBridge,
   createProjectTaskSessionRuntimeResolver,
   createProjectTaskWakeScheduler,
+  createProjectRootRecoveryScheduler,
+  rootProjectTaskWakeEvidence,
+  reconcileProjectTaskWakeRoot,
+  observeProjectTaskWakeLifecycle,
+  observeProjectRootRecoveryLifecycle,
   createResolveUnknownAuthorizationGate,
   createSseBroadcaster,
   createSubagentEventReconciler,
+  drainContinuableChildrenWithDeadline,
   dispatchProjectTaskWakeSignals,
   createTeamTurnAdmission,
   fileBoundaryOverlap,
@@ -7175,6 +7496,7 @@ export {
   hasTeamCreationRootAuthority,
   normalizeExpansionRequest,
   resourceBoundaryOverlap,
+  runWithLifecycleDeadline,
   pauseTeamsForUserStop,
   resumePausedTeam,
   observeUserStops,

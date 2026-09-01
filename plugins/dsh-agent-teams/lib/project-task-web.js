@@ -15,6 +15,7 @@ const MAX_WEB_COLLABORATION_PAGE_BYTES = 128 * 1024;
 const WEB_PAGE_CURSOR_MAX_CHARS = 16_384;
 const WEB_TASK_CURSOR_PREFIX = "ptw4";
 const WEB_COLLABORATION_CURSOR_PREFIX = "pcw3";
+const WEB_ROOT_RECOVERY_CAPABILITY_PREFIX = "prc1";
 const COLLABORATION_SECTIONS = Object.freeze(["seats", "tasks", "locks", "handoffs", "recoveries", "evidence", "history", "requests"]);
 const COLLABORATION_SECTION_SET = new Set(COLLABORATION_SECTIONS);
 const COLLABORATION_SSE_DEBOUNCE_MS = 40;
@@ -74,6 +75,16 @@ function decodeCollaborationPageCursor(projectRef, cursor, key) {
   const payload = openPageCursor(WEB_COLLABORATION_CURSOR_PREFIX, "project-collaboration-web-page-v3", projectRef, cursor, key, "collaboration page cursor is invalid");
   if (!isRecord(payload) || Object.keys(payload).sort().join(",") !== "b,r,s,v" || payload.v !== 3 || !Number.isSafeInteger(payload.r) || payload.r < 0 || !COLLABORATION_SECTION_SET.has(payload.s) || !isRecord(payload.b) || Object.keys(payload.b).length === 0) throw webError("collaboration page cursor is invalid", "PROJECT_TASK_WEB_CURSOR_INVALID");
   return { revision: payload.r, section: payload.s, boundary: payload.b };
+}
+function encodeRootRecoveryCapability(projectRef, recoveryRef, revision, action, actorRef, key) {
+  return sealPageCursor(WEB_ROOT_RECOVERY_CAPABILITY_PREFIX, "project-root-recovery-capability-v1", projectRef, { v: 1, r: recoveryRef, n: revision, a: action, i: actorRef }, key);
+}
+function decodeRootRecoveryCapability(projectRef, capability, key) {
+  let payload;
+  try { payload = openPageCursor(WEB_ROOT_RECOVERY_CAPABILITY_PREFIX, "project-root-recovery-capability-v1", projectRef, capability, key, "root recovery capability is invalid"); }
+  catch { throw webError("root recovery capability is invalid", "PROJECT_TASK_WEB_FORBIDDEN"); }
+  if (!isRecord(payload) || Object.keys(payload).sort().join(",") !== "a,i,n,r,v" || payload.v !== 1 || typeof payload.r !== "string" || payload.r.length < 1 || payload.r.length > 256 || !Number.isSafeInteger(payload.n) || payload.n < 1 || !new Set(["retry", "takeover"]).has(payload.a) || typeof payload.i !== "string" || payload.i.length < 1 || payload.i.length > 256) throw webError("root recovery capability is invalid", "PROJECT_TASK_WEB_FORBIDDEN");
+  return Object.freeze({ recoveryRef: payload.r, revision: payload.n, action: payload.a, actorRef: payload.i });
 }
 function nonEmptyString(value, field, max = 2_000) {
   if (typeof value !== "string" || value.trim() === "" || value.length > max) throw webError(`${field} is invalid`);
@@ -266,16 +277,17 @@ function projectTaskWebError(error) {
 }
 
 class ProjectTaskWebRuntime {
-  constructor({ projectEntry, legacySummaryProvider = () => false, now = Date.now, randomBytesImpl = randomBytes, wakeScheduler = () => undefined } = {}) {
+  constructor({ projectEntry, legacySummaryProvider = () => false, now = Date.now, randomBytesImpl = randomBytes, wakeScheduler = () => undefined, rootRecoveryAuthorityProvider } = {}) {
     if (typeof projectEntry?.localProjectTaskContext !== "function") throw new TypeError("projectEntry must provide localProjectTaskContext");
     if (typeof legacySummaryProvider !== "function") throw new TypeError("legacySummaryProvider must be a function");
-    if (typeof now !== "function" || typeof randomBytesImpl !== "function" || typeof wakeScheduler !== "function") throw new TypeError("runtime functions are invalid");
+    if (typeof now !== "function" || typeof randomBytesImpl !== "function" || typeof wakeScheduler !== "function" || (rootRecoveryAuthorityProvider !== undefined && typeof rootRecoveryAuthorityProvider !== "function")) throw new TypeError("runtime functions are invalid");
     const cursorKey = randomBytesImpl(32);
     if ((!Buffer.isBuffer(cursorKey) && !(cursorKey instanceof Uint8Array)) || cursorKey.byteLength !== 32) throw new TypeError("randomBytesImpl must return 32 bytes");
     this.projectEntry = projectEntry;
     this.legacySummaryProvider = legacySummaryProvider;
     this.now = now;
     this.wakeScheduler = wakeScheduler;
+    this.rootRecoveryAuthorityProvider = rootRecoveryAuthorityProvider;
     this.cursorKey = Buffer.from(cursorKey);
     this.binding = undefined;
     this.collaborationCache = new Map();
@@ -320,6 +332,20 @@ class ProjectTaskWebRuntime {
       const page = this.#collaborationPage(binding, undefined, true);
       if (previous !== undefined && page.revision !== previous) this.#queueCollaborationUpdate(binding.context.projectRef, page.revision);
       return page;
+    }));
+  }
+
+  async resolveRootRecoveryCapability(input = {}) {
+    if (!isRecord(input) || Object.keys(input).some((key) => !new Set(["capability", "action", "expectedRevision"]).has(key))) throw webError("root recovery capability request is invalid", "PROJECT_TASK_WEB_FORBIDDEN");
+    const capability = nonEmptyString(input.capability, "capability", WEB_PAGE_CURSOR_MAX_CHARS);
+    const action = nonEmptyString(input.action, "action", 32);
+    if (!new Set(["retry", "takeover"]).has(action)) throw webError("root recovery action is invalid", "PROJECT_TASK_WEB_FORBIDDEN");
+    const expectedRevision = safeInteger(input.expectedRevision, "expectedRevision", 1);
+    return this.#enqueue(() => this.#withBinding((binding) => {
+      const authority = this.#rootRecoveryAuthority(binding);
+      const decoded = decodeRootRecoveryCapability(binding.context.projectRef, capability, this.cursorKey);
+      if (decoded.actorRef !== authority.actorRef || decoded.action !== action || decoded.revision !== expectedRevision) throw webError("root recovery capability does not match this root action", "PROJECT_TASK_WEB_FORBIDDEN");
+      return Object.freeze({ recoveryRef: decoded.recoveryRef, action, expectedRevision });
     }));
   }
 
@@ -465,6 +491,17 @@ class ProjectTaskWebRuntime {
     try { context?.dispose?.(); } catch {}
   }
 
+  #rootRecoveryAuthority(binding) {
+    const actor = binding.context.actorResolver(binding.context.execution, binding.context.projectRef);
+    const supplied = this.rootRecoveryAuthorityProvider?.(Object.freeze({ context: binding.context, store: binding.store, actor }));
+    if (supplied === undefined) {
+      const authorities = Array.isArray(actor?.authorities) ? actor.authorities : [];
+      return Object.freeze({ actorRef: actor.actorRef, isCoordinator: actor.kind === "human" && ["owner", "maintainer"].includes(actor.role) || authorities.includes("project_lead") || authorities.includes("coordinator") });
+    }
+    if (!isRecord(supplied) || typeof supplied.actorRef !== "string" || supplied.actorRef.length < 1 || supplied.actorRef.length > 256 || typeof supplied.isCoordinator !== "boolean") throw webError("root recovery authority is invalid", "PROJECT_TASK_WEB_FORBIDDEN");
+    return Object.freeze({ actorRef: supplied.actorRef, isCoordinator: supplied.isCoordinator });
+  }
+
   #safeCollaborationItems(binding, section, items) {
     const projectRef = binding.context.projectRef;
     const actor = binding.context.actorResolver(binding.context.execution, projectRef);
@@ -474,8 +511,16 @@ class ProjectTaskWebRuntime {
     if (section === "locks") return items.map((lock) => Object.freeze({ lockRef: opaque("lock", lock.resourceRef), ownerActorRef: opaque("actor", lock.ownerActorRef), ...(typeof lock.taskRef === "string" ? { taskRef: lock.taskRef } : {}), state: safeProjectionToken(lock.state), revision: safeProjectionTime(lock.revision), createdAt: safeProjectionTime(lock.createdAt), updatedAt: safeProjectionTime(lock.updatedAt) }));
     if (section === "handoffs") return items.map((handoff) => Object.freeze({ handoffRef: opaque("handoff", handoff.handoffRef), taskRef: handoff.taskRef, sourceActorRef: opaque("actor", handoff.sourceActorRef), targetActorRef: opaque("actor", handoff.targetActorRef), state: safeProjectionToken(handoff.state), revision: safeProjectionTime(handoff.revision), hasSummary: typeof handoff.summary === "string" && handoff.summary.trim() !== "", createdAt: safeProjectionTime(handoff.createdAt), updatedAt: safeProjectionTime(handoff.updatedAt) }));
     if (section === "recoveries") {
-      const isCoordinator = Array.isArray(actor?.authorities) && (actor.authorities.includes("project_lead") || actor.authorities.includes("coordinator"));
-      return items.map((item) => Object.freeze({ recoveryRef: opaque("recovery", item.recoveryRef), mode: safeProjectionToken(item.mode), state: safeProjectionToken(item.state), revision: safeProjectionTime(item.revision), failureCode: safeProjectionToken(item.failureCode, "failed"), mine: item.requesterActorRef === actor?.actorRef, failedSeatMine: item.failedActorRef === actor?.actorRef, canRetry: item.mode === "retry" && item.failedActorRef === actor?.actorRef && ["prepared", "reserved", "failed"].includes(item.state), canRequestTakeover: isCoordinator && item.mode === "takeover" && item.state === "prepared", requiresConfirmation: true, updatedAt: safeProjectionTime(item.updatedAt) }));
+      const authority = this.#rootRecoveryAuthority(binding);
+      return items.map((item) => {
+        const mine = item.initiatorActorRef === authority.actorRef;
+        const resumable = ["prepared", "reserved", "activated", "failed", "outcome_unknown"].includes(item.state);
+        const hasDurableLaunch = typeof item.launchRef === "string";
+        const canRetry = mine && item.mode === "retry" && resumable && hasDurableLaunch;
+        const canRequestTakeover = mine && authority.isCoordinator && item.mode === "takeover" && resumable && (item.state === "prepared" || hasDurableLaunch);
+        const action = canRetry ? "retry" : canRequestTakeover ? "takeover" : undefined;
+        return Object.freeze({ recoveryRef: opaque("recovery", item.recoveryRef), mode: safeProjectionToken(item.mode), state: safeProjectionToken(item.state), revision: safeProjectionTime(item.revision), failureCode: safeProjectionToken(item.failureCode, "failed"), mine, failedSeatMine: item.failedActorRef === authority.actorRef, canRetry, canRequestTakeover, ...(action === undefined ? {} : { recoveryCapability: encodeRootRecoveryCapability(projectRef, item.recoveryRef, item.revision, action, authority.actorRef, this.cursorKey) }), requiresConfirmation: true, updatedAt: safeProjectionTime(item.updatedAt) });
+      });
     }
     if (section === "evidence") return items.map((item) => Object.freeze({ evidenceRef: opaque("evidence", item.evidenceRef), taskRef: item.taskRef, ...(typeof item.actorRef === "string" ? { actorRef: opaque("actor", item.actorRef) } : {}), kind: safeProjectionToken(item.kind), state: safeProjectionToken(item.state, "recorded"), createdAt: safeProjectionTime(item.createdAt) }));
     if (section === "history") return items.map((item) => Object.freeze({ historyRef: opaque("history", String(item.revision)), revision: safeProjectionTime(item.revision), kind: safeProjectionToken(item.kind), ...(typeof item.actorRef === "string" ? { actorRef: opaque("actor", item.actorRef) } : {}), ...(typeof item.subjectRef === "string" ? { subjectRef: opaque("ref", item.subjectRef) } : {}), createdAt: safeProjectionTime(item.createdAt) }));

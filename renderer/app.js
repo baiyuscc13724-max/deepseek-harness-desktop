@@ -91,7 +91,6 @@ const modelRoutingMeters = document.querySelector('#modelRoutingMeters')
 const modelRoutingStatus = document.querySelector('#modelRoutingStatus')
 const modelRoutingSave = document.querySelector('#modelRoutingSave')
 const mobileSyncOverlay = document.querySelector('#mobileSyncOverlay')
-const mobileSyncQuickButton = document.querySelector('#mobileSyncQuickButton')
 const closeMobileSyncButton = document.querySelector('#closeMobileSync')
 const mobileSyncToggle = document.querySelector('#mobileSyncToggle')
 const mobileSyncHeadline = document.querySelector('#mobileSyncHeadline')
@@ -1095,12 +1094,6 @@ function renderMobileSync(next = mobileSyncState) {
   mobileSyncState = { ...mobileSyncState, ...(next || {}) }
   const running = mobileSyncState.enabled && mobileSyncState.running
   const remote = mobileSyncState.remote || {}
-  const connected = running && ((Array.isArray(mobileSyncState.devices) && mobileSyncState.devices.length > 0) || remote.status === 'connected')
-  if (mobileSyncQuickButton) {
-    mobileSyncQuickButton.dataset.state = connected ? 'connected' : running ? 'waiting' : 'off'
-    mobileSyncQuickButton.title = connected ? '手机与远程同步：已连接' : running ? '手机与远程同步：等待手机连接' : '手机与远程同步：未开启'
-    mobileSyncQuickButton.setAttribute('aria-label', mobileSyncQuickButton.title)
-  }
   mobileSyncHeadline.textContent = running ? '手机同步已开启' : '手机同步未开启'
   mobileSyncDetail.textContent = running
     ? mobileSyncState.targetReady ? '电脑工作台已就绪，已配对手机会自动连接。' : '同步服务已开启，正在等待电脑工作台就绪。'
@@ -3179,7 +3172,6 @@ skinLowPerformance.addEventListener('change', async () => {
   await publishAppearanceState()
   renderUiModePicker()
 })
-mobileSyncQuickButton?.addEventListener('click', openMobileSync)
 closeMobileSyncButton.addEventListener('click', closeMobileSync)
 mobileSyncOverlay.addEventListener('click', event => {
   if (event.target === mobileSyncOverlay) closeMobileSync()

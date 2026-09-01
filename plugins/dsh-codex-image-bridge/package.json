@@ -1,6 +1,6 @@
 {
   "name": "dsh-codex-image-bridge",
-  "version": "1.0.56",
+  "version": "1.0.57",
   "description": "Least-privilege DeepSeek Harness bridge to Codex image generation",
   "type": "module",
   "main": "src/index.js",
@@ -13,11 +13,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-attachment": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-fs": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-home-paths": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-subprocess": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-attachment": "^0.1.2-alpha.3",
+    "@deepseek-ai/dsh-fs": "^0.1.2-alpha.3",
+    "@deepseek-ai/dsh-home-paths": "^0.1.2-alpha.3",
+    "@deepseek-ai/dsh-subprocess": "^0.1.2-alpha.3",
+    "@deepseek-ai/dsh-tools": "^0.1.2-alpha.3",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "license": "MIT",

@@ -3,10 +3,12 @@ const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
 const { mkdtemp, rm, writeFile } = require('node:fs/promises')
-const { EventEmitter } = require('node:events')
+const { EventEmitter, once } = require('node:events')
+const { createServer } = require('node:http')
 const { PassThrough } = require('node:stream')
 
-const { nodeRuntimeSupported, runPackagedSelfTest, runtimeWebBootable } = require('../electron/bridge/self-test-service.cjs')
+const { runtimeAuthCookieName } = require('../electron/bridge/runtime-session-auth.cjs')
+const { nodeRuntimeSupported, probeRuntimeUrl, runPackagedSelfTest, runtimeWebBootable } = require('../electron/bridge/self-test-service.cjs')
 
 test('node runtime check rejects obsolete runtimes', () => {
   assert.equal(nodeRuntimeSupported('24.1.0'), true)
@@ -73,6 +75,87 @@ test('runtime probe retries an early process exit within one bounded deadline', 
     assert.equal(diagnostics.attempts[1].candidateUrl, 'http://127.0.0.1:43124')
   } finally {
     await rm(runtimeHome, { recursive: true, force: true })
+  }
+})
+
+test('runtime probe preserves a launch token split across output chunks without persisting it in diagnostics', async () => {
+  const runtimeHome = await mkdtemp(path.join(os.tmpdir(), 'harness-runtime-probe-auth-'))
+  const token = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde'
+  const authenticatedUrl = `http://127.0.0.1:43126/?token=${token}`
+  try {
+    const child = new EventEmitter()
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    child.kill = () => {}
+    const diagnostics = { attempts: [] }
+    const probed = []
+    const resultPromise = runtimeWebBootable({ command: 'electron', argsPrefix: ['cli.js'], env: {} }, {
+      runtimeHome,
+      timeoutMs: 1_000,
+      diagnostics,
+      spawnImpl: () => {
+        process.nextTick(() => {
+          child.stdout.write('dsh web: http://127.0.0.1:43126/?tok')
+          child.stdout.write(`en=${token}\n`)
+        })
+        return child
+      },
+      probeUrl: async url => {
+        probed.push(url)
+        return url === authenticatedUrl
+      }
+    })
+    assert.equal(await resultPromise, true)
+    assert.equal(probed.at(-1), authenticatedUrl)
+    assert.equal(diagnostics.attempts[0].candidateUrl, 'http://127.0.0.1:43126')
+    assert.equal(JSON.stringify(diagnostics).includes(token), false)
+  } finally {
+    await rm(runtimeHome, { recursive: true, force: true })
+  }
+})
+
+test('default runtime probe proves the launch cookie can authenticate the clean root', async () => {
+  const requests = []
+  const server = createServer((request, response) => {
+    requests.push({ url: request.url, cookie: request.headers.cookie || '' })
+    const origin = `http://127.0.0.1:${server.address().port}`
+    const cookie = `${runtimeAuthCookieName(origin)}=v1.c2lnbmVkLWJvZHk.c2lnbmF0dXJl`
+    if (request.url === '/?token=launch-token') {
+      response.writeHead(303, { location: '/', 'set-cookie': `${cookie}; Path=/; HttpOnly; SameSite=Strict` })
+      response.end()
+      return
+    }
+    if (request.url === '/?token=no-cookie') {
+      response.writeHead(303, { location: '/' })
+      response.end()
+      return
+    }
+    if (request.url === '/' && request.headers.cookie === cookie) {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end('<!doctype html>')
+      return
+    }
+    response.writeHead(401, { 'content-type': 'text/plain' })
+    response.end('authentication required')
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const origin = `http://127.0.0.1:${server.address().port}`
+  try {
+    assert.equal(await probeRuntimeUrl(`${origin}/?token=launch-token`), true)
+    const expectedCookie = `${runtimeAuthCookieName(origin)}=v1.c2lnbmVkLWJvZHk.c2lnbmF0dXJl`
+    assert.deepEqual(requests, [
+      { url: '/?token=launch-token', cookie: '' },
+      { url: '/', cookie: expectedCookie }
+    ])
+    assert.equal(await probeRuntimeUrl(`${origin}/?token=no-cookie`), false)
+    assert.equal(await probeRuntimeUrl(origin), false)
+    assert.deepEqual(requests.slice(2), [
+      { url: '/?token=no-cookie', cookie: '' },
+      { url: '/', cookie: '' }
+    ])
+  } finally {
+    await new Promise(resolve => server.close(resolve))
   }
 })
 

@@ -568,6 +568,34 @@ test('collaboration projection is current-project-only, opaque, exactly counted,
   }
 })
 
+test('root recovery projection issues an actor/action/revision-bound mutation capability', async () => {
+  const mod = await import(`${webUrl}?root-recovery-capability=${Date.now()}`)
+  const { ProjectTaskStore } = await import(storeUrl)
+  const root = await mkdtemp(path.join(os.tmpdir(), 'project-root-recovery-capability-'))
+  const databasePath = path.join(root, 'tasks.sqlite'), key = randomBytes(32), context = taskContext({ databasePath, key })
+  const runtime = new mod.ProjectTaskWebRuntime({ projectEntry: { localProjectTaskContext: async () => context }, randomBytesImpl: () => Buffer.alloc(32, 19) })
+  const browserActor = `actor_${'O'.repeat(24)}`, failedActor = `actor_${'F'.repeat(24)}`
+  const writer = new ProjectTaskStore({ filePath: databasePath, keyProvider: ref => { assert.equal(ref, projectRef); return Buffer.from(key) } })
+  try {
+    writer.initialize()
+    writer.createCollaborationBoard({ projectRef, coordinatorActorRef: browserActor, title: 'Recovery capability', createdAt: 1 })
+    writer.upsertCollaborationSeat({ projectRef, actorRef: failedActor, changedByActorRef: browserActor, kind: 'root', state: 'active', duty: 'Worker', resourceScope: [], phase: 'failed', nextStep: 'retry', updatedAt: 2 })
+    writer.prepareRootRecovery({ projectRef, recoveryRef: 'recovery_capability_raw', requestId: 'recovery_capability_request', mode: 'retry', failedActorRef: failedActor, initiatorActorRef: browserActor, beneficiaryActorRef: failedActor, failureCode: 'HOST_SESSION_CREATE_FAILED', failureEvidence: 'durable Host failure', createdAt: 3 })
+    writer.reserveRootRecovery({ projectRef, recoveryRef: 'recovery_capability_raw', initiatorActorRef: browserActor, launchRef: 'failed_slot_capability', updatedAt: 4 })
+    const projected = (await runtime.state()).projectCollaboration.sections.recoveries[0]
+    assert.equal(projected.canRetry, true)
+    assert.equal(projected.mine, true)
+    assert.match(projected.recoveryCapability, /^prc1\./u)
+    assert.equal(projected.recoveryCapability.includes('recovery_capability_raw'), false)
+    assert.deepEqual(await runtime.resolveRootRecoveryCapability({ capability: projected.recoveryCapability, action: 'retry', expectedRevision: projected.revision }), { recoveryRef: 'recovery_capability_raw', action: 'retry', expectedRevision: projected.revision })
+    await assert.rejects(runtime.resolveRootRecoveryCapability({ capability: projected.recoveryCapability, action: 'takeover', expectedRevision: projected.revision }), error => error.code === 'PROJECT_TASK_WEB_FORBIDDEN')
+  } finally {
+    writer.close()
+    await runtime.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('combined state fails closed when both nonempty surfaces fit alone but their minimum progress cannot fit together', async () => usingFixture(async ({ mod, runtime, databasePath, key }) => {
   const { ProjectTaskStore } = await import(storeUrl)
   const created = await runtime.action(createCommand('minimum-progress'))

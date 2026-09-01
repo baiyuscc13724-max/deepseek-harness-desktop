@@ -257,6 +257,26 @@ test('attention, resume planning, and confirmed retirement task release are dete
   assert.equal(team.tasks[2].assigneeSessionId, 'failed-session', 'completed audit history is preserved')
 })
 
+test('an unrelated later delivery to the same recipient does not resolve an older failed delivery', async () => {
+  const mod = await plugin()
+  const timestamp = new Date().toISOString()
+  const later = new Date(Date.now() + 1_000).toISOString()
+  const team = {
+    id: 'delivery-lineage-team', rootLeadSessionId: 'lead', name: 'Delivery lineage', objective: 'Preserve exact delivery failures', revision: 1, state: 'active', createdAt: timestamp, updatedAt: later,
+    members: [{ id: 'lead-id', sessionId: 'lead', name: 'Lead', role: 'root', kind: 'lead', state: 'ready', createdAt: timestamp, updatedAt: timestamp }],
+    tasks: [],
+    messages: [
+      { id: 'old-failure', fromSessionId: 'lead', toSessionId: 'recipient', body: 'first payload', status: 'failed', createdAt: timestamp },
+      { id: 'unrelated-success', fromSessionId: 'lead', toSessionId: 'recipient', body: 'different payload', status: 'delivered', createdAt: later, deliveredAt: later }
+    ]
+  }
+
+  const attention = mod.deriveAttention(team)
+  assert.deepEqual(attention.failedDeliveries, ['old-failure'])
+  assert.ok(attention.codes.includes('failed_delivery'))
+  assert.equal(team.messages[0].status, 'failed', 'attention projection never rewrites durable audit history')
+})
+
 test('explicit release persists Host release facts through the public task projection', async () => {
   const fx = await fixture()
   const lead = { id: 'release-lead' }
@@ -1146,6 +1166,85 @@ test('restart reconciles transient members and uncertain outbox messages', async
   } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 
+test('restart never presents an interrupted active task as healthy or silently replays its claim', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, { id: 'restart-active-lead' }, { objective: 'Require an explicit decision after restart' })
+    const timestamp = new Date().toISOString()
+    await fx.store.mutate(document => {
+      const current = document.teams.find(candidate => candidate.id === team.id)
+      current.members.push({ ...worker('restart-active-worker', 'Restart'), state: 'running', runId: 'old-run' })
+      current.tasks.push({
+        id: 'restart-active-task', title: 'Interrupted active work', state: 'in_progress', revision: 1,
+        dependsOn: [], files: [], assigneeSessionId: 'restart-active-worker', claimedAt: timestamp,
+        attempt: 1, claimId: 'restart-active-claim', leaseEpoch: 0, attemptHistory: [], interruptionHistory: [], lifecycleLedger: [], capabilities: [], externalEffects: [],
+        createdAt: timestamp, updatedAt: timestamp
+      })
+    })
+
+    const restored = new fx.mod.AgentTeamsStore(fx.file)
+    await restored.init()
+    const durable = restored.snapshot().teams.find(candidate => candidate.id === team.id)
+    const member = durable.members.find(candidate => candidate.sessionId === 'restart-active-worker')
+    const task = durable.tasks.find(candidate => candidate.id === 'restart-active-task')
+    assert.equal(member.state, 'failed')
+    assert.match(member.error, /explicit retry or replacement/u)
+    assert.equal(task.state, 'in_progress')
+    assert.equal(task.claimId, 'restart-active-claim', 'the uncertain attempt remains exactly fenced for explicit recovery')
+    assert.ok(task.interruptionHistory.some(entry => entry.kind === 'host_restart_during_active_task'))
+    const attention = fx.mod.deriveAttention(durable)
+    assert.ok(attention.codes.includes('failed_member'))
+    assert.ok(attention.codes.includes('stranded_task'))
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('restart preserves a terminal closing team until an explicit drain-confirmed retry closes it', async () => {
+  const fx = await fixture()
+  const lead = { id: 'restart-close-lead' }
+  const drained = []
+  const ctx = {
+    agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+    subagents: { drainContinuableChildren: async (_lead, ids) => { drained.push([...ids]) } }
+  }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Finish persisted closure' })
+    await fx.store.mutate(document => {
+      const current = document.teams.find(candidate => candidate.id === team.id)
+      current.state = 'closing'
+      current.members.push({
+        ...worker('restart-close-worker', 'Closer'),
+        state: 'shutting_down',
+        shutdownUnconfirmed: true,
+        stopUnconfirmed: true
+      })
+    })
+    const restored = new fx.mod.AgentTeamsStore(fx.file)
+    await restored.init()
+    let durable = restored.snapshot().teams.find(candidate => candidate.id === team.id)
+    let member = durable.members.find(candidate => candidate.sessionId === 'restart-close-worker')
+    assert.equal(durable.state, 'closing')
+    assert.equal(durable.closure, undefined, 'restart alone cannot manufacture a Host drain acknowledgement')
+    assert.equal(member.state, 'failed')
+    assert.equal(member.shutdownUnconfirmed, true)
+    assert.equal(member.stopUnconfirmed, true)
+    assert.ok(fx.mod.deriveAttention(durable).codes.includes('closure_incomplete'))
+    assert.ok(fx.mod.deriveAttention(durable).codes.includes('unconfirmed_shutdown'))
+
+    const result = await fx.mod.shutdownTeam(ctx, restored, undefined, lead, { teamId: team.id, force: true }, new AbortController().signal)
+    assert.equal(result.team.state, 'closed')
+    assert.deepEqual(result.failures, [])
+    assert.deepEqual(drained, [['restart-close-worker']])
+    durable = restored.snapshot().teams.find(candidate => candidate.id === team.id)
+    member = durable.members.find(candidate => candidate.sessionId === 'restart-close-worker')
+    assert.equal(member.state, 'retired')
+    assert.equal(member.shutdownUnconfirmed, undefined)
+    assert.equal(member.stopUnconfirmed, undefined)
+    assert.equal(durable.closure.forced, true)
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
 test('active tasks expose overlapping file conflict warnings', async () => {
   const fx = await fixture()
   try {
@@ -1171,6 +1270,80 @@ test('graceful lifecycle waits release their waiter on cancellation and timeout'
       : error?.code === 'AGENT_TEAMS_LIFECYCLE_TIMEOUT')
     assert.equal(cancelled, true)
   }
+})
+
+test('all lifecycle operations receive an abort signal and release their caller at the shared deadline', async () => {
+  const mod = await plugin()
+  let operationSignal
+  const started = Date.now()
+  await assert.rejects(
+    mod.runWithLifecycleDeadline(signal => { operationSignal = signal; return new Promise(() => {}) }, { timeoutMs: 5, label: 'test drain' }),
+    error => error?.code === 'AGENT_TEAMS_LIFECYCLE_TIMEOUT'
+  )
+  assert.equal(operationSignal.aborted, true)
+  assert.ok(Date.now() - started < 1_000)
+})
+
+test('same-tick abort prevents a lifecycle operation from starting', async () => {
+  const mod = await plugin()
+  const controller = new AbortController()
+  let called = false
+  const pending = mod.runWithLifecycleDeadline(
+    () => { called = true },
+    { signal: controller.signal, timeoutMs: 60_000, label: 'same-tick cancellation' }
+  )
+  controller.abort(new Error('same-tick cancellation'))
+  await assert.rejects(pending, /same-tick cancellation/u)
+  await Promise.resolve()
+  assert.equal(called, false)
+})
+
+test('drain deadline detaches conservatively without passing an unsupported SDK signal', async () => {
+  const mod = await plugin()
+  let receivedArguments
+  const ctx = {
+    subagents: {
+      drainContinuableChildren(...args) {
+        receivedArguments = args
+        return new Promise(() => {})
+      }
+    }
+  }
+  await assert.rejects(
+    mod.drainContinuableChildrenWithDeadline(ctx, { id: 'lead' }, ['child'], undefined, 5),
+    error => error?.code === 'AGENT_TEAMS_LIFECYCLE_TIMEOUT'
+  )
+  assert.equal(receivedArguments.length, 2)
+  assert.deepEqual(receivedArguments[1], ['child'])
+})
+
+test('aborted force shutdown persists failed unconfirmed members and releases the team operation queue', async () => {
+  const fx = await fixture()
+  const lead = { id: 'deadline-lead' }
+  const ctx = {
+    agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+    subagents: { drainContinuableChildren: async () => new Promise(() => {}) }
+  }
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Persist deadline failure' })
+    await fx.store.mutate(document => { document.teams.find(candidate => candidate.id === team.id).members.push(worker('deadline-worker', 'Deadline')) })
+    const controller = new AbortController()
+    const reason = new Error('lifecycle deadline test')
+    reason.code = 'AGENT_TEAMS_LIFECYCLE_TIMEOUT'
+    controller.abort(reason)
+    const result = await fx.mod.shutdownTeam(ctx, fx.store, undefined, lead, { teamId: team.id, force: true }, controller.signal)
+    assert.equal(result.team.state, 'active')
+    assert.ok(result.failures.some(failure => /lifecycle deadline test/u.test(failure)))
+    const durable = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
+    const member = durable.members.find(candidate => candidate.sessionId === 'deadline-worker')
+    assert.equal(member.state, 'failed')
+    assert.equal(member.shutdownUnconfirmed, true)
+    assert.equal(member.stopUnconfirmed, true)
+    assert.equal(durable.closure.outcome, 'failed')
+    const snapshot = await fx.store.read(document => document.teams.length)
+    assert.equal(snapshot, 1, 'the serialized team/store queue remains available after deadline failure')
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 
 test('subagent lifecycle bursts reconcile in one bounded store mutation', async () => {

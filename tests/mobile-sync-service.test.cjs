@@ -7,24 +7,75 @@ const os = require('node:os')
 const path = require('node:path')
 const { WebSocket, WebSocketServer } = require('ws')
 
-const { BROWSER_FORBIDDEN_PORTS, MOBILE_DOCUMENT_MAX_BYTES, MOBILE_DOCUMENT_UPLOAD_CONTRACT, MOBILE_SYNC_MANIFEST_CONTRACT, MOBILE_SYNC_MANIFEST_PATH, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, mobilePluginsDto, mobileProviderMetersDto, safeDeviceName } = require('../electron/bridge/mobile-sync-service.cjs')
+const { BROWSER_FORBIDDEN_PORTS, MOBILE_DOCUMENT_MAX_BYTES, MOBILE_DOCUMENT_UPLOAD_CONTRACT, MOBILE_SYNC_MANIFEST_CONTRACT, MOBILE_SYNC_MANIFEST_PATH, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, mobilePluginsDto, mobileProviderMetersDto, safeDeviceName, upstreamRuntimeCookieHeader, withoutRuntimeAuthCookies, withoutRuntimeAuthSetCookies } = require('../electron/bridge/mobile-sync-service.cjs')
 const { MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
 const electronMainSource = readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
-async function createRuntime(label) {
+async function createRuntime(label, { websocketSetCookies = [] } = {}) {
+  const upgradeHeaders = []
+  const requests = []
   const server = http.createServer((request, response) => {
-    response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
+    requests.push({ method: request.method, url: request.url })
     if (request.url === '/headers') {
+      response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
       response.end(JSON.stringify({ origin: request.headers.origin, referer: request.headers.referer, cookie: request.headers.cookie }))
-    } else response.end(`${label}:${request.url}`)
+    } else if (request.url === '/set-cookie') {
+      response.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Set-Cookie': [
+          'dsh-auth-upstream=v1.c2lnbmVkLWJvZHk.c2lnbmF0dXJl; HttpOnly; SameSite=Strict',
+          'official_session=public; SameSite=Lax'
+        ]
+      })
+      response.end('cookies')
+    } else if (request.url === '/unauthorized') {
+      response.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' })
+      response.end('authentication required')
+    } else {
+      response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
+      response.end(`${label}:${request.url}`)
+    }
   })
   const websocket = new WebSocketServer({ noServer: true })
+  if (websocketSetCookies.length) {
+    websocket.on('headers', headers => {
+      for (const cookie of websocketSetCookies) headers.push(`Set-Cookie: ${cookie}`)
+    })
+  }
   websocket.on('connection', client => client.on('message', value => client.send(`${label}:${value}`)))
-  server.on('upgrade', (request, socket, head) => websocket.handleUpgrade(request, socket, head, client => websocket.emit('connection', client, request)))
+  server.on('upgrade', (request, socket, head) => {
+    upgradeHeaders.push({ ...request.headers })
+    websocket.handleUpgrade(request, socket, head, client => websocket.emit('connection', client, request))
+  })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   return {
     url: `http://127.0.0.1:${server.address().port}`,
+    requests,
+    upgradeHeaders,
     close: () => new Promise(resolve => websocket.close(() => server.close(resolve)))
+  }
+}
+
+async function createRejectedWebSocketRuntime() {
+  const upgrades = []
+  const server = http.createServer((_request, response) => response.writeHead(404).end())
+  server.on('upgrade', (request, socket) => {
+    upgrades.push({ method: request.method, url: request.url, headers: { ...request.headers } })
+    socket.end([
+      'HTTP/1.1 401 Unauthorized',
+      'Connection: close',
+      'Content-Length: 0',
+      'Set-Cookie: dsh-auth-secret=v1.body.sig; HttpOnly; SameSite=Strict',
+      'Set-Cookie: official_session=public; SameSite=Lax',
+      '',
+      ''
+    ].join('\r\n'))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    upgrades,
+    close: () => new Promise(resolve => server.close(resolve))
   }
 }
 
@@ -111,6 +162,100 @@ test('mobile bridge requires one-time pairing and proxies HTTP without protocol 
   assert.equal(upstreamHeaders.referer, `${runtime.url}/conversation/abc`)
   assert.equal(upstreamHeaders.cookie, 'official_session=yes')
   assert.equal(service.state().devices.length, 1)
+})
+
+test('mobile proxy replaces client-supplied runtime auth with the controlled cookie and never returns it', async t => {
+  const runtime = await createRuntime('official-authenticated')
+  const providerCalls = []
+  const controlled = 'dsh-auth-controlled=v1.c2lnbmVkLWJvZHk.c2lnbmF0dXJl'
+  const service = new MobileSyncService({
+    store: createStore(),
+    getRuntimeTarget: () => runtime.url,
+    host: '127.0.0.1',
+    port: 0,
+    qrFactory: async value => `qr:${value}`,
+    cookieProvider: origin => { providerCalls.push(origin); return controlled }
+  })
+  t.after(async () => {
+    await service.stop()
+    await runtime.close()
+  })
+  await service.start()
+  const origin = service.state().origins[0]
+  const paired = await pair(service)
+  const headers = await fetch(`${origin}/headers`, {
+    headers: { Cookie: `${paired.cookie}; dsh-auth-forged=v1.Zm9yZ2Vk.c2ln; official_session=yes` }
+  })
+  assert.equal((await headers.json()).cookie, `official_session=yes; ${controlled}`)
+  assert.deepEqual(providerCalls, [runtime.url])
+
+  const response = await fetch(`${origin}/set-cookie`, { headers: { Cookie: paired.cookie } })
+  assert.equal(await response.text(), 'cookies')
+  assert.doesNotMatch(response.headers.get('set-cookie') || '', /dsh-auth-/u)
+  assert.match(response.headers.get('set-cookie') || '', /official_session=public/u)
+})
+
+test('mobile proxy cookie helpers fail closed for forged auth and preserve the legacy no-cookie path', () => {
+  const signed = 'dsh-auth-controlled=v1.c2lnbmVkLWJvZHk.c2lnbmF0dXJl'
+  assert.equal(withoutRuntimeAuthCookies('regular=yes; dsh-auth-forged=v1.body.sig; malformed'), 'regular=yes')
+  assert.equal(upstreamRuntimeCookieHeader('harness_mobile_auth=device.secret; regular=yes; dsh-auth-forged=v1.body.sig', signed), `regular=yes; ${signed}`)
+  assert.equal(upstreamRuntimeCookieHeader('harness_mobile_auth=device.secret; regular=yes'), 'regular=yes')
+  assert.equal(upstreamRuntimeCookieHeader('dsh-auth-forged=v1.body.sig', 'attacker=value'), '')
+  assert.deepEqual(withoutRuntimeAuthSetCookies(['dsh-auth-secret=v1.body.sig; HttpOnly', 'regular=yes; SameSite=Lax']), ['regular=yes; SameSite=Lax'])
+})
+
+test('mobile proxy awaits a fresh main-process cookie for every HTTP request and fails closed when refresh fails', async t => {
+  const runtime = await createRuntime('official-refresh')
+  const cookies = [
+    'dsh-auth-refresh=v1.Ym9keTE.c2lnMQ',
+    'dsh-auth-refresh=v1.Ym9keTI.c2lnMg'
+  ]
+  let refreshes = 0
+  let fail = false
+  let forcedRefresh
+  const forced = new Promise(resolve => { forcedRefresh = resolve })
+  const providerOptions = []
+  const service = new MobileSyncService({
+    store: createStore(),
+    getRuntimeTarget: () => runtime.url,
+    host: '127.0.0.1',
+    port: 0,
+    qrFactory: async value => `qr:${value}`,
+    cookieProvider: async (_origin, options = {}) => {
+      await new Promise(resolve => setImmediate(resolve))
+      if (fail) throw new Error('refresh failed')
+      providerOptions.push(options)
+      if (options.force === true) forcedRefresh()
+      return cookies[Math.min(refreshes++, cookies.length - 1)]
+    }
+  })
+  t.after(async () => {
+    await service.stop()
+    await runtime.close()
+  })
+  await service.start()
+  const origin = service.state().origins[0]
+  const paired = await pair(service)
+  const first = await fetch(`${origin}/headers`, { headers: { Cookie: paired.cookie } })
+  const second = await fetch(`${origin}/headers`, { headers: { Cookie: paired.cookie } })
+  assert.equal((await first.json()).cookie, cookies[0])
+  assert.equal((await second.json()).cookie, cookies[1])
+  assert.equal(refreshes, 2)
+
+  const rejected = await fetch(`${origin}/unauthorized`, {
+    method: 'POST',
+    headers: { Cookie: paired.cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mutation: true })
+  })
+  assert.equal(rejected.status, 401)
+  await forced
+  assert.equal(providerOptions.at(-1).force, true, 'an upstream 401 refreshes authentication for subsequent requests')
+  assert.equal(runtime.requests.filter(request => request.url === '/unauthorized').length, 1, 'the proxy must never replay a non-idempotent request')
+
+  fail = true
+  const unavailable = await fetch(`${origin}/headers`, { headers: { Cookie: paired.cookie } })
+  assert.equal(unavailable.status, 503)
+  assert.doesNotMatch(await unavailable.text(), /refresh failed/u)
 })
 
 test('paired phones upload general documents through the official live-session workspace route', async t => {
@@ -558,15 +703,25 @@ test('iPhone and iPad offer a Safari workbench when no Apple distribution accoun
 })
 
 test('mobile bridge proxies WebSocket and follows a replaced official runtime target', async t => {
-  const runtimeA = await createRuntime('official-a')
+  const runtimeA = await createRuntime('official-a', {
+    websocketSetCookies: [
+      'dsh-auth-upstream=v1.body.sig; HttpOnly; SameSite=Strict',
+      'official_session=public; SameSite=Lax'
+    ]
+  })
   const runtimeB = await createRuntime('official-b')
   let current = runtimeA.url
+  const controlled = 'dsh-auth-websocket=v1.d3MtYm9keQ.d3Mtc2ln'
   const service = new MobileSyncService({
     store: createStore(),
     getRuntimeTarget: () => current,
     host: '127.0.0.1',
     port: 0,
-    qrFactory: async () => 'qr'
+    qrFactory: async () => 'qr',
+    cookieProvider: async () => {
+      await new Promise(resolve => setImmediate(resolve))
+      return controlled
+    }
   })
   t.after(async () => {
     await service.stop()
@@ -577,8 +732,10 @@ test('mobile bridge proxies WebSocket and follows a replaced official runtime ta
   const paired = await pair(service)
   const origin = service.state().origins[0]
   const wsUrl = origin.replace(/^http/, 'ws') + '/events'
+  let upgradeResponseHeaders
   const message = await new Promise((resolve, reject) => {
     const client = new WebSocket(wsUrl, { headers: { Cookie: paired.cookie } })
+    client.once('upgrade', response => { upgradeResponseHeaders = response.headers })
     client.once('open', () => client.send('hello'))
     client.once('message', value => {
       resolve(String(value))
@@ -587,9 +744,54 @@ test('mobile bridge proxies WebSocket and follows a replaced official runtime ta
     client.once('error', reject)
   })
   assert.equal(message, 'official-a:hello')
+  assert.equal(runtimeA.upgradeHeaders[0].cookie, controlled)
+  assert.doesNotMatch(String(upgradeResponseHeaders?.['set-cookie'] || ''), /dsh-auth-/u)
+  assert.match(String(upgradeResponseHeaders?.['set-cookie'] || ''), /official_session=public/u)
   current = runtimeB.url
   const response = await fetch(`${origin}/next`, { headers: { Cookie: paired.cookie } })
   assert.equal(await response.text(), 'official-b:/next')
+})
+
+test('rejected WebSocket handshakes never expose runtime auth or replay the upgrade', async t => {
+  const runtime = await createRejectedWebSocketRuntime()
+  const controlled = 'dsh-auth-websocket=v1.d3MtYm9keQ.d3Mtc2ln'
+  const providerOptions = []
+  let forceRefresh
+  const forced = new Promise(resolve => { forceRefresh = resolve })
+  const service = new MobileSyncService({
+    store: createStore(),
+    getRuntimeTarget: () => runtime.url,
+    host: '127.0.0.1',
+    port: 0,
+    qrFactory: async () => 'qr',
+    cookieProvider: async (_origin, options = {}) => {
+      providerOptions.push(options)
+      if (options.force === true) forceRefresh()
+      return controlled
+    }
+  })
+  t.after(async () => {
+    await service.stop()
+    await runtime.close()
+  })
+  await service.start()
+  const paired = await pair(service)
+  const wsUrl = service.state().origins[0].replace(/^http/, 'ws') + '/events'
+  const responseHeaders = await new Promise((resolve, reject) => {
+    const client = new WebSocket(wsUrl, { headers: { Cookie: paired.cookie } })
+    client.once('open', () => reject(new Error('rejected runtime unexpectedly upgraded the WebSocket')))
+    client.once('unexpected-response', (_request, response) => {
+      const headers = { ...response.headers }
+      response.resume()
+      response.once('end', () => resolve(headers))
+    })
+    client.once('error', reject)
+  })
+  await forced
+  assert.equal(runtime.upgrades.length, 1, 'a rejected WebSocket handshake must never be replayed')
+  assert.equal(providerOptions.filter(options => options.force === true).length, 1)
+  assert.doesNotMatch(String(responseHeaders['set-cookie'] || ''), /dsh-auth-/u)
+  assert.match(String(responseHeaders['set-cookie'] || ''), /official_session=public/u)
 })
 
 test('agent stop or completion never owns the mobile sync service lifecycle', () => {

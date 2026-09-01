@@ -2,6 +2,8 @@ const { access, mkdir, mkdtemp, rm, unlink, writeFile } = require('node:fs/promi
 const { spawn } = require('node:child_process')
 const os = require('node:os')
 const path = require('node:path')
+const { runtimeAuthCookieHeaderFromSetCookie } = require('./runtime-session-auth.cjs')
+const { appendRuntimeWebOutput, detectRuntimeWebUrl, normalizeRuntimeWebUrl, redactRuntimeWebAuth, safeRuntimeWebUrl } = require('./runtime-web-url.cjs')
 
 async function rendererAvailable(rendererEntry) {
   try {
@@ -51,13 +53,60 @@ async function marketplaceInstallable(options = {}) {
 
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 
-async function probeRuntimeUrl(url) {
+async function probeRuntimeUrl(url, { fetchImpl = globalThis.fetch, timeoutMs = 1200 } = {}) {
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(1200) })
-    return response.status >= 200 && response.status < 500
+    const launchUrl = normalizeRuntimeWebUrl(url)
+    if (!launchUrl || typeof fetchImpl !== 'function') return false
+    const response = await fetchImpl(launchUrl, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })
+    const launch = new URL(launchUrl)
+    if (!launch.searchParams.has('token')) return response.status >= 200 && response.status < 300
+    if (response.status !== 303) return false
+    const location = response.headers?.get?.('location')
+    const clean = location ? new URL(location, launchUrl) : null
+    if (!clean || clean.origin !== launch.origin || clean.pathname !== '/' || clean.search || clean.hash) return false
+    const cookieValues = typeof response.headers?.getSetCookie === 'function'
+      ? response.headers.getSetCookie()
+      : [response.headers?.get?.('set-cookie')]
+    const cookie = cookieValues.map(value => runtimeAuthCookieHeaderFromSetCookie(value, launchUrl)).find(Boolean)
+    if (!cookie) return false
+    const cleanResponse = await fetchImpl(clean.toString(), {
+      cache: 'no-store',
+      headers: { Cookie: cookie },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+    return cleanResponse.status >= 200 && cleanResponse.status < 300
   } catch {
     return false
   }
+}
+
+function writeRedactedRuntimeOutput(state, chunk, writer) {
+  let output = String(chunk || '')
+  if (state.suppressUntilLineBreak) {
+    const breakAt = output.search(/[\r\n]/u)
+    if (breakAt < 0) return
+    output = output.slice(breakAt + 1)
+    state.suppressUntilLineBreak = false
+  }
+  state.pending += output
+  const lastLineFeed = state.pending.lastIndexOf('\n')
+  const lastCarriageReturn = state.pending.lastIndexOf('\r')
+  const completeAt = Math.max(lastLineFeed, lastCarriageReturn)
+  if (completeAt >= 0) {
+    writer(redactRuntimeWebAuth(state.pending.slice(0, completeAt + 1)))
+    state.pending = state.pending.slice(completeAt + 1)
+  }
+  if (state.pending.length > 8192) {
+    writer('[runtime output line omitted]\n')
+    state.pending = ''
+    state.suppressUntilLineBreak = true
+  }
+}
+
+function flushRedactedRuntimeOutput(state, writer) {
+  if (state.pending) writer(redactRuntimeWebAuth(state.pending))
+  state.pending = ''
 }
 
 async function runtimeWebBootable(dsh, options = {}) {
@@ -78,23 +127,29 @@ async function runtimeWebBootable(dsh, options = {}) {
       let signal = null
       let failure = ''
       let booted = false
+      let stdoutBuffer = ''
+      let stderrBuffer = ''
+      const stdoutLog = { pending: '', suppressUntilLineBreak: false }
+      const stderrLog = { pending: '', suppressUntilLineBreak: false }
       try {
         child = spawnImpl(dsh.command, [...dsh.argsPrefix, 'web', '--port', '0', '--no-open'], {
           env: { ...process.env, ...(dsh.env || {}), DSH_HOME: runtimeHome, HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER: '1' },
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe']
         })
-        const inspect = chunk => {
-          const match = String(chunk || '').match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/i)
-          if (match) candidateUrl = match[0].replace('localhost', '127.0.0.1')
+        const inspect = (chunk, isError = false) => {
+          if (isError) stderrBuffer = appendRuntimeWebOutput(stderrBuffer, chunk)
+          else stdoutBuffer = appendRuntimeWebOutput(stdoutBuffer, chunk)
+          const detected = detectRuntimeWebUrl(isError ? stderrBuffer : stdoutBuffer)
+          if (detected) candidateUrl = detected
         }
         child.stdout?.on('data', chunk => {
           inspect(chunk)
-          if (options.logOutput) process.stdout.write(chunk)
+          if (options.logOutput) writeRedactedRuntimeOutput(stdoutLog, chunk, value => process.stdout.write(value))
         })
         child.stderr?.on('data', chunk => {
-          inspect(chunk)
-          if (options.logOutput) process.stderr.write(chunk)
+          inspect(chunk, true)
+          if (options.logOutput) writeRedactedRuntimeOutput(stderrLog, chunk, value => process.stderr.write(value))
         })
         child.once('error', error => { failure = String(error?.message || error || 'spawn error'); exited = true })
         child.once('exit', (code, receivedSignal) => { exitCode = code; signal = receivedSignal; exited = true })
@@ -105,7 +160,11 @@ async function runtimeWebBootable(dsh, options = {}) {
       } catch (error) {
         failure = String(error?.message || error)
       } finally {
-        diagnostics?.attempts.push({ attempt, candidateUrl, exited, exitCode, signal, failure })
+        if (options.logOutput) {
+          flushRedactedRuntimeOutput(stdoutLog, value => process.stdout.write(value))
+          flushRedactedRuntimeOutput(stderrLog, value => process.stderr.write(value))
+        }
+        diagnostics?.attempts.push({ attempt, candidateUrl: safeRuntimeWebUrl(candidateUrl), exited, exitCode, signal, failure: redactRuntimeWebAuth(failure) })
         child?.kill?.()
       }
       if (booted) return true
@@ -173,4 +232,4 @@ async function runPackagedSelfTest(options = {}) {
   }
 }
 
-module.exports = { marketplaceInstallable, nodeRuntimeSupported, rendererAvailable, runPackagedSelfTest, runtimeWebBootable, userDataWritable }
+module.exports = { marketplaceInstallable, nodeRuntimeSupported, probeRuntimeUrl, rendererAvailable, runPackagedSelfTest, runtimeWebBootable, userDataWritable }

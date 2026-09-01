@@ -196,6 +196,44 @@ test('durable project task wake delivery deduplicates inbox and session evidence
   ])
 })
 
+test('unknown project wake reconciliation distinguishes exact delivery, complete absence, and truncated history', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-evidence=${Date.now()}-${Math.random()}`)
+  const wakeRef = 'wake-reconcile-exact'
+  const message = { source: { kind: 'coordinator', summary: 'Project tasks' }, content: [{ type: 'text', text: `[Project task wake ${wakeRef}] exact` }] }
+  const complete = { session: { events: [] }, inbox: { nextTurn: [], nextStep: [] } }
+  assert.equal(mod.rootProjectTaskWakeEvidence(complete, wakeRef), 'complete_history_absence')
+  complete.inbox.nextStep.push(message)
+  assert.equal(mod.rootProjectTaskWakeEvidence(complete, wakeRef), 'exact_message')
+  const truncated = { session: { events: Array.from({ length: 257 }, () => ({ type: 'turn/end', data: {} })) }, inbox: { nextTurn: [], nextStep: [] } }
+  assert.equal(mod.rootProjectTaskWakeEvidence(truncated, wakeRef), 'unknown', 'a bounded scan never turns incomplete history into negative evidence')
+  truncated.session.events.push({ type: 'user/message', data: { message } })
+  assert.equal(mod.rootProjectTaskWakeEvidence(truncated, wakeRef), 'exact_message')
+})
+
+test('restart reconciles every same-project root waiter before dispatching that project once', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-multi-root-restart=${Date.now()}-${Math.random()}`)
+  const cwd = 'C:/wake-shared-project'
+  const roots = [
+    { id: 'wake-root-a', status: 'idle', session: { header: { cwd } } },
+    { id: 'wake-root-b', status: 'running', session: { header: { cwd } } }
+  ]
+  const calls = []
+  const ctx = {
+    agents: { roots: () => roots },
+    logger: { warn(message) { assert.fail(message) } }
+  }
+  mod.observeProjectTaskWakeLifecycle(ctx, {}, Promise.resolve(), {
+    reconcile: async (_ctx, _entry, root, options) => { calls.push({ rootId: root.id, ...options }) }
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(calls, [
+    { rootId: 'wake-root-a', dispatch: false },
+    { rootId: 'wake-root-b', dispatch: false },
+    { rootId: 'wake-root-a', dispatch: true, reconcile: false }
+  ])
+})
+
 test('project task wake pumps are singleflight per canonical project lane', async () => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-singleflight=${Date.now()}-${Math.random()}`)
   let release
@@ -306,6 +344,142 @@ test('project task wake scheduler close cancels delayed retries and apply dispos
   assert.match(source, /ctx\.effect\(\(\) => \(\) => projectTaskWakeScheduler\.close\(\)\)/u)
 })
 
+test('project root recovery scheduler uses bounded backoff, drains exact targets, and cancels stale timers on close', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-root-recovery-scheduler=${Date.now()}-${Math.random()}`)
+  const timers = []
+  const cleared = []
+  const calls = new Map()
+  let releaseCancelledPump, markCancelledPumpStarted
+  const cancelledPumpGate = new Promise(resolve => { releaseCancelledPump = resolve })
+  const cancelledPumpStarted = new Promise(resolve => { markCancelledPumpStarted = resolve })
+  const scheduler = mod.createProjectRootRecoveryScheduler(
+    { logger: { warn() {} }, agents: { roots() { return [] } } },
+    undefined,
+    undefined,
+    Promise.resolve(),
+    {
+      retryBaseMs: 25,
+      retryMaxMs: 100,
+      pump: async target => {
+        const count = (calls.get(target.recoveryRef) ?? 0) + 1
+        calls.set(target.recoveryRef, count)
+        if (target.recoveryRef === 'recovery-cancel-running') { markCancelledPumpStarted(); await cancelledPumpGate }
+        return { retryable: target.recoveryRef === 'recovery-close' || count < 3 }
+      },
+      setTimer(callback, delay) {
+        const timer = { callback, delay, unrefCalled: false, unref() { this.unrefCalled = true } }
+        timers.push(timer)
+        return timer
+      },
+      clearTimer(timer) { cleared.push(timer) }
+    }
+  )
+  const target = { rootId: 'root-recovery', canonicalProjectKey: 'project-key', recoveryRef: 'recovery-retry' }
+  scheduler(target)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(calls.get(target.recoveryRef), 1)
+  assert.equal(timers[0].delay, 25)
+  assert.equal(timers[0].unrefCalled, true)
+  timers[0].callback()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(calls.get(target.recoveryRef), 2)
+  assert.equal(timers[1].delay, 50)
+  timers[1].callback()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(calls.get(target.recoveryRef), 3)
+  assert.equal(scheduler.size(), 0, 'a terminal exact recovery must leave no polling state')
+
+  const cancelledTarget = { ...target, recoveryRef: 'recovery-cancel-running' }
+  scheduler(cancelledTarget)
+  await cancelledPumpStarted
+  scheduler.cancelRoot(cancelledTarget.rootId)
+  releaseCancelledPump()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(scheduler.size(), 0)
+  assert.equal(timers.length, 2, 'Stop cancellation must fence a late retryable pump result')
+
+  const closeTarget = { ...target, recoveryRef: 'recovery-close' }
+  scheduler(closeTarget)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(timers[2].delay, 25)
+  await scheduler.close()
+  assert.deepEqual(cleared, [timers[2]])
+  timers[2].callback()
+  scheduler({ ...target, recoveryRef: 'recovery-after-close' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(calls.has('recovery-after-close'), false)
+  assert.equal(calls.get('recovery-close'), 1, 'closed scheduler must ignore stale timer callbacks')
+  const source = await readFile(pluginFile, 'utf8')
+  assert.match(source, /ctx\.effect\(\(\) => \(\) => projectRootRecoveryScheduler\.close\(\)\)/u)
+  assert.match(source, /current\.state==="failed"&&current\.revision>=PROJECT_ROOT_RECOVERY_AUTO_EFFECT_REVISION_LIMIT/u)
+})
+
+test('project root recovery scheduler enforces the durable effect budget while unknown results remain observer-only', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-root-recovery-budget=${Date.now()}-${Math.random()}`)
+  const cwd = 'C:/project-root-recovery-budget'
+  let normalized = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC')
+  if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
+  const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
+  const root = { id: 'root-recovery-budget', status: 'running', session: { header: { cwd }, events: [] } }
+  const createFixture = revision => {
+    let current = { recoveryRef: `recovery-budget-${revision}`, initiatorActorRef: 'actor-budget', revision, state: 'failed', mode: 'retry', launchRef: `slot-budget-${revision}` }
+    const transitions = [], timers = []
+    let effects = 0, observations = 0
+    const collaboration = {
+      getRootRecovery: () => ({ ...current }),
+      updateRootRecovery: (_execution, input) => {
+        assert.equal(input.expectedRevision, current.revision)
+        current = { ...current, state: input.state, revision: current.revision + 1 }
+        transitions.push(input.state)
+        return { recovery: { ...current } }
+      },
+      snapshot: () => ({ recoveries: [{ ...current }] })
+    }
+    const projectSessionLaunch = {
+      retryFailedSlot: async (_execution, { slotRef }) => { effects += 1; return { slots: [{ slotRef, state: 'outcome_unknown' }] } },
+      slotStatus: async (_execution, { slotRef }) => { observations += 1; return { slots: [{ slotRef, state: 'outcome_unknown' }] } }
+    }
+    const scheduler = mod.createProjectRootRecoveryScheduler(
+      { logger: { warn() {} }, agents: { get: id => id === root.id ? root : undefined, roots: () => [root] } },
+      undefined,
+      projectSessionLaunch,
+      Promise.resolve(),
+      {
+        retryBaseMs: 25,
+        retryMaxMs: 100,
+        openRecoveryContext: async (_execution, operation) => operation({ projectRef: 'project-budget', actorRef: 'actor-budget', collaboration, deriveOpaque: () => 'unused' }),
+        setTimer(callback, delay) { const timer = { callback, delay, unref() {} }; timers.push(timer); return timer },
+        clearTimer() {}
+      }
+    )
+    return { scheduler, timers, transitions, get current() { return current }, get effects() { return effects }, get observations() { return observations } }
+  }
+  const target = revision => ({ rootId: root.id, canonicalProjectKey, recoveryRef: `recovery-budget-${revision}` })
+
+  const exhausted = createFixture(10)
+  exhausted.scheduler(target(10))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(exhausted.effects, 0, 'the persisted revision budget must fence every further retry effect')
+  assert.equal(exhausted.observations, 0)
+  assert.equal(exhausted.timers.length, 0, 'a permanently failed exhausted recovery must not retain a polling loop')
+  assert.equal(exhausted.scheduler.size(), 0)
+  await exhausted.scheduler.close()
+
+  const available = createFixture(9)
+  available.scheduler(target(9))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(available.effects, 1)
+  assert.equal(available.observations, 1)
+  assert.deepEqual(available.transitions, ['activated', 'outcome_unknown'])
+  assert.equal(available.timers[0].delay, 25)
+  available.timers[0].callback()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(available.effects, 1, 'an unknown outcome may be observed again but must never repeat the effect')
+  assert.equal(available.observations, 2)
+  assert.equal(available.timers[1].delay, 50)
+  await available.scheduler.close()
+})
+
 test('explicit Stop removes queued project wakes and fences enqueue resolution before ack', async () => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-stop-race=${Date.now()}-${Math.random()}`)
   let releaseEnqueue, enqueueStarted
@@ -378,6 +552,25 @@ test('Stop after wake claim but before exact-root lookup acknowledges the claime
   })
   assert.deepEqual(result, { claimed: 1, delivered: 0, retryable: 0 })
   assert.equal(acknowledgements[0].outcome, 'paused')
+})
+
+test('Stop cancels top-level project launch and admission even when the root owns no private Agent Team', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?project-stop-without-team=${Date.now()}-${Math.random()}`)
+  const session = { id: 'project-only-root', header: { cwd: 'C:/project-only-stop' }, events: [] }
+  const root = { id: session.id, session, cancel() { assert.fail('private-team inbox cancellation is unnecessary without a team') } }
+  const handlers = {}, stopped = [], cancelled = []
+  const ctx = {
+    on(name, handler) { handlers[name] = handler },
+    agents: { get: id => id === root.id ? root : undefined, roots: () => [root] },
+    logger: { warn() {} },
+  }
+  mod.observeUserStops(ctx, { activeTeamsForRoot: () => [] }, Promise.resolve(), { cancelRoot(agent) { cancelled.push(agent.id) } }, { async stopForRoot(rootId, binding) { stopped.push({ rootId, binding }) } })
+  handlers['session/event'](session, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(cancelled, [root.id])
+  assert.equal(stopped.length, 1)
+  assert.equal(stopped[0].rootId, root.id)
+  assert.equal(stopped[0].binding.callerRootId, root.id)
 })
 
 test('project task wake session evidence scan is bounded to a recent tail window', async () => {
@@ -563,6 +756,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }, null, 2)}\n`, 'utf8')
     const mod = await import(`${pathToFileURL(pluginFile).href}?runtime=${Date.now()}`)
     const tools = new Map()
+    const toolGuards = []
+    const provisioningGuardDecisions = []
     const routes = new Map()
     const listeners = new Map()
     const promptSections = []
@@ -635,7 +830,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const ctx = {
       logger: { info() {}, warn() {}, error() {} },
       get: () => undefined,
-      tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
+      tools: {
+        register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) },
+        guard(guard) { toolGuards.push(guard); return () => toolGuards.splice(toolGuards.indexOf(guard), 1) }
+      },
       systemPrompt: { section(section) { promptSections.push(section); return () => {} } },
       webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
       effect(setup) { const cleanup = setup(); if (typeof cleanup === 'function') effectCleanups.push(cleanup) },
@@ -649,6 +847,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
       subagents: {
         async startContinuable(spec) {
           starts.push(spec)
+          provisioningGuardDecisions.push(toolGuards.map(guard => guard({ name: 'subagent', agent: { id: spec.childId } })).find(Boolean))
+          const unknownRestrictedTools = [...(spec.request.toolFilter?.allow || []), ...(spec.request.toolFilter?.deny || [])]
+          if (unknownRestrictedTools.length > 0) throw new Error(`tools.restrict() names unknown global tool "${unknownRestrictedTools[0]}"`)
           if (spawnGate) {
             spawnEntered()
             await spawnGate
@@ -853,7 +1054,11 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(starts[0].request.parent, rootAgent)
     assert.equal(starts[0].request.agentOptions.provider, 'test-provider')
     assert.equal(starts[0].request.agentOptions.model, 'special-model')
-    assert.deepEqual(starts[0].request.toolFilter, { deny: ['subagent', 'subagent_fork', 'workflow', 'ralph'] })
+    assert.equal(starts[0].request.toolFilter, undefined, 'managed members use the Host execution guard instead of an SDK-local child filter')
+    assert.match(provisioningGuardDecisions[0], /managed Agent Team members cannot call subagent/u)
+    for (const name of ['subagent', 'subagent_fork', 'workflow', 'ralph']) assert.match(toolGuards[0]({ name, agent: workerAgent }), new RegExp(`cannot call ${name}`))
+    assert.equal(toolGuards[0]({ name: 'team_task_update', agent: workerAgent }), undefined)
+    assert.equal(toolGuards[0]({ name: 'subagent', agent: rootAgent }), undefined)
     assert.equal(spawned.member.modelTier, 'subagent')
     assert.equal(spawned.member.inheritsMain, false)
     assert.equal(spawned.member.routeSource, 'live-lead-explicit-model')
@@ -1890,7 +2095,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
     await tools.get('team_shutdown').execute({ team_id: fallbackTeam.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(drains.at(-1).parent, rootAgent)
     assert.deepEqual(new Set(drains.at(-1).childIds), new Set([fallbackSpawn.member.sessionId, longButValidName.member.sessionId]))
-    for (const start of starts) assert.deepEqual(start.request.toolFilter, { deny: ['subagent', 'subagent_fork', 'workflow', 'ralph'] })
+    for (const start of starts) assert.equal(start.request.toolFilter, undefined)
+    assert.equal(provisioningGuardDecisions.length, starts.length)
+    for (const decision of provisioningGuardDecisions) assert.match(decision, /managed Agent Team members cannot call subagent/u)
 
     const emptyShutdownTeam = (await startTeam(tools, { objective: 'Empty shutdown must not certify success' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const emptyShutdown = await tools.get('team_shutdown').execute({ team_id: emptyShutdownTeam.id }, { agent: rootAgent, signal: new AbortController().signal })
@@ -2112,7 +2319,7 @@ test('tool lifecycle stays consistently paused from explicit Stop through status
     const ctx = {
       logger: { info() {}, warn() {}, error() {} },
       get: () => undefined,
-      tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
+      tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) }, guard() { return () => {} } },
       systemPrompt: { section() { return () => {} } },
       webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
       effect(setup) { const cleanup = setup(); if (typeof cleanup === 'function') cleanups.push(cleanup) },
@@ -2185,7 +2392,7 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     const ctx = {
       logger: { info() {}, warn() {}, error() {} },
       get: () => undefined,
-      tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
+      tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) }, guard() { return () => {} } },
       systemPrompt: { section() { return () => {} } },
       webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
       effect(setup) { const cleanup = setup(); if (typeof cleanup === 'function') cleanups.push(cleanup) },

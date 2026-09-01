@@ -19,6 +19,7 @@ const { ensurePluginMarketplace } = require('./bridge/plugin-marketplace-service
 const { ensureMobileControlPlugin } = require('./bridge/mobile-control-plugin-service.cjs')
 const { ensureDesktopDirectoryPickerPlugin } = require('./bridge/desktop-directory-picker-plugin-service.cjs')
 const { ensureDesktopBrowserToolsPlugin } = require('./bridge/desktop-browser-tools-plugin-service.cjs')
+const { ensureDesktopWebSearchPlugin } = require('./bridge/desktop-web-search-plugin-service.cjs')
 const { ensureDesktopMemoryToolsPlugin } = require('./bridge/desktop-memory-tools-plugin-service.cjs')
 const { ensureDesktopMcpManagerPlugin } = require('./bridge/desktop-mcp-manager-plugin-service.cjs')
 const { ensureDesktopSchedulesPlugin } = require('./bridge/desktop-schedules-plugin-service.cjs')
@@ -46,6 +47,8 @@ const { createGitRuntimeService } = require('./bridge/git-runtime-service.cjs')
 const { terminateProcessTree } = require('./bridge/process-tree.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
 const { appendBoundedRuntimeDiagnostic, isRecoverableGeneratedProfileFailure, resetGeneratedWebProfileRoot } = require('./bridge/dsh-generated-profile-recovery.cjs')
+const { exchangeRuntimeLaunchToken, probeAuthenticatedRuntimeSession, readRuntimeAuthCookie, requireRuntimeAuthCookie, runtimeLoopbackOrigin, runtimeSessionFetch, runtimeWebSocketOptions } = require('./bridge/runtime-session-auth.cjs')
+const { appendRuntimeWebOutput, detectRuntimeWebUrl, isRuntimeWebReadyStatus, normalizeRuntimeWebUrl, redactRuntimeWebAuth, runtimeSessionWindowUrl, safeRuntimeWebUrl } = require('./bridge/runtime-web-url.cjs')
 const { resolveUserDataOverride } = require('./bridge/user-data-override.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
 const { DEFAULT_APP_FEEDS, DEFAULT_MAX_REDIRECTS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile, safeHttpsUpdateUrl } = require('./bridge/update-service.cjs')
@@ -116,6 +119,9 @@ let providerMeterRegistryPromise = null
 let runtime = null
 let runtimeOwnedByDesktop = false
 let runtimeState = { status: 'stopped', url: null, detail: '' }
+let runtimeLaunchUrl = null
+let runtimeSessionAuthentication = null
+let runtimeSessionCookie = null
 let appStateStore = null
 let lastUpdatePayload = null
 let activeUpdateInstall = null
@@ -204,6 +210,7 @@ function send(channel, payload) {
 
 function setRuntimeState(next) {
   runtimeState = { ...runtimeState, ...next }
+  if (runtimeState.status !== 'ready') resetRuntimeSessionAuthentication({ clearLaunch: true })
   send('runtime:state', runtimeState)
   if (runtimeState.status === 'ready' && runtimeState.url && petAdapter) {
     petAdapter.start(runtimeState.url).catch(error => console.warn(`Unable to start pet event adapter: ${error.message}`))
@@ -1157,6 +1164,63 @@ async function captureBrowserForModel(view, parameters) {
   return { image: scaled.toDataURL(), mime: 'image/png', width: size.width, height: size.height }
 }
 
+async function inspectBrowserMediaForModel(view, parameters = {}) {
+  const requestedIndex = Number.isSafeInteger(Number(parameters.media_index)) ? Math.max(0, Math.floor(Number(parameters.media_index))) : -1
+  const result = await view.webContents.executeJavaScript(`(() => {
+    const visible=element=>{const rect=element.getBoundingClientRect();const style=getComputedStyle(element);return rect.width>0&&rect.height>0&&rect.bottom>0&&rect.right>0&&rect.left<innerWidth&&rect.top<innerHeight&&style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity||1)>0};
+    const videos=[...document.querySelectorAll('video')].filter(visible).slice(0,12);
+    const requested=${requestedIndex};
+    let selected=requested>=0&&requested<videos.length?requested:-1;
+    if(selected<0&&videos.length)selected=videos.map((video,index)=>({index,area:(()=>{const rect=video.getBoundingClientRect();return rect.width*rect.height})()})).sort((a,b)=>b.area-a.area)[0].index;
+    const describe=(video,index)=>{const rect=video.getBoundingClientRect();const cues=[...video.textTracks].flatMap(track=>[...(track.activeCues||[])].map(cue=>String(cue.text||'').replace(/\\s+/g,' ').trim())).filter(Boolean).slice(0,20);return {index,selected:index===selected,currentTime:Number.isFinite(video.currentTime)?video.currentTime:null,duration:Number.isFinite(video.duration)?video.duration:null,paused:Boolean(video.paused),ended:Boolean(video.ended),muted:Boolean(video.muted),volume:Number(video.volume),playbackRate:Number(video.playbackRate),readyState:Number(video.readyState),networkState:Number(video.networkState),videoWidth:Number(video.videoWidth),videoHeight:Number(video.videoHeight),rect:{x:Math.round(rect.left),y:Math.round(rect.top),width:Math.round(rect.width),height:Math.round(rect.height)},source:String(video.currentSrc||video.src||''),poster:String(video.poster||''),tracks:[...video.textTracks].slice(0,20).map(track=>({kind:String(track.kind||''),label:String(track.label||'').slice(0,120),language:String(track.language||'').slice(0,40),mode:String(track.mode||'')})),activeCues:cues};};
+    const overlays=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],dialog,.modal,.popup,.login-mask,.login-modal')].filter(visible).slice(0,12).map(node=>({role:String(node.getAttribute('role')||node.tagName.toLowerCase()),label:String(node.getAttribute('aria-label')||node.querySelector('h1,h2,h3')?.textContent||'').replace(/\\s+/g,' ').trim().slice(0,160),text:String(node.innerText||'').replace(/\\s+/g,' ').trim().slice(0,400)}));
+    return {count:videos.length,selectedIndex:selected,videos:videos.map(describe),overlays};
+  })()`, false)
+  return {
+    count: Number(result?.count) || 0,
+    selectedIndex: Number.isInteger(result?.selectedIndex) ? result.selectedIndex : -1,
+    videos: Array.isArray(result?.videos) ? result.videos.map(video => ({ ...video, source: safeBrowserDiagnosticUrl(video.source), poster: safeBrowserDiagnosticUrl(video.poster) })) : [],
+    overlays: Array.isArray(result?.overlays) ? result.overlays : []
+  }
+}
+
+async function captureBrowserMediaFrameForModel(view, parameters = {}) {
+  const requestedIndex = Number.isSafeInteger(Number(parameters.media_index)) ? Math.max(0, Math.floor(Number(parameters.media_index))) : -1
+  const requestedTime = Number(parameters.time_seconds)
+  const hasRequestedTime = Number.isFinite(requestedTime) && requestedTime >= 0
+  const preflight = await view.webContents.executeJavaScript(`(async()=>{
+    const visible=element=>{const rect=element.getBoundingClientRect();const style=getComputedStyle(element);return rect.width>0&&rect.height>0&&rect.bottom>0&&rect.right>0&&rect.left<innerWidth&&rect.top<innerHeight&&style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity||1)>0};
+    const videos=[...document.querySelectorAll('video')].filter(visible).slice(0,12);
+    const requested=${requestedIndex};
+    let selected=requested>=0&&requested<videos.length?requested:-1;
+    if(selected<0&&videos.length)selected=videos.map((video,index)=>({index,area:(()=>{const rect=video.getBoundingClientRect();return rect.width*rect.height})()})).sort((a,b)=>b.area-a.area)[0].index;
+    const video=videos[selected];
+    if(!video)return {missing:true,count:videos.length};
+    if(${hasRequestedTime}){
+      const maximum=Number.isFinite(video.duration)&&video.duration>0?Math.max(0,video.duration-0.05):${requestedTime};
+      const target=Math.min(${requestedTime},maximum);
+      if(Math.abs(video.currentTime-target)>0.04){
+        await new Promise(resolve=>{let settled=false;const done=()=>{if(settled)return;settled=true;clearTimeout(timer);video.removeEventListener('seeked',done);video.removeEventListener('error',done);resolve()};const timer=setTimeout(done,3500);video.addEventListener('seeked',done,{once:true});video.addEventListener('error',done,{once:true});try{video.currentTime=target}catch{done()}});
+      }
+    }
+    const rect=video.getBoundingClientRect();
+    const sensitive=/(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc)/i;
+    const intersectsSensitive=[...document.querySelectorAll('input,textarea,select,[contenteditable="true"]')].filter(visible).some(element=>{const other=element.getBoundingClientRect();const overlap=other.left<rect.right&&other.right>rect.left&&other.top<rect.bottom&&other.bottom>rect.top;return overlap&&sensitive.test([element.type,element.name,element.id,element.autocomplete,element.getAttribute('aria-label'),element.placeholder].filter(Boolean).join(' '))});
+    const cues=[...video.textTracks].flatMap(track=>[...(track.activeCues||[])].map(cue=>String(cue.text||'').replace(/\\s+/g,' ').trim())).filter(Boolean).slice(0,20);
+    return {missing:false,count:videos.length,selectedIndex:selected,intersectsSensitive,currentTime:Number.isFinite(video.currentTime)?video.currentTime:null,duration:Number.isFinite(video.duration)?video.duration:null,paused:Boolean(video.paused),readyState:Number(video.readyState),videoWidth:Number(video.videoWidth),videoHeight:Number(video.videoHeight),activeCues:cues,rect:{x:Math.max(0,Math.floor(rect.left)),y:Math.max(0,Math.floor(rect.top)),width:Math.max(1,Math.floor(Math.min(rect.right,innerWidth)-Math.max(0,rect.left))),height:Math.max(1,Math.floor(Math.min(rect.bottom,innerHeight)-Math.max(0,rect.top)))}};
+  })()`, false)
+  if (preflight?.missing) throw Object.assign(new Error('当前页面没有可见的视频播放器。'), { code: 'media-unavailable' })
+  if (preflight?.intersectsSensitive) throw Object.assign(new Error('视频画面被密码、验证码或账号类敏感输入区域覆盖；请先让用户或已识别的关闭按钮移除遮罩。'), { code: 'sensitive-screenshot-blocked' })
+  const rect = preflight?.rect
+  if (!rect || rect.width < 2 || rect.height < 2) throw Object.assign(new Error('视频播放器当前不可见或尺寸无效。'), { code: 'media-unavailable' })
+  const image = await view.webContents.capturePage(rect)
+  const maxWidth = Math.max(320, Math.min(1600, Math.floor(Number(parameters.max_width) || 1200)))
+  const sourceSize = image.getSize()
+  const scaled = sourceSize.width > maxWidth ? image.resize({ width: maxWidth, quality: 'good' }) : image
+  const size = scaled.getSize()
+  return { ...preflight, image: scaled.toDataURL(), mime: 'image/png', width: size.width, height: size.height }
+}
+
 async function browserDomDiagnostics(view) {
   return view.webContents.executeJavaScript(`(() => {
     const sensitive=/(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc)/i;
@@ -1458,6 +1522,18 @@ async function modelBrowserAction(input = {}, context = {}) {
   if (action === 'screenshot') {
     authorizeBrowserRead(origin, tabId)
     const result = await captureBrowserForModel(view, parameters)
+    browserOperations.assert(ticket)
+    return result
+  }
+  if (action === 'mediaInfo') {
+    authorizeBrowserRead(origin, tabId, 'video')
+    const result = await inspectBrowserMediaForModel(view, parameters)
+    browserOperations.assert(ticket)
+    return result
+  }
+  if (action === 'mediaFrame') {
+    authorizeBrowserRead(origin, tabId, 'video')
+    const result = await captureBrowserMediaFrameForModel(view, parameters)
     browserOperations.assert(ticket)
     return result
   }
@@ -1958,6 +2034,7 @@ function desktopAndroidHttpRequest(url, options = {}) {
       headers: {
         origin: options.origin || new URL(url).origin,
         'sec-fetch-site': 'same-origin',
+        ...(options.cookie ? { cookie: options.cookie } : {}),
         ...(body ? { 'content-type': 'application/json', 'content-length': String(body.length) } : {})
       }
     }, response => {
@@ -1987,9 +2064,11 @@ async function desktopAndroidPanelAction(input = {}) {
   if (!route) throw new Error('Android 右栏动作不受支持。')
   if (runtimeState.status !== 'ready' || !isLocalRuntimeUrl(runtimeState.url)) throw new Error('Harness 运行时尚未就绪。')
   const base = new URL(runtimeState.url)
+  const cookie = await runtimeAuthCookieHeader(base)
   const response = await desktopAndroidHttpRequest(new URL(route, base), {
     body: desktopAndroidRequestBody(action, input.payload),
-    origin: base.origin
+    origin: base.origin,
+    cookie
   })
   const text = response.body.toString('utf8')
   let body = {}
@@ -2001,7 +2080,7 @@ async function desktopAndroidPanelAction(input = {}) {
   if (action === 'capture' && typeof body.screenshotUrl === 'string') {
     const screenshotUrl = new URL(body.screenshotUrl)
     if (screenshotUrl.origin !== base.origin) throw new Error('Android 截图能力 URL 越界。')
-    const screenshot = await desktopAndroidHttpRequest(screenshotUrl, { method: 'GET', origin: base.origin, maximum: 12 * 1024 * 1024 })
+    const screenshot = await desktopAndroidHttpRequest(screenshotUrl, { method: 'GET', origin: base.origin, cookie, maximum: 12 * 1024 * 1024 })
     if (screenshot.status < 200 || screenshot.status >= 300) throw new Error(`Android 截图读取失败（${screenshot.status}）。`)
     const type = String(screenshot.headers['content-type'] || 'image/png').split(';')[0]
     if (!/^image\/(?:png|jpeg|webp)$/u.test(type)) throw new Error('Android 截图返回类型无效。')
@@ -2645,7 +2724,9 @@ function ensureMobileSyncService() {
     getProviderMeters: () => getProviderMeters(false),
     getPlugins: getInstalledPlugins,
     chooseWorkspaceDirectory,
-    fetchImpl: (url, options) => net.fetch(url, options)
+    fetchImpl: runtimeApiFetch,
+    WebSocketImpl: HarnessRuntimeWebSocket,
+    cookieProvider: runtimeAuthCookieHeader
   })
   mobileSyncService.on('state', state => send('mobileSync:state', state))
   return mobileSyncService
@@ -2740,6 +2821,8 @@ function ensurePetSystem() {
     onChange: state => publishPetState(state)
   })
   petAdapter = new PetEventAdapter({
+    fetchImpl: runtimeApiFetch,
+    cookieProvider: runtimeAuthCookieHeader,
     onEvent: event => {
       if (event.type === 'baseline') petDomain.ingestBaseline(event)
       else petDomain.ingest(event)
@@ -3589,9 +3672,124 @@ async function openHarnessSettingsDocument() {
   return { ok: true, path: settingsFile }
 }
 
+function harnessRuntimeSession() {
+  return session.fromPartition('persist:harness')
+}
+
+function resetRuntimeSessionAuthentication({ clearLaunch = false } = {}) {
+  runtimeSessionAuthentication = null
+  runtimeSessionCookie = null
+  if (clearLaunch) runtimeLaunchUrl = null
+}
+
+function runtimeLaunchHasToken(value) {
+  try { return new URL(value).searchParams.has('token') }
+  catch { return false }
+}
+
+function runtimeAuthenticationUrl(value = runtimeState.url) {
+  const requestedOrigin = runtimeLoopbackOrigin(value)
+  const privateOrigin = runtimeLoopbackOrigin(runtimeLaunchUrl)
+  if (requestedOrigin && privateOrigin === requestedOrigin) return runtimeLaunchUrl
+  return normalizeRuntimeWebUrl(value)
+}
+
+function markRuntimeReady(launchUrl, detail) {
+  const normalized = normalizeRuntimeWebUrl(launchUrl)
+  const publicUrl = safeRuntimeWebUrl(normalized)
+  if (!normalized || !publicUrl) throw new Error('Harness runtime authentication target is unavailable.')
+  runtimeLaunchUrl = normalized
+  setRuntimeState({ status: 'ready', url: publicUrl, detail })
+  return runtimeState
+}
+
+async function prepareRuntimeSessionAuthentication(value, { force = false } = {}) {
+  const launchUrl = normalizeRuntimeWebUrl(value)
+  if (!launchUrl) throw new Error('Harness runtime authentication target is unavailable.')
+  if (!force && runtimeSessionAuthentication?.launchUrl === launchUrl) return runtimeSessionAuthentication.promise
+  const runtimeSession = harnessRuntimeSession()
+  const record = { launchUrl, promise: null }
+  record.promise = (async () => {
+    const exchanged = await exchangeRuntimeLaunchToken(runtimeSession, launchUrl, { signal: AbortSignal.timeout(5000) })
+    if (!exchanged) throw new Error('Harness runtime browser authentication was rejected.')
+    const cookie = await readRuntimeAuthCookie(runtimeSession.cookies, launchUrl)
+    if (!cookie) throw new Error('Harness runtime browser authentication cookie is unavailable.')
+    if (runtimeSessionAuthentication === record) runtimeSessionCookie = cookie
+    return cookie
+  })().catch(() => {
+    if (runtimeSessionAuthentication === record) resetRuntimeSessionAuthentication()
+    throw new Error('Harness runtime browser authentication failed.')
+  })
+  runtimeSessionAuthentication = record
+  return record.promise
+}
+
+async function currentRuntimeAuthCookie(value = runtimeState.url) {
+  const launchUrl = runtimeAuthenticationUrl(value)
+  if (!launchUrl) throw new Error('Harness runtime authentication target is unavailable.')
+  await prepareRuntimeSessionAuthentication(launchUrl)
+  const runtimeSession = harnessRuntimeSession()
+  const cookie = await requireRuntimeAuthCookie(runtimeSession.cookies, launchUrl, {
+    refresh: runtimeLaunchHasToken(launchUrl)
+      ? () => prepareRuntimeSessionAuthentication(launchUrl, { force: true })
+      : undefined
+  })
+  runtimeSessionCookie = cookie
+  return cookie
+}
+
+function assertCurrentRuntimeApiTarget(value) {
+  const launchOrigin = runtimeLoopbackOrigin(runtimeState.url)
+  const target = new URL(String(value || ''))
+  if (!launchOrigin || runtimeLoopbackOrigin(target) !== launchOrigin || (target.pathname !== '/api' && !target.pathname.startsWith('/api/'))) {
+    throw new Error('Harness runtime API target is unavailable.')
+  }
+  return target
+}
+
+async function runtimeApiFetch(value, options = {}) {
+  const target = assertCurrentRuntimeApiTarget(value)
+  await currentRuntimeAuthCookie(runtimeState.url)
+  return runtimeSessionFetch(harnessRuntimeSession(), target, options)
+}
+
+async function runtimeAuthCookieHeader(value = runtimeState.url, { force = false } = {}) {
+  const launchOrigin = runtimeLoopbackOrigin(runtimeState.url)
+  if (!launchOrigin || runtimeLoopbackOrigin(value) !== launchOrigin) throw new Error('Harness runtime authentication target is unavailable.')
+  const launchUrl = runtimeAuthenticationUrl(value)
+  if (!launchUrl) throw new Error('Harness runtime authentication target is unavailable.')
+  if (force && runtimeLaunchHasToken(launchUrl)) await prepareRuntimeSessionAuthentication(launchUrl, { force: true })
+  return (await currentRuntimeAuthCookie(launchUrl))?.header || ''
+}
+
+function cachedRuntimeWebSocketOptions(value) {
+  const header = cachedRuntimeAuthCookieHeader(value)
+  return runtimeWebSocketOptions(header)
+}
+
+function cachedRuntimeAuthCookieHeader(value) {
+  const origin = runtimeLoopbackOrigin(value)
+  if (!origin || runtimeSessionCookie?.origin !== origin || runtimeSessionCookie.expiresAt <= Date.now()) return ''
+  return runtimeSessionCookie.header
+}
+
+function mergedRuntimeWebSocketOptions(value, options = {}) {
+  const authenticated = cachedRuntimeWebSocketOptions(value)
+  return {
+    ...(options || {}),
+    headers: { ...(options?.headers || {}), ...(authenticated.headers || {}) }
+  }
+}
+
+class HarnessRuntimeWebSocket extends WebSocket {
+  constructor(address, protocols, options) {
+    if (typeof protocols === 'string' || Array.isArray(protocols)) super(address, protocols, mergedRuntimeWebSocketOptions(address, options))
+    else super(address, mergedRuntimeWebSocketOptions(address, protocols))
+  }
+}
+
 function detectUrl(text) {
-  const match = String(text || '').match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/i)
-  return match ? match[0].replace('localhost', '127.0.0.1') : null
+  return detectRuntimeWebUrl(text)
 }
 
 function isLocalRuntimeUrl(value) {
@@ -3614,7 +3812,7 @@ function probeUrl(url, timeoutMs = 900) {
     }
     const request = http.get(url, response => {
       response.resume()
-      done(response.statusCode >= 100 && response.statusCode < 600)
+      done(isRuntimeWebReadyStatus(response.statusCode))
     })
     request.setTimeout(timeoutMs, () => {
       request.destroy()
@@ -3625,13 +3823,14 @@ function probeUrl(url, timeoutMs = 900) {
 }
 
 async function connectExistingRuntime() {
-  if (!await probeUrl(DEFAULT_RUNTIME_URL, 500)) return false
+  try {
+    await prepareRuntimeSessionAuthentication(DEFAULT_RUNTIME_URL)
+    if (!await probeAuthenticatedRuntimeSession(harnessRuntimeSession(), DEFAULT_RUNTIME_URL, { signal: AbortSignal.timeout(500) })) return false
+  } catch {
+    return false
+  }
   runtimeOwnedByDesktop = false
-  setRuntimeState({
-    status: 'ready',
-    url: DEFAULT_RUNTIME_URL,
-    detail: '已连接本机正在运行的 DeepSeek Harness；桌面版不会接管该进程。'
-  })
+  markRuntimeReady(DEFAULT_RUNTIME_URL, '已连接本机正在运行的 DeepSeek Harness；桌面版不会接管该进程。')
   return true
 }
 
@@ -3716,14 +3915,18 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
   let candidateUrl = null
   let lastErrorText = ''
   let diagnosticErrorText = ''
+  let runtimeStdoutBuffer = ''
+  let runtimeStderrBuffer = ''
 
   const onOutput = (chunk, isError = false) => {
     const output = chunk.toString()
-    const detected = detectUrl(output)
+    if (isError) runtimeStderrBuffer = appendRuntimeWebOutput(runtimeStderrBuffer, output)
+    else runtimeStdoutBuffer = appendRuntimeWebOutput(runtimeStdoutBuffer, output)
+    const detected = detectUrl(isError ? runtimeStderrBuffer : runtimeStdoutBuffer)
     if (detected) candidateUrl = detected
     if (isError && output.trim()) {
       diagnosticErrorText = appendBoundedRuntimeDiagnostic(diagnosticErrorText, output)
-      lastErrorText = diagnosticErrorText.trim().slice(-1200)
+      lastErrorText = redactRuntimeWebAuth(diagnosticErrorText).trim().slice(-1200)
     }
   }
 
@@ -3746,13 +3949,17 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
   const deadline = Date.now() + 22000
   while (Date.now() < deadline && runtime === child && child.exitCode == null) {
     if (candidateUrl && await probeUrl(candidateUrl)) {
-      setRuntimeState({ status: 'ready', url: candidateUrl, detail: `DeepSeek Harness Web 已就绪：${candidateUrl}` })
-      return runtimeState
+      try {
+        await prepareRuntimeSessionAuthentication(candidateUrl)
+        return markRuntimeReady(candidateUrl, `DeepSeek Harness Web 已就绪：${safeRuntimeWebUrl(candidateUrl)}`)
+      } catch {}
     }
     if (process.env.HARNESS_DESKTOP_REUSE_RUNTIME === '1' && candidateUrl !== DEFAULT_RUNTIME_URL && await probeUrl(DEFAULT_RUNTIME_URL)) {
       candidateUrl = DEFAULT_RUNTIME_URL
-      setRuntimeState({ status: 'ready', url: candidateUrl, detail: `DeepSeek Harness Web 已就绪：${candidateUrl}` })
-      return runtimeState
+      try {
+        await prepareRuntimeSessionAuthentication(candidateUrl)
+        return markRuntimeReady(candidateUrl, `DeepSeek Harness Web 已就绪：${safeRuntimeWebUrl(candidateUrl)}`)
+      } catch {}
     }
     await new Promise(resolve => setTimeout(resolve, 350))
   }
@@ -3885,7 +4092,7 @@ async function callRuntimeRpc(endpoint, payload) {
   if (!OFFICIAL_RUNTIME_RPC_ENDPOINTS.has(endpoint)) throw new Error('Harness runtime RPC endpoint is not allowed.')
   if (runtimeState.status !== 'ready' || !runtimeState.url) throw new Error('Harness runtime is unavailable.')
   const rpcId = randomUUID()
-  const response = await net.fetch(new URL(`/api/${endpoint}`, runtimeState.url).toString(), {
+  const response = await runtimeApiFetch(new URL(`/api/${endpoint}`, runtimeState.url), {
     method: 'POST',
     headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload }),
@@ -3905,8 +4112,11 @@ async function inspectRuntimePrompt({ sessionId, requestId }) {
   target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:'
   const controlId = `control-${randomUUID()}`
   const followId = `follow-${randomUUID()}`
+  let socketOptions
+  try { socketOptions = runtimeWebSocketOptions(await runtimeAuthCookieHeader(target)) }
+  catch { return null }
   return new Promise(resolve => {
-    const socket = new WebSocket(target.toString())
+    const socket = new WebSocket(target.toString(), socketOptions)
     let settled = false, controlReady = false, followReady = false
     const finish = evidence => {
       if (settled) return
@@ -4026,6 +4236,10 @@ function desktopBrowserToolsPluginOptions() {
     dshHome: desktopDshHome(),
     bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-browser-tools')
   }
+}
+
+function desktopWebSearchPluginOptions() {
+  return { dshHome: desktopDshHome(), bundledRoot: path.join(__dirname, '..', 'plugins', 'dsh-desktop-web-search') }
 }
 
 function desktopMemoryToolsPluginOptions() {
@@ -4696,9 +4910,22 @@ async function runSelfTestMode() {
   const output = selfTestOutputPath()
   if (output) await writeFile(path.resolve(output), `${JSON.stringify({ phase: 'preparing-runtime', startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   await ensureBundledRuntime()
+  await ensureDesktopCompactionPlugin(desktopCompactionPluginOptions())
   await ensurePluginMarketplace(pluginMarketplaceOptions())
+  await ensureMobileControlPlugin(mobileControlPluginOptions())
+  await ensureDesktopDirectoryPickerPlugin(desktopDirectoryPickerPluginOptions())
+  await ensureDesktopBrowserToolsPlugin(desktopBrowserToolsPluginOptions())
+  await ensureDesktopWebSearchPlugin(desktopWebSearchPluginOptions())
+  await ensureDesktopMemoryToolsPlugin(desktopMemoryToolsPluginOptions())
+  await ensureDesktopMcpManagerPlugin(desktopMcpManagerPluginOptions())
+  await ensureDesktopSchedulesPlugin(desktopSchedulesPluginOptions())
+  await ensureDesktopFilesPlugin(desktopFilesPluginOptions())
+  await ensureDesktopProgressPlugin(desktopProgressPluginOptions())
+  await ensureDesktopComputerUsePlugin(desktopComputerUsePluginOptions())
+  await ensureDesktopAndroidPlugin(desktopAndroidPluginOptions())
   await ensureModelAdmissionPlugin(modelAdmissionPluginOptions())
   await ensureAgentTeamsPlugin(agentTeamsPluginOptions())
+  await ensureSessionExperiencePlugin(sessionExperiencePluginOptions())
   if (output) await writeFile(path.resolve(output), `${JSON.stringify({ phase: 'probing-runtime', startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   const report = await runPackagedSelfTest({
     appVersion: app.getVersion(),
@@ -4910,8 +5137,8 @@ function openDetachedSessionWindow(sessionId) {
   const value = String(sessionId || '')
   if (!value || value.length > 256 || value.trim() !== value) throw new Error('会话 ID 无效。')
   if (runtimeState.status !== 'ready' || !runtimeState.url) throw new Error('Harness 运行时尚未就绪。')
-  const target = new URL(runtimeState.url)
-  target.searchParams.set('harness-desktop-session', value)
+  const targetUrl = runtimeSessionWindowUrl(runtimeState.url, value)
+  if (!targetUrl) throw new Error('Harness 运行时尚未就绪。')
   const iconPath = STORE_BUILD
     ? path.join(__dirname, '..', 'store', 'Assets', 'AppList.targetsize-256.png')
     : path.join(__dirname, '..', 'build', 'icon.png')
@@ -4960,7 +5187,7 @@ function openDetachedSessionWindow(sessionId) {
   })
   detached.webContents.on('will-attach-webview', event => event.preventDefault())
   detached.on('closed', () => detachedSessionWindows.delete(detached))
-  detached.loadURL(target.toString())
+  detached.loadURL(targetUrl)
   return true
 }
 
@@ -5274,7 +5501,7 @@ ipcMain.handle('rightWorkspace:resource', (event, kind, payload) => {
     kind: String(kind || ''),
     sessionId: payload?.sessionId,
     path: payload?.path,
-    fetchImpl: (url, options) => net.fetch(url.toString(), options)
+    fetchImpl: runtimeApiFetch
   })
 })
 ipcMain.handle('rightWorkspace:openFile', async (event, payload) => {
@@ -5286,7 +5513,7 @@ ipcMain.handle('rightWorkspace:openFile', async (event, payload) => {
     path: payload?.path,
     name: payload?.name,
     tempBase: app.getPath('temp'),
-    fetchImpl: (url, options) => net.fetch(url.toString(), options),
+    fetchImpl: runtimeApiFetch,
     mkdirImpl: mkdir,
     mkdtempImpl: mkdtemp,
     openImpl: open,
@@ -5624,6 +5851,9 @@ app.whenReady().then(async () => {
     })
     await ensureDesktopBrowserToolsPlugin(desktopBrowserToolsPluginOptions()).catch(error => {
       console.warn(`Unable to prepare desktop browser tools plugin: ${error.message}`)
+    })
+    await ensureDesktopWebSearchPlugin(desktopWebSearchPluginOptions()).catch(error => {
+      console.warn(`Unable to prepare independent web search plugin: ${error.message}`)
     })
     await ensureDesktopMemoryToolsPlugin(desktopMemoryToolsPluginOptions()).catch(error => {
       console.warn(`Unable to prepare desktop memory tools plugin: ${error.message}`)

@@ -10,7 +10,7 @@ const { ensureDesktopBrowserToolsPlugin } = require('../electron/bridge/desktop-
 
 const bundledRoot = path.resolve(__dirname, '..', 'plugins', 'dsh-desktop-browser-tools')
 const ACTIONS = [
-  'status', 'observe', 'screenshot', 'navigate', 'back', 'forward', 'reload',
+  'status', 'observe', 'screenshot', 'mediaInfo', 'mediaFrame', 'navigate', 'back', 'forward', 'reload',
   'click', 'type', 'scroll', 'hover', 'keypress', 'select', 'wait',
   'tabList', 'tabOpen', 'tabSwitch', 'tabClose',
   'console', 'network', 'inspect', 'extract', 'download', 'upload', 'dialog', 'stop'
@@ -61,10 +61,10 @@ test('desktop browser tools installs into the DSH Web profile idempotently', asy
   try {
     const first = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
     const second = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
-    assert.equal(first.version, '1.0.56')
+    assert.equal(first.version, '1.0.57')
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.imageBridge.version, '1.0.56')
+    assert.equal(first.imageBridge.version, '1.0.57')
     assert.equal(first.imageBridge.patchChanged, true)
     assert.equal(second.imageBridge.patchChanged, false)
     assert.match(readFileSync(path.join(first.destination, 'lib', 'index.js'), 'utf8'), /browser_control/)
@@ -75,7 +75,7 @@ test('desktop browser tools installs into the DSH Web profile idempotently', asy
     const marker = JSON.parse(await readFile(path.join(root, 'skills', 'imagegen', '.harness-desktop-managed.json'), 'utf8'))
     assert.equal(marker.owner, 'dsh-desktop-browser-tools')
     assert.equal(marker.skill, 'imagegen')
-    assert.equal(marker.version, '1.0.56')
+    assert.equal(marker.version, '1.0.57')
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-desktop-browser-tools/g) || []).length, 1)
     assert.match(patch, /id: desktop-browser-tools/u)
@@ -113,7 +113,7 @@ test('browser_control tool exposes exactly the fixed action enum', async () => {
   assert.ok(tool.parameters.required.includes('action'))
   assert.deepEqual(properties.action.enum, ACTIONS)
   assert.equal(properties.action.type, 'string')
-  for (const key of ['url', 'ref', 'text', 'value', 'key', 'delta_x', 'delta_y', 'timeout_ms', 'max_width', 'extract_mode', 'max_items', 'tab_id', 'limit', 'since', 'confirmation_id']) {
+  for (const key of ['url', 'ref', 'text', 'value', 'key', 'delta_x', 'delta_y', 'timeout_ms', 'max_width', 'media_index', 'time_seconds', 'extract_mode', 'max_items', 'tab_id', 'limit', 'since', 'confirmation_id']) {
     assert.ok(properties[key], `missing payload parameter ${key}`)
   }
   for (const forbidden of ['script', 'javascript', 'expression', 'command', 'shell']) {
@@ -326,6 +326,10 @@ test('browser_control screenshot emits an image attachment and safely degrades w
     const rendered = imageTool.output.render({ action: 'screenshot' }, result)
     assert.ok(rendered.some(block => block.type === 'image' && block.attachment === attachment))
     assert.doesNotMatch(JSON.stringify(rendered), /data:image\/png;base64/u)
+
+    const mediaFrame = await imageTool.execute({ action: 'mediaFrame', media_index: 1, time_seconds: 12.5 }, { agent: { options: { provider: 'test', model: 'vision' } } })
+    assert.deepEqual(mediaFrame.result.attachment, attachment)
+    assert.ok(imageTool.output.render({ action: 'mediaFrame' }, mediaFrame).some(block => block.type === 'image'))
   } finally {
     globalThis.fetch = previousFetch
     if (previousEnv === undefined) delete process.env.HARNESS_DESKTOP_BROWSER_STATE_FILE
@@ -367,6 +371,31 @@ test('browser_control normalizes unavailable-tab, stop, and shared Computer Use 
       assert.doesNotMatch(guidance.text, /调用 stop/u)
     })
   }
+})
+
+test('browser_control turns deterministic navigation URL failures into actionable blocked results', async () => {
+  const { tool } = await loadPluginTool()
+  for (const code of ['parse-error', 'scheme-blocked', 'private-network-not-authorized']) {
+    await withBrowserEndpoint(async (action, payload) => {
+      assert.equal(action, 'navigate')
+      assert.equal(payload.url, 'not a valid URL')
+      return httpResponse(400, { ok: false, error: '地址无法按 WHATWG 规则解析。', code })
+    }, async () => {
+      const result = await tool.execute({ action: 'navigate', url: 'not a valid URL' }, {})
+      assert.equal(result.ok, true)
+      assert.equal(result.result.blocked, true)
+      assert.equal(result.result.retryable, false)
+      assert.equal(result.result.code, code)
+      assert.match(result.result.guidance, /不要重复相同输入/u)
+      assert.match(result.result.guidance, /web_search/u)
+      assert.match(tool.output.render({ action: 'navigate' }, result).at(-1).text, /修正地址后/u)
+    })
+  }
+
+  const empty = await tool.execute({ action: 'navigate' }, {})
+  assert.equal(empty.result.code, 'empty')
+  assert.equal(empty.result.blocked, true)
+  assert.match(empty.result.guidance, /HTTP\(S\)/u)
 })
 
 test('browser_control keeps throwing for rejections that are not safe gate codes', async () => {

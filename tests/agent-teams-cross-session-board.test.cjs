@@ -155,7 +155,7 @@ test('a project containing only archived teams returns an empty board without de
   const board = mod.projectTeamBoardPage(document, archived.members[0].sessionId, archived.id)
   assert.equal(board.available, true)
   assert.deepEqual(board.teams, [])
-  assert.deepEqual(board.stats, { totalTeams: 0, includedTeams: 0, totalTasks: 0, includedTasks: 0, pendingTasks: 0, inProgressTasks: 0, completedTasks: 0, cancelledTasks: 0, blockedTasks: 0, attentionTasks: 0, attentionTeams: 0 })
+  assert.deepEqual(board.stats, { totalTeams: 0, includedTeams: 0, totalTasks: 0, includedTasks: 0, pendingTasks: 0, inProgressTasks: 0, submittedTasks: 0, acceptanceRequiredTasks: 0, completedTasks: 0, cancelledTasks: 0, blockedTasks: 0, attentionTasks: 0, attentionTeams: 0 })
   assert.deepEqual(board.page, { includedTeams: 0, includedTasks: 0, hasMore: false, nextCursor: null })
 
   const snapshot = mod.teamSnapshot(document, archived.members[0].sessionId, archived.id)
@@ -171,6 +171,25 @@ test('closing the last visible team invalidates an older pagination cursor', asy
   assert.equal(first.page.hasMore, true)
   const archived = { ...visible, state: 'closed', revision: visible.revision + 1, updatedAt: iso(80_000) }
   assert.throws(() => mod.createProjectTeamBoardPage(projectA, [archived], { cursor: first.page.nextCursor, cursorIntegrityKey: cursorKey }), (error) => error.code === 'AGENT_TEAMS_PROJECT_BOARD_CURSOR_STALE' && error.stale === true)
+})
+
+test('submitted work requires acceptance and an unrelated later delivery cannot clear failed-delivery attention', async () => {
+  const mod = await import(`${boardUrl}?acceptance=${Date.now()}-${Math.random()}`)
+  const current = team(projectA, 45, 1, { prefix: 'acceptance' })
+  current.tasks[0].state = 'submitted'
+  current.messages.push(
+    { id: 'old-failure', fromSessionId: current.rootLeadSessionId, toSessionId: 'recipient', status: 'failed', createdAt: iso(100) },
+    { id: 'later-success', fromSessionId: current.rootLeadSessionId, toSessionId: 'recipient', status: 'delivered', createdAt: iso(200), deliveredAt: iso(300) }
+  )
+  const board = mod.createProjectTeamBoard(projectA, [current], { cursorIntegrityKey: cursorKey })
+  assert.equal(board.stats.submittedTasks, 1)
+  assert.equal(board.stats.acceptanceRequiredTasks, 1)
+  assert.equal(board.stats.attentionTasks, 1)
+  assert.equal(board.teams[0].taskStats.submitted, 1)
+  assert.equal(board.teams[0].taskStats.acceptanceRequired, 1)
+  assert.ok(board.teams[0].attention.codes.includes('acceptance_required'))
+  assert.ok(board.teams[0].attention.codes.includes('failed_delivery'))
+  assert.equal(current.messages[0].status, 'failed', 'durable failure history remains unchanged for audit')
 })
 
 test('project team board HMAC cursors reject tamper, cross-project replay, and stale revisions without exposing routing data', async () => {

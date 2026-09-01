@@ -1,82 +1,73 @@
-# Harness Desktop 1.0.56
+# Harness Desktop 1.0.57
 
-v1.0.56 是一次整合官方 Harness `0.1.2-alpha.3`、Agent Teams 可靠性、Mobile 导航与附件体验，以及定时任务实现收敛的正式更新。本版把当前维护树中已完成的多会话修复统一纳入同一个不可变版本，并继续保留 Stop、跨项目、真实外部副作用、结果未知、敏感输入和发布签名的硬门禁。
+v1.0.57 候选源码同时修复官方 Harness `0.1.2-alpha.3` 的桌面启动兼容问题，以及 Agent Teams / 跨项目会话在崩溃、重启、Stop、结果未知和关闭流程中的真实堵塞。本次修复不通过关闭认证、自动重放不确定副作用或放宽项目/团队权限换取可用性。
 
-本版本不会静默替用户安装。桌面端只有在用户于更新中心明确点击更新/安装后才会切换版本；Android 仍必须由用户手动安装长期证书签名的 APK。
+此前的官方 `0.1.2-alpha.2` 仅保留为可复核的历史迁移基线，不再描述当前运行时或发布目标。
 
-## 官方 Harness alpha.3 维护迁移
+本版本不会静默替用户安装。桌面端只有在用户于更新中心明确点击更新/安装后才会切换版本；Android 仍由用户手动安装长期证书签名的 APK。
 
-- 所有直接官方 DSH 依赖统一精确固定为 `0.1.2-alpha.3`，lockfile 保留精确 resolved/integrity；移除包不得重新进入直接依赖图，意外新增 root 或版本漂移一律 fail closed。
-- 此前的官方 `0.1.2-alpha.2` 证据仅作为 superseded 历史迁移基线保留，不再描述当前运行时、门禁或发布状态。
-- 原生接入 Session Controller 的长历史 `loadThrough`、轮次导航与 `turnOutline` projection、附件队列缩略图、手动断线重连、Schedule catalog，以及 Gateway/Remotes stream 能力。
-- 关键 alpha.3 capability artifacts 同时校验精确 SHA-256 和预期语义片段，避免“版本号相同但运行能力漂移”被误判为兼容。
-- Session Experience 不再依赖已退休的 `@deepseek-ai/dsh-client-runtime`；append surface 只接受明确的 user/assistant/tool result 事件类型。
-- 自研 Project/Team、canonical project 隔离、任务/租约/验收账本、路由回执、恢复和证据仍是唯一权威数据面；官方 experimental Team 不接管，也不进行状态双写。
+## 启动与认证
 
-## Agent Teams 任务、租约与恢复修复
+- 完整保留官方运行时输出的 loopback `/?token=...` 地址，并支持 URL 被 stdout/stderr 分割到多个数据块时继续识别。
+- 认证 token 只用于本机工作台首次交换 cookie；状态详情、自检记录和日志输出只显示 origin 或脱敏值，不把 bearer 写入诊断。
+- Runtime readiness 只接受有效启动响应；packaged self-test 进一步验证完整认证链：token 请求必须返回 303、响应必须提供精确 authority 的认证 Cookie，携带该 Cookie 访问 clean `/` 还必须得到 2xx。401、404、5xx、错误 Cookie 或未认证的 clean 根地址均不会被误判为已启动。
+- 主进程 RPC、事件 WebSocket、右侧工作区和 Mobile 请求复用官方 `persist:harness` 会话的认证 cookie；伪造的移动认证 cookie 与上游认证 `Set-Cookie` 不会穿透代理边界。
+- MobileSync WebSocket 的 401 拒绝和 101 成功握手都会剥离 `dsh-auth-*` `Set-Cookie`、保留普通 Cookie。401 不会触发握手重放；认证只会单飞刷新并供后续新连接使用。
 
-- `leaseEpoch=0` 不再被 UI 当作缺失值；任务认领、提交、复核和释放继续精确绑定 claimId、leaseEpoch 与当前 revision。
-- 修复显式 Stop 与迟到 submission 的竞态：暂停先于 replay 生效，迟到结果不能越过 pause epoch，停止后的任务可安全回到 pending。
-- 强制成员退休会清理活动 claim、追加释放账本并恢复可认领任务，不再留下僵尸租约或长期阻塞。
-- Root 的破坏性项目任务命令（含 `release`）统一使用 revision/CAS 和持久 request receipt；no-op replay、retired target replay、state-only 伪造及 stale revision 均有明确拒绝或幂等语义。
-- 外部 effect 状态变化会推进 revision；`outcome_unknown` 仍须精确 Host 授权，不能因重试、恢复或 UI 重放而绕过。
-- 顶层协作会话的排队启动状态写入 schema v13 waiter/outbox；Host wake scheduler 可在重启后恢复未完成投递，已确认投递不会重复创建。
-- 顶层子会话启动前执行精确 workspace 预检，并把已验证的工作目录持久传递给子进程；错误目录或不可用 workspace 直接失败。
-- 新增完整使用缺陷审计与 OCC 回归，覆盖自动路由、计划、任务板、Stop、恢复、会话启动和跨重启场景。
+## 插件兼容
 
-## Mobile 导航、设置与附件体验
+- Computer Use 改用 alpha.3 的 `settingsCtx.settings.installSection(...)`，移除已删除的 `dsh-settings` 命名辅助函数。
+- Browser Tools 改用 `ctx.remote.skills` 和新版 RpcResult，移除退休的 `connection.api.skills`。
+- 所有随包 Web 客户端 manifest 清理退休的 `dsh-client-runtime` / `dsh-client-ui-slots` 注入，并由负向回归阻止旧 API 回流。
 
-- Android 与 iOS 共享资源继续保持字节一致；四域导航固定为“对话 / 代理团队 / 定时任务 / 我的”，并优先绑定权威 Agent Teams 画布和正式任务视图。
-- “我的”直接复用官方 Settings 页面，不再创建重复占位表面；设置页挂载、异步打开、返回、页面隔离和加载/失败状态均按语义控件处理。
-- 展开项目不会误关侧栏或抢占输入框焦点；对话详情状态滞后时，系统返回键可依据可见 composer 恢复正确层级。
-- 附件图片预览按结构识别为全屏 lightbox，不再套用通用 bottom-sheet 几何；图片保持 viewport 内完整缩放，48px 关闭按钮可触摸，系统返回优先关闭预览且不依赖中英文按钮文本。
-- 原生输入、附件选择/上传和 tool-result 图片交付继续接受有界数据与明确 MIME/来源，敏感输入及权限边界不变。
+## Agent Teams 与跨项目会话
 
-## 定时任务实现收敛
+- Host 已持久化但尚未来得及入队的 `queued` 会话操作，会在冷启动后的 exact project/workspace 绑定恢复时重新进入原队列；复用原 operation、session 和 prompt identity，不新建第二个顶层会话，也不重复发送初始化提示。
+- 同一 operation 的启动、观察与重试串行化。`prompt_dispatched` 的 `outcome_unknown` 由 Host 自动合并 `session/control` 和 `session/follow` 中绑定 exact requestId 的证据：已投递直接转为 `ready`，精确未投递才进入可安全失败/重试路径；证据不足时后台只观察并退避，不盲目再次投递。
+- 用户 Stop 会先围栏并取消该 root 的顶层项目会话启动与 admission，即使还没有私有 Agent Team；团队暂停和子成员 drain 仍按原 pause epoch/lease 规则处理。
+- 项目任务 wake 在 Host 重启时检查 exact `wakeRef`。只有发现 exact inbox/session message，或能够证明已检查完整 session history 与两个 inbox 队列且确实不存在时，才会消除未知投递；证据不完整时保持 `outcome_unknown`，不盲目重复唤醒。
+- 普通用户消息或解除暂停不会凭空创建 wake waiter；只有 `claim_next` 的 `temporarily_empty` 才建立可恢复等待。
+- Root recovery 会在重启与后续用户活动后自动续跑同一 durable recovery，并只在 exact Host 证据证明未投递或确定可安全重试时进行有界自动重试；revision/CAS 与原 operation/session/prompt identity 继续防止并发双发。页面只收到不透明、绑定 exact project/actor/action/revision 的 Host capability；takeover 仍要求协调者权限、已审计请求和已迁移任务所有权。
+- 该自动驾驶边界只适用于 Host 能精确证明的会话启动与 root recovery。任意外部副作用若缺少精确持久证据，仍保留原安全门，不会被推断为成功或自动重放。
 
-- 桌面启动时删除已退休的 `dsh-desktop-schedules` profile 副本和 patch 项，只保留一个官方 `@deepseek-ai/dsh-schedule` 入口。
-- 清理过程保持原有第三方 patch 行、可重复执行，并把官方 replacement 状态显式返回给 Host。
-- 既有 session-local schedule 工具合同继续可观察；普通创建、删除、列举和到期交付不因 UI 实现收敛而改变。
+## 生命周期、重启与 Attention
 
-## 发布前门禁
+- Graceful retirement、force drain、follow-up 和恢复启动使用统一的有界 deadline/Abort。deadline 只释放调用方和串行队列；由于底层 SDK drain 不能接收 AbortSignal，超时不会被当成成功，成员保持 `failed`、`shutdownUnconfirmed`、`stopUnconfirmed`，原 claim/lease fence 不被清除。
+- Host 重启遇到持有 `in_progress` 的旧 worker 时，worker 会进入 failed；任务保留原 claimId、leaseEpoch 与中断证据，等待显式 retry/replace，不自动执行第二次。
+- 崩溃时处于 `closing` 的团队在缺少 Host drain/进程边界证明时继续保持 `closing` 与 `closure_incomplete` / `unconfirmed_shutdown`。显式 force shutdown 只有在真实 drain 成功后才会 retire worker、取消未完成任务并关闭团队。
+- `submitted` 任务现在计入 submitted、acceptance-required 和 Attention 统计，直到 root 独立验收。旧 `failed_delivery` 也不会因后来一条无关消息成功而消失；当前没有可证明同一 payload 重试的持久 lineage，因此告警保守保留。
 
-正式发布必须在干净、已提交的精确 source revision 上重新完成：
+## 界面边界
 
-- 全仓 `npm run verify` 与 `npm run verify:release`；
-- 官方 alpha.3 dependency、capability artifact、patch composition、remote seam 和 hermetic acceptance；
-- Agent Teams / Project 的任务、OCC、恢复、Stop、会话启动和 UI 契约；
-- Android JVM 单元测试、iPhone/iPad 模拟器验证及 Android/iOS 共享资源一致性；
-- `git diff --check`、版本身份、安全声明和发布合同。
+- 删除桌面外壳中与官方侧栏入口重叠的第二个“手机同步”按钮，保留唯一入口、连接状态圆点、键盘焦点与对话框无障碍语义。
+- v1.0.57 未包含 Agent Teams UI 重设计；现有卡片界面、功能与权限不变，仅补充恢复动作所需的数据接线。
 
-正式制品仍只能由仓库唯一的 resumable publisher 从精确候选提交触发 GitHub Actions 云构建。发布器负责不可变 `v1.0.56` Tag、Windows/macOS/Linux 制品、签名 Android、签名生产组件、精确 18 项资产清单、GitHub→CNB 云到云镜像，并在两端验证完成后最后提升三个 stable feed；不得用本地打包或手工上传绕过任一阶段。
+## 发布前门禁与待验证项
+
+当前文档描述候选源码和已经落入代码的安全语义，不代表 v1.0.57 已发布。正式发布前仍必须在干净、已提交的精确 revision 上完成：
+
+- 全仓 `npm run verify`、`npm run verify:release` 与 `git diff --check`；
+- Runtime URL/session-auth、Agent Teams Host launch、Project wake/recovery、生命周期/Attention 的最终定向测试；
+- packaged self-test、版本/安全合同、Android 与 iPhone/iPad 模拟器门禁；
+- 发布器的云端 Windows/macOS/Linux 构建、签名 Android、签名生产组件、精确 18 项资产、GitHub→CNB 云镜像及最后的三个 stable feed。
+
+正式制品只能由仓库唯一的 resumable publisher 创建新的不可变 `v1.0.57` Tag。不得手工上传、移动 Tag、覆盖 v1.0.56 资产，或在双云验证完成前提升 stable feed。
 
 ## 版本身份
 
-- 桌面根包、lockfile 和 14 个随包插件：`1.0.56`
-- Android：`versionName=1.0.56`、`versionCode=1005600`
-- iOS/iPadOS 源码：`MARKETING_VERSION=1.0.56`、build `10056`
-- 正式不可变 Tag：`v1.0.56`
-- 已发布 `v1.0.55` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变
+- 桌面根包、lockfile 和 15 个自有插件：`1.0.57`
+- Android：`versionName=1.0.57`、`versionCode=1005700`
+- iOS/iPadOS：`MARKETING_VERSION=1.0.57`、build `10057`
+- 计划中的正式不可变 Tag：`v1.0.57`
+- 已发布 `v1.0.56` 的 Tag、18 项资产、签名 APK、组件与 stable feed 保持不可变
 
-## 获取更新
+## 发布完成后获取更新
 
-### Windows
+以下链接只有在 publisher 完成并核对不可变资产后才代表 v1.0.57 正式版本：
 
-打开 Harness Desktop 设置中的更新中心，点击“立即检查”，阅读更新说明后明确选择下载和安装。也可以从 GitHub Release 下载安装版或便携版。
-
-### Android
-
-下载 `Harness-Mobile-1.0.56-android-universal.apk` 及其 `.sha256`，核对摘要后由用户手动安装。若 Android 提示签名冲突，请不要强行覆盖来源不明的旧包。
-
-### macOS 与 iPhone/iPad
-
-macOS 提供 Intel 和 Apple Silicon 的 DMG/ZIP 预览包，当前仍采用明确无 Developer ID/公证契约并可能显示 Gatekeeper 提示。iPhone/iPad 不发布未签名 IPA，继续通过 Safari 工作台和“添加到主屏幕”使用。
-
-## 下载与完整性
-
-- GitHub Release：[v1.0.56](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.56)
+- GitHub Release：[v1.0.57](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.57)
 - 永久最新版入口：[GitHub Releases / latest](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)
-- 桌面摘要：[SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.56/SHA256SUMS.txt)
-- 组件摘要：[COMPONENT-SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.56/COMPONENT-SHA256SUMS.txt)
+- 桌面摘要：[SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.57/SHA256SUMS.txt)
+- 组件摘要：[COMPONENT-SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.57/COMPONENT-SHA256SUMS.txt)
 
-如果 GitHub 下载受限，可把同一文件名中的下载前缀换为 `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.56/`。GitHub 与 CNB 文件应具有相同大小和 SHA-256；不一致时不要运行该文件。
+若 GitHub 下载受限，可把同一文件名的下载前缀替换为 `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.57/`。GitHub 与 CNB 文件的大小和 SHA-256 应一致；不一致时不要运行。

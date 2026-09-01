@@ -10,6 +10,7 @@ const { Readable } = require('node:stream')
 const hostFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
 const clientFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'client.js')
 const launchFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-session-launch.js')
+const projectTaskStoreFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-store.js')
 
 function sliceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker)
@@ -128,7 +129,7 @@ test('real top-level project sessions use a separate confirmed Host launch plane
   assert.match(host, /collaboration\.reserveRootSeat\(execution/u)
   assert.match(launch, /reserveAdoption\(execution, \{ canonicalProjectKey:[\s\S]*batchRef: batch\.batchRef, slotRef: slot\.slotRef, operationRef: slot\.operationRef/u)
   assert.match(host, /args\.action === "adopt_slot"[\s\S]*new Set\(\["slot_ref"\]\)[\s\S]*redeemAdoption\(execution[\s\S]*collaboration\.adoptRootSeat\(execution/u)
-  assert.match(host, /args\.action==="recover_root"[\s\S]*requireDirectHumanRoot\(ctx,execution\)[\s\S]*rootFailureEvidence[\s\S]*prepareRootRecovery[\s\S]*reserveRootRecovery[\s\S]*continueProjectRootRecovery/u)
+  assert.match(host, /args\.action==="recover_root"[\s\S]*requireDirectHumanRoot\(ctx,execution\)[\s\S]*rootFailureEvidence[\s\S]*prepareRootRecovery[\s\S]*reservePreparedProjectRootRecovery[\s\S]*continueProjectRootRecovery/u)
   assert.match(host, /new ProjectCollaborationService\(\{ store, actorResolver, earlyResolutionAuthorizer, rootFailureResolver \}\)/u)
   assert.match(launch, /createHmac\("sha256", callerSalt\)[\s\S]*agent-teams-caller-root-v1/u)
   assert.doesNotMatch(host, /deriveCapability\("session-launch"|slot_actor_ref/u)
@@ -355,10 +356,51 @@ test('project collaboration model projections exclude raw core sentinels and ide
   assert.ok(bounded.tasks.every(task => [...task.title].length <= 500 && Buffer.byteLength(task.title, 'utf8') <= 2 * 1024 && Buffer.byteLength(JSON.stringify(task.requirements), 'utf8') <= 8 * 1024))
 })
 
-test('registered direct-human root recovery route reaches Host evidence, durable takeover, launch, and ready', async () => {
+test('prepared takeover recovery advances from an exact Web projection capability through POST to ready', async () => {
   const mod=await import(`${pathToFileURL(hostFile).href}?recovery-route=${Date.now()}`),fx=await registeredProjectToolsFixture(mod,'recovery-route')
   const derive=(domain,...parts)=>createHmac('sha256',fx.projectKey).update(domain).update('\0').update(fx.projectRef).update('\0').update(JSON.stringify(parts)).digest('base64url')
-  try {const [lead,target,requester]=fx.roots;assert.equal((await fx.invoke('project_collaboration',lead,{action:'initialize',payload:{title:'Recovery'}})).ok,true);for(const [root,duty] of [[lead,'Lead'],[target,'Failed'],[requester,'Requester']])assert.equal((await fx.invoke('project_collaboration',root,{action:'update_own_seat',payload:{expected_revision:0,state:'active',duty,resource_scope:['src/recovery'],phase:'work',next_step:'continue'}})).ok,true);const blocked=await fx.invoke('project_task',lead,{action:'create',request_id:'blocked',payload:{title:'Blocked'}}),claimedBlocked=await fx.invoke('project_task',requester,{action:'claim',request_id:'claim-blocked',task_ref:blocked.task.taskRef,expected_revision:blocked.task.revision,payload:{}}),blockedState=await fx.invoke('project_task',requester,{action:'transition',request_id:'block-owned',task_ref:blocked.task.taskRef,expected_revision:claimedBlocked.task.revision,payload:{to:'blocked',blockReason:'waiting for dependency'}}),dependency=await fx.invoke('project_task',lead,{action:'create',request_id:'dependency',payload:{title:'Dependency'}}),claimed=await fx.invoke('project_task',target,{action:'claim',request_id:'claim-dependency',task_ref:dependency.task.taskRef,expected_revision:dependency.task.revision,payload:{}});await fx.invoke('project_task',lead,{action:'add_dependency',request_id:'relation',task_ref:blocked.task.taskRef,expected_revision:blockedState.task.revision,payload:{blockerTaskRef:dependency.task.taskRef}});const opened=await fx.invoke('project_collaboration',requester,{action:'create_request',request_id:'takeover',payload:{kind:'takeover',task_ref:blocked.task.taskRef,dependency_task_ref:dependency.task.taskRef,reason:'failed root',respond_by_at:Date.now()+60000}}),row=(await fx.invoke('project_collaboration',target,{action:'read_requests',payload:{limit:20}})).requests.find(value=>value.requestRef===opened.requests[0].requestRef);const released=await fx.invoke('project_collaboration',target,{action:'respond_request',payload:{request_ref:row.requestRef,expected_revision:row.revision,response:'release',resolution:'owner release'}});assert.equal(released.requests[0].state,'resolved');fx.failures.set('failure-route',{failedActorRef:`actor_${derive('dsh-agent-teams/project-root-actor/v1',target.id)}`,taskRef:dependency.task.taskRef,operationRef:'operation_failed',batchRef:'batch_failed',failureCode:'HOST_SESSION_FAILED',failureEvidence:'durable Host failure',role:'Failed',resources:['src/recovery'],task:'Continue dependency'});const recovered=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'recover-route',payload:{failure_ref:'failure-route',mode:'takeover',collaboration_request_ref:row.requestRef}});assert.equal(recovered.ok,true,JSON.stringify(recovered));assert.equal(fx.launchCalls.length,1);assert.equal(recovered.recoveries[0].state,'ready');const replay=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'recover-route',payload:{failure_ref:'failure-route',mode:'takeover',collaboration_request_ref:row.requestRef}});assert.equal(replay.recoveries[0].state,'ready');const missing=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'missing',payload:{failure_ref:'missing',mode:'takeover',collaboration_request_ref:row.requestRef}});assert.equal(missing.ok,false)}finally{await fx.cleanup()}
+  let projectTaskRuntimeForSession,ProjectTaskStore,originalReserve
+  try {
+    const [lead,target,requester]=fx.roots
+    assert.equal((await fx.invoke('project_collaboration',lead,{action:'initialize',payload:{title:'Recovery'}})).ok,true)
+    for(const [root,duty] of [[lead,'Lead'],[target,'Failed'],[requester,'Requester']]) assert.equal((await fx.invoke('project_collaboration',root,{action:'update_own_seat',payload:{expected_revision:0,state:'active',duty,resource_scope:['src/recovery'],phase:'work',next_step:'continue'}})).ok,true)
+    const blocked=await fx.invoke('project_task',lead,{action:'create',request_id:'blocked',payload:{title:'Blocked'}})
+    const claimedBlocked=await fx.invoke('project_task',requester,{action:'claim',request_id:'claim-blocked',task_ref:blocked.task.taskRef,expected_revision:blocked.task.revision,payload:{}})
+    const blockedState=await fx.invoke('project_task',requester,{action:'transition',request_id:'block-owned',task_ref:blocked.task.taskRef,expected_revision:claimedBlocked.task.revision,payload:{to:'blocked',blockReason:'waiting for dependency'}})
+    const dependency=await fx.invoke('project_task',lead,{action:'create',request_id:'dependency',payload:{title:'Dependency'}})
+    await fx.invoke('project_task',target,{action:'claim',request_id:'claim-dependency',task_ref:dependency.task.taskRef,expected_revision:dependency.task.revision,payload:{}})
+    await fx.invoke('project_task',lead,{action:'add_dependency',request_id:'relation',task_ref:blocked.task.taskRef,expected_revision:blockedState.task.revision,payload:{blockerTaskRef:dependency.task.taskRef}})
+    const opened=await fx.invoke('project_collaboration',requester,{action:'create_request',request_id:'takeover',payload:{kind:'takeover',task_ref:blocked.task.taskRef,dependency_task_ref:dependency.task.taskRef,reason:'failed root',respond_by_at:Date.now()+60000}})
+    const row=(await fx.invoke('project_collaboration',target,{action:'read_requests',payload:{limit:20}})).requests.find(value=>value.requestRef===opened.requests[0].requestRef)
+    const released=await fx.invoke('project_collaboration',target,{action:'respond_request',payload:{request_ref:row.requestRef,expected_revision:row.revision,response:'release',resolution:'owner release'}})
+    assert.equal(released.requests[0].state,'resolved')
+    fx.failures.set('failure-route',{failedActorRef:`actor_${derive('dsh-agent-teams/project-root-actor/v1',target.id)}`,taskRef:dependency.task.taskRef,operationRef:'operation_failed',batchRef:'batch_failed',failureCode:'HOST_SESSION_FAILED',failureEvidence:'durable Host failure',role:'Failed',resources:['src/recovery'],task:'Continue dependency'})
+    ;({ProjectTaskStore}=await import(pathToFileURL(projectTaskStoreFile).href)); originalReserve=ProjectTaskStore.prototype.reserveRootRecovery
+    let interrupted=false
+    ProjectTaskStore.prototype.reserveRootRecovery=function(input){ if(!interrupted){interrupted=true;throw Object.assign(new Error('simulated restart between prepare and reserve'),{code:'SIMULATED_RESTART'})} return originalReserve.call(this,input) }
+    let preparedResult
+    try { preparedResult=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'recover-route',payload:{failure_ref:'failure-route',mode:'takeover',collaboration_request_ref:row.requestRef}}) }
+    finally { ProjectTaskStore.prototype.reserveRootRecovery=originalReserve; originalReserve=undefined }
+    assert.equal(interrupted,true); assert.equal(preparedResult.ok,false)
+    const teamDocument={version:6,settings:{enabled:true,maxMembers:4,maxActiveTurns:4},teams:[]},teamStore={read:async operation=>operation(teamDocument),subscribe:()=>()=>{},snapshot:()=>teamDocument}
+    projectTaskRuntimeForSession=mod.createProjectTaskSessionRuntimeResolver(fx.ctx,fx.projectEntry)
+    mod.registerWebApi(fx.ctx,teamStore,Promise.resolve(),undefined,fx.projectEntry,fx.projectSessionLaunch,projectTaskRuntimeForSession)
+    const route=fx.routes.find(value=>value.path==='/api/agent-teams/action')
+    const projected=(await projectTaskRuntimeForSession(lead.id).state()).projectCollaboration.sections.recoveries.find(item=>item.state==='prepared'&&item.mode==='takeover')
+    assert.equal(projected.canRequestTakeover,true); assert.match(projected.recoveryCapability,/^prc1\./u)
+    const body={action:'root-recovery-continue',sessionId:lead.id,recoveryCapability:projected.recoveryCapability,recoveryAction:'takeover',expectedRevision:projected.revision,confirm:true}
+    assert.equal((await invokeWebRoute(route,{...body,recoveryAction:'retry'})).status,403)
+    const resumed=await invokeWebRoute(route,body); assert.equal(resumed.status,200,JSON.stringify(resumed.body)); assert.equal(fx.launchCalls.length,1)
+    const ready=(await projectTaskRuntimeForSession(lead.id).state()).projectCollaboration.sections.recoveries.find(item=>item.recoveryRef===projected.recoveryRef)
+    assert.equal(ready.state,'ready')
+    const stale=await invokeWebRoute(route,body); assert.equal(stale.status,409); assert.equal(stale.body.code??stale.body.error?.code,'PROJECT_ROOT_RECOVERY_CONFLICT')
+    const missing=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'missing',payload:{failure_ref:'missing',mode:'takeover',collaboration_request_ref:row.requestRef}})
+    assert.equal(missing.ok,false)
+  } finally {
+    if(originalReserve!==undefined) ProjectTaskStore.prototype.reserveRootRecovery=originalReserve
+    await projectTaskRuntimeForSession?.close?.()
+    await fx.cleanup()
+  }
 })
 
 test('retry recovery is initiated by the exact original launch owner rather than the unborn child slot', async () => {
@@ -368,6 +410,7 @@ test('retry recovery is initiated by the exact original launch owner rather than
 
 test('registered authenticated Web route enforces confirmation, header, exact root, OCC, and continues recovery', async () => {
   const mod=await import(`${pathToFileURL(hostFile).href}?recovery-web=${Date.now()}`),fx=await registeredProjectToolsFixture(mod,'recovery-web')
+  let projectTaskRuntimeForSession
   try {
     const [lead,foreign]=fx.roots
     await fx.invoke('project_collaboration',lead,{action:'initialize',payload:{title:'Web recovery'}})
@@ -375,20 +418,43 @@ test('registered authenticated Web route enforces confirmation, header, exact ro
     const reserved=await mod.reserveProjectLaunchSlots(fx.projectEntry,Object.freeze({agent:lead}),{request_id:'web-retry-slot',slots:[{title:'Web child',role:'Child',resources:['src/web-recovery'],task:'Recover'}],prepared:[{slotRef:'web-retry-failure',operationRef:'web-retry-operation',adoptionCapability:'web-retry-capability'}]})
     fx.failures.set('web-retry-failure',{failedActorRef:reserved.reservations[0].slotActorRef,taskRef:reserved.reservations[0].taskRef,operationRef:'web-retry-operation',batchRef:'web-retry-batch',failureCode:'HOST_SESSION_CREATE_FAILED',failureEvidence:'Host operation definitively failed',role:'Child',resources:['src/web-recovery'],task:'Recover'})
     fx.projectSessionLaunch.retryFailedSlot=async(_execution,{slotRef})=>({state:'outcome_unknown',slots:[{slotRef,state:'outcome_unknown'}]})
+    fx.projectSessionLaunch.slotStatus=async(_execution,{slotRef})=>({state:'outcome_unknown',slots:[{slotRef,state:'outcome_unknown'}]})
     const prepared=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'web-retry-request',payload:{failure_ref:'web-retry-failure',mode:'retry'}}),recovery=prepared.recoveries[0]
     assert.equal(recovery.state,'outcome_unknown')
     fx.projectSessionLaunch.slotStatus=async(_execution,{slotRef})=>({state:'ready',slots:[{slotRef,state:'ready'}]})
     const teamDocument={version:6,settings:{enabled:true,maxMembers:4,maxActiveTurns:4},teams:[]},teamStore={read:async operation=>operation(teamDocument),subscribe:()=>()=>{},snapshot:()=>teamDocument}
-    mod.registerWebApi(fx.ctx,teamStore,Promise.resolve(),undefined,fx.projectEntry,fx.projectSessionLaunch)
+    projectTaskRuntimeForSession=mod.createProjectTaskSessionRuntimeResolver(fx.ctx,fx.projectEntry)
+    mod.registerWebApi(fx.ctx,teamStore,Promise.resolve(),undefined,fx.projectEntry,fx.projectSessionLaunch,projectTaskRuntimeForSession)
     const route=fx.routes.find(value=>value.path==='/api/agent-teams/action')
-    const body={action:'root-recovery-continue',sessionId:lead.id,recoveryRef:recovery.recoveryRef,expectedRevision:recovery.revision,confirm:true}
+    const projected=(await projectTaskRuntimeForSession(lead.id).state()).projectCollaboration.sections.recoveries.find(item=>item.state==='outcome_unknown')
+    assert.equal(projected.canRetry,true); assert.match(projected.recoveryCapability,/^prc1\./u)
+    const body={action:'root-recovery-continue',sessionId:lead.id,recoveryCapability:projected.recoveryCapability,recoveryAction:'retry',expectedRevision:recovery.revision,confirm:true}
     assert.equal((await invokeWebRoute(route,body,{header:false})).status,403)
     assert.equal((await invokeWebRoute(route,{...body,confirm:false})).status,400)
     assert.equal((await invokeWebRoute(route,{...body,sessionId:'missing-root'})).status,403)
-    assert.equal((await invokeWebRoute(route,{...body,sessionId:foreign.id})).status,400)
+    assert.equal((await invokeWebRoute(route,{...body,sessionId:foreign.id})).status,403)
+    assert.equal((await invokeWebRoute(route,{...body,recoveryAction:'takeover'})).status,403)
     const success=await invokeWebRoute(route,body); assert.equal(success.status,200,JSON.stringify(success.body)); assert.equal(success.body.ok,true)
     const stale=await invokeWebRoute(route,body); assert.equal(stale.status,409); assert.equal(stale.body.code??stale.body.error?.code,'PROJECT_ROOT_RECOVERY_CONFLICT')
-  } finally { await fx.cleanup() }
+
+    const secondReserved=await mod.reserveProjectLaunchSlots(fx.projectEntry,Object.freeze({agent:lead}),{request_id:'web-prepared-slot',slots:[{title:'Interrupted child',role:'Child',resources:['src/web-recovery'],task:'Recover after restart'}],prepared:[{slotRef:'web-prepared-failure',operationRef:'web-prepared-operation',adoptionCapability:'web-prepared-capability'}]})
+    fx.failures.set('web-prepared-failure',{failedActorRef:secondReserved.reservations[0].slotActorRef,taskRef:secondReserved.reservations[0].taskRef,operationRef:'web-prepared-operation',batchRef:'web-prepared-batch',failureCode:'HOST_SESSION_CREATE_FAILED',failureEvidence:'Host operation definitively failed before reservation',role:'Child',resources:['src/web-recovery'],task:'Recover after restart'})
+    const {ProjectTaskStore}=await import(pathToFileURL(projectTaskStoreFile).href),originalReserve=ProjectTaskStore.prototype.reserveRootRecovery
+    let interrupted=false
+    ProjectTaskStore.prototype.reserveRootRecovery=function(input){ if(!interrupted){interrupted=true;throw Object.assign(new Error('simulated restart between prepare and reserve'),{code:'SIMULATED_RESTART'})} return originalReserve.call(this,input) }
+    let interruptedResult
+    try { interruptedResult=await fx.invoke('project_collaboration',lead,{action:'recover_root',request_id:'web-prepared-request',payload:{failure_ref:'web-prepared-failure',mode:'retry'}}) }
+    finally { ProjectTaskStore.prototype.reserveRootRecovery=originalReserve }
+    assert.equal(interrupted,true); assert.equal(interruptedResult.ok,false)
+    const preparedProjection=(await projectTaskRuntimeForSession(lead.id).state()).projectCollaboration.sections.recoveries.find(item=>item.state==='prepared')
+    assert.equal(preparedProjection.canRetry,true); assert.match(preparedProjection.recoveryCapability,/^prc1\./u)
+    let retriedFailureRef
+    fx.projectSessionLaunch.retryFailedSlot=async(_execution,{slotRef})=>{retriedFailureRef=slotRef;return {state:'ready',slots:[{slotRef,state:'ready'}]}}
+    const resumed=await invokeWebRoute(route,{action:'root-recovery-continue',sessionId:lead.id,recoveryCapability:preparedProjection.recoveryCapability,recoveryAction:'retry',expectedRevision:preparedProjection.revision,confirm:true})
+    assert.equal(resumed.status,200,JSON.stringify(resumed.body)); assert.equal(retriedFailureRef,'web-prepared-failure')
+    const readyProjection=(await projectTaskRuntimeForSession(lead.id).state()).projectCollaboration.sections.recoveries.find(item=>item.recoveryRef===preparedProjection.recoveryRef)
+    assert.equal(readyProjection.state,'ready')
+  } finally { await projectTaskRuntimeForSession?.close?.(); await fx.cleanup() }
 })
 
 test('explicit blocker contract leaves only the EP02 head claimable in an EP02 to EP05 chain', async () => {
@@ -554,7 +620,9 @@ test('failed-member recovery tool and trusted Host action enforce direct-human r
   const route = sliceBetween(host, 'path: "/api/agent-teams/action"', 'function registerProjectEntryApi')
   assert.match(route, /body\.confirm !== true/u)
   assert.match(route, /ctx\.agents\.roots\(\)\.includes\(lead\)/u)
-  assert.match(route, /root-recovery-continue[\s\S]*body\.confirm !== true[\s\S]*ctx\.agents\.roots\(\)\.includes\(lead\)[\s\S]*recoveryRef[\s\S]*expectedRevision[\s\S]*continueProjectRootRecovery/u)
+  assert.match(route, /root-recovery-continue[\s\S]*body\.confirm !== true[\s\S]*ctx\.agents\.roots\(\)\.includes\(lead\)[\s\S]*recoveryCapability[\s\S]*recoveryAction[\s\S]*resolveRootRecoveryCapability[\s\S]*continueProjectRootRecovery/u)
+  assert.match(route, /current\.state==="prepared"[\s\S]*reservePreparedProjectRootRecovery/u)
+  assert.match(host, /async function reservePreparedProjectRootRecovery[\s\S]*prepareStart[\s\S]*prepareAdoptions[\s\S]*reserveRootRecovery/u)
   assert.match(route, /member-retry/u)
   assert.match(route, /member-replace/u)
   assert.match(route, /member-reconcile/u)

@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
+const net = require('node:net')
 const { mkdtemp, mkdir, readFile, rm, writeFile } = require('node:fs/promises')
 const { randomBytes, createHash, createHmac } = require('node:crypto')
 const { CALLER_SALT_ENV, createAgentTeamsSessionLaunchService, projectKeyForWorkspace } = require('../electron/bridge/agent-teams-session-launch-service.cjs')
@@ -89,6 +90,50 @@ test('idempotency, session.list reconciliation shape, and queued cancellation re
     assert.equal((await value.service.handleRequest({ action: 'retry', ...envelope })).state, 'ready')
     assert.equal(attempts, 2)
     assert.equal((await value.service.handleRequest(input)).state, 'ready')
+  } finally { await cleanup(value) }
+})
+
+test('cold-start queued launch resumes after exact project rebind and reconciliation without duplicating the session or prompt', async () => {
+  let value = await fixture()
+  try {
+    const canonicalProjectKey = projectKeyForWorkspace(value.projects.a)
+    const binding = await value.resolve('a', 'queued-root')
+    const input = value.launch(binding, 'a1', 'queued-root')
+    assert.equal((await value.service.handleRequest(input)).state, 'ready')
+    const stored = JSON.parse(await readFile(value.stateFile, 'utf8'))
+    const expectedSessionId = stored.operations[0].sessionId
+    await value.service.close()
+    Object.assign(stored.operations[0], { state: 'queued', phase: 'reserved', revision: 1, updatedAt: Date.now() })
+    for (const field of ['workspaceId', 'renameSeq', 'promptRequestId', 'reconciliation', 'errorCode']) delete stored.operations[0][field]
+    await writeFile(value.stateFile, `${JSON.stringify(stored)}\n`, 'utf8')
+
+    const sessions = new Set(), created = [], prompted = []
+    const rpc = async (method, payload) => {
+      const request = requestOf(payload)
+      if (method === 'workspace/create') return { workspace: { workspaceId: 'wa', path: value.projects.a } }
+      if (method === 'session/list') return { items: [...sessions].map(sessionId => ({ sessionId })) }
+      if (method === 'session/create') { created.push(request.sessionId); sessions.add(request.sessionId); return { sessionId: request.sessionId } }
+      if (method === 'session/rename') return { title: request.title, seq: 1 }
+      if (method === 'session/prompt') { prompted.push({ requestId: request.requestId, sessionId: request.sessionId }); return { accepted: true } }
+      throw new Error(method)
+    }
+    value.service = createAgentTeamsSessionLaunchService({ stateFile: value.stateFile, token: value.token, callRuntimeRpc: rpc })
+    await value.service.start()
+    assert.deepEqual({ queued: value.service.diagnostics().queued, running: value.service.diagnostics().running, records: value.service.diagnostics().records }, { queued: 0, running: 0, records: 1 }, 'redacted persisted bindings wait for an authenticated exact-path rebind')
+    const rebound = await value.service.handleRequest({ action: 'resolveProject', token: value.auth, canonicalProjectKey, workspacePath: value.projects.a, callerRootRef: rootRef('queued-root') })
+    assert.deepEqual({ queued: value.service.diagnostics().queued, running: value.service.diagnostics().running }, { queued: 0, running: 0 }, 'binding alone has no launch side effect, so a stop path can still cancel the queued operation')
+    const envelope = { token: value.auth, canonicalProjectKey, callerRootRef: rootRef('queued-root'), projectTicket: rebound.projectTicket, projectRef: rebound.projectRef, boardRef: rebound.boardRef, operationRef: input.operationRef }
+    const recovered = await value.service.handleRequest({ action: 'reconcile', ...envelope })
+    assert.equal(recovered.state, 'ready')
+    assert.deepEqual(created, [expectedSessionId])
+    assert.deepEqual(prompted.map(row => row.sessionId), [expectedSessionId])
+    assert.equal((await value.service.handleRequest({ action: 'retry', ...envelope })).state, 'ready')
+    assert.equal((await value.service.handleRequest(input)).state, 'ready')
+    assert.deepEqual(created, [expectedSessionId], 'retry and launch replay reuse the exact recovered session')
+    assert.equal(prompted.length, 1, 'retry and launch replay never redeliver the initialization prompt')
+    const recoveredState = JSON.parse(await readFile(value.stateFile, 'utf8'))
+    assert.equal(recoveredState.operations[0].sessionId, expectedSessionId)
+    assert.equal(recoveredState.operations[0].state, 'ready')
   } finally { await cleanup(value) }
 })
 
@@ -211,7 +256,7 @@ test('rename failure resumes the exact persisted session phase across Host resta
 test('prompt uncertainty requires exact OCC reconciliation and remains observer-only until direct decision', async () => {
   let value,prompts=0,lists=0; const sessions=new Set()
   const rpc=async(method,payload)=>{if(method==='workspace/create')return {workspace:{workspaceId:'wa',path:value.projects.a}};if(method==='session/list'){lists+=1;return {items:[...sessions].map(sessionId=>({sessionId}))}}if(method==='session/create'){sessions.add(requestOf(payload).sessionId);return {sessionId:requestOf(payload).sessionId}}if(method==='session/rename')return {title:requestOf(payload).title,seq:1};if(method==='session/prompt'){prompts+=1;const error=new Error('prompt transport uncertain');error.definitive=true;error.code='HOST_PROMPT_FAILED';throw error};throw new Error(method)}
-  const inspectRuntimePrompt=async({requestId,decision})=>({delivered:decision==='delivered',source:'session/follow',rpcId:requestId})
+  const inspectRuntimePrompt=async({requestId,decision})=>decision===undefined?null:{delivered:decision==='delivered',source:'session/follow',rpcId:requestId}
   value=await fixture({ inspectRuntimePrompt },rpc)
   try {
     const key=projectKeyForWorkspace(value.projects.a),binding=await value.resolve('a','prompt-root'),input=value.launch(binding,'a3','prompt-root'),unknown=await value.service.handleRequest(input);assert.equal(unknown.state,'outcome_unknown');assert.equal(unknown.revision,1);assert.equal(prompts,1)
@@ -227,6 +272,287 @@ test('prompt uncertainty requires exact OCC reconciliation and remains observer-
     const foreign=await value.service.handleRequest({action:'resolveProject',token:value.auth,canonicalProjectKey:key,workspacePath:value.projects.a,callerRootRef:rootRef('foreign-root')});await assert.rejects(value.service.handleRequest({...envelope,action:'resolveUnknown',callerRootRef:rootRef('foreign-root'),projectTicket:foreign.projectTicket,projectRef:foreign.projectRef,boardRef:foreign.boardRef,requestId:'foreign',decision:'delivered',expectedRevision:1}),error=>error.code==='HOST_SESSION_LAUNCH_PROJECT_MISMATCH')
     const second=value.launch(binding,'a4','prompt-root'),unknown2=await value.service.handleRequest(second);assert.equal(unknown2.state,'outcome_unknown');const notDelivered=await value.service.handleRequest({...envelope,operationRef:second.operationRef,action:'resolveUnknown',requestId:'resolve-not-delivered',decision:'not_delivered',expectedRevision:1});assert.equal(notDelivered.state,'failed');assert.equal(notDelivered.errorCode,'HOST_SESSION_PROMPT_NOT_DELIVERED');assert.equal(prompts,2);assert.ok(lists>=3)
   } finally { await cleanup(value) }
+})
+
+test('observer reconciliation derives delivered, not-delivered, and unavailable prompt evidence without blind retry', async () => {
+  let value, prompts = 0, automaticEvidence = null
+  const sessions = new Set()
+  const rpc = async (method, payload) => {
+    if (method === 'workspace/create') return { workspace: { workspaceId: 'wa', path: value.projects.a } }
+    if (method === 'session/list') return { items: [...sessions].map(sessionId => ({ sessionId })) }
+    if (method === 'session/create') { sessions.add(requestOf(payload).sessionId); return { sessionId: requestOf(payload).sessionId } }
+    if (method === 'session/rename') return { title: requestOf(payload).title, seq: 1 }
+    if (method === 'session/prompt') { prompts += 1; const error = new Error('prompt transport uncertain'); error.code = 'HOST_PROMPT_FAILED'; error.definitive = true; throw error }
+    throw new Error(method)
+  }
+  const inspectRuntimePrompt = async ({ requestId, decision }) => {
+    if (decision !== undefined || automaticEvidence === null) return null
+    return { delivered: automaticEvidence, source: automaticEvidence ? 'session/control' : 'session/follow', rpcId: requestId }
+  }
+  value = await fixture({ inspectRuntimePrompt }, rpc)
+  try {
+    const canonicalProjectKey = projectKeyForWorkspace(value.projects.a), binding = await value.resolve('a', 'automatic-evidence-root')
+    const envelope = operationRef => ({ token: value.auth, canonicalProjectKey, callerRootRef: rootRef('automatic-evidence-root'), projectTicket: binding.projectTicket, projectRef: binding.projectRef, boardRef: binding.boardRef, operationRef })
+
+    const deliveredInput = value.launch(binding, 'a7', 'automatic-evidence-root')
+    assert.equal((await value.service.handleRequest(deliveredInput)).state, 'outcome_unknown')
+    automaticEvidence = true
+    const delivered = await value.service.handleRequest({ action: 'reconcile', ...envelope(deliveredInput.operationRef) })
+    assert.deepEqual({ state: delivered.state, revision: delivered.revision }, { state: 'ready', revision: 2 })
+
+    const notDeliveredInput = value.launch(binding, 'a8', 'automatic-evidence-root')
+    automaticEvidence = null
+    assert.equal((await value.service.handleRequest(notDeliveredInput)).state, 'outcome_unknown')
+    automaticEvidence = false
+    const notDelivered = await value.service.handleRequest({ action: 'reconcile', ...envelope(notDeliveredInput.operationRef) })
+    assert.deepEqual({ state: notDelivered.state, revision: notDelivered.revision, errorCode: notDelivered.errorCode }, { state: 'failed', revision: 2, errorCode: 'HOST_SESSION_PROMPT_NOT_DELIVERED' })
+
+    const unavailableInput = value.launch(binding, 'a9', 'automatic-evidence-root')
+    automaticEvidence = null
+    assert.equal((await value.service.handleRequest(unavailableInput)).state, 'outcome_unknown')
+    const unavailable = await value.service.handleRequest({ action: 'reconcile', ...envelope(unavailableInput.operationRef) })
+    assert.deepEqual({ state: unavailable.state, revision: unavailable.revision }, { state: 'outcome_unknown', revision: 1 })
+    await assert.rejects(value.service.handleRequest({ action: 'retry', ...envelope(unavailableInput.operationRef) }), error => error.code === 'HOST_SESSION_LAUNCH_OUTCOME_UNKNOWN')
+    automaticEvidence = true
+    assert.equal((await value.service.handleRequest({ action: 'reconcile', ...envelope(unavailableInput.operationRef) })).state, 'ready')
+    assert.equal(prompts, 3, 'observer reconciliation never dispatches or retries a prompt effect')
+  } finally { await cleanup(value) }
+})
+
+test('opposite reconciliation decisions with one expected revision are serialized and only one may commit', async () => {
+  let value, releaseInspection, inspections = 0
+  const inspectionGate = new Promise(resolve => { releaseInspection = resolve })
+  const rpc = async (method, payload) => {
+    if (method === 'workspace/create') return { workspace: { workspaceId: 'wa', path: value.projects.a } }
+    if (method === 'session/list') return { items: [] }
+    if (method === 'session/create') return { sessionId: requestOf(payload).sessionId }
+    if (method === 'session/rename') return { title: requestOf(payload).title, seq: 1 }
+    if (method === 'session/prompt') { const error = new Error('prompt transport uncertain'); error.code = 'HOST_PROMPT_FAILED'; error.definitive = true; throw error }
+    throw new Error(method)
+  }
+  const inspectRuntimePrompt = async ({ requestId, decision }) => { inspections += 1; await inspectionGate; return { delivered: decision === 'delivered', source: 'session/follow', rpcId: requestId } }
+  value = await fixture({ inspectRuntimePrompt }, rpc)
+  try {
+    const canonicalProjectKey = projectKeyForWorkspace(value.projects.a), binding = await value.resolve('a', 'occ-root'), input = value.launch(binding, 'a5', 'occ-root')
+    assert.equal((await value.service.handleRequest(input)).state, 'outcome_unknown')
+    const envelope = { action: 'resolveUnknown', token: value.auth, canonicalProjectKey, callerRootRef: rootRef('occ-root'), projectTicket: binding.projectTicket, projectRef: binding.projectRef, boardRef: binding.boardRef, operationRef: input.operationRef, expectedRevision: 1 }
+    const delivered = value.service.handleRequest({ ...envelope, requestId: 'occ-delivered', decision: 'delivered' })
+    const notDelivered = value.service.handleRequest({ ...envelope, requestId: 'occ-not-delivered', decision: 'not_delivered' })
+    await new Promise(resolve => setImmediate(resolve))
+    releaseInspection()
+    const [winner, loser] = await Promise.allSettled([delivered, notDelivered])
+    assert.equal(winner.status, 'fulfilled')
+    assert.equal(winner.value.state, 'ready')
+    assert.equal(winner.value.revision, 2)
+    assert.equal(loser.status, 'rejected')
+    assert.equal(loser.reason.code, 'HOST_SESSION_LAUNCH_CONFLICT')
+    assert.equal(inspections, 1, 'the losing stale decision never performs or commits a second evidence inspection')
+    assert.deepEqual(await value.service.handleRequest({ ...envelope, requestId: 'occ-delivered', decision: 'delivered' }), winner.value, 'the winning exact request remains an idempotent replay')
+    assert.equal(inspections, 1)
+    const stored = JSON.parse(await readFile(value.stateFile, 'utf8'))
+    assert.equal(stored.operations[0].revision, 2)
+    assert.equal(stored.operations[0].reconciliation.requestId, 'occ-delivered')
+    assert.equal(stored.operations[0].reconciliation.decision, 'delivered')
+  } finally { releaseInspection(); await cleanup(value) }
+})
+
+test('a delayed failing reconcile cannot roll back a serialized delivered prompt decision', async () => {
+  let value, blockSessionList = false, releaseList, noteListStarted, inspections = 0
+  const listGate = new Promise(resolve => { releaseList = resolve })
+  const listStarted = new Promise(resolve => { noteListStarted = resolve })
+  const rpc = async (method, payload) => {
+    if (method === 'workspace/create') return { workspace: { workspaceId: 'wa', path: value.projects.a } }
+    if (method === 'session/list') { if (blockSessionList) { noteListStarted(); await listGate; throw new Error('late session/list failure') } return { items: [] } }
+    if (method === 'session/create') return { sessionId: requestOf(payload).sessionId }
+    if (method === 'session/rename') return { title: requestOf(payload).title, seq: 1 }
+    if (method === 'session/prompt') { const error = new Error('prompt transport uncertain'); error.code = 'HOST_PROMPT_FAILED'; error.definitive = true; throw error }
+    throw new Error(method)
+  }
+  const inspectRuntimePrompt = async ({ requestId, decision }) => { inspections += 1; return decision === undefined ? null : { delivered: true, source: 'session/follow', rpcId: requestId } }
+  value = await fixture({ inspectRuntimePrompt }, rpc)
+  try {
+    const canonicalProjectKey = projectKeyForWorkspace(value.projects.a), binding = await value.resolve('a', 'reconcile-race-root'), input = value.launch(binding, 'a6', 'reconcile-race-root')
+    assert.equal((await value.service.handleRequest(input)).state, 'outcome_unknown')
+    const envelope = { token: value.auth, canonicalProjectKey, callerRootRef: rootRef('reconcile-race-root'), projectTicket: binding.projectTicket, projectRef: binding.projectRef, boardRef: binding.boardRef, operationRef: input.operationRef }
+    blockSessionList = true
+    const observing = value.service.handleRequest({ action: 'reconcile', ...envelope })
+    await listStarted
+    const resolving = value.service.handleRequest({ action: 'resolveUnknown', ...envelope, requestId: 'race-delivered', decision: 'delivered', expectedRevision: 1 })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(inspections, 1, 'the prompt decision waits behind the exact in-flight observer')
+    releaseList()
+    assert.equal((await observing).state, 'outcome_unknown')
+    const resolved = await resolving
+    assert.equal(resolved.state, 'ready')
+    assert.equal(resolved.revision, 2)
+    assert.equal(inspections, 2)
+    const stored = JSON.parse(await readFile(value.stateFile, 'utf8'))
+    assert.equal(stored.operations[0].state, 'ready')
+    assert.equal(stored.operations[0].revision, 2)
+    assert.equal(stored.operations[0].reconciliation.requestId, 'race-delivered')
+  } finally { releaseList(); await cleanup(value) }
+})
+
+test('close drains accepted launch and retry requests across the persist-to-enqueue boundary', async () => {
+  let value, creates = 0
+  value = await fixture({}, async (method, payload) => {
+    const request = requestOf(payload)
+    if (method === 'workspace/create') return { workspace: { workspaceId: 'wa', path: value.projects.a } }
+    if (method === 'session/list') return { items: [] }
+    if (method === 'session/create') { creates += 1; const error = new Error('definitive create rejection'); error.code = 'HOST_SESSION_CREATE_FAILED'; error.definitive = true; throw error }
+    if (method === 'session/rename') return { title: request.title, seq: 1 }
+    if (method === 'session/prompt') return { accepted: true }
+    throw new Error(method)
+  })
+  try {
+    const canonicalProjectKey = projectKeyForWorkspace(value.projects.a), caller = 'close-persist-root'
+    const binding = await value.resolve('a', caller), failedInput = value.launch(binding, 'a1', caller)
+    assert.equal((await value.service.handleRequest(failedInput)).state, 'failed')
+    const envelope = { token: value.auth, canonicalProjectKey, callerRootRef: rootRef(caller), projectTicket: binding.projectTicket, projectRef: binding.projectRef, boardRef: binding.boardRef }
+    const retry = value.service.handleRequest({ action: 'retry', ...envelope, operationRef: failedInput.operationRef })
+    const freshInput = value.launch(binding, 'a2', caller), fresh = value.service.handleRequest(freshInput)
+    const closing = value.service.close()
+    let timer
+    const settled = await Promise.race([
+      Promise.all([retry, fresh, closing]),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('accepted launch/retry did not settle during close')), 1_000) })
+    ]).finally(() => clearTimeout(timer))
+    assert.deepEqual(settled.slice(0, 2).map(result => result.state), ['cancelled', 'cancelled'])
+    assert.deepEqual({ queued: value.service.diagnostics().queued, running: value.service.diagnostics().running, lanes: value.service.diagnostics().activeProjectLanes }, { queued: 0, running: 0, lanes: 0 })
+    assert.equal(creates, 1, 'close-fenced retry and launch never reach a new Host effect')
+    const stored = JSON.parse(await readFile(value.stateFile, 'utf8'))
+    for (const operationRef of [failedInput.operationRef, freshInput.operationRef]) {
+      const operation = stored.operations.find(row => row.operationRef === operationRef)
+      assert.deepEqual({ state: operation.state, phase: operation.phase }, { state: 'cancelled', phase: 'cancelled' })
+    }
+  } finally { await cleanup(value) }
+})
+
+test('every concurrent close caller receives and waits for the same drain promise', async () => {
+  let value, releaseWorkspace, noteWorkspaceStarted
+  const workspaceStarted = new Promise(resolve => { noteWorkspaceStarted = resolve })
+  value = await fixture({}, async (method, payload) => {
+    const request = requestOf(payload)
+    if (method === 'workspace/create') { noteWorkspaceStarted(); await new Promise(resolve => { releaseWorkspace = resolve }); return { workspace: { workspaceId: 'wa', path: value.projects.a } } }
+    if (method === 'session/list') return { items: [] }
+    if (method === 'session/create') return { sessionId: request.sessionId }
+    if (method === 'session/rename') return { title: request.title, seq: 1 }
+    if (method === 'session/prompt') return { accepted: true }
+    throw new Error(method)
+  })
+  try {
+    const binding = await value.resolve('a', 'shared-close-root')
+    const launching = value.service.handleRequest(value.launch(binding, 'a1', 'shared-close-root'))
+    await workspaceStarted
+    const first = value.service.close(), second = value.service.close()
+    assert.equal(first, second)
+    let secondDone = false
+    void second.then(() => { secondDone = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(secondDone, false, 'no concurrent close caller may return before the accepted launch drains')
+    releaseWorkspace(); releaseWorkspace = undefined
+    assert.equal((await launching).state, 'ready')
+    await Promise.all([first, second])
+    assert.equal(secondDone, true)
+  } finally { releaseWorkspace?.(); await cleanup(value) }
+})
+
+test('close destroys an accepted half-frame socket instead of waiting forever for a newline', async () => {
+  const value = await fixture({ socketIdleTimeoutMs: 60_000 })
+  let socket
+  try {
+    socket = net.createConnection(value.service.endpoint)
+    await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject) })
+    const disconnected = new Promise(resolve => socket.once('close', resolve))
+    socket.write('{')
+    for (let attempt = 0; attempt < 100 && value.service.diagnostics().acceptedSockets !== 1; attempt += 1) await new Promise(resolve => setTimeout(resolve, 5))
+    assert.equal(value.service.diagnostics().acceptedSockets, 1, 'the real named-pipe connection reached the Host frame reader')
+    const closing = value.service.close()
+    let timer
+    await Promise.race([
+      closing,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('half-frame socket blocked Host close')), 1_000) })
+    ]).finally(() => clearTimeout(timer))
+    await disconnected
+    assert.equal(value.service.diagnostics().acceptedSockets, 0)
+  } finally { socket?.destroy(); await cleanup(value) }
+})
+
+test('an accepted incomplete frame is evicted by the bounded socket idle timeout', async () => {
+  const value = await fixture({ socketIdleTimeoutMs: 25 })
+  let socket
+  try {
+    socket = net.createConnection(value.service.endpoint)
+    await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject) })
+    const disconnected = new Promise(resolve => socket.once('close', resolve))
+    socket.write('{')
+    let timer
+    await Promise.race([
+      disconnected,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('incomplete frame outlived the idle timeout')), 1_000) })
+    ]).finally(() => clearTimeout(timer))
+    for (let attempt = 0; attempt < 100 && value.service.diagnostics().acceptedSockets !== 0; attempt += 1) await new Promise(resolve => setTimeout(resolve, 5))
+    assert.equal(value.service.diagnostics().acceptedSockets, 0)
+  } finally { socket?.destroy(); await cleanup(value) }
+})
+
+test('the live operation slot index rejects a foreign-root reservation before terminal compaction', async () => {
+  let value, releaseWorkspace, noteWorkspaceStarted
+  const workspaceStarted = new Promise(resolve => { noteWorkspaceStarted = resolve })
+  value = await fixture({}, async (method, payload) => {
+    const request = requestOf(payload)
+    if (method === 'workspace/create') { noteWorkspaceStarted(); await new Promise(resolve => { releaseWorkspace = resolve }); return { workspace: { workspaceId: 'wa', path: value.projects.a } } }
+    if (method === 'session/list') return { items: [] }
+    if (method === 'session/create') return { sessionId: request.sessionId }
+    if (method === 'session/rename') return { title: request.title, seq: 1 }
+    if (method === 'session/prompt') return { accepted: true }
+    throw new Error(method)
+  })
+  try {
+    const canonicalProjectKey = projectKeyForWorkspace(value.projects.a)
+    const parent = await value.resolve('a', 'slot-parent'), foreign = await value.resolve('a', 'slot-foreign')
+    const input = value.launch(parent, 'a1', 'slot-parent'), launching = value.service.handleRequest(input)
+    await workspaceStarted
+    await assert.rejects(value.service.handleRequest({ action: 'reserveAdoption', token: value.auth, canonicalProjectKey, callerRootRef: rootRef('slot-foreign'), projectTicket: foreign.projectTicket, projectRef: foreign.projectRef, boardRef: foreign.boardRef, batchRef: input.batchRef, slotRef: input.slotRef, operationRef: input.operationRef }), error => error.code === 'HOST_SESSION_ADOPTION_FORBIDDEN')
+    releaseWorkspace(); releaseWorkspace = undefined
+    assert.equal((await launching).state, 'ready')
+  } finally { releaseWorkspace?.(); await cleanup(value) }
+})
+
+test('close waits for a gated prompt reconciliation and no closed instance persists afterward', async () => {
+  let value, releaseInspection, noteInspectionStarted
+  const inspectionGate = new Promise(resolve => { releaseInspection = resolve })
+  const inspectionStarted = new Promise(resolve => { noteInspectionStarted = resolve })
+  const rpc = async (method, payload) => {
+    if (method === 'workspace/create') return { workspace: { workspaceId: 'wa', path: value.projects.a } }
+    if (method === 'session/list') return { items: [] }
+    if (method === 'session/create') return { sessionId: requestOf(payload).sessionId }
+    if (method === 'session/rename') return { title: requestOf(payload).title, seq: 1 }
+    if (method === 'session/prompt') { const error = new Error('prompt transport uncertain'); error.code = 'HOST_PROMPT_FAILED'; error.definitive = true; throw error }
+    throw new Error(method)
+  }
+  const inspectRuntimePrompt = async ({ requestId }) => { noteInspectionStarted(); await inspectionGate; return { delivered: true, source: 'session/control', rpcId: requestId } }
+  value = await fixture({ inspectRuntimePrompt }, rpc)
+  let closePromise
+  try {
+    const canonicalProjectKey = projectKeyForWorkspace(value.projects.a), binding = await value.resolve('a', 'close-race-root'), input = value.launch(binding, 'a7', 'close-race-root')
+    assert.equal((await value.service.handleRequest(input)).state, 'outcome_unknown')
+    const resolving = value.service.handleRequest({ action: 'resolveUnknown', token: value.auth, canonicalProjectKey, callerRootRef: rootRef('close-race-root'), projectTicket: binding.projectTicket, projectRef: binding.projectRef, boardRef: binding.boardRef, operationRef: input.operationRef, requestId: 'close-delivered', decision: 'delivered', expectedRevision: 1 })
+    await inspectionStarted
+    let closeFinished = false
+    closePromise = value.service.close().then(() => { closeFinished = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(closeFinished, false, 'close must not return while an accepted reconciliation can still persist')
+    releaseInspection()
+    assert.equal((await resolving).state, 'ready')
+    await closePromise
+    const afterClose = await readFile(value.stateFile, 'utf8')
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(await readFile(value.stateFile, 'utf8'), afterClose, 'the closed instance has no late persistence tail')
+    const stored = JSON.parse(afterClose)
+    assert.equal(stored.operations[0].state, 'ready')
+    assert.equal(stored.operations[0].reconciliation.requestId, 'close-delivered')
+  } finally { releaseInspection(); await closePromise?.catch(() => undefined); await cleanup(value) }
 })
 
 test('close drains service and invalid token fails closed', async () => {

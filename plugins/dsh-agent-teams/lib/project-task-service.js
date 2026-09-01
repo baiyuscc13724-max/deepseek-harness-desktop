@@ -114,6 +114,22 @@ class ProjectTaskCommandService {
     });
   }
 
+  inspectTaskWakeWaiter(execution, input = {}) {
+    const actor = this.actors.resolve(execution, input.projectRef);
+    return this.store.inspectTaskWakeWaiter({ projectRef: actor.projectRef, actorRef: actor.actorRef });
+  }
+
+  reconcileTaskWakeSignal(execution, input = {}) {
+    const actor = this.actors.resolve(execution, input.projectRef);
+    return this.store.reconcileTaskWakeSignal({
+      projectRef: actor.projectRef,
+      actorRef: actor.actorRef,
+      wakeRef: input.wakeRef,
+      evidence: input.evidence,
+      updatedAt: this.now(),
+    });
+  }
+
   setTaskWakePaused(execution, input = {}) {
     const actor = this.actors.resolve(execution, input.projectRef);
     return this.store.setTaskWakePaused({ projectRef: actor.projectRef, actorRef: actor.actorRef, paused: input.paused, updatedAt: this.now() });
@@ -354,7 +370,7 @@ class ProjectCollaborationService {
     const evidence=this.rootFailureResolver({execution,actor,failureRef:input.failureRef,mode:input.mode});
     if(!isRecord(evidence) || typeof evidence.failedActorRef!=="string" || typeof evidence.failureCode!=="string" || typeof evidence.failureEvidence!=="string" || evidence.initiatorAuthorized!==true || input.mode==="takeover" && typeof evidence.taskRef!=="string") throw collaborationError("Host has no definitive failed top-level root evidence","PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED");
     if(input.mode==="takeover" && !coordinator(actor)) throw collaborationError("takeover recovery requires the project coordinator","PROJECT_ROOT_RECOVERY_FORBIDDEN");
-    return this.store.prepareRootRecovery({projectRef:actor.projectRef,recoveryRef:input.recoveryRef,requestId:input.requestId,mode:input.mode,failedActorRef:evidence.failedActorRef,initiatorActorRef:actor.actorRef,beneficiaryActorRef:evidence.beneficiaryActorRef ?? evidence.failedActorRef,failureCode:evidence.failureCode,failureEvidence:evidence.failureEvidence,collaborationRequestRef:input.collaborationRequestRef,recoveryTaskRef:evidence.taskRef,createdAt:this.now()});
+    return this.store.prepareRootRecovery({projectRef:actor.projectRef,recoveryRef:input.recoveryRef,requestId:input.requestId,mode:input.mode,failedActorRef:evidence.failedActorRef,initiatorActorRef:actor.actorRef,beneficiaryActorRef:evidence.beneficiaryActorRef ?? evidence.failedActorRef,failureRef:input.failureRef,failureCode:evidence.failureCode,failureEvidence:evidence.failureEvidence,collaborationRequestRef:input.collaborationRequestRef,recoveryTaskRef:evidence.taskRef,createdAt:this.now()});
   }
 
   getRootRecovery(execution,input={}) { const actor=this.#actor(execution,input.projectRef),recovery=this.store.getRootRecovery({projectRef:actor.projectRef,recoveryRef:input.recoveryRef}); if(recovery===undefined) throw collaborationError("root recovery not found","PROJECT_COLLABORATION_NOT_FOUND"); if(recovery.requesterActorRef!==actor.actorRef&&!coordinator(actor)) throw collaborationError("root recovery belongs to another root","PROJECT_ROOT_RECOVERY_FORBIDDEN"); return recovery; }

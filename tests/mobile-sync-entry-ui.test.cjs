@@ -29,11 +29,11 @@ function extractBefore(name, boundary, bindings = {}) {
   return new Function(...Object.keys(bindings), `${source}; return ${name}`)(...Object.values(bindings)) // eslint-disable-line no-new-func
 }
 
-test('desktop shell always exposes a labeled mobile sync entry', () => {
-  assert.match(rendererHtml, /id="mobileSyncQuickButton"[\s\S]*<span>手机同步<\/span>/u)
-  assert.match(rendererCss, /\.mobile-sync-quick-button \{ position:absolute; z-index:21;[^}]*width:112px; height:42px;/u)
-  assert.match(renderer, /mobileSyncQuickButton\?\.addEventListener\('click', openMobileSync\)/u)
-  assert.match(renderer, /mobileSyncQuickButton\.dataset\.state = connected \? 'connected' : running \? 'waiting' : 'off'/u)
+test('desktop shell does not duplicate the official workspace mobile sync entry', () => {
+  assert.doesNotMatch(rendererHtml, /id="mobileSyncQuickButton"/u)
+  assert.doesNotMatch(rendererCss, /\.mobile-sync-quick-button/u)
+  assert.doesNotMatch(renderer, /mobileSyncQuickButton/u)
+  assert.equal((renderer.match(/entry\.id = 'harness-desktop-mobile-sync-entry'/gu) || []).length, 1)
 })
 
 test('mobile sync uses a body-level fixed portal instead of the official Settings event tree', () => {

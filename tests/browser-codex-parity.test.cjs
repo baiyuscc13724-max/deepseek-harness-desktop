@@ -11,7 +11,7 @@ async function source(relative) {
 
 test('browser tool exposes Codex-class background-first structured actions without arbitrary script execution', async () => {
   const plugin = await source('plugins/dsh-desktop-browser-tools/lib/index.js')
-  for (const action of ['status', 'observe', 'screenshot', 'navigate', 'back', 'forward', 'reload', 'click', 'type', 'scroll', 'hover', 'keypress', 'select', 'wait', 'tabList', 'tabOpen', 'tabSwitch', 'tabClose', 'console', 'network', 'inspect', 'extract', 'download', 'upload', 'dialog', 'stop']) {
+  for (const action of ['status', 'observe', 'screenshot', 'mediaInfo', 'mediaFrame', 'navigate', 'back', 'forward', 'reload', 'click', 'type', 'scroll', 'hover', 'keypress', 'select', 'wait', 'tabList', 'tabOpen', 'tabSwitch', 'tabClose', 'console', 'network', 'inspect', 'extract', 'download', 'upload', 'dialog', 'stop']) {
     assert.ok(plugin.includes(`'${action}'`), `browser tool missing ${action}`)
   }
   assert.doesNotMatch(plugin, /['"](?:eval|evaluate|executeScript|shell|script)['"]/)
@@ -43,7 +43,7 @@ test('browser screenshots become model-visible image attachments instead of JSON
 
 test('browser host provides background CDP/DOM control with visual fallback, tabs, diagnostics and bounded private origins', async () => {
   const main = await source('electron/main.cjs')
-  for (const contract of ['new BrowserDiagnostics()', 'new BrowserHistoryStore(', 'capturePage()', 'extractBrowserData', 'sensitive-screenshot-blocked', 'browserTabs', 'activeBrowserTabId', 'recordConsole', 'recordNetwork', 'browserModelBootstrapTrustedPrivateOrigins', 'interactivePicker: true', 'uploadBrowserFileInteractively', 'browserDownloadDestination', 'downloadBrowserResource', 'consumeTrustedDownloadIntent', 'activeBrowserTransfers', 'withBrowserTransferLock', 'AbortController', 'Page.handleJavaScriptDialog']) {
+  for (const contract of ['new BrowserDiagnostics()', 'new BrowserHistoryStore(', 'capturePage()', 'inspectBrowserMediaForModel', 'captureBrowserMediaFrameForModel', 'textTracks', 'activeCues', 'extractBrowserData', 'sensitive-screenshot-blocked', 'browserTabs', 'activeBrowserTabId', 'recordConsole', 'recordNetwork', 'browserModelBootstrapTrustedPrivateOrigins', 'interactivePicker: true', 'uploadBrowserFileInteractively', 'browserDownloadDestination', 'downloadBrowserResource', 'consumeTrustedDownloadIntent', 'activeBrowserTransfers', 'withBrowserTransferLock', 'AbortController', 'Page.handleJavaScriptDialog']) {
     assert.ok(main.includes(contract), `browser host missing ${contract}`)
   }
   assert.match(main, /key === 'Enter' \|\| key === 'Space'[^\n]*\? 'submit'/)

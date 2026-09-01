@@ -895,7 +895,7 @@ test('failed root recovery UI is permission-projected, confirm-first, bounded, a
   assert.match(workspace,/item\.canRetry===true/u); assert.match(workspace,/item\.canRequestTakeover===true/u)
   assert.match(workspace,/rootRecoveryState\.confirm!==key/u); assert.match(workspace,/aria-busy/u); assert.match(workspace,/role:"alert","aria-live":"assertive"/u)
   assert.match(workspace,/success:key[\s\S]*setTimeout/u); assert.match(workspace,/role:"status","aria-live":"polite"/u)
-  assert.match(source,/root-recovery-continue[\s\S]*recoveryRef:recovery\.recoveryRef[\s\S]*expectedRevision:recovery\.revision[\s\S]*confirm:true/u)
+  assert.match(source,/root-recovery-continue[\s\S]*recoveryCapability:recovery\.recoveryCapability[\s\S]*expectedRevision:recovery\.revision[\s\S]*recoveryAction:action[\s\S]*confirm:true/u)
   assert.doesNotMatch(source,/function recoverProjectRoot[\s\S]{0,500}setDraft/u)
   assert.match(workspace,/minHeight:44,minWidth:44/u); assert.match(workspace,/"aria-describedby":"dat-collaboration-recovery-help"/u)
   assert.match(source,/未知结果不会自动重试、唤醒或接管/u); assert.match(source,/unknown outcomes never retry, wake, or take over automatically/u)
@@ -919,13 +919,17 @@ test('the one cross-session task surface and coordination pages explain capabili
   assert.doesNotMatch(source, /inboxIntro: "[^"]*(?:安全投影|safe projection|元数据|metadata)/iu)
 })
 
-test('workbench navigation stays as a sticky horizontal bar at every width', async () => {
+test('workbench navigation stays fixed above an independently scrolling workspace at every width', async () => {
   const source = await clientSource()
 
+  assert.match(source, /\.dat-view\{[^}]*height:100%;[^}]*overflow:hidden/u)
+  assert.match(source, /\.dat-shell\{[^}]*display:flex;flex-direction:column;[^}]*height:100%;min-height:0/u)
+  assert.match(source, /\.dat-workspace-scroll\{[^}]*min-height:0;overflow-y:auto;[^}]*scrollbar-gutter:stable/u)
   assert.match(source, /\.dat-workspace\{[^}]*container-type:inline-size/u)
   assert.match(source, /@container(?:\s+[\w-]+)?\s*\(max-width:/u)
   assert.match(source, /\.dat-workspace-nav\{[^}]*position:sticky;top:0;[^}]*display:flex;[^}]*width:100%;[^}]*overflow-x:auto/u)
   assert.match(source, /\.dat-workspace-nav button\{[^}]*flex:1 0 auto;[^}]*white-space:nowrap/u)
+  assert.match(source, /h\(WorkspaceNav, \{[\s\S]*?h\("div", \{ className: "dat-workspace-scroll" \},[\s\S]*?h\("div", \{ className: "dat-head" \}/u)
   assert.match(source, /@media\(max-width:[^)]+\)\{[^}]*\.dat-workspace-nav/u)
   assert.doesNotMatch(source, /\.dat-workbench\{[^}]*grid-template-columns:172px/u)
 })

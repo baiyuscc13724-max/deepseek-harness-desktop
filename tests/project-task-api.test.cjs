@@ -52,7 +52,7 @@ function harness(routes, cleanups) {
     logger: { info() {}, warn() {}, error() {} },
     agents: { get(id) { return id === root.id ? root : undefined }, roots() { return [root] }, currentInitiator() { return root } },
     subagents: { interrupt() {} },
-    tools: { register() { return () => {} } },
+    tools: { register() { return () => {} }, guard() { return () => {} } },
     systemPrompt: { section() { return () => {} } },
     webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     effect(setup) { const cleanup = setup(); if (typeof cleanup === 'function') cleanups.push(cleanup) },

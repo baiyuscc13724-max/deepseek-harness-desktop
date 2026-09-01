@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-teams",
-  "version": "1.0.56",
+  "version": "1.0.57",
   "description": "First-class durable local agent teams for DeepSeek Harness Desktop",
   "type": "module",
   "main": "lib/index.js",
@@ -13,7 +13,6 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-settings"
       ],
@@ -25,10 +24,10 @@
     "reflect-metadata": "0.2.2"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-agent": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-subagent": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-agent": "^0.1.2-alpha.3",
+    "@deepseek-ai/dsh-llm": "^0.1.2-alpha.3",
+    "@deepseek-ai/dsh-subagent": "^0.1.2-alpha.3",
+    "@deepseek-ai/dsh-tools": "^0.1.2-alpha.3",
     "@deepseek-ai/schemastery": "^3.17.1"
   },
   "license": "MIT"

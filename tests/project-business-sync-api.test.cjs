@@ -126,7 +126,11 @@ async function fixture() {
     async close() {
       for (const cleanup of cleanups.reverse()) await cleanup()
       await closeAll([['collaborator business', collaboratorBusiness], ['authority business', authorityBusiness], ['collaborator automation', collaboratorAutomations], ['collaborator tasks', collaboratorTasks], ['authority automation', authorityAutomations], ['authority tasks', authorityTasks], ['collaborator entry', collaboratorEntry], ['authority entry', authorityEntry]])
-      await rm(authorityHome, { recursive: true, force: true }); await rm(collaboratorHome, { recursive: true, force: true })
+      // Windows can retain a just-closed SQLite WAL handle for a short interval
+      // while the full smoke suite is under heavy I/O. Keep cleanup bounded and
+      // observable: persistent ownership still rejects after the retry budget.
+      const cleanupOptions = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
+      await rm(authorityHome, cleanupOptions); await rm(collaboratorHome, cleanupOptions)
     }
   }
 }

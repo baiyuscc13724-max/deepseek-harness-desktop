@@ -428,7 +428,7 @@ test('root recovery separates the Host-bound launch initiator from the failed be
   assert.throws(()=>collaboration.prepareRootRecovery(fx.leadExecution,{projectRef,recoveryRef:'recovery_forged',requestId:'recovery_forged',mode:'retry',failureRef:'host-failure-1',failureCode:'FORGED'}),/Host-derived/u)
   assert.throws(()=>collaboration.prepareRootRecovery(fx.agentExecution,{projectRef,recoveryRef:'recovery_wrong_owner',requestId:'recovery_wrong_owner',mode:'retry',failureRef:'host-failure-1'}),error=>error.code==='PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED')
   const prepared=collaboration.prepareRootRecovery(fx.leadExecution,{projectRef,recoveryRef:'recovery_retry',requestId:'recovery_retry_request',mode:'retry',failureRef:'host-failure-1'})
-  assert.equal(prepared.recovery.state,'prepared'); assert.equal(prepared.recovery.failedActorRef,'actor_agent'); assert.equal(prepared.recovery.initiatorActorRef,'actor_project_lead'); assert.equal(prepared.recovery.beneficiaryActorRef,'actor_agent')
+  assert.equal(prepared.recovery.state,'prepared'); assert.equal(prepared.recovery.failedActorRef,'actor_agent'); assert.equal(prepared.recovery.initiatorActorRef,'actor_project_lead'); assert.equal(prepared.recovery.beneficiaryActorRef,'actor_agent'); assert.equal(prepared.recovery.launchRef,'host-failure-1')
   assert.throws(()=>collaboration.prepareRootRecovery(fx.leadExecution,{projectRef,recoveryRef:'recovery_missing',requestId:'recovery_missing',mode:'retry',failureRef:'unknown'}),error=>error.code==='PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED')
 }))
 
@@ -466,9 +466,12 @@ test('Host wake service ports derive project and actor bindings while preserving
   const signals = fx.service.claimTaskWakeSignals(fx.ownerExecution, { projectRef, dispatcherRef: 'dispatcher_service' })
   assert.equal(signals.length, 1)
   assert.equal(signals[0].actorRef, 'actor_agent')
-  assert.equal(fx.service.ackTaskWakeSignal(fx.ownerExecution, { projectRef, wakeRef: signals[0].wakeRef, dispatcherRef: 'dispatcher_service', outcome: 'delivered' }).state, 'delivered')
+  assert.equal(fx.service.ackTaskWakeSignal(fx.ownerExecution, { projectRef, wakeRef: signals[0].wakeRef, dispatcherRef: 'dispatcher_service', outcome: 'outcome_unknown' }).state, 'outcome_unknown')
+  assert.equal(fx.service.inspectTaskWakeWaiter(fx.agentExecution, { projectRef }).wakeRef, signals[0].wakeRef)
+  assert.equal(fx.service.reconcileTaskWakeSignal(fx.agentExecution, { projectRef, wakeRef: signals[0].wakeRef, evidence: 'exact_message' }).state, 'delivered')
   assert.deepEqual(fx.service.claimTaskWakeSignals(fx.agentExecution, { projectRef, dispatcherRef: 'dispatcher_duplicate' }), [])
   assert.equal(fx.service.setTaskWakePaused(fx.agentExecution, { projectRef, paused: true }).state, 'paused')
+  assert.deepEqual(fx.service.setTaskWakePaused(fx.otherAgentExecution, { projectRef, paused: false }), { actorRef: 'actor_other_agent', state: 'idle', generation: 0 })
   assert.throws(() => fx.service.claimTaskWakeSignals({ trusted: 'agent' }, { projectRef, dispatcherRef: 'dispatcher_forged' }), error => error.code === 'PROJECT_TASK_ACTOR_UNRESOLVED')
 }))
 

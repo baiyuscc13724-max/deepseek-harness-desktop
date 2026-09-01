@@ -1,5 +1,6 @@
 const { randomUUID } = require('node:crypto')
 const WebSocket = require('ws')
+const { runtimeWebSocketOptions } = require('../bridge/runtime-session-auth.cjs')
 
 const PET_UNARY_ENDPOINTS = new Set(['$events/result', 'session/list', 'session/modelCatalog'])
 const PET_EVENT_ALLOWLIST = new Set([
@@ -27,9 +28,11 @@ function selectedModel(item, fallback = '') {
 }
 
 class PetEventAdapter {
-  constructor({ fetchImpl = globalThis.fetch, WebSocketImpl = WebSocket, onEvent = () => {}, onDiagnostic = () => {} } = {}) {
+  constructor({ fetchImpl = globalThis.fetch, WebSocketImpl = WebSocket, cookieProvider = async () => '', onEvent = () => {}, onDiagnostic = () => {} } = {}) {
+    if (typeof cookieProvider !== 'function') throw new Error('PetEventAdapter requires cookieProvider for runtime authentication.')
     this.fetchImpl = fetchImpl
     this.WebSocketImpl = WebSocketImpl
+    this.cookieProvider = cookieProvider
     this.onEvent = onEvent
     this.onDiagnostic = onDiagnostic
     this.baseUrl = null
@@ -64,7 +67,7 @@ class PetEventAdapter {
     this.stopped = false
     this.baseUrl = next
     await this.refreshBaseline()
-    this.openStreams()
+    await this.openStreams()
   }
 
   async refreshBaseline() {
@@ -87,11 +90,14 @@ class PetEventAdapter {
     }
   }
 
-  openStreams() {
+  async openStreams() {
     if (this.stopped) return
-    const url = new URL('/api/remote.mux', this.baseUrl)
+    const baseUrl = this.baseUrl
+    const cookieHeader = await this.cookieProvider(baseUrl.origin)
+    if (this.stopped || this.baseUrl !== baseUrl) return
+    const url = new URL('/api/remote.mux', baseUrl)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new this.WebSocketImpl(url.toString())
+    const socket = new this.WebSocketImpl(url.toString(), runtimeWebSocketOptions(cookieHeader))
     this.socket = socket
     this.eventClientId = ''
     this.eventStreamId = `events-${randomUUID()}`
@@ -147,7 +153,7 @@ class PetEventAdapter {
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null
       if (this.stopped) return
-      try { await this.refreshBaseline(); this.openStreams() }
+      try { await this.refreshBaseline(); await this.openStreams() }
       catch (error) { this.onDiagnostic(`宠物事件重新连接失败：${error.message}`); this.scheduleReconnect() }
     }, 1500)
     this.reconnectTimer.unref?.()

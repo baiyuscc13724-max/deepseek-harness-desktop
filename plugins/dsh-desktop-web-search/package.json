@@ -1,0 +1,17 @@
+{
+  "name": "dsh-desktop-web-search",
+  "version": "1.0.57",
+  "description": "Account-free public web search provider for Harness Desktop.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-web": "^0.1.2-alpha.3",
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/schemastery": "^3.18.2"
+  },
+  "license": "MIT"
+}

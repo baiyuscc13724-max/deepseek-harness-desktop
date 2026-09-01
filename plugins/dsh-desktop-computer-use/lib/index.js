@@ -1,4 +1,3 @@
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 import { readFile } from 'node:fs/promises'
@@ -6,7 +5,7 @@ import { registerDesktopControl } from './desktop-control.js'
 
 const name = 'desktop-computer-use'
 const inject = ['systemPrompt', 'tools']
-const computerUseSettingsNamespace = settingsNamespace(name)
+const computerUseSettingsNamespace = name
 // Presence-only namespace: authorization, policy, and session state remain owned by the trusted Electron Host.
 const computerUseSettingsSchema = z.object({})
 
@@ -27,9 +26,11 @@ async function execute(scope, action, payload) {
 }
 
 function apply(ctx) {
-  installSettingsSection(ctx, computerUseSettingsNamespace, computerUseSettingsSchema, {}, {
-    setSource: () => {},
-    onChange: () => {}
+  ctx.inject(['settings'], settingsCtx => {
+    settingsCtx.settings.installSection(ctx, computerUseSettingsNamespace, computerUseSettingsSchema, {}, {
+      setSource: () => {},
+      onChange: () => {}
+    })
   })
   ctx.systemPrompt.section({
     name: 'tool:desktop-computer-use',

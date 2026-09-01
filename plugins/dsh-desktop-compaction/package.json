@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-compaction",
-  "version": "1.0.56",
+  "version": "1.0.57",
   "description": "Harness Desktop-owned context compaction policy with bounded overflow and Codex overload recovery.",
   "type": "module",
   "main": "lib/index.js",
@@ -9,7 +9,7 @@
     "./package.json": "./package.json"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-compaction-basic": "^0.1.1-rc.2"
+    "@deepseek-ai/dsh-compaction-basic": "^0.1.2-alpha.3"
   },
   "license": "MIT"
 }

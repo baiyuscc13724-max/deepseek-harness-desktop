@@ -727,9 +727,10 @@ test('pre-adoption retry preserves the exact reserved seat capability through re
   const coordinator='actor_retry_launch_owner',slotActorRef='actor_retry_unborn_slot',taskRef='task_retry_unborn',slotCapability='retry_unborn_capability_abcdefghijklmnopqrstuvwxyz'
   state.store.createCollaborationBoard({projectRef,coordinatorActorRef:coordinator,title:'Retry board',createdAt:1})
   state.store.reserveRootSeat({projectRef,coordinatorActorRef:coordinator,requestId:'retry_unborn_reserve',slotActorRef,slotCapability,duty:'Unborn child',resourceScope:['src/unborn'],createdAt:2,task:{taskRef,title:'Retry child task',fileScope:['src/unborn']}})
-  const prepared=state.store.prepareRootRecovery({projectRef,recoveryRef:'recovery_unborn',requestId:'recovery_unborn_request',mode:'retry',failedActorRef:slotActorRef,initiatorActorRef:coordinator,beneficiaryActorRef:slotActorRef,failureCode:'HOST_SESSION_CREATE_FAILED',failureEvidence:'Host create failed definitively',recoveryTaskRef:taskRef,createdAt:3})
-  assert.equal(prepared.recovery.initiatorActorRef,coordinator); assert.equal(prepared.recovery.beneficiaryActorRef,slotActorRef)
+  const prepared=state.store.prepareRootRecovery({projectRef,recoveryRef:'recovery_unborn',requestId:'recovery_unborn_request',mode:'retry',failedActorRef:slotActorRef,initiatorActorRef:coordinator,beneficiaryActorRef:slotActorRef,failureRef:'slot_retry_unborn',failureCode:'HOST_SESSION_CREATE_FAILED',failureEvidence:'Host create failed definitively',recoveryTaskRef:taskRef,createdAt:3})
+  assert.equal(prepared.recovery.initiatorActorRef,coordinator); assert.equal(prepared.recovery.beneficiaryActorRef,slotActorRef); assert.equal(prepared.recovery.launchRef,'slot_retry_unborn')
   assert.equal(state.store.readCollaborationSnapshot({projectRef}).seats.find(seat=>seat.actorRef===slotActorRef).state,'reserved')
+  assert.throws(()=>state.store.reserveRootRecovery({projectRef,recoveryRef:'recovery_unborn',initiatorActorRef:coordinator,launchRef:'slot_retry_wrong',updatedAt:4}),error=>error.code==='PROJECT_ROOT_RECOVERY_CONFLICT')
   const reserved=state.store.reserveRootRecovery({projectRef,recoveryRef:'recovery_unborn',initiatorActorRef:coordinator,launchRef:'slot_retry_unborn',updatedAt:4})
   const activated=state.store.updateRootRecovery({projectRef,recoveryRef:'recovery_unborn',actorRef:coordinator,expectedRevision:reserved.recovery.revision,state:'activated',updatedAt:5})
   state.store.updateRootRecovery({projectRef,recoveryRef:'recovery_unborn',actorRef:coordinator,expectedRevision:activated.recovery.revision,state:'ready',updatedAt:6})
@@ -947,11 +948,26 @@ test('temporarily_empty arms one durable project-fenced wake that survives resta
   assert.notEqual(resumed[0].wakeRef, first[0].wakeRef)
   state.store.ackTaskWakeSignal({ projectRef, wakeRef: resumed[0].wakeRef, dispatcherRef: 'dispatcher-resumed', outcome: 'outcome_unknown', updatedAt: 103 })
   assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-blind-retry', updatedAt: 200, limit: 10 }), [], 'uncertain Host delivery stays fenced past its old lease')
-  state.store.ackTaskWakeSignal({ projectRef, wakeRef: resumed[0].wakeRef, dispatcherRef: 'dispatcher-resumed', outcome: 'not_delivered', updatedAt: 201 })
+  assert.deepEqual(state.store.inspectTaskWakeWaiter({ projectRef, actorRef: sleeper }), { actorRef: sleeper, state: 'outcome_unknown', generation: 2, wakeRef: resumed[0].wakeRef })
+  assert.throws(() => state.store.reconcileTaskWakeSignal({ projectRef, actorRef: sleeper, wakeRef: 'wake_wrong', evidence: 'complete_history_absence', updatedAt: 201 }), error => error.code === 'PROJECT_TASK_WAKE_CONFLICT')
+  state.store.close()
+  state.store = new state.storeMod.ProjectTaskStore({ filePath: state.filePath, keyProvider: state.keyProvider })
+  state.store.initialize()
+  assert.equal(state.store.reconcileTaskWakeSignal({ projectRef, actorRef: sleeper, wakeRef: resumed[0].wakeRef, evidence: 'complete_history_absence', updatedAt: 201 }).state, 'waiting', 'restart reconciliation requires the exact durable wakeRef and explicit negative evidence')
   const reconciled = state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-reconciled', updatedAt: 202, limit: 10 })
   assert.equal(reconciled[0].wakeRef, resumed[0].wakeRef)
   state.store.ackTaskWakeSignal({ projectRef, wakeRef: reconciled[0].wakeRef, dispatcherRef: 'dispatcher-reconciled', outcome: 'delivered', updatedAt: 203 })
   assert.deepEqual(state.store.claimTaskWakeSignals({ projectRef, dispatcherRef: 'dispatcher-duplicate-event', updatedAt: 300, limit: 10 }), [])
+}))
+
+test('pause and direct-human resume never create a wake waiter before claim_next arms one', async () => usingFixture(async state => {
+  const owner = 'actor_wake_idle_owner', root = 'actor_wake_idle_root'
+  state.store.createCollaborationBoard({ projectRef, coordinatorActorRef: owner, title: 'Idle wake project', createdAt: 1 })
+  state.store.upsertCollaborationSeat({ projectRef, actorRef: root, changedByActorRef: owner, kind: 'root', state: 'active', duty: 'Idle', resourceScope: [], phase: 'waiting', nextStep: 'ordinary chat', updatedAt: 2 })
+  assert.deepEqual(state.store.setTaskWakePaused({ projectRef, actorRef: root, paused: true, updatedAt: 3 }), { actorRef: root, state: 'idle', generation: 0 })
+  assert.deepEqual(state.store.setTaskWakePaused({ projectRef, actorRef: root, paused: false, updatedAt: 4 }), { actorRef: root, state: 'idle', generation: 0 })
+  assert.deepEqual(state.store.inspectTaskWakeWaiter({ projectRef, actorRef: root }), { actorRef: root, state: 'idle', generation: 0 })
+  assert.deepEqual(state.store.listTaskWakeProjects({ updatedAt: 5 }), [])
 }))
 
 test('one newly eligible task wakes only one of two durable idle roots in the same dispatch batch', async () => usingFixture(async state => {

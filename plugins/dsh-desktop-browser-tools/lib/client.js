@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       const inputTriggers = ctx.get('inputTriggers')
-      const skillsApi = ctx.get('connection').api.skills
+      const skillsApi = ctx.remote.skills
       const fetches = new Map()
       const lexiconListeners = new Map()
       const notifyLexicon = (sessionId) => {
@@ -43,7 +43,7 @@ window.__ModuleLoader__.load({
         if (existing) return existing.promise
         const abort = new AbortController()
         const promise = (async () => {
-          const { result } = await skillsApi.list({ sessionId }, abort.signal)
+          const result = await skillsApi.list({ sessionId }, abort.signal)
           if (!result.ok) throw new Error(`skill.list failed: ${result.error.code}: ${result.error.message}`)
           return result.value.skills
         })()
@@ -84,7 +84,7 @@ window.__ModuleLoader__.load({
         }
       }
 
-      // $ 技能候选：静态技能 + 已安装技能（connection.api.skills），去重合并。
+      // $ 技能候选：静态技能 + 已安装技能（remote.skills），去重合并。
       const skillsSource = {
         trigger: '$',
         name: 'skills',
@@ -136,7 +136,7 @@ window.__ModuleLoader__.load({
       ctx.on('connection/reset', clearAll)
     }
 
-    module.exports = { apply, inject: ['inputTriggers', 'connection', 'remote'] }
+    module.exports = { apply, inject: ['inputTriggers', 'remote', 'remote.skills'] }
     return module.exports
   }
 })

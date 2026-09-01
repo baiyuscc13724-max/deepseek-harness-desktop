@@ -11,7 +11,7 @@ function testContext(promptSections, cleanups) {
   return {
     logger: { info() {}, warn() {}, error() {} },
     get() { return undefined },
-    tools: { register() { return () => {} } },
+    tools: { register() { return () => {} }, guard() { return () => {} } },
     systemPrompt: {
       section(section) {
         promptSections.push(section)

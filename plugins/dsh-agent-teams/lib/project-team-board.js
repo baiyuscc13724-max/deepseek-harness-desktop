@@ -11,7 +11,7 @@ const UI_PROJECT_TEAM_BOARD_DUTY_NAME_CHARS = 80;
 const PROJECT_TEAM_BOARD_CURSOR_VERSION = 1;
 const PROJECT_TEAM_BOARD_CURSOR_PREFIX = "ptb1";
 const DEFAULT_CURSOR_INTEGRITY_KEY = randomBytes(32);
-const TASK_STATES = Object.freeze(["pending", "in_progress", "completed", "cancelled"]);
+const TASK_STATES = Object.freeze(["pending", "in_progress", "submitted", "completed", "cancelled"]);
 
 function text(value, max) {
   if (typeof value !== "string") return "";
@@ -24,7 +24,7 @@ function newestFirst(left, right) {
   const updatedDelta = Date.parse(right.updatedAt ?? 0) - Date.parse(left.updatedAt ?? 0);
   return updatedDelta || String(left.id).localeCompare(String(right.id));
 }
-function emptyTaskStats() { return { total: 0, pending: 0, inProgress: 0, completed: 0, cancelled: 0, blocked: 0, attention: 0 }; }
+function emptyTaskStats() { return { total: 0, pending: 0, inProgress: 0, submitted: 0, completed: 0, cancelled: 0, blocked: 0, attention: 0, acceptanceRequired: 0 }; }
 function taskStateKey(state) { return state === "in_progress" ? "inProgress" : TASK_STATES.includes(state) ? state : undefined; }
 function ownerDutyName(team, task) {
   if (task.assigneeSessionId === undefined) return null;
@@ -44,6 +44,7 @@ function taskIsBlocked(team, task, taskIndex, satisfiesDependency) {
 }
 function taskNeedsAttention(team, task, blocked) {
   if (blocked || task.state === "cancelled") return true;
+  if (task.state === "submitted") return true;
   if ((task.capabilities ?? []).some((capability) => capability.status !== "verified")) return true;
   if ((task.externalEffects ?? []).some((effect) => effect.outcome === "outcome_unknown")) return true;
   if (task.state === "pending" && task.assigneeSessionId === undefined && task.releaseReason !== undefined) return true;
@@ -57,6 +58,9 @@ function teamAttentionCodes(team, taskFacts) {
   const codes = new Set();
   if (team.members.some((member) => member.kind === "worker" && member.state === "failed")) codes.add("failed_member");
   if (team.members.some((member) => member.kind === "worker" && (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true))) codes.add("unconfirmed_shutdown");
+  // There is no durable retry lineage/message identity linking two delivery
+  // attempts. Preserve every failed-delivery warning until an explicit lineage
+  // contract can prove that the exact payload was superseded.
   if (team.messages.some((message) => message.status === "failed")) codes.add("failed_delivery");
   if (team.bootstrap !== undefined && team.bootstrap.phase !== "complete") codes.add("bootstrap_incomplete");
   if (team.plan !== undefined && !["committed", "active"].includes(team.plan.phase)) codes.add("plan_draft");
@@ -64,6 +68,8 @@ function teamAttentionCodes(team, taskFacts) {
   if (team.tasks.some((task) => (task.externalEffects ?? []).some((effect) => effect.outcome === "outcome_unknown"))) codes.add("outcome_unknown");
   if (team.tasks.some((task) => task.state === "pending" && task.assigneeSessionId === undefined && task.releaseReason !== undefined)) codes.add("released_task");
   if (team.tasks.some((task) => task.state === "in_progress" && task.assigneeSessionId !== undefined && !team.members.some((member) => member.sessionId === task.assigneeSessionId && !["failed", "retired"].includes(member.state)))) codes.add("stranded_task");
+  if (team.tasks.some((task) => task.state === "submitted")) codes.add("acceptance_required");
+  if (team.state === "closing") codes.add("closure_incomplete");
   if (taskFacts.some((fact) => fact.blocked)) codes.add("blocked_task");
   return [...codes].sort();
 }
@@ -109,13 +115,13 @@ function prepareProjectTeamBoard(projectKey, projectTeams, { teamState = (team) 
   for (const team of ordered) {
     const taskFacts = team.tasks.map((task) => {
       const blocked = taskIsBlocked(team, task, taskIndex, satisfiesDependency), attention = taskNeedsAttention(team, task, blocked), stateKey = taskStateKey(task.state);
-      totalTaskStats.total += 1; if (stateKey !== undefined) totalTaskStats[stateKey] += 1; if (blocked) totalTaskStats.blocked += 1; if (attention) totalTaskStats.attention += 1;
+      totalTaskStats.total += 1; if (stateKey !== undefined) totalTaskStats[stateKey] += 1; if (task.state === "submitted") totalTaskStats.acceptanceRequired += 1; if (blocked) totalTaskStats.blocked += 1; if (attention) totalTaskStats.attention += 1;
       return { task, blocked, attention };
     });
     const attentionCodes = teamAttentionCodes(team, taskFacts); if (attentionCodes.length > 0) totalAttentionTeams += 1;
     const teamTaskStats = emptyTaskStats();
     const tasks = taskFacts.map(({ task, blocked, attention }) => {
-      const stateKey = taskStateKey(task.state); teamTaskStats.total += 1; if (stateKey !== undefined) teamTaskStats[stateKey] += 1; if (blocked) teamTaskStats.blocked += 1; if (attention) teamTaskStats.attention += 1;
+      const stateKey = taskStateKey(task.state); teamTaskStats.total += 1; if (stateKey !== undefined) teamTaskStats[stateKey] += 1; if (task.state === "submitted") teamTaskStats.acceptanceRequired += 1; if (blocked) teamTaskStats.blocked += 1; if (attention) teamTaskStats.attention += 1;
       return { id: task.id, title: text(task.title, UI_PROJECT_TEAM_BOARD_TASK_TITLE_CHARS), status: task.state, ownerDutyName: ownerDutyName(team, task), blocked, attention, updatedAt: task.updatedAt };
     }).sort(newestFirst);
     teamRecords.push({ summary: { id: team.id, name: text(team.name, UI_PROJECT_TEAM_BOARD_TEAM_NAME_CHARS), status: teamState(team), planPhase: team.plan?.phase ?? "active", memberCount: team.members.filter((member) => member.state !== "retired").length, taskStats: teamTaskStats, attention: { required: attentionCodes.length > 0, codes: attentionCodes }, updatedAt: team.updatedAt }, tasks });
@@ -142,12 +148,12 @@ function composePage(prepared, start, taskLimit, key) {
   const planned = planPage(prepared.teamRecords, start, taskLimit);
   const nextCursor = planned.hasMore ? encodeProjectTeamBoardCursor(prepared.projectKey, prepared.cursor, planned.nextPosition, key) : null;
   return { available: true, cursor: prepared.cursor,
-    stats: { totalTeams: prepared.totalTeams, includedTeams: planned.teams.length, totalTasks: prepared.totalTaskStats.total, includedTasks: planned.includedTasks, pendingTasks: prepared.totalTaskStats.pending, inProgressTasks: prepared.totalTaskStats.inProgress, completedTasks: prepared.totalTaskStats.completed, cancelledTasks: prepared.totalTaskStats.cancelled, blockedTasks: prepared.totalTaskStats.blocked, attentionTasks: prepared.totalTaskStats.attention, attentionTeams: prepared.totalAttentionTeams },
+    stats: { totalTeams: prepared.totalTeams, includedTeams: planned.teams.length, totalTasks: prepared.totalTaskStats.total, includedTasks: planned.includedTasks, pendingTasks: prepared.totalTaskStats.pending, inProgressTasks: prepared.totalTaskStats.inProgress, submittedTasks: prepared.totalTaskStats.submitted, acceptanceRequiredTasks: prepared.totalTaskStats.acceptanceRequired, completedTasks: prepared.totalTaskStats.completed, cancelledTasks: prepared.totalTaskStats.cancelled, blockedTasks: prepared.totalTaskStats.blocked, attentionTasks: prepared.totalTaskStats.attention, attentionTeams: prepared.totalAttentionTeams },
     page: { includedTeams: planned.teams.length, includedTasks: planned.includedTasks, hasMore: planned.hasMore, nextCursor },
     projection: { scope: "page", maxTeams: UI_PROJECT_TEAM_BOARD_MAX_TEAMS, maxTasks: UI_PROJECT_TEAM_BOARD_MAX_TASKS, maxBytes: UI_PROJECT_TEAM_BOARD_MAX_BYTES, teamsTruncated: planned.hasMore, tasksTruncated: planned.hasMore, payloadTruncated: taskLimit < UI_PROJECT_TEAM_BOARD_MAX_TASKS }, teams: planned.teams };
 }
 function unavailableBoard() {
-  return Object.freeze({ available: false, cursor: "project_board_unavailable", stats: { totalTeams: 0, includedTeams: 0, totalTasks: 0, includedTasks: 0, pendingTasks: 0, inProgressTasks: 0, completedTasks: 0, cancelledTasks: 0, blockedTasks: 0, attentionTasks: 0, attentionTeams: 0 }, page: { includedTeams: 0, includedTasks: 0, hasMore: false, nextCursor: null }, projection: { scope: "page", maxTeams: UI_PROJECT_TEAM_BOARD_MAX_TEAMS, maxTasks: UI_PROJECT_TEAM_BOARD_MAX_TASKS, maxBytes: UI_PROJECT_TEAM_BOARD_MAX_BYTES, teamsTruncated: false, tasksTruncated: false, payloadTruncated: false }, teams: [] });
+  return Object.freeze({ available: false, cursor: "project_board_unavailable", stats: { totalTeams: 0, includedTeams: 0, totalTasks: 0, includedTasks: 0, pendingTasks: 0, inProgressTasks: 0, submittedTasks: 0, acceptanceRequiredTasks: 0, completedTasks: 0, cancelledTasks: 0, blockedTasks: 0, attentionTasks: 0, attentionTeams: 0 }, page: { includedTeams: 0, includedTasks: 0, hasMore: false, nextCursor: null }, projection: { scope: "page", maxTeams: UI_PROJECT_TEAM_BOARD_MAX_TEAMS, maxTasks: UI_PROJECT_TEAM_BOARD_MAX_TASKS, maxBytes: UI_PROJECT_TEAM_BOARD_MAX_BYTES, teamsTruncated: false, tasksTruncated: false, payloadTruncated: false }, teams: [] });
 }
 function paginatePreparedProjectTeamBoard(prepared, { cursor, cursorIntegrityKey } = {}) {
   if (prepared === null) return unavailableBoard();

@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict')
+const { EventEmitter } = require('node:events')
 const test = require('node:test')
 
 const { PetEventAdapter, normalizeRuntimeUrl } = require('../electron/pet/pet-event-adapter.cjs')
@@ -29,4 +30,41 @@ test('pet adapter maps the fixed alpha.2 event/control projections without retai
   ])
   assert.equal(calls[0][0], 'http://127.0.0.1:3080/api/$events/result')
   assert.deepEqual(calls[0][1].payload, { args: { clientId: 'event-client', eventId: 'approval-1', outcome: { kind: 'next' } } })
+})
+
+test('pet runtime websocket receives only the controlled in-memory authentication cookie', async () => {
+  const sockets = []
+  const cookieCalls = []
+  const cookie = 'dsh-auth-authority=v1.c2lnbmVkLWJvZHk.c2lnbmF0dXJl'
+  class FakeSocket extends EventEmitter {
+    constructor(url, options) { super(); this.url = url; this.options = options; sockets.push(this) }
+    close() {}
+  }
+  const adapter = new PetEventAdapter({
+    WebSocketImpl: FakeSocket,
+    cookieProvider: async origin => { cookieCalls.push(origin); return cookie }
+  })
+  adapter.baseUrl = new URL('http://127.0.0.1:3080')
+  adapter.stopped = false
+  await adapter.openStreams()
+  assert.deepEqual(cookieCalls, ['http://127.0.0.1:3080'])
+  assert.equal(sockets[0].url, 'ws://127.0.0.1:3080/api/remote.mux')
+  assert.deepEqual(sockets[0].options, { headers: { Cookie: cookie } })
+  adapter.stop()
+})
+
+test('pet runtime websocket keeps the legacy no-cookie path and rejects untrusted provider output', async () => {
+  const sockets = []
+  class FakeSocket extends EventEmitter {
+    constructor(url, options) { super(); sockets.push({ url, options }) }
+    close() {}
+  }
+  const adapter = new PetEventAdapter({ WebSocketImpl: FakeSocket })
+  adapter.baseUrl = new URL('http://localhost:3080')
+  adapter.stopped = false
+  await adapter.openStreams()
+  assert.deepEqual(sockets[0].options, {})
+  adapter.cookieProvider = async () => 'attacker=value'
+  await assert.rejects(adapter.openStreams(), /authentication cookie is invalid/)
+  adapter.stop()
 })

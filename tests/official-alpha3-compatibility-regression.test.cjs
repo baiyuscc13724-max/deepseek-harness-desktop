@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const semver = require('semver')
 const test = require('node:test')
 
 const ROOT = path.resolve(process.env.DSH_ALPHA3_CANDIDATE_ROOT || path.resolve(__dirname, '..'))
@@ -18,6 +19,27 @@ const requiredOfficialCapabilities = Object.freeze([
 const retiredPrivatePackages = Object.freeze([
   '@deepseek-ai/dsh-client-runtime',
   '@deepseek-ai/dsh-host-apiproxy'
+])
+const retiredClientPackages = Object.freeze([
+  '@deepseek-ai/dsh-client-runtime',
+  '@deepseek-ai/dsh-client-ui-slots'
+])
+const desktopOwnedPluginDirectories = Object.freeze([
+  'dsh-agent-teams',
+  'dsh-codex-image-bridge',
+  'dsh-desktop-browser-tools',
+  'dsh-desktop-compaction',
+  'dsh-desktop-computer-use',
+  'dsh-desktop-directory-picker',
+  'dsh-desktop-files',
+  'dsh-desktop-mcp-manager',
+  'dsh-desktop-memory-tools',
+  'dsh-desktop-progress',
+  'dsh-desktop-schedules',
+  'dsh-desktop-web-search',
+  'dsh-mobile-control',
+  'dsh-model-admission',
+  'dsh-session-experience'
 ])
 
 function json(relative) {
@@ -35,6 +57,15 @@ function dshEntries(lock) {
     .filter(([location]) => location !== '')
     .map(([location, entry]) => ({ location, entry, name: packageName(location, entry) }))
     .filter(({ name }) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'))
+}
+
+function desktopOwnedPluginManifests() {
+  const pluginRoot = path.join(ROOT, 'plugins')
+  return fs.readdirSync(pluginRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => ({ directory: entry.name, manifest: json(path.join('plugins', entry.name, 'package.json')) }))
+    .filter(({ manifest }) => typeof manifest.name === 'string' && manifest.name.startsWith('dsh-'))
+    .sort((left, right) => left.directory.localeCompare(right.directory))
 }
 
 test('alpha.3 pins the complete installed official core graph without rc.2 or alpha.2 fallback', () => {
@@ -73,6 +104,42 @@ test('alpha.3 root declares official scheduling, session reference, projection, 
     assert.equal(installed.version, TARGET, `${name} must resolve to the same alpha.3 release`)
   }
   for (const name of retiredPrivatePackages) assert.equal(fs.existsSync(path.join(DSH_SCOPE, name.slice('@deepseek-ai/'.length))), false, `${name} is a retired private implementation, not an alpha.3 capability`)
+})
+
+test('Desktop-owned plugin manifests exclude retired client packages and accept every installed official peer', () => {
+  const plugins = desktopOwnedPluginManifests()
+  assert.deepEqual(
+    plugins.map(({ directory }) => directory),
+    desktopOwnedPluginDirectories,
+    'the compatibility gate must cover every Desktop-owned plugin while excluding the adapted third-party Android plugin'
+  )
+
+  for (const { directory, manifest } of plugins) {
+    const dependencySections = [
+      ['dependencies', Object.keys(manifest.dependencies || {})],
+      ['devDependencies', Object.keys(manifest.devDependencies || {})],
+      ['optionalDependencies', Object.keys(manifest.optionalDependencies || {})],
+      ['peerDependencies', Object.keys(manifest.peerDependencies || {})],
+      ['dsh.client.inject', manifest.dsh?.client?.inject || []]
+    ]
+    for (const [section, names] of dependencySections) {
+      for (const retired of retiredClientPackages) {
+        assert.equal(names.includes(retired), false, `${directory} ${section} retains removed alpha.3 package ${retired}`)
+      }
+    }
+
+    for (const [name, range] of Object.entries(manifest.peerDependencies || {})) {
+      if (!name.startsWith('@deepseek-ai/')) continue
+      const installedPath = path.join('node_modules', ...name.split('/'), 'package.json')
+      assert.equal(fs.existsSync(path.join(ROOT, installedPath)), true, `${directory} peer ${name} is not supplied by the installed official runtime`)
+      const installed = json(installedPath)
+      assert.ok(semver.validRange(range), `${directory} peer ${name} has invalid range ${range}`)
+      assert.equal(semver.satisfies(installed.version, range), true, `${directory} peer ${name}@${range} rejects installed ${installed.version}`)
+      if (name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')) {
+        assert.equal(installed.version, TARGET, `${directory} peer ${name} must resolve from the alpha.3 official graph`)
+      }
+    }
+  }
 })
 
 test('alpha.3 generated session descriptor exposes official queue, todo, image, goal, and skill seams', () => {

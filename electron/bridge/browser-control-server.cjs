@@ -10,7 +10,7 @@ const MAX_RECENT_REQUESTS = 512
 const REPLAY_ACTIONS = Object.freeze({
   // Emergency stop must never be rejected by replay-cache capacity or wait on
   // an earlier request identity. The stop path is intentionally idempotent.
-  browser: new Set(['navigate', 'back', 'forward', 'reload', 'click', 'type', 'scroll', 'hover', 'keypress', 'select', 'tabOpen', 'tabSwitch', 'tabClose', 'download', 'upload', 'dialog']),
+  browser: new Set(['navigate', 'back', 'forward', 'reload', 'click', 'type', 'scroll', 'hover', 'keypress', 'select', 'mediaFrame', 'tabOpen', 'tabSwitch', 'tabClose', 'download', 'upload', 'dialog']),
   computer: new Set(),
   memory: new Set()
 })

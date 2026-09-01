@@ -420,13 +420,14 @@ class ProjectTaskStore {
     const failureEvidence = boundedUtf8String(input.failureEvidence, "failureEvidence");
     const collaborationRequestRef = optionalString(input.collaborationRequestRef, "collaborationRequestRef", 256);
     const recoveryTaskRef = optionalString(input.recoveryTaskRef, "recoveryTaskRef", 256);
+    const retryLaunchRef = mode === "retry" ? optionalString(input.failureRef, "failureRef", 256) : undefined;
     const timestamp = safeInteger(input.createdAt, "createdAt");
     let requestDigest, duplicate = false;
     this.#transaction(() => {
       const takeoverRequest=mode==="takeover"&&collaborationRequestRef!==undefined?this.database.prepare("SELECT * FROM project_collaboration_requests WHERE project_ref=? AND request_ref=?").get(projectRef,collaborationRequestRef):undefined;
       if(mode==="takeover"&&takeoverRequest!==undefined) beneficiaryActorRef=takeoverRequest.requester_actor_ref;
       if (mode === "takeover") { const board=this.database.prepare("SELECT coordinator_actor_ref FROM project_collaboration_boards WHERE project_ref=?").get(projectRef); if(board?.coordinator_actor_ref!==initiatorActorRef) throw storeError("only the coordinator may authorize takeover recovery","PROJECT_ROOT_RECOVERY_FORBIDDEN"); if(beneficiaryActorRef===failedActorRef) throw storeError("takeover requires a distinct beneficiary","PROJECT_ROOT_RECOVERY_FORBIDDEN"); }
-      requestDigest = commandDigest({ operation: "root-recovery-prepare", projectRef, requestId, mode, failedActorRef, initiatorActorRef, beneficiaryActorRef, failureCode, failureEvidence, collaborationRequestRef, recoveryTaskRef });
+      requestDigest = commandDigest({ operation: "root-recovery-prepare", projectRef, requestId, mode, failedActorRef, initiatorActorRef, beneficiaryActorRef, failureCode, failureEvidence, collaborationRequestRef, recoveryTaskRef, retryLaunchRef });
       const replay = this.database.prepare("SELECT * FROM project_collaboration_root_recoveries WHERE project_ref=? AND request_id=?").get(projectRef, requestId);
       if (replay !== undefined) { if (replay.request_digest !== requestDigest) throw storeError("root recovery request replay drifted", "PROJECT_TASK_IDEMPOTENCY_CONFLICT"); duplicate = true; return; }
       const seat = this.database.prepare("SELECT * FROM project_collaboration_seats WHERE project_ref=? AND actor_ref=? AND kind='root'").get(projectRef, failedActorRef);
@@ -438,7 +439,7 @@ class ProjectTaskStore {
         if (request === undefined || request.kind !== "takeover" || targetTaskRef !== recoveryTaskRef || request.requester_actor_ref !== beneficiaryActorRef || request.target_actor_ref !== failedActorRef || !["resolved", "escalated"].includes(request.state) || targetTask === undefined || targetTask.owner_actor_ref !== beneficiaryActorRef || targetTask.assignee_actor_ref !== beneficiaryActorRef) throw storeError("takeover requires the exact audited request and its already migrated task ownership", "PROJECT_ROOT_RECOVERY_TAKEOVER_REQUIRED");
       }
       this.database.prepare(`INSERT INTO project_collaboration_root_recoveries(project_ref,recovery_ref,request_id,request_digest,mode,failed_actor_ref,requester_actor_ref,collaboration_request_ref,state,revision,replacement_slot_actor_ref,replacement_task_ref,launch_ref,failure_code,failure_evidence_cipher,created_at,updated_at,initiator_actor_ref,beneficiary_actor_ref)
-        VALUES(?,?,?,?,?,?,?,?, 'prepared',1,NULL,?,NULL,?,?,?,?,?,?)`).run(projectRef,recoveryRef,requestId,requestDigest,mode,failedActorRef,beneficiaryActorRef,collaborationRequestRef ?? null,recoveryTaskRef ?? null,failureCode,this.cipher.seal(projectRef,collaborationField("root-recovery",recoveryRef,"failureEvidence"),failureEvidence),timestamp,timestamp,initiatorActorRef,beneficiaryActorRef);
+        VALUES(?,?,?,?,?,?,?,?, 'prepared',1,NULL,?,?,?,?,?,?,?,?)`).run(projectRef,recoveryRef,requestId,requestDigest,mode,failedActorRef,beneficiaryActorRef,collaborationRequestRef ?? null,recoveryTaskRef ?? null,retryLaunchRef ?? null,failureCode,this.cipher.seal(projectRef,collaborationField("root-recovery",recoveryRef,"failureEvidence"),failureEvidence),timestamp,timestamp,initiatorActorRef,beneficiaryActorRef);
       if (seat.state !== "reserved") this.database.prepare("UPDATE project_collaboration_seats SET state='paused',revision=revision+1,phase_cipher=?,next_step_cipher=?,updated_at=? WHERE project_ref=? AND actor_ref=?").run(this.cipher.seal(projectRef,collaborationField("seat",failedActorRef,"phase"),"recovery"),this.cipher.seal(projectRef,collaborationField("seat",failedActorRef,"nextStep"),mode === "retry" ? "Retry the exact top-level session explicitly" : "Await audited replacement root adoption"),timestamp,projectRef,failedActorRef);
       this.database.prepare("UPDATE project_collaboration_boards SET revision=revision+1,updated_at=? WHERE project_ref=?").run(timestamp,projectRef);
       const projectRevision=this.#nextProjectRevision(projectRef);
@@ -458,6 +459,7 @@ class ProjectTaskStore {
       if((row.initiator_actor_ref ?? row.requester_actor_ref)!==initiatorActorRef) throw storeError("root recovery initiator is unauthorized","PROJECT_ROOT_RECOVERY_FORBIDDEN");
       if(row.state==="reserved") { const reservation=replacementSlotActorRef===undefined?undefined:this.database.prepare("SELECT capability_digest FROM project_collaboration_root_reservations WHERE project_ref=? AND slot_actor_ref=?").get(projectRef,replacementSlotActorRef),capabilityDigest=slotCapability===undefined?undefined:commandDigest({operation:"root-seat-capability",projectRef,slotActorRef:replacementSlotActorRef,slotCapability}); if(row.launch_ref!==launchRef || (row.replacement_slot_actor_ref ?? undefined)!==replacementSlotActorRef || reservation?.capability_digest!==capabilityDigest) throw storeError("root recovery reservation replay drifted","PROJECT_TASK_IDEMPOTENCY_CONFLICT"); return {duplicate:true,projectRevision:this.getProjectRevision(projectRef),recovery:this.#decodeRootRecovery(projectRef,row)}; }
       if(row.state!=="prepared") throw storeError("root recovery is not preparable","PROJECT_ROOT_RECOVERY_CONFLICT");
+      if(row.mode==="retry" && row.launch_ref!==null && row.launch_ref!==launchRef) throw storeError("exact-session retry reference changed","PROJECT_ROOT_RECOVERY_CONFLICT");
       if(row.mode==="retry" && replacementSlotActorRef!==undefined) throw storeError("exact-session retry cannot reserve a replacement seat","PROJECT_ROOT_RECOVERY_CONFLICT");
       let taskRef;
       if(row.mode==="takeover") {
@@ -1147,6 +1149,42 @@ class ProjectTaskStore {
     });
   }
 
+  inspectTaskWakeWaiter(input = {}) {
+    this.#requireReady();
+    const projectRef = normalizeProjectRef(input.projectRef);
+    const actorRef = nonEmptyString(input.actorRef, "actorRef", 256);
+    this.#assertProjectRevision(projectRef);
+    const row = this.database.prepare("SELECT * FROM project_task_wake_waiters WHERE project_ref=? AND actor_ref=?").get(projectRef, actorRef);
+    if (row === undefined) return Object.freeze({ actorRef, state: "idle", generation: 0 });
+    return Object.freeze({
+      actorRef,
+      state: row.state,
+      generation: row.generation,
+      ...(row.wake_ref === null ? {} : { wakeRef: row.wake_ref }),
+    });
+  }
+
+  reconcileTaskWakeSignal(input = {}) {
+    this.#requireReady();
+    const projectRef = normalizeProjectRef(input.projectRef);
+    const actorRef = nonEmptyString(input.actorRef, "actorRef", 256);
+    const wakeRef = nonEmptyString(input.wakeRef, "wakeRef", 256);
+    const evidence = nonEmptyString(input.evidence, "evidence", 64);
+    if (!new Set(["exact_message", "complete_history_absence"]).has(evidence)) throw new TypeError("unsupported task wake reconciliation evidence");
+    const timestamp = safeInteger(input.updatedAt, "updatedAt");
+    return this.#transaction(() => {
+      const row = this.database.prepare("SELECT * FROM project_task_wake_waiters WHERE project_ref=? AND actor_ref=?").get(projectRef, actorRef);
+      if (row === undefined) throw storeError("task wake waiter does not exist", "PROJECT_TASK_WAKE_NOT_FOUND");
+      if (row.wake_ref !== wakeRef) throw storeError("task wake reconciliation reference changed", "PROJECT_TASK_WAKE_CONFLICT");
+      const targetState = evidence === "exact_message" ? "delivered" : "waiting";
+      if (row.state === targetState) return { duplicate: true, wakeRef, state: targetState };
+      if (row.state !== "outcome_unknown") throw storeError("task wake is not awaiting reconciliation", "PROJECT_TASK_WAKE_CONFLICT");
+      this.database.prepare("UPDATE project_task_wake_waiters SET state=?,dispatcher_ref=?,lease_until=0,updated_at=? WHERE project_ref=? AND actor_ref=? AND wake_ref=? AND state='outcome_unknown'")
+        .run(targetState, targetState === "waiting" ? null : row.dispatcher_ref, timestamp, projectRef, actorRef, wakeRef);
+      return { duplicate: false, wakeRef, state: targetState };
+    });
+  }
+
   setTaskWakePaused(input = {}) {
     this.#requireReady();
     const projectRef = normalizeProjectRef(input.projectRef);
@@ -1156,10 +1194,7 @@ class ProjectTaskStore {
     return this.#transaction(() => {
       const projectRevision = this.#assertProjectRevision(projectRef);
       const row = this.database.prepare("SELECT * FROM project_task_wake_waiters WHERE project_ref=? AND actor_ref=?").get(projectRef, actorRef);
-      if (row === undefined) {
-        this.database.prepare("INSERT INTO project_task_wake_waiters(project_ref,actor_ref,generation,state,wake_ref,dispatcher_ref,lease_until,observed_revision,created_at,updated_at) VALUES(?,?,1,?,?,NULL,0,?,?,?)").run(projectRef, actorRef, input.paused ? "paused" : "waiting", null, projectRevision, timestamp, timestamp);
-        return { actorRef, state: input.paused ? "paused" : "waiting", generation: 1 };
-      }
+      if (row === undefined) return { actorRef, state: "idle", generation: 0 };
       if (input.paused) {
         if (row.state !== "paused") this.database.prepare("UPDATE project_task_wake_waiters SET state='paused',dispatcher_ref=NULL,lease_until=0,updated_at=? WHERE project_ref=? AND actor_ref=?").run(timestamp, projectRef, actorRef);
         return { actorRef, state: "paused", generation: row.generation };

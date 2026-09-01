@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.0.57
+
+### 官方 Harness alpha.3 启动与认证兼容
+
+- 本地 Web 启动地址完整保留 `/?token=...`，支持 stdout/stderr 跨分块识别；packaged self-test 现在验证 token 请求返回 303、取得精确 authority 的认证 Cookie，并携带该 Cookie 访问 clean `/` 获得 2xx 的完整链路，401/404/5xx 不再误报为已就绪。
+- Runtime 状态、自检诊断与可选输出统一隐藏启动 token，只保留 loopback origin；解析器拒绝非本机、非根路径、无效端口和歧义 query。
+- 主进程 HTTP RPC 与事件 WebSocket 复用官方 `persist:harness` 会话的认证 cookie，避免工作台启动后设置、事件与桌宠通道继续收到 401。
+- MobileSync WebSocket 在 401 拒绝与 101 成功握手中都会剥离上游 `dsh-auth-*` `Set-Cookie`，同时保留普通 Cookie；401 握手不会被自动重放，只以单飞刷新认证供后续新连接使用。
+
+### 插件 alpha.3 API 迁移
+
+- Computer Use 设置注册迁移到 `settingsCtx.settings.installSection(...)`，不再导入 alpha.3 已删除的 `dsh-settings` 命名辅助函数。
+- Browser Tools 技能候选迁移到 `ctx.remote.skills` 与新版 RpcResult，不再访问退休的 `connection.api.skills`。
+- 随包 Web 客户端清理 `dsh-client-runtime` / `dsh-client-ui-slots` 退休注入，并增加全插件负向回归，防止旧 API 或旧 manifest 重新进入发布包。
+
+### Agent Teams 与跨项目会话恢复
+
+- Host 冷启动后会在精确 canonical project/workspace 绑定恢复时重新排队持久化为 `queued` 的顶层会话操作，并复用同一 operation/session/prompt identity；同一操作的启动、重试与 reconcile 合并到一条执行链，避免崩溃窗口留下永久排队或重复创建、重复投递。
+- `prompt_dispatched` 的 `outcome_unknown` 由 Host 自动合并 `session/control` 与 `session/follow` 的 exact requestId 证据：已投递直接收敛为 `ready`，精确证明未投递才进入可安全失败/重试路径；证据不足时只保持后台观察并指数退避，不盲目再次发送 prompt。
+- Root recovery 会在重启和后续用户活动后自动恢复同一 durable recovery。只有 exact Host 证据证明未投递或处于可安全重试的确定失败时才执行有界自动重试；未知现场只观察、不重复外部效果，revision/CAS 与原 operation/session/prompt identity 继续阻止并发或崩溃窗口造成双发。Host 关闭会等待已经受理的操作与持久写入收敛。
+- 显式 Stop 现在会先取消该 root 的顶层项目会话启动与 admission，即使它尚未建立私有 Agent Team；项目任务 wake 在 Host 重启后以 exact `wakeRef` 核对完整 session/inbox 证据，未知现场不盲目重投，普通用户消息也不会凭空建立未由 `claim_next` 创建的 waiter。
+- Root recovery 的 Web 投影改为 Host 签发、绑定 exact project/actor/action/revision 的不透明 capability；retry 继续绑定原始 Host launch reference，takeover 继续要求协调者、已审计请求与已迁移任务所有权，私有 recovery/actor 标识不作为可执行输入暴露给页面。
+- 上述自动驾驶只覆盖能够由 Host 精确证明的会话启动与 root recovery；缺少精确持久证据的任意外部副作用继续受原安全门约束，不会被推断为成功或自动重放。
+
+### 团队生命周期、重启与注意事项
+
+- Graceful retirement、force drain、follow-up 与恢复启动增加统一的有界 deadline/Abort；超时会释放串行调用链，但不会把无法取消的底层 drain 推断为成功，成员持久化为 failed + shutdown/stop unconfirmed，供显式重试或替换。
+- Host 重启遇到仍持有 `in_progress` 的旧 worker 时，会把 worker 标为 failed 并保留原 claimId/leaseEpoch 与 interruption evidence；任务不自动重放，也不伪装成可继续的健康执行。
+- 崩溃遗留的 `closing` 团队不会只凭本地任务终态自动宣告关闭；重新执行关闭并获得 Host drain 成功后才收敛，失败继续保留 closing/failed/unconfirmed 审计。`submitted` 任务现在进入统计、Attention 与 `acceptance_required`，不会被当作普通在途或已完成任务。
+- 一次无关的后续消息成功不会清除旧 `failed_delivery` 告警；在缺少可证明“同一 payload 重试”的持久 lineage 前，该告警保持可见，避免把未送达误报为已恢复。
+
+### 桌面界面与发布身份
+
+- 删除桌面外壳重复的“手机同步”按钮，只保留与官方左侧栏对齐、具备连接状态与无障碍语义的唯一入口。
+- v1.0.57 未包含 Agent Teams UI 重设计；现有卡片界面、功能与权限不变，仅补充恢复动作所需的数据接线。
+- 桌面根包、lockfile、15 个自有插件、Android、iOS/iPadOS、桌面移动路由和更新示例统一到 `1.0.57`；Android `versionCode=1005700`，iOS build code 为 `10057`。
+- 新增 [`docs/SECURITY-REVIEW-v1.0.57.zh-CN.md`](docs/SECURITY-REVIEW-v1.0.57.zh-CN.md)。正式发布只走 resumable publisher，创建新的不可变 `v1.0.57`；已发布的 `v1.0.56` Tag、资产、组件、签名 Android APK 与 stable feed 保持不变。
+- 当前条目记录的是源码修复与定向契约，尚不等同于正式发布验收；最终全仓 `npm run verify`、`npm run verify:release`、干净 revision、云构建/签名、双云镜像与 stable feed 仍待发布器产生证据。
+
 ## 1.0.56
 
 ### 官方 Harness alpha.3 与 Schedule 收敛

@@ -40,7 +40,7 @@ function createContext(rootAgent, senderAgent, targetAgent) {
   const agents = new Map([[rootAgent.id, rootAgent], [senderAgent.id, senderAgent], [targetAgent.id, targetAgent]])
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
-    tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
+    tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) }, guard() { return () => {} } },
     systemPrompt: { section(section) { prompts.push(section); return () => {} } },
     webServer: { register() { return () => {} } },
     effect(setup) { setup() },

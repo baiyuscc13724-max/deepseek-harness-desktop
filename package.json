@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "1.0.56",
+  "version": "1.0.57",
   "private": false,
   "description": "Open-source Windows and macOS desktop shell for the official DeepSeek Harness Web UI with automatic local runtime startup, mobile pairing, packaged self-test, and release gates.",
   "author": {
@@ -99,6 +99,7 @@
       "plugins/dsh-mobile-control/**/*",
       "plugins/dsh-desktop-directory-picker/**/*",
       "plugins/dsh-desktop-browser-tools/**/*",
+      "plugins/dsh-desktop-web-search/**/*",
       "plugins/dsh-codex-image-bridge/**/*",
       "plugins/dsh-desktop-memory-tools/**/*",
       "plugins/dsh-desktop-mcp-manager/**/*",
@@ -221,6 +222,7 @@
       "plugins/dsh-mobile-control/**/*",
       "plugins/dsh-desktop-directory-picker/**/*",
       "plugins/dsh-desktop-browser-tools/**/*",
+      "plugins/dsh-desktop-web-search/**/*",
       "plugins/dsh-codex-image-bridge/**/*",
       "plugins/dsh-desktop-memory-tools/**/*",
       "plugins/dsh-desktop-mcp-manager/**/*",

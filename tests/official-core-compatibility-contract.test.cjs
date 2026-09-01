@@ -213,7 +213,7 @@ test('Host routes, model tools, and the sole UI workspace converge on the same b
   assert.doesNotMatch(workspace, /method: "POST"|postProjectTaskAction|createTask\(|updateTask\(/u)
   assert.match(workspace, /function runRootRecovery\(item,action\)[\s\S]*rootRecoveryState\.confirm!==key[\s\S]*props\.onRootRecovery\(item,action\)/u)
   assert.match(workspace, /MemberRecoveryReconcilePanel[\s\S]*props\.onReconcile[\s\S]*MemberRecoveryPanel[\s\S]*props\.onRecover/u)
-  assert.match(client, /function recoverProjectRoot\(recovery,action\)[\s\S]*postAction\(props\.sessionId,"root-recovery-continue",\{recoveryRef:recovery\.recoveryRef,expectedRevision:recovery\.revision,recoveryAction:action,confirm:true\}\)/u)
+  assert.match(client, /function recoverProjectRoot\(recovery,action\)[\s\S]*postAction\(props\.sessionId,"root-recovery-continue",\{recoveryCapability:recovery\.recoveryCapability,expectedRevision:recovery\.revision,recoveryAction:action,confirm:true\}\)/u)
   assert.match(client, /h\(ProjectCollaborationWorkspace, \{ key: "project-collaboration:" \+ props\.sessionId,[\s\S]*onRecover: recoverProjectMember, onReconcile: reconcileProjectMember, onRootRecovery: recoverProjectRoot \}\)/u)
 })
 

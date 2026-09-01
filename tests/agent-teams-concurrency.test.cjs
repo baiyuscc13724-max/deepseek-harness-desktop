@@ -31,7 +31,7 @@ function response() {
 function context(routes, cleanups) {
   return {
     logger: { info() {}, warn() {}, error() {} },
-    tools: { register() { return () => {} } },
+    tools: { register() { return () => {} }, guard() { return () => {} } },
     systemPrompt: { section() { return () => {} } },
     webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     effect(setup) { const cleanup = setup(); if (typeof cleanup === 'function') cleanups.push(cleanup) },

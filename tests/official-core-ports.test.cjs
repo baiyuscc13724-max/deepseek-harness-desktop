@@ -311,6 +311,91 @@ test('root recovery continuation fails exact OCC before any launch effect when r
   assert.equal(launchCalls, 0)
 })
 
+test('failed takeover recovery retries the exact reserved Host slot before reporting ready', async () => {
+  const host = await import(pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')).href)
+  let current = { recoveryRef: 'recovery_takeover_failed', revision: 5, state: 'failed', mode: 'takeover', launchRef: 'batch_takeover_failed', replacementSlotActorRef: 'actor_replacement', replacementTaskRef: 'task_replacement' }
+  const transitions = [], calls = [], events = []
+  const collaboration = {
+    getRootRecovery: () => ({ ...current }),
+    updateRootRecovery: (_execution, input) => {
+      assert.equal(input.recoveryRef, current.recoveryRef)
+      assert.equal(input.expectedRevision, current.revision)
+      current = { ...current, state: input.state, revision: current.revision + 1 }
+      transitions.push(input.state)
+      events.push(['transition', input.state])
+      return { recovery: { ...current } }
+    },
+    snapshot: () => ({ recovery: { ...current } })
+  }
+  const launch = {
+    recoveryReservation: async (_execution, input) => {
+      calls.push(['reservation', input.batchRef])
+      events.push(['reservation', input.batchRef])
+      return { batchRef: input.batchRef, slotRef: 'slot_takeover_failed', operationRef: 'operation_takeover_failed', slotState: 'failed' }
+    },
+    retryFailedSlot: async (_execution, input) => {
+      calls.push(['retry', input.slotRef])
+      events.push(['retry', input.slotRef])
+      return { state: 'ready', slots: [{ slotRef: input.slotRef, state: 'ready' }] }
+    },
+    status: async () => { throw new Error('failed takeover must not use observer-only status as its retry action') }
+  }
+  const result = await host.continueProjectRootRecovery(launch, {}, { canonicalProjectKey: 'project-key' }, 'project_01', collaboration, current.recoveryRef, current.revision)
+  assert.deepEqual(calls, [['reservation', 'batch_takeover_failed'], ['retry', 'slot_takeover_failed']])
+  assert.deepEqual(transitions, ['activated', 'ready'])
+  assert.deepEqual(events, [['reservation', 'batch_takeover_failed'], ['transition', 'activated'], ['retry', 'slot_takeover_failed'], ['transition', 'ready']], 'the durable activated CAS fences the retry effect')
+  assert.equal(result.recovery.state, 'ready')
+})
+
+test('failed recovery persists activated before an uncertain retry and never retries the unknown effect again', async () => {
+  const host = await import(pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')).href)
+  let current = { recoveryRef: 'recovery_retry_unknown', revision: 3, state: 'failed', mode: 'retry', launchRef: 'slot_retry_unknown' }
+  const events = []
+  const collaboration = {
+    getRootRecovery: () => ({ ...current }),
+    updateRootRecovery: (_execution, input) => {
+      assert.equal(input.expectedRevision, current.revision)
+      current = { ...current, state: input.state, revision: current.revision + 1 }
+      events.push(['transition', input.state])
+      return { recovery: { ...current } }
+    },
+    snapshot: () => ({ recovery: { ...current } })
+  }
+  const launch = {
+    retryFailedSlot: async (_execution, input) => { events.push(['retry', input.slotRef]); return { slots: [{ slotRef: input.slotRef, state: 'outcome_unknown' }] } },
+    slotStatus: async (_execution, input) => { events.push(['observe', input.slotRef]); return { slots: [{ slotRef: input.slotRef, state: 'outcome_unknown' }] } }
+  }
+  await host.continueProjectRootRecovery(launch, {}, {}, 'project_01', collaboration, current.recoveryRef, current.revision)
+  assert.deepEqual(events, [['transition', 'activated'], ['retry', 'slot_retry_unknown'], ['observe', 'slot_retry_unknown'], ['transition', 'outcome_unknown']])
+  assert.equal(current.state, 'outcome_unknown')
+  events.length = 0
+  await host.continueProjectRootRecovery(launch, {}, {}, 'project_01', collaboration, current.recoveryRef, current.revision)
+  assert.deepEqual(events, [['observe', 'slot_retry_unknown']], 'unknown recovery is observer-only until exact Host evidence changes it')
+  assert.equal(current.state, 'outcome_unknown')
+})
+
+test('a failed recovery CAS conflict prevents every Host retry effect', async () => {
+  const host = await import(pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')).href)
+  const current = { recoveryRef: 'recovery_retry_race', revision: 9, state: 'failed', mode: 'retry', launchRef: 'slot_retry_race' }
+  let effects = 0
+  const conflict = Object.assign(new Error('lost CAS'), { code: 'PROJECT_ROOT_RECOVERY_CONFLICT' })
+  await assert.rejects(host.continueProjectRootRecovery({ retryFailedSlot: async () => { effects += 1 } }, {}, {}, 'project_01', {
+    getRootRecovery: () => ({ ...current }), updateRootRecovery: () => { throw conflict }, snapshot: () => ({})
+  }, current.recoveryRef, current.revision), error => error === conflict)
+  assert.equal(effects, 0)
+})
+
+test('a reserved retry recovery CAS conflict prevents every Host retry effect', async () => {
+  const host = await import(pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')).href)
+  const current = { recoveryRef: 'recovery_reserved_race', revision: 2, state: 'reserved', mode: 'retry', launchRef: 'slot_reserved_race' }
+  let effects = 0
+  const conflict = Object.assign(new Error('lost reserved CAS'), { code: 'PROJECT_ROOT_RECOVERY_CONFLICT' })
+  await assert.rejects(host.continueProjectRootRecovery({ retryFailedSlot: async () => { effects += 1 } }, {}, {}, 'project_01', {
+    getRootRecovery: () => ({ ...current }), updateRootRecovery: () => { throw conflict }, snapshot: () => ({})
+  }, current.recoveryRef, current.revision), error => error === conflict)
+  assert.equal(effects, 0)
+})
+
 test('production Host registration consumes all official-compatible ports instead of declaring an unused interface', async () => {
   const source = await readFile(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js'), 'utf8')
   assert.match(source, /createOfficialCorePorts\(\{ providers: \[createCustomOfficialCoreProvider\(/u)

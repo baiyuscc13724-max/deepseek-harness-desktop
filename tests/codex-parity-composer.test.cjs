@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
-const { readFile } = require('node:fs/promises')
+const { readFile, readdir } = require('node:fs/promises')
 
 const root = path.resolve(__dirname, '..')
 
@@ -32,8 +32,9 @@ test('browser-tools client registers a $ skills source merging static and instal
   for (const skill of SKILLS) {
     assert.match(client, new RegExp(`name: ['"]${skill}['"]`), `$ skill candidate missing ${skill}`)
   }
-  // 动态并入已安装 skills（imagegen/openai-docs/visualize 等走 connection.api.skills）
-  assert.match(client, /ctx\.get\(['"]connection['"]\)\.api\.skills/)
+  // 动态并入已安装 skills（imagegen/openai-docs/visualize 等走 alpha.3 remote.skills）
+  assert.match(client, /ctx\.remote\.skills/u)
+  assert.doesNotMatch(client, /ctx\.get\(['"]connection['"]\)\.api|const \{ result \} = await skillsApi/u)
   assert.match(client, /skillsApi\.list\(/)
   assert.match(client, /startsWith\(query\)/)
   assert.match(client, /lexicon\(session\) \{/)
@@ -59,9 +60,46 @@ test('browser-tools package declares the web client module and its client face',
   assert.equal(pkg.exports['./client'], './lib/client.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.equal(pkg.dsh.client.immediately, true)
-  for (const dep of ['@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-input-trigger']) {
+  for (const dep of ['@deepseek-ai/dsh-client-ui-input-trigger', '@deepseek-ai/dsh-api-remotes']) {
     assert.ok(pkg.dsh.client.inject.includes(dep), `dsh.client inject missing ${dep}`)
   }
+  assert.ok(!pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime'))
+  assert.deepEqual(pkg.peerDependencies, {
+    '@deepseek-ai/cordis': '^4.0.2',
+    '@deepseek-ai/dsh-api-remotes': '^0.1.2-alpha.3',
+    '@deepseek-ai/dsh-client-ui-input-trigger': '^0.1.2-alpha.3'
+  })
   const client = await source('plugins/dsh-desktop-browser-tools/lib/client.js')
-  assert.match(client, /module\.exports = \{ apply, inject: \[['"]inputTriggers['"], ['"]connection['"], ['"]remote['"]\] \}/u)
+  assert.match(client, /module\.exports = \{ apply, inject: \[['"]inputTriggers['"], ['"]remote['"], ['"]remote\.skills['"]\] \}/u)
+})
+
+test('bundled web clients do not inject retired alpha.3 client packages or call the retired connection API', async () => {
+  const pluginRoot = path.join(root, 'plugins')
+  const entries = await readdir(pluginRoot, { withFileTypes: true })
+  const retiredInjects = new Set([
+    '@deepseek-ai/dsh-client-runtime',
+    '@deepseek-ai/dsh-client-ui-slots'
+  ])
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const manifestPath = path.join(pluginRoot, entry.name, 'package.json')
+    let pkg
+    try {
+      pkg = JSON.parse(await readFile(manifestPath, 'utf8'))
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue
+      throw error
+    }
+    if (pkg.dsh?.client?.platform !== 'web') continue
+    for (const dependency of pkg.dsh.client.inject || []) {
+      assert.ok(!retiredInjects.has(dependency), `${pkg.name} injects retired alpha.3 client package ${dependency}`)
+    }
+
+    const clientExport = pkg.exports?.['./client']
+    if (typeof clientExport !== 'string') continue
+    const client = await readFile(path.join(pluginRoot, entry.name, clientExport), 'utf8')
+    assert.doesNotMatch(client, /ctx\.get\(['"]connection['"]\)\.api/u, `${pkg.name} calls the retired connection.api face`)
+    assert.doesNotMatch(client, /@deepseek-ai\/dsh-client-runtime\/client/u, `${pkg.name} bundles the retired client runtime`)
+  }
 })

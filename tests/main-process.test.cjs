@@ -5,6 +5,54 @@ const path = require('node:path')
 
 const source = readFileSync(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
+test('runtime startup keeps the launch token main-only and publishes only the clean runtime origin', () => {
+  assert.match(source, /require\('\.\/bridge\/runtime-web-url\.cjs'\)/u)
+  assert.match(source, /return detectRuntimeWebUrl\(text\)/u)
+  assert.match(source, /runtimeStdoutBuffer = appendRuntimeWebOutput\(runtimeStdoutBuffer, output\)/u)
+  assert.match(source, /runtimeStderrBuffer = appendRuntimeWebOutput\(runtimeStderrBuffer, output\)/u)
+  assert.match(source, /done\(isRuntimeWebReadyStatus\(response\.statusCode\)\)/u)
+  assert.match(source, /diagnosticErrorText = appendBoundedRuntimeDiagnostic\(diagnosticErrorText, output\)[\s\S]{0,120}lastErrorText = redactRuntimeWebAuth\(diagnosticErrorText\)/u)
+  assert.match(source, /DeepSeek Harness Web 已就绪：\$\{safeRuntimeWebUrl\(candidateUrl\)\}/u)
+  assert.match(source, /let runtimeLaunchUrl = null/u)
+  assert.match(source, /function markRuntimeReady\(launchUrl, detail\)[\s\S]{0,420}runtimeLaunchUrl = normalized[\s\S]{0,160}url: publicUrl/u)
+  assert.match(source, /await prepareRuntimeSessionAuthentication\(candidateUrl\)[\s\S]{0,120}return markRuntimeReady\(candidateUrl,/u)
+  assert.doesNotMatch(source, /setRuntimeState\(\{ status: 'ready', url: candidateUrl/u)
+  assert.doesNotMatch(source, /statusCode >= 100 && response\.statusCode < 600/u)
+  assert.doesNotMatch(source, /function detectUrl\(text\) \{\r?\n\s+const match/u)
+})
+
+test('main runtime clients share only the authenticated persist:harness session and controlled cookie provider', () => {
+  assert.match(source, /return session\.fromPartition\('persist:harness'\)/u)
+  assert.match(source, /exchangeRuntimeLaunchToken\(runtimeSession, launchUrl,[\s\S]{0,180}readRuntimeAuthCookie\(runtimeSession\.cookies, launchUrl\)/u)
+  assert.match(source, /async function runtimeApiFetch\(value, options = \{\}\)[\s\S]{0,240}runtimeSessionFetch\(harnessRuntimeSession\(\), target, options\)/u)
+  assert.match(source, /connectExistingRuntime\(\)[\s\S]{0,300}probeAuthenticatedRuntimeSession\(harnessRuntimeSession\(\), DEFAULT_RUNTIME_URL/u)
+  assert.match(source, /fetchImpl: runtimeApiFetch,[\s\S]{0,100}WebSocketImpl: HarnessRuntimeWebSocket,[\s\S]{0,100}cookieProvider: runtimeAuthCookieHeader/u)
+  assert.match(source, /petAdapter = new PetEventAdapter\(\{[\s\S]{0,140}fetchImpl: runtimeApiFetch,[\s\S]{0,100}cookieProvider: runtimeAuthCookieHeader/u)
+  assert.match(source, /async function runtimeAuthCookieHeader\(value = runtimeState\.url, \{ force = false \} = \{\}\)[\s\S]{0,520}prepareRuntimeSessionAuthentication\(launchUrl, \{ force: true \}\)/u)
+  assert.doesNotMatch(source, /callRuntimeRpc[\s\S]{0,500}net\.fetch/u)
+})
+
+test('packaged self-test prepares every critical plugin used by normal startup', () => {
+  const body = source.slice(source.indexOf('async function runSelfTestMode()'), source.indexOf('function createWindow()'))
+  for (const prepare of [
+    'ensureDesktopCompactionPlugin',
+    'ensurePluginMarketplace',
+    'ensureMobileControlPlugin',
+    'ensureDesktopDirectoryPickerPlugin',
+    'ensureDesktopBrowserToolsPlugin',
+    'ensureDesktopMemoryToolsPlugin',
+    'ensureDesktopMcpManagerPlugin',
+    'ensureDesktopSchedulesPlugin',
+    'ensureDesktopFilesPlugin',
+    'ensureDesktopProgressPlugin',
+    'ensureDesktopComputerUsePlugin',
+    'ensureDesktopAndroidPlugin',
+    'ensureModelAdmissionPlugin',
+    'ensureAgentTeamsPlugin',
+    'ensureSessionExperiencePlugin'
+  ]) assert.match(body, new RegExp(`await ${prepare}\\(`, 'u'), `${prepare} is missing from the packaged release gate`)
+})
+
 test('main exposes one sender-guarded unified update state and action contract', () => {
   assert.match(source, /async function getUnifiedUpdateState\(\)/)
   assert.match(source, /displayVersion:[\s\S]*pendingCount:[\s\S]*items,[\s\S]*preferences/)
