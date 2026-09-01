@@ -126,6 +126,47 @@ test('same-version candidate rebind is allowed only before every publication sid
   )
 })
 
+test('dirty preflight state corrects an old-version binding only before every effect', () => {
+  const state = {
+    sourceRevision: 'a'.repeat(40),
+    productRevision: '',
+    candidateAttempts: [],
+    phases: {
+      'local-source-gates': {
+        status: 'failed',
+        startedAt: '2026-09-01T08:34:30.801Z',
+        failedAt: '2026-09-01T08:34:30.870Z',
+        error: 'Publication requires a clean tree. Commit or remove:\n M package.json'
+      }
+    }
+  }
+  const safe = {
+    oldRunTerminal: true,
+    previousVersion: false,
+    currentVersion: true,
+    sameVersion: false,
+    fastForward: true,
+    localTagExists: false,
+    remoteTagExists: false,
+    githubReleaseExists: false,
+    cnbReleaseExists: false,
+    stablePromoted: false
+  }
+  assert.equal(assertCandidateRebindAllowed(state, safe), true)
+  for (const changed of [
+    { candidateAttempts: [{ sourceRevision: '0'.repeat(40) }] },
+    { phases: { ...state.phases, 'desktop-cloud-builds': { status: 'failed' } } },
+    { phases: { 'local-source-gates': { ...state.phases['local-source-gates'], error: 'release verification failed' } } },
+    { phases: { 'local-source-gates': { ...state.phases['local-source-gates'], sourceRevision: 'a'.repeat(40) } } }
+  ]) assert.throws(() => assertCandidateRebindAllowed({ ...state, ...changed }, safe), /product versions/u)
+  assert.throws(() => assertCandidateRebindAllowed(state, { ...safe, currentVersion: false }), /product versions/u)
+  assert.throws(() => assertCandidateRebindAllowed(state, { ...safe, oldRunTerminal: false }), /previous cloud run/u)
+  assert.throws(() => assertCandidateRebindAllowed(state, { ...safe, githubReleaseExists: true }), /publication side effect/u)
+
+  const publisher = read('scripts/release-publish.mjs')
+  assert.match(publisher, /if \(!state\.sourceRevision\) \{\s*assertClean\(\)\s*if \(!revisionHasVersion\(currentHead\)\)/u)
+})
+
 test('pre-existing Tag is adopted only inside the publisher create/push crash window', () => {
   const revision = 'a'.repeat(40)
   const desktop = { status: 'completed', requestId: 'request-1', runId: 42 }

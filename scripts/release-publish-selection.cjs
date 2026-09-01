@@ -102,12 +102,31 @@ function isUncheckpointedImmutableTagFailure(phase) {
   )
 }
 
+function isPreflightOnlyVersionCorrection(state, evidence) {
+  const phases = state.phases && typeof state.phases === 'object' && !Array.isArray(state.phases) ? state.phases : {}
+  const entries = Object.entries(phases)
+  const local = phases['local-source-gates']
+  const attempts = state.candidateAttempts ?? []
+  const allowedKeys = new Set(['status', 'startedAt', 'failedAt', 'error'])
+  return (
+    /^[0-9a-f]{40}$/u.test(String(state.sourceRevision || '').toLowerCase()) &&
+    Array.isArray(attempts) && attempts.length === 0 &&
+    entries.length === 1 && entries[0][0] === 'local-source-gates' &&
+    local?.status === 'failed' &&
+    Object.keys(local).every(key => allowedKeys.has(key)) &&
+    /^\d{4}-\d{2}-\d{2}T/u.test(String(local.startedAt || '')) &&
+    /^\d{4}-\d{2}-\d{2}T/u.test(String(local.failedAt || '')) &&
+    /^Publication requires a clean tree\. Commit or remove:/u.test(String(local.error || '')) &&
+    evidence.previousVersion === false && evidence.currentVersion === true
+  )
+}
+
 function assertCandidateRebindAllowed(state, evidence = {}) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('Candidate rebind requires publication state.')
   if (state.productRevision || evidence.localTagExists || evidence.remoteTagExists) throw new Error('Candidate revision cannot rebind after an immutable tag exists.')
   if (evidence.githubReleaseExists || evidence.cnbReleaseExists || evidence.stablePromoted) throw new Error('Candidate revision cannot rebind after a publication side effect exists.')
   if (evidence.oldRunTerminal !== true) throw new Error('Candidate revision cannot rebind while its previous cloud run is active or unknown.')
-  if (evidence.sameVersion !== true) throw new Error('Candidate revision cannot rebind across product versions.')
+  if (evidence.sameVersion !== true && !isPreflightOnlyVersionCorrection(state, evidence)) throw new Error('Candidate revision cannot rebind across product versions.')
   if (evidence.fastForward !== true) throw new Error('Candidate revision must advance by fast-forward.')
   const allowed = new Set(['local-source-gates', 'desktop-cloud-builds'])
   for (const [id, phase] of Object.entries(state.phases || {})) {

@@ -1013,12 +1013,16 @@ async function rebindCandidateRevision(state, currentHead) {
     }
   }
   const sideEffects = await candidateSideEffects()
+  const previousVersion = revisionHasVersion(previous)
+  const currentVersion = revisionHasVersion(currentHead)
   assertCandidateRebindAllowed(state, {
     localTagExists: Boolean(localTagRevision()),
     remoteTagExists: Boolean(remoteTagRevision()),
     ...sideEffects,
     oldRunTerminal,
-    sameVersion: revisionHasVersion(previous) && revisionHasVersion(currentHead),
+    previousVersion,
+    currentVersion,
+    sameVersion: previousVersion && currentVersion,
     fastForward: revisionFastForwards(previous, currentHead)
   })
   state.candidateAttempts ||= []
@@ -1077,7 +1081,12 @@ async function publish() {
     await saveState(state)
   }
   if (!observedTagRevision) {
-    if (!state.sourceRevision) { state.sourceRevision = currentHead; await saveState(state) }
+    if (!state.sourceRevision) {
+      assertClean()
+      if (!revisionHasVersion(currentHead)) throw new Error(`Candidate HEAD does not contain package version ${version}.`)
+      state.sourceRevision = currentHead
+      await saveState(state)
+    }
     await rebindCandidateRevision(state, currentHead)
   }
   stateProductRevision = state.productRevision || observedTagRevision || state.sourceRevision
