@@ -171,7 +171,7 @@ test('trusted run validator rejects forks and noncanonical workflows', async () 
     repository: { full_name: OFFICIAL_REPOSITORY },
     head_repository: { full_name: OFFICIAL_REPOSITORY },
     pull_requests: [{ number: 42 }],
-    updated_at: '2026-08-25T00:00:00.000Z'
+    updated_at: '2030-08-25T00:00:00.000Z'
   }
   assert.equal(validateTrustedBuildRun(run, expected).runNumber, 7)
   assert.throws(() => validateTrustedBuildRun({ ...run, head_repository: { full_name: 'attacker/fork' } }, expected), /fork/)
@@ -215,7 +215,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     fork: false,
     pullRequest,
     headSha,
-    builtAt: '2026-08-25T00:00:00.000Z',
+    builtAt: '2030-08-25T00:00:00.000Z',
     prPackageVersion: '1.0.40',
     officialStableVersion: '1.0.44',
     buildRunNumber: 88,
@@ -233,7 +233,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     id: buildRunId, run_number: 88, run_attempt: 1, event: 'pull_request', status: 'completed', conclusion: 'success',
     path: '.github/workflows/pr-preview-build.yml', head_sha: headSha,
     repository: { full_name: repository }, head_repository: { full_name: repository },
-    pull_requests: [{ number: pullRequest }], updated_at: '2026-08-25T00:00:00.000Z'
+    pull_requests: [{ number: pullRequest }], updated_at: '2030-08-25T00:00:00.000Z'
   }))
   const prFile = path.join(temp, 'pull-request.json')
   await writeFile(prFile, JSON.stringify({
@@ -249,7 +249,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
   }))
   const stableFile = path.join(temp, 'official-stable-release.json')
   await writeFile(stableFile, JSON.stringify({
-    tag_name: 'v1.0.44', draft: false, prerelease: false, published_at: '2026-08-24T00:00:00.000Z'
+    tag_name: 'v1.0.44', draft: false, prerelease: false, published_at: '2030-08-24T00:00:00.000Z'
   }))
   const keyFile = path.join(temp, 'preview-key.pem')
   const trustedPreviewConfigFile = path.join(temp, 'trusted-preview-sources.json')
@@ -260,7 +260,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     runMetadataFile: runFile, pullRequestMetadataFile: prFile, stableReleaseMetadataFile: stableFile, trustedPreviewConfigFile,
     inputRoot: input, outputRoot: output, repository, prNumber: pullRequest, headSha,
     buildRunId, artifactName, keyFile, keyId: 'harness-preview-test',
-    cnbProject: repository, publishedAt: '2026-08-25T00:00:00.000Z'
+    cnbProject: repository, publishedAt: '2030-08-25T00:00:00.000Z'
   })
   assert.equal(result.previewManifest.componentManifest.releaseVersion, '1.0.45-pr.88.1')
   assert.equal(result.previewManifest.componentManifest.bootstrap.minVersion, '1.0.44')
@@ -313,7 +313,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     configFile: verifierConfig,
     indexFile,
     manifestFile,
-    now: Date.parse('2026-08-25T00:01:00.000Z')
+    now: Date.parse('2030-08-25T00:01:00.000Z')
   })
   assert.equal(verifiedFeed.requestAssets, 0)
 
@@ -343,7 +343,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     activatedRelease: version,
     restoredRelease: '1.0.44',
     checks: { healthy: 'passed', rollback: 'passed' },
-    createdAt: '2026-08-25T00:02:00.000Z'
+    createdAt: '2030-08-25T00:02:00.000Z'
   }
   const evidenceBytes = Buffer.from(JSON.stringify(evidence))
   const evidenceFile = path.join(temp, 'local-gate-evidence.json')
@@ -378,7 +378,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     headSha,
     immutableTag: audit.immutableTag,
     sequence: result.previewIndex.sequence,
-    now: Date.parse('2026-08-25T00:03:00.000Z')
+    now: Date.parse('2030-08-25T00:03:00.000Z')
   })
   assert.equal(promotion.componentSha256, sha256(componentBytes))
   assert.equal(promotion.evidenceSha256, evidenceSha256)
@@ -403,7 +403,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     indexFile,
     manifestFile,
     requestFile,
-    now: Date.parse('2026-08-25T00:03:00.000Z')
+    now: Date.parse('2030-08-25T00:03:00.000Z')
   })
   assert.equal(verifiedRequest.requestAssets, 3)
   await writeFile(evidenceFile, JSON.stringify({ ...evidence, checks: { healthy: 'passed', rollback: 'failed' } }))
@@ -425,7 +425,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     headSha,
     immutableTag: audit.immutableTag,
     sequence: result.previewIndex.sequence,
-    now: Date.parse('2026-08-25T00:03:00.000Z')
+    now: Date.parse('2030-08-25T00:03:00.000Z')
   }), /证据 SHA-256 不匹配/)
   await writeFile(evidenceFile, evidenceBytes)
 
@@ -438,7 +438,7 @@ test('signer verifies artifact bytes, emits CNB-first signed metadata, and gates
     indexFile,
     manifestFile,
     requestFile,
-    now: Date.parse('2026-08-25T00:01:00.000Z')
+    now: Date.parse('2030-08-25T00:01:00.000Z')
   }), /镜像请求资产与签名 feed 不一致/)
   await writeFile(requestFile, JSON.stringify(originalRequest))
 
