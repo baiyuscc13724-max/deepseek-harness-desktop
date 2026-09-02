@@ -1674,7 +1674,6 @@ public final class MainActivity extends AppCompatActivity {
         // attached, so the app callback needs OVERLAY priority to receive edge
         // gestures. While the IME is visible it is deliberately unregistered,
         // leaving the first back gesture to dismiss the keyboard.
-        private static final int WORKBENCH_PRIORITY = OnBackInvokedDispatcher.PRIORITY_OVERLAY;
         private final OnBackInvokedDispatcher dispatcher;
         private final OnBackInvokedCallback callback;
         private boolean started;
@@ -1706,7 +1705,7 @@ public final class MainActivity extends AppCompatActivity {
             boolean shouldRegister = started && !imeVisible;
             if (registered == shouldRegister) return;
             if (shouldRegister) {
-                dispatcher.registerOnBackInvokedCallback(WORKBENCH_PRIORITY, callback);
+                dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback);
             } else {
                 dispatcher.unregisterOnBackInvokedCallback(callback);
             }
