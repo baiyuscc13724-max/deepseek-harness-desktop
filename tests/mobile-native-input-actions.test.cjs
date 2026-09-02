@@ -174,6 +174,15 @@ test('new-session image and document wait for the official workspace before inta
     windowMock, documentMock, bridge, FakeFileReader, FakeFile, FakeEvent, FakeCustomEvent,
     FakeMutationObserver, setTimeoutMock, clearTimeoutMock, () => 1, class {}, async () => new Response()
   )
+  const plus = documentMock.getElementById('harness-mobile-input-button')
+  const menu = documentMock.getElementById('harness-mobile-input-menu')
+  assert.ok(plus)
+  assert.equal(plus.disabled, false, 'the new-session workspace trigger must keep attachment intake available')
+  plus.click()
+  assert.equal(menu.hidden, false, 'tapping plus must open the native input choices')
+  assert.equal(plus['aria-expanded'], 'true')
+  plus.click()
+  assert.equal(menu.hidden, true)
   const input = documentMock.getElementById('harness-mobile-photo-input')
   assert.ok(input)
   input.files = [{ name: 'phone-photo.png', type: 'image/png', lastModified: 1, bytes: new Uint8Array([1, 2, 3]) }]
@@ -223,6 +232,48 @@ test('composer plus menu exposes exactly the four native input choices', () => {
   assert.match(adapter, /aria-haspopup','menu'/)
   assert.match(adapter, /aria-expanded','false'/)
   assert.match(adapter, /setAttribute\('role','menuitem'\)/)
+  assert.match(adapter, /var currentCard=function\(\).*data-phase/u, 'attachment state must follow the active mobile composer rather than the first stale card')
+  assert.match(adapter, /var mount=function\(\).*currentCard\(\).*staleEntry/u, 'a composer remount must move the plus entry to the current card')
+  assert.match(adapter, /var syncOrMount=function\(\).*card\.contains\(button\)/u, 'an old connected plus button must not block mounting in a new conversation')
+})
+
+test('composer attachment entry follows the active card across official remounts', () => {
+  const script = extractJavaStringConstant(adapter, 'FILE_ENTRY_JS')
+  const currentCardSource = script.match(/var currentCard=(function\(\)\{.*?\});var currentTextarea/u)?.[1]
+  const syncSource = script.match(/var syncOrMount=(function\(\)\{.*?\});var affectsEntry/u)?.[1]
+  assert.ok(currentCardSource)
+  assert.ok(syncSource)
+
+  const active = { id: 'active' }
+  const mobile = { id: 'mobile' }
+  const fallback = { id: 'fallback' }
+  const choices = new Map([
+    ['[data-phase="active"] [data-composer-card]', active],
+    ['[data-harness-mobile-conversation="true"] [data-composer-card]', mobile],
+    ['[data-composer-card]', fallback]
+  ])
+  const currentCard = new Function('document', `var currentCard=${currentCardSource}; return currentCard`)({ querySelector: selector => choices.get(selector) || null }) // eslint-disable-line no-new-func
+  assert.equal(currentCard(), active)
+  choices.set('[data-phase="active"] [data-composer-card]', null)
+  assert.equal(currentCard(), mobile)
+
+  const staleButton = {}
+  let mountCalls = 0
+  let syncCalls = 0
+  let ownsButton = false
+  const current = { contains: node => ownsButton && node === staleButton }
+  const syncOrMount = new Function('currentCard', 'document', 'syncState', 'mount', `var syncOrMount=${syncSource}; return syncOrMount`)(
+    () => current,
+    { getElementById: () => staleButton },
+    () => { syncCalls += 1 },
+    () => { mountCalls += 1 }
+  ) // eslint-disable-line no-new-func
+  syncOrMount()
+  assert.equal(mountCalls, 1, 'a stale connected plus entry must be replaced')
+  assert.equal(syncCalls, 0)
+  ownsButton = true
+  syncOrMount()
+  assert.equal(syncCalls, 1, 'the current card keeps and refreshes its own plus entry')
 })
 
 test('composer frame stays inside its padded parent during focus and IME lift', () => {

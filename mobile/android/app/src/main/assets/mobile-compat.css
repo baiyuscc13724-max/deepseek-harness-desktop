@@ -5053,7 +5053,7 @@
   margin: 0 auto !important;
   padding: 16px !important;
   display: grid !important;
-  grid-template-rows: auto auto 44px minmax(0, 1fr) !important;
+  grid-template-rows: auto auto auto 44px minmax(0, 1fr) !important;
   gap: 12px !important;
   overflow: hidden !important;
   border: 1px solid var(--hm-color-border, #dfe3e8) !important;
@@ -5076,6 +5076,7 @@
 }
 
 [data-harness-mobile-model-handle="true"] {
+  grid-row: 1 !important;
   width: 44px !important;
   height: 5px !important;
   margin: -4px auto 4px !important;
@@ -5084,6 +5085,7 @@
 }
 
 [data-harness-mobile-model-sheet] header {
+  grid-row: 2 !important;
   min-width: 0 !important;
   display: flex !important;
   align-items: center !important;
@@ -5114,6 +5116,7 @@
 }
 
 [data-harness-mobile-model-summary] {
+  grid-row: 3 !important;
   box-sizing: border-box !important;
   min-width: 0 !important;
   min-height: 44px !important;
@@ -5146,6 +5149,7 @@
 }
 
 [data-harness-mobile-model-sheet] [role="tablist"] {
+  grid-row: 4 !important;
   box-sizing: border-box !important;
   height: 44px !important;
   min-height: 44px !important;
@@ -5185,7 +5189,9 @@
 }
 
 [data-harness-mobile-model-content] {
-  min-height: 132px !important;
+  grid-row: 5 !important;
+  min-height: 0 !important;
+  align-self: stretch !important;
   overflow: auto !important;
   overscroll-behavior: contain !important;
   scrollbar-width: thin;

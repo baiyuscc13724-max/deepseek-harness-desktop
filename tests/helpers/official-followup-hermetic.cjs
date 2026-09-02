@@ -27,7 +27,7 @@ const ACCEPTED = Object.freeze({
   'tests/official-alpha2-runtime-migration.test.cjs': 'd002a0d0b19674d07beda48c892b181cedb58bcc1cf7cdfeeaa84c4c34298472',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',
   'README.md': 'd31c8a16bb1e0582123e910b52322395946300580e4347d6f026b5efb872ece3',
-  'CHANGELOG.md': '70c4ff6be89d135ad8d4e5433cd83b5a565657abcd06852e9f7a62b4ea733fd9',
+  'CHANGELOG.md': 'ccb4db9c87f12ba636587250840b27b17bc03586d36c2b182b2e72f1e8fc8a8f',
   'release-notes.md': '13ed89aa8fa221026ada1134432ccab7e19164f3543f608e21cd35619a7bf212'
 })
 const ACCEPTED_MIGRATION_FILES = Object.freeze({

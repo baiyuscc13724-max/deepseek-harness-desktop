@@ -16,7 +16,7 @@ window.__ModuleLoader__.load({
       openSession: "打开会话", restoreSession: "恢复为新会话", restored: "已从归档会话恢复副本", copyId: "复制会话 ID", copied: "已复制", copyFailed: "复制失败，请手动选择", locate: "按会话 ID 定位", locatePlaceholder: "粘贴会话 ID 后回车",
       deleteHistory: "删除历史", deleteTitle: "永久删除整个会话？", deleteWarning: "会话“{title}”的消息与本地日志将被永久删除，且无法恢复。", deleteId: "会话 ID：{id}", cancelDelete: "取消", confirmDelete: "永久删除", deletingHistory: "正在删除…", deletedHistory: "已永久删除会话历史", deleteFailed: "删除失败：{error}",
       locateMiss: "没有找到该会话 ID", sessionIdLabel: "会话 ID", attachment: "附加文件", attachTitle: "从电脑选择文件并附加到当前输入框",
-      uploading: "正在添加附件…", attached: "已添加附件：{path}", attachFailed: "添加附件失败：{error}", unavailable: "当前输入框不可用", revokeHint: "附件保存在工作区 uploads/ 目录，可通过 @ 引用发送。",
+      uploading: "正在添加附件…", attached: "已添加附件：{path}", attachedMany: "已添加 {count} 个附件", attachPartial: "已添加 {count} 个附件，另有 {failed} 个失败：{error}", attachFailed: "添加附件失败：{error}", attachTooMany: "一次最多添加 64 个附件", attachMaxSize: "单个文件最大 50 MB", dropTitle: "释放即可添加文件或图片", unavailable: "当前输入框不可用", revokeHint: "附件保存在工作区 uploads/ 目录，可通过 @ 引用发送。",
       completionRegion: "会话完成通知", taskComplete: "任务已完成", taskCompleteHint: "点击前往这个会话", openCompletedSession: "打开已完成会话：{title}",
       timelineView: "时间线", timelineIntro: "按任务轮次整理的可追溯摘要。可直接 @ 引用到输入框，发送时会按原始事件范围重新解析。", timelineSearch: "搜索任务、结果或文件", timelineEmpty: "当前已加载范围内还没有任务摘要", timelineLoadOlder: "加载更早任务", timelineLoadingOlder: "正在加载…", timelineReference: "@ 引用", timelineReferenced: "已加入输入框", timelineReferenceUnavailable: "输入框当前不可用", timelineViewSource: "查看轨迹", timelineDetails: "查看完整摘要", timelineObjective: "任务目标", timelineOutcome: "完成结果", timelineChanges: "涉及文件", timelineSourceRange: "原始事件 #{start}–#{end}", timelineSection: "任务时间线", timelineCandidate: "任务 {turn}", timelineTaskFallback: "任务 {turn}", timelineOlderRequest: "较早的任务请求尚未加载", timelineNoOutcome: "本轮没有可显示的最终回复", timelineReferenceMissing: "时间线引用已失效或对应事件尚未加载", timelineStatusCompleted: "已完成", timelineStatusFailed: "失败", timelineStatusStopped: "已停止", timelineStatusRunning: "进行中", timelineShowingRecent: "为保持流畅，当前显示最近 {count} 条；搜索仍覆盖全部已加载摘要。"
     };
@@ -26,7 +26,7 @@ window.__ModuleLoader__.load({
       openSession: "Open session", restoreSession: "Restore as new session", restored: "Restored a copy of the archived session", copyId: "Copy session ID", copied: "Copied", copyFailed: "Copy failed, please select manually", locate: "Locate by session ID", locatePlaceholder: "Paste a session ID and press Enter",
       deleteHistory: "Delete history", deleteTitle: "Permanently delete this session?", deleteWarning: "Messages and local logs for “{title}” will be permanently deleted and cannot be recovered.", deleteId: "Session ID: {id}", cancelDelete: "Cancel", confirmDelete: "Delete permanently", deletingHistory: "Deleting…", deletedHistory: "Session history permanently deleted", deleteFailed: "Delete failed: {error}",
       locateMiss: "No session with that ID", sessionIdLabel: "Session ID", attachment: "Attach file", attachTitle: "Choose a file from this computer and attach it to the current composer",
-      uploading: "Adding attachment…", attached: "Attachment added: {path}", attachFailed: "Failed to add attachment: {error}", unavailable: "Composer is unavailable", revokeHint: "Attachments are stored under workspace uploads/ and can be sent with @ mentions.",
+      uploading: "Adding attachments…", attached: "Attachment added: {path}", attachedMany: "Added {count} attachments", attachPartial: "Added {count} attachments; {failed} failed: {error}", attachFailed: "Failed to add attachment: {error}", attachTooMany: "Add no more than 64 attachments at once", attachMaxSize: "Each file must be 50 MB or smaller", dropTitle: "Drop to add files or images", unavailable: "Composer is unavailable", revokeHint: "Attachments are stored under workspace uploads/ and can be sent with @ mentions.",
       completionRegion: "Session completion notifications", taskComplete: "Task completed", taskCompleteHint: "Open this session", openCompletedSession: "Open completed session: {title}",
       timelineView: "Timeline", timelineIntro: "Traceable summaries grouped by task turn. Reference one into the composer; its original event range is resolved again when sent.", timelineSearch: "Search tasks, outcomes, or files", timelineEmpty: "No task summaries exist in the currently loaded range", timelineLoadOlder: "Load earlier tasks", timelineLoadingOlder: "Loading…", timelineReference: "@ Reference", timelineReferenced: "Added to the composer", timelineReferenceUnavailable: "The composer is currently unavailable", timelineViewSource: "View trajectory", timelineDetails: "View full summary", timelineObjective: "Objective", timelineOutcome: "Outcome", timelineChanges: "Files involved", timelineSourceRange: "Source events #{start}–#{end}", timelineSection: "Task timeline", timelineCandidate: "Task {turn}", timelineTaskFallback: "Task {turn}", timelineOlderRequest: "The earlier task request is not loaded", timelineNoOutcome: "This turn has no displayable final response", timelineReferenceMissing: "The timeline reference is stale or its source events are not loaded", timelineStatusCompleted: "Completed", timelineStatusFailed: "Failed", timelineStatusStopped: "Stopped", timelineStatusRunning: "Running", timelineShowingRecent: "To stay responsive, showing the latest {count}; search still covers every loaded summary."
     };
@@ -49,6 +49,8 @@ window.__ModuleLoader__.load({
         ".dse-attach svg{display:block}",
         ".dse-status{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
         ".dse-status[data-error=true]{color:var(--dsw-alias-state-error-primary)}",
+        "[data-composer-card=\"true\"][data-dse-file-drop=\"true\"]{position:relative;outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}",
+        "[data-composer-card=\"true\"][data-dse-file-drop=\"true\"]::after{content:attr(data-dse-file-drop-label);position:absolute;z-index:20;inset:6px;display:grid;place-items:center;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--dsw-alias-brand-primary) 68%,var(--dsw-alias-border-l2));border-radius:10px;padding:16px;color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 90%,transparent);backdrop-filter:blur(8px);font-size:13px;font-weight:600;pointer-events:none}",
         ".dse-archive{box-sizing:border-box;padding:22px clamp(18px,4vw,44px) 60px;color:var(--dsw-alias-label-primary)}",
         ".dse-archive-shell{width:min(100%,760px);margin:0 auto;display:grid;gap:14px}",
         ".dse-archive-head{margin:0;font-size:20px;line-height:28px}",
@@ -168,6 +170,90 @@ window.__ModuleLoader__.load({
       return null;
     }
 
+    var MAX_ATTACHMENT_FILES = 64;
+    var MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+    function attachmentBatchTooLarge(files) { return Array.from(files || []).length > MAX_ATTACHMENT_FILES; }
+    var NATIVE_DROP_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+    var NATIVE_DROP_IMAGE_TYPE_BY_EXTENSION = Object.freeze({
+      ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".jfif": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"
+    });
+    function attachmentExtension(name) {
+      var matched = String(name || "").toLowerCase().match(/(\.[^.\\/]+)$/u);
+      return matched ? matched[1] : "";
+    }
+    function nativeDropImage(file) {
+      var declared = String(file && file.type || "").toLowerCase();
+      if (NATIVE_DROP_IMAGE_TYPES.has(declared)) return { file: file, normalized: false };
+      var inferred = NATIVE_DROP_IMAGE_TYPE_BY_EXTENSION[attachmentExtension(file && file.name)];
+      if (!inferred || typeof File !== "function") return null;
+      try {
+        return {
+          file: new File([file], String(file && file.name || "image"), {
+            type: inferred,
+            lastModified: Number.isFinite(file && file.lastModified) ? file.lastModified : Date.now()
+          }),
+          normalized: true
+        };
+      } catch (_) { return null; }
+    }
+    function planAttachmentDrop(files) {
+      var nativeImages = [];
+      var references = [];
+      var normalized = false;
+      Array.from(files || []).forEach(function (file) {
+        var native = nativeDropImage(file);
+        if (native) {
+          nativeImages.push(native.file);
+          normalized = normalized || native.normalized;
+        } else references.push(file);
+      });
+      return { nativeImages: nativeImages, references: references, intercept: references.length > 0 || normalized };
+    }
+    function transferNeedsReferenceDrop(dataTransfer) {
+      var items = Array.from(dataTransfer && dataTransfer.items || []).filter(function (item) { return item && item.kind === "file"; });
+      if (!items.length) return false;
+      return items.some(function (item) { return !NATIVE_DROP_IMAGE_TYPES.has(String(item.type || "").toLowerCase()); });
+    }
+    function quoteAttachmentMention(value) {
+      var path = String(value || "").replace(/"/gu, "");
+      return /\s/u.test(path) ? "@\"" + path + "\"" : "@" + path;
+    }
+    function appendAttachmentMentions(draft, paths) {
+      var current = typeof draft === "string" ? draft : "";
+      var mentions = Array.from(paths || []).filter(Boolean).map(quoteAttachmentMention);
+      if (!mentions.length) return current;
+      var separator = current && !/\s$/u.test(current) ? " " : "";
+      return current + separator + mentions.join(" ") + " ";
+    }
+    function resetOfficialAttachmentDrop() {
+      try { window.dispatchEvent(new Event("dragend")); } catch (_) {}
+    }
+    function dispatchNativeDropImages(files) {
+      if (!files.length) return true;
+      if (typeof DataTransfer !== "function" || typeof DragEvent !== "function") return false;
+      try {
+        var transfer = new DataTransfer();
+        files.forEach(function (file) { transfer.items.add(file); });
+        document.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+        return true;
+      } catch (_) { return false; }
+    }
+    function uploadAttachmentFile(sessionId, file) {
+      var url = "/api/session-experience/upload?sessionId=" + encodeURIComponent(sessionId) + "&name=" + encodeURIComponent(file.name);
+      return fetch(url, { method: "POST", headers: { "content-type": file.type || "application/octet-stream" }, body: file, credentials: "same-origin" })
+        .then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (data) {
+            if (!response.ok) { var error = new Error(data.error || "HTTP " + response.status); error.code = data.code; throw error; }
+            return data;
+          });
+        })
+        .then(function (result) {
+          var attachPath = result && result.file && result.file.path ? result.file.path : "";
+          if (!attachPath) throw new Error("no path");
+          return attachPath;
+        });
+    }
+
     function PaperclipButton(props) {
       var sessionId = props.sessionId || (props.input && props.input.sessionId) || "";
       var inputActions = props.inputActions;
@@ -177,10 +263,20 @@ window.__ModuleLoader__.load({
       var fileRef = useRef(null);
       var browserIntentAnchorRef = useRef(null);
       var browserIntentDraftRef = useRef({ text: "", hasAttachments: false });
+      var attachmentContextRef = useRef(null);
+      var attachmentUploadRef = useRef(null);
+      var attachmentQueueRef = useRef(Promise.resolve());
+      var mountedRef = useRef(true);
+      var currentDraft = props.input && typeof props.input.draft === "string" ? props.input.draft : "";
       browserIntentDraftRef.current = {
-        text: props.input && typeof props.input.draft === "string" ? props.input.draft : "",
+        text: currentDraft,
         hasAttachments: Boolean(props.input && Array.isArray(props.input.imageIds) && props.input.imageIds.length)
       };
+      attachmentContextRef.current = { sessionId: sessionId, inputActions: inputActions, draft: currentDraft };
+      useEffect(function () {
+        mountedRef.current = true;
+        return function () { mountedRef.current = false; };
+      }, []);
       useEffect(function () {
         if (!sessionId || !inputActions) return;
         timelineComposerActions[sessionId] = inputActions;
@@ -260,36 +356,178 @@ window.__ModuleLoader__.load({
           card.removeEventListener("click", onClick, true);
         };
       }, [inputActions]);
+      function enqueueUploads(rawFiles) {
+        var files = Array.from(rawFiles || []).filter(Boolean);
+        if (!files.length) return Promise.resolve(false);
+        if (attachmentBatchTooLarge(files)) {
+          setStatus(translate("attachTooMany")); setError(true);
+          return Promise.resolve(false);
+        }
+        if (!sessionId || !inputActions || typeof inputActions.setDraft !== "function") {
+          setStatus(translate("unavailable")); setError(true);
+          return Promise.resolve(false);
+        }
+        var accepted = [];
+        var failures = [];
+        files.forEach(function (file) {
+          if (file.size > MAX_ATTACHMENT_BYTES) failures.push(translate("attachMaxSize"));
+          else accepted.push(file);
+        });
+        if (!accepted.length) {
+          setStatus(translate("attachFailed", { error: failures[0] || translate("unavailable") })); setError(true);
+          return Promise.resolve(false);
+        }
+        var requestedSessionId = sessionId;
+        attachmentQueueRef.current = attachmentQueueRef.current.catch(function () {}).then(function () {
+          var before = attachmentContextRef.current;
+          if (!mountedRef.current || !before || before.sessionId !== requestedSessionId) return false;
+          setBusy(true); setStatus(translate("uploading")); setError(false);
+          var paths = [];
+          var chain = Promise.resolve();
+          accepted.forEach(function (file) {
+            chain = chain.then(function () {
+              return uploadAttachmentFile(requestedSessionId, file).then(function (path) { paths.push(path); }, function (cause) {
+                failures.push((cause && cause.message) || String(cause));
+              });
+            });
+          });
+          return chain.then(function () {
+            var current = attachmentContextRef.current;
+            if (!mountedRef.current || !current || current.sessionId !== requestedSessionId) return false;
+            if (paths.length) {
+              var nextDraft = appendAttachmentMentions(current.draft, paths);
+              current.inputActions.setDraft(nextDraft);
+              current.draft = nextDraft;
+            }
+            if (paths.length && failures.length) {
+              setStatus(translate("attachPartial", { count: paths.length, failed: failures.length, error: failures[0] })); setError(true);
+            } else if (paths.length > 1) {
+              setStatus(translate("attachedMany", { count: paths.length })); setError(false);
+            } else if (paths.length === 1) {
+              setStatus(translate("attached", { path: paths[0] })); setError(false);
+            } else {
+              setStatus(translate("attachFailed", { error: failures[0] || translate("unavailable") })); setError(true);
+            }
+            return paths.length > 0;
+          }).finally(function () {
+            var current = attachmentContextRef.current;
+            if (mountedRef.current && current && current.sessionId === requestedSessionId) setBusy(false);
+          });
+        }).catch(function (cause) {
+          var current = attachmentContextRef.current;
+          if (mountedRef.current && current && current.sessionId === requestedSessionId) {
+            setBusy(false);
+            setStatus(translate("attachFailed", { error: (cause && cause.message) || String(cause) }));
+            setError(true);
+          }
+          return false;
+        });
+        return attachmentQueueRef.current;
+      }
+      attachmentUploadRef.current = enqueueUploads;
+      useEffect(function () {
+        if (typeof document === "undefined" || typeof window === "undefined") return;
+        var anchor = browserIntentAnchorRef.current;
+        var card = anchor && typeof anchor.closest === "function" ? anchor.closest('[data-composer-card="true"]') : null;
+        if (!card) return;
+        // Match the official composer-wide drop surface while the active conversation card is visible.
+        var active = false;
+        var depth = 0;
+        var watchdog = null;
+        function visible() {
+          if (!card.isConnected || typeof card.getBoundingClientRect !== "function") return false;
+          var rect = card.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }
+        function clearDrop() {
+          if (watchdog !== null) window.clearTimeout(watchdog);
+          watchdog = null; active = false; depth = 0;
+          delete card.dataset.dseFileDrop;
+          delete card.dataset.dseFileDropLabel;
+        }
+        function armWatchdog() {
+          if (watchdog !== null) window.clearTimeout(watchdog);
+          watchdog = window.setTimeout(clearDrop, 1500);
+        }
+        function takeReferenceDrag(event) {
+          var transfer = event.dataTransfer;
+          if (event.isTrusted !== true || !visible() || !transfer || Array.from(transfer.types || []).indexOf("Files") < 0 || !transferNeedsReferenceDrop(transfer)) return false;
+          event.preventDefault(); event.stopPropagation();
+          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          transfer.dropEffect = "copy";
+          if (!active) resetOfficialAttachmentDrop();
+          active = true;
+          card.dataset.dseFileDrop = "true";
+          card.dataset.dseFileDropLabel = translate("dropTitle");
+          armWatchdog();
+          return true;
+        }
+        function onDragEnter(event) { if (takeReferenceDrag(event)) depth += 1; }
+        function onDragOver(event) { takeReferenceDrag(event); }
+        function onDragLeave(event) {
+          if (!active) return;
+          event.stopPropagation();
+          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          depth = Math.max(0, depth - 1);
+          if (depth === 0) clearDrop();
+        }
+        function onAttachmentDrop(event) {
+          var transfer = event.dataTransfer;
+          if (event.isTrusted !== true || !visible() || !transfer || Array.from(transfer.types || []).indexOf("Files") < 0) return;
+          var files = Array.from(transfer.files || []);
+          if (!files.length) { clearDrop(); return; }
+          var plan = planAttachmentDrop(files);
+          if (!plan.intercept) { clearDrop(); return; }
+          event.preventDefault(); event.stopPropagation();
+          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          clearDrop();
+          resetOfficialAttachmentDrop();
+          if (attachmentBatchTooLarge(files)) {
+            setStatus(translate("attachTooMany")); setError(true);
+            return;
+          }
+          var references = plan.references.slice();
+          if (plan.nativeImages.length && !dispatchNativeDropImages(plan.nativeImages)) references = references.concat(plan.nativeImages);
+          if (references.length && attachmentUploadRef.current) void attachmentUploadRef.current(references);
+        }
+        function onKeyDown(event) { if (event.key === "Escape") clearDrop(); }
+        function onVisibilityChange() { if (document.hidden) clearDrop(); }
+        document.addEventListener("dragenter", onDragEnter, true);
+        document.addEventListener("dragover", onDragOver, true);
+        document.addEventListener("dragleave", onDragLeave, true);
+        document.addEventListener("drop", onAttachmentDrop, true);
+        document.addEventListener("pointerdown", clearDrop, true);
+        document.addEventListener("keydown", onKeyDown, true);
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        window.addEventListener("dragend", clearDrop);
+        window.addEventListener("blur", clearDrop);
+        window.addEventListener("pagehide", clearDrop);
+        return function () {
+          clearDrop();
+          document.removeEventListener("dragenter", onDragEnter, true);
+          document.removeEventListener("dragover", onDragOver, true);
+          document.removeEventListener("dragleave", onDragLeave, true);
+          document.removeEventListener("drop", onAttachmentDrop, true);
+          document.removeEventListener("pointerdown", clearDrop, true);
+          document.removeEventListener("keydown", onKeyDown, true);
+          document.removeEventListener("visibilitychange", onVisibilityChange);
+          window.removeEventListener("dragend", clearDrop);
+          window.removeEventListener("blur", clearDrop);
+          window.removeEventListener("pagehide", clearDrop);
+        };
+      }, [sessionId]);
       function pick() {
         setStatus(""); setError(false);
         if (fileRef.current) { fileRef.current.value = ""; fileRef.current.click(); }
       }
       function upload(event) {
-        var file = event.target.files && event.target.files[0];
-        if (!file || busy) return;
-        if (!sessionId) { setStatus(translate("unavailable")); setError(true); return; }
-        if (file.size > 50 * 1024 * 1024) { setStatus(translate("attachFailed", { error: "最大 50 MB" })); setError(true); return; }
-        setBusy(true); setStatus(translate("uploading")); setError(false);
-        var url = "/api/session-experience/upload?sessionId=" + encodeURIComponent(sessionId) + "&name=" + encodeURIComponent(file.name);
-        fetch(url, { method: "POST", headers: { "content-type": file.type || "application/octet-stream" }, body: file, credentials: "same-origin" })
-          .then(function (response) { return response.json().catch(function () { return {}; }).then(function (data) { if (!response.ok) { var err = new Error(data.error || "HTTP " + response.status); err.code = data.code; throw err; } return data; }); })
-          .then(function (result) {
-            var attachPath = result && result.file && result.file.path ? result.file.path : "";
-            if (!attachPath) throw new Error("no path");
-            if (inputActions && typeof inputActions.setDraft === "function") {
-              var quoted = /\s/.test(attachPath) ? "@\"" + attachPath.replace(/\"/g, "") + "\"" : "@" + attachPath;
-              var currentDraft = props.input && typeof props.input.draft === "string" ? props.input.draft : "";
-              var separator = currentDraft && !/\s$/u.test(currentDraft) ? " " : "";
-              inputActions.setDraft(currentDraft + separator + quoted + " ");
-              setStatus(translate("attached", { path: attachPath }));
-            } else setStatus(translate("unavailable"));
-          })
-          .catch(function (cause) { setStatus(translate("attachFailed", { error: (cause && cause.message) || String(cause) })); setError(true); })
-          .finally(function () { setBusy(false); if (fileRef.current) fileRef.current.value = ""; });
+        var files = event.target.files ? Array.from(event.target.files) : [];
+        if (fileRef.current) fileRef.current.value = "";
+        if (files.length && attachmentUploadRef.current) void attachmentUploadRef.current(files);
       }
       return h(React.Fragment, null,
         h("span", { ref: browserIntentAnchorRef, "data-dsh-browser-intent-bridge": "ready", style: { display: "none" }, "aria-hidden": "true" }),
-        h("input", { ref: fileRef, className: "dse-file-input", type: "file", style: { position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }, tabIndex: -1, "aria-hidden": "true", onChange: upload }),
+        h("input", { ref: fileRef, className: "dse-file-input", type: "file", multiple: true, style: { position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }, tabIndex: -1, "aria-hidden": "true", onChange: upload }),
         h("button", { type: "button", className: "dse-attach", "data-busy": busy ? "true" : "false", disabled: busy, onClick: pick, title: translate("attachTitle"), "aria-label": translate("attachment") },
           h("svg", { width: 17, height: 17, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
             h("path", { d: "M21.2 11.2 12.7 19.7a5.2 5.2 0 0 1-7.3-7.3l8.5-8.5a3.4 3.4 0 1 1 4.8 4.8l-8.5 8.5a1.5 1.5 0 1 1-2.1-2.1l7.8-7.8" })
@@ -1198,6 +1436,7 @@ window.__ModuleLoader__.load({
     exports.inject = ["slots", "locale", "sessions", "workspaces", "inputTriggers"];
     exports.__completionTest = { createCompletionState: createCompletionState, reconcileCompletionState: reconcileCompletionState };
     exports.__browserIntentTest = { parseBrowserOpenIntent: parseBrowserOpenIntent, explicitBrowserUrl: explicitBrowserUrl, PaperclipButton: PaperclipButton };
+    exports.__attachmentDropTest = { planAttachmentDrop: planAttachmentDrop, transferNeedsReferenceDrop: transferNeedsReferenceDrop, appendAttachmentMentions: appendAttachmentMentions, attachmentBatchTooLarge: attachmentBatchTooLarge, nativeDropImage: nativeDropImage };
     exports.__timelineTest = { deriveTimelineItems: deriveTimelineItems, timelineReferencePayload: timelineReferencePayload, parseTimelineReference: parseTimelineReference, timelineReferenceInsert: timelineReferenceInsert, resolveTimelineReference: resolveTimelineReference, serializeTimelineReference: serializeTimelineReference, createTimelineReferenceSource: createTimelineReferenceSource, timelinePreservedIndex: timelinePreservedIndex, timelineActiveIndex: timelineActiveIndex, installInlineTimelineRail: installInlineTimelineRail, injectStyles: injectStyles, TimelineView: TimelineView };
     return module.exports;
   }

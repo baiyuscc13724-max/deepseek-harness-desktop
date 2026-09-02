@@ -298,6 +298,40 @@ test('completion notice state seeds once, filters current sessions, deduplicates
   assert.deepEqual(restored.notices, [], 'the first ready snapshot is a baseline, not a replay')
 })
 
+test('composer drop keeps native images native and routes every other file through workspace uploads', async () => {
+  const client = await clientPlugin()
+  const { appendAttachmentMentions, attachmentBatchTooLarge, planAttachmentDrop, transferNeedsReferenceDrop } = client.__attachmentDropTest
+  const png = { name: 'screen.png', type: 'image/png', size: 12, lastModified: 1 }
+  const pdf = { name: 'requirements.pdf', type: 'application/pdf', size: 24, lastModified: 2 }
+  const tiff = { name: 'scan.tiff', type: 'image/tiff', size: 36, lastModified: 3 }
+  const inferredPng = new File([new Uint8Array([1])], 'fallback.PNG', { type: '', lastModified: 4 })
+
+  const nativeOnly = planAttachmentDrop([png])
+  assert.equal(nativeOnly.intercept, false)
+  assert.deepEqual(nativeOnly.nativeImages, [png])
+  assert.deepEqual(nativeOnly.references, [])
+
+  const inferred = planAttachmentDrop([inferredPng])
+  assert.equal(inferred.intercept, true, 'an empty drag MIME must be normalized and redispatched')
+  assert.equal(inferred.nativeImages[0].type, 'image/png')
+  assert.deepEqual(inferred.references, [])
+
+  const mixed = planAttachmentDrop([pdf, png, tiff])
+  assert.equal(mixed.intercept, true)
+  assert.deepEqual(mixed.nativeImages, [png])
+  assert.deepEqual(mixed.references, [pdf, tiff])
+  assert.equal(attachmentBatchTooLarge(Array.from({ length: 64 }, function () { return pdf })), false)
+  assert.equal(attachmentBatchTooLarge(Array.from({ length: 65 }, function (_, index) { return index === 64 ? png : pdf })), true)
+  assert.equal(transferNeedsReferenceDrop({ items: [{ kind: 'file', type: 'image/png' }] }), false)
+  assert.equal(transferNeedsReferenceDrop({ items: [{ kind: 'file', type: '' }] }), true)
+  assert.equal(transferNeedsReferenceDrop({ items: [{ kind: 'file', type: 'application/pdf' }] }), true)
+  assert.equal(transferNeedsReferenceDrop({ items: [{ kind: 'string', type: 'text/plain' }] }), false)
+  assert.equal(
+    appendAttachmentMentions('review', ['uploads/requirements.pdf', 'uploads/需求 文档.docx']),
+    'review @uploads/requirements.pdf @"uploads/需求 文档.docx" '
+  )
+})
+
 test('client registers completion notices, archive history and an in-composer paperclip', async () => {
   const source = await readFile(path.join(root, 'plugins/dsh-session-experience/lib/client.js'), 'utf8')
   const manifest = JSON.parse(await readFile(path.join(root, 'plugins/dsh-session-experience/package.json'), 'utf8'))
@@ -341,9 +375,17 @@ test('client registers completion notices, archive history and an in-composer pa
   assert.match(source, /\/api\/session-experience\/upload/u)
   assert.match(source, /\/api\/session-experience\/archive-history/u)
   assert.match(source, /inputActions\.setDraft/u)
-  assert.match(source, /currentDraft \+ separator \+ quoted \+ " "/u)
-  assert.match(source, /type:\s*["']file["']/u)
-  assert.match(source, /最大 50 MB/u)
+  assert.match(source, /appendAttachmentMentions\(current\.draft, paths\)/u)
+  assert.match(source, /type:\s*["']file["'], multiple: true/u)
+  assert.match(source, /typeof document === "undefined" \|\| typeof window === "undefined"/u)
+  assert.match(source, /document\.addEventListener\("drop", onAttachmentDrop, true\)/u)
+  assert.match(source, /event\.isTrusted !== true/u)
+  assert.match(source, /dispatchNativeDropImages\(plan\.nativeImages\)/u)
+  assert.match(source, /if \(attachmentBatchTooLarge\(files\)\)/u)
+  assert.match(source, /\}\)\.catch\(function \(cause\) \{\s*var current = attachmentContextRef\.current;/u)
+  assert.match(source, /void attachmentUploadRef\.current\(references\)/u)
+  assert.match(source, /data-dse-file-drop/u)
+  assert.match(source, /单个文件最大 50 MB/u)
   assert.doesNotMatch(source, /ipcRenderer|desktopHarness/u)
   assert.doesNotMatch(source, /inputActions\.(submit|send)/u)
   assert.doesNotThrow(() => new Function(source))
