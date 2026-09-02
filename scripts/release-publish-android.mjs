@@ -99,8 +99,8 @@ function gitRun(args) {
   execute(git, args, { env: gitEnvironment() })
 }
 
-const GIT_FETCH_RETRY_ATTEMPTS = 4
-const TRANSIENT_GIT_FETCH_ERROR = /(?:RPC failed[\s\S]*?(?:curl 28|Connection was reset)|TLS handshake timeout|Failed to connect to github\.com|Could not resolve host|expected flush after ref listing)/iu
+const GIT_FETCH_RETRY_ATTEMPTS = 6
+const TRANSIENT_GIT_FETCH_ERROR = /(?:RPC failed[\s\S]*?(?:curl 28|Connection was reset)|Recv failure:\s*Connection was reset|TLS handshake timeout|Failed to connect to github\.com|Could not resolve host|expected flush after ref listing)/iu
 const gitFetchRetryWait = new Int32Array(new SharedArrayBuffer(4))
 
 function gitFetchRemoteMainWithRetry() {
