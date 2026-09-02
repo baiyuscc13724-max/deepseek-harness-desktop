@@ -44,7 +44,7 @@ async function injectedTeamPrompt() {
     await Promise.allSettled(cleanups.reverse().map(cleanup => cleanup()))
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
-    await rm(root, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 })
   }
 }
 
