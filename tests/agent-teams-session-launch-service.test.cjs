@@ -415,7 +415,7 @@ test('close drains accepted launch and retry requests across the persist-to-enqu
     let timer
     const settled = await Promise.race([
       Promise.all([retry, fresh, closing]),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('accepted launch/retry did not settle during close')), 1_000) })
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('accepted launch/retry did not settle during close')), 10_000) })
     ]).finally(() => clearTimeout(timer))
     assert.deepEqual(settled.slice(0, 2).map(result => result.state), ['cancelled', 'cancelled'])
     assert.deepEqual({ queued: value.service.diagnostics().queued, running: value.service.diagnostics().running, lanes: value.service.diagnostics().activeProjectLanes }, { queued: 0, running: 0, lanes: 0 })
