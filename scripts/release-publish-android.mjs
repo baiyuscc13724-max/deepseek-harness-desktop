@@ -99,6 +99,26 @@ function gitRun(args) {
   execute(git, args, { env: gitEnvironment() })
 }
 
+const GIT_FETCH_RETRY_ATTEMPTS = 4
+const TRANSIENT_GIT_FETCH_ERROR = /(?:RPC failed[\s\S]*?(?:curl 28|Connection was reset)|TLS handshake timeout|Failed to connect to github\.com|Could not resolve host|expected flush after ref listing)/iu
+const gitFetchRetryWait = new Int32Array(new SharedArrayBuffer(4))
+
+function gitFetchRemoteMainWithRetry() {
+  const args = ['fetch', 'origin', 'main', '--tags']
+  for (let attempt = 1; attempt <= GIT_FETCH_RETRY_ATTEMPTS; attempt += 1) {
+    const result = captureResult(git, args, { env: gitEnvironment() })
+    if (!result.error && result.status === 0) return
+    const detail = String(result.stderr || result.stdout || result.error?.message || '').trim()
+    const retryable = !result.error && TRANSIENT_GIT_FETCH_ERROR.test(detail)
+    if (!retryable || attempt === GIT_FETCH_RETRY_ATTEMPTS) {
+      if (result.error) throw result.error
+      throw new Error(`${git} ${args.join(' ')} exited with code ${result.status}.\n${detail}`)
+    }
+    console.warn(`Transient GitHub fetch failure (${attempt}/${GIT_FETCH_RETRY_ATTEMPTS}); retrying read-only fetch.`)
+    Atomics.wait(gitFetchRetryWait, 0, 0, attempt * 1_000)
+  }
+}
+
 function ghCapture(args) {
   return execute(process.platform === 'win32' ? 'gh.exe' : 'gh', args, { timeout: 2 * 60 * 1000 })
 }
@@ -146,7 +166,7 @@ function remoteTagRevision(tag) {
 }
 
 function assertExactRemoteMain() {
-  gitRun(['fetch', 'origin', 'main', '--tags'])
+  gitFetchRemoteMainWithRetry()
   const branch = gitCapture(['branch', '--show-current'])
   const head = gitCapture(['rev-parse', 'HEAD']).toLowerCase()
   const remoteMain = gitCapture(['rev-parse', 'origin/main']).toLowerCase()
