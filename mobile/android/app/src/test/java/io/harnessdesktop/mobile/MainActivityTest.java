@@ -41,8 +41,8 @@ public final class MainActivityTest {
     @Test public void android13UsesPlatformBackOnceAndLegacyDispatcherOnlyBeforeApi33() throws Exception {
         String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
             "src/main/java/io/harnessdesktop/mobile/MainActivity.java")), StandardCharsets.UTF_8);
-        assertTrue(source.contains("WORKBENCH_PRIORITY = OnBackInvokedDispatcher.PRIORITY_OVERLAY"));
-        assertTrue(source.contains("registerOnBackInvokedCallback"));
+        assertTrue(source.contains("registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback)"));
+        assertFalse(source.contains("WORKBENCH_PRIORITY"));
         assertTrue(source.contains("unregisterOnBackInvokedCallback"));
         assertTrue(source.contains("Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU"));
         assertTrue(source.contains("Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null"));
@@ -58,9 +58,8 @@ public final class MainActivityTest {
         int screenCapture = source.indexOf("private static final class ScreenCaptureObserver", dispatcher);
         String dispatcherBody = source.substring(dispatcher, screenCapture);
         assertTrue(dispatcherBody.contains(
-            "WORKBENCH_PRIORITY = OnBackInvokedDispatcher.PRIORITY_OVERLAY"));
-        assertTrue(dispatcherBody.contains(
-            "registerOnBackInvokedCallback(WORKBENCH_PRIORITY, callback)"));
+            "registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback)"));
+        assertFalse(dispatcherBody.contains("WORKBENCH_PRIORITY"));
         assertTrue(dispatcherBody.contains("boolean shouldRegister = started && !imeVisible"));
         assertTrue(source.contains("api33BackDispatcher.setImeVisible(nextImeVisible)"));
         assertTrue(source.contains("api33BackDispatcher.setImeVisible(imeVisible)"));
