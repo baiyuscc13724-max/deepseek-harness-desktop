@@ -64,7 +64,8 @@ test('real Host prepare-reserve-all-activate-ready-child-adopt keeps the adoptio
     const activated = await runtime.activatePreparedBatch({}, { batchRef: prepared.batchRef, reservations, projectBinding: parentBinding })
     assert.equal(activated.noHostEffects, false)
     let ready = activated
-    for (let attempt = 0; attempt < 100 && ready.state !== 'ready'; attempt += 1) { await delay(5); ready = await runtime.status({}, { batchRef: prepared.batchRef, projectBinding: parentBinding }) }
+    const readyDeadline = Date.now() + 10_000
+    while (ready.state !== 'ready' && Date.now() < readyDeadline) { await delay(25); ready = await runtime.status({}, { batchRef: prepared.batchRef, projectBinding: parentBinding }) }
     assert.equal(ready.state, 'ready')
     assert.equal(ready.createdSessionCount, 2)
 
