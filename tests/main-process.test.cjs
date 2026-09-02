@@ -102,8 +102,13 @@ test('guest preload accepts 199 and 200 automatic rounds but rejects 201 before 
     assert.equal(invocations.at(-1).value.autopilotMaxAdditionalRounds, autopilotMaxAdditionalRounds)
     assert.equal(invocations.at(-1).value.hostAuthorization.rootSessionId, base.sessionId)
   }
+  const unscopedDefaultOn = { ...base, autopilotMaxAdditionalRounds: 200 }
+  delete unscopedDefaultOn.hostAuthorization
+  const unscopedResult = await api.authorizeAgentTeamsAutopilotSettings(unscopedDefaultOn)
+  assert.equal(unscopedResult.authorizationId, 'authorization-200')
+  assert.equal(Object.hasOwn(invocations.at(-1).value, 'hostAuthorization'), false, 'trusted Save may precede the first team without inventing scope')
   await assert.rejects(api.authorizeAgentTeamsAutopilotSettings({ ...base, autopilotMaxAdditionalRounds: 201 }), /代理团队自动接力设置无效/u)
-  assert.equal(invocations.length, 2, '201 must be rejected before the official IPC capability request')
+  assert.equal(invocations.length, 3, '201 must be rejected before the official IPC capability request')
 })
 
 test('autopilot settings authorization is injected only for an exact managed Runtime request and revoked with Runtime', () => {

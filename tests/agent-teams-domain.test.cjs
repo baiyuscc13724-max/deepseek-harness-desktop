@@ -75,7 +75,7 @@ test('disabled Agent Teams initialization creates no storage file', async () => 
   const fx = await fixture()
   try {
     assert.equal(fx.store.snapshot().settings.enabled, false)
-    assert.equal(fx.store.snapshot().settings.autopilotEnabled, false)
+    assert.equal(fx.store.snapshot().settings.autopilotEnabled, true)
     assert.equal(fx.store.snapshot().settings.autopilotMaxAdditionalRounds, 200)
     await fx.store.mutate(() => undefined)
     await assert.rejects(stat(fx.file), error => error && error.code === 'ENOENT')
@@ -130,7 +130,7 @@ test('v1 store migration performs crash reconciliation in the same initializatio
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
     assert.equal(migrated.version, 8)
-    assert.deepEqual(migrated.settings, { ...legacy.settings, autopilotEnabled: false, autopilotMaxAdditionalRounds: 200 })
+    assert.deepEqual(migrated.settings, { ...legacy.settings, autopilotEnabled: true, autopilotMaxAdditionalRounds: 200 })
     const migratedTeam = migrated.teams[0]
     assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-lead').state, 'ready')
     assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-worker').state, 'ready')
@@ -166,25 +166,31 @@ test('v2 stores migrate additively to the bootstrap-capable schema', async () =>
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
     assert.equal(migrated.version, 8)
-    assert.equal(migrated.settings.autopilotEnabled, false)
+    assert.equal(migrated.settings.autopilotEnabled, true)
     assert.equal(migrated.settings.autopilotMaxAdditionalRounds, 200)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('legacy and profile defaults cannot opt into autopilot without a Desktop Host receipt', async () => {
+test('profile and legacy stores preserve the default-on preference without minting Goal authority', async () => {
   const mod = await plugin()
   const configuredRoot = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-config-autopilot-'))
   const configuredFile = path.join(configuredRoot, 'storages', 'agent_teams.json')
   const legacyRoot = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-legacy-autopilot-'))
   const legacyFile = path.join(legacyRoot, 'storages', 'agent_teams.json')
+  const optedOutRoot = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-legacy-autopilot-off-'))
+  const optedOutFile = path.join(optedOutRoot, 'storages', 'agent_teams.json')
   try {
     const configured = new mod.AgentTeamsStore(configuredFile, {
       enabled: true, maxMembers: 4, maxActiveTurns: 4,
       autopilotEnabled: true, autopilotMaxAdditionalRounds: 17
     })
     await configured.init()
-    assert.equal(configured.snapshot().settings.autopilotEnabled, false, 'profile config is preference input, not Host authorization')
-    assert.equal(configured.snapshot().settings.autopilotMaxAdditionalRounds, 17, 'the inert budget preference remains configurable')
+    assert.equal(configured.snapshot().settings.autopilotEnabled, true, 'profile config selects the preference but cannot issue a Host grant')
+    assert.equal(configured.snapshot().settings.autopilotMaxAdditionalRounds, 17)
+    const preferenceOnlyTeam = await mod.createTeam(configured, {
+      id: 'preference-only-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: configuredRoot } }
+    }, { objective: 'Prove that a stored preference is not Goal authority' })
+    assert.equal(preferenceOnlyTeam.autopilot, undefined, 'preference alone must not mint a team Goal grant')
 
     await mkdir(path.dirname(legacyFile), { recursive: true })
     await writeFile(legacyFile, `${JSON.stringify({
@@ -194,11 +200,23 @@ test('legacy and profile defaults cannot opt into autopilot without a Desktop Ho
     })}\n`, 'utf8')
     const migrated = new mod.AgentTeamsStore(legacyFile)
     await migrated.init()
-    assert.equal(migrated.snapshot().settings.autopilotEnabled, false, 'a legacy true bit is forcibly demoted during migration')
+    assert.equal(migrated.snapshot().settings.autopilotEnabled, true, 'an explicit legacy preference remains selected')
     assert.equal(migrated.snapshot().settings.autopilotMaxAdditionalRounds, 17)
+
+    await mkdir(path.dirname(optedOutFile), { recursive: true })
+    await writeFile(optedOutFile, `${JSON.stringify({
+      version: 7,
+      settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4, autopilotEnabled: false, autopilotMaxAdditionalRounds: 23 },
+      teams: [], routingReceipts: [], routingReceiptArchive: { version: 1, count: 0, chainHash: '0'.repeat(64) }
+    })}\n`, 'utf8')
+    const optedOut = new mod.AgentTeamsStore(optedOutFile)
+    await optedOut.init()
+    assert.equal(optedOut.snapshot().settings.autopilotEnabled, false, 'an explicit legacy opt-out must survive migration')
+    assert.equal(optedOut.snapshot().settings.autopilotMaxAdditionalRounds, 23)
   } finally {
     await rm(configuredRoot, { recursive: true, force: true })
     await rm(legacyRoot, { recursive: true, force: true })
+    await rm(optedOutRoot, { recursive: true, force: true })
   }
 })
 

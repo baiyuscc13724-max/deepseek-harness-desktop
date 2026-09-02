@@ -77,7 +77,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   enabled: false,
   maxMembers: 4,
   maxActiveTurns: 4,
-  autopilotEnabled: false,
+  autopilotEnabled: true,
   autopilotMaxAdditionalRounds: 200,
 });
 const AGENT_TEAM_AUTOPILOT_SETTINGS_KEYS = Object.freeze(["enabled", "maxMembers", "maxActiveTurns", "autopilotEnabled", "autopilotMaxAdditionalRounds"]);
@@ -1284,11 +1284,10 @@ function migrateStoreDocument(document) {
   const sourceVersion = document.version;
   const legacy = LEGACY_STORE_VERSIONS.has(sourceVersion);
   const legacyTaskSemantics = LEGACY_TASK_SEMANTICS_VERSIONS.has(sourceVersion);
-  // A stored preference is not continuation authority. Old stores therefore
-  // migrate with automatic continuation explicitly off; a user must opt in
-  // through the trusted Host settings UI before a new exact-goal grant exists.
-  if (legacy) document.settings.autopilotEnabled = false;
-  else document.settings.autopilotEnabled ??= false;
+  // Automatic continuation is selected by default, but a persisted preference
+  // is still not Goal authority. Preserve an explicit stored choice and use the
+  // product default only when an older store has no preference field at all.
+  document.settings.autopilotEnabled ??= DEFAULT_SETTINGS.autopilotEnabled;
   document.settings.autopilotMaxAdditionalRounds ??= DEFAULT_SETTINGS.autopilotMaxAdditionalRounds;
   document.routingReceipts ??= [];
   document.routingReceiptArchive ??= { version: 1, count: 0, chainHash: "0".repeat(64) };
@@ -2093,9 +2092,9 @@ function defaultDocument(settings = {}) {
       enabled: settings.enabled ?? DEFAULT_SETTINGS.enabled,
       maxMembers: safeLimit(settings.maxMembers, "maxMembers", DEFAULT_SETTINGS.maxMembers),
       maxActiveTurns: safeLimit(settings.maxActiveTurns, "maxActiveTurns", DEFAULT_SETTINGS.maxActiveTurns),
-      // Profile/default configuration is not a Desktop Host authorization path.
-      // Only the one-time settings capability may turn this persisted bit on.
-      autopilotEnabled: false,
+      // Profile/default configuration selects the preference only. A trusted
+      // settings Save is still required before any exact Goal grant is created.
+      autopilotEnabled: settings.autopilotEnabled ?? DEFAULT_SETTINGS.autopilotEnabled,
       autopilotMaxAdditionalRounds: safeLimit(settings.autopilotMaxAdditionalRounds, "autopilotMaxAdditionalRounds", DEFAULT_SETTINGS.autopilotMaxAdditionalRounds, AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS),
     },
     teams: [],
@@ -2716,6 +2715,25 @@ function hasDirectHumanRootAuthority(ctx, execution) {
   return ctx.agents.roots().includes(execution.agent)
     && events.some((event) => event.type === "user/message" && event.data?.source?.kind === "user");
 }
+function exactDirectHumanAutopilotRootAuthority(ctx, execution) {
+  if (!hasDirectHumanRootAuthority(ctx, execution) || typeof ctx.goals?.get !== "function") return undefined;
+  const goal = ctx.goals.get(execution.agent);
+  if (goal === undefined || goal.phase !== "active" || goal.activation !== "armed"
+    || typeof goal.objective !== "string" || goal.objective.length === 0
+    || !Number.isSafeInteger(goal.revision) || goal.revision < 1
+    || !Number.isSafeInteger(goal.roundsStarted) || goal.roundsStarted < 0
+    || !Number.isSafeInteger(goal.maxGoalRounds) || goal.maxGoalRounds < Math.max(1, goal.roundsStarted)) return undefined;
+  return Object.freeze({
+    rootSessionId: execution.agent.id,
+    turnKey: execution.turnKey ?? currentTurnKey(execution.agent),
+    projectKey: projectKeyForRoot(execution.agent),
+    goalId: goal.id,
+    goalRevision: goal.revision,
+    goalRound: goal.roundsStarted,
+    goalObjectiveHash: agentTeamAutopilotObjectiveHash(goal.objective),
+    goalMaxGoalRounds: goal.maxGoalRounds,
+  });
+}
 function exactGoalRoundRootAuthority(ctx, execution) {
   if (!ctx.agents.roots().includes(execution.agent) || typeof ctx.goals?.get !== "function") return undefined;
   const goal = ctx.goals.get(execution.agent);
@@ -3028,6 +3046,28 @@ async function exactGoalRoundAutopilotGrantIntent(ctx, authorizationProvider, ex
   if (proof === undefined || proof.enabled !== true || proof.autopilotEnabled !== true) return undefined;
   return Object.freeze({ ...authority, authorizationEpoch: state.authorizationEpoch, autopilotSettingsHash: proof.settingsHash });
 }
+async function exactDirectHumanAutopilotGrantIntent(ctx, authorizationProvider, execution, authority = exactDirectHumanAutopilotRootAuthority(ctx, execution)) {
+  if (authority === undefined || typeof authorizationProvider?.readAutopilotAuthorizationState !== "function") return undefined;
+  let state;
+  try { state = await authorizationProvider.readAutopilotAuthorizationState(); }
+  catch { return undefined; }
+  const proof = agentTeamAutopilotSettingsProof(state);
+  if (proof === undefined || proof.enabled !== true || proof.autopilotEnabled !== true) return undefined;
+  return Object.freeze({ ...authority, authorizationEpoch: state.authorizationEpoch, autopilotSettingsHash: proof.settingsHash });
+}
+function exactDirectHumanGrantIntentMatches(document, root, goal, routingReceiptId, intent) {
+  if (!isRecord(intent) || typeof intent.authorizationEpoch !== "string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(intent.authorizationEpoch)
+    || typeof intent.autopilotSettingsHash !== "string" || !/^[a-f0-9]{64}$/u.test(intent.autopilotSettingsHash)
+    || intent.autopilotSettingsHash !== agentTeamAutopilotSettingsHash(document.settings)
+    || intent.rootSessionId !== root.id || intent.projectKey !== optionalProjectKeyForRoot(root)
+    || goal === undefined || intent.goalId !== goal.id || intent.goalRevision !== goal.revision
+    || intent.goalRound !== goal.roundsStarted || intent.goalObjectiveHash !== agentTeamAutopilotObjectiveHash(goal.objective)
+    || intent.goalMaxGoalRounds !== goal.maxGoalRounds) return false;
+  const receipt = document.routingReceipts.find((candidate) => candidate.id === routingReceiptId);
+  return receipt !== undefined && receipt.level === "level3" && receipt.outcome === "recorded"
+    && receipt.establishmentAuthority === "direct_human" && receipt.rootSessionId === intent.rootSessionId
+    && receipt.turnKey === intent.turnKey && receipt.projectKey === intent.projectKey;
+}
 function exactGoalRoundGrantIntentMatches(document, root, goal, routingReceiptId, intent) {
   if (!isRecord(intent) || typeof intent.authorizationEpoch !== "string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(intent.authorizationEpoch)
     || typeof intent.autopilotSettingsHash !== "string" || !/^[a-f0-9]{64}$/u.test(intent.autopilotSettingsHash)
@@ -3044,7 +3084,7 @@ function exactGoalRoundGrantIntentMatches(document, root, goal, routingReceiptId
     && receipt.goalRound === intent.goalRound && receipt.goalObjectiveHash === intent.goalObjectiveHash
     && receipt.goalMaxGoalRounds === intent.goalMaxGoalRounds;
 }
-function agentTeamAutopilotGrantForCreation(document, root, goal, { goalRoundGrantIntent, planHash, pauseEpoch = 0, routingReceiptId, excludeTeamId } = {}) {
+function agentTeamAutopilotGrantForCreation(document, root, goal, { directHumanGrantIntent, goalRoundGrantIntent, planHash, pauseEpoch = 0, routingReceiptId, excludeTeamId } = {}) {
   if (document.settings.autopilotEnabled !== true) return undefined;
   const configuredBudget = document.settings.autopilotMaxAdditionalRounds;
   if (!Number.isSafeInteger(configuredBudget) || configuredBudget < 1 || configuredBudget > AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS) return undefined;
@@ -3080,13 +3120,15 @@ function agentTeamAutopilotGrantForCreation(document, root, goal, { goalRoundGra
     return inherited;
   }
   // A preference alone cannot mint Goal authority. For the first open team the
-  // core accepts only the exact Host-admitted Goal event for this root/turn and
-  // the current unguessable Desktop authorization epoch. Neither fact is exposed
-  // as a model/tool argument. The matching durable routing receipt makes the
-  // origin independently auditable after the creation transaction finalizes it.
-  if (!exactGoalRoundGrantIntentMatches(document, root, goal, routingReceiptId, goalRoundGrantIntent)) return undefined;
+  // core also requires either the exact direct-human root turn or the exact
+  // Host-admitted Goal round, plus the current unguessable Desktop settings
+  // epoch. None of these facts is exposed as a model/tool argument.
+  const grantIntent = exactDirectHumanGrantIntentMatches(document, root, goal, routingReceiptId, directHumanGrantIntent)
+    ? directHumanGrantIntent
+    : exactGoalRoundGrantIntentMatches(document, root, goal, routingReceiptId, goalRoundGrantIntent) ? goalRoundGrantIntent : undefined;
+  if (grantIntent === undefined) return undefined;
   return createAgentTeamAutopilotGrant(root, goal, {
-    authorizationEpoch: goalRoundGrantIntent.authorizationEpoch,
+    authorizationEpoch: grantIntent.authorizationEpoch,
     planHash,
     pauseEpoch,
     routingReceiptId,
@@ -4299,6 +4341,7 @@ async function createTeam(store, lead, input) {
     const timestamp = now();
     const initialPlanHash = createHash("sha256").update(JSON.stringify({ objective, tasks: [] })).digest("hex");
     const autopilotGrant = agentTeamAutopilotGrantForCreation(document, lead, input.autopilotGoal, {
+      directHumanGrantIntent: input.directHumanGrantIntent,
       goalRoundGrantIntent: input.goalRoundGrantIntent,
       routingReceiptId: input.routingReceiptId,
     });
@@ -4803,6 +4846,7 @@ async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
     const timestamp = now(), teamId = randomUUID();
     const taskIds = new Map(plan.tasks.map((task) => [task.key, randomUUID()]));
     const autopilotGrant = agentTeamAutopilotGrantForCreation(document, lead, input.autopilotGoal, {
+      directHumanGrantIntent: input.directHumanGrantIntent,
       goalRoundGrantIntent: input.goalRoundGrantIntent,
       routingReceiptId: input.routingReceiptId,
     });
@@ -7468,11 +7512,12 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
       const directHuman = hasDirectHumanRootAuthority(ctx, execution);
       const establishmentAuthority = directHuman ? "direct_human" : "goal_round";
       const goalRoundAuthority = directHuman ? undefined : exactGoalRoundRootAuthority(ctx, execution);
+      const directHumanGrantIntent = !directHuman || !store.autopilotPolicy().enabled ? undefined : await exactDirectHumanAutopilotGrantIntent(ctx, authorizationProvider, execution);
       const goalRoundGrantIntent = directHuman || !store.autopilotPolicy().enabled ? undefined : await exactGoalRoundAutopilotGrantIntent(ctx, authorizationProvider, execution, goalRoundAuthority);
       const routingDecision = { level: "level3", reasonCategory: args.explicit_user_team_request === true ? "explicit_user_team_request" : "independent_sustained_workstreams", explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: "team_start" };
       const recorded = await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded", establishmentAuthority, goalRoundAuthority });
       try {
-        const team = await createTeam(store, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, routingReceiptId: recorded.receipt.id, autopilotGoal: ctx.goals?.get?.(execution.agent), goalRoundGrantIntent });
+        const team = await createTeam(store, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, routingReceiptId: recorded.receipt.id, autopilotGoal: ctx.goals?.get?.(execution.agent), directHumanGrantIntent, goalRoundGrantIntent });
         const routing = await store.read((document) => ({ receipt: clone(document.routingReceipts.find((receipt) => receipt.id === recorded.receipt.id)), reused: recorded.reused }));
         return publicResult({ team, routing });
       } catch (error) {
@@ -7518,11 +7563,12 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
       const directHuman = hasDirectHumanRootAuthority(ctx, execution);
       const establishmentAuthority = directHuman ? "direct_human" : "goal_round";
       const goalRoundAuthority = directHuman ? undefined : exactGoalRoundRootAuthority(ctx, execution);
+      const directHumanGrantIntent = !directHuman || !store.autopilotPolicy().enabled ? undefined : await exactDirectHumanAutopilotGrantIntent(ctx, authorizationProvider, execution);
       const goalRoundGrantIntent = directHuman || !store.autopilotPolicy().enabled ? undefined : await exactGoalRoundAutopilotGrantIntent(ctx, authorizationProvider, execution, goalRoundAuthority);
       const routingDecision = { level: "level3", reasonCategory: args.explicit_user_team_request === true ? "explicit_user_team_request" : "independent_sustained_workstreams", explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: "team_bootstrap" };
       const recorded = await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded", establishmentAuthority, goalRoundAuthority });
       try {
-        const result = await bootstrapTeam(ctx, store, admission, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, routingReceiptId: recorded.receipt.id, autopilotGoal: ctx.goals?.get?.(execution.agent), goalRoundGrantIntent, tasks: (args.tasks ?? []).map((task) => ({ key: task.key, title: task.title, description: task.description, memberKey: task.member_key, dependsOn: task.depends_on, files: task.files })), members: (args.members ?? []).map((member) => ({ key: member.key, name: member.name, role: member.role, prompt: member.prompt, modelTier: member.model_tier, model: member.model })) }, signal);
+        const result = await bootstrapTeam(ctx, store, admission, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, routingReceiptId: recorded.receipt.id, autopilotGoal: ctx.goals?.get?.(execution.agent), directHumanGrantIntent, goalRoundGrantIntent, tasks: (args.tasks ?? []).map((task) => ({ key: task.key, title: task.title, description: task.description, memberKey: task.member_key, dependsOn: task.depends_on, files: task.files })), members: (args.members ?? []).map((member) => ({ key: member.key, name: member.name, role: member.role, prompt: member.prompt, modelTier: member.model_tier, model: member.model })) }, signal);
         const routing = await store.read((document) => ({ receipt: clone(document.routingReceipts.find((receipt) => receipt.id === recorded.receipt.id)), reused: recorded.reused || result.operation.reused }));
         return publicResult({ ...result, routing });
       } catch (error) {
@@ -8187,15 +8233,16 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
             });
             const budgetChanged = preview.nextSettings.autopilotMaxAdditionalRounds !== preview.document.settings.autopilotMaxAdditionalRounds;
             const autopilotModeChanged = preview.nextSettings.autopilotEnabled !== preview.document.settings.autopilotEnabled;
-            const authorizationRequired = preview.nextSettings.autopilotEnabled || autopilotModeChanged || budgetChanged;
+            const hasLiveAutopilotGrant = preview.document.teams.some((team) => ["pending_plan", "active"].includes(team.autopilot?.status));
+            const authorizationRequired = preview.nextSettings.autopilotEnabled || budgetChanged || autopilotModeChanged && hasLiveAutopilotGrant;
             if (!authorizationRequired) {
               return store.mutate((document) => {
                 document.settings = preview.nextSettings;
                 return { settings: document.settings };
               });
             }
-            if (preview.nextSettings.autopilotEnabled && preview.hostScope === undefined) {
-              reject("enabling automatic continuation requires an exact Desktop Host scope", "AGENT_TEAMS_HOST_AUTHORIZATION_REQUIRED");
+            if (preview.nextSettings.autopilotEnabled && preview.hostScope === undefined && hasLiveAutopilotGrant) {
+              reject("refreshing a live automatic-continuation grant requires its exact Desktop Host scope", "AGENT_TEAMS_HOST_AUTHORIZATION_REQUIRED");
             }
             // The outer web session is an independent trust boundary. Check it
             // before claiming the one-time Host receipt so a misbound request
@@ -9176,6 +9223,9 @@ export {
   dispatchProjectTaskWakeSignals,
   createTeamTurnAdmission,
   fileBoundaryOverlap,
+  exactDirectHumanAutopilotRootAuthority,
+  exactDirectHumanAutopilotGrantIntent,
+  agentTeamAutopilotGrantForCreation,
   exactGoalRoundRootAuthority,
   hasExactGoalRoundRootAuthority,
   hasTeamCreationRootAuthority,

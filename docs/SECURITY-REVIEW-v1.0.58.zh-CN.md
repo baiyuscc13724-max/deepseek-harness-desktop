@@ -38,8 +38,8 @@ v1.0.58 候选继续以 fail closed 为默认行为。官方核心升级不替�
 
 ## 4. Agent Teams 事件驱动自动驾驶
 
-- 自动接力必须由用户在可信桌面设置中显式开启；默认和旧数据迁移均为关闭。用户为每个目标选择固定的 1–200 轮追加上限，默认 200；模型参数、routing 声明和普通 goal round 都不能扩大该额度。
-- 首个团队必须消费一次性 Desktop Host 授权回执才取得本生命周期权限。回执精确绑定 root、canonical project、active Goal、team、pause epoch 与设置值；全局开关、静态请求头、模型声明或稍后创建的团队都不能替代该回执。只有同 root 下完整、仍存活且事实一致的平级团队，才可继承仍存活的授权组。
+- 自动接力在可信桌面设置中默认勾选；旧数据缺少该字段时采用默认值，已明确关闭的配置仍保留。用户点击“保存”并完成一次 Desktop Host 确认后即可记录偏好，即使尚无团队也不需要先构造 scope；每个目标选择固定的 1–200 轮追加上限，默认 200。模型参数、routing 声明和普通 goal round 都不能扩大该额度。
+- 无团队的可信保存只生成与 settings hash 和 Host authorization epoch 绑定的 proof，`hostAuthorization` 仍为 `null`，不能单独取得 Goal 权限。首个符合条件团队创建时还必须证明同一精确直接用户回合或 Host-admitted Goal round，并匹配 Level 3 routing receipt；最终 grant 才精确落到 root、canonical project、active Goal、team、pause epoch 与设置值。全局开关、静态请求头或模型声明不能替代这些事实；只有同 root 下完整、仍存活且事实一致的平级团队，才可继承仍存活的授权组。
 - 获得授权后，正常成员等待期间 Root 不再消耗轮次轮询，也不再要求用户发送“继续”触发验收；安全的成员提交、释放和状态变化会通过持久 Agent Teams 事件在 Root 空闲时合并唤醒，自动继续验收或调度。显式 Stop 或安全 blocker 会撤销自动权限，仍须人工恢复。
 - 自动 park 只有在所有未完成的内部安全任务都由 `running` / `provisioning` worker 持有，或其依赖链最终能够证明落到同一 root 下的 live producer 时成立；至少必须存在一个 producer。跨 team 的可证明依赖链允许 park。
 - 依赖缺失、循环、终态/取消 blocker、跨 root、paused team、project 不一致、capability 未验证、文件冲突、effect 非 `none` 或 `outcome_unknown` 均 fail closed，不能 edit/resume/followup/steer。

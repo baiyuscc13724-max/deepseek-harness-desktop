@@ -1312,7 +1312,16 @@ test('transient empty and aborted runtime indexes return incomplete recovery wit
   const paired = await pair(service)
   const endpoint = `${service.state().origins[0]}${MOBILE_SYNC_MANIFEST_PATH}`
   const headers = { Cookie: paired.cookie }
-  const first = await (await fetch(endpoint, { headers })).json()
+  const baselineDeadline = Date.now() + 5_000
+  let first
+  do {
+    first = await (await fetch(endpoint, { headers })).json()
+    if (first.complete === true && first.snapshot?.sessions?.[0]?.sessionId === 'session-one') break
+    if (Date.now() >= baselineDeadline) break
+    await new Promise(resolve => setTimeout(resolve, 25))
+  } while (true)
+  assert.equal(first.complete, true, 'the ready runtime must establish the durable baseline before transient recovery is tested')
+  assert.equal(first.snapshot.sessions[0].sessionId, 'session-one')
   const diskBefore = readFileSync(store.file, 'utf8')
 
   mode = 'empty'

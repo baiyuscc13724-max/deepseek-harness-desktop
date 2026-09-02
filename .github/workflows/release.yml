@@ -366,9 +366,10 @@ jobs:
           if ($env:ONEOFF_WORKFLOW_REF -notmatch '/\.github/workflows/release\.yml@refs/heads/main$') { throw 'One-off gate is not running in the formal main-branch release workflow.' }
           $head = (& git rev-parse HEAD).Trim().ToLowerInvariant()
           if ($LASTEXITCODE -ne 0 -or $head -ne $env:ONEOFF_SOURCE_REVISION) { throw 'Checked-out source differs from source_revision.' }
-          $remoteTag = @(& git ls-remote --exit-code --tags origin "refs/tags/$env:ONEOFF_TAG" 2>&1)
+          $remoteTag = @(& git ls-remote --tags origin "refs/tags/$env:ONEOFF_TAG" 2>&1)
           $remoteTagStatus = $LASTEXITCODE
-          if ($remoteTagStatus -ne 2 -or $remoteTag.Count -ne 0) { throw 'The v1.0.58 Tag already exists; the pre-Tag gate refuses to run.' }
+          if ($remoteTagStatus -ne 0) { throw 'Unable to verify that the v1.0.58 Tag is absent.' }
+          if ($remoteTag.Count -ne 0) { throw 'The v1.0.58 Tag already exists; the pre-Tag gate refuses to run.' }
       # Deliberately omit run-id/repository/token: download-artifact therefore
       # resolves desktop-windows-latest only from this exact workflow run.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4

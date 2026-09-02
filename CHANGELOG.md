@@ -17,8 +17,8 @@
 
 - 官方工作台中的手机同步入口经受限 guest preload 进入可信 shell bridge，只转发固定动作并打开已有同步面板；仍只有一个入口和一份设备状态，不改变配对、权限、撤销或传输加密边界。
 - 左侧栏“设置”和“手机同步”保留独立点击区与 8px 间距；展开态横向排列、折叠态纵向错开，避免背景和命中区域粘连或覆盖。
-- 候选 v1.0.58 为 Agent Teams 增加可信桌面设置“自动接力，不用发送继续”，默认关闭，旧数据迁移也保持关闭；用户显式开启后可为每个目标选择固定的 1–200 轮追加上限，默认 200。
-- 首个团队只有消费一次性 Desktop Host 授权回执后才取得本生命周期权限；该回执精确绑定 root、canonical project、active Goal、team、pause epoch 与设置值，不能由全局开关、静态请求头、模型参数或稍后创建的团队替代。后续同 root 下事实完整一致的平级团队才可继承仍存活的授权组。
+- 候选 v1.0.58 为 Agent Teams 增加可信桌面设置“自动接力，不用发送继续”，默认勾选；旧数据没有该字段时采用默认值，已明确关闭的配置仍保持关闭。用户点击“保存”并完成一次 Desktop Host 确认后即可使用，即使尚无团队也会记录偏好；每个目标可选择固定的 1–200 轮追加上限，默认 200。
+- 无团队的可信保存只生成 settings proof，不会凭偏好伪造 Goal 权限。首个符合条件团队创建时还必须把当前 Host 授权 epoch、直接用户回合或精确 Goal round 与 Level 3 routing receipt 绑定，最终 grant 精确落到 root、canonical project、active Goal、team、pause epoch 与设置值；全局开关、静态请求头或模型参数都不能替代。后续同 root 下事实完整一致的平级团队才可继承仍存活的授权组。
 - 获得授权后，正常成员等待期间 Root 安全 park；成员提交、释放与状态转换以持久事件合并唤醒，自动继续验收和调度，不再消耗轮次等待用户回复“继续”。显式 Stop 或安全 blocker 仍会解除授权并保持人工恢复门禁。
 - 自动 park 要求所有未完成内部任务都由 live worker 持有，或沿同一 root 的依赖链最终落到 live producer；跨 team 可证明依赖链可用。缺失/循环/终态 blocker、跨 root/project、paused、capability 未验证、文件冲突、effect 非 `none` 与 `outcome_unknown` 全部 fail closed。
 - 每个 durable transition 最多补一个 goal round，只恢复明确的 `round-limit`；达到用户设置的固定预算即停止。Host/plugin 重启、Stop、handoff、关闭设置、降低预算、权限确认、外部副作用未知和其他 blocker 都会撤销或阻断授权，不以无限循环或盲目重试兜底。

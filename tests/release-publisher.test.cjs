@@ -742,6 +742,10 @@ test('v1.0.58 one-off UI failure blocks Tag and every public or stable phase whi
   assert.match(oneoff, /^    if: \$\{\{ inputs\.tag == 'v1\.0\.58' \}\}$/mu)
   assert.match(oneoff, /^    needs: build$/mu)
   assert.doesNotMatch(oneoff, /contents: write|gh release|stable-components|cnb|immutable-tag/u)
+  assert.match(oneoff, /git ls-remote --tags origin "refs\/tags\/\$env:ONEOFF_TAG"/u)
+  assert.doesNotMatch(oneoff, /git ls-remote --exit-code/u)
+  assert.match(oneoff, /\$remoteTagStatus -ne 0/u)
+  assert.match(oneoff, /\$remoteTag\.Count -ne 0/u)
 
   const waitForRun = publisher.slice(publisher.indexOf('async function waitForRun(runId)'), publisher.indexOf('async function sleep()'))
   assert.match(waitForRun, /await waitForRunCompletion\(runId\)[\s\S]*run\.conclusion !== 'success'[\s\S]*throw new Error/u)

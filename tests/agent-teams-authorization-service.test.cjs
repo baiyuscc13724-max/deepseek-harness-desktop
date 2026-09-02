@@ -257,8 +257,8 @@ test('cancel, timeout, schema replacement, forged capability, and service errors
   } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
 })
 
-test('official IPC claims and consumes an epoch-bound unscoped false capability without Goal authority', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-autopilot-unscoped-false-'))
+test('official IPC saves an epoch-bound unscoped default-on preference without Goal authority', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-autopilot-unscoped-true-'))
   const issuedAt = 1_895_000_000_000
   const epochs = ['f'.repeat(32), 'e'.repeat(32)]
   const service = createAgentTeamsAuthorizationService({
@@ -269,25 +269,24 @@ test('official IPC claims and consumes an epoch-bound unscoped false capability 
   })
   await service.start()
   try {
-    const capability = await capabilityFor(service, 'autopilot-unscoped-false')
+    const capability = await capabilityFor(service, 'autopilot-unscoped-true')
     const desktopBinding = autopilotDesktopBinding()
-    const unscopedFalse = autopilotIssue({
+    const unscopedTrue = autopilotIssue({
       sessionId: 'settings',
-      autopilotEnabled: false,
+      autopilotEnabled: true,
       autopilotMaxAdditionalRounds: 200
     })
-    delete unscopedFalse.hostAuthorization
+    delete unscopedTrue.hostAuthorization
     const goalScopeKeys = ['rootSessionId', 'projectKey', 'goalId', 'teamId', 'pauseEpoch', 'teamScopeHash']
-    assert.equal(Object.hasOwn(unscopedFalse, 'hostAuthorization'), false)
-    for (const key of goalScopeKeys) assert.equal(Object.hasOwn(unscopedFalse, key), false, `${key} must not enter an unscoped settings capability`)
-    assert.throws(() => service.issueAutopilotAuthorization({ ...unscopedFalse, autopilotEnabled: true }, desktopBinding), error => error?.code === 'HOST_AUTHORIZATION_INVALID', 'unscoped true must be rejected before signing')
+    assert.equal(Object.hasOwn(unscopedTrue, 'hostAuthorization'), false)
+    for (const key of goalScopeKeys) assert.equal(Object.hasOwn(unscopedTrue, key), false, `${key} must not enter an unscoped settings capability`)
 
-    const authorization = service.issueAutopilotAuthorization(unscopedFalse, desktopBinding)
+    const authorization = service.issueAutopilotAuthorization(unscopedTrue, desktopBinding)
     assert.equal(authorization.authorizationEpoch, 'f'.repeat(32))
     assert.equal(authorization.expiresAt, issuedAt + AUTOPILOT_RECEIPT_TTL_MS)
     assert.deepEqual(service.readAutopilotAuthorizationState(), autopilotState('f'.repeat(32)), 'signing alone must not advance the epoch')
-    assert.equal(service.claimAutopilotWebRequest(authorization.authorizationId, unscopedFalse, desktopBinding, desktopBinding.runtimeOrigin), true)
-    const receipt = await capability.consumeAutopilotAuthorization(autopilotRequest(authorization, unscopedFalse))
+    assert.equal(service.claimAutopilotWebRequest(authorization.authorizationId, unscopedTrue, desktopBinding, desktopBinding.runtimeOrigin), true)
+    const receipt = await capability.consumeAutopilotAuthorization(autopilotRequest(authorization, unscopedTrue))
 
     assert.equal(receipt.hostAuthorization, null)
     assert.equal(receipt.sessionId, 'settings')
@@ -295,15 +294,16 @@ test('official IPC claims and consumes an epoch-bound unscoped false capability 
       enabled: true,
       maxMembers: 4,
       maxActiveTurns: 3,
-      autopilotEnabled: false,
+      autopilotEnabled: true,
       autopilotMaxAdditionalRounds: 200
     })
     assert.equal(receipt.desktopBindingHash, autopilotDesktopBindingHash(desktopBinding))
     assert.equal(receipt.authorizationEpoch, 'e'.repeat(32))
-    const settingsProof = autopilotProof(unscopedFalse, 'e'.repeat(32), issuedAt)
+    const settingsProof = autopilotProof(unscopedTrue, 'e'.repeat(32), issuedAt)
     assert.deepEqual(receipt.autopilotSettingsProof, settingsProof)
-    for (const key of goalScopeKeys) assert.equal(Object.hasOwn(receipt, key), false, `${key} must not be minted by a false capability`)
-    assert.equal(receipt.settings.autopilotEnabled === true && receipt.hostAuthorization !== null, false, 'a false capability cannot form Goal authorization')
+    for (const key of goalScopeKeys) assert.equal(Object.hasOwn(receipt, key), false, `${key} must not be minted by an unscoped capability`)
+    assert.equal(receipt.settings.autopilotEnabled, true)
+    assert.equal(receipt.hostAuthorization, null, 'the saved preference must not form Goal authorization by itself')
     assert.deepEqual(await capability.readAutopilotAuthorizationState(), autopilotState('e'.repeat(32), settingsProof), 'official IPC consumption advances the epoch exactly once')
     capability.dispose()
   } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
@@ -330,7 +330,6 @@ test('trusted Host issues one short-lived autopilot receipt bound to exact scope
     assert.throws(() => service.issueAutopilotAuthorization(unscoped), error => error?.code === 'HOST_AUTHORIZATION_INVALID', 'unscoped settings must not bypass the Desktop binding')
     const unscopedAuthorization = service.issueAutopilotAuthorization(unscoped, desktopBinding)
     assert.equal(typeof unscopedAuthorization.authorizationId, 'string', 'unscoped non-autopilot settings remain compatible through an exact Host capability')
-    assert.throws(() => service.issueAutopilotAuthorization({ ...unscoped, autopilotEnabled: true }, desktopBinding), error => error?.code === 'HOST_AUTHORIZATION_INVALID')
     assert.deepEqual(service.readAutopilotAuthorizationState(), autopilotState('a'.repeat(32)), 'issue must not rotate live authority')
     assert.equal(AUTOPILOT_RECEIPT_TTL_MS, 15_000)
     const authorization = issueAndClaimAutopilot(service, body, desktopBinding)

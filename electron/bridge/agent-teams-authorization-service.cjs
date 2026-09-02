@@ -81,7 +81,8 @@ function validateAutopilotIssue(value) {
   const sessionId = strictString(value.sessionId)
   const settings = validateAutopilotSettings(Object.fromEntries(AUTOPILOT_SETTINGS_KEYS.map(key => [key, value[key]])))
   if (!hasScope) {
-    if (settings.autopilotEnabled) throw authorizationError('HOST_AUTHORIZATION_INVALID')
+    // A trusted user-activated Save may persist the default-on preference before
+    // any team exists. The null scope deliberately carries no Goal authority.
     return Object.freeze({ sessionId, settings, hostAuthorization: null })
   }
   const scope = validateAutopilotScope(value.hostAuthorization)

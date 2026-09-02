@@ -497,10 +497,72 @@ function assertStoppedWithoutGoalMutation(runtime) {
   assert.equal(runtime.attempts.resume, 0)
 }
 
-test('default, legacy, opted-out, and missing-grant stores never acquire automatic goal authority', async t => {
+test('a trusted default-on Save binds the first team only inside the exact direct-human Goal turn', async () => {
+  const mod = await loadPlugin('direct-human-settings-grant')
+  const cwd = path.join(process.cwd(), 'direct-human-autopilot-project')
+  const root = { id: 'direct-human-root', session: { header: { cwd } } }
+  const goal = {
+    id: 'direct-human-goal', revision: 1, objective: 'Continue this exact saved goal safely',
+    phase: 'active', activation: 'armed', roundsStarted: 0, maxGoalRounds: 3
+  }
+  const execution = {
+    agent: root,
+    turnKey: 'direct-human-settings-turn',
+    events: [{ type: 'user/message', data: { source: { kind: 'user' } } }]
+  }
+  const settings = {
+    enabled: true, maxMembers: 4, maxActiveTurns: 4,
+    autopilotEnabled: true, autopilotMaxAdditionalRounds: 200
+  }
+  const proof = autopilotSettingsProof(settings, AUTHORIZATION_EPOCH)
+  const ctx = {
+    agents: { roots: () => [root] },
+    goals: { get: agent => agent === root ? goal : undefined }
+  }
+  const intent = await mod.exactDirectHumanAutopilotGrantIntent(ctx, {
+    async readAutopilotAuthorizationState() {
+      return { authorizationEpoch: AUTHORIZATION_EPOCH, autopilotSettingsProof: proof }
+    }
+  }, execution)
+  assert.equal(intent.rootSessionId, root.id)
+  assert.equal(intent.goalRound, 0, 'the direct-user creation turn may precede the first automatic round')
+  assert.equal(intent.autopilotSettingsHash, proof.settingsHash)
+
+  const routingReceiptId = 'direct-human-routing-receipt'
+  const document = {
+    settings,
+    teams: [],
+    routingReceipts: [{
+      id: routingReceiptId, rootSessionId: root.id, turnKey: execution.turnKey, projectKey: projectKey(cwd),
+      level: 'level3', outcome: 'recorded', establishmentAuthority: 'direct_human'
+    }]
+  }
+  const grant = mod.agentTeamAutopilotGrantForCreation(document, root, goal, {
+    directHumanGrantIntent: intent, routingReceiptId
+  })
+  assert.equal(grant.status, 'pending_plan')
+  assert.equal(grant.authority, 'direct_human')
+  assert.equal(grant.authorizationEpoch, AUTHORIZATION_EPOCH)
+  assert.equal(grant.goalId, goal.id)
+  assert.equal(grant.maxAdditionalRounds, 200)
+
+  assert.equal(mod.agentTeamAutopilotGrantForCreation(document, root, goal, { routingReceiptId }), undefined, 'the selected preference alone is not Goal authority')
+  assert.equal(mod.agentTeamAutopilotGrantForCreation({ ...document, settings: { ...settings, autopilotMaxAdditionalRounds: 199 } }, root, goal, {
+    directHumanGrantIntent: intent, routingReceiptId
+  }), undefined, 'changing the saved settings hash invalidates the exact intent')
+  assert.equal(mod.agentTeamAutopilotGrantForCreation({ ...document, routingReceipts: [{ ...document.routingReceipts[0], turnKey: 'other-turn' }] }, root, goal, {
+    directHumanGrantIntent: intent, routingReceiptId
+  }), undefined, 'a different direct-human turn cannot reuse the intent')
+
+  const source = await readFile(pluginFile, 'utf8')
+  assert.match(source, /const directHumanGrantIntent = !directHuman \|\| !store\.autopilotPolicy\(\)\.enabled \? undefined : await exactDirectHumanAutopilotGrantIntent\(ctx, authorizationProvider, execution\)/u)
+  assert.equal((source.match(/autopilotGoal: ctx\.goals\?\.get\?\.\(execution\.agent\), directHumanGrantIntent, goalRoundGrantIntent/gu) || []).length, 2, 'team_start and team_bootstrap both carry the exact direct-human intent internally')
+})
+
+test('explicitly disabled, legacy, and missing-grant stores never acquire automatic goal authority', async t => {
   const mod = await loadPlugin('no-implicit-grant')
   const cases = [
-    ['default-off v8', fixture({ withGrant: false, autopilotEnabled: false })],
+    ['explicitly disabled v8', fixture({ withGrant: false, autopilotEnabled: false })],
     ['legacy v7 without autopilot fields', fixture({ version: 7, withGrant: false, includeAutopilotSettings: false })],
     ['Host preference on but no exact grant', fixture({ withGrant: false, autopilotEnabled: true })]
   ]

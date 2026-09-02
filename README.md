@@ -56,7 +56,7 @@ scoop install harness-desktop/harness-desktop
 | 外观皮肤 | 从顶部快捷入口切换桌面配色和背景；手机端拥有独立皮肤设置与不透明核心表面，不会读取或套用电脑壁纸文件 |
 | DSH 插件与 Skills | 在应用内发现、安装和更新；随包受管 Skills 支持 Codex 风格 `$` 触发，`@` 继续用于文件引用；英文简介自动生成中文摘要并保留原文 |
 | 主模型与子代理 | 子代理可跟随主模型或单独选模型；目录区分运行中、可继续与只读历史，结束任务不会删除完整记录 |
-| 协作团队（实验） | 启用后自动判断：简单任务由主模型 solo；只有一个独立辅助时使用普通 `subagent`；至少两个持续独立工作流且需要依赖、交接或文件边界时才建团队。计划按 `draft → committed → active` 持久化，成员启动必须绑定真实任务；认领带 attempt/claim/lease fencing，Stop、两阶段 Resume、同项目 handoff/adopt 与未验证 checkpoint 均保留审计。另有默认关闭的“自动接力”桌面开关及每目标 1–200 轮固定上限，默认 200；首个团队必须消费精确绑定 root/project/goal/team/pause/settings 的一次性 Desktop Host 授权，不能靠全局开关或静态请求头。正常成员等待由持久事件自动唤醒 Root 继续验收和调度；显式 Stop 或安全 blocker 仍 fail closed，须人工恢复。任务板只显示 Ready / Running / Attention / Done，取消进入历史，不伪造百分比；详见[代理团队用户指南](docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md) |
+| 协作团队（实验） | 启用后自动判断：简单任务由主模型 solo；只有一个独立辅助时使用普通 `subagent`；至少两个持续独立工作流且需要依赖、交接或文件边界时才建团队。计划按 `draft → committed → active` 持久化，成员启动必须绑定真实任务；认领带 attempt/claim/lease fencing，Stop、两阶段 Resume、同项目 handoff/adopt 与未验证 checkpoint 均保留审计。“自动接力”默认勾选，每个目标固定追加 1–200 轮（默认 200）；可信“保存”即使尚无团队也可记录偏好，但偏好本身不授予 Goal 权限。首个符合条件团队创建时还必须把当前 Host settings proof、直接用户回合或精确 Goal round 与 routing receipt 绑定到 root/project/goal/team/pause/settings，不能靠全局开关或静态请求头伪造。正常成员等待由持久事件自动唤醒 Root 继续验收和调度；显式 Stop 或安全 blocker 仍 fail closed，须人工恢复。任务板只显示 Ready / Running / Attention / Done，取消进入历史，不伪造百分比；详见[代理团队用户指南](docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md) |
 | 内置浏览器 | 对齐 Codex 的可见导航、交互、检查与停止能力；来源/actor、站点授权、导航、敏感动作、文件/下载、取消与审计继续经过动态安全门禁，最终发布结论以真实 Electron 专项复核为准 |
 | 桌面更新 | Ed25519 签名发布清单、国内源优先、全球源自动回退、逐跳 HTTPS 与 SHA-256 校验，并在更新前展示改动内容 |
 | 用户配置保护 | 主题、插件和模型路由保存在用户目录，更新官方 Harness 时不会被覆盖 |

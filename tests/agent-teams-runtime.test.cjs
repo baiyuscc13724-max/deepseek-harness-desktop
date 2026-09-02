@@ -1028,12 +1028,12 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const enabledSettings = JSON.parse(settings.body).state.config
     assert.equal(enabledSettings.autopilotEnabled, false)
     assert.equal(enabledSettings.autopilotMaxAdditionalRounds, 200)
-    const beforeUnscopedBudgetChange = autopilotAuthorizationConsumptions.length
+    const beforeUnauthorizedBudgetChange = autopilotAuthorizationConsumptions.length
     const unscopedBudgetChange = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
       sessionId: 'settings', action: 'settings', autopilotEnabled: false, autopilotMaxAdditionalRounds: 199
     }))
     assert.equal(unscopedBudgetChange.status, 403)
-    assert.equal(autopilotAuthorizationConsumptions.length, beforeUnscopedBudgetChange, 'budget changes without an exact Host scope are rejected before receipt consumption')
+    assert.equal(autopilotAuthorizationConsumptions.length, beforeUnauthorizedBudgetChange, 'budget changes without a one-time Host capability are rejected before receipt consumption')
     const stoppedAutopilot = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
       sessionId: 'settings', action: 'settings', autopilotEnabled: false, autopilotMaxAdditionalRounds: 200
     }))
@@ -1041,7 +1041,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     const stoppedAutopilotSettings = JSON.parse(stoppedAutopilot.body).state.config
     assert.equal(stoppedAutopilotSettings.autopilotEnabled, false)
     assert.equal(stoppedAutopilotSettings.autopilotMaxAdditionalRounds, 200)
-    assert.equal(autopilotAuthorizationConsumptions.length, beforeUnscopedBudgetChange, 'false remains compatible without Host scope or receipt')
+    assert.equal(autopilotAuthorizationConsumptions.length, beforeUnauthorizedBudgetChange, 'false remains compatible without Host scope or receipt')
     const invalidAutopilot = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
       sessionId: 'settings', action: 'settings', autopilotEnabled: 'true', autopilotMaxAdditionalRounds: 201
     }))
@@ -1134,14 +1134,16 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(hostScope.pauseEpoch, 0)
     assert.match(hostScope.teamScopeHash, /^[a-f0-9]{64}$/u)
 
-    const beforeMissingScope = autopilotAuthorizationConsumptions.length
+    const beforePreferenceSave = autopilotAuthorizationConsumptions.length
     const preferenceOnly = await invoke(routes.get('/api/agent-teams/action'), hostAuthorizedSettingsRequest({
       sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
       autopilotEnabled: true, autopilotMaxAdditionalRounds: 200
-    }, 'host-settings-missing-scope'))
-    assert.equal(preferenceOnly.status, 403)
-    assert.equal(autopilotAuthorizationConsumptions.length, beforeMissingScope, 'true without Host scope is rejected before receipt consumption')
-    assert.equal((await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })).team.autopilot, undefined)
+    }, 'host-settings-preference-only'))
+    assert.equal(preferenceOnly.status, 200, preferenceOnly.body)
+    assert.equal(autopilotAuthorizationConsumptions.length, beforePreferenceSave + 1, 'trusted Save consumes one Host capability even before an exact team scope exists')
+    assert.equal(autopilotAuthorizationConsumptions.at(-1).hostAuthorization, null)
+    assert.equal(JSON.parse(preferenceOnly.body).state.config.autopilotEnabled, true)
+    assert.equal((await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })).team.autopilot, undefined, 'an unscoped preference Save does not retrofit Goal authority')
 
     const forgedAuthorizationRequest = hostAuthorizedSettingsRequest({
       sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
@@ -2358,12 +2360,12 @@ test('model tools create a team, spawn independent members, and relay with non-u
       sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
       autopilotEnabled: true, autopilotMaxAdditionalRounds: 200
     }, 'host-settings-empty-root-autopilot'))
-    assert.equal(enableEmptyRootAutopilot.status, 403, enableEmptyRootAutopilot.body)
-    assert.equal(autopilotAuthorizationConsumptions.length, beforeEmptyRootAuthorization, 'an empty root cannot burn a receipt without an exact team scope')
+    assert.equal(enableEmptyRootAutopilot.status, 200, enableEmptyRootAutopilot.body)
+    assert.equal(autopilotAuthorizationConsumptions.length, beforeEmptyRootAuthorization + 1, 'trusted Save records the default-on preference before a team exists')
+    assert.equal(autopilotAuthorizationConsumptions.at(-1).hostAuthorization, null)
     const persistedPreference = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8'))
-    persistedPreference.settings.autopilotEnabled = true
-    persistedPreference.settings.autopilotMaxAdditionalRounds = 200
-    await writeFile(path.join(root, 'storages', 'agent_teams.json'), `${JSON.stringify(persistedPreference, null, 2)}\n`, 'utf8')
+    assert.equal(persistedPreference.settings.autopilotEnabled, true)
+    assert.equal(persistedPreference.settings.autopilotMaxAdditionalRounds, 200)
     currentGoal = {
       id: 'goal-autopilot-team', revision: 4, objective: 'Finish automatic implementation and verification without asking for continue',
       phase: 'active', activation: 'armed', roundsStarted: 2, maxGoalRounds: 4
@@ -2385,32 +2387,11 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(automaticStarted.routing.receipt.outcome, 'created')
     assert.equal(automaticStarted.team.rootLeadSessionId, rootAgent.id)
-    assert.equal(automaticStarted.team.autopilot, undefined, 'a preference file edit without the matching Host proof cannot mint Goal authority')
-    await tools.get('team_shutdown').execute({ team_id: automaticStarted.team.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
-
-    // Model the trusted Host proof that can survive after an earlier authorized
-    // team closes; the opaque epoch and settings hash never enter tool input.
-    autopilotAuthorizationEpochRevision += 1
-    autopilotAuthorizationEpoch = String.fromCharCode(97 + autopilotAuthorizationEpochRevision).repeat(32)
-    currentAutopilotSettingsProof = autopilotSettingsProof(persistedPreference.settings, autopilotAuthorizationEpoch)
-    currentGoal = { ...currentGoal, roundsStarted: 3 }
-    rootAgent.session.events.push(
-      { type: 'turn/end', data: {} },
-      { type: 'turn/start', data: {} },
-      { type: 'user/message', data: { source: { kind: 'goal', goalId: currentGoal.id, revision: currentGoal.revision, round: currentGoal.roundsStarted } } }
-    )
-    const hostProvedRoute = await tools.get('team_route_goal').execute({
-      level: 'level3', reason_category: 'independent_sustained_workstreams', candidate_workstreams: 2, creation_path: 'team_start'
-    }, { agent: rootAgent, signal: new AbortController().signal })
-    assert.equal(hostProvedRoute.receipt.outcome, 'recorded')
-    const hostProvedStarted = await tools.get('team_start').execute({
-      request_id: 'goal-round-team-start-host-proof', objective: 'Create a Host-proved automatic team', candidate_workstreams: 2
-    }, { agent: rootAgent, signal: new AbortController().signal })
-    assert.equal(hostProvedStarted.team.autopilot.status, 'pending_plan')
-    const hostProvedPersisted = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === hostProvedStarted.team.id)
+    assert.equal(automaticStarted.team.autopilot.status, 'pending_plan', 'the trusted preference Save supplies the Host proof for the first exact Goal-round team')
+    const hostProvedPersisted = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === automaticStarted.team.id)
     assert.equal(hostProvedPersisted.autopilot.goalId, currentGoal.id)
     assert.equal(hostProvedPersisted.autopilot.authorizationEpoch, autopilotAuthorizationEpoch)
-    await tools.get('team_shutdown').execute({ team_id: hostProvedStarted.team.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
+    await tools.get('team_shutdown').execute({ team_id: automaticStarted.team.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
     currentGoal = { ...currentGoal, roundsStarted: 4, phase: 'active', activation: 'armed' }
     rootAgent.session.events.push(
@@ -2572,7 +2553,8 @@ test('tool lifecycle stays consistently paused from explicit Stop through status
     }
     mod.apply(ctx)
     const enabled = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
-      sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4
+      sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: false, autopilotMaxAdditionalRounds: 200
     }))
     assert.equal(enabled.status, 200)
     const started = await startTeam(tools, { objective: 'Keep Stop lifecycle consistent' }, { agent: lead, signal: new AbortController().signal })
@@ -2660,7 +2642,11 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
       }
     }
     mod.apply(ctx)
-    await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', { sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4 }))
+    const enabled = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
+      sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: false, autopilotMaxAdditionalRounds: 200
+    }))
+    assert.equal(enabled.status, 200, enabled.body)
     openDirectHumanTurn(lead)
     const conflictingScopes = {
       request_id: 'bootstrap-overlap', objective: 'Reject unsafe parallel writes', candidate_workstreams: 2,

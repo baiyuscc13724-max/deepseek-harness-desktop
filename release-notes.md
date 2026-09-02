@@ -24,8 +24,8 @@ v1.0.58 候选将官方 Harness 核心兼容升级到 `0.1.2-alpha.4`，修复�
 
 ## Agent Teams 自动驾驶
 
-- 候选桌面设置新增“自动接力，不用发送继续”，默认关闭，旧配置升级也不会静默开启。用户显式开启后可为每个目标选择固定的 1–200 轮追加上限，默认 200。
-- 首个团队必须消费一次性 Desktop Host 授权回执才获得本生命周期权限；回执精确绑定 root、canonical project、active Goal、team、pause epoch 与设置值，不能靠全局开关、静态请求头、模型参数或稍后创建的团队取得权限。只有同 root 下完整、仍存活且事实一致的平级团队，才可继承该授权组。
+- 候选桌面设置新增“自动接力，不用发送继续”，默认勾选；旧配置缺少该字段时采用默认值，已明确关闭的选择仍保留。点击“保存”并完成一次 Desktop Host 确认即可使用，即使尚无团队也会记录偏好；每个目标可配置固定的 1–200 轮追加上限，默认 200。
+- 无团队的可信保存只生成 settings proof，不会凭偏好取得 Goal 权限。首个符合条件团队创建时还必须把当前 Host 授权 epoch、直接用户回合或精确 Goal round 与 Level 3 routing receipt 绑定，最终 grant 精确落到 root、canonical project、active Goal、team、pause epoch 与设置值；全局开关、静态请求头和模型参数都不能替代。只有同 root 下完整、仍存活且事实一致的平级团队，才可继承该授权组。
 - 获得授权后，正常成员等待期间 Root 会安全 park，不再消耗轮次轮询，也不再要求用户发送“继续”。成员提交、释放和状态变化通过持久事件在 Root 空闲时合并唤醒，自动继续验收和调度；显式 Stop 或安全 blocker 始终撤销自动权限，仍须人工恢复。
 - 自动 park 需要所有未完成内部任务都由 live worker 持有，或沿同一 root 的依赖链最终落到 live producer；支持跨 team 的可证明依赖链。
 - 缺失/循环/终态 blocker、跨 root、paused、project 不一致、capability 未验证、文件冲突、effect 非 `none` 或 `outcome_unknown` 均 fail closed，不会 edit/resume/followup/steer。
