@@ -47,6 +47,7 @@ test('artifact-fixture smoke boots real DSH Web, proves state and SSE, and rende
     assert.equal(report.api.modelProviderInvoked, false)
     assert.equal(report.dom.desktop, true)
     assert.equal(report.dom.stopResumePreview, true)
+    assert.equal(report.dom.draftSwitchToChat, true)
     assert.equal(report.dom.keyboardAndAria, true)
     assert.equal(report.dom.focusStyleChanged, true)
     assert.equal(report.dom.focusedRectInViewport, true)
