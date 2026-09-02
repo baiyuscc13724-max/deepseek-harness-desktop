@@ -31,10 +31,25 @@ const PROTECTED_METADATA_PATHS = Object.freeze([
 ])
 const POST_TAG_CONTROLLER_PATHS = Object.freeze([
   '.github/workflows/android-mobile-release.yml',
+  'package-lock.json',
   'scripts/release-publish-android.mjs',
   'scripts/release-audit.mjs',
   'tests/release-publisher.test.cjs'
 ])
+const POST_TAG_LOCK_REPAIRS = Object.freeze({
+  'node_modules/fast-uri': Object.freeze({
+    from: '3.1.5',
+    to: '3.1.6',
+    resolved: 'https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.6.tgz',
+    integrity: 'sha512-7Ical1vFEMr0onbVzEDIreM22I4khW+fzyQPwvAFWBp1iwdshSZRsL4jjRvPG9JP1uiqMHRto+YU6R2/CzDz5Q=='
+  }),
+  'node_modules/qs': Object.freeze({
+    from: '6.15.3',
+    to: '6.16.0',
+    resolved: 'https://registry.npmjs.org/qs/-/qs-6.16.0.tgz',
+    integrity: 'sha512-h6fhOIaRrID2CbEY2fqs+7t+UXZo+MLAnU5gRIq85uFtdiUPCdsApMlHhXogKVM4HM2DVbIjGNTTYH2OcmP1vA=='
+  })
+})
 const STANDALONE_RELEASE_BODY = version => `Standalone signed Android mobile release ${version}. Desktop packages, components, stable feeds, and prior immutable assets are unchanged.`
 
 function sha256(value) {
@@ -175,6 +190,26 @@ function assertExactRemoteMain() {
   return head
 }
 
+function assertExactPostTagLockRepair(sourceRevision, currentHead) {
+  const baseline = JSON.parse(gitCapture(['show', `${sourceRevision}:package-lock.json`]))
+  const current = JSON.parse(gitCapture(['show', `${currentHead}:package-lock.json`]))
+  if (!baseline.packages || !current.packages) throw new Error('Post-Tag dependency repair requires package-lock v3 package entries.')
+  const baselineRemainder = { ...baseline, packages: { ...baseline.packages } }
+  const currentRemainder = { ...current, packages: { ...current.packages } }
+  for (const [location, repair] of Object.entries(POST_TAG_LOCK_REPAIRS)) {
+    const before = baseline.packages[location]
+    const after = current.packages[location]
+    if (!before || !after || before.version !== repair.from) throw new Error(`Post-Tag dependency repair baseline is not exact for ${location}.`)
+    const expected = { ...before, version: repair.to, resolved: repair.resolved, integrity: repair.integrity }
+    if (JSON.stringify(after) !== JSON.stringify(expected)) throw new Error(`Post-Tag dependency repair is not exact for ${location}.`)
+    delete baselineRemainder.packages[location]
+    delete currentRemainder.packages[location]
+  }
+  if (JSON.stringify(currentRemainder) !== JSON.stringify(baselineRemainder)) {
+    throw new Error('Post-Tag dependency repair changed package-lock content outside the reviewed advisory entries.')
+  }
+}
+
 function assertPostTagControllerAdvance(state, currentHead, mobile) {
   if (state.phases['immutable-mobile-tag']?.status !== 'completed') throw new Error('Android controller cannot advance before the immutable Tag phase completes.')
   if (localTagRevision(mobile.tag) !== state.sourceRevision || remoteTagRevision(mobile.tag) !== state.sourceRevision) {
@@ -188,6 +223,7 @@ function assertPostTagControllerAdvance(state, currentHead, mobile) {
   if (changed.length === 0 || unexpected.length > 0) {
     throw new Error(`Post-Tag Android recovery may change only controller files: ${unexpected.join(', ') || 'no reviewed controller change'}.`)
   }
+  if (changed.includes('package-lock.json')) assertExactPostTagLockRepair(state.sourceRevision, currentHead)
   return changed
 }
 
