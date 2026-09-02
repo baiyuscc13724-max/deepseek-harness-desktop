@@ -8,7 +8,7 @@
 
 ## 源码证据（维护 checkout）
 
-- 硬常量位于 `plugins/dsh-agent-teams/lib/index.js:46-55`：`HARD_MAX_MEMBERS = 8`、`HARD_MAX_TEAMS_PER_ROOT = 8`、扩展/Bootstrap 上限为 4；配置 schema `:122-126` 将 `maxMembers` 与 `maxActiveTurns` 限制在 1–8。
+- 硬常量位于 `plugins/dsh-agent-teams/lib/index.js:46-55`：`HARD_MAX_MEMBERS = 8`、`HARD_MAX_TEAMS_PER_ROOT = 8`，扩展/Bootstrap 的批次硬上限与成员硬上限同为 8；配置 schema `:122-126` 将 `maxMembers` 与 `maxActiveTurns` 限制在 1–8。
 - 持久化校验 `:1087-1093` 按 `rootLeadSessionId` 统计所有非 `closed` 团队，超过 8 拒绝；这证明计数是“每个 root 的平级团队”，不是全局一队。
 - `createTeam` `:2630-2667` 只要求启用状态并检查该 lead 的未关闭团队数；无“已有 active team”条件。其 `:2634-2635` 在第 9 个时返回 `AGENT_TEAMS_TEAM_LIMIT`。
 - reviewed `bootstrapTeam` `:2980-3012` 使用同样的 root 计数（`:2994`），并分别检查本次成员数不超过 `maxMembers`（`:2995`）及所有团队活动 worker 回合不超过 root 共享 `maxActiveTurns`（`:2996`）。

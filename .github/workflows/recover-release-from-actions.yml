@@ -71,7 +71,7 @@ jobs:
             test "${#changed_files[@]}" -gt 0 || { echo 'Post-tag recovery revision contains no publisher fix.' >&2; exit 1; }
             for file in "${changed_files[@]}"; do
               case "$file" in
-                .cnb.yml|.github/workflows/recover-release-from-actions.yml|.github/workflows/publish-production-components.yml|scripts/publish-cnb-cloud-mirror.ps1|scripts/release-audit.mjs|scripts/release-publish.mjs|scripts/release-publish-selection.cjs|tests/release-publisher.test.cjs) ;;
+                .cnb.yml|.github/workflows/recover-release-from-actions.yml|.github/workflows/publish-production-components.yml|scripts/publish-cnb-cloud-mirror.ps1|scripts/release-audit.mjs|scripts/release-local-formal-windows-validation.cjs|scripts/release-publish.mjs|scripts/release-publish-selection.cjs|scripts/verify-formal-windows-release-identity.mjs|tests/release-publisher.test.cjs) ;;
                 *) echo "Post-tag recovery revision contains forbidden file: $file" >&2; exit 1 ;;
               esac
             done

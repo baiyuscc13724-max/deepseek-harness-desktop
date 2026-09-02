@@ -15,28 +15,28 @@ window.__ModuleLoader__.load({
     var zh = {
       title: "代理团队", loading: "正在载入团队工作区…", retry: "重试", loadError: "暂时无法更新团队信息：{error}。请重试；如果仍失败，可以返回对话继续工作。", actionError: "操作没有完成。请按页面提示处理后重试；如果仍失败，请返回负责人对话查看状态。技术详情：{error}",
       disabled: "自动团队尚未启用", disabledBody: "启用后，你只需像平常一样描述目标；AI 会判断是否需要团队，简单任务不会强行组队。", enable: "启用自动团队", enabling: "正在启用…", disable: "关闭自动团队", disabling: "正在关闭…", disableActiveHint: "存在活动团队时无法关闭自动团队。请先让负责人完成任务并关闭所有活动团队。", disableSafeHint: "关闭后不会创建新团队；已关闭团队的历史仍会保留。",
-      noTeam: "自动团队已开启", wizardIntro: "无需配置团队。回到对话直接说出目标，AI 会自动判断是否需要并行；下面的模板仅供希望立即指定方向时使用。", backToChat: "返回对话，直接说目标", chooseTemplate: "可选：协作方向", defineObjective: "可选：立即填写目标", prepare: "放入输入框", prepared: "已放入底部输入框。请检查内容并点击发送；系统不会自动发送。", objectivePlaceholder: "例如：完成新版团队工作台并通过验证",
+      noTeam: "自动团队已开启", wizardIntro: "无需配置团队。回到对话直接说出目标，AI 会自动判断是否需要并行；下面的模板仅供希望立即指定方向时使用。", backToChat: "返回对话，直接说目标", chooseTemplate: "可选：协作方向", defineObjective: "可选：立即填写目标", prepare: "放入输入框", prepared: "已放入对话输入框，正在返回对话；请检查后发送，系统不会自动发送。", objectivePlaceholder: "例如：完成新版团队工作台并通过验证",
       research: "调研与核验", researchBody: "研究员收集资料，分析员交叉验证，负责人汇总结论。", build: "开发与审查", buildBody: "开发负责改动，审查负责风险，测试负责验证。", incident: "问题诊断", incidentBody: "诊断、修复与回归验证并行推进。", custom: "自定义团队", customBody: "只填写目标，由 AI 自动设计成员、职责、任务边界和协作方式。",
-      active: "协作进行中", paused: "已由用户停止", pausedBody: "团队已停止，不会在后台继续。要恢复，请生成继续请求并在底部输入框中确认发送。", continueTeam: "生成继续请求", failedNext: "有成员未能完成工作。请打开成员列表查看详情，再让负责人处理未完成任务。", closed: "团队已关闭", closedBody: "该团队不再接受成员协作；历史成员、任务和事件仍可查看。", unknown: "未知", status: "状态", objective: "团队目标", connection: "连接", live: "已更新", polling: "正在保持更新", stale: "信息可能不是最新", disconnected: "正在重新连接", workspaceIntro: "默认只展示现在需要关注的工作；完成内容和协作细节按需查看。",
+      active: "协作进行中", paused: "已由用户停止", pausedBody: "团队已停止，不会在后台继续。要恢复，请生成继续请求；页面会切换到对话供你确认发送。", continueTeam: "生成继续请求", failedNext: "有成员未能完成工作。请打开成员列表查看详情，再让负责人处理未完成任务。", closed: "团队已关闭", closedBody: "该团队不再接受成员协作；历史成员、任务和事件仍可查看。", unknown: "未知", status: "状态", objective: "团队目标", connection: "连接", live: "已更新", polling: "正在保持更新", stale: "信息可能不是最新", disconnected: "正在重新连接", workspaceIntro: "默认只展示现在需要关注的工作；完成内容和协作细节按需查看。",
       members: "成员", tasks: "任务", events: "协作事件", noMembers: "暂无成员", noTasks: "暂无任务", noEvents: "暂无协作事件", lead: "负责人", leadRole: "统筹目标和结果", openConversation: "查看实时工作", currentTask: "当前任务：{value}", model: "模型", mainModel: "主模型", subagentModel: "成员模型", inheritsMain: "与负责人相同", currentWork: "当前工作", listView: "列表", canvasView: "画布", canvasLabel: "团队实时画布", canvasHint: "选择成员可打开统一代理目录；连线表示分配、依赖、阻塞或文件冲突。", assignedRelation: "分配", dependsRelation: "依赖", blockedRelation: "阻塞", conflictRelation: "冲突", completedSummary: "已完成 {count} 项", noActiveTasks: "当前没有待处理或进行中的任务。", completedTasks: "已完成", taskHistory: "任务历史", historyHint: "完成的任务会自动移到这里，不再占用当前工作区。", openHistory: "查看历史 {count}", hideHistory: "收起历史", openMembers: "代理目录 {count}", openActivity: "动态 {count}", memberPanel: "团队成员", activityPanel: "协作动态", closePanel: "关闭侧栏", activeMembers: "当前成员", pastMembers: "过往成员", moreActions: "更多操作", fewerActions: "收起操作", workspaceSettings: "团队设置", archive: "历史", archivedTeams: "历史团队", activeTeamList: "进行中的团队", noArchivedTeams: "暂无历史团队", recentActivity: "最近动态", showMore: "再显示 {count} 条",
       pending: "待处理", in_progress: "进行中", submitted: "待负责人验收", completed: "已验收完成", cancelled: "已取消", blocked: "受阻", ready: "等待任务", running: "工作中", idle: "本轮工作已完成", provisioning: "正在启动", shutting_down: "正在停止", closing: "正在关闭", retired: "已结束协作", failed: "失败", delivered: "已送达", closedStatus: "已关闭",
       assignee: "执行成员", unassigned: "未分配", blockedBy: "正在等待：{value}", failedBy: "失败的前置任务：{value}", dependencySources: "还需其他团队完成：{value}", conflicts: "文件范围可能冲突：{value}", files: "文件：{value}", filesHidden: "为保护工作区信息，此页面不显示文件路径；需要时请让负责人核对。", taskFallback: "任务 {id}", lastActivity: "最后活动：{value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}", taskDetail: "任务详情", taskDetailUnavailable: "此任务已结束或当前无法读取。请返回任务板选择其他任务，或查看任务历史。", taskSelectionExpired: "任务信息刚刚更新，原详情已关闭。请从当前任务列表重新选择。", blockedTaskReason: "受阻原因", blockedTaskUnknown: "暂未提供具体阻塞原因。", blockedTaskNext: "下一步：等待列出的依赖完成；如果信息已过期，请让负责人刷新依赖或重新协调任务。", taskDependencies: "依赖任务", taskEvents: "相关实时事件", taskRef: "任务编号", taskBackToBoard: "返回任务板", taskWorkflow: "实时工作流", taskWorkflowHint: "状态和动态会随团队实时更新；没有可靠记录的环节不会猜测。", taskOverview: "任务概览", taskLiveEvents: "实时动态", taskLiveEventsHint: "这里只显示与当前任务有关的最新协作记录。", taskLiveConnected: "详情会随团队状态自动更新。", taskBlockedBranch: "当前阻塞", taskBlockedClear: "当前没有阻塞", taskBlockedBranchHint: "阻塞不是必经阶段；只有任务实时报告受阻时才会点亮。", taskStageCurrent: "当前阶段", taskStageReached: "已有记录", taskStageUpcoming: "尚未到达", taskStageUnknown: "暂无可靠记录", taskCreatedAt: "进入待处理", taskStartedAt: "开始执行", taskCompletedAt: "完成时间", taskResult: "成员成果", taskResultPreview: "已提交成果", taskResultTruncated: "成果较长，已显示安全截断版本。", taskNextStep: "当前下一步", taskNextPending: "等待负责人或成员认领；存在依赖时先完成依赖。", taskNextProgress: "执行成员正在推进；下方动态会持续更新。", taskNextCompleted: "任务已经完成，可在实时动态中回看相关协作。", taskTimelineLimited: "仅显示最新 {count} 条相关动态。",
-      quickActions: "快捷提示", addMember: "添加成员", newPeerTeam: "评估是否需要新团队", createTask: "创建任务", coordinate: "协调团队", summarize: "汇总进展", closeTeam: "请求关闭", newTeam: "创建新团队", draftOnly: "操作会写入下方输入框，不会自动发送。", draftSet: "已放入底部输入框。请检查内容并点击发送；系统不会自动发送。", creationSent: "创建请求已发送，正在返回对话。", creationSentFallback: "创建请求已发送。请使用上方“对话”标签查看响应。",
+      quickActions: "快捷提示", addMember: "添加成员", newPeerTeam: "评估是否需要新团队", createTask: "创建任务", coordinate: "协调团队", summarize: "汇总进展", closeTeam: "请求关闭", newTeam: "创建新团队", draftOnly: "操作会写入对话输入框并切回对话，不会自动发送。", draftSet: "已放入对话输入框。请切换到“对话”检查并发送；系统不会自动发送。",
       teamsOverview: "团队总览", teamCount: "共 {count} 个团队", activeTeams: "活跃 {count}", closedTeams: "已关闭 {count}", switchTeam: "切换到团队：{name}", crossTeam: "跨团队动态", noCrossTeam: "暂无跨团队动态", backgroundHint: "切换团队或页面不会停止后台成员。", teamTasks: "{active} 进行中 · {done} 已完成", lastUpdated: "更新于 {value}",
-      currentSession: "当前会话", revision: "状态版本 {value}", settingsTitle: "代理团队", settingsDescription: "启用后只需正常描述目标，AI 自动判断是否使用团队；简单任务保持单人执行。数值越高通常会使用更多模型额度并增加费用；不确定时保留推荐值。", settingsEnabled: "启用自动团队", settingsMaxMembers: "每个团队的成员上限", settingsMaxActiveTurns: "同时工作的成员上限（所有团队合计）", settingsSave: "保存设置", settingsSaving: "正在保存…", settingsSaved: "设置已保存", settingsRange: "两项设置都请输入 1 到 8 之间的整数。", settingsCloseTeamsFirst: "请先在负责人会话中关闭所有活动团队，再关闭代理团队功能。"
+      currentSession: "当前会话", revision: "状态版本 {value}", settingsTitle: "代理团队", settingsDescription: "启用后只需正常描述目标，AI 自动判断是否使用团队；简单任务保持单人执行。两项数值都是上限，不是要求 AI 固定凑满的人数；若希望最多 8 名成员同时启动，请将两项都设为 8。快速建队和后续扩员都会遵守这些设置。数值越高通常会使用更多模型额度并增加费用。", settingsEnabled: "启用自动团队", settingsMaxMembers: "每个团队的成员上限", settingsMaxActiveTurns: "同时工作的成员上限（所有团队合计）", settingsAutopilotEnabled: "自动接力，不用发送“继续”", settingsAutopilotMaxAdditionalRounds: "每个目标最多自动多做几轮", settingsAutopilotHint: "开启自动接力、关闭已启用的自动接力或调整轮数时，会显示一次 Desktop Host 确认；只调整成员上限可直接保存。开启后，这个可信偏好可用于之后新建的安全团队；当前负责人、活动 Goal 和已选安全团队会在同一次保存中明确授权。正常等待成员会被停放；只有持久任务提交、成员失败或依赖变化才会唤醒，Stop、真正的安全阻塞和权限异常仍需你手动恢复。", settingsAutopilotScopeRequired: "开启自动接力需要当前负责人、活动 Goal 与安全团队的精确 Host 授权；请回到负责人会话再打开此设置。", settingsSave: "保存设置", settingsSaving: "正在保存…", settingsSaved: "设置已保存", settingsRange: "成员上限请输入 1 到 8，自动接力轮数请输入 1 到 200。", settingsCloseTeamsFirst: "请先在负责人会话中关闭所有活动团队，再关闭代理团队功能。"
     };
     var en = {
       title: "Agent Teams", loading: "Loading team workspace…", retry: "Retry", loadError: "Team information could not be updated: {error}. Try again; if it still fails, you can continue working in Chat.", actionError: "The action did not finish. Follow the guidance on this page, then try again. If it still fails, return to the lead conversation to review status. Technical details: {error}",
       disabled: "Automatic teams are disabled", disabledBody: "After enabling, describe goals normally. AI decides whether a team is useful and keeps simple work solo.", enable: "Enable automatic teams", enabling: "Enabling…", disable: "Turn off automatic teams", disabling: "Turning off…", disableActiveHint: "Automatic teams cannot be turned off while a team is active. Ask the lead to finish work and close every active team first.", disableSafeHint: "Turning this off prevents new teams; closed-team history remains available.",
-      noTeam: "Automatic teams are ready", wizardIntro: "No team setup is required. Return to Chat and state the goal normally; AI decides whether to parallelize. The templates below are optional shortcuts.", backToChat: "Return to Chat and state a goal", chooseTemplate: "Optional: collaboration direction", defineObjective: "Optional: enter a goal now", prepare: "Put in composer", prepared: "Added to the composer below. Review it and select Send; it will not be sent automatically.", objectivePlaceholder: "For example: deliver the new team workspace and verify it",
+      noTeam: "Automatic teams are ready", wizardIntro: "No team setup is required. Return to Chat and state the goal normally; AI decides whether to parallelize. The templates below are optional shortcuts.", backToChat: "Return to Chat and state a goal", chooseTemplate: "Optional: collaboration direction", defineObjective: "Optional: enter a goal now", prepare: "Put in composer", prepared: "Added to the Chat composer and returning to Chat. Review it before sending; it will not be sent automatically.", objectivePlaceholder: "For example: deliver the new team workspace and verify it",
       research: "Research & verify", researchBody: "A researcher gathers evidence, an analyst cross-checks it, and the lead synthesizes findings.", build: "Build & review", buildBody: "Development makes changes, Review checks risk, and Test verifies the result.", incident: "Diagnose an issue", incidentBody: "Diagnosis, remediation, and regression verification move in parallel.", custom: "Custom team", customBody: "Enter only the objective; AI designs the members, responsibilities, task boundaries, and collaboration pattern.",
-      active: "Collaboration active", paused: "Stopped by user", pausedBody: "This team is stopped and will not continue in the background. To resume, prepare a continue request and confirm Send in the composer below.", continueTeam: "Prepare continue request", failedNext: "A member could not finish its work. Open the member list for details, then ask the lead to handle unfinished tasks.", closed: "Team closed", closedBody: "This team no longer accepts member collaboration. Its members, tasks, and events remain available.", unknown: "Unknown", status: "Status", objective: "Team objective", connection: "Connection", live: "Up to date", polling: "Keeping up to date", stale: "Information may be out of date", disconnected: "Reconnecting", workspaceIntro: "Only work that needs attention is shown by default. Completed work and collaboration details stay available on demand.",
+      active: "Collaboration active", paused: "Stopped by user", pausedBody: "This team is stopped and will not continue in the background. To resume, prepare a continue request; the page returns to Chat for review and sending.", continueTeam: "Prepare continue request", failedNext: "A member could not finish its work. Open the member list for details, then ask the lead to handle unfinished tasks.", closed: "Team closed", closedBody: "This team no longer accepts member collaboration. Its members, tasks, and events remain available.", unknown: "Unknown", status: "Status", objective: "Team objective", connection: "Connection", live: "Up to date", polling: "Keeping up to date", stale: "Information may be out of date", disconnected: "Reconnecting", workspaceIntro: "Only work that needs attention is shown by default. Completed work and collaboration details stay available on demand.",
       members: "Members", tasks: "Tasks", events: "Collaboration events", noMembers: "No members", noTasks: "No tasks", noEvents: "No collaboration events", lead: "Lead", leadRole: "Plans the goal and owns the result", openConversation: "View live work", currentTask: "Current task: {value}", model: "Model", mainModel: "Main model", subagentModel: "Member model", inheritsMain: "Same as lead", currentWork: "Current work", listView: "List", canvasView: "Canvas", canvasLabel: "Live team canvas", canvasHint: "Select a member to open the unified agent catalog. Lines show assignment, dependency, blocking, or file conflicts.", assignedRelation: "Assigned", dependsRelation: "Depends on", blockedRelation: "Blocked by", conflictRelation: "Conflict", completedSummary: "{count} completed", noActiveTasks: "No pending or in-progress tasks.", completedTasks: "Completed", taskHistory: "Task history", historyHint: "Completed tasks move here automatically instead of filling the current workspace.", openHistory: "View history {count}", hideHistory: "Hide history", openMembers: "Agents {count}", openActivity: "Activity {count}", memberPanel: "Team members", activityPanel: "Collaboration activity", closePanel: "Close sidebar", activeMembers: "Current members", pastMembers: "Past members", moreActions: "More actions", fewerActions: "Hide actions", workspaceSettings: "Team settings", archive: "History", archivedTeams: "Team history", activeTeamList: "Active teams", noArchivedTeams: "No archived teams", recentActivity: "Recent activity", showMore: "Show {count} more",
       pending: "Pending", in_progress: "In progress", submitted: "Awaiting lead acceptance", completed: "Accepted and completed", cancelled: "Cancelled", blocked: "Blocked", ready: "Waiting for work", running: "Working", idle: "Finished this turn", provisioning: "Starting", shutting_down: "Stopping", closing: "Closing", retired: "No longer active", failed: "Failed", delivered: "Delivered", closedStatus: "Closed",
       assignee: "Assignee", unassigned: "Unassigned", blockedBy: "Waiting for: {value}", failedBy: "Failed prerequisites: {value}", dependencySources: "Waiting for another team: {value}", conflicts: "File boundaries may conflict: {value}", files: "Files: {value}", filesHidden: "File paths are hidden here to protect workspace information. Ask the lead to verify them when needed.", taskFallback: "Task {id}", lastActivity: "Last activity: {value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}", taskDetail: "Task detail", taskDetailUnavailable: "This task has finished or cannot be read right now. Return to the task board or review task history.", taskSelectionExpired: "Task information just changed, so the old detail was closed. Select it again from the current task list.", blockedTaskReason: "Why this task is blocked", blockedTaskUnknown: "No specific blocking reason is available yet.", blockedTaskNext: "Next: wait for the listed dependencies. If this information is stale, ask the lead to refresh dependencies or coordinate the task again.", taskDependencies: "Dependencies", taskEvents: "Related live events", taskRef: "Task ID", taskBackToBoard: "Back to task board", taskWorkflow: "Live workflow", taskWorkflowHint: "Status and activity update with the team. Stages without reliable evidence are never guessed.", taskOverview: "Task overview", taskLiveEvents: "Live activity", taskLiveEventsHint: "Only the latest collaboration records related to this task are shown here.", taskLiveConnected: "This detail updates with the team state.", taskBlockedBranch: "Current blocker", taskBlockedClear: "No current blocker", taskBlockedBranchHint: "Blocking is not a required stage. It lights up only when the task reports a live blocker.", taskStageCurrent: "Current stage", taskStageReached: "Recorded", taskStageUpcoming: "Not reached", taskStageUnknown: "No reliable record", taskCreatedAt: "Entered pending", taskStartedAt: "Work started", taskCompletedAt: "Completed at", taskResult: "Member result", taskResultPreview: "Result delivered", taskResultTruncated: "This result was long, so a safely truncated version is shown.", taskNextStep: "Current next step", taskNextPending: "Waiting for the lead or a member to claim it; prerequisites finish first.", taskNextProgress: "The assigned member is working; live activity below will keep updating.", taskNextCompleted: "The task is complete. Review related collaboration in the live activity.", taskTimelineLimited: "Showing only the latest {count} related updates.",
-      quickActions: "Prompt shortcuts", addMember: "Add member", newPeerTeam: "Check whether another team is needed", createTask: "Create task", coordinate: "Coordinate team", summarize: "Summarize progress", closeTeam: "Request shutdown", newTeam: "Create another team", draftOnly: "Actions write to the composer and never send automatically.", draftSet: "Added to the composer below. Review it and select Send; it will not be sent automatically.", creationSent: "Creation request sent; returning to Chat.", creationSentFallback: "Creation request sent. Use the Chat tab above to view the response.",
+      quickActions: "Prompt shortcuts", addMember: "Add member", newPeerTeam: "Check whether another team is needed", createTask: "Create task", coordinate: "Coordinate team", summarize: "Summarize progress", closeTeam: "Request shutdown", newTeam: "Create another team", draftOnly: "Actions write to the Chat composer and return to Chat without sending.", draftSet: "Added to the Chat composer. Switch to Chat to review and send; it will not be sent automatically.",
       teamsOverview: "Team overview", teamCount: "{count} teams", activeTeams: "{count} active", closedTeams: "{count} closed", switchTeam: "Switch to team: {name}", crossTeam: "Cross-team activity", noCrossTeam: "No cross-team activity", backgroundHint: "Switching teams or views never stops background members.", teamTasks: "{active} active · {done} done", lastUpdated: "Updated {value}",
-      currentSession: "Current session", revision: "Status version {value}", settingsTitle: "Agent Teams", settingsDescription: "After enabling, describe goals normally and AI decides whether to use a team; simple work stays solo. Higher values usually use more model quota and may cost more; keep the recommended values if unsure.", settingsEnabled: "Enable automatic teams", settingsMaxMembers: "Member limit per team", settingsMaxActiveTurns: "Members working at once (all teams combined)", settingsSave: "Save settings", settingsSaving: "Saving…", settingsSaved: "Settings saved", settingsRange: "Enter a whole number from 1 to 8 for both settings.", settingsCloseTeamsFirst: "Close every active team from its lead conversation before disabling Agent Teams."
+      currentSession: "Current session", revision: "Status version {value}", settingsTitle: "Agent Teams", settingsDescription: "After enabling, describe goals normally and AI decides whether to use a team; simple work stays solo. Both values are ceilings, not a target roster size. To allow up to eight members to start together, set both limits to 8. Bootstrap and later expansion follow these settings. Higher values usually use more model quota and may cost more.", settingsEnabled: "Enable automatic teams", settingsMaxMembers: "Member limit per team", settingsMaxActiveTurns: "Members working at once (all teams combined)", settingsAutopilotEnabled: "Continue automatically without asking me to send “continue”", settingsAutopilotMaxAdditionalRounds: "Maximum extra rounds per goal", settingsAutopilotHint: "Enabling automatic continuation, turning it off after it was enabled, or changing its round budget shows one Desktop Host confirmation; member-limit-only changes save directly. Once enabled, this trusted preference can apply to future safe teams; the selected safe team is explicitly authorized for the current lead and active Goal in the same save. Normal member waiting is parked; only a durable task submission, member failure, or dependency change wakes the lead. Stop, real safety blockers, and permission anomalies still require manual recovery.", settingsAutopilotScopeRequired: "Enabling automatic continuation requires exact Host authorization for the current lead, active Goal, and safe team. Return to the lead conversation before enabling it.", settingsSave: "Save settings", settingsSaving: "Saving…", settingsSaved: "Settings saved", settingsRange: "Enter 1 to 8 for member limits and 1 to 200 for automatic continuation rounds.", settingsCloseTeamsFirst: "Close every active team from its lead conversation before disabling Agent Teams."
     };
     Object.assign(zh, {
       recoveryTitle: "恢复失败成员", recoveryBody: "选择重试会继续同一成员并保留任务 claim/lease；替换会撤销旧 claim、保留 checkpoint 与失败审计，再创建一个可见同级成员。不会自动执行。", recoveryRetry: "重试成员", recoveryReplace: "替换成员", recoveryConfirmRetry: "确认重试 {name}？这会向同一成员发送一次有界恢复提示，并继续使用原任务 claim/lease。", recoveryConfirmReplace: "确认替换 {name}？这会产生一次新的成员模型启动成本，撤销旧 claim/lease，并把同一任务预绑定给可见替代成员。", recoveryConfirm: "确认并继续", recoveryCancel: "取消", recoveryWorkingRetry: "正在重试成员…", recoveryWorkingReplace: "正在替换成员…", recoverySuccessRetry: "恢复提示已送达同一成员；原任务 claim/lease 保持不变。", recoverySuccessReplace: "替代成员已创建并接手同一批任务；旧 claim/lease 已撤销并保留审计。", recoveryError: "恢复没有完成：{error}。请刷新团队状态，按页面提示处理后再明确重试；不要连续点击。", recoveryUnknownTitle: "恢复结果待核对", recoveryUnknownBody: "请求 {request} 已停在 {phase}。系统不会重复启动成员或重复发送工作提示；请核对可审计记录后明确标记结果。", recoveryMarkDelivered: "确认已送达", recoveryMarkNotDelivered: "确认未送达", recoveryReconcileConfirmDelivered: "确认这次恢复已送达？只会结算原 request，不会再次发送。", recoveryReconcileConfirmNotDelivered: "确认这次恢复未送达？系统会安全收束原 attempt，之后才允许新的明确恢复。", recoveryReconcileSuccess: "原恢复 request 已完成核对。", recoveryReconcileWorking: "正在核对…",
@@ -826,8 +826,22 @@ window.__ModuleLoader__.load({
       });
     }
     function postAction(sessionId, action, payload) {
-      return fetch("/api/agent-teams/action", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", Accept: "application/json", "x-harness-agent-teams": "1" }, body: JSON.stringify(Object.assign({ sessionId: sessionId, action: action }, payload || {})) }).then(function (response) {
+      var headers = { "content-type": "application/json", Accept: "application/json", "x-harness-agent-teams": "1" };
+      return fetch("/api/agent-teams/action", { method: "POST", credentials: "same-origin", headers: headers, body: JSON.stringify(Object.assign({ sessionId: sessionId, action: action }, payload || {})) }).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) { if (!response.ok) { var error = new Error(data.error || ("HTTP " + response.status)); error.code = data.code; error.status = response.status; throw error; } return data; });
+      });
+    }
+    function postAuthorizedSettings(sessionId, payload) {
+      var desktop = typeof window !== "undefined" ? window.harnessDesktopGuest : null;
+      var issue = desktop && typeof desktop.authorizeAgentTeamsAutopilotSettings === "function" ? desktop.authorizeAgentTeamsAutopilotSettings : null;
+      if (!issue) { var unavailable = new Error("Desktop Host authorization is unavailable"); unavailable.code = "AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE"; throw unavailable; }
+      // Called synchronously from the native submit/click event. The isolated
+      // preload requires Chromium user activation and the main process then
+      // presents an exact, parent-window-bound native confirmation.
+      var authorizationPromise = issue(Object.assign({ sessionId: sessionId, action: "settings" }, payload));
+      return Promise.resolve(authorizationPromise).then(function (authorization) {
+        if (!authorization || typeof authorization.authorizationId !== "string" || !authorization.authorizationId) { var invalid = new Error("Desktop Host authorization is invalid"); invalid.code = "AGENT_TEAMS_HOST_AUTHORIZATION_INVALID"; throw invalid; }
+        return postAction(sessionId, "settings", Object.assign({}, payload, { hostAuthorizationCapability: authorization.authorizationId }));
       });
     }
     function teamSnapshotVersion(snapshot) {
@@ -838,7 +852,9 @@ window.__ModuleLoader__.load({
         return [teamId(team), team.revision || "", team.updatedAt || "", team.status || team.state || ""];
       });
       if (teams.some(function (team) { return !team.revision && !team.updatedAt; })) return JSON.stringify(snapshot);
-      return JSON.stringify([!!snapshot.enabled, config.maxMembers || 0, config.maxActiveTurns || 0, markers]);
+      var authorization = snapshot.autopilotAuthorization || null;
+      var authorizationMarker = authorization && [authorization.rootSessionId, authorization.projectKey, authorization.goalId, authorization.teamId, authorization.pauseEpoch, authorization.teamScopeHash];
+      return JSON.stringify([!!snapshot.enabled, config.maxMembers || 0, config.maxActiveTurns || 0, !!config.autopilotEnabled, config.autopilotMaxAdditionalRounds || 0, authorizationMarker, markers]);
     }
     function useTeamState(sessionId, selectedTeamId) {
       var statePair = useState(null), state = statePair[0], setState = statePair[1];
@@ -3197,46 +3213,20 @@ window.__ModuleLoader__.load({
       var selectedPair = useState(""), selectedId = selectedPair[0], setSelectedId = selectedPair[1];
       var workspacePair = useState("board"), workspaceView = workspacePair[0], setWorkspaceView = workspacePair[1];
       var live = useTeamState(props.sessionId, selectedId);
-      var inputPhase = props.useInput(function (state) { return state.phase; });
-      var inputDraft = props.useInput(function (state) { return state.draft; });
-      var inputDraftRev = props.useInput(function (state) { return state.draftRev; });
       var busyPair = useState(false), busy = busyPair[0], setBusy = busyPair[1];
       var actionErrorPair = useState(""), actionError = actionErrorPair[0], setActionError = actionErrorPair[1];
       var noticePair = useState(""), notice = noticePair[0], setNotice = noticePair[1];
-      var creationRef = useRef(null), previousPhaseRef = useRef(inputPhase);
       var snapshot = live.state, teams = teamsFromSnapshot(snapshot);
       var preferredId = snapshot && (snapshot.activeTeamId || snapshot.selectedTeamId) || snapshot && snapshot.team && teamId(snapshot.team);
       var team = teams.filter(function (item) { return teamId(item) === selectedId; })[0] || teams.filter(function (item) { return teamId(item) === preferredId; })[0] || teams[0] || null;
       useEffect(function () {
         if (team && teamId(team) !== selectedId) setSelectedId(teamId(team));
       }, [selectedId, preferredId, teams.map(teamId).join("|")]);
-      useEffect(function () {
-        var pending = creationRef.current;
-        if (pending && pending.observedInComposer && previousPhaseRef.current !== "submitting" && inputPhase === "submitting") {
-          pending.submitting = true;
-          pending.submittedDraft = inputDraft;
-          pending.submittedDraftRev = inputDraftRev;
-        }
-        if (pending && pending.submitting && previousPhaseRef.current === "submitting" && inputPhase === "plain") {
-          var draftConsumed = inputDraft === "" && inputDraftRev !== pending.submittedDraftRev;
-          if (draftConsumed) {
-            creationRef.current = null;
-            if (typeof props.setView === "function") {
-              setNotice(t("creationSent"));
-              props.setView("chat");
-            } else setNotice(t("creationSentFallback"));
-          } else pending.submitting = false;
-        }
-        previousPhaseRef.current = inputPhase;
-      }, [inputPhase, inputDraft, inputDraftRev, props.setView]);
-      useEffect(function () {
-        if (creationRef.current && inputDraft === creationRef.current.prompt) creationRef.current.observedInComposer = true;
-      }, [inputDraft]);
-      function setDraft(prompt, options) {
+      function setDraft(prompt) {
         if (!props.inputActions || typeof props.inputActions.setDraft !== "function") { setActionError("inputActions.setDraft unavailable"); return; }
         props.inputActions.setDraft(prompt);
-        if (options && options.creation) creationRef.current = { prompt: prompt, observedInComposer: false };
         setNotice(t("draftSet"));
+        if (typeof props.setView === "function") props.setView("chat");
       }
       function applyActionState(result) {
         if (result && result.state) { live.setState(result.state); return true; }
@@ -3245,14 +3235,24 @@ window.__ModuleLoader__.load({
       }
       function enable() {
         setBusy(true); setActionError("");
-        postAction(props.sessionId, "settings", { enabled: true }).then(function (result) {
+        var config = snapshot && (snapshot.config || snapshot.settings) || {};
+        var payload = { enabled: true, maxMembers: Number(config.maxMembers) || 4, maxActiveTurns: Number(config.maxActiveTurns) || 4, autopilotEnabled: !!config.autopilotEnabled, autopilotMaxAdditionalRounds: Number(config.autopilotMaxAdditionalRounds) || 200 };
+        if (payload.autopilotEnabled && snapshot && snapshot.autopilotAuthorization) payload.hostAuthorization = snapshot.autopilotAuthorization;
+        var operation;
+        try { operation = postAuthorizedSettings(props.sessionId, payload); } catch (error) { operation = Promise.reject(error); }
+        operation.then(function (result) {
           if (!applyActionState(result)) live.reload().catch(function () {});
           if (typeof props.setView === "function") props.setView("chat");
         }).catch(function (error) { setActionError(errorText(error)); }).finally(function () { setBusy(false); });
       }
       function disable() {
         setBusy(true); setActionError("");
-        postAction(props.sessionId, "settings", { enabled: false }).then(function (result) {
+        var config = snapshot && (snapshot.config || snapshot.settings) || {};
+        var payload = { enabled: false, maxMembers: Number(config.maxMembers) || 4, maxActiveTurns: Number(config.maxActiveTurns) || 4, autopilotEnabled: !!config.autopilotEnabled, autopilotMaxAdditionalRounds: Number(config.autopilotMaxAdditionalRounds) || 200 };
+        if (payload.autopilotEnabled && snapshot && snapshot.autopilotAuthorization) payload.hostAuthorization = snapshot.autopilotAuthorization;
+        var operation;
+        try { operation = postAuthorizedSettings(props.sessionId, payload); } catch (error) { operation = Promise.reject(error); }
+        operation.then(function (result) {
           if (!applyActionState(result)) return fetchState(props.sessionId).then(function (state) { live.setState(state); });
         }).catch(function (error) {
           setActionError(error && error.code === "AGENT_TEAMS_CONFLICT" ? t("disableActiveHint") : errorText(error));
@@ -3335,34 +3335,48 @@ window.__ModuleLoader__.load({
     function AgentTeamsSettings(props) {
       var t = useLocale();
       var sessionId = resolveSettingsSessionId(props.sessions);
-      var valuesPair = useState({ enabled: false, maxMembers: 4, maxActiveTurns: 4 }), values = valuesPair[0], setValues = valuesPair[1];
+      var valuesPair = useState({ enabled: false, maxMembers: 4, maxActiveTurns: 4, autopilotEnabled: false, autopilotMaxAdditionalRounds: 200 }), values = valuesPair[0], setValues = valuesPair[1];
+      var authorizationPair = useState(null), hostAuthorization = authorizationPair[0], setHostAuthorization = authorizationPair[1];
+      var committedAutopilotEnabled = useRef(false), committedAutopilotBudget = useRef(200);
       var loadingPair = useState(true), loading = loadingPair[0], setLoading = loadingPair[1];
       var savingPair = useState(false), saving = savingPair[0], setSaving = savingPair[1];
       var errorPair = useState(""), error = errorPair[0], setError = errorPair[1];
       var savedPair = useState(false), saved = savedPair[0], setSaved = savedPair[1];
-      function applyState(state) { var config = state.config || {}; setValues({ enabled: !!state.enabled, maxMembers: Number(config.maxMembers) || 4, maxActiveTurns: Number(config.maxActiveTurns) || 4 }); }
+      function applyState(state) { var config = state.config || {}, budget = Number(config.autopilotMaxAdditionalRounds) || 200, autopilotEnabled = !!config.autopilotEnabled; committedAutopilotEnabled.current = autopilotEnabled; committedAutopilotBudget.current = budget; setHostAuthorization(state.autopilotAuthorization || null); setValues({ enabled: !!state.enabled, maxMembers: Number(config.maxMembers) || 4, maxActiveTurns: Number(config.maxActiveTurns) || 4, autopilotEnabled: autopilotEnabled, autopilotMaxAdditionalRounds: budget }); }
       useEffect(function () {
         var alive = true; setLoading(true); setError("");
         fetchState(sessionId).then(function (state) { if (alive) applyState(state); }).catch(function (err) { if (alive) setError(errorText(err)); }).finally(function () { if (alive) setLoading(false); });
         return function () { alive = false; };
       }, [sessionId]);
-      function valid(value) { var number = Number(value); return Number.isInteger(number) && number >= 1 && number <= 8; }
+      function valid(value, maximum) { var number = Number(value); return Number.isInteger(number) && number >= 1 && number <= maximum; }
       function submit(event) {
-        event.preventDefault(); if (!valid(values.maxMembers) || !valid(values.maxActiveTurns)) { setError(t("settingsRange")); return; }
+        event.preventDefault(); if (!valid(values.maxMembers, 8) || !valid(values.maxActiveTurns, 8) || !valid(values.autopilotMaxAdditionalRounds, 200)) { setError(t("settingsRange")); return; }
+        var budget = Number(values.autopilotMaxAdditionalRounds);
+        var authorizationRequired = !!values.autopilotEnabled || !!values.autopilotEnabled !== committedAutopilotEnabled.current || budget !== committedAutopilotBudget.current;
+        if (authorizationRequired && values.autopilotEnabled && !hostAuthorization) { setSaved(false); setError(t("settingsAutopilotScopeRequired")); return; }
         setSaving(true); setSaved(false); setError("");
-        postAction(sessionId, "settings", { enabled: !!values.enabled, maxMembers: Number(values.maxMembers), maxActiveTurns: Number(values.maxActiveTurns) }).then(function (result) { if (result && result.state) applyState(result.state); setSaved(true); }).catch(function (err) {
+        var payload = { enabled: !!values.enabled, maxMembers: Number(values.maxMembers), maxActiveTurns: Number(values.maxActiveTurns), autopilotEnabled: !!values.autopilotEnabled, autopilotMaxAdditionalRounds: budget };
+        if (authorizationRequired && hostAuthorization) payload.hostAuthorization = hostAuthorization;
+        var settingsPromise;
+        try {
+          settingsPromise = authorizationRequired ? postAuthorizedSettings(sessionId, payload) : postAction(sessionId, "settings", payload);
+        } catch (authorizationError) { settingsPromise = Promise.reject(authorizationError); }
+        Promise.resolve(settingsPromise).then(function (result) { if (result && result.state) applyState(result.state); setSaved(true); }).catch(function (err) {
           setError(err && err.code === "AGENT_TEAMS_CONFLICT" ? t("settingsCloseTeamsFirst") : errorText(err));
           return fetchState(sessionId).then(applyState).catch(function () {});
         }).finally(function () { setSaving(false); });
       }
-      function numberField(id, label, key) { return h("label", { htmlFor: id }, h("span", { className: "dat-label" }, label), h("input", { id: id, className: "dat-field", type: "number", min: 1, max: 8, step: 1, value: values[key], onChange: function (event) { var next = {}; next[key] = event.target.value; setValues(Object.assign({}, values, next)); setSaved(false); } })); }
+      function numberField(id, label, key, maximum) { return h("label", { htmlFor: id }, h("span", { className: "dat-label" }, label), h("input", { id: id, className: "dat-field", type: "number", min: 1, max: maximum, step: 1, value: values[key], disabled: saving, onChange: function (event) { var next = {}; next[key] = event.target.value; setValues(Object.assign({}, values, next)); setSaved(false); } })); }
       return h("section", { style: { maxWidth: 680, color: "var(--dsw-alias-label-primary)" }, "aria-labelledby": "dat-settings-title" },
         h("h2", { id: "dat-settings-title" }, t("settingsTitle")), h("p", { className: "dat-meta" }, t("settingsDescription")),
-        loading ? h("div", { role: "status" }, t("loading")) : h("form", { onSubmit: submit, className: "dat-panel" },
+        loading ? h("div", { role: "status" }, t("loading")) : h("form", { onSubmit: submit, className: "dat-panel", "data-agent-teams-settings-form": "1" },
           h("label", { className: "dat-row", style: { justifyContent: "space-between" } }, h("span", null, t("settingsEnabled")), h("input", { type: "checkbox", role: "switch", checked: values.enabled, disabled: saving, onChange: function (event) { setValues(Object.assign({}, values, { enabled: event.target.checked })); setSaved(false); } })),
-          numberField("dat-max-members", t("settingsMaxMembers"), "maxMembers"), numberField("dat-max-turns", t("settingsMaxActiveTurns"), "maxActiveTurns"),
+          numberField("dat-max-members", t("settingsMaxMembers"), "maxMembers", 8), numberField("dat-max-turns", t("settingsMaxActiveTurns"), "maxActiveTurns", 8),
+          h("label", { className: "dat-row", style: { justifyContent: "space-between", marginTop: 14 } }, h("span", null, t("settingsAutopilotEnabled")), h("input", { type: "checkbox", role: "switch", checked: values.autopilotEnabled, disabled: saving, onChange: function (event) { setValues(Object.assign({}, values, { autopilotEnabled: event.target.checked })); setSaved(false); } })),
+          h("p", { className: "dat-note" }, t("settingsAutopilotHint")),
+          numberField("dat-autopilot-max-rounds", t("settingsAutopilotMaxAdditionalRounds"), "autopilotMaxAdditionalRounds", 200),
           error ? h("div", { className: "dat-error", role: "alert" }, error) : null,
-          h("div", { className: "dat-actions" }, h(Button, { type: "submit", primary: true, disabled: saving }, saving ? t("settingsSaving") : t("settingsSave")), saved ? h("span", { className: "dat-note", role: "status" }, t("settingsSaved")) : null)
+          h("div", { className: "dat-actions" }, h(Button, { type: "submit", primary: true, disabled: saving, "data-agent-teams-settings-save": "1" }, saving ? t("settingsSaving") : t("settingsSave")), saved ? h("span", { className: "dat-note", role: "status" }, t("settingsSaved")) : null)
         )
       );
     }
@@ -3373,7 +3387,10 @@ window.__ModuleLoader__.load({
       try { translate = ctx.locale.bind(NS); } catch (_) {}
       try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {}
       try { ctx.effect(function () { return ctx.locale.subscribe(function () { try { currentLang = ctx.locale.getLocale().active || currentLang; } catch (_) {} localeListeners.slice().forEach(function (listener) { listener(); }); }); }, "agent-teams: locale subscription"); } catch (_) {}
-      function View(props) { return h(TeamView, Object.assign({}, props, { sessions: ctx.sessions, workspaces: ctx.workspaces })); }
+      function View(props) {
+        var setView = typeof props.setView === "function" ? props.setView : typeof props.openView === "function" ? function (view) { props.openView(view); } : undefined;
+        return h(TeamView, Object.assign({}, props, { sessions: ctx.sessions, workspaces: ctx.workspaces, setView: setView }));
+      }
       function Settings() { return h(AgentTeamsSettings, { sessions: ctx.sessions }); }
       ctx.slots.inject("conversation.view", function () { return ctx.slots.register({ name: "conversation.view", id: "agent-teams", order: 20, locale: NS, label: function () { return translate("title"); } }, View); });
       ctx.slots.inject("settings.section", function () { return ctx.slots.register({ name: "settings.section", id: "agent-teams-settings", order: 35, locale: NS, label: function () { return translate("settingsTitle"); } }, Settings); });

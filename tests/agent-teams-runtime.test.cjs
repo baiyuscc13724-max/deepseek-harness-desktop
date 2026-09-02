@@ -8,6 +8,7 @@ const { Readable } = require('node:stream')
 const { pathToFileURL } = require('node:url')
 
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
+const queueSubagentPrompt = Symbol.for('dsh.subagent.queuePrompt')
 
 function request(method, url, body) {
   const payload = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
@@ -16,6 +17,23 @@ function request(method, url, body) {
   req.url = url
   req.headers = { host: '127.0.0.1:9945', origin: 'http://127.0.0.1:9945', ...(method === 'POST' ? { 'x-harness-agent-teams': '1' } : {}) }
   return req
+}
+
+function hostAuthorizedSettingsRequest(body, authorizationId) {
+  const req = request('POST', '/api/agent-teams/action', { ...body, hostAuthorizationCapability: authorizationId })
+  req.headers['x-harness-agent-teams-authorization'] = authorizationId
+  return req
+}
+const AUTOPILOT_SETTINGS_KEYS = ['enabled', 'maxMembers', 'maxActiveTurns', 'autopilotEnabled', 'autopilotMaxAdditionalRounds']
+function autopilotSettingsProof(settings, authorizationEpoch, authorizedAt = Date.now()) {
+  return {
+    version: 1,
+    settingsHash: createHash('sha256').update(JSON.stringify(['agent-teams-autopilot-settings-v1', AUTOPILOT_SETTINGS_KEYS.map(key => settings[key])])).digest('hex'),
+    enabled: settings.enabled,
+    autopilotEnabled: settings.autopilotEnabled,
+    authorizationEpoch,
+    authorizedAt
+  }
 }
 
 function response() {
@@ -40,8 +58,10 @@ async function invoke(route, req) {
 }
 
 function openDirectHumanTurn(agent) {
-  const events = agent?.session?.events
+  const session = agent?.session
+  const events = session?.events
   if (!Array.isArray(events)) throw new Error('test fixture agent must expose session events')
+  if (typeof session.snapshotEvents !== 'function') session.snapshotEvents = () => events.slice()
   events.push(
     { type: 'turn/end', data: {} },
     { type: 'turn/start', data: {} },
@@ -49,9 +69,11 @@ function openDirectHumanTurn(agent) {
   )
 }
 
+let teamStartSequence = 0
 async function startTeam(tools, args, execution) {
   openDirectHumanTurn(execution.agent)
-  return tools.get('team_start').execute({ candidate_workstreams: 2, ...args }, execution)
+  teamStartSequence += 1
+  return tools.get('team_start').execute({ candidate_workstreams: 2, request_id: `runtime-team-start-${teamStartSequence}`, ...args }, execution)
 }
 
 let taskCommandSequence = 0
@@ -167,6 +189,8 @@ test('durable project task wakes deliver only to the exact live same-project roo
   })
   assert.deepEqual(result, { claimed: 3, delivered: 1, retryable: 1 })
   assert.match(accepted[0].content[0].text, /wake-target-ref/u)
+  assert.equal(accepted[0].source.kind, 'plugin')
+  assert.equal(accepted[0].source.plugin, 'dsh-agent-teams')
   assert.equal(accepted[0].source.summary, 'Project tasks')
   assert.deepEqual(acknowledgements.map(entry => [entry.wakeRef, entry.outcome]), [
     ['wake-target-ref', 'delivered'], ['wake-missing-ref', 'not_delivered'], ['wake-failed-ref', 'outcome_unknown']
@@ -180,10 +204,11 @@ test('durable project task wake delivery deduplicates inbox and session evidence
   let normalized = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC')
   if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
   const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
-  const inbox = { id: 'wake-inbox', status: 'idle', session: { header: { cwd }, events: [] }, inbox: { nextTurn: [wakeMessage('wake-inbox-ref')], nextStep: [] }, async followup() { throw new Error('duplicate inbox enqueue') } }
-  const history = { id: 'wake-history', status: 'running', session: { header: { cwd }, events: [{ type: 'user/message', data: { message: wakeMessage('wake-history-ref') } }] }, inbox: { nextTurn: [], nextStep: [] }, async steer() { throw new Error('duplicate history enqueue') } }
-  const raced = { id: 'wake-raced', status: 'idle', session: { header: { cwd }, events: [] }, inbox: { nextTurn: [], nextStep: [] }, async followup(message) { this.inbox.nextTurn.push(message); throw new Error('accepted before error') } }
-  const uncertain = { id: 'wake-uncertain', status: 'idle', session: { header: { cwd }, events: [] }, inbox: { nextTurn: [], nextStep: [] }, async followup() { throw new Error('unknown enqueue outcome') } }
+  const wakeSession = events => ({ header: { cwd }, events, snapshotEvents() { return this.events.slice() } })
+  const inbox = { id: 'wake-inbox', status: 'idle', session: wakeSession([]), inbox: { nextTurn: [wakeMessage('wake-inbox-ref')], nextStep: [] }, async followup() { throw new Error('duplicate inbox enqueue') } }
+  const history = { id: 'wake-history', status: 'running', session: wakeSession([{ type: 'user/message', data: { message: wakeMessage('wake-history-ref') } }]), inbox: { nextTurn: [], nextStep: [] }, async steer() { throw new Error('duplicate history enqueue') } }
+  const raced = { id: 'wake-raced', status: 'idle', session: wakeSession([]), inbox: { nextTurn: [], nextStep: [] }, async followup(message) { this.inbox.nextTurn.push(message); throw new Error('accepted before error') } }
+  const uncertain = { id: 'wake-uncertain', status: 'idle', session: wakeSession([]), inbox: { nextTurn: [], nextStep: [] }, async followup() { throw new Error('unknown enqueue outcome') } }
   const acknowledgements = []
   const wake = {
     claim() { return [{ wakeRef: 'wake-inbox-ref', actorRef: 'actor:wake-inbox' }, { wakeRef: 'wake-history-ref', actorRef: 'actor:wake-history' }, { wakeRef: 'wake-raced-ref', actorRef: 'actor:wake-raced' }, { wakeRef: 'wake-uncertain-ref', actorRef: 'actor:wake-uncertain' }] },
@@ -200,13 +225,17 @@ test('unknown project wake reconciliation distinguishes exact delivery, complete
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-evidence=${Date.now()}-${Math.random()}`)
   const wakeRef = 'wake-reconcile-exact'
   const message = { source: { kind: 'coordinator', summary: 'Project tasks' }, content: [{ type: 'text', text: `[Project task wake ${wakeRef}] exact` }] }
-  const complete = { session: { events: [] }, inbox: { nextTurn: [], nextStep: [] } }
+  const completeEvents = []
+  const complete = { session: { snapshotEvents: () => completeEvents }, inbox: { nextTurn: [], nextStep: [] } }
   assert.equal(mod.rootProjectTaskWakeEvidence(complete, wakeRef), 'complete_history_absence')
+  const missingSnapshot = { session: { events: [{ type: 'user/message', data: { message } }] }, inbox: { nextTurn: [], nextStep: [] } }
+  assert.equal(mod.rootProjectTaskWakeEvidence(missingSnapshot, wakeRef), 'unknown', 'legacy Session.events data is never executed as evidence')
   complete.inbox.nextStep.push(message)
   assert.equal(mod.rootProjectTaskWakeEvidence(complete, wakeRef), 'exact_message')
-  const truncated = { session: { events: Array.from({ length: 257 }, () => ({ type: 'turn/end', data: {} })) }, inbox: { nextTurn: [], nextStep: [] } }
+  const truncatedEvents = Array.from({ length: 257 }, () => ({ type: 'turn/end', data: {} }))
+  const truncated = { session: { snapshotEvents: () => truncatedEvents }, inbox: { nextTurn: [], nextStep: [] } }
   assert.equal(mod.rootProjectTaskWakeEvidence(truncated, wakeRef), 'unknown', 'a bounded scan never turns incomplete history into negative evidence')
-  truncated.session.events.push({ type: 'user/message', data: { message } })
+  truncatedEvents.push({ type: 'user/message', data: { message } })
   assert.equal(mod.rootProjectTaskWakeEvidence(truncated, wakeRef), 'exact_message')
 })
 
@@ -584,7 +613,7 @@ test('project task wake session evidence scan is bounded to a recent tail window
   let enqueues = 0
   const root = {
     id: 'wake-tail-root', status: 'idle', inbox: { nextTurn: [], nextStep: [] },
-    session: { header: { cwd }, events: [{ type: 'user/message', data: { message: wakeMessage } }, ...Array.from({ length: 512 }, () => ({ type: 'assistant/message', data: {} }))] },
+    session: { header: { cwd }, events: [{ type: 'user/message', data: { message: wakeMessage } }, ...Array.from({ length: 512 }, () => ({ type: 'assistant/message', data: {} }))], snapshotEvents() { return this.events.slice() } },
     async followup() { enqueues += 1 }
   }
   const acknowledgements = []
@@ -806,7 +835,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
       session: { header: { cwd: root }, events: [
         { type: 'turn/start', data: {} },
         { type: 'user/message', data: { source: { kind: 'user' } } }
-      ] },
+      ], snapshotEvents() { return this.events.slice() } },
       inbox: leadInbox,
       followup(message) { leadFollowups.push(message); leadInboxNextTurn.push(message) },
       steer(message) { leadSteers.push(message); leadInboxNextStep.push(message) }
@@ -815,21 +844,50 @@ test('model tools create a team, spawn independent members, and relay with non-u
       id: 'worker-session', status: 'running', options: { provider: 'test-provider', model: 'test-model' },
       session: { events: [
         { type: 'turn/start', data: {} },
-        { type: 'user/message', data: { source: { kind: 'coordinator' } } }
-      ] }
+        { type: 'user/message', data: { source: { kind: 'agent-message', form: 'relay', senderSessionId: rootAgent.id } } }
+      ], snapshotEvents() { return this.events.slice() } }
     }
     const recoveryAgent = {
       id: 'recovery-session', status: 'running', options: { provider: 'test-provider', model: 'test-model' },
       session: { header: { cwd: root }, events: [
         { type: 'turn/start', data: {} },
         { type: 'user/message', data: { source: { kind: 'user' } } }
-      ] }
+      ], snapshotEvents() { return this.events.slice() } }
     }
     let activeInitiator = rootAgent
     let currentGoal
+    let autopilotAuthorizationEpoch = 'a'.repeat(32)
+    let currentAutopilotSettingsProof = null
+    let autopilotAuthorizationEpochRevision = 0
+    let autopilotAuthorizationRevocations = 0
+    let revocationGoalActivation
+    const consumedAutopilotAuthorizations = new Set()
+    const autopilotAuthorizationConsumptions = []
+    const autopilotAuthorizationProvider = {
+      async consumeAutopilotAuthorization(value) {
+        if (!/^host-settings-[a-z0-9-]+$/u.test(value.authorizationId)) { const error = new Error('invalid Host authorization'); error.code = 'AGENT_TEAMS_HOST_AUTHORIZATION_INVALID'; throw error }
+        if (consumedAutopilotAuthorizations.has(value.authorizationId)) { const error = new Error('replayed Host authorization'); error.code = 'AGENT_TEAMS_HOST_AUTHORIZATION_REPLAY'; throw error }
+        consumedAutopilotAuthorizations.add(value.authorizationId)
+        autopilotAuthorizationConsumptions.push(structuredClone(value))
+        autopilotAuthorizationEpochRevision += 1
+        autopilotAuthorizationEpoch = String.fromCharCode(97 + autopilotAuthorizationEpochRevision).repeat(32)
+        const issuedAt = Date.now()
+        currentAutopilotSettingsProof = autopilotSettingsProof(value.settings, autopilotAuthorizationEpoch, issuedAt)
+        return { ...value, tool: 'team_autopilot', desktopBindingHash: 'd'.repeat(64), authorizationEpoch: autopilotAuthorizationEpoch, autopilotSettingsProof: currentAutopilotSettingsProof, issuedAt, expiresAt: issuedAt + 30_000 }
+      },
+      async readAutopilotAuthorizationState() { return { authorizationEpoch: autopilotAuthorizationEpoch, autopilotSettingsProof: currentAutopilotSettingsProof } },
+      async revokeAutopilotAuthorizations() {
+        revocationGoalActivation = currentGoal?.activation
+        autopilotAuthorizationRevocations += 1
+        autopilotAuthorizationEpochRevision += 1
+        autopilotAuthorizationEpoch = String.fromCharCode(97 + autopilotAuthorizationEpochRevision).repeat(32)
+        currentAutopilotSettingsProof = null
+        return { authorizationEpoch: autopilotAuthorizationEpoch, autopilotSettingsProof: currentAutopilotSettingsProof }
+      }
+    }
     const ctx = {
       logger: { info() {}, warn() {}, error() {} },
-      get: () => undefined,
+      get: name => name === 'agentTeamsAuthorization' ? autopilotAuthorizationProvider : undefined,
       tools: {
         register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) },
         guard(guard) { toolGuards.push(guard); return () => toolGuards.splice(toolGuards.indexOf(guard), 1) }
@@ -843,7 +901,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
         roots() { return [...(leadAvailable ? [rootAgent] : []), recoveryAgent] },
         currentInitiator() { return activeInitiator }
       },
-      goals: { get(agent) { return agent === rootAgent ? currentGoal : undefined } },
+      goals: {
+        get(agent) { return agent === rootAgent ? currentGoal : undefined },
+        disarm(agent) { assert.equal(agent, rootAgent); currentGoal = { ...currentGoal, activation: 'disarmed' }; return currentGoal }
+      },
       subagents: {
         async startContinuable(spec) {
           starts.push(spec)
@@ -858,7 +919,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
           if (starts.length === 1 && forcedChildId === undefined) workerAgent.id = childId
           return { childId, messageId: `initial-message-${starts.length}` }
         },
-        async followup(parent, childId, content, options) {
+        async [queueSubagentPrompt](parent, childId, content, source, signal) {
+          const options = { source, signal }
           followups.push({ parent, childId, content, options })
           const graceful = content?.[0]?.text?.includes('graceful retirement') === true
           if (failGracefulFollowupIds.has(childId) && graceful) throw new Error('graceful followup failed')
@@ -959,9 +1021,31 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(disabledPrompt, /Team members must never create teams/u)
 
     const settings = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
-      sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4
+      sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: false, autopilotMaxAdditionalRounds: 200
     }))
-    assert.equal(settings.status, 200)
+    assert.equal(settings.status, 200, settings.body)
+    const enabledSettings = JSON.parse(settings.body).state.config
+    assert.equal(enabledSettings.autopilotEnabled, false)
+    assert.equal(enabledSettings.autopilotMaxAdditionalRounds, 200)
+    const beforeUnscopedBudgetChange = autopilotAuthorizationConsumptions.length
+    const unscopedBudgetChange = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
+      sessionId: 'settings', action: 'settings', autopilotEnabled: false, autopilotMaxAdditionalRounds: 199
+    }))
+    assert.equal(unscopedBudgetChange.status, 403)
+    assert.equal(autopilotAuthorizationConsumptions.length, beforeUnscopedBudgetChange, 'budget changes without an exact Host scope are rejected before receipt consumption')
+    const stoppedAutopilot = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
+      sessionId: 'settings', action: 'settings', autopilotEnabled: false, autopilotMaxAdditionalRounds: 200
+    }))
+    assert.equal(stoppedAutopilot.status, 200)
+    const stoppedAutopilotSettings = JSON.parse(stoppedAutopilot.body).state.config
+    assert.equal(stoppedAutopilotSettings.autopilotEnabled, false)
+    assert.equal(stoppedAutopilotSettings.autopilotMaxAdditionalRounds, 200)
+    assert.equal(autopilotAuthorizationConsumptions.length, beforeUnscopedBudgetChange, 'false remains compatible without Host scope or receipt')
+    const invalidAutopilot = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
+      sessionId: 'settings', action: 'settings', autopilotEnabled: 'true', autopilotMaxAdditionalRounds: 201
+    }))
+    assert.equal(invalidAutopilot.status, 400)
     const enabledPrompt = teamsPrompt.text({})
     assert.match(enabledPrompt, /automatic-team mode is ENABLED/u)
     assert.match(enabledPrompt, /Before substantive work on every ordinary direct-human root turn, and before first creating an Agent Team during an exact admitted continuation/u)
@@ -1036,6 +1120,106 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(started.team.members[0].provider, 'main-provider')
     assert.equal(started.team.members[0].model, 'main-model')
 
+    currentGoal = {
+      id: 'goal-host-authorized-autopilot', revision: 1, objective: 'Keep the exact first team moving safely',
+      phase: 'active', activation: 'armed', roundsStarted: 1, maxGoalRounds: 3
+    }
+    const authorizationState = await invoke(routes.get('/api/agent-teams/state'), request('GET', `/api/agent-teams/state?sessionId=${encodeURIComponent(rootAgent.id)}&teamId=${encodeURIComponent(started.team.id)}`))
+    assert.equal(authorizationState.status, 200)
+    const hostScope = JSON.parse(authorizationState.body).autopilotAuthorization
+    assert.equal(hostScope.rootSessionId, rootAgent.id)
+    assert.match(hostScope.projectKey, /^[a-f0-9]{64}$/u)
+    assert.equal(hostScope.goalId, currentGoal.id)
+    assert.equal(hostScope.teamId, started.team.id)
+    assert.equal(hostScope.pauseEpoch, 0)
+    assert.match(hostScope.teamScopeHash, /^[a-f0-9]{64}$/u)
+
+    const beforeMissingScope = autopilotAuthorizationConsumptions.length
+    const preferenceOnly = await invoke(routes.get('/api/agent-teams/action'), hostAuthorizedSettingsRequest({
+      sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: true, autopilotMaxAdditionalRounds: 200
+    }, 'host-settings-missing-scope'))
+    assert.equal(preferenceOnly.status, 403)
+    assert.equal(autopilotAuthorizationConsumptions.length, beforeMissingScope, 'true without Host scope is rejected before receipt consumption')
+    assert.equal((await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })).team.autopilot, undefined)
+
+    const forgedAuthorizationRequest = hostAuthorizedSettingsRequest({
+      sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: true, autopilotMaxAdditionalRounds: 200, hostAuthorization: hostScope
+    }, 'forged-static')
+    const forgedAuthorization = await invoke(routes.get('/api/agent-teams/action'), forgedAuthorizationRequest)
+    assert.equal(forgedAuthorization.status, 403)
+    assert.equal((await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })).team.autopilot, undefined)
+
+    const beforeWrongBinding = autopilotAuthorizationConsumptions.length
+    const wrongBinding = await invoke(routes.get('/api/agent-teams/action'), hostAuthorizedSettingsRequest({
+      sessionId: recoveryAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: true, autopilotMaxAdditionalRounds: 200, hostAuthorization: hostScope
+    }, 'host-settings-once'))
+    assert.equal(wrongBinding.status, 403)
+    assert.equal(autopilotAuthorizationConsumptions.length, beforeWrongBinding, 'outer session binding is checked before the one-time receipt is consumed')
+
+    const authorizedSettings = await invoke(routes.get('/api/agent-teams/action'), hostAuthorizedSettingsRequest({
+      sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: true, autopilotMaxAdditionalRounds: 200, hostAuthorization: hostScope
+    }, 'host-settings-once'))
+    assert.equal(authorizedSettings.status, 200)
+    const authorizedTeam = (await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })).team
+    assert.equal(authorizedTeam.autopilot.status, 'pending_plan')
+    assert.equal(authorizedTeam.autopilot.maxAdditionalRounds, 200)
+    const stateFile = path.join(root, 'storages', 'agent_teams.json')
+    const authorizedStore = JSON.parse(await readFile(stateFile, 'utf8'))
+    const persistedAuthorization = authorizedStore.teams.find(team => team.id === started.team.id).autopilot
+    const persistedAuthorizationEpoch = persistedAuthorization.authorizationEpoch
+    assert.equal(persistedAuthorizationEpoch, autopilotAuthorizationEpoch)
+    assert.equal(persistedAuthorization.goalId, currentGoal.id)
+    const store = new mod.AgentTeamsStore(stateFile)
+    await store.init()
+    currentGoal.maxGoalRounds += 1
+    await store.mutate(document => {
+      const grant = document.teams.find(team => team.id === started.team.id).autopilot
+      grant.additionalRoundsGranted = 1
+      grant.expectedMaxGoalRounds = currentGoal.maxGoalRounds
+    })
+
+    const unscopedMaintenance = await invoke(routes.get('/api/agent-teams/action'), hostAuthorizedSettingsRequest({
+      sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: true, autopilotMaxAdditionalRounds: 200
+    }, 'host-settings-maintain-unscoped'))
+    assert.equal(unscopedMaintenance.status, 403)
+    const maintainedSettings = await invoke(routes.get('/api/agent-teams/action'), hostAuthorizedSettingsRequest({
+      sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: true, autopilotMaxAdditionalRounds: 199, hostAuthorization: hostScope
+    }, 'host-settings-maintain'))
+    assert.equal(maintainedSettings.status, 200)
+    const maintainedTeam = (await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })).team
+    assert.equal(maintainedTeam.autopilot.maxAdditionalRounds, 199)
+    assert.equal(maintainedTeam.autopilot.additionalRoundsGranted, 1, 'reauthorizing true preserves already consumed finite budget')
+    assert.equal(maintainedTeam.autopilot.expectedMaxGoalRounds, undefined, 'private Goal-cap authority never enters the public projection')
+    assert.equal(maintainedTeam.autopilot.authorizationEpoch, undefined, 'private Host epochs never enter the public projection')
+    const maintainedStore = JSON.parse(await readFile(stateFile, 'utf8'))
+    const maintainedGrant = maintainedStore.teams.find(team => team.id === started.team.id).autopilot
+    assert.equal(maintainedGrant.expectedMaxGoalRounds, currentGoal.maxGoalRounds)
+    assert.equal(maintainedGrant.authorizationEpoch, autopilotAuthorizationEpoch)
+
+    const replayRequest = hostAuthorizedSettingsRequest({
+      sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: true, autopilotMaxAdditionalRounds: 199, hostAuthorization: hostScope
+    }, 'host-settings-maintain')
+    assert.equal((await invoke(routes.get('/api/agent-teams/action'), replayRequest)).status, 403)
+
+    const revocationsBeforeDisable = autopilotAuthorizationRevocations
+    revocationGoalActivation = 'not-called'
+    const revokeAuthorizedSettings = await invoke(routes.get('/api/agent-teams/action'), hostAuthorizedSettingsRequest({
+      sessionId: rootAgent.id, action: 'settings', autopilotEnabled: false, autopilotMaxAdditionalRounds: 199
+    }, 'host-settings-revoke'))
+    assert.equal(revokeAuthorizedSettings.status, 200, revokeAuthorizedSettings.body)
+    assert.equal(currentGoal.activation, 'disarmed', 'settings revocation disarms the exact bound Goal first')
+    assert.equal(revocationGoalActivation, 'not-called', 'the consumed false receipt rotates the Host epoch once without a second revoke call')
+    assert.equal(autopilotAuthorizationRevocations, revocationsBeforeDisable, 'settings revocation never rotates the Host epoch twice')
+    assert.notEqual(autopilotAuthorizationEpoch, persistedAuthorizationEpoch, 'unscoped false rotates the Host authorization epoch while remaining receipt-compatible')
+    assert.equal((await tools.get('team_status').execute({ team_id: started.team.id }, { agent: rootAgent, signal: new AbortController().signal })).team.autopilot.status, 'revoked')
+
     const unsafeDisable = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
       sessionId: 'settings', action: 'settings', enabled: false
     }))
@@ -1068,11 +1252,18 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(starts[0].request.prompt[0].text, /Do not begin any task/u)
     assert.match(followups[0].content[0].text, /use team_expansion_request with explicit deliverables, acceptance criteria, and non-overlapping file\/resource boundaries/u)
     assert.match(followups[0].content[0].text, /root coordinator decides whether to create persistent tasks and visible peer members without bypassing maxMembers or maxActiveTurns/u)
-    assert.equal(followups[0].options.source.kind, 'coordinator')
+    assert.equal(followups[0].options.source.kind, 'agent-message')
+    assert.equal(followups[0].options.source.form, 'relay')
+    assert.equal(followups[0].options.source.senderSessionId, rootAgent.id)
     assert.equal(starts[0].childId, spawned.member.sessionId)
     assert.equal(followups[0].childId, spawned.member.sessionId)
 
-    rootAgent.session.events.push({ type: 'turn/end', data: {} }, { type: 'turn/start', data: { continuation: 'goal' } })
+    currentGoal = { ...currentGoal, revision: 2, roundsStarted: 2, activation: 'armed' }
+    rootAgent.session.events.push(
+      { type: 'turn/end', data: {} },
+      { type: 'turn/start', data: { continuation: 'goal' } },
+      { type: 'user/message', data: { source: { kind: 'goal', goalId: currentGoal.id, revision: currentGoal.revision, round: currentGoal.roundsStarted } } }
+    )
     const automaticTask = await tools.get('team_task_create').execute({
       team_id: started.team.id, title: 'Safe automatic-round regression', files: ['src/automatic-round.js']
     }, { agent: rootAgent, signal: new AbortController().signal })
@@ -1100,8 +1291,13 @@ test('model tools create a team, spawn independent members, and relay with non-u
     await tools.get('team_plan_commit').execute({ team_id: started.team.id, expected_revision: crossProjectDraft.team.plan.revision, confirmed_plan_hash: crossProjectDraft.team.plan.hash }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(crossProjectTask.task.status, 'pending')
 
+    rootAgent.session.events.push(
+      { type: 'turn/end', data: {} },
+      { type: 'turn/start', data: { continuation: 'goal' } }
+    )
+
     for (const [toolName, args] of [
-      ['team_start', { objective: 'Must still require a direct user', candidate_workstreams: 2 }],
+      ['team_start', { request_id: 'automatic-team-start-denied', objective: 'Must still require a direct user', candidate_workstreams: 2 }],
       ['team_bootstrap', { request_id: 'automatic-bootstrap-denied', objective: 'Denied', candidate_workstreams: 2, tasks: [], members: [] }],
       ['team_resume', { team_id: started.team.id }],
       ['team_handoff', { team_id: started.team.id, target_root_session_id: recoveryAgent.id }],
@@ -1131,9 +1327,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(forbiddenSpoofedLeadControl.status, 403)
 
     const sameTeamRelay = await tools.get('team_message').execute({ team_id: started.team.id, recipient_session_id: 'Researcher', message: 'Verify source B' }, { agent: rootAgent, signal: new AbortController().signal })
-    assert.equal(followups[1].options.source.kind, 'coordinator')
-    assert.equal(followups[1].options.source.form, 'notice')
-    assert.equal(followups[1].options.source.summary, 'Agent Teams')
+    assert.equal(followups[1].options.source.kind, 'agent-message')
+    assert.equal(followups[1].options.source.form, 'relay')
+    assert.equal(followups[1].options.source.summary, undefined)
     assert.equal(followups[1].options.source.senderSessionId, rootAgent.id)
     assert.match(followups[1].content[0].text, /from Lead/u)
     const sameTeamEnvelopeLine = followups[1].content[0].text.split('\n')[1]
@@ -1147,7 +1343,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
       senderMemberId: `lead:${rootAgent.id}`,
       recipientMemberId: spawned.member.id
     })
-    assert.ok(followups.every(item => item.options.source.kind === 'coordinator'))
+    assert.ok(followups.every(item => item.options.source.kind === 'agent-message' && item.options.source.form === 'relay'))
 
     await assert.rejects(
       tools.get('team_spawn').execute({ team_id: started.team.id, task_ids: [durableTask.task.id], name: '  ＲＥＳＥＡＲＣＨＥＲ  ', role: 'duplicate', prompt: 'Must not start' }, { agent: rootAgent, signal: new AbortController().signal }),
@@ -1252,8 +1448,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(leadSteers.length, 1)
     assert.equal(leadFollowups.length, 0)
     assert.match(leadSteers[0].content[0].text, /Intermediate progress while lead is working/u)
-    assert.equal(leadSteers[0].source.kind, 'coordinator')
-    assert.equal(leadSteers[0].source.form, 'notice')
+    assert.equal(leadSteers[0].source.kind, 'agent-message')
+    assert.equal(leadSteers[0].source.form, 'relay')
+    assert.equal(leadSteers[0].source.senderSessionId, workerAgent.id)
 
     rootAgent.status = 'idle'
     activeInitiator = workerAgent
@@ -1472,7 +1669,9 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(crossTeam.message.fromTeamId, started.team.id)
     assert.equal(crossTeam.message.toTeamId, sibling.id)
     assert.equal(crossTeam.message.toName, 'PeerWorker')
-    assert.equal(followups.at(-1).options.source.kind, 'coordinator')
+    assert.equal(followups.at(-1).options.source.kind, 'agent-message')
+    assert.equal(followups.at(-1).options.source.form, 'relay')
+    assert.equal(followups.at(-1).options.source.senderSessionId, rootAgent.id)
     const crossTeamEnvelopeLine = followups.at(-1).content[0].text.split('\n')[1]
     const crossTeamEnvelope = JSON.parse(crossTeamEnvelopeLine.slice('[Agent team envelope '.length, -1))
     assert.deepEqual(crossTeamEnvelope, {
@@ -1818,6 +2017,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.equal(retriedMember.state, 'retired')
     assert.equal(retriedMember.error, undefined)
     assert.deepEqual(drains.at(-1), { parent: rootAgent, childIds: [operatorSpawn.member.sessionId] })
+    await tools.get('team_shutdown').execute({ team_id: sibling.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
     const coldTeam = (await startTeam(tools, { objective: 'Cold child shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).team
     const coldMember = (await tools.get('team_spawn').execute({ team_id: coldTeam.id, name: 'ColdTester', role: 'cold shutdown test', prompt: 'Become cold before shutdown' }, { agent: rootAgent, signal: new AbortController().signal })).member
@@ -2153,7 +2353,21 @@ test('model tools create a team, spawn independent members, and relay with non-u
     leadAvailable = true
     activeInitiator = rootAgent
 
-    currentGoal = { id: 'goal-autopilot-team', revision: 4, phase: 'active', activation: 'armed', roundsStarted: 2 }
+    const beforeEmptyRootAuthorization = autopilotAuthorizationConsumptions.length
+    const enableEmptyRootAutopilot = await invoke(routes.get('/api/agent-teams/action'), hostAuthorizedSettingsRequest({
+      sessionId: rootAgent.id, action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: true, autopilotMaxAdditionalRounds: 200
+    }, 'host-settings-empty-root-autopilot'))
+    assert.equal(enableEmptyRootAutopilot.status, 403, enableEmptyRootAutopilot.body)
+    assert.equal(autopilotAuthorizationConsumptions.length, beforeEmptyRootAuthorization, 'an empty root cannot burn a receipt without an exact team scope')
+    const persistedPreference = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8'))
+    persistedPreference.settings.autopilotEnabled = true
+    persistedPreference.settings.autopilotMaxAdditionalRounds = 200
+    await writeFile(path.join(root, 'storages', 'agent_teams.json'), `${JSON.stringify(persistedPreference, null, 2)}\n`, 'utf8')
+    currentGoal = {
+      id: 'goal-autopilot-team', revision: 4, objective: 'Finish automatic implementation and verification without asking for continue',
+      phase: 'active', activation: 'armed', roundsStarted: 2, maxGoalRounds: 4
+    }
     rootAgent.session.events.push(
       { type: 'turn/end', data: {} },
       { type: 'turn/start', data: {} },
@@ -2163,14 +2377,42 @@ test('model tools create a team, spawn independent members, and relay with non-u
       level: 'level3', reason_category: 'independent_sustained_workstreams', candidate_workstreams: 2, creation_path: 'team_start'
     }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(automaticRoute.receipt.outcome, 'recorded')
+    assert.equal(automaticRoute.receipt.goalId, currentGoal.id)
+    assert.equal(automaticRoute.receipt.goalRevision, currentGoal.revision)
+    assert.equal(automaticRoute.receipt.goalRound, currentGoal.roundsStarted)
     const automaticStarted = await tools.get('team_start').execute({
-      objective: 'Create a safe team without asking the user to continue', candidate_workstreams: 2
+      request_id: 'goal-round-team-start', objective: 'Create a safe team without asking the user to continue', candidate_workstreams: 2
     }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(automaticStarted.routing.receipt.outcome, 'created')
     assert.equal(automaticStarted.team.rootLeadSessionId, rootAgent.id)
+    assert.equal(automaticStarted.team.autopilot, undefined, 'a preference file edit without the matching Host proof cannot mint Goal authority')
     await tools.get('team_shutdown').execute({ team_id: automaticStarted.team.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
 
+    // Model the trusted Host proof that can survive after an earlier authorized
+    // team closes; the opaque epoch and settings hash never enter tool input.
+    autopilotAuthorizationEpochRevision += 1
+    autopilotAuthorizationEpoch = String.fromCharCode(97 + autopilotAuthorizationEpochRevision).repeat(32)
+    currentAutopilotSettingsProof = autopilotSettingsProof(persistedPreference.settings, autopilotAuthorizationEpoch)
     currentGoal = { ...currentGoal, roundsStarted: 3 }
+    rootAgent.session.events.push(
+      { type: 'turn/end', data: {} },
+      { type: 'turn/start', data: {} },
+      { type: 'user/message', data: { source: { kind: 'goal', goalId: currentGoal.id, revision: currentGoal.revision, round: currentGoal.roundsStarted } } }
+    )
+    const hostProvedRoute = await tools.get('team_route_goal').execute({
+      level: 'level3', reason_category: 'independent_sustained_workstreams', candidate_workstreams: 2, creation_path: 'team_start'
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(hostProvedRoute.receipt.outcome, 'recorded')
+    const hostProvedStarted = await tools.get('team_start').execute({
+      request_id: 'goal-round-team-start-host-proof', objective: 'Create a Host-proved automatic team', candidate_workstreams: 2
+    }, { agent: rootAgent, signal: new AbortController().signal })
+    assert.equal(hostProvedStarted.team.autopilot.status, 'pending_plan')
+    const hostProvedPersisted = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8')).teams.find(team => team.id === hostProvedStarted.team.id)
+    assert.equal(hostProvedPersisted.autopilot.goalId, currentGoal.id)
+    assert.equal(hostProvedPersisted.autopilot.authorizationEpoch, autopilotAuthorizationEpoch)
+    await tools.get('team_shutdown').execute({ team_id: hostProvedStarted.team.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
+
+    currentGoal = { ...currentGoal, roundsStarted: 4, phase: 'active', activation: 'armed' }
     rootAgent.session.events.push(
       { type: 'turn/end', data: {} },
       { type: 'turn/start', data: {} },
@@ -2189,6 +2431,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }, { agent: rootAgent, signal: new AbortController().signal })
     assert.equal(automaticBootstrap.routing.receipt.outcome, 'created')
     assert.equal(automaticBootstrap.operation.phase, 'complete')
+    assert.equal(automaticBootstrap.team.autopilot, undefined, 'shutdown revocation clears the Host proof before a later automatic team')
     assert.equal(automaticBootstrap.team.members.filter(member => member.kind === 'worker').length, 2)
     await tools.get('team_shutdown').execute({ team_id: automaticBootstrap.team.id, force: true }, { agent: rootAgent, signal: new AbortController().signal })
     currentGoal = undefined
@@ -2386,7 +2629,7 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
     let failWork = false
     const lead = {
       id: 'bootstrap-lead', status: 'running', options: { provider: 'main-provider', model: 'main-model' },
-      session: { header: { cwd: root }, events: [{ type: 'turn/start', data: {} }, { type: 'user/message', data: { source: { kind: 'user' } } }] },
+      session: { header: { cwd: root }, events: [{ type: 'turn/start', data: {} }, { type: 'user/message', data: { source: { kind: 'user' } } }], snapshotEvents() { return this.events.slice() } },
       inbox: { nextTurn: [], nextStep: [], remove() { return false } }, followup() {}, steer() {}
     }
     const ctx = {
@@ -2406,7 +2649,7 @@ test('bounded bootstrap is durable, replay-safe, task-first, and fail-closed', a
           starts.push(spec)
           return { childId: spec.childId, messageId: `start-${starts.length}` }
         },
-        async followup(parent, childId, content) {
+        async [queueSubagentPrompt](parent, childId, content) {
           const persisted = JSON.parse(await readFile(path.join(root, 'storages', 'agent_teams.json'), 'utf8'))
           if (followups.length < 2 || failWork) assert.ok(persisted.teams.some(team => team.tasks.some(task => task.assigneeSessionId === childId)), 'bootstrap task binding must publish before work followup')
           followups.push({ parent, childId, content })

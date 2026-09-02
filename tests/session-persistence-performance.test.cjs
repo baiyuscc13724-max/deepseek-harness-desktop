@@ -5,6 +5,7 @@ const { test } = require('node:test')
 const { pathToFileURL } = require('node:url')
 
 const root = path.resolve(__dirname, '..')
+const sessionRuntimeFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session', 'lib', 'index.js')
 const runtimeFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session-persistence-jsonl', 'lib', 'index.js')
 const patchFile = path.join(root, 'scripts', 'session-persistence-performance-patch.mjs')
 
@@ -25,10 +26,10 @@ function fakePersistence(JsonlSessionPersistence, count, readFirstZstdLine) {
   return persistence
 }
 
-function header(index) {
+function header(index, version = 0) {
   return JSON.stringify({
     type: 'session',
-    version: 1,
+    version,
     id: `session-${index}`,
     createdAt: index,
     delegationDepth: 0
@@ -49,6 +50,19 @@ test('installed session metadata listing patch is pinned and idempotent', async 
   assert.throws(
     () => patchSessionPersistenceListingSource(drifted),
     /differs from the pinned implementation/
+  )
+})
+
+test('alpha.4 keeps physical session logs at v0 and rejects a future v1 header', async () => {
+  const [{ SESSION_FORMAT_VERSION }, { JsonlSessionPersistence }] = await Promise.all([
+    import(pathToFileURL(sessionRuntimeFile).href),
+    runtime()
+  ])
+  assert.equal(SESSION_FORMAT_VERSION, 0)
+  const persistence = fakePersistence(JsonlSessionPersistence, 1, async () => header(0, 1))
+  await assert.rejects(
+    () => persistence.list(),
+    error => error?.name === 'SessionFormatUnsupportedError' && /uses log format v1, but this harness reads only v0/u.test(error.message)
   )
 })
 

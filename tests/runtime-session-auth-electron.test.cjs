@@ -1,0 +1,21 @@
+const assert = require('node:assert/strict')
+const { readFileSync } = require('node:fs')
+const path = require('node:path')
+const test = require('node:test')
+
+const repoRoot = path.resolve(__dirname, '..')
+const fixture = readFileSync(path.join(__dirname, 'fixtures', 'runtime-session-auth-electron.cjs'), 'utf8')
+const runner = readFileSync(path.join(repoRoot, 'scripts', 'test-runtime-session-auth-electron.cjs'), 'utf8')
+
+test('real Electron runtime authentication fixture owns the complete redirect and partition contract', () => {
+  assert.match(fixture, /session\.fromPartition\('persist:harness'/u)
+  assert.match(fixture, /response\.writeHead\(303/u)
+  assert.match(fixture, /'set-cookie':/u)
+  assert.match(fixture, /location: '\/'/u)
+  assert.match(fixture, /redirect: 'follow'/u)
+  assert.match(fixture, /runtimeSession\.cookies\.get/u)
+  assert.match(fixture, /redirect: 'manual'/u)
+  assert.match(fixture, /isolatedSession/u)
+  assert.match(runner, /delete environment\.ELECTRON_RUN_AS_NODE/u)
+  assert.match(runner, /spawnSync\(electronBinary/u)
+})

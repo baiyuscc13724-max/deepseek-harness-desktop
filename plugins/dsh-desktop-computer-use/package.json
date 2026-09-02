@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-computer-use",
-  "version": "1.0.57",
+  "version": "1.0.58",
   "type": "module",
   "description": "Harness Desktop session or permanent unlimited computer use tool",
   "license": "MIT",
@@ -21,8 +21,8 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-settings": "^0.1.2-alpha.3",
-    "@deepseek-ai/dsh-tools": "^0.1.2-alpha.3",
+    "@deepseek-ai/dsh-settings": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-tools": "^0.1.2-alpha.4",
     "@deepseek-ai/schemastery": "^3.18.2"
   }
 }

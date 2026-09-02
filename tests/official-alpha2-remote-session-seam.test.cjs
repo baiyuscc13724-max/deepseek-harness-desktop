@@ -106,18 +106,21 @@ alpha2Audit('audit is pinned to the official alpha.2 tag/commit and exact packag
   ]) assert.equal(manifest(name).version, '0.1.2-alpha.2', `${name} drifted from the audited version`)
 })
 
-test('public exports expose the Remote/Session seam without relying on removed packages', () => {
+test('public exports expose the versioned Remote/Session seam without relying on removed packages', () => {
   const expected = {
-    'dsh-api-remotes': ['.', './client', './types', './invariant'],
-    'dsh-api-session-controller': ['.', './client', './types', './remote-events', './remote', './typert', './invariant'],
-    'dsh-api-gateway': ['.', './client', './types', './invariant'],
-    'dsh-client-connection': ['.', './client', './invariant'],
-    'dsh-session-projection': ['.', './types', './invariant'],
-    'dsh-session-query': ['.', './invariant']
+    'dsh-api-remotes': ['.', './client', './types'],
+    'dsh-api-session-controller': ['.', './client', './types', './remote-events', './remote', './typert'],
+    'dsh-api-gateway': ['.', './client', './types'],
+    'dsh-client-connection': ['.', './client'],
+    'dsh-session-projection': ['.', './types'],
+    'dsh-session-query': ['.']
   }
-  for (const [name, keys] of Object.entries(expected)) {
-    const exports = manifest(name).exports
-    for (const key of keys) assert.ok(Object.hasOwn(exports, key), `${name} is missing ${key}`)
+  for (const [name, currentKeys] of Object.entries(expected)) {
+    const pkg = manifest(name)
+    assert.ok(['0.1.2-alpha.2', '0.1.2-alpha.3', '0.1.2-alpha.4'].includes(pkg.version), `unsupported ${name} version ${pkg.version}`)
+    const keys = pkg.version === '0.1.2-alpha.4' ? currentKeys : [...currentKeys, './invariant']
+    for (const key of keys) assert.ok(Object.hasOwn(pkg.exports, key), `${name} is missing ${key}`)
+    assert.equal(Object.hasOwn(pkg.exports, './invariant'), pkg.version !== '0.1.2-alpha.4', `${name} invariant export does not match its pinned version`)
   }
   const report = readFileSync(path.join(repoRoot, 'docs', 'OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md'), 'utf8')
   assert.match(report, /unproven=blocked/u)

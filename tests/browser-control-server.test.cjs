@@ -4,7 +4,8 @@ const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
 const { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } = require('node:fs/promises')
-const { BrowserControlServer, MAX_RECENT_REQUESTS, isLoopback, requestFingerprint } = require('../electron/bridge/browser-control-server.cjs')
+const { BrowserControlServer, MAX_RECENT_REQUESTS, PLAYWRIGHT_READ_OPERATIONS, isLoopback, requestFingerprint } = require('../electron/bridge/browser-control-server.cjs')
+const { READ_OPERATIONS } = require('../electron/bridge/browser-codex-api.cjs')
 
 async function waitFor(predicate, message, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs
@@ -681,6 +682,50 @@ test('request replay metadata stores only a digest and read-only responses are n
     assert.equal((await (await memoryRequest()).json()).result.call, 3)
     assert.equal((await (await memoryRequest()).json()).result.call, 4)
     assert.equal(server.recentRequests.size, 0)
+  } finally {
+    await server.stop()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('playwright mutations are replay-safe and fenced after unknown outcomes while reads stay repeatable', async () => {
+  assert.deepEqual([...PLAYWRIGHT_READ_OPERATIONS].sort(), [...READ_OPERATIONS].sort(), 'loopback server and host must classify Playwright reads identically')
+  const root = await mkdtemp(path.join(os.tmpdir(), 'browser-control-playwright-replay-'))
+  const stateFile = path.join(root, 'browser.json')
+  let calls = 0
+  const server = new BrowserControlServer({
+    stateFile,
+    handler: async body => {
+      calls += 1
+      if (body.payload?.fail) throw Object.assign(new Error('playwright outcome unknown'), { code: 'browser-outcome-unknown', statusCode: 504 })
+      return { call: calls, operation: body.payload?.operation }
+    }
+  })
+  try {
+    await server.start()
+    const secret = JSON.parse(await readFile(stateFile, 'utf8'))
+    const headers = { Authorization: `Bearer ${secret.token}`, 'Content-Type': 'application/json' }
+    const post = body => fetch(`${secret.origin}/action`, { method: 'POST', headers, body: JSON.stringify(body) })
+
+    const mutation = { action: 'playwright', payload: { operation: 'click', selector: '#save' }, request_id: 'playwright_click_replay_001' }
+    assert.deepEqual((await (await post(mutation)).json()).result, { call: 1, operation: 'click' })
+    assert.deepEqual((await (await post(mutation)).json()).result, { call: 1, operation: 'click' })
+    assert.equal(calls, 1)
+
+    const read = { action: 'playwright', payload: { operation: 'count', selector: 'button' }, request_id: 'playwright_count_repeat_001' }
+    assert.equal((await (await post(read)).json()).result.call, 2)
+    assert.equal((await (await post(read)).json()).result.call, 3)
+
+    const failed = await post({ action: 'playwright', payload: { operation: 'fill', selector: '#note', text: 'hello', fail: true }, request_id: 'playwright_fill_unknown_001' })
+    assert.equal(failed.status, 504)
+    assert.equal((await failed.json()).code, 'browser-outcome-unknown')
+
+    const readAfterFailure = await post({ action: 'playwright', payload: { operation: 'isVisible', selector: '#note' }, request_id: 'playwright_read_after_unknown' })
+    assert.equal(readAfterFailure.status, 200)
+    const blockedMutation = await post({ action: 'playwright', payload: { operation: 'setChecked', selector: '#agree', checked: true }, request_id: 'playwright_mutation_after_unknown' })
+    assert.equal(blockedMutation.status, 409)
+    assert.equal((await blockedMutation.json()).code, 'browser-outcome-unknown')
+    assert.equal(calls, 5)
   } finally {
     await server.stop()
     await rm(root, { recursive: true, force: true })

@@ -254,19 +254,19 @@ test('raw-list session forwarding is not accepted as the cache work-tree interme
   assert.throws(() => patchToolResultOwnerSource(malicious), /owner patch is incomplete/u)
 })
 
-test('alpha.3 native conversation, attachment, turn-outline, reconnect, and schedule owners are hash-pinned and never repatched', async () => {
-  const { assertInstalledAlpha3NativeCapabilities } = await import('../scripts/patch-official-runtime.mjs')
+test('alpha.4 native conversation, attachment, turn-outline, reconnect, and schedule owners are hash-pinned and never repatched', async () => {
+  const { assertInstalledAlpha4NativeCapabilities } = await import('../scripts/patch-official-runtime.mjs')
   const before = new Map([
     ['conversation', fs.readFileSync(CONVERSATION_FILE, 'utf8')],
     ['chat', fs.readFileSync(CHAT_FILE, 'utf8')]
   ])
-  assert.equal(await assertInstalledAlpha3NativeCapabilities(), false)
-  assert.equal(await assertInstalledAlpha3NativeCapabilities(), false, 'official native verification must be idempotent')
+  assert.equal(await assertInstalledAlpha4NativeCapabilities(), false)
+  assert.equal(await assertInstalledAlpha4NativeCapabilities(), false, 'official native verification must be idempotent')
   assert.equal(fs.readFileSync(CONVERSATION_FILE, 'utf8'), before.get('conversation'))
   assert.equal(fs.readFileSync(CHAT_FILE, 'utf8'), before.get('chat'))
   const runtime = fs.readFileSync(path.join(ROOT, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
   for (const installer of ['patchInstalledConversation', 'patchInstalledAttachmentInput', 'patchInstalledModelSelection', 'patchInstalledModelSettings', 'patchInstalledWorkspaceUi']) {
-    assert.match(runtime, new RegExp(`targetsAlpha3 \\? false :[^;]*${installer}`, 'u'), `${installer} must not override an alpha.3 native owner`)
+    assert.match(runtime, new RegExp(`targetsAlpha4 \\? false :[^;]*${installer}`, 'u'), `${installer} must not override an alpha.4 native owner`)
   }
 })
 

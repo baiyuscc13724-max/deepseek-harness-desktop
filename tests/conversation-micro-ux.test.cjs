@@ -26,18 +26,21 @@ async function readRuntimeSource(relative) {
 // composer，而**不**自行引入第二套草稿持久化键。
 const DESKTOP_SESSION_CLIENT = path.join(root, 'plugins', 'dsh-session-experience', 'lib', 'client.js')
 
-test('官方 alpha.2 原生模块保留会话微体验合同', async () => {
-  const [chat, conversation, sessionController] = await Promise.all([
+test('官方 alpha.4 原生模块保留会话微体验合同', async () => {
+  const [chat, conversation, sessionController, session] = await Promise.all([
     readRuntimeSource('@deepseek-ai/dsh-client-ui-chat/lib/client.js'),
     readRuntimeSource('@deepseek-ai/dsh-client-ui-conversation/lib/client.js'),
-    readRuntimeSource('@deepseek-ai/dsh-api-session-controller/lib/client.js')
+    readRuntimeSource('@deepseek-ai/dsh-api-session-controller/lib/client.js'),
+    readRuntimeSource('@deepseek-ai/dsh-session/lib/index.js')
   ])
 
   const chatStore = chat.slice(chat.indexOf('function createChatStore()'))
   assert.match(chatStore, /return \(0, _deepseek_ai_dsh_client_store\.defineStore\)\(\{\s*init: \(\) => \(\{\s*selection: null,\s*turnProcesses: \[\]/,
     'chat selection state must remain a scope-local store, not the removed draft persistence seam')
-  assert.match(chatStore, /setTurnProcessOpen: \(draft, turn, generation, open\) => \{/,
-    'chat store must retain the turn-process disclosure action')
+  assert.match(chatStore, /setTurnProcessOpen: \(draft, turn, answerStep, open\) => \{/,
+    'chat store must retain the answer-step-scoped turn-process disclosure action')
+  assert.match(chat, /storedEntry\?\.answerStep === processSpec\.answerStep/,
+    'turn-process disclosure must be keyed to the projected answer step')
 
   assert.match(conversation, /const promptError = useSession\(\(s\) => s\.promptError\) \?\? null/,
     'composer must select the controller prompt error')
@@ -59,6 +62,13 @@ test('官方 alpha.2 原生模块保留会话微体验合同', async () => {
     'session controller must persist the active selection under the native key')
   assert.match(sessionController, /const restored = this\.selection\.getSnapshot\(\);\s*this\.manager = new SessionManager\(remote, restored\.sessionId, restored\.subagentAddress\);/,
     'session controller must restore both real-session and subagent selection addresses')
+
+  assert.match(session, /function SessionSeq\(value\) \{/,
+    'session events must keep their branded non-negative sequence contract')
+  assert.match(session, /snapshotEvents\(fromSeq = SessionLogOffset\(0\), toSeqExclusive = this\.seq\) \{[\s\S]{0,260}Object\.freeze\(this\.log\.slice\(fromSeq, toSeqExclusive\)\)/,
+    'session snapshots must remain immutable bounded sequence ranges')
+  assert.match(session, /ownEvents\(\) \{\s*return this\.snapshotEvents\(this\.inheritedEventCount\);/,
+    'session-owned event reads must exclude the fork-inherited prefix')
 })
 
 test('桌面端不重复实现草稿/当前会话持久化（依赖官方运行时）', async () => {

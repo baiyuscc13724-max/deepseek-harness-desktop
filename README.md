@@ -21,20 +21,20 @@
 
 ## 下载
 
-目标稳定版：**v1.0.57** · [查看本次更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.57)
+下一发布候选：**v1.0.58** · 上一稳定版：**v1.0.57** · [查看候选更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.58)
 
-> 已发布的 `v1.0.56`、其精确 18 项资产、组件、签名 Android APK 与 stable feed 全部保持不可变；更早版本与候选 Tag 也不会移动、重建或复用。新的统一 `v1.0.57` 修复官方 Harness `0.1.2-alpha.3` 启动认证 URL 被截断、旧插件 API 导致启动失败，以及左侧栏重复显示“手机同步”的问题；同时收紧本地运行时探测和敏感 token 脱敏。正式发布仍绑定精确 main SHA，经全平台云构建、Android 长期证书签名、组件签名、精确 18 项清单和 GitHub→CNB 云镜像后才提升 stable feed；完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
+> 已发布的 `v1.0.57`、其精确资产、组件、签名 Android APK 与 stable feed 保持不可变；更早版本与候选 Tag 也不会移动、重建或复用。统一候选 `v1.0.58` 修复 Electron 同会话认证跳转、Runtime 并发启动/陈旧进程/MCP 启动阻塞、手机同步 guest→shell 入口，并让 Agent Teams 在精确安全门禁内按成员事件自动续跑和验收：首个团队必须消费精确绑定 root/project/goal/team/pause/settings 的一次性 Desktop Host 授权，不能依赖全局开关或静态请求头。Codex 浏览器能力对等仍须通过真实 Electron 动态复核。正式云 Windows 资产还必须先下载到本机隔离环境完成启动验证，全部通过后才允许发布器提升 stable feed、让客户端发现更新；完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
 >
 > 此前的官方 `0.1.2-alpha.2` 仅保留为可复核的历史迁移基线，不再描述当前运行时或发布目标。
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.57/Harness-Desktop-1.0.57-win-x64.exe) |
-| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.57/Harness-Desktop-1.0.57-portable-x64.exe) |
-| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.57/Harness-Desktop-1.0.57-mac-arm64.dmg) |
-| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.57/Harness-Desktop-1.0.57-mac-x64.dmg) |
-| Android 手机端 1.0.57 | 扫码配对、四域工作台、原生输入、受限文档上传与固定手机控制 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.57/Harness-Mobile-1.0.57-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.57/Harness-Mobile-1.0.57-android-universal.apk.sha256) |
-| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.57/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Desktop-1.0.58-win-x64.exe) |
+| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Desktop-1.0.58-portable-x64.exe) |
+| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Desktop-1.0.58-mac-arm64.dmg) |
+| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Desktop-1.0.58-mac-x64.dmg) |
+| Android 手机端 1.0.58 | 扫码配对、四域工作台、原生输入、受限文档上传与固定手机控制 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Mobile-1.0.58-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Mobile-1.0.58-android-universal.apk.sha256) |
+| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 
@@ -51,12 +51,13 @@ scoop install harness-desktop/harness-desktop
 
 | 功能 | 使用方式 |
 | --- | --- |
-| 官方 Harness 工作台 | 维护依赖统一精确固定为官方 `0.1.2-alpha.3`；轮次导航、附件队列、断线重连、Schedule catalog、turn-outline projection 与 Remote stream 使用官方实现，关键 capability artifacts 以精确哈希和语义片段双重校验，漂移即 fail closed。退休的 `dsh-client-runtime` 与 Desktop Schedule 重复实现不再重新注入；自研 Project/Team、canonical-project 隔离、submission acceptance ledger、routing receipts、locks/recovery/cursors/evidence 仍是唯一权威，官方 experimental Team 不接管也不双写。当前发布仍受 hermetic 终验和唯一 resumable publisher 硬门禁约束 |
+| 官方 Harness 工作台 | 维护依赖及完整 required/optional DSH 图统一精确固定为官方 `0.1.2-alpha.4`；branded session sequence、事件所有权、projector/node-store、Host follow-up queue、轮次导航、附件队列、断线重连、Schedule catalog、turn-outline projection 与 Remote stream 使用 alpha.4 合同，关键 capability artifacts 以精确哈希和语义片段双重校验，漂移即 fail closed。退休的 `dsh-client-runtime` 与 Desktop Schedule 重复实现不再重新注入；自研 Project/Team、canonical-project 隔离、submission acceptance ledger、routing receipts、locks/recovery/cursors/evidence 仍是唯一权威，官方 experimental Team 不接管也不双写。当前发布仍受 hermetic 终验和唯一 resumable publisher 硬门禁约束 |
 | 女仆鲸桌宠 | 感知结构化任务节奏并主动提醒，记录本地默契、每日进度与连续完成；支持 TOK、抚摸、拖动、屏幕边缘及窗口互动，不读取对话正文或屏幕 |
 | 外观皮肤 | 从顶部快捷入口切换桌面配色和背景；手机端拥有独立皮肤设置与不透明核心表面，不会读取或套用电脑壁纸文件 |
 | DSH 插件与 Skills | 在应用内发现、安装和更新；随包受管 Skills 支持 Codex 风格 `$` 触发，`@` 继续用于文件引用；英文简介自动生成中文摘要并保留原文 |
 | 主模型与子代理 | 子代理可跟随主模型或单独选模型；目录区分运行中、可继续与只读历史，结束任务不会删除完整记录 |
-| 协作团队（实验） | 启用后自动判断：简单任务由主模型 solo；只有一个独立辅助时使用普通 `subagent`；至少两个持续独立工作流且需要依赖、交接或文件边界时才建团队。计划按 `draft → committed → active` 持久化，成员启动必须绑定真实任务；认领带 attempt/claim/lease fencing，Stop、两阶段 Resume、同项目 handoff/adopt 与未验证 checkpoint 均保留审计。任务板只显示 Ready / Running / Attention / Done，取消进入历史，不伪造百分比；详见[代理团队用户指南](docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md) |
+| 协作团队（实验） | 启用后自动判断：简单任务由主模型 solo；只有一个独立辅助时使用普通 `subagent`；至少两个持续独立工作流且需要依赖、交接或文件边界时才建团队。计划按 `draft → committed → active` 持久化，成员启动必须绑定真实任务；认领带 attempt/claim/lease fencing，Stop、两阶段 Resume、同项目 handoff/adopt 与未验证 checkpoint 均保留审计。另有默认关闭的“自动接力”桌面开关及每目标 1–200 轮固定上限，默认 200；首个团队必须消费精确绑定 root/project/goal/team/pause/settings 的一次性 Desktop Host 授权，不能靠全局开关或静态请求头。正常成员等待由持久事件自动唤醒 Root 继续验收和调度；显式 Stop 或安全 blocker 仍 fail closed，须人工恢复。任务板只显示 Ready / Running / Attention / Done，取消进入历史，不伪造百分比；详见[代理团队用户指南](docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md) |
+| 内置浏览器 | 对齐 Codex 的可见导航、交互、检查与停止能力；来源/actor、站点授权、导航、敏感动作、文件/下载、取消与审计继续经过动态安全门禁，最终发布结论以真实 Electron 专项复核为准 |
 | 桌面更新 | Ed25519 签名发布清单、国内源优先、全球源自动回退、逐跳 HTTPS 与 SHA-256 校验，并在更新前展示改动内容 |
 | 用户配置保护 | 主题、插件和模型路由保存在用户目录，更新官方 Harness 时不会被覆盖 |
 | MCP 连接 | 设置页管理官方 MCP 客户端的 stdio 与 Streamable HTTP 连接；秘密只保存凭据引用，启用本地进程前明确确认 |

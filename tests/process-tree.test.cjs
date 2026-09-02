@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { terminateProcessTree } = require('../electron/bridge/process-tree.cjs')
+const { EventEmitter } = require('node:events')
+const { terminateProcessTree, waitForProcessExit } = require('../electron/bridge/process-tree.cjs')
 
 test('Windows runtime shutdown delegates to taskkill process-tree termination', () => {
   const calls = []
@@ -25,4 +26,30 @@ test('macOS runtime shutdown signals the detached process group then escalates',
   assert.deepEqual(signals, [[-4321, 'SIGTERM']])
   escalation()
   assert.deepEqual(signals, [[-4321, 'SIGTERM'], [-4321, 'SIGKILL']])
+})
+
+test('runtime retirement waits for the exact child exit event', async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 2468, exitCode: null })
+  let timerCleared = false
+  const waiting = waitForProcessExit(child, {
+    setTimeoutImpl: () => ({ unref() {} }),
+    clearTimeoutImpl: () => { timerCleared = true }
+  })
+  child.exitCode = 0
+  child.emit('exit', 0, null)
+  assert.equal(await waiting, true)
+  assert.equal(timerCleared, true)
+  assert.equal(child.listenerCount('exit'), 0)
+})
+
+test('runtime retirement reports a still-live child after its bounded wait', async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 1357, exitCode: null })
+  let timeout
+  const waiting = waitForProcessExit(child, {
+    setTimeoutImpl: callback => { timeout = callback; return { unref() {} } },
+    clearTimeoutImpl() {}
+  })
+  timeout()
+  assert.equal(await waiting, false)
+  assert.equal(child.listenerCount('exit'), 0)
 })

@@ -27,7 +27,7 @@ const required = [
   'tests/dsh-home.test.cjs', 'tests/user-data-override.test.cjs', 'tests/desktop-release-contract.test.cjs', 'tests/update-service.test.cjs', 'tests/update-download-service.test.cjs', 'tests/update-feed-config.test.cjs', 'tests/mirror-manifest.test.cjs', 'tests/update-launcher.test.cjs', 'tests/runtime-web-url.test.cjs', 'tests/runtime-session-auth.test.cjs', 'tests/self-test-service.test.cjs', 'tests/model-routing-service.test.cjs', 'tests/provider-meter-service.test.cjs', 'tests/provider-meter-adapters.test.cjs', 'tests/plugin-marketplace-service.test.cjs', 'tests/runtime-proxy.test.cjs', 'tests/runtime-bundle-service.test.cjs', 'tests/official-runtime-patch.test.cjs', 'tests/local-target-service.test.cjs', 'tests/desktop-tray.test.cjs', 'tests/startup-animation.test.cjs',
   'tests/component-update-contract.test.cjs', 'tests/component-update-archive.test.cjs', 'tests/component-update-builder.test.cjs', 'tests/release-automation.test.cjs', 'tests/component-update-config.test.cjs', 'tests/component-update-service.test.cjs', 'tests/component-update-helper.test.cjs', 'tests/component-runtime-resolver.test.cjs', 'tests/component-update-ui.test.cjs', 'tests/process-tree.test.cjs', 'tests/mobile-version-sync.test.cjs', 'tests/mobile-relay-config.test.cjs', 'tests/wss-relay.test.cjs',
   'docs/ARCHITECTURE.zh-CN.md', 'docs/COMPETITOR-FEATURE-BENCHMARK.zh-CN.md', 'docs/UPDATE-MIRRORS.zh-CN.md', 'docs/COMPONENT-UPDATES.zh-CN.md', 'docs/CROSS-PLATFORM-MOBILE.zh-CN.md', 'docs/mobile-app-updates.md', 'docs/BRANDING.zh-CN.md', 'docs/VALIDATION.zh-CN.md', 'docs/CLOUD-RELEASE-PIPELINE.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.46.zh-CN.md', 'docs/SECURITY-REVIEW-v1.0.47.zh-CN.md', 'docs/assets/harness-desktop-hero.jpg',
-  '.github/workflows/apple-virtual-tests.yml', '.github/workflows/android-mobile-release.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/prepare-bundled-git.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/component-update-helper.cjs', 'scripts/create-component-signing-key.mjs', 'scripts/create-android-release-keystore.ps1', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs', 'scripts/test-right-workspace-electron.cjs',
+  '.github/workflows/apple-virtual-tests.yml', '.github/workflows/android-mobile-release.yml', 'build/installer.iss', 'build/entitlements.mac.plist', 'build/artifact-size-budget.json', 'scripts/artifact-size-budget.mjs', 'scripts/build-maid-whale-atlases.mjs', 'scripts/prepare-bundled-git.mjs', 'scripts/build-release.mjs', 'scripts/build-mirror-manifest.mjs', 'scripts/build-component-update.mjs', 'scripts/prepare-production-components.mjs', 'scripts/release-orchestrator.mjs', 'scripts/release-local-formal-windows-validation.cjs', 'scripts/verify-formal-windows-release-identity.mjs', 'scripts/component-update-helper.cjs', 'scripts/create-component-signing-key.mjs', 'scripts/create-android-release-keystore.ps1', 'scripts/local-component-update-test.mjs', 'scripts/mirror-manifest-lib.mjs', 'scripts/release-audit.mjs', 'scripts/packaged-selftest-contract.mjs', 'scripts/patch-official-runtime.mjs', 'scripts/test-right-workspace-electron.cjs',
   'mobile/mobile-app-update.example.json', 'mobile/mobile-app-update.json', 'mobile/ios/project.yml', 'mobile/ios/README.zh-CN.md', 'mobile/ios/HarnessMobile/App/HarnessMobileApp.swift', 'mobile/ios/HarnessMobile/App/ContentView.swift', 'mobile/ios/HarnessMobile/App/WorkbenchView.swift', 'mobile/ios/HarnessMobile/App/QRScannerView.swift', 'mobile/ios/HarnessMobile/Core/PairingProfile.swift', 'mobile/ios/HarnessMobile/Core/PairingStore.swift', 'mobile/ios/HarnessMobile/Core/LoopbackProxy.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelCodec.swift', 'mobile/ios/HarnessMobile/Core/RelayTunnelClient.swift', 'mobile/ios/HarnessMobile/Core/MobileAppUpdateChecker.swift', 'mobile/ios/HarnessMobile/Resources/Info.plist', 'mobile/ios/HarnessMobile/Resources/PrivacyInfo.xcprivacy',
   'mobile/android/RELEASE-SIGNING.zh-CN.md', 'mobile/android/app/src/main/AndroidManifest.xml', 'mobile/android/app/src/main/res/xml/mobile_update_paths.xml', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/MobileAppUpdateChecker.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/RelayTunnelCodec.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/WssRelayClient.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/PairingProfileStore.java', 'mobile/android/app/src/main/java/io/harnessdesktop/mobile/NetworkReconnectPolicy.java',
   'LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'release-manifest.json', 'release-mirrors.example.json', 'release-update-sources.json', 'release-update-sources.example.json', 'component-update-sources.json', 'mobile-relay-sources.json', 'component-release.example.json', 'component-release.macos-arm64.example.json'
@@ -68,6 +68,7 @@ required.push(
   'docs/SECURITY-REVIEW-v1.0.55.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.56.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.57.zh-CN.md',
+  'docs/SECURITY-REVIEW-v1.0.58.zh-CN.md',
   'electron/bridge/native-p2p-host.cjs',
   'electron/bridge/sync-transports/native-p2p-adapter.cjs',
   'renderer/native-p2p.html',
@@ -244,11 +245,12 @@ for (const contract of ['harness-desktop-version-button', 'harness-desktop-updat
 for (const contract of ['dataset.hdSettingsLayout', 'dataset.hdSettingsContent', 'dataset.hdSettingsOptions', 'width:min(1120px']) {
   if (!rendererScript.includes(contract)) throw new Error(`The functional settings dialog layout enhancement is missing: ${contract}`)
 }
-for (const contract of ['harness-desktop-mobile-sync-entry', 'mountMobileEntry', 'entry.parentElement !== document.body', 'watchMobileEntryLayout(host, settingsTrigger)', 'settingsTrigger.textContent?.trim()', 'mobileEntryPortalPlacement', 'position:fixed; z-index:18', 'activateMobileEntry', 'open = openMobileSync', "entry.addEventListener('click', activateMobileEntry, true)"]) {
+for (const contract of ['harness-desktop-mobile-sync-entry', 'mountMobileEntry', 'entry.parentElement !== document.body', 'watchMobileEntryLayout(host, settingsTrigger)', 'settingsTrigger.textContent?.trim()', 'mobileEntryPortalPlacement', 'position:fixed; z-index:18', 'activateMobileEntry', 'open = request', "open('open-mobile-sync')", "entry.addEventListener('click', activateMobileEntry, true)"]) {
   if (!rendererScript.includes(contract)) throw new Error(`The renderer-owned mobile sync portal beside Settings is missing: ${contract}`)
 }
-if (rendererScript.includes("row.id = 'harness-desktop-mobile-sync-row'") || rendererScript.includes('mountMobile(section)') || rendererScript.includes('host.insertBefore(entry, settingsTrigger)') || rendererScript.includes("open('open-mobile-sync')")) {
-  throw new Error('Mobile sync must not remain embedded in the official Settings event tree or depend on the custom URL bridge.')
+const mobileEntryActivation = rendererScript.slice(rendererScript.indexOf('const activateMobileEntry'), rendererScript.indexOf('const mountMobileEntry'))
+if (rendererScript.includes("row.id = 'harness-desktop-mobile-sync-row'") || rendererScript.includes('mountMobile(section)') || rendererScript.includes('host.insertBefore(entry, settingsTrigger)') || mobileEntryActivation.includes('openMobileSync')) {
+  throw new Error('Mobile sync must not remain embedded in the official Settings event tree or call shell-only functions from the isolated guest.')
 }
 if (!rendererScript.includes('element.textContent !== value') || !rendererScript.includes('mountScheduled') || !rendererScript.includes('officialSettingsMutationTouchesUi') || !rendererScript.includes('if (officialSettingsMutationTouchesUi(records)) scheduleMount()') || !rendererScript.includes('list.dataset.signature !== itemsSignature')) {
   throw new Error('Official settings and unified update integration must prevent MutationObserver self-trigger loops.')
@@ -485,9 +487,21 @@ for (const contract of ['file("version.properties")', 'HARNESS_MOBILE_VERSION_NA
 for (const contract of ['HARNESS_ANDROID_KEYSTORE_PATH', 'HARNESS_ANDROID_KEY_ALIAS', 'HARNESS_ANDROID_STORE_PASSWORD', 'HARNESS_ANDROID_KEY_PASSWORD', 'verifyReleaseSigningConfiguration', 'enableV3Signing = true']) {
   if (!androidBuild.includes(contract)) throw new Error(`Android release signing configuration is incomplete: ${contract}`)
 }
-const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
-for (const contract of ['ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'android-v', 'make_latest:"false"', 'MOBILE_VERSION_NAME=$version', 'MOBILE_VERSION_CODE=$version_code', "encodeAndroidVersionCode(require('./package.json').version)", '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'Harness-Mobile-${version}-android-universal.apk', 'RELEASE_TAG: ${{ inputs.tag || github.ref_name }}', 'Waiting for verified desktop release', 'seq 1 180', 'gh release upload', 'android-universal.apk.sha256', 'Preserving the existing immutable APK', 'Unexpected standalone Android release assets', 'repos/$GITHUB_REPOSITORY/releases/latest', 'Verify public signed APK bytes and identity']) {
+const androidReleaseWorkflow = (await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')).replace(/\r\n?/gu, '\n')
+for (const contract of ['workflow_dispatch:', 'tag:', 'request_id:', 'run-name: Android ${{ inputs.tag }} · ${{ inputs.request_id }}', 'ANDROID_RELEASE_KEYSTORE_BASE64', 'ANDROID_RELEASE_CERT_SHA256', '092aea424b7e2edadd648967b7a9f909997fc028072532aea6cf459fcebf1c21', 'assembleRelease', 'apksigner', 'io.harnessdesktop.mobile', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'android-v', 'make_latest:"false"', 'MOBILE_VERSION_NAME=$version', 'MOBILE_VERSION_CODE=$version_code', "encodeAndroidVersionCode(require('./package.json').version)", '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'Harness-Mobile-${version}-android-universal.apk', 'RELEASE_TAG: ${{ inputs.tag }}', 'Waiting for verified desktop release', 'seq 1 180', 'gh release upload', 'android-universal.apk.sha256', 'Preserving the existing immutable APK', 'Unexpected standalone Android release assets', 'repos/$GITHUB_REPOSITORY/releases/latest', 'Verify public signed APK bytes and identity', 'verify-formal-windows-release-identity.mjs']) {
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Signed Android publication workflow contract missing: ${contract}`)
+}
+const androidTriggerBlock = androidReleaseWorkflow.slice(androidReleaseWorkflow.indexOf('\non:\n'), androidReleaseWorkflow.indexOf('\nrun-name:'))
+const androidTriggers = [...androidTriggerBlock.matchAll(/^  ([a-z_]+):/gmu)].map(match => match[1])
+if (JSON.stringify(androidTriggers) !== JSON.stringify(['workflow_dispatch'])) throw new Error('Signed Android publication must be workflow_dispatch-only.')
+for (const input of ['tag', 'request_id']) {
+  if (!new RegExp(`^      ${input}:\\n(?:        .+\\n)*?        required: true$`, 'mu').test(androidReleaseWorkflow)) throw new Error(`Signed Android workflow input must be required: ${input}`)
+}
+for (const forbidden of ['github.ref_name', 'github.run_id', 'inputs.tag ||', '\n  push:']) {
+  if (androidReleaseWorkflow.includes(forbidden)) throw new Error(`Signed Android workflow must use the exact persisted dispatch identity: ${forbidden}`)
+}
+if ((androidReleaseWorkflow.match(/verify-formal-windows-release-identity\.mjs/gu) || []).length < 3 || androidReleaseWorkflow.lastIndexOf('verify-formal-windows-release-identity.mjs') < androidReleaseWorkflow.indexOf('Verify public signed APK bytes and identity')) {
+  throw new Error('Signed Android workflow must revalidate the formal Windows identity before upload and after public APK verification.')
 }
 for (const forbidden of ['app-debug.apk', 'assembleDebug', '--clobber']) {
   if (androidReleaseWorkflow.includes(forbidden)) throw new Error(`Android publication workflow must never publish debug output: ${forbidden}`)
@@ -511,8 +525,8 @@ for (const contract of [
 ]) {
   if (!readme.includes(contract)) throw new Error(`README release and discovery content is stale or incomplete: ${contract}`)
 }
-const OFFICIAL_ALPHA3_VERSION = '0.1.2-alpha.3'
-const OFFICIAL_ALPHA3_DEPENDENCY_ROOTS = Object.freeze([
+const OFFICIAL_ALPHA4_VERSION = '0.1.2-alpha.4'
+const OFFICIAL_ALPHA4_DEPENDENCY_ROOTS = Object.freeze([
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-anonymous-user-id', '@deepseek-ai/dsh-atomic-write', '@deepseek-ai/dsh-bash-local',
   '@deepseek-ai/dsh-code-runtime', '@deepseek-ai/dsh-compaction', '@deepseek-ai/dsh-compaction-basic',
@@ -522,7 +536,7 @@ const OFFICIAL_ALPHA3_DEPENDENCY_ROOTS = Object.freeze([
   '@deepseek-ai/dsh-subagent-in-process-driver', '@deepseek-ai/dsh-subprocess',
   '@deepseek-ai/dsh-timeout', '@deepseek-ai/dsh-workflow'
 ])
-const OFFICIAL_ALPHA3_OPTIONAL_ROOTS = Object.freeze([
+const OFFICIAL_ALPHA4_OPTIONAL_ROOTS = Object.freeze([
   '@deepseek-ai/dsh-attachment', '@deepseek-ai/dsh-jobs', '@deepseek-ai/dsh-session-persistence',
   '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-settings', '@deepseek-ai/dsh-util-time'
 ])
@@ -532,33 +546,33 @@ const REMOVED_DSH_ROOTS = new Set([
   '@deepseek-ai/dsh-session-persistence-sqlite'
 ])
 
-export function assertOfficialAlpha3ReleaseContract(pkg) {
+export function assertOfficialAlpha4ReleaseContract(pkg) {
   const dependencies = pkg?.dependencies
   const optionalDependencies = pkg?.optionalDependencies
   if (!dependencies || Array.isArray(dependencies) || typeof dependencies !== 'object' || !optionalDependencies || Array.isArray(optionalDependencies) || typeof optionalDependencies !== 'object') {
-    throw new Error('Official alpha.3 release dependencies and optionalDependencies must be objects.')
+    throw new Error('Official alpha.4 release dependencies and optionalDependencies must be objects.')
   }
-  const acceptedRoots = new Set([...OFFICIAL_ALPHA3_DEPENDENCY_ROOTS, ...OFFICIAL_ALPHA3_OPTIONAL_ROOTS])
-  if (acceptedRoots.size !== 26 || OFFICIAL_ALPHA3_DEPENDENCY_ROOTS.length !== 20 || OFFICIAL_ALPHA3_OPTIONAL_ROOTS.length !== 6) {
-    throw new Error('Official alpha.3 release root allowlist must contain exactly 26 unique roots.')
+  const acceptedRoots = new Set([...OFFICIAL_ALPHA4_DEPENDENCY_ROOTS, ...OFFICIAL_ALPHA4_OPTIONAL_ROOTS])
+  if (acceptedRoots.size !== 26 || OFFICIAL_ALPHA4_DEPENDENCY_ROOTS.length !== 20 || OFFICIAL_ALPHA4_OPTIONAL_ROOTS.length !== 6) {
+    throw new Error('Official alpha.4 release root allowlist must contain exactly 26 unique roots.')
   }
-  for (const root of OFFICIAL_ALPHA3_DEPENDENCY_ROOTS) {
-    if (dependencies[root] !== OFFICIAL_ALPHA3_VERSION) throw new Error(`Official alpha.3 DSH dependency root must be pinned exactly: ${root}`)
+  for (const root of OFFICIAL_ALPHA4_DEPENDENCY_ROOTS) {
+    if (dependencies[root] !== OFFICIAL_ALPHA4_VERSION) throw new Error(`Official alpha.4 DSH dependency root must be pinned exactly: ${root}`)
   }
-  for (const root of OFFICIAL_ALPHA3_OPTIONAL_ROOTS) {
-    if (optionalDependencies[root] !== OFFICIAL_ALPHA3_VERSION) throw new Error(`Official alpha.3 DSH optional root must be pinned exactly: ${root}`)
+  for (const root of OFFICIAL_ALPHA4_OPTIONAL_ROOTS) {
+    if (optionalDependencies[root] !== OFFICIAL_ALPHA4_VERSION) throw new Error(`Official alpha.4 DSH optional root must be pinned exactly: ${root}`)
   }
   for (const [section, entries] of [['dependencies', dependencies], ['optionalDependencies', optionalDependencies]]) {
     for (const [name, version] of Object.entries(entries)) {
       if (!name.startsWith('@deepseek-ai/dsh')) continue
       if (REMOVED_DSH_ROOTS.has(name)) throw new Error(`Removed DSH root must not re-enter the release graph: ${name}`)
-      if (!acceptedRoots.has(name)) throw new Error(`Unexpected direct DSH root in the alpha.3 ${section} graph: ${name}`)
-      if (version !== OFFICIAL_ALPHA3_VERSION) throw new Error(`Official alpha.3 DSH root must use an exact version: ${name}`)
+      if (!acceptedRoots.has(name)) throw new Error(`Unexpected direct DSH root in the alpha.4 ${section} graph: ${name}`)
+      if (version !== OFFICIAL_ALPHA4_VERSION) throw new Error(`Official alpha.4 DSH root must use an exact version: ${name}`)
     }
   }
 }
 
-assertOfficialAlpha3ReleaseContract(pkg)
+assertOfficialAlpha4ReleaseContract(pkg)
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')
@@ -787,13 +801,20 @@ const componentProductionBuilder = await readFile(path.join(root, 'scripts/prepa
 for (const contract of ['HARNESS_COMPONENT_SIGNING_KEY_FILE', 'HARNESS_COMPONENT_KEY_ID', 'does not match the public key embedded', 'win32-x64', 'darwin-x64', 'darwin-arm64', 'full-package fallback', 'validateAndVerifyManifest']) {
   if (!componentProductionBuilder.includes(contract)) throw new Error(`Production component build contract missing: ${contract}`)
 }
-const productionComponentWorkflow = await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')
-for (const contract of ['product_revision:', 'ref: ${{ env.RELEASE_TAG }}', 'PUBLISHER_PRODUCT_REVISION', 'git rev-list -n 1 "$RELEASE_TAG"', 'test "${#files[@]}" -eq 7']) {
+const productionComponentWorkflow = (await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')).replace(/\r\n?/gu, '\n')
+for (const contract of ['product_revision:', 'request_id:', 'run-name: Components ${{ inputs.tag }} · ${{ inputs.request_id }}', 'ref: ${{ env.RELEASE_TAG }}', 'PUBLISHER_PRODUCT_REVISION', 'git rev-list -n 1 "$RELEASE_TAG"', 'test "${#files[@]}" -eq 7', 'verify-formal-windows-release-identity.mjs', 'Revalidate formal Windows identity after all component side effects']) {
   if (!productionComponentWorkflow.includes(contract)) throw new Error(`Production component workflow immutable-tag contract missing: ${contract}`)
 }
+for (const input of ['tag', 'product_revision', 'request_id', 'formal_windows_product_revision', 'formal_windows_release_id', 'formal_windows_asset_id', 'formal_windows_asset_name', 'formal_windows_asset_size', 'formal_windows_asset_digest', 'formal_windows_asset_url']) {
+  if (!new RegExp(`^      ${input}:\\n(?:        .+\\n)*?        required: true$`, 'mu').test(productionComponentWorkflow)) throw new Error(`Production component workflow input must be required: ${input}`)
+}
+if (productionComponentWorkflow.includes('inputs.tag ||') || productionComponentWorkflow.includes('inputs.request_id ||')) throw new Error('Production component workflow must not fall back from its exact publisher identity.')
+if (productionComponentWorkflow.lastIndexOf('verify-formal-windows-release-identity.mjs') < productionComponentWorkflow.indexOf('git push origin "HEAD:refs/heads/$branch"')) throw new Error('Production component workflow must revalidate formal Windows identity after all public/branch side effects.')
 if (productionComponentWorkflow.includes('component-publish/v')) throw new Error('Production component publication must not be triggered by a mutable branch.')
 const desktopManifestRefresher = await readFile(path.join(root, 'scripts/refresh-release-manifest.mjs'), 'utf8')
 const releasePublisher = await readFile(path.join(root, 'scripts/release-publish.mjs'), 'utf8')
+const releaseFormalWindowsValidation = await readFile(path.join(root, 'scripts/release-local-formal-windows-validation.cjs'), 'utf8')
+const releaseFormalWindowsRemoteIdentity = await readFile(path.join(root, 'scripts/verify-formal-windows-release-identity.mjs'), 'utf8')
 const releasePublisherSelection = await readFile(path.join(root, 'scripts/release-publish-selection.cjs'), 'utf8')
 const releasePublisherTests = await readFile(path.join(root, 'tests/release-publisher.test.cjs'), 'utf8')
 for (const contract of ['HARNESS_COMPONENT_SIGNING_KEY_FILE', 'HARNESS_COMPONENT_KEY_ID', 'createSignedDesktopReleaseManifest', 'validateAndVerifyDesktopReleaseManifest']) {
@@ -810,6 +831,30 @@ for (const contract of ["delete state.phases['local-windows']", 'incorrectlyMigr
 }
 for (const contract of ['legacy local packaging state always reruns', 'tampered stored workflow run identities', 'completed publication phases cannot skip fresh run evidence validation', 'GitHub and CNB 18-asset drift is rejected before stable']) {
   if (!releasePublisherTests.includes(contract)) throw new Error(`Cloud-only publisher behavior regression test missing: ${contract}`)
+}
+const desktopPublicationIndex = releasePublisher.indexOf("phase(state, 'desktop-publication'")
+const formalWindowsValidationIndex = releasePublisher.indexOf("phase(state, 'local-formal-windows-validation'")
+const formalWindowsLaterPhaseIndexes = ['signed-android', 'signed-components', 'release-manifest', 'cnb-assets', 'stable-components', 'cnb-stable', 'complete'].map(id => releasePublisher.indexOf(`phase(state, '${id}'`))
+if (desktopPublicationIndex < 0 || formalWindowsValidationIndex <= desktopPublicationIndex || formalWindowsLaterPhaseIndexes.some(index => index <= formalWindowsValidationIndex)) throw new Error('Formal Windows validation must run after desktop publication and before signed Android or any later publication phase.')
+for (const contract of ['expectedPortableAssetName', 'performFormalWindowsValidation', 'revalidateFormalWindowsValidation']) {
+  if (!releasePublisher.includes(contract)) throw new Error(`Formal Windows publisher phase contract missing: ${contract}`)
+}
+for (const contract of ['requires a Windows x64 host', 'browser_download_url', 'asset.size', 'asset.digest', 'productRevision', "'--self-test'", '--user-data-dir=', '--harness-user-data-dir=', 'report.ok !== true', 'report.product.version !== version', 'report.checks[check] !== true', 'validateDownloadedAsset(layout.executablePath', 'reportSha256']) {
+  if (!releaseFormalWindowsValidation.includes(contract)) throw new Error(`Formal Windows local validation fail-closed contract missing: ${contract}`)
+}
+for (const contract of ['releases/${releaseId}', 'release.tag_name !== expected.tag', 'release.target_commitish', 'release.draft !== false', 'release.prerelease !== false', 'asset?.name === expected.assetName', 'asset.digest !== expected.assetDigest', 'asset.browser_download_url !== expected.assetUrl']) {
+  if (!releaseFormalWindowsRemoteIdentity.includes(contract)) throw new Error(`Formal Windows remote identity verifier contract missing: ${contract}`)
+}
+for (const phaseName of ['signed-android', 'signed-components', 'release-manifest', 'cnb-assets', 'stable-components', 'cnb-stable', 'complete']) {
+  const boundaryIndex = releasePublisher.indexOf(`requireCurrentFormalWindowsValidation(state, '${phaseName}')`)
+  const phaseIndex = releasePublisher.indexOf(`phase(state, '${phaseName}'`)
+  if (boundaryIndex <= formalWindowsValidationIndex || phaseIndex <= boundaryIndex) throw new Error(`Formal Windows identity must be freshly revalidated immediately before ${phaseName}.`)
+}
+for (const contract of ['formalWindowsWorkflowFields(formalBeforeAndroid.evidence)', 'formalWindowsWorkflowFields(formalBeforeComponents.evidence)', 'androidWorkflowIdentity(requestId)', 'componentCheckpointWorkflowIdentity(completed)', 'signed-android completion', 'signed-components completion']) {
+  if (!releasePublisher.includes(contract)) throw new Error(`Formal Windows cloud workflow binding contract missing: ${contract}`)
+}
+for (const contract of ['formal Windows validation is ordered after public desktop bytes', 'downloads digest-bound public bytes', 'completed evidence is revalidated', 'same-run formal Windows asset drift fails the cloud workflow and the publisher next-phase boundary']) {
+  if (!releasePublisherTests.includes(contract)) throw new Error(`Formal Windows local validation regression test missing: ${contract}`)
 }
 const stablePromotion = releasePublisher.slice(releasePublisher.indexOf("phase(state, 'stable-components'"), releasePublisher.indexOf("phase(state, 'cnb-stable'"))
 if (stablePromotion.indexOf('verifyCloudAssetMirrorsBeforeStable') < 0 || stablePromotion.indexOf('verifyCloudAssetMirrorsBeforeStable') > stablePromotion.indexOf('promoteStableFeeds')) throw new Error('Stable component promotion must revalidate exact GitHub/CNB assets immediately before promotion.')
@@ -853,7 +898,7 @@ if (!(await readFile(path.join(root, 'electron/bridge/dsh-resolver.cjs'), 'utf8'
 }
 
 const runtimePatch = await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'), 'utf8')
-for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledConversation', 'patchConversationWorkTreeSource', 'patchTimelineReferenceActionSource', 'patchInstalledTokenMeter', 'patchInstalledModelSettings', 'patchModelSettingsKeyOverrideSource', 'patchInstalledAgentLoop', 'patchInstalledSubagentContinuation', 'const iterator = stream[Symbol.asyncIterator]()', 'activation.accepted.size > 0 && agent.inbox.hasPending', 'internal team queue filtering', '[Agent team message ']) {
+for (const contract of ['this.sessions.create({ workspaceId: target })', 'this.sessions.clear()', 'Pinned DSH startSession implementation changed', 'System.Windows.Forms.FolderBrowserDialog', 'patchInstalledDirectoryPicker', 'patchInstalledConversation', 'patchConversationWorkTreeSource', 'patchTimelineReferenceActionSource', 'patchInstalledTokenMeter', 'patchInstalledModelSettings', 'patchModelSettingsKeyOverrideSource', 'patchInstalledAgentLoop', 'patchInstalledSubagentContinuation', 'patchInstalledMcpClient', 'patchMcpClientStartupTimeoutSource', 'CONNECTION_ATTEMPT_TIMEOUT_MS', 'Optional MCP integrations connect under their supervisor', 'const iterator = stream[Symbol.asyncIterator]()', 'activation.accepted.size > 0 && agent.inbox.hasPending', 'internal team queue filtering', '[Agent team message ']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Guarded desktop runtime patch is missing: ${contract}`)
 }
 const modelSettingsKeyOverridePatch = await readFile(path.join(root, 'scripts/model-settings-key-override-patch.mjs'), 'utf8')
@@ -899,6 +944,10 @@ for (const contract of ['patchInstalledSubprocess', 'patchSubprocessSource', 'SU
 const installedSubprocessRuntime = await readFile(path.join(root, 'node_modules', '@deepseek-ai', 'dsh-subprocess-local', 'lib', 'index.js'), 'utf8')
 if ((installedSubprocessRuntime.match(/stdio: "ignore", windowsHide: true/g) || []).length !== 2 || !installedSubprocessRuntime.includes('env,\n\t\twindowsHide: true,\n\t\tstdio:')) {
   throw new Error('The installed DSH subprocess runtime can still create visible Windows console windows.')
+}
+const installedMcpClientRuntime = await readFile(path.join(root, 'node_modules', '@deepseek-ai', 'dsh-mcp-client', 'lib', 'index.js'), 'utf8')
+for (const contract of ['const CONNECTION_ATTEMPT_TIMEOUT_MS = 8e3;', 'connection and initial tool sync timed out', 'function requestClose(generation)', 'if (!config.failOnStartupError) return;', 'if (!isActive()) return previous;', 'attemptQuiesced, syncQuiesced']) {
+  if (!installedMcpClientRuntime.includes(contract)) throw new Error(`Installed DSH MCP client can still block base Web startup: ${contract}`)
 }
 for (const contract of ['patchInstalledWebApp', 'patchWebAppSource', 'WEB_APP_BROWSER_LAUNCH_PATCHED', 'Pinned DSH browser launcher implementation changed']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Hidden DSH browser-launcher patch is missing: ${contract}`)

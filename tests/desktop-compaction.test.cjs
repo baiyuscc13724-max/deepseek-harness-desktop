@@ -70,6 +70,7 @@ test('Codex overload recovery persists visible retry state and preserves the ret
   const waits = []
   const session = {
     events,
+    snapshotEvents() { return events.slice() },
     append(type, data) { events.push({ type, data }) }
   }
   const payload = {
@@ -113,7 +114,7 @@ test('Codex overload recovery stops after its budget and keeps the session resum
   const errors = []
   let nextCalls = 0
   const result = await recoverCodexOverload({ logger: { error: message => errors.push(message) } }, {
-    agent: { session: { events, append() { throw new Error('must not append after exhaustion') } } },
+    agent: { session: { snapshotEvents: () => events.slice(), append() { throw new Error('must not append after exhaustion') } } },
     turn: 1,
     step: 2,
     provider: 'openai-codex',
@@ -124,6 +125,21 @@ test('Codex overload recovery stops after its budget and keeps the session resum
   assert.equal(nextCalls, 1)
   assert.deepEqual(errors, [CODEX_OVERLOAD_RECOVERY_GUIDANCE])
   assert.match(errors[0], /上下文仍已保留/u)
+})
+
+test('Codex overload recovery fails closed without the official session snapshot API', async () => {
+  const { recoverCodexOverload } = await plugin()
+  let nextCalls = 0
+  const result = await recoverCodexOverload({ logger: {} }, {
+    agent: { session: { append() { assert.fail('missing snapshotEvents must not mutate retry history') } } },
+    turn: 1,
+    step: 1,
+    provider: 'openai-codex',
+    failure: { message: 'Our servers are currently overloaded. Please try again later.', code: 'PI_AI_ERROR' },
+    signal: new AbortController().signal
+  }, async () => { nextCalls += 1; return 'next' })
+  assert.equal(result, 'next')
+  assert.equal(nextCalls, 1)
 })
 
 test('summary overflow shrinking removes only an old balanced prefix', async () => {
@@ -225,6 +241,7 @@ test('Codex overload recovery writes official durable retry events with five bou
   ]
   const session = {
     events,
+    snapshotEvents() { return events.slice() },
     append(type, data) {
       const event = { seq: events.length, type, data }
       events.push(event)
@@ -275,7 +292,7 @@ test('Codex overload recovery excludes auth, credits, other providers, and broad
     failure: { code: 'PI_AI_ERROR', message: 'PREAUTHPOST says try again later' }
   }), true, 'auth marker must use bounded matching')
   const events = []
-  const session = { events, append: (type, data) => events.push({ type, data }) }
+  const session = { snapshotEvents: () => events.slice(), append: (type, data) => events.push({ type, data }) }
   const cases = [
     { provider: 'openai-codex', failure: { code: 'AUTH', message: 'overloaded' } },
     { provider: 'openai-codex', failure: { code: 'CreditsError', message: 'try again later' } },
@@ -306,6 +323,7 @@ test('Codex overload backoff is cancellable after scheduling and before retry st
   const events = []
   const session = {
     events,
+    snapshotEvents() { return events.slice() },
     append(type, data) { events.push({ type, data }) }
   }
   const pending = recoverCodexOverload({
@@ -325,7 +343,7 @@ test('Desktop compaction plugin installation is profile-local and repeatable', a
   t.after(() => rm(dshHome, { recursive: true, force: true }))
   const bundledRoot = path.join(root, 'plugins', 'dsh-desktop-compaction')
   const first = await ensureDesktopCompactionPlugin({ dshHome, bundledRoot })
-  assert.equal(first.version, '1.0.57')
+  assert.equal(first.version, '1.0.58')
   const installed = path.join(first.destination, 'lib', 'index.js')
   assert.match(await readFile(installed, 'utf8'), /class DesktopCompactionEngine extends BasicCompactionEngine/u)
   await writeFile(installed, 'stale')
@@ -353,6 +371,6 @@ test('plugin declares one official compaction-engine module graph and inherits i
   const manifest = JSON.parse(await readFile(path.join(root, 'plugins/dsh-desktop-compaction/package.json'), 'utf8'))
   assert.equal(manifest.main, 'lib/index.js')
   assert.match(manifest.description, /Codex overload recovery/u)
-  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-compaction-basic'], '^0.1.2-alpha.3')
+  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-compaction-basic'], '^0.1.2-alpha.4')
   assert.equal(manifest.dsh, undefined)
 })

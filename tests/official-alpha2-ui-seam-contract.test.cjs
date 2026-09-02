@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 const test = require('node:test')
 const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
@@ -159,7 +160,7 @@ test('official model settings executes credential-key and onboarding gates witho
   assert.doesNotMatch(apply, /setKeyDraft\(keyValue\)/u)
 })
 
-test('official workspace and token folds execute visibility, ordering, replacement, and retry semantics', () => {
+test('official workspace and token folds execute visibility, ordering, replacement, and retry semantics', async () => {
   const workspaceBundle = readText(path.join(isolatedPackage('@deepseek-ai/dsh-client-ui-workspace'), 'lib', 'client.js'))
   const workspaceStart = workspaceBundle.indexOf('\t\tfunction byRecency(')
   const workspaceEnd = workspaceBundle.indexOf('\t\t/** Keep navigation', workspaceStart)
@@ -181,7 +182,15 @@ test('official workspace and token folds execute visibility, ordering, replaceme
   const tokenEnd = tokenBundle.indexOf("/**\n* Token-meter's context-occupancy projection unit.", tokenStart)
   assert.ok(tokenStart >= 0 && tokenEnd > tokenStart, 'token usage projection region drift')
   const z = new Proxy(function zChain () {}, { get: () => () => z })
-  const projection = Function('z$1', `${tokenBundle.slice(tokenStart, tokenEnd)}; return tokenUsageProjectionDefinition`)(z)
+  let sessionSeq = value => value
+  if (tokenBundle.includes('transform(SessionSeq)')) {
+    const sessionModule = await import(pathToFileURL(path.join(isolatedPackage('@deepseek-ai/dsh-session'), 'lib', 'index.js')).href)
+    assert.equal(typeof sessionModule.SessionSeq, 'function', 'alpha.4 token projection must import the official branded SessionSeq constructor')
+    assert.equal(sessionModule.SessionSeq(0), 0)
+    assert.throws(() => sessionModule.SessionSeq(-1), /SessionSeq/u)
+    sessionSeq = sessionModule.SessionSeq
+  }
+  const projection = Function('z$1', 'SessionSeq', `${tokenBundle.slice(tokenStart, tokenEnd)}; return tokenUsageProjectionDefinition`)(z, sessionSeq)
   const usage = (type, values) => type === 'chunk' ? { type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'usage', usage: values } } } : { type: 'assistant/message', data: { turn: 1, step: 1, usage: values } }
   const first = projection.apply(projection.init(), usage('chunk', { inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 1 }))
   assert.deepEqual(first.totals, { uncachedInputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 1 })

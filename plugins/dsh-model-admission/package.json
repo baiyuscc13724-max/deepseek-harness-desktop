@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-admission",
-  "version": "1.0.57",
+  "version": "1.0.58",
   "description": "Bounded fair model-attempt admission for DeepSeek Harness Desktop",
   "type": "module",
   "main": "lib/index.js",
@@ -9,7 +9,7 @@
     "./package.json": "./package.json"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": "^0.1.2-alpha.3",
+    "@deepseek-ai/dsh-llm": "^0.1.2-alpha.4",
     "@deepseek-ai/schemastery": "^3.17.1"
   },
   "license": "MIT"

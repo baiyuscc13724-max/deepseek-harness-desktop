@@ -335,6 +335,66 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # ONE-OFF v1.0.58 ONLY: delete this entire job plus its script and contract
+  # tests immediately after v1.0.58 publication completes. Never retarget it.
+  oneoff-v1-0-58-windows-ui-validation:
+    if: ${{ inputs.tag == 'v1.0.58' }}
+    name: One-off v1.0.58 installed Windows homepage
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_revision }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Bind one-off gate to the exact current workflow and source revision
+        shell: pwsh
+        env:
+          ONEOFF_TAG: ${{ inputs.tag }}
+          ONEOFF_SOURCE_REVISION: ${{ inputs.source_revision }}
+          ONEOFF_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:ONEOFF_TAG -ne 'v1.0.58') { throw 'This temporary gate is restricted to v1.0.58.' }
+          if ($env:ONEOFF_SOURCE_REVISION -notmatch '^[0-9a-f]{40}$') { throw 'Candidate source revision is invalid.' }
+          if ($env:GITHUB_SHA.ToLowerInvariant() -ne $env:ONEOFF_SOURCE_REVISION) { throw 'Workflow GITHUB_SHA differs from source_revision.' }
+          if ($env:ONEOFF_WORKFLOW_REF -notmatch '/\.github/workflows/release\.yml@refs/heads/main$') { throw 'One-off gate is not running in the formal main-branch release workflow.' }
+          $head = (& git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:ONEOFF_SOURCE_REVISION) { throw 'Checked-out source differs from source_revision.' }
+          $remoteTag = @(& git ls-remote --exit-code --tags origin "refs/tags/$env:ONEOFF_TAG" 2>&1)
+          $remoteTagStatus = $LASTEXITCODE
+          if ($remoteTagStatus -ne 2 -or $remoteTag.Count -ne 0) { throw 'The v1.0.58 Tag already exists; the pre-Tag gate refuses to run.' }
+      # Deliberately omit run-id/repository/token: download-artifact therefore
+      # resolves desktop-windows-latest only from this exact workflow run.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-windows-latest
+          path: ${{ runner.temp }}/v1.0.58-current-run-${{ github.run_id }}
+      - name: Install, open the ordinary app, prove its homepage, stop, and uninstall
+        shell: pwsh
+        env:
+          ONEOFF_TAG: ${{ inputs.tag }}
+          ONEOFF_SOURCE_REVISION: ${{ inputs.source_revision }}
+          ONEOFF_RUN_ID: ${{ github.run_id }}
+          ONEOFF_WORKFLOW_REF: ${{ github.workflow_ref }}
+          ONEOFF_WORKFLOW_NAME: ${{ github.workflow }}
+          ONEOFF_ARTIFACT_ROOT: ${{ runner.temp }}/v1.0.58-current-run-${{ github.run_id }}
+          ONEOFF_REPORT_PATH: ${{ runner.temp }}/v1.0.58-windows-homepage-evidence-${{ github.run_id }}.json
+        run: node scripts/release-oneoff-v1.0.58-windows-ui-validation.cjs
+      - name: Preserve one-off structured evidence for this candidate run
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: oneoff-v1.0.58-windows-ui-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/v1.0.58-windows-homepage-evidence-${{ github.run_id }}.json
+          if-no-files-found: warn
+          retention-days: 14
+
   ios-simulators:
     name: Validate iPhone and iPad simulators
     runs-on: macos-14

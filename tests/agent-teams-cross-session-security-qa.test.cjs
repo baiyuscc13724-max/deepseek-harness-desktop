@@ -104,7 +104,7 @@ test('the unique cross-session board entry exposes requests accessibly and proje
   assert.match(host, /path: "\/api\/agent-teams\/project\/team-board\/page"/u)
   assert.match(host, /name: "project_collaboration"[\s\S]*?"read_requests"/u)
 
-  const member = { id: 'private-team-member', status: 'running', session: { header: { cwd: os.tmpdir() }, events: [{ type: 'turn/start', id: 'member-turn', time: 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }] } }
+  const member = { id: 'private-team-member', status: 'running', session: { header: { cwd: os.tmpdir() }, events: [{ type: 'turn/start', id: 'member-turn', time: 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }], snapshotEvents() { return this.events.slice() } } }
   const ctx = { agents: { roots: () => [], get: id => id === member.id ? member : undefined, currentInitiator: () => member } }
   assert.throws(() => mod.requireProjectRootCaller(ctx, { agent: member }), error => error.code === 'PROJECT_COLLABORATION_ROOT_REQUIRED')
   assert.equal(JSON.stringify(member).includes('projectRef'), false)

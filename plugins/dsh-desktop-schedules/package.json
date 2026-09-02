@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-schedules",
-  "version": "1.0.57",
+  "version": "1.0.58",
   "description": "Observable session-local schedules for DeepSeek Harness Desktop",
   "type": "module",
   "main": "lib/index.js",
@@ -19,8 +19,8 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-agent": "^0.1.2-alpha.3",
-    "@deepseek-ai/dsh-schedule": "^0.1.2-alpha.3"
+    "@deepseek-ai/dsh-agent": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-schedule": "^0.1.2-alpha.4"
   },
   "license": "MIT"
 }

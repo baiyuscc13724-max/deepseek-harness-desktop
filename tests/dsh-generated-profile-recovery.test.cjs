@@ -57,7 +57,7 @@ test('generated-profile recovery resets only cordis.yml and preserves user patch
 
 test('desktop startup retries one generated-profile conflict without exposing the retry flag over IPC', async () => {
   const source = await readFile(mainFile, 'utf8')
-  assert.match(source, /async function startRuntime\(\) \{\s*return startRuntimeAttempt\(false\)/u)
+  assert.match(source, /async function startRuntime\(\)[\s\S]{0,180}const attempt = startRuntimeAttempt\(false\)[\s\S]{0,80}runtimeStartPromise = attempt/u)
   assert.match(source, /!generatedProfileRecoveryAttempted[\s\S]{0,500}isRecoverableGeneratedProfileFailure\(diagnosticErrorText\)/u)
   assert.match(source, /resetGeneratedWebProfileRoot\(\{ dshHome: desktopDshHome\(\) \}\)[\s\S]{0,300}return startRuntimeAttempt\(true\)/u)
   assert.equal((source.match(/return startRuntimeAttempt\(true\)/gu) || []).length, 1)

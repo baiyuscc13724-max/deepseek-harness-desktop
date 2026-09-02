@@ -42,7 +42,8 @@ test('only the root can recall private memory and durable writes require a direc
       events: [
         { type: 'turn/start' },
         { type: 'user/message', data: { source: { kind: 'user' } } }
-      ]
+      ],
+      snapshotEvents() { return this.events.slice() }
     }
   }
   const childAgent = { id: 'child', session: { header: { cwd }, events: rootAgent.session.events } }

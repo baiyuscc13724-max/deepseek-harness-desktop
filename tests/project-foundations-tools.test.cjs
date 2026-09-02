@@ -19,7 +19,7 @@ const gitCommand = gitExecutable()
 const allowedGitRoot = gitCommand === bundledGit ? path.resolve(__dirname, '..', 'third_party', 'mingit') : path.dirname(path.dirname(gitCommand))
 async function git(cwd, args) { return String((await execFileAsync(gitCommand, args, { cwd, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never' } })).stdout).trim() }
 function agent(id, cwd, kind = 'worker') {
-  return { id, status: 'running', session: { header: { cwd }, events: [{ type: 'turn/start' }] }, kind }
+  return { id, status: 'running', session: { header: { cwd }, events: [{ type: 'turn/start' }], snapshotEvents() { return this.events.slice() } }, kind }
 }
 function capability() {
   return Object.freeze(Object.defineProperties({}, { gitCommand: { value: gitCommand }, allowedGitRoot: { value: allowedGitRoot } }))

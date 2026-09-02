@@ -364,7 +364,7 @@ test('client keeps session id copy in archive and sidebar paths without a top-ri
   assert.match(source, /exports\.inject = \["slots", "locale", "sessions", "workspaces", "inputTriggers"\]/u)
 })
 
-test('official alpha.2 native artifacts retain the session experience seams at their current owners', async () => {
+test('official alpha.4 native artifacts retain the session experience seams at their current owners', async () => {
   const [chat, conversation, sessionController] = await Promise.all([
     readFile(path.join(root, 'node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js'), 'utf8'),
     readFile(path.join(root, 'node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js'), 'utf8'),
@@ -374,8 +374,10 @@ test('official alpha.2 native artifacts retain the session experience seams at t
   const chatStore = chat.slice(chat.indexOf('function createChatStore()'))
   assert.match(chatStore, /return \(0, _deepseek_ai_dsh_client_store\.defineStore\)\(\{\s*init: \(\) => \(\{\s*selection: null,\s*turnProcesses: \[\]/u,
     'chat selection state must remain a scope-local store, not the removed draft persistence seam')
-  assert.match(chatStore, /setTurnProcessOpen: \(draft, turn, generation, open\) => \{/u,
-    'chat store must retain the turn-process disclosure action')
+  assert.match(chatStore, /setTurnProcessOpen: \(draft, turn, answerStep, open\) => \{/u,
+    'chat store must retain the answer-step-scoped turn-process disclosure action')
+  assert.match(chat, /storedEntry\?\.answerStep === processSpec\.answerStep/u,
+    'turn-process disclosure must remain bound to the projected answer step')
 
   assert.match(conversation, /const promptError = useSession\(\(s\) => s\.promptError\) \?\? null/u,
     'composer must select the controller prompt error')

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { isProxy } from "node:util/types";
 import z from "@deepseek-ai/schemastery";
 import { createUserMessage, HarnessError } from "@deepseek-ai/dsh-llm";
+import { queueHostSubagentPrompt, queueSubagentPrompt } from "@deepseek-ai/dsh-subagent/internal";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COLLABORATION_REASONS } from "./collaboration-broker.js";
 import { AgentCollaborationService } from "./collaboration-service.js";
@@ -26,8 +27,9 @@ import { ProjectTaskStore } from "./project-task-store.js";
 /** Host-only agent-team coordinator. A future client bundle is advertised by package metadata. */
 const name = "agent-teams";
 const inject = ["agents", "goals", "subagents", "tools", "systemPrompt", "webServer"];
-const STORE_VERSION = 7;
-const LEGACY_STORE_VERSIONS = new Set([1, 2, 3, 4, 5, 6]);
+const STORE_VERSION = 8;
+const LEGACY_STORE_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7]);
+const LEGACY_TASK_SEMANTICS_VERSIONS = new Set([1, 2, 3, 4, 5, 6]);
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_TEAM_MESSAGES = 500;
 const MAX_TEAM_TASKS = 1_000;
@@ -51,10 +53,10 @@ const MAX_TEAM_ADMISSION_QUEUE_PER_ROOT = 8;
 const TEAM_ADMISSION_TIMEOUT_MS = 30_000;
 const HARD_MAX_MEMBERS = 8;
 const HARD_MAX_TEAMS_PER_ROOT = 8;
-const MAX_EXPANSION_WORKSTREAMS = 4;
+const MAX_EXPANSION_WORKSTREAMS = HARD_MAX_MEMBERS;
 const MAX_EXPANSION_BOUNDARIES = 16;
 const MAX_EXPANSION_REQUEST_CHARS = 24_000;
-const MAX_BOOTSTRAP_ITEMS = 4;
+const MAX_BOOTSTRAP_ITEMS = HARD_MAX_MEMBERS;
 const MAX_TASK_ATTEMPT_HISTORY = 24;
 const MAX_TASK_INTERRUPTION_HISTORY = 24;
 const MAX_TASK_LIFECYCLE_EVENTS = 256;
@@ -71,7 +73,14 @@ const PLAN_MIGRATION_STATES = Object.freeze(["ready", "legacy_unplanned", "legac
 const CAPABILITY_STATES = Object.freeze(["verified", "unavailable", "unknown"]);
 const EXTERNAL_EFFECT_POLICIES = Object.freeze(["none", "idempotent", "confirm_each", "forbidden"]);
 const EXTERNAL_EFFECT_OUTCOMES = Object.freeze(["not_started", "succeeded", "failed", "outcome_unknown"]);
-const DEFAULT_SETTINGS = Object.freeze({ enabled: false, maxMembers: 4, maxActiveTurns: 4 });
+const DEFAULT_SETTINGS = Object.freeze({
+  enabled: false,
+  maxMembers: 4,
+  maxActiveTurns: 4,
+  autopilotEnabled: false,
+  autopilotMaxAdditionalRounds: 200,
+});
+const AGENT_TEAM_AUTOPILOT_SETTINGS_KEYS = Object.freeze(["enabled", "maxMembers", "maxActiveTurns", "autopilotEnabled", "autopilotMaxAdditionalRounds"]);
 const MODEL_ROUTING_FILE = "harness-desktop-model-routing.json";
 const MODEL_TIERS = Object.freeze(["main", "subagent"]);
 const MANAGED_MEMBER_DENIED_TOOLS = Object.freeze(["subagent", "subagent_fork", "workflow", "ralph"]);
@@ -109,6 +118,17 @@ const PROJECT_TASK_WAKE_RETRY_BASE_MS = 250;
 const PROJECT_TASK_WAKE_RETRY_MAX_MS = 30_000;
 const PROJECT_ROOT_RECOVERY_RETRY_BASE_MS = 1_000;
 const PROJECT_ROOT_RECOVERY_RETRY_MAX_MS = 30_000;
+const AGENT_TEAM_AUTOPILOT_ROUND_GRANT = 1;
+const AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS = 200;
+const AGENT_TEAM_AUTOPILOT_RETRY_BASE_MS = 50;
+const AGENT_TEAM_AUTOPILOT_RETRY_MAX_MS = 1_000;
+const AGENT_TEAM_AUTOPILOT_MAX_RETRIES = 3;
+const AGENT_TEAM_AUTOPILOT_AUTHORIZATION_HEADER = "x-harness-agent-teams-authorization";
+const MAX_AGENT_TEAM_AUTOPILOT_WAKES = 128;
+const AGENT_TEAM_AUTOPILOT_STATUSES = Object.freeze(["pending_plan", "active", "revoked", "exhausted"]);
+const AGENT_TEAM_AUTOPILOT_WAKE_STATUSES = Object.freeze(["prepared", "goal_mutated", "delivered", "cancelled"]);
+const AGENT_TEAM_AUTOPILOT_WAKE_KINDS = Object.freeze(["review_submission", "dispatch_work", "member_attention", "close_team", "reconcile_work"]);
+const AGENT_TEAM_AUTOPILOT_HOST_SCOPE_KEYS = new Set(["rootSessionId", "projectKey", "goalId", "teamId", "pauseEpoch", "teamScopeHash"]);
 // A recovery starts at revision 1, reserves at revision 2, and every retry
 // effect is fenced by a durable transition to activated.  Stop background
 // effects at revision 10 so even the shortest failed cycle can perform no more
@@ -117,11 +137,14 @@ const PROJECT_ROOT_RECOVERY_RETRY_MAX_MS = 30_000;
 const PROJECT_ROOT_RECOVERY_AUTO_EFFECT_REVISION_LIMIT = 10;
 const STOPPABLE_MEMBER_STATES = new Set(["provisioning", "running", "idle", "ready", "shutting_down"]);
 const STORE_INSTANCES = new Map();
-const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "bootstrap", "plan", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory", "closure", "memberRecoveries", "taskCommandReceipts"]);
+const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "start", "bootstrap", "plan", "autopilot", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory", "closure", "memberRecoveries", "taskCommandReceipts"]);
+const TEAM_START_KEYS = new Set(["requestId", "inputHash"]);
+const AUTOPILOT_KEYS = new Set(["version", "status", "authority", "grantId", "routingReceiptId", "authorizationEpoch", "rootSessionId", "projectKey", "goalId", "goalObjectiveHash", "pauseEpochAtGrant", "planHashAtGrant", "baseMaxGoalRounds", "expectedMaxGoalRounds", "maxAdditionalRounds", "additionalRoundsGranted", "lastStateHash", "parkedGoalRevision", "parkedAt", "wakes", "grantedAt", "revokedAt", "revokeReason"]);
+const AUTOPILOT_WAKE_KEYS = new Set(["key", "kind", "stateHash", "roundsStarted", "status", "teamRevision", "targetMaxGoalRounds", "createdAt", "goalRevision", "deliveredAt", "cancelledAt", "reason"]);
 const TASK_COMMAND_RECEIPT_KEYS = new Set(["requestId", "inputHash", "taskId", "action", "taskRevisionBefore", "taskRevisionAfter", "pauseEpoch", "createdAt"]);
 const MEMBER_RECOVERY_KEYS = new Set(["requestId", "inputHash", "action", "status", "phase", "memberId", "sessionId", "taskIds", "activeTaskIds", "activeClaims", "createdAt", "updatedAt", "pauseEpoch", "teamRevision", "replacementMemberId", "replacementSessionId", "errorCode", "errorStage", "errorMessage", "reconciledAt", "reconciledBy", "resolution"]);
 const HANDOFF_KEYS = new Set(["tokenHash", "sourceRootSessionId", "targetRootSessionId", "projectKey", "createdAt", "expiresAt"]);
-const OWNERSHIP_HISTORY_KEYS = new Set(["kind", "sourceRootSessionId", "targetRootSessionId", "projectKey", "tokenHash", "at", "pauseEpoch"]);
+const OWNERSHIP_HISTORY_KEYS = new Set(["kind", "sourceRootSessionId", "targetRootSessionId", "projectKey", "tokenHash", "at", "pauseEpoch", "autopilotGrantId", "autopilotRoutingReceiptId", "autopilotGoalId", "autopilotStatusAtHandoff", "autopilotRevokedAt", "autopilotRevokeReason"]);
 const PLAN_KEYS = new Set(["phase", "revision", "hash", "committedAt", "activatedAt", "authorization", "migrationState"]);
 const PLAN_AUTHORIZATION_KEYS = new Set(["source", "attestedAt", "confirmedPlanHash", "permissions", "files", "cost", "externalSideEffects"]);
 const RESUME_KEYS = new Set(["previewId", "requestId", "pauseEpoch", "teamRevision", "createdAt", "nodes", "status", "committedAt"]);
@@ -132,7 +155,7 @@ const BOOTSTRAP_MEMBER_REF_KEYS = new Set(["key", "name", "status", "memberId", 
 const TASK_KEYS = new Set(["id", "title", "description", "state", "revision", "dependsOn", "crossTeamDependsOn", "files", "assigneeSessionId", "createdAt", "updatedAt", "claimedAt", "completedAt", "cancelledAt", "cancellationReason", "releasedAt", "releaseReason", "result", "submission", "acceptance", "attempt", "claimId", "leaseEpoch", "attemptHistory", "interruptionHistory", "lifecycleLedger", "checkpoint", "nextStep", "capabilities", "externalEffects"]);
 const TASK_RESULT_KEYS = new Set(["text", "reportedAt", "truncated", "taskId", "claimId", "leaseEpoch", "reportedBy"]);
 const TASK_LIFECYCLE_EVENT_KEYS = new Set(["kind", "sequence", "at", "attempt", "claimId", "leaseEpoch", "actorId", "ownerEpoch", "reason"]);
-const ROUTING_RECEIPT_KEYS = new Set(["id", "rootSessionId", "turnKey", "projectKey", "level", "reasonCategory", "explicitUserTeamRequest", "candidateWorkstreams", "creationPath", "outcome", "teamId", "decisionAuthority", "createdAt", "finalizedAt"]);
+const ROUTING_RECEIPT_KEYS = new Set(["id", "rootSessionId", "turnKey", "projectKey", "level", "reasonCategory", "explicitUserTeamRequest", "candidateWorkstreams", "creationPath", "outcome", "teamId", "decisionAuthority", "establishmentAuthority", "goalId", "goalRevision", "goalRound", "goalObjectiveHash", "goalMaxGoalRounds", "createdAt", "finalizedAt"]);
 const ROUTING_RECEIPT_ARCHIVE_KEYS = new Set(["version", "count", "chainHash", "lastReceiptId", "lastArchivedAt"]);
 const TASK_SUBMISSION_KEYS = new Set(["taskId", "claimId", "leaseEpoch", "submittedAt", "submittedBy", "source"]);
 const TASK_ACCEPTANCE_KEYS = new Set(["taskId", "claimId", "leaseEpoch", "acceptedAt", "acceptedBy", "ownerEpoch"]);
@@ -153,6 +176,8 @@ const Config = z.object({
   enabled: z.boolean().default(false),
   maxMembers: z.number().step(1).min(1).max(HARD_MAX_MEMBERS).default(4),
   maxActiveTurns: z.number().step(1).min(1).max(HARD_MAX_MEMBERS).default(4),
+  autopilotEnabled: z.boolean().default(false),
+  autopilotMaxAdditionalRounds: z.number().step(1).min(1).max(AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS).default(DEFAULT_SETTINGS.autopilotMaxAdditionalRounds),
 });
 
 function isRecord(value) {
@@ -402,6 +427,18 @@ function validateRoutingReceipt(receipt, index) {
   assertEnum(receipt.outcome, ROUTING_OUTCOMES, `${field}.outcome`);
   optionalString(receipt.teamId, `${field}.teamId`, 256);
   assertEnum(receipt.decisionAuthority, ["model_declared"], `${field}.decisionAuthority`);
+  assertEnum(receipt.establishmentAuthority, ["direct_human", "goal_round", "legacy_unknown"], `${field}.establishmentAuthority`);
+  const goalRoundFields = ["goalId", "goalRevision", "goalRound", "goalObjectiveHash", "goalMaxGoalRounds"];
+  const goalRoundFieldCount = goalRoundFields.filter((key) => receipt[key] !== undefined).length;
+  if (goalRoundFieldCount !== 0) {
+    if (receipt.establishmentAuthority !== "goal_round" || goalRoundFieldCount !== goalRoundFields.length) throw new TypeError(`${field} exact Goal-round authority is incomplete`);
+    nonEmptyString(receipt.goalId, `${field}.goalId`, 256);
+    positiveInteger(receipt.goalRevision, `${field}.goalRevision`);
+    positiveInteger(receipt.goalRound, `${field}.goalRound`);
+    if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(receipt.goalObjectiveHash, `${field}.goalObjectiveHash`, 64))) throw new TypeError(`${field}.goalObjectiveHash is invalid`);
+    positiveInteger(receipt.goalMaxGoalRounds, `${field}.goalMaxGoalRounds`);
+    if (receipt.goalRound > receipt.goalMaxGoalRounds) throw new TypeError(`${field} Goal round exceeds its admitted cap`);
+  }
   assertIsoDate(receipt.createdAt, `${field}.createdAt`);
   if (receipt.finalizedAt !== undefined) assertIsoDate(receipt.finalizedAt, `${field}.finalizedAt`);
   if (receipt.level !== "level3" && receipt.outcome !== "recorded") throw new TypeError(`${field} Level 1 and Level 2 routing decisions must remain recorded`);
@@ -966,6 +1003,24 @@ function fixedRootAtOwnershipEpoch(team, ownerEpoch) {
   return fixedRoot;
 }
 
+function rootAppearsInValidOwnershipChain(team, rootSessionId) {
+  let fixedRoot = team.rootLeadSessionId;
+  if (fixedRoot === rootSessionId) return true;
+  let upperEpoch = (team.pauseEpoch ?? 0) + 1;
+  const adoptions = (team.ownershipHistory ?? [])
+    .filter((entry) => entry.kind === "handoff_adopted")
+    .sort((left, right) => right.pauseEpoch - left.pauseEpoch);
+  for (const adoption of adoptions) {
+    if (adoption.pauseEpoch >= upperEpoch || adoption.pauseEpoch < 1
+      || team.projectKey === undefined || adoption.projectKey !== team.projectKey
+      || adoption.targetRootSessionId !== fixedRoot) return false;
+    fixedRoot = adoption.sourceRootSessionId;
+    if (fixedRoot === rootSessionId) return true;
+    upperEpoch = adoption.pauseEpoch;
+  }
+  return false;
+}
+
 function acceptanceOwnerMatchesTeam(team, acceptance) {
   return fixedRootAtOwnershipEpoch(team, acceptance.ownerEpoch) === acceptance.acceptedBy;
 }
@@ -984,6 +1039,72 @@ function inferLegacyAcceptanceOwnerEpoch(team, task) {
   return leaseEpoch;
 }
 
+function validateAgentTeamAutopilot(autopilot) {
+  if (!isRecord(autopilot)) throw new TypeError("team.autopilot must be an object");
+  assertAllowedKeys(autopilot, AUTOPILOT_KEYS, "team.autopilot");
+  if (autopilot.version !== 1) throw new TypeError("team.autopilot.version must be 1");
+  assertEnum(autopilot.status, AGENT_TEAM_AUTOPILOT_STATUSES, "team.autopilot.status");
+  if (autopilot.authority !== "direct_human") throw new TypeError("team.autopilot.authority must be direct_human");
+  nonEmptyString(autopilot.grantId, "team.autopilot.grantId", 256);
+  nonEmptyString(autopilot.routingReceiptId, "team.autopilot.routingReceiptId", 256);
+  if (autopilot.authorizationEpoch !== undefined && !/^[A-Za-z0-9_-]{16,128}$/u.test(nonEmptyString(autopilot.authorizationEpoch, "team.autopilot.authorizationEpoch", 128))) throw new TypeError("team.autopilot.authorizationEpoch is invalid");
+  nonEmptyString(autopilot.rootSessionId, "team.autopilot.rootSessionId", 256);
+  if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(autopilot.projectKey, "team.autopilot.projectKey", 64))) throw new TypeError("team.autopilot.projectKey is invalid");
+  nonEmptyString(autopilot.goalId, "team.autopilot.goalId", 256);
+  if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(autopilot.goalObjectiveHash, "team.autopilot.goalObjectiveHash", 64))) throw new TypeError("team.autopilot.goalObjectiveHash is invalid");
+  positiveInteger(autopilot.pauseEpochAtGrant, "team.autopilot.pauseEpochAtGrant", { allowZero: true });
+  if (autopilot.planHashAtGrant !== undefined && !/^[a-f0-9]{64}$/u.test(nonEmptyString(autopilot.planHashAtGrant, "team.autopilot.planHashAtGrant", 64))) throw new TypeError("team.autopilot.planHashAtGrant is invalid");
+  positiveInteger(autopilot.baseMaxGoalRounds, "team.autopilot.baseMaxGoalRounds");
+  positiveInteger(autopilot.expectedMaxGoalRounds, "team.autopilot.expectedMaxGoalRounds");
+  positiveInteger(autopilot.maxAdditionalRounds, "team.autopilot.maxAdditionalRounds");
+  positiveInteger(autopilot.additionalRoundsGranted, "team.autopilot.additionalRoundsGranted", { allowZero: true });
+  if (autopilot.maxAdditionalRounds > AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS) throw new TypeError("team.autopilot.maxAdditionalRounds exceeds the Host policy limit");
+  if (autopilot.additionalRoundsGranted > autopilot.maxAdditionalRounds) throw new TypeError("team.autopilot additional-round budget is inconsistent");
+  if (autopilot.expectedMaxGoalRounds !== autopilot.baseMaxGoalRounds + autopilot.additionalRoundsGranted) throw new TypeError("team.autopilot expected goal cap is inconsistent");
+  if (autopilot.lastStateHash !== undefined && !/^[a-f0-9]{64}$/u.test(nonEmptyString(autopilot.lastStateHash, "team.autopilot.lastStateHash", 64))) throw new TypeError("team.autopilot.lastStateHash is invalid");
+  if (autopilot.parkedGoalRevision !== undefined) positiveInteger(autopilot.parkedGoalRevision, "team.autopilot.parkedGoalRevision");
+  if (autopilot.parkedAt !== undefined) assertIsoDate(autopilot.parkedAt, "team.autopilot.parkedAt");
+  if (!Array.isArray(autopilot.wakes) || autopilot.wakes.length > MAX_AGENT_TEAM_AUTOPILOT_WAKES) throw new TypeError("team.autopilot.wakes is invalid");
+  const wakeKeys = new Set();
+  let pendingWakeCount = 0;
+  for (const [index, wake] of autopilot.wakes.entries()) {
+    if (!isRecord(wake)) throw new TypeError(`team.autopilot.wakes[${index}] must be an object`);
+    assertAllowedKeys(wake, AUTOPILOT_WAKE_KEYS, `team.autopilot.wakes[${index}]`);
+    const key = nonEmptyString(wake.key, `team.autopilot.wakes[${index}].key`, 256);
+    if (wakeKeys.has(key)) throw new TypeError("team.autopilot wake keys must be unique");
+    wakeKeys.add(key);
+    assertEnum(wake.kind, AGENT_TEAM_AUTOPILOT_WAKE_KINDS, `team.autopilot.wakes[${index}].kind`);
+    if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(wake.stateHash, `team.autopilot.wakes[${index}].stateHash`, 64))) throw new TypeError("team.autopilot wake stateHash is invalid");
+    positiveInteger(wake.roundsStarted, `team.autopilot.wakes[${index}].roundsStarted`, { allowZero: true });
+    assertEnum(wake.status, AGENT_TEAM_AUTOPILOT_WAKE_STATUSES, `team.autopilot.wakes[${index}].status`);
+    positiveInteger(wake.teamRevision, `team.autopilot.wakes[${index}].teamRevision`);
+    positiveInteger(wake.targetMaxGoalRounds, `team.autopilot.wakes[${index}].targetMaxGoalRounds`);
+    if (wake.targetMaxGoalRounds < autopilot.baseMaxGoalRounds || wake.targetMaxGoalRounds > autopilot.baseMaxGoalRounds + autopilot.maxAdditionalRounds) throw new TypeError("team.autopilot wake target exceeds the fixed grant budget");
+    if (wake.roundsStarted > wake.targetMaxGoalRounds) throw new TypeError("team.autopilot wake cannot target an already surpassed goal cap");
+    assertIsoDate(wake.createdAt, `team.autopilot.wakes[${index}].createdAt`);
+    if (wake.goalRevision !== undefined) positiveInteger(wake.goalRevision, `team.autopilot.wakes[${index}].goalRevision`);
+    if (wake.deliveredAt !== undefined) assertIsoDate(wake.deliveredAt, `team.autopilot.wakes[${index}].deliveredAt`);
+    if (wake.cancelledAt !== undefined) assertIsoDate(wake.cancelledAt, `team.autopilot.wakes[${index}].cancelledAt`);
+    optionalString(wake.reason, `team.autopilot.wakes[${index}].reason`, 1_000);
+    if (wake.status === "prepared" && (wake.goalRevision !== undefined || wake.deliveredAt !== undefined || wake.cancelledAt !== undefined || wake.reason !== undefined)) throw new TypeError("prepared team autopilot wake cannot claim a later outcome");
+    if (wake.status === "goal_mutated" && (wake.goalRevision === undefined || wake.deliveredAt !== undefined || wake.cancelledAt !== undefined || wake.reason !== undefined)) throw new TypeError("goal-mutated team autopilot wake has inconsistent outcome fields");
+    if (wake.status === "delivered" && (wake.goalRevision === undefined || wake.deliveredAt === undefined || wake.cancelledAt !== undefined || wake.reason !== undefined)) throw new TypeError("delivered team autopilot wake requires exact goal evidence");
+    if (wake.status === "cancelled" && (wake.cancelledAt === undefined || wake.reason === undefined || wake.deliveredAt !== undefined)) throw new TypeError("cancelled team autopilot wake requires a durable reason");
+    if (["prepared", "goal_mutated"].includes(wake.status)) {
+      pendingWakeCount += 1;
+      if (wake.targetMaxGoalRounds !== autopilot.expectedMaxGoalRounds) throw new TypeError("pending team autopilot wake must match the reserved goal cap");
+    } else if (wake.status === "delivered" && wake.targetMaxGoalRounds > autopilot.expectedMaxGoalRounds) throw new TypeError("delivered team autopilot wake exceeds the accepted goal cap");
+  }
+  if (pendingWakeCount > 1) throw new TypeError("team.autopilot may have at most one pending wake");
+  assertIsoDate(autopilot.grantedAt, "team.autopilot.grantedAt");
+  if (autopilot.revokedAt !== undefined) assertIsoDate(autopilot.revokedAt, "team.autopilot.revokedAt");
+  optionalString(autopilot.revokeReason, "team.autopilot.revokeReason", 1_000);
+  if (autopilot.status === "pending_plan" && autopilot.planHashAtGrant !== undefined) throw new TypeError("pending team autopilot cannot pre-claim a plan hash");
+  if (autopilot.status === "active" && autopilot.planHashAtGrant === undefined) throw new TypeError("active team autopilot requires an exact plan hash");
+  if (["pending_plan", "active"].includes(autopilot.status) && (autopilot.revokedAt !== undefined || autopilot.revokeReason !== undefined)) throw new TypeError("live team autopilot cannot retain revocation metadata");
+  if (["revoked", "exhausted"].includes(autopilot.status) && (autopilot.revokedAt === undefined || autopilot.revokeReason === undefined)) throw new TypeError("stopped team autopilot requires a durable reason");
+}
+
 /** Validate one team and all cross-record references. */
 function validateTeam(team) {
   if (!isRecord(team)) throw new TypeError("team must be an object");
@@ -995,6 +1116,18 @@ function validateTeam(team) {
   if (team.revision !== undefined && (!Number.isSafeInteger(team.revision) || team.revision < 1)) throw new TypeError("team.revision must be a positive integer");
   positiveInteger(team.pauseEpoch ?? 0, "team.pauseEpoch", { allowZero: true });
   if (team.projectKey !== undefined && !/^[a-f0-9]{64}$/u.test(nonEmptyString(team.projectKey, "team.projectKey", 64))) throw new TypeError("team.projectKey is invalid");
+  if (team.start !== undefined) {
+    if (!isRecord(team.start)) throw new TypeError("team.start must be an object");
+    assertAllowedKeys(team.start, TEAM_START_KEYS, "team.start");
+    nonEmptyString(team.start.requestId, "team.start.requestId", 256);
+    if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(team.start.inputHash, "team.start.inputHash", 64))) throw new TypeError("team.start.inputHash is invalid");
+  }
+  if (team.autopilot !== undefined) {
+    validateAgentTeamAutopilot(team.autopilot);
+    if (team.autopilot.rootSessionId !== team.rootLeadSessionId) throw new TypeError("team.autopilot root must match the fixed team root");
+    if (team.projectKey === undefined || team.autopilot.projectKey !== team.projectKey) throw new TypeError("team.autopilot project must match the fixed team project");
+    if (team.autopilot.pauseEpochAtGrant > (team.pauseEpoch ?? 0)) throw new TypeError("team.autopilot pause epoch cannot be from the future");
+  }
   const ownershipHistory = team.ownershipHistory ?? [];
   if (!Array.isArray(ownershipHistory) || ownershipHistory.length > MAX_OWNERSHIP_HISTORY) throw new TypeError("team.ownershipHistory is invalid");
   for (const [index, entry] of ownershipHistory.entries()) {
@@ -1007,6 +1140,17 @@ function validateTeam(team) {
     if (!/^[a-f0-9]{64}$/u.test(nonEmptyString(entry.tokenHash, `team.ownershipHistory[${index}].tokenHash`, 64))) throw new TypeError("ownership history tokenHash is invalid");
     assertIsoDate(entry.at, `team.ownershipHistory[${index}].at`);
     positiveInteger(entry.pauseEpoch, `team.ownershipHistory[${index}].pauseEpoch`, { allowZero: true });
+    const autopilotAuditFields = ["autopilotGrantId", "autopilotRoutingReceiptId", "autopilotGoalId", "autopilotStatusAtHandoff", "autopilotRevokedAt", "autopilotRevokeReason"];
+    const autopilotAuditCount = autopilotAuditFields.filter((field) => entry[field] !== undefined).length;
+    if (autopilotAuditCount !== 0) {
+      if (entry.kind !== "handoff_adopted" || autopilotAuditCount !== autopilotAuditFields.length) throw new TypeError("ownership handoff autopilot revocation audit is incomplete");
+      nonEmptyString(entry.autopilotGrantId, `team.ownershipHistory[${index}].autopilotGrantId`, 256);
+      nonEmptyString(entry.autopilotRoutingReceiptId, `team.ownershipHistory[${index}].autopilotRoutingReceiptId`, 256);
+      nonEmptyString(entry.autopilotGoalId, `team.ownershipHistory[${index}].autopilotGoalId`, 256);
+      assertEnum(entry.autopilotStatusAtHandoff, AGENT_TEAM_AUTOPILOT_STATUSES, `team.ownershipHistory[${index}].autopilotStatusAtHandoff`);
+      assertIsoDate(entry.autopilotRevokedAt, `team.ownershipHistory[${index}].autopilotRevokedAt`);
+      nonEmptyString(entry.autopilotRevokeReason, `team.ownershipHistory[${index}].autopilotRevokeReason`, 1_000);
+    }
   }
   if (team.plan !== undefined) validatePlan(team.plan);
   if (team.handoff !== undefined) {
@@ -1139,13 +1283,25 @@ function migrateTaskLifecycleLedger(task, team, sourceVersion) {
 function migrateStoreDocument(document) {
   const sourceVersion = document.version;
   const legacy = LEGACY_STORE_VERSIONS.has(sourceVersion);
+  const legacyTaskSemantics = LEGACY_TASK_SEMANTICS_VERSIONS.has(sourceVersion);
+  // A stored preference is not continuation authority. Old stores therefore
+  // migrate with automatic continuation explicitly off; a user must opt in
+  // through the trusted Host settings UI before a new exact-goal grant exists.
+  if (legacy) document.settings.autopilotEnabled = false;
+  else document.settings.autopilotEnabled ??= false;
+  document.settings.autopilotMaxAdditionalRounds ??= DEFAULT_SETTINGS.autopilotMaxAdditionalRounds;
   document.routingReceipts ??= [];
   document.routingReceiptArchive ??= { version: 1, count: 0, chainHash: "0".repeat(64) };
   for (const receipt of document.routingReceipts) {
     receipt.decisionAuthority ??= "model_declared";
+    receipt.establishmentAuthority ??= "legacy_unknown";
     if (receipt.outcome !== "recorded") receipt.finalizedAt ??= receipt.createdAt;
   }
   for (const team of document.teams) {
+    // No pre-v8 store could contain a Desktop Host-issued autopilot capability.
+    // Discard any forged/experimental legacy grant instead of upgrading it into
+    // trusted continuation authority during migration.
+    if (legacy) team.autopilot = undefined;
     team.pauseEpoch ??= 0;
     team.ownershipHistory ??= [];
     team.taskCommandReceipts ??= [];
@@ -1174,24 +1330,24 @@ function migrateStoreDocument(document) {
         const inferredOwnerEpoch = inferLegacyAcceptanceOwnerEpoch(team, task);
         if (inferredOwnerEpoch !== undefined) task.acceptance.ownerEpoch = inferredOwnerEpoch;
       }
-      if (legacy && task.state === "completed") {
+      if (legacyTaskSemantics && task.state === "completed") {
         task.assigneeSessionId ??= team.rootLeadSessionId;
         const completedAt = task.completedAt ?? task.updatedAt;
         task.submission ??= taskSubmission(task, task.assigneeSessionId, completedAt, "legacy_migration");
         if (task.result !== undefined) Object.assign(task.result, { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, reportedBy: task.result.reportedBy ?? task.assigneeSessionId });
-      } else if (legacy && !["completed", "submitted"].includes(task.state)) {
+      } else if (legacyTaskSemantics && !["completed", "submitted"].includes(task.state)) {
         task.result = undefined;
         task.submission = undefined;
         task.acceptance = undefined;
       }
       migrateTaskLifecycleLedger(task, team, sourceVersion);
-      if (legacy && task.state === "completed" && task.submission !== undefined && task.acceptance === undefined) {
+      if (legacyTaskSemantics && task.state === "completed" && task.submission !== undefined && task.acceptance === undefined) {
         task.state = "submitted";
         task.completedAt = undefined;
       }
     }
     const timestamp = team.updatedAt ?? team.createdAt ?? now();
-    if (legacy && team.state === "closed") {
+    if (legacyTaskSemantics && team.state === "closed") {
       const hasUnverifiedCompletion = team.tasks.some((task) => task.state === "submitted" && task.submission !== undefined && task.acceptance === undefined);
       terminalizeTeamTasks(team, timestamp, "legacy closed team contained unfinished or unaccepted work");
       const cancelledTaskIds = teamCancelledTaskIds(team);
@@ -1241,6 +1397,8 @@ function validateStoreDocument(document) {
   document.settings.enabled = Boolean(document.settings.enabled);
   document.settings.maxMembers = safeLimit(document.settings.maxMembers, "settings.maxMembers", 4);
   document.settings.maxActiveTurns = safeLimit(document.settings.maxActiveTurns, "settings.maxActiveTurns", 4);
+  document.settings.autopilotEnabled = Boolean(document.settings.autopilotEnabled);
+  document.settings.autopilotMaxAdditionalRounds = safeLimit(document.settings.autopilotMaxAdditionalRounds, "settings.autopilotMaxAdditionalRounds", DEFAULT_SETTINGS.autopilotMaxAdditionalRounds, AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS);
   if (!Array.isArray(document.routingReceipts) || document.routingReceipts.length > MAX_ROUTING_RECEIPTS) throw new TypeError("routingReceipts is invalid");
   document.routingReceipts.forEach(validateRoutingReceipt);
   const archive = document.routingReceiptArchive;
@@ -1260,7 +1418,26 @@ function validateStoreDocument(document) {
   if (teamsById.size !== document.teams.length) throw new TypeError("team ids must be unique");
   for (const receipt of document.routingReceipts) if (receipt.teamId !== undefined) {
     const team = teamsById.get(receipt.teamId);
-    if (team === undefined || team.rootLeadSessionId !== receipt.rootSessionId || team.projectKey !== receipt.projectKey) throw new TypeError("routing receipt team scope must be Host-derived from the same root and project");
+    if (team === undefined || !rootAppearsInValidOwnershipChain(team, receipt.rootSessionId) || team.projectKey !== receipt.projectKey) throw new TypeError("routing receipt team scope must be Host-derived from the same ownership chain and project");
+  }
+  for (const team of document.teams) if (team.autopilot !== undefined && ["pending_plan", "active"].includes(team.autopilot.status)) {
+    const receipt = document.routingReceipts.find((candidate) => candidate.id === team.autopilot.routingReceiptId);
+    const authorityTeam = receipt?.teamId === undefined ? undefined : teamsById.get(receipt.teamId);
+    const exactGoalRoundAuthority = receipt?.establishmentAuthority === "goal_round"
+      && receipt.goalId === team.autopilot.goalId
+      && receipt.goalObjectiveHash === team.autopilot.goalObjectiveHash
+      && receipt.goalMaxGoalRounds === team.autopilot.baseMaxGoalRounds
+      && Number.isSafeInteger(receipt.goalRevision) && receipt.goalRevision > 0
+      && Number.isSafeInteger(receipt.goalRound) && receipt.goalRound > 0
+      && receipt.goalRound <= receipt.goalMaxGoalRounds;
+    if (receipt === undefined || receipt.level !== "level3" || !["created", "reused"].includes(receipt.outcome)
+      || !(receipt.establishmentAuthority === "direct_human" || exactGoalRoundAuthority) || authorityTeam === undefined
+      || receipt.projectKey !== team.projectKey || authorityTeam.projectKey !== team.projectKey
+      || authorityTeam.rootLeadSessionId !== team.rootLeadSessionId
+      || !rootAppearsInValidOwnershipChain(authorityTeam, receipt.rootSessionId)) {
+      throw new TypeError("team.autopilot must bind one finalized Host-admitted Level 3 routing receipt in the same fixed-root project and exact Goal scope");
+    }
+    if (document.settings.autopilotEnabled !== true || team.autopilot.maxAdditionalRounds > document.settings.autopilotMaxAdditionalRounds) throw new TypeError("live team autopilot exceeds the trusted Host policy");
   }
   const rootLeadSessions = new Set(document.teams.map((team) => team.rootLeadSessionId));
   const openTeamCounts = new Map();
@@ -1465,6 +1642,12 @@ function projectTeam(team, nameTeams = []) {
   delete projectedTeam.projectKey;
   delete projectedTeam.handoff;
   delete projectedTeam.taskCommandReceipts;
+  delete projectedTeam.autopilot;
+  if (team.autopilot !== undefined) projectedTeam.autopilot = {
+    status: team.autopilot.status,
+    maxAdditionalRounds: team.autopilot.maxAdditionalRounds,
+    additionalRoundsGranted: team.autopilot.additionalRoundsGranted,
+  };
   projectedTeam.ownershipHistory = (team.ownershipHistory ?? []).map((entry) => ({
     kind: entry.kind,
     sourceRootSessionId: entry.sourceRootSessionId,
@@ -1624,10 +1807,13 @@ function projectTaskPlanItems(value) {
     status: TASK_STATES.includes(item?.status) ? item.status : "pending",
   })).filter((item) => item.content.length > 0);
 }
+function snapshotSessionEvents(session) {
+  return typeof session?.snapshotEvents === "function" ? session.snapshotEvents() : [];
+}
 function taskRuntimeProjection(task, member, agent) {
   const claimedAt = Date.parse(task.claimedAt ?? "");
   const completedAt = Date.parse(task.completedAt ?? "");
-  const allEvents = Array.isArray(agent?.session?.events) ? agent.session.events : [];
+  const allEvents = snapshotSessionEvents(agent?.session);
   let sourceEvents = [];
   let sourceTruncated = false;
   if (allEvents.length > 0 && Number.isFinite(claimedAt)) {
@@ -1907,6 +2093,10 @@ function defaultDocument(settings = {}) {
       enabled: settings.enabled ?? DEFAULT_SETTINGS.enabled,
       maxMembers: safeLimit(settings.maxMembers, "maxMembers", DEFAULT_SETTINGS.maxMembers),
       maxActiveTurns: safeLimit(settings.maxActiveTurns, "maxActiveTurns", DEFAULT_SETTINGS.maxActiveTurns),
+      // Profile/default configuration is not a Desktop Host authorization path.
+      // Only the one-time settings capability may turn this persisted bit on.
+      autopilotEnabled: false,
+      autopilotMaxAdditionalRounds: safeLimit(settings.autopilotMaxAdditionalRounds, "autopilotMaxAdditionalRounds", DEFAULT_SETTINGS.autopilotMaxAdditionalRounds, AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS),
     },
     teams: [],
     routingReceipts: [],
@@ -2375,6 +2565,18 @@ class AgentTeamsStore {
   isEnabled() {
     return this.document.settings.enabled === true;
   }
+  capacityPolicy() {
+    return {
+      maxMembers: this.document.settings.maxMembers,
+      maxActiveTurns: this.document.settings.maxActiveTurns,
+    };
+  }
+  autopilotPolicy() {
+    return {
+      enabled: this.document.settings.autopilotEnabled === true,
+      maxAdditionalRounds: this.document.settings.autopilotMaxAdditionalRounds,
+    };
+  }
   hasManagedMember(sessionId) {
     return this.document.teams.some((team) => team.state !== "closed" && memberOf(team, sessionId)?.kind === "worker");
   }
@@ -2391,7 +2593,13 @@ class AgentTeamsStore {
   }
   async read(reader = (document) => document) {
     await this.chain;
-    return queueStoreMutation(this.filePath, () => clone(reader(this.document)));
+    return queueStoreMutation(this.filePath, async () => {
+      // A read is also an externally visible state boundary. Refresh here so a
+      // Host-managed settings update is observed before callers derive a
+      // one-time authorization intent from the current policy.
+      await this.#refreshFromDiskIfChanged();
+      return clone(reader(this.document));
+    });
   }
   mutate(mutator) {
     const operation = this.chain.then(() => queueStoreMutation(this.filePath, async () => {
@@ -2478,16 +2686,18 @@ function reject(message, code = "AGENT_TEAMS_POLICY") {
   throw new HarnessError(message, code);
 }
 function openTurn(agent) {
-  for (let index = agent.session.events.length - 1; index >= 0; index -= 1) {
-    const event = agent.session.events[index];
+  const events = snapshotSessionEvents(agent.session);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
     if (event?.type === "turn/end") reject("agent-team tools require an open model turn", "AGENT_TEAMS_DRIVER_REQUIRED");
-    if (event?.type === "turn/start") return agent.session.events.slice(index + 1);
+    if (event?.type === "turn/start") return events.slice(index + 1);
   }
   return reject("agent-team tools require an open model turn", "AGENT_TEAMS_DRIVER_REQUIRED");
 }
 function currentTurnKey(agent) {
-  for (let index = agent.session.events.length - 1; index >= 0; index -= 1) {
-    const event = agent.session.events[index];
+  const events = snapshotSessionEvents(agent.session);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
     if (event?.type !== "turn/start") continue;
     return createHash("sha256").update(JSON.stringify(["agent-teams-turn-v1", agent.id, index, event.id ?? null, event.time ?? null])).digest("hex");
   }
@@ -2506,16 +2716,34 @@ function hasDirectHumanRootAuthority(ctx, execution) {
   return ctx.agents.roots().includes(execution.agent)
     && events.some((event) => event.type === "user/message" && event.data?.source?.kind === "user");
 }
-function hasExactGoalRoundRootAuthority(ctx, execution) {
-  if (!ctx.agents.roots().includes(execution.agent) || typeof ctx.goals?.get !== "function") return false;
+function exactGoalRoundRootAuthority(ctx, execution) {
+  if (!ctx.agents.roots().includes(execution.agent) || typeof ctx.goals?.get !== "function") return undefined;
   const goal = ctx.goals.get(execution.agent);
-  if (goal === undefined || goal.phase !== "active" || goal.activation !== "armed" || !Number.isSafeInteger(goal.roundsStarted) || goal.roundsStarted < 1) return false;
+  if (goal === undefined || goal.phase !== "active" || goal.activation !== "armed"
+    || typeof goal.objective !== "string" || goal.objective.length === 0
+    || !Number.isSafeInteger(goal.revision) || goal.revision < 1
+    || !Number.isSafeInteger(goal.roundsStarted) || goal.roundsStarted < 1
+    || !Number.isSafeInteger(goal.maxGoalRounds) || goal.maxGoalRounds < goal.roundsStarted) return undefined;
   const events = Array.isArray(execution.events) ? execution.events : openTurn(execution.agent);
-  return events.some((event) => event.type === "user/message"
+  const admitted = events.some((event) => event.type === "user/message"
     && event.data?.source?.kind === "goal"
     && event.data.source.goalId === goal.id
     && event.data.source.revision === goal.revision
     && event.data.source.round === goal.roundsStarted);
+  if (!admitted) return undefined;
+  return Object.freeze({
+    rootSessionId: execution.agent.id,
+    turnKey: execution.turnKey ?? currentTurnKey(execution.agent),
+    projectKey: projectKeyForRoot(execution.agent),
+    goalId: goal.id,
+    goalRevision: goal.revision,
+    goalRound: goal.roundsStarted,
+    goalObjectiveHash: agentTeamAutopilotObjectiveHash(goal.objective),
+    goalMaxGoalRounds: goal.maxGoalRounds,
+  });
+}
+function hasExactGoalRoundRootAuthority(ctx, execution) {
+  return exactGoalRoundRootAuthority(ctx, execution) !== undefined;
 }
 function hasTeamCreationRootAuthority(ctx, execution) {
   return hasDirectHumanRootAuthority(ctx, execution) || hasExactGoalRoundRootAuthority(ctx, execution);
@@ -2541,6 +2769,18 @@ function routingReceiptMaterial(execution, input) {
   const reasonCategory = input.reasonCategory;
   assertEnum(reasonCategory, ROUTING_REASON_CATEGORIES, "reasonCategory");
   assertEnum(creationPath, ROUTING_CREATION_PATHS, "creationPath");
+  const establishmentAuthority = input.establishmentAuthority ?? "legacy_unknown";
+  const goalRoundAuthority = input.goalRoundAuthority;
+  if (establishmentAuthority === "goal_round") {
+    if (!isRecord(goalRoundAuthority)
+      || goalRoundAuthority.rootSessionId !== execution.agent.id
+      || goalRoundAuthority.turnKey !== execution.turnKey
+      || goalRoundAuthority.projectKey !== projectKeyForRoot(execution.agent)) {
+      reject("Goal-round routing requires the exact Host-admitted root, turn, and project fact", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
+    }
+  } else if (goalRoundAuthority !== undefined) {
+    reject("only an exact Goal-round routing decision may carry Goal authority", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
+  }
   const material = {
     rootSessionId: execution.agent.id,
     turnKey: execution.turnKey,
@@ -2553,6 +2793,14 @@ function routingReceiptMaterial(execution, input) {
     outcome: input.outcome ?? "recorded",
     ...(input.teamId === undefined ? {} : { teamId: nonEmptyString(input.teamId, "teamId", 256) }),
     decisionAuthority: "model_declared",
+    establishmentAuthority,
+    ...(goalRoundAuthority === undefined ? {} : {
+      goalId: goalRoundAuthority.goalId,
+      goalRevision: goalRoundAuthority.goalRevision,
+      goalRound: goalRoundAuthority.goalRound,
+      goalObjectiveHash: goalRoundAuthority.goalObjectiveHash,
+      goalMaxGoalRounds: goalRoundAuthority.goalMaxGoalRounds,
+    }),
   };
   const validationTime = now();
   validateRoutingReceipt({ id: "pending", ...material, createdAt: validationTime, ...(material.outcome === "recorded" ? {} : { finalizedAt: validationTime }) }, 0);
@@ -2572,6 +2820,21 @@ function archiveRoutingReceipt(document, receipt) {
   archive.lastReceiptId = receipt.id;
   archive.lastArchivedAt = now();
 }
+function finalizeRoutingReceiptForTeam(document, receiptId, team, outcome) {
+  assertEnum(outcome, ["created", "reused"], "routing outcome");
+  const receipt = document.routingReceipts.find((candidate) => candidate.id === receiptId);
+  if (receipt === undefined || receipt.level !== "level3" || receipt.rootSessionId !== team.rootLeadSessionId
+    || receipt.projectKey !== team.projectKey) reject("team creation routing receipt is missing or out of scope", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
+  if (routingReceiptIsPending(receipt)) {
+    receipt.outcome = outcome;
+    receipt.teamId = team.id;
+    receipt.finalizedAt = now();
+    validateRoutingReceipt(receipt, 0);
+    return receipt;
+  }
+  if (!["created", "reused"].includes(receipt.outcome) || receipt.teamId !== team.id) reject("terminal routing receipt is bound to another team", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
+  return receipt;
+}
 async function recordRoutingReceipt(store, execution, input) {
   const material = routingReceiptMaterial(execution, input);
   return store.mutate((document) => {
@@ -2588,12 +2851,14 @@ async function recordRoutingReceipt(store, execution, input) {
         validateRoutingReceipt(existing, 0);
         return { receipt: clone(existing), reused: false, finalized: true, capabilityBoundary: "routing receipt decisions are model-declared; only root, turn, project, and team scope are Host-derived, and the receipt does not force model routing" };
       }
+      if (material.outcome === "recorded" && ["created", "reused"].includes(existing.outcome)) return { receipt: clone(existing), reused: true };
       if (existing.outcome !== material.outcome || existing.teamId !== material.teamId) reject("terminal routing receipt replay must match its exact outcome and team binding", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
       return { receipt: clone(existing), reused: true };
     }
     if (material.outcome !== "recorded") reject("terminal Level 3 routing outcome requires an existing matching recorded decision", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
     while (document.routingReceipts.length >= MAX_ROUTING_RECEIPTS) {
-      const archiveIndex = document.routingReceipts.findIndex((receipt) => !routingReceiptIsPending(receipt));
+      const protectedReceiptIds = new Set(document.teams.filter((team) => ["pending_plan", "active"].includes(team.autopilot?.status)).map((team) => team.autopilot.routingReceiptId));
+      const archiveIndex = document.routingReceipts.findIndex((receipt) => !routingReceiptIsPending(receipt) && !protectedReceiptIds.has(receipt.id));
       if (archiveIndex < 0) reject("routing receipt capacity is occupied by unfinalized Level 3 decisions", "AGENT_TEAMS_ROUTING_RECEIPT_LIMIT");
       const [archived] = document.routingReceipts.splice(archiveIndex, 1);
       archiveRoutingReceipt(document, archived);
@@ -2676,12 +2941,17 @@ async function authorizeResolveUnknown(store, gate, execution, input) {
   };
   return gate.consume(request);
 }
+function queueAgentTeamPrompt(subagents, parent, childId, content, options) {
+  if (typeof subagents?.[queueSubagentPrompt] !== "function") {
+    return Promise.reject(new HarnessError("continuable subagent prompt queue is unavailable", "AGENT_TEAMS_SUBAGENT_UNAVAILABLE"));
+  }
+  return queueHostSubagentPrompt(subagents, parent, childId, content, options.source, options.signal);
+}
 function relaySource(senderSessionId) {
   return {
-    kind: "coordinator",
-    form: "notice",
+    kind: "agent-message",
+    form: "relay",
     senderSessionId,
-    summary: "Agent Teams",
   };
 }
 function relayToLead(lead, message) {
@@ -2693,27 +2963,972 @@ function relayToLead(lead, message) {
   if (lead.status === "idle") lead.followup(message);
   else lead.steer(message);
 }
+
+function memberCanStillProduceTaskProgress(member) {
+  return member?.kind === "worker" && ["provisioning", "running"].includes(member.state);
+}
+function agentTeamAutopilotObjectiveHash(objective) {
+  return createHash("sha256").update(JSON.stringify(["agent-teams-autopilot-objective-v1", objective])).digest("hex");
+}
+function agentTeamAutopilotSettingsHash(settings) {
+  return createHash("sha256").update(JSON.stringify(["agent-teams-autopilot-settings-v1", AGENT_TEAM_AUTOPILOT_SETTINGS_KEYS.map((key) => settings?.[key])])).digest("hex");
+}
+function agentTeamAutopilotSettingsProof(state) {
+  const proof = state?.autopilotSettingsProof;
+  if (!isRecord(proof) || proof.version !== 1
+    || typeof state?.authorizationEpoch !== "string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(state.authorizationEpoch)
+    || proof.authorizationEpoch !== state.authorizationEpoch
+    || typeof proof.settingsHash !== "string" || !/^[a-f0-9]{64}$/u.test(proof.settingsHash)
+    || typeof proof.enabled !== "boolean" || typeof proof.autopilotEnabled !== "boolean"
+    || !Number.isSafeInteger(proof.authorizedAt) || proof.authorizedAt < 0) return undefined;
+  return proof;
+}
+function agentTeamAutopilotSettingsProofMatches(state, settings, { requireLive = false } = {}) {
+  const proof = agentTeamAutopilotSettingsProof(state);
+  return proof !== undefined && proof.settingsHash === agentTeamAutopilotSettingsHash(settings)
+    && proof.enabled === settings?.enabled && proof.autopilotEnabled === settings?.autopilotEnabled
+    && (!requireLive || proof.enabled === true && proof.autopilotEnabled === true);
+}
+function createAgentTeamAutopilotGrant(root, goal, { authorizationEpoch, planHash, pauseEpoch = 0, routingReceiptId, maxAdditionalRounds } = {}) {
+  const projectKey = optionalProjectKeyForRoot(root);
+  if (projectKey === undefined || goal === undefined || goal.phase !== "active" || goal.activation !== "armed"
+    || typeof authorizationEpoch !== "string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(authorizationEpoch)
+    || !Number.isSafeInteger(goal.roundsStarted) || goal.roundsStarted < 0
+    || !Number.isSafeInteger(goal.maxGoalRounds) || goal.maxGoalRounds < 1
+    || !Number.isSafeInteger(maxAdditionalRounds) || maxAdditionalRounds < 1 || maxAdditionalRounds > AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS
+    || typeof routingReceiptId !== "string" || routingReceiptId.length === 0) return undefined;
+  const timestamp = now();
+  return {
+    version: 1,
+    status: planHash === undefined ? "pending_plan" : "active",
+    authority: "direct_human",
+    grantId: randomUUID(),
+    routingReceiptId,
+    authorizationEpoch,
+    rootSessionId: root.id,
+    projectKey,
+    goalId: goal.id,
+    goalObjectiveHash: agentTeamAutopilotObjectiveHash(goal.objective),
+    pauseEpochAtGrant: pauseEpoch,
+    ...(planHash === undefined ? {} : { planHashAtGrant: planHash }),
+    baseMaxGoalRounds: goal.maxGoalRounds,
+    expectedMaxGoalRounds: goal.maxGoalRounds,
+    maxAdditionalRounds,
+    additionalRoundsGranted: 0,
+    wakes: [],
+    grantedAt: timestamp,
+  };
+}
+async function exactGoalRoundAutopilotGrantIntent(ctx, authorizationProvider, execution, authority = exactGoalRoundRootAuthority(ctx, execution)) {
+  if (authority === undefined || typeof authorizationProvider?.readAutopilotAuthorizationState !== "function") return undefined;
+  let state;
+  try { state = await authorizationProvider.readAutopilotAuthorizationState(); }
+  catch { return undefined; }
+  const proof = agentTeamAutopilotSettingsProof(state);
+  if (proof === undefined || proof.enabled !== true || proof.autopilotEnabled !== true) return undefined;
+  return Object.freeze({ ...authority, authorizationEpoch: state.authorizationEpoch, autopilotSettingsHash: proof.settingsHash });
+}
+function exactGoalRoundGrantIntentMatches(document, root, goal, routingReceiptId, intent) {
+  if (!isRecord(intent) || typeof intent.authorizationEpoch !== "string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(intent.authorizationEpoch)
+    || typeof intent.autopilotSettingsHash !== "string" || !/^[a-f0-9]{64}$/u.test(intent.autopilotSettingsHash)
+    || intent.autopilotSettingsHash !== agentTeamAutopilotSettingsHash(document.settings)
+    || intent.rootSessionId !== root.id || intent.projectKey !== optionalProjectKeyForRoot(root)
+    || goal === undefined || intent.goalId !== goal.id || intent.goalRevision !== goal.revision
+    || intent.goalRound !== goal.roundsStarted || intent.goalObjectiveHash !== agentTeamAutopilotObjectiveHash(goal.objective)
+    || intent.goalMaxGoalRounds !== goal.maxGoalRounds) return false;
+  const receipt = document.routingReceipts.find((candidate) => candidate.id === routingReceiptId);
+  return receipt !== undefined && receipt.level === "level3" && receipt.outcome === "recorded"
+    && receipt.establishmentAuthority === "goal_round" && receipt.rootSessionId === intent.rootSessionId
+    && receipt.turnKey === intent.turnKey && receipt.projectKey === intent.projectKey
+    && receipt.goalId === intent.goalId && receipt.goalRevision === intent.goalRevision
+    && receipt.goalRound === intent.goalRound && receipt.goalObjectiveHash === intent.goalObjectiveHash
+    && receipt.goalMaxGoalRounds === intent.goalMaxGoalRounds;
+}
+function agentTeamAutopilotGrantForCreation(document, root, goal, { goalRoundGrantIntent, planHash, pauseEpoch = 0, routingReceiptId, excludeTeamId } = {}) {
+  if (document.settings.autopilotEnabled !== true) return undefined;
+  const configuredBudget = document.settings.autopilotMaxAdditionalRounds;
+  if (!Number.isSafeInteger(configuredBudget) || configuredBudget < 1 || configuredBudget > AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS) return undefined;
+  const openTeams = document.teams.filter((team) => team.rootLeadSessionId === root.id && team.state !== "closed" && team.id !== excludeTeamId);
+  const liveGrantTeams = openTeams.filter((team) => ["pending_plan", "active"].includes(team.autopilot?.status));
+  if (openTeams.length > 0) {
+    // An automatically created sibling may inherit only a complete, exact Host
+    // grant group. A missing/revoked sibling means the root has no authority to
+    // resume a turn that could act across all of its open teams.
+    if (liveGrantTeams.length !== openTeams.length || goal === undefined) return undefined;
+    const templateTeam = liveGrantTeams[0];
+    const template = templateTeam.autopilot;
+    const invalid = liveGrantTeams.some((team) => agentTeamAutopilotInvalidReason(team, root, goal, document.settings) !== undefined);
+    const inconsistent = liveGrantTeams.some((team) => team.autopilot.authorizationEpoch !== template.authorizationEpoch
+      || team.autopilot.goalId !== template.goalId
+      || team.autopilot.goalObjectiveHash !== template.goalObjectiveHash
+      || team.autopilot.baseMaxGoalRounds !== template.baseMaxGoalRounds
+      || team.autopilot.expectedMaxGoalRounds !== template.expectedMaxGoalRounds
+      || team.autopilot.maxAdditionalRounds !== template.maxAdditionalRounds
+      || team.autopilot.additionalRoundsGranted !== template.additionalRoundsGranted);
+    if (invalid || inconsistent || template.maxAdditionalRounds > configuredBudget) return undefined;
+    const inherited = clone(template);
+    inherited.grantId = randomUUID();
+    inherited.status = planHash === undefined ? "pending_plan" : "active";
+    inherited.pauseEpochAtGrant = pauseEpoch;
+    inherited.grantedAt = now();
+    inherited.revokedAt = undefined;
+    inherited.revokeReason = undefined;
+    inherited.parkedGoalRevision = undefined;
+    inherited.parkedAt = undefined;
+    if (planHash === undefined) inherited.planHashAtGrant = undefined;
+    else inherited.planHashAtGrant = planHash;
+    return inherited;
+  }
+  // A preference alone cannot mint Goal authority. For the first open team the
+  // core accepts only the exact Host-admitted Goal event for this root/turn and
+  // the current unguessable Desktop authorization epoch. Neither fact is exposed
+  // as a model/tool argument. The matching durable routing receipt makes the
+  // origin independently auditable after the creation transaction finalizes it.
+  if (!exactGoalRoundGrantIntentMatches(document, root, goal, routingReceiptId, goalRoundGrantIntent)) return undefined;
+  return createAgentTeamAutopilotGrant(root, goal, {
+    authorizationEpoch: goalRoundGrantIntent.authorizationEpoch,
+    planHash,
+    pauseEpoch,
+    routingReceiptId,
+    maxAdditionalRounds: configuredBudget,
+  });
+}
+function bindAgentTeamAutopilotPlan(team, goal) {
+  const autopilot = team.autopilot;
+  if (autopilot?.status !== "pending_plan" || goal === undefined || goal.phase !== "active" || goal.activation !== "armed"
+    || autopilot.rootSessionId !== team.rootLeadSessionId || autopilot.projectKey !== team.projectKey
+    || autopilot.goalId !== goal.id || autopilot.goalObjectiveHash !== agentTeamAutopilotObjectiveHash(goal.objective)
+    || autopilot.expectedMaxGoalRounds !== goal.maxGoalRounds || autopilot.pauseEpochAtGrant !== (team.pauseEpoch ?? 0)
+    || !teamHasEstablishedWorker(team) || !planAuthorizationSupportsAutopilot(team)
+    || !planCapabilitiesAreVerified(team) || !planFilesAreConflictFree(team) || !planEffectsAreOrdinary(team)
+    || team.closure !== undefined || team.handoff !== undefined || effectiveTeamState(team) !== "active"
+    || (team.memberRecoveries ?? []).some((receipt) => receipt.status === "outcome_unknown" || receipt.status === "prepared")) return false;
+  autopilot.status = "active";
+  autopilot.planHashAtGrant = team.plan.hash;
+  return true;
+}
+function revokeAgentTeamAutopilot(team, reason, status = "revoked") {
+  const autopilot = team.autopilot;
+  if (autopilot === undefined || ["revoked", "exhausted"].includes(autopilot.status)) return false;
+  const timestamp = now();
+  autopilot.status = status;
+  autopilot.revokedAt = timestamp;
+  autopilot.revokeReason = reason;
+  autopilot.parkedGoalRevision = undefined;
+  autopilot.parkedAt = undefined;
+  for (const wake of autopilot.wakes) if (!["delivered", "cancelled"].includes(wake.status)) {
+    wake.status = "cancelled";
+    wake.cancelledAt = timestamp;
+    wake.reason = reason;
+  }
+  team.updatedAt = timestamp;
+  return true;
+}
+function liveAgentTeamAutopilotTeams(document, rootSessionId) {
+  return document.teams.filter((team) => team.rootLeadSessionId === rootSessionId && ["pending_plan", "active"].includes(team.autopilot?.status));
+}
+function liveAgentTeamAutopilotGoalIds(document, rootSessionId) {
+  return new Set(liveAgentTeamAutopilotTeams(document, rootSessionId).map((team) => team.autopilot.goalId));
+}
+function disarmBoundAgentTeamGoal(ctx, root, document, boundGoalIds = liveAgentTeamAutopilotGoalIds(document, root?.id)) {
+  if (root === undefined || ctx.agents?.get?.(root.id) !== root || !ctx.agents?.roots?.().includes(root)
+    || typeof ctx.goals?.get !== "function" || typeof ctx.goals?.disarm !== "function") return false;
+  const goal = ctx.goals.get(root);
+  if (goal === undefined || goal.phase !== "active" || goal.activation !== "armed"
+    || !(boundGoalIds instanceof Set) || !boundGoalIds.has(goal.id)) return false;
+  ctx.goals.disarm(root);
+  const current = ctx.goals.get(root);
+  if (current?.id === goal.id && current.phase === "active" && current.activation === "armed") {
+    reject("bound Goal remained armed while automatic-continuation authority was being revoked", "AGENT_TEAMS_GOAL_DEACTIVATION_FAILED");
+  }
+  return true;
+}
+async function revokeDesktopAgentTeamAutopilot(ctx, authorizationProvider, document, rootSessionId, reason) {
+  if (typeof authorizationProvider?.revokeAutopilotAuthorizations !== "function") return false;
+  const epochs = rootSessionId === undefined ? new Set() : new Set(liveAgentTeamAutopilotTeams(document, rootSessionId).map((team) => team.autopilot.authorizationEpoch).filter(Boolean));
+  if (epochs.size > 1) return false;
+  let authorizationEpoch = epochs.size === 1 ? [...epochs][0] : undefined;
+  try {
+    if (authorizationEpoch === undefined) {
+      if (typeof authorizationProvider.readAutopilotAuthorizationState !== "function") return false;
+      const current = await authorizationProvider.readAutopilotAuthorizationState();
+      if (typeof current?.authorizationEpoch !== "string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(current.authorizationEpoch)) return false;
+      authorizationEpoch = current.authorizationEpoch;
+    }
+    const state = await authorizationProvider.revokeAutopilotAuthorizations({ authorizationEpoch, reason: String(reason).slice(0, 256) });
+    return typeof state?.authorizationEpoch === "string" && state.authorizationEpoch !== authorizationEpoch;
+  } catch (error) {
+    ctx.logger?.warn?.(`Agent Teams could not rotate the Desktop Host autopilot authorization epoch: ${error?.code ?? error?.message ?? "unknown error"}`);
+    return false;
+  }
+}
+async function revokeRootAgentTeamAutopilot(ctx, store, root, reason, status = "revoked", authorizationProvider) {
+  const rootSessionId = nonEmptyString(root?.id, "rootSessionId", 256);
+  const before = store.snapshot();
+  const boundGoalIds = liveAgentTeamAutopilotGoalIds(before, rootSessionId);
+  disarmBoundAgentTeamGoal(ctx, root, before, boundGoalIds);
+  await revokeDesktopAgentTeamAutopilot(ctx, authorizationProvider, before, rootSessionId, reason);
+  let changed = await store.mutate((document) => {
+    let changed = false;
+    for (const team of document.teams) if (team.rootLeadSessionId === rootSessionId) {
+      changed = revokeAgentTeamAutopilot(team, reason, status) || changed;
+    }
+    return changed;
+  });
+  // Recheck both boundaries after the durable write. A racing Goal resume or
+  // grant attach cannot survive the two-step external/durable revocation edge.
+  // Disarming first makes every crash prefix fail closed: no persisted grant is
+  // ever removed while its exact process-local Goal remains armed.
+  disarmBoundAgentTeamGoal(ctx, root, store.snapshot(), boundGoalIds);
+  if (liveAgentTeamAutopilotTeams(store.snapshot(), rootSessionId).length > 0) {
+    changed = await store.mutate((document) => {
+      let repeated = false;
+      for (const team of document.teams) if (team.rootLeadSessionId === rootSessionId) repeated = revokeAgentTeamAutopilot(team, reason, status) || repeated;
+      return repeated;
+    }) || changed;
+    disarmBoundAgentTeamGoal(ctx, root, store.snapshot(), boundGoalIds);
+  }
+  const finalDocument = store.snapshot();
+  const finalGoal = typeof ctx.goals?.get === "function" ? ctx.goals.get(root) : undefined;
+  if (liveAgentTeamAutopilotTeams(finalDocument, rootSessionId).length > 0
+    || finalGoal?.phase === "active" && finalGoal.activation === "armed" && boundGoalIds.has(finalGoal.id)) {
+    reject("automatic-continuation authority could not be revoked atomically", "AGENT_TEAMS_GOAL_DEACTIVATION_FAILED");
+  }
+  return changed;
+}
+function planAuthorizationSupportsAutopilot(team) {
+  const plan = team.plan;
+  const authorization = plan?.authorization;
+  return plan?.phase === "active" && plan.migrationState === "ready"
+    && plan.hash === teamPlanHash(team) && authorization?.confirmedPlanHash === plan.hash
+    && authorization.source !== "unknown"
+    && ["permissions", "files", "cost", "externalSideEffects"].every((field) => authorization[field] !== "unknown");
+}
+function teamHasSafeAutopilotAuthority(team, root) {
+  if (effectiveTeamState(team) !== "active" || team.rootLeadSessionId !== root.id) return false;
+  const projectKey = optionalProjectKeyForRoot(root);
+  if (projectKey === undefined || team.projectKey !== projectKey) return false;
+  return team.closure === undefined && team.handoff === undefined && teamHasEstablishedWorker(team)
+    && planAuthorizationSupportsAutopilot(team) && planCapabilitiesAreVerified(team)
+    && planFilesAreConflictFree(team) && planEffectsAreOrdinary(team)
+    && !(team.memberRecoveries ?? []).some((receipt) => receipt.status === "outcome_unknown" || receipt.status === "prepared");
+}
+function rootHasSafeAutopilotAuthority(document, root) {
+  const owned = document.teams.filter((team) => team.rootLeadSessionId === root.id && effectiveTeamState(team) === "active");
+  return owned.length > 0 && owned.every((team) => teamHasSafeAutopilotAuthority(team, root));
+}
+function rootCanAutonomouslyWait(document, root) {
+  const owned = document.teams.filter((team) => team.rootLeadSessionId === root.id && effectiveTeamState(team) === "active");
+  if (owned.length === 0 || !owned.every((team) => teamHasSafeAutopilotAuthority(team, root))) return false;
+  const teamsById = new Map(document.teams.map((team) => [team.id, team]));
+  const ownedById = new Map(owned.map((team) => [team.id, team]));
+  let hasLiveProducer = false;
+  const settled = new Map();
+  const resolvesToLiveProducer = (team, task, visiting = new Set()) => {
+    const key = taskNodeKey(team.id, task.id);
+    if (settled.has(key)) return settled.get(key);
+    if (visiting.has(key) || task.state === "submitted" || task.state === "cancelled") return false;
+    if (taskSatisfiesDependency(task)) return true;
+    if (!ownedById.has(team.id) || !teamHasSafeAutopilotAuthority(team, root)) return false;
+    const assignee = task.assigneeSessionId === undefined ? undefined : memberOf(team, task.assigneeSessionId);
+    if (task.state === "in_progress") {
+      const live = memberCanStillProduceTaskProgress(assignee);
+      if (live) hasLiveProducer = true;
+      settled.set(key, live);
+      return live;
+    }
+    if (task.state !== "pending") return false;
+    const dependencies = [
+      ...(task.dependsOn ?? []).map((taskId) => ({ teamId: team.id, taskId })),
+      ...(task.crossTeamDependsOn ?? []),
+    ];
+    const unresolved = dependencies.filter((dependency) => {
+      const source = teamsById.get(dependency.teamId);
+      const blocker = source?.tasks.find((candidate) => candidate.id === dependency.taskId);
+      return !taskSatisfiesDependency(blocker);
+    });
+    if (unresolved.length === 0) {
+      const live = memberCanStillProduceTaskProgress(assignee);
+      if (live) hasLiveProducer = true;
+      settled.set(key, live);
+      return live;
+    }
+    const nextVisiting = new Set(visiting).add(key);
+    const resolved = unresolved.every((dependency) => {
+      const source = ownedById.get(dependency.teamId);
+      const blocker = source?.tasks.find((candidate) => candidate.id === dependency.taskId);
+      return source !== undefined && blocker !== undefined && resolvesToLiveProducer(source, blocker, nextVisiting);
+    });
+    settled.set(key, resolved);
+    return resolved;
+  };
+  const unfinished = owned.flatMap((team) => team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => ({ team, task })));
+  return unfinished.length > 0 && unfinished.every(({ team, task }) => resolvesToLiveProducer(team, task)) && hasLiveProducer;
+}
+function taskDependenciesAreSatisfied(document, team, task) {
+  const local = new Map(team.tasks.map((candidate) => [candidate.id, candidate]));
+  const byTeam = new Map(document.teams.map((candidate) => [candidate.id, candidate]));
+  return (task.dependsOn ?? []).every((taskId) => taskSatisfiesDependency(local.get(taskId)))
+    && (task.crossTeamDependsOn ?? []).every((dependency) => taskSatisfiesDependency(byTeam.get(dependency.teamId)?.tasks.find((candidate) => candidate.id === dependency.taskId)));
+}
+function rootAgentTeamAutopilotAction(document, root) {
+  const teams = document.teams.filter((team) => team.rootLeadSessionId === root.id && effectiveTeamState(team) === "active").sort((left, right) => left.id.localeCompare(right.id));
+  if (teams.length === 0) return undefined;
+  if (rootCanAutonomouslyWait(document, root)) return { kind: "waiting", teams };
+  let kind;
+  if (teams.some((team) => team.tasks.some((task) => task.state === "submitted"))) kind = "review_submission";
+  else if (teams.every((team) => team.tasks.length > 0 && team.tasks.every(taskIsTerminal))) kind = "close_team";
+  else if (teams.some((team) => team.members.some((member) => member.kind === "worker" && ["idle", "ready", "failed"].includes(member.state)
+    && team.tasks.some((task) => task.assigneeSessionId === member.sessionId && !taskIsTerminal(task))))) kind = "member_attention";
+  else if (teams.some((team) => team.tasks.some((task) => task.state === "pending" && taskDependenciesAreSatisfied(document, team, task)
+    && (task.assigneeSessionId === undefined || !memberCanStillProduceTaskProgress(memberOf(team, task.assigneeSessionId)))))) kind = "dispatch_work";
+  else if (teams.some((team) => team.tasks.some((task) => !taskIsTerminal(task)))) kind = "reconcile_work";
+  else return undefined;
+  const material = teams.map((team) => ({
+    id: team.id,
+    pauseEpoch: team.pauseEpoch ?? 0,
+    planHash: team.plan?.hash,
+    // Revisions and checkpoints are audit/progress metadata, not a new action.
+    // Hash only facts that can change what the root must do so a no-op turn or
+    // duplicate projection cannot consume another bounded Goal round.
+    tasks: team.tasks.map((task) => ({
+      id: task.id,
+      state: task.state,
+      assigneeSessionId: task.assigneeSessionId,
+      claimId: task.claimId,
+      leaseEpoch: task.leaseEpoch,
+      dependencies: [...deriveTaskAcrossTeams(task, team, document.teams).dependencies].sort(),
+      blockedBy: [...deriveTaskAcrossTeams(task, team, document.teams).blockedBy].sort(),
+    })),
+    members: team.members.filter((member) => member.kind === "worker").map((member) => ({ id: member.id, sessionId: member.sessionId, state: member.state, runId: member.runId })),
+  }));
+  const stateHash = createHash("sha256").update(JSON.stringify(["agent-teams-autopilot-state-v2", kind, material])).digest("hex");
+  return { kind, stateHash, teams };
+}
+function pendingAgentTeamAutopilotWake(autopilot) {
+  return [...(autopilot?.wakes ?? [])].reverse().find((wake) => ["prepared", "goal_mutated"].includes(wake.status));
+}
+function agentTeamAutopilotWakeComparable(wake) {
+  if (wake === undefined) return undefined;
+  const comparable = clone(wake);
+  // This is diagnostic provenance for the local team record, not part of the
+  // root-wide wake identity replicated across every grant.
+  comparable.teamRevision = 0;
+  return comparable;
+}
+function agentTeamAutopilotWakeGroup(grants, wakeKey) {
+  const copies = grants.map((team) => team.autopilot.wakes.find((wake) => wake.key === wakeKey));
+  if (copies.every((wake) => wake === undefined)) return { wake: undefined };
+  if (copies.some((wake) => wake === undefined)) return { error: "automatic wake ledger is incomplete across the root team group" };
+  const canonical = JSON.stringify(agentTeamAutopilotWakeComparable(copies[0]));
+  if (copies.some((wake) => JSON.stringify(agentTeamAutopilotWakeComparable(wake)) !== canonical)) return { error: "automatic wake ledger diverged across the root team group" };
+  return { wake: clone(copies[0]) };
+}
+function agentTeamAutopilotInvalidReason(team, root, goal, settings) {
+  const autopilot = team.autopilot;
+  if (autopilot === undefined || !["pending_plan", "active"].includes(autopilot.status)) return undefined;
+  if (settings?.autopilotEnabled !== true) return "trusted Host autopilot setting is disabled";
+  if (typeof autopilot.authorizationEpoch !== "string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(autopilot.authorizationEpoch)) return "trusted Host autopilot authorization epoch is missing";
+  if (!Number.isSafeInteger(settings.autopilotMaxAdditionalRounds) || autopilot.maxAdditionalRounds > settings.autopilotMaxAdditionalRounds) return "trusted Host autopilot budget was reduced";
+  if (effectiveTeamState(team) !== "active") return "team is no longer active";
+  if (autopilot.rootSessionId !== root.id || team.rootLeadSessionId !== root.id) return "fixed root identity changed";
+  const projectKey = optionalProjectKeyForRoot(root);
+  if (projectKey === undefined || team.projectKey !== projectKey || autopilot.projectKey !== projectKey) return "canonical project scope changed";
+  if (autopilot.pauseEpochAtGrant !== (team.pauseEpoch ?? 0)) return "Stop or resume advanced the pause epoch";
+  if (goal === undefined || goal.id !== autopilot.goalId) return "bound goal changed or was cleared";
+  if (agentTeamAutopilotObjectiveHash(goal.objective) !== autopilot.goalObjectiveHash) return "bound goal objective changed";
+  if (["paused", "complete"].includes(goal.phase) || goal.phase === "blocked" && goal.blockedReason?.code !== "round-limit") return `goal entered ${goal.phase}`;
+  const pending = pendingAgentTeamAutopilotWake(autopilot);
+  const previousExpectedCap = pending?.targetMaxGoalRounds === autopilot.expectedMaxGoalRounds ? autopilot.expectedMaxGoalRounds - AGENT_TEAM_AUTOPILOT_ROUND_GRANT : undefined;
+  if (goal.maxGoalRounds !== autopilot.expectedMaxGoalRounds && goal.maxGoalRounds !== previousExpectedCap) return "goal round cap changed outside the bounded autopilot grant";
+  if (autopilot.status === "active") {
+    if (autopilot.planHashAtGrant !== team.plan?.hash || !teamHasSafeAutopilotAuthority(team, root)) return "team plan or safety facts changed";
+    const deliveredThisRevision = [...autopilot.wakes].reverse().some((wake) => wake.status === "delivered" && wake.goalRevision === goal.revision);
+    if (goal.phase === "active" && goal.activation !== "armed" && pending === undefined
+      && autopilot.parkedGoalRevision !== goal.revision && !deliveredThisRevision) return "goal continuation was disarmed outside an autopilot wait";
+  }
+  return undefined;
+}
+function agentTeamAutopilotWakeRoots(previous, current) {
+  const wake = new Set();
+  const priorById = new Map((previous?.teams ?? []).map((team) => [team.id, team]));
+  const dependencySignature = (document, team, task) => {
+    const derived = deriveTaskAcrossTeams(task, team, document.teams);
+    return JSON.stringify([
+      [...derived.dependencies].sort(),
+      [...derived.blockedBy].sort(),
+      [...derived.failedBy].sort(),
+    ]);
+  };
+  for (const team of current.teams) {
+    if (effectiveTeamState(team) !== "active") continue;
+    const before = priorById.get(team.id);
+    if (before !== undefined && before.rootLeadSessionId !== team.rootLeadSessionId) continue;
+    const beforeTasks = new Map((before?.tasks ?? []).map((task) => [task.id, task]));
+    const beforeMembers = new Map((before?.members ?? []).map((member) => [member.id, member]));
+    const submitted = team.tasks.some((task) => {
+      if (task.state !== "submitted" || task.submission?.submittedBy === team.rootLeadSessionId) return false;
+      const prior = beforeTasks.get(task.id);
+      return prior?.state !== "submitted" || prior.submission?.claimId !== task.submission?.claimId
+        || prior.submission?.leaseEpoch !== task.submission?.leaseEpoch || prior.submission?.submittedAt !== task.submission?.submittedAt;
+    });
+    const failed = team.members.some((member) => member.kind === "worker" && member.state === "failed" && beforeMembers.get(member.id)?.state !== "failed");
+    const dependencyChanged = previous !== undefined && team.tasks.some((task) => {
+      const prior = beforeTasks.get(task.id);
+      if (prior === undefined) return task.dependsOn.length > 0 || (task.crossTeamDependsOn ?? []).length > 0;
+      return dependencySignature(previous, before, prior) !== dependencySignature(current, team, task);
+    });
+    if (submitted || failed || dependencyChanged) wake.add(team.rootLeadSessionId);
+  }
+  return [...wake];
+}
+function createAgentTeamAutopilot(ctx, store, ready = Promise.resolve(store.snapshot()), authorizationProvider, options = {}) {
+  let closed = false;
+  let requested = false;
+  let run;
+  let request = () => {};
+  const retryBaseMs = options.retryBaseMs ?? AGENT_TEAM_AUTOPILOT_RETRY_BASE_MS;
+  const retryMaxMs = options.retryMaxMs ?? AGENT_TEAM_AUTOPILOT_RETRY_MAX_MS;
+  const maxRetries = options.maxRetries ?? AGENT_TEAM_AUTOPILOT_MAX_RETRIES;
+  const setTimer = options.setTimer ?? setTimeout;
+  const clearTimer = options.clearTimer ?? clearTimeout;
+  if (!Number.isSafeInteger(retryBaseMs) || retryBaseMs < 1 || !Number.isSafeInteger(retryMaxMs) || retryMaxMs < retryBaseMs
+    || !Number.isSafeInteger(maxRetries) || maxRetries < 1 || typeof setTimer !== "function" || typeof clearTimer !== "function") {
+    throw new TypeError("agent-team autopilot retry options are invalid");
+  }
+  const retryStates = new Map();
+  let observedDocument = store.snapshot();
+  let wakeEvidenceSequence = 0;
+  const wakeEvidenceByRoot = new Map();
+  const rootIsLive = (root) => root !== undefined && ctx.agents.get(root.id) === root && ctx.agents.roots().includes(root);
+  const activeGrantTeams = (document, root) => document.teams.filter((team) => team.rootLeadSessionId === root.id && team.state !== "closed" && team.autopilot?.status === "active");
+  const revokeRoot = async (root, reason, status = "revoked") => {
+    if (!rootIsLive(root)) return;
+    return revokeRootAgentTeamAutopilot(ctx, store, root, reason, status, authorizationProvider);
+  };
+  const sameAutopilotAction = (current, expected) => current?.kind === expected?.kind
+    && (current?.kind === "waiting"
+      ? JSON.stringify(current.teams.map((team) => team.id).sort()) === JSON.stringify(expected.teams.map((team) => team.id).sort())
+      : current?.stateHash === expected?.stateHash);
+  const parkRootGoal = async (root, goal, { resetActionState = false, action } = {}) => {
+    if (!rootIsLive(root) || root.status !== "idle" || goal === undefined || action === undefined) return false;
+    const beforeDocument = store.snapshot();
+    const beforeAction = rootAgentTeamAutopilotAction(beforeDocument, root);
+    const current = ctx.goals.get(root);
+    if (!sameAutopilotAction(beforeAction, action) || current?.id !== goal.id || current.revision !== goal.revision
+      || current.phase !== "active" || !["armed", "disarmed"].includes(current.activation)) return false;
+    // Goal activation is process-local and can be consumed by the official driver.
+    // Remove that authority synchronously, before the first await or durable parked
+    // marker, so every crash prefix is disarmed rather than marker-only.
+    if (current.activation === "armed") ctx.goals.disarm(root);
+    const parkedGoal = ctx.goals.get(root);
+    const exactPark = rootIsLive(root) && root.status === "idle" && parkedGoal?.id === current.id
+      && parkedGoal.phase === "active" && parkedGoal.activation === "disarmed"
+      && parkedGoal.roundsStarted === current.roundsStarted && parkedGoal.maxGoalRounds === current.maxGoalRounds
+      && agentTeamAutopilotObjectiveHash(parkedGoal.objective) === agentTeamAutopilotObjectiveHash(current.objective);
+    if (!exactPark) {
+      await revokeRoot(root, "root changed while automatic continuation was being parked");
+      return false;
+    }
+    let persisted;
+    try {
+      persisted = await store.mutate((draft) => {
+        const mutationGoal = ctx.goals.get(root);
+        const mutationAction = rootAgentTeamAutopilotAction(draft, root);
+        const grants = activeGrantTeams(draft, root);
+        if (!rootIsLive(root) || root.status !== "idle" || mutationGoal?.id !== parkedGoal.id
+          || mutationGoal.phase !== "active" || mutationGoal.activation !== "disarmed"
+          || mutationGoal.roundsStarted !== parkedGoal.roundsStarted || mutationGoal.maxGoalRounds !== parkedGoal.maxGoalRounds
+          || !sameAutopilotAction(mutationAction, action) || grants.length === 0) return false;
+        const timestamp = now();
+        for (const team of grants) {
+          team.autopilot.parkedGoalRevision = mutationGoal.revision;
+          team.autopilot.parkedAt = timestamp;
+          if (resetActionState) team.autopilot.lastStateHash = undefined;
+          team.updatedAt = timestamp;
+        }
+        return true;
+      });
+    } catch (error) {
+      await revokeRoot(root, `automatic continuation parked-state persistence failed: ${error?.code ?? error?.message ?? "unknown error"}`);
+      return false;
+    }
+    const finalGoal = ctx.goals.get(root);
+    const finalAction = rootAgentTeamAutopilotAction(store.snapshot(), root);
+    if (persisted !== true || !rootIsLive(root) || root.status !== "idle" || finalGoal?.id !== parkedGoal.id
+      || finalGoal.phase !== "active" || finalGoal.activation !== "disarmed"
+      || finalGoal.roundsStarted !== parkedGoal.roundsStarted || !sameAutopilotAction(finalAction, action)) {
+      await revokeRoot(root, "automatic continuation park boundary changed before durable confirmation");
+      return false;
+    }
+    return true;
+  };
+  const reconcileRoot = async (root) => {
+    if (!rootIsLive(root)) return;
+    let document = store.snapshot();
+    let goal = ctx.goals.get(root);
+    const candidates = document.teams.filter((team) => team.rootLeadSessionId === root.id && ["pending_plan", "active"].includes(team.autopilot?.status));
+    // The running root may be applying one exact admitted Goal-round plan CAS.
+    // No scheduler effect is possible until it becomes idle; validate/revoke at
+    // that boundary so a safe draft→commit transaction can rebind its grant
+    // instead of being torn down between the two model tool calls.
+    if (root.status !== "idle") return;
+    if (candidates.length > 0) {
+      let hostState;
+      try {
+        if (typeof authorizationProvider?.readAutopilotAuthorizationState !== "function") throw new Error("Desktop Host authorization capability is unavailable");
+        hostState = await authorizationProvider.readAutopilotAuthorizationState();
+      } catch {
+        await revokeRoot(root, "trusted Host autopilot authorization state is unavailable");
+        return;
+      }
+      if (!agentTeamAutopilotSettingsProofMatches(hostState, document.settings, { requireLive: true })) {
+        await revokeRoot(root, "trusted Host autopilot settings proof changed");
+        return;
+      }
+      if (candidates.some((team) => team.autopilot.authorizationEpoch !== hostState.authorizationEpoch)) {
+        await revokeRoot(root, "trusted Host autopilot authorization epoch changed");
+        return;
+      }
+    }
+    const invalid = candidates.map((team) => [team.id, agentTeamAutopilotInvalidReason(team, root, goal, document.settings)]).filter(([, reason]) => reason !== undefined);
+    if (invalid.length > 0) {
+      const reason = `root automatic-continuation grant group became invalid: ${invalid.map(([teamId, value]) => `${teamId}: ${value}`).join("; ")}`;
+      await revokeRoot(root, reason);
+      return;
+    }
+    const ownedOpen = document.teams.filter((team) => team.rootLeadSessionId === root.id && team.state !== "closed");
+    const liveScope = ownedOpen.filter((team) => ["pending_plan", "active"].includes(team.autopilot?.status));
+    if (liveScope.length !== ownedOpen.length) {
+      if (liveScope.length > 0) await revokeRoot(root, "automatic continuation scope contains an open team without the same live grant boundary");
+      return;
+    }
+    // A newly established draft/bootstrap team is part of the exact root scope,
+    // but cannot resume the goal until its first real worker publication binds the
+    // plan-specific capability. Existing siblings stay parked in the meantime.
+    if (liveScope.some((team) => team.autopilot.status === "pending_plan")) return;
+    const grants = activeGrantTeams(document, root);
+    if (ownedOpen.length === 0 || grants.length !== ownedOpen.length || goal === undefined) return;
+    if (new Set(grants.map((team) => team.autopilot.authorizationEpoch)).size !== 1
+      || new Set(grants.map((team) => team.autopilot.goalId)).size !== 1
+      || new Set(grants.map((team) => team.autopilot.baseMaxGoalRounds)).size !== 1
+      || new Set(grants.map((team) => team.autopilot.expectedMaxGoalRounds)).size !== 1
+      || new Set(grants.map((team) => team.autopilot.maxAdditionalRounds)).size !== 1
+      || new Set(grants.map((team) => team.autopilot.additionalRoundsGranted)).size !== 1
+      || new Set(grants.map((team) => team.autopilot.lastStateHash)).size !== 1) {
+      await revokeRoot(root, "automatic continuation grant group diverged");
+      return;
+    }
+    const action = rootAgentTeamAutopilotAction(document, root);
+    const wakeEvidence = wakeEvidenceByRoot.get(root.id);
+    if (action?.kind === "waiting") {
+      // Ordinary producer-owned waiting is parked rather than treated as a
+      // blocker or a reason to spend another Goal round.
+      await parkRootGoal(root, goal, { resetActionState: true, action });
+      if (wakeEvidenceByRoot.get(root.id) === wakeEvidence) wakeEvidenceByRoot.delete(root.id);
+      return;
+    }
+    if (action === undefined) {
+      if (wakeEvidenceByRoot.get(root.id) === wakeEvidence) wakeEvidenceByRoot.delete(root.id);
+      return;
+    }
+    const pendingKeys = grants.map((team) => team.autopilot.wakes.filter((wake) => ["prepared", "goal_mutated"].includes(wake.status)).map((wake) => wake.key));
+    if (pendingKeys.some((keys) => keys.length > 1) || new Set(pendingKeys.map((keys) => keys[0] ?? "")).size !== 1) {
+      await revokeRoot(root, "automatic wake ledger has multiple or divergent pending entries");
+      return;
+    }
+    const deliveredRoundObserved = grants.every((team) => team.autopilot.wakes.some((wake) => wake.status === "delivered"
+      && wake.stateHash === action.stateHash && wake.roundsStarted < goal.roundsStarted));
+    if (pendingKeys.every((keys) => keys.length === 0) && deliveredRoundObserved
+      && grants.every((team) => team.autopilot.additionalRoundsGranted >= team.autopilot.maxAdditionalRounds)) {
+      await revokeRoot(root, "bounded automatic goal-round budget exhausted", "exhausted");
+      return;
+    }
+    if (pendingKeys.every((keys) => keys.length === 0) && deliveredRoundObserved
+      && grants.every((team) => team.autopilot.lastStateHash === action.stateHash)) {
+      // The previous wake already granted one root turn for this exact durable
+      // action. Park only after that turn is observable in roundsStarted; the
+      // delivery mutation itself must not disarm the just-resumed Goal.
+      await parkRootGoal(root, goal, { action });
+      return;
+    }
+    const newWakeKey = createHash("sha256").update(JSON.stringify(["agent-teams-autopilot-wake-v1", root.id, goal.id, action.kind, action.stateHash, goal.roundsStarted])).digest("hex");
+    const wakeKey = pendingKeys[0][0] ?? newWakeKey;
+    let groupedWake = agentTeamAutopilotWakeGroup(grants, wakeKey);
+    if (groupedWake.error !== undefined) {
+      await revokeRoot(root, groupedWake.error);
+      return;
+    }
+    let wake = groupedWake.wake;
+    if (wake === undefined && pendingKeys.every((keys) => keys.length === 0) && wakeEvidence === undefined) {
+      // Attention already present in a projection is not a scheduler event.
+      // Only a new submission, member failure, or dependency transition may
+      // allocate a fresh wake; persisted pending ledgers recover above.
+      await parkRootGoal(root, goal, { action });
+      return;
+    }
+    if (wake === undefined) {
+      const prepared = await store.mutate((draft) => {
+        const currentGoal = ctx.goals.get(root);
+        const currentAction = rootAgentTeamAutopilotAction(draft, root);
+        const currentOwnedOpen = draft.teams.filter((team) => team.rootLeadSessionId === root.id && team.state !== "closed");
+        const currentGrants = activeGrantTeams(draft, root).sort((left, right) => left.id.localeCompare(right.id));
+        if (currentGoal === undefined || currentAction?.stateHash !== action.stateHash || currentAction.kind !== action.kind
+          || currentGrants.length !== currentOwnedOpen.length || currentGrants.length !== grants.length
+          || currentGrants.some((team) => agentTeamAutopilotInvalidReason(team, root, currentGoal, draft.settings) !== undefined)) return undefined;
+        const currentGroup = agentTeamAutopilotWakeGroup(currentGrants, wakeKey);
+        if (currentGroup.error !== undefined) return { autopilotTerminal: { reason: currentGroup.error, status: "revoked" } };
+        if (currentGroup.wake !== undefined) return currentGroup.wake;
+        const extend = currentGoal.roundsStarted >= currentGoal.maxGoalRounds;
+        if (extend && currentGrants.some((team) => team.autopilot.additionalRoundsGranted >= team.autopilot.maxAdditionalRounds)) {
+          return { autopilotTerminal: { reason: "bounded automatic goal-round budget exhausted", status: "exhausted" } };
+        }
+        const targetMaxGoalRounds = currentGoal.maxGoalRounds + (extend ? AGENT_TEAM_AUTOPILOT_ROUND_GRANT : 0);
+        if (extend) for (const team of currentGrants) {
+          team.autopilot.additionalRoundsGranted += AGENT_TEAM_AUTOPILOT_ROUND_GRANT;
+          team.autopilot.expectedMaxGoalRounds += AGENT_TEAM_AUTOPILOT_ROUND_GRANT;
+        }
+        for (const team of currentGrants) {
+          while (team.autopilot.wakes.length >= MAX_AGENT_TEAM_AUTOPILOT_WAKES) {
+            const terminalIndex = team.autopilot.wakes.findIndex((candidate) => ["delivered", "cancelled"].includes(candidate.status));
+            if (terminalIndex < 0) {
+              return { autopilotTerminal: { reason: "automatic wake receipt capacity exhausted", status: "exhausted" } };
+            }
+            team.autopilot.wakes.splice(terminalIndex, 1);
+          }
+        }
+        const timestamp = now();
+        for (const team of currentGrants) {
+          team.autopilot.wakes.push({ key: wakeKey, kind: action.kind, stateHash: action.stateHash, roundsStarted: currentGoal.roundsStarted, status: "prepared", teamRevision: team.revision ?? 1, targetMaxGoalRounds, createdAt: timestamp });
+          team.autopilot.lastStateHash = action.stateHash;
+          team.autopilot.parkedGoalRevision = undefined;
+          team.autopilot.parkedAt = undefined;
+          team.updatedAt = timestamp;
+        }
+        return clone(currentGrants[0].autopilot.wakes.at(-1));
+      });
+      if (prepared?.autopilotTerminal !== undefined) {
+        await revokeRoot(root, prepared.autopilotTerminal.reason, prepared.autopilotTerminal.status);
+        return;
+      }
+      if (prepared === undefined) return;
+      wake = prepared;
+    }
+    if (["delivered", "cancelled"].includes(wake.status)) return;
+    const deliveryState = async () => store.read((currentDocument) => {
+      const currentGoal = ctx.goals.get(root);
+      const currentOwnedOpen = currentDocument.teams.filter((team) => team.rootLeadSessionId === root.id && team.state !== "closed");
+      const currentGrants = activeGrantTeams(currentDocument, root).sort((left, right) => left.id.localeCompare(right.id));
+      if (root.status !== "idle") return { wait: true };
+      if (currentGoal === undefined || currentGrants.length !== currentOwnedOpen.length || currentGrants.length === 0) return { authorityError: "automatic continuation scope changed before wake delivery" };
+      const invalidReason = currentGrants.map((team) => agentTeamAutopilotInvalidReason(team, root, currentGoal, currentDocument.settings)).find((reason) => reason !== undefined);
+      if (invalidReason !== undefined) return { authorityError: invalidReason };
+      const currentGroup = agentTeamAutopilotWakeGroup(currentGrants, wakeKey);
+      if (currentGroup.error !== undefined || currentGroup.wake === undefined) return { authorityError: currentGroup.error ?? "automatic wake ledger disappeared before delivery" };
+      if (currentGoal.maxGoalRounds > currentGroup.wake.targetMaxGoalRounds
+        || currentGoal.maxGoalRounds < currentGroup.wake.targetMaxGoalRounds - AGENT_TEAM_AUTOPILOT_ROUND_GRANT) return { authorityError: "goal cap diverged from the durable automatic wake target" };
+      if (currentGoal.roundsStarted === currentGroup.wake.roundsStarted + 1) {
+        if (currentGoal.maxGoalRounds !== currentGroup.wake.targetMaxGoalRounds) return { authorityError: "goal round advanced without the exact durable wake cap" };
+        return { goal: currentGoal, wake: currentGroup.wake, recoveredDelivery: true };
+      }
+      if (currentGoal.roundsStarted !== currentGroup.wake.roundsStarted) return { authorityError: "goal round advanced beyond the exact durable wake" };
+      const currentAction = rootAgentTeamAutopilotAction(currentDocument, root);
+      if (currentAction === undefined || currentAction.kind === "waiting") return { stale: true };
+      return { goal: currentGoal, wake: currentGroup.wake };
+    });
+    const markWakeDelivered = async (deliveredGoal) => store.mutate((draft) => {
+      const currentGoal = ctx.goals.get(root);
+      const currentGrants = activeGrantTeams(draft, root).sort((left, right) => left.id.localeCompare(right.id));
+      const currentGroup = agentTeamAutopilotWakeGroup(currentGrants, wakeKey);
+      if (currentGroup.error !== undefined || currentGroup.wake === undefined || currentGoal?.id !== deliveredGoal.id
+        || currentGoal.revision !== deliveredGoal.revision || currentGoal.maxGoalRounds !== currentGroup.wake.targetMaxGoalRounds
+        || ![currentGroup.wake.roundsStarted, currentGroup.wake.roundsStarted + 1].includes(currentGoal.roundsStarted)) {
+        reject("automatic wake delivery facts changed before durable acknowledgement", "AGENT_TEAMS_AUTOPILOT_SCOPE_CHANGED");
+      }
+      const deliveredAt = now();
+      for (const team of currentGrants) {
+        const receipt = team.autopilot.wakes.find((candidate) => candidate.key === wakeKey);
+        if (receipt !== undefined && !["delivered", "cancelled"].includes(receipt.status)) {
+          receipt.status = "delivered";
+          receipt.goalRevision = currentGoal.revision;
+          receipt.deliveredAt = deliveredAt;
+          team.updatedAt = deliveredAt;
+        }
+      }
+      return true;
+    });
+    const cancelStaleWake = async () => store.mutate((draft) => {
+      const currentGoal = ctx.goals.get(root);
+      const currentGrants = activeGrantTeams(draft, root);
+      const currentGroup = agentTeamAutopilotWakeGroup(currentGrants, wakeKey);
+      if (currentGroup.wake === undefined || currentGroup.error !== undefined) return;
+      const timestamp = now();
+      const rollbackReservation = currentGoal?.maxGoalRounds === currentGroup.wake.targetMaxGoalRounds - AGENT_TEAM_AUTOPILOT_ROUND_GRANT;
+      for (const team of currentGrants) {
+        const receipt = team.autopilot.wakes.find((candidate) => candidate.key === wakeKey);
+        if (receipt !== undefined && !["delivered", "cancelled"].includes(receipt.status)) {
+          receipt.status = "cancelled";
+          receipt.cancelledAt = timestamp;
+          receipt.reason = "durable team state no longer requires an automatic goal turn";
+        }
+        if (rollbackReservation) {
+          team.autopilot.additionalRoundsGranted -= AGENT_TEAM_AUTOPILOT_ROUND_GRANT;
+          team.autopilot.expectedMaxGoalRounds -= AGENT_TEAM_AUTOPILOT_ROUND_GRANT;
+        }
+        team.updatedAt = timestamp;
+      }
+    });
+    let checked = await deliveryState();
+    if (checked.wait) return;
+    if (checked.authorityError !== undefined) return revokeRoot(root, checked.authorityError);
+    if (checked.stale) { await cancelStaleWake(); return; }
+    if (checked.recoveredDelivery) {
+      await markWakeDelivered(checked.goal);
+      if (wakeEvidence !== undefined && wakeEvidenceByRoot.get(root.id) === wakeEvidence) wakeEvidenceByRoot.delete(root.id);
+      return;
+    }
+    goal = checked.goal;
+    wake = checked.wake;
+    if (goal.maxGoalRounds < wake.targetMaxGoalRounds) {
+      if (goal.maxGoalRounds + AGENT_TEAM_AUTOPILOT_ROUND_GRANT !== wake.targetMaxGoalRounds || goal.roundsStarted < goal.maxGoalRounds) return revokeRoot(root, "automatic wake observed an unexpected goal cap");
+      goal = ctx.goals.edit(root, { id: goal.id, revision: goal.revision }, { maxGoalRounds: wake.targetMaxGoalRounds });
+      const authorityInvalid = await store.mutate((draft) => {
+        const currentGrants = activeGrantTeams(draft, root);
+        if (currentGrants.some((team) => agentTeamAutopilotInvalidReason(team, root, goal, draft.settings) !== undefined)) return true;
+        for (const team of currentGrants) {
+          const receipt = team.autopilot.wakes.find((candidate) => candidate.key === wakeKey);
+          if (receipt !== undefined && receipt.status === "prepared") { receipt.status = "goal_mutated"; receipt.goalRevision = goal.revision; team.updatedAt = now(); }
+        }
+        return false;
+      });
+      if (authorityInvalid) return revokeRoot(root, "automatic continuation authority changed after goal-cap mutation");
+    } else if (goal.maxGoalRounds > wake.targetMaxGoalRounds) return revokeRoot(root, "goal cap exceeded the durable automatic wake target");
+    checked = await deliveryState();
+    if (checked.wait) return;
+    if (checked.authorityError !== undefined) return revokeRoot(root, checked.authorityError);
+    if (checked.stale) { await cancelStaleWake(); return; }
+    if (checked.recoveredDelivery) {
+      await markWakeDelivered(checked.goal);
+      if (wakeEvidence !== undefined && wakeEvidenceByRoot.get(root.id) === wakeEvidence) wakeEvidenceByRoot.delete(root.id);
+      return;
+    }
+    goal = checked.goal;
+    if (goal.phase === "blocked" && goal.blockedReason?.code === "round-limit" || goal.phase === "active" && goal.activation === "disarmed") {
+      goal = ctx.goals.resume(root, { id: goal.id, revision: goal.revision });
+    }
+    if (goal.phase !== "active" || goal.activation !== "armed") return revokeRoot(root, "automatic wake could not arm the exact bound goal");
+    await markWakeDelivered(goal);
+    if (wakeEvidence !== undefined && wakeEvidenceByRoot.get(root.id) === wakeEvidence) wakeEvidenceByRoot.delete(root.id);
+  };
+  const clearRootRetry = (rootId) => {
+    const state = retryStates.get(rootId);
+    if (state?.timer !== undefined) clearTimer(state.timer);
+    retryStates.delete(rootId);
+  };
+  const failRootReconcile = async (root, error) => {
+    if (!rootIsLive(root)) return clearRootRetry(root?.id);
+    // Never leave a retry window with process-local armed authority. A later
+    // exact retry may resume from its durable wake, but a crash between attempts
+    // remains safely disarmed.
+    if (root.status === "idle") disarmBoundAgentTeamGoal(ctx, root, store.snapshot());
+    const prior = retryStates.get(root.id) ?? { attempts: 0, timer: undefined };
+    if (prior.timer !== undefined) clearTimer(prior.timer);
+    prior.attempts += 1;
+    prior.timer = undefined;
+    ctx.logger.warn(`agent-teams autopilot reconciliation failed (${prior.attempts}/${maxRetries}): ${String(error?.code ?? error?.message ?? error)}`);
+    if (prior.attempts >= maxRetries) {
+      retryStates.delete(root.id);
+      try { await revokeRoot(root, `automatic continuation failed after ${maxRetries} bounded recovery attempts: ${error?.code ?? error?.message ?? "unknown error"}`); }
+      catch (revokeError) { ctx.logger.warn(`agent-teams autopilot fail-closed revocation failed: ${String(revokeError?.code ?? revokeError?.message ?? revokeError)}`); }
+      return;
+    }
+    const delay = Math.min(retryMaxMs, retryBaseMs * (2 ** (prior.attempts - 1)));
+    prior.timer = setTimer(() => {
+      prior.timer = undefined;
+      if (!closed && retryStates.get(root.id) === prior) request();
+    }, delay);
+    prior.timer?.unref?.();
+    retryStates.set(root.id, prior);
+  };
+  const reconcile = async () => {
+    for (const root of ctx.agents.roots()) {
+      try {
+        await reconcileRoot(root);
+        clearRootRetry(root.id);
+      } catch (error) {
+        await failRootReconcile(root, error);
+      }
+    }
+  };
+  request = () => {
+    if (closed) return;
+    requested = true;
+    if (run !== undefined) return;
+    const operation = async () => {
+      while (requested && !closed) {
+        requested = false;
+        await reconcile();
+      }
+    };
+    run = typeof ctx.agents.withoutInitiator === "function" ? ctx.agents.withoutInitiator(operation) : operation();
+    run.finally(() => { run = undefined; if (requested && !closed) request(); });
+  };
+  const onDocument = (document) => {
+    const current = document ?? store.snapshot();
+    for (const rootSessionId of agentTeamAutopilotWakeRoots(observedDocument, current)) {
+      wakeEvidenceSequence += 1;
+      wakeEvidenceByRoot.set(rootSessionId, wakeEvidenceSequence);
+    }
+    observedDocument = current;
+    request();
+  };
+  const onStatus = ({ agent, status }) => { if (status === "idle" && rootIsLive(agent)) request(); };
+  const onSessionEvent = (session, event) => {
+    const root = ctx.agents.get(session.id);
+    if (!rootIsLive(root)) return;
+    if (event?.type === "goal/change" || event?.type === "user/message" && event.data?.source?.kind === "goal") request();
+    if (event?.type === "turn/end" && ["max-tokens", "aborted"].includes(event.data?.reason?.kind)) void revokeRoot(root, `goal turn ended with ${event.data.reason.kind}`).catch((error) => ctx.logger.warn(String(error)));
+  };
+  const onSessionStart = ({ agent }) => { if (rootIsLive(agent)) void revokeRoot(agent, "session restart requires fresh direct-human continuation authority").catch((error) => ctx.logger.warn(String(error))); };
+  const onAgentError = ({ agent }) => { if (rootIsLive(agent)) void revokeRoot(agent, "agent error requires fresh direct-human continuation authority").catch((error) => ctx.logger.warn(String(error))); };
+  const unsubscribe = store.subscribe(onDocument);
+  const disposeStatus = ctx.on("agent/status", onStatus);
+  const disposeSessionEvent = ctx.on("session/event", onSessionEvent);
+  const disposeSessionStart = ctx.on("agent/session-start", onSessionStart);
+  const disposeAgentError = ctx.on("agent/error", onAgentError);
+  const recoverPendingWakeBeforeLifecycleRevoke = async (root) => {
+    const document = store.snapshot();
+    const grants = activeGrantTeams(document, root).sort((left, right) => left.id.localeCompare(right.id));
+    const pendingKeys = grants.map((team) => team.autopilot.wakes.filter((wake) => ["prepared", "goal_mutated"].includes(wake.status)).map((wake) => wake.key));
+    if (grants.length === 0 || pendingKeys.some((keys) => keys.length > 1)
+      || new Set(pendingKeys.map((keys) => keys[0] ?? "")).size !== 1 || pendingKeys[0].length === 0) return;
+    const wakeKey = pendingKeys[0][0];
+    const grouped = agentTeamAutopilotWakeGroup(grants, wakeKey);
+    if (grouped.error !== undefined || grouped.wake === undefined) return;
+    const wake = grouped.wake;
+    // Lifecycle readiness is not authority to resume a Goal. Disarm first, then
+    // recover the exact durable effect prefix solely for audit/rollback before
+    // rotating authority and revoking the grant group.
+    disarmBoundAgentTeamGoal(ctx, root, document);
+    let goal = ctx.goals.get(root);
+    if (goal?.id !== grants[0].autopilot.goalId) return;
+    if (goal.roundsStarted === wake.roundsStarted + 1 && goal.maxGoalRounds === wake.targetMaxGoalRounds) {
+      await store.mutate((draft) => {
+        const currentGoal = ctx.goals.get(root);
+        const currentGrants = activeGrantTeams(draft, root).sort((left, right) => left.id.localeCompare(right.id));
+        const currentGroup = agentTeamAutopilotWakeGroup(currentGrants, wakeKey);
+        if (currentGroup.error !== undefined || currentGroup.wake === undefined || currentGoal?.id !== goal.id
+          || currentGoal.roundsStarted !== wake.roundsStarted + 1 || currentGoal.maxGoalRounds !== wake.targetMaxGoalRounds) return;
+        const deliveredAt = now();
+        for (const team of currentGrants) {
+          const receipt = team.autopilot.wakes.find((candidate) => candidate.key === wakeKey);
+          receipt.status = "delivered";
+          receipt.goalRevision = currentGoal.revision;
+          receipt.deliveredAt = deliveredAt;
+          team.updatedAt = deliveredAt;
+        }
+      });
+      return;
+    }
+    if (goal.roundsStarted !== wake.roundsStarted) return;
+    const reservationExtended = grants.every((team) => team.autopilot.expectedMaxGoalRounds === wake.targetMaxGoalRounds
+      && team.autopilot.additionalRoundsGranted > 0)
+      && wake.targetMaxGoalRounds > grants[0].autopilot.baseMaxGoalRounds;
+    const previousCap = wake.targetMaxGoalRounds - AGENT_TEAM_AUTOPILOT_ROUND_GRANT;
+    if (reservationExtended && goal.maxGoalRounds === wake.targetMaxGoalRounds && goal.roundsStarted <= previousCap) {
+      try { ctx.goals.edit(root, { id: goal.id, revision: goal.revision }, { maxGoalRounds: previousCap }); }
+      catch (error) {
+        const observed = ctx.goals.get(root);
+        if (observed?.id !== goal.id || observed.maxGoalRounds !== previousCap) {
+          ctx.logger.warn(`agent-teams startup could not roll back an unconsumed automatic Goal cap: ${String(error?.code ?? error?.message ?? error)}`);
+          return;
+        }
+      }
+      goal = ctx.goals.get(root);
+    }
+    const exactRollback = reservationExtended && goal?.id === grants[0].autopilot.goalId && goal.roundsStarted === wake.roundsStarted
+      && goal.maxGoalRounds === previousCap;
+    const noCapEffect = !reservationExtended && goal?.maxGoalRounds === wake.targetMaxGoalRounds;
+    if (!exactRollback && !noCapEffect) return;
+    await store.mutate((draft) => {
+      const currentGoal = ctx.goals.get(root);
+      const currentGrants = activeGrantTeams(draft, root).sort((left, right) => left.id.localeCompare(right.id));
+      const currentGroup = agentTeamAutopilotWakeGroup(currentGrants, wakeKey);
+      if (currentGroup.error !== undefined || currentGroup.wake === undefined || currentGoal?.id !== goal.id
+        || currentGoal.roundsStarted !== wake.roundsStarted || currentGoal.maxGoalRounds !== goal.maxGoalRounds) return;
+      const cancelledAt = now();
+      for (const team of currentGrants) {
+        const receipt = team.autopilot.wakes.find((candidate) => candidate.key === wakeKey);
+        receipt.status = "cancelled";
+        receipt.cancelledAt = cancelledAt;
+        receipt.reason = "plugin lifecycle recovered an unconsumed automatic wake before revocation";
+        if (exactRollback) {
+          team.autopilot.additionalRoundsGranted -= AGENT_TEAM_AUTOPILOT_ROUND_GRANT;
+          team.autopilot.expectedMaxGoalRounds -= AGENT_TEAM_AUTOPILOT_ROUND_GRANT;
+        }
+        team.updatedAt = cancelledAt;
+      }
+    });
+  };
+  // Goal activation is intentionally process-local. A persisted team grant is an
+  // audit fact, never authority to cross a session-start edge; revoke every live
+  // grant before the first reconciliation in this plugin lifecycle.
+  void ready.then(async () => {
+    const reason = "plugin or session lifecycle restart requires fresh direct-human continuation authority";
+    const liveRootIds = new Set();
+    for (const root of ctx.agents.roots()) if (rootIsLive(root)) {
+      liveRootIds.add(root.id);
+      try { await recoverPendingWakeBeforeLifecycleRevoke(root); }
+      catch (error) { ctx.logger.warn(`agent-teams autopilot startup wake recovery failed: ${String(error?.code ?? error?.message ?? error)}`); }
+      await revokeRoot(root, reason);
+    }
+    await store.mutate((document) => {
+      for (const team of document.teams) if (!liveRootIds.has(team.rootLeadSessionId)) revokeAgentTeamAutopilot(team, reason);
+    });
+    request();
+  })
+    .catch((error) => ctx.logger.warn(`agent-teams autopilot initialization failed: ${String(error)}`));
+  return {
+    close() {
+      closed = true;
+      for (const rootId of [...retryStates.keys()]) clearRootRetry(rootId);
+      unsubscribe();
+      if (typeof disposeStatus === "function") disposeStatus();
+      if (typeof disposeSessionEvent === "function") disposeSessionEvent();
+      if (typeof disposeSessionStart === "function") disposeSessionStart();
+      if (typeof disposeAgentError === "function") disposeAgentError();
+    },
+    onDocument,
+    onStatus,
+    request,
+    async flush() { request(); while (run !== undefined) await run; },
+  };
+}
 function projectTaskWakeMessage(root, wakeRef) {
   return createUserMessage({
     content: textContent(`[Project task wake ${wakeRef}] Project work is eligible again. Resume the durable project loop: read targeted collaboration requests, then call project_task claim_next with a new request_id. Do not replay work already claimed or completed.`),
-    source: { kind: "coordinator", form: "notice", senderSessionId: root.id, summary: "Project tasks" },
+    source: { kind: "plugin", plugin: "dsh-agent-teams", form: "notice", summary: "Project tasks" },
   });
 }
 function projectTaskWakeRefFromMessage(candidate) {
   const message = candidate?.data?.message ?? candidate;
-  if (message?.source?.kind !== "coordinator" || message.source.summary !== "Project tasks") return undefined;
+  const source = message?.source;
+  // Reconcile wakes persisted before the Host queue provenance migration as well as current plugin notices.
+  const supportedSource = source?.kind === "coordinator" || (source?.kind === "plugin" && source.plugin === "dsh-agent-teams");
+  if (!supportedSource || source.summary !== "Project tasks") return undefined;
   const text = message.content?.[0]?.type === "text" ? message.content[0].text : "";
   return /^\[Project task wake ([A-Za-z0-9_-]{1,256})\]/u.exec(text)?.[1];
 }
 function rootHasProjectTaskWake(root, wakeRef) {
   const pending = [...(root.inbox?.nextTurn ?? []), ...(root.inbox?.nextStep ?? [])];
   if (pending.some((message) => projectTaskWakeRefFromMessage(message) === wakeRef)) return true;
-  const events = root.session?.events ?? [];
+  const events = snapshotSessionEvents(root?.session);
   return events.slice(-PROJECT_TASK_WAKE_EVENT_TAIL).some((event) => event?.type === "user/message" && projectTaskWakeRefFromMessage(event) === wakeRef);
 }
 function rootProjectTaskWakeEvidence(root, wakeRef) {
   if (rootHasProjectTaskWake(root, wakeRef)) return "exact_message";
-  const events = root?.session?.events;
+  const session = root?.session;
+  const events = typeof session?.snapshotEvents === "function" ? snapshotSessionEvents(session) : undefined;
   const nextTurn = root?.inbox?.nextTurn;
   const nextStep = root?.inbox?.nextStep;
   // Absence is evidence only when every persisted session event and both live inbox
@@ -2779,7 +3994,10 @@ function dispatchProjectTaskWakeSignals(ctx, binding, options) {
   return run;
 }
 function queuedTeamRelayId(message) {
-  if (message?.source?.kind !== "coordinator" || message.source.summary !== "Agent Teams") return undefined;
+  const source = message?.source;
+  const supportedSource = source?.kind === "agent-message" && source.form === "relay"
+    || source?.kind === "coordinator" && source.summary === "Agent Teams";
+  if (!supportedSource) return undefined;
   const text = message.content?.[0]?.type === "text" ? message.content[0].text : "";
   return /^\[Agent team message ([0-9a-f-]{36}) from /u.exec(text)?.[1];
 }
@@ -3060,30 +4278,47 @@ async function submitExpansionRequest(ctx, store, admission, caller, input, sign
 }
 
 async function createTeam(store, lead, input) {
+  const objective = nonEmptyString(input.objective ?? input.name ?? "Agent team", "objective", 16_384);
+  const normalizedName = nonEmptyString(input.name ?? objective.slice(0, 500), "name", 500);
+  const normalizedLeadName = normalizeMemberName(input.leadName ?? "Lead", "leadName");
+  const requestId = optionalString(input.requestId, "requestId", 256);
+  const inputHash = requestId === undefined ? undefined : createHash("sha256").update(JSON.stringify({ objective, name: normalizedName, leadName: normalizedLeadName })).digest("hex");
   const mainSelection = await resolveModelSelection(store, "main", undefined, lead.options);
   return store.mutate((document) => {
     assertEnabled(document);
+    if (requestId !== undefined) {
+      const existing = document.teams.find((team) => team.rootLeadSessionId === lead.id && team.start?.requestId === requestId);
+      if (existing !== undefined) {
+        if (existing.start.inputHash !== inputHash) reject("team_start request_id was already used with different input", "AGENT_TEAMS_IDEMPOTENCY_CONFLICT");
+        if (input.routingReceiptId !== undefined) finalizeRoutingReceiptForTeam(document, input.routingReceiptId, existing, "reused");
+        return projectTeam(existing);
+      }
+    }
     const openTeams = document.teams.filter((team) => team.rootLeadSessionId === lead.id && team.state !== "closed").length;
     if (openTeams >= HARD_MAX_TEAMS_PER_ROOT) reject(`root lead peer-team limit reached (${HARD_MAX_TEAMS_PER_ROOT})`, "AGENT_TEAMS_TEAM_LIMIT");
     const timestamp = now();
-    const objective = nonEmptyString(input.objective ?? input.name ?? "Agent team", "objective", 16_384);
     const initialPlanHash = createHash("sha256").update(JSON.stringify({ objective, tasks: [] })).digest("hex");
+    const autopilotGrant = agentTeamAutopilotGrantForCreation(document, lead, input.autopilotGoal, {
+      goalRoundGrantIntent: input.goalRoundGrantIntent,
+      routingReceiptId: input.routingReceiptId,
+    });
     const team = {
       id: randomUUID(),
       rootLeadSessionId: lead.id,
-      name: nonEmptyString(input.name ?? objective.slice(0, 500), "name", 500),
+      name: normalizedName,
       objective,
       state: "active",
       pauseEpoch: 0,
       ...(optionalProjectKeyForRoot(lead) === undefined ? {} : { projectKey: optionalProjectKeyForRoot(lead) }),
       ownershipHistory: [],
       taskCommandReceipts: [],
+      ...(requestId === undefined ? {} : { start: { requestId, inputHash } }),
       createdAt: timestamp,
       updatedAt: timestamp,
       members: [{
         id: `lead:${lead.id}`,
         sessionId: lead.id,
-        name: normalizeMemberName(input.leadName ?? "Lead", "leadName"),
+        name: normalizedLeadName,
         role: "root lead and coordinator",
         ...mainSelection,
         kind: "lead",
@@ -3094,8 +4329,10 @@ async function createTeam(store, lead, input) {
       tasks: [],
       messages: [],
       plan: { phase: "draft", revision: 1, hash: initialPlanHash, migrationState: "ready" },
+      ...(autopilotGrant === undefined ? {} : { autopilot: autopilotGrant }),
     };
     document.teams.push(team);
+    if (input.routingReceiptId !== undefined) finalizeRoutingReceiptForTeam(document, input.routingReceiptId, team, "created");
     return projectTeam(team);
   });
 }
@@ -3151,27 +4388,105 @@ function reconcileSafePlanAuthorization(team, timestamp = now()) {
   }
   return changed;
 }
-function assertAutomaticPlanRecommitAllowed(ctx, team, lead) {
+function assertExactAutomaticGoalRound(ctx, lead, authority) {
+  if (!isRecord(authority)) reject("automatic plan recommit requires the exact admitted Goal round", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+  const exact = exactGoalRoundRootAuthority(ctx, { agent: lead, turnKey: authority.turnKey });
+  if (exact === undefined) {
+    reject("automatic plan recommit requires the exact admitted Goal round", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+  }
+  if (exact.projectKey !== authority.projectKey) {
+    reject("automatic plan recommit requires the same canonical project scope", "AGENT_TEAMS_CROSS_PROJECT_FORBIDDEN");
+  }
+  if (Object.keys(exact).some((key) => exact[key] !== authority[key])) {
+    reject("automatic plan recommit requires the exact admitted Goal round", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+  }
+  return ctx.goals.get(lead);
+}
+function automaticPlanRecommitGrantGroup(document, team, lead, goal, authority) {
+  const openTeams = document.teams.filter((candidate) => candidate.rootLeadSessionId === lead.id && candidate.state !== "closed");
+  const grants = openTeams.filter((candidate) => ["pending_plan", "active"].includes(candidate.autopilot?.status));
+  if (grants.length === 0) return [];
+  if (grants.length !== openTeams.length || !grants.includes(team)) reject("automatic plan recommit requires one complete live root grant group", "AGENT_TEAMS_AUTOPILOT_SCOPE_CHANGED");
+  const template = grants[0].autopilot;
+  if (authority.goalId !== goal.id || authority.goalObjectiveHash !== template.goalObjectiveHash
+    || authority.goalMaxGoalRounds !== template.expectedMaxGoalRounds
+    || new Set(grants.map((candidate) => candidate.autopilot.authorizationEpoch)).size !== 1
+    || new Set(grants.map((candidate) => candidate.autopilot.goalId)).size !== 1
+    || new Set(grants.map((candidate) => candidate.autopilot.goalObjectiveHash)).size !== 1
+    || new Set(grants.map((candidate) => candidate.autopilot.baseMaxGoalRounds)).size !== 1
+    || new Set(grants.map((candidate) => candidate.autopilot.expectedMaxGoalRounds)).size !== 1
+    || new Set(grants.map((candidate) => candidate.autopilot.maxAdditionalRounds)).size !== 1
+    || new Set(grants.map((candidate) => candidate.autopilot.additionalRoundsGranted)).size !== 1
+    || new Set(grants.map((candidate) => candidate.autopilot.lastStateHash)).size !== 1) {
+    reject("automatic plan recommit grant group diverged", "AGENT_TEAMS_AUTOPILOT_SCOPE_CHANGED");
+  }
+  if (grants.some((candidate) => pendingAgentTeamAutopilotWake(candidate.autopilot) !== undefined)) {
+    reject("automatic plan recommit cannot move a pending durable wake", "AGENT_TEAMS_AUTOPILOT_WAKE_PENDING");
+  }
+  for (const candidate of grants) {
+    const autopilot = candidate.autopilot;
+    if (document.settings.autopilotEnabled !== true || autopilot.maxAdditionalRounds > document.settings.autopilotMaxAdditionalRounds
+      || effectiveTeamState(candidate) !== "active" || candidate.rootLeadSessionId !== lead.id
+      || candidate.projectKey !== authority.projectKey || autopilot.projectKey !== authority.projectKey
+      || autopilot.rootSessionId !== lead.id || autopilot.goalId !== goal.id
+      || autopilot.goalObjectiveHash !== agentTeamAutopilotObjectiveHash(goal.objective)
+      || autopilot.expectedMaxGoalRounds !== goal.maxGoalRounds
+      || autopilot.pauseEpochAtGrant !== (candidate.pauseEpoch ?? 0)
+      || candidate.closure !== undefined || candidate.handoff !== undefined
+      || (candidate.memberRecoveries ?? []).some((receipt) => receipt.status === "outcome_unknown" || receipt.status === "prepared")) {
+      reject("automatic plan recommit grant scope changed", "AGENT_TEAMS_AUTOPILOT_SCOPE_CHANGED");
+    }
+    if (candidate !== team && agentTeamAutopilotInvalidReason(candidate, lead, goal, document.settings) !== undefined) {
+      reject("automatic plan recommit sibling authority changed", "AGENT_TEAMS_AUTOPILOT_SCOPE_CHANGED");
+    }
+  }
+  return grants;
+}
+function assertAutomaticPlanRecommitAllowed(ctx, document, team, lead, authority) {
   requireLiveRootLead(ctx, team, lead);
   requireActiveTeam(team);
-  if (!teamHasEstablishedWorker(team)) reject("automatic plan recommit requires a team already established from a direct-human turn", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+  const goal = assertExactAutomaticGoalRound(ctx, lead, authority);
+  const grantGroup = automaticPlanRecommitGrantGroup(document, team, lead, goal, authority);
+  const exactPendingGrant = team.autopilot?.status === "pending_plan" && grantGroup.includes(team);
+  if (!teamHasEstablishedWorker(team) && !exactPendingGrant) reject("automatic plan recommit requires an established team or the exact pending Host Goal-round grant", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
   const currentProjectKey = projectKeyForRoot(lead);
   if (team.projectKey === undefined || team.projectKey !== currentProjectKey) reject("automatic plan recommit requires the same canonical project scope", "AGENT_TEAMS_CROSS_PROJECT_FORBIDDEN");
   if (team.tasks.some((task) => task.capabilities.some((capability) => capability.status === "unavailable"))) reject("automatic plan recommit cannot use an unavailable capability", "AGENT_TEAMS_CAPABILITY_UNAVAILABLE");
   if (!planCapabilitiesAreVerified(team)) reject("automatic plan recommit cannot expand unknown capabilities", "AGENT_TEAMS_CAPABILITY_UNKNOWN");
   if (!planFilesAreConflictFree(team)) reject("automatic plan recommit requires conflict-free file ownership", "AGENT_TEAMS_FILE_CONFLICT");
   if (!planEffectsAreOrdinary(team)) reject("automatic plan recommit is limited to effect-free internal work", "AGENT_TEAMS_EXTERNAL_EFFECT_CONFIRMATION_REQUIRED");
+  return { goal, grantGroup };
+}
+function rebindAutomaticPlanGrantGroup(grantGroup, team, planHash) {
+  if (grantGroup.length === 0) return;
+  const timestamp = now();
+  for (const candidate of grantGroup) {
+    // A plan transition changes the scheduler action material. Clear the shared
+    // action fingerprint atomically across the whole root group while preserving
+    // terminal wake receipts. Pending wakes were rejected by the preflight.
+    candidate.autopilot.lastStateHash = undefined;
+    candidate.autopilot.parkedGoalRevision = undefined;
+    candidate.autopilot.parkedAt = undefined;
+    candidate.updatedAt = timestamp;
+  }
+  if (team.autopilot.status === "active" || teamHasEstablishedWorker(team)) {
+    team.autopilot.status = "active";
+    team.autopilot.planHashAtGrant = planHash;
+  }
 }
 
 async function commitTeamPlan(ctx, store, lead, input) {
-  return store.runOperation(() => store.mutate((document) => {
+  try {
+    return await store.runOperation(() => store.mutate((document) => {
     assertEnabled(document);
     const team = optionalString(input.teamId, "teamId", 256) === undefined
       ? resolveUniqueLeadTeam(document, undefined, lead.id, (candidate) => candidate.state === "active")
       : findTeam(document, input.teamId);
     requireLiveRootLead(ctx, team, lead);
     requireActiveTeam(team);
-    if (input.automaticContinuation === true) assertAutomaticPlanRecommitAllowed(ctx, team, lead);
+    const automatic = input.automaticContinuation === true
+      ? assertAutomaticPlanRecommitAllowed(ctx, document, team, lead, input.automaticGoalRoundAuthority)
+      : undefined;
     const expectedRevision = input.expectedRevision;
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) reject("expected_revision must be a positive integer", "AGENT_TEAMS_PLAN_CAS_REQUIRED");
     if (team.plan.revision !== expectedRevision) reject("team plan changed; preview it again before commit", "AGENT_TEAMS_STALE_PLAN");
@@ -3186,6 +4501,8 @@ async function commitTeamPlan(ctx, store, lead, input) {
       : "committed";
     if (team.plan.phase === targetPhase && team.plan.hash === currentHash && team.plan.authorization?.confirmedPlanHash === currentHash && team.plan.migrationState === "ready") {
       if (reconcileSafePlanAuthorization(team)) team.updatedAt = now();
+      if (input.automaticContinuation === true) rebindAutomaticPlanGrantGroup(automatic.grantGroup, team, currentHash);
+      else if (bindAgentTeamAutopilotPlan(team, input.autopilotGoal)) team.updatedAt = now();
       return { teamId: team.id, plan: clone(team.plan), reused: true };
     }
     if (team.tasks.length === 0) reject("a team plan must persist at least one task before commit", "AGENT_TEAMS_EMPTY_PLAN");
@@ -3226,9 +4543,17 @@ async function commitTeamPlan(ctx, store, lead, input) {
       team.plan.phase = "active";
       team.plan.activatedAt = timestamp;
     }
+    if (input.automaticContinuation === true) rebindAutomaticPlanGrantGroup(automatic.grantGroup, team, currentHash);
+    else bindAgentTeamAutopilotPlan(team, input.autopilotGoal);
     team.updatedAt = timestamp;
     return { teamId: team.id, plan: clone(team.plan), reused: false };
-  }));
+    }));
+  } catch (error) {
+    if (input.automaticContinuation === true && liveAgentTeamAutopilotTeams(store.snapshot(), lead.id).length > 0) {
+      await revokeRootAgentTeamAutopilot(ctx, store, lead, `automatic plan recommit failed closed: ${error?.code ?? "invalid plan authority"}`, "revoked", input.authorizationProvider);
+    }
+    throw error;
+  }
 }
 function projectScopeForRoot(root) {
   const cwd = root?.session?.header?.cwd;
@@ -3281,6 +4606,28 @@ async function adoptTeamHandoff(ctx, store, target, input) {
     const targetOpenTeams = document.teams.filter((candidate) => candidate.id !== team.id && candidate.rootLeadSessionId === target.id && candidate.state !== "closed").length;
     if (targetOpenTeams >= HARD_MAX_TEAMS_PER_ROOT) reject("target root peer-team limit reached", "AGENT_TEAMS_TEAM_LIMIT");
     const timestamp = now();
+    const revokeReason = "ownership handoff requires fresh direct-human continuation authority";
+    let autopilotRevocationAudit;
+    if (team.autopilot !== undefined) {
+      const statusAtHandoff = team.autopilot.status;
+      revokeAgentTeamAutopilot(team, revokeReason);
+      autopilotRevocationAudit = {
+        autopilotGrantId: team.autopilot.grantId,
+        autopilotRoutingReceiptId: team.autopilot.routingReceiptId,
+        autopilotGoalId: team.autopilot.goalId,
+        autopilotStatusAtHandoff: statusAtHandoff,
+        autopilotRevokedAt: timestamp,
+        autopilotRevokeReason: revokeReason,
+      };
+      // A grant is bound to the former exact root. Retain only the bounded private
+      // ownership audit above; the new owner must establish fresh direct-human
+      // authority before any automatic Goal continuation can resume.
+      team.autopilot = undefined;
+    }
+    // A resumed goal can coordinate every team owned by the source root. Moving
+    // even one of those teams changes that authority scope, so revoke siblings in
+    // the same ownership transaction rather than waiting for an idle reconciler.
+    for (const sibling of document.teams) if (sibling.id !== team.id && sibling.rootLeadSessionId === handoff.sourceRootSessionId) revokeAgentTeamAutopilot(sibling, revokeReason);
     team.pauseEpoch = (team.pauseEpoch ?? 0) + 1;
     sourceLead.role = "former root lead retained for durable audit references";
     for (const member of team.members) {
@@ -3318,7 +4665,7 @@ async function adoptTeamHandoff(ctx, store, target, input) {
     team.members.push({ id: `lead:${target.id}`, sessionId: target.id, name: normalizeMemberName(input.leadName ?? "Lead", "leadName"), role: "root lead and coordinator", ...selection, kind: "lead", state: "running", createdAt: timestamp, updatedAt: timestamp });
     team.rootLeadSessionId = target.id;
     team.ownershipHistory ??= [];
-    boundedPush(team.ownershipHistory, { kind: "handoff_adopted", sourceRootSessionId: handoff.sourceRootSessionId, targetRootSessionId: target.id, projectKey: handoff.projectKey, tokenHash: handoff.tokenHash, at: timestamp, pauseEpoch: team.pauseEpoch }, MAX_OWNERSHIP_HISTORY);
+    boundedPush(team.ownershipHistory, { kind: "handoff_adopted", sourceRootSessionId: handoff.sourceRootSessionId, targetRootSessionId: target.id, projectKey: handoff.projectKey, tokenHash: handoff.tokenHash, at: timestamp, pauseEpoch: team.pauseEpoch, ...(autopilotRevocationAudit === undefined ? {} : autopilotRevocationAudit) }, MAX_OWNERSHIP_HISTORY);
     team.handoff = undefined;
     team.resume = undefined;
     USER_PAUSED_TEAMS.add(team.id);
@@ -3447,6 +4794,7 @@ async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
       requireLiveRootLead(ctx, existing, lead);
       if (existing.bootstrap.inputHash !== plan.inputHash) reject("bootstrap request_id was already used with different input", "AGENT_TEAMS_IDEMPOTENCY_CONFLICT");
       requireActiveTeam(existing);
+      if (input.routingReceiptId !== undefined) finalizeRoutingReceiptForTeam(document, input.routingReceiptId, existing, "reused");
       return { teamId: existing.id, reused: true };
     }
     if (document.teams.filter((team) => team.rootLeadSessionId === lead.id && team.state !== "closed").length >= HARD_MAX_TEAMS_PER_ROOT) reject(`root lead peer-team limit reached (${HARD_MAX_TEAMS_PER_ROOT})`, "AGENT_TEAMS_TEAM_LIMIT");
@@ -3454,6 +4802,10 @@ async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
     if (activeWorkerTurnsForLead(document, lead.id) + plan.members.length > document.settings.maxActiveTurns) reject("bootstrap exceeds the root lead active-turn limit", "AGENT_TEAMS_ACTIVE_TURN_LIMIT");
     const timestamp = now(), teamId = randomUUID();
     const taskIds = new Map(plan.tasks.map((task) => [task.key, randomUUID()]));
+    const autopilotGrant = agentTeamAutopilotGrantForCreation(document, lead, input.autopilotGoal, {
+      goalRoundGrantIntent: input.goalRoundGrantIntent,
+      routingReceiptId: input.routingReceiptId,
+    });
     const team = {
       id: teamId, rootLeadSessionId: lead.id, name: plan.name ?? plan.objective.slice(0, 500), objective: plan.objective, state: "active", pauseEpoch: 0, ...(optionalProjectKeyForRoot(lead) === undefined ? {} : { projectKey: optionalProjectKeyForRoot(lead) }), ownershipHistory: [], taskCommandReceipts: [], createdAt: timestamp, updatedAt: timestamp,
       members: [{ id: `lead:${lead.id}`, sessionId: lead.id, name: plan.leadName, role: "root lead and coordinator", ...mainSelection, kind: "lead", state: "running", createdAt: timestamp, updatedAt: timestamp }],
@@ -3466,7 +4818,9 @@ async function bootstrapTeam(ctx, store, admission, lead, input, signal) {
       phase: "active", revision: 1, hash: bootstrapPlanHash, committedAt: timestamp, activatedAt: timestamp, migrationState: "ready",
       authorization: { source: "human_attested", attestedAt: timestamp, confirmedPlanHash: bootstrapPlanHash, permissions: "human_attested", files: "human_attested", cost: "human_attested", externalSideEffects: "human_attested" },
     };
+    if (autopilotGrant !== undefined) team.autopilot = autopilotGrant;
     document.teams.push(team);
+    if (input.routingReceiptId !== undefined) finalizeRoutingReceiptForTeam(document, input.routingReceiptId, team, "created");
     return { teamId, reused: false };
   }));
   for (const memberPlan of plan.members) {
@@ -3711,7 +5065,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
     try {
       await admission.run(lead, started.childId, signal, async () => {
         requireExactRootAgent(ctx, lead);
-        return ctx.subagents.followup(lead, started.childId, textContent(workPrompt(reservation.teamId, reservation.memberId, reservation.prompt, reservation.taskIds)), { source: relaySource(lead.id), signal });
+        return queueAgentTeamPrompt(ctx.subagents, lead, started.childId, textContent(workPrompt(reservation.teamId, reservation.memberId, reservation.prompt, reservation.taskIds)), { source: relaySource(lead.id), signal });
       });
     } catch (error) {
       await settleSpawnedChildFailure(ctx, store, lead, { phase: "work-followup", teamId: reservation.teamId, memberId: reservation.memberId, childId: started.childId, cause: error });
@@ -3732,6 +5086,7 @@ async function spawnMember(ctx, store, admission, lead, input, signal) {
         team.plan.activatedAt = timestamp;
         team.updatedAt = timestamp;
       }
+      if (bindAgentTeamAutopilotPlan(team, ctx.goals?.get?.(lead))) team.updatedAt = now();
       return { teamId: team.id, member: clone(current ?? member), plan: clone(team.plan) };
     }));
   }));
@@ -3893,7 +5248,7 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
         if (marked.phase !== "retry_dispatching") return memberRecoveryPublic(findTeam(await store.read((current) => current), teamId), marked, (await store.read((current) => current)).teams);
         const document = await store.read((current) => current), team = findTeam(document, teamId), member = team.members.find((candidate) => candidate.id === memberId), tasks = marked.taskIds.map((taskId) => team.tasks.find((task) => task.id === taskId)).filter(Boolean);
         await runWithLifecycleDeadline(
-          (lifecycleSignal) => admission.run(lead, marked.sessionId, lifecycleSignal, async () => { requireExactRootAgent(ctx, lead); return ctx.subagents.followup(lead, marked.sessionId, textContent(memberRecoveryPrompt(team, member, tasks, action)), { source: relaySource(lead.id), signal: lifecycleSignal }); }),
+          (lifecycleSignal) => admission.run(lead, marked.sessionId, lifecycleSignal, async () => { requireExactRootAgent(ctx, lead); return queueAgentTeamPrompt(ctx.subagents, lead, marked.sessionId, textContent(memberRecoveryPrompt(team, member, tasks, action)), { source: relaySource(lead.id), signal: lifecycleSignal }); }),
           { signal, label: "failed member retry" },
         );
         await store.runOperation(() => store.mutate((current) => {
@@ -3938,7 +5293,7 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
         await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); liveReceipt.phase = "followup_dispatching"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
         const replacement = team.members.find((candidate) => candidate.id === receipt.replacementMemberId), tasks = receipt.taskIds.map((taskId) => team.tasks.find((task) => task.id === taskId)).filter(Boolean);
         await runWithLifecycleDeadline(
-          (lifecycleSignal) => admission.run(lead, startedId, lifecycleSignal, async () => ctx.subagents.followup(lead, startedId, textContent(memberRecoveryPrompt(team, replacement, tasks, action)), { source: relaySource(lead.id), signal: lifecycleSignal })),
+          (lifecycleSignal) => admission.run(lead, startedId, lifecycleSignal, async () => queueAgentTeamPrompt(ctx.subagents, lead, startedId, textContent(memberRecoveryPrompt(team, replacement, tasks, action)), { source: relaySource(lead.id), signal: lifecycleSignal })),
           { signal, label: "replacement member followup" },
         );
         await store.runOperation(() => store.mutate((current) => { const liveTeam = findTeam(current, teamId); requireActiveTeam(liveTeam); const liveReceipt = liveTeam.memberRecoveries.find((candidate) => candidate.requestId === requestId); if (liveReceipt.status !== "outcome_unknown" || liveReceipt.phase !== "followup_dispatching" || (liveTeam.pauseEpoch ?? 0) !== liveReceipt.pauseEpoch) reject("team changed during replacement followup", "AGENT_TEAMS_STALE_LEASE"); liveReceipt.phase = "followup_returned"; liveReceipt.updatedAt = now(); liveTeam.updatedAt = liveReceipt.updatedAt; }));
@@ -4144,7 +5499,7 @@ async function sendTeamMessageUnlocked(ctx, store, admission, caller, input, sig
     } else {
       await admission.run(lead, prepared.recipient.sessionId, signal, async () => {
         requireExactRootAgent(ctx, lead);
-        return ctx.subagents.followup(lead, prepared.recipient.sessionId, content, { source: relaySource(caller.id), signal });
+        return queueAgentTeamPrompt(ctx.subagents, lead, prepared.recipient.sessionId, content, { source: relaySource(caller.id), signal });
       });
     }
     return store.runOperation(() => store.mutate((document) => {
@@ -4595,10 +5950,14 @@ function resetTaskStoppedAfter(task, stoppedAt, pauseEpoch) {
   task.updatedAt = stoppedAt;
   bumpTaskRevision(task);
 }
-async function pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt) {
+async function pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt, authorizationProvider) {
   const selectedChildren = new Map(selections.map((entry) => [entry.teamId, new Set(entry.childIds)]));
   const teamIds = new Set(selectedChildren.keys());
   const childIds = [...new Set(selections.flatMap((entry) => entry.childIds))];
+  // Stop must remove the bound Goal activation before durable team authority is
+  // revoked or the pause epoch advances; otherwise an already-armed continuation
+  // can escape the newly paused scope.
+  await revokeRootAgentTeamAutopilot(ctx, store, lead, "explicit user Stop requires fresh direct-human continuation authority", "revoked", authorizationProvider);
   await store.runOperation(() => store.mutate((document) => {
     for (const team of document.teams) {
       if (!teamIds.has(team.id) || team.rootLeadSessionId !== lead.id || !["active", "paused"].includes(team.state)) continue;
@@ -4730,6 +6089,15 @@ async function resumePausedTeam(ctx, store, lead, input) {
     team.updatedAt = now();
     const resumePlan = buildResumePlan(team, document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId));
     team.resume = { ...team.resume, status: "committed", committedAt: team.updatedAt };
+    const directRoutingReceipt = document.routingReceipts.find((receipt) => receipt.teamId === team.id && receipt.establishmentAuthority === "direct_human" && ["created", "reused"].includes(receipt.outcome));
+    const refreshedAutopilot = directRoutingReceipt === undefined ? undefined : agentTeamAutopilotGrantForCreation(document, lead, input.autopilotGoal, {
+      directHuman: true,
+      planHash: team.plan?.hash,
+      pauseEpoch: team.pauseEpoch ?? 0,
+      routingReceiptId: directRoutingReceipt.id,
+      excludeTeamId: team.id,
+    });
+    if (refreshedAutopilot !== undefined && planAuthorizationSupportsAutopilot(team)) team.autopilot = refreshedAutopilot;
     USER_PAUSED_TEAMS.delete(team.id);
     USER_PAUSE_RECONCILIATIONS.delete(team.id);
     USER_PAUSE_EPOCHS.set(team.id, team.pauseEpoch ?? 0);
@@ -4762,7 +6130,7 @@ async function retireMember(ctx, store, admission, lead, input, signal) {
       await runWithLifecycleDeadline(async (lifecycleSignal) => {
         await admission.run(lead, prepared.member.sessionId, lifecycleSignal, async () => {
           requireExactRootAgent(ctx, lead);
-          return ctx.subagents.followup(lead, prepared.member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
+          return queueAgentTeamPrompt(ctx.subagents, lead, prepared.member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
             source: relaySource(lead.id), signal: lifecycleSignal,
           });
         });
@@ -4802,26 +6170,39 @@ async function retireMember(ctx, store, admission, lead, input, signal) {
   }));
 }
 
-async function shutdownTeam(ctx, store, admission, lead, input, signal) {
+async function shutdownTeam(ctx, store, admission, lead, input, signal, authorizationProvider) {
   const teamId = await store.read((document) => optionalString(input.teamId, "teamId", 256) === undefined ? resolveUniqueLeadTeam(document, undefined, lead.id, (candidate) => candidate.state !== "closed").id : findTeam(document, input.teamId).id);
   if (input.memberSessionId !== undefined && input.memberSessionId !== "") {
     return queueTeamOperation(store.filePath, teamId, () => retireMember(ctx, store, admission, lead, { ...input, teamId }, signal));
   }
   const force = input.force === true;
-  const prepared = await queueTeamOperation(store.filePath, teamId, () => store.runOperation(() => store.mutate((document) => {
-    const team = findTeam(document, teamId);
-    requireLiveRootLead(ctx, team, lead);
-    if (team.state !== "closing") requireActiveTeam(team);
-    const unacceptedTaskIds = team.tasks.filter(taskAwaitsAcceptance).map((task) => task.id);
-    if (!force && unacceptedTaskIds.length > 0) reject(`team has submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
-    const unfinishedTaskIds = team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => task.id);
-    if (!force && unfinishedTaskIds.length > 0) reject(`team has unfinished tasks; complete or cancel them before graceful shutdown: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
-    team.state = "closing";
-    const workers = team.members.filter((member) => member.kind === "worker" && member.state !== "retired");
-    for (const member of workers) markMemberShuttingDown(member, force);
-    team.updatedAt = now();
-    return { teamId: team.id, workers: workers.map((member) => clone(member)) };
-  })));
+  const prepared = await queueTeamOperation(store.filePath, teamId, () => store.runOperation(async () => {
+    const preflight = await store.read((document) => {
+      const team = findTeam(document, teamId);
+      requireLiveRootLead(ctx, team, lead);
+      if (team.state !== "closing") requireActiveTeam(team);
+      const unacceptedTaskIds = team.tasks.filter(taskAwaitsAcceptance).map((task) => task.id);
+      if (!force && unacceptedTaskIds.length > 0) reject(`team has submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
+      const unfinishedTaskIds = team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => task.id);
+      if (!force && unfinishedTaskIds.length > 0) reject(`team has unfinished tasks; complete or cancel them before graceful shutdown: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
+      return { hasLiveAutopilot: document.teams.some((candidate) => candidate.rootLeadSessionId === lead.id && ["pending_plan", "active"].includes(candidate.autopilot?.status)) };
+    });
+    if (preflight.hasLiveAutopilot) await revokeRootAgentTeamAutopilot(ctx, store, lead, "team shutdown requires fresh direct-human continuation authority", "revoked", authorizationProvider);
+    return store.mutate((document) => {
+      const team = findTeam(document, teamId);
+      requireLiveRootLead(ctx, team, lead);
+      if (team.state !== "closing") requireActiveTeam(team);
+      const unacceptedTaskIds = team.tasks.filter(taskAwaitsAcceptance).map((task) => task.id);
+      if (!force && unacceptedTaskIds.length > 0) reject(`team has submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
+      const unfinishedTaskIds = team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => task.id);
+      if (!force && unfinishedTaskIds.length > 0) reject(`team has unfinished tasks; complete or cancel them before graceful shutdown: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
+      team.state = "closing";
+      const workers = team.members.filter((member) => member.kind === "worker" && member.state !== "retired");
+      for (const member of workers) markMemberShuttingDown(member, force);
+      team.updatedAt = now();
+      return { teamId: team.id, workers: workers.map((member) => clone(member)) };
+    });
+  }));
 
   let drainError;
   let outcomes = [];
@@ -4838,7 +6219,7 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal) {
         await runWithLifecycleDeadline(async (lifecycleSignal) => {
           await admission.run(lead, member.sessionId, lifecycleSignal, async () => {
             requireExactRootAgent(ctx, lead);
-            return ctx.subagents.followup(lead, member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
+            return queueAgentTeamPrompt(ctx.subagents, lead, member.sessionId, textContent("The team lead requests graceful retirement. Finish only essential cleanup, report any final result to the lead, and then stop taking team work."), {
               source: relaySource(lead.id), signal: lifecycleSignal,
             });
           });
@@ -5010,6 +6391,8 @@ function teamSnapshot(document, sessionId, selectedTeamId) {
     config.enabled,
     config.maxMembers,
     config.maxActiveTurns,
+    config.autopilotEnabled,
+    config.autopilotMaxAdditionalRounds,
     selected?.id ?? null,
     projectTeamBoard.cursor,
     ...ordered.map((candidate) => [candidate.id, candidate.revision ?? 1, effectiveTeamState(candidate)]),
@@ -5026,19 +6409,46 @@ function teamSnapshot(document, sessionId, selectedTeamId) {
     crossTeamEvents: projectCrossTeamEvents(peerTeams),
   };
 }
+function teamSnapshotWithAutopilotAuthorization(ctx, document, sessionId, selectedTeamId) {
+  const snapshot = teamSnapshot(document, sessionId, selectedTeamId);
+  const root = ctx.agents?.get?.(sessionId);
+  const team = document.teams.find((candidate) => candidate.id === snapshot.activeTeamId);
+  const goal = root === undefined || typeof ctx.goals?.get !== "function" ? undefined : ctx.goals.get(root);
+  const exactRoot = root !== undefined && ctx.agents?.get?.(root.id) === root && ctx.agents?.roots?.().includes(root);
+  const liveGrant = ["pending_plan", "active"].includes(team?.autopilot?.status) && team.autopilot.goalId === goal?.id
+    && team.autopilot.rootSessionId === root?.id && team.autopilot.pauseEpochAtGrant === (team?.pauseEpoch ?? 0);
+  const goalCanBeScoped = goal?.phase === "active" && (goal.activation === "armed" || liveGrant && goal.activation === "disarmed");
+  const openRootTeams = exactRoot ? document.teams.filter((candidate) => candidate.rootLeadSessionId === root.id && candidate.state !== "closed") : [];
+  const teamScopeHash = openRootTeams.length === 0 ? undefined : agentTeamAutopilotHostTeamScopeHash(openRootTeams);
+  const scope = exactRoot && team?.rootLeadSessionId === root.id && effectiveTeamState(team) === "active"
+    && typeof team.projectKey === "string" && /^[a-f0-9]{64}$/u.test(team.projectKey)
+    && team.projectKey === optionalProjectKeyForRoot(root) && goalCanBeScoped && teamScopeHash !== undefined
+    ? { rootSessionId: root.id, projectKey: team.projectKey, goalId: goal.id, teamId: team.id, pauseEpoch: team.pauseEpoch ?? 0, teamScopeHash }
+    : null;
+  snapshot.autopilotAuthorization = scope;
+  snapshot.cursor = JSON.stringify([snapshot.cursor, scope === null ? null : [scope.rootSessionId, scope.projectKey, scope.goalId, scope.teamId, scope.pauseEpoch, scope.teamScopeHash]]);
+  return snapshot;
+}
 
 function teamSystemPrompt(store) {
   if (!store.isEnabled()) {
     return "Agent Teams automatic-team mode is DISABLED. Do not proactively call any team tool. Work normally without creating, spawning, messaging, or managing teams unless the direct user first enables the feature through its settings. Team members must never create teams.";
   }
+  const autopilotPolicy = store.autopilotPolicy();
+  const capacityPolicy = store.capacityPolicy();
+  const bootstrapCapacity = Math.min(MAX_BOOTSTRAP_ITEMS, capacityPolicy.maxMembers, capacityPolicy.maxActiveTurns);
   return [
     "Agent Teams automatic-team mode is ENABLED.",
+    `Configured capacity is ${capacityPolicy.maxMembers} managed member(s) per team and ${capacityPolicy.maxActiveTurns} simultaneously active member(s) across all teams owned by this root. These values are ceilings, not a target roster size: choose the number justified by sustained independent workstreams. A complete bootstrap plan may contain up to ${bootstrapCapacity} visible peers right now; if maxMembers is higher than maxActiveTurns, create or start additional members only as active-turn capacity becomes available.`,
     "Before substantive work on every ordinary direct-human root turn, and before first creating an Agent Team during an exact admitted continuation of that root's active, armed goal, apply the three-level gate below and persist exactly one Host-scoped routing decision for that root/turn/project: all three levels call team_route_goal first; for Level 3, team_start/team_bootstrap then finalize that same immutable decision with the creation outcome and Host-validated team. Decision content is model-declared; the receipt is an audit record only, does not force or prove model-route selection, and model input cannot choose another root, project, turn, or team scope. When Level 3 conditions are met, choose exactly one creation path in that same authorized turn: use team_bootstrap when the complete bounded task/member plan is already known; otherwise use team_start and then the existing task/spawn tools. Never ask the user to send “continue” merely to cross from an admitted automatic goal round into safe internal team creation. Never call both team_start and team_bootstrap for the same team, and never replace the required visible managed members with multiple hidden ordinary subagents.",
     "Keep durable team task state synchronized at every handoff: members must explicitly complete finished tasks before their final report, and the root lead must reconcile every task before retiring members or closing the team. A report or successful subagent turn is not completion evidence. Graceful retirement and shutdown require no unfinished owned work; force shutdown records unfinished work as cancelled rather than leaving permanent pending tasks.",
     "Once an Agent Team is established for the current goal, the root lead defaults to coordination only: decompose the user's objective into substantive outcomes, persist and assign durable tasks, coordinate dependencies and handoffs, monitor and reconcile task state, review and accept member deliverables, then perform final integration and user-facing synthesis. The root lead must not personally implement, research, design, test, or otherwise substitute for a core professional deliverable that is assigned or should be assigned to a member role. If substantive coverage is missing, create or restructure the relevant durable task and assign or expand the visible team instead of absorbing that work; the root may make only minimal glue changes required to integrate accepted member outputs.",
+    autopilotPolicy.enabled
+      ? `Agent Team waiting is event-driven, and the trusted Host automatic-continuation preference is ON with a fixed budget of at most ${autopilotPolicy.maxAdditionalRounds} extra goal rounds. First inspect team_status: only when every open team reports autopilot.status=active and every unfinished safe internal task is either owned by a live worker or blocked on such work may you end the current turn without polling team_status and without asking the user to send ‘continue’. The Host parks normal waiting; it is not a blocked Goal outcome. Only a new claim-bound durable task submission, a worker transition to failed, or a durable dependency/reference/satisfaction change wakes the exact fixed root. Worker release, ready/idle transitions, checkpoints, and duplicate projections do not spend a round. If the goal's configured round slice is exhausted, the Host grants exactly one additional round for that durable transition. This grant is not a timer, retry loop, or permission upgrade: missing/revoked grants, paused teams, cross-project scope, unknown capabilities, file conflicts, non-none/outcome_unknown effects, explicit Stop/resume, real safety blockers, permission anomalies, recovery, handoff, confirmation boundaries, or the finite budget remain stopped and require manual recovery.`
+      : "The trusted Host automatic-continuation preference is OFF. Do not end a coordinator turn on the assumption that worker progress will wake it, and do not claim that the Host will extend goal rounds. Finish currently actionable coordination in this turn; if a safe team must continue across future rounds, explain that automatic continuation can be explicitly enabled in Agent Teams settings. Never repeatedly ask the user to send ‘continue’ as a substitute for that setting.",
     "A team's durable tasks and member roles must collectively cover the substantive outputs required to satisfy the user's goal, each with a real deliverable and observable acceptance criteria. Never create decorative, token, or review-only members while leaving the core professional output to the root lead; if the work does not justify delegating its substantive production, do not create a team.",
     "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively choose one Agent Team creation path only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
-    "When a new team already has a complete bounded plan of one through four durable tasks and one through four visible peers, call team_bootstrap directly with a stable request_id and do not call team_start first. Otherwise team_start creates a draft: persist tasks, then use team_plan_commit with the exact plan revision and confirmed_plan_hash before any team_spawn. Without durable successful worker-publication history that CAS persists phase committed; the first fully successful spawn records publication and activates it, while later recommit persists active even after every published worker gracefully retires. Provisioning or initial publication/work-followup failure never establishes this history. Upgraded retired workers without the new marker qualify only through a task submission/result or checkpoint bound to their exact historical claim; retired state alone and former-root adoption history do not qualify. Both committed and active pass new claim/spawn execution gates. New team creation and bootstrap require either the current direct-human root turn or the exact admitted automatic continuation of the same root's active, armed goal; every other non-human turn remains forbidden. After that authorized establishment and one successful worker publication, the same exact live root may recommit a later draft during an automatic goal round without another user message only while the team remains active and unpaused in the same canonical project, every capability is individually verified, file scopes are conflict-free, cost stays within the direct user's ordinary default AI-routing grant, every effect policy is none, and no outcome is unknown. Public spawn always requires non-empty persisted task_ids, and the Host atomically pre-binds those tasks with the member placeholder before child creation. Bootstrap persists all tasks before starting members, and exact replay reuses its plan. Neither path may bypass capacity checks, file-scope separation, capability preflight, or explicit review of partial/uncertain starts.",
+    "When a new team already has a complete bounded task/member plan that fits the configured bootstrap capacity described above, call team_bootstrap directly with a stable request_id and do not call team_start first. Otherwise team_start creates a draft: persist tasks, then use team_plan_commit with the exact plan revision and confirmed_plan_hash before any team_spawn. Without durable successful worker-publication history that CAS persists phase committed; the first fully successful spawn records publication and activates it, while later recommit persists active even after every published worker gracefully retires. Provisioning or initial publication/work-followup failure never establishes this history. Upgraded retired workers without the new marker qualify only through a task submission/result or checkpoint bound to their exact historical claim; retired state alone and former-root adoption history do not qualify. Both committed and active pass new claim/spawn execution gates. New team creation and bootstrap require either the current direct-human root turn or the exact admitted automatic continuation of the same root's active, armed goal; every other non-human turn remains forbidden. After that authorized establishment and one successful worker publication, the same exact live root may recommit a later draft during an automatic goal round without another user message only while the team remains active and unpaused in the same canonical project, every capability is individually verified, file scopes are conflict-free, cost stays within the direct user's ordinary default AI-routing grant, every effect policy is none, and no outcome is unknown. Public spawn always requires non-empty persisted task_ids, and the Host atomically pre-binds those tasks with the member placeholder before child creation. Bootstrap persists all tasks before starting members, and exact replay reuses its plan. Neither path may bypass capacity checks, file-scope separation, capability preflight, or explicit review of partial/uncertain starts.",
     "An ordinary internal team that the direct user explicitly requested needs no redundant confirmation for a dynamically safe automatic-round recommit. Plan authority remains explicitly host_verified, human_attested, or unknown: a continuing/default grant stays human_attested and never becomes Host proof. Tool/model booleans can create only human_attested facts, never host_verified facts, and can never bulk-upgrade unknown capability records. Any material change to task scope, file ownership, capability/permission facts, model-cost class, or external effects returns the plan to draft and requires a fresh exact-hash CAS commit. New team creation and bootstrap remain behind the direct-human-or-exact-admitted-goal-round gate. Stop recovery/resume, handoff/adopt/recover, resolve_unknown, cross-project scope, unknown/unavailable or separately billed capabilities, conflicting files, and confirm_each/idempotent/forbidden effects remain behind their stricter direct-human or Host gates. An already active main-tier worker does not itself create a new cost grant or block safe continuation.",
     "A task claim returns claimId and leaseEpoch. Members must echo both for checkpoint, submission, or release; stale attempts are rejected and only an exact submission replay is a no-op. Worker complete moves the task only to submitted/in-review and appends an immutable claim-bound submission event. It does not complete the task, unlock dependencies, or permit graceful retirement. Only a later fixed-root accept of the current submission moves it to authoritative completed and appends acceptance; reject/reopen/cancel never erase older lifecycle events. Member checkpoints and next steps are unverified annotations separate from the five task states (pending, in_progress, submitted, completed, cancelled). External effect keys are Host-derived from stable team/task/effect identity. Only participating idempotency protocols can claim exactly-once; outcome_unknown blocks retry until an exact direct-human root resolves it.",
     "Team ownership may move only through team_handoff then team_adopt: both require direct-human root turns, the team must be durably paused, source and target must be exact live roots with the same canonical projectKey, and adoption must present the short-lived single-use token. Adoption increments pauseEpoch, revokes every old claim/lease, retires old-parent workers for bounded audit history, safely releases unfinished work to pending, and never wakes anyone automatically. Unknown scope and cross-project adoption fail closed.",
@@ -6009,7 +7419,7 @@ function registerProjectSessionLaunchTool(ctx, projectEntry, runtime, ready = Pr
   }));
 }
 
-function registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization) {
+function registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization, authorizationProvider) {
   ctx.systemPrompt.section({
     name: "tool:agent-teams",
     order: 116,
@@ -6034,7 +7444,9 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => {
       requireTeamCreationRoot(ctx, execution);
-      return publicResult(await recordRoutingReceipt(store, execution, { level: args.level, reasonCategory: args.reason_category, explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: args.creation_path, outcome: "recorded" }));
+      const directHuman = hasDirectHumanRootAuthority(ctx, execution);
+      const goalRoundAuthority = directHuman ? undefined : exactGoalRoundRootAuthority(ctx, execution);
+      return publicResult(await recordRoutingReceipt(store, execution, { level: args.level, reasonCategory: args.reason_category, explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: args.creation_path, outcome: "recorded", establishmentAuthority: directHuman ? "direct_human" : "goal_round", goalRoundAuthority }));
     }),
     presentCall: (args) => present("Record goal routing decision", args.level),
   }));
@@ -6042,6 +7454,7 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     name: "team_start",
     description: "Start a durable peer team owned by this fixed top-level root lead. Use this manual creation path only when a complete bounded team_bootstrap plan is not ready; never call team_start before team_bootstrap for the same team. Call this in the current authorized root turn as soon as you identify at least two sustained independent workstreams that require visible managed members and ongoing coordination; do not substitute multiple ordinary subagents. An exact admitted automatic continuation of the root's active, armed goal carries creation authority without another user message. Automatic use normally requires at least two sustained independent workstreams delegated to different visible workers; the lead does not count, and one continuable helper should use ordinary subagent instead. An explicit user team request may override this automatic threshold. At most 8 teams may remain unclosed, and all peers share maxActiveTurns. Requires either direct-human root authority or the exact current admitted goal continuation in the open turn.",
     parameters: {
+      request_id: { type: "string", required: true, description: "Stable idempotency key. Exact replay reuses the durably created team." },
       objective: { type: "string", required: true, description: "Concrete objective shared by the team." },
       name: { type: "string", description: "Optional short team display name." },
       lead_name: { type: "string", description: "Optional display name for the root lead." },
@@ -6050,14 +7463,20 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     }, output: TOOL_OUTPUT,
     execute: run(async (args, execution) => {
       requireTeamCreationRoot(ctx, execution);
+      // Refresh Host-managed policy before deriving the one-time Goal grant intent.
+      await store.read(() => undefined);
+      const directHuman = hasDirectHumanRootAuthority(ctx, execution);
+      const establishmentAuthority = directHuman ? "direct_human" : "goal_round";
+      const goalRoundAuthority = directHuman ? undefined : exactGoalRoundRootAuthority(ctx, execution);
+      const goalRoundGrantIntent = directHuman || !store.autopilotPolicy().enabled ? undefined : await exactGoalRoundAutopilotGrantIntent(ctx, authorizationProvider, execution, goalRoundAuthority);
       const routingDecision = { level: "level3", reasonCategory: args.explicit_user_team_request === true ? "explicit_user_team_request" : "independent_sustained_workstreams", explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: "team_start" };
-      await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded" });
+      const recorded = await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded", establishmentAuthority, goalRoundAuthority });
       try {
-        const team = await createTeam(store, execution.agent, { objective: args.objective, name: args.name, leadName: args.lead_name });
-        const routing = await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "created", teamId: team.id });
+        const team = await createTeam(store, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, routingReceiptId: recorded.receipt.id, autopilotGoal: ctx.goals?.get?.(execution.agent), goalRoundGrantIntent });
+        const routing = await store.read((document) => ({ receipt: clone(document.routingReceipts.find((receipt) => receipt.id === recorded.receipt.id)), reused: recorded.reused }));
         return publicResult({ team, routing });
       } catch (error) {
-        try { await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "failed" }); } catch {}
+        try { await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "failed", establishmentAuthority, goalRoundAuthority }); } catch {}
         throw error;
       }
     }),
@@ -6075,12 +7494,16 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
       cost_verified: { type: "boolean" },
       external_side_effects_verified: { type: "boolean", description: "True only for direct-user verification of the declared external effects." },
     }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution) => publicResult(await commitTeamPlan(ctx, store, execution.agent, { teamId: args.team_id, expectedRevision: args.expected_revision, confirmedPlanHash: args.confirmed_plan_hash, permissionsVerified: args.permissions_verified, filesVerified: args.files_verified, costVerified: args.cost_verified, externalSideEffectsVerified: args.external_side_effects_verified, automaticContinuation: !hasDirectHumanRootAuthority(ctx, execution) }))),
+    execute: run(async (args, execution) => {
+      const directHuman = hasDirectHumanRootAuthority(ctx, execution);
+      const automaticGoalRoundAuthority = directHuman ? undefined : exactGoalRoundRootAuthority(ctx, execution);
+      return publicResult(await commitTeamPlan(ctx, store, execution.agent, { teamId: args.team_id, expectedRevision: args.expected_revision, confirmedPlanHash: args.confirmed_plan_hash, permissionsVerified: args.permissions_verified, filesVerified: args.files_verified, costVerified: args.cost_verified, externalSideEffectsVerified: args.external_side_effects_verified, automaticContinuation: !directHuman, automaticGoalRoundAuthority, authorizationProvider, ...(directHuman ? { autopilotGoal: ctx.goals?.get?.(execution.agent) } : {}) }));
+    }),
     presentCall: (args) => present("Commit agent team plan", args.team_id),
   }));
   ctx.tools.register(defineTool({
     name: "team_bootstrap",
-    description: "Create one bounded team plan, persist all tasks before work starts, and provision up to four visible peers. Use this directly instead of team_start when the complete plan is ready; never call both for the same team. Different members must have non-overlapping file scopes. Requires either the exact direct-human root turn or the exact admitted automatic continuation of that root's active, armed goal. request_id makes exact replays reuse the same durable plan; uncertain partial starts fail closed and never duplicate a visible member automatically.",
+    description: "Create one bounded team plan, persist all tasks before work starts, and provision up to the configured member/active-turn capacity (hard maximum 8 visible peers). Use this directly instead of team_start when the complete plan is ready; never call both for the same team. Different members must have non-overlapping file scopes. Requires either the exact direct-human root turn or the exact admitted automatic continuation of that root's active, armed goal. request_id makes exact replays reuse the same durable plan; uncertain partial starts fail closed and never duplicate a visible member automatically.",
     parameters: {
       request_id: { type: "string", required: true }, objective: { type: "string", required: true }, name: { type: "string" }, lead_name: { type: "string" },
       explicit_user_team_request: { type: "boolean", description: "Model-declared true only when the direct user explicitly requested a team; this is audited but is not Host proof." },
@@ -6090,14 +7513,20 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     }, output: TOOL_OUTPUT,
     execute: run(async (args, execution, signal) => {
       requireTeamCreationRoot(ctx, execution);
+      // Refresh Host-managed policy before deriving the one-time Goal grant intent.
+      await store.read(() => undefined);
+      const directHuman = hasDirectHumanRootAuthority(ctx, execution);
+      const establishmentAuthority = directHuman ? "direct_human" : "goal_round";
+      const goalRoundAuthority = directHuman ? undefined : exactGoalRoundRootAuthority(ctx, execution);
+      const goalRoundGrantIntent = directHuman || !store.autopilotPolicy().enabled ? undefined : await exactGoalRoundAutopilotGrantIntent(ctx, authorizationProvider, execution, goalRoundAuthority);
       const routingDecision = { level: "level3", reasonCategory: args.explicit_user_team_request === true ? "explicit_user_team_request" : "independent_sustained_workstreams", explicitUserTeamRequest: args.explicit_user_team_request, candidateWorkstreams: args.candidate_workstreams, creationPath: "team_bootstrap" };
-      await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded" });
+      const recorded = await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "recorded", establishmentAuthority, goalRoundAuthority });
       try {
-        const result = await bootstrapTeam(ctx, store, admission, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, tasks: (args.tasks ?? []).map((task) => ({ key: task.key, title: task.title, description: task.description, memberKey: task.member_key, dependsOn: task.depends_on, files: task.files })), members: (args.members ?? []).map((member) => ({ key: member.key, name: member.name, role: member.role, prompt: member.prompt, modelTier: member.model_tier, model: member.model })) }, signal);
-        const routing = await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: result.operation.reused ? "reused" : "created", teamId: result.team.id });
+        const result = await bootstrapTeam(ctx, store, admission, execution.agent, { requestId: args.request_id, objective: args.objective, name: args.name, leadName: args.lead_name, routingReceiptId: recorded.receipt.id, autopilotGoal: ctx.goals?.get?.(execution.agent), goalRoundGrantIntent, tasks: (args.tasks ?? []).map((task) => ({ key: task.key, title: task.title, description: task.description, memberKey: task.member_key, dependsOn: task.depends_on, files: task.files })), members: (args.members ?? []).map((member) => ({ key: member.key, name: member.name, role: member.role, prompt: member.prompt, modelTier: member.model_tier, model: member.model })) }, signal);
+        const routing = await store.read((document) => ({ receipt: clone(document.routingReceipts.find((receipt) => receipt.id === recorded.receipt.id)), reused: recorded.reused || result.operation.reused }));
         return publicResult({ ...result, routing });
       } catch (error) {
-        try { await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "failed" }); } catch {}
+        try { await recordRoutingReceipt(store, execution, { ...routingDecision, outcome: "failed", establishmentAuthority, goalRoundAuthority }); } catch {}
         throw error;
       }
     }),
@@ -6266,7 +7695,7 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
   ctx.tools.register(defineTool({
     name: "team_resume", description: "Two-phase resume for a team paused by explicit Stop. First call without commit to persist a preview. Then CAS-commit with preview_id, expected_pause_epoch, and expected_team_revision. Abnormal nodes remain attention items and never freeze healthy nodes; no member is woken automatically.",
     parameters: { team_id: { type: "string", description: "Optional only when the root lead owns exactly one paused team." }, request_id: { type: "string", description: "Optional request id. Replaying it returns the same durable preview/receipt." }, commit: { type: "boolean", description: "False/omitted creates a preview; true CAS-commits it." }, preview_id: { type: "string" }, expected_pause_epoch: { type: "number" }, expected_team_revision: { type: "number" } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution) => { requireDirectHumanRoot(ctx, execution); return publicResult(await resumePausedTeam(ctx, store, execution.agent, { teamId: args.team_id, requestId: args.request_id, commit: args.commit, previewId: args.preview_id, expectedPauseEpoch: args.expected_pause_epoch, expectedTeamRevision: args.expected_team_revision })); }),
+    execute: run(async (args, execution) => { requireDirectHumanRoot(ctx, execution); return publicResult(await resumePausedTeam(ctx, store, execution.agent, { teamId: args.team_id, requestId: args.request_id, commit: args.commit, previewId: args.preview_id, expectedPauseEpoch: args.expected_pause_epoch, expectedTeamRevision: args.expected_team_revision, autopilotGoal: ctx.goals?.get?.(execution.agent) })); }),
     presentCall: (args) => present("Resume paused team", args.team_id),
   }));
   ctx.tools.register(defineTool({
@@ -6330,7 +7759,7 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
   ctx.tools.register(defineTool({
     name: "team_shutdown", description: "Gracefully retire one member or close the whole team only after its durable tasks are reconciled. Graceful member retirement rejects unfinished owned tasks; graceful team shutdown rejects any unfinished task. Force member retirement releases owned tasks with an attention marker, while force team shutdown records unfinished tasks as cancelled before closing.",
     parameters: { team_id: { type: "string", description: "Optional only when the root lead owns exactly one unclosed team." }, member_session_id: { type: "string" }, force: { type: "boolean" } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => publicResult(await shutdownTeam(ctx, store, admission, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force }, signal))),
+    execute: run(async (args, execution, signal) => publicResult(await shutdownTeam(ctx, store, admission, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force }, signal, authorizationProvider))),
     presentCall: (args) => present("Shut down team", args.team_id),
   }));
 }
@@ -6346,14 +7775,14 @@ function errorPayload(error, fallbackCode = "AGENT_TEAMS_INVALID_REQUEST") {
     code: typeof error?.code === "string" ? error.code : fallbackCode,
   };
 }
-function trustedRequest(req) {
+function trustedRequest(req, { requireOrigin = false } = {}) {
   const rawHost = req.headers.host;
   if (typeof rawHost !== "string") return false;
   let host;
   try { host = new URL(`http://${rawHost}`).hostname.toLowerCase(); } catch { return false; }
   if (host !== "127.0.0.1" && host !== "localhost") return false;
   const origin = req.headers.origin;
-  if (origin === undefined) return true;
+  if (origin === undefined) return !requireOrigin;
   try {
     const parsed = new URL(origin);
     return parsed.protocol === "http:" && parsed.host.toLowerCase() === rawHost.toLowerCase() && ["127.0.0.1", "localhost"].includes(parsed.hostname.toLowerCase());
@@ -6485,9 +7914,157 @@ function createSseBroadcaster({ delayMs = SSE_COALESCE_MS, keepaliveMs = TEAM_SS
   return { add, clients, close, flush, remove, schedule, send };
 }
 
-function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessionLaunch, projectTaskRuntimeForSession, projectRootRecoveryScheduler) {
+function agentTeamAutopilotHostTeamScopeHash(teams) {
+  const material = [...teams].sort((left, right) => left.id.localeCompare(right.id)).map((team) => [
+    team.id,
+    team.rootLeadSessionId,
+    team.projectKey ?? null,
+    effectiveTeamState(team),
+    team.pauseEpoch ?? 0,
+    team.plan?.phase ?? null,
+    team.plan?.hash ?? null,
+  ]);
+  return createHash("sha256").update(JSON.stringify(["agent-teams-autopilot-host-team-scope-v1", material])).digest("hex");
+}
+function normalizeAgentTeamAutopilotHostScope(value) {
+  if (!isRecord(value)) reject("automatic continuation requires an exact Desktop Host scope", "AGENT_TEAMS_HOST_AUTHORIZATION_INVALID");
+  assertAllowedKeys(value, AGENT_TEAM_AUTOPILOT_HOST_SCOPE_KEYS, "hostAuthorization");
+  const scope = {
+    rootSessionId: nonEmptyString(value.rootSessionId, "hostAuthorization.rootSessionId", 256),
+    projectKey: nonEmptyString(value.projectKey, "hostAuthorization.projectKey", 64),
+    goalId: nonEmptyString(value.goalId, "hostAuthorization.goalId", 256),
+    teamId: nonEmptyString(value.teamId, "hostAuthorization.teamId", 256),
+    pauseEpoch: positiveInteger(value.pauseEpoch, "hostAuthorization.pauseEpoch", { allowZero: true }),
+    teamScopeHash: nonEmptyString(value.teamScopeHash, "hostAuthorization.teamScopeHash", 64),
+  };
+  if (!/^[a-f0-9]{64}$/u.test(scope.projectKey) || !/^[a-f0-9]{64}$/u.test(scope.teamScopeHash)) reject("automatic continuation project scope is invalid", "AGENT_TEAMS_HOST_AUTHORIZATION_INVALID");
+  return scope;
+}
+function verifyAgentTeamAutopilotAuthorizationReceipt(receipt, expected) {
+  if (!isRecord(receipt) || receipt.tool !== "team_autopilot" || receipt.authorizationId !== expected.authorizationId
+    || receipt.sessionId !== expected.sessionId
+    || JSON.stringify(receipt.hostAuthorization) !== JSON.stringify(expected.hostAuthorization)
+    || !isRecord(receipt.settings) || Object.keys(expected.settings).some((key) => receipt.settings[key] !== expected.settings[key])
+    || typeof receipt.desktopBindingHash !== "string" || !/^[a-f0-9]{64}$/u.test(receipt.desktopBindingHash)
+    || typeof receipt.authorizationEpoch !== "string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(receipt.authorizationEpoch)
+    || !agentTeamAutopilotSettingsProofMatches(receipt, expected.settings)
+    || !Number.isSafeInteger(receipt.issuedAt) || !Number.isSafeInteger(receipt.expiresAt) || receipt.expiresAt <= Date.now()) {
+    reject("Desktop Host automatic-continuation authorization did not match the exact request", "AGENT_TEAMS_HOST_AUTHORIZATION_INVALID");
+  }
+  return receipt.authorizationEpoch;
+}
+function attachAuthorizedAgentTeamAutopilot(ctx, document, scope, settings, authorizationEpoch) {
+  const root = ctx.agents.get(scope.rootSessionId);
+  if (root === undefined || ctx.agents.get(root.id) !== root || !ctx.agents.roots().includes(root)) reject("automatic continuation requires the exact live root", "AGENT_TEAMS_UNAUTHORIZED");
+  const team = findTeam(document, scope.teamId);
+  const goal = ctx.goals?.get?.(root);
+  if (team.rootLeadSessionId !== root.id || effectiveTeamState(team) !== "active" || team.projectKey !== scope.projectKey
+    || optionalProjectKeyForRoot(root) !== scope.projectKey || (team.pauseEpoch ?? 0) !== scope.pauseEpoch
+    || goal?.id !== scope.goalId || goal.phase !== "active") {
+    reject("automatic continuation scope changed before Host authorization was consumed", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+  }
+  const openTeams = document.teams.filter((candidate) => candidate.rootLeadSessionId === root.id && candidate.state !== "closed");
+  if (!openTeams.includes(team) || openTeams.length === 0 || agentTeamAutopilotHostTeamScopeHash(openTeams) !== scope.teamScopeHash) {
+    reject("automatic continuation team group changed before Host authorization was consumed", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+  }
+  const exactParkedGroup = goal.activation === "disarmed" && openTeams.every((candidate) => ["pending_plan", "active"].includes(candidate.autopilot?.status)
+    && candidate.autopilot.rootSessionId === root.id && candidate.autopilot.projectKey === scope.projectKey
+    && candidate.autopilot.goalId === goal.id && candidate.autopilot.pauseEpochAtGrant === (candidate.pauseEpoch ?? 0));
+  if (goal.activation !== "armed" && !exactParkedGroup) reject("automatic continuation requires the exact armed Goal or its complete safely parked grant group", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+  const existingLive = openTeams.filter((candidate) => ["pending_plan", "active"].includes(candidate.autopilot?.status));
+  if (existingLive.length > 0 && existingLive.length !== openTeams.length) {
+    reject("automatic continuation cannot rebind an incomplete live grant group", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+  }
+  if (existingLive.some((candidate) => pendingAgentTeamAutopilotWake(candidate.autopilot) !== undefined)) {
+    reject("automatic continuation cannot rebind while a durable wake is pending", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+  }
+  if (existingLive.some((candidate) => candidate.autopilot.rootSessionId !== root.id || candidate.autopilot.projectKey !== scope.projectKey
+    || candidate.autopilot.goalId !== goal.id || candidate.autopilot.goalObjectiveHash !== agentTeamAutopilotObjectiveHash(goal.objective)
+    || candidate.autopilot.pauseEpochAtGrant !== (candidate.pauseEpoch ?? 0) || candidate.autopilot.expectedMaxGoalRounds !== goal.maxGoalRounds
+    || candidate.autopilot.additionalRoundsGranted > settings.autopilotMaxAdditionalRounds)) {
+    reject("automatic continuation cannot reset consumed rounds or rebind stale grant facts", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+  }
+  const grants = openTeams.map((candidate) => {
+    if (effectiveTeamState(candidate) !== "active" || candidate.projectKey !== scope.projectKey || candidate.closure !== undefined || candidate.handoff !== undefined
+      || (candidate.memberRecoveries ?? []).some((receipt) => receipt.status === "outcome_unknown" || receipt.status === "prepared")) {
+      reject("automatic continuation can authorize only the exact safe open team group", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+    }
+    const routingReceipt = [...document.routingReceipts].reverse().find((receipt) => receipt.teamId === candidate.id
+      && receipt.rootSessionId === root.id && receipt.establishmentAuthority === "direct_human" && ["created", "reused"].includes(receipt.outcome))
+      ?? document.routingReceipts.find((receipt) => receipt.id === candidate.autopilot?.routingReceiptId
+        && receipt.establishmentAuthority === "direct_human" && ["created", "reused"].includes(receipt.outcome));
+    if (routingReceipt === undefined) reject("automatic continuation requires direct-human team establishment evidence", "AGENT_TEAMS_UNAUTHORIZED");
+    const planHash = candidate.plan?.phase === "active" && teamHasEstablishedWorker(candidate) && planAuthorizationSupportsAutopilot(candidate)
+      && planCapabilitiesAreVerified(candidate) && planFilesAreConflictFree(candidate) && planEffectsAreOrdinary(candidate) ? candidate.plan.hash : undefined;
+    let grant;
+    if (["pending_plan", "active"].includes(candidate.autopilot?.status)) {
+      grant = clone(candidate.autopilot);
+      grant.grantId = randomUUID();
+      grant.routingReceiptId = routingReceipt.id;
+      grant.authorizationEpoch = authorizationEpoch;
+      grant.status = planHash === undefined ? "pending_plan" : "active";
+      grant.maxAdditionalRounds = settings.autopilotMaxAdditionalRounds;
+      grant.grantedAt = now();
+      grant.revokedAt = undefined;
+      grant.revokeReason = undefined;
+      if (planHash === undefined) grant.planHashAtGrant = undefined;
+      else grant.planHashAtGrant = planHash;
+      if (goal.activation === "armed") {
+        grant.parkedGoalRevision = undefined;
+        grant.parkedAt = undefined;
+      }
+    } else {
+      grant = createAgentTeamAutopilotGrant(root, goal, {
+        authorizationEpoch,
+        planHash,
+        pauseEpoch: candidate.pauseEpoch ?? 0,
+        routingReceiptId: routingReceipt.id,
+        maxAdditionalRounds: settings.autopilotMaxAdditionalRounds,
+      });
+    }
+    if (grant === undefined) reject("automatic continuation grant facts are incomplete", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+    return [candidate, grant];
+  });
+  const timestamp = now();
+  for (const [candidate, grant] of grants) { candidate.autopilot = grant; candidate.updatedAt = timestamp; }
+  return true;
+}
+
+async function failClosedAfterAgentTeamSettingsConsume(ctx, store, preview, reason) {
+  const rootGoalIds = new Map();
+  for (const team of preview.document.teams) {
+    if (!["pending_plan", "active"].includes(team.autopilot?.status)) continue;
+    const ids = rootGoalIds.get(team.rootLeadSessionId) ?? new Set();
+    ids.add(team.autopilot.goalId);
+    rootGoalIds.set(team.rootLeadSessionId, ids);
+  }
+  for (const [rootSessionId, goalIds] of rootGoalIds) {
+    disarmBoundAgentTeamGoal(ctx, ctx.agents.get(rootSessionId), preview.document, goalIds);
+  }
+  if (rootGoalIds.size > 0) {
+    await store.mutate((document) => {
+      for (const team of document.teams) if (rootGoalIds.has(team.rootLeadSessionId)) {
+        revokeAgentTeamAutopilot(team, reason, "revoked");
+      }
+      return true;
+    });
+  }
+  const finalDocument = store.snapshot();
+  for (const [rootSessionId, goalIds] of rootGoalIds) {
+    const root = ctx.agents.get(rootSessionId);
+    disarmBoundAgentTeamGoal(ctx, root, finalDocument, goalIds);
+    const goal = typeof ctx.goals?.get === "function" ? ctx.goals.get(root) : undefined;
+    if (liveAgentTeamAutopilotTeams(finalDocument, rootSessionId).length > 0
+      || goal?.phase === "active" && goal.activation === "armed" && goalIds.has(goal.id)) {
+      reject("Host settings failure could not revoke every old automatic-continuation boundary", "AGENT_TEAMS_GOAL_DEACTIVATION_FAILED");
+    }
+  }
+}
+
+function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessionLaunch, projectTaskRuntimeForSession, projectRootRecoveryScheduler, authorizationProvider) {
   const officialCorePorts = officialCorePortsForProjectEntry(projectEntry);
-  const broadcaster = createSseBroadcaster();
+  const stateSnapshot = (document, sessionId, selectedTeamId) => teamSnapshotWithAutopilotAuthorization(ctx, document, sessionId, selectedTeamId);
+  const broadcaster = createSseBroadcaster({ snapshot: stateSnapshot });
   const detailSnapshot = (document, sessionId, selectedTeamId, selectedTaskId) => projectTaskDetailForUi(ctx, document, sessionId, selectedTeamId, selectedTaskId)
     ?? { unavailable: true, taskId: selectedTaskId ?? null };
   const detailBroadcaster = createSseBroadcaster({ snapshot: detailSnapshot });
@@ -6506,7 +8083,7 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
         const requestUrl = new URL(req.url, "http://x");
         const sessionId = nonEmptyString(requestUrl.searchParams.get("sessionId"), "sessionId", 256);
         const selectedTeamId = optionalString(requestUrl.searchParams.get("teamId"), "teamId", 256);
-        return json(res, 200, await store.read((document) => teamSnapshot(document, sessionId, selectedTeamId)));
+        return json(res, 200, await store.read((document) => stateSnapshot(document, sessionId, selectedTeamId)));
       } catch (error) { return json(res, 400, errorPayload(error)); }
     },
   }), "agent-teams state route");
@@ -6578,7 +8155,7 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
         res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no", "x-content-type-options": "nosniff" });
         res.flushHeaders?.();
         const client = broadcaster.add(sessionId, selectedTeamId, res);
-        broadcaster.send(client, await store.read((document) => teamSnapshot(document, sessionId, selectedTeamId)));
+        broadcaster.send(client, await store.read((document) => stateSnapshot(document, sessionId, selectedTeamId)));
         req.once("close", () => broadcaster.remove(client));
       } catch (error) { if (!res.headersSent) return json(res, 400, errorPayload(error)); }
     },
@@ -6586,7 +8163,7 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
   ctx.effect(() => ctx.webServer.register({
     kind: "exact", path: "/api/agent-teams/action", handler: async (req, res) => {
       if (req.method !== "POST") return json(res, 405, { error: "method not allowed", code: "AGENT_TEAMS_METHOD_NOT_ALLOWED" });
-      if (!trustedRequest(req) || req.headers["x-harness-agent-teams"] !== "1") return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
+      if (!trustedRequest(req, { requireOrigin: true }) || req.headers["x-harness-agent-teams"] !== "1") return json(res, 403, { error: "forbidden", code: "AGENT_TEAMS_FORBIDDEN" });
       let body;
       try { body = await readJsonBody(req); } catch (error) { return json(res, error?.status === 413 ? 413 : 400, errorPayload(error, error?.status === 413 ? "AGENT_TEAMS_BODY_TOO_LARGE" : "AGENT_TEAMS_INVALID_REQUEST")); }
       try {
@@ -6595,14 +8172,106 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
         const sessionId = nonEmptyString(body.sessionId, "sessionId", 256);
         let result;
         if (action === "settings") {
-          result = await store.mutate((document) => {
-            if (body.enabled === false && document.teams.some((team) => team.state !== "closed")) reject("close the active team before disabling Agent Teams", "AGENT_TEAMS_CONFLICT");
-            document.settings = {
-              enabled: body.enabled === undefined ? document.settings.enabled : Boolean(body.enabled),
-              maxMembers: safeLimit(body.maxMembers, "maxMembers", document.settings.maxMembers),
-              maxActiveTurns: safeLimit(body.maxActiveTurns, "maxActiveTurns", document.settings.maxActiveTurns),
-            };
-            return { settings: document.settings };
+          result = await store.runOperation(async () => {
+            const preview = await store.read((document) => {
+              if (body.enabled === false && document.teams.some((team) => team.state !== "closed")) reject("close the active team before disabling Agent Teams", "AGENT_TEAMS_CONFLICT");
+              if (body.autopilotEnabled !== undefined && typeof body.autopilotEnabled !== "boolean") reject("autopilotEnabled must be a boolean", "AGENT_TEAMS_INVALID_REQUEST");
+              const nextSettings = {
+                enabled: body.enabled === undefined ? document.settings.enabled : Boolean(body.enabled),
+                maxMembers: safeLimit(body.maxMembers, "maxMembers", document.settings.maxMembers),
+                maxActiveTurns: safeLimit(body.maxActiveTurns, "maxActiveTurns", document.settings.maxActiveTurns),
+                autopilotEnabled: body.autopilotEnabled === undefined ? document.settings.autopilotEnabled : body.autopilotEnabled,
+                autopilotMaxAdditionalRounds: safeLimit(body.autopilotMaxAdditionalRounds, "autopilotMaxAdditionalRounds", document.settings.autopilotMaxAdditionalRounds, AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS),
+              };
+              return { document, nextSettings, hostScope: body.hostAuthorization === undefined ? undefined : normalizeAgentTeamAutopilotHostScope(body.hostAuthorization) };
+            });
+            const budgetChanged = preview.nextSettings.autopilotMaxAdditionalRounds !== preview.document.settings.autopilotMaxAdditionalRounds;
+            const autopilotModeChanged = preview.nextSettings.autopilotEnabled !== preview.document.settings.autopilotEnabled;
+            const authorizationRequired = preview.nextSettings.autopilotEnabled || autopilotModeChanged || budgetChanged;
+            if (!authorizationRequired) {
+              return store.mutate((document) => {
+                document.settings = preview.nextSettings;
+                return { settings: document.settings };
+              });
+            }
+            if (preview.nextSettings.autopilotEnabled && preview.hostScope === undefined) {
+              reject("enabling automatic continuation requires an exact Desktop Host scope", "AGENT_TEAMS_HOST_AUTHORIZATION_REQUIRED");
+            }
+            // The outer web session is an independent trust boundary. Check it
+            // before claiming the one-time Host receipt so a misbound request
+            // cannot burn a valid capability that the exact root can still use.
+            if (preview.hostScope !== undefined && sessionId !== preview.hostScope.rootSessionId) {
+              reject("Desktop Host authorization is bound to a different root session", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+            }
+            const suppliedHeader = req.headers[AGENT_TEAM_AUTOPILOT_AUTHORIZATION_HEADER];
+            const suppliedBodyCapability = body.hostAuthorizationCapability;
+            if (suppliedHeader === undefined || suppliedBodyCapability === undefined) {
+              reject("automatic continuation settings require a one-time Desktop Host authorization", "AGENT_TEAMS_HOST_AUTHORIZATION_REQUIRED");
+            }
+            const authorizationId = nonEmptyString(suppliedHeader, "Desktop Host authorization", 256);
+            const bodyAuthorizationId = nonEmptyString(suppliedBodyCapability, "Desktop Host authorization capability", 256);
+            if (bodyAuthorizationId !== authorizationId) reject("Desktop Host authorization did not match the exact settings request", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
+            if (typeof authorizationProvider?.consumeAutopilotAuthorization !== "function") reject("Desktop Host automatic-continuation authorization is unavailable", "AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE");
+            const expected = { authorizationId, sessionId, settings: preview.nextSettings, hostAuthorization: preview.hostScope ?? null };
+            let budgetExhaustsScopedGroup = false;
+            // Prove the exact stable team/plan/pause scope before consuming the
+            // one-time epoch-changing receipt. An unscoped save still records
+            // the persistent Host preference but cannot mint a current grant.
+            if (preview.nextSettings.autopilotEnabled && preview.hostScope !== undefined) {
+              const scopedOpenTeams = preview.document.teams.filter((team) => team.rootLeadSessionId === preview.hostScope.rootSessionId && team.state !== "closed");
+              const liveScopedTeams = scopedOpenTeams.filter((team) => ["pending_plan", "active"].includes(team.autopilot?.status));
+              budgetExhaustsScopedGroup = liveScopedTeams.some((team) => team.autopilot.additionalRoundsGranted > preview.nextSettings.autopilotMaxAdditionalRounds);
+              const preflightBudget = Math.max(preview.nextSettings.autopilotMaxAdditionalRounds,
+                ...liveScopedTeams.map((team) => Math.max(team.autopilot.maxAdditionalRounds, team.autopilot.additionalRoundsGranted)));
+              attachAuthorizedAgentTeamAutopilot(ctx, clone(preview.document), preview.hostScope,
+                { ...preview.nextSettings, autopilotMaxAdditionalRounds: preflightBudget }, "preflight_host_authority_epoch");
+            }
+            let hostConsumeStarted = false;
+            try {
+              hostConsumeStarted = true;
+              const receipt = await authorizationProvider.consumeAutopilotAuthorization(expected);
+              const authorizationEpoch = verifyAgentTeamAutopilotAuthorizationReceipt(receipt, expected);
+              const authorized = preview.nextSettings.autopilotEnabled && preview.hostScope !== undefined && !budgetExhaustsScopedGroup
+                ? { scope: preview.hostScope, authorizationEpoch } : undefined;
+              const retainedRootId = authorized?.scope.rootSessionId;
+              const revokedRootIds = new Set(preview.document.teams.filter((team) => ["pending_plan", "active"].includes(team.autopilot?.status)
+                && team.rootLeadSessionId !== retainedRootId).map((team) => team.rootLeadSessionId));
+              const revokedGoalIds = new Map([...revokedRootIds].map((rootSessionId) => [rootSessionId, liveAgentTeamAutopilotGoalIds(preview.document, rootSessionId)]));
+              for (const rootSessionId of revokedRootIds) disarmBoundAgentTeamGoal(ctx, ctx.agents.get(rootSessionId), preview.document);
+              const mutationResult = await store.mutate((document) => {
+                for (const team of document.teams) {
+                  if (!["pending_plan", "active"].includes(team.autopilot?.status) || team.rootLeadSessionId === retainedRootId) continue;
+                  const exhaustedByBudget = budgetExhaustsScopedGroup && team.rootLeadSessionId === preview.hostScope?.rootSessionId;
+                  revokeAgentTeamAutopilot(team, exhaustedByBudget
+                    ? "Host automatic-continuation budget is below the rounds already consumed by this Goal"
+                    : preview.nextSettings.autopilotEnabled ? "Host settings authorization moved to another exact root scope"
+                      : "Host disabled automatic goal continuation", exhaustedByBudget ? "exhausted" : "revoked");
+                }
+                document.settings = preview.nextSettings;
+                if (authorized !== undefined) attachAuthorizedAgentTeamAutopilot(ctx, document, authorized.scope, preview.nextSettings, authorized.authorizationEpoch);
+                return { settings: document.settings };
+              });
+              // Recheck both process-local Goal activation and durable grants
+              // after the write. The consumed receipt already rotated the Host
+              // epoch, so no second Host rotation is permitted here.
+              const finalDocument = store.snapshot();
+              for (const [rootSessionId, boundGoalIds] of revokedGoalIds) {
+                const root = ctx.agents.get(rootSessionId);
+                disarmBoundAgentTeamGoal(ctx, root, finalDocument, boundGoalIds);
+                const goal = typeof ctx.goals?.get === "function" ? ctx.goals.get(root) : undefined;
+                if (liveAgentTeamAutopilotTeams(finalDocument, rootSessionId).length > 0
+                  || goal?.phase === "active" && goal.activation === "armed" && boundGoalIds.has(goal.id)) {
+                  reject("automatic-continuation settings revocation did not reach both authority boundaries", "AGENT_TEAMS_GOAL_DEACTIVATION_FAILED");
+                }
+              }
+              return mutationResult;
+            } catch (error) {
+              if (hostConsumeStarted) {
+                await failClosedAfterAgentTeamSettingsConsume(ctx, store, preview,
+                  `Host settings authorization failed closed after consumption: ${error?.code ?? "unknown error"}`);
+              }
+              throw error;
+            }
           });
         } else if (action === "root-recovery-continue") {
           if (body.confirm !== true) reject("root recovery requires explicit direct-human confirmation", "AGENT_TEAMS_RECOVERY_CONFIRMATION_REQUIRED");
@@ -6632,10 +8301,10 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
           if (lead === undefined || !ctx.agents.roots().includes(lead)) reject("member recovery reconciliation requires the exact fixed root session", "AGENT_TEAMS_UNAUTHORIZED");
           result = await officialCorePorts.recovery.reconcileMember({ confirm: true, expectedRevision: body.expectedRevision, resolution: body.resolution, operation: () => reconcileMemberRecovery(ctx, store, lead, { teamId: body.teamId, requestId: body.requestId, resolution: body.resolution, expectedRevision: body.expectedRevision }) });
         } else reject("team mutations are available only through authenticated model tools; use the lead conversation or open a member conversation", "AGENT_TEAMS_UNAUTHORIZED");
-        const state = await store.read((document) => teamSnapshot(document, sessionId, body.teamId));
+        const state = await store.read((document) => stateSnapshot(document, sessionId, body.teamId));
         return json(res, 200, publicResult({ result, state }));
       } catch (error) {
-        const status = error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : ["AGENT_TEAMS_UNAUTHORIZED", "PROJECT_TASK_WEB_FORBIDDEN"].includes(error?.code) ? 403 : error?.code?.includes("CONFLICT") || error?.code?.includes("LIMIT") ? 409 : 400;
+        const status = error?.code === "AGENT_TEAMS_NOT_FOUND" ? 404 : ["AGENT_TEAMS_UNAUTHORIZED", "PROJECT_TASK_WEB_FORBIDDEN"].includes(error?.code) || error?.code?.startsWith("AGENT_TEAMS_HOST_AUTHORIZATION") ? 403 : error?.code?.includes("CONFLICT") || error?.code?.includes("LIMIT") ? 409 : 400;
         return json(res, status, errorPayload(error));
       }
     },
@@ -7128,7 +8797,7 @@ function observeProjectRootFailures(ctx,projectEntry,projectSessionLaunch,ready=
   });
 }
 
-function observeUserStops(ctx, store, ready, admission, projectSessionLaunch, projectEntry) {
+function observeUserStops(ctx, store, ready, admission, projectSessionLaunch, projectEntry, authorizationProvider) {
   const scheduleProjectTaskWake = (root, options) => {
     if (projectEntry === undefined || !ctx.agents.roots().includes(root)) return;
     void ready.then(() => reconcileProjectTaskWakeRoot(ctx, projectEntry, root, options))
@@ -7156,7 +8825,7 @@ function observeUserStops(ctx, store, ready, admission, projectSessionLaunch, pr
     // durably increments pauseEpoch and marks every team paused before it drains or
     // interrupts any child. Late lifecycle/task writes are fenced by that epoch.
     for (const selection of selections) USER_PAUSED_TEAMS.add(selection.teamId);
-    const reconciliation = ready.then(() => pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt));
+    const reconciliation = ready.then(() => pauseTeamsForUserStop(ctx, store, lead, selections, stoppedAt, authorizationProvider));
     for (const selection of selections) USER_PAUSE_RECONCILIATIONS.set(selection.teamId, reconciliation);
     store.notify?.();
     // The stock UI cancellation preserves queued inbox work. For a team-owning root,
@@ -7176,6 +8845,8 @@ function resolveConfig(config = {}) {
     enabled: config.enabled ?? DEFAULT_SETTINGS.enabled,
     maxMembers: safeLimit(config.maxMembers, "maxMembers", DEFAULT_SETTINGS.maxMembers),
     maxActiveTurns: safeLimit(config.maxActiveTurns, "maxActiveTurns", DEFAULT_SETTINGS.maxActiveTurns),
+    autopilotEnabled: config.autopilotEnabled ?? DEFAULT_SETTINGS.autopilotEnabled,
+    autopilotMaxAdditionalRounds: safeLimit(config.autopilotMaxAdditionalRounds, "autopilotMaxAdditionalRounds", DEFAULT_SETTINGS.autopilotMaxAdditionalRounds, AGENT_TEAM_AUTOPILOT_MAX_ADDITIONAL_ROUNDS),
   };
 }
 // Cordis resolves an optional service through ctx.get(name) without requiring
@@ -7253,8 +8924,12 @@ function resolveAgentTeamsAuthorizationProvider(ctx) {
   try { value = typeof ctx?.get === "function" ? ctx.get("agentTeamsAuthorization") : undefined; }
   catch { return desktop; }
   if (isPlainRecord(value)) {
-    const consumeResolveUnknown = ownDataDescriptorOrAbsent(value, "consumeResolveUnknown");
-    if (typeof consumeResolveUnknown === "function") return Object.freeze({ consumeResolveUnknown: (request) => consumeResolveUnknown.call(value, request) });
+    const projected = { available: true };
+    for (const name of ["consumeResolveUnknown", "consumeAutopilotAuthorization", "readAutopilotAuthorizationState", "revokeAutopilotAuthorizations"]) {
+      const method = ownDataDescriptorOrAbsent(value, name);
+      if (typeof method === "function") projected[name] = (request) => method.call(value, request);
+    }
+    if (Object.keys(projected).length > 1) return Object.freeze(projected);
   }
   return desktop;
 }
@@ -7381,6 +9056,8 @@ function apply(ctx, config = {}) {
     },
   })] });
   const ready = Promise.all([store.init(), projectSessionLaunch.init()]).then(([document]) => document);
+  const teamAutopilot = createAgentTeamAutopilot(ctx, store, ready, authorizationProvider);
+  ctx.effect(() => () => teamAutopilot.close(), "agent-teams event-driven autopilot");
   projectTaskWakeScheduler = createProjectTaskWakeScheduler(ctx, officialCorePorts, ready);
   ctx.effect(() => () => projectTaskWakeScheduler.close());
   const projectRootRecoveryScheduler = createProjectRootRecoveryScheduler(ctx, officialCorePorts, projectSessionLaunch, ready);
@@ -7428,18 +9105,21 @@ function apply(ctx, config = {}) {
       store.close();
     };
   }, "agent-teams collaboration presence");
-  registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization);
+  registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization, authorizationProvider);
   registerProjectCollaborationTools(ctx, officialCorePorts, projectSessionLaunch, ready, projectRootRecoveryScheduler);
   registerProjectSessionLaunchTool(ctx, officialCorePorts, projectSessionLaunch, ready);
   registerProjectFoundationTools(ctx, projectFoundations, ready);
   registerProjectFoundationsApi(ctx, projectFoundations, ready);
-  registerWebApi(ctx, store, ready, admission, officialCorePorts, projectSessionLaunch, projectTaskRuntimeForSession, projectRootRecoveryScheduler);
+  registerWebApi(ctx, store, ready, admission, officialCorePorts, projectSessionLaunch, projectTaskRuntimeForSession, projectRootRecoveryScheduler, authorizationProvider);
   registerProjectEntryApi(ctx, projectEntry);
   registerProjectTaskApi(ctx, projectTaskRuntimeForSession, projectBusiness);
   registerProjectAutomationApi(ctx, projectAutomations, projectBusiness);
   observeSubagents(ctx, store, ready, admission);
   observeProjectRootRecoveryLifecycle(ctx, projectRootRecoveryScheduler, ready);
-  observeUserStops(ctx, store, ready, admission, projectSessionLaunch, officialCorePorts);
+  // Preserve the established lifecycle wiring contract:
+  // observeUserStops(ctx, store, ready, admission, projectSessionLaunch, officialCorePorts)
+  // The trailing capability only rotates the trusted Host authorization epoch.
+  observeUserStops(ctx, store, ready, admission, projectSessionLaunch, officialCorePorts, authorizationProvider);
   observeProjectTaskWakeLifecycle(ctx, officialCorePorts, ready);
   observeProjectRootFailures(ctx,projectEntryRegistry,projectSessionLaunch,ready);
 }
@@ -7480,8 +9160,12 @@ export {
   createProjectTaskSseBridge,
   createProjectTaskSessionRuntimeResolver,
   createProjectTaskWakeScheduler,
+  createAgentTeamAutopilot,
   createProjectRootRecoveryScheduler,
   rootProjectTaskWakeEvidence,
+  rootCanAutonomouslyWait,
+  rootHasSafeAutopilotAuthority,
+  agentTeamAutopilotWakeRoots,
   reconcileProjectTaskWakeRoot,
   observeProjectTaskWakeLifecycle,
   observeProjectRootRecoveryLifecycle,
@@ -7492,6 +9176,7 @@ export {
   dispatchProjectTaskWakeSignals,
   createTeamTurnAdmission,
   fileBoundaryOverlap,
+  exactGoalRoundRootAuthority,
   hasExactGoalRoundRootAuthority,
   hasTeamCreationRootAuthority,
   normalizeExpansionRequest,

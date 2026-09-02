@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtemp, rm } = require('node:fs/promises')
+const { mkdtemp, rm, writeFile } = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 
@@ -49,6 +49,31 @@ test('missing credential fails closed without projecting the reference resolutio
   assert.equal(created.status.phase, 'failed')
   assert.equal(created.status.error.code, 'MCP_CREDENTIAL_MISSING')
   assert.doesNotMatch(created.status.error.message, /MCP_TOKEN/)
+})
+
+test('profile load starts enabled MCP servers concurrently within one bounded startup window', async t => {
+  const { McpManager } = await plugin
+  const root = await mkdtemp(path.join(os.tmpdir(), 'mcp-manager-concurrent-load-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const file = path.join(root, 'servers.json')
+  const rows = ['first', 'second'].map(id => ({ ...server(true), id, serverName: id, label: id, revision: 1 }))
+  await writeFile(file, JSON.stringify({ version: 1, servers: rows }))
+  const started = []; const release = []
+  const manager = new McpManager({
+    file,
+    credentials: { resolve: async ref => ({ value: `resolved:${ref}` }) },
+    mount: config => new Promise(resolve => {
+      started.push(config.serverName)
+      release.push(() => resolve({ dispose: async () => {} }))
+    })
+  })
+  const loading = manager.load()
+  for (let index = 0; index < 50 && started.length < 2; index += 1) await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(started.sort(), ['first', 'second'])
+  for (const resolve of release) resolve()
+  const loaded = await loading
+  assert.equal(loaded.every(row => row.status.phase === 'ready'), true)
+  await manager.close()
 })
 
 test('enable and disable are revisioned and stop dynamic instances', async t => {

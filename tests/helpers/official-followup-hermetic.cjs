@@ -19,16 +19,16 @@ const FRESH_INSTALL_BASELINE = Object.freeze({ digest: 'B3D892DCB6CD2CC8D5BA062F
 const ACCEPTED_HISTORICAL_BASELINE = Object.freeze({ digest: '17D85E217EC8FA2B73B5879C618BA4760A8233E6893252E3F88AF3A6C51A44E0', fileCount: 42879, totalBytes: 369552648 })
 const REJECTED_RUN_ROOT_TOKENS = Object.freeze(['160456', '162000', '164000', '165000', '170000'])
 const ACCEPTED = Object.freeze({
-  'package.json': '9e881ac085b9dd3a9e02c06e41073a7b506e91c6439f171f204cbbc7c39baf7d',
-  'package-lock.json': 'a42c8f145309d00124f2975eb808512fe42be85e2f2d6758603a2d14cc67b0a9',
-  'scripts/patch-official-runtime.mjs': 'aea05404163096165e154dc20b1c60a4fc0cafc5af80c92e79527484260cfb27',
-  'scripts/verify-static.mjs': '7ac1cb86f709c7bf19cd250261bbb52cff4754807938929abbf8afca7da7c5bb',
-  'tests/official-alpha2-static-release-contract.test.cjs': '1e1e85e9470409cf07272517e0bd3b678ab3a6b491db8c3b2bd908d1bb97668b',
-  'tests/official-alpha2-runtime-migration.test.cjs': 'd8cd7c703ea90ea67a7fbd16a43d7ff19bc9ac05aea12e9b2aa64896f5d96d26',
+  'package.json': '242feeaccdd58369a8bb722899a0cd5e995bc979924ccc0fea5da4c7b29521a3',
+  'package-lock.json': '00b75065a460ed87f04d562ef45d9e6f1405fb5da2ea57ff8187b1c415f437c4',
+  'scripts/patch-official-runtime.mjs': 'ac1c0831008a4742be069f7eb4f0ae2d225348f6c083ffab4252fcd429dda0d8',
+  'scripts/verify-static.mjs': 'ca50ab0eed28646cfe9cee0e536bbf271d26841636525ffe3ffa793cac8400ff',
+  'tests/official-alpha2-static-release-contract.test.cjs': '9babbbd8f5cc901befba380595cd0bfc8fb37793ee016b872c9fcd55c409e2cb',
+  'tests/official-alpha2-runtime-migration.test.cjs': 'd002a0d0b19674d07beda48c892b181cedb58bcc1cf7cdfeeaa84c4c34298472',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',
-  'README.md': '51f13ab566ca2347ea5892d5c145d26d9dc5f38e35ac4a4548b9d2f6fd02abb3',
-  'CHANGELOG.md': '33a6b4875c06eca1dcd205d6b7c6a7a05d56ca6c1659167c6246b4c1fdcea6d7',
-  'release-notes.md': '3fd0b1a746aa4d765fdfb64ba3bf0e714595c9e47409b89505dc7902454bf33e'
+  'README.md': '8d7b846875e00a9312b834027862a656b0cf0ab5f3fc5231a7a1aef4d1c3cb63',
+  'CHANGELOG.md': 'df315874dcebff445a18ab0c94bf1a54244192dc787dea44fe3403e28e8ca13e',
+  'release-notes.md': '47626328b3bf21caa1a5ef158e0d358a2412ee5b79e9b3f5725fa24b18cac062'
 })
 const ACCEPTED_MIGRATION_FILES = Object.freeze({
   'candidate-summary.json': '76cce10f2aeb698528f61ddb54fcd94bc274409a89554c45cdc2643eefe2ae15',

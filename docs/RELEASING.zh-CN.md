@@ -27,7 +27,7 @@ npm run release:publish -- status --version <package.json 中的版本> --scope 
 
 Android scope 只允许干净且等于 `origin/main` 的源码，并先绑定该提交在 `main` 上唯一成功的 `CI / Android mobile compile/test` 云端编译测试证据，同时以 `mobile_only=true` 验证 iPhone/iPad 模拟器并明确跳过 macOS 桌面打包，之后才创建新的不可变 `android-v<mobileVersion>` Tag，由 GitHub Actions 使用长期证书生成/验证正式 APK，再由 CNB Runner 从 GitHub 云到云镜像；Release 只能有 APK 与 `.sha256` 两项，并重新证明既有 `v<integrationVersion>` 的 18 项桌面/组件资产、stable feed 与双云镜像没有变化。它不得调度桌面构建、组件发布或 stable 提升，也不得把本地 debug/release APK作为上传输入。iPhone/iPad 继续采用 Safari 工作台与“添加到主屏幕”，并保留模拟器门禁；没有 Apple Developer 会员时不发布不可安装的未签名 IPA。
 
-状态保存在 `.release-state/v<version>-publish.json`，`packagingMode` 固定为 `github-actions-only`。从 `v1.0.44` 起发布器固定执行：本地源码/安全门禁（删除并拒绝 `dist`，不打包）→ 候选提交快进到 `main` → GitHub Actions 按精确 `source_revision` 完成 Windows/macOS/Linux 构建、iOS 模拟器测试、三份桌面制品归档、当前 Windows 便携/安装包自检、组件健康与回滚以及安装器安装/卸载 → **全部成功后才创建唯一不可变 Tag** → 恢复工作流直接消费前述同一 run 的 Actions 制品并公开 draft → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。`release.yml` 不再监听产品 Tag，因此 Tag push 不会重复构建桌面包。旧 `local-windows` 状态绝不折算成新门禁成功；恢复时记录的 runId 必须重新匹配精确 workflow ID/名称/路径、事件、持久化 requestId 对应的 `display_title`、提交、ref、结论、成功 jobs 和制品集合；GitHub REST run 对象没有 `inputs`，不得把不存在的字段当身份依据。每次实际进入 stable 提升前都会重新检查两云 18 项资产，第二次 CNB 同步才使用 metadata-only 模式，只校验并同步三个 stable feed，不重复传输 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
+状态保存在 `.release-state/v<version>-publish.json`，`packagingMode` 固定为 `github-actions-only`。从 `v1.0.44` 起发布器固定执行：本地源码/安全门禁（删除并拒绝 `dist`，不打包）→ 候选提交快进到 `main` → GitHub Actions 按精确 `source_revision` 完成 Windows/macOS/Linux 构建、iOS 模拟器测试、三份桌面制品归档、当前 Windows 便携/安装包自检、组件健康与回滚以及安装器安装/卸载 → **全部成功后才创建唯一不可变 Tag** → 恢复工作流直接消费前述同一 run 的 Actions 制品并公开 draft → 从公开 Release 下载正式 Windows portable x64 到 `.release-state` 隔离目录并真实自检 → 签名 Android → 签名组件 → 精确 18 项清单 → CNB 从 GitHub 云端镜像 → 最后提升 stable feed → 再同步 CNB。正式 Windows 验收绑定 asset ID、size、GitHub SHA-256 digest 与产品提交，使用唯一 Electron/Harness 数据目录；跨会话恢复会重新读取远端元数据、重新计算本地字节和报告摘要并严格检查全部报告项，不能只信旧状态。该阶段不读取 `dist`、不接受 Actions artifact，且非 Windows x64 发布主机失败关闭。`release.yml` 不再监听产品 Tag，因此 Tag push 不会重复构建桌面包。旧 `local-windows` 状态绝不折算成新门禁成功；恢复时记录的 runId 必须重新匹配精确 workflow ID/名称/路径、事件、持久化 requestId 对应的 `display_title`、提交、ref、结论、成功 jobs 和制品集合；GitHub REST run 对象没有 `inputs`，不得把不存在的字段当身份依据。每次实际进入 stable 提升前都会重新检查两云 18 项资产，第二次 CNB 同步才使用 metadata-only 模式，只校验并同步三个 stable feed，不重复传输 18 个不可变资产。阶段成功后原子记录，换会话或网络中断后重复 `run` 只从未完成阶段继续。
 
 后文章节是发布器和工作流的安全契约及故障排查资料，不是让会话绕过发布器逐条手工执行的操作清单。完整信任边界、状态迁移和竞态分析见 `docs/CLOUD-RELEASE-PIPELINE.zh-CN.md`。
 
@@ -35,6 +35,7 @@ Android scope 只允许干净且等于 `origin/main` 的源码，并先绑定该
 
 - 所有本地编排默认只验证，不上传：`npm run release:orchestrate -- run --through verify`。
 - 只有干净、已验证且同一轮云构建/测试完整成功的精确提交可以创建 Tag；Tag 创建后永不移动或重建，GitHub Release、组件资产和 Android 正式 APK 一经公开也不得原地替换。
+- 用户可见的 signed manifest/stable 推进前，发布器必须已在 Windows x64 本机下载并隔离启动公开 Release 中的正式 portable x64；该副本仅用于验收，绝不回传或充当发布输入。
 - `release-manifest.json` 在新资产全部存在前继续指向上一健康版本，避免公开空链接。
 - v1.0.29 是生产组件更新的完整 Bootstrap 引导包。v1.0.25 不修改、不补发组件源。
 - Android 只允许长期 release 证书；debug、未签名、包名/版本/指纹漂移时工作流必须失败。
@@ -91,6 +92,7 @@ macOS 桌面包按显式无签名契约构建：`package.json` 的 `build.mac.id
 5. 只有上述 run 整体成功后，发布器才把唯一 `v<version>` Tag 指向该 `source_revision`。正式 Tag 一旦创建绝不移动、删除或重建。
 6. 发布器随后创建精确私有 draft，并调度 `.github/workflows/recover-release-from-actions.yml`；它只从第 4 步记录的同一 `source_run_id` 下载 Actions 制品，不在本机中转、不重新构建，也不接受其他 run 的制品。
 7. 恢复工作流生成 `SHA256SUMS.txt`、按大小/digest 幂等补齐 draft，并从 draft 重新下载全部资产核对精确集合和 SHA-256 后才一次性公开。同名资产永不覆盖；任一上传/复核失败时只留下非公开 draft，不得手工上传替代品。
+8. `local-formal-windows-validation` 随后从第 7 步公开 Release 的规范 URL 下载正式 `Harness-Desktop-<version>-portable-x64.exe`。下载目录按版本、40 位 `productRevision` 和随机 validation ID 隔离；文件必须与远端 Release ID 及 asset ID/size/`sha256:` digest/URL 一致，并用各自唯一的 `--user-data-dir`、`--harness-user-data-dir` 运行 `--self-test`。只有报告 `ok=true`、产品版本精确匹配且全部规定检查严格为 `true` 才写入成功 checkpoint；恢复时以及同一连续运行的每个后续阶段前，仍重验远端元数据、本地文件和报告。Android/组件工作流也在公开副作用前后核对发布器传入的同一正式身份，发布器在工作流结束后再次核对。漂移会阻断清单采用、CNB 和 stable；若检测前已有 APK/组件附件公开，它们可能留在不完整 Release 中，但不会被自动覆盖、不会被清单或 stable 采用，必须调查并提升版本。
 
 GitHub CLI 必须由发布者本人登录；不得在聊天中发送密码、Token 或验证码：
 
@@ -100,7 +102,7 @@ gh run list --workflow release.yml --branch v1.0.29
 gh run watch <run-id> --exit-status
 ```
 
-历史 `v1.0.41`、`v1.0.42`、`v1.0.43` Tag 与状态记录保持只读，不移动、不改写，也不把其已完成阶段重新解释为新顺序；它们曾因托管 Runner 跨平台 fixture/竞态门禁失败而未发布（v1.0.42 本地 1200 项门禁与 Ubuntu/iOS 云端通过，Windows short-path fixture 与 macOS 并发 Git worktree 竞态失败；v1.0.43 本地官方门禁 1202 tests/1200 pass/2 skip/0 fail 通过，Ubuntu job 在 CAS concurrent finalize 的 POSIX rename/inode race 失败）。从 `v1.0.44` 起，云端失败发生在 Tag 之前，因此不会留下失败 Tag：在版本号不变、旧 run 已终止、新提交是旧候选的安全快进，并且本地/远端 Tag、GitHub Release（含 draft）、CNB Release/资产、stable 提升均不存在时，发布器可以把同一个版本候选重新绑定到新 SHA；它会保留旧 run、结论和阶段快照作为 `candidateAttempts` 审计记录，并仅重置候选门禁/构建阶段。CNB absence 不读取会对不存在版本也返回 200 的 SPA release 页面，而是对精确 18 项规范 download URL 做 15 秒超时的有界 HEAD：仅 **18 项全部返回 404** 才证明不存在，任一 2xx/3xx 是副作用，410、5xx、网络异常或观测数量不是 18 均为 unknown 并 fail closed。任一条件不能证明或任何公开副作用已发生都 fail closed；启动时已有本地或远端 Tag 即使候选 run 成功也默认视为外部 Tag 并拒绝。唯一例外是 `immutable-tag` 阶段已在 state 中预先 checkpoint 同一 `sourceRevision`、`requestId`、`runId` 和操作类型的窄授权标记，随后发布器执行本地 create 或远端 push、但在完成阶段 checkpoint 前崩溃的窗口；恢复仍须重新验证同 SHA 的本地门禁、完整成功 run、五个 jobs 与制品证据。授权窗口不允许不同 SHA、不同 run、缺少本地 Tag 的远端采用或任何 Tag 移动。Tag 创建后仍维持绝对不可变，只允许恢复同一成功 source run 的制品；恢复 draft 时逐个保留大小/digest 一致的资产、只补缺失项，因此上传中断后仍可续跑。可变 `release-retry/*` push 入口已移除；如 Tag 后必须修复恢复基础设施，只能由统一发布器调度恢复工作流，云端会再次校验发布器修复提交相对产品 Tag 只改动六个白名单文件。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
+历史 `v1.0.41`、`v1.0.42`、`v1.0.43` Tag 与状态记录保持只读，不移动、不改写，也不把其已完成阶段重新解释为新顺序；它们曾因托管 Runner 跨平台 fixture/竞态门禁失败而未发布（v1.0.42 本地 1200 项门禁与 Ubuntu/iOS 云端通过，Windows short-path fixture 与 macOS 并发 Git worktree 竞态失败；v1.0.43 本地官方门禁 1202 tests/1200 pass/2 skip/0 fail 通过，Ubuntu job 在 CAS concurrent finalize 的 POSIX rename/inode race 失败）。从 `v1.0.44` 起，云端失败发生在 Tag 之前，因此不会留下失败 Tag：在版本号不变、旧 run 已终止、新提交是旧候选的安全快进，并且本地/远端 Tag、GitHub Release（含 draft）、CNB Release/资产、stable 提升均不存在时，发布器可以把同一个版本候选重新绑定到新 SHA；它会保留旧 run、结论和阶段快照作为 `candidateAttempts` 审计记录，并仅重置候选门禁/构建阶段。CNB absence 不读取会对不存在版本也返回 200 的 SPA release 页面，而是对精确 18 项规范 download URL 做 15 秒超时的有界 HEAD：仅 **18 项全部返回 404** 才证明不存在，任一 2xx/3xx 是副作用，410、5xx、网络异常或观测数量不是 18 均为 unknown 并 fail closed。任一条件不能证明或任何公开副作用已发生都 fail closed；启动时已有本地或远端 Tag 即使候选 run 成功也默认视为外部 Tag 并拒绝。唯一例外是 `immutable-tag` 阶段已在 state 中预先 checkpoint 同一 `sourceRevision`、`requestId`、`runId` 和操作类型的窄授权标记，随后发布器执行本地 create 或远端 push、但在完成阶段 checkpoint 前崩溃的窗口；恢复仍须重新验证同 SHA 的本地门禁、完整成功 run、五个 jobs 与制品证据。授权窗口不允许不同 SHA、不同 run、缺少本地 Tag 的远端采用或任何 Tag 移动。Tag 创建后仍维持绝对不可变，只允许恢复同一成功 source run 的制品；恢复 draft 时逐个保留大小/digest 一致的资产、只补缺失项，因此上传中断后仍可续跑。可变 `release-retry/*` push 入口已移除；如 Tag 后必须修复恢复基础设施，只能由统一发布器调度恢复工作流，云端会再次校验发布器修复提交相对产品 Tag 只改动白名单内的发布基础设施文件。Inno Setup 固定 6.7.0 时显式允许从托管 Runner 预装的更新版本降级，避免镜像更新导致伪失败。
 
 ## 4. 正式 Android
 
@@ -112,7 +114,7 @@ GitHub 仓库 Actions Secrets 必须已有：
 - `ANDROID_RELEASE_KEY_PASSWORD`
 - `ANDROID_RELEASE_CERT_SHA256`
 
-推送同一 Tag 时 **Publish Signed Android Mobile** 自动启动：先检查全部 Secret，再等待经过桌面矩阵和 iPhone/iPad 模拟器门禁的 Release 最多 90 分钟；手动 `workflow_dispatch` 只用于同 Tag 幂等核验。工作流强制验证 `io.harnessdesktop.mobile`、从桌面版本推导的 versionCode/versionName、长期证书固定指纹和 `apksigner`，然后只在资产尚不存在时加入：
+**Publish Signed Android Mobile** 只接受统一发布器的 `workflow_dispatch`，不监听产品 Tag push。发布器必须先持久化唯一 requestId，再传入精确 Tag、requestId，以及本机已验收的正式 Windows Release/portable 七字段身份；只采用 `display_title`、workflow 路径/ID、事件、head SHA 与 Tag ref 全部匹配该请求的运行。工作流先检查全部 Secret，并等待经过桌面矩阵和 iPhone/iPad 模拟器门禁的 Release 最多 90 分钟；它在上传前和公开 APK 复核后重新查询 GitHub，确认正式 Windows 身份没有漂移。随后强制验证 `io.harnessdesktop.mobile`、从桌面版本推导的 versionCode/versionName、长期证书固定指纹和 `apksigner`，然后只在资产尚不存在时加入：
 
 - `Harness-Mobile-<version>-android-universal.apk`
 - `Harness-Mobile-<version>-android-universal.apk.sha256`
@@ -144,7 +146,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/configure-compon
 
 ## 6. 生成生产组件与桌面签名清单
 
-统一发布器在桌面和 Android 资产公开后，从不可变产品 Tag 调度 `publish-production-components.yml` 并显式传入同一 `productRevision`；工作流不接受可变分支 push。GitHub Runner 从 Actions Secret `HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64` 创建一次性临时 PEM，确认它与 Bootstrap 内置公钥一致，再为 `win32-x64`、`darwin-x64`、`darwin-arm64` 生成：
+统一发布器在桌面和 Android 资产公开后，从不可变产品 Tag 调度 `publish-production-components.yml`，并显式传入同一 `productRevision`、已持久化的唯一 requestId 和本机验收得到的正式 Windows Release/portable 七字段身份；工作流只接受精确 `workflow_dispatch` 请求，不接受可变分支 push。Runner 在准备/上传组件前、签清单前以及全部公开/分支副作用后重新查询 GitHub 并核对该身份。GitHub Runner 从 Actions Secret `HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64` 创建一次性临时 PEM，确认它与 Bootstrap 内置公钥一致，再为 `win32-x64`、`darwin-x64`、`darwin-arm64` 生成：
 
 - 不可变 `desktop-shell-<version>-<target>.zip`
 - 不可变 `components-<version>-<target>.json`
@@ -159,7 +161,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/configure-compon
 
 1. **先有可信完整 Bootstrap**：GitHub/CNB 的 v1.0.29 完整安装包均已下载验哈希。
 2. 受保护 GitHub Runner 从不可变产品 Tag 在临时目录生成三个组件 ZIP、三个目标清单和 `COMPONENT-SHA256SUMS.txt`；不使用可变 `component-publish/*` 分支，私钥、临时 staging 和恢复资料永不进入 Git。
-3. `Publish Verified Production Components` 工作流先用内置公钥、精确文件集、SHA-256、ZIP 索引、目标架构、CNB/GitHub URL 顺序和完整包兜底绑定复核。ZIP 时间戳和清单 `publishedAt` 固定到 Tag，使重跑字节确定；已存在资产只有与本次确定性签名产物大小和 digest 完全一致才保留，只补齐缺失项，上传后重新下载复核。
+3. `Publish Verified Production Components` 工作流先重验发布器传入的正式 Windows 身份，再用内置公钥、精确文件集、SHA-256、ZIP 索引、目标架构、CNB/GitHub URL 顺序和完整包兜底绑定复核。ZIP 时间戳和清单 `publishedAt` 固定到 Tag，使重跑字节确定；已存在资产只有与本次确定性签名产物大小和 digest 完全一致才保留，只补齐缺失项，上传后重新下载复核。签清单前及工作流结束时再验正式 Windows 身份；尾部漂移会使工作流失败，发布器下一阶段也会失败关闭，不采用其清单或提升 stable。
 4. GitHub Runner 使用现有 Actions Secret 为精确 18 项 `release-manifest.json` 添加域分离的 Ed25519 签名；发布器校验签名分支父提交、唯一文件差异和内置公钥后快进 `main`，再运行 CNB 云端镜像并等待所有附件验哈希成功。
 5. 只有 GitHub 与 CNB 两端资产都可用后，才把三个签名清单复制为：
    - `component-feeds/stable/win32-x64.json`

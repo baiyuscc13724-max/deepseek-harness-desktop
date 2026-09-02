@@ -11,6 +11,11 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const { validateAndVerifyDesktopReleaseManifest } = require('../electron/bridge/desktop-release-contract.cjs')
 const {
+  expectedPortableAssetName,
+  performFormalWindowsValidation,
+  revalidateFormalWindowsValidation
+} = require('./release-local-formal-windows-validation.cjs')
+const {
   assertCandidateRebindAllowed,
   assertExistingTagRecoveryAllowed,
   canReattachPreferredDraft,
@@ -42,11 +47,13 @@ const git = String(process.env.HARNESS_RELEASE_GIT || (existsSync(bundledGit) ? 
 const npmCli = String(process.env.npm_execpath || '').trim()
 const PACKAGING_MODE = 'github-actions-only'
 const LOCAL_GATE_PHASE = 'local-source-gates'
+const LOCAL_FORMAL_WINDOWS_VALIDATION_PHASE = 'local-formal-windows-validation'
 const PHASES = [
   LOCAL_GATE_PHASE,
   'desktop-cloud-builds',
   'immutable-tag',
   'desktop-publication',
+  LOCAL_FORMAL_WINDOWS_VALIDATION_PHASE,
   'signed-android',
   'signed-components',
   'release-manifest',
@@ -64,7 +71,7 @@ const BUILD_JOBS = [
 const WORKFLOWS = Object.freeze({
   desktop: Object.freeze({ workflowName: 'Cloud Build & Release Desktop', workflowPath: '.github/workflows/release.yml', events: ['workflow_dispatch'] }),
   recovery: Object.freeze({ workflowName: 'Recover Release From Verified Actions Artifacts', workflowPath: '.github/workflows/recover-release-from-actions.yml', events: ['workflow_dispatch'] }),
-  android: Object.freeze({ workflowName: 'Publish Signed Android Mobile', workflowPath: '.github/workflows/android-mobile-release.yml', events: ['push', 'workflow_dispatch'] }),
+  android: Object.freeze({ workflowName: 'Publish Signed Android Mobile', workflowPath: '.github/workflows/android-mobile-release.yml', events: ['workflow_dispatch'] }),
   components: Object.freeze({ workflowName: 'Publish Verified Production Components', workflowPath: '.github/workflows/publish-production-components.yml', events: ['workflow_dispatch'] })
 })
 const POST_TAG_PUBLISHER_FIX_FILES = new Set([
@@ -73,8 +80,10 @@ const POST_TAG_PUBLISHER_FIX_FILES = new Set([
   '.github/workflows/publish-production-components.yml',
   'scripts/publish-cnb-cloud-mirror.ps1',
   'scripts/release-audit.mjs',
+  'scripts/release-local-formal-windows-validation.cjs',
   'scripts/release-publish.mjs',
   'scripts/release-publish-selection.cjs',
+  'scripts/verify-formal-windows-release-identity.mjs',
   'tests/release-publisher.test.cjs'
 ])
 
@@ -331,7 +340,9 @@ function componentCheckpointWorkflowIdentity(phaseState) {
     recoveryHeadSha: phaseState?.workflowHeadSha,
     recoveryHeadBranch: phaseState?.workflowHeadBranch
   })
-  return { ...bounded, ...WORKFLOWS.components }
+  const requestId = String(phaseState?.requestId || '')
+  if (!requestId) throw new Error('Component workflow checkpoint lacks its persisted request id.')
+  return { ...bounded, ...WORKFLOWS.components, displayTitle: `Components ${tag} · ${requestId}` }
 }
 
 function localTagRevision() {
@@ -434,28 +445,56 @@ function assertReleaseAssets(release, expectedNames, { draft, allowAdditional = 
   }
 }
 
-function workflowRuns(workflow) {
-  return ghJson(['run', 'list', '--repo', repo, '--workflow', workflow, '--limit', '50', '--json', 'databaseId,displayTitle,workflowName,status,conclusion,event,headBranch,headSha,createdAt,url']) || []
+async function requireCurrentFormalWindowsValidation(state, nextPhase) {
+  const evidence = state.phases?.[LOCAL_FORMAL_WINDOWS_VALIDATION_PHASE]
+  if (!evidence || evidence.status !== 'completed') {
+    throw new Error(`Publication phase ${nextPhase} requires completed formal Windows validation evidence.`)
+  }
+  const release = releaseForTag()
+  assertReleaseAssets(release, expectedDesktopNames(), { draft: false, allowAdditional: true })
+  const asset = release.assets.find(candidate => candidate.name === expectedPortableAssetName(version))
+  await revalidateFormalWindowsValidation({
+    evidence,
+    stateDir,
+    version,
+    productRevision: stateProductRevision,
+    releaseId: Number(release.id),
+    asset,
+    repo,
+    tag
+  })
+  console.log(`Revalidated formal Windows asset identity before publication phase: ${nextPhase}`)
+  return { evidence, release, asset }
 }
 
-async function waitForRunDiscovery(workflow, predicate, dispatch) {
-  const discoveryStarted = Date.now()
-  while (Date.now() - discoveryStarted < 60_000) {
-    const existing = workflowRuns(workflow).filter(predicate).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0]
-    if (existing) return existing
-    await sleep()
+function formalWindowsCheckpointIdentity(evidence) {
+  if (!evidence?.asset) throw new Error('Formal Windows workflow binding evidence is missing.')
+  return {
+    productRevision: evidence.productRevision,
+    releaseId: evidence.releaseId,
+    assetId: evidence.asset.id,
+    assetName: evidence.asset.name,
+    assetSize: evidence.asset.size,
+    assetDigest: evidence.asset.digest,
+    assetUrl: evidence.asset.browserDownloadUrl
   }
-  const dispatchedId = dispatch ? Number(await dispatch()) : 0
-  if (dispatchedId) {
-    return ghJson(['run', 'view', String(dispatchedId), '--repo', repo, '--json', 'databaseId,displayTitle,workflowName,status,conclusion,event,headBranch,headSha,createdAt,url'])
-  }
-  const dispatchedAt = Date.now()
-  while (Date.now() - dispatchedAt < 5 * 60 * 1000) {
-    const found = workflowRuns(workflow).filter(predicate).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0]
-    if (found) return found
-    await sleep()
-  }
-  throw new Error(`GitHub did not create ${workflow} within five minutes.`)
+}
+
+function formalWindowsWorkflowFields(evidence) {
+  const identity = formalWindowsCheckpointIdentity(evidence)
+  return Object.entries({
+    formal_windows_product_revision: identity.productRevision,
+    formal_windows_release_id: identity.releaseId,
+    formal_windows_asset_id: identity.assetId,
+    formal_windows_asset_name: identity.assetName,
+    formal_windows_asset_size: identity.assetSize,
+    formal_windows_asset_digest: identity.assetDigest,
+    formal_windows_asset_url: identity.assetUrl
+  })
+}
+
+function workflowRuns(workflow) {
+  return ghJson(['run', 'list', '--repo', repo, '--workflow', workflow, '--limit', '50', '--json', 'databaseId,displayTitle,workflowName,status,conclusion,event,headBranch,headSha,createdAt,url']) || []
 }
 
 async function waitForSuccessfulJobs(runId, names) {
@@ -509,8 +548,14 @@ function workflowRun(runId) {
   return run
 }
 
-function productWorkflowIdentity(workflow) {
-  return { ...workflow, headSha: stateProductRevision, headBranch: tag }
+function androidWorkflowIdentity(requestId) {
+  if (!requestId) throw new Error('Signed Android workflow identity requires its persisted request id.')
+  return {
+    ...WORKFLOWS.android,
+    headSha: stateProductRevision,
+    headBranch: tag,
+    displayTitle: `Android ${tag} · ${requestId}`
+  }
 }
 
 function candidateDesktopWorkflowIdentity(sourceRevision, requestId) {
@@ -1317,58 +1362,234 @@ async function publish() {
     }
   })
 
-  await phase(state, 'signed-android', async () => {
-    const expectedIdentity = productWorkflowIdentity(WORKFLOWS.android)
-    const stored = reusableWorkflowRun(Number(state.phases['signed-android']?.runId || 0), expectedIdentity)
-    const discoverable = { workflowName: WORKFLOWS.android.workflowName, events: WORKFLOWS.android.events, headSha: stateProductRevision, headBranch: tag }
-    const discovered = stored || await waitForRunDiscovery(
-      'android-mobile-release.yml',
-      run => matchesWorkflowRunIdentity(run, discoverable) && !(run.status === 'completed' && run.conclusion !== 'success'),
-      () => dispatchWorkflow('android-mobile-release.yml', [['tag', tag]])
-    )
-    const run = stored || reusableWorkflowRun(Number(discovered.databaseId), expectedIdentity)
-    if (!run) throw new Error('Signed Android workflow identity does not match the immutable product tag.')
-    await checkpoint(state, 'signed-android', { runId: Number(run.databaseId), url: run.url })
-    await waitForRun(run.databaseId)
+  await phase(state, 'local-formal-windows-validation', async () => {
     const release = releaseForTag()
-    assertReleaseAssets(release, [...expectedDesktopNames(), ...expectedAndroidNames()], { draft: false, allowAdditional: true })
-    return { runId: Number(run.databaseId), url: run.url }
+    assertReleaseAssets(release, expectedDesktopNames(), { draft: false, allowAdditional: true })
+    const asset = release.assets.find(candidate => candidate.name === expectedPortableAssetName(version))
+    const evidence = await performFormalWindowsValidation({
+      stateDir,
+      version,
+      productRevision: stateProductRevision,
+      releaseId: Number(release.id),
+      asset,
+      repo,
+      tag
+    })
+    const confirmedRelease = releaseForTag()
+    assertReleaseAssets(confirmedRelease, expectedDesktopNames(), { draft: false, allowAdditional: true })
+    const confirmedAsset = confirmedRelease.assets.find(candidate => candidate.name === expectedPortableAssetName(version))
+    await revalidateFormalWindowsValidation({
+      evidence,
+      stateDir,
+      version,
+      productRevision: stateProductRevision,
+      releaseId: Number(confirmedRelease.id),
+      asset: confirmedAsset,
+      repo,
+      tag
+    })
+    return evidence
+  }, {
+    validateCompleted: async completed => {
+      const release = releaseForTag()
+      assertReleaseAssets(release, expectedDesktopNames(), { draft: false, allowAdditional: true })
+      const asset = release.assets.find(candidate => candidate.name === expectedPortableAssetName(version))
+      await revalidateFormalWindowsValidation({
+        evidence: completed,
+        stateDir,
+        version,
+        productRevision: stateProductRevision,
+        releaseId: Number(release.id),
+        asset,
+        repo,
+        tag
+      })
+    }
+  })
+
+  const formalBeforeAndroid = await requireCurrentFormalWindowsValidation(state, 'signed-android')
+  const formalAndroidIdentity = formalWindowsCheckpointIdentity(formalBeforeAndroid.evidence)
+  await phase(state, 'signed-android', async () => {
+    let requestId = String(state.phases['signed-android']?.requestId || '')
+    if (!requestId) {
+      requestId = `${tag}-android-${randomUUID()}`
+      await checkpoint(state, 'signed-android', { requestId, dispatchAttemptedAt: null })
+    }
+    for (;;) {
+      const expectedIdentity = androidWorkflowIdentity(requestId)
+      const phaseState = state.phases['signed-android'] || {}
+      let run = reusableWorkflowRun(Number(phaseState.runId || 0), expectedIdentity)
+      if (!run && phaseState.dispatchAttemptedAt) {
+        run = workflowRunByExactIdentity('android-mobile-release.yml', expectedIdentity, 'Signed Android')
+        if (!run) run = await waitForExactWorkflowDiscovery('android-mobile-release.yml', expectedIdentity, 'Signed Android')
+      }
+      if (run?.status === 'completed' && run.conclusion !== 'success') {
+        const attempts = Array.isArray(phaseState.failedRequests) ? phaseState.failedRequests : []
+        if (attempts.length >= 5) throw new Error('Signed Android workflow recovery exceeded its bounded request limit.')
+        requestId = `${tag}-android-${randomUUID()}`
+        await checkpoint(state, 'signed-android', {
+          requestId,
+          dispatchAttemptedAt: null,
+          runId: null,
+          url: null,
+          failedRequests: [...attempts, {
+            requestId: String(phaseState.requestId || ''),
+            runId: Number(run.databaseId),
+            conclusion: run.conclusion,
+            url: run.url,
+            failedAt: new Date().toISOString()
+          }]
+        })
+        continue
+      }
+      if (!run) {
+        await checkpoint(state, 'signed-android', {
+          dispatchAttemptedAt: new Date().toISOString(),
+          formalWindowsIdentity: formalAndroidIdentity
+        })
+        const runId = await dispatchWorkflow('android-mobile-release.yml', [
+          ['tag', tag],
+          ...formalWindowsWorkflowFields(formalBeforeAndroid.evidence)
+        ], tag, requestId)
+        run = workflowRun(runId)
+        if (!matchesWorkflowRunIdentity(run, expectedIdentity)) {
+          throw new Error('Dispatched signed Android workflow identity does not match its persisted request id.')
+        }
+      }
+      await checkpoint(state, 'signed-android', {
+        requestId,
+        runId: Number(run.databaseId),
+        url: run.url,
+        formalWindowsIdentity: formalAndroidIdentity
+      })
+      const completed = await waitForRunCompletion(run.databaseId)
+      if (completed.conclusion !== 'success') {
+        run = workflowRun(run.databaseId)
+        continue
+      }
+      requireSuccessfulWorkflowEvidence(run.databaseId, expectedIdentity, 'Android signing')
+      await requireCurrentFormalWindowsValidation(state, 'signed-android completion')
+      const release = releaseForTag()
+      assertReleaseAssets(release, [...expectedDesktopNames(), ...expectedAndroidNames()], { draft: false, allowAdditional: true })
+      return { requestId, runId: Number(run.databaseId), url: run.url, formalWindowsIdentity: formalAndroidIdentity }
+    }
   }, {
     validateCompleted: completed => {
-      requireSuccessfulWorkflowEvidence(completed.runId, productWorkflowIdentity(WORKFLOWS.android), 'Android signing')
+      if (JSON.stringify(completed.formalWindowsIdentity) !== JSON.stringify(formalAndroidIdentity)) {
+        throw new Error('Completed Android workflow is not bound to the current formal Windows validation identity.')
+      }
+      requireSuccessfulWorkflowEvidence(completed.runId, androidWorkflowIdentity(completed.requestId), 'Android signing')
       assertReleaseAssets(releaseForTag(), [...expectedDesktopNames(), ...expectedAndroidNames()], { draft: false, allowAdditional: true })
     }
   })
 
+  const formalBeforeComponents = await requireCurrentFormalWindowsValidation(state, 'signed-components')
+  const formalComponentIdentity = formalWindowsCheckpointIdentity(formalBeforeComponents.evidence)
   await phase(state, 'signed-components', async () => {
-    const componentSource = publishPostTagRecoveryFix()
-    const expectedIdentity = { ...WORKFLOWS.components, headSha: componentSource.headSha, headBranch: componentSource.headBranch }
-    const stored = reusableWorkflowRun(Number(state.phases['signed-components']?.runId || 0), expectedIdentity)
-    const runId = Number(stored?.databaseId || 0) || await dispatchWorkflow('publish-production-components.yml', [['tag', tag], ['product_revision', stateProductRevision]], componentSource.ref)
-    const run = stored || reusableWorkflowRun(runId, expectedIdentity)
-    if (!run) throw new Error('Signed component workflow identity does not match its immutable product and bounded publisher revision.')
-    await checkpoint(state, 'signed-components', { runId, url: run.url, workflowHeadSha: componentSource.headSha, workflowHeadBranch: componentSource.headBranch })
-    await waitForRun(runId)
-    const release = releaseForTag()
-    assertReleaseAssets(release, expectedAllNames(), { draft: false })
-    return { runId, url: run.url, workflowHeadSha: componentSource.headSha, workflowHeadBranch: componentSource.headBranch }
+    let requestId = String(state.phases['signed-components']?.requestId || '')
+    if (!requestId) {
+      requestId = `${tag}-components-${randomUUID()}`
+      await checkpoint(state, 'signed-components', { requestId, dispatchAttemptedAt: null })
+    }
+    for (;;) {
+      const componentSource = publishPostTagRecoveryFix()
+      const expectedIdentity = componentCheckpointWorkflowIdentity({
+        workflowHeadSha: componentSource.headSha,
+        workflowHeadBranch: componentSource.headBranch,
+        requestId
+      })
+      const phaseState = state.phases['signed-components'] || {}
+      let run = reusableWorkflowRun(Number(phaseState.runId || 0), expectedIdentity)
+      if (!run && phaseState.dispatchAttemptedAt) {
+        run = workflowRunByExactIdentity('publish-production-components.yml', expectedIdentity, 'Signed components')
+        if (!run) run = await waitForExactWorkflowDiscovery('publish-production-components.yml', expectedIdentity, 'Signed components')
+      }
+      if (run?.status === 'completed' && run.conclusion !== 'success') {
+        const attempts = Array.isArray(phaseState.failedRequests) ? phaseState.failedRequests : []
+        if (attempts.length >= 5) throw new Error('Signed component workflow recovery exceeded its bounded request limit.')
+        requestId = `${tag}-components-${randomUUID()}`
+        await checkpoint(state, 'signed-components', {
+          requestId,
+          dispatchAttemptedAt: null,
+          runId: null,
+          url: null,
+          failedRequests: [...attempts, {
+            requestId: String(phaseState.requestId || ''),
+            runId: Number(run.databaseId),
+            conclusion: run.conclusion,
+            url: run.url,
+            failedAt: new Date().toISOString()
+          }]
+        })
+        continue
+      }
+      if (!run) {
+        await checkpoint(state, 'signed-components', {
+          requestId,
+          dispatchAttemptedAt: new Date().toISOString(),
+          workflowHeadSha: componentSource.headSha,
+          workflowHeadBranch: componentSource.headBranch,
+          formalWindowsIdentity: formalComponentIdentity
+        })
+        const runId = await dispatchWorkflow('publish-production-components.yml', [
+          ['tag', tag],
+          ['product_revision', stateProductRevision],
+          ...formalWindowsWorkflowFields(formalBeforeComponents.evidence)
+        ], componentSource.ref, requestId)
+        run = workflowRun(runId)
+        if (!matchesWorkflowRunIdentity(run, expectedIdentity)) {
+          throw new Error('Dispatched signed component workflow identity does not match its persisted request id.')
+        }
+      }
+      await checkpoint(state, 'signed-components', {
+        requestId,
+        runId: Number(run.databaseId),
+        url: run.url,
+        workflowHeadSha: componentSource.headSha,
+        workflowHeadBranch: componentSource.headBranch,
+        formalWindowsIdentity: formalComponentIdentity
+      })
+      const completed = await waitForRunCompletion(run.databaseId)
+      if (completed.conclusion !== 'success') {
+        run = workflowRun(run.databaseId)
+        continue
+      }
+      requireSuccessfulWorkflowEvidence(run.databaseId, expectedIdentity, 'component signing')
+      await requireCurrentFormalWindowsValidation(state, 'signed-components completion')
+      const release = releaseForTag()
+      assertReleaseAssets(release, expectedAllNames(), { draft: false })
+      return {
+        requestId,
+        runId: Number(run.databaseId),
+        url: run.url,
+        workflowHeadSha: componentSource.headSha,
+        workflowHeadBranch: componentSource.headBranch,
+        formalWindowsIdentity: formalComponentIdentity
+      }
+    }
   }, {
     validateCompleted: completed => {
+      if (JSON.stringify(completed.formalWindowsIdentity) !== JSON.stringify(formalComponentIdentity)) {
+        throw new Error('Completed component workflow is not bound to the current formal Windows validation identity.')
+      }
       requireSuccessfulWorkflowEvidence(completed.runId, componentCheckpointWorkflowIdentity(completed), 'component signing')
       assertReleaseAssets(releaseForTag(), expectedAllNames(), { draft: false })
     }
   })
 
+  await requireCurrentFormalWindowsValidation(state, 'release-manifest')
   await phase(state, 'release-manifest', async () => {
     const adopted = await adoptCloudSignedManifest()
     return { commit: adopted.commit, branch: adopted.branch }
   })
 
+  await requireCurrentFormalWindowsValidation(state, 'cnb-assets')
   await phase(state, 'cnb-assets', async () => {
     await readVerifiedDesktopRelease()
     npmRun(['run', 'release:cnb-cloud'], { timeout: 30 * 60 * 1000, env: releaseEnvironment() })
   })
 
+  await requireCurrentFormalWindowsValidation(state, 'stable-components')
   await phase(state, 'stable-components', async () => {
     const mirror = await verifyCloudAssetMirrorsBeforeStable()
     const files = await promoteStableFeeds()
@@ -1376,10 +1597,12 @@ async function publish() {
     return { commit, ...mirror }
   })
 
+  await requireCurrentFormalWindowsValidation(state, 'cnb-stable')
   await phase(state, 'cnb-stable', async () => {
     npmRun(['run', 'release:cnb-cloud', '--', '-StableOnly'], { timeout: 10 * 60 * 1000, env: releaseEnvironment() })
   })
 
+  await requireCurrentFormalWindowsValidation(state, 'complete')
   await phase(state, 'complete', async () => {
     await finalRemoteCheck()
     return { releaseUrl: `https://github.com/${repo}/releases/tag/${tag}`, mirrorUrl: `https://cnb.cool/${repo}/-/releases/tag/${tag}` }
@@ -1413,6 +1636,7 @@ if (scope === 'android') {
       'all release packages built and tested by GitHub Actions before tagging',
       'immutable tag only after exact successful cloud evidence',
       'cloud-only same-run release artifact transfer',
+      'public formal Windows portable isolated self-test before signed publication',
       'signed Android',
       'signed components',
       'exact 18-asset manifest',

@@ -1,26 +1,43 @@
 name: Publish Signed Android Mobile
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
         description: Existing desktop tag, or immutable android-v<version> standalone tag
         required: true
-        default: v1.0.54
       request_id:
         description: Unique publisher request identity
+        required: true
+      formal_windows_product_revision:
+        description: Locally validated desktop product revision (required for desktop tags)
+        required: false
+      formal_windows_release_id:
+        description: Locally validated public GitHub Release id (required for desktop tags)
+        required: false
+      formal_windows_asset_id:
+        description: Locally validated portable x64 asset id (required for desktop tags)
+        required: false
+      formal_windows_asset_name:
+        description: Locally validated portable x64 asset name (required for desktop tags)
+        required: false
+      formal_windows_asset_size:
+        description: Locally validated portable x64 asset size (required for desktop tags)
+        required: false
+      formal_windows_asset_digest:
+        description: Locally validated portable x64 asset sha256 digest (required for desktop tags)
+        required: false
+      formal_windows_asset_url:
+        description: Locally validated portable x64 canonical URL (required for desktop tags)
         required: false
 
-run-name: Android ${{ inputs.tag || github.ref_name }} · ${{ inputs.request_id || github.run_id }}
+run-name: Android ${{ inputs.tag }} · ${{ inputs.request_id }}
 
 permissions:
   contents: write
 
 concurrency:
-  group: android-mobile-release-${{ inputs.tag || github.ref_name }}
+  group: android-mobile-release-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -30,8 +47,15 @@ jobs:
     timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-      MOBILE_ONLY: ${{ startsWith(inputs.tag || github.ref_name, 'android-v') && 'true' || 'false' }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      MOBILE_ONLY: ${{ startsWith(inputs.tag, 'android-v') && 'true' || 'false' }}
+      FORMAL_WINDOWS_PRODUCT_REVISION: ${{ inputs.formal_windows_product_revision }}
+      FORMAL_WINDOWS_RELEASE_ID: ${{ inputs.formal_windows_release_id }}
+      FORMAL_WINDOWS_ASSET_ID: ${{ inputs.formal_windows_asset_id }}
+      FORMAL_WINDOWS_ASSET_NAME: ${{ inputs.formal_windows_asset_name }}
+      FORMAL_WINDOWS_ASSET_SIZE: ${{ inputs.formal_windows_asset_size }}
+      FORMAL_WINDOWS_ASSET_DIGEST: ${{ inputs.formal_windows_asset_digest }}
+      FORMAL_WINDOWS_ASSET_URL: ${{ inputs.formal_windows_asset_url }}
       HARNESS_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
       HARNESS_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
       HARNESS_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
@@ -39,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.tag }}
           lfs: true
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
@@ -61,6 +85,20 @@ jobs:
           echo "MOBILE_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
           test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
           if test "$MOBILE_ONLY" = true; then test "$(git rev-parse HEAD)" = "$GITHUB_SHA"; fi
+          if test "$MOBILE_ONLY" = true; then
+            test -z "$FORMAL_WINDOWS_PRODUCT_REVISION$FORMAL_WINDOWS_RELEASE_ID$FORMAL_WINDOWS_ASSET_ID$FORMAL_WINDOWS_ASSET_NAME$FORMAL_WINDOWS_ASSET_SIZE$FORMAL_WINDOWS_ASSET_DIGEST$FORMAL_WINDOWS_ASSET_URL"
+          else
+            node scripts/verify-formal-windows-release-identity.mjs \
+              --repo "$GITHUB_REPOSITORY" \
+              --tag "$RELEASE_TAG" \
+              --product-revision "$FORMAL_WINDOWS_PRODUCT_REVISION" \
+              --release-id "$FORMAL_WINDOWS_RELEASE_ID" \
+              --asset-id "$FORMAL_WINDOWS_ASSET_ID" \
+              --asset-name "$FORMAL_WINDOWS_ASSET_NAME" \
+              --asset-size "$FORMAL_WINDOWS_ASSET_SIZE" \
+              --asset-digest "$FORMAL_WINDOWS_ASSET_DIGEST" \
+              --asset-url "$FORMAL_WINDOWS_ASSET_URL"
+          fi
           test -n '${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}'
           test -n "$HARNESS_ANDROID_KEY_ALIAS"
           test -n "$HARNESS_ANDROID_STORE_PASSWORD"
@@ -166,6 +204,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if test "$MOBILE_ONLY" != true; then
+            node scripts/verify-formal-windows-release-identity.mjs \
+              --repo "$GITHUB_REPOSITORY" \
+              --tag "$RELEASE_TAG" \
+              --product-revision "$FORMAL_WINDOWS_PRODUCT_REVISION" \
+              --release-id "$FORMAL_WINDOWS_RELEASE_ID" \
+              --asset-id "$FORMAL_WINDOWS_ASSET_ID" \
+              --asset-name "$FORMAL_WINDOWS_ASSET_NAME" \
+              --asset-size "$FORMAL_WINDOWS_ASSET_SIZE" \
+              --asset-digest "$FORMAL_WINDOWS_ASSET_DIGEST" \
+              --asset-url "$FORMAL_WINDOWS_ASSET_URL"
+          fi
           existing="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
           if test "$MOBILE_ONLY" = true; then
             unexpected="$(grep -Fvx -e "$ANDROID_ASSET" -e "$ANDROID_CHECKSUM" <<< "$existing" || true)"
@@ -229,4 +279,15 @@ jobs:
             test "$(grep -c . <<< "$assets")" -eq 2
             integration="$(node -p "require('./scripts/mobile-release-version.cjs').readAndroidMobileVersion(process.cwd()).integrationVersion")"
             test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')" = "v$integration"
+          else
+            node scripts/verify-formal-windows-release-identity.mjs \
+              --repo "$GITHUB_REPOSITORY" \
+              --tag "$RELEASE_TAG" \
+              --product-revision "$FORMAL_WINDOWS_PRODUCT_REVISION" \
+              --release-id "$FORMAL_WINDOWS_RELEASE_ID" \
+              --asset-id "$FORMAL_WINDOWS_ASSET_ID" \
+              --asset-name "$FORMAL_WINDOWS_ASSET_NAME" \
+              --asset-size "$FORMAL_WINDOWS_ASSET_SIZE" \
+              --asset-digest "$FORMAL_WINDOWS_ASSET_DIGEST" \
+              --asset-url "$FORMAL_WINDOWS_ASSET_URL"
           fi

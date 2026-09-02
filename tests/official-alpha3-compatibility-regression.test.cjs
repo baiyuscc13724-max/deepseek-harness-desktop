@@ -6,8 +6,9 @@ const path = require('node:path')
 const semver = require('semver')
 const test = require('node:test')
 
-const ROOT = path.resolve(process.env.DSH_ALPHA3_CANDIDATE_ROOT || path.resolve(__dirname, '..'))
-const TARGET = '0.1.2-alpha.3'
+const ROOT = path.resolve(process.env.DSH_ALPHA4_CANDIDATE_ROOT || path.resolve(__dirname, '..'))
+const TARGET = '0.1.2-alpha.4'
+const LEGACY_ALPHA3_TARGET = '0.1.2-alpha.3'
 const DSH_SCOPE = path.join(ROOT, 'node_modules', '@deepseek-ai')
 const requiredOfficialCapabilities = Object.freeze([
   '@deepseek-ai/dsh-schedule',
@@ -68,25 +69,25 @@ function desktopOwnedPluginManifests() {
     .sort((left, right) => left.directory.localeCompare(right.directory))
 }
 
-test('alpha.3 pins the complete installed official core graph without rc.2 or alpha.2 fallback', () => {
+test('alpha.4 pins the complete installed official core graph without alpha.3, rc.2, or alpha.2 fallback', () => {
   const pkg = json('package.json')
   const lock = json('package-lock.json')
   const direct = Object.entries(pkg.dependencies).filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'))
   const optional = Object.entries(pkg.optionalDependencies || {}).filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'))
   assert.ok(direct.length > 0, 'the Desktop manifest must retain an explicit official DSH root')
   for (const [name, version] of direct) {
-    assert.equal(version, TARGET, `${name} must pin alpha.3 exactly`)
+    assert.equal(version, TARGET, `${name} must pin alpha.4 exactly`)
     assert.equal(lock.packages[''].dependencies[name], TARGET, `${name} root lock must match package.json`)
   }
   for (const [name, version] of optional) {
-    assert.equal(version, TARGET, `${name} optional root must pin alpha.3 exactly`)
+    assert.equal(version, TARGET, `${name} optional root must pin alpha.4 exactly`)
     assert.equal(lock.packages[''].optionalDependencies[name], TARGET, `${name} optional root lock must match package.json`)
   }
 
   const entries = dshEntries(lock)
   assert.ok(entries.length >= direct.length + optional.length, 'lockfile must materialize every direct and optional official package')
   for (const { location, entry, name } of entries) {
-    assert.equal(entry.version, TARGET, `${location} (${name}) must not retain a pre-alpha.3 package`)
+    assert.equal(entry.version, TARGET, `${location} (${name}) must not retain an alpha.3 or earlier package`)
     assert.match(entry.resolved, /^https:\/\/registry\.(?:npmjs\.org|npmmirror\.com)\//u, `${location} must use an official registry tarball`)
     assert.match(entry.integrity, /^sha512-[A-Za-z0-9+/]+={0,2}$/u, `${location} must retain registry integrity evidence`)
   }
@@ -169,11 +170,11 @@ test('alpha.3 official todo tool replaces the complete list and retains strict a
   await assert.rejects(tool.execute({ todos: [{ content: 'one', status: 'in_progress' }, { content: 'two', status: 'in_progress' }] }, { agent: { session: { append() {} } } }), /at most one task may be in_progress/u)
 })
 
-test('alpha.3 runtime graph classifier accepts only the installed official core', async () => {
+test('alpha.4 runtime graph classifier accepts only the installed official core', async () => {
   const { pathToFileURL } = require('node:url')
-  const patch = await import(`${pathToFileURL(path.join(ROOT, 'scripts', 'patch-official-runtime.mjs')).href}?official-alpha3=${Date.now()}`)
+  const patch = await import(`${pathToFileURL(path.join(ROOT, 'scripts', 'patch-official-runtime.mjs')).href}?official-alpha4=${Date.now()}`)
   const result = patch.classifyOfficialRuntimeGraph(json('package.json'), json('package-lock.json'), json('node_modules/@deepseek-ai/dsh/package.json'))
-  assert.equal(result.mode, 'alpha3')
+  assert.equal(result.mode, 'alpha4')
   assert.equal(result.version, TARGET)
   const rootPackage = json('package.json')
   const rootCount = [...Object.keys(rootPackage.dependencies), ...Object.keys(rootPackage.optionalDependencies || {})]
@@ -182,14 +183,17 @@ test('alpha.3 runtime graph classifier accepts only the installed official core'
   assert.ok(result.selectedPackageCount >= result.directRootCount)
 })
 
-test('official compatibility installer selects alpha.3 and rejects stale alpha.2 dispatch', () => {
+test('official compatibility installer selects alpha.4 while retaining explicit alpha.3 and alpha.2 compatibility dispatch', () => {
   const source = fs.readFileSync(path.join(ROOT, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
-  assert.match(source, /0\.1\.2-alpha\.3/u, 'runtime patcher must identify the upgraded official release')
-  assert.match(source, /officialGraph\.mode === 'alpha3'/u, 'alpha.3 requires an explicit official dispatch branch')
-  assert.match(source, /if \(targetsAlpha3\) await assertInstalledAlpha3NativeCapabilities\(\)/u, 'alpha.3 must verify native official capability anchors before patch dispatch')
+  assert.match(source, /0\.1\.2-alpha\.4/u, 'runtime patcher must identify the current official release')
+  assert.match(source, /officialGraph\.mode === 'alpha4'/u, 'alpha.4 requires an explicit official dispatch branch')
+  assert.match(source, /if \(targetsAlpha4\) await assertInstalledAlpha4NativeCapabilities\(\)/u, 'alpha.4 must verify native official capability anchors before patch dispatch')
   for (const installer of ['patchInstalledAlpha2SessionController', 'patchInstalledRuntime', 'patchInstalledConversation', 'patchInstalledAttachmentInput', 'patchInstalledModelSelection', 'patchInstalledModelSettings', 'patchInstalledWorkspaceUi', 'patchInstalledHostApiProxy']) {
-    assert.match(source, new RegExp(`targetsAlpha3 \\? false :[^;]*${installer}`, 'u'), `${installer} must be skipped for alpha.3 instead of mutating an official native owner`)
+    assert.match(source, new RegExp(`targetsAlpha4 \\? false :[^;]*${installer}`, 'u'), `${installer} must be skipped for alpha.4 instead of mutating an official native owner`)
   }
+  assert.match(source, new RegExp(LEGACY_ALPHA3_TARGET.replace(/[.]/gu, '\\.'), 'u'), 'alpha.3 remains a recognized backward-compatible official graph')
+  assert.match(source, /officialGraph\.mode === 'alpha3'/u, 'alpha.3 keeps an explicit compatibility dispatch branch')
+  assert.match(source, /if \(targetsAlpha3\) await assertInstalledAlpha3NativeCapabilities\(\)/u, 'alpha.3 retains native capability verification')
   assert.match(source, /if \(targetsAlpha2\) await assertOfficialAlpha2RemovedArtifactsAbsent\(\)/u, 'retired private bundle checks must remain confined to the alpha.2 compatibility branch')
-  assert.match(source, /for \(const removed of \[runtimeClient, hostApiProxyRuntime,/u, 'alpha.3 native capability verification must fail closed when retired private artifacts are installed')
+  assert.match(source, /for \(const removed of \[runtimeClient, hostApiProxyRuntime,/u, 'native capability verification must fail closed when retired private artifacts are installed')
 })

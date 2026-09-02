@@ -10,7 +10,7 @@ const indexUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-age
 const storeUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-store.js')).href
 
 function root(id, cwd) {
-  return { id, status: 'running', session: { header: { cwd }, events: [{ type: 'turn/start', id: `turn-${id}`, time: 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }] } }
+  return { id, status: 'running', session: { header: { cwd }, events: [{ type: 'turn/start', id: `turn-${id}`, time: 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }], snapshotEvents() { return this.events.slice() } } }
 }
 
 async function registeredFixture() {

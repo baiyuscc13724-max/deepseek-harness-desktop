@@ -270,13 +270,13 @@ window.__ModuleLoader__.load({
     }
     function requestText(mode, prompt, value) {
       if (lang === "zh") {
-        if (mode === "after") return "请在当前会话创建一个定时任务：" + JSON.stringify(prompt) + "，在 " + value + " 秒后提醒。创建后告诉我任务 ID。";
-        if (mode === "every") return "请在当前会话创建一个固定频率定时任务：" + JSON.stringify(prompt) + "，每 " + value + " 秒提醒一次。创建后告诉我任务 ID。";
+        if (mode === "after") return "请在当前会话使用 schedule_create 创建一个定时任务，参数 prompt 为 " + JSON.stringify(prompt) + "，after_seconds 为 " + value + "。创建后告诉我任务 ID。";
+        if (mode === "every") return "请在当前会话使用 schedule_create 创建一个固定频率定时任务，参数 prompt 为 " + JSON.stringify(prompt) + "，every_seconds 为 " + value + "。创建后告诉我任务 ID。";
         var zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
         return "请在当前会话创建一个定时任务：" + JSON.stringify(prompt) + "，在本地时间 " + value + "（时区 " + zone + "）提醒一次。创建后告诉我任务 ID。";
       }
-      if (mode === "after") return "Create a schedule in this session to remind me " + JSON.stringify(prompt) + " after " + value + " seconds. Return its exact id.";
-      if (mode === "every") return "Create a fixed-rate schedule in this session to remind me " + JSON.stringify(prompt) + " every " + value + " seconds. Return its exact id.";
+      if (mode === "after") return "Use schedule_create in this session with prompt " + JSON.stringify(prompt) + " and after_seconds set to " + value + ". Return its exact id.";
+      if (mode === "every") return "Use schedule_create in this session with prompt " + JSON.stringify(prompt) + " and every_seconds set to " + value + ". Return its exact id.";
       var timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
       return "Create a schedule in this session to remind me " + JSON.stringify(prompt) + " once at local time " + value + " in " + timeZone + ". Return its exact id.";
     }
@@ -352,8 +352,14 @@ window.__ModuleLoader__.load({
       function recreate(item) {
         var record = item && item.schedule ? item.schedule : item;
         if (!record || !record.prompt) return;
-        if (record.kind === "every") return setDraft(requestText("every", record.prompt, record.everySeconds));
-        if (record.kind === "after") return setDraft(requestText("after", record.prompt, record.afterSeconds));
+        if (record.kind === "every") {
+          if (!Number.isSafeInteger(record.everySeconds) || record.everySeconds < 300) return setNote(t("invalid"));
+          return setDraft(requestText("every", record.prompt, record.everySeconds));
+        }
+        if (record.kind === "after") {
+          if (!Number.isSafeInteger(record.afterSeconds) || record.afterSeconds <= 0) return setNote(t("invalid"));
+          return setDraft(requestText("after", record.prompt, record.afterSeconds));
+        }
         var message = lang === "zh" ? ("请在当前会话重新创建一次性定时任务：" + JSON.stringify(record.prompt) + "。原计划时间为 " + record.scheduledAt + "，请先向我确认新的未来时间，不要直接创建。") : ("Recreate the one-time schedule " + JSON.stringify(record.prompt) + ". Its former target was " + record.scheduledAt + "; ask me for a new future time before creating it.");
         return setDraft(message);
       }

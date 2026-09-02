@@ -1529,6 +1529,7 @@ function officialSettingsBootstrap() {
     @media (max-width:640px) { #harness-desktop-version-button { right:5px; bottom:1px; } #harness-desktop-update-center { padding:10px; } .hd-update-center-dialog { width:100%; max-height:100%; border-radius:14px; } .hd-update-center-head, .hd-update-center-toolbar, .hd-update-items { padding-left:14px; padding-right:14px; } .hd-update-item-head { flex-direction:column; } .hd-update-item-badges { justify-content:flex-start; } }
     @media (prefers-reduced-motion:reduce) { #harness-desktop-version-button, #harness-desktop-update-center { transition:none; } }
     #harness-desktop-mobile-sync-entry { position:fixed; z-index:18; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:flex-start; gap:8px; width:112px!important; min-width:112px; height:42px!important; min-height:42px; margin:0!important; border:0; border-radius:12px!important; padding:0 12px!important; color:var(--dsw-alias-label-secondary,#667085); background:transparent; font:inherit; font-size:13px; font-weight:500; white-space:nowrap; cursor:pointer; pointer-events:auto; touch-action:manipulation; app-region:no-drag; -webkit-app-region:no-drag; }
+    [data-hd-mobile-entry-anchor="expanded"] { margin-right:120px!important; }
     #harness-desktop-mobile-sync-entry[hidden] { display:none!important; }
     #harness-desktop-mobile-sync-entry:hover { color:var(--dsw-alias-label-primary,#20242b); background:var(--dsw-alias-interactive-bg-hover,#eef1f5); }
     #harness-desktop-mobile-sync-entry:focus-visible { outline:2px solid var(--dsw-alias-brand-primary,#315efb); outline-offset:2px; }
@@ -2255,18 +2256,21 @@ function officialSettingsBootstrap() {
 
   const mobileEntryCompactForWidth = (width, settingsLabelVisible = false) => !settingsLabelVisible && Number.isFinite(width) && width > 0 && width <= 72
   const mobileEntryPortalPlacement = (hostRect, triggerRect, viewportWidth, settingsLabelVisible = false) => {
+    const gap = 8
     const hostWidth = Number(hostRect?.width) || 0
     const compact = mobileEntryCompactForWidth(hostWidth, settingsLabelVisible)
     const size = compact ? 36 : 112
     const controlHeight = compact ? 36 : 42
-    const safeViewportWidth = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : Number(hostRect?.right) || size + 8
+    const safeViewportWidth = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : Number(hostRect?.right) || size + gap
     const preferredLeft = compact
       ? (Number(hostRect?.left) || 0) + Math.max(0, (hostWidth - size) / 2)
       : (Number(hostRect?.right) || size) - size
-    const left = Math.max(8, Math.min(safeViewportWidth - size - 8, Math.round(preferredLeft)))
+    const left = Math.max(gap, Math.min(safeViewportWidth - size - gap, Math.round(preferredLeft)))
     const triggerTop = Number(triggerRect?.top) || 0
     const triggerHeight = Number(triggerRect?.height) || controlHeight
-    const top = Math.max(8, Math.round(triggerTop + (triggerHeight - controlHeight) / 2))
+    const top = compact
+      ? Math.max(gap, Math.round(triggerTop - controlHeight - gap))
+      : Math.max(gap, Math.round(triggerTop + (triggerHeight - controlHeight) / 2))
     return { compact, left, top, size }
   }
   let mobileEntryLayoutWidth = 0
@@ -2281,10 +2285,12 @@ function officialSettingsBootstrap() {
     const width = Number.isFinite(observedWidth) ? observedWidth : hostRect.width
     mobileEntryLayoutWidth = width
     if (width <= 0 || triggerRect.width <= 0 || triggerRect.height <= 0) {
+      delete settingsTrigger.dataset.hdMobileEntryAnchor
       entry.hidden = true
       return
     }
     const placement = mobileEntryPortalPlacement({ left: hostRect.left, right: hostRect.right, width }, triggerRect, window.innerWidth, Boolean(settingsTrigger.textContent?.trim()))
+    settingsTrigger.dataset.hdMobileEntryAnchor = placement.compact ? 'compact' : 'expanded'
     entry.dataset.hdMobileCompact = String(placement.compact)
     entry.style.left = `${placement.left}px`
     entry.style.top = `${placement.top}px`
@@ -2296,6 +2302,7 @@ function officialSettingsBootstrap() {
       return
     }
     mobileEntryResizeObserver?.disconnect()
+    if (mobileEntryLayoutTrigger?.dataset) delete mobileEntryLayoutTrigger.dataset.hdMobileEntryAnchor
     mobileEntryLayoutHost = host
     mobileEntryLayoutTrigger = settingsTrigger
     mobileEntryLayoutWidth = 0
@@ -2312,13 +2319,13 @@ function officialSettingsBootstrap() {
   }
   window.addEventListener('resize', () => syncMobileEntryLayout())
   document.addEventListener('scroll', () => syncMobileEntryLayout(), true)
-  const activateMobileEntry = (event, open = openMobileSync) => {
+  const activateMobileEntry = (event, open = request) => {
     event?.preventDefault?.()
     event?.stopImmediatePropagation?.()
     event?.stopPropagation?.()
     const tooltip = document.querySelector('#harness-desktop-mobile-sync-tooltip')
     if (tooltip) tooltip.hidden = true
-    open()
+    open('open-mobile-sync')
   }
 
   const mountMobileEntry = () => {
@@ -2366,6 +2373,10 @@ function officialSettingsBootstrap() {
     const settingsTrigger = findSettingsTrigger()
     const host = settingsTrigger?.parentElement
     if (!settingsTrigger || !host) {
+      mobileEntryResizeObserver?.disconnect()
+      if (mobileEntryLayoutTrigger?.dataset) delete mobileEntryLayoutTrigger.dataset.hdMobileEntryAnchor
+      mobileEntryLayoutHost = null
+      mobileEntryLayoutTrigger = null
       entry.dataset.hdMobileCompact = 'false'
       entry.style.left = '104px'
       entry.style.top = 'auto'

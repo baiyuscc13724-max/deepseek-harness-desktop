@@ -1,7 +1,7 @@
 'use strict'
 
 const { createHash } = require('node:crypto')
-const { isRuntimeWebReadyStatus, normalizeRuntimeWebUrl } = require('./runtime-web-url.cjs')
+const { normalizeRuntimeWebUrl } = require('./runtime-web-url.cjs')
 
 const AUTH_COOKIE_PREFIX = 'dsh-auth-'
 const AUTH_COOKIE_VALUE_PATTERN = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u
@@ -70,16 +70,19 @@ async function requireRuntimeAuthCookie(cookieStore, value, { refresh } = {}) {
 
 async function exchangeRuntimeLaunchToken(runtimeSession, value, { signal } = {}) {
   const launchUrl = normalizeRuntimeWebUrl(value)
-  if (!launchUrl || typeof runtimeSession?.fetch !== 'function') return false
+  if (!launchUrl) return false
   const target = new URL(launchUrl)
   if (!target.searchParams.has('token')) return true
+  if (typeof runtimeSession?.fetch !== 'function') return false
   const response = await runtimeSession.fetch(launchUrl, {
     cache: 'no-store',
     credentials: 'include',
-    redirect: 'manual',
+    redirect: 'follow',
+    referrerPolicy: 'no-referrer',
     ...(signal ? { signal } : {})
   })
-  return isRuntimeWebReadyStatus(response.status)
+  if (!Number.isInteger(response?.status) || response.status < 200 || response.status >= 300) return false
+  return Boolean(await readRuntimeAuthCookie(runtimeSession.cookies, launchUrl))
 }
 
 async function runtimeSessionFetch(runtimeSession, value, options = {}) {

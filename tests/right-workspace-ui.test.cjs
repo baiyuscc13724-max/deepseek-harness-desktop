@@ -365,10 +365,11 @@ test('mobile entry layout watch is idempotent and switches host and trigger beha
   vm.runInNewContext(`${watchSource}\n globalThis.watchMobileEntryLayout = watchMobileEntryLayout`, context)
   const rect = (left, top, width, height) => ({ left, right: left + width, top, width, height })
   const hostA = { getBoundingClientRect: () => rect(10, 100, 220, 42) }
-  const triggerA = { textContent: '设置', getBoundingClientRect: () => rect(10, 100, 220, 42) }
+  const triggerA = { dataset: {}, textContent: '设置', getBoundingClientRect: () => rect(10, 100, 220, 42) }
   context.watchMobileEntryLayout(hostA, triggerA)
   assert.equal(context.observers.length, 1)
   assert.deepEqual(context.observers[0].observeCalls, [hostA, triggerA])
+  assert.equal(triggerA.dataset.hdMobileEntryAnchor, 'expanded')
   const firstPlacement = { left: context.entry.style.left, top: context.entry.style.top, hidden: context.entry.hidden }
 
   // Repeating the exact pair must not add observers or observe/listener registrations.
@@ -378,11 +379,13 @@ test('mobile entry layout watch is idempotent and switches host and trigger beha
   assert.deepEqual({ left: context.entry.style.left, top: context.entry.style.top, hidden: context.entry.hidden }, firstPlacement)
 
   const hostB = { getBoundingClientRect: () => rect(400, 200, 72, 42) }
-  const triggerB = { textContent: '', getBoundingClientRect: () => rect(400, 200, 72, 42) }
+  const triggerB = { dataset: {}, textContent: '', getBoundingClientRect: () => rect(400, 200, 72, 42) }
   context.watchMobileEntryLayout(hostB, triggerB)
   assert.equal(context.observers[0].disconnectCalls, 1)
   assert.equal(context.observers.length, 2)
   assert.deepEqual(context.observers[1].observeCalls, [hostB, triggerB])
+  assert.equal(triggerA.dataset.hdMobileEntryAnchor, undefined)
+  assert.equal(triggerB.dataset.hdMobileEntryAnchor, 'compact')
   const switched = { left: context.entry.style.left, top: context.entry.style.top, hidden: context.entry.hidden }
   assert.notDeepEqual(switched, firstPlacement)
   assert.equal(switched.hidden, false)

@@ -244,7 +244,7 @@ test('thousand-turn transcripts and large tool groups keep collapsed render work
   assert.equal(reduceConversationWorkTreeRenderCount(0, { type: 'sync', open: true, total: 4000 }), 64)
 })
 
-test('native alpha.2 chat publishes mutable node-store content snapshots without structural churn', async () => {
+test('native alpha.4 chat publishes mutable node-store content snapshots without structural churn', async () => {
   const source = await readFile(conversationRuntime, 'utf8')
   assert.match(source, /var MutableChatNodeStore = class \{[\s\S]*values\(\) \{[\s\S]*if \(this\.valuesDirty\)[\s\S]*this\.valuesCache = \[\.\.\.this\.byKey\.values\(\)\]/u)
   assert.match(source, /upsert\(nodes\) \{[\s\S]*this\.byKey\.set\(node\.key, node\)[\s\S]*if \(changed\) this\.valuesDirty = true/u)
@@ -252,10 +252,10 @@ test('native alpha.2 chat publishes mutable node-store content snapshots without
   assert.match(source, /this\.store\.upsert\(upserts\)[\s\S]*this\.order = sameReferences\$1\(this\.order, next\) \? this\.order : next/u)
   assert.match(source, /nodes: this\.store/u)
 
-  const classStart = source.indexOf('var MutableChatNodeStore = class {')
-  const classEnd = source.indexOf('\n\t\tvar MutableChatLocationIndex = class {', classStart)
-  assert.ok(classStart >= 0 && classEnd > classStart)
-  const MutableChatNodeStore = new Function('EMPTY_LIST', `${source.slice(classStart, classEnd)}\nreturn MutableChatNodeStore;`)([])
+  const projectorStart = source.indexOf('var ChatTurnProcessProjector = class {')
+  const classEnd = source.indexOf('\n\t\tvar MutableChatLocationIndex = class {', projectorStart)
+  assert.ok(projectorStart >= 0 && classEnd > projectorStart)
+  const MutableChatNodeStore = new Function(`${source.slice(projectorStart, classEnd)}\nreturn MutableChatNodeStore;`)()
   const store = new MutableChatNodeStore()
   const order = ['node:1']
   store.upsert([{ key: 'node:1', data: { status: 'running' } }])
@@ -267,26 +267,45 @@ test('native alpha.2 chat publishes mutable node-store content snapshots without
   assert.equal(secondSnapshot[0].data.status, 'settled')
 })
 
-test('native alpha.2 turn-process disclosure is session-scoped, searchable, and generation-safe', async () => {
+test('native alpha.4 turn-process disclosure is session-scoped, searchable, and answer-step-safe', async () => {
   const source = await readFile(conversationRuntime, 'utf8')
   for (const contract of [
-    'function turnProcessGeneration(spec)',
-    'function encodeTurnProcess(spec)',
-    'function decodeTurnProcess(signature)',
+    'function sameTurnProcessSpec(left, right)',
     'function storedTurnProcessEntry(state, turn)',
     'turnProcesses: []',
-    'setTurnProcessOpen: (draft, turn, generation, open)',
+    'setTurnProcessOpen: (draft, turn, answerStep, open)',
     'if (!open)',
     'draft.turnProcesses.splice(index, 1)',
-    'storedEntry?.generation === processGeneration',
-    'actions.setTurnProcessOpen(processSpec.turn, processGeneration, open)',
+    'storedEntry?.answerStep === processSpec.answerStep',
+    'actions.setTurnProcessOpen(processSpec.turn, processSpec.answerStep, open)',
     'function useSearchableHidden(hidden, reveal)',
     'element.setAttribute("hidden", "until-found")',
     'element.addEventListener("beforematch", reveal)',
     'const TurnProcessNodeView',
     '"aria-expanded": open',
     'turnProcess.setOpen(!open)',
-    'var MutableChatNodeStore = class'
+    'function SessionSeq(value)',
+    'var ChatTurnProcessProjector = class',
+    'processSource(key)',
+    'var MutableChatNodeStore = class',
+    'this.store.updateProcesses(processTurns, this.locations)'
   ]) assert.match(source, new RegExp(contract.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'))
   assert.doesNotThrow(() => new Function(source))
+})
+
+test('alpha.4 work-tree patch preserves node projector seats and session-scoped disclosure', async () => {
+  const { patchConversationWorkTreeSource } = await import(pathToFileURL(patchModule).href)
+  const source = await readFile(conversationRuntime, 'utf8')
+  const first = patchConversationWorkTreeSource(source)
+  assert.equal(first.changed, true)
+  for (const contract of [
+    'var ChatTurnProcessProjector = class',
+    'const nodeSnapshot = useChat((s) => s.nodes.values())',
+    'useChatNodeProcess',
+    'savedScrollAnchorKey: chatScroll.read()?.anchorKey',
+    'harness.desktop.work-tree-disclosure.v1:'
+  ]) assert.ok(first.source.includes(contract), `missing alpha.4 work-tree contract: ${contract}`)
+  assert.doesNotThrow(() => new Function(first.source))
+  const second = patchConversationWorkTreeSource(first.source)
+  assert.equal(second.changed, false, 'the alpha.4 patch must remain idempotent')
 })

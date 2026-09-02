@@ -6,6 +6,7 @@ const path = require('node:path')
 const { createCredentialHarness } = require('./fixtures/model-settings-key-override-runtime.cjs')
 
 const root = path.resolve(__dirname, '..')
+const runtimePackageFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-models', 'package.json')
 const runtimeFile = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-models', 'lib', 'client.js')
 
 async function moduleUnderTest() {
@@ -93,7 +94,7 @@ test('unset plus compensation failure is surfaced and records the extreme residu
   assert.equal(result.audit.filter((entry) => entry.operation === 'settings.mutate').length, 2)
 })
 
-test('native alpha.2 provider deletion selects only its writable managed ref and removes it before settings', async () => {
+test('native alpha.4 provider deletion selects only its writable managed ref and removes it before settings', async () => {
   const { managedProviderCredentialRef } = await moduleUnderTest()
   const overrideRef = 'HARNESS_DESKTOP_CUSTOM_GATEWAY_API_KEY'
   assert.equal(managedProviderCredentialRef('custom-gateway', overrideRef, { configured: true, writable: true }), overrideRef)
@@ -122,9 +123,11 @@ test('writable custom pi-ai credentials retain the normal ref and unavailable ga
   assert.equal(plan.credential.ref, 'CUSTOM_GATEWAY_API_KEY')
 })
 
-test('native alpha.2 runtime is exact, executable, write-only, masked and accessible', () => {
+test('native alpha.4 runtime is exact, executable, write-only, masked and accessible', () => {
+  const manifest = JSON.parse(readFileSync(runtimePackageFile, 'utf8'))
+  assert.deepEqual({ name: manifest.name, version: manifest.version }, { name: '@deepseek-ai/dsh-client-ui-settings-models', version: '0.1.2-alpha.4' })
   const runtime = readFileSync(runtimeFile, 'utf8')
-  assert.equal(createHash('sha256').update(runtime).digest('hex').toUpperCase(), '70DE8C4CE48D9C133005B1F95F8E9E9FE114F3BB2D08A9206C2283469831D74D')
+  assert.equal(createHash('sha256').update(runtime).digest('hex').toUpperCase(), '7ACF9736EDEEA519C63791E946A135F5CC854C95C299FD9864E82074FCE587E5')
   assert.doesNotThrow(() => new Function(runtime))
   assert.match(runtime, /type: "password"/u)
   assert.match(runtime, /autoComplete: "off"/u)

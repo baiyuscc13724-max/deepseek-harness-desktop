@@ -18,7 +18,7 @@ function extractConst(name, nextName) {
   assert.ok(start >= 0 && end > start, `${name} source boundary is present`)
   const source = renderer.slice(start, end)
   const fakeDocument = { querySelector: () => null }
-  return new Function('openMobileSync', 'document', `${source}; return ${name}`)(() => {}, fakeDocument) // eslint-disable-line no-new-func
+  return (request = () => {}) => new Function('request', 'document', `${source}; return ${name}`)(request, fakeDocument) // eslint-disable-line no-new-func
 }
 
 function extractBefore(name, boundary, bindings = {}) {
@@ -49,7 +49,7 @@ test('mobile sync uses a body-level fixed portal instead of the official Setting
 })
 
 test('portal placement keeps a labeled 42px-tall target aligned to expanded and compact sidebars', () => {
-  const compactForWidth = extractConst('mobileEntryCompactForWidth', 'mobileEntryPortalPlacement')
+  const compactForWidth = extractConst('mobileEntryCompactForWidth', 'mobileEntryPortalPlacement')()
   const placement = extractBefore('mobileEntryPortalPlacement', '\n  let mobileEntryLayoutWidth', { mobileEntryCompactForWidth: compactForWidth })
   assert.equal(compactForWidth(176), false)
   assert.equal(compactForWidth(56), true)
@@ -69,37 +69,40 @@ test('portal placement keeps a labeled 42px-tall target aligned to expanded and 
     1460,
     false
   )
-  assert.deepEqual(compact, { compact: true, left: 24, top: 881, size: 36 })
+  assert.deepEqual(compact, { compact: true, left: 24, top: 834, size: 36 })
+  assert.equal(878 - (compact.top + compact.size), 8, 'compact buttons keep an 8px vertical gap')
   assert.ok(expanded.left >= 8 && expanded.left + expanded.size <= 1452)
   assert.match(renderer, /<span class="hd-mobile-entry-label">手机同步<\/span>/u)
   assert.match(renderer, /#harness-desktop-mobile-sync-entry \{[^}]*width:112px!important;[^}]*height:42px!important;[^}]*padding:0 12px!important;/u)
+  assert.match(renderer, /\[data-hd-mobile-entry-anchor="expanded"\] \{ margin-right:120px!important; \}/u)
+  assert.match(renderer, /settingsTrigger\.dataset\.hdMobileEntryAnchor = placement\.compact \? 'compact' : 'expanded'/u)
   assert.match(renderer, /data-hd-mobile-compact="true"\] \.hd-mobile-entry-label \{ display:none; \}/u)
   assert.match(renderer, /new ResizeObserver/u)
   assert.match(renderer, /window\.addEventListener\('resize', \(\) => syncMobileEntryLayout\(\)\)/u)
   assert.match(renderer, /document\.addEventListener\('scroll', \(\) => syncMobileEntryLayout\(\), true\)/u)
 })
 
-test('mobile entry bypasses the custom URL bridge and opens the dialog directly every time', () => {
-  const activate = extractConst('activateMobileEntry', 'mountMobileEntry')
+test('mobile entry crosses the guest boundary through the existing custom URL bridge every time', () => {
+  const actions = []
+  const activate = extractConst('activateMobileEntry', 'mountMobileEntry')(action => { actions.push(action) })
   let prevented = 0
   let stopped = 0
   let immediate = 0
-  let opened = 0
   const event = {
     preventDefault() { prevented += 1 },
     stopPropagation() { stopped += 1 },
     stopImmediatePropagation() { immediate += 1 }
   }
-  const open = () => { opened += 1 }
-  activate(event, open)
-  activate(event, open)
+  activate(event)
+  activate(event)
   assert.equal(prevented, 2)
   assert.equal(stopped, 2)
   assert.equal(immediate, 2)
-  assert.equal(opened, 2)
-  assert.match(renderer, /const activateMobileEntry = \(event, open = openMobileSync\)/u)
+  assert.deepEqual(actions, ['open-mobile-sync', 'open-mobile-sync'])
+  assert.match(renderer, /const activateMobileEntry = \(event, open = request\)/u)
   assert.match(renderer, /entry\.addEventListener\('click', activateMobileEntry, true\)/u)
-  assert.doesNotMatch(renderer.slice(renderer.indexOf('const activateMobileEntry'), renderer.indexOf('const mountMobileEntry')), /open-mobile-sync/u)
+  assert.match(renderer.slice(renderer.indexOf('const activateMobileEntry'), renderer.indexOf('const mountMobileEntry')), /open\('open-mobile-sync'\)/u)
+  assert.doesNotMatch(renderer.slice(renderer.indexOf('const activateMobileEntry'), renderer.indexOf('const mountMobileEntry')), /openMobileSync/u)
   assert.doesNotMatch(renderer, /entry\.addEventListener\('pointerdown'/u)
 })
 

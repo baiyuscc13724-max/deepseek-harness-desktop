@@ -1,0 +1,22 @@
+const assert = require('node:assert/strict')
+const { readFileSync } = require('node:fs')
+const path = require('node:path')
+const test = require('node:test')
+
+const repoRoot = path.resolve(__dirname, '..')
+const fixture = readFileSync(path.join(__dirname, 'fixtures', 'agent-teams-host-capability-electron.cjs'), 'utf8')
+const runner = readFileSync(path.join(repoRoot, 'scripts', 'test-agent-teams-host-electron.cjs'), 'utf8')
+
+test('real Electron Host capability fixture covers embedded and detached trusted-click flows', () => {
+  assert.match(fixture, /guest-preload\.cjs/u)
+  assert.match(fixture, /session-menu-preload\.cjs/u)
+  assert.match(fixture, /document\.querySelector\('#save'\)\.click\(\)/u)
+  assert.match(fixture, /sendInputEvent\(\{ type: 'mouseDown'/u)
+  assert.match(fixture, /event\.senderFrame, event\.sender\.mainFrame/u)
+  assert.match(fixture, /owner\.isFocused\(\)/u)
+  assert.match(fixture, /claimAutopilotWebRequest/u)
+  assert.match(fixture, /same capability cannot authorize a second request/u)
+  assert.match(fixture, /AGENT_TEAMS_HOST_ELECTRON_QA/u)
+  assert.match(runner, /delete environment\.ELECTRON_RUN_AS_NODE/u)
+  assert.match(runner, /spawnSync\(electronBinary/u)
+})

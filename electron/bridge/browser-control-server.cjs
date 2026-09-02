@@ -7,10 +7,11 @@ const MAX_BODY_BYTES = 64 * 1024
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/
 const CONTROL_SCOPES = new Set(['browser', 'computer', 'memory'])
 const MAX_RECENT_REQUESTS = 512
+const PLAYWRIGHT_READ_OPERATIONS = new Set(['domSnapshot', 'count', 'isVisible', 'isEnabled', 'innerText', 'textContent', 'getAttribute'])
 const REPLAY_ACTIONS = Object.freeze({
   // Emergency stop must never be rejected by replay-cache capacity or wait on
   // an earlier request identity. The stop path is intentionally idempotent.
-  browser: new Set(['navigate', 'back', 'forward', 'reload', 'click', 'type', 'scroll', 'hover', 'keypress', 'select', 'mediaFrame', 'tabOpen', 'tabSwitch', 'tabClose', 'download', 'upload', 'dialog']),
+  browser: new Set(['navigate', 'back', 'forward', 'reload', 'click', 'type', 'scroll', 'hover', 'keypress', 'select', 'mediaFrame', 'tabOpen', 'tabSwitch', 'tabClose', 'download', 'upload', 'dialog', 'playwright']),
   computer: new Set(),
   memory: new Set()
 })
@@ -178,13 +179,18 @@ class BrowserControlServer {
     response.end(data)
   }
 
-  #isMutation(scope, action) {
-    return REPLAY_ACTIONS[scope]?.has(String(action || '')) === true
+  #isMutation(scope, body) {
+    const action = String(body?.action || '')
+    if (REPLAY_ACTIONS[scope]?.has(action) !== true) return false
+    if (scope === 'browser' && action === 'playwright') {
+      return !PLAYWRIGHT_READ_OPERATIONS.has(String(body?.payload?.operation || ''))
+    }
+    return true
   }
 
-  #markUnknownOutcome(context, action) {
-    if (!this.#isMutation(context.scope, action)) return
-    this.unknownOutcomes.set(context.scope, { action: String(action || ''), at: Date.now() })
+  #markUnknownOutcome(context, body) {
+    if (!this.#isMutation(context.scope, body)) return
+    this.unknownOutcomes.set(context.scope, { action: String(body?.action || ''), at: Date.now() })
   }
 
   #runHandler(body, context) {
@@ -204,7 +210,7 @@ class BrowserControlServer {
         callback(value)
       }
       const onAbort = () => {
-        this.#markUnknownOutcome(context, action)
+        this.#markUnknownOutcome(context, body)
         finish(reject, controlError('browser-action-cancelled', '浏览器操作已取消。', 499))
       }
       context.signal.addEventListener('abort', onAbort, { once: true })
@@ -212,7 +218,7 @@ class BrowserControlServer {
       operation.then(
         value => finish(resolve, value),
         error => {
-          if (error?.code === 'browser-outcome-unknown') this.#markUnknownOutcome(context, action)
+          if (error?.code === 'browser-outcome-unknown') this.#markUnknownOutcome(context, body)
           finish(reject, error)
         }
       )
@@ -231,7 +237,7 @@ class BrowserControlServer {
       return execute()
     }
     if (action === 'status') return execute()
-    if (this.#isMutation(context.scope, action) && this.unknownOutcomes.has(context.scope)) {
+    if (this.#isMutation(context.scope, body) && this.unknownOutcomes.has(context.scope)) {
       throw controlError(
         'browser-outcome-unknown',
         '上一次浏览器状态变更在连接中断时未能确认结果。为避免重复副作用，新的状态变更已阻止；可以继续 status、observe、console 等只读诊断，或先停止并恢复控制会话。',
@@ -245,7 +251,7 @@ class BrowserControlServer {
   }
 
   #deduplicatedDispatch(body, context) {
-    if (!REPLAY_ACTIONS[context.scope]?.has(String(body?.action || ''))) return this.#dispatch(body, context)
+    if (!this.#isMutation(context.scope, body)) return this.#dispatch(body, context)
     const fingerprint = requestFingerprint(body, context.scope)
     const existing = this.recentRequests.get(context.requestId)
     if (existing) {
@@ -320,4 +326,4 @@ class BrowserControlServer {
   }
 }
 
-module.exports = { BrowserControlServer, CONTROL_SCOPES, MAX_BODY_BYTES, MAX_RECENT_REQUESTS, REPLAY_ACTIONS, REQUEST_ID_PATTERN, isLoopback, requestFingerprint }
+module.exports = { BrowserControlServer, CONTROL_SCOPES, MAX_BODY_BYTES, MAX_RECENT_REQUESTS, PLAYWRIGHT_READ_OPERATIONS, REPLAY_ACTIONS, REQUEST_ID_PATTERN, isLoopback, requestFingerprint }

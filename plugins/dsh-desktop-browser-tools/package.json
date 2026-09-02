@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-browser-tools",
-  "version": "1.0.57",
+  "version": "1.0.58",
   "type": "module",
   "description": "Harness Desktop first-party browser control tool adapter",
   "license": "MIT",
@@ -22,7 +22,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-api-remotes": "^0.1.2-alpha.3",
-    "@deepseek-ai/dsh-client-ui-input-trigger": "^0.1.2-alpha.3"
+    "@deepseek-ai/dsh-api-remotes": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-client-ui-input-trigger": "^0.1.2-alpha.4"
   }
 }

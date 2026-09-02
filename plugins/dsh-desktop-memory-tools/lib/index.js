@@ -33,7 +33,9 @@ function currentRoot(ctx, exec) {
 
 function currentDirectHumanRoot(ctx, exec) {
   if (!currentRoot(ctx, exec)) return false
-  const events = exec.agent.session?.events || []
+  const session = exec.agent.session
+  if (typeof session?.snapshotEvents !== 'function') return false
+  const events = session.snapshotEvents()
   let start = -1
   for (let index = events.length - 1; index >= 0; index -= 1) {
     if (events[index]?.type === 'turn/end') return false

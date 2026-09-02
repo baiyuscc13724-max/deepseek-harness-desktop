@@ -41,26 +41,21 @@ test('schedule service deletes the retired Desktop plugin and reports official r
 test('observable schedule snapshot folds the official schedule event log', async () => {
   const { snapshot } = await plugin()
   const sessionId = 'session-a'
-  const agent = {
-    id: sessionId,
-    session: {
-      header: { seedLength: 0 },
-      events: [{
-        type: 'schedule/change',
-        data: {
-          version: 1,
-          operation: 'create',
-          schedule: {
-            id: 'schedule-1',
-            kind: 'after',
-            prompt: 'Review the build',
-            afterSeconds: 60,
-            scheduledAt: '2026-08-21T08:01:00.000Z'
-          }
-        }
-      }]
+  const events = [{
+    type: 'schedule/change',
+    data: {
+      version: 1,
+      operation: 'create',
+      schedule: {
+        id: 'schedule-1',
+        kind: 'after',
+        prompt: 'Review the build',
+        afterSeconds: 60,
+        scheduledAt: '2026-08-21T08:01:00.000Z'
+      }
     }
-  }
+  }]
+  const agent = { id: sessionId, session: { ownEvents: () => events } }
   const ctx = { agents: { get: id => id === sessionId ? agent : undefined, roots: () => [agent] } }
   const result = snapshot(ctx, sessionId, Date.parse('2026-08-21T08:00:00.000Z'))
   assert.equal(result.schemaVersion, 2)
@@ -117,6 +112,10 @@ test('schedule client observes state and only prepares user-reviewed requests', 
   assert.match(source, /visibleSchedules/u)
   assert.match(source, /visibleHistory/u)
   assert.match(source, /function recreate\(item\)/u)
+  assert.match(source, /every_seconds/u)
+  assert.match(source, /Number\.isSafeInteger\(record\.everySeconds\)/u)
+  assert.match(source, /record\.everySeconds < 300/u)
+  assert.doesNotMatch(source, /record\.interval/u)
   assert.match(source, /setInterval\(guarded, 15000\)/u)
   assert.doesNotMatch(source, /method:\s*["']POST["']/)
   assert.doesNotMatch(source, /inputActions\.(submit|send)/)

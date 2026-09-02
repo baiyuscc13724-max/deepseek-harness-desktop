@@ -3,6 +3,16 @@ import net from "node:net";
 const ENDPOINT_ENV = "HARNESS_DESKTOP_AUTHORIZATION_ENDPOINT";
 const TOKEN_ENV = "HARNESS_DESKTOP_AUTHORIZATION_TOKEN";
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const ERROR_CODES = Object.freeze({
+  HOST_AUTHORIZATION_REPLAY: "AGENT_TEAMS_HOST_AUTHORIZATION_REPLAY",
+  HOST_AUTHORIZATION_DENIED: "AGENT_TEAMS_HOST_AUTHORIZATION_DENIED",
+  HOST_AUTHORIZATION_INVALID: "AGENT_TEAMS_HOST_AUTHORIZATION_INVALID",
+  HOST_AUTHORIZATION_STATE_INVALID: "AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE",
+  HOST_AUTHORIZATION_CAPACITY: "AGENT_TEAMS_HOST_AUTHORIZATION_CAPACITY",
+  HOST_AUTHORIZATION_EXPIRED: "AGENT_TEAMS_HOST_AUTHORIZATION_EXPIRED",
+  HOST_AUTHORIZATION_REVOKED: "AGENT_TEAMS_HOST_AUTHORIZATION_REVOKED",
+  HOST_AUTHORIZATION_MISMATCH: "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH",
+});
 
 function capabilityError(code = "AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE") {
   const error = new Error("Desktop Host authorization is unavailable");
@@ -12,6 +22,17 @@ function capabilityError(code = "AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE") {
 function validEndpoint(value, platform = process.platform) {
   if (typeof value !== "string" || value.length === 0 || value.length > 1024 || value.includes("\0")) return false;
   return platform === "win32" ? value.startsWith("\\\\.\\pipe\\dsh-agent-teams-authorization-") : value.startsWith("/");
+}
+function unavailableCapability() {
+  const unavailable = () => Promise.reject(capabilityError());
+  return Object.freeze({
+    available: false,
+    consumeResolveUnknown: unavailable,
+    consumeAutopilotAuthorization: unavailable,
+    readAutopilotAuthorizationState: unavailable,
+    revokeAutopilotAuthorizations: unavailable,
+    dispose: () => false,
+  });
 }
 function consumeDesktopAuthorizationCapability({ env = process.env, connect = net.createConnection, platform = process.platform, timeoutMs = 130_000 } = {}) {
   let endpoint;
@@ -25,36 +46,44 @@ function consumeDesktopAuthorizationCapability({ env = process.env, connect = ne
   }
   let token;
   try { token = Buffer.from(tokenText ?? "", "base64url"); } catch {}
-  const unavailable = () => Promise.reject(capabilityError());
   if (!cleared || !validEndpoint(endpoint, platform) || token?.length !== 32 || token.toString("base64url") !== tokenText) {
     token?.fill(0);
-    return Object.freeze({ available: false, consumeResolveUnknown: unavailable, dispose: () => false });
+    return unavailableCapability();
   }
   let disposed = false;
-  const consumeResolveUnknown = request => new Promise((resolve, reject) => {
+  const invoke = (action, request, resultKey) => new Promise((resolve, reject) => {
     if (disposed) return reject(capabilityError());
     const socket = connect(endpoint);
     let response = "";
     let bytes = 0;
+    let settled = false;
+    const finish = callback => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
     const timer = setTimeout(() => socket.destroy(capabilityError()), timeoutMs);
-    const fail = () => { clearTimeout(timer); reject(capabilityError()); };
+    const fail = () => finish(() => reject(capabilityError()));
     socket.setEncoding("utf8");
-    socket.once("connect", () => socket.write(`${JSON.stringify({ action: "consumeResolveUnknown", token: token.toString("base64url"), request })}\n`));
+    socket.once("connect", () => socket.write(`${JSON.stringify({ action, token: token.toString("base64url"), request })}\n`));
     socket.on("data", chunk => {
       bytes += Buffer.byteLength(chunk);
       if (bytes > MAX_RESPONSE_BYTES) return socket.destroy(capabilityError());
       response += chunk;
     });
     socket.once("error", fail);
-    socket.once("end", () => {
-      clearTimeout(timer);
+    socket.once("end", () => finish(() => {
       let parsed;
       try { parsed = JSON.parse(response.trim()); } catch { return reject(capabilityError()); }
-      if (parsed?.ok === true && parsed.receipt && typeof parsed.receipt === "object") return resolve(parsed.receipt);
-      const codes = { HOST_AUTHORIZATION_REPLAY: "AGENT_TEAMS_HOST_AUTHORIZATION_REPLAY", HOST_AUTHORIZATION_DENIED: "AGENT_TEAMS_HOST_AUTHORIZATION_DENIED", HOST_AUTHORIZATION_INVALID: "AGENT_TEAMS_HOST_AUTHORIZATION_INVALID", HOST_AUTHORIZATION_STATE_INVALID: "AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE", HOST_AUTHORIZATION_CAPACITY: "AGENT_TEAMS_HOST_AUTHORIZATION_CAPACITY" };
-      reject(capabilityError(codes[parsed?.code] ?? "AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE"));
-    });
+      if (parsed?.ok === true && parsed[resultKey] && typeof parsed[resultKey] === "object") return resolve(parsed[resultKey]);
+      reject(capabilityError(ERROR_CODES[parsed?.code] ?? "AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE"));
+    }));
   });
+  const consumeResolveUnknown = request => invoke("consumeResolveUnknown", request, "receipt");
+  const consumeAutopilotAuthorization = request => invoke("consumeAutopilotAuthorization", request, "receipt");
+  const readAutopilotAuthorizationState = () => invoke("readAutopilotAuthorizationState", undefined, "state");
+  const revokeAutopilotAuthorizations = request => invoke("revokeAutopilotAuthorizations", request, "state");
   const dispose = () => {
     if (disposed) return false;
     disposed = true;
@@ -62,7 +91,14 @@ function consumeDesktopAuthorizationCapability({ env = process.env, connect = ne
     return true;
   };
   const capability = { available: true };
-  Object.defineProperties(capability, { consumeResolveUnknown: { value: consumeResolveUnknown }, dispose: { value: dispose }, toJSON: { value: () => ({ available: true }) } });
+  Object.defineProperties(capability, {
+    consumeResolveUnknown: { value: consumeResolveUnknown },
+    consumeAutopilotAuthorization: { value: consumeAutopilotAuthorization },
+    readAutopilotAuthorizationState: { value: readAutopilotAuthorizationState },
+    revokeAutopilotAuthorizations: { value: revokeAutopilotAuthorizations },
+    dispose: { value: dispose },
+    toJSON: { value: () => ({ available: true }) },
+  });
   return Object.freeze(capability);
 }
 

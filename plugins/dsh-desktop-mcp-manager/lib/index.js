@@ -134,7 +134,7 @@ export class McpManager {
   async load() {
     const rows = await readStore(this.file)
     this.servers = new Map(rows.map(row => [row.id, row]))
-    for (const row of rows) if (row.enabled) await this.start(row.id)
+    await Promise.allSettled(rows.filter(row => row.enabled).map(row => this.start(row.id)))
     return this.list()
   }
   list() { return [...this.servers.values()].map(server => ({ ...publicServer(server), status: this.status(server.id) })) }

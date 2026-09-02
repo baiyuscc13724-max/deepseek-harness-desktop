@@ -784,7 +784,93 @@ function assertComplete(source) {
   }
 }
 
+const ALPHA4_STYLE_ANCHOR = '\t\tconst tagId$11 = "@deepseek-ai/dsh-client-ui-chat/ChatView.module.css";'
+const ALPHA4_STYLE_PATCH = STYLE_PATCH.replace(STYLE_ANCHOR, ALPHA4_STYLE_ANCHOR)
+const ALPHA4_NODE_STORE_ANCHOR = '\t\t\tconst nodeStore = useChat((s) => s.nodes);'
+const ALPHA4_NODE_STORE_PATCH = `${ALPHA4_NODE_STORE_ANCHOR}\n\t\t\t/* DSH_DESKTOP_MEMOIZED_WORK_TREE: content snapshots invalidate grouping without structural churn. */\n\t\t\tconst nodeSnapshot = useChat((s) => s.nodes.values());`
+const ALPHA4_NODE_LIST_ANCHOR = '\t\tconst ChatNodeList = (0, react.memo)(function ChatNodeList({ order, ...seatProps }) {\n\t\t\treturn order.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, {\n\t\t\t\tnodeKey,\n\t\t\t\t...seatProps\n\t\t\t}, nodeKey));\n\t\t});'
+const ALPHA4_NODE_LIST_PATCH = `${WORK_TREE_HELPERS}
+\t\tconst ConversationWorkTreeGroup = (0, react.memo)(function ConversationWorkTreeGroup({ item, sessionId, savedScrollAnchorKey, ...seatProps }) {
+\t\t\tconst selectedNodeKey = seatProps.selectedCallId === void 0 ? void 0 : item.callNodeKeys.get(seatProps.selectedCallId);
+\t\t\tconst selected = selectedNodeKey !== void 0;
+\t\t\tconst restoreNodeKey = conversationWorkTreeRestoreNodeKey(item.nodeKeys, item.callNodeKeys, savedScrollAnchorKey);
+\t\t\tconst disclosureStorage = conversationWorkTreeStorage();
+\t\t\tconst readPersistedDisclosure = () => readConversationWorkTreeDisclosure(disclosureStorage, sessionId, item.key);
+\t\t\tconst [disclosure, setDisclosure] = (0, react.useState)(() => createConversationWorkTreeDisclosureState(readPersistedDisclosure(), item.active, selected));
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tsetDisclosure(createConversationWorkTreeDisclosureState(readPersistedDisclosure(), item.active, selected));
+\t\t\t}, [sessionId, item.key]);
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tsetDisclosure((value) => reduceConversationWorkTreeDisclosure(value, { type: "activity", active: item.active, selected }));
+\t\t\t}, [item.active, selected]);
+\t\t\tconst open = disclosure.open;
+\t\t\tconst [renderedCount, setRenderedCount] = (0, react.useState)(() => reduceConversationWorkTreeRenderCount(0, { type: "sync", open, total: item.nodeKeys.length }));
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tsetRenderedCount((value) => reduceConversationWorkTreeRenderCount(value, { type: "sync", open, total: item.nodeKeys.length }));
+\t\t\t}, [open, item.nodeKeys.length]);
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tif (!open || renderedCount >= item.nodeKeys.length) return;
+\t\t\t\tlet cancelled = false;
+\t\t\t\tconst advance = () => { if (!cancelled) setRenderedCount((value) => reduceConversationWorkTreeRenderCount(value, { type: "advance", open: true, total: item.nodeKeys.length })); };
+\t\t\t\tconst idle = globalThis.requestIdleCallback;
+\t\t\t\tconst handle = typeof idle === "function" ? idle(advance, { timeout: 50 }) : globalThis.setTimeout(advance, 0);
+\t\t\t\treturn () => { cancelled = true; if (typeof idle === "function") globalThis.cancelIdleCallback?.(handle); else globalThis.clearTimeout(handle); };
+\t\t\t}, [open, renderedCount, item.nodeKeys.length]);
+\t\t\tconst renderedNodeKeys = open ? conversationWorkTreeRenderKeys(item.nodeKeys, renderedCount, selectedNodeKey, restoreNodeKey) : [];
+\t\t\tconst state = item.active ? "running" : item.failed ? "error" : item.stopped ? "stopped" : "done";
+\t\t\tconst t = seatProps.t;
+\t\t\tconst status = t(\`workTree.status.\${state}\`);
+\t\t\tconst count = t("workTree.steps", { count: item.count });
+\t\t\tconst action = t(open ? "workTree.collapse" : "workTree.expand");
+\t\t\treturn (0, react_jsx_runtime.jsxs)("section", { className: "hd-work-tree", "data-state": state, "data-open": open || void 0, "data-chat-anchor-key": item.key, "data-chat-flow-key": item.key, "data-chat-flow-kind": "work-tree", children: [
+\t\t\t\t(0, react_jsx_runtime.jsxs)("button", { type: "button", className: "hd-work-tree-toggle", "aria-expanded": open, "aria-label": \`\${action} · \${status} · \${count}\`, onClick: () => setDisclosure((value) => { const next = reduceConversationWorkTreeDisclosure(value, { type: "toggle" }); writeConversationWorkTreeDisclosure(disclosureStorage, sessionId, item.key, next.open); return next; }), children: [
+\t\t\t\t\t(0, react_jsx_runtime.jsx)("span", { className: "hd-work-tree-chevron", "aria-hidden": true, children: open ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronRightOutline14, {}) }),
+\t\t\t\t\t(0, react_jsx_runtime.jsx)("span", { className: "hd-work-tree-title", children: t("workTree.title") }),
+\t\t\t\t\t(0, react_jsx_runtime.jsx)("span", { className: "hd-work-tree-count", children: count }),
+\t\t\t\t\t(0, react_jsx_runtime.jsx)("span", { className: "hd-work-tree-status", "aria-live": "polite", children: status })
+\t\t\t\t] }),
+\t\t\t\t(0, react_jsx_runtime.jsx)("div", { className: "hd-work-tree-body", hidden: !open, "aria-busy": open && renderedCount < item.nodeKeys.length || void 0, children: renderedNodeKeys.map((nodeKey) => (0, react_jsx_runtime.jsx)(ChatNodeSeat, { nodeKey, ...seatProps }, nodeKey)) })
+\t\t\t] });
+\t\t});
+\t\tconst ChatNodeList = (0, react.memo)(function ChatNodeList({ order, nodeStore, nodeSnapshot, sessionId, savedScrollAnchorKey, ...seatProps }) {
+\t\t\tconst workTreeItems = (0, react.useMemo)(() => buildConversationWorkTreeItems(order, nodeStore), [order, nodeSnapshot]);
+\t\t\treturn workTreeItems.map((item) => item.kind === "work-tree" ? (0, react_jsx_runtime.jsx)(ConversationWorkTreeGroup, { item, sessionId, savedScrollAnchorKey, ...seatProps }, sessionId + ":" + item.key) : (0, react_jsx_runtime.jsx)(ChatNodeSeat, { nodeKey: item.nodeKey, ...seatProps }, item.key));
+\t\t});`
+const ALPHA4_NODE_LIST_PROPS_ANCHOR = '\t\t\t\t\t\t\t\t\torder,\n\t\t\t\t\t\t\t\t\tuseChatNode,'
+const ALPHA4_NODE_LIST_PROPS_PATCH = '\t\t\t\t\t\t\t\t\torder,\n\t\t\t\t\t\t\t\t\tnodeStore,\n\t\t\t\t\t\t\t\t\tnodeSnapshot,\n\t\t\t\t\t\t\t\t\tsessionId,\n\t\t\t\t\t\t\t\t\tsavedScrollAnchorKey: chatScroll.read()?.anchorKey,\n\t\t\t\t\t\t\t\t\tuseChatNode,'
+
+function assertAlpha4Complete(source) {
+  for (const required of [
+    '@harness-desktop/conversation-work-tree-v1',
+    '@harness-desktop/conversation-work-tree-reader-restore-v9',
+    'var ChatTurnProcessProjector = class',
+    'function buildConversationWorkTreeItems',
+    'const nodeSnapshot = useChat((s) => s.nodes.values())',
+    '[order, nodeSnapshot]',
+    'function ConversationWorkTreeGroup',
+    'useChatNodeProcess',
+    'harness.desktop.work-tree-disclosure.v1:',
+    'savedScrollAnchorKey: chatScroll.read()?.anchorKey'
+  ]) if (!source.includes(required)) throw new Error('Installed alpha.4 conversation work-tree patch is incomplete; refusing to continue.')
+}
+
+function patchAlpha4ConversationWorkTreeSource(source) {
+  if (!source.includes(ALPHA4_STYLE_ANCHOR)) return null
+  if (source.includes(PATCH_MARKER)) {
+    assertAlpha4Complete(source)
+    return { source, changed: false }
+  }
+  let output = replaceExactlyOnce(source, ALPHA4_STYLE_ANCHOR, ALPHA4_STYLE_PATCH, 'alpha.4 work-tree style anchor')
+  output = replaceExactlyOnce(output, ALPHA4_NODE_STORE_ANCHOR, ALPHA4_NODE_STORE_PATCH, 'alpha.4 mutable node snapshot selector')
+  output = replaceExactlyOnce(output, ALPHA4_NODE_LIST_ANCHOR, ALPHA4_NODE_LIST_PATCH, 'alpha.4 work-tree node list')
+  output = replaceExactlyOnce(output, ALPHA4_NODE_LIST_PROPS_ANCHOR, ALPHA4_NODE_LIST_PROPS_PATCH, 'alpha.4 work-tree node list props')
+  assertAlpha4Complete(output)
+  return { source: output, changed: true }
+}
+
 export function patchConversationWorkTreeSource(source) {
+  const alpha4 = patchAlpha4ConversationWorkTreeSource(source)
+  if (alpha4 !== null) return alpha4
   if (source.includes(PATCH_MARKER)) {
     let migrated = source
     let changed = false

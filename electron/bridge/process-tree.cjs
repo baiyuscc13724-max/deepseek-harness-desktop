@@ -23,4 +23,27 @@ function terminateProcessTree(child, {
   return true
 }
 
-module.exports = { terminateProcessTree }
+function waitForProcessExit(child, {
+  timeoutMs = 5000,
+  setTimeoutImpl = setTimeout,
+  clearTimeoutImpl = clearTimeout
+} = {}) {
+  if (!child?.pid || child.exitCode != null) return Promise.resolve(true)
+  return new Promise(resolve => {
+    let settled = false
+    let timer
+    const finish = exited => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeoutImpl(timer)
+      child.off?.('exit', onExit)
+      resolve(exited)
+    }
+    const onExit = () => finish(true)
+    child.once?.('exit', onExit)
+    timer = setTimeoutImpl(() => finish(child.exitCode != null), timeoutMs)
+    timer?.unref?.()
+  })
+}
+
+module.exports = { terminateProcessTree, waitForProcessExit }

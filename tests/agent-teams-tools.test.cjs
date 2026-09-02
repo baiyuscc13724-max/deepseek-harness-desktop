@@ -32,7 +32,7 @@ async function registeredProjectToolsFixture(mod, label) {
   const projectRef = `project_registered_tools_${label}_01`
   const projectKey = Buffer.alloc(32, label.charCodeAt(0) % 255 || 1)
   const internalExecution = Object.freeze(Object.create(null))
-  const root = id => ({ id, status: 'running', session: { header: { cwd: path.join(temporary, id) }, events: [{ type: 'turn/start', id: `turn-${id}`, time: 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }] } })
+  const root = id => ({ id, status: 'running', session: { header: { cwd: path.join(temporary, id) }, events: [{ type: 'turn/start', id: `turn-${id}`, time: 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }], snapshotEvents() { return this.events.slice() } } })
   const roots = [root('registered-root-A'), root('registered-root-B'), root('registered-root-C')]
   const agents = [...roots]
   let current = roots[0]
@@ -186,8 +186,8 @@ test('bind_legacy is a distinct exact direct-human root action and cannot be smu
   fixture.projectEntry.requiresCanonicalProjectKey = true
   fixture.projectEntry.localProjectCollaborationContext = async options => { assert.match(options.canonicalProjectKey, /^[a-f0-9]{64}$/u); localCalls += 1; return local() }
   fixture.projectEntry.bindLegacyProjectCollaborationContext = async options => { assert.match(options.canonicalProjectKey, /^[a-f0-9]{64}$/u); bindCalls += 1; return local() }
-  const automatedRoot = { id: 'registered-automated-root', status: 'running', session: { header: { cwd: path.join(fixture.temporary, 'automated') }, events: [{ type: 'turn/start', id: 'turn-automated', time: 2 }] } }
-  const teamMember = { id: 'registered-team-member', status: 'running', session: { header: { cwd: path.join(fixture.temporary, 'member') }, events: [{ type: 'turn/start', id: 'turn-member', time: 2 }, { type: 'user/message', data: { source: { kind: 'user' } } }] } }
+  const automatedRoot = { id: 'registered-automated-root', status: 'running', session: { header: { cwd: path.join(fixture.temporary, 'automated') }, events: [{ type: 'turn/start', id: 'turn-automated', time: 2 }], snapshotEvents() { return this.events.slice() } } }
+  const teamMember = { id: 'registered-team-member', status: 'running', session: { header: { cwd: path.join(fixture.temporary, 'member') }, events: [{ type: 'turn/start', id: 'turn-member', time: 2 }, { type: 'user/message', data: { source: { kind: 'user' } } }], snapshotEvents() { return this.events.slice() } } }
   fixture.roots.push(automatedRoot)
   fixture.agents.push(automatedRoot, teamMember)
   try {
@@ -213,7 +213,7 @@ test('bind_legacy is a distinct exact direct-human root action and cannot be smu
 
 test('project-board representative gate fails closed for Agent Team members', async () => {
   const mod = await import(`${pathToFileURL(hostFile).href}?root-gate=${Date.now()}`)
-  const member = { id: 'member-session', status: 'running', session: { events: [{ type: 'turn/start', id: 'turn-1', time: 1 }] } }
+  const member = { id: 'member-session', status: 'running', session: { events: [{ type: 'turn/start', id: 'turn-1', time: 1 }], snapshotEvents() { return this.events.slice() } } }
   const ctx = { agents: { get: id => id === member.id ? member : undefined, currentInitiator: () => member, roots: () => [] } }
   assert.throws(() => mod.requireProjectRootCaller(ctx, { agent: member }), error => error.code === 'PROJECT_COLLABORATION_ROOT_REQUIRED')
 })

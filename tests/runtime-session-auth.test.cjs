@@ -98,21 +98,76 @@ test('runtime cookie resolution fails closed after clean reuse loses its cookie 
   assert.equal(refreshes, 1)
 })
 
-test('runtime launch exchange uses the persistent session with manual redirects and accepts only 2xx/3xx', async () => {
+test('runtime launch exchange follows the official redirect in one Electron session and requires its cookie', async () => {
   const calls = []
+  let cookies = []
+  let installCookie = true
   const runtimeSession = {
+    cookies: {
+      get: async () => cookies
+    },
     fetch: async (url, options) => {
       calls.push({ url, options })
-      return { status: calls.length === 1 ? 303 : 401 }
+      if (installCookie) cookies = [{ name: COOKIE_NAME, value: COOKIE_VALUE, expirationDate: Date.now() / 1000 + 60 }]
+      return { status: 200 }
     }
   }
   const launchUrl = `${ORIGIN}/?token=launch-token`
   assert.equal(await exchangeRuntimeLaunchToken(runtimeSession, launchUrl), true)
   assert.equal(calls[0].url, launchUrl)
-  assert.deepEqual(calls[0].options, { cache: 'no-store', credentials: 'include', redirect: 'manual' })
+  assert.deepEqual(calls[0].options, {
+    cache: 'no-store',
+    credentials: 'include',
+    redirect: 'follow',
+    referrerPolicy: 'no-referrer'
+  })
+
+  cookies = []
+  installCookie = false
   assert.equal(await exchangeRuntimeLaunchToken(runtimeSession, launchUrl), false)
   assert.equal(await exchangeRuntimeLaunchToken(runtimeSession, ORIGIN), true)
-  assert.equal(calls.length, 2, 'legacy clean URLs do not manufacture a token exchange request')
+  assert.equal(await exchangeRuntimeLaunchToken({}, ORIGIN), true)
+  assert.equal(calls.length, 2, 'clean URLs do not manufacture a token exchange request')
+})
+
+test('runtime launch exchange rejects non-2xx finals, missing cookies, forged names, and expired cookies', async () => {
+  let status = 401
+  let cookies = [{ name: COOKIE_NAME, value: COOKIE_VALUE, expirationDate: Date.now() / 1000 + 60 }]
+  const runtimeSession = {
+    cookies: { get: async () => cookies },
+    fetch: async () => ({ status })
+  }
+  const launchUrl = `${ORIGIN}/?token=launch-token`
+  assert.equal(await exchangeRuntimeLaunchToken(runtimeSession, launchUrl), false)
+
+  status = 200
+  cookies = []
+  assert.equal(await exchangeRuntimeLaunchToken(runtimeSession, launchUrl), false)
+
+  cookies = [{ name: 'dsh-auth-forged', value: COOKIE_VALUE, expirationDate: Date.now() / 1000 + 60 }]
+  assert.equal(await exchangeRuntimeLaunchToken(runtimeSession, launchUrl), false)
+
+  cookies = [{ name: COOKIE_NAME, value: COOKIE_VALUE, expirationDate: Date.now() / 1000 - 1 }]
+  assert.equal(await exchangeRuntimeLaunchToken(runtimeSession, launchUrl), false)
+
+  assert.equal(await exchangeRuntimeLaunchToken(runtimeSession, 'http://example.com:43126/?token=launch-token'), false)
+})
+
+test('runtime launch exchange surfaces Electron redirect failures and never switches HTTP stacks', async () => {
+  let electronCalls = 0
+  let nodeCalls = 0
+  const runtimeSession = {
+    cookies: { get: async () => [] },
+    fetch: async () => {
+      electronCalls += 1
+      throw new Error('Redirect was cancelled')
+    }
+  }
+  await assert.rejects(exchangeRuntimeLaunchToken(runtimeSession, `${ORIGIN}/?token=launch-token`, {
+    fetchImpl: async () => { nodeCalls += 1 }
+  }), /Redirect was cancelled/u)
+  assert.equal(electronCalls, 1)
+  assert.equal(nodeCalls, 0)
 })
 
 test('runtime session fetch and websocket options remain loopback-scoped and cookie-controlled', async () => {

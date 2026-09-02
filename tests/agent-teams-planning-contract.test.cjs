@@ -7,6 +7,7 @@ const { mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
+const queueSubagentPrompt = Symbol.for('dsh.subagent.queuePrompt')
 
 async function loadPlugin(label) {
   return import(`${pathToFileURL(pluginFile).href}?${label}=${Date.now()}-${Math.random()}`)
@@ -83,7 +84,7 @@ test('v4 migration preserves empty and active teams while adding conservative pl
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
 
-    assert.equal(migrated.version, 7)
+    assert.equal(migrated.version, 8)
     assert.deepEqual(migrated.teams.map(team => team.id), ['empty', 'active'])
     assert.deepEqual(migrated.teams[1].tasks.map(task => [task.id, task.state]), [['pending', 'pending'], ['running', 'in_progress'], ['done', 'submitted'], ['cancelled', 'cancelled']])
     assert.equal(migrated.teams[1].tasks[2].lifecycleLedger.some(event => event.kind === 'submission'), true)
@@ -474,8 +475,14 @@ test('automatic-round recommit dynamically honors default routing and rejects un
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-automatic-recommit-boundaries-'))
   const mod = await loadPlugin('automatic-recommit-boundaries')
   const store = new mod.AgentTeamsStore(path.join(root, 'storages', 'agent_teams.json'), { enabled: true, maxMembers: 8, maxActiveTurns: 8 })
-  const lead = { id: 'automatic-recommit-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: root } } }
-  const ctx = { agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] } }
+  const goal = { id: 'automatic-recommit-goal', revision: 2, objective: 'Safely continue every established team', phase: 'active', activation: 'armed', roundsStarted: 2, maxGoalRounds: 4 }
+  const lead = { id: 'automatic-recommit-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: root }, events: [
+    { type: 'turn/start', id: 'automatic-recommit-turn', time: timestamp(1_000) },
+    { type: 'user/message', data: { source: { kind: 'goal', goalId: goal.id, revision: goal.revision, round: goal.roundsStarted } } }
+  ] } }
+  lead.session.snapshotEvents = () => lead.session.events.slice()
+  const ctx = { agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] }, goals: { get: agent => agent === lead ? goal : undefined } }
+  const automaticGoalRoundAuthority = mod.exactGoalRoundRootAuthority(ctx, { agent: lead, turnKey: 'automatic-recommit-turn-key', events: lead.session.snapshotEvents() })
   const establish = async (name, modelTier = 'subagent') => {
     const team = await mod.createTeam(store, lead, { objective: name })
     await mod.createTask(store, lead, { teamId: team.id, title: 'Direct-human baseline', files: [`baseline/${team.id}.js`] })
@@ -497,6 +504,7 @@ test('automatic-round recommit dynamically honors default routing and rejects un
     const plan = store.snapshot().teams.find(team => team.id === teamId).plan
     return mod.commitTeamPlan(ctx, store, lead, {
       teamId, expectedRevision: plan.revision, confirmedPlanHash: plan.hash, automaticContinuation: true,
+      automaticGoalRoundAuthority,
       permissionsVerified: true, filesVerified: true, costVerified: true, externalSideEffectsVerified: true
     })
   }
@@ -566,19 +574,26 @@ test('published and legacy task receipts survive retirement while provisioning a
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-published-worker-history-'))
   const mod = await loadPlugin('published-worker-history')
   const store = new mod.AgentTeamsStore(path.join(root, 'storages', 'agent_teams.json'), { enabled: true, maxMembers: 4, maxActiveTurns: 4 })
-  const lead = { id: 'published-history-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: root } } }
+  const goal = { id: 'published-history-goal', revision: 3, objective: 'Continue safely after worker publication', phase: 'active', activation: 'armed', roundsStarted: 3, maxGoalRounds: 5 }
+  const lead = { id: 'published-history-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: root }, events: [
+    { type: 'turn/start', id: 'published-history-turn', time: timestamp(1_000) },
+    { type: 'user/message', data: { source: { kind: 'goal', goalId: goal.id, revision: goal.revision, round: goal.roundsStarted } } }
+  ] } }
+  lead.session.snapshotEvents = () => lead.session.events.slice()
   const ctx = {
     agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+    goals: { get: agent => agent === lead ? goal : undefined },
     subagents: {
       async startContinuable({ childId }) { return { childId } },
-      async followup() {},
+      async [queueSubagentPrompt]() {},
       async drainContinuableChildren() {}
     }
   }
   const admission = { async run(_lead, _childId, _signal, work) { return work() }, abandon() {} }
+  const automaticGoalRoundAuthority = mod.exactGoalRoundRootAuthority(ctx, { agent: lead, turnKey: 'published-history-turn-key', events: lead.session.events })
   const commitCurrent = async (teamId, automaticContinuation = false) => {
     const plan = store.snapshot().teams.find(team => team.id === teamId).plan
-    return mod.commitTeamPlan(ctx, store, lead, { teamId, expectedRevision: plan.revision, confirmedPlanHash: plan.hash, automaticContinuation })
+    return mod.commitTeamPlan(ctx, store, lead, { teamId, expectedRevision: plan.revision, confirmedPlanHash: plan.hash, automaticContinuation, ...(automaticContinuation ? { automaticGoalRoundAuthority } : {}) })
   }
   try {
     await store.init()
@@ -758,6 +773,85 @@ test('same-project adoption retains private audit hashes without exposing them i
     assert.deepEqual(durable.tasks[0].checkpoint, checkpoint)
     assert.equal(durable.tasks[0].claimId, undefined)
     assert.equal(durable.tasks[0].leaseEpoch, 1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('same-project adoption removes a revoked former-owner autopilot grant and retains a private revocation audit', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-handoff-autopilot-'))
+  const mod = await loadPlugin('handoff-autopilot')
+  const store = new mod.AgentTeamsStore(path.join(root, 'storages', 'agent_teams.json'), { enabled: true, maxMembers: 4, maxActiveTurns: 4 })
+  const sourceLead = { id: 'autopilot-source', options: { provider: 'test', model: 'test' }, session: { header: { cwd: root } } }
+  const targetLead = { id: 'autopilot-target', options: { provider: 'test', model: 'test' }, session: { header: { cwd: root } } }
+  const roots = [sourceLead, targetLead]
+  const ctx = { agents: { get: id => roots.find(agent => agent.id === id), roots: () => roots } }
+  try {
+    await store.init()
+    const team = await mod.createTeam(store, sourceLead, { objective: 'Transfer a team without transferring automatic continuation authority' })
+    const routingReceiptId = 'routing-autopilot-handoff'
+    const grantId = 'grant-autopilot-handoff'
+    const goalId = 'goal-autopilot-handoff'
+    const grantedAt = timestamp(2_000)
+    await store.mutate(document => {
+      const durable = document.teams[0]
+      document.routingReceipts.push({
+        id: routingReceiptId,
+        rootSessionId: sourceLead.id,
+        turnKey: 'turn-autopilot-handoff',
+        projectKey: durable.projectKey,
+        level: 'level3',
+        reasonCategory: 'explicit_user_team_request',
+        explicitUserTeamRequest: true,
+        candidateWorkstreams: 1,
+        creationPath: 'team_start',
+        outcome: 'created',
+        teamId: durable.id,
+        decisionAuthority: 'model_declared',
+        establishmentAuthority: 'direct_human',
+        createdAt: grantedAt,
+        finalizedAt: grantedAt
+      })
+      durable.autopilot = {
+        version: 1,
+        status: 'revoked',
+        authority: 'direct_human',
+        grantId,
+        routingReceiptId,
+        rootSessionId: sourceLead.id,
+        projectKey: durable.projectKey,
+        goalId,
+        goalObjectiveHash: createHash('sha256').update(JSON.stringify(['agent-teams-autopilot-objective-v1', 'Finish the transfer safely'])).digest('hex'),
+        pauseEpochAtGrant: 0,
+        baseMaxGoalRounds: 8,
+        expectedMaxGoalRounds: 8,
+        maxAdditionalRounds: 200,
+        additionalRoundsGranted: 0,
+        wakes: [],
+        grantedAt,
+        revokedAt: timestamp(3_000),
+        revokeReason: 'explicit user stop'
+      }
+      durable.state = 'paused'
+      durable.pauseEpoch = 1
+    })
+
+    const prepared = await mod.prepareTeamHandoff(ctx, store, sourceLead, { teamId: team.id, targetRootSessionId: targetLead.id })
+    const adopted = await mod.adoptTeamHandoff(ctx, store, targetLead, { teamId: team.id, handoffToken: prepared.handoffToken, leadName: 'NewLead' })
+    const durable = store.snapshot().teams[0]
+    const adoption = durable.ownershipHistory.at(-1)
+
+    assert.equal(durable.rootLeadSessionId, targetLead.id)
+    assert.equal(durable.autopilot, undefined, 'the former root grant must not survive ownership adoption')
+    assert.equal(adoption.kind, 'handoff_adopted')
+    assert.equal(adoption.autopilotGrantId, grantId)
+    assert.equal(adoption.autopilotRoutingReceiptId, routingReceiptId)
+    assert.equal(adoption.autopilotGoalId, goalId)
+    assert.equal(adoption.autopilotStatusAtHandoff, 'revoked')
+    assert.equal(adoption.autopilotRevokeReason, 'ownership handoff requires fresh direct-human continuation authority')
+    assert.match(adoption.autopilotRevokedAt, /^\d{4}-\d{2}-\d{2}T/u)
+    assert.doesNotThrow(() => mod.validateStoreDocument(structuredClone(store.snapshot())))
+    assert.doesNotMatch(JSON.stringify(adopted), /grant-autopilot-handoff|routing-autopilot-handoff|goal-autopilot-handoff|fresh direct-human/u, 'private revocation authority audit must not enter public results')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -982,7 +1076,7 @@ test('spawn accepts an exact parent workspace that owns the task file-scope anch
     agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
     subagents: {
       async startContinuable({ childId }) { starts += 1; return { childId } },
-      async followup() {},
+      async [queueSubagentPrompt]() {},
       async drainContinuableChildren() {}
     }
   }

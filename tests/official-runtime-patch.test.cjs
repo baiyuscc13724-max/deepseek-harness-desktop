@@ -8,6 +8,14 @@ const { pathToFileURL } = require('node:url')
 const vm = require('node:vm')
 
 const alpha2CandidateRoot = process.env.DSH_ALPHA2_CANDIDATE_ROOT || path.resolve(__dirname, '..')
+const alpha2CandidateVersion = (() => {
+  try {
+    return JSON.parse(readFileSync(path.join(alpha2CandidateRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8')).version
+  } catch {
+    return null
+  }
+})()
+const alpha2FixtureTest = alpha2CandidateVersion === '0.1.2-alpha.2' ? test : (name, fn) => test.skip(name, fn)
 
 const originalSource = `\t\t\t\tstartSession(workspaceId) {
 \t\t\t\t\tconst workspace = this.list.getSnapshot();
@@ -36,7 +44,120 @@ test('all desktop New Session entry points force a new session and remain idempo
   assert.equal(patchRuntimeSource(first.source).changed, false)
 })
 
-test('alpha.2 installed workspace wrapper enforces the exact transformed output guard', async () => {
+const mcpStartupFixture = `const GENERATION_CLOSE_TIMEOUT_MS = 5e3;
+async function syncTools(client, ctx, opts, previous) {
+	for (const dispose of previous.values()) dispose();
+	return previous;
+}
+function startConnection(ctx, config, policy) {
+	let disposers;
+	let syncChain = Promise.resolve();
+	const isCurrent = () => true;
+	function enqueueSync(generation, syncOpts = opts) {
+		const run = syncChain.then(async () => {
+			disposers = await syncTools(generation, ctx, syncOpts, disposers);
+		});
+		syncChain = run.catch(() => {});
+		return run;
+	}
+	function waitForClose(closed) {
+		return Promise.resolve(true);
+	}
+	function scheduleReconnect() {
+		return policy;
+	}
+	async function connectGeneration(startup) {
+		const generation = createGeneration();
+		const closed = Promise.withResolvers();
+		let attemptSettled = false;
+		const hasClosed = () => false;
+		try {
+			await generation.connect(createTransport(config));
+			if (hasClosed()) {
+				attemptSettled = true;
+				generationDown(generation);
+				return;
+			}
+			await enqueueSync(generation, startup ? startupOpts : opts);
+		} catch (error) {
+			try {
+				await generation.close();
+			} catch {}
+			const quiesced = hasClosed() || await waitForClose(closed.promise);
+			if (!quiesced) return;
+		}
+	}
+	return {
+		async dispose() {
+			const current = client;
+			const currentClosed = clientClosed;
+			if (current !== void 0) {
+				try {
+					await current.close();
+				} catch {}
+				if (currentClosed !== void 0 && !await waitForClose(currentClosed)) report();
+			}
+			await settling;
+			await syncChain;
+		}
+	};
+}
+async function apply(ctx, config) {
+	const connection = startConnection(ctx, config, reconnect);
+	const outcome = await connection.ready;
+	if (outcome.error !== void 0 && config.failOnStartupError) throw new Error(\`mcp-client(\${config.serverName}): initial connection or tool synchronization failed\`, { cause: outcome.error });
+}`
+
+test('MCP startup patch bounds connect plus first tool sync and leaves optional integrations non-blocking', async () => {
+  const { patchMcpClientStartupTimeoutSource } = await import('../scripts/patch-official-runtime.mjs')
+  const patched = patchMcpClientStartupTimeoutSource(mcpStartupFixture)
+  assert.equal(patched.changed, true)
+  for (const marker of [
+    'const CONNECTION_ATTEMPT_TIMEOUT_MS = 8e3;',
+    'const completed = await Promise.race([',
+    'connection and initial tool sync timed out',
+    'function requestClose(generation)',
+    'requestClose(current);',
+    'if (!config.failOnStartupError) return;',
+    'if (!isActive()) return previous;',
+    'attemptQuiesced, syncQuiesced'
+  ]) assert.match(patched.source, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'))
+  assert.equal(patchMcpClientStartupTimeoutSource(patched.source).changed, false)
+  assert.throws(() => patchMcpClientStartupTimeoutSource(patched.source.replace('const CONNECTION_ATTEMPT_TIMEOUT_MS = 8e3;\n', '')), /incomplete/u)
+  assert.throws(() => patchMcpClientStartupTimeoutSource(mcpStartupFixture.replace('await generation.connect(createTransport(config));', 'await generation.connect(changedTransport);')), /connection attempt changed/u)
+})
+
+test('installed alpha.4 MCP client is the exact complete bounded startup artifact', async () => {
+  const { patchInstalledMcpClient } = await import('../scripts/patch-official-runtime.mjs')
+  const file = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-mcp-client', 'lib', 'index.js')
+  assert.equal(await patchInstalledMcpClient(file), false)
+  assert.equal(createHash('sha256').update(readFileSync(file)).digest('hex').toUpperCase(), '58254A778587C06DBAE6BC2B811C9D3DA5AE4EB2565A371B960C3CA27A273A18')
+})
+
+test('alpha.4 root and selected official dependency graphs are exact and unmixed', async () => {
+  const root = path.resolve(__dirname, '..')
+  const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
+  const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'))
+  const installedCore = JSON.parse(readFileSync(path.join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))
+  const { classifyOfficialRuntimeGraph } = await import('../scripts/patch-official-runtime.mjs')
+  assert.deepEqual(classifyOfficialRuntimeGraph(manifest, lock, installedCore), {
+    mode: 'alpha4',
+    version: '0.1.2-alpha.4',
+    directRootCount: 26,
+    selectedPackageCount: 215
+  })
+  const roots = [...Object.entries(manifest.dependencies), ...Object.entries(manifest.optionalDependencies || {})]
+    .filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'))
+  assert.equal(roots.length, 26)
+  assert.ok(roots.every(([, version]) => version === '0.1.2-alpha.4'))
+  const selected = Object.entries(lock.packages)
+    .filter(([location]) => location.split('node_modules/').at(-1)?.startsWith('@deepseek-ai/dsh'))
+  assert.equal(selected.length, 215)
+  assert.ok(selected.every(([, entry]) => entry.version === '0.1.2-alpha.4'))
+  assert.equal(lock.packages['node_modules/@deepseek-ai/dsh-tool-subagent-report'], undefined)
+})
+
+alpha2FixtureTest('alpha.2 installed workspace wrapper enforces the exact transformed output guard', async () => {
   const source = readFileSync(path.join(alpha2CandidateRoot, 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js'), 'utf8')
   const temporary = mkdtempSync(path.join(os.tmpdir(), 'alpha2-workspace-wrapper-'))
   const file = path.join(temporary, 'lib', 'client.js')
@@ -59,7 +180,7 @@ test('alpha.2 installed workspace wrapper enforces the exact transformed output 
   }
 })
 
-test('alpha.2 removes the legacy runtime and keeps session projection work in Session Controller', async () => {
+alpha2FixtureTest('alpha.2 removes the legacy runtime and keeps session projection work in Session Controller', async () => {
   const { access } = require('node:fs/promises')
   const removed = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js')
   await assert.rejects(() => access(removed), error => error?.code === 'ENOENT')
@@ -75,7 +196,7 @@ test('alpha.2 removes the legacy runtime and keeps session projection work in Se
   assert.equal(patchAlpha2SessionControllerSource(first.source).changed, false)
 })
 
-test('alpha.2 Session Controller real bundle enforces keyed dirtiness, bounded scheduling and linear cache cleanup', async () => {
+alpha2FixtureTest('alpha.2 Session Controller real bundle enforces keyed dirtiness, bounded scheduling and linear cache cleanup', async () => {
   const alpha2File = path.join(alpha2CandidateRoot, 'node_modules', '@deepseek-ai', 'dsh-api-session-controller', 'lib', 'client.js')
   const source = readFileSync(alpha2File, 'utf8')
   const { patchAlpha2SessionControllerSource } = await import('../scripts/patch-official-runtime.mjs')
@@ -210,13 +331,14 @@ test('the on-demand browser launcher does not flash a Node console window', asyn
   assert.throws(() => patchWebAppSource(drifted), /Pinned DSH browser launcher implementation changed/u)
 })
 
-test('alpha.3 keeps native turn navigation, queue images, reconnect, and schedule catalog behavior without Desktop conversation patches', async () => {
-  const { assertInstalledAlpha3NativeCapabilities } = await import('../scripts/patch-official-runtime.mjs')
+test('alpha.4 keeps native turn navigation, queue images, reconnect, schedule catalog, and session lineage behavior without Desktop overrides', async () => {
+  const { assertInstalledAlpha4NativeCapabilities } = await import('../scripts/patch-official-runtime.mjs')
   const base = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai')
   const chat = readFileSync(path.join(base, 'dsh-client-ui-chat', 'lib', 'client.js'), 'utf8')
   const conversation = readFileSync(path.join(base, 'dsh-client-ui-conversation', 'lib', 'client.js'), 'utf8')
   const connection = readFileSync(path.join(base, 'dsh-client-connection', 'lib', 'client.js'), 'utf8')
   const schedule = readFileSync(path.join(base, 'dsh-client-ui-schedule', 'lib', 'client.js'), 'utf8')
+  const session = readFileSync(path.join(base, 'dsh-session', 'lib', 'index.js'), 'utf8')
   assert.match(chat, /function TurnNavigatorRail\(/u)
   assert.match(chat, /useProjection\("turnOutline"\)/u)
   assert.match(conversation, /function QueueThumb\(/u)
@@ -225,8 +347,11 @@ test('alpha.3 keeps native turn navigation, queue images, reconnect, and schedul
   assert.match(connection, /backoffMaxMs: 1e4/u)
   assert.match(schedule, /function ScheduleCatalogAction\(/u)
   assert.match(schedule, /schedule-catalog/u)
-  assert.equal(await assertInstalledAlpha3NativeCapabilities(), false)
-  assert.equal(await assertInstalledAlpha3NativeCapabilities(), false, 'native capability verification must be idempotent')
+  assert.match(session, /function SessionSeq\(value\) \{/u)
+  assert.match(session, /inheritedEventCount;/u)
+  assert.match(session, /ownEvents\(\) \{\s*return this\.snapshotEvents\(this\.inheritedEventCount\);/u)
+  assert.equal(await assertInstalledAlpha4NativeCapabilities(), false)
+  assert.equal(await assertInstalledAlpha4NativeCapabilities(), false, 'native capability verification must be idempotent')
 })
 
 test('full-response copy uses the official alpha.2 unobtrusive icon action', async () => {

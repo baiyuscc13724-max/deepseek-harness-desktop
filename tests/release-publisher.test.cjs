@@ -1,9 +1,17 @@
 const assert = require('node:assert/strict')
 const { execFileSync, spawnSync } = require('node:child_process')
-const { readFileSync } = require('node:fs')
+const { createHash } = require('node:crypto')
+const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
+const { tmpdir } = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 const YAML = require('yaml')
+const {
+  SELF_TEST_CHECKS,
+  normalizeFormalWindowsAsset,
+  performFormalWindowsValidation,
+  revalidateFormalWindowsValidation,
+} = require('../scripts/release-local-formal-windows-validation.cjs')
 const {
   assertCandidateRebindAllowed,
   assertExistingTagRecoveryAllowed,
@@ -28,6 +36,7 @@ const expectedPhases = [
   'desktop-cloud-builds',
   'immutable-tag',
   'desktop-publication',
+  'local-formal-windows-validation',
   'signed-android',
   'signed-components',
   'release-manifest',
@@ -254,7 +263,7 @@ test('tampered stored workflow run identities cannot satisfy a release phase', (
   const expected = {
     workflowName: run.workflowName,
     workflowPath: run.workflowPath,
-    events: ['push', 'workflow_dispatch'],
+    events: ['workflow_dispatch'],
     headSha: run.headSha,
     headBranch: run.headBranch,
     displayTitle: run.displayTitle
@@ -348,6 +357,7 @@ test('one publisher command exposes the immutable resumable release order', () =
   assert.ok(plan.guarantees.includes('local source gates without local release packaging'))
   assert.ok(plan.guarantees.includes('all release packages built and tested by GitHub Actions before tagging'))
   assert.ok(plan.guarantees.includes('cloud-only same-run release artifact transfer'))
+  assert.ok(plan.guarantees.includes('public formal Windows portable isolated self-test before signed publication'))
   assert.ok(plan.guarantees.includes('stable feeds last'))
   assert.equal(pkg.scripts['release:publish'], 'node scripts/release-publish.mjs')
 })
@@ -370,11 +380,12 @@ test('publisher resumes atomically and never downloads Actions binaries locally'
   assert.match(source, /workflowRun[\s\S]*actions\/runs\/[\s\S]*actions\/workflows\/\$\{api\?\.workflow_id\}[\s\S]*workflowMetadata\?\.name[\s\S]*workflowPath[\s\S]*matchesWorkflowRunIdentity/u)
   assert.doesNotMatch(source, /workflowName: String\(api\?\.name/u)
   assert.match(source, /run\.status === 'completed'[\s\S]*required\.every/u)
-  assert.match(source, /signed-android'[\s\S]*productWorkflowIdentity\(WORKFLOWS\.android\)[\s\S]*signed-components'[\s\S]*publishPostTagRecoveryFix\(\)[\s\S]*componentCheckpointWorkflowIdentity\(completed\)/u)
+  assert.match(source, /signed-android'[\s\S]*androidWorkflowIdentity\(requestId\)[\s\S]*signed-components'[\s\S]*publishPostTagRecoveryFix\(\)[\s\S]*componentCheckpointWorkflowIdentity\(completed\)/u)
   for (const [phaseName, nextPhase] of [
     ['desktop-cloud-builds', 'immutable-tag'],
     ['immutable-tag', 'desktop-publication'],
-    ['desktop-publication', 'signed-android'],
+    ['desktop-publication', 'local-formal-windows-validation'],
+    ['local-formal-windows-validation', 'signed-android'],
     ['signed-android', 'signed-components'],
     ['signed-components', 'release-manifest']
   ]) {
@@ -398,11 +409,318 @@ test('publisher resumes atomically and never downloads Actions binaries locally'
   assert.match(source, /'release:cnb-cloud', '--', '-StableOnly'/u)
 })
 
+test('formal Windows validation is ordered after public desktop bytes and before every remaining publication', () => {
+  const publisher = read('scripts/release-publish.mjs')
+  const desktop = publisher.indexOf("phase(state, 'desktop-publication'")
+  const localFormal = publisher.indexOf("phase(state, 'local-formal-windows-validation'")
+  const android = publisher.indexOf("phase(state, 'signed-android'")
+  const components = publisher.indexOf("phase(state, 'signed-components'")
+  const releaseManifest = publisher.indexOf("phase(state, 'release-manifest'")
+  assert.ok(desktop >= 0 && desktop < localFormal)
+  assert.ok(localFormal < android && localFormal < components && localFormal < releaseManifest)
+  const segment = publisher.slice(localFormal, android)
+  assert.match(segment, /releaseForTag\(\)[\s\S]*performFormalWindowsValidation/u)
+  assert.match(segment, /validateCompleted:[\s\S]*releaseForTag\(\)[\s\S]*revalidateFormalWindowsValidation/u)
+  assert.doesNotMatch(segment, /localDist|\bdist\b|desktopBuildArtifacts/u)
+  assert.match(publisher, /scripts\/release-local-formal-windows-validation\.cjs/u)
+  for (const phaseName of ['signed-android', 'signed-components', 'release-manifest', 'cnb-assets', 'stable-components', 'cnb-stable', 'complete']) {
+    const boundary = publisher.indexOf(`requireCurrentFormalWindowsValidation(state, '${phaseName}')`)
+    const phase = publisher.indexOf(`phase(state, '${phaseName}'`)
+    assert.ok(boundary > localFormal && boundary < phase, `${phaseName} must freshly revalidate the formal Windows identity before entering the phase`)
+  }
+  assert.match(publisher, /signed-android completion/u)
+  assert.match(publisher, /signed-components completion/u)
+  assert.match(publisher, /formalWindowsWorkflowFields\(formalBeforeAndroid\.evidence\)/u)
+  assert.match(publisher, /formalWindowsWorkflowFields\(formalBeforeComponents\.evidence\)/u)
+})
+
+test('same-run formal Windows asset drift fails the cloud workflow and the publisher next-phase boundary', async () => {
+  const { verifyFormalWindowsReleaseIdentity } = await import('../scripts/verify-formal-windows-release-identity.mjs')
+  const expected = {
+    repo: 'example/harness',
+    tag: 'v9.8.7',
+    productRevision: 'c'.repeat(40),
+    releaseId: 17,
+    assetId: 23,
+    assetName: 'Harness-Desktop-9.8.7-portable-x64.exe',
+    assetSize: 41,
+    assetDigest: `sha256:${'d'.repeat(64)}`,
+    assetUrl: 'https://github.com/example/harness/releases/download/v9.8.7/Harness-Desktop-9.8.7-portable-x64.exe',
+  }
+  const release = {
+    id: expected.releaseId,
+    tag_name: expected.tag,
+    target_commitish: expected.productRevision,
+    draft: false,
+    prerelease: false,
+    assets: [{
+      id: expected.assetId,
+      name: expected.assetName,
+      size: expected.assetSize,
+      digest: expected.assetDigest,
+      browser_download_url: expected.assetUrl,
+    }],
+  }
+  assert.equal(verifyFormalWindowsReleaseIdentity(release, expected), true)
+  assert.throws(
+    () => verifyFormalWindowsReleaseIdentity({ ...release, assets: [{ ...release.assets[0], id: expected.assetId + 1 }] }, expected),
+    /asset identity changed/u,
+  )
+  assert.throws(
+    () => verifyFormalWindowsReleaseIdentity({ ...release, assets: [] }, expected),
+    /missing or duplicated/u,
+  )
+
+  const android = read('.github/workflows/android-mobile-release.yml')
+  const components = read('.github/workflows/publish-production-components.yml')
+  for (const workflow of [android, components]) {
+    for (const field of ['product_revision', 'release_id', 'asset_id', 'asset_name', 'asset_size', 'asset_digest', 'asset_url']) {
+      assert.match(workflow, new RegExp(`formal_windows_${field}:`, 'u'))
+    }
+    assert.match(workflow, /verify-formal-windows-release-identity\.mjs/u)
+  }
+  assert.ok(android.indexOf('verify-formal-windows-release-identity.mjs', android.indexOf('Add immutable signed APK')) > android.indexOf('Add immutable signed APK'))
+  assert.ok(components.indexOf('verify-formal-windows-release-identity.mjs', components.indexOf('Upload only missing immutable signed component assets')) > components.indexOf('Upload only missing immutable signed component assets'))
+  assert.ok(components.indexOf('verify-formal-windows-release-identity.mjs', components.indexOf('Sign exact desktop release manifest')) > components.indexOf('Sign exact desktop release manifest'))
+  assert.ok(android.lastIndexOf('verify-formal-windows-release-identity.mjs') > android.indexOf('Verify public signed APK bytes and identity'))
+  assert.ok(components.lastIndexOf('verify-formal-windows-release-identity.mjs') > components.indexOf('git push origin "HEAD:refs/heads/$branch"'))
+  assert.match(components, /Revalidate formal Windows identity after all component side effects/u)
+  assert.match(read('scripts/release-publish.mjs'), /signed-components completion[\s\S]*requireCurrentFormalWindowsValidation\(state, 'release-manifest'\)/u)
+})
+
+test('formal Windows validation downloads digest-bound public bytes and runs an isolated strict self-test', async t => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'harness-formal-windows-'))
+  t.after(() => rmSync(temporary, { recursive: true, force: true }))
+  const version = '9.8.7'
+  const tag = `v${version}`
+  const repo = 'example/harness'
+  const productRevision = 'a'.repeat(40)
+  const bytes = Buffer.from('formal-public-portable-windows-bytes')
+  const digest = createHash('sha256').update(bytes).digest('hex')
+  const name = `Harness-Desktop-${version}-portable-x64.exe`
+  const asset = {
+    id: 731,
+    name,
+    size: bytes.length,
+    digest: `sha256:${digest}`,
+    browser_download_url: `https://github.com/${repo}/releases/download/${tag}/${name}`,
+  }
+  let downloadedUrl = ''
+  let observedArgs
+  const evidence = await performFormalWindowsValidation({
+    stateDir: temporary,
+    version,
+    productRevision,
+    releaseId: 419,
+    asset,
+    repo,
+    tag,
+    platform: 'win32',
+    arch: 'x64',
+    fetchImpl: async url => {
+      downloadedUrl = url
+      return new Response(bytes, { status: 200 })
+    },
+    spawnSyncImpl: (executable, args, options) => {
+      observedArgs = args
+      assert.ok(executable.startsWith(path.resolve(temporary)))
+      assert.equal(options.windowsHide, true)
+      assert.equal(options.env.ELECTRON_RUN_AS_NODE, undefined)
+      const output = args.find(value => value.startsWith('--self-test-output=')).slice('--self-test-output='.length)
+      writeFileSync(output, JSON.stringify({
+        ok: true,
+        product: { version },
+        checks: Object.fromEntries(SELF_TEST_CHECKS.map(check => [check, true])),
+      }))
+      return { status: 0, signal: null }
+    },
+  })
+
+  assert.equal(downloadedUrl, asset.browser_download_url)
+  assert.deepEqual(readFileSync(evidence.executablePath), bytes)
+  assert.equal(evidence.asset.id, asset.id)
+  assert.equal(evidence.asset.size, bytes.length)
+  assert.equal(evidence.asset.digest, asset.digest)
+  assert.equal(evidence.productRevision, productRevision)
+  assert.deepEqual(observedArgs, evidence.selfTestArguments)
+  assert.ok(observedArgs.includes('--self-test'))
+  assert.ok(observedArgs.includes(`--user-data-dir=${evidence.userDataDir}`))
+  assert.ok(observedArgs.includes(`--harness-user-data-dir=${evidence.harnessUserDataDir}`))
+  assert.notEqual(evidence.userDataDir, evidence.harnessUserDataDir)
+  assert.ok(evidence.userDataDir.startsWith(path.resolve(temporary)))
+  assert.ok(evidence.harnessUserDataDir.startsWith(path.resolve(temporary)))
+
+  await revalidateFormalWindowsValidation({
+    evidence,
+    stateDir: temporary,
+    version,
+    productRevision,
+    releaseId: 419,
+    asset,
+    repo,
+    tag,
+    platform: 'win32',
+    arch: 'x64',
+  })
+})
+
+test('formal Windows validation fails closed and completed evidence is revalidated', async t => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'harness-formal-windows-fail-'))
+  t.after(() => rmSync(temporary, { recursive: true, force: true }))
+  const version = '9.8.7'
+  const tag = `v${version}`
+  const repo = 'example/harness'
+  const productRevision = 'b'.repeat(40)
+  const bytes = Buffer.from('official-byte-sequence')
+  const digest = createHash('sha256').update(bytes).digest('hex')
+  const name = `Harness-Desktop-${version}-portable-x64.exe`
+  const asset = {
+    id: 992,
+    name,
+    size: bytes.length,
+    digest: `sha256:${digest}`,
+    browser_download_url: `https://github.com/${repo}/releases/download/${tag}/${name}`,
+  }
+  assert.throws(
+    () => normalizeFormalWindowsAsset({ ...asset, size: bytes.length + 1, digest: 'sha256:not-a-digest' }, { version, repo, tag }),
+    /invalid sha256 digest/u,
+  )
+  await assert.rejects(
+    performFormalWindowsValidation({
+      stateDir: temporary,
+      version,
+      productRevision,
+      releaseId: 42,
+      asset,
+      repo,
+      tag,
+      platform: 'linux',
+      arch: 'x64',
+      fetchImpl: async () => { throw new Error('must not download') },
+      spawnSyncImpl: () => { throw new Error('must not launch') },
+    }),
+    /requires a Windows x64 host/u,
+  )
+  await assert.rejects(
+    performFormalWindowsValidation({
+      stateDir: temporary,
+      version,
+      productRevision,
+      releaseId: 42,
+      asset,
+      repo,
+      tag,
+      platform: 'win32',
+      arch: 'x64',
+      fetchImpl: async () => new Response(Buffer.from('wrong bytes'), { status: 200 }),
+      spawnSyncImpl: () => { throw new Error('must not launch') },
+    }),
+    /size mismatch|digest mismatch/u,
+  )
+
+  const evidence = await performFormalWindowsValidation({
+    stateDir: temporary,
+    version,
+    productRevision,
+    releaseId: 42,
+    asset,
+    repo,
+    tag,
+    platform: 'win32',
+    arch: 'x64',
+    fetchImpl: async () => new Response(bytes, { status: 200 }),
+    spawnSyncImpl: (_executable, args) => {
+      const output = args.find(value => value.startsWith('--self-test-output=')).slice('--self-test-output='.length)
+      writeFileSync(output, JSON.stringify({
+        ok: true,
+        product: { version },
+        checks: Object.fromEntries(SELF_TEST_CHECKS.map(check => [check, true])),
+      }))
+      return { status: 0, signal: null }
+    },
+  })
+
+  await assert.rejects(
+    revalidateFormalWindowsValidation({
+      evidence,
+      stateDir: temporary,
+      version,
+      productRevision,
+      releaseId: 42,
+      asset: { ...asset, id: asset.id + 1 },
+      repo,
+      tag,
+      platform: 'win32',
+      arch: 'x64',
+    }),
+    /asset metadata changed: id/u,
+  )
+  writeFileSync(evidence.executablePath, Buffer.alloc(bytes.length, 0x78))
+  await assert.rejects(
+    revalidateFormalWindowsValidation({
+      evidence,
+      stateDir: temporary,
+      version,
+      productRevision,
+      releaseId: 42,
+      asset,
+      repo,
+      tag,
+      platform: 'win32',
+      arch: 'x64',
+    }),
+    /digest mismatch/u,
+  )
+  writeFileSync(evidence.executablePath, bytes)
+  mkdirSync(path.dirname(evidence.reportPath), { recursive: true })
+  writeFileSync(evidence.reportPath, JSON.stringify({
+    ok: true,
+    product: { version },
+    checks: Object.fromEntries(SELF_TEST_CHECKS.map(check => [check, true])),
+    harmlessButUncheckpointedChange: true,
+  }))
+  await assert.rejects(
+    revalidateFormalWindowsValidation({
+      evidence,
+      stateDir: temporary,
+      version,
+      productRevision,
+      releaseId: 42,
+      asset,
+      repo,
+      tag,
+      platform: 'win32',
+      arch: 'x64',
+    }),
+    /report digest no longer matches/u,
+  )
+  writeFileSync(evidence.reportPath, JSON.stringify({
+    ok: true,
+    product: { version },
+    checks: Object.fromEntries(SELF_TEST_CHECKS.map(check => [check, check !== SELF_TEST_CHECKS[0]])),
+  }))
+  await assert.rejects(
+    revalidateFormalWindowsValidation({
+      evidence,
+      stateDir: temporary,
+      version,
+      productRevision,
+      releaseId: 42,
+      asset,
+      repo,
+      tag,
+      platform: 'win32',
+      arch: 'x64',
+    }),
+    /self-test check did not pass/u,
+  )
+})
+
 test('successful pre-Tag run is the sole artifact source for post-Tag publication', () => {
   const source = read('scripts/release-publish.mjs')
   const build = source.slice(source.indexOf("phase(state, 'desktop-cloud-builds'"), source.indexOf("phase(state, 'immutable-tag'"))
   const tagPhase = source.slice(source.indexOf("phase(state, 'immutable-tag'"), source.indexOf("phase(state, 'desktop-publication'"))
-  const publication = source.slice(source.indexOf("phase(state, 'desktop-publication'"), source.indexOf("phase(state, 'signed-android'"))
+  const publication = source.slice(source.indexOf("phase(state, 'desktop-publication'"), source.indexOf("phase(state, 'local-formal-windows-validation'"))
   assert.match(build, /await waitForRun\(run\.databaseId\)[\s\S]*desktopBuildArtifacts\(run\.databaseId\)/u)
   assert.match(tagPhase, /requireDesktopBuildEvidence\(desktopRunId\)[\s\S]*gitRun\(\['tag'/u)
   assert.match(publication, /requireDesktopBuildEvidence\(desktopRunId\)[\s\S]*source_run_id', desktopRunId/u)
@@ -412,6 +730,36 @@ test('successful pre-Tag run is the sole artifact source for post-Tag publicatio
   assert.doesNotMatch(publication, /inputs:/u)
   assert.doesNotMatch(publication, /sourceRun\.conclusion === 'success'/u)
   assert.doesNotMatch(source, /gh[^\n]*run[^\n]*download/u)
+})
+
+test('v1.0.58 one-off UI failure blocks Tag and every public or stable phase while preserving same-version retry', () => {
+  const publisher = read('scripts/release-publish.mjs')
+  const workflow = read('.github/workflows/release.yml')
+  const oneoffStart = workflow.indexOf('  oneoff-v1-0-58-windows-ui-validation:')
+  const oneoffEnd = workflow.indexOf('\n  ios-simulators:', oneoffStart)
+  assert.ok(oneoffStart >= 0 && oneoffEnd > oneoffStart)
+  const oneoff = workflow.slice(oneoffStart, oneoffEnd)
+  assert.match(oneoff, /^    if: \$\{\{ inputs\.tag == 'v1\.0\.58' \}\}$/mu)
+  assert.match(oneoff, /^    needs: build$/mu)
+  assert.doesNotMatch(oneoff, /contents: write|gh release|stable-components|cnb|immutable-tag/u)
+
+  const waitForRun = publisher.slice(publisher.indexOf('async function waitForRun(runId)'), publisher.indexOf('async function sleep()'))
+  assert.match(waitForRun, /await waitForRunCompletion\(runId\)[\s\S]*run\.conclusion !== 'success'[\s\S]*throw new Error/u)
+  const evidenceGate = publisher.slice(publisher.indexOf('function requireDesktopBuildEvidence'), publisher.indexOf('function requireSuccessfulWorkflowEvidence'))
+  assert.match(evidenceGate, /run\.status !== 'completed' \|\| run\.conclusion !== 'success'/u)
+
+  const buildPhase = publisher.indexOf("phase(state, 'desktop-cloud-builds'")
+  const tagPhase = publisher.indexOf("phase(state, 'immutable-tag'")
+  const publicationPhase = publisher.indexOf("phase(state, 'desktop-publication'")
+  const stablePhase = publisher.indexOf("phase(state, 'stable-components'")
+  assert.ok(buildPhase >= 0 && buildPhase < tagPhase && tagPhase < publicationPhase && publicationPhase < stablePhase)
+  const preTag = publisher.slice(buildPhase, tagPhase)
+  assert.match(preTag, /await waitForRun\(run\.databaseId\)/u)
+  assert.match(preTag, /desktopBuildArtifacts\(run\.databaseId\)/u)
+
+  const retryState = { sourceRevision: 'a'.repeat(40), productRevision: '', phases: { 'desktop-cloud-builds': { status: 'failed', runId: 731 } } }
+  const noEffects = { oldRunTerminal: true, sameVersion: true, fastForward: true, localTagExists: false, remoteTagExists: false, githubReleaseExists: false, cnbReleaseExists: false, stablePromoted: false }
+  assert.equal(assertCandidateRebindAllowed(retryState, noEffects), true)
 })
 
 test('second CNB synchronization is metadata-only and never repeats the 18-asset mirror', () => {
@@ -509,10 +857,15 @@ test('publisher fails closed unless the desktop manifest is signed and verified 
   assert.match(publisher, /changed\.length !== 1 \|\| changed\[0\] !== 'release-manifest\.json'/u)
   assert.match(publisher, /POST_TAG_PUBLISHER_FIX_FILES[\s\S]*publish-production-components\.yml/u)
   assert.match(publisher, /POST_TAG_PUBLISHER_FIX_FILES[\s\S]*scripts\/release-audit\.mjs/u)
+  assert.match(publisher, /POST_TAG_PUBLISHER_FIX_FILES[\s\S]*scripts\/release-local-formal-windows-validation\.cjs/u)
+  assert.match(publisher, /POST_TAG_PUBLISHER_FIX_FILES[\s\S]*scripts\/verify-formal-windows-release-identity\.mjs/u)
   assert.match(publisher, /POST_TAG_PUBLISHER_FIX_FILES[\s\S]*scripts\/release-publish-selection\.cjs/u)
   assert.match(publisher, /POST_TAG_PUBLISHER_FIX_FILES[\s\S]*scripts\/publish-cnb-cloud-mirror\.ps1/u)
   assert.match(publisher, /POST_TAG_PUBLISHER_FIX_FILES[\s\S]*'\.cnb\.yml'/u)
   assert.match(publisher, /postTagChanges\.some\(file => !POST_TAG_PUBLISHER_FIX_FILES\.has\(file\)\)/u)
+  const recovery = read('.github/workflows/recover-release-from-actions.yml')
+  assert.match(recovery, /scripts\/release-local-formal-windows-validation\.cjs/u)
+  assert.match(recovery, /scripts\/verify-formal-windows-release-identity\.mjs/u)
   assert.match(publisher, /gitRun\(\['cherry-pick', candidate\]\)/u)
   assert.match(publisher, /readVerifiedDesktopRelease/u)
   assert.match(publisher, /await readVerifiedDesktopRelease\(\)[\s\S]*gitRun\(\['push', 'origin', 'HEAD:main'\]\)/u)
@@ -803,7 +1156,9 @@ test('manual workflow recovery is uniquely identified and candidate build binds 
     assert.match(workflow, /request_id:/u)
     assert.match(workflow, /run-name:/u)
   }
-  assert.match(android, /ref: \$\{\{ inputs\.tag \|\| github\.ref \}\}/u)
+  assert.match(android, /ref: \$\{\{ inputs\.tag \}\}/u)
+  assert.match(android, /run-name: Android \$\{\{ inputs\.tag \}\} · \$\{\{ inputs\.request_id \}\}/u)
+  assert.doesNotMatch(android, /\n\s+push:|github\.ref_name|github\.run_id|inputs\.tag \|\|/u)
   assert.match(android, /git rev-parse HEAD[\s\S]*git rev-list -n 1/u)
 })
 

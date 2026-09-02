@@ -15,7 +15,7 @@ function agent(id, source = 'coordinator') {
     session: { events: [
       { type: 'turn/start', data: {} },
       { type: 'user/message', data: { source: { kind: source } } }
-    ] }
+    ], snapshotEvents() { return this.events.slice() } }
   }
 }
 

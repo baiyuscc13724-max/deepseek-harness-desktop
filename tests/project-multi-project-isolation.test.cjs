@@ -34,7 +34,7 @@ function baseProjectEntry(root) {
 }
 
 function rootAgent(index, cwd) {
-  return { id: `canonical-root-${index}`, status: 'running', session: { header: { cwd }, events: [{ type: 'turn/start', id: `turn-${index}`, time: index + 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }] } }
+  return { id: `canonical-root-${index}`, status: 'running', session: { header: { cwd }, events: [{ type: 'turn/start', id: `turn-${index}`, time: index + 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }], snapshotEvents() { return this.events.slice() } } }
 }
 
 test('registered project tools isolate 16 canonical roots with identical model ids and independent slow/fast SQLite lanes', async () => {

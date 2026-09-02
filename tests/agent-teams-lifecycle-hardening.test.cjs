@@ -92,7 +92,7 @@ test('legacy completed records without Host acceptance remain explicitly unaccep
   document.version = 5
   delete document.teams[0].tasks[0].acceptance
   assert.doesNotThrow(() => mod.validateStoreDocument(document))
-  assert.equal(document.version, 7)
+  assert.equal(document.version, 8)
   assert.equal(document.teams[0].tasks[0].state, 'submitted')
   assert.equal(document.teams[0].tasks[0].acceptance, undefined)
   assert.equal(document.teams[0].tasks[0].submission.source, 'explicit_complete')

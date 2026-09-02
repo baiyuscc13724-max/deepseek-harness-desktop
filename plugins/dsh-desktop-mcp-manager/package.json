@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-mcp-manager",
-  "version": "1.0.57",
+  "version": "1.0.58",
   "description": "Secure MCP server manager for Harness Desktop",
   "type": "module",
   "main": "lib/index.js",
@@ -20,9 +20,9 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-credentials": "^0.1.2-alpha.3",
-    "@deepseek-ai/dsh-mcp-client": "^0.1.2-alpha.3",
-    "@deepseek-ai/dsh-tools": "^0.1.2-alpha.3"
+    "@deepseek-ai/dsh-credentials": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-mcp-client": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-tools": "^0.1.2-alpha.4"
   },
   "license": "MIT"
 }

@@ -8,19 +8,32 @@ const workflow = await readFile(path.join(root, '.github/workflows/release.yml')
 const service = await readFile(path.join(root, 'electron/bridge/self-test-service.cjs'), 'utf8')
 const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'))
-const packagedAlpha2Peers = [
+const OFFICIAL_ALPHA4_VERSION = '0.1.2-alpha.4'
+const packagedAlpha4Peers = Object.freeze([
   '@deepseek-ai/dsh-attachment',
   '@deepseek-ai/dsh-jobs',
   '@deepseek-ai/dsh-session-persistence',
   '@deepseek-ai/dsh-session-query',
   '@deepseek-ai/dsh-settings',
   '@deepseek-ai/dsh-util-time'
-]
+])
+const officialRuntimeVersion = manifest.dependencies?.['@deepseek-ai/dsh']
+if (officialRuntimeVersion !== OFFICIAL_ALPHA4_VERSION) throw new Error('Packaged runtime must stay pinned to the reviewed official alpha.4 release.')
+const declaredDshOptionalRoots = Object.keys(manifest.optionalDependencies || {})
+  .filter(packageName => packageName === '@deepseek-ai/dsh' || packageName.startsWith('@deepseek-ai/dsh-'))
+  .sort()
+if (JSON.stringify(declaredDshOptionalRoots) !== JSON.stringify([...packagedAlpha4Peers].sort())) {
+  throw new Error('Packaged alpha.4 runtime peers must match the complete reviewed optional-root allowlist.')
+}
+const lockRoot = lock.packages?.['']
+if (!lockRoot || Array.isArray(lockRoot) || typeof lockRoot !== 'object') throw new Error('Packaged alpha.4 runtime lock root is missing or malformed.')
 
-for (const packageName of packagedAlpha2Peers) {
-  if (manifest.optionalDependencies?.[packageName] !== '0.1.2-alpha.2') throw new Error(`Packaged alpha.2 runtime peer is not an exact optional root: ${packageName}`)
+for (const packageName of packagedAlpha4Peers) {
+  const manifestVersion = manifest.optionalDependencies?.[packageName]
+  if (manifestVersion !== officialRuntimeVersion) throw new Error(`Packaged alpha.4 runtime peer is not an exact optional root: ${packageName}`)
+  if (lockRoot.optionalDependencies?.[packageName] !== manifestVersion) throw new Error(`Packaged alpha.4 runtime peer root lock does not match the manifest: ${packageName}`)
   const locked = lock.packages?.[`node_modules/${packageName}`]
-  if (locked?.version !== '0.1.2-alpha.2' || locked.peer === true) throw new Error(`Packaged alpha.2 runtime peer is not locked as a packable root: ${packageName}`)
+  if (locked?.version !== manifestVersion || locked.peer === true) throw new Error(`Packaged alpha.4 runtime peer is not locked as a packable root: ${packageName}`)
 }
 
 for (const contract of ['--self-test', 'runPackagedSelfTest', 'HARNESS_DESKTOP_SELFTEST']) {

@@ -128,6 +128,8 @@ for (const relative of ['electron/bridge/terminal-service.cjs', 'node_modules/@x
 
 const workflow = (await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8')).replace(/\r\n?/gu, '\n')
 const releasePublisher = await readFile(path.join(root, 'scripts/release-publish.mjs'), 'utf8')
+const releaseFormalWindowsValidation = await readFile(path.join(root, 'scripts/release-local-formal-windows-validation.cjs'), 'utf8')
+const releaseFormalWindowsRemoteIdentity = await readFile(path.join(root, 'scripts/verify-formal-windows-release-identity.mjs'), 'utf8')
 const releasePublisherSelection = await readFile(path.join(root, 'scripts/release-publish-selection.cjs'), 'utf8')
 const releasePublisherTests = await readFile(path.join(root, 'tests/release-publisher.test.cjs'), 'utf8')
 for (const contract of ['repos/${repo}/actions/runs/${runId}', 'workflowPath', 'WORKFLOWS.android', 'WORKFLOWS.components', 'WORKFLOWS.recovery', 'validateCompletedPhaseEvidence', 'verifyCloudAssetMirrorsBeforeStable', 'validateGithubReleaseAgainstManifest']) {
@@ -138,6 +140,30 @@ for (const contract of ["delete state.phases['local-windows']", 'incorrectlyMigr
 }
 for (const contract of ['legacy local packaging state always reruns', 'tampered stored workflow run identities', 'completed publication phases cannot skip fresh run evidence validation', 'GitHub and CNB 18-asset drift is rejected before stable']) {
   if (!releasePublisherTests.includes(contract)) throw new Error(`Publisher fail-closed behavior test missing: ${contract}`)
+}
+const desktopPublicationIndex = releasePublisher.indexOf("phase(state, 'desktop-publication'")
+const formalWindowsValidationIndex = releasePublisher.indexOf("phase(state, 'local-formal-windows-validation'")
+const formalWindowsLaterPhaseIndexes = ['signed-android', 'signed-components', 'release-manifest', 'cnb-assets', 'stable-components', 'cnb-stable', 'complete'].map(id => releasePublisher.indexOf(`phase(state, '${id}'`))
+if (desktopPublicationIndex < 0 || formalWindowsValidationIndex <= desktopPublicationIndex || formalWindowsLaterPhaseIndexes.some(index => index <= formalWindowsValidationIndex)) throw new Error('Formal Windows validation must run after desktop publication and before signed Android or any later publication phase.')
+for (const contract of ['expectedPortableAssetName', 'performFormalWindowsValidation', 'revalidateFormalWindowsValidation']) {
+  if (!releasePublisher.includes(contract)) throw new Error(`Formal Windows publisher phase contract missing: ${contract}`)
+}
+for (const contract of ['requires a Windows x64 host', 'browser_download_url', 'asset.size', 'asset.digest', 'productRevision', "'--self-test'", '--user-data-dir=', '--harness-user-data-dir=', 'report.ok !== true', 'report.product.version !== version', 'report.checks[check] !== true', 'validateDownloadedAsset(layout.executablePath', 'reportSha256']) {
+  if (!releaseFormalWindowsValidation.includes(contract)) throw new Error(`Formal Windows local validation fail-closed contract missing: ${contract}`)
+}
+for (const contract of ['releases/${releaseId}', 'release.tag_name !== expected.tag', 'release.target_commitish', 'release.draft !== false', 'release.prerelease !== false', 'asset?.name === expected.assetName', 'asset.digest !== expected.assetDigest', 'asset.browser_download_url !== expected.assetUrl']) {
+  if (!releaseFormalWindowsRemoteIdentity.includes(contract)) throw new Error(`Formal Windows remote identity verifier contract missing: ${contract}`)
+}
+for (const phaseName of ['signed-android', 'signed-components', 'release-manifest', 'cnb-assets', 'stable-components', 'cnb-stable', 'complete']) {
+  const boundaryIndex = releasePublisher.indexOf(`requireCurrentFormalWindowsValidation(state, '${phaseName}')`)
+  const phaseIndex = releasePublisher.indexOf(`phase(state, '${phaseName}'`)
+  if (boundaryIndex <= formalWindowsValidationIndex || phaseIndex <= boundaryIndex) throw new Error(`Formal Windows identity must be freshly revalidated immediately before ${phaseName}.`)
+}
+for (const contract of ['formalWindowsWorkflowFields(formalBeforeAndroid.evidence)', 'formalWindowsWorkflowFields(formalBeforeComponents.evidence)', 'androidWorkflowIdentity(requestId)', 'componentCheckpointWorkflowIdentity(completed)', 'signed-android completion', 'signed-components completion']) {
+  if (!releasePublisher.includes(contract)) throw new Error(`Formal Windows cloud workflow binding contract missing: ${contract}`)
+}
+for (const contract of ['formal Windows validation is ordered after public desktop bytes', 'downloads digest-bound public bytes', 'completed evidence is revalidated', 'same-run formal Windows asset drift fails the cloud workflow and the publisher next-phase boundary']) {
+  if (!releasePublisherTests.includes(contract)) throw new Error(`Formal Windows local validation regression test missing: ${contract}`)
 }
 const stablePromotion = releasePublisher.slice(releasePublisher.indexOf("phase(state, 'stable-components'"), releasePublisher.indexOf("phase(state, 'cnb-stable'"))
 if (stablePromotion.indexOf('verifyCloudAssetMirrorsBeforeStable') < 0 || stablePromotion.indexOf('verifyCloudAssetMirrorsBeforeStable') > stablePromotion.indexOf('promoteStableFeeds')) throw new Error('Stable feeds must follow fresh exact GitHub/CNB asset revalidation.')
@@ -204,10 +230,15 @@ if (!/^  publish:\n    name: Publish unchanged recovered draft\n    needs: recov
 if (!recoveryWorkflow.includes('.display_title == "Candidate \\($tag) @ \\($sha) · \\($request)"')) throw new Error('Cloud recovery must bind the source run by exact display title identity and request id.')
 if (recoveryWorkflow.includes('npm run dist')) throw new Error('Cloud recovery must never rebuild desktop packages.')
 if (/^\s*gh release (?:download|upload|edit|view)/mu.test(workflow) || workflow.includes('--clobber') || workflow.includes('overwrite_files: true')) throw new Error('Desktop release workflow must use immutable release and asset ids and never overwrite an asset.')
-const componentPublishWorkflow = await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')
-for (const contract of ['workflow_dispatch:', 'product_revision:', 'ref: ${{ env.RELEASE_TAG }}', 'PUBLISHER_PRODUCT_REVISION', 'git rev-list -n 1 "$RELEASE_TAG"', 'fetch-depth: 0', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'prepare-production-components.mjs', 'verify-production-component-staging.mjs', 'test "${#files[@]}" -eq 7', 'Preserve matching assets and identify missing component assets', 'gh release upload', 'Re-download and verify public component assets', 'Sign exact desktop release manifest in protected CI', 'refresh-release-manifest.mjs', 'branch="release-manifest/$RELEASE_TAG"', 'refs/tags/$RELEASE_TAG', 'git rev-parse "refs/tags/$RELEASE_TAG^{}"', 'publisher_revision="$GITHUB_SHA"', 'assert_bounded_manifest_parent', 'Manifest parent contains forbidden post-tag file', 'git diff-tree --no-commit-id --name-only -r', 'cmp "$manifest_file"', 'git reset --hard HEAD', 'git clean -fd', 'git checkout --detach "$publisher_revision"', 'git push origin "HEAD:refs/heads/$branch"']) {
+const componentPublishWorkflow = (await readFile(path.join(root, '.github/workflows/publish-production-components.yml'), 'utf8')).replace(/\r\n?/gu, '\n')
+for (const contract of ['workflow_dispatch:', 'product_revision:', 'request_id:', 'run-name: Components ${{ inputs.tag }} · ${{ inputs.request_id }}', 'ref: ${{ env.RELEASE_TAG }}', 'PUBLISHER_PRODUCT_REVISION', 'git rev-list -n 1 "$RELEASE_TAG"', 'fetch-depth: 0', 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'prepare-production-components.mjs', 'verify-production-component-staging.mjs', 'test "${#files[@]}" -eq 7', 'Preserve matching assets and identify missing component assets', 'gh release upload', 'Re-download and verify public component assets', 'Sign exact desktop release manifest in protected CI', 'refresh-release-manifest.mjs', 'branch="release-manifest/$RELEASE_TAG"', 'refs/tags/$RELEASE_TAG', 'git rev-parse "refs/tags/$RELEASE_TAG^{}"', 'publisher_revision="$GITHUB_SHA"', 'assert_bounded_manifest_parent', 'Manifest parent contains forbidden post-tag file', 'git diff-tree --no-commit-id --name-only -r', 'cmp "$manifest_file"', 'git reset --hard HEAD', 'git clean -fd', 'git checkout --detach "$publisher_revision"', 'git push origin "HEAD:refs/heads/$branch"', 'verify-formal-windows-release-identity.mjs', 'Revalidate formal Windows identity after all component side effects']) {
   if (!componentPublishWorkflow.includes(contract)) throw new Error(`Production component publication must verify immutable product and bounded publisher revisions while refusing replacement: ${contract}`)
 }
+for (const input of ['tag', 'product_revision', 'request_id', 'formal_windows_product_revision', 'formal_windows_release_id', 'formal_windows_asset_id', 'formal_windows_asset_name', 'formal_windows_asset_size', 'formal_windows_asset_digest', 'formal_windows_asset_url']) {
+  if (!new RegExp(`^      ${input}:\\n(?:        .+\\n)*?        required: true$`, 'mu').test(componentPublishWorkflow)) throw new Error(`Production component workflow input must be required: ${input}`)
+}
+if (componentPublishWorkflow.includes('inputs.tag ||') || componentPublishWorkflow.includes('inputs.request_id ||')) throw new Error('Production component workflow must not fall back from its exact publisher identity.')
+if (componentPublishWorkflow.lastIndexOf('verify-formal-windows-release-identity.mjs') < componentPublishWorkflow.indexOf('git push origin "HEAD:refs/heads/$branch"')) throw new Error('Production component workflow must revalidate formal Windows identity after all public/branch side effects.')
 if (componentPublishWorkflow.includes('component-publish/v') || componentPublishWorkflow.includes('git push origin "HEAD:refs/heads/main"')) throw new Error('Production components must never publish from a mutable branch or push their manifest directly to main.')
 const signingSecretWorkflow = await readFile(path.join(root, '.github/workflows/verify-component-signing-secret.yml'), 'utf8')
 for (const contract of [`verify-component-signing-secret/${releaseTag}`, 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64', 'base64 --decode', "trap 'rm -f", 'verify-component-signing-key.mjs']) {
@@ -217,10 +248,20 @@ const manifestRefresher = await readFile(path.join(root, 'scripts/refresh-releas
 for (const contract of ['assets: manifestAssets.length', 'asset.digest', 'Unexpected public release asset set', 'mirror_urls', 'COMPONENT-SHA256SUMS.txt', "assetName === 'SHA256SUMS.txt'", '/-/git/raw/main/SHA256SUMS.txt']) {
   if (!manifestRefresher.includes(contract)) throw new Error(`Final release manifest must bind the exact public asset set to GitHub digests and CNB mirrors: ${contract}`)
 }
-const androidReleaseWorkflow = await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')
-for (const contract of ['seq 1 180', 'android-universal.apk.sha256', 'Preserving the existing immutable APK and deriving its missing checksum when necessary.', 'Verify public signed APK bytes and identity', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'Create immutable standalone Android release when requested', 'make_latest:"false"', 'Unexpected standalone Android release assets', "encodeAndroidVersionCode(require('./package.json').version)", 'MOBILE_VERSION_NAME=$version', "existing=''", 'release_error="$(mktemp)"', 'release_status=$?', "grep -F 'HTTP 404'", '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'releases/latest']) {
+const androidReleaseWorkflow = (await readFile(path.join(root, '.github/workflows/android-mobile-release.yml'), 'utf8')).replace(/\r\n?/gu, '\n')
+for (const contract of ['workflow_dispatch:', 'tag:', 'request_id:', 'run-name: Android ${{ inputs.tag }} · ${{ inputs.request_id }}', 'RELEASE_TAG: ${{ inputs.tag }}', 'seq 1 180', 'android-universal.apk.sha256', 'Preserving the existing immutable APK and deriving its missing checksum when necessary.', 'Verify public signed APK bytes and identity', 'MOBILE_ONLY:', 'mobile-release-version.cjs', 'Create immutable standalone Android release when requested', 'make_latest:"false"', 'Unexpected standalone Android release assets', "encodeAndroidVersionCode(require('./package.json').version)", 'MOBILE_VERSION_NAME=$version', "existing=''", 'release_error="$(mktemp)"', 'release_status=$?', "grep -F 'HTTP 404'", '-PHARNESS_MOBILE_VERSION_NAME=$MOBILE_VERSION_NAME', '-PHARNESS_MOBILE_VERSION_CODE=$MOBILE_VERSION_CODE', 'releases/latest', 'verify-formal-windows-release-identity.mjs']) {
   if (!androidReleaseWorkflow.includes(contract)) throw new Error(`Android immutable publication contract missing: ${contract}`)
 }
+const androidTriggerBlock = androidReleaseWorkflow.slice(androidReleaseWorkflow.indexOf('\non:\n'), androidReleaseWorkflow.indexOf('\nrun-name:'))
+const androidTriggers = [...androidTriggerBlock.matchAll(/^  ([a-z_]+):/gmu)].map(match => match[1])
+if (JSON.stringify(androidTriggers) !== JSON.stringify(['workflow_dispatch'])) throw new Error('Signed Android publication must be workflow_dispatch-only.')
+for (const input of ['tag', 'request_id']) {
+  if (!new RegExp(`^      ${input}:\\n(?:        .+\\n)*?        required: true$`, 'mu').test(androidReleaseWorkflow)) throw new Error(`Signed Android workflow input must be required: ${input}`)
+}
+for (const forbidden of ['github.ref_name', 'github.run_id', 'inputs.tag ||', '\n  push:']) {
+  if (androidReleaseWorkflow.includes(forbidden)) throw new Error(`Signed Android workflow must use the exact persisted dispatch identity: ${forbidden}`)
+}
+if ((androidReleaseWorkflow.match(/verify-formal-windows-release-identity\.mjs/gu) || []).length < 3 || androidReleaseWorkflow.lastIndexOf('verify-formal-windows-release-identity.mjs') < androidReleaseWorkflow.indexOf('Verify public signed APK bytes and identity')) throw new Error('Signed Android workflow must revalidate the formal Windows identity before upload and after public APK verification.')
 if (androidReleaseWorkflow.includes('--clobber')) throw new Error('Android publication must never overwrite public release assets.')
 if (/existing="\$\(gh api .*\|\| true\)"/u.test(androidReleaseWorkflow)) throw new Error('Android release 404 responses must not be mistaken for existing release JSON.')
 const androidPublisher = await readFile(path.join(root, 'scripts/release-publish-android.mjs'), 'utf8')

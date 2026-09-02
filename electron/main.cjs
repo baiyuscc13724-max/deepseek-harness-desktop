@@ -33,7 +33,7 @@ const { WindowsDesktopUi } = require('./bridge/windows-desktop-ui.cjs')
 const { WindowsUiAutomationSource } = require('./bridge/windows-ui-automation-source.cjs')
 const { ensureModelAdmissionPlugin } = require('./bridge/model-admission-plugin-service.cjs')
 const { ensureAgentTeamsPlugin } = require('./bridge/agent-teams-plugin-service.cjs')
-const { createAgentTeamsAuthorizationService, startAgentTeamsAuthorizationService } = require('./bridge/agent-teams-authorization-service.cjs')
+const { createAgentTeamsAuthorizationService, startAgentTeamsAuthorizationService, validateAutopilotIssue } = require('./bridge/agent-teams-authorization-service.cjs')
 const { createAgentTeamsSecretService, startAgentTeamsSecretService } = require('./bridge/agent-teams-secret-service.cjs')
 const { createAgentTeamsSessionLaunchService, startAgentTeamsSessionLaunchService } = require('./bridge/agent-teams-session-launch-service.cjs')
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
@@ -44,11 +44,11 @@ const { ComputerUseDesktopOverlayController, ComputerUseIndicatorController, sho
 const { WindowsComputerUse } = require('./bridge/windows-computer-use.cjs')
 const { spawnCommand } = require('./bridge/process-spawn.cjs')
 const { createGitRuntimeService } = require('./bridge/git-runtime-service.cjs')
-const { terminateProcessTree } = require('./bridge/process-tree.cjs')
+const { terminateProcessTree, waitForProcessExit } = require('./bridge/process-tree.cjs')
 const { desktopRuntimeEnvironment, resolveDesktopRuntimePaths } = require('./bridge/dsh-home.cjs')
 const { appendBoundedRuntimeDiagnostic, isRecoverableGeneratedProfileFailure, resetGeneratedWebProfileRoot } = require('./bridge/dsh-generated-profile-recovery.cjs')
 const { exchangeRuntimeLaunchToken, probeAuthenticatedRuntimeSession, readRuntimeAuthCookie, requireRuntimeAuthCookie, runtimeLoopbackOrigin, runtimeSessionFetch, runtimeWebSocketOptions } = require('./bridge/runtime-session-auth.cjs')
-const { appendRuntimeWebOutput, detectRuntimeWebUrl, isRuntimeWebReadyStatus, normalizeRuntimeWebUrl, redactRuntimeWebAuth, runtimeSessionWindowUrl, safeRuntimeWebUrl } = require('./bridge/runtime-web-url.cjs')
+const { appendRuntimeWebOutput, detectRuntimeWebUrl, normalizeRuntimeWebUrl, redactRuntimeWebAuth, runtimeSessionWindowUrl, safeRuntimeWebUrl } = require('./bridge/runtime-web-url.cjs')
 const { resolveUserDataOverride } = require('./bridge/user-data-override.cjs')
 const { buildRuntimeProxyEnv, hasExplicitProxy } = require('./bridge/runtime-proxy.cjs')
 const { DEFAULT_APP_FEEDS, DEFAULT_MAX_REDIRECTS, checkAppUpdate, checkHarnessUpstream, parseChecksumFile, safeHttpsUpdateUrl } = require('./bridge/update-service.cjs')
@@ -74,6 +74,7 @@ const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
 const { BrowserSecurityPolicy, isModelBootstrapSourceUrl } = require('./bridge/browser-security-policy.cjs')
 const { DECISIONS: BROWSER_LINK_DECISIONS, routeBrowserLink } = require('./bridge/browser-link-router.cjs')
 const { MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, isSensitiveText } = require('./bridge/browser-action-gate.cjs')
+const { runBrowserPlaywrightOperation } = require('./bridge/browser-codex-api.cjs')
 const { BrowserOperationCoordinator, runBrowserOperation } = require('./bridge/browser-operation-coordinator.cjs')
 const { BrowserNavigationLane, attachBrowserNavigationGuard } = require('./bridge/browser-navigation-guard.cjs')
 const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
@@ -107,6 +108,10 @@ const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3080'
 const RIGHT_WORKSPACE_OPEN_CLEANUP_MS = 60 * 60 * 1000
 const WALLPAPER_SCHEME = 'harness-wallpaper'
 const LOCAL_RUNTIME_HOSTS = new Set(['127.0.0.1', 'localhost'])
+const AGENT_TEAMS_AUTHORIZATION_HEADER = 'X-Harness-Agent-Teams-Authorization'
+const AGENT_TEAMS_ACTION_PATH = '/api/agent-teams/action'
+const AGENT_TEAMS_CAPABILITY_FIELD = 'hostAuthorizationCapability'
+const MAX_AGENT_TEAMS_ACTION_BODY_BYTES = 256 * 1024
 const SELF_TEST_MODE = process.argv.includes('--self-test')
 const COMPONENT_HEALTH_CHECK_MODE = process.argv.includes('--component-health-check')
 const MANUAL_VALIDATION_MODE = process.argv.includes('--manual-validation') && process.argv.some(value => /^--harness-user-data-dir=.+/.test(value))
@@ -135,6 +140,7 @@ let desktopTray = null
 let isQuitting = false
 let runtimeNodeModulesRoot = null
 let runtimeInitializationPromise = null
+let runtimeStartPromise = null
 let mobileSyncStore = null
 let mobileSyncService = null
 let mobileSyncTransportManager = null
@@ -146,6 +152,8 @@ let storageManagementService = null
 let terminalManager = null
 let gitRuntimeService = null
 let agentTeamsAuthorizationService = null
+let agentTeamsAuthorizationWebRequestInstalled = false
+const agentTeamsAuthorizationRequests = new Map()
 let agentTeamsSecretService = null
 let agentTeamsSessionLaunchService = null
 let gitPreparationPromise = null
@@ -1518,6 +1526,21 @@ async function modelBrowserAction(input = {}, context = {}) {
   if (action === 'observe') return observeBrowserForModel(context.signal)
   const allowBlankNavigation = action === 'navigate' || action === 'tabOpen'
   const { view, url, origin, tabId, ticket } = requireBrowserForModel(context.signal, { allowBlankNavigation })
+  if (action === 'playwright') {
+    return runBrowserPlaywrightOperation({
+      webContents: view.webContents,
+      parameters,
+      origin,
+      tabId,
+      securityPolicy: browserSecurityPolicy,
+      confirmationId: parameters.confirmation_id,
+      assertCurrent: () => browserOperations.assert(ticket),
+      markAction: operation => markBrowserModelNavigation(tabId, operation),
+      beginInput: operation => browserNavigationLane(tabId)?.beginModelInput(operation) || (() => {}),
+      surfaceConfirmation: surfacePendingBrowserConfirmation,
+      sanitizeText: safeBrowserText
+    })
+  }
   markBrowserModelNavigation(tabId, action || 'unknown-action')
   if (action === 'screenshot') {
     authorizeBrowserRead(origin, tabId)
@@ -2645,6 +2668,179 @@ async function ensureAgentTeamsSecretService() {
   return service
 }
 
+function agentTeamsAutopilotOwnerForContents(contents) {
+  if (contents === runtimeGuest && mainWindow && !mainWindow.isDestroyed()) return mainWindow
+  for (const detached of detachedSessionWindows) {
+    if (!detached.isDestroyed() && detached.webContents === contents) return detached
+  }
+  return null
+}
+
+function agentTeamsAutopilotDesktopBinding(event) {
+  assertLocalRuntimeSender(event)
+  const ownerWindow = agentTeamsAutopilotOwnerForContents(event.sender)
+  if (!ownerWindow || event.sender.isDestroyed() || event.senderFrame !== event.sender.mainFrame || event.sender.session !== harnessRuntimeSession()) {
+    throw new Error('只允许当前 Harness Desktop 会话页面授权代理团队自动接力。')
+  }
+  if (!ownerWindow.isVisible() || !ownerWindow.isFocused() || !event.sender.isFocused()) {
+    throw new Error('请在当前 Harness Desktop 窗口中点击保存。')
+  }
+  let runtimeOrigin
+  try {
+    runtimeOrigin = new URL(runtimeState.url).origin
+    if (new URL(event.senderFrame.url).origin !== runtimeOrigin) throw new Error('origin mismatch')
+  } catch {
+    throw new Error('当前 Harness 本地运行时身份不可用。')
+  }
+  return Object.freeze({ ownerWindow, desktopBinding: Object.freeze({
+    senderWebContentsId: event.sender.id,
+    ownerWindowWebContentsId: ownerWindow.webContents.id,
+    runtimeOrigin
+  }) })
+}
+
+async function issueAgentTeamsAutopilotAuthorization(event, body) {
+  const firstBinding = agentTeamsAutopilotDesktopBinding(event)
+  const normalized = validateAutopilotIssue(body)
+  const exactBody = Object.freeze({
+    action: 'settings',
+    sessionId: normalized.sessionId,
+    ...normalized.settings,
+    ...(normalized.hostAuthorization === null ? {} : { hostAuthorization: normalized.hostAuthorization })
+  })
+  const decision = await dialog.showMessageBox(firstBinding.ownerWindow, {
+    type: 'warning',
+    buttons: ['确认保存', '取消'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    title: '确认代理团队自动驾驶设置',
+    message: '仅保存下面这一次设置，并更新当前明确授权的安全团队。',
+    detail: [
+      `代理团队：${normalized.settings.enabled ? '开启' : '关闭'}`,
+      `成员上限：${normalized.settings.maxMembers}`,
+      `并行轮次上限：${normalized.settings.maxActiveTurns}`,
+      `自动驾驶：${normalized.settings.autopilotEnabled ? '开启' : '关闭'}`,
+      `自动追加轮次：${normalized.settings.autopilotMaxAdditionalRounds}（最多 200）`,
+      normalized.hostAuthorization === null ? '当前团队：不变更授权' : `当前团队：${normalized.hostAuthorization.teamId}`
+    ].join('\n')
+  })
+  if (decision.response !== 0) throw Object.assign(new Error('已取消代理团队自动驾驶设置。'), { code: 'HOST_AUTHORIZATION_DENIED' })
+  // Re-evaluate focus, sender, window and Runtime identity after the native
+  // confirmation closes. A navigation or focus transfer during the dialog
+  // must never inherit the user's decision.
+  const confirmedBinding = agentTeamsAutopilotDesktopBinding(event)
+  if (confirmedBinding.ownerWindow !== firstBinding.ownerWindow) throw new Error('确认窗口已变化，请重新保存。')
+  const service = await ensureAgentTeamsAuthorizationService()
+  if (!service) throw new Error('代理团队桌面授权服务不可用。')
+  return service.issueAutopilotAuthorization(exactBody, confirmedBinding.desktopBinding)
+}
+
+function removeRequestHeader(headers, name) {
+  for (const key of Object.keys(headers || {})) if (key.toLowerCase() === name.toLowerCase()) delete headers[key]
+}
+
+function requestHeader(headers, name) {
+  const key = Object.keys(headers || {}).find(candidate => candidate.toLowerCase() === name.toLowerCase())
+  return key === undefined ? undefined : headers[key]
+}
+
+function agentTeamsRequestBody(details) {
+  const chunks = []
+  let size = 0
+  for (const part of details.uploadData || []) {
+    if (!part || part.bytes === undefined || part.file !== undefined || part.blobUUID !== undefined) return null
+    const bytes = Buffer.from(part.bytes)
+    size += bytes.length
+    if (size > MAX_AGENT_TEAMS_ACTION_BODY_BYTES) return null
+    chunks.push(bytes)
+  }
+  if (chunks.length === 0) return null
+  try {
+    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch { return null }
+}
+
+function currentAgentTeamsActionRequest(details) {
+  if (runtimeState.status !== 'ready' || !runtimeState.url || details.method !== 'POST') return null
+  let target
+  let runtimeOrigin
+  try {
+    target = new URL(details.url)
+    runtimeOrigin = new URL(runtimeState.url).origin
+  } catch { return null }
+  if (target.origin !== runtimeOrigin || target.pathname !== AGENT_TEAMS_ACTION_PATH || target.search || target.hash) return null
+  let contents = null
+  if (runtimeGuest && !runtimeGuest.isDestroyed() && details.webContentsId === runtimeGuest.id) contents = runtimeGuest
+  if (!contents) {
+    for (const detached of detachedSessionWindows) {
+      if (!detached.isDestroyed() && detached.webContents.id === details.webContentsId) { contents = detached.webContents; break }
+    }
+  }
+  const ownerWindow = contents && agentTeamsAutopilotOwnerForContents(contents)
+  if (!contents || !ownerWindow || contents.session !== harnessRuntimeSession() || !ownerWindow.isVisible() || !ownerWindow.isFocused() || !contents.isFocused()) return null
+  return Object.freeze({
+    senderWebContentsId: contents.id,
+    ownerWindowWebContentsId: ownerWindow.webContents.id,
+    runtimeOrigin
+  })
+}
+
+function installAgentTeamsAuthorizationWebRequestBridge() {
+  if (agentTeamsAuthorizationWebRequestInstalled) return
+  agentTeamsAuthorizationWebRequestInstalled = true
+  const runtimeSession = harnessRuntimeSession()
+  const filter = { urls: ['http://127.0.0.1/*', 'http://localhost/*'] }
+  runtimeSession.webRequest.onBeforeRequest(filter, (details, callback) => {
+    const desktopBinding = currentAgentTeamsActionRequest(details)
+    const body = desktopBinding && agentTeamsRequestBody(details)
+    const capability = typeof body?.[AGENT_TEAMS_CAPABILITY_FIELD] === 'string' ? body[AGENT_TEAMS_CAPABILITY_FIELD] : ''
+    if (capability) {
+      const claimBody = { ...body }
+      delete claimBody[AGENT_TEAMS_CAPABILITY_FIELD]
+      agentTeamsAuthorizationRequests.set(details.id, { capability, claimBody, desktopBinding })
+    }
+    callback({})
+  })
+  runtimeSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
+    const requestHeaders = { ...(details.requestHeaders || {}) }
+    removeRequestHeader(requestHeaders, AGENT_TEAMS_AUTHORIZATION_HEADER)
+    const pending = agentTeamsAuthorizationRequests.get(details.id)
+    agentTeamsAuthorizationRequests.delete(details.id)
+    if (pending) {
+      const currentBinding = currentAgentTeamsActionRequest(details)
+      const origin = requestHeader(requestHeaders, 'Origin')
+      try {
+        if (!currentBinding || JSON.stringify(currentBinding) !== JSON.stringify(pending.desktopBinding)) throw new Error('request binding changed')
+        agentTeamsAuthorizationService?.claimAutopilotWebRequest?.(pending.capability, pending.claimBody, currentBinding, origin)
+        requestHeaders[AGENT_TEAMS_AUTHORIZATION_HEADER] = pending.capability
+      } catch {
+        // The service burns a known capability on every Origin, body, sender,
+        // focus or window mismatch. The request proceeds without Host authority
+        // so the Runtime returns a deterministic fail-closed response.
+        try { agentTeamsAuthorizationService?.claimAutopilotWebRequest?.(pending.capability, pending.claimBody, pending.desktopBinding, null) } catch {}
+      }
+    }
+    callback({ requestHeaders })
+  })
+  const cleanup = details => { agentTeamsAuthorizationRequests.delete(details.id) }
+  runtimeSession.webRequest.onCompleted(filter, cleanup)
+  runtimeSession.webRequest.onErrorOccurred(filter, cleanup)
+}
+
+function revokeAgentTeamsAutopilotAuthorizations(reason) {
+  agentTeamsAuthorizationRequests.clear()
+  try {
+    agentTeamsAuthorizationService?.revokeAutopilotAuthorizations?.(reason)
+  } catch (error) {
+    const failed = agentTeamsAuthorizationService
+    agentTeamsAuthorizationService = null
+    failed?.close?.().catch(() => {})
+    console.warn(`Agent Teams autopilot authorization service revoked after a fail-closed error: ${error.message}`)
+  }
+}
+
 async function ensureAgentTeamsAuthorizationService() {
   if (agentTeamsAuthorizationService) return agentTeamsAuthorizationService
   const service = await startAgentTeamsAuthorizationService({
@@ -2653,7 +2849,10 @@ async function ensureAgentTeamsAuthorizationService() {
       showMessageBox: options => mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options)
     })
   })
-  if (service) agentTeamsAuthorizationService = service
+  if (service) {
+    agentTeamsAuthorizationService = service
+    installAgentTeamsAuthorizationWebRequestBridge()
+  }
   return service
 }
 
@@ -3710,16 +3909,30 @@ async function prepareRuntimeSessionAuthentication(value, { force = false } = {}
   const runtimeSession = harnessRuntimeSession()
   const record = { launchUrl, promise: null }
   record.promise = (async () => {
-    const exchanged = await exchangeRuntimeLaunchToken(runtimeSession, launchUrl, { signal: AbortSignal.timeout(5000) })
-    if (!exchanged) throw new Error('Harness runtime browser authentication was rejected.')
-    const cookie = await readRuntimeAuthCookie(runtimeSession.cookies, launchUrl)
-    if (!cookie) throw new Error('Harness runtime browser authentication cookie is unavailable.')
-    if (runtimeSessionAuthentication === record) runtimeSessionCookie = cookie
-    return cookie
-  })().catch(() => {
-    if (runtimeSessionAuthentication === record) resetRuntimeSessionAuthentication()
-    throw new Error('Harness runtime browser authentication failed.')
-  })
+    let stage = 'token-exchange'
+    try {
+      const exchanged = await exchangeRuntimeLaunchToken(runtimeSession, launchUrl, { signal: AbortSignal.timeout(5000) })
+      if (!exchanged) throw new Error('Harness runtime browser authentication was rejected.')
+      stage = 'cookie-read'
+      const cookie = await readRuntimeAuthCookie(runtimeSession.cookies, launchUrl)
+      if (!cookie) throw new Error('Harness runtime browser authentication cookie is unavailable.')
+      if (runtimeSessionAuthentication === record) runtimeSessionCookie = cookie
+      return cookie
+    } catch (error) {
+      if (runtimeSessionAuthentication === record) resetRuntimeSessionAuthentication()
+      const origin = runtimeLoopbackOrigin(launchUrl)
+      const [proxy, cookies] = await Promise.all([
+        origin && typeof runtimeSession.resolveProxy === 'function'
+          ? runtimeSession.resolveProxy(origin).catch(proxyError => `ERROR:${proxyError?.message || proxyError}`)
+          : Promise.resolve('unavailable'),
+        origin && typeof runtimeSession.cookies?.get === 'function'
+          ? runtimeSession.cookies.get({ url: `${origin}/` }).catch(() => [])
+          : Promise.resolve([])
+      ])
+      const reason = redactRuntimeWebAuth(error?.message || String(error || 'unknown')).trim()
+      throw new Error(`Harness runtime browser authentication failed [stage=${stage}, proxy=${proxy || 'unknown'}, cookieCount=${cookies.length}]: ${reason || 'unknown error'}`)
+    }
+  })()
   runtimeSessionAuthentication = record
   return record.promise
 }
@@ -3801,27 +4014,6 @@ function isLocalRuntimeUrl(value) {
   }
 }
 
-function probeUrl(url, timeoutMs = 900) {
-  return new Promise(resolve => {
-    if (!isLocalRuntimeUrl(url)) return resolve(false)
-    let settled = false
-    const done = value => {
-      if (settled) return
-      settled = true
-      resolve(value)
-    }
-    const request = http.get(url, response => {
-      response.resume()
-      done(isRuntimeWebReadyStatus(response.statusCode))
-    })
-    request.setTimeout(timeoutMs, () => {
-      request.destroy()
-      done(false)
-    })
-    request.on('error', () => done(false))
-  })
-}
-
 async function connectExistingRuntime() {
   try {
     await prepareRuntimeSessionAuthentication(DEFAULT_RUNTIME_URL)
@@ -3835,12 +4027,30 @@ async function connectExistingRuntime() {
 }
 
 async function startRuntime() {
-  return startRuntimeAttempt(false)
+  if (runtimeStartPromise) return runtimeStartPromise
+  const attempt = startRuntimeAttempt(false)
+  runtimeStartPromise = attempt
+  try {
+    return await attempt
+  } finally {
+    if (runtimeStartPromise === attempt) runtimeStartPromise = null
+  }
 }
 
 async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
   if (runtimeState.status === 'ready' && runtimeState.url) return runtimeState
-  if (runtime && runtime.exitCode == null) return runtimeState
+  if (runtime && runtime.exitCode == null) {
+    if (runtimeState.status !== 'error') return runtimeState
+    const staleRuntime = runtime
+    terminateProcessTree(staleRuntime)
+    const retired = await waitForProcessExit(staleRuntime)
+    if (!retired && staleRuntime.exitCode == null) {
+      setRuntimeState({ status: 'error', url: null, detail: '旧的 DeepSeek Harness 进程未能退出；已阻止重复启动，请再次重试。' })
+      return runtimeState
+    }
+    if (runtime === staleRuntime) runtime = null
+    runtimeOwnedByDesktop = false
+  }
   // Desktop extensions patch the pinned client runtime bundled with this app.
   // Reusing an arbitrary service on 3080 can silently serve a different client
   // build, leaving shell-owned actions (such as New Session) out of sync.
@@ -3875,6 +4085,7 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
     await ensureBrowserControlServer()
     const secretService = await ensureAgentTeamsSecretService()
     const authorizationService = await ensureAgentTeamsAuthorizationService()
+    revokeAgentTeamsAutopilotAuthorizations('runtime start advanced the authorization epoch')
     const runtimePaths = desktopRuntimePaths()
     // This capability endpoint must exist before Runtime starts, but it defers
     // every Runtime RPC until a launch/reconcile request arrives after ready.
@@ -3917,6 +4128,12 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
   let diagnosticErrorText = ''
   let runtimeStdoutBuffer = ''
   let runtimeStderrBuffer = ''
+  let retiring = false
+
+  const recordRuntimeProbeError = error => {
+    const message = redactRuntimeWebAuth(error?.message || String(error || '')).trim()
+    if (message) lastErrorText = `本地 Web 认证检查失败：${message}`.slice(-1200)
+  }
 
   const onOutput = (chunk, isError = false) => {
     const output = chunk.toString()
@@ -3932,11 +4149,21 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
 
   child.stdout?.on('data', chunk => onOutput(chunk))
   child.stderr?.on('data', chunk => onOutput(chunk, true))
-  child.on('error', error => setRuntimeState({ status: 'error', url: null, detail: error.message }))
-  child.on('exit', (code, signal) => {
-    if (runtime === child) runtime = null
-    const wasStopping = runtimeState.status === 'stopping'
+  child.on('error', error => {
+    if (runtime !== child) return
+    revokeAgentTeamsAutopilotAuthorizations('runtime process failed')
+    runtime = null
     runtimeOwnedByDesktop = false
+    terminateProcessTree(child)
+    setRuntimeState({ status: 'error', url: null, detail: error.message })
+  })
+  child.on('exit', (code, signal) => {
+    if (runtime !== child) return
+    revokeAgentTeamsAutopilotAuthorizations('runtime process exited')
+    if (runtime === child) runtime = null
+    runtimeOwnedByDesktop = false
+    if (retiring) return
+    const wasStopping = runtimeState.status === 'stopping'
     setRuntimeState({
       status: wasStopping || code === 0 ? 'stopped' : 'error',
       url: null,
@@ -3948,27 +4175,44 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
 
   const deadline = Date.now() + 22000
   while (Date.now() < deadline && runtime === child && child.exitCode == null) {
-    if (candidateUrl && await probeUrl(candidateUrl)) {
+    if (candidateUrl) {
       try {
         await prepareRuntimeSessionAuthentication(candidateUrl)
-        return markRuntimeReady(candidateUrl, `DeepSeek Harness Web 已就绪：${safeRuntimeWebUrl(candidateUrl)}`)
-      } catch {}
+        if (await probeAuthenticatedRuntimeSession(harnessRuntimeSession(), candidateUrl, { signal: AbortSignal.timeout(900) })) {
+          return markRuntimeReady(candidateUrl, `DeepSeek Harness Web 已就绪：${safeRuntimeWebUrl(candidateUrl)}`)
+        }
+      } catch (error) {
+        recordRuntimeProbeError(error)
+      }
     }
-    if (process.env.HARNESS_DESKTOP_REUSE_RUNTIME === '1' && candidateUrl !== DEFAULT_RUNTIME_URL && await probeUrl(DEFAULT_RUNTIME_URL)) {
+    if (process.env.HARNESS_DESKTOP_REUSE_RUNTIME === '1' && candidateUrl !== DEFAULT_RUNTIME_URL) {
       candidateUrl = DEFAULT_RUNTIME_URL
       try {
         await prepareRuntimeSessionAuthentication(candidateUrl)
-        return markRuntimeReady(candidateUrl, `DeepSeek Harness Web 已就绪：${safeRuntimeWebUrl(candidateUrl)}`)
-      } catch {}
+        if (await probeAuthenticatedRuntimeSession(harnessRuntimeSession(), candidateUrl, { signal: AbortSignal.timeout(900) })) {
+          return markRuntimeReady(candidateUrl, `DeepSeek Harness Web 已就绪：${safeRuntimeWebUrl(candidateUrl)}`)
+        }
+      } catch (error) {
+        recordRuntimeProbeError(error)
+      }
     }
     await new Promise(resolve => setTimeout(resolve, 350))
   }
 
   if (runtime === child && child.exitCode == null && runtimeState.status === 'starting') {
+    const detail = lastErrorText || 'DeepSeek Harness 进程已启动，但 22 秒内没有检测到可访问的本地 Web 服务。'
+    retiring = true
+    revokeAgentTeamsAutopilotAuthorizations('runtime startup timed out')
+    terminateProcessTree(child)
+    const retired = await waitForProcessExit(child)
+    if (retired || child.exitCode != null) {
+      if (runtime === child) runtime = null
+      runtimeOwnedByDesktop = false
+    }
     setRuntimeState({
       status: 'error',
       url: null,
-      detail: lastErrorText || 'DeepSeek Harness 进程已启动，但 22 秒内没有检测到可访问的本地 Web 服务。'
+      detail: retired || child.exitCode != null ? detail : `${detail}；旧进程未能在 5 秒内退出，已阻止重复启动。`
     })
   }
   if (!generatedProfileRecoveryAttempted
@@ -3988,6 +4232,7 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
 }
 
 function stopRuntime() {
+  revokeAgentTeamsAutopilotAuthorizations('runtime stop revoked automatic continuation authority')
   if (!runtimeOwnedByDesktop || !runtime || runtime.exitCode != null) {
     runtime = null
     runtimeOwnedByDesktop = false
@@ -5745,6 +5990,7 @@ ipcMain.handle('sessionMenu:setFlag', (event, value) => {
   assertLocalRuntimeSender(event)
   return sessionMenuStatePayload(ensureStateStore().updateSessionMenuFlag(value || {}))
 })
+ipcMain.handle('agentTeams:authorizeAutopilotSettings', (event, value) => issueAgentTeamsAutopilotAuthorization(event, value))
 ipcMain.handle('workspace:chooseDirectory', event => {
   if (!isLocalRuntimeUrl(event.sender.getURL())) throw new Error('只允许本机 Harness 界面选择工作区。')
   return chooseWorkspaceDirectory()

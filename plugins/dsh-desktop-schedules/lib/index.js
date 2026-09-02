@@ -59,17 +59,21 @@ function scheduleHistory(events, seedLength = 0, limit = 50) {
   return history.slice(-Math.max(1, Math.min(100, Number(limit) || 50))).reverse()
 }
 
+function ownSessionEvents(session) {
+  if (typeof session?.ownEvents !== 'function') throw new TypeError('official Session.ownEvents is unavailable')
+  return session.ownEvents()
+}
+
 function snapshot(ctx, sessionId, now = Date.now()) {
   const agent = ctx.agents.get(sessionId)
   if (!agent || !ctx.agents.roots().includes(agent)) {
     return { schemaVersion: 2, available: false, live: false, sessionId, schedules: [], history: [], limitation: 'session-local' }
   }
   try {
-    const events = Array.isArray(agent.session?.events) ? agent.session.events : []
-    const seedLength = agent.session?.header?.seedLength ?? 0
-    const folded = foldScheduleEvents(events, seedLength)
+    const events = ownSessionEvents(agent.session)
+    const folded = foldScheduleEvents(events)
     const schedules = folded.active.map(record => scheduleView(record, now)).sort((left, right) => Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt) || left.id.localeCompare(right.id))
-    return { schemaVersion: 2, available: true, live: true, sessionId, schedules, history: scheduleHistory(events, seedLength), limitation: 'session-local', minimumEverySeconds: 300 }
+    return { schemaVersion: 2, available: true, live: true, sessionId, schedules, history: scheduleHistory(events), limitation: 'session-local', minimumEverySeconds: 300 }
   } catch {
     return { schemaVersion: 2, available: true, live: true, sessionId, schedules: [], history: [], limitation: 'session-local', error: { code: 'corrupt_schedule_log', message: '当前会话的定时任务记录无法安全读取。' } }
   }

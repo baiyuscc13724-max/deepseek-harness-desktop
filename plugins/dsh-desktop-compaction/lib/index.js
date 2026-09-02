@@ -122,7 +122,8 @@ async function recoverCodexOverload(first, second, third, fourth = {}) {
   if (!isCodexOverloadFailure(payload)) return next()
   if (signal?.aborted) return undefined
 
-  const events = Array.isArray(agent?.session?.events) ? agent.session.events : []
+  if (typeof agent?.session?.snapshotEvents !== 'function') return next()
+  const events = agent.session.snapshotEvents()
   const prior = events.findLast(event => event.type === 'llm/retry'
     && event.data?.turn === turn
     && event.data?.step === step

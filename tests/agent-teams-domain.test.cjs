@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url')
 const { createHash } = require('node:crypto')
 
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
+const queueSubagentPrompt = Symbol.for('dsh.subagent.queuePrompt')
 let pluginPromise
 function plugin() {
   pluginPromise ||= import(`${pathToFileURL(pluginFile).href}?test=${Date.now()}`)
@@ -74,8 +75,32 @@ test('disabled Agent Teams initialization creates no storage file', async () => 
   const fx = await fixture()
   try {
     assert.equal(fx.store.snapshot().settings.enabled, false)
+    assert.equal(fx.store.snapshot().settings.autopilotEnabled, false)
+    assert.equal(fx.store.snapshot().settings.autopilotMaxAdditionalRounds, 200)
     await fx.store.mutate(() => undefined)
     await assert.rejects(stat(fx.file), error => error && error.code === 'ENOENT')
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('autopilot round settings accept 199 and 200, reject 201, and survive restart', async () => {
+  const fx = await fixture()
+  try {
+    await fx.store.mutate(document => {
+      document.settings.enabled = true
+      document.settings.autopilotMaxAdditionalRounds = 199
+    })
+    assert.equal(JSON.parse(await readFile(fx.file, 'utf8')).settings.autopilotMaxAdditionalRounds, 199)
+
+    await fx.store.mutate(document => { document.settings.autopilotMaxAdditionalRounds = 200 })
+    const restarted = new fx.mod.AgentTeamsStore(fx.file)
+    await restarted.init()
+    assert.equal(restarted.snapshot().settings.autopilotMaxAdditionalRounds, 200)
+
+    await assert.rejects(
+      fx.store.mutate(document => { document.settings.autopilotMaxAdditionalRounds = 201 }),
+      /settings\.autopilotMaxAdditionalRounds must be an integer from 1 through 200/u
+    )
+    assert.equal(fx.store.snapshot().settings.autopilotMaxAdditionalRounds, 200)
   } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 
@@ -104,8 +129,8 @@ test('v1 store migration performs crash reconciliation in the same initializatio
     const store = new mod.AgentTeamsStore(file)
     await store.init()
     const migrated = JSON.parse(await readFile(file, 'utf8'))
-    assert.equal(migrated.version, 7)
-    assert.deepEqual(migrated.settings, legacy.settings)
+    assert.equal(migrated.version, 8)
+    assert.deepEqual(migrated.settings, { ...legacy.settings, autopilotEnabled: false, autopilotMaxAdditionalRounds: 200 })
     const migratedTeam = migrated.teams[0]
     assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-lead').state, 'ready')
     assert.equal(migratedTeam.members.find(member => member.sessionId === 'legacy-worker').state, 'ready')
@@ -139,8 +164,42 @@ test('v2 stores migrate additively to the bootstrap-capable schema', async () =>
     await writeFile(file, `${JSON.stringify({ version: 2, settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4 }, teams: [] })}\n`, 'utf8')
     const store = new mod.AgentTeamsStore(file)
     await store.init()
-    assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 7)
+    const migrated = JSON.parse(await readFile(file, 'utf8'))
+    assert.equal(migrated.version, 8)
+    assert.equal(migrated.settings.autopilotEnabled, false)
+    assert.equal(migrated.settings.autopilotMaxAdditionalRounds, 200)
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('legacy and profile defaults cannot opt into autopilot without a Desktop Host receipt', async () => {
+  const mod = await plugin()
+  const configuredRoot = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-config-autopilot-'))
+  const configuredFile = path.join(configuredRoot, 'storages', 'agent_teams.json')
+  const legacyRoot = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-legacy-autopilot-'))
+  const legacyFile = path.join(legacyRoot, 'storages', 'agent_teams.json')
+  try {
+    const configured = new mod.AgentTeamsStore(configuredFile, {
+      enabled: true, maxMembers: 4, maxActiveTurns: 4,
+      autopilotEnabled: true, autopilotMaxAdditionalRounds: 17
+    })
+    await configured.init()
+    assert.equal(configured.snapshot().settings.autopilotEnabled, false, 'profile config is preference input, not Host authorization')
+    assert.equal(configured.snapshot().settings.autopilotMaxAdditionalRounds, 17, 'the inert budget preference remains configurable')
+
+    await mkdir(path.dirname(legacyFile), { recursive: true })
+    await writeFile(legacyFile, `${JSON.stringify({
+      version: 7,
+      settings: { enabled: true, maxMembers: 4, maxActiveTurns: 4, autopilotEnabled: true, autopilotMaxAdditionalRounds: 17 },
+      teams: [], routingReceipts: [], routingReceiptArchive: { version: 1, count: 0, chainHash: '0'.repeat(64) }
+    })}\n`, 'utf8')
+    const migrated = new mod.AgentTeamsStore(legacyFile)
+    await migrated.init()
+    assert.equal(migrated.snapshot().settings.autopilotEnabled, false, 'a legacy true bit is forcibly demoted during migration')
+    assert.equal(migrated.snapshot().settings.autopilotMaxAdditionalRounds, 17)
+  } finally {
+    await rm(configuredRoot, { recursive: true, force: true })
+    await rm(legacyRoot, { recursive: true, force: true })
+  }
 })
 
 test('startup additively reconciles safe old active authorization without rewriting plan or acceptance history', async () => {
@@ -1754,7 +1813,7 @@ test('exact task detail projects useful live workflow without exposing raw sessi
     { type: 'step/end', seq: 7, time: start + 60, data: { turn: 2, step: 1 } },
     { type: 'turn/end', seq: 8, time: start + 70, data: { turn: 2, reason: { kind: 'future-kind' } } }
   ]
-  const ctx = { agents: { get(id) { return id === 'worker-session' ? { id, session: { events: sessionEvents } } : undefined } } }
+  const ctx = { agents: { get(id) { return id === 'worker-session' ? { id, session: { snapshotEvents: () => sessionEvents.slice() } } : undefined } } }
   const detail = mod.projectTaskDetailForUi(ctx, document, 'lead-session', 'team-detail', 'task-detail')
   assert.equal(detail.summary, '修正 Tag 后置审查阻断')
   assert.match(detail.description, /不得跳过安全检查/u)
@@ -1954,7 +2013,7 @@ async function memberRecoveryFixture(label) {
   const ctx = {
     agents: { get: id => agents.get(id), roots: () => [lead] },
     subagents: {
-      async followup(_lead, childId, content) {
+      async [queueSubagentPrompt](_lead, childId, content) {
         followups.push({ childId, text: content[0].text })
         if (observerRunningFor === childId) await fx.store.mutate(document => { const current = document.teams.find(candidate => candidate.id === team.id); const member = current?.members.find(candidate => candidate.sessionId === childId); if (member) member.state = 'running' })
         if (failFollowupFor === childId) throw Object.assign(new Error('recovery followup failed'), { code: 'RECOVERY_SEND_FAILED' })
@@ -1995,6 +2054,17 @@ async function memberRecoveryFixture(label) {
     async closeRecovery() { admission.close(); await rm(this.root, { recursive: true, force: true }) }
   })
 }
+
+test('member recovery fails closed without the official Host queue and never executes a legacy followup method', async () => {
+  const fx = await memberRecoveryFixture('queue-fail-closed')
+  try {
+    let legacyCalls = 0
+    delete fx.ctx.subagents[queueSubagentPrompt]
+    fx.ctx.subagents.followup = async () => { legacyCalls += 1; return 'legacy-delivery' }
+    await assert.rejects(fx.recover('retry', 'queue-fail-closed'), error => error?.code === 'AGENT_TEAMS_SUBAGENT_UNAVAILABLE')
+    assert.equal(legacyCalls, 0)
+  } finally { await fx.closeRecovery() }
+})
 
 test('project team board exposes recovery refs only to the exact fixed root without mutating the shared cache', async () => {
   const fx = await memberRecoveryFixture('board-recovery')
@@ -2158,7 +2228,7 @@ test('failed retry remains recoverable and replacement revokes the old claim bef
 test('direct-human reconciliation resolves uncertain replacement dispatch without duplicate work or permanent lock', async () => {
   const delivered = await memberRecoveryFixture('reconcile-delivered')
   try {
-    delivered.ctx.subagents.followup = async (_lead, childId) => { delivered.followups.push({ childId }); throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
+    delivered.ctx.subagents[queueSubagentPrompt] = async (_lead, childId) => { delivered.followups.push({ childId }); throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
     await assert.rejects(delivered.recover('replace', 'dispatch-unknown'), error => error?.code === 'DISPATCH_UNCERTAIN')
     let current = delivered.store.snapshot().teams.find(team => team.id === delivered.teamId), receipt = current.memberRecoveries.at(-1)
     assert.equal(receipt.status, 'outcome_unknown')
@@ -2181,7 +2251,7 @@ test('direct-human reconciliation resolves uncertain replacement dispatch withou
   } finally { await retryIdle.closeRecovery() }
   const replacementClaimed = await memberRecoveryFixture('reconcile-replacement-claimed')
   try {
-    replacementClaimed.ctx.subagents.followup = async () => { throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
+    replacementClaimed.ctx.subagents[queueSubagentPrompt] = async () => { throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
     await assert.rejects(replacementClaimed.recover('replace', 'replacement-claimed'), error => error?.code === 'DISPATCH_UNCERTAIN')
     let team = replacementClaimed.store.snapshot().teams.find(candidate => candidate.id === replacementClaimed.teamId), receipt = team.memberRecoveries.at(-1), replacement = team.members.find(member => member.id === receipt.replacementMemberId)
     const claim = (await replacementClaimed.mod.updateTask(replacementClaimed.store, { id: replacement.sessionId }, { teamId: replacementClaimed.teamId, taskId: replacementClaimed.taskId, action: 'claim' })).task
@@ -2194,7 +2264,7 @@ test('direct-human reconciliation resolves uncertain replacement dispatch withou
   } finally { await replacementClaimed.closeRecovery() }
   const replacementCompleted = await memberRecoveryFixture('reconcile-replacement-completed')
   try {
-    replacementCompleted.ctx.subagents.followup = async () => { throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
+    replacementCompleted.ctx.subagents[queueSubagentPrompt] = async () => { throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
     await assert.rejects(replacementCompleted.recover('replace', 'replacement-completed'), error => error?.code === 'DISPATCH_UNCERTAIN')
     let team = replacementCompleted.store.snapshot().teams.find(candidate => candidate.id === replacementCompleted.teamId), receipt = team.memberRecoveries.at(-1), replacement = team.members.find(member => member.id === receipt.replacementMemberId)
     const claim = (await replacementCompleted.mod.updateTask(replacementCompleted.store, { id: replacement.sessionId }, { teamId: replacementCompleted.teamId, taskId: replacementCompleted.taskId, action: 'claim' })).task
@@ -2220,7 +2290,7 @@ test('direct-human reconciliation resolves uncertain replacement dispatch withou
   } finally { await retryCompleted.closeRecovery() }
   const foreign = await memberRecoveryFixture('reconcile-foreign')
   try {
-    foreign.ctx.subagents.followup = async () => { throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
+    foreign.ctx.subagents[queueSubagentPrompt] = async () => { throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
     await assert.rejects(foreign.recover('replace', 'replacement-foreign'), error => error?.code === 'DISPATCH_UNCERTAIN')
     let team = foreign.store.snapshot().teams.find(candidate => candidate.id === foreign.teamId), receipt = team.memberRecoveries.at(-1)
     await foreign.store.mutate(document => { const task = document.teams.find(candidate => candidate.id === foreign.teamId).tasks.find(candidate => candidate.id === foreign.taskId); task.assigneeSessionId = foreign.lead.id })
@@ -2231,7 +2301,7 @@ test('direct-human reconciliation resolves uncertain replacement dispatch withou
   } finally { await foreign.closeRecovery() }
   const migrated = await memberRecoveryFixture('reconcile-migrated')
   try {
-    migrated.ctx.subagents.followup = async () => { throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
+    migrated.ctx.subagents[queueSubagentPrompt] = async () => { throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
     await assert.rejects(migrated.recover('replace', 'replacement-migrated'), error => error?.code === 'DISPATCH_UNCERTAIN')
     let team = migrated.store.snapshot().teams.find(candidate => candidate.id === migrated.teamId), receipt = team.memberRecoveries.at(-1), timestamp = new Date().toISOString()
     await migrated.store.mutate(document => { const task = document.teams.find(candidate => candidate.id === migrated.teamId).tasks.find(candidate => candidate.id === migrated.taskId); task.state = 'submitted'; task.claimId = 'legacy-claim'; task.leaseEpoch = receipt.pauseEpoch; task.claimedAt = timestamp; task.completedAt = undefined; task.submission = { taskId: task.id, claimId: task.claimId, leaseEpoch: task.leaseEpoch, submittedAt: timestamp, submittedBy: task.assigneeSessionId, source: 'legacy_migration' }; task.updatedAt = timestamp })
@@ -2242,7 +2312,7 @@ test('direct-human reconciliation resolves uncertain replacement dispatch withou
   } finally { await migrated.closeRecovery() }
   const conflicted = await memberRecoveryFixture('reconcile-conflicted')
   try {
-    conflicted.ctx.subagents.followup = async (_lead, childId) => { conflicted.followups.push({ childId }); throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
+    conflicted.ctx.subagents[queueSubagentPrompt] = async (_lead, childId) => { conflicted.followups.push({ childId }); throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
     await assert.rejects(conflicted.recover('replace', 'dispatch-unknown'), error => error?.code === 'DISPATCH_UNCERTAIN')
     let team = conflicted.store.snapshot().teams.find(candidate => candidate.id === conflicted.teamId), receipt = team.memberRecoveries.at(-1), replacement = team.members.find(member => member.id === receipt.replacementMemberId)
     await conflicted.mod.updateTask(conflicted.store, { id: replacement.sessionId }, { teamId: conflicted.teamId, taskId: conflicted.taskId, action: 'claim' })
@@ -2254,13 +2324,13 @@ test('direct-human reconciliation resolves uncertain replacement dispatch withou
   } finally { await conflicted.closeRecovery() }
   const notDelivered = await memberRecoveryFixture('reconcile-not-delivered')
   try {
-    notDelivered.ctx.subagents.followup = async (_lead, childId) => { notDelivered.followups.push({ childId }); throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
+    notDelivered.ctx.subagents[queueSubagentPrompt] = async (_lead, childId) => { notDelivered.followups.push({ childId }); throw Object.assign(new Error('uncertain dispatch'), { code: 'DISPATCH_UNCERTAIN' }) }
     await assert.rejects(notDelivered.recover('replace', 'dispatch-unknown'), error => error?.code === 'DISPATCH_UNCERTAIN')
     let receipt = notDelivered.store.snapshot().teams.find(team => team.id === notDelivered.teamId).memberRecoveries.at(-1)
     const reconciled = await notDelivered.mod.reconcileMemberRecovery(notDelivered.ctx, notDelivered.store, notDelivered.lead, { teamId: notDelivered.teamId, requestId: receipt.requestId, resolution: 'not_delivered', expectedRevision: notDelivered.revision() })
     assert.equal(reconciled.recovery.status, 'failed')
     assert.ok(notDelivered.drains.some(ids => ids.includes(receipt.replacementSessionId)))
-    notDelivered.ctx.subagents.followup = async (_lead, childId) => { notDelivered.followups.push({ childId }); return 'delivered' }
+    notDelivered.ctx.subagents[queueSubagentPrompt] = async (_lead, childId) => { notDelivered.followups.push({ childId }); return 'delivered' }
     const next = await notDelivered.recover('replace', 'replacement-after-reconcile')
     assert.equal(next.recovery.status, 'delivered')
     assert.equal(notDelivered.starts.length, 2)
@@ -2292,7 +2362,7 @@ test('Stop races fence retry delivery and replacement publication without duplic
     await retry.store.mutate(document => { document.teams.find(team => team.id === retry.teamId).projectKey = 'd'.repeat(64) })
     let releaseFollowup, enteredFollowup
     const entered = new Promise(resolve => { enteredFollowup = resolve })
-    retry.ctx.subagents.followup = async () => { enteredFollowup(); await new Promise(resolve => { releaseFollowup = resolve }); return 'delivered-during-stop' }
+    retry.ctx.subagents[queueSubagentPrompt] = async () => { enteredFollowup(); await new Promise(resolve => { releaseFollowup = resolve }); return 'delivered-during-stop' }
     const attempt = retry.recover('retry', 'retry-stop')
     await entered
     await retry.store.mutate(document => { const team = document.teams.find(candidate => candidate.id === retry.teamId); team.state = 'paused'; team.pauseEpoch += 1 })

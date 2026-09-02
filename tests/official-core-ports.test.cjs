@@ -285,7 +285,7 @@ test('registered project tools reject raw Host identity while allowing normalize
       return Object.freeze(context)
     },
   }
-  const root = { id: 'root-tool-boundary', status: 'running', session: { header: { cwd: temporary }, events: [{ type: 'turn/start', id: 'turn-1', time: 1 }] } }
+  const root = { id: 'root-tool-boundary', status: 'running', session: { header: { cwd: temporary }, events: [{ type: 'turn/start', id: 'turn-1', time: 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }], snapshotEvents() { return this.events.slice() } } }
   const tools = new Map()
   const ctx = { agents: { roots: () => [root], get: id => id === root.id ? root : undefined, currentInitiator: () => root }, tools: { register: tool => tools.set(tool.name, tool) }, systemPrompt: { section: () => undefined } }
   host.registerProjectCollaborationTools(ctx, projectEntry, {})

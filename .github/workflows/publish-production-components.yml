@@ -6,21 +6,41 @@ on:
       tag:
         description: Existing immutable Bootstrap release tag
         required: true
-        default: v1.0.54
       product_revision:
         description: Exact 40-character commit bound to the immutable release tag
         required: true
       request_id:
         description: Unique publisher request identity
-        required: false
+        required: true
+      formal_windows_product_revision:
+        description: Locally validated desktop product revision
+        required: true
+      formal_windows_release_id:
+        description: Locally validated public GitHub Release id
+        required: true
+      formal_windows_asset_id:
+        description: Locally validated portable x64 asset id
+        required: true
+      formal_windows_asset_name:
+        description: Locally validated portable x64 asset name
+        required: true
+      formal_windows_asset_size:
+        description: Locally validated portable x64 asset size
+        required: true
+      formal_windows_asset_digest:
+        description: Locally validated portable x64 asset sha256 digest
+        required: true
+      formal_windows_asset_url:
+        description: Locally validated portable x64 canonical URL
+        required: true
 
-run-name: Components ${{ inputs.tag || 'v1.0.54' }} · ${{ inputs.request_id || github.run_id }}
+run-name: Components ${{ inputs.tag }} · ${{ inputs.request_id }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: production-components-${{ inputs.tag || 'v1.0.54' }}
+  group: production-components-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -31,7 +51,14 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ inputs.tag || 'v1.0.54' }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      FORMAL_WINDOWS_PRODUCT_REVISION: ${{ inputs.formal_windows_product_revision }}
+      FORMAL_WINDOWS_RELEASE_ID: ${{ inputs.formal_windows_release_id }}
+      FORMAL_WINDOWS_ASSET_ID: ${{ inputs.formal_windows_asset_id }}
+      FORMAL_WINDOWS_ASSET_NAME: ${{ inputs.formal_windows_asset_name }}
+      FORMAL_WINDOWS_ASSET_SIZE: ${{ inputs.formal_windows_asset_size }}
+      FORMAL_WINDOWS_ASSET_DIGEST: ${{ inputs.formal_windows_asset_digest }}
+      FORMAL_WINDOWS_ASSET_URL: ${{ inputs.formal_windows_asset_url }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -53,13 +80,34 @@ jobs:
           tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
           test "$head_revision" = "$tag_revision"
           test "$head_revision" = "$PUBLISHER_PRODUCT_REVISION"
+          test "$FORMAL_WINDOWS_PRODUCT_REVISION" = "$PUBLISHER_PRODUCT_REVISION"
           test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
+          node scripts/verify-formal-windows-release-identity.mjs \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --product-revision "$FORMAL_WINDOWS_PRODUCT_REVISION" \
+            --release-id "$FORMAL_WINDOWS_RELEASE_ID" \
+            --asset-id "$FORMAL_WINDOWS_ASSET_ID" \
+            --asset-name "$FORMAL_WINDOWS_ASSET_NAME" \
+            --asset-size "$FORMAL_WINDOWS_ASSET_SIZE" \
+            --asset-digest "$FORMAL_WINDOWS_ASSET_DIGEST" \
+            --asset-url "$FORMAL_WINDOWS_ASSET_URL"
       - name: Prepare signed staging from protected CI key
         shell: bash
         env:
           COMPONENT_SIGNING_PRIVATE_KEY_BASE64: ${{ secrets.HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64 }}
         run: |
           set -euo pipefail
+          node scripts/verify-formal-windows-release-identity.mjs \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --product-revision "$FORMAL_WINDOWS_PRODUCT_REVISION" \
+            --release-id "$FORMAL_WINDOWS_RELEASE_ID" \
+            --asset-id "$FORMAL_WINDOWS_ASSET_ID" \
+            --asset-name "$FORMAL_WINDOWS_ASSET_NAME" \
+            --asset-size "$FORMAL_WINDOWS_ASSET_SIZE" \
+            --asset-digest "$FORMAL_WINDOWS_ASSET_DIGEST" \
+            --asset-url "$FORMAL_WINDOWS_ASSET_URL"
           test -n "$COMPONENT_SIGNING_PRIVATE_KEY_BASE64" || { echo 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64 is not configured.' >&2; exit 1; }
           version="${RELEASE_TAG#v}"
           fallback_dir="$RUNNER_TEMP/component-fallbacks"
@@ -120,6 +168,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node scripts/verify-formal-windows-release-identity.mjs \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --product-revision "$FORMAL_WINDOWS_PRODUCT_REVISION" \
+            --release-id "$FORMAL_WINDOWS_RELEASE_ID" \
+            --asset-id "$FORMAL_WINDOWS_ASSET_ID" \
+            --asset-name "$FORMAL_WINDOWS_ASSET_NAME" \
+            --asset-size "$FORMAL_WINDOWS_ASSET_SIZE" \
+            --asset-digest "$FORMAL_WINDOWS_ASSET_DIGEST" \
+            --asset-url "$FORMAL_WINDOWS_ASSET_URL"
           while IFS= read -r file; do
             test -n "$file" || continue
             name="$(basename "$file")"
@@ -148,6 +206,16 @@ jobs:
           COMPONENT_SIGNING_PRIVATE_KEY_BASE64: ${{ secrets.HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64 }}
         run: |
           set -euo pipefail
+          node scripts/verify-formal-windows-release-identity.mjs \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --product-revision "$FORMAL_WINDOWS_PRODUCT_REVISION" \
+            --release-id "$FORMAL_WINDOWS_RELEASE_ID" \
+            --asset-id "$FORMAL_WINDOWS_ASSET_ID" \
+            --asset-name "$FORMAL_WINDOWS_ASSET_NAME" \
+            --asset-size "$FORMAL_WINDOWS_ASSET_SIZE" \
+            --asset-digest "$FORMAL_WINDOWS_ASSET_DIGEST" \
+            --asset-url "$FORMAL_WINDOWS_ASSET_URL"
           test -n "$COMPONENT_SIGNING_PRIVATE_KEY_BASE64" || { echo 'HARNESS_COMPONENT_SIGNING_PRIVATE_KEY_BASE64 is not configured.' >&2; exit 1; }
           key_file="$RUNNER_TEMP/desktop-release-ed25519-private.pem"
           manifest_file="$RUNNER_TEMP/release-manifest.json"
@@ -173,7 +241,7 @@ jobs:
             fi
             for file in "${publisher_changes[@]}"; do
               case "$file" in
-                .cnb.yml|.github/workflows/recover-release-from-actions.yml|.github/workflows/publish-production-components.yml|scripts/publish-cnb-cloud-mirror.ps1|scripts/release-audit.mjs|scripts/release-publish.mjs|scripts/release-publish-selection.cjs|tests/release-publisher.test.cjs) ;;
+                .cnb.yml|.github/workflows/recover-release-from-actions.yml|.github/workflows/publish-production-components.yml|scripts/publish-cnb-cloud-mirror.ps1|scripts/release-audit.mjs|scripts/release-local-formal-windows-validation.cjs|scripts/release-publish.mjs|scripts/release-publish-selection.cjs|scripts/verify-formal-windows-release-identity.mjs|tests/release-publisher.test.cjs) ;;
                 *) echo "Manifest parent contains forbidden post-tag file: $file" >&2; exit 1 ;;
               esac
             done
@@ -202,3 +270,17 @@ jobs:
           test "$(git rev-parse HEAD^)" = "$publisher_revision"
           test "$(git diff-tree --no-commit-id --name-only -r HEAD)" = 'release-manifest.json'
           git push origin "HEAD:refs/heads/$branch"
+      - name: Revalidate formal Windows identity after all component side effects
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-formal-windows-release-identity.mjs \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --product-revision "$FORMAL_WINDOWS_PRODUCT_REVISION" \
+            --release-id "$FORMAL_WINDOWS_RELEASE_ID" \
+            --asset-id "$FORMAL_WINDOWS_ASSET_ID" \
+            --asset-name "$FORMAL_WINDOWS_ASSET_NAME" \
+            --asset-size "$FORMAL_WINDOWS_ASSET_SIZE" \
+            --asset-digest "$FORMAL_WINDOWS_ASSET_DIGEST" \
+            --asset-url "$FORMAL_WINDOWS_ASSET_URL"

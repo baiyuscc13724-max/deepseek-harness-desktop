@@ -23,12 +23,14 @@ const EXPECTED_SKILLS = [
 
 async function loadPluginTool(services = {}) {
   const mod = await import(pathToFileURL(path.join(bundledRoot, 'lib', 'index.js')).href)
-  let tool
+  const tools = []
   mod.apply({
-    tools: { register: registered => { tool = registered } },
+    tools: { register: registered => { tools.push(registered) } },
     get: name => services[name]
   })
-  return { mod, tool }
+  const tool = tools.find(registered => registered.name === 'browser_control')
+  const playwright = tools.find(registered => registered.name === 'browser_playwright')
+  return { mod, tools, tool, playwright }
 }
 
 function httpResponse(status, payload) {
@@ -61,10 +63,10 @@ test('desktop browser tools installs into the DSH Web profile idempotently', asy
   try {
     const first = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
     const second = await ensureDesktopBrowserToolsPlugin({ dshHome: root, bundledRoot })
-    assert.equal(first.version, '1.0.57')
+    assert.equal(first.version, '1.0.58')
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.imageBridge.version, '1.0.57')
+    assert.equal(first.imageBridge.version, '1.0.58')
     assert.equal(first.imageBridge.patchChanged, true)
     assert.equal(second.imageBridge.patchChanged, false)
     assert.match(readFileSync(path.join(first.destination, 'lib', 'index.js'), 'utf8'), /browser_control/)
@@ -75,7 +77,7 @@ test('desktop browser tools installs into the DSH Web profile idempotently', asy
     const marker = JSON.parse(await readFile(path.join(root, 'skills', 'imagegen', '.harness-desktop-managed.json'), 'utf8'))
     assert.equal(marker.owner, 'dsh-desktop-browser-tools')
     assert.equal(marker.skill, 'imagegen')
-    assert.equal(marker.version, '1.0.57')
+    assert.equal(marker.version, '1.0.58')
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-desktop-browser-tools/g) || []).length, 1)
     assert.match(patch, /id: desktop-browser-tools/u)
@@ -122,6 +124,34 @@ test('browser_control tool exposes exactly the fixed action enum', async () => {
   for (const coordinate of ['x', 'y', 'startX', 'startY', 'endX', 'endY']) {
     assert.equal(properties[coordinate], undefined, `browser model contract must use structured refs, not model coordinates (${coordinate})`)
   }
+})
+
+test('browser plugin registers browser_playwright separately with a bounded schema', async () => {
+  const { tools, playwright } = await loadPluginTool()
+  assert.equal(tools.filter(tool => tool.name === 'browser_control').length, 1)
+  assert.equal(tools.filter(tool => tool.name === 'browser_playwright').length, 1)
+  assert.ok(playwright, 'browser_playwright must be registered by name')
+  const properties = playwright.parameters.properties
+  assert.ok(playwright.parameters.required.includes('operation'))
+  assert.equal(properties.operation.type, 'string')
+  assert.ok(Array.isArray(properties.operation.enum) && properties.operation.enum.length > 0)
+  for (const key of ['selector', 'selector_kind', 'name', 'frame_selector', 'confirmation_id']) assert.ok(properties[key], `missing bounded Playwright parameter ${key}`)
+  for (const forbidden of ['script', 'javascript', 'evaluate', 'expression', 'command', 'shell']) {
+    assert.equal(properties[forbidden], undefined, `must not expose arbitrary ${forbidden}`)
+  }
+})
+
+test('browser_playwright forwards one-time confirmation ids through the authenticated loopback payload', async () => {
+  const { playwright } = await loadPluginTool()
+  let captured
+  await withBrowserEndpoint(async (action, payload) => {
+    captured = { action, payload }
+    return httpResponse(200, { ok: true, result: { acted: true } })
+  }, async () => {
+    const result = await playwright.execute({ operation: 'click', selector: '#save', confirmation_id: 'confirm-1' }, { agent: { id: 'agent-pw' }, callId: 'pw-confirm' })
+    assert.equal(result.result.acted, true)
+  })
+  assert.deepEqual(captured, { action: 'playwright', payload: { operation: 'click', selector: '#save', confirmation_id: 'confirm-1' } })
 })
 
 test('browser_control description keeps sensitive terms out and prioritizes background structured control', async () => {
@@ -201,7 +231,7 @@ test('browser_control rejects a non-loopback origin from the state file', async 
     globalThis.fetch = async () => { throw new Error('must not be reached') }
     const applyErr = await new Promise(resolve => {
       mod.apply({ tools: { register: tool => {
-        tool.execute({ action: 'status' }, {}).then(() => resolve(null), error => resolve(error))
+        if (tool.name === 'browser_control') tool.execute({ action: 'status' }, {}).then(() => resolve(null), error => resolve(error))
       } } })
     })
     try {
@@ -289,6 +319,20 @@ test('browser_control never blindly retries a mutation whose network outcome is 
         && error.retryable === false
         && /^call_[0-9a-f]{32}$/u.test(error.requestId)
         && /不得自动重试/u.test(error.message)
+    )
+  })
+})
+
+test('browser_playwright network uncertainty follows the same read/write classification as the host', async () => {
+  const { playwright } = await loadPluginTool()
+  await withBrowserEndpoint(async () => { throw new Error('socket reset') }, async () => {
+    await assert.rejects(
+      () => playwright.execute({ operation: 'count', selector: 'button' }, { agent: { id: 'agent-read' }, callId: 'pw-read' }),
+      error => error.code !== 'browser-outcome-unknown' && /socket reset/u.test(error.message)
+    )
+    await assert.rejects(
+      () => playwright.execute({ operation: 'click', selector: '#save' }, { agent: { id: 'agent-write' }, callId: 'pw-write' }),
+      error => error.code === 'browser-outcome-unknown' && error.retryable === false
     )
   })
 })

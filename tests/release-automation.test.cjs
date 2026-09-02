@@ -18,10 +18,16 @@ test('all third-party GitHub Actions are pinned to immutable commits', async () 
   }
 })
 
-test('signed Android publication follows the tag and waits for the verified desktop release', async () => {
+test('signed Android publication is exact-dispatch-only and waits for the verified desktop release', async () => {
   const workflow = await source(path.join('.github', 'workflows', 'android-mobile-release.yml'))
-  assert.match(workflow, /push:[\s\S]*tags:[\s\S]*'v\*'/u)
-  assert.ok(workflow.includes('RELEASE_TAG: ${{ inputs.tag || github.ref_name }}'))
+  assert.match(workflow, /workflow_dispatch:[\s\S]*tag:[\s\S]*request_id:/u)
+  assert.doesNotMatch(workflow, /\n\s+push:|github\.ref_name|github\.run_id|inputs\.tag \|\|/u)
+  assert.ok(workflow.includes('RELEASE_TAG: ${{ inputs.tag }}'))
+  assert.match(workflow, /run-name: Android \$\{\{ inputs\.tag \}\} · \$\{\{ inputs\.request_id \}\}/u)
+  for (const input of ['tag', 'request_id']) {
+    assert.match(workflow, new RegExp(`${input}:[\\s\\S]*?required: true`, 'u'))
+  }
+  assert.ok((workflow.match(/verify-formal-windows-release-identity\.mjs/gu) || []).length >= 3)
   assert.match(workflow, /Waiting for verified desktop release/u)
   assert.match(workflow, /gh release upload "\$RELEASE_TAG"/u)
   assert.match(workflow, /seq 1 180/u)
@@ -47,6 +53,29 @@ test('signed Android publication follows the tag and waits for the verified desk
   assert.match(recoveryWorkflow, /--method PATCH "repos\/\$GITHUB_REPOSITORY\/releases\/\$RELEASE_ID"/u)
   assert.doesNotMatch(recoveryWorkflow, /--clobber|overwrite_files: true|npm run dist/u)
   assert.match(workflow, /--json isDraft/u)
+})
+
+test('v1.0.58 one-off installed homepage gate consumes only the current pre-Tag Windows artifact', async () => {
+  const workflow = await source(path.join('.github', 'workflows', 'release.yml'))
+  const jobStart = workflow.indexOf('  oneoff-v1-0-58-windows-ui-validation:')
+  const jobEnd = workflow.indexOf('\n  ios-simulators:', jobStart)
+  assert.ok(jobStart > workflow.indexOf('name: desktop-${{ matrix.os }}'))
+  assert.ok(jobEnd > jobStart)
+  const job = workflow.slice(jobStart, jobEnd)
+  const cleanupMarker = workflow.slice(Math.max(0, jobStart - 240), jobStart)
+  assert.match(cleanupMarker, /ONE-OFF v1\.0\.58 ONLY:[\s\S]*delete this entire job plus its script and contract[\s\S]*after v1\.0\.58 publication completes/iu)
+  assert.match(job, /^    if: \$\{\{ inputs\.tag == 'v1\.0\.58' \}\}$/mu)
+  assert.match(job, /^    needs: build$/mu)
+  assert.match(job, /ref: \$\{\{ inputs\.source_revision \}\}/u)
+  assert.match(job, /GITHUB_SHA\.ToLowerInvariant\(\) -ne \$env:ONEOFF_SOURCE_REVISION/u)
+  assert.match(job, /github\.workflow_ref[\s\S]*github\.run_id/u)
+  assert.match(job, /actions\/download-artifact@[0-9a-f]{40}[\s\S]*name: desktop-windows-latest[\s\S]*runner\.temp.*github\.run_id/u)
+  assert.doesNotMatch(job, /^\s+run-id:/mu)
+  assert.match(job, /release-oneoff-v1\.0\.58-windows-ui-validation\.cjs/u)
+  assert.match(job, /Install, open the ordinary app, prove its homepage, stop, and uninstall/u)
+  assert.doesNotMatch(job, /--self-test|gh release|uploads\.github\.com|contents: write|stable-components|release:publish/u)
+  const existingSmoke = workflow.slice(workflow.indexOf('- name: Run Windows installer smoke test'), jobStart)
+  assert.match(existingSmoke, /Current-version installed self-test[\s\S]*Current-version Windows uninstaller/u)
 })
 
 test('macOS release artifacts are explicitly unsigned with a one-click installer helper', async () => {
@@ -82,6 +111,13 @@ test('production component preparation binds the private key to target-correct f
   assert.match(publisher, /Preserve matching assets and identify missing component assets/u)
   assert.match(publisher, /verify-production-component-staging\.mjs/u)
   assert.match(publisher, /Re-download and verify public component assets/u)
+  assert.match(publisher, /run-name: Components \$\{\{ inputs\.tag \}\} · \$\{\{ inputs\.request_id \}\}/u)
+  assert.doesNotMatch(publisher, /inputs\.tag \|\||inputs\.request_id \|\|/u)
+  for (const input of ['tag', 'product_revision', 'request_id', 'formal_windows_product_revision', 'formal_windows_release_id', 'formal_windows_asset_id', 'formal_windows_asset_name', 'formal_windows_asset_size', 'formal_windows_asset_digest', 'formal_windows_asset_url']) {
+    assert.match(publisher, new RegExp(`^      ${input}:\\r?\\n(?:        [^\\r\\n]+\\r?\\n)*?        required: true$`, 'mu'))
+  }
+  assert.ok((publisher.match(/verify-formal-windows-release-identity\.mjs/gu) || []).length >= 4)
+  assert.ok(publisher.lastIndexOf('verify-formal-windows-release-identity.mjs') > publisher.indexOf('git push origin "HEAD:refs/heads/$branch"'))
   assert.doesNotMatch(publisher, /--clobber/u)
   const backup = await source('scripts/configure-component-signing-backup.ps1')
   assert.match(backup, /gh repo create \$BackupRepo --private/u)

@@ -47,17 +47,17 @@ test('top-level creation authority is limited to direct human input or the exact
 
 test('goal-round creation authority rejects stale, inactive, disarmed, and non-root callers', async () => {
   const mod = await import(`${pathToFileURL(sourcePath).href}?goal-round-creation-authority=${Date.now()}`)
-  const root = { id: 'goal-root' }
+  const root = { id: 'goal-root', session: { header: { cwd: path.resolve('C:/goal-round-root') }, events: [{ type: 'turn/start', id: 'goal-turn', time: '2026-09-01T00:00:00.000Z' }] } }
   const worker = { id: 'goal-worker' }
   let goal
   const ctx = {
     agents: { roots: () => [root] },
     goals: { get(agent) { assert.equal(agent, root); return goal } }
   }
-  const execution = (agent, source) => ({ agent, events: [{ type: 'user/message', data: { source } }] })
+  const execution = (agent, source) => ({ agent, turnKey: 'goal-round-turn-key', events: [{ type: 'user/message', data: { source } }] })
   assert.equal(mod.hasTeamCreationRootAuthority(ctx, execution(root, { kind: 'user' })), true)
 
-  goal = { id: 'goal-1', revision: 3, phase: 'active', activation: 'armed', roundsStarted: 7 }
+  goal = { id: 'goal-1', revision: 3, objective: 'Exercise exact goal-round authority', phase: 'active', activation: 'armed', roundsStarted: 7, maxGoalRounds: 7 }
   const exact = { kind: 'goal', goalId: goal.id, revision: goal.revision, round: goal.roundsStarted }
   assert.equal(mod.hasExactGoalRoundRootAuthority(ctx, execution(root, exact)), true)
   assert.equal(mod.hasTeamCreationRootAuthority(ctx, execution(root, exact)), true)
@@ -65,7 +65,7 @@ test('goal-round creation authority rejects stale, inactive, disarmed, and non-r
     { ...exact, goalId: 'other-goal' },
     { ...exact, revision: goal.revision + 1 },
     { ...exact, round: goal.roundsStarted - 1 },
-    { kind: 'coordinator', goalId: goal.id, revision: goal.revision, round: goal.roundsStarted }
+    { kind: 'agent-message', form: 'relay', senderSessionId: 'goal-worker', goalId: goal.id, revision: goal.revision, round: goal.roundsStarted }
   ]) assert.equal(mod.hasTeamCreationRootAuthority(ctx, execution(root, source)), false)
 
   goal = { ...goal, phase: 'paused' }
@@ -206,21 +206,21 @@ test('routing receipt phases reject direct terminals, failed team binding, and i
     await mod.recordRoutingReceipt(store, { agent, turnKey: 'unknown-team' }, { ...decision, outcome: 'recorded' })
     await assert.rejects(
       mod.recordRoutingReceipt(store, { agent, turnKey: 'unknown-team' }, { ...decision, outcome: 'created', teamId: 'missing-team' }),
-      /routing receipt team scope must be Host-derived from the same root and project/u
+      /routing receipt team scope must be Host-derived from the same ownership chain and project/u
     )
     const foreign = { id: 'foreign-root', session: { header: { cwd: temporary } } }
     const foreignTeam = await mod.createTeam(store, foreign, { objective: 'Foreign routing team' })
     await mod.recordRoutingReceipt(store, { agent, turnKey: 'foreign-team' }, { ...decision, outcome: 'recorded' })
     await assert.rejects(
       mod.recordRoutingReceipt(store, { agent, turnKey: 'foreign-team' }, { ...decision, outcome: 'created', teamId: foreignTeam.id }),
-      /routing receipt team scope must be Host-derived from the same root and project/u
+      /routing receipt team scope must be Host-derived from the same ownership chain and project/u
     )
     const missingProjectTeam = await mod.createTeam(store, agent, { objective: 'Missing project routing team' })
     await store.mutate(document => { document.teams.find(team => team.id === missingProjectTeam.id).projectKey = undefined })
     await mod.recordRoutingReceipt(store, { agent, turnKey: 'missing-project' }, { ...decision, outcome: 'recorded' })
     await assert.rejects(
       mod.recordRoutingReceipt(store, { agent, turnKey: 'missing-project' }, { ...decision, outcome: 'created', teamId: missingProjectTeam.id }),
-      /routing receipt team scope must be Host-derived from the same root and project/u
+      /routing receipt team scope must be Host-derived from the same ownership chain and project/u
     )
   } finally {
     await fsp.rm(temporary, { recursive: true, force: true })

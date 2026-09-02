@@ -111,3 +111,29 @@ test('dangerous browser actions remain origin-, payload- and confirmation-bound'
   assert.match(history, /const SCHEMA_VERSION = 2/)
   assert.match(history, /const normalizedTitle = ''/)
 })
+
+test('browser_playwright 与 browser_control 共用安全回环和后台 CDP/DOM 宿主', async () => {
+  const [plugin, main, api] = await Promise.all([
+    source('plugins/dsh-desktop-browser-tools/lib/index.js'),
+    source('electron/main.cjs'),
+    source('electron/bridge/browser-codex-api.cjs')
+  ])
+  assert.match(plugin, /name:\s*'browser_playwright'/u)
+  assert.match(plugin, /request\(state, 'playwright', payload/u)
+  assert.match(plugin, /先调用 browser_control 的 status 确认浏览器控制可用/u)
+  const legacyActions = /const ACTIONS = \[([\s\S]*?)\]/u.exec(plugin)?.[1] || ''
+  assert.match(legacyActions, /'stop'/u)
+  assert.doesNotMatch(legacyActions, /'playwright'/u)
+  assert.match(main, /action === 'playwright'/u)
+  assert.match(main, /browser-codex-api\.cjs/u)
+  assert.match(main, /beginInput:[\s\S]{0,200}beginModelInput/u)
+  assert.match(main, /requireSharedComputerUseForBrowser\(\{ requestAuthorization: true \}\)/u)
+  assert.match(main, /dataPlane: \{ primary: 'cdp-dom', structuredRefs: true, loopbackApi: true, screenshotRequired: false/u)
+  assert.match(api, /securityPolicy\.modelAction/u)
+  assert.match(api, /fixedLocatorPageFunction\.toString\(\)/u)
+  assert.match(api, /executeJavaScriptInIsolatedWorld/u)
+  assert.match(api, /Input\.dispatchMouseEvent/u)
+  assert.match(api, /Input\.insertText/u)
+  assert.match(api, /browser-playwright-binding-(?:stale|changed)/u)
+  assert.doesNotMatch(api, /tab-not-visible/u)
+})

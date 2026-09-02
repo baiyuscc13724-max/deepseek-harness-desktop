@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.0.58
+
+### 官方 Harness alpha.4 兼容升级
+
+- 官方 Harness Runtime 及完整 required/optional DSH 依赖图精确固定为 `0.1.2-alpha.4`，并以精确版本、依赖图闭包、产物哈希、语义锚点和幂等 patch 门禁阻止 alpha 漂移。
+- Desktop 适配 alpha.4 的 branded session sequence、事件所有权、projector/node-store 与 Host follow-up queue 合同；自研 Agent Teams 的 Host 一次性授权、root/project/body 绑定、runtime epoch 撤销、任务账本和自动驾驶仍是唯一权威，没有被官方核心替代或双写。
+
+### 桌面启动根因与认证会话
+
+- 官方 Runtime 的 token 重定向改由承载工作台的同一个 `persist:harness` Electron session 跟随并建立 Cookie；每一跳继续限制为精确 loopback authority，跨来源、循环、缺少 Cookie 或 clean `/` 非 2xx 均 fail closed。
+- 同一 runtime home 的并发启动合并为 singleflight；启动前只清理能够精确归属且已失去可访问 Web 服务的陈旧进程，不按端口、PID 或名称猜测终止。
+- Runtime readiness 必须由真实认证链证明。可选 MCP 的连接与首次工具同步增加有界 startup deadline 和 supervisor 收敛，不能再无限阻塞基础 Web 启动；fatal MCP 配置仍保持失败语义。
+
+### 手机同步与 Agent Teams 自动驾驶
+
+- 官方工作台中的手机同步入口经受限 guest preload 进入可信 shell bridge，只转发固定动作并打开已有同步面板；仍只有一个入口和一份设备状态，不改变配对、权限、撤销或传输加密边界。
+- 左侧栏“设置”和“手机同步”保留独立点击区与 8px 间距；展开态横向排列、折叠态纵向错开，避免背景和命中区域粘连或覆盖。
+- 候选 v1.0.58 为 Agent Teams 增加可信桌面设置“自动接力，不用发送继续”，默认关闭，旧数据迁移也保持关闭；用户显式开启后可为每个目标选择固定的 1–200 轮追加上限，默认 200。
+- 首个团队只有消费一次性 Desktop Host 授权回执后才取得本生命周期权限；该回执精确绑定 root、canonical project、active Goal、team、pause epoch 与设置值，不能由全局开关、静态请求头、模型参数或稍后创建的团队替代。后续同 root 下事实完整一致的平级团队才可继承仍存活的授权组。
+- 获得授权后，正常成员等待期间 Root 安全 park；成员提交、释放与状态转换以持久事件合并唤醒，自动继续验收和调度，不再消耗轮次等待用户回复“继续”。显式 Stop 或安全 blocker 仍会解除授权并保持人工恢复门禁。
+- 自动 park 要求所有未完成内部任务都由 live worker 持有，或沿同一 root 的依赖链最终落到 live producer；跨 team 可证明依赖链可用。缺失/循环/终态 blocker、跨 root/project、paused、capability 未验证、文件冲突、effect 非 `none` 与 `outcome_unknown` 全部 fail closed。
+- 每个 durable transition 最多补一个 goal round，只恢复明确的 `round-limit`；达到用户设置的固定预算即停止。Host/plugin 重启、Stop、handoff、关闭设置、降低预算、权限确认、外部副作用未知和其他 blocker 都会撤销或阻断授权，不以无限循环或盲目重试兜底。
+- 修复成员容量设置与自动建队脱节：关闭自动接力时，单独保存 `maxMembers` / `maxActiveTurns` 不再错误要求 Host 授权；完整 Bootstrap 与扩员提案不再固定卡在 4，而是遵守当前设置并支持到 8。系统提示与设置页明确这两项是容量上限而非强制凑满人数，并提示 8 人同时启动需要两项都设为 8。
+- 官方输入框现在只在“对话”视图挂载到可见布局；切到“轨迹、代理团队、归档历史、Godot 预览”等视图时不再遮挡内容或进入键盘焦点顺序。团队页生成草稿后会先保存草稿再切回“对话”，仍由用户亲自发送。
+
+### 浏览器对等与发布门禁
+
+- Codex 浏览器的可见导航、交互、检查与停止能力继续经过来源/actor、站点授权、导航、敏感动作、文件/下载、取消与审计等动态安全门禁；最终结论由 browser 专项真实 Electron 场景复核，失败即阻止发布。
+- 新增 v1.0.58 安全审查。正式云桌面构建及安装器门禁成功并公开桌面 Release 后，发布器必须按精确 revision/run/Release/asset/digest 把正式 Windows x64 便携包下载到本机隔离目录，使用独立 Electron userData 与 Harness runtime home 运行 packaged self-test，严格核对版本、随包 Runtime token→Cookie→clean `/` 启动链和全部报告项；本地开发实例不能替代该证据。
+- 桌面根包、lockfile、15 个自有插件、Android、iOS/iPadOS、桌面移动路由、移动更新示例和 Web Search User-Agent 统一到 `1.0.58`；Android `versionCode=1005800`，iOS build code 为 `10058`。`@zseven-w/dsh-android` 保持独立的 `0.1.0-rc.4`。
+- `v1.0.57` 是上一不可变稳定版；其 Tag、资产、签名 APK、组件、镜像和 stable feed 不移动、不覆盖。v1.0.58 仍必须由唯一 resumable publisher 完成隔离验证、双云核对后才提升 stable feed。
+
 ## 1.0.57
 
 ### 官方 Harness alpha.3 启动与认证兼容
