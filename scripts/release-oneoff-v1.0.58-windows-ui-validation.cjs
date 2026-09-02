@@ -10,6 +10,7 @@ const {
   readFileSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -379,14 +380,41 @@ async function stopOrdinaryApplication({ launched, spawnSyncImpl = spawnSync }) 
   if (result?.error || (result?.status !== 0 && launched.child?.exitCode == null)) throw processFailure('Installed application process-tree stop', result)
 }
 
-async function uninstallCandidate({ installed, layout, spawnSyncImpl = spawnSync }) {
+async function uninstallCandidate({
+  installed,
+  layout,
+  spawnSyncImpl = spawnSync,
+  waitImpl = wait,
+  maxCleanupAttempts = 120,
+}) {
   runBounded(installed.uninstallerPath, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], {
     label: 'v1.0.58 one-off Windows uninstaller',
     timeoutMs: 300_000,
     spawnSyncImpl,
   })
-  for (let attempt = 0; attempt < 30 && existsSync(layout.installRoot); attempt += 1) await wait(500)
-  if (existsSync(layout.installRoot)) throw new Error('Windows uninstaller did not remove the isolated installation directory.')
+  for (let attempt = 0; attempt < maxCleanupAttempts; attempt += 1) {
+    if (!existsSync(layout.installRoot)) return
+    let residualEntries
+    try { residualEntries = readdirSync(layout.installRoot) } catch (error) {
+      if (error?.code === 'ENOENT' || !existsSync(layout.installRoot)) return
+      throw error
+    }
+    if (residualEntries.length === 0) {
+      try { rmdirSync(layout.installRoot) } catch (error) {
+        if (error?.code === 'ENOENT' || !existsSync(layout.installRoot)) return
+        if (!['EACCES', 'EBUSY', 'ENOTEMPTY', 'EPERM'].includes(error?.code)) throw error
+      }
+      if (!existsSync(layout.installRoot)) return
+    }
+    await waitImpl(500)
+  }
+  if (!existsSync(layout.installRoot)) return
+  let residualEntries
+  try { residualEntries = readdirSync(layout.installRoot).slice(0, 32) } catch (error) {
+    if (error?.code === 'ENOENT' || !existsSync(layout.installRoot)) return
+    throw error
+  }
+  throw new Error(`Windows uninstaller left residual entries in the isolated installation directory: ${residualEntries.join(', ') || '(empty directory)'}.`)
 }
 
 function writeReport(reportPath, report) {
@@ -528,6 +556,7 @@ module.exports = {
   normalizeIdentity,
   ordinaryLaunchArguments,
   performOneoffWindowsUiValidation,
+  uninstallCandidate,
   validateHomepageProof,
 }
 

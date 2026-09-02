@@ -16,6 +16,7 @@ const {
   normalizeIdentity,
   ordinaryLaunchArguments,
   performOneoffWindowsUiValidation,
+  uninstallCandidate,
   validateHomepageProof,
 } = require('../scripts/release-oneoff-v1.0.58-windows-ui-validation.cjs')
 
@@ -164,6 +165,48 @@ test('successful gate binds the current-run installer, uses isolated ordinary-ap
     'isolated-install-uninstalled',
     'validation-root-removed',
   ])
+})
+
+test('the real uninstaller allows its asynchronous second phase to finish and removes an empty install root', async t => {
+  const root = mkdtempSync(path.join(tmpdir(), 'harness-v1.0.58-uninstall-grace-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const installRoot = path.join(root, 'installed-app')
+  const residual = path.join(installRoot, '_iu-second-phase.tmp')
+  mkdirSync(installRoot, { recursive: true })
+  writeFileSync(residual, 'temporary Inno Setup second phase')
+  let waits = 0
+
+  await uninstallCandidate({
+    installed: { uninstallerPath: path.join(root, 'unins000.exe') },
+    layout: { installRoot },
+    spawnSyncImpl: () => ({ status: 0, stdout: '', stderr: '' }),
+    waitImpl: async milliseconds => {
+      assert.equal(milliseconds, 500)
+      waits += 1
+      rmSync(residual, { force: true })
+    },
+    maxCleanupAttempts: 3,
+  })
+
+  assert.equal(waits, 1)
+  assert.equal(existsSync(installRoot), false)
+})
+
+test('the real uninstaller still fails closed with bounded residual-entry evidence', async t => {
+  const root = mkdtempSync(path.join(tmpdir(), 'harness-v1.0.58-uninstall-residual-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const installRoot = path.join(root, 'installed-app')
+  mkdirSync(installRoot, { recursive: true })
+  writeFileSync(path.join(installRoot, 'unexpected.log'), 'must not be hidden by cleanup')
+
+  await assert.rejects(uninstallCandidate({
+    installed: { uninstallerPath: path.join(root, 'unins000.exe') },
+    layout: { installRoot },
+    spawnSyncImpl: () => ({ status: 0, stdout: '', stderr: '' }),
+    waitImpl: async () => {},
+    maxCleanupAttempts: 1,
+  }), /residual entries.*unexpected\.log/iu)
+  assert.equal(existsSync(installRoot), true)
 })
 
 test('a missing structured homepage marker fails closed but still stops and uninstalls', async t => {
