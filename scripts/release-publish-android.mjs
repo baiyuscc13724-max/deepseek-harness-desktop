@@ -227,7 +227,7 @@ function assertStandaloneReleaseShell(repo, sourceRevision, mobile, { requireEmp
 async function assertStandaloneCnbAssetsAbsent(repo, mobile) {
   for (const name of [mobile.assetName, mobile.checksumName]) {
     const url = `https://cnb.cool/${repo}/-/releases/download/${mobile.tag}/${name}`
-    const response = await fetch(url, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+    const response = await fetchRemoteRead(url, { method: 'HEAD', redirect: 'manual', timeout: 15_000 })
     if (response.status !== 404) throw new Error(`Standalone Android recovery requires absent CNB asset ${name} (HTTP ${response.status}).`)
   }
 }
@@ -304,10 +304,39 @@ function assertProtectedReleaseMatchesManifest(release, repo, protectedTag) {
   return true
 }
 
+const REMOTE_READ_RETRY_ATTEMPTS = 4
+const TRANSIENT_REMOTE_READ_ERROR = /(?:TimeoutError|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|Connect Timeout Error|socket disconnected|other side closed)/iu
+
+function remoteReadErrorDetail(error) {
+  const detail = []
+  for (let current = error, depth = 0; current && depth < 4; current = current.cause, depth += 1) {
+    detail.push(current.name, current.code, current.message)
+  }
+  return detail.filter(Boolean).join(' ')
+}
+
+async function withRemoteReadRetry(operation) {
+  for (let attempt = 1; attempt <= REMOTE_READ_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!TRANSIENT_REMOTE_READ_ERROR.test(remoteReadErrorDetail(error)) || attempt === REMOTE_READ_RETRY_ATTEMPTS) throw error
+      console.warn(`Transient remote read failure (${attempt}/${REMOTE_READ_RETRY_ATTEMPTS}); retrying read-only request.`)
+      await new Promise(resolve => setTimeout(resolve, attempt * 1_000))
+    }
+  }
+}
+
+async function fetchRemoteRead(url, { timeout, ...options }) {
+  return withRemoteReadRetry(() => fetch(url, { ...options, signal: AbortSignal.timeout(timeout) }))
+}
+
 async function fetchBytes(url, timeout = 5 * 60 * 1000) {
-  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(timeout) })
-  if (!response.ok) throw new Error(`Remote download failed (${response.status}): ${url}`)
-  return Buffer.from(await response.arrayBuffer())
+  return withRemoteReadRetry(async () => {
+    const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(timeout) })
+    if (!response.ok) throw new Error(`Remote download failed (${response.status}): ${url}`)
+    return Buffer.from(await response.arrayBuffer())
+  })
 }
 
 async function remoteSha256(url) {
@@ -315,16 +344,18 @@ async function remoteSha256(url) {
 }
 
 async function remoteStreamEvidence(url, timeout = 30 * 60 * 1000) {
-  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(timeout) })
-  if (!response.ok || !response.body) throw new Error(`Remote byte verification failed (${response.status}): ${url}`)
-  const digest = createHash('sha256')
-  let size = 0
-  for await (const chunk of response.body) {
-    const bytes = Buffer.from(chunk)
-    size += bytes.length
-    digest.update(bytes)
-  }
-  return { size, sha256: digest.digest('hex') }
+  return withRemoteReadRetry(async () => {
+    const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(timeout) })
+    if (!response.ok || !response.body) throw new Error(`Remote byte verification failed (${response.status}): ${url}`)
+    const digest = createHash('sha256')
+    let size = 0
+    for await (const chunk of response.body) {
+      const bytes = Buffer.from(chunk)
+      size += bytes.length
+      digest.update(bytes)
+    }
+    return { size, sha256: digest.digest('hex') }
+  })
 }
 
 async function protectedMetadataHashes(repo) {
@@ -359,7 +390,7 @@ async function protectedCnbAssetHeads(repo, protectedTag) {
   for (const asset of manifest[0].assets) {
     const url = (asset.mirror_urls || []).find(value => value.startsWith(`https://cnb.cool/${repo}/-/releases/download/${protectedTag}/`))
     if (!url) throw new Error(`Protected CNB mirror URL is missing for ${asset.name}.`)
-    const response = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(30_000) })
+    const response = await fetchRemoteRead(url, { method: 'HEAD', redirect: 'follow', timeout: 30_000 })
     const size = Number(response.headers.get('content-length') || 0)
     if (!response.ok || size !== Number(asset.size)) throw new Error(`Protected CNB asset observation failed for ${asset.name}.`)
     observations.push({ name: asset.name, size, url })
@@ -741,7 +772,7 @@ async function assertStandaloneRemoteAbsence(repo, mobile) {
   if (readGithubRelease(repo, mobile.tag)) throw new Error('Cannot rebind Android candidate after its GitHub release exists.')
   for (const name of [mobile.assetName, mobile.checksumName]) {
     const url = `https://cnb.cool/${repo}/-/releases/download/${mobile.tag}/${name}`
-    const response = await fetch(url, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+    const response = await fetchRemoteRead(url, { method: 'HEAD', redirect: 'manual', timeout: 15_000 })
     if (response.status !== 404) throw new Error(`Cannot prove CNB Android side-effect absence for ${name} (HTTP ${response.status}).`)
   }
 }
