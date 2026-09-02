@@ -1020,6 +1020,14 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(disabledPrompt, /Do not proactively call any team tool/u)
     assert.match(disabledPrompt, /Team members must never create teams/u)
 
+    const memberLimitOnly = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
+      sessionId: 'settings', action: 'settings', maxMembers: 5
+    }))
+    assert.equal(memberLimitOnly.status, 200, memberLimitOnly.body)
+    assert.equal(JSON.parse(memberLimitOnly.body).state.config.autopilotEnabled, true, 'an independent member limit Save preserves the default-on preference')
+    assert.equal(JSON.parse(memberLimitOnly.body).state.config.maxMembers, 5)
+    assert.equal(autopilotAuthorizationConsumptions.length, 0, 'an independent member limit Save never claims automatic-continuation authority')
+
     const settings = await invoke(routes.get('/api/agent-teams/action'), request('POST', '/api/agent-teams/action', {
       sessionId: 'settings', action: 'settings', enabled: true, maxMembers: 4, maxActiveTurns: 4,
       autopilotEnabled: false, autopilotMaxAdditionalRounds: 200

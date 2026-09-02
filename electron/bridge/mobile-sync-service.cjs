@@ -7,6 +7,7 @@ const path = require('node:path')
 const httpProxy = require('http-proxy')
 const QRCode = require('qrcode')
 const WebSocket = require('ws')
+const { BROWSER_FORBIDDEN_PORTS, browserSafePort, listenBrowserSafe } = require('./browser-safe-port.cjs')
 const { CONTROL_PROTOCOL_VERSION, MobileControlBroker, isLoopbackAddress } = require('./mobile-control-broker.cjs')
 const { AUTH_COOKIE_PREFIX, validatedRuntimeAuthCookieHeader } = require('./runtime-session-auth.cjs')
 const { SYNC_PROTOCOL_VERSION } = require('../store/mobile-sync-store.cjs')
@@ -472,54 +473,6 @@ function documentUploadError(status, code) {
   return { status: status >= 400 && status < 500 ? status : 502, code: 'DOCUMENT_UPLOAD_REJECTED', error: '电脑工作区未接受该文档。' }
 }
 
-const BROWSER_FORBIDDEN_PORTS = new Set([
-  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
-  101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179,
-  389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601,
-  636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000,
-  6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080
-])
-
-function browserSafePort(value) {
-  return Number.isInteger(value) && value > 0 && value <= 65535 && !BROWSER_FORBIDDEN_PORTS.has(value)
-}
-
-function listen(server, port, host) {
-  return new Promise((resolve, reject) => {
-    const onError = error => {
-      server.off('listening', onListening)
-      reject(error)
-    }
-    const onListening = () => {
-      server.off('error', onError)
-      resolve(server.address())
-    }
-    server.once('error', onError)
-    server.once('listening', onListening)
-    server.listen(port, host)
-  })
-}
-
-function closeListener(server) {
-  return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
-}
-
-async function listenBrowserSafe(server, preferredPort, host, maxAttempts = 32) {
-  let candidate = browserSafePort(preferredPort) ? preferredPort : 0
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    try { await listen(server, candidate, host) }
-    catch (error) {
-      if (candidate !== 0 && error.code === 'EADDRINUSE') { candidate = 0; continue }
-      throw error
-    }
-    const address = server.address()
-    if (address && browserSafePort(address.port)) return address
-    await closeListener(server)
-    candidate = 0
-  }
-  throw Object.assign(new Error('Unable to allocate a browser-safe mobile sync port.'), { code: 'MOBILE_SYNC_NO_SAFE_PORT' })
-}
-
 class MobileSyncService extends EventEmitter {
   constructor({
     store,
@@ -830,7 +783,10 @@ class MobileSyncService extends EventEmitter {
       })
     })
     const preferredPort = this.requestedPort ?? this.store.get().preferredPort
-    const address = await listenBrowserSafe(this.server, preferredPort, this.host)
+    const address = await listenBrowserSafe(this.server, preferredPort, this.host, {
+      unavailableCode: 'MOBILE_SYNC_NO_SAFE_PORT',
+      unavailableMessage: 'Unable to allocate a browser-safe mobile sync port.'
+    })
     this.port = address.port
     try {
       await this.#writeDesktopControlState()

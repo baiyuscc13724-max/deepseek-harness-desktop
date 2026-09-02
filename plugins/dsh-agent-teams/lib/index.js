@@ -8234,7 +8234,12 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
             const budgetChanged = preview.nextSettings.autopilotMaxAdditionalRounds !== preview.document.settings.autopilotMaxAdditionalRounds;
             const autopilotModeChanged = preview.nextSettings.autopilotEnabled !== preview.document.settings.autopilotEnabled;
             const hasLiveAutopilotGrant = preview.document.teams.some((team) => ["pending_plan", "active"].includes(team.autopilot?.status));
-            const authorizationRequired = preview.nextSettings.autopilotEnabled || budgetChanged || autopilotModeChanged && hasLiveAutopilotGrant;
+            const autopilotSettingsRequested = Object.hasOwn(body, "autopilotEnabled") || Object.hasOwn(body, "autopilotMaxAdditionalRounds");
+            const suppliedHeader = req.headers[AGENT_TEAM_AUTOPILOT_AUTHORIZATION_HEADER];
+            const suppliedBodyCapability = body.hostAuthorizationCapability;
+            const authorizationCapabilitySupplied = suppliedHeader !== undefined || suppliedBodyCapability !== undefined;
+            const authorizationRequired = authorizationCapabilitySupplied || autopilotSettingsRequested
+              && (preview.nextSettings.autopilotEnabled || budgetChanged || autopilotModeChanged && hasLiveAutopilotGrant);
             if (!authorizationRequired) {
               return store.mutate((document) => {
                 document.settings = preview.nextSettings;
@@ -8250,8 +8255,6 @@ function registerWebApi(ctx, store, ready, admission, projectEntry, projectSessi
             if (preview.hostScope !== undefined && sessionId !== preview.hostScope.rootSessionId) {
               reject("Desktop Host authorization is bound to a different root session", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
             }
-            const suppliedHeader = req.headers[AGENT_TEAM_AUTOPILOT_AUTHORIZATION_HEADER];
-            const suppliedBodyCapability = body.hostAuthorizationCapability;
             if (suppliedHeader === undefined || suppliedBodyCapability === undefined) {
               reject("automatic continuation settings require a one-time Desktop Host authorization", "AGENT_TEAMS_HOST_AUTHORIZATION_REQUIRED");
             }

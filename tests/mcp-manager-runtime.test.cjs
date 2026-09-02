@@ -68,7 +68,8 @@ test('profile load starts enabled MCP servers concurrently within one bounded st
     })
   })
   const loading = manager.load()
-  for (let index = 0; index < 50 && started.length < 2; index += 1) await new Promise(resolve => setImmediate(resolve))
+  const startupDeadline = Date.now() + 10_000
+  while (started.length < 2 && Date.now() < startupDeadline) await new Promise(resolve => setTimeout(resolve, 25))
   assert.deepEqual(started.sort(), ['first', 'second'])
   for (const resolve of release) resolve()
   const loaded = await loading

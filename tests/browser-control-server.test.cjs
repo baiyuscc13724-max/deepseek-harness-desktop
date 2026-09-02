@@ -1,10 +1,12 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const http = require('node:http')
+const { EventEmitter } = require('node:events')
 const os = require('node:os')
 const path = require('node:path')
 const { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } = require('node:fs/promises')
 const { BrowserControlServer, MAX_RECENT_REQUESTS, PLAYWRIGHT_READ_OPERATIONS, isLoopback, requestFingerprint } = require('../electron/bridge/browser-control-server.cjs')
+const { browserSafePort, listenBrowserSafe } = require('../electron/bridge/browser-safe-port.cjs')
 const { READ_OPERATIONS } = require('../electron/bridge/browser-codex-api.cjs')
 
 async function waitFor(predicate, message, timeoutMs = 1_000) {
@@ -15,6 +17,36 @@ async function waitFor(predicate, message, timeoutMs = 1_000) {
   }
 }
 
+test('browser-safe listener retries a Chromium-forbidden ephemeral port', async () => {
+  class FakeServer extends EventEmitter {
+    constructor() {
+      super()
+      this.ports = [6000, 49152]
+      this.listenCalls = []
+      this.closeCalls = 0
+      this.currentPort = 0
+    }
+    listen(port, host) {
+      this.listenCalls.push({ port, host })
+      this.currentPort = this.ports.shift()
+      queueMicrotask(() => this.emit('listening'))
+    }
+    address() { return { address: '127.0.0.1', family: 'IPv4', port: this.currentPort } }
+    close(callback) {
+      this.closeCalls += 1
+      queueMicrotask(callback)
+    }
+  }
+  const server = new FakeServer()
+  const address = await listenBrowserSafe(server, 0, '127.0.0.1', { maxAttempts: 2 })
+  assert.equal(address.port, 49152)
+  assert.deepEqual(server.listenCalls, [
+    { port: 0, host: '127.0.0.1' },
+    { port: 0, host: '127.0.0.1' }
+  ])
+  assert.equal(server.closeCalls, 1)
+})
+
 test('browser tool bridge uses a random bearer token and loopback-only endpoint', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'browser-control-server-'))
   const stateFile = path.join(root, 'state', 'browser.json')
@@ -23,6 +55,7 @@ test('browser tool bridge uses a random bearer token and loopback-only endpoint'
   try {
     const publicState = await server.start()
     assert.equal(publicState.origin.startsWith('http://127.0.0.1:'), true)
+    assert.equal(browserSafePort(Number(new URL(publicState.origin).port)), true, 'the browser control origin must never use a Chromium-forbidden port')
     assert.equal('token' in publicState, false)
     const secretState = JSON.parse(await readFile(stateFile, 'utf8'))
     assert.ok(secretState.token.length >= 40)

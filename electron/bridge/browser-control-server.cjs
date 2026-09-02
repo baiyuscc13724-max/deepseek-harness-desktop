@@ -2,6 +2,7 @@ const http = require('node:http')
 const { createHash, randomBytes } = require('node:crypto')
 const { mkdir, readdir, rename, rm, writeFile } = require('node:fs/promises')
 const path = require('node:path')
+const { listenBrowserSafe } = require('./browser-safe-port.cjs')
 
 const MAX_BODY_BYTES = 64 * 1024
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/
@@ -77,16 +78,12 @@ class BrowserControlServer {
       socket.once('close', () => this.sockets.delete(socket))
     })
     try {
-      await new Promise((resolve, reject) => {
-        const onError = error => { server.off('listening', onListening); reject(error) }
-        const onListening = () => { server.off('error', onError); resolve() }
-        server.once('error', onError)
-        server.once('listening', onListening)
-        server.listen(0, '127.0.0.1')
+      const address = await listenBrowserSafe(server, 0, '127.0.0.1', {
+        unavailableCode: 'BROWSER_CONTROL_NO_SAFE_PORT',
+        unavailableMessage: '无法分配浏览器可访问的本地控制端口。'
       })
       server.on('error', () => { if (this.server === server) this.stop().catch(() => {}) })
       if (generation !== this.generation || this.server !== server) throw new Error('浏览器控制服务启动已取消。')
-      const address = server.address()
       this.origin = `http://127.0.0.1:${address.port}`
       await this.#writeState()
       return this.state()

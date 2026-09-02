@@ -3337,14 +3337,14 @@ window.__ModuleLoader__.load({
       var sessionId = resolveSettingsSessionId(props.sessions);
       var valuesPair = useState({ enabled: false, maxMembers: 4, maxActiveTurns: 4, autopilotEnabled: true, autopilotMaxAdditionalRounds: 200 }), values = valuesPair[0], setValues = valuesPair[1];
       var authorizationPair = useState(null), hostAuthorization = authorizationPair[0], setHostAuthorization = authorizationPair[1];
-      var committedAutopilotEnabled = useRef(true), committedAutopilotBudget = useRef(200);
+      var committedAutopilotEnabled = useRef(true), committedAutopilotBudget = useRef(200), trustedAutopilotSaved = useRef(false);
       var loadingPair = useState(true), loading = loadingPair[0], setLoading = loadingPair[1];
       var savingPair = useState(false), saving = savingPair[0], setSaving = savingPair[1];
       var errorPair = useState(""), error = errorPair[0], setError = errorPair[1];
       var savedPair = useState(false), saved = savedPair[0], setSaved = savedPair[1];
       function applyState(state) { var config = state.config || {}, budget = Number(config.autopilotMaxAdditionalRounds) || 200, autopilotEnabled = !!config.autopilotEnabled; committedAutopilotEnabled.current = autopilotEnabled; committedAutopilotBudget.current = budget; setHostAuthorization(state.autopilotAuthorization || null); setValues({ enabled: !!state.enabled, maxMembers: Number(config.maxMembers) || 4, maxActiveTurns: Number(config.maxActiveTurns) || 4, autopilotEnabled: autopilotEnabled, autopilotMaxAdditionalRounds: budget }); }
       useEffect(function () {
-        var alive = true; setLoading(true); setError("");
+        var alive = true; trustedAutopilotSaved.current = false; setLoading(true); setError("");
         fetchState(sessionId).then(function (state) { if (alive) applyState(state); }).catch(function (err) { if (alive) setError(errorText(err)); }).finally(function () { if (alive) setLoading(false); });
         return function () { alive = false; };
       }, [sessionId]);
@@ -3352,15 +3352,17 @@ window.__ModuleLoader__.load({
       function submit(event) {
         event.preventDefault(); if (!valid(values.maxMembers, 8) || !valid(values.maxActiveTurns, 8) || !valid(values.autopilotMaxAdditionalRounds, 200)) { setError(t("settingsRange")); return; }
         var budget = Number(values.autopilotMaxAdditionalRounds);
-        var authorizationRequired = !!values.autopilotEnabled || !!values.autopilotEnabled !== committedAutopilotEnabled.current || budget !== committedAutopilotBudget.current;
+        var autopilotChanged = !!values.autopilotEnabled !== committedAutopilotEnabled.current || budget !== committedAutopilotBudget.current;
+        var authorizationRequired = autopilotChanged || !!values.autopilotEnabled && !trustedAutopilotSaved.current;
         setSaving(true); setSaved(false); setError("");
-        var payload = { enabled: !!values.enabled, maxMembers: Number(values.maxMembers), maxActiveTurns: Number(values.maxActiveTurns), autopilotEnabled: !!values.autopilotEnabled, autopilotMaxAdditionalRounds: budget };
+        var payload = { enabled: !!values.enabled, maxMembers: Number(values.maxMembers), maxActiveTurns: Number(values.maxActiveTurns) };
+        if (authorizationRequired) { payload.autopilotEnabled = !!values.autopilotEnabled; payload.autopilotMaxAdditionalRounds = budget; }
         if (authorizationRequired && hostAuthorization) payload.hostAuthorization = hostAuthorization;
         var settingsPromise;
         try {
           settingsPromise = authorizationRequired ? postAuthorizedSettings(sessionId, payload) : postAction(sessionId, "settings", payload);
         } catch (authorizationError) { settingsPromise = Promise.reject(authorizationError); }
-        Promise.resolve(settingsPromise).then(function (result) { if (result && result.state) applyState(result.state); setSaved(true); }).catch(function (err) {
+        Promise.resolve(settingsPromise).then(function (result) { if (result && result.state) applyState(result.state); trustedAutopilotSaved.current = !!values.autopilotEnabled; setSaved(true); }).catch(function (err) {
           setError(err && err.code === "AGENT_TEAMS_CONFLICT" ? t("settingsCloseTeamsFirst") : errorText(err));
           return fetchState(sessionId).then(applyState).catch(function () {});
         }).finally(function () { setSaving(false); });
