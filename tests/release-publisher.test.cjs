@@ -7,6 +7,7 @@ const path = require('node:path')
 const test = require('node:test')
 const YAML = require('yaml')
 const {
+  FORMAL_WINDOWS_DOWNLOAD_TIMEOUT_MS,
   SELF_TEST_CHECKS,
   normalizeFormalWindowsAsset,
   performFormalWindowsValidation,
@@ -489,6 +490,7 @@ test('same-run formal Windows asset drift fails the cloud workflow and the publi
 })
 
 test('formal Windows validation downloads digest-bound public bytes and runs an isolated strict self-test', async t => {
+  assert.equal(FORMAL_WINDOWS_DOWNLOAD_TIMEOUT_MS, 15 * 60 * 1000, 'public release downloads retain a bounded slow-network window')
   const temporary = mkdtempSync(path.join(tmpdir(), 'harness-formal-windows-'))
   t.after(() => rmSync(temporary, { recursive: true, force: true }))
   const version = '9.8.7'

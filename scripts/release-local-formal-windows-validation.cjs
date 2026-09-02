@@ -11,6 +11,7 @@ const { Readable } = require('node:stream')
 const { pipeline } = require('node:stream/promises')
 const { spawnSync } = require('node:child_process')
 
+const FORMAL_WINDOWS_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000
 const MAX_SELF_TEST_REPORT_BYTES = 1024 * 1024
 const SELF_TEST_TIMEOUT_MS = 5 * 60 * 1000
 const SELF_TEST_CHECKS = Object.freeze([
@@ -225,7 +226,7 @@ async function downloadFormalWindowsAsset(asset, destination, { fetchImpl = glob
         'User-Agent': 'Harness-Desktop-Release-Validator',
       },
       redirect: 'follow',
-      signal: AbortSignal.timeout(5 * 60 * 1000),
+      signal: AbortSignal.timeout(FORMAL_WINDOWS_DOWNLOAD_TIMEOUT_MS),
     })
     if (!response || response.ok !== true || !response.body) {
       throw new Error(
@@ -398,6 +399,7 @@ async function revalidateFormalWindowsValidation({
 }
 
 module.exports = {
+  FORMAL_WINDOWS_DOWNLOAD_TIMEOUT_MS,
   SELF_TEST_CHECKS,
   assertWindowsHost,
   downloadFormalWindowsAsset,
