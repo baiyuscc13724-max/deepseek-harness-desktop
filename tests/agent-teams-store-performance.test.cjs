@@ -14,6 +14,20 @@ function hash(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
+function expectedLedgerProjectionHashes(header, entries) {
+  const roots = [...new Set(entries.map(entry => entry.rootLeadSessionId))].sort()
+  return roots.map(rootSessionId => {
+    const directlyRelated = entries.filter(entry => entry.rootLeadSessionId === rootSessionId || entry.index.members.some(member => member.sessionId === rootSessionId))
+    const projects = new Set(directlyRelated.map(entry => entry.projectKey).filter(value => value !== undefined))
+    const relatedRoots = new Set(directlyRelated.map(entry => entry.rootLeadSessionId))
+    const projectedEntries = entries.filter(entry => relatedRoots.has(entry.rootLeadSessionId) || entry.projectKey !== undefined && projects.has(entry.projectKey))
+    return {
+      rootSessionId,
+      hash: hash(Buffer.from(JSON.stringify(['agent-teams-root-ledger-projection-v1', header.settings, projectedEntries])))
+    }
+  })
+}
+
 function canonicalBuffer(value) {
   return Buffer.from(`${JSON.stringify(value)}\n`)
 }
@@ -60,6 +74,25 @@ async function directoryUsage(root, current = root, usage = { files: 0, bytes: 0
     }
   }
   return usage
+}
+
+async function waitForRetentionMaintenance(store) {
+  await store._settleRetentionMaintenance()
+  const maintenance = store.storageDiagnostics().retention.maintenance
+  assert.deepEqual(
+    [maintenance.requested, maintenance.scheduled, maintenance.running],
+    [false, false, false],
+    'retention maintenance settles without an unobserved background branch'
+  )
+}
+
+function deferred() {
+  let resolve, reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 async function plugin(label) {
@@ -970,6 +1003,420 @@ test('noncanonical content-addressed pointer references fail closed before artif
   }
 })
 
+test('projection hashing preserves Unicode roots across shared and distinct canonical scopes', async () => {
+  const mod = await plugin('hot-cold-projection-scope')
+  const readVerifiedProjectionHashes = async file => {
+    const ledger = await currentLedgerState(file)
+    const hotDocument = JSON.parse(await readFile(artifactPath(ledger.root, ledger.manifest.hot.path), 'utf8'))
+    const catalog = JSON.parse(await readFile(artifactPath(ledger.root, ledger.manifest.closedCatalog.path), 'utf8'))
+    const entries = [...ledger.manifest.hotTeams, ...catalog.entries].sort((left, right) => left.ordinal - right.ordinal)
+    const expected = expectedLedgerProjectionHashes(hotDocument.header, entries)
+    assert.deepEqual(ledger.manifest.projectionHashes, expected)
+    return expected
+  }
+
+  const sharedRoot = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-projection-shared-'))
+  const sharedFixture = await createBulkV8Fixture(mod, sharedRoot, 18)
+  const composedRoot = 'root-é'
+  const decomposedRoot = 'root-é'
+  assert.notEqual(composedRoot, decomposedRoot)
+  assert.equal(composedRoot.normalize('NFC'), decomposedRoot.normalize('NFC'))
+  for (let index = 0; index < sharedFixture.document.teams.length; index += 1) {
+    const team = sharedFixture.document.teams[index]
+    const rootSessionId = index % 2 === 0 ? composedRoot : decomposedRoot
+    team.rootLeadSessionId = rootSessionId
+    team.members[0].id = `lead:${rootSessionId}`
+    team.members[0].sessionId = rootSessionId
+  }
+  await writeFile(sharedFixture.file, `${JSON.stringify(sharedFixture.document)}\n`)
+  const sharedStore = new mod.AgentTeamsStore(sharedFixture.file, { hotColdStore: true })
+  let sharedRestarted
+  try {
+    await sharedStore.init()
+    const initial = await readVerifiedProjectionHashes(sharedFixture.file)
+    assert.deepEqual(new Set(initial.map(item => item.rootSessionId)), new Set([composedRoot, decomposedRoot]))
+    assert.equal(new Set(initial.map(item => item.hash)).size, 1, 'identical shared-project scopes retain one exact digest value')
+    await mutateActiveName(sharedStore, 1)
+    await readVerifiedProjectionHashes(sharedFixture.file)
+    sharedStore.close()
+    sharedRestarted = new mod.AgentTeamsStore(sharedFixture.file)
+    await sharedRestarted.init()
+    await readVerifiedProjectionHashes(sharedFixture.file)
+  } finally {
+    sharedStore.close()
+    sharedRestarted?.close()
+    await rm(sharedRoot, { recursive: true, force: true })
+  }
+
+  const distinctRoot = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-projection-distinct-'))
+  const distinctFixture = await createBulkV8Fixture(mod, distinctRoot, 18, { distinctProjects: true })
+  const distinctStore = new mod.AgentTeamsStore(distinctFixture.file, { hotColdStore: true })
+  let distinctRestarted
+  try {
+    await distinctStore.init()
+    const before = await readVerifiedProjectionHashes(distinctFixture.file)
+    assert.equal(before.length, 18)
+    assert.equal(new Set(before.map(item => item.hash)).size, before.length, 'different canonical ordinal scopes must retain independent digest values')
+    const beforeByRoot = new Map(before.map(item => [item.rootSessionId, item.hash]))
+    await mutateActiveName(distinctStore, 1)
+    const after = await readVerifiedProjectionHashes(distinctFixture.file)
+    const afterByRoot = new Map(after.map(item => [item.rootSessionId, item.hash]))
+    assert.notEqual(afterByRoot.get('root-17'), beforeByRoot.get('root-17'), 'the mutated ordinal scope advances its own digest')
+    for (const [rootSessionId, digest] of beforeByRoot) {
+      if (rootSessionId !== 'root-17') assert.equal(afterByRoot.get(rootSessionId), digest, `unrelated ordinal scope ${rootSessionId} keeps its digest`)
+    }
+    distinctStore.close()
+    distinctRestarted = new mod.AgentTeamsStore(distinctFixture.file)
+    await distinctRestarted.init()
+    assert.deepEqual(await readVerifiedProjectionHashes(distinctFixture.file), after)
+  } finally {
+    distinctStore.close()
+    distinctRestarted?.close()
+    await rm(distinctRoot, { recursive: true, force: true })
+  }
+})
+
+test('parallel hot and manifest writers fully settle, prefer hot errors, and leave the pointer unchanged', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-writer-settlement-'))
+  const mod = await plugin('hot-cold-writer-settlement')
+  const fixture = await createBulkV8Fixture(mod, root, 18)
+  let armed = false
+  let mode = 'manifest-failure'
+  let hotEntered = deferred()
+  let manifestEntered = deferred()
+  let releaseHot = deferred()
+  const store = new mod.AgentTeamsStore(fixture.file, {
+    hotColdStore: true,
+    async hotColdFaultInjector(stage) {
+      if (!armed) return
+      if (stage === 'before-hot-document-write') {
+        hotEntered.resolve()
+        if (mode === 'manifest-failure') await releaseHot.promise
+        if (mode === 'both-fail') throw new Error('hot branch failed')
+      }
+      if (stage === 'before-manifest-document-write') {
+        manifestEntered.resolve()
+        throw new Error(mode === 'both-fail' ? 'manifest branch also failed' : 'manifest branch failed')
+      }
+    }
+  })
+  try {
+    await store.init()
+    const ledger = await currentLedgerState(fixture.file)
+    const pointerPath = path.join(ledger.root, 'current.json')
+    const pointerBytes = await readFile(pointerPath)
+    const pointerInfo = await stat(pointerPath, { bigint: true })
+    armed = true
+    let settled = false
+    const mutation = mutateActiveName(store, 1)
+    const observed = mutation.then(() => { settled = true }, () => { settled = true })
+    await Promise.all([hotEntered.promise, manifestEntered.promise])
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(settled, false, 'a rejected writer cannot let the mutation escape while its sibling is still running')
+    releaseHot.resolve()
+    await assert.rejects(mutation, /manifest branch failed/u)
+    await observed
+    const afterInfo = await stat(pointerPath, { bigint: true })
+    assert.deepEqual(await readFile(pointerPath), pointerBytes)
+    assert.deepEqual(
+      [afterInfo.dev, afterInfo.ino, afterInfo.size, afterInfo.mtimeNs, afterInfo.ctimeNs],
+      [pointerInfo.dev, pointerInfo.ino, pointerInfo.size, pointerInfo.mtimeNs, pointerInfo.ctimeNs]
+    )
+    assert.equal(Object.keys(await directorySnapshot(ledger.root)).some(reference => reference.endsWith('.tmp')), false)
+    const settledSnapshot = await directorySnapshot(ledger.root)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(await directorySnapshot(ledger.root), settledSnapshot, 'no writer may continue after the rejected mutation settles')
+
+    mode = 'both-fail'
+    hotEntered = deferred()
+    manifestEntered = deferred()
+    releaseHot = deferred()
+    await assert.rejects(mutateActiveName(store, 2), /hot branch failed/u, 'the hot writer error has deterministic priority')
+    await Promise.all([hotEntered.promise, manifestEntered.promise])
+    assert.deepEqual(await readFile(pointerPath), pointerBytes)
+    assert.equal(Object.keys(await directorySnapshot(ledger.root)).some(reference => reference.endsWith('.tmp')), false)
+  } finally {
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('immutable writer collisions clean owned temps without deleting the destination', async t => {
+  for (const [code, equal] of [['EEXIST', true], ['EPERM', false]]) await t.test(`${code}-${equal ? 'equal' : 'mismatch'}`, async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), `agent-teams-hot-cold-collision-${code.toLowerCase()}-`))
+    const mod = await plugin(`hot-cold-collision-${code}-${equal}`)
+    const fixture = await createBulkV8Fixture(mod, root, 18)
+    let armed = false
+    let collisionDestination
+    let collisionBytes
+    const store = new mod.AgentTeamsStore(fixture.file, {
+      hotColdStore: true,
+      async hotColdFaultInjector(stage) {
+        if (!armed || !stage.startsWith('before-immutable-rename:hot/')) return
+        const reference = stage.slice('before-immutable-rename:'.length)
+        collisionDestination = artifactPath(`${fixture.file}.ledger`, reference)
+        const directory = path.dirname(collisionDestination)
+        const prefix = `${path.basename(collisionDestination)}.`
+        const tempName = (await readdir(directory)).find(name => name.startsWith(prefix) && name.endsWith('.tmp'))
+        assert.ok(tempName, 'the collision hook observes the still-owned wx temp')
+        const intended = await readFile(path.join(directory, tempName))
+        collisionBytes = equal ? intended : Buffer.from('foreign collision bytes\n')
+        await writeFile(collisionDestination, collisionBytes)
+        const error = new Error(`injected ${code} collision`)
+        error.code = code
+        throw error
+      }
+    })
+    try {
+      await store.init()
+      const ledger = await currentLedgerState(fixture.file)
+      const pointerBytes = await readFile(path.join(ledger.root, 'current.json'))
+      armed = true
+      if (equal) {
+        await mutateActiveName(store, 1)
+        assert.equal(store.storageDiagnostics().generation, ledger.pointer.generation + 1)
+      } else {
+        await assert.rejects(mutateActiveName(store, 1), /immutable Agent Teams artifact collision/u)
+        assert.deepEqual(await readFile(path.join(ledger.root, 'current.json')), pointerBytes)
+        assert.deepEqual(await readFile(collisionDestination), collisionBytes, 'collision cleanup must never remove or replace the destination')
+      }
+      assert.equal(Object.keys(await directorySnapshot(ledger.root)).some(reference => reference.endsWith('.tmp')), false)
+    } finally {
+      store.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+test('after-hot remains the physical verification gate before after-manifest and pointer visibility', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-physical-gate-'))
+  const mod = await plugin('hot-cold-physical-gate')
+  const fixture = await createBulkV8Fixture(mod, root, 18)
+  let armed = false
+  const stages = []
+  let targetGeneration
+  const store = new mod.AgentTeamsStore(fixture.file, {
+    hotColdStore: true,
+    async hotColdFaultInjector(stage) {
+      if (!armed) return
+      if (stage === 'after-hot-document') {
+        stages.push(stage)
+        const hotDirectory = path.join(`${fixture.file}.ledger`, 'hot')
+        const name = (await readdir(hotDirectory)).find(candidate => candidate.startsWith(`hot-${targetGeneration}-`) && candidate.endsWith('.json'))
+        assert.ok(name)
+        await writeFile(path.join(hotDirectory, name), '{"corrupt":true}\n')
+      } else if (stage === 'after-manifest-document') stages.push(stage)
+    }
+  })
+  try {
+    await store.init()
+    const ledger = await currentLedgerState(fixture.file)
+    const pointerPath = path.join(ledger.root, 'current.json')
+    const pointerBytes = await readFile(pointerPath)
+    targetGeneration = ledger.pointer.generation + 1
+    armed = true
+    await assert.rejects(mutateActiveName(store, 1), /artifact integrity mismatch/u)
+    assert.deepEqual(stages, ['after-hot-document'])
+    assert.deepEqual(await readFile(pointerPath), pointerBytes)
+    assert.equal(Object.keys(await directorySnapshot(ledger.root)).some(reference => reference.endsWith('.tmp')), false)
+  } finally {
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('the exact commit origin adopts once while peers and both listener streams advance once', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-origin-publication-'))
+  const mod = await plugin('hot-cold-origin-publication')
+  const fixture = await createBulkV8Fixture(mod, root, 18)
+  const first = new mod.AgentTeamsStore(fixture.file, { hotColdStore: true })
+  const second = new mod.AgentTeamsStore(fixture.file, { hotColdStore: true })
+  try {
+    await first.init()
+    await second.init()
+    const counts = { firstAdopt: 0, secondAdopt: 0, firstListener: 0, secondListener: 0 }
+    const firstAdopt = first._adoptHotColdPublication.bind(first)
+    const secondAdopt = second._adoptHotColdPublication.bind(second)
+    first._adoptHotColdPublication = (...args) => { counts.firstAdopt += 1; return firstAdopt(...args) }
+    second._adoptHotColdPublication = (...args) => { counts.secondAdopt += 1; return secondAdopt(...args) }
+    const unsubscribeFirst = first.subscribe(() => { counts.firstListener += 1 })
+    const unsubscribeSecond = second.subscribe(() => { counts.secondListener += 1 })
+
+    await mutateActiveName(first, 1)
+    assert.deepEqual(counts, { firstAdopt: 1, secondAdopt: 1, firstListener: 1, secondListener: 1 })
+    assert.equal(second.snapshot().teams.find(team => team.state !== 'closed').name, 'Generation 1')
+
+    Object.assign(counts, { firstAdopt: 0, secondAdopt: 0, firstListener: 0, secondListener: 0 })
+    await mutateActiveName(second, 2)
+    assert.deepEqual(counts, { firstAdopt: 1, secondAdopt: 1, firstListener: 1, secondListener: 1 })
+    assert.equal(first.snapshot().teams.find(team => team.state !== 'closed').name, 'Generation 2')
+
+    Object.assign(counts, { firstAdopt: 0, secondAdopt: 0, firstListener: 0, secondListener: 0 })
+    await second.rollbackHotColdManifest()
+    assert.deepEqual(counts, { firstAdopt: 1, secondAdopt: 2, firstListener: 1, secondListener: 1 }, 'rollback keeps its independent local-adopt plus publication-adopt path')
+    assert.equal(first.snapshot().teams.find(team => team.state !== 'closed').name, 'Generation 1')
+    unsubscribeFirst()
+    unsubscribeSecond()
+  } finally {
+    first.close()
+    second.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('two stores share one file-scoped soft-maintenance queue across origin handoffs', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-soft-two-store-'))
+  const mod = await plugin('hot-cold-soft-two-store')
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  let sweeps = 0
+  const options = {
+    enabled: true,
+    hotColdStore: true,
+    hotColdRetentionSoftFiles: 1,
+    hotColdRetentionHardFiles: 64,
+    hotColdRetentionSoftBytes: 16 * 1024 * 1024,
+    hotColdRetentionHardBytes: 32 * 1024 * 1024,
+    hotColdFaultInjector(stage) { if (stage === 'before-retention-sweep') sweeps += 1 }
+  }
+  const first = new mod.AgentTeamsStore(file, options)
+  const second = new mod.AgentTeamsStore(file, options)
+  try {
+    await first.init()
+    await mod.createTeam(first, { id: 'root-soft-two-store', options: { provider: 'test', model: 'test' } }, { objective: 'soft two store', leadName: 'Lead' })
+    await second.init()
+    sweeps = 0
+    for (let index = 0; index < 12; index += 1) {
+      await mutateActiveName(first, index)
+      const maintenance = first.storageDiagnostics().retention.maintenance
+      if (maintenance.requested || maintenance.scheduled) break
+    }
+    await waitForRetentionMaintenance(first)
+    assert.equal(sweeps, 1, 'the writer and peer cannot enqueue duplicate sweeps for one file')
+    assert.equal(second.snapshot().teams.find(team => team.state !== 'closed').name, first.snapshot().teams.find(team => team.state !== 'closed').name)
+    assert.deepEqual(second.storageDiagnostics().retention.maintenance, first.storageDiagnostics().retention.maintenance)
+
+    for (let index = 20; index < 32; index += 1) {
+      await mutateActiveName(second, index)
+      const maintenance = second.storageDiagnostics().retention.maintenance
+      if (maintenance.requested || maintenance.scheduled) break
+    }
+    await waitForRetentionMaintenance(second)
+    assert.equal(sweeps, 2, 'the shared queue safely transfers maintenance ownership to the next exact origin')
+    assert.equal(first.snapshot().teams.find(team => team.state !== 'closed').name, second.snapshot().teams.find(team => team.state !== 'closed').name)
+  } finally {
+    first.close()
+    second.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('file-scoped soft retention yields to foreground work, converges quietly, and emits no publication', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-soft-maintenance-'))
+  const mod = await plugin('hot-cold-soft-maintenance')
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  let armGate = false
+  let gated = false
+  const sweepEntered = deferred()
+  const releaseSweep = deferred()
+  let unlinks = 0
+  const store = new mod.AgentTeamsStore(file, {
+    enabled: true,
+    hotColdStore: true,
+    hotColdRetentionSoftFiles: 1,
+    hotColdRetentionHardFiles: 64,
+    hotColdRetentionSoftBytes: 16 * 1024 * 1024,
+    hotColdRetentionHardBytes: 32 * 1024 * 1024,
+    async hotColdFaultInjector(stage) {
+      if (armGate && !gated && stage === 'before-retention-sweep') {
+        gated = true
+        sweepEntered.resolve()
+        await releaseSweep.promise
+      }
+      if (stage.startsWith('before-retention-unlink:')) unlinks += 1
+    }
+  })
+  try {
+    await store.init()
+    await mod.createTeam(store, { id: 'root-soft-maintenance', options: { provider: 'test', model: 'test' } }, { objective: 'soft maintenance', leadName: 'Lead' })
+    let publications = 0
+    const unsubscribe = store.subscribe(() => { publications += 1 })
+    for (let index = 0; index < 12; index += 1) {
+      await mutateActiveName(store, index)
+      const maintenance = store.storageDiagnostics().retention.maintenance
+      if (maintenance?.requested || maintenance?.scheduled || maintenance?.running) break
+    }
+    const beforeMaintenance = store.storageDiagnostics()
+    assert.ok(beforeMaintenance.retention.debtFiles >= beforeMaintenance.retention.policy.softFiles)
+    assert.ok(beforeMaintenance.retention.maintenance.requested || beforeMaintenance.retention.maintenance.scheduled)
+    const generation = beforeMaintenance.generation
+    const expectedPublications = publications
+    armGate = true
+    await sweepEntered.promise
+    assert.equal(store.storageDiagnostics().generation, generation, 'soft cleanup starts only after the pointer-visible mutation returned')
+
+    const foreground = store.read(document => document.teams.find(team => team.state !== 'closed').name)
+    releaseSweep.resolve()
+    assert.equal(await foreground, `Generation ${generation - 2}`)
+    assert.equal(unlinks, 0, 'foreground arrival cancels validation before the first unlink')
+    await waitForRetentionMaintenance(store)
+    const settled = store.storageDiagnostics().retention
+    assert.ok(settled.lastSweep.deletedFiles > 0)
+    assert.ok(settled.debtFiles < settled.policy.softFiles)
+    assert.equal(publications, expectedPublications, 'maintenance never emits a Store publication')
+    unsubscribe()
+  } finally {
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('close cancels queued or running soft retention without post-close deletion', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-soft-close-'))
+  const mod = await plugin('hot-cold-soft-close')
+  const file = path.join(root, 'storages', 'agent_teams.json')
+  let armGate = false
+  const sweepEntered = deferred()
+  const releaseSweep = deferred()
+  let unlinks = 0
+  const store = new mod.AgentTeamsStore(file, {
+    enabled: true,
+    hotColdStore: true,
+    hotColdRetentionSoftFiles: 1,
+    hotColdRetentionHardFiles: 64,
+    hotColdRetentionSoftBytes: 16 * 1024 * 1024,
+    hotColdRetentionHardBytes: 32 * 1024 * 1024,
+    async hotColdFaultInjector(stage) {
+      if (armGate && stage === 'before-retention-sweep') {
+        sweepEntered.resolve()
+        await releaseSweep.promise
+      }
+      if (stage.startsWith('before-retention-unlink:')) unlinks += 1
+    }
+  })
+  try {
+    await store.init()
+    await mod.createTeam(store, { id: 'root-soft-close', options: { provider: 'test', model: 'test' } }, { objective: 'soft close', leadName: 'Lead' })
+    for (let index = 0; index < 12; index += 1) {
+      await mutateActiveName(store, index)
+      const maintenance = store.storageDiagnostics().retention.maintenance
+      if (maintenance?.requested || maintenance?.scheduled || maintenance?.running) break
+    }
+    assert.ok(store.storageDiagnostics().retention.maintenance?.scheduled)
+    armGate = true
+    await sweepEntered.promise
+    const beforeClose = await directorySnapshot(`${file}.ledger`)
+    store.close()
+    releaseSweep.resolve()
+    await waitForRetentionMaintenance(store)
+    assert.equal(unlinks, 0)
+    assert.deepEqual(await directorySnapshot(`${file}.ledger`), beforeClose)
+  } finally {
+    store.close()
+    releaseSweep.resolve()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('146-team active mutation stays below the 75ms p95 and 30 percent write budget', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-performance-'))
   const mod = await plugin('hot-cold-performance')
@@ -1312,8 +1759,10 @@ test('retention stays bounded through 500 mutations, preserves protected artifac
     const unsubscribe = store.subscribe(() => { publications += 1 })
     const beforeRevision = store.snapshot().teams.find(team => team.id === created.id).revision
     for (let index = 0; index < 100; index += 1) await mutateActiveName(store, index)
+    await waitForRetentionMaintenance(store)
     const after100 = await directoryUsage(ledger.root)
     for (let index = 100; index < 500; index += 1) await mutateActiveName(store, index)
+    await waitForRetentionMaintenance(store)
     const after500 = await directoryUsage(ledger.root)
     unsubscribe()
     t.diagnostic(`retention usage: 100 mutations=${after100.files} files/${after100.bytes} bytes; 500 mutations=${after500.files} files/${after500.bytes} bytes`)
@@ -1380,6 +1829,7 @@ test('retention preserves restart-safe two-rollback depth plus the next manifest
       'forced generation-one promotion charges no live artifacts as garbage'
     )
     for (let index = 0; index < 8; index += 1) await mutateActiveName(store, index)
+    await waitForRetentionMaintenance(store)
     assert.ok(store.storageDiagnostics().retention.lastSweep.deletedFiles > 0)
 
     const ledger = await currentLedgerState(file)
@@ -1425,6 +1875,7 @@ test('retention preserves restart-safe two-rollback depth plus the next manifest
     assert.equal(restartedView.teams[0].name, 'Generation 5')
     const sweepBeforeMutation = restarted.storageDiagnostics().retention.lastSweep?.at
     for (let index = 0; index < 3; index += 1) await restarted.mutate(document => { document.teams[0].name = `post-depth-rollback mutation ${index}` })
+    await waitForRetentionMaintenance(restarted)
     const sweepAfterMutation = restarted.storageDiagnostics().retention.lastSweep
     assert.ok(sweepAfterMutation.deletedFiles > 0)
     assert.notEqual(sweepAfterMutation.at, sweepBeforeMutation, 'post-rollback mutations advance far enough to run a fresh exact sweep')
@@ -1486,6 +1937,7 @@ test('124 closed shards stay live through 500 active mutations, periodic scans, 
     await assert.doesNotReject(async () => {
       for (let index = 0; index < 100; index += 1) await mutateActiveName(store, index)
     }, '100 active-only mutations cannot be hard-blocked by the 124 retained closed shards')
+    await waitForRetentionMaintenance(store)
     const after100 = await directoryUsage(ledgerRoot)
     const diagnostics100 = store.storageDiagnostics()
     assert.equal(diagnostics100.retention.blocked, false)
@@ -1498,6 +1950,7 @@ test('124 closed shards stay live through 500 active mutations, periodic scans, 
     await assert.doesNotReject(async () => {
       for (let index = 100; index < 500; index += 1) await mutateActiveName(store, index)
     }, '500 active-only mutations cannot be hard-blocked by retained live artifacts')
+    await waitForRetentionMaintenance(store)
     const after500 = await directoryUsage(ledgerRoot)
     const diagnostics = store.storageDiagnostics()
     const fileGrowth = after500.files - baseline.files
@@ -1512,7 +1965,7 @@ test('124 closed shards stay live through 500 active mutations, periodic scans, 
     assert.ok(diagnostics.retention.debtFiles < diagnostics.retention.policy.hardFiles)
     assert.ok(diagnostics.retention.debtBytes < diagnostics.retention.policy.hardBytes)
     assert.ok(scansAfter100 < 10, `100 mutations performed ${scansAfter100} managed-directory scans`)
-    assert.ok(sweeps >= 18 && sweeps <= 22, `expected generation-periodic sweeps, received ${sweeps}`)
+    assert.ok(sweeps >= 4 && sweeps <= 7, `expected quiet-window plus hard-gate sweeps, received ${sweeps}`)
     assert.ok(scans <= sweeps + 2, `managed-directory scans ${scans} must be bounded by exact sweeps ${sweeps}`)
     assert.ok(scans < 500 / 10, 'neither full validation nor directory scanning may run on every mutation')
 
@@ -1586,7 +2039,10 @@ test('a legitimate live ledger larger than the byte hard watermark never becomes
     const ledger = await currentLedgerState(fixture.file)
     const catalog = JSON.parse(await readFile(artifactPath(ledger.root, ledger.manifest.closedCatalog.path), 'utf8'))
     await writeFile(artifactPath(ledger.root, catalog.entries[0].shard.path), '{"corrupt":true}\n')
-    for (let index = 1; index <= 12 && store.storageDiagnostics().retention.lastSweep === undefined; index += 1) await mutateActiveName(store, index)
+    for (let index = 1; index <= 12 && store.storageDiagnostics().retention.lastSweep === undefined; index += 1) {
+      await mutateActiveName(store, index)
+      await waitForRetentionMaintenance(store)
+    }
     const afterFailure = store.storageDiagnostics().retention
     assert.equal(afterFailure.lastSweep.validationFailed, true)
     assert.ok(afterFailure.debtBytes > 0, 'only now-unretained generation artifacts become garbage debt')
@@ -1648,7 +2104,7 @@ test('failed artifact orphan refreshes before the live hard gate while semantic 
     )
     assert.deepEqual(await directorySnapshot(ledgerRoot), beforeNoop, 'the hard gate rejects before any new artifact')
     const blocked = store.storageDiagnostics().retention
-    assert.equal(blocked.debtFiles, 1, 'the prior same-process orphan is exact garbage debt')
+    assert.equal(blocked.debtFiles, 2, 'the fully settled parallel hot and manifest orphans are exact garbage debt')
     assert.equal(blocked.blocked, true)
     assert.equal(store.storageDiagnostics().generation, generation)
     assert.ok(scans > scansBeforeNoop)
@@ -1699,6 +2155,11 @@ test('post-switch retention validation failure is fail-open for the durable muta
     assert.equal(JSON.parse(await readFile(path.join(`${file}.ledger`, 'current.json'), 'utf8')).generation, generation + 1)
     assert.equal(publications, 1)
     assert.match(store.storageDiagnostics().retention.lastError, /post-commit retention maintenance failed: injected post-commit retention read failure/u)
+    assert.deepEqual(
+      [store.storageDiagnostics().retention.debtFiles, store.storageDiagnostics().retention.debtBytes, store.storageDiagnostics().retention.blocked],
+      [0, 0, false],
+      'the skipped second adopt still performs exact-origin retention normalization after a post-commit failure'
+    )
 
     const scansBeforeNoop = scans
     await store.mutate(() => undefined)
@@ -1733,6 +2194,7 @@ test('retention validation failure deletes nothing and unlink failure blocks bef
       await writeFile(artifactPath(ledger.root, catalog.entries[0].shard.path), '{"corrupt":true}\n')
       const before = await directorySnapshot(ledger.root)
       await mutateActiveName(store, 6)
+      await waitForRetentionMaintenance(store)
       const after = await directorySnapshot(ledger.root)
       for (const [reference, digest] of Object.entries(before)) if (reference !== 'current.json') assert.equal(after[reference], digest, `validation failure deleted or rewrote ${reference}`)
       assert.equal(store.storageDiagnostics().retention.lastSweep.validationFailed, true)
@@ -1761,7 +2223,10 @@ test('retention validation failure deletes nothing and unlink failure blocks bef
       await store.init()
       await mod.createTeam(store, { id: 'root-retention-blocked', options: { provider: 'test', model: 'test' } }, { objective: 'retention blocked', leadName: 'Lead' })
       failUnlink = true
-      for (let index = 0; index < 8 && !store.storageDiagnostics().retention.blocked; index += 1) await mutateActiveName(store, index)
+      for (let index = 0; index < 8 && !store.storageDiagnostics().retention.blocked; index += 1) {
+        await mutateActiveName(store, index)
+        await waitForRetentionMaintenance(store)
+      }
       assert.equal(store.storageDiagnostics().retention.blocked, true)
       const generation = store.storageDiagnostics().generation
       await assert.rejects(mutateActiveName(store, 99), error => error.code === 'AGENT_TEAMS_LEDGER_RETENTION_BLOCKED')
@@ -1777,13 +2242,16 @@ test('retention validation failure deletes nothing and unlink failure blocks bef
   })
 })
 
-test('retention aborts deletion when pointer bytes or identity change after validation', async () => {
+test('retention aborts deletion when an exact same-generation manifest branch replaces the validated pointer', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-hot-cold-retention-pointer-race-'))
   const mod = await plugin('retention-pointer-race')
   const file = path.join(root, 'storages', 'agent_teams.json')
   const pointerPath = path.join(`${file}.ledger`, 'current.json')
   let armPointerRace = false
   let switched = false
+  let originalManifestHash
+  let alternateManifestHash
+  let restarted
   const store = new mod.AgentTeamsStore(file, {
     enabled: true,
     hotColdStore: true,
@@ -1795,8 +2263,18 @@ test('retention aborts deletion when pointer bytes or identity change after vali
       if (!armPointerRace || switched || !stage.startsWith('before-retention-unlink:')) return
       const pointer = JSON.parse(await readFile(pointerPath, 'utf8'))
       const manifest = JSON.parse(await readFile(artifactPath(`${file}.ledger`, pointer.manifest.path), 'utf8'))
-      const previous = manifest.previous
-      await writeFile(pointerPath, `${JSON.stringify({ version: 1, generation: previous.generation, manifest: previous })}\n`)
+      originalManifestHash = pointer.manifest.hash
+      const alternateManifest = { ...manifest, createdAt: new Date(Date.parse(manifest.createdAt) + 1).toISOString() }
+      const alternateBytes = canonicalBuffer(alternateManifest)
+      const alternateDescriptor = {
+        path: `manifests/manifest-${pointer.generation}-${hash(alternateBytes)}.json`,
+        hash: hash(alternateBytes),
+        bytes: alternateBytes.length,
+        generation: pointer.generation
+      }
+      alternateManifestHash = alternateDescriptor.hash
+      await writeFile(artifactPath(`${file}.ledger`, alternateDescriptor.path), alternateBytes)
+      await writeFile(pointerPath, canonicalBuffer({ ...pointer, manifest: alternateDescriptor }))
       switched = true
     }
   })
@@ -1806,16 +2284,39 @@ test('retention aborts deletion when pointer bytes or identity change after vali
     const sourceBytes = await readFile(file)
     const sentinelBytes = await readFile(`${file}.promoted.json`)
     armPointerRace = true
-    for (let index = 0; index < 8 && !switched; index += 1) await mutateActiveName(store, index)
+    for (let index = 0; index < 8 && !switched; index += 1) {
+      await mutateActiveName(store, index)
+      await waitForRetentionMaintenance(store)
+    }
     assert.equal(switched, true)
     assert.equal(store.storageDiagnostics().retention.lastSweep.aborted, true)
     assert.equal(store.storageDiagnostics().retention.lastSweep.deletedFiles, 0)
     assert.deepEqual(await readFile(file), sourceBytes)
     assert.deepEqual(await readFile(`${file}.promoted.json`), sentinelBytes)
     const diskPointer = JSON.parse(await readFile(pointerPath, 'utf8'))
-    assert.ok(diskPointer.generation < store.storageDiagnostics().generation)
+    assert.equal(diskPointer.generation, store.storageDiagnostics().generation)
+    assert.equal(diskPointer.manifest.hash, alternateManifestHash)
+    assert.notEqual(diskPointer.manifest.hash, originalManifestHash)
+    assert.equal(
+      await store.read(document => document.teams.find(team => team.state !== 'closed').name),
+      `Generation ${diskPointer.generation - 2}`,
+      'the same live instance reloads the winning branch before its next foreground view'
+    )
+    store.close()
+    restarted = new mod.AgentTeamsStore(file)
+    let firstRestartManifestHash
+    const restartAdopt = restarted._adoptHotColdPublication.bind(restarted)
+    restarted._adoptHotColdPublication = (...args) => {
+      firstRestartManifestHash ??= args[0].pointer.manifest.hash
+      return restartAdopt(...args)
+    }
+    const restartedView = await restarted.init()
+    assert.equal(firstRestartManifestHash, alternateManifestHash, 'restart first adopts the exact alternate same-generation branch')
+    assert.ok(restarted.storageDiagnostics().generation >= diskPointer.generation)
+    assert.equal(restartedView.teams.find(team => team.state !== 'closed').name, `Generation ${diskPointer.generation - 2}`)
   } finally {
     store.close()
+    restarted?.close()
     await rm(root, { recursive: true, force: true })
   }
 })

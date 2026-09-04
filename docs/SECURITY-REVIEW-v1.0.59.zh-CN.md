@@ -81,6 +81,25 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 - exportV8 必须重建与当前权威视图等价的 v8 文档；目标若是 legacy source、ledger 内部路径、source/ledger 的 symlink、junction、hardlink 或其他 filesystem alias，必须拒绝。导出不能覆盖 promotion sentinel。
 - OCC、claim/lease、submission/acceptance、wake/routing、handoff/recovery、authorization、quality/evidence 与 external-effect/idempotency 历史不得因分层、GC 或 rollback 丢失。
 
+### 8.1 第二轮持久化优化的安全等价复核
+
+本轮独立逐项审查产品 `+574/-104` 与回归 `+510/-9` 差异，并在产品文件和性能测试只读的条件下接受以下两个 canonical-LF 源身份：
+
+- `plugins/dsh-agent-teams/lib/index.js`：`2fa992584f0509a23be0c3f24c2827507a4ef39ba0c21dcac18982f3550d5878`
+- `tests/agent-teams-store-performance.test.cjs`：`68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887`
+
+独立复核确认性能恢复没有缩小权威数据域、耐久边界或拒绝条件：
+
+- Root ledger projection 只在单次 `rootLedgerProjectionHashes` 调用内，按已校验的 canonical ordinal 有序子序列复用 scope digest；Map 不跨 mutation、generation 或 ACL 存活，返回行仍保留每个原始 `rootSessionId` 的逐码点身份。独立 oracle 覆盖 NFC/NFD 规范等价但码点不同的 root、共享与不同 scope、scope 变化及重启。
+- hot 与 manifest 只在写前完整 `validateIndexedStore`、canonical bytes 和全部 hash 已确定后并行落盘；`Promise.allSettled` 等待两支完全结束，hot 错误优先，拒绝返回后不存在晚到 writer。随后仍按 after-hot fault gate、物理 hot 的 hash/长度/JSON/team-entry exact 核验、manifest gate，最后才原子替换 pointer；pointer 是唯一可见提交边界。
+- immutable writer 继续使用同目录随机 temp、`wx`、文件 `fsync`、rename、readback 与目录同步。`tempOwned` 只在 rename 真正成功后清除；失败或 EEXIST/EPERM 碰撞只清理由本调用拥有的 temp，绝不 `rm` destination。hot 的第二次物理核验仍在，删除的只是同一已验证内存图的重复全局遍历。
+- retention 的 artifact/JSON/catalog 复用键精确包含 `path + hash + bytes + generation`，并且生命周期只限一次 plan；每代 manifest/hot、merged ordinal、document/security/projection hash、ACL/epoch、closed shard 和 immutable v8 source 仍分别验证。任何 unlink 前仍先完成删除前的 `fullValidation`，每次 unlink 前仍重读并比对完整 pointer bytes 与 stat identity。
+- soft maintenance 仅是按 `filePath` 共享、与 writer 共用 mutation lane 的 captured quiet job；`setImmediate().unref()` 只调度，不授权。token 同时绑定 canonical pointer bytes 的 SHA/长度/stat、generation、manifest descriptor、retention floor、debt/revision、lifecycle 与 foreground epoch；`init/read/mutate/rollback`、peer adoption、post-commit failure、同 generation 分支替换、Stop/close 都会使旧 token 失效，结果只有在 CAS 仍匹配时才可回写，maintenance 不产生 publication。captured promise 完整吸收诊断分支异常，close 会取消 queued/running maintenance，取消后不会开始下一次 unlink。
+- hard watermark 不等待 soft job：下一次真实写在写入第一个新 artifact 前仍同步刷新 reachability，并在超线时执行完整同步 sweep 或 fail closed refusal。保留集合仍是 current+4 个完整 generation 与 depth 5 的 manifest-only 线索，两次可重启 rollback、promotion source/sentinel、Unicode、task/claim/lease/OCC 历史均未降级。
+- exact-origin fast path 只对刚完成首轮 adopt 且对象 identity、stamp 与 branch descriptor 全部一致的提交者生效，并执行等价 retention normalization；peer store、listener/SSE、rollback、init、failure 和外部分支继续走完整 adoption。一次 mutation 仍只产生一次 publication。
+
+性能合同保持 45 次、丢弃前 5 次、p95 `<75 ms`、写入 `<30%`，没有 sleep、额外 warmup、样本减少、阈值或 runner 重分类。Windows `10.0.22621` / Node `v24.16.0` 以 `--unhandled-rejections=strict` 独立复验：完整 store 连续两次均为 74/74、0 skip，目标 p95 为 `25.98 ms` / `25.92 ms`，写入均为 `5290/149443`（`3.54%`）；security/OCC/Stop accepted 矩阵为 169/169，authorization/projection/SSE 专项为 29/29；official hermetic acceptance 为 11 pass、0 fail、2 个既有 historical-audit skip，`node scripts/verify-static.mjs`、Node syntax 与 MinGit `diff --check` 成功。两个 skip 仍由既有 `DSH_HISTORICAL_ALPHA2_AUDIT` 显式门控，没有改成通过，也没有掩盖产品测试失败。
+
 ## 9. Root 投影缓存与 SSE 清理
 
 - 投影缓存 feature flag 只有 `disabled | shadow | enabled` 三态，默认 `disabled`。`disabled` 直接走权威投影并清空缓存；`shadow` 计算并比较候选但始终返回权威结果；只有 `enabled` 才允许命中。
@@ -155,4 +174,4 @@ publisher 的不可变顺序是：
 - `npm run upstream:status` 仍确认官方最新目标与锁定的 `0.1.2-alpha.5` 相符；若上游身份改变，停止并重新审计。
 - publisher 在最终 immutable revision 上取得正式云构建、签名、公开 Windows 隔离自检、18 资产及 GitHub/CNB/stable 一致性证据。
 
-ACCEPTED 表的 10 个文本文件只能在上述实现与本地门禁冻结后，按 helper 的 `sha256CanonicalTextFile` 语义（CRLF/CR 统一为 LF，再计算 SHA-256）重算。不得用原始文件字节哈希代替，不得修改 `ACCEPTED_MIGRATION_FILES`、历史 baseline 或 alpha.2 常量，也不得为全绿而基线化真实失败。
+ACCEPTED 表的 12 个文本文件只能在上述实现与本地门禁冻结后，按 helper 的 `sha256CanonicalTextFile` 语义（CRLF/CR 统一为 LF，再计算 SHA-256）重算。不得用原始文件字节哈希代替，不得修改 `ACCEPTED_MIGRATION_FILES`、历史 baseline 或 alpha.2 常量，也不得为全绿而基线化真实失败。

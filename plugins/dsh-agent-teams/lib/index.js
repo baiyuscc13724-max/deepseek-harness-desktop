@@ -134,6 +134,7 @@ const TEAM_STATES = Object.freeze(["active", "paused", "closing", "closed"]);
 const TRANSIENT_MEMBER_STATES = new Set(["provisioning", "running", "idle", "shutting_down"]);
 const STORE_MUTATION_CHAINS = new Map();
 const STORE_OPERATION_CHAINS = new Map();
+const STORE_RETENTION_MAINTENANCE = new Map();
 const TEAM_OPERATION_CHAINS = new Map();
 const GRACEFUL_ACTIVE_RUNS = new Map();
 const GRACEFUL_LIFECYCLE_WAITERS = new Map();
@@ -2532,6 +2533,127 @@ function queueStoreOperation(filePath, operation) {
   STORE_OPERATION_CHAINS.set(filePath, result.then(() => undefined, () => undefined));
   return result;
 }
+function storeRetentionMaintenanceState(filePath) {
+  let state = STORE_RETENTION_MAINTENANCE.get(filePath);
+  if (state === undefined) {
+    state = {
+      foregroundEpoch: 0,
+      foregroundCount: 0,
+      requested: false,
+      scheduled: undefined,
+      running: false,
+      runPromise: undefined,
+    };
+    STORE_RETENTION_MAINTENANCE.set(filePath, state);
+  }
+  return state;
+}
+function cleanupStoreRetentionMaintenance(filePath, state) {
+  if (state.foregroundCount === 0 && !state.requested && state.scheduled === undefined && !state.running && state.runPromise === undefined) {
+    if (STORE_RETENTION_MAINTENANCE.get(filePath) === state) STORE_RETENTION_MAINTENANCE.delete(filePath);
+  }
+}
+function storeRetentionMaintenanceOwner(filePath) {
+  return [...(STORE_INSTANCES.get(filePath) ?? [])].find((instance) => instance._retentionMaintenanceNeeded());
+}
+function scheduleStoreRetentionMaintenance(filePath) {
+  const state = storeRetentionMaintenanceState(filePath);
+  if (!state.requested || state.scheduled !== undefined || state.running || state.foregroundCount > 0) return;
+  const scheduled = setImmediate(() => {
+    if (state.scheduled !== scheduled) return;
+    state.scheduled = undefined;
+    if (!state.requested || state.running || state.foregroundCount > 0) {
+      if (state.requested && !state.running && state.foregroundCount === 0) scheduleStoreRetentionMaintenance(filePath);
+      else cleanupStoreRetentionMaintenance(filePath, state);
+      return;
+    }
+    const owner = storeRetentionMaintenanceOwner(filePath);
+    if (owner === undefined) {
+      state.requested = false;
+      cleanupStoreRetentionMaintenance(filePath, state);
+      return;
+    }
+    state.requested = false;
+    state.running = true;
+    const foregroundEpoch = state.foregroundEpoch;
+    const run = queueStoreMutation(filePath, () => owner._runRetentionMaintenance(state, foregroundEpoch));
+    const captured = (async () => {
+      try {
+        let outcome;
+        try { outcome = await run; }
+        catch (error) { outcome = owner._recordUnexpectedRetentionMaintenanceFailure(error, state, foregroundEpoch); }
+        state.running = false;
+        if (state.runPromise === captured) state.runPromise = undefined;
+        if (outcome?.status === "superseded" && storeRetentionMaintenanceOwner(filePath) !== undefined) state.requested = true;
+        if (state.requested && state.foregroundCount === 0) scheduleStoreRetentionMaintenance(filePath);
+        else cleanupStoreRetentionMaintenance(filePath, state);
+      } catch {
+        // The low-priority branch is always captured, even if diagnostic bookkeeping
+        // itself fails. Never let maintenance become an unhandled rejection.
+        state.running = false;
+        if (state.runPromise === captured) state.runPromise = undefined;
+        cleanupStoreRetentionMaintenance(filePath, state);
+      }
+    })();
+    state.runPromise = captured;
+  });
+  scheduled.unref?.();
+  state.scheduled = scheduled;
+}
+function requestStoreRetentionMaintenance(filePath) {
+  const state = storeRetentionMaintenanceState(filePath);
+  state.requested = true;
+  scheduleStoreRetentionMaintenance(filePath);
+}
+function beginStoreRetentionForeground(filePath) {
+  const state = storeRetentionMaintenanceState(filePath);
+  state.foregroundEpoch += 1;
+  state.foregroundCount += 1;
+  if (state.scheduled !== undefined) {
+    clearImmediate(state.scheduled);
+    state.scheduled = undefined;
+    state.requested = true;
+  }
+  if (state.running) state.requested = true;
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    state.foregroundCount = Math.max(0, state.foregroundCount - 1);
+    if (state.requested && state.foregroundCount === 0) scheduleStoreRetentionMaintenance(filePath);
+    else cleanupStoreRetentionMaintenance(filePath, state);
+  };
+}
+function cancelStoreRetentionMaintenance(filePath) {
+  const state = STORE_RETENTION_MAINTENANCE.get(filePath);
+  if (state === undefined) return;
+  state.foregroundEpoch += 1;
+  if (state.scheduled !== undefined) {
+    clearImmediate(state.scheduled);
+    state.scheduled = undefined;
+  }
+  state.requested = storeRetentionMaintenanceOwner(filePath) !== undefined;
+  if (state.requested && !state.running && state.foregroundCount === 0) scheduleStoreRetentionMaintenance(filePath);
+  else cleanupStoreRetentionMaintenance(filePath, state);
+}
+function storeRetentionMaintenanceDiagnostics(filePath) {
+  const state = STORE_RETENTION_MAINTENANCE.get(filePath);
+  return {
+    requested: state?.requested === true,
+    scheduled: state?.scheduled !== undefined,
+    running: state?.running === true,
+    foregroundCount: state?.foregroundCount ?? 0,
+    foregroundEpoch: state?.foregroundEpoch ?? 0,
+  };
+}
+async function settleStoreRetentionMaintenance(filePath) {
+  for (;;) {
+    const state = STORE_RETENTION_MAINTENANCE.get(filePath);
+    if (state === undefined || !state.requested && state.scheduled === undefined && !state.running && state.runPromise === undefined) return;
+    if (state.runPromise !== undefined) await state.runPromise;
+    else await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+  }
+}
 function queueTeamOperation(filePath, teamId, operation) {
   const key = `${filePath}\u0000${teamId}`;
   const previous = TEAM_OPERATION_CHAINS.get(key) ?? Promise.resolve();
@@ -3066,7 +3188,7 @@ async function syncStoreDirectory(directoryPath) {
     await directory?.close().catch(() => undefined);
   }
 }
-async function writeImmutableArtifact(layoutRoot, reference, bytes) {
+async function writeImmutableArtifact(layoutRoot, reference, bytes, { beforeRename } = {}) {
   const destination = hotColdArtifactPath(layoutRoot, reference);
   await mkdir(dirname(destination), { recursive: true });
   try {
@@ -3078,6 +3200,7 @@ async function writeImmutableArtifact(layoutRoot, reference, bytes) {
   }
   const temp = `${destination}.${process.pid}.${randomUUID()}.tmp`;
   let handle;
+  let tempOwned = true;
   try {
     handle = await open(temp, "wx", 0o600);
     await handle.writeFile(bytes);
@@ -3085,7 +3208,9 @@ async function writeImmutableArtifact(layoutRoot, reference, bytes) {
     await handle.close();
     handle = undefined;
     try {
+      await beforeRename?.(temp, destination);
       await rename(temp, destination);
+      tempOwned = false;
     } catch (error) {
       if (!["EEXIST", "EPERM"].includes(error?.code)) throw error;
       const existing = await readFile(destination);
@@ -3097,13 +3222,14 @@ async function writeImmutableArtifact(layoutRoot, reference, bytes) {
     return destination;
   } finally {
     await handle?.close().catch(() => undefined);
-    await rm(temp, { force: true }).catch(() => undefined);
+    if (tempOwned) await rm(temp, { force: true }).catch(() => undefined);
   }
 }
 async function replaceAtomicArtifact(filePath, bytes) {
   await mkdir(dirname(filePath), { recursive: true });
   const temp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   let handle;
+  let tempOwned = true;
   try {
     handle = await open(temp, "wx", 0o600);
     await handle.writeFile(bytes);
@@ -3111,12 +3237,13 @@ async function replaceAtomicArtifact(filePath, bytes) {
     await handle.close();
     handle = undefined;
     await rename(temp, filePath);
+    tempOwned = false;
     const verified = await readFile(filePath);
     if (!verified.equals(bytes)) throw new TypeError(`atomic Agent Teams artifact failed verification at ${filePath}`);
     await syncStoreDirectory(dirname(filePath));
   } finally {
     await handle?.close().catch(() => undefined);
-    await rm(temp, { force: true }).catch(() => undefined);
+    if (tempOwned) await rm(temp, { force: true }).catch(() => undefined);
   }
 }
 function filesystemPathIdentityKey(value, platform = process.platform) {
@@ -3366,10 +3493,21 @@ function ledgerProjectionEntries(entries, rootSessionId) {
 }
 function rootLedgerProjectionHashes(header, entries) {
   const roots = [...new Set(entries.map((entry) => entry.rootLeadSessionId))].sort();
-  return roots.map((rootSessionId) => ({
-    rootSessionId,
-    hash: sha256Bytes(Buffer.from(JSON.stringify(["agent-teams-root-ledger-projection-v1", header.settings, ledgerProjectionEntries(entries, rootSessionId)]), "utf8")),
-  }));
+  const scopeHashes = new Map();
+  return roots.map((rootSessionId) => {
+    const projectedEntries = ledgerProjectionEntries(entries, rootSessionId);
+    // Roots in the same project often have the exact same ACL projection. Preserve
+    // the byte-identical projection hash while serializing that shared scope once.
+    // Ordinals are already validated canonical integers, so this cache key never
+    // normalizes or otherwise changes Unicode-bearing team identity fields.
+    const scopeKey = JSON.stringify(projectedEntries.map((entry) => entry.ordinal));
+    let hash = scopeHashes.get(scopeKey);
+    if (hash === undefined) {
+      hash = sha256Bytes(Buffer.from(JSON.stringify(["agent-teams-root-ledger-projection-v1", header.settings, projectedEntries]), "utf8"));
+      scopeHashes.set(scopeKey, hash);
+    }
+    return { rootSessionId, hash };
+  });
 }
 function rootAppearsInLedgerEntry(entry, rootSessionId) {
   return rootAppearsInValidOwnershipChain({
@@ -3713,10 +3851,12 @@ function markStoreProjectionDocument(document, metadata) {
   return document;
 }
 
-function publishStoreDocument(filePath, document, stamp, publication) {
+function publishStoreDocument(filePath, document, stamp, publication, { adoptedHotColdOrigin } = {}) {
   for (const instance of STORE_INSTANCES.get(filePath) ?? []) {
-    if (publication?.mode === "hot-cold") instance._adoptHotColdPublication(publication, stamp);
-    else {
+    if (publication?.mode === "hot-cold") {
+      if (instance === adoptedHotColdOrigin) instance._normalizeCommittedHotColdPublication(publication, stamp);
+      else instance._adoptHotColdPublication(publication, stamp);
+    } else {
       // Legacy mutations clone before editing, so instances can share this committed,
       // immutable-by-convention document without multiplying full-store clones.
       instance._adoptLegacyPublication(document, stamp, { previousBranchKey: publication?.previousBranchKey });
@@ -3778,14 +3918,21 @@ class AgentTeamsStore {
     };
     this.retentionKeep = undefined;
     this.retentionKeepGeneration = 0;
+    this.retentionAuthority = undefined;
+    this.retentionRevision = 0;
+    this.retentionLifecycleEpoch = 0;
     this.retentionGarbage = new Map();
+    this.retentionAuthorityReloadRequired = false;
+    this.closed = false;
     this._adoptLegacyPublication(this.document);
     const instances = STORE_INSTANCES.get(filePath) ?? new Set();
     instances.add(this);
     STORE_INSTANCES.set(filePath, instances);
   }
   async init() {
-    return queueStoreOperation(this.filePath, () => queueStoreMutation(this.filePath, async () => {
+    const endForeground = beginStoreRetentionForeground(this.filePath);
+    try {
+      return await queueStoreOperation(this.filePath, () => queueStoreMutation(this.filePath, async () => {
     const previousStamp = this.fileStamp;
     let migrated = false;
     let legacySourceBytes;
@@ -3983,7 +4130,10 @@ class AgentTeamsStore {
     // Fresh instances and externally advanced authority stamps still publish once.
     if (changed || previousStamp !== this.fileStamp) publishStoreDocument(this.filePath, this.document, this.fileStamp, publication);
     return this._listenerDocument();
-    }));
+      }));
+    } finally {
+      endForeground();
+    }
   }
   snapshot() {
     // Callers may intentionally edit a detached snapshot before submitting it to
@@ -4009,9 +4159,12 @@ class AgentTeamsStore {
       legacySource: this.manifest?.sourceV8?.path,
       promotionSentinel: this.storageMode === "hot-cold" ? this.layout.promotionMarkerPath : undefined,
       lastMutation: this.lastStorageMutation === undefined ? undefined : clone(this.lastStorageMutation),
-      retention: clone(this.retention),
+      retention: { ...clone(this.retention), maintenance: storeRetentionMaintenanceDiagnostics(this.filePath) },
       promotionBlocked: this.promotionBlocked,
     };
+  }
+  async _settleRetentionMaintenance() {
+    await settleStoreRetentionMaintenance(this.filePath);
   }
   async exportV8(destination) {
     const requestedTarget = resolve(nonEmptyString(destination, "destination", 32_768));
@@ -4023,10 +4176,14 @@ class AgentTeamsStore {
     return { destination: target, hash: artifact.hash, version: STORE_VERSION };
   }
   close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.retentionLifecycleEpoch += 1;
     this.listeners.clear();
     const instances = STORE_INSTANCES.get(this.filePath);
     instances?.delete(this);
     if (instances?.size === 0) STORE_INSTANCES.delete(this.filePath);
+    cancelStoreRetentionMaintenance(this.filePath);
   }
   isEnabled() {
     return this.document.settings.enabled === true;
@@ -4058,21 +4215,27 @@ class AgentTeamsStore {
     }));
   }
   async read(reader = (document) => document) {
-    await this.chain;
-    return queueStoreMutation(this.filePath, async () => {
-      // A read is also an externally visible state boundary. Refresh here so a
-      // Host-managed settings update is observed before callers derive a
-      // one-time authorization intent from the current policy.
-      await this.#refreshFromDiskIfChanged();
-      if (this.storageMode !== "hot-cold") {
-        markStoreProjectionDocument(this.document, this.projectionMetadata);
-        return clone(await reader(this.document));
-      }
-      const { document, tracker } = this.#hotColdLazyDocument();
-      return cloneLazyValue(await reader(document), tracker);
-    });
+    const endForeground = beginStoreRetentionForeground(this.filePath);
+    try {
+      await this.chain;
+      return await queueStoreMutation(this.filePath, async () => {
+        // A read is also an externally visible state boundary. Refresh here so a
+        // Host-managed settings update is observed before callers derive a
+        // one-time authorization intent from the current policy.
+        await this.#refreshFromDiskIfChanged();
+        if (this.storageMode !== "hot-cold") {
+          markStoreProjectionDocument(this.document, this.projectionMetadata);
+          return clone(await reader(this.document));
+        }
+        const { document, tracker } = this.#hotColdLazyDocument();
+        return cloneLazyValue(await reader(document), tracker);
+      });
+    } finally {
+      endForeground();
+    }
   }
   mutate(mutator) {
+    const endForeground = beginStoreRetentionForeground(this.filePath);
     const operation = this.chain.then(() => queueStoreMutation(this.filePath, async () => {
       // Same-process instances synchronize at publication. A cheap metadata check keeps
       // explicit external recovery/test edits visible without reparsing on every event.
@@ -4106,7 +4269,10 @@ class AgentTeamsStore {
       return clone(value);
     }));
     this.chain = operation.then(() => undefined, () => undefined);
-    return operation;
+    return operation.then(
+      (value) => { endForeground(); return value; },
+      (error) => { endForeground(); throw error; },
+    );
   }
   runOperation(operation) {
     return queueStoreOperation(this.filePath, operation);
@@ -4142,6 +4308,55 @@ class AgentTeamsStore {
     });
     return this.projectionMetadata;
   }
+  #retentionAuthorityFor(pointer, pointerStamp, pointerBytes) {
+    if (pointer === undefined || pointerStamp === undefined) return undefined;
+    const canonicalPointerBytes = pointerBytes ?? jsonArtifact(pointer).bytes;
+    return Object.freeze({
+      pointerHash: sha256Bytes(canonicalPointerBytes),
+      pointerBytes: canonicalPointerBytes.length,
+      pointerStamp,
+      generation: pointer.generation,
+      manifest: JSON.stringify(pointer.manifest),
+      retentionFloorGeneration: pointer.retentionFloorGeneration ?? null,
+    });
+  }
+  #retentionAuthorityEquals(left, right) {
+    return left !== undefined && right !== undefined
+      && left.pointerHash === right.pointerHash
+      && left.pointerBytes === right.pointerBytes
+      && left.pointerStamp === right.pointerStamp
+      && left.generation === right.generation
+      && left.manifest === right.manifest
+      && left.retentionFloorGeneration === right.retentionFloorGeneration;
+  }
+  #retentionAuthorityMatches(pointer, stamp) {
+    return this.retentionKeep !== undefined
+      && this.#retentionAuthorityEquals(this.retentionAuthority, this.#retentionAuthorityFor(pointer, stamp));
+  }
+  #retentionReachabilityIsCurrent() {
+    return this.storageMode === "hot-cold" && this.#retentionAuthorityMatches(this.pointer, this.fileStamp);
+  }
+  #invalidateRetentionReachability({ clearDebt = false, requireAuthorityReload = false } = {}) {
+    this.retentionKeep = undefined;
+    this.retentionKeepGeneration = 0;
+    this.retentionAuthority = undefined;
+    if (requireAuthorityReload) this.retentionAuthorityReloadRequired = true;
+    if (clearDebt) {
+      this.retentionGarbage = new Map();
+      this.retention.debtBytes = 0;
+      this.retention.debtFiles = 0;
+      this.retention.blocked = false;
+    }
+    this.retentionRevision += 1;
+  }
+  #normalizeHotColdRetention(pointer, stamp, { preserveRetention = false } = {}) {
+    if (!preserveRetention && !this.#retentionAuthorityMatches(pointer, stamp)) {
+      // A peer, rollback, or exact-origin post-commit failure may make a formerly
+      // garbage content-addressed artifact live again. Clear estimates until the
+      // next real write performs an exact branch-bound refresh.
+      this.#invalidateRetentionReachability({ clearDebt: true });
+    }
+  }
   _adoptLegacyPublication(document, stamp, { previousBranchKey } = {}) {
     const artifact = jsonArtifact(document);
     this.storageMode = "legacy";
@@ -4151,6 +4366,8 @@ class AgentTeamsStore {
     this.hotDocument = undefined;
     this.entries = [];
     this.teamEntries = new Map();
+    this.retentionAuthorityReloadRequired = false;
+    this.#invalidateRetentionReachability({ clearDebt: true });
     if (stamp !== undefined) this.fileStamp = stamp;
     const entries = document.teams.map(projectionTeamIdentityFromDocument);
     this._setProjectionPublication({
@@ -4163,6 +4380,20 @@ class AgentTeamsStore {
     });
     markStoreProjectionDocument(document, this.projectionMetadata);
   }
+  _normalizeCommittedHotColdPublication(publication, stamp) {
+    const pointer = validateHotColdPointer(publication.pointer);
+    const manifest = validateHotColdManifest(publication.manifest);
+    if (pointer.generation !== manifest.generation
+      || this.storageMode !== "hot-cold"
+      || publication.pointer !== this.pointer
+      || publication.manifest !== this.manifest
+      || publication.hotDocument !== this.hotDocument
+      || publication.entries !== this.entries
+      || this.fileStamp !== stamp
+      || projectionArtifactDescriptorKey(this.pointer?.manifest) !== projectionArtifactDescriptorKey(pointer.manifest)) throw new TypeError("Agent Teams exact-origin publication is not the locally adopted commit");
+    this.retentionAuthorityReloadRequired = false;
+    this.#normalizeHotColdRetention(pointer, stamp);
+  }
   _adoptHotColdPublication(publication, stamp, { preserveRetention = false } = {}) {
     const pointer = validateHotColdPointer(publication.pointer);
     const manifest = validateHotColdManifest(publication.manifest);
@@ -4171,16 +4402,7 @@ class AgentTeamsStore {
     if (!Array.isArray(entries) || entries.length !== manifest.teamCount) throw new TypeError("Agent Teams hot/cold publication index is invalid");
     entries.forEach(validateTeamLedgerEntry);
     if (pointer.generation !== manifest.generation) throw new TypeError("Agent Teams hot/cold publication generations disagree");
-    if (!preserveRetention && this.retentionKeepGeneration !== manifest.generation) {
-      // Another instance may make a formerly-garbage content-addressed artifact live
-      // again. Clear stale estimates now; the next local write refreshes exact debt.
-      this.retentionKeep = undefined;
-      this.retentionKeepGeneration = 0;
-      this.retentionGarbage = new Map();
-      this.retention.debtBytes = 0;
-      this.retention.debtFiles = 0;
-      this.retention.blocked = false;
-    }
+    this.#normalizeHotColdRetention(pointer, stamp, { preserveRetention });
     const hotById = new Map(hotDocument.teams.map((team) => [team.id, team]));
     const teams = entries.map((entry) => {
       if (entry.storage === "closed") return ledgerTeamStub(entry);
@@ -4197,6 +4419,7 @@ class AgentTeamsStore {
     this.teamEntries = new Map(entries.map((entry) => [entry.id, entry]));
     this.document = assembleStoreDocument(hotDocument.header, teams);
     if (stamp !== undefined) this.fileStamp = stamp;
+    this.retentionAuthorityReloadRequired = false;
     this._setProjectionPublication({
       mode: "hot-cold",
       branchKey: projectionArtifactDescriptorKey(pointer.manifest),
@@ -4219,6 +4442,7 @@ class AgentTeamsStore {
     return markStoreProjectionDocument(assembleImmutableStoreView(hotDocument.header, teams), this.projectionMetadata);
   }
   async rollbackHotColdManifest() {
+    const endForeground = beginStoreRetentionForeground(this.filePath);
     const operation = this.chain.then(() => queueStoreMutation(this.filePath, async () => {
       await this.#refreshFromDiskIfChanged();
       if (this.storageMode !== "hot-cold" || this.manifest?.previous === undefined) throw new HarnessError("no previous Agent Teams manifest is available", "AGENT_TEAMS_MANIFEST_ROLLBACK_UNAVAILABLE");
@@ -4244,7 +4468,10 @@ class AgentTeamsStore {
       return this.storageDiagnostics();
     }));
     this.chain = operation.then(() => undefined, () => undefined);
-    return operation;
+    return operation.then(
+      (value) => { endForeground(); return value; },
+      (error) => { endForeground(); throw error; },
+    );
   }
   async #currentFileStamp(filePath = this.storageMode === "hot-cold" ? this.layout.pointerPath : this.filePath) {
     const info = await stat(filePath);
@@ -4432,13 +4659,12 @@ class AgentTeamsStore {
       // A failed prior write may have left immutable artifacts outside the cached
       // reachability set. Refresh that stale state before the hard gate and before
       // writing even the first byte of the next real generation.
-      if (this.retentionKeepGeneration !== this.manifest.generation || this.retentionKeep === undefined) await this.#refreshRetentionDebt();
+      if (!this.#retentionReachabilityIsCurrent()) await this.#refreshRetentionDebt();
       await this.#ensureRetentionWritable();
-      previousRetentionKeep = this.retentionKeep;
+      previousRetentionKeep = new Set(this.retentionKeep);
       // From this point an injected or physical write failure can leave an orphan.
       // The next real mutation must rescan; semantic no-ops never enter this method.
-      this.retentionKeep = undefined;
-      this.retentionKeepGeneration = 0;
+      this.#invalidateRetentionReachability();
     }
     const previousEntries = this.entries ?? [];
     const generation = (this.manifest?.generation ?? 0) + 1;
@@ -4488,22 +4714,8 @@ class AgentTeamsStore {
     validateClosedCatalog(await parseVerifiedArtifact(this.layout.root, closedCatalog));
     validateIndexedStore(clone(header), entries, fullTeams);
     const hotDocument = { version: HOT_COLD_STORE_VERSION, storeVersion: STORE_VERSION, generation, header: clone(header), teams: clone(hotTeams) };
-    const hot = await this.#writeHotDocument(hotDocument);
-    artifactBytes += hot.bytes;
-    artifactFiles += 1;
-    const physicalHot = validateHotDocument(await parseVerifiedArtifact(this.layout.root, hot), { generation });
-    const physicalTeamCache = new Map();
-    const physicalLoader = (entry) => {
-      if (!physicalTeamCache.has(entry.id)) {
-        const team = entry.storage === "hot"
-          ? this.#assertTeamMatchesEntry(clone(physicalHot.teams.find((candidate) => candidate.id === entry.id)), entry)
-          : this.#teamForEntrySync(entry, physicalHot);
-        physicalTeamCache.set(entry.id, team);
-      }
-      return physicalTeamCache.get(entry.id);
-    };
-    for (const entry of entries) if (entry.storage === "hot" || fullTeams.has(entry.id)) physicalLoader(entry);
-    validateIndexedStore(clone(header), entries, physicalTeamCache);
+    const hotArtifact = jsonArtifact(hotDocument);
+    const hot = { path: `hot/hot-${generation}-${hotArtifact.hash}.json`, hash: hotArtifact.hash, bytes: hotArtifact.size };
     const projectionHashes = rootLedgerProjectionHashes(header, entries);
     const manifest = validateHotColdManifest({
       version: HOT_COLD_STORE_VERSION,
@@ -4520,6 +4732,43 @@ class AgentTeamsStore {
       securityHash: documentSecurityHash(header, entries),
       projectionHashes,
     });
+    const manifestArtifact = jsonArtifact(manifest);
+    const manifestDescriptor = { path: `manifests/manifest-${generation}-${manifestArtifact.hash}.json`, hash: manifestArtifact.hash, bytes: manifestArtifact.size, generation };
+    // These two content-addressed artifacts are still unreachable. Let their full
+    // temp/wx/write/file-fsync/rename/readback paths overlap, but never let either
+    // branch escape: pointer visibility remains strictly after both have settled.
+    const [hotWrite, manifestWrite] = await Promise.allSettled([
+      (async () => {
+        await this.#fault("before-hot-document-write");
+        return writeImmutableArtifact(this.layout.root, hot.path, hotArtifact.bytes, {
+          beforeRename: () => this.#fault(`before-immutable-rename:${hot.path}`),
+        });
+      })(),
+      (async () => {
+        await this.#fault("before-manifest-document-write");
+        return writeImmutableArtifact(this.layout.root, manifestDescriptor.path, manifestArtifact.bytes, {
+          beforeRename: () => this.#fault(`before-immutable-rename:${manifestDescriptor.path}`),
+        });
+      })(),
+    ]);
+    if (hotWrite.status === "rejected") throw hotWrite.reason;
+    await this.#fault("after-hot-document");
+    const physicalHot = validateHotDocument(await parseVerifiedArtifact(this.layout.root, hot), { generation });
+    const physicalTeamCache = new Map();
+    const physicalLoader = (entry) => {
+      if (!physicalTeamCache.has(entry.id)) {
+        const team = entry.storage === "hot"
+          ? this.#assertTeamMatchesEntry(clone(physicalHot.teams.find((candidate) => candidate.id === entry.id)), entry)
+          : this.#teamForEntrySync(entry, physicalHot);
+        physicalTeamCache.set(entry.id, team);
+      }
+      return physicalTeamCache.get(entry.id);
+    };
+    for (const entry of entries) if (entry.storage === "hot" || fullTeams.has(entry.id)) physicalLoader(entry);
+    // The complete index and logical teams were validated immediately before the
+    // write. No local reference to `entries` escapes across that boundary; the
+    // physical loader then validates and rebuilds every newly written team against
+    // its exact entry, so repeating the global index walk cannot add a safety check.
     if (promotionDocument !== undefined) {
       const reconstructed = assembleStoreDocument(header, entries.map((entry) => physicalLoader(entry)));
       validateStoreDocument(reconstructed);
@@ -4529,12 +4778,10 @@ class AgentTeamsStore {
       const rebuiltEntries = reconstructed.teams.map((team, ordinal) => buildTeamLedgerEntry(team, ordinal, team.state === "closed" ? "closed" : "hot", team.state === "closed" ? entries[ordinal].shard : undefined));
       if (documentMerkleHash(header, rebuiltEntries) !== manifest.documentHash || documentSecurityHash(header, rebuiltEntries) !== manifest.securityHash) throw new TypeError("Agent Teams v8 migration hash or security epoch diverged");
     }
-    const manifestArtifact = jsonArtifact(manifest);
-    const manifestDescriptor = { path: `manifests/manifest-${generation}-${manifestArtifact.hash}.json`, hash: manifestArtifact.hash, bytes: manifestArtifact.size, generation };
-    await writeImmutableArtifact(this.layout.root, manifestDescriptor.path, manifestArtifact.bytes);
-    artifactBytes += manifestDescriptor.bytes;
-    artifactFiles += 1;
+    if (manifestWrite.status === "rejected") throw manifestWrite.reason;
     await this.#fault("after-manifest-document");
+    artifactBytes += hot.bytes + manifestDescriptor.bytes;
+    artifactFiles += 2;
     const priorRetentionFloor = this.pointer?.retentionFloorGeneration
       ?? (this.pointer === undefined ? 1 : Math.max(1, this.pointer.generation - (HOT_COLD_RETENTION_COMPLETE_GENERATIONS - 1)));
     const retentionFloorGeneration = Math.max(priorRetentionFloor, generation - (HOT_COLD_RETENTION_MAX_COMPLETE_GENERATIONS - 1));
@@ -4568,8 +4815,7 @@ class AgentTeamsStore {
         await this.#advanceRetentionDebt(previousRetentionKeep);
         await this.#maybeSweepRetention();
       } catch (error) {
-        this.retentionKeep = undefined;
-        this.retentionKeepGeneration = 0;
+        this.#invalidateRetentionReachability();
         this.retention.consecutiveFailures += 1;
         this.retention.lastError = `post-commit retention maintenance failed: ${error?.message ?? String(error)}`;
       }
@@ -4642,49 +4888,80 @@ class AgentTeamsStore {
       : buildTeamLedgerEntry(item.team, ordinal, item.team.state === "closed" ? "closed" : "hot", item.team.state === "closed" && item.entry?.storage === "closed" && item.entry.hash === jsonArtifact(item.team).hash ? item.entry.shard : item.team.state === "closed" ? { path: `closed/team-${jsonArtifact(item.team).hash}.json`, hash: jsonArtifact(item.team).hash, bytes: jsonArtifact(item.team).size } : undefined));
     if (JSON.stringify(header) === JSON.stringify(previousHeader)
       && JSON.stringify(prospective.map((entry) => [entry.ordinal, entry.id, entry.storage, entry.hash])) === JSON.stringify(previousEntries.map((entry) => [entry.ordinal, entry.id, entry.storage, entry.hash]))) return cloneLazyValue(value, tracker);
-    await this.#commitHotColdPlan(header, ordered);
-    const publication = hotColdPublication(this.pointer, this.manifest, this.hotDocument, this.entries);
-    publishStoreDocument(this.filePath, this.document, this.fileStamp, publication);
+    const publication = await this.#commitHotColdPlan(header, ordered);
+    publishStoreDocument(this.filePath, this.document, this.fileStamp, publication, { adoptedHotColdOrigin: this });
     return cloneLazyValue(value, tracker);
   }
-  async #managedRetentionFiles() {
+  #retentionMaintenanceSuperseded() {
+    const error = new Error("Agent Teams retention maintenance was superseded by foreground work");
+    error.code = "AGENT_TEAMS_RETENTION_MAINTENANCE_SUPERSEDED";
+    return error;
+  }
+  #isRetentionMaintenanceSuperseded(error) {
+    return error?.code === "AGENT_TEAMS_RETENTION_MAINTENANCE_SUPERSEDED";
+  }
+  #retentionContinuationActive(shouldContinue) {
+    return shouldContinue === undefined || shouldContinue();
+  }
+  #assertRetentionContinuation(shouldContinue) {
+    if (!this.#retentionContinuationActive(shouldContinue)) throw this.#retentionMaintenanceSuperseded();
+  }
+  async #managedRetentionFiles({ shouldContinue } = {}) {
+    this.#assertRetentionContinuation(shouldContinue);
     await this.#fault("before-retention-scan");
+    this.#assertRetentionContinuation(shouldContinue);
     const files = [];
     for (const directory of ["closed", "catalog", "hot", "legacy", "manifests"]) {
+      this.#assertRetentionContinuation(shouldContinue);
       const directoryPath = join(this.layout.root, directory);
       let children;
       try { children = await readdir(directoryPath, { withFileTypes: true }); }
       catch (error) { if (error?.code === "ENOENT") continue; throw error; }
+      this.#assertRetentionContinuation(shouldContinue);
       for (const child of children) {
         const reference = `${directory}/${child.name}`;
         if (!child.isFile() || !HOT_COLD_FILE_REF.test(reference)) continue;
+        this.#assertRetentionContinuation(shouldContinue);
         const filePath = hotColdArtifactPath(this.layout.root, reference);
         let info;
         try { info = await lstat(filePath); }
         catch (error) { if (error?.code === "ENOENT") continue; throw error; }
+        this.#assertRetentionContinuation(shouldContinue);
         if (!info.isFile() || info.isSymbolicLink() || !Number.isSafeInteger(info.size) || info.size < 0) continue;
         files.push({ reference, filePath, bytes: info.size });
       }
     }
     return files.sort((left, right) => left.reference.localeCompare(right.reference));
   }
-  async #retentionPlan({ fullValidation = false } = {}) {
+  async #retentionPlan({ fullValidation = false, shouldContinue, expectedAuthority } = {}) {
+    this.#assertRetentionContinuation(shouldContinue);
     const pointerBytes = await readFile(this.layout.pointerPath);
+    this.#assertRetentionContinuation(shouldContinue);
     const pointer = validateHotColdPointer(JSON.parse(pointerBytes.toString("utf8")));
     if (!pointerBytes.equals(jsonArtifact(pointer).bytes)) throw new TypeError("Agent Teams hot/cold pointer is noncanonical");
     const pointerStamp = await this.#currentFileStamp(this.layout.pointerPath);
+    this.#assertRetentionContinuation(shouldContinue);
+    const authority = this.#retentionAuthorityFor(pointer, pointerStamp, pointerBytes);
+    if (expectedAuthority !== undefined && !this.#retentionAuthorityEquals(authority, expectedAuthority)) throw this.#retentionMaintenanceSuperseded();
     const sentinel = await this.#readPromotionSentinel();
+    this.#assertRetentionContinuation(shouldContinue);
     if (sentinel?.phase !== "committed") throw new TypeError("Agent Teams retention requires a committed sibling promotion sentinel");
     const legacyMarker = await this.#readLegacyPromotionMarker();
+    this.#assertRetentionContinuation(shouldContinue);
     const keep = new Set();
     const artifactBytesCache = new Map();
     const artifactJsonCache = new Map();
+    const validatedClosedCatalogCache = new Map();
     const descriptorCacheKey = (candidate) => JSON.stringify([candidate.path, candidate.hash, candidate.bytes, candidate.generation ?? null]);
     const cachedArtifactBytes = async (candidate) => {
       const key = descriptorCacheKey(candidate);
       if (!artifactBytesCache.has(key)) {
+        this.#assertRetentionContinuation(shouldContinue);
         await this.#fault(`before-retention-artifact-read:${candidate.path}`);
-        artifactBytesCache.set(key, await verifiedArtifactBytes(this.layout.root, candidate));
+        this.#assertRetentionContinuation(shouldContinue);
+        const bytes = await verifiedArtifactBytes(this.layout.root, candidate);
+        this.#assertRetentionContinuation(shouldContinue);
+        artifactBytesCache.set(key, bytes);
       }
       return artifactBytesCache.get(key);
     };
@@ -4693,11 +4970,17 @@ class AgentTeamsStore {
       if (!artifactJsonCache.has(key)) artifactJsonCache.set(key, JSON.parse((await cachedArtifactBytes(candidate)).toString("utf8")));
       return artifactJsonCache.get(key);
     };
+    const cachedClosedCatalog = async (candidate) => {
+      const key = descriptorCacheKey(candidate);
+      if (!validatedClosedCatalogCache.has(key)) validatedClosedCatalogCache.set(key, validateClosedCatalog(await cachedArtifactJson(candidate)));
+      return validatedClosedCatalogCache.get(key);
+    };
     let descriptor = pointer.manifest;
     let currentSource;
     const retentionFloorGeneration = pointer.retentionFloorGeneration
       ?? Math.max(1, pointer.generation - (HOT_COLD_RETENTION_COMPLETE_GENERATIONS - 1));
     for (let depth = 0; descriptor !== undefined && depth <= HOT_COLD_RETENTION_MAX_COMPLETE_GENERATIONS; depth += 1) {
+      this.#assertRetentionContinuation(shouldContinue);
       validateCanonicalArtifactDescriptor(descriptor, "manifest", descriptor.generation);
       const manifest = validateHotColdManifest(await cachedArtifactJson(descriptor));
       if (manifest.generation !== descriptor.generation) throw new TypeError("Agent Teams retention manifest generation mismatch");
@@ -4707,10 +4990,12 @@ class AgentTeamsStore {
         currentSource ??= manifest.sourceV8;
         if (JSON.stringify(manifest.sourceV8) !== JSON.stringify(currentSource)) throw new TypeError("Agent Teams retained generations disagree on their immutable v8 source");
         for (const artifact of [manifest.sourceV8, manifest.hot, manifest.closedCatalog]) keep.add(artifact.path);
-        const catalog = validateClosedCatalog(await cachedArtifactJson(manifest.closedCatalog));
+        const catalog = await cachedClosedCatalog(manifest.closedCatalog);
         const entries = [...manifest.hotTeams, ...catalog.entries].sort((left, right) => left.ordinal - right.ordinal);
         if (entries.length !== manifest.teamCount) throw new TypeError("Agent Teams retained generation team count mismatch");
-        entries.forEach(validateTeamLedgerEntry);
+        // Both descriptor classes were fully validated above; only their merged
+        // canonical ordinal sequence is generation-specific.
+        if (entries.some((entry, ordinal) => entry.ordinal !== ordinal)) throw new TypeError("Agent Teams retained generation team ordinals mismatch");
         for (const entry of catalog.entries) keep.add(entry.shard.path);
         if (fullValidation) {
           await cachedArtifactBytes(manifest.sourceV8);
@@ -4718,6 +5003,7 @@ class AgentTeamsStore {
           const hotById = new Map(hotDocument.teams.map((team) => [team.id, team]));
           const fullTeams = new Map();
           for (const entry of entries) {
+            this.#assertRetentionContinuation(shouldContinue);
             let team;
             if (entry.storage === "hot") team = hotById.get(entry.id);
             else team = await cachedArtifactJson(entry.shard);
@@ -4737,18 +5023,31 @@ class AgentTeamsStore {
     }
     if (currentSource === undefined || JSON.stringify(sentinel.sourceV8) !== JSON.stringify(currentSource)) throw new TypeError("Agent Teams promotion sentinel disagrees with the retained generation chain");
     if (legacyMarker !== undefined) validateLegacyPromotionMarker(legacyMarker, currentSource);
-    if (fullValidation) await this.#verifyOuterV8Source(currentSource, undefined, { knownCopyBytes: await cachedArtifactBytes(currentSource) });
-    return { pointer, pointerBytes, pointerStamp, keep };
+    if (fullValidation) {
+      const sourceBytes = await cachedArtifactBytes(currentSource);
+      this.#assertRetentionContinuation(shouldContinue);
+      await this.#verifyOuterV8Source(currentSource, undefined, { knownCopyBytes: sourceBytes });
+      this.#assertRetentionContinuation(shouldContinue);
+    }
+    return { pointer, pointerBytes, pointerStamp, authority, keep };
   }
   #setRetentionReachability(plan, candidates) {
     this.retentionKeep = plan.keep;
     this.retentionKeepGeneration = plan.pointer.generation;
+    this.retentionAuthority = plan.authority;
     this.retentionGarbage = new Map(candidates.map((candidate) => [candidate.reference, candidate]));
     this.retention.debtBytes = candidates.reduce((sum, file) => sum + file.bytes, 0);
     this.retention.debtFiles = candidates.length;
+    this.retentionRevision += 1;
   }
-  async #refreshRetentionDebt() {
-    const [plan, files] = await Promise.all([this.#retentionPlan(), this.#managedRetentionFiles()]);
+  async #refreshRetentionDebt({ shouldContinue, expectedAuthority } = {}) {
+    const [planResult, filesResult] = await Promise.allSettled([
+      this.#retentionPlan({ shouldContinue, expectedAuthority }),
+      this.#managedRetentionFiles({ shouldContinue }),
+    ]);
+    if (planResult.status === "rejected") throw planResult.reason;
+    if (filesResult.status === "rejected") throw filesResult.reason;
+    const plan = planResult.value, files = filesResult.value;
     const candidates = files.filter((file) => !plan.keep.has(file.reference));
     this.#setRetentionReachability(plan, candidates);
     return { plan, files, candidates };
@@ -4773,23 +5072,69 @@ class AgentTeamsStore {
   #retentionAtHardWatermark() {
     return this.retention.debtBytes >= this.retention.policy.hardBytes || this.retention.debtFiles >= this.retention.policy.hardFiles;
   }
-  async #sweepRetention() {
+  _retentionMaintenanceNeeded() {
+    return !this.closed && this.storageMode === "hot-cold" && this.#retentionAtSoftWatermark();
+  }
+  #captureRetentionMaintenanceToken(state, foregroundEpoch) {
+    if (this.closed || state.foregroundCount !== 0 || state.foregroundEpoch !== foregroundEpoch || !this._retentionMaintenanceNeeded() || !this.#retentionReachabilityIsCurrent()) return undefined;
+    return Object.freeze({
+      authority: this.retentionAuthority,
+      retentionRevision: this.retentionRevision,
+      debtBytes: this.retention.debtBytes,
+      debtFiles: this.retention.debtFiles,
+      lifecycleEpoch: this.retentionLifecycleEpoch,
+      foregroundEpoch,
+    });
+  }
+  #retentionMaintenanceContextMatches(token, state) {
+    return !this.closed
+      && this.retentionLifecycleEpoch === token.lifecycleEpoch
+      && state.foregroundCount === 0
+      && state.foregroundEpoch === token.foregroundEpoch
+      && this.#retentionAuthorityMatches(this.pointer, this.fileStamp)
+      && this.#retentionAuthorityEquals(this.retentionAuthority, token.authority);
+  }
+  #retentionMaintenanceTokenMatches(token, state) {
+    return this.#retentionMaintenanceContextMatches(token, state)
+      && this.retentionRevision === token.retentionRevision
+      && this.retention.debtBytes === token.debtBytes
+      && this.retention.debtFiles === token.debtFiles;
+  }
+  async #sweepRetention({ shouldContinue, expectedAuthority } = {}) {
+    this.#assertRetentionContinuation(shouldContinue);
     await this.#fault("before-retention-sweep");
+    this.#assertRetentionContinuation(shouldContinue);
     // Finish every hash/ACL/epoch validation before the first unlink. A failed
     // retained generation therefore causes exactly zero deletion.
-    const plan = await this.#retentionPlan({ fullValidation: true });
-    const files = await this.#managedRetentionFiles();
+    const plan = await this.#retentionPlan({ fullValidation: true, shouldContinue, expectedAuthority });
+    const files = await this.#managedRetentionFiles({ shouldContinue });
     const candidates = files.filter((file) => !plan.keep.has(file.reference));
     const deleted = new Set();
     const failures = [];
     const syncedDirectories = new Set();
     let aborted = false;
+    let superseded = false;
     for (const candidate of candidates) {
+      if (!this.#retentionContinuationActive(shouldContinue)) {
+        superseded = true;
+        aborted = true;
+        break;
+      }
       try { await this.#fault(`before-retention-unlink:${candidate.reference}`); }
       catch (error) {
+        if (!this.#retentionContinuationActive(shouldContinue)) {
+          superseded = true;
+          aborted = true;
+          break;
+        }
         failures.push({ reference: candidate.reference, error: error?.message ?? String(error) });
         await syncStoreDirectory(dirname(candidate.filePath));
         continue;
+      }
+      if (!this.#retentionContinuationActive(shouldContinue)) {
+        superseded = true;
+        aborted = true;
+        break;
       }
       let currentBytes;
       let currentStamp;
@@ -4798,6 +5143,11 @@ class AgentTeamsStore {
         currentStamp = await this.#currentFileStamp(this.layout.pointerPath);
       } catch (error) {
         failures.push({ reference: candidate.reference, error: `pointer recheck failed: ${error?.message ?? String(error)}` });
+        aborted = true;
+        break;
+      }
+      if (!this.#retentionContinuationActive(shouldContinue)) {
+        superseded = true;
         aborted = true;
         break;
       }
@@ -4816,46 +5166,164 @@ class AgentTeamsStore {
         else failures.push({ reference: candidate.reference, error: error?.message ?? String(error) });
         await syncStoreDirectory(dirname(candidate.filePath));
       }
+      if (!this.#retentionContinuationActive(shouldContinue)) {
+        superseded = true;
+        aborted = true;
+        break;
+      }
     }
     for (const directory of syncedDirectories) await syncStoreDirectory(directory);
-    await this.#fault("after-retention-sweep");
+    if (!superseded) await this.#fault("after-retention-sweep");
     const remaining = candidates.filter((candidate) => !deleted.has(candidate.reference));
-    this.#setRetentionReachability(plan, remaining);
     return {
+      plan,
+      remaining,
       deletedFiles: deleted.size,
       deletedBytes: candidates.filter((candidate) => deleted.has(candidate.reference)).reduce((sum, file) => sum + file.bytes, 0),
       remainingFiles: remaining.length,
       remainingBytes: remaining.reduce((sum, file) => sum + file.bytes, 0),
       failures,
       aborted,
+      superseded,
     };
   }
-  async #runRetentionSweep() {
-    try {
-      const result = await this.#sweepRetention();
-      this.retention.debtBytes = result.remainingBytes;
-      this.retention.debtFiles = result.remainingFiles;
-      this.retention.lastSweep = { at: now(), ...clone(result) };
-      if (result.failures.length === 0 && !result.aborted) {
-        this.retention.consecutiveFailures = 0;
-        this.retention.blocked = false;
-        this.retention.lastError = undefined;
-        return true;
-      }
-      this.retention.consecutiveFailures += 1;
-      this.retention.lastError = result.failures[0]?.error ?? "retention sweep aborted";
-    } catch (error) {
-      // A failed full validation must never turn the legitimate live baseline
-      // into garbage debt. A cheaper reachability pass can still classify
-      // candidates when (for example) only a closed shard is corrupt; if that
-      // also fails, keep the generation-derived estimate already accumulated.
-      try { await this.#refreshRetentionDebt(); } catch { /* preserve prior estimated garbage only */ }
-      this.retention.consecutiveFailures += 1;
-      this.retention.lastError = error?.message ?? String(error);
-      this.retention.lastSweep = { at: now(), deletedFiles: 0, deletedBytes: 0, validationFailed: true, error: this.retention.lastError };
+  #applyRetentionSweepResult(result) {
+    if (result.aborted) this.#invalidateRetentionReachability({ requireAuthorityReload: true });
+    else this.#setRetentionReachability(result.plan, result.remaining);
+    this.retention.lastSweep = {
+      at: now(),
+      deletedFiles: result.deletedFiles,
+      deletedBytes: result.deletedBytes,
+      remainingFiles: result.remainingFiles,
+      remainingBytes: result.remainingBytes,
+      failures: clone(result.failures),
+      aborted: result.aborted,
+    };
+    if (result.failures.length === 0 && !result.aborted) {
+      this.retention.consecutiveFailures = 0;
+      this.retention.blocked = false;
+      this.retention.lastError = undefined;
+      return true;
     }
+    this.retention.consecutiveFailures += 1;
+    this.retention.lastError = result.failures[0]?.error ?? "retention sweep aborted";
     this.retention.blocked = this.#retentionAtHardWatermark();
     return false;
+  }
+  async #recordRetentionValidationFailure(error, options = {}) {
+    // A failed full validation must never turn the legitimate live baseline into
+    // garbage debt. A cheaper reachability pass may still classify candidates.
+    try { await this.#refreshRetentionDebt(options); }
+    catch (refreshError) {
+      if (this.#isRetentionMaintenanceSuperseded(refreshError)) throw refreshError;
+      // Preserve the prior exact generation-derived estimate when refresh also fails.
+    }
+    this.retention.consecutiveFailures += 1;
+    this.retention.lastError = error?.message ?? String(error);
+    this.retention.lastSweep = { at: now(), deletedFiles: 0, deletedBytes: 0, validationFailed: true, error: this.retention.lastError };
+    this.retention.blocked = this.#retentionAtHardWatermark();
+  }
+  async #runRetentionSweep() {
+    const expectedAuthority = this.#retentionReachabilityIsCurrent() ? this.retentionAuthority : undefined;
+    try {
+      const result = await this.#sweepRetention({ expectedAuthority });
+      return this.#applyRetentionSweepResult(result);
+    } catch (error) {
+      if (this.#isRetentionMaintenanceSuperseded(error)) {
+        this.#invalidateRetentionReachability({ requireAuthorityReload: true });
+        this.retention.consecutiveFailures += 1;
+        this.retention.lastError = "pointer identity changed before hard retention maintenance";
+        this.retention.lastSweep = { at: now(), deletedFiles: 0, deletedBytes: 0, failures: [{ error: this.retention.lastError }], aborted: true };
+        this.retention.blocked = this.#retentionAtHardWatermark();
+        return false;
+      }
+      await this.#recordRetentionValidationFailure(error, { expectedAuthority });
+      return false;
+    }
+  }
+  async _runRetentionMaintenance(state, foregroundEpoch) {
+    const lifecycleEpoch = this.retentionLifecycleEpoch;
+    const contextActive = () => !this.closed
+      && this.retentionLifecycleEpoch === lifecycleEpoch
+      && state.foregroundCount === 0
+      && state.foregroundEpoch === foregroundEpoch;
+    if (!contextActive()) return { status: "superseded" };
+    if (!this.#retentionReachabilityIsCurrent()) {
+      const expectedAuthority = this.#retentionAuthorityFor(this.pointer, this.fileStamp);
+      try { await this.#refreshRetentionDebt({ shouldContinue: contextActive, expectedAuthority }); }
+      catch (error) {
+        if (this.#isRetentionMaintenanceSuperseded(error)) {
+          if (!contextActive()) return { status: "superseded" };
+          this.#invalidateRetentionReachability({ requireAuthorityReload: true });
+          this.retention.consecutiveFailures += 1;
+          this.retention.lastError = "pointer identity changed before retention maintenance";
+          this.retention.lastSweep = { at: now(), deletedFiles: 0, deletedBytes: 0, failures: [{ error: this.retention.lastError }], aborted: true };
+          this.retention.blocked = this.#retentionAtHardWatermark();
+          return { status: "failed" };
+        }
+        this.retention.consecutiveFailures += 1;
+        this.retention.lastError = error?.message ?? String(error);
+        this.retention.lastSweep = { at: now(), deletedFiles: 0, deletedBytes: 0, validationFailed: true, error: this.retention.lastError };
+        this.retention.blocked = this.#retentionAtHardWatermark();
+        return { status: "failed" };
+      }
+    }
+    const token = this.#captureRetentionMaintenanceToken(state, foregroundEpoch);
+    if (token === undefined) return { status: contextActive() && !this._retentionMaintenanceNeeded() ? "completed" : "superseded" };
+    const shouldContinue = () => this.#retentionMaintenanceTokenMatches(token, state);
+    try {
+      const result = await this.#sweepRetention({ shouldContinue, expectedAuthority: token.authority });
+      if (result.superseded || !this.#retentionMaintenanceTokenMatches(token, state)) {
+        this.#invalidateRetentionReachability();
+        return { status: "superseded" };
+      }
+      const succeeded = this.#applyRetentionSweepResult(result);
+      return { status: succeeded ? "completed" : "failed" };
+    } catch (error) {
+      if (!this.#retentionMaintenanceTokenMatches(token, state)) {
+        this.#invalidateRetentionReachability();
+        return { status: "superseded" };
+      }
+      if (this.#isRetentionMaintenanceSuperseded(error)) {
+        this.#invalidateRetentionReachability({ requireAuthorityReload: true });
+        this.retention.consecutiveFailures += 1;
+        this.retention.lastError = "pointer identity changed during retention validation";
+        this.retention.lastSweep = { at: now(), deletedFiles: 0, deletedBytes: 0, failures: [{ error: this.retention.lastError }], aborted: true };
+        this.retention.blocked = this.#retentionAtHardWatermark();
+        return { status: "failed" };
+      }
+      try {
+        await this.#recordRetentionValidationFailure(error, { shouldContinue, expectedAuthority: token.authority });
+      } catch (refreshError) {
+        if (this.#isRetentionMaintenanceSuperseded(refreshError)) {
+          if (!this.#retentionMaintenanceContextMatches(token, state)) {
+            this.#invalidateRetentionReachability();
+            return { status: "superseded" };
+          }
+          this.#invalidateRetentionReachability({ requireAuthorityReload: true });
+          this.retention.consecutiveFailures += 1;
+          this.retention.lastError = "pointer identity changed while retention failure was reconciled";
+          this.retention.lastSweep = { at: now(), deletedFiles: 0, deletedBytes: 0, failures: [{ error: this.retention.lastError }], aborted: true };
+          this.retention.blocked = this.#retentionAtHardWatermark();
+          return { status: "failed" };
+        }
+        throw refreshError;
+      }
+      if (!this.#retentionMaintenanceContextMatches(token, state)) {
+        this.#invalidateRetentionReachability();
+        return { status: "superseded" };
+      }
+      return { status: "failed" };
+    }
+  }
+  _recordUnexpectedRetentionMaintenanceFailure(error, state, foregroundEpoch) {
+    if (this.closed || state.foregroundCount !== 0 || state.foregroundEpoch !== foregroundEpoch) return { status: "superseded" };
+    this.#invalidateRetentionReachability();
+    this.retention.consecutiveFailures += 1;
+    this.retention.lastError = error?.message ?? String(error);
+    this.retention.lastSweep = { at: now(), deletedFiles: 0, deletedBytes: 0, validationFailed: true, error: this.retention.lastError };
+    this.retention.blocked = this.#retentionAtHardWatermark();
+    return { status: "failed" };
   }
   async #maybeSweepRetention({ refresh = false } = {}) {
     if (this.storageMode !== "hot-cold") return;
@@ -4871,7 +5339,7 @@ class AgentTeamsStore {
         return;
       }
     }
-    if (this.#retentionAtSoftWatermark()) await this.#runRetentionSweep();
+    if (this.#retentionAtSoftWatermark()) requestStoreRetentionMaintenance(this.filePath);
   }
   async #ensureRetentionWritable() {
     if (!this.retention.blocked && !this.#retentionAtHardWatermark()) return;
@@ -4887,7 +5355,9 @@ class AgentTeamsStore {
     let stamp;
     try { stamp = await this.#currentFileStamp(authorityPath); }
     catch (error) { if (error?.code === "ENOENT" && !pointerExists) return; throw error; }
-    if (stamp === this.fileStamp && (pointerExists ? this.storageMode === "hot-cold" : this.storageMode === "legacy")) return;
+    if (!this.retentionAuthorityReloadRequired
+      && stamp === this.fileStamp
+      && (pointerExists ? this.storageMode === "hot-cold" : this.storageMode === "legacy")) return;
     if (pointerExists) {
       const loaded = await this.#loadHotColdState();
       this._adoptHotColdPublication(loaded.publication, loaded.stamp);

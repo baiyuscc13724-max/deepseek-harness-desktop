@@ -23,6 +23,8 @@ const ACCEPTED = Object.freeze({
   'package-lock.json': 'ab011b915c803ea215874bd688a90a110eb5ddd6dbfabcd3a0d85811dbf39904',
   'scripts/patch-official-runtime.mjs': '2870605d734d2341b1f8f7d9fa6c89dc96c82f5db6ac7fbaf0b9ddcb81d9e9c9',
   'scripts/verify-static.mjs': '66585d57d28ce767798d3a4b828f5d04dde4ef3675fbec7bb67c9756bd872e72',
+  'plugins/dsh-agent-teams/lib/index.js': '2fa992584f0509a23be0c3f24c2827507a4ef39ba0c21dcac18982f3550d5878',
+  'tests/agent-teams-store-performance.test.cjs': '68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887',
   'tests/official-alpha2-static-release-contract.test.cjs': '9babbbd8f5cc901befba380595cd0bfc8fb37793ee016b872c9fcd55c409e2cb',
   'tests/official-alpha2-runtime-migration.test.cjs': 'd002a0d0b19674d07beda48c892b181cedb58bcc1cf7cdfeeaa84c4c34298472',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',

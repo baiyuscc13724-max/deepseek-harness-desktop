@@ -23,6 +23,22 @@ alpha2Audit('accepted alpha.2 source, static gate, migration and publication inp
   assert.equal(helper.ALPHA2, '0.1.2-alpha.2'); assert.equal(helper.TAG, 'dsh-v0.1.2-alpha.2'); assert.equal(helper.COMMIT, '0a53fb55bea101816fa226bb964ae2bed71c343b')
 })
 
+test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof sources without moving history', () => {
+  const accepted = Object.freeze({
+    'plugins/dsh-agent-teams/lib/index.js': '2fa992584f0509a23be0c3f24c2827507a4ef39ba0c21dcac18982f3550d5878',
+    'tests/agent-teams-store-performance.test.cjs': '68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887'
+  })
+  assert.equal(Object.keys(helper.ACCEPTED).length, 12)
+  for (const [relative, expected] of Object.entries(accepted)) {
+    assert.equal(helper.ACCEPTED[relative], expected, `reviewed acceptance drift: ${relative}`)
+    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `reviewed source drift: ${relative}`)
+  }
+  assert.equal(helper.ALPHA2, '0.1.2-alpha.2'); assert.equal(helper.TAG, 'dsh-v0.1.2-alpha.2'); assert.equal(helper.COMMIT, '0a53fb55bea101816fa226bb964ae2bed71c343b')
+  const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
+  const evidence = [...Object.values(accepted), 'Promise.allSettled', '删除前的 `fullValidation`', '74/74', '25.98 ms', '25.92 ms', '169/169', '29/29', '3.54%']
+  for (const contract of evidence) assert.ok(review.includes(contract), `v1.0.59 hot/cold review evidence missing: ${contract}`)
+})
+
 test('source exclusions are exact components and cannot hide similarly named product paths', () => {
   for (const value of ['.git/config', 'nested/node_modules/a.js', 'dist/a', 'nested/temp/a', 'evidence/a', '.release-state/v1/state.json', '.cache/a', 'npm-cache/a', '.alpha2-disposable/a', '.official-alpha2-candidate/a', '.release-cache/a']) assert.equal(helper.excluded(value), true, value)
   for (const value of ['attempt/a', 'docs/evidence-report.md', 'tests/temporary.test.cjs', 'distribution/a']) assert.equal(helper.excluded(value), false, value)
